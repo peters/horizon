@@ -10,7 +10,9 @@ use horizon_core::{PanelId, WorkspaceId};
 
 use super::super::shortcuts;
 use super::super::{HorizonApp, SpeechNotice};
-use super::desktop::{dictation_sink, inject_desktop_transcript, recv_global_hotkey};
+use super::desktop::{
+    dictation_sink, inject_desktop_transcript, prepare_desktop_target, recv_global_hotkey, release_desktop_target,
+};
 use super::{SpeechEvent, SpeechSink, SpeechSystem};
 use crate::input;
 use crate::theme;
@@ -18,6 +20,7 @@ use crate::theme;
 pub(crate) const SPEECH_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const SPEECH_RELEASE_OWNERSHIP_TIMEOUT: Duration = Duration::from_secs(3);
 const DESKTOP_INSERT_ERROR_ID: &str = "speech_desktop_insert_error";
+const DESKTOP_INSERT_PENDING_ID: &str = "speech_desktop_insert_pending";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct HoldHotkeyTransition {
@@ -92,6 +95,26 @@ fn no_start_notice(activity: SpeechActivity) -> SpeechEvent {
     SpeechEvent::Notice(message.to_string())
 }
 
+fn start_speech(speech: &mut SpeechSystem, target: SpeechSink, profile: usize, events: &mut Vec<SpeechEvent>) -> bool {
+    if target == SpeechSink::Desktop
+        && let Err(error) = prepare_desktop_target()
+    {
+        events.push(SpeechEvent::Error(format!(
+            "could not start desktop dictation ({error}); clipboard was not used"
+        )));
+        return false;
+    }
+    speech.start(target, profile);
+    if speech.recording_sink() == Some(target) {
+        true
+    } else {
+        if target == SpeechSink::Desktop {
+            release_desktop_target();
+        }
+        false
+    }
+}
+
 /// Which text surface ate a gated push-to-talk press, for the notice. The
 /// priority order mirrors `text_surface_active`; rename fields are the
 /// remaining case.
@@ -156,7 +179,7 @@ fn handle_profile_hotkeys(
         }
         match speech.hotkey_mode() {
             horizon_core::SpeechHotkeyMode::Hold => {
-                let transition = hold_hotkey_transition(
+                let mut transition = hold_hotkey_transition(
                     profile,
                     pressed,
                     released,
@@ -165,7 +188,9 @@ fn handle_profile_hotkeys(
                     sink,
                 );
                 if let Some(target) = transition.start_target {
-                    speech.start(target, profile);
+                    if !start_speech(speech, target, profile, events) {
+                        transition.engaged_profile = None;
+                    }
                 } else if pressed {
                     events.push(no_start_notice(speech_activity(speech)));
                 }
@@ -182,7 +207,7 @@ fn handle_profile_hotkeys(
                         // `start` below no-ops outside Idle; explain instead.
                         events.push(no_start_notice(speech_activity(speech)));
                     } else if let Some(target) = sink {
-                        speech.start(target, profile);
+                        let _ = start_speech(speech, target, profile, events);
                     } else {
                         events.push(no_start_notice(SpeechActivity::Idle));
                     }
@@ -231,7 +256,7 @@ fn apply_global_hotkey_events(
                 }
                 match speech.hotkey_mode() {
                     horizon_core::SpeechHotkeyMode::Hold => {
-                        let transition = hold_hotkey_transition(
+                        let mut transition = hold_hotkey_transition(
                             profile,
                             true,
                             false,
@@ -240,8 +265,11 @@ fn apply_global_hotkey_events(
                             sink,
                         );
                         if let Some(target) = transition.start_target {
-                            speech.start(target, profile);
-                            started_this_drain = true;
+                            if start_speech(speech, target, profile, notices) {
+                                started_this_drain = true;
+                            } else {
+                                transition.engaged_profile = None;
+                            }
                         } else {
                             notices.push(no_start_notice(speech_activity(speech)));
                         }
@@ -253,9 +281,10 @@ fn apply_global_hotkey_events(
                         } else if speech_activity(speech) != SpeechActivity::Idle {
                             notices.push(no_start_notice(speech_activity(speech)));
                         } else if let Some(target) = sink {
-                            speech.start(target, profile);
-                            engaged_profile = Some(profile);
-                            started_this_drain = true;
+                            if start_speech(speech, target, profile, notices) {
+                                engaged_profile = Some(profile);
+                                started_this_drain = true;
+                            }
                         } else {
                             notices.push(no_start_notice(SpeechActivity::Idle));
                         }
@@ -536,6 +565,7 @@ impl HorizonApp {
         if let Some(message) = ctx.data_mut(|data| data.remove_temp::<String>(egui::Id::new(DESKTOP_INSERT_ERROR_ID))) {
             events.push(SpeechEvent::Error(message));
         }
+        let mut desktop_text_dispatched = false;
         for event in events {
             match event {
                 SpeechEvent::Text { target, text } => match target {
@@ -554,21 +584,30 @@ impl HorizonApp {
                     SpeechSink::Desktop => {
                         let payload = format!("{text} ");
                         let result_ctx = ctx.clone();
+                        ctx.data_mut(|data| {
+                            data.insert_temp(egui::Id::new(DESKTOP_INSERT_PENDING_ID), true);
+                        });
                         if std::thread::Builder::new()
                             .name("horizon-speech-direct-insert".to_owned())
                             .spawn(move || {
-                                if let Err(error) = inject_desktop_transcript(&payload) {
-                                    result_ctx.data_mut(|data| {
+                                let result = inject_desktop_transcript(&payload);
+                                result_ctx.data_mut(|data| {
+                                    data.remove_temp::<bool>(egui::Id::new(DESKTOP_INSERT_PENDING_ID));
+                                    if let Err(error) = result {
                                         data.insert_temp(
                                             egui::Id::new(DESKTOP_INSERT_ERROR_ID),
                                             format!("could not insert transcript ({error}); clipboard was not used"),
                                         );
-                                    });
-                                    result_ctx.request_repaint();
-                                }
+                                    }
+                                });
+                                result_ctx.request_repaint();
                             })
                             .is_err()
                         {
+                            ctx.data_mut(|data| {
+                                data.remove_temp::<bool>(egui::Id::new(DESKTOP_INSERT_PENDING_ID));
+                            });
+                            release_desktop_target();
                             let error = horizon_cursor::InjectError::Failed("failed to start desktop insertion");
                             tracing::warn!(%error, "desktop speech inject failed");
                             self.show_speech_notice(
@@ -577,6 +616,8 @@ impl HorizonApp {
                                 ),
                                 true,
                             );
+                        } else {
+                            desktop_text_dispatched = true;
                         }
                     }
                 },
@@ -589,6 +630,14 @@ impl HorizonApp {
                     self.show_speech_notice(format!("Speech input error: {message}"), true);
                 }
             }
+        }
+        let desktop_active = self.speech.as_ref().and_then(SpeechSystem::active_sink) == Some(SpeechSink::Desktop);
+        let desktop_insert_pending = ctx.data(|data| {
+            data.get_temp::<bool>(egui::Id::new(DESKTOP_INSERT_PENDING_ID))
+                .unwrap_or(false)
+        });
+        if should_release_desktop_target(desktop_text_dispatched, desktop_active, desktop_insert_pending) {
+            release_desktop_target();
         }
     }
 
@@ -716,6 +765,10 @@ impl HorizonApp {
             self.speech_engaged_profile = None;
         }
     }
+}
+
+const fn should_release_desktop_target(text_dispatched: bool, active: bool, insert_pending: bool) -> bool {
+    !text_dispatched && !active && !insert_pending
 }
 
 #[cfg(test)]

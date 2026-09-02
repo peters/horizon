@@ -42,7 +42,7 @@ pub enum HotkeyKey {
 pub enum HotkeyEvent {
     Pressed(usize),
     Released(usize),
-    /// The X11 listener thread exited (display connection lost).
+    /// The platform listener exited or its event connection was lost.
     Disconnected,
 }
 
@@ -64,24 +64,24 @@ impl fmt::Display for HotkeyError {
 
 impl std::error::Error for HotkeyError {}
 
-/// Background X11 grab of speech push-to-talk bindings.
+/// Platform global grab of speech push-to-talk bindings.
 pub struct GlobalHotkeys {
     events: Receiver<HotkeyEvent>,
     shutdown: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
     wake: Arc<Mutex<Option<WakeFn>>>,
     profiles: Vec<usize>,
+    _platform_guard: platform::PlatformGuard,
 }
 
 impl GlobalHotkeys {
     /// Grab `bindings` (profile index, spec).
     ///
     /// # Errors
-    /// Returns [`HotkeyError::Unsupported`] when `bindings` is empty, this
-    /// session is Wayland (`WAYLAND_DISPLAY` is set), or there is no X11
-    /// display. [`HotkeyError::Failed`] is returned when none of the bindings
-    /// could be grabbed. Bindings that fail individually are omitted from
-    /// [`Self::profiles`] so local handling can keep them.
+    /// Returns [`HotkeyError::Unsupported`] when `bindings` is empty or the
+    /// current platform/session cannot provide global hotkeys. On X11,
+    /// bindings that fail individually are omitted from [`Self::profiles`] so
+    /// local handling can keep them. macOS registration is transactional.
     pub fn listen(bindings: &[(usize, Hotkey)]) -> Result<Self, HotkeyError> {
         if bindings.is_empty() || !session_supports_global_hotkeys(std::env::var_os("WAYLAND_DISPLAY").as_deref()) {
             return Err(HotkeyError::Unsupported);
@@ -121,7 +121,7 @@ impl GlobalHotkeys {
 }
 
 fn session_supports_global_hotkeys(wayland_display: Option<&std::ffi::OsStr>) -> bool {
-    wayland_display.is_none()
+    !cfg!(any(target_os = "linux", target_os = "freebsd")) || wayland_display.is_none()
 }
 
 impl Drop for GlobalHotkeys {
@@ -160,6 +160,8 @@ mod platform {
     const XK_COMMA: u32 = 0x002c;
     const XK_MINUS: u32 = 0x002d;
     const XK_PLUS: u32 = 0x002b;
+
+    pub(super) struct PlatformGuard;
 
     pub(super) fn listen(bindings: &[(usize, Hotkey)]) -> Result<GlobalHotkeys, HotkeyError> {
         let (conn, screen_num) = x11rb::connect(None).map_err(|_| HotkeyError::Unsupported)?;
@@ -262,6 +264,7 @@ mod platform {
             thread: Some(thread),
             wake,
             profiles,
+            _platform_guard: PlatformGuard,
         })
     }
 
@@ -495,20 +498,21 @@ mod tests {
     }
 
     #[test]
-    fn wayland_display_disables_global_hotkeys() {
-        assert!(!super::session_supports_global_hotkeys(Some(std::ffi::OsStr::new(
-            "wayland-0"
-        ))));
+    fn wayland_display_is_relevant_only_to_x11_platforms() {
+        assert_eq!(
+            super::session_supports_global_hotkeys(Some(std::ffi::OsStr::new("wayland-0"))),
+            !cfg!(any(target_os = "linux", target_os = "freebsd"))
+        );
         assert!(super::session_supports_global_hotkeys(None));
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "linux", target_os = "freebsd")))]
 mod live_tests {
     use super::{GlobalHotkeys, Hotkey, HotkeyEvent, HotkeyKey};
 
     #[test]
-    #[ignore = "live X11 nested-display smoke"]
+    #[ignore = "live X11 desktop global-hotkey smoke"]
     fn live_global_hotkey_receives_press_and_release() {
         let hotkeys = GlobalHotkeys::listen(&[(
             7,
@@ -540,9 +544,15 @@ mod live_tests {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+#[cfg(target_os = "macos")]
+#[path = "hotkey/macos.rs"]
+mod platform;
+
+#[cfg(not(any(target_os = "linux", target_os = "freebsd", target_os = "macos")))]
 mod platform {
     use super::{GlobalHotkeys, Hotkey, HotkeyError};
+
+    pub(super) struct PlatformGuard;
 
     pub(super) fn listen(_bindings: &[(usize, Hotkey)]) -> Result<GlobalHotkeys, HotkeyError> {
         Err(HotkeyError::Unsupported)

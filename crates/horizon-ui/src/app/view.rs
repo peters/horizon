@@ -299,7 +299,7 @@ impl HorizonApp {
             return false;
         };
 
-        let zoom = fit_zoom_for_frame(canvas_rect.size(), size, Vec2::splat(64.0));
+        let zoom = fit_workspace_zoom(canvas_rect.size(), size, Vec2::splat(64.0));
         let pan_offset = aligned_pan_offset(canvas_rect, pos, size, zoom, false);
 
         self.board.focus_workspace(workspace_id);
@@ -405,6 +405,10 @@ fn fit_zoom_for_frame(canvas_size: Vec2, frame_size: Vec2, margin: Vec2) -> f32 
     horizon_core::clamp_canvas_zoom((available_size.x / frame_size.x).min(available_size.y / frame_size.y))
 }
 
+fn fit_workspace_zoom(canvas_size: Vec2, frame_size: Vec2, margin: Vec2) -> f32 {
+    fit_zoom_for_frame(canvas_size, frame_size, margin).min(horizon_core::DEFAULT_CANVAS_ZOOM)
+}
+
 fn aligned_pan_offset(canvas_rect: Rect, canvas_pos: Pos2, canvas_size: Vec2, zoom: f32, left_align: bool) -> Vec2 {
     let pan_margin = 40.0;
     let x = if left_align {
@@ -434,7 +438,10 @@ mod tests {
     use egui::{Pos2, Rect, Vec2};
     use horizon_core::{CanvasViewState, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM};
 
-    use super::{aligned_pan_offset, canvas_scene_transform, fit_zoom_for_frame, panel_focus_frame, reveal_view_state};
+    use super::{
+        aligned_pan_offset, canvas_scene_transform, fit_workspace_zoom, fit_zoom_for_frame, panel_focus_frame,
+        reveal_view_state,
+    };
 
     #[test]
     fn canvas_scene_transform_matches_canvas_view_mapping() {
@@ -494,6 +501,15 @@ mod tests {
 
         assert!((zoomed_out - MIN_CANVAS_ZOOM).abs() <= f32::EPSILON);
         assert!((zoomed_in - MAX_CANVAS_ZOOM).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn workspace_fit_zooms_out_but_never_upscales_content() {
+        let zoomed_out = fit_workspace_zoom(Vec2::new(600.0, 400.0), Vec2::new(900.0, 600.0), Vec2::splat(64.0));
+        let native_scale = fit_workspace_zoom(Vec2::new(1600.0, 1000.0), Vec2::new(100.0, 80.0), Vec2::splat(64.0));
+
+        assert!(zoomed_out < horizon_core::DEFAULT_CANVAS_ZOOM);
+        assert!((native_scale - horizon_core::DEFAULT_CANVAS_ZOOM).abs() <= f32::EPSILON);
     }
 
     #[test]

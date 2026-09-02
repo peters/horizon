@@ -11,6 +11,7 @@ use crate::app::speech::built_with_speech;
 
 const CLIPBOARD_HOTKEY_ERROR: &str =
     "Clipboard shortcuts (Ctrl/Cmd+C, X, or V) are reserved and cannot be used as speech hotkeys";
+const STACKED_SPEECH_GRID_MAX_WIDTH: f32 = 400.0;
 
 mod model_info;
 pub(in crate::app) use model_info::SpeechModelInfoCache;
@@ -91,7 +92,6 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut Sp
     if !config.features.speech.enabled {
         return changed;
     }
-
     ui.add_space(6.0);
     changed |= ui
         .checkbox(
@@ -101,10 +101,11 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut Sp
                 .size(12.0),
         )
         .changed();
-    super::dim_label(
-        ui,
-        "When no Horizon window is focused, push-to-talk inserts directly into its focused editable field through Linux accessibility. The clipboard is never used. Background dictation currently requires X11; unsupported or protected fields are left unchanged.",
-    );
+    super::dim_label(ui, desktop_injection_copy());
+    #[cfg(target_os = "macos")]
+    if config.features.speech.desktop_injection {
+        render_accessibility_status(ui);
+    }
 
     // The microphone applies to every profile, so it renders in both the
     // profiles and the flat single-model layout. Backend and hotkey mode
@@ -133,6 +134,7 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut Sp
             .show(ui, |ui| {
                 for index in 0..config.features.speech.profiles.len() {
                     changed |= render_hotkey_binder_slot(ui, config, Some(index));
+                    stack_speech_field(ui);
                     let profile = &config.features.speech.profiles[index];
                     let model_name = std::path::Path::new(&profile.model)
                         .file_name()
@@ -175,6 +177,7 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut Sp
             changed |= speech_backend_row(ui, config);
 
             ui.label(egui::RichText::new("Push-to-talk").color(theme::FG_SOFT()).size(12.0));
+            stack_speech_field(ui);
             changed |= render_hotkey_binder(ui, config);
             ui.end_row();
 
@@ -184,12 +187,54 @@ pub(super) fn render(ui: &mut Ui, config: &mut Config, model_info_cache: &mut Sp
     changed
 }
 
+fn visible_available_width(ui: &Ui) -> f32 {
+    (ui.clip_rect().right() - ui.cursor().left()).max(0.0)
+}
+
+fn speech_settings_stacked(visible_width: f32) -> bool {
+    visible_width < STACKED_SPEECH_GRID_MAX_WIDTH
+}
+
+fn stack_speech_field(ui: &mut Ui) {
+    if speech_settings_stacked(ui.clip_rect().width()) {
+        ui.end_row();
+    }
+}
+
+const fn desktop_injection_copy() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "With Horizon in the background, push-to-talk inserts directly into the exact editable field captured when you press it. Any focus change discards the transcript. macOS Accessibility is used; the clipboard is never used."
+    } else if cfg!(target_os = "linux") {
+        "When no Horizon window is focused, push-to-talk inserts directly into its focused editable field through Linux accessibility. The clipboard is never used. Background dictation currently requires X11; unsupported or protected fields are left unchanged."
+    } else {
+        "Insertion into other apps is not supported on this platform. Horizon never uses the clipboard for speech input."
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn render_accessibility_status(ui: &mut Ui) {
+    let granted = horizon_cursor::accessibility_permission_granted().unwrap_or(false);
+    ui.horizontal_wrapped(|ui| {
+        let (label, color) = if granted {
+            ("Accessibility granted", theme::PALETTE_GREEN())
+        } else {
+            ("Accessibility permission required", theme::PALETTE_YELLOW())
+        };
+        ui.label(egui::RichText::new("●").color(color).size(9.0));
+        ui.label(egui::RichText::new(label).color(theme::FG_SOFT()).size(11.0));
+        if !granted && ui.small_button("Grant Accessibility…").clicked() {
+            let _ = horizon_cursor::request_accessibility_permission();
+        }
+    });
+}
+
 /// Global hold/toggle picker; rendered in both the flat and the profiles
 /// layout (the mode applies to every push-to-talk key).
 fn speech_hotkey_mode_row(ui: &mut Ui, config: &mut Config) -> bool {
     let mut changed = false;
     let speech = &mut config.features.speech;
     ui.label(egui::RichText::new("Hotkey mode").color(theme::FG_SOFT()).size(12.0));
+    stack_speech_field(ui);
     egui::ComboBox::from_id_salt("settings_speech_hotkey_mode")
         .selected_text(match speech.hotkey_mode {
             SpeechHotkeyMode::Hold => "Hold (Ventrilo-style)",
@@ -256,7 +301,9 @@ fn input_device_names_equal(left: &str, right: &str) -> bool {
 fn speech_microphone_row(ui: &mut Ui, config: &mut Config) -> bool {
     let mut changed = false;
     ui.label(egui::RichText::new("Microphone").color(theme::FG_SOFT()).size(12.0));
+    stack_speech_field(ui);
     ui.horizontal(|ui| {
+        let picker_width = (visible_available_width(ui) - 36.0).clamp(120.0, 240.0);
         let devices = input_device_list(ui);
         let current = config.features.speech.input_device.trim().to_string();
         let selected = if current.is_empty() {
@@ -265,7 +312,7 @@ fn speech_microphone_row(ui: &mut Ui, config: &mut Config) -> bool {
             current.clone()
         };
         egui::ComboBox::from_id_salt("settings_speech_input_device")
-            .width(240.0)
+            .width(picker_width)
             .selected_text(egui::RichText::new(selected).size(12.0))
             .show_ui(ui, |ui| {
                 if ui.selectable_label(current.is_empty(), "System default").clicked() && !current.is_empty() {
@@ -309,12 +356,17 @@ fn speech_microphone_row(ui: &mut Ui, config: &mut Config) -> bool {
 fn speech_model_rows(ui: &mut Ui, config: &mut Config, model_info: &SpeechModelInfoState) -> bool {
     let mut changed = false;
     ui.label(egui::RichText::new("Model (GGUF)").color(theme::FG_SOFT()).size(12.0));
+    stack_speech_field(ui);
     changed |= ui
-        .add(egui::TextEdit::singleline(&mut config.features.speech.model).desired_width(260.0))
+        .add(
+            egui::TextEdit::singleline(&mut config.features.speech.model)
+                .desired_width(visible_available_width(ui).min(260.0)),
+        )
         .changed();
     ui.end_row();
 
     ui.label(String::new());
+    stack_speech_field(ui);
     match model_info {
         SpeechModelInfoState::Available(info) => super::dim_label(
             ui,
@@ -344,6 +396,7 @@ fn speech_language_row(ui: &mut Ui, config: &mut Config, model_info: Option<&Spe
             .color(theme::FG_SOFT())
             .size(12.0),
     );
+    stack_speech_field(ui);
     match model_info {
         Some(info) if !info.languages.is_empty() => {
             // A model that forbids auto-detect needs an explicit source; if
@@ -392,6 +445,7 @@ fn speech_output_row(
 ) -> bool {
     let mut changed = false;
     ui.label(egui::RichText::new("Output").color(theme::FG_SOFT()).size(12.0));
+    stack_speech_field(ui);
     let targets: Vec<String> = if model_info_pending {
         match config.features.speech.task {
             SpeechTask::Transcribe => Vec::new(),
@@ -427,6 +481,7 @@ fn speech_output_row(
         SpeechTask::Translate => format!("Translate to {}", config.features.speech.target_language),
     };
     egui::ComboBox::from_id_salt("settings_speech_output")
+        .width(visible_available_width(ui).min(260.0))
         .selected_text(selected)
         .show_ui(ui, |ui| {
             changed |= ui
@@ -458,6 +513,7 @@ fn speech_output_row(
     if !model_info_pending && matches!(model_info, Some(info) if info.supports_translate == Some(false)) {
         ui.end_row();
         ui.label(String::new());
+        stack_speech_field(ui);
         super::dim_label(ui, "⚠ this model does not support the translate task");
     }
     ui.end_row();
@@ -467,6 +523,7 @@ fn speech_output_row(
 fn speech_backend_row(ui: &mut Ui, config: &mut Config) -> bool {
     let mut changed = false;
     ui.label(egui::RichText::new("Backend").color(theme::FG_SOFT()).size(12.0));
+    stack_speech_field(ui);
     ui.horizontal(|ui| {
         // Explicit backends are required, not best-effort: offering one this
         // binary did not compile guarantees a load failure. Auto/CPU always
@@ -800,8 +857,22 @@ mod tests {
 
     use super::{
         CLIPBOARD_HOTKEY_ERROR, ClipboardCapture, HotkeyCaptureAttempt, captured_binding_string,
-        hotkey_capture_attempt, input_device_names_equal, render_hotkey_binder, speech_output_row,
+        desktop_injection_copy, hotkey_capture_attempt, input_device_names_equal, render_hotkey_binder,
+        speech_output_row, speech_settings_stacked,
     };
+
+    #[test]
+    fn desktop_injection_copy_promises_direct_insertion_without_clipboard() {
+        let copy = desktop_injection_copy();
+        assert!(copy.contains("clipboard"));
+        assert!(!copy.contains("paste"));
+    }
+
+    #[test]
+    fn speech_fields_stack_before_their_two_column_layout_would_clip() {
+        assert!(speech_settings_stacked(399.0));
+        assert!(!speech_settings_stacked(400.0));
+    }
 
     #[test]
     fn input_device_selection_uses_case_insensitive_name_matching() {
