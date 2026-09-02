@@ -1,5 +1,6 @@
 use super::{
-    ApiExecution, ApiJob, AzureAccessToken, AzureCleanup, AzureError, AzureProfile, CreateJobRequest, Transport,
+    ApiExecution, ApiJob, AzureAccessToken, AzureCleanup, AzureError, AzureProfile, CreateJobRequest, CreateResult,
+    Transport,
 };
 use std::time::Duration;
 use url::Url;
@@ -61,13 +62,14 @@ impl Transport for AzureHttp {
         }
         decode_json(response, &[200], "job inspection").map(Some)
     }
-    fn create(&self, name: &str, request: &CreateJobRequest) -> Result<ApiJob, AzureError> {
+    fn create(&self, name: &str, request: &CreateJobRequest) -> Result<CreateResult, AzureError> {
         let url = self.job_url(name, None)?;
         let response = self
             .authorize(self.agent.put(url.as_str()))
             .send_json(request)
             .map_err(request_failed("job creation"))?;
-        decode_json(response, &[200, 201], "job creation")
+        let created = response.status().as_u16() == 201;
+        decode_json(response, &[200, 201], "job creation").map(|job| CreateResult { job, created })
     }
     fn executions(&self, name: &str) -> Result<Vec<ApiExecution>, AzureError> {
         let url = self.job_url(name, Some("executions"))?;

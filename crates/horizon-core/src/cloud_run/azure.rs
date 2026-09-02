@@ -20,6 +20,7 @@ const PROTOCOL_ENV: &str = "HORIZON_CLOUD_PROTOCOL_VERSION";
 const TERMINATE_ENV: &str = "HORIZON_TERMINATE_AFTER";
 const MIN_LEASE_SECONDS: u32 = 300;
 const MAX_LEASE_SECONDS: u32 = 30 * 24 * 60 * 60;
+const LEASE_CLOCK_SKEW_SECONDS: i64 = 120;
 #[derive(Clone)]
 pub struct AzureAccessToken(String);
 impl AzureAccessToken {
@@ -27,12 +28,7 @@ impl AzureAccessToken {
     /// Rejects empty, oversized, whitespace-containing, or non-ASCII tokens.
     pub fn new(value: impl Into<String>) -> Result<Self, AzureError> {
         let value = value.into();
-        let valid = !value.is_empty()
-            && value.len() <= 16_384
-            && value.is_ascii()
-            && value
-                .bytes()
-                .all(|byte| !byte.is_ascii_whitespace() && !byte.is_ascii_control());
+        let valid = valid_text(&value, 16_384) && value.bytes().all(|byte| !byte.is_ascii_whitespace());
         valid.then_some(Self(value)).ok_or(AzureError::InvalidAccessToken)
     }
     pub(super) fn expose(&self) -> &str {
@@ -46,12 +42,6 @@ impl fmt::Debug for AzureAccessToken {
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct AzureRegistry {
-    pub server: String,
-    pub identity_id: String,
-}
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct AzureProfile {
     pub name: String,
     pub subscription_id: String,
@@ -60,10 +50,7 @@ pub struct AzureProfile {
     pub location: String,
     pub cpu_millicores: u32,
     pub memory_mib: u32,
-    pub ephemeral_disk_gib: u32,
     pub hourly_cost_micros: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub registry: Option<AzureRegistry>,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -155,22 +142,27 @@ impl AzureClient {
         } else {
             enforce_cost(target, self.profile.hourly_cost_micros)?;
             let request = create_request(workflow_id, job_id, target, &self.profile)?;
-            (self.transport.create(&name, &request)?, true)
+            let created = self.transport.create(&name, &request)?;
+            (created.job, created.created)
         };
         let worker = match worker_from_job(&job, workflow_id, job_id, target, &self.profile) {
             Ok(worker) => worker,
             Err(error) if created => return self.cleanup_creation_failure(&name, workflow_id, job_id, error),
             Err(error) => return Err(error),
         };
+        if !recovered_deadline_valid(&worker.delete_after, target.lease_seconds) {
+            return self.cleanup_creation_failure(&name, workflow_id, job_id, AzureError::ResourceIdentityMismatch);
+        }
         let result = (|| {
             enforce_cost(target, worker.hourly_cost_micros)?;
             let existing = self.execution_for(&job, &worker.resource_id)?;
-            let execution = if existing.is_none() && job.ready_to_start() {
+            // The persisted job is the at-most-once fence; retries only reconcile its execution.
+            let execution = if created && existing.is_none() && job.ready_to_start() {
                 self.transport.start(&name)?
             } else {
                 existing
             };
-            status_from_resource(&job, &worker, execution.as_ref())
+            status_from_resource(&job, &worker, execution.as_ref(), &self.profile)
         })();
         let status = match result {
             Ok(status) => status,
@@ -193,7 +185,7 @@ impl AzureClient {
             return Ok(None);
         };
         let execution = self.execution_for(&job, &worker.resource_id)?;
-        status_from_resource(&job, worker, execution.as_ref()).map(Some)
+        status_from_resource(&job, worker, execution.as_ref(), &self.profile).map(Some)
     }
     /// # Errors
     /// Refuses deletion when persisted or provider identity differs.
@@ -202,17 +194,16 @@ impl AzureClient {
         let Some(job) = self.transport.get(&worker.name)? else {
             return Ok(AzureCleanup::AlreadyAbsent);
         };
-        status_from_resource(&job, worker, None)?;
+        status_from_resource(&job, worker, None, &self.profile)?;
         self.transport.delete(&worker.name)
     }
     fn validate_scope(&self, worker: &AzureWorker) -> Result<(), AzureError> {
         worker.validate()?;
-        let expected = resource_id(
+        let valid = worker.resource_id.eq_ignore_ascii_case(&resource_id(
             &self.profile.subscription_id,
             &self.profile.resource_group,
             &worker.name,
-        );
-        let valid = worker.resource_id.eq_ignore_ascii_case(&expected);
+        ));
         valid.then_some(()).ok_or(AzureError::InvalidPersistedWorker)
     }
     fn single_execution(&self, name: &str, resource_id: &str) -> Result<Option<ApiExecution>, AzureError> {
@@ -294,9 +285,13 @@ pub enum AzureError {
     HourlyCostRejected { actual: u64, maximum: u64 },
 }
 type CreateJobRequest = serde_json::Value;
+struct CreateResult {
+    job: ApiJob,
+    created: bool,
+}
 trait Transport: Send + Sync {
     fn get(&self, name: &str) -> Result<Option<ApiJob>, AzureError>;
-    fn create(&self, name: &str, request: &CreateJobRequest) -> Result<ApiJob, AzureError>;
+    fn create(&self, name: &str, request: &CreateJobRequest) -> Result<CreateResult, AzureError>;
     fn executions(&self, name: &str) -> Result<Vec<ApiExecution>, AzureError>;
     fn start(&self, name: &str) -> Result<Option<ApiExecution>, AzureError>;
     fn delete(&self, name: &str) -> Result<AzureCleanup, AzureError>;
@@ -343,8 +338,16 @@ struct ApiProperties {
 #[serde(default, rename_all = "camelCase")]
 struct ApiConfiguration {
     replica_timeout: u32,
+    replica_retry_limit: u32,
     trigger_type: String,
+    manual_trigger_config: ApiManualTriggerConfig,
     registries: Option<Vec<Registry>>,
+}
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct ApiManualTriggerConfig {
+    parallelism: u32,
+    replica_completion_count: u32,
 }
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
@@ -357,6 +360,13 @@ struct ApiContainer {
     name: String,
     image: String,
     env: Vec<ApiEnv>,
+    resources: ApiResources,
+}
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+struct ApiResources {
+    cpu: f64,
+    memory: String,
 }
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -394,24 +404,12 @@ fn create_request(
         {"name": PROTOCOL_ENV, "value": super::CLOUD_RUN_PROTOCOL_VERSION.to_string()},
         {"name": TERMINATE_ENV, "value": deadline}
     ]);
-    let (identity, registries, identity_settings) = profile.registry.as_ref().map_or_else(
-        || (serde_json::json!({"type": "None"}), Vec::new(), Vec::new()),
-        |registry| {
-            (
-                serde_json::json!({
-                    "type": "UserAssigned", "userAssignedIdentities": {&registry.identity_id: {}}
-                }),
-                vec![serde_json::json!({"server": registry.server, "identity": registry.identity_id})],
-                vec![serde_json::json!({"identity": registry.identity_id, "lifecycle": "None"})],
-            )
-        },
-    );
     let properties = serde_json::json!({
         "environmentId": profile.environment_id,
         "configuration": {
             "triggerType": "Manual", "replicaTimeout": target.lease_seconds, "replicaRetryLimit": 0,
             "manualTriggerConfig": {"parallelism": 1, "replicaCompletionCount": 1},
-            "registries": registries, "identitySettings": identity_settings
+            "registries": [], "identitySettings": []
         },
         "template": {"containers": [{
             "name": "worker", "image": target.image, "env": env,
@@ -420,7 +418,7 @@ fn create_request(
         }]}
     });
     Ok(serde_json::json!({
-        "location": profile.location, "tags": tags, "identity": identity, "properties": properties
+        "location": profile.location, "tags": tags, "identity": {"type": "None"}, "properties": properties
     }))
 }
 fn validate_profile(profile: &AzureProfile) -> Result<(), AzureError> {
@@ -438,29 +436,17 @@ fn validate_profile(profile: &AzureProfile) -> Result<(), AzureError> {
         && profile.cpu_millicores.is_multiple_of(250)
         && profile.memory_mib >= 512
         && profile.memory_mib.is_multiple_of(256)
-        && profile.ephemeral_disk_gib > 0
-        && profile.hourly_cost_micros > 0
-        && profile
-            .registry
-            .as_ref()
-            .is_none_or(|registry| valid_registry_server(&registry.server) && valid_arm_id(&registry.identity_id));
+        && profile.hourly_cost_micros > 0;
     valid.then_some(()).ok_or(AzureError::InvalidProfile)
 }
 fn validate_target(target: &WorkerTarget, profile: &AzureProfile) -> Result<(), AzureError> {
     validate_profile(profile)?;
-    let registry_matches = profile.registry.as_ref().is_none_or(|registry| {
-        target
-            .image
-            .split_once('/')
-            .is_some_and(|(server, _)| server.eq_ignore_ascii_case(&registry.server))
-    });
     let valid = target.provider == CloudProvider::Azure
         && target.profile == profile.name
-        && (1..=profile.ephemeral_disk_gib).contains(&target.disk_gib)
+        && (1..=ephemeral_disk_limit(profile.cpu_millicores)).contains(&target.disk_gib)
         && (MIN_LEASE_SECONDS..=MAX_LEASE_SECONDS).contains(&target.lease_seconds)
-        && target.max_hourly_cost_micros != Some(0)
-        && valid_immutable_image(&target.image)
-        && registry_matches;
+        && target.max_hourly_cost_micros.is_some_and(|maximum| maximum > 0)
+        && valid_immutable_image(&target.image);
     valid.then_some(()).ok_or(AzureError::InvalidTarget)
 }
 fn enforce_cost(target: &WorkerTarget, actual: u64) -> Result<(), AzureError> {
@@ -484,7 +470,7 @@ fn worker_from_job(
         || !tag_matches(job, DISK_TAG, &target.disk_gib.to_string())
         || !tag_matches(job, COST_TAG, &profile.hourly_cost_micros.to_string())
         || !job.location.replace(' ', "").eq_ignore_ascii_case(&profile.location)
-        || !job_configuration_matches(job, target, profile)
+        || !job_configuration_matches(job, &target.image, target.lease_seconds, profile)
     {
         return Err(AzureError::ResourceIdentityMismatch);
     }
@@ -514,27 +500,22 @@ fn status_from_resource(
     job: &ApiJob,
     worker: &AzureWorker,
     execution: Option<&ApiExecution>,
+    profile: &AzureProfile,
 ) -> Result<AzureWorkerStatus, AzureError> {
     worker.validate()?;
     let containers = job.properties.template.containers.as_deref().unwrap_or_default();
-    let owned = job.id.eq_ignore_ascii_case(&worker.resource_id)
-        && job.name == worker.name
+    let owned = basic_identity_matches(job, worker.workflow_id, worker.job_id, profile)
+        && job.id.eq_ignore_ascii_case(&worker.resource_id)
         && job
             .properties
             .environment_id
             .eq_ignore_ascii_case(&worker.environment_id)
-        && job.properties.configuration.replica_timeout == worker.lease_seconds
-        && tag_matches(job, OWNER_TAG, "horizon")
-        && tag_matches(job, WORKFLOW_TAG, &worker.workflow_id.to_string())
-        && tag_matches(job, JOB_TAG, &worker.job_id.to_string())
-        && tag_matches(job, PROTOCOL_TAG, &super::CLOUD_RUN_PROTOCOL_VERSION.to_string())
+        && job_configuration_matches(job, &worker.image, worker.lease_seconds, profile)
         && tag_matches(job, PROFILE_TAG, &worker.profile)
         && tag_matches(job, DISK_TAG, &worker.disk_gib.to_string())
         && tag_matches(job, COST_TAG, &worker.hourly_cost_micros.to_string())
         && tag_matches(job, DEADLINE_TAG, &worker.delete_after)
         && containers.len() == 1
-        && containers[0].name == "worker"
-        && containers[0].image == worker.image
         && env_matches(&containers[0], WORKFLOW_ENV, &worker.workflow_id.to_string())
         && env_matches(&containers[0], JOB_ENV, &worker.job_id.to_string())
         && env_matches(
@@ -581,48 +562,33 @@ fn basic_identity_matches(
     profile: &AzureProfile,
 ) -> bool {
     let name = resource_name(workflow_id, job_id);
+    let id = resource_id(&profile.subscription_id, &profile.resource_group, &name);
     job.name == name
-        && job
-            .id
-            .eq_ignore_ascii_case(&resource_id(&profile.subscription_id, &profile.resource_group, &name))
+        && job.id.eq_ignore_ascii_case(&id)
         && tag_matches(job, OWNER_TAG, "horizon")
         && tag_matches(job, WORKFLOW_TAG, &workflow_id.to_string())
         && tag_matches(job, JOB_TAG, &job_id.to_string())
         && tag_matches(job, PROTOCOL_TAG, &super::CLOUD_RUN_PROTOCOL_VERSION.to_string())
 }
-fn job_configuration_matches(job: &ApiJob, target: &WorkerTarget, profile: &AzureProfile) -> bool {
+fn job_configuration_matches(job: &ApiJob, image: &str, lease_seconds: u32, profile: &AzureProfile) -> bool {
     let config = &job.properties.configuration;
     let containers = job.properties.template.containers.as_deref().unwrap_or_default();
-    let registry_matches = profile.registry.as_ref().map_or_else(
-        || {
-            config.registries.as_deref().unwrap_or_default().is_empty()
-                && job.identity.as_ref().is_none_or(|identity| {
-                    identity.user_assigned_identities.is_empty()
-                        && (identity.kind.is_empty() || identity.kind.eq_ignore_ascii_case("None"))
-                })
-        },
-        |registry| {
-            config.registries.as_deref()
-                == Some(&[Registry {
-                    server: registry.server.clone(),
-                    identity: registry.identity_id.clone(),
-                }])
-                && job.identity.as_ref().is_some_and(|identity| {
-                    identity.kind.eq_ignore_ascii_case("UserAssigned")
-                        && identity.user_assigned_identities.len() == 1
-                        && identity
-                            .user_assigned_identities
-                            .keys()
-                            .any(|id| id.eq_ignore_ascii_case(&registry.identity_id))
-                })
-        },
-    );
+    let public_image = config.registries.as_deref().unwrap_or_default().is_empty()
+        && job.identity.as_ref().is_none_or(|identity| {
+            identity.user_assigned_identities.is_empty()
+                && (identity.kind.is_empty() || identity.kind.eq_ignore_ascii_case("None"))
+        });
     config.trigger_type.eq_ignore_ascii_case("Manual")
-        && config.replica_timeout == target.lease_seconds
+        && config.replica_timeout == lease_seconds
+        && config.replica_retry_limit == 0
+        && config.manual_trigger_config.parallelism == 1
+        && config.manual_trigger_config.replica_completion_count == 1
         && containers.len() == 1
         && containers[0].name == "worker"
-        && containers[0].image == target.image
-        && registry_matches
+        && containers[0].image == image
+        && (containers[0].resources.cpu - f64::from(profile.cpu_millicores) / 1_000.0).abs() < f64::EPSILON
+        && memory_matches(&containers[0].resources.memory, profile.memory_mib)
+        && public_image
 }
 fn resource_name(workflow_id: CloudWorkflowId, job_id: CloudJobId) -> String {
     let workflow = workflow_id.to_string().replace('-', "");
@@ -638,6 +604,23 @@ fn deletion_deadline(lease_seconds: u32) -> Result<String, AzureError> {
         .ok_or(AzureError::InvalidTarget)?
         .format(&time::format_description::well_known::Rfc3339)
         .map_err(|_| AzureError::InvalidTarget)
+}
+fn recovered_deadline_valid(value: &str, lease_seconds: u32) -> bool {
+    let Ok(deadline) = time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339) else {
+        return false;
+    };
+    let now = time::OffsetDateTime::now_utc();
+    deadline >= now - time::Duration::seconds(LEASE_CLOCK_SKEW_SECONDS)
+        && deadline <= now + time::Duration::seconds(i64::from(lease_seconds) + LEASE_CLOCK_SKEW_SECONDS)
+}
+fn ephemeral_disk_limit(cpu_millicores: u32) -> u32 {
+    (cpu_millicores / 250).checked_next_power_of_two().unwrap_or(8).min(8)
+}
+fn memory_matches(value: &str, expected_mib: u32) -> bool {
+    value
+        .strip_suffix("Gi")
+        .and_then(|amount| amount.parse::<f64>().ok())
+        .is_some_and(|amount| (amount - f64::from(expected_mib) / 1_024.0).abs() < f64::EPSILON)
 }
 fn tag_matches(job: &ApiJob, key: &str, expected: &str) -> bool {
     job.tags.get(key).is_some_and(|value| value == expected)
@@ -680,13 +663,6 @@ fn valid_resource_group(value: &str) -> bool {
 }
 fn valid_location(value: &str) -> bool {
     valid_text(value, 90) && value.bytes().all(|byte| byte.is_ascii_alphanumeric())
-}
-fn valid_registry_server(value: &str) -> bool {
-    valid_text(value, 253)
-        && value.contains('.')
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
 }
 fn valid_arm_id(value: &str) -> bool {
     value.starts_with("/subscriptions/")
