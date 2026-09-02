@@ -272,6 +272,10 @@ impl Driver {
 
     pub(super) fn supersede_pending_navigation(&mut self, now: Instant) {
         if let Some(pending) = self.pending_navigation.take() {
+            // The superseded navigation's `browsingContext.navigate` reply may
+            // still be in flight; a late rejection must not fail its
+            // replacement.
+            self.navigate_request_id = None;
             self.complete_agent_action(&pending.request, Ok(pending.superseded(now)));
         }
     }

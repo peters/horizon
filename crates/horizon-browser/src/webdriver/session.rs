@@ -242,8 +242,13 @@ pub(crate) fn run_webdriver(
         driver.tick_safari_input(event_tx);
         for request in driver.tick_coordination(event_tx) {
             // A blocking action later in the batch must not delay the typed
-            // timeout of a navigation dispatched earlier in it.
+            // timeout of a navigation dispatched earlier in it, and a
+            // navigation that hit its bound earlier in the batch must have its
+            // session timeout restored and page state refreshed before the
+            // next request runs.
             driver.tick_pending_navigation();
+            driver.tick_classic_timeout_restore();
+            driver.tick_page_state_refresh(event_tx);
             driver.service_agent_request(&request, event_tx);
         }
         if let Err(error) = driver.drain_bidi_events(event_tx) {

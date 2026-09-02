@@ -410,12 +410,14 @@ impl BrowserController {
     }
 
     /// Like `wait_for_result`, but for an action whose bound the engine
-    /// enforces itself. The engine anchors that bound at the request time, so
-    /// an action it dispatches late completes at once with its typed timeout;
-    /// while the action has not been dispatched yet (queued or claimed behind
-    /// a blocking driver operation, a classic navigation for example) this
-    /// keeps waiting for that typed result instead of returning a generic
-    /// timeout, up to a hard cap.
+    /// enforces itself (navigations and selector waits). The engine always
+    /// produces a typed result for such an action: at its bound when it is
+    /// being observed, and at once when it is dispatched late because the
+    /// bound is anchored at the request time. Only the driver being blocked
+    /// (a synchronous backend call, a classic navigation, a claimed batch
+    /// serviced in order) can delay that result, so this keeps waiting for
+    /// it past the bound plus delivery headroom, up to a hard cap, instead of
+    /// returning a generic timeout that hides the typed outcome.
     async fn wait_for_engine_result(
         &self,
         panel_id: &str,
@@ -424,11 +426,8 @@ impl BrowserController {
     ) -> Result<ActionReceipt, ControlError> {
         let started = Instant::now();
         let timeout_millis = engine_bound_millis + RESULT_DELIVERY_HEADROOM_MILLIS;
-        let timeout = Duration::from_millis(timeout_millis);
         let hard_cap = Duration::from_millis(timeout_millis + MAX_ACTION_TIMEOUT_MILLIS);
         let mut last_heartbeat = started;
-        let mut last_queue_check: Option<Instant> = None;
-        let mut not_dispatched = false;
         loop {
             if let Some(result) = manifest::take_action_result(panel_id, &action_id)
                 .map_err(|source| ControlError::internal_io("could not read browser action result", source))?
@@ -436,33 +435,11 @@ impl BrowserController {
                 self.refresh_claim(panel_id)?;
                 return outcome(result);
             }
-            let elapsed = started.elapsed();
-            if elapsed >= timeout {
-                if elapsed >= hard_cap {
-                    return Err(ControlError::Timeout {
-                        action_id,
-                        timeout_millis,
-                    });
-                }
-                if last_queue_check.is_none_or(|checked| checked.elapsed() >= HEARTBEAT_INTERVAL) {
-                    // The driver takes the whole queue at once and services it
-                    // in order, so the manifest queue cannot tell a claimed
-                    // action from a dispatched one; the audit journal can: the
-                    // driver records `dispatched` right before it starts one.
-                    not_dispatched = manifest::read_audit_for(panel_id, self.identity()).is_ok_and(|entries| {
-                        !entries.iter().any(|entry| {
-                            entry.action_id == action_id
-                                && !matches!(entry.status, horizon_browser::BrowserAuditStatus::Queued)
-                        })
-                    });
-                    last_queue_check = Some(Instant::now());
-                }
-                if !not_dispatched {
-                    return Err(ControlError::Timeout {
-                        action_id,
-                        timeout_millis,
-                    });
-                }
+            if started.elapsed() >= hard_cap {
+                return Err(ControlError::Timeout {
+                    action_id,
+                    timeout_millis,
+                });
             }
             if last_heartbeat.elapsed() >= HEARTBEAT_INTERVAL {
                 self.refresh_claim(panel_id)?;
