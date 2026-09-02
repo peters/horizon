@@ -54,7 +54,7 @@ macro_rules! hex_value {
             pub fn $parser(value: impl Into<String>) -> Result<Self, CloudProtocolError> {
                 let value = value.into();
                 if value.len() != $length || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-                    return Err(CloudProtocolError::$error(value));
+                    return Err(CloudProtocolError::$error);
                 }
                 Ok(Self(value.to_ascii_lowercase()))
             }
@@ -289,13 +289,12 @@ impl CloudWorkflow {
         let mut known_weighted = 0_u128;
         let mut estimated = false;
         for node in latest {
-            let basis_points = match node.progress.basis_points() {
+            let progress = node.progress.basis_points();
+            estimated |= progress.is_none();
+            let basis_points = match progress {
                 Some(value) => u128::from(value),
                 None if matches!(node.state, CloudJobState::Completed | CloudJobState::Cleaned) => 10_000,
-                None => {
-                    estimated = true;
-                    0
-                }
+                None => 0,
             };
             known_weighted += basis_points * u128::from(node.weight);
         }
@@ -312,10 +311,10 @@ pub enum CloudProtocolError {
     UnsupportedVersion(u32),
     #[error("{0} must not be empty")]
     EmptyField(&'static str),
-    #[error("Git commit must be a full 40-character hexadecimal SHA: {0}")]
-    InvalidGitCommit(String),
-    #[error("SHA-256 digest must be 64 hexadecimal characters: {0}")]
-    InvalidSha256(String),
+    #[error("Git commit must be a full 40-character hexadecimal SHA")]
+    InvalidGitCommit,
+    #[error("SHA-256 digest must be 64 hexadecimal characters")]
+    InvalidSha256,
     #[error("workflow retention ends before it starts")]
     InvalidRetention,
     #[error("workflow timestamps are not monotonic")]

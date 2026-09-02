@@ -206,6 +206,7 @@ fn retries_are_unambiguous_and_keep_outcomes_through_cleanup() {
     previous.outcome = Some(CloudJobOutcome::Failed);
     previous.weight = 100;
     previous.retry.max_attempts = 2;
+    assert!(workflow(vec![previous.clone()]).progress().estimated);
     let mut retry = node(CloudJobId::new(), "nativesdk-build", Vec::new());
     retry.attempt = 2;
     retry.retry.max_attempts = 2;
