@@ -71,6 +71,7 @@ macro_rules! hex_value {
     };
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WorkerTarget {
     pub provider: CloudProvider,
     pub profile: String,
@@ -82,6 +83,7 @@ pub struct WorkerTarget {
 }
 hex_value!(GitCommitSha => parse; 40; InvalidGitCommit; "Parse an exact Git commit SHA.");
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GitSource {
     /// Repository identity without credentials, normally `owner/name`.
     pub repository: String,
@@ -91,6 +93,7 @@ pub struct GitSource {
 }
 hex_value!(ArtifactDigest => parse_sha256; 64; InvalidSha256; "Parse a SHA-256 digest.");
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ArtifactRef {
     pub artifact_id: String,
     /// Opaque control-plane key. Signed download URLs are never persisted.
@@ -101,6 +104,7 @@ pub struct ArtifactRef {
     pub media_type: Option<String>,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProvenanceRecord {
     pub producer_job_id: CloudJobId,
     pub source: GitSource,
@@ -116,7 +120,7 @@ pub struct ProvenanceRecord {
 }
 string_enum!(ProgressUnit: Bytes, Tests, Jobs, Steps);
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CloudProgress {
     Pending,
     Indeterminate {
@@ -149,6 +153,7 @@ string_enum!(CloudJobState: Queued, Provisioning, PullingImage, Cloning, Running
 string_enum!(CloudJobOutcome: Succeeded, Failed, Cancelled);
 string_enum!(WorkflowNodeKind: Build, Test, Artifact, Approval, Merge, Publish, Deploy, Verify, Cleanup);
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RetryPolicy {
     pub max_attempts: u16,
     pub backoff_seconds: u32,
@@ -162,7 +167,7 @@ impl Default for RetryPolicy {
     }
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ApprovalDecision {
     Pending,
     Approved {
@@ -176,6 +181,7 @@ pub enum ApprovalDecision {
     },
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ApprovalGate {
     pub action: String,
     pub decision: ApprovalDecision,
@@ -184,6 +190,7 @@ pub struct ApprovalGate {
 }
 string_enum!(ReleaseAction: MergePullRequest, PublishPackage, PublishToTest, PublishToProduction);
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReleaseGate {
     pub action: ReleaseAction,
     pub repository: String,
@@ -191,6 +198,7 @@ pub struct ReleaseGate {
     pub approval: ApprovalGate,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EnvironmentLease {
     pub environment: String,
     pub holder_workflow_id: CloudWorkflowId,
@@ -199,6 +207,7 @@ pub struct EnvironmentLease {
     pub expires_at_millis: i64,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WorkflowNode {
     pub id: CloudJobId,
     /// Stable identity shared by retry attempts of the same logical node.
@@ -238,6 +247,7 @@ pub struct WorkflowProgress {
     pub estimated: bool,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CloudWorkflow {
     pub protocol_version: u32,
     pub id: CloudWorkflowId,
@@ -344,5 +354,4 @@ pub enum CloudProtocolError {
     InvalidEnvironmentLease(CloudJobId),
 }
 #[cfg(test)]
-#[path = "cloud_run/tests.rs"]
 mod tests;

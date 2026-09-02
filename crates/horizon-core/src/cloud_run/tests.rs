@@ -57,6 +57,9 @@ fn approved(at_millis: i64) -> ApprovalDecision {
         decided_at_millis: at_millis,
     }
 }
+fn release_approval(node: &mut WorkflowNode) -> &mut ApprovalGate {
+    &mut node.release.as_mut().expect("release").approval
+}
 #[test]
 fn dependency_validation_is_iterative_and_detects_cycles() {
     let mut nodes = Vec::with_capacity(4_096);
@@ -68,10 +71,8 @@ fn dependency_validation_is_iterative_and_detects_cycles() {
     }
     assert_eq!(workflow(nodes).validate(), Ok(()));
     let (first, second) = (CloudJobId::new(), CloudJobId::new());
-    assert!(matches!(
-        invalid(vec![node(first, "first", vec![second]), node(second, "second", vec![first])]),
-        DependencyCycle(id) if id == first || id == second
-    ));
+    let cycle = vec![node(first, "first", vec![second]), node(second, "second", vec![first])];
+    assert!(matches!(invalid(cycle), DependencyCycle(id) if id == first || id == second));
 }
 #[test]
 fn approvals_and_leases_obey_snapshot_time_and_identity() {
@@ -153,8 +154,14 @@ fn v1_json_contract_round_trips() {
     assert_eq!((snapshot.validate(), record.validate()), (Ok(()), Ok(())));
     let serialized = serde_json::to_string(&(&snapshot, &record)).expect("serialize v1");
     assert_eq!(serialized, golden);
+    let unknown = golden.replacen("\"weight\":10", "\"approval_typo\":null,\"weight\":10", 1);
+    assert!(serde_json::from_str::<(CloudWorkflow, ProvenanceRecord)>(&unknown).is_err());
     assert!(record.source.commit.as_str().len() == 40 && record.artifacts[0].sha256.as_str().len() == 64);
-    for image in "https://u:p@r/i?q / .. image: Org/image image@sha256:deadbeef".split_ascii_whitespace() {
+    assert!(super::validation::valid_worker_image(
+        "registry--ha.example:5000/team/image"
+    ));
+    assert!(super::validation::valid_worker_image("[2001:db8::1]:5000/team/image"));
+    for image in "https://u:p@r/i?q / .. image: ghcr.io/Org/image image@sha256:deadbeef".split_ascii_whitespace() {
         let mut bad = snapshot.clone();
         bad.nodes[0].worker.as_mut().expect("worker").image = image.to_string();
         rejects(bad.nodes, &InvalidWorkerTarget(snapshot.nodes[0].id));
@@ -168,6 +175,9 @@ fn v1_json_contract_round_trips() {
     bad.nodes[4].depends_on.clear();
     assert_eq!(bad.validate(), Err(invalid_evidence()));
     bad.nodes[4].depends_on.push(evidence);
+    release_approval(&mut bad.nodes[4]).evidence_job_ids.push(evidence);
+    assert_eq!(bad.validate(), Err(invalid_evidence()));
+    release_approval(&mut bad.nodes[4]).evidence_job_ids.pop();
     bad.nodes[2].state = CloudJobState::Failed;
     bad.nodes[2].outcome = Some(CloudJobOutcome::Failed);
     bad.nodes[2].progress = CloudProgress::Pending;
@@ -183,25 +193,21 @@ fn inputs_are_unique_outputs_of_direct_dependencies() {
     let mut consumer = node(consumer_id, "test", vec![producer_id]);
     consumer.input_artifact_ids.push("candidate".to_string());
     assert_eq!(workflow(vec![producer.clone(), consumer.clone()]).validate(), Ok(()));
+    let invalid_input = InvalidInputArtifact(consumer_id);
     for inputs in [
         vec![String::new()],
         vec!["candidate".to_string(); 2],
         vec!["missing".to_string()],
     ] {
         consumer.input_artifact_ids = inputs;
-        rejects(
-            vec![producer.clone(), consumer.clone()],
-            &InvalidInputArtifact(consumer_id),
-        );
+        rejects(vec![producer.clone(), consumer.clone()], &invalid_input);
     }
     consumer.input_artifact_ids = vec!["candidate".to_string()];
     consumer.depends_on = vec![producer_id; 2];
-    rejects(
-        vec![producer.clone(), consumer.clone()],
-        &InvalidDependency(consumer_id),
-    );
+    let invalid_dependency = InvalidDependency(consumer_id);
+    rejects(vec![producer.clone(), consumer.clone()], &invalid_dependency);
     consumer.depends_on.clear();
-    rejects(vec![producer, consumer], &InvalidInputArtifact(consumer_id));
+    rejects(vec![producer, consumer], &invalid_input);
 }
 #[test]
 fn retries_are_unambiguous_and_keep_outcomes_through_cleanup() {
@@ -237,10 +243,8 @@ fn retries_are_unambiguous_and_keep_outcomes_through_cleanup() {
         total: 2,
         unit: ProgressUnit::Steps,
     };
-    rejects(
-        vec![previous.clone(), completed.clone()],
-        &InvalidProgress(completed.id),
-    );
+    let invalid_progress = InvalidProgress(completed.id);
+    rejects(vec![previous.clone(), completed.clone()], &invalid_progress);
     completed.progress = CloudProgress::Completed;
     let progress = workflow(vec![previous.clone(), completed]).progress();
     assert_eq!(progress.basis_points, 10_000);

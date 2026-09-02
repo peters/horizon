@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 use url::Url;
 static OCI_IMAGE_REFERENCE: LazyLock<Option<Regex>> = LazyLock::new(|| {
-    Regex::new(r"\A(?:[a-z0-9]+(?:[.-][a-z0-9]+)*(?::[0-9]+)?/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[a-f0-9]{64})?\z").ok()
+    Regex::new(r"\A(?:(?:(?:[A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9-]*[A-Za-z0-9])(?:\.(?:[A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9-]*[A-Za-z0-9]))*|\[(?:[A-Fa-f0-9:]+)\])(?::[0-9]+)?/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@[A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*:[A-Fa-f0-9]{32,})?\z").ok()
 });
 fn ensure(valid: bool, error: Error) -> Result<(), Error> {
     valid.then_some(()).ok_or(error)
@@ -184,6 +184,8 @@ fn validate_approval(
     let valid_time = |value| value >= workflow.created_at_millis && value <= workflow.updated_at_millis;
     let approved = matches!(approval.decision, ApprovalDecision::Approved { .. });
     let active = [Provisioning, PullingImage, Cloning, Running, Checkpointing].contains(&node.state);
+    let dependencies: HashSet<_> = node.depends_on.iter().copied().collect();
+    let mut evidence_ids = HashSet::new();
     match &approval.decision {
         ApprovalDecision::Pending if node.outcome != Some(CloudJobOutcome::Succeeded) && !active => {}
         ApprovalDecision::Approved {
@@ -212,17 +214,9 @@ fn validate_approval(
                 evidence: *evidence_id,
             });
         };
-        let terminal = matches!(
-            evidence.state,
-            CloudJobState::Completed
-                | CloudJobState::Failed
-                | CloudJobState::Cancelled
-                | CloudJobState::Cleaning
-                | CloudJobState::Cleaned
-        );
         ensure(
-            node.depends_on.contains(evidence_id)
-                && terminal
+            evidence_ids.insert(*evidence_id)
+                && dependencies.contains(evidence_id)
                 && evidence.outcome.is_some()
                 && (!approved || evidence.outcome == Some(CloudJobOutcome::Succeeded)),
             Error::InvalidApprovalEvidence {
@@ -295,7 +289,7 @@ fn validate_artifact(node_id: CloudJobId, artifact: &ArtifactRef) -> Result<(), 
     }
     Ok(())
 }
-fn valid_worker_image(value: &str) -> bool {
+pub(super) fn valid_worker_image(value: &str) -> bool {
     OCI_IMAGE_REFERENCE
         .as_ref()
         .is_some_and(|pattern| pattern.is_match(value))
