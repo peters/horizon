@@ -125,27 +125,23 @@ impl Driver {
                     .then_some(())
                     .ok_or_else(|| "browser did not commit a reachable URL".to_string())
             });
-        let _ = self.classic_post("timeouts", &json!({ "pageLoad": PAGE_LOAD_TIMEOUT_MILLIS }));
         let now = Instant::now();
         if let Err(error) = &result
             && classic_error_is_page_load_timeout(error)
         {
+            // Publish the typed outcome first. Restoring the session timeout
+            // and re-reading the page state are best-effort calls with their
+            // own 10 s guards; against a hung driver they would eat the
+            // controller's delivery headroom, so the loop runs them after the
+            // result is written.
             self.retain_frame_during_navigation = false;
             self.navigation_failed = false;
-            if let Ok(response) = self.classic_get("url")
-                && let Some(current) = webdriver_value(&response).and_then(Value::as_str)
-            {
-                let current = normalize_url(current).to_string();
-                if current != self.url {
-                    self.url = current;
-                    self.coordination_dirty = true;
-                    let _ = event_tx.send(BrowserEvent::UrlChanged(self.url.clone()));
-                }
-            }
+            self.classic_timeout_to_restore = Some(PAGE_LOAD_TIMEOUT_MILLIS);
+            self.refresh_pending_at = Some(now);
             self.frames.demand();
-            let committed = (self.url != previous_url).then(|| self.url.clone());
-            return Ok(pending.settle_timed_out(committed.as_deref(), now));
+            return Ok(pending.settle_timed_out(None, now));
         }
+        let _ = self.classic_post("timeouts", &json!({ "pageLoad": PAGE_LOAD_TIMEOUT_MILLIS }));
         self.finish_page(result, &format!("navigation to {url}"), event_tx)
             .map_err(|error| BrowserControlFailure::new("navigation_failed", error))?;
         let (committed, title) = (self.url.clone(), self.title.clone());
@@ -421,6 +417,16 @@ impl Driver {
             self.observe_navigation_signal(crate::navigation::NavigationSignal::Title(&title));
         }
         let _ = event_tx.send(BrowserEvent::Loading(false));
+    }
+
+    /// Restore the session page-load timeout a bounded classic navigation
+    /// lowered, once its typed outcome has been published.
+    pub(super) fn tick_classic_timeout_restore(&mut self) {
+        if let Some(page_load) = self.classic_timeout_to_restore
+            && self.classic_post("timeouts", &json!({ "pageLoad": page_load })).is_ok()
+        {
+            self.classic_timeout_to_restore = None;
+        }
     }
 
     pub(super) fn tick_page_state_refresh(&mut self, event_tx: &BrowserEventSender) {

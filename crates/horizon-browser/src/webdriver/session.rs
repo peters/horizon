@@ -159,6 +159,9 @@ struct Driver {
     navigate_request_id: Option<u64>,
     pending_classic_history_start: Option<PendingHistoryStart>,
     refresh_pending_at: Option<Instant>,
+    /// Session page-load timeout a bounded classic navigation lowered and the
+    /// loop still has to restore, once the typed outcome was published.
+    classic_timeout_to_restore: Option<u64>,
     coordination_dirty: bool,
     last_coordination_write: Instant,
     last_signal_check: Instant,
@@ -258,6 +261,7 @@ pub(crate) fn run_webdriver(
         if driver.frames.due(Instant::now()) {
             driver.capture_frame(frame_slot, event_tx);
         }
+        driver.tick_classic_timeout_restore();
         driver.tick_page_state_refresh(event_tx);
         driver.tick_pending_navigation();
         driver.write_coordination(false);
@@ -360,6 +364,7 @@ impl Driver {
             navigate_request_id: None,
             pending_classic_history_start: None,
             refresh_pending_at: None,
+            classic_timeout_to_restore: None,
             coordination_dirty: true,
             last_coordination_write: Instant::now(),
             last_signal_check: Instant::now(),
