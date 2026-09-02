@@ -320,20 +320,33 @@ fn run_loop(
         state.pending_restart_tick(link, event_tx, frame_slot);
 
         // 5. Ownership / handoff signals from the manifest (agent side).
+        if stop_for_chrome_exit(state, chrome, event_tx) {
+            break;
+        }
         let actions = state.tick_signals(event_tx);
-        let _ = state.drain_agent_actions(link, event_tx, frame_slot, actions);
+        let _ = state.drain_agent_actions(link, event_tx, frame_slot, actions, chrome);
+        if stop_for_chrome_exit(state, chrome, event_tx) {
+            break;
+        }
         state.tick_pending_navigation();
-        state.tick_pending_wait(link, event_tx, frame_slot);
+        state.tick_pending_wait(link, event_tx, frame_slot, chrome);
 
         // 6. Chrome process liveness.
-        if let Some(status) = chrome.child_status() {
-            state.settle_pending_wait_for_shutdown(Instant::now());
-            let _ = event_tx.send(BrowserEvent::Stopped { code: status.code() });
+        if stop_for_chrome_exit(state, chrome, event_tx) {
             break;
         }
 
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+fn stop_for_chrome_exit(state: &mut DriverState, chrome: &mut ChromeProcess, event_tx: &BrowserEventSender) -> bool {
+    let Some(status) = chrome.child_status() else {
+        return false;
+    };
+    state.settle_pending_wait_for_shutdown(Instant::now());
+    let _ = event_tx.send(BrowserEvent::Stopped { code: status.code() });
+    true
 }
 
 #[derive(Clone, Copy, Debug)]

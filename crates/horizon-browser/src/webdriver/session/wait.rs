@@ -6,8 +6,8 @@ use std::time::Instant;
 
 use crate::navigation::{AgentActionExecution, PendingNavigation, now_millis};
 use crate::wait::{
-    Observation, PendingWait, RELEASE_CHECK_BUDGET, WAIT_MAX_RESULTS, WaitResult, WaitStop,
-    defer_result_during_shutdown,
+    BackendChecked, Observation, PendingWait, RELEASE_CHECK_BUDGET, WAIT_MAX_RESULTS, WaitResult, WaitStop,
+    defer_result_during_shutdown, run_while_backend_available,
 };
 use crate::{AgentAction, BrowserControlAction, BrowserControlFailure};
 
@@ -51,7 +51,17 @@ impl Driver {
         // The first observation runs under the same guards as every later one:
         // an already-expired bound, a lost lease, a pending handoff, or an
         // uncommitted navigation must not let it succeed against the old page.
-        let result = self.advance_wait(&mut pending, now, true);
+        let result = run_while_backend_available(
+            self,
+            |driver| driver.service.process.child_status().is_some(),
+            |driver| driver.advance_wait(&mut pending, now, true),
+        );
+        let result = match result {
+            BackendChecked::Available(result) => result,
+            BackendChecked::Unavailable => {
+                return AgentActionExecution::Done(self.retained_shutdown_wait_result(&pending, Instant::now()));
+            }
+        };
         if let Some(result) = defer_result_during_shutdown(stop_requested, result) {
             return AgentActionExecution::Done(result);
         }
@@ -68,7 +78,18 @@ impl Driver {
         };
         let now = Instant::now();
         let observe = pending.poll_due(now);
-        let result = self.advance_wait(&mut pending, now, observe);
+        let result = run_while_backend_available(
+            self,
+            |driver| driver.service.process.child_status().is_some(),
+            |driver| driver.advance_wait(&mut pending, now, observe),
+        );
+        let result = match result {
+            BackendChecked::Available(result) => result,
+            BackendChecked::Unavailable => {
+                self.complete_wait_for_shutdown(&pending, Instant::now());
+                return;
+            }
+        };
         let result = defer_result_during_shutdown(stop_requested, result);
         match result {
             Some(result) => {
@@ -171,10 +192,19 @@ impl Driver {
     /// Publish a terminal result before the driver loop releases its state.
     pub(super) fn settle_pending_wait_for_shutdown(&mut self, now: Instant) {
         if let Some(pending) = self.pending_wait.take() {
-            self.complete_agent_action(&pending.request, pending.stopped(WaitStop::BrowserUnavailable, now));
-            if let Some(coordination) = self.config.coordination.as_ref() {
-                coordination.retain_action_result_on_remove(&self.config.panel_local_id, &pending.request.action_id);
-            }
+            self.complete_wait_for_shutdown(&pending, now);
         }
+    }
+
+    fn complete_wait_for_shutdown(&mut self, pending: &PendingWait, now: Instant) {
+        let result = self.retained_shutdown_wait_result(pending, now);
+        self.complete_agent_action(&pending.request, result);
+    }
+
+    fn retained_shutdown_wait_result(&self, pending: &PendingWait, now: Instant) -> WaitResult {
+        if let Some(coordination) = self.config.coordination.as_ref() {
+            coordination.retain_action_result_on_remove(&self.config.panel_local_id, &pending.request.action_id);
+        }
+        pending.stopped(WaitStop::BrowserUnavailable, now)
     }
 }
