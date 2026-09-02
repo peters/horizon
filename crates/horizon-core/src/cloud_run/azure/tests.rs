@@ -116,6 +116,8 @@ fn creation_is_bounded_and_retries_reuse_one_execution() {
     let state = transport.0.lock().expect("state");
     let request = state.requests.first().expect("request");
     assert_eq!(request["properties"]["configuration"]["replicaTimeout"], 3_600);
+    let resources = &request["properties"]["template"]["containers"][0]["resources"];
+    assert_eq!(resources["memory"], "1.00Gi");
     assert_eq!(request["identity"]["type"], "UserAssigned");
     assert_eq!(
         request["properties"]["configuration"]["identitySettings"][0]["lifecycle"],

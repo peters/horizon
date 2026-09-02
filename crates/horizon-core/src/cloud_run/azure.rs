@@ -65,7 +65,6 @@ pub struct AzureProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registry: Option<AzureRegistry>,
 }
-/// Persistable Azure identity sufficient for recovery and exact cleanup.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AzureWorker {
@@ -128,7 +127,6 @@ pub enum AzureCleanup {
     DeletionPending,
     AlreadyAbsent,
 }
-/// Blocking Azure ARM client. Call it from a worker thread when used by an async UI.
 pub struct AzureClient {
     profile: AzureProfile,
     transport: Box<dyn Transport>,
@@ -346,12 +344,12 @@ struct ApiProperties {
 struct ApiConfiguration {
     replica_timeout: u32,
     trigger_type: String,
-    registries: Vec<Registry>,
+    registries: Option<Vec<Registry>>,
 }
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 struct ApiTemplate {
-    containers: Vec<ApiContainer>,
+    containers: Option<Vec<ApiContainer>>,
 }
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
@@ -418,7 +416,7 @@ fn create_request(
         "template": {"containers": [{
             "name": "worker", "image": target.image, "env": env,
             "resources": {"cpu": f64::from(profile.cpu_millicores) / 1_000.0,
-                          "memory": format!("{}Mi", profile.memory_mib)}
+                          "memory": format!("{:.2}Gi", f64::from(profile.memory_mib) / 1_024.0)}
         }]}
     });
     Ok(serde_json::json!({
@@ -439,7 +437,7 @@ fn validate_profile(profile: &AzureProfile) -> Result<(), AzureError> {
         && profile.cpu_millicores >= 250
         && profile.cpu_millicores.is_multiple_of(250)
         && profile.memory_mib >= 512
-        && profile.memory_mib.is_multiple_of(128)
+        && profile.memory_mib.is_multiple_of(256)
         && profile.ephemeral_disk_gib > 0
         && profile.hourly_cost_micros > 0
         && profile
@@ -485,7 +483,7 @@ fn worker_from_job(
         || !tag_matches(job, PROFILE_TAG, &profile.name)
         || !tag_matches(job, DISK_TAG, &target.disk_gib.to_string())
         || !tag_matches(job, COST_TAG, &profile.hourly_cost_micros.to_string())
-        || !job.location.eq_ignore_ascii_case(&profile.location)
+        || !job.location.replace(' ', "").eq_ignore_ascii_case(&profile.location)
         || !job_configuration_matches(job, target, profile)
     {
         return Err(AzureError::ResourceIdentityMismatch);
@@ -518,7 +516,7 @@ fn status_from_resource(
     execution: Option<&ApiExecution>,
 ) -> Result<AzureWorkerStatus, AzureError> {
     worker.validate()?;
-    let containers = job.properties.template.containers.as_slice();
+    let containers = job.properties.template.containers.as_deref().unwrap_or_default();
     let owned = job.id.eq_ignore_ascii_case(&worker.resource_id)
         && job.name == worker.name
         && job
@@ -594,21 +592,21 @@ fn basic_identity_matches(
 }
 fn job_configuration_matches(job: &ApiJob, target: &WorkerTarget, profile: &AzureProfile) -> bool {
     let config = &job.properties.configuration;
-    let containers = job.properties.template.containers.as_slice();
+    let containers = job.properties.template.containers.as_deref().unwrap_or_default();
     let registry_matches = profile.registry.as_ref().map_or_else(
         || {
-            config.registries.is_empty()
+            config.registries.as_deref().unwrap_or_default().is_empty()
                 && job.identity.as_ref().is_none_or(|identity| {
                     identity.user_assigned_identities.is_empty()
                         && (identity.kind.is_empty() || identity.kind.eq_ignore_ascii_case("None"))
                 })
         },
         |registry| {
-            config.registries
-                == [Registry {
+            config.registries.as_deref()
+                == Some(&[Registry {
                     server: registry.server.clone(),
                     identity: registry.identity_id.clone(),
-                }]
+                }])
                 && job.identity.as_ref().is_some_and(|identity| {
                     identity.kind.eq_ignore_ascii_case("UserAssigned")
                         && identity.user_assigned_identities.len() == 1
@@ -681,7 +679,7 @@ fn valid_resource_group(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || b"._-()".contains(&byte))
 }
 fn valid_location(value: &str) -> bool {
-    valid_text(value, 90) && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    valid_text(value, 90) && value.bytes().all(|byte| byte.is_ascii_alphanumeric())
 }
 fn valid_registry_server(value: &str) -> bool {
     valid_text(value, 253)
