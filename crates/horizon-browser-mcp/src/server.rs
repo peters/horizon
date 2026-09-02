@@ -67,9 +67,11 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_create",
-        description = "Create a browser panel in the calling agent's Horizon workspace and wait until it is controllable. Use this when browser_list is empty. Reuse an existing panel for iframes, popups, dialogs, and consent flows; never create a helper panel for them. Only when the user explicitly requests an independent session, set allow_additional=true. Set visible=false for a live background panel; omit backend to use Horizon's configured browser. Bare hostnames default to HTTPS and explicit HTTP is preserved."
+        description = "Create a browser panel in the calling agent's Horizon workspace and wait until its backend is ready and, when url is given, that page has committed; if the page has not committed within a bounded startup wait the panel is still returned with navigation=pending, and if the first page failed to load it is returned with navigation=failed and navigation_error (the panel is controllable; navigate again). Use this when browser_list is empty. Reuse an existing panel for iframes, popups, dialogs, and consent flows; never create a helper panel for them. Only when the user explicitly requests an independent session, set allow_additional=true. Set visible=false for a live background panel; omit backend to use Horizon's configured browser. Bare hostnames default to HTTPS and explicit HTTP is preserved."
     )]
     async fn browser_create(&self, Parameters(input): Parameters<CreateInput>) -> Result<Json<CreateOutput>, String> {
+        // Matches the request normalization: a blank url is no navigation.
+        let url_requested = input.url.as_deref().is_some_and(|url| !url.trim().is_empty());
         let receipt = self
             .controller
             .create(
@@ -84,6 +86,9 @@ impl HorizonBrowserMcp {
         Ok(Json(CreateOutput {
             action_id: receipt.action_id,
             panel: receipt.panel,
+            navigation: crate::model::CreateNavigationState::resolve(receipt.navigation, url_requested),
+            navigation_error: receipt.navigation_error,
+            startup_millis: receipt.startup_millis,
         }))
     }
 

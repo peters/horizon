@@ -12,7 +12,14 @@ the Horizon browser MCP server is not connected.
 
 Start with `browser_list` when the panel id is unknown. If it returns no panels,
 call `browser_create`; this opens a panel in the current agent's Horizon
-workspace and returns its ready panel id. If it returns a usable panel, reuse
+workspace and returns its ready panel id once the backend is ready and, when
+you passed a `url`, once that page committed (`navigation: committed`). A
+`navigation: pending` result means the panel is controllable but the first
+page had not committed within the bounded startup wait, so use `browser_wait`
+or `browser_panel` before reading it; `navigation: failed` means that page
+failed to load (`navigation_error` says why) and you must navigate again or
+fix the URL; `navigation: superseded` means the user navigated the panel
+first, so read `panel.url` before acting. If `browser_list` returns a usable panel, reuse
 that panel for iframe, popup, dialog, and consent interactions. Never create or
 reveal a helper panel as a workaround. Only when the user explicitly requests
 another independent browser session may you call `browser_create` with

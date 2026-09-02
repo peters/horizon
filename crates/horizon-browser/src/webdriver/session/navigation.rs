@@ -12,8 +12,8 @@ use crate::{
 };
 
 use super::{
-    Driver, NAVIGATION_HTTP_TIMEOUT, PAGE_LOAD_TIMEOUT_MILLIS, PendingHistoryStart, classic_navigation_committed,
-    normalize_url, webdriver_value,
+    Driver, NAVIGATION_HTTP_TIMEOUT, PAGE_LOAD_TIMEOUT_MILLIS, PendingHistoryStart, STARTUP_PAGE_LOAD_TIMEOUT_MILLIS,
+    classic_navigation_committed, normalize_url, webdriver_value,
 };
 
 /// How much longer than a classic navigation's bound its HTTP read waits for
@@ -297,6 +297,78 @@ impl Driver {
         }
     }
 
+    /// The startup navigation. Firefox `BiDi` dispatches it asynchronously and
+    /// settles from its events; classic `WebDriver` would otherwise block the
+    /// driver for the whole 50 s page-load timeout before the servicing loop
+    /// starts, so it runs under a 10 s page-load bound: a slow page keeps
+    /// loading in the browser while commands and agent actions are already
+    /// serviced, and page state is re-read every second until it commits.
+    /// Returns whether the navigation is still running when this returns.
+    pub(super) fn navigate_initial(&mut self, url: &str, event_tx: &BrowserEventSender) -> bool {
+        if self.config.browser.backend == BackendKind::FirefoxBidi {
+            // Firefox answers `browsingContext.navigate` only once the
+            // destination responds; a synchronous call would fail a slow
+            // first page at the 5 s command timeout before the loop starts.
+            // Dispatch without waiting: the reply and the navigation events
+            // are serviced by the loop like any agent navigation.
+            return self.dispatch_bidi_navigate(url, event_tx).is_ok();
+        }
+        let url = normalize_navigation_target(url);
+        let previous_url = self.url.clone();
+        if let Err(error) = self.classic_post("timeouts", &json!({ "pageLoad": STARTUP_PAGE_LOAD_TIMEOUT_MILLIS })) {
+            // Navigating under an unknown bound could block the servicing
+            // loop for the full session timeout; fail the startup navigation
+            // instead, so the create reports it and the loop starts now.
+            self.navigation_failed = true;
+            let _ = event_tx.send(BrowserEvent::NavigationFailed(format!(
+                "could not apply the startup navigation bound: {error}"
+            )));
+            let _ = event_tx.send(BrowserEvent::Loading(false));
+            return false;
+        }
+        self.begin_navigation();
+        let _ = event_tx.send(BrowserEvent::Loading(true));
+        let started = Instant::now();
+        let result = self
+            .classic_navigation_post_within(
+                "url",
+                &json!({ "url": &url }),
+                Duration::from_millis(STARTUP_PAGE_LOAD_TIMEOUT_MILLIS + 5_000),
+            )
+            .and_then(|_| self.classic_get("url"))
+            .and_then(|response| {
+                classic_navigation_committed(&response, &url, &previous_url)
+                    .then_some(())
+                    .ok_or_else(|| "browser did not commit a reachable URL".to_string())
+            });
+        if self
+            .classic_post("timeouts", &json!({ "pageLoad": PAGE_LOAD_TIMEOUT_MILLIS }))
+            .is_err()
+        {
+            // The loop retries the restore so later navigations do not run
+            // under the startup bound.
+            self.classic_timeout_to_restore = Some(PAGE_LOAD_TIMEOUT_MILLIS);
+        }
+        let timed_out = result
+            .as_ref()
+            .is_err_and(|error| classic_error_is_page_load_timeout(error));
+        if timed_out {
+            // Still loading: keep the frame, report nothing failed, and poll
+            // the page state until the document commits or the normal
+            // page-load window passes.
+            self.retain_frame_during_navigation = false;
+            self.navigation_failed = false;
+            // The window counts from the navigation start, so the overall
+            // failure cutoff stays at the normal page-load window.
+            self.startup_refresh_until = Some(started + Duration::from_millis(PAGE_LOAD_TIMEOUT_MILLIS));
+            self.refresh_pending_at = Some(Instant::now() + Duration::from_secs(1));
+            tracing::debug!(target: "browser", url = %url, "startup navigation still loading after its bound");
+            return true;
+        }
+        let _ = self.finish_page(result, &format!("startup navigation to {url}"), event_tx);
+        false
+    }
+
     pub(super) fn navigate(&mut self, url: &str, event_tx: &BrowserEventSender) -> Result<(), String> {
         let url = normalize_navigation_target(url);
         // A non-agent navigation takes the page over: a pending agent
@@ -402,6 +474,24 @@ impl Driver {
         Ok(())
     }
 
+    pub(super) fn classic_get(&self, suffix: &str) -> Result<Value, String> {
+        self.service
+            .http
+            .get(&self.session_path(suffix))
+            .map_err(|error| error.to_string())
+    }
+
+    pub(super) fn classic_post(&self, suffix: &str, body: &Value) -> Result<Value, String> {
+        self.service
+            .http
+            .post(&self.session_path(suffix), body)
+            .map_err(|error| error.to_string())
+    }
+
+    pub(super) fn session_path(&self, suffix: &str) -> String {
+        format!("/session/{}/{}", self.session_id, suffix.trim_start_matches('/'))
+    }
+
     fn classic_navigation_post(&self, suffix: &str, body: &serde_json::Value) -> Result<serde_json::Value, String> {
         self.classic_navigation_post_within(suffix, body, NAVIGATION_HTTP_TIMEOUT)
     }
@@ -458,7 +548,31 @@ impl Driver {
             return;
         }
         self.refresh_pending_at = None;
+        let previous_url = self.url.clone();
         self.refresh_page_state(event_tx);
+        if let Some(until) = self.startup_refresh_until {
+            if self.url != previous_url {
+                self.startup_refresh_until = None;
+                self.frames.demand();
+            } else if Instant::now() >= until {
+                // Classic WebDriver reports no later event, so a navigation
+                // that has not committed by the page-load window is failed
+                // explicitly instead of leaving the panel silently stale.
+                self.startup_refresh_until = None;
+                self.navigation_failed = true;
+                self.frames.interaction_started_at = None;
+                let _ = event_tx.send(BrowserEvent::NavigationFailed(
+                    "the navigation did not commit within the page-load window".to_string(),
+                ));
+                let _ = event_tx.send(BrowserEvent::Loading(false));
+            } else {
+                // `refresh_page_state` reported the page as not loading; the
+                // startup navigation is still running, so say so until it
+                // commits or the window passes.
+                let _ = event_tx.send(BrowserEvent::Loading(true));
+                self.refresh_pending_at = Some(Instant::now() + Duration::from_secs(1));
+            }
+        }
     }
 }
 

@@ -51,8 +51,9 @@ mod workspace;
 pub use agent::{claim, enqueue_action, heartbeat, release, request_handoff};
 pub use audit::{audit_path_for_root, default_audit_path, read_audit};
 pub use create::{
-    BrowserCreateAuditStatus, BrowserCreateOutcome, BrowserCreateRequest, BrowserCreateResult, claim_create_request,
-    complete_create_request, enqueue_create, list_create_requests, record_create_status, take_create_result,
+    BrowserCreateAuditStatus, BrowserCreateOutcome, BrowserCreateRequest, BrowserCreateResult, CreateNavigation,
+    claim_create_request, complete_create_request, enqueue_create, list_create_requests, record_create_status,
+    take_create_result,
 };
 pub use result::{action_result_path_for_root, default_action_result_path, take_action_result};
 pub use visibility::{

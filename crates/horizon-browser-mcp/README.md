@@ -34,7 +34,17 @@ shell commands, files, or other MCP servers.
   A panel's `visible` field is host presentation state, not proof that it is
   in the caller's workspace.
 - `browser_create` opens a panel in the calling agent's Horizon workspace and
-  returns only after it is ready and owned by that agent. It uses the configured
+  returns only after its backend is ready, it is owned by that agent, and,
+  when a `url` was given, that page has committed (`navigation: committed`,
+  with `panel.url` authoritative; the title is read after commit and may still
+  be empty or change). If the first page has not
+  committed within a bounded startup wait, the controllable panel is still
+  returned with `navigation: pending` instead of an empty URL presented as
+  ready; if that page failed to load, it is returned with `navigation: failed`
+  and the browser's `navigation_error` (an explicit `about:blank` counts as
+  committed); if the user navigated the panel before that page committed, it
+  is returned with `navigation: superseded` at the user's page. `startup_millis` reports the latency from the host accepting the
+  request until the panel was reported. It uses the configured
   backend unless explicitly overridden. Set `visible: false` to start a live
   background panel. If the same agent already owns a panel, creation is rejected
   unless the user explicitly requested another independent session and the call

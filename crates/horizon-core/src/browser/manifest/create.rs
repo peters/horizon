@@ -51,20 +51,70 @@ pub struct BrowserCreateResult {
     pub outcome: BrowserCreateOutcome,
 }
 
+/// Where the requested startup navigation stood when creation completed.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CreateNavigation {
+    /// No initial URL was requested; the panel is ready at its blank page.
+    #[default]
+    NotRequested,
+    /// The requested page committed; the manifest URL is authoritative.
+    Committed,
+    /// The backend is ready but the requested page had not committed within
+    /// the bounded startup wait; the panel is controllable and still loading.
+    Pending,
+    /// The backend is ready but the requested page failed to load; the panel
+    /// is controllable at its previous (blank) document and
+    /// `navigation_error` carries the browser's message.
+    Failed,
+    /// The user navigated the panel before the requested page committed; the
+    /// panel is controllable at the user's page, and the requested page is
+    /// not coming.
+    Superseded,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum BrowserCreateOutcome {
-    Ready { panel_local_id: String },
-    Failed { code: String, message: String },
+    Ready {
+        panel_local_id: String,
+        /// Absent in results written by hosts that predate startup
+        /// readiness; readers must not treat that as proof that no URL was
+        /// requested.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        navigation: Option<CreateNavigation>,
+        /// The browser's message when `navigation` is `failed`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        navigation_error: Option<String>,
+        /// Milliseconds from the host accepting the request until the panel
+        /// was reported ready.
+        #[serde(default)]
+        startup_millis: u64,
+    },
+    Failed {
+        code: String,
+        message: String,
+    },
 }
 
 impl BrowserCreateResult {
     #[must_use]
-    pub fn ready(request: &BrowserCreateRequest, panel_local_id: String) -> Self {
+    pub fn ready(
+        request: &BrowserCreateRequest,
+        panel_local_id: String,
+        navigation: CreateNavigation,
+        navigation_error: Option<String>,
+        startup_millis: u64,
+    ) -> Self {
         Self {
             request_id: request.request_id.clone(),
             actor: request.actor.clone(),
-            outcome: BrowserCreateOutcome::Ready { panel_local_id },
+            outcome: BrowserCreateOutcome::Ready {
+                panel_local_id,
+                navigation: Some(navigation),
+                navigation_error,
+                startup_millis,
+            },
         }
     }
 
@@ -372,6 +422,42 @@ const fn default_visible() -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn ready_outcomes_keep_the_legacy_shape_and_default_the_navigation_state() {
+        let legacy: BrowserCreateOutcome =
+            serde_json::from_value(serde_json::json!({ "status": "ready", "panel_local_id": "panel" }))
+                .expect("legacy ready outcome decodes");
+        assert_eq!(
+            legacy,
+            BrowserCreateOutcome::Ready {
+                panel_local_id: "panel".to_string(),
+                navigation: None,
+                navigation_error: None,
+                startup_millis: 0,
+            },
+            "a legacy result leaves the navigation state unknown rather than claiming no URL was requested"
+        );
+        let encoded = serde_json::to_value(BrowserCreateOutcome::Ready {
+            panel_local_id: "panel".to_string(),
+            navigation: Some(CreateNavigation::Pending),
+            navigation_error: None,
+            startup_millis: 1234,
+        })
+        .expect("encode");
+        assert_eq!(encoded["navigation"], "pending");
+        assert_eq!(encoded["startup_millis"], 1234);
+        assert!(encoded.get("navigation_error").is_none());
+        let failed = serde_json::to_value(BrowserCreateOutcome::Ready {
+            panel_local_id: "panel".to_string(),
+            navigation: Some(CreateNavigation::Failed),
+            navigation_error: Some("could not navigate to https://down.test/".to_string()),
+            startup_millis: 900,
+        })
+        .expect("encode");
+        assert_eq!(failed["navigation"], "failed");
+        assert_eq!(failed["navigation_error"], "could not navigate to https://down.test/");
+    }
+
     fn root() -> tempfile::TempDir {
         tempfile::tempdir().expect("isolated create root")
     }
@@ -412,7 +498,13 @@ mod tests {
         );
         assert!(list_at(root.path()).expect("list claimed requests").is_empty());
 
-        let result = BrowserCreateResult::ready(&claimed, "browser-panel".to_string());
+        let result = BrowserCreateResult::ready(
+            &claimed,
+            "browser-panel".to_string(),
+            CreateNavigation::Committed,
+            None,
+            1_500,
+        );
         complete_at(root.path(), &result).expect("complete create");
         assert_eq!(
             take_at(root.path(), &request_id, actor).expect("take result"),

@@ -86,7 +86,9 @@ The reusable runner:
 - launches the exact Horizon binary with an agent panel and no Browser panel;
 - invokes only the fourteen public `browser_*` MCP tools;
 - proves empty discovery followed by an audited hidden `browser_create` in the
-  requesting agent's workspace, controls it while hidden, shows it through
+  requesting agent's workspace whose result already reports the committed
+  first page (`navigation: committed`, `startup_millis`) and is queryable
+  immediately, controls it while hidden, shows it through
   `browser_visibility`, then checks schemas, navigation,
   snapshot/query/ref lifetime, trusted
   single and double click, Unicode fill, scroll, history, wait/evaluate,
