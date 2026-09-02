@@ -422,6 +422,11 @@ impl DriverState {
             return;
         }
         self.retain_frame_during_navigation = false;
+        // A same-document history traversal (a hash or history-state entry)
+        // completes here rather than through frameNavigated or
+        // frameStoppedLoading, so the top-frame navigation it started ends
+        // here too; otherwise every later wait would stay navigation-blocked.
+        self.top_frame_navigating = false;
         self.navigation_failed = false;
         self.invalidate_scrollbar_layout();
         let url = normalized_committed_url(target_url);
