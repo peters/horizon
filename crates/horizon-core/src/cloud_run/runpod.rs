@@ -142,7 +142,14 @@ impl RunPodClient {
     ) -> Result<RunPodEnsure, RunPodError> {
         validate_target(target, profile)?;
         let name = resource_name(workflow_id, job_id);
-        let matches = self.transport.list_by_name(&name)?;
+        let mut matches = self.transport.list_by_name(&name)?;
+        for delay_ms in http::PROPAGATION_BACKOFF_MS {
+            if !matches.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+            matches = self.transport.list_by_name(&name)?;
+        }
         let (pod, created, expected_deadline) = match matches.as_slice() {
             [] => {
                 let request = CreatePodRequest::new(workflow_id, job_id, target, profile, name.clone())?;

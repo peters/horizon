@@ -7,7 +7,7 @@ const CREATE_MUTATION: &str =
     "mutation CreatePod($input: PodFindAndDeployOnDemandInput!) { podFindAndDeployOnDemand(input: $input) { id } }";
 const RESPONSE_LIMIT_BYTES: u64 = 2 * 1024 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-const PROPAGATION_BACKOFF_MS: [u64; 7] = [250, 500, 1_000, 2_000, 4_000, 8_000, 16_000];
+pub(super) const PROPAGATION_BACKOFF_MS: [u64; 8] = [0, 250, 500, 1_000, 2_000, 4_000, 8_000, 16_000];
 const CAPACITY_ERROR_MARKERS: [&str; 8] = [
     "no longer any instances available",
     "no instances currently available",
@@ -23,7 +23,6 @@ pub(super) struct RunPodHttp {
     base: Url,
     authorization: String,
 }
-
 #[derive(serde::Deserialize)]
 struct ListPodsResponse {
     pods: Vec<ApiPod>,
@@ -46,7 +45,6 @@ impl RunPodHttp {
             authorization: format!("Bearer {}", api_key.expose()),
         })
     }
-
     fn pods_url(&self) -> Result<Url, RunPodError> {
         self.base.join("pods").map_err(|_| RunPodError::InvalidResponse {
             operation: "URL construction",
@@ -101,10 +99,10 @@ impl Transport for RunPodHttp {
             });
         };
         for delay_ms in PROPAGATION_BACKOFF_MS {
+            thread::sleep(Duration::from_millis(delay_ms));
             if let Ok(Some(pod)) = self.get(&pod_id) {
                 return Ok(pod);
             }
-            thread::sleep(Duration::from_millis(delay_ms));
         }
         if self.delete(&pod_id) != Ok(RunPodCleanup::Deleted) || !matches!(self.get(&pod_id), Ok(None)) {
             return Err(RunPodError::CreationCleanupFailed { pod_id });
@@ -145,9 +143,6 @@ impl Transport for RunPodHttp {
                 operation: "pod deletion",
                 status: response.status().as_u16(),
             });
-        }
-        if matches!(self.get(pod_id), Ok(None)) {
-            return Ok(RunPodCleanup::Deleted);
         }
         for delay_ms in PROPAGATION_BACKOFF_MS {
             thread::sleep(Duration::from_millis(delay_ms));

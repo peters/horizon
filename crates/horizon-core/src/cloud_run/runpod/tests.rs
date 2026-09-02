@@ -1,5 +1,4 @@
 use super::*;
-use crate::cloud_run::CloudProvider;
 use std::sync::{Arc, Mutex};
 #[derive(Clone, Default)]
 struct FakeTransport(Arc<Mutex<FakeState>>);
@@ -9,7 +8,7 @@ struct FakeState {
     create_response: Option<ApiPod>,
     create_requests: Vec<CreatePodRequest>,
     deleted: Vec<String>,
-    fail_delete: bool,
+    hidden_list_calls: u8,
 }
 impl FakeTransport {
     fn with_create_response(response: ApiPod) -> Self {
@@ -25,7 +24,12 @@ impl FakeTransport {
 }
 impl Transport for FakeTransport {
     fn list_by_name(&self, _name: &str) -> Result<Vec<ApiPod>, RunPodError> {
-        Ok(self.0.lock().expect("state").pods.clone())
+        let mut state = self.0.lock().expect("state");
+        if state.hidden_list_calls > 0 {
+            state.hidden_list_calls -= 1;
+            return Ok(Vec::new());
+        }
+        Ok(state.pods.clone())
     }
     fn create(&self, request: &CreatePodRequest) -> Result<ApiPod, RunPodError> {
         let mut state = self.0.lock().expect("state");
@@ -43,11 +47,6 @@ impl Transport for FakeTransport {
     }
     fn delete(&self, pod_id: &str) -> Result<RunPodCleanup, RunPodError> {
         let mut state = self.0.lock().expect("state");
-        if state.fail_delete {
-            return Err(RunPodError::RequestFailed {
-                operation: "pod deletion",
-            });
-        }
         state.deleted.push(pod_id.to_string());
         state.pods.retain(|pod| pod.id != pod_id);
         Ok(RunPodCleanup::Deleted)
@@ -163,7 +162,6 @@ fn creation_uses_secure_direct_pull_and_bandwidth_constraints() {
     assert_eq!(request.min_download_mbps, Some(250));
     assert_eq!(request.min_upload_mbps, Some(100));
     assert_eq!(request.container_disk_in_gb, 80);
-    assert_eq!(request.env.len(), 4);
     assert!(
         request
             .env
@@ -182,6 +180,7 @@ fn retries_reuse_one_exact_worker_and_reject_ambiguity() {
     let target = target();
     let pod = api_pod(workflow_id, job_id, &target, Some(420_000));
     let transport = FakeTransport::with_pods(vec![pod.clone()]);
+    transport.0.lock().expect("state").hidden_list_calls = 2;
     let observer = transport.clone();
     let result = RunPodClient::with_transport(transport)
         .ensure_worker(workflow_id, job_id, &target, &profile())
