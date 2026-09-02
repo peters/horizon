@@ -4,8 +4,8 @@
 use std::time::Instant;
 
 use crate::navigation::{AgentActionExecution, PendingNavigation, now_millis};
-use crate::wait::{PendingWait, WAIT_QUERY_RESULTS, WaitResult, WaitStop};
-use crate::{AgentAction, BrowserControlAction, BrowserControlFailure, BrowserControlValue};
+use crate::wait::{Observation, PendingWait, WAIT_QUERY_RESULTS, WaitResult, WaitStop};
+use crate::{AgentAction, BrowserControlAction, BrowserControlFailure};
 
 use super::Driver;
 
@@ -84,8 +84,13 @@ impl Driver {
         }
         // A satisfied observation completes only after the signals have been
         // re-read and BiDi events drained: the guards above ran again first.
-        if let Some(result) = pending.take_deferred(self.signal_epoch) {
-            return Some(result);
+        if let Some(scan) = pending.take_deferred(self.signal_epoch) {
+            // Register the released scan now, so the returned references are
+            // the current ones and no earlier observation disturbed the map.
+            return Some(match self.semantic_register_scan(scan) {
+                Ok((generation, revision, nodes)) => Ok(pending.outcome(generation, revision, nodes, now)),
+                Err(failure) => Err(failure),
+            });
         }
         if self.navigation_in_flight() {
             // The document is changing under this wait; it can only be judged
@@ -97,14 +102,7 @@ impl Driver {
             return Some(pending.stopped(WaitStop::NavigationInvalidated, now));
         }
         if observe {
-            return match self.observe_wait(pending, now) {
-                Some(Ok(result)) => {
-                    pending.defer(Ok(result), self.signal_epoch);
-                    self.request_signal_refresh();
-                    None
-                }
-                other => other,
-            };
+            return self.observe_wait(pending, now);
         }
         None
     }
@@ -120,17 +118,21 @@ impl Driver {
 
     fn observe_wait(&mut self, pending: &mut PendingWait, now: Instant) -> Option<WaitResult> {
         // The script call may block; give it no more than the remaining bound
-        // and judge the result against a fresh clock afterwards.
+        // and judge the result against a fresh clock afterwards. The scan is
+        // peeked, not registered: only the released scan becomes references.
         let budget = pending.observation_budget(now);
-        let observed = self.semantic_query_within(&pending.selector, WAIT_QUERY_RESULTS, budget);
+        let observed = self.semantic_peek_within(&pending.selector, WAIT_QUERY_RESULTS, budget);
         let now = Instant::now();
         match observed {
-            Ok(BrowserControlValue::Nodes {
-                generation,
-                revision,
-                nodes,
-            }) => pending.observe(generation, revision, nodes, now),
-            Ok(_) => None,
+            Ok((generation, nodes, scan)) => match pending.observe(generation, &nodes, now) {
+                Observation::Satisfied => {
+                    pending.defer(scan, self.signal_epoch);
+                    self.request_signal_refresh();
+                    None
+                }
+                Observation::Waiting => None,
+                Observation::Done(result) => Some(result),
+            },
             Err(failure) => pending.observe_failure(failure, now),
         }
     }

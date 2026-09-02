@@ -269,6 +269,16 @@ impl DriverState {
                     self.handle_lifecycle_event(event);
                 }
             }
+            "Page.frameStartedLoading" | "Page.frameStoppedLoading" => {
+                if on_page_session
+                    && event.params.get("frameId").and_then(|id| id.as_str()) == self.main_frame_id.as_deref()
+                {
+                    // Covers navigations no command of ours started (a link,
+                    // a meta refresh, a script) and the commands that do not
+                    // retain the frame; a stop without a commit ends it.
+                    self.top_frame_navigating = event.method == "Page.frameStartedLoading";
+                }
+            }
             "Runtime.executionContextCreated"
             | "Runtime.executionContextDestroyed"
             | "Runtime.executionContextsCleared" => {
@@ -317,6 +327,7 @@ impl DriverState {
         }
         self.invalidate_scrollbar_layout();
         self.semantic.invalidate();
+        self.top_frame_navigating = false;
         self.main_frame_id = frame.get("id").and_then(|id| id.as_str()).map(str::to_string);
         if let Some(unreachable_url) = frame
             .get("unreachableUrl")

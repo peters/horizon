@@ -47,6 +47,31 @@ impl SemanticState {
         self.references.clear();
     }
 
+    /// Parse a scan without registering references: the page generation and
+    /// the nodes (with empty references) for judging a condition, leaving the
+    /// reference map of the last registered snapshot or query untouched.
+    pub(crate) fn peek_nodes(&self, value: &Value) -> Result<(u64, Vec<BrowserNode>), BrowserControlFailure> {
+        let response: NodeScanResponse = serde_json::from_value(value.clone())
+            .map_err(|error| BrowserControlFailure::new("invalid_result", format!("invalid page snapshot: {error}")))?;
+        if let Some(error) = response.error {
+            return Err(error);
+        }
+        let nodes = response
+            .nodes
+            .into_iter()
+            .map(|scanned| BrowserNode {
+                reference: String::new(),
+                role: truncate_utf8(scanned.role, MAX_NODE_STRING_BYTES),
+                name: truncate_utf8(scanned.name, MAX_NODE_STRING_BYTES),
+                text: truncate_utf8(scanned.text, MAX_NODE_STRING_BYTES),
+                visible: scanned.visible,
+                enabled: scanned.enabled,
+                bounds: scanned.bounds.filter(valid_bounds),
+            })
+            .collect();
+        Ok((self.generation, nodes))
+    }
+
     pub(crate) fn register_nodes(
         &mut self,
         value: Value,

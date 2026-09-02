@@ -39,6 +39,17 @@ pub(crate) enum WaitStop {
 
 pub(crate) type WaitResult = Result<BrowserControlValue, BrowserControlFailure>;
 
+/// What one observation concluded.
+#[derive(Debug)]
+pub(crate) enum Observation {
+    /// The condition is not met yet.
+    Waiting,
+    /// The condition is met; the scan is deferred until the guards re-ran.
+    Satisfied,
+    /// The wait completed (invalidated or timed out) during the observation.
+    Done(WaitResult),
+}
+
 #[derive(Debug)]
 pub(crate) struct PendingWait {
     pub(crate) request: AgentAction,
@@ -55,12 +66,13 @@ pub(crate) struct PendingWait {
     /// that navigation settles the wait is invalidated, because the document
     /// it may now observe is not the one it was asked about.
     blocked_by_navigation: bool,
-    /// A satisfied observation held until the driver has re-read the
-    /// coordination signals and drained backend events, so a lease or
-    /// handoff change (or a navigation) during the blocking observation
-    /// still cancels the wait. Stored with the signal epoch it was observed
-    /// under; it is released only once a later epoch proves a refresh ran.
-    deferred: Option<(WaitResult, u64)>,
+    /// The raw scan of a satisfied observation, held until the driver has
+    /// re-read the coordination signals and drained backend events, so a
+    /// lease or handoff change (or a navigation) during the blocking
+    /// observation still cancels the wait. Stored with the signal epoch it
+    /// was observed under; it is released, and only then registered as
+    /// semantic references, once a later epoch proves a refresh ran.
+    deferred: Option<(serde_json::Value, u64)>,
 }
 
 impl PendingWait {
@@ -100,21 +112,44 @@ impl PendingWait {
         self.blocked_by_navigation
     }
 
-    /// Hold a satisfied result, observed under `signal_epoch`, until the
-    /// guards have been re-evaluated on fresher signals.
-    pub(crate) fn defer(&mut self, result: WaitResult, signal_epoch: u64) {
-        self.deferred = Some((result, signal_epoch));
+    /// Hold the raw scan of a satisfied observation, made under
+    /// `signal_epoch`, until the guards have been re-evaluated on fresher
+    /// signals.
+    pub(crate) fn defer(&mut self, scan: serde_json::Value, signal_epoch: u64) {
+        self.deferred = Some((scan, signal_epoch));
     }
 
-    /// The held result, once a coordination refresh newer than the one it
-    /// was observed under has run and the guards allowed it.
-    pub(crate) fn take_deferred(&mut self, signal_epoch: u64) -> Option<WaitResult> {
+    /// The held scan, once a coordination refresh newer than the one it was
+    /// observed under has run and the guards allowed it; the driver registers
+    /// it and builds the outcome with [`Self::outcome`].
+    pub(crate) fn take_deferred(&mut self, signal_epoch: u64) -> Option<serde_json::Value> {
         match self.deferred.take() {
-            Some((result, observed_epoch)) if observed_epoch != signal_epoch => Some(result),
+            Some((scan, observed_epoch)) if observed_epoch != signal_epoch => Some(scan),
             other => {
                 self.deferred = other;
                 None
             }
+        }
+    }
+
+    /// The satisfied outcome from the registered nodes of the released scan.
+    pub(crate) fn outcome(
+        &self,
+        generation: u64,
+        revision: u64,
+        mut nodes: Vec<BrowserNode>,
+        now: Instant,
+    ) -> BrowserControlValue {
+        nodes.truncate(WAIT_MAX_RESULTS as usize);
+        BrowserControlValue::Wait {
+            wait: WaitOutcome {
+                state: self.state,
+                generation,
+                revision,
+                nodes,
+                elapsed_millis: self.elapsed_millis(now),
+                polls: self.polls,
+            },
         }
     }
 
@@ -130,14 +165,8 @@ impl PendingWait {
             .clamp(MIN_OBSERVATION_BUDGET, MAX_OBSERVATION_BUDGET)
     }
 
-    /// Record one page observation; `Some` when the condition is met.
-    pub(crate) fn observe(
-        &mut self,
-        generation: u64,
-        revision: u64,
-        nodes: Vec<BrowserNode>,
-        now: Instant,
-    ) -> Option<WaitResult> {
+    /// Judge one page observation made without registering references.
+    pub(crate) fn observe(&mut self, generation: u64, nodes: &[BrowserNode], now: Instant) -> Observation {
         self.polls = self.polls.saturating_add(1);
         self.next_poll = now + WAIT_POLL_INTERVAL;
         self.last_match_count = nodes.len();
@@ -145,29 +174,20 @@ impl PendingWait {
         if generation != self.generation_at_start {
             // The page navigated while the query was in flight: these nodes
             // belong to another document.
-            return Some(self.stopped(WaitStop::NavigationInvalidated, now));
+            return Observation::Done(self.stopped(WaitStop::NavigationInvalidated, now));
         }
         // `now` is taken after the query returned: an observation that
         // overran the bound is a timeout, whatever it saw.
         if now >= self.deadline {
-            return Some(self.timed_out(now));
+            return Observation::Done(self.timed_out(now));
         }
-        // Decide on every match the query returned; report at most the cap.
-        if !self.state.satisfied_by(&nodes) {
-            return None;
+        // Decide on every match the query returned; the released scan is
+        // registered and capped by the driver.
+        if self.state.satisfied_by(nodes) {
+            Observation::Satisfied
+        } else {
+            Observation::Waiting
         }
-        let mut nodes = nodes;
-        nodes.truncate(WAIT_MAX_RESULTS as usize);
-        Some(Ok(BrowserControlValue::Wait {
-            wait: WaitOutcome {
-                state: self.state,
-                generation,
-                revision,
-                nodes,
-                elapsed_millis: self.elapsed_millis(now),
-                polls: self.polls,
-            },
-        }))
     }
 
     /// A failed observation. Only an execution-context replacement (a page
@@ -267,7 +287,7 @@ mod tests {
 
     fn node(visible: bool) -> BrowserNode {
         BrowserNode {
-            reference: "g1s1e1".to_string(),
+            reference: String::new(),
             role: "paragraph".to_string(),
             name: String::new(),
             text: "late".to_string(),
@@ -299,8 +319,19 @@ mod tests {
         )
     }
 
-    fn outcome(result: Option<WaitResult>) -> WaitOutcome {
-        match result.expect("settled").expect("satisfied") {
+    fn scan() -> serde_json::Value {
+        serde_json::json!({ "nodes": [] })
+    }
+
+    fn done(observation: Observation) -> WaitResult {
+        match observation {
+            Observation::Done(result) => result,
+            other => panic!("expected a completed wait, got {other:?}"),
+        }
+    }
+
+    fn released(wait: &PendingWait, nodes: Vec<BrowserNode>, now: Instant) -> WaitOutcome {
+        match wait.outcome(7, 1, nodes, now) {
             BrowserControlValue::Wait { wait } => wait,
             other => panic!("unexpected value {other:?}"),
         }
@@ -311,39 +342,52 @@ mod tests {
         let now = Instant::now();
         let mut wait = pending(SelectorState::Visible, 5_000, now);
         assert!(wait.poll_due(now));
-        assert!(wait.observe(7, 1, Vec::new(), now).is_none(), "no match keeps waiting");
+        assert!(
+            matches!(wait.observe(7, &[], now), Observation::Waiting),
+            "no match keeps waiting"
+        );
         assert!(
             !wait.poll_due(now + Duration::from_millis(50)),
             "observations are paced"
         );
         assert!(wait.poll_due(now + WAIT_POLL_INTERVAL));
         assert!(
-            wait.observe(7, 2, vec![node(false)], now + Duration::from_millis(100))
-                .is_none(),
+            matches!(
+                wait.observe(7, &[node(false)], now + Duration::from_millis(100)),
+                Observation::Waiting
+            ),
             "a hidden match does not satisfy visible"
         );
-        let satisfied = outcome(wait.observe(7, 3, vec![node(true)], now + Duration::from_millis(1_500)));
+        assert!(matches!(
+            wait.observe(7, &[node(true)], now + Duration::from_millis(1_500)),
+            Observation::Satisfied
+        ));
+        let satisfied = released(&wait, vec![node(true)], now + Duration::from_millis(1_500));
         assert_eq!(satisfied.state, SelectorState::Visible);
         assert_eq!(satisfied.polls, 3);
         assert_eq!(satisfied.elapsed_millis, 1_500);
         assert_eq!(satisfied.nodes.len(), 1);
 
         let mut hidden = pending(SelectorState::Hidden, 5_000, now);
-        assert!(hidden.observe(7, 1, vec![node(true)], now).is_none());
+        assert!(matches!(hidden.observe(7, &[node(true)], now), Observation::Waiting));
         assert!(
-            outcome(hidden.observe(7, 2, Vec::new(), now)).nodes.is_empty(),
+            matches!(hidden.observe(7, &[], now), Observation::Satisfied),
             "an empty match set is hidden"
         );
 
         let mut present = pending(SelectorState::Present, 5_000, now);
-        assert_eq!(outcome(present.observe(7, 1, vec![node(false)], now)).polls, 1);
+        assert!(matches!(
+            present.observe(7, &[node(false)], now),
+            Observation::Satisfied
+        ));
+        assert_eq!(released(&present, vec![node(false)], now).polls, 1);
     }
 
     #[test]
     fn timeouts_and_cancellations_are_typed_failures() {
         let now = Instant::now();
         let mut wait = pending(SelectorState::Present, 1_000, now);
-        assert!(wait.observe(7, 1, Vec::new(), now).is_none());
+        assert!(matches!(wait.observe(7, &[], now), Observation::Waiting));
         assert!(wait.tick(7, now + Duration::from_millis(999)).is_none());
         let timeout = wait
             .tick(7, now + Duration::from_millis(1_000))
@@ -403,16 +447,17 @@ mod tests {
         let mut nodes: Vec<BrowserNode> = (0..25).map(|_| node(false)).collect();
         nodes.push(node(true));
         let mut visible = pending(SelectorState::Visible, 1_000, now);
-        let result = visible
-            .observe(7, 1, nodes.clone(), now)
-            .expect("a visible match beyond the cap counts");
-        match result.expect("satisfied") {
-            BrowserControlValue::Wait { wait } => assert_eq!(wait.nodes.len(), WAIT_MAX_RESULTS as usize),
-            other => panic!("unexpected value {other:?}"),
-        }
+        assert!(
+            matches!(visible.observe(7, &nodes, now), Observation::Satisfied),
+            "a visible match beyond the cap counts"
+        );
+        assert_eq!(
+            released(&visible, nodes.clone(), now).nodes.len(),
+            WAIT_MAX_RESULTS as usize
+        );
         let mut hidden = pending(SelectorState::Hidden, 1_000, now);
         assert!(
-            hidden.observe(7, 1, nodes, now).is_none(),
+            matches!(hidden.observe(7, &nodes, now), Observation::Waiting),
             "a visible match beyond the cap keeps hidden unsatisfied"
         );
     }
@@ -421,7 +466,7 @@ mod tests {
     fn an_observation_from_another_page_generation_invalidates_the_wait() {
         let now = Instant::now();
         let mut pending = pending(SelectorState::Present, 1_000, now);
-        let result = pending.observe(7 + 1, 1, vec![node(true)], now).expect("settled");
+        let result = done(pending.observe(7 + 1, &[node(true)], now));
         assert_eq!(result.expect_err("invalidated").code, "wait_navigation_invalidated");
     }
 
@@ -442,8 +487,7 @@ mod tests {
         // the element, and a transient failure after the bound is one too.
         let late = now + Duration::from_millis(1_001);
         let mut overran = pending(SelectorState::Present, 1_000, now);
-        let result = overran.observe(7, 1, vec![node(true)], late).expect("settled");
-        let failure = result.expect_err("timed out");
+        let failure = done(overran.observe(7, &[node(true)], late)).expect_err("timed out");
         assert_eq!(failure.code, "wait_timeout");
         assert!(
             failure.message.contains("within the 1000 ms bound (elapsed 1001 ms"),
@@ -519,12 +563,20 @@ mod tests {
             .observe_failure(BrowserControlFailure::new("protocol_error", "evaluate timed out"), now)
             .expect("settled");
         assert_eq!(surfaced.expect_err("failed").code, "protocol_error");
+    }
 
-        // A satisfied result held for guard re-evaluation survives the
-        // deadline passing meanwhile; a navigation still invalidates it.
+    #[test]
+    fn a_satisfied_scan_is_released_only_after_a_later_signal_refresh() {
+        let now = Instant::now();
+        // The deferred scan survives the deadline passing meanwhile; a
+        // navigation still invalidates it; and it is released only under a
+        // later coordination-read epoch than it was observed under.
         let mut deferred = pending(SelectorState::Present, 1_000, now);
-        let result = deferred.observe(7, 1, vec![node(true)], now).expect("satisfied");
-        deferred.defer(result, 3);
+        assert!(matches!(
+            deferred.observe(7, &[node(true)], now),
+            Observation::Satisfied
+        ));
+        deferred.defer(scan(), 3);
         assert!(
             deferred.tick(7, now + Duration::from_secs(2)).is_none(),
             "the deadline does not apply to a held result"
@@ -539,5 +591,11 @@ mod tests {
         );
         assert!(deferred.take_deferred(4).is_some(), "a later refresh releases it");
         assert!(deferred.take_deferred(5).is_none());
+
+        // A wait blocked by an in-flight navigation remembers it.
+        let mut blocked = pending(SelectorState::Present, 1_000, now);
+        assert!(!blocked.blocked_by_navigation());
+        blocked.block_for_navigation();
+        assert!(blocked.blocked_by_navigation());
     }
 }

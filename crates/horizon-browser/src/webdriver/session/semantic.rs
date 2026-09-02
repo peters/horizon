@@ -83,15 +83,25 @@ impl Driver {
         self.register_query(value)
     }
 
-    /// A selector query whose script call may block for at most `timeout`.
-    pub(super) fn semantic_query_within(
+    /// A selector scan that does not register references: for judging a wait
+    /// condition without disturbing refs a concurrent snapshot handed out.
+    pub(super) fn semantic_peek_within(
         &mut self,
         selector: &str,
         max_results: u32,
         timeout: std::time::Duration,
-    ) -> Result<BrowserControlValue, BrowserControlFailure> {
+    ) -> Result<(u64, Vec<crate::BrowserNode>, Value), BrowserControlFailure> {
         let value = self.evaluate_json_within(&scan_expression(Some(selector), max_results), Some(timeout))?;
-        self.register_query(value)
+        let (generation, nodes) = self.semantic.peek_nodes(&value)?;
+        Ok((generation, nodes, value))
+    }
+
+    /// Register a previously peeked scan as the current references.
+    pub(super) fn semantic_register_scan(
+        &mut self,
+        value: Value,
+    ) -> Result<(u64, u64, Vec<crate::BrowserNode>), BrowserControlFailure> {
+        self.semantic.register_nodes(value)
     }
 
     fn register_query(&mut self, value: Value) -> Result<BrowserControlValue, BrowserControlFailure> {

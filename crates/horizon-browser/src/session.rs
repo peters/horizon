@@ -418,6 +418,9 @@ struct DriverState {
     /// Agent navigation whose typed outcome is settled by page events.
     pending_navigation: Option<crate::navigation::PendingNavigation>,
     pending_wait: Option<crate::wait::PendingWait>,
+    /// The top frame started a navigation (reload, history, page-initiated,
+    /// or command) whose commit or failure has not arrived yet.
+    top_frame_navigating: bool,
     /// In-flight `Page.navigate` request. The reply is routed asynchronously
     /// so a slow destination never blocks frames, input, or coordination.
     navigate_request_id: Option<u64>,
@@ -489,6 +492,7 @@ impl DriverState {
             navigation_failed: false,
             pending_navigation: None,
             pending_wait: None,
+            top_frame_navigating: false,
             navigate_request_id: None,
             screencast_request_id: None,
             clipboard: ClipboardState::default(),
@@ -770,6 +774,7 @@ impl DriverState {
 
     fn fail_navigation(&mut self, event_tx: &BrowserEventSender, message: &str) {
         self.navigation_failed = true;
+        self.top_frame_navigating = false;
         self.interaction_started_at = None;
         let _ = event_tx.send(BrowserEvent::NavigationFailed(message.to_string()));
         let _ = event_tx.send(BrowserEvent::Loading(false));

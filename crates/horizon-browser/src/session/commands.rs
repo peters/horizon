@@ -130,6 +130,7 @@ impl DriverState {
                 self.supersede_pending_navigation(Instant::now());
                 match self.send_page_command(link, event_tx, frame_slot, "Page.reload", &serde_json::json!({})) {
                     Ok(_) => {
+                        self.top_frame_navigating = true;
                         self.pending_restart_at = Some(Instant::now());
                         Ok(false)
                     }
@@ -564,6 +565,7 @@ impl DriverState {
             &serde_json::json!({ "entryId": entry_id }),
         ) {
             Ok(_) => {
+                self.top_frame_navigating = true;
                 self.pending_restart_at = Some(Instant::now());
                 Ok(())
             }

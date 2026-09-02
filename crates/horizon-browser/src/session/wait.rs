@@ -6,8 +6,8 @@ use std::time::Instant;
 
 use crate::frames::FrameSlot;
 use crate::navigation::{AgentActionExecution, PendingNavigation, now_millis};
-use crate::wait::{PendingWait, WAIT_QUERY_RESULTS, WaitResult, WaitStop};
-use crate::{AgentAction, BrowserControlAction, BrowserControlFailure, BrowserControlValue};
+use crate::wait::{Observation, PendingWait, WAIT_QUERY_RESULTS, WaitResult, WaitStop};
+use crate::{AgentAction, BrowserControlAction, BrowserControlFailure};
 
 use super::{BrowserEventSender, DriverState};
 
@@ -105,8 +105,13 @@ impl DriverState {
         }
         // A satisfied observation completes only after the signals have been
         // re-read and events drained: the guards above ran again first.
-        if let Some(result) = pending.take_deferred(self.signal_epoch) {
-            return Some(result);
+        if let Some(scan) = pending.take_deferred(self.signal_epoch) {
+            // Register the released scan now, so the returned references are
+            // the current ones and no earlier observation disturbed the map.
+            return Some(match self.semantic_register_scan(scan) {
+                Ok((generation, revision, nodes)) => Ok(pending.outcome(generation, revision, nodes, now)),
+                Err(failure) => Err(failure),
+            });
         }
         if self.navigation_in_flight() {
             // The document is changing under this wait; it can only be judged
@@ -118,14 +123,7 @@ impl DriverState {
             return Some(pending.stopped(WaitStop::NavigationInvalidated, now));
         }
         if observe {
-            return match self.observe_wait(link, event_tx, frame_slot, pending, now) {
-                Some(Ok(result)) => {
-                    pending.defer(Ok(result), self.signal_epoch);
-                    self.request_signal_refresh();
-                    None
-                }
-                other => other,
-            };
+            return self.observe_wait(link, event_tx, frame_slot, pending, now);
         }
         None
     }
@@ -134,7 +132,9 @@ impl DriverState {
     /// or any navigation the driver started (agent, user, or timed-out
     /// action) whose commit or failure has not arrived yet.
     fn navigation_in_flight(&self) -> bool {
-        self.pending_navigation.is_some() || (self.retain_frame_during_navigation && !self.navigation_failed)
+        self.pending_navigation.is_some()
+            || self.top_frame_navigating
+            || (self.retain_frame_during_navigation && !self.navigation_failed)
     }
 
     fn observe_wait(
@@ -146,9 +146,10 @@ impl DriverState {
         now: Instant,
     ) -> Option<WaitResult> {
         // The evaluation may block; give it no more than the remaining bound
-        // and judge the result against a fresh clock afterwards.
+        // and judge the result against a fresh clock afterwards. The scan is
+        // peeked, not registered: only the released scan becomes references.
         let budget = pending.observation_budget(now);
-        let observed = self.semantic_query_within(
+        let observed = self.semantic_peek_within(
             link,
             event_tx,
             frame_slot,
@@ -158,12 +159,15 @@ impl DriverState {
         );
         let now = Instant::now();
         match observed {
-            Ok(BrowserControlValue::Nodes {
-                generation,
-                revision,
-                nodes,
-            }) => pending.observe(generation, revision, nodes, now),
-            Ok(_) => None,
+            Ok((generation, nodes, scan)) => match pending.observe(generation, &nodes, now) {
+                Observation::Satisfied => {
+                    pending.defer(scan, self.signal_epoch);
+                    self.request_signal_refresh();
+                    None
+                }
+                Observation::Waiting => None,
+                Observation::Done(result) => Some(result),
+            },
             Err(failure) => pending.observe_failure(failure, now),
         }
     }
