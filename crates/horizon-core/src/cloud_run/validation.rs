@@ -1,29 +1,28 @@
 use super::{
     ApprovalDecision, ApprovalGate, ArtifactRef, CLOUD_RUN_PROTOCOL_VERSION, CloudJobId, CloudJobOutcome,
-    CloudJobState, CloudProgress, CloudProtocolError, CloudWorkflow, ProvenanceRecord, WorkflowNode, WorkflowNodeKind,
+    CloudJobState, CloudProgress, CloudProtocolError as Error, CloudWorkflow, GitSource, ProvenanceRecord,
+    WorkflowNode, WorkflowNodeKind,
 };
 use std::collections::{HashMap, HashSet};
 use url::Url;
+fn ensure(valid: bool, error: Error) -> Result<(), Error> {
+    valid.then_some(()).ok_or(error)
+}
 impl ProvenanceRecord {
     /// Validate persisted source and artifact references for secret-free storage.
     /// # Errors
     /// Rejects invalid repositories, workflow URLs, and artifact identities.
-    pub fn validate(&self) -> Result<(), CloudProtocolError> {
-        if !valid_repository(&self.source.repository) {
-            return Err(CloudProtocolError::InvalidRepository);
-        }
-        if self
-            .workflow_run_url
-            .as_deref()
-            .is_some_and(|url| !valid_public_url(url))
-        {
-            return Err(CloudProtocolError::InvalidWorkflowRunUrl(self.producer_job_id));
-        }
+    pub fn validate(&self) -> Result<(), Error> {
+        validate_git_source(&self.source)?;
+        ensure(
+            self.workflow_run_url.as_deref().is_none_or(valid_public_url),
+            Error::InvalidWorkflowRunUrl(self.producer_job_id),
+        )?;
         let mut artifact_ids = HashSet::new();
         for artifact in &self.artifacts {
             validate_artifact(self.producer_job_id, artifact)?;
             if !artifact_ids.insert(artifact.artifact_id.as_str()) {
-                return Err(CloudProtocolError::DuplicateArtifactId(artifact.artifact_id.clone()));
+                return Err(Error::DuplicateArtifactId(artifact.artifact_id.clone()));
             }
         }
         Ok(())
@@ -33,26 +32,24 @@ impl CloudWorkflow {
     /// Validate all persisted cross-node and security invariants.
     /// # Errors
     /// Rejects snapshots with any invalid persisted protocol invariant.
-    pub fn validate(&self) -> Result<(), CloudProtocolError> {
-        if self.protocol_version != CLOUD_RUN_PROTOCOL_VERSION {
-            return Err(CloudProtocolError::UnsupportedVersion(self.protocol_version));
-        }
-        if self.title.trim().is_empty() {
-            return Err(CloudProtocolError::EmptyField("workflow.title"));
-        }
-        if self.retain_until_millis < self.created_at_millis {
-            return Err(CloudProtocolError::InvalidRetention);
-        }
+    pub fn validate(&self) -> Result<(), Error> {
+        ensure(
+            self.protocol_version == CLOUD_RUN_PROTOCOL_VERSION,
+            Error::UnsupportedVersion(self.protocol_version),
+        )?;
+        ensure(!self.title.trim().is_empty(), Error::EmptyField("workflow.title"))?;
+        ensure(
+            self.retain_until_millis >= self.created_at_millis,
+            Error::InvalidRetention,
+        )?;
         if self.created_at_millis < 0
             || self.updated_at_millis < self.created_at_millis
             || self.retain_until_millis < self.updated_at_millis
         {
-            return Err(CloudProtocolError::InvalidWorkflowTimestamps);
+            return Err(Error::InvalidWorkflowTimestamps);
         }
         let nodes: HashMap<_, _> = self.nodes.iter().map(|node| (node.id, node)).collect();
-        if nodes.len() != self.nodes.len() {
-            return Err(CloudProtocolError::DuplicateNodeId);
-        }
+        ensure(nodes.len() == self.nodes.len(), Error::DuplicateNodeId)?;
         let mut artifact_producers = HashMap::new();
         let mut logical_attempts = HashSet::new();
         let mut superseded_attempts = HashSet::new();
@@ -61,21 +58,21 @@ impl CloudWorkflow {
             if let Some(previous_id) = node.supersedes
                 && !superseded_attempts.insert(previous_id)
             {
-                return Err(CloudProtocolError::ForkedRetryAttempt(previous_id));
+                return Err(Error::ForkedRetryAttempt(previous_id));
             }
             if !logical_attempts.insert((node.logical_key.as_str(), node.attempt)) {
-                return Err(CloudProtocolError::DuplicateLogicalAttempt {
+                return Err(Error::DuplicateLogicalAttempt {
                     logical_key: node.logical_key.clone(),
                     attempt: node.attempt,
                 });
             }
             for artifact in &node.outputs {
                 validate_artifact(node.id, artifact)?;
-                if artifact_producers
+                let duplicate = artifact_producers
                     .insert(artifact.artifact_id.as_str(), node.id)
-                    .is_some()
-                {
-                    return Err(CloudProtocolError::DuplicateArtifactId(artifact.artifact_id.clone()));
+                    .is_some();
+                if duplicate {
+                    return Err(Error::DuplicateArtifactId(artifact.artifact_id.clone()));
                 }
             }
         }
@@ -89,14 +86,12 @@ fn validate_node(
     workflow: &CloudWorkflow,
     node: &WorkflowNode,
     nodes: &HashMap<CloudJobId, &WorkflowNode>,
-) -> Result<(), CloudProtocolError> {
+) -> Result<(), Error> {
     if node.logical_key.trim().is_empty() || node.label.trim().is_empty() {
-        return Err(CloudProtocolError::EmptyNodeIdentity(node.id));
+        return Err(Error::EmptyNodeIdentity(node.id));
     }
-    if let Some(source) = &node.source
-        && !valid_repository(&source.repository)
-    {
-        return Err(CloudProtocolError::InvalidRepository);
+    if let Some(source) = &node.source {
+        validate_git_source(source)?;
     }
     if let Some(worker) = &node.worker
         && (worker.profile.trim().is_empty()
@@ -104,43 +99,36 @@ fn validate_node(
             || worker.disk_gib == 0
             || worker.lease_seconds == 0)
     {
-        return Err(CloudProtocolError::InvalidWorkerTarget(node.id));
+        return Err(Error::InvalidWorkerTarget(node.id));
     }
     if node.weight == 0 || node.attempt == 0 || node.retry.max_attempts == 0 || node.attempt > node.retry.max_attempts {
-        return Err(CloudProtocolError::InvalidAttempt(node.id));
+        return Err(Error::InvalidAttempt(node.id));
     }
-    if !valid_outcome(node) {
-        return Err(CloudProtocolError::InvalidJobOutcome(node.id));
-    }
+    ensure(valid_outcome(node), Error::InvalidJobOutcome(node.id))?;
     validate_retry(node, nodes)?;
-    if node.depends_on.contains(&node.id) {
-        return Err(CloudProtocolError::SelfDependency(node.id));
-    }
+    ensure(!node.depends_on.contains(&node.id), Error::SelfDependency(node.id))?;
     for dependency in &node.depends_on {
         if !nodes.contains_key(dependency) {
-            return Err(CloudProtocolError::MissingDependency {
+            return Err(Error::MissingDependency {
                 node: node.id,
                 dependency: *dependency,
             });
         }
     }
-    if !valid_progress(node) {
-        return Err(CloudProtocolError::InvalidProgress(node.id));
-    }
-    if node.approval.is_some() && node.release.is_some() {
-        return Err(CloudProtocolError::InvalidApprovalGate(node.id));
-    }
+    ensure(valid_progress(node), Error::InvalidProgress(node.id))?;
+    ensure(
+        node.approval.is_none() || node.release.is_none(),
+        Error::InvalidApprovalGate(node.id),
+    )?;
     let needs_approval = node.kind == WorkflowNodeKind::Approval || node.state == CloudJobState::WaitingForApproval;
     if needs_approval && node.approval.is_none() && node.release.is_none() {
-        return Err(CloudProtocolError::MissingApprovalGate(node.id));
+        return Err(Error::MissingApprovalGate(node.id));
     }
     if let Some(approval) = &node.approval {
         validate_approval(workflow, node, approval, nodes)?;
     }
     if let Some(release) = &node.release {
-        if !valid_repository(&release.repository) {
-            return Err(CloudProtocolError::InvalidRepository);
-        }
+        ensure(valid_repository(&release.repository), Error::InvalidRepository)?;
         validate_approval(workflow, node, &release.approval, nodes)?;
     }
     if let Some(lease) = &node.environment_lease
@@ -152,20 +140,16 @@ fn validate_node(
             || lease.expires_at_millis <= lease.acquired_at_millis
             || lease.expires_at_millis > workflow.retain_until_millis)
     {
-        return Err(CloudProtocolError::InvalidEnvironmentLease(node.id));
+        return Err(Error::InvalidEnvironmentLease(node.id));
     }
     Ok(())
 }
-fn validate_retry(node: &WorkflowNode, nodes: &HashMap<CloudJobId, &WorkflowNode>) -> Result<(), CloudProtocolError> {
+fn validate_retry(node: &WorkflowNode, nodes: &HashMap<CloudJobId, &WorkflowNode>) -> Result<(), Error> {
     let Some(previous_id) = node.supersedes else {
-        return if node.attempt == 1 {
-            Ok(())
-        } else {
-            Err(CloudProtocolError::InvalidSupersededAttempt(node.id))
-        };
+        return ensure(node.attempt == 1, Error::InvalidSupersededAttempt(node.id));
     };
     let Some(previous) = nodes.get(&previous_id) else {
-        return Err(CloudProtocolError::MissingSupersededAttempt {
+        return Err(Error::MissingSupersededAttempt {
             node: node.id,
             previous: previous_id,
         });
@@ -178,7 +162,7 @@ fn validate_retry(node: &WorkflowNode, nodes: &HashMap<CloudJobId, &WorkflowNode
             Some(CloudJobOutcome::Failed | CloudJobOutcome::Cancelled)
         )
     {
-        return Err(CloudProtocolError::InvalidSupersededAttempt(node.id));
+        return Err(Error::InvalidSupersededAttempt(node.id));
     }
     Ok(())
 }
@@ -187,11 +171,9 @@ fn validate_approval(
     node: &WorkflowNode,
     approval: &ApprovalGate,
     nodes: &HashMap<CloudJobId, &WorkflowNode>,
-) -> Result<(), CloudProtocolError> {
+) -> Result<(), Error> {
     let node_id = node.id;
-    if approval.action.trim().is_empty() {
-        return Err(CloudProtocolError::InvalidApprovalGate(node_id));
-    }
+    ensure(!approval.action.trim().is_empty(), Error::InvalidApprovalGate(node_id))?;
     let valid_time = |value| value >= workflow.created_at_millis && value <= workflow.updated_at_millis;
     match &approval.decision {
         ApprovalDecision::Pending if node.outcome != Some(CloudJobOutcome::Succeeded) => {}
@@ -210,15 +192,13 @@ fn validate_approval(
             && !reason.trim().is_empty()
             && matches!(node.outcome, Some(CloudJobOutcome::Failed | CloudJobOutcome::Cancelled)) => {}
         ApprovalDecision::Pending | ApprovalDecision::Approved { .. } | ApprovalDecision::Rejected { .. } => {
-            return Err(CloudProtocolError::InvalidApprovalGate(node_id));
+            return Err(Error::InvalidApprovalGate(node_id));
         }
     }
     for evidence_id in &approval.evidence_job_ids {
-        if *evidence_id == node_id {
-            return Err(CloudProtocolError::SelfApprovalEvidence(node_id));
-        }
+        ensure(*evidence_id != node_id, Error::SelfApprovalEvidence(node_id))?;
         if !nodes.contains_key(evidence_id) {
-            return Err(CloudProtocolError::MissingApprovalEvidence {
+            return Err(Error::MissingApprovalEvidence {
                 node: node_id,
                 evidence: *evidence_id,
             });
@@ -236,10 +216,7 @@ fn valid_progress(node: &WorkflowNode) -> bool {
         && (!matches!(node.progress, CloudProgress::Completed) || successful)
         && (!successful || node.progress.basis_points() == Some(10_000))
 }
-fn validate_inputs(
-    node: &WorkflowNode,
-    artifact_producers: &HashMap<&str, CloudJobId>,
-) -> Result<(), CloudProtocolError> {
+fn validate_inputs(node: &WorkflowNode, artifact_producers: &HashMap<&str, CloudJobId>) -> Result<(), Error> {
     let mut seen = HashSet::new();
     let dependencies: HashSet<_> = node.depends_on.iter().copied().collect();
     for artifact_id in &node.input_artifact_ids {
@@ -248,13 +225,13 @@ fn validate_inputs(
             || !seen.insert(artifact_id.as_str())
             || producer.is_none_or(|producer| !dependencies.contains(producer))
         {
-            return Err(CloudProtocolError::InvalidInputArtifact(node.id));
+            return Err(Error::InvalidInputArtifact(node.id));
         }
     }
     Ok(())
 }
 fn valid_outcome(node: &WorkflowNode) -> bool {
-    use CloudJobOutcome::{Cancelled, Succeeded};
+    use CloudJobOutcome::{Cancelled, Failed as FailedOutcome, Succeeded};
     use CloudJobState::{
         Cancelled as CancelledState, Checkpointing, Cleaned, Cleaning, Cloning, Completed, Failed, Provisioning,
         PullingImage, Queued, Running, WaitingForApproval,
@@ -266,23 +243,24 @@ fn valid_outcome(node: &WorkflowNode) -> bool {
             None
         ) | (Completed, Some(Succeeded))
             | (CancelledState, Some(Cancelled))
-            | (Failed | Cleaning | Cleaned, Some(_))
+            | (Failed, Some(FailedOutcome))
+            | (Cleaning | Cleaned, Some(_))
     )
 }
-fn validate_artifact(node_id: CloudJobId, artifact: &ArtifactRef) -> Result<(), CloudProtocolError> {
+fn validate_artifact(node_id: CloudJobId, artifact: &ArtifactRef) -> Result<(), Error> {
     let key = artifact.storage_key.trim();
     if artifact.artifact_id.trim().is_empty()
         || key.is_empty()
         || key.starts_with('/')
         || key.as_bytes().get(1) == Some(&b':') && key.as_bytes()[0].is_ascii_alphabetic()
-        || key.contains("://")
+        || Url::parse(key).is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
         || key.contains(['?', '#'])
         || key.contains('\\')
         || key.contains('%')
         || key.split('/').any(|segment| matches!(segment, "" | "." | ".."))
         || artifact.storage_key.chars().any(char::is_control)
     {
-        return Err(CloudProtocolError::InvalidArtifactRef(node_id));
+        return Err(Error::InvalidArtifactRef(node_id));
     }
     Ok(())
 }
@@ -301,6 +279,26 @@ fn valid_worker_image(value: &str) -> bool {
                 .is_some_and(|hash| hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
         })
 }
+fn validate_git_source(source: &GitSource) -> Result<(), Error> {
+    ensure(valid_repository(&source.repository), Error::InvalidRepository)?;
+    ensure(
+        source.branch.as_deref().is_none_or(valid_branch),
+        Error::InvalidGitBranch,
+    )
+}
+fn valid_branch(branch: &str) -> bool {
+    !branch.is_empty()
+        && branch != "@"
+        && !branch.starts_with(['-', '/', '.'])
+        && !branch.ends_with(['/', '.'])
+        && !["..", "@{", "//"].iter().any(|needle| branch.contains(needle))
+        && !branch
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace() || "~^:?*[\\".contains(character))
+        && branch
+            .split('/')
+            .all(|segment| !segment.starts_with('.') && !segment.as_bytes().ends_with(b".lock"))
+}
 fn valid_repository(repository: &str) -> bool {
     let mut segments = repository.split('/');
     let valid_segment = |segment: &str| {
@@ -316,23 +314,20 @@ fn valid_repository(repository: &str) -> bool {
     )
 }
 fn valid_public_url(value: &str) -> bool {
-    if value
+    !value
         .chars()
         .any(|character| character.is_control() || character.is_whitespace())
-        || value.contains('\\')
-    {
-        return false;
-    }
-    Url::parse(value).is_ok_and(|url| {
-        url.scheme() == "https"
-            && url.host().is_some()
-            && url.username().is_empty()
-            && url.password().is_none()
-            && url.query().is_none()
-            && url.fragment().is_none()
-    })
+        && !value.contains('\\')
+        && Url::parse(value).is_ok_and(|url| {
+            url.scheme() == "https"
+                && url.host().is_some()
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.query().is_none()
+                && url.fragment().is_none()
+        })
 }
-fn ensure_acyclic(nodes: &HashMap<CloudJobId, &WorkflowNode>) -> Result<(), CloudProtocolError> {
+fn ensure_acyclic(nodes: &HashMap<CloudJobId, &WorkflowNode>) -> Result<(), Error> {
     let mut remaining: HashMap<_, _> = nodes.iter().map(|(id, node)| (*id, node.depends_on.len())).collect();
     let mut dependents: HashMap<CloudJobId, Vec<CloudJobId>> = HashMap::new();
     for (id, node) in nodes {
@@ -361,6 +356,6 @@ fn ensure_acyclic(nodes: &HashMap<CloudJobId, &WorkflowNode>) -> Result<(), Clou
     }
     remaining
         .into_iter()
-        .find_map(|(id, count)| (count > 0).then_some(CloudProtocolError::DependencyCycle(id)))
+        .find_map(|(id, count)| (count > 0).then_some(Error::DependencyCycle(id)))
         .map_or(Ok(()), Err)
 }

@@ -107,10 +107,7 @@ fn approvals_and_leases_obey_snapshot_time_and_identity() {
         acquired_at_millis: 1_100,
         expires_at_millis: snapshot.retain_until_millis + 1,
     });
-    assert_eq!(
-        snapshot.validate().expect_err("lease outlives workflow"),
-        InvalidEnvironmentLease(id)
-    );
+    assert_eq!(snapshot.validate().expect_err("lease"), InvalidEnvironmentLease(id));
 }
 #[test]
 fn provenance_rejects_secrets_without_echoing_them() {
@@ -133,12 +130,17 @@ fn provenance_rejects_secrets_without_echoing_them() {
     assert_eq!(error, InvalidRepository);
     assert!(!error.to_string().contains("secret"));
     record.source.repository = "fintermobilityas/nativesdk".to_string();
+    for branch in ["bad branch", "refs/../main", "foo.lock/bar", "https://u:secret@e/r"] {
+        record.source.branch = Some(branch.to_string());
+        assert_eq!(record.validate(), Err(InvalidGitBranch));
+    }
+    record.source.branch = None;
     for url in "https://u:p@e.test/r https://e.test/r?q=x https://: https://[invalid".split_ascii_whitespace() {
         record.workflow_run_url = Some(url.to_string());
         assert_eq!(record.validate(), Err(InvalidWorkflowRunUrl(id)));
     }
     record.workflow_run_url = None;
-    for key in ["https://e/a?x", "C:/x", "C:x", "x\n", "x/%2e%2e/y", "x/%2Fy"] {
+    for key in ["https:e/x", "x?x", "C:/x", "C:x", "x\n", "x/%2e%2e/y", "x/%2Fy"] {
         record.artifacts[0].storage_key = key.to_string();
         assert_eq!(record.validate(), Err(InvalidArtifactRef(id)));
     }
@@ -167,9 +169,14 @@ fn v1_json_contract_round_trips() {
         serde_json::to_string(&(&snapshot, &record)).expect("serialize v1"),
         golden
     );
+    assert_eq!(record.source.commit.as_str().len(), 40);
+    assert_eq!(record.artifacts[0].sha256.as_str().len(), 64);
     let mut bad = snapshot.clone();
     bad.nodes[0].worker.as_mut().expect("worker").image = "https://u:p@r/i?q".to_string();
     rejects(bad.nodes, &InvalidWorkerTarget(snapshot.nodes[0].id));
+    let mut bad = snapshot.clone();
+    bad.nodes[0].source.as_mut().expect("source").branch = Some("bad branch".to_string());
+    assert_eq!(bad.validate(), Err(InvalidGitBranch));
     snapshot.nodes[8].release = snapshot.nodes[4].release.clone();
     let error = InvalidApprovalGate(snapshot.nodes[8].id);
     assert_eq!(snapshot.validate(), Err(error));
@@ -202,6 +209,9 @@ fn inputs_are_unique_outputs_of_direct_dependencies() {
 fn retries_are_unambiguous_and_keep_outcomes_through_cleanup() {
     let first = CloudJobId::new();
     let mut previous = node(first, "nativesdk-build", Vec::new());
+    previous.state = CloudJobState::Failed;
+    previous.outcome = Some(CloudJobOutcome::Succeeded);
+    rejects(vec![previous.clone()], &InvalidJobOutcome(first));
     previous.state = CloudJobState::Cleaned;
     previous.outcome = Some(CloudJobOutcome::Failed);
     previous.weight = 100;
@@ -215,12 +225,9 @@ fn retries_are_unambiguous_and_keep_outcomes_through_cleanup() {
     retry.progress = CloudProgress::Completed;
     rejects(vec![previous.clone(), retry.clone()], &InvalidProgress(retry.id));
     retry.progress = CloudProgress::Pending;
-    let mut changed_policy = retry.clone();
-    changed_policy.retry.max_attempts = 3;
-    rejects(
-        vec![previous.clone(), changed_policy],
-        &InvalidSupersededAttempt(retry.id),
-    );
+    let mut changed = retry.clone();
+    changed.retry.max_attempts = 3;
+    rejects(vec![previous.clone(), changed], &InvalidSupersededAttempt(retry.id));
     let mut completed = retry.clone();
     completed.state = CloudJobState::Completed;
     completed.outcome = Some(CloudJobOutcome::Succeeded);
@@ -235,15 +242,11 @@ fn retries_are_unambiguous_and_keep_outcomes_through_cleanup() {
         &InvalidProgress(completed.id),
     );
     completed.progress = CloudProgress::Completed;
-    assert_eq!(
-        workflow(vec![previous.clone(), completed]).progress().basis_points,
-        10_000
-    );
+    let progress = workflow(vec![previous.clone(), completed]).progress();
+    assert_eq!(progress.basis_points, 10_000);
+    let duplicate = node(CloudJobId::new(), "nativesdk-build", Vec::new());
     assert!(matches!(
-        invalid(vec![
-            previous.clone(),
-            node(CloudJobId::new(), "nativesdk-build", Vec::new())
-        ]),
+        invalid(vec![previous.clone(), duplicate]),
         DuplicateLogicalAttempt { attempt: 1, .. }
     ));
     let mut fork = retry.clone();

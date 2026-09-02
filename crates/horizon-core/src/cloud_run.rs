@@ -55,6 +55,10 @@ macro_rules! hex_value {
                 }
                 Ok(Self(value.to_ascii_lowercase()))
             }
+            #[must_use]
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
         }
         impl<'de> Deserialize<'de> for $name {
             fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -322,6 +326,8 @@ pub enum CloudProtocolError {
     DuplicateArtifactId(String),
     #[error("repository must be a credential-free owner/name identity")]
     InvalidRepository,
+    #[error("Git branch must be a safe ref name")]
+    InvalidGitBranch,
     #[error("node {0} has an empty logical key or label")]
     EmptyNodeIdentity(CloudJobId),
     #[error("node {0} has an invalid worker target")]
