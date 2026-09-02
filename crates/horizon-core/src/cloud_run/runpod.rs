@@ -12,14 +12,12 @@ const PROTOCOL_ENV: &str = "HORIZON_CLOUD_PROTOCOL_VERSION";
 const TERMINATE_ENV: &str = "HORIZON_TERMINATE_AFTER";
 const MIN_LEASE_SECONDS: u32 = 300;
 const MAX_LEASE_SECONDS: u32 = 30 * 24 * 60 * 60;
-/// Secret `RunPod` bearer token. Debug output is always redacted.
+const LEASE_CLOCK_SKEW_SECONDS: i64 = 120;
 #[derive(Clone)]
 pub struct RunPodApiKey(String);
 impl RunPodApiKey {
     /// Validate a token supplied by a secret store.
-    ///
     /// # Errors
-    /// Rejects empty, oversized, whitespace-containing, or non-ASCII tokens.
     pub fn new(value: impl Into<String>) -> Result<Self, RunPodError> {
         let value = value.into();
         let valid = !value.is_empty()
@@ -31,9 +29,7 @@ impl RunPodApiKey {
         valid.then_some(Self(value)).ok_or(RunPodError::InvalidApiKey)
     }
     /// Load the token injected by the control plane.
-    ///
     /// # Errors
-    /// Returns an error when `RUNPOD_API_KEY` is missing, non-Unicode, or invalid.
     pub fn from_env() -> Result<Self, RunPodError> {
         env::var("RUNPOD_API_KEY")
             .map_err(|_| RunPodError::MissingApiKey)
@@ -48,7 +44,6 @@ impl fmt::Debug for RunPodApiKey {
         formatter.write_str("RunPodApiKey(<redacted>)")
     }
 }
-/// Non-secret `RunPod` placement and connectivity settings.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunPodProfile {
@@ -71,7 +66,6 @@ pub struct RunPodProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container_registry_auth_id: Option<String>,
 }
-/// Persistable provider resource identity used for exact cleanup after restart.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunPodWorker {
@@ -87,7 +81,6 @@ pub struct RunPodWorker {
 impl RunPodWorker {
     /// Validate persisted identity before any provider mutation.
     /// # Errors
-    /// Rejects malformed IDs, names, images, or cost values.
     pub fn validate(&self) -> Result<(), RunPodError> {
         let expected_name = resource_name(self.workflow_id, self.job_id);
         if !valid_provider_id(&self.pod_id)
@@ -127,14 +120,12 @@ pub enum RunPodCleanup {
     Deleted,
     AlreadyAbsent,
 }
-/// Blocking `RunPod` client. Call it from a worker thread when used by an async UI.
 pub struct RunPodClient {
     transport: Box<dyn Transport>,
 }
 impl RunPodClient {
     /// Build a production client pinned to `RunPod`'s HTTPS control planes.
     /// # Errors
-    /// Returns an error if the fixed control-plane URL cannot be initialized.
     pub fn new(api_key: &RunPodApiKey) -> Result<Self, RunPodError> {
         Ok(Self {
             transport: Box::new(http::RunPodHttp::new(api_key)?),
@@ -142,8 +133,6 @@ impl RunPodClient {
     }
     /// Create a worker once, or adopt the single exact resource from an interrupted attempt.
     /// # Errors
-    /// Fails closed on invalid configuration, ambiguous resources, identity mismatch,
-    /// provider errors, missing cost data under a cost cap, or a breached cost cap.
     pub fn ensure_worker(
         &self,
         workflow_id: CloudWorkflowId,
@@ -178,6 +167,14 @@ impl RunPodClient {
             }
             Err(error) => return Err(error),
         };
+        if !created && !recovered_deadline_valid(&status.worker.terminate_after, target.lease_seconds) {
+            let worker = Box::new(status.worker);
+            return if self.delete_worker(&worker).is_ok() {
+                Err(RunPodError::LeaseDeadlineRejected { worker })
+            } else {
+                Err(RunPodError::LeaseRejectionCleanupFailed { worker })
+            };
+        }
         self.enforce_cost_limit(&status.worker, target.max_hourly_cost_micros)?;
         Ok(if created {
             RunPodEnsure::Created(status)
@@ -187,7 +184,6 @@ impl RunPodClient {
     }
     /// Inspect an exact persisted worker, returning `None` after provider deletion.
     /// # Errors
-    /// Fails if persisted or provider identity differs from the expected workflow resource.
     pub fn inspect_worker(&self, worker: &RunPodWorker) -> Result<Option<RunPodWorkerStatus>, RunPodError> {
         worker.validate()?;
         self.transport
@@ -197,7 +193,6 @@ impl RunPodClient {
     }
     /// Delete only the exact resource proven to belong to the persisted workflow and job.
     /// # Errors
-    /// Fails closed on identity mismatch or provider errors without issuing a delete.
     pub fn delete_worker(&self, worker: &RunPodWorker) -> Result<RunPodCleanup, RunPodError> {
         worker.validate()?;
         let Some(pod) = self.transport.get(&worker.pod_id)? else {
@@ -268,6 +263,12 @@ pub enum RunPodError {
     CreationVerificationFailed { pod_id: String },
     #[error("RunPod pod {pod_id} could not be verified or deleted after creation")]
     CreationCleanupFailed { pod_id: String },
+    #[error("RunPod pod {pod_id} deletion could not be verified")]
+    DeletionVerificationFailed { pod_id: String },
+    #[error("RunPod recovered worker lease was outside the requested bound and was deleted")]
+    LeaseDeadlineRejected { worker: Box<RunPodWorker> },
+    #[error("RunPod recovered worker lease was outside the requested bound but cleanup failed")]
+    LeaseRejectionCleanupFailed { worker: Box<RunPodWorker> },
     #[error("RunPod hourly cost was rejected and cleanup was requested")]
     HourlyCostRejected {
         worker: Box<RunPodWorker>,
@@ -499,6 +500,14 @@ fn termination_deadline(lease_seconds: u32) -> Result<String, RunPodError> {
         .ok_or(RunPodError::InvalidTarget)?
         .format(&time::format_description::well_known::Rfc3339)
         .map_err(|_| RunPodError::InvalidTarget)
+}
+fn recovered_deadline_valid(value: &str, lease_seconds: u32) -> bool {
+    let Ok(deadline) = time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339) else {
+        return false;
+    };
+    let now = time::OffsetDateTime::now_utc();
+    deadline >= now - time::Duration::seconds(LEASE_CLOCK_SKEW_SECONDS)
+        && deadline <= now + time::Duration::seconds(i64::from(lease_seconds) + LEASE_CLOCK_SKEW_SECONDS)
 }
 fn valid_provider_id(value: &str) -> bool {
     !value.is_empty()

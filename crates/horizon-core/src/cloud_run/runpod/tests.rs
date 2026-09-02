@@ -2,9 +2,7 @@ use super::*;
 use crate::cloud_run::CloudProvider;
 use std::sync::{Arc, Mutex};
 #[derive(Clone, Default)]
-struct FakeTransport {
-    state: Arc<Mutex<FakeState>>,
-}
+struct FakeTransport(Arc<Mutex<FakeState>>);
 #[derive(Default)]
 struct FakeState {
     pods: Vec<ApiPod>,
@@ -16,21 +14,21 @@ struct FakeState {
 impl FakeTransport {
     fn with_create_response(response: ApiPod) -> Self {
         let transport = Self::default();
-        transport.state.lock().expect("state").create_response = Some(response);
+        transport.0.lock().expect("state").create_response = Some(response);
         transport
     }
     fn with_pods(pods: Vec<ApiPod>) -> Self {
         let transport = Self::default();
-        transport.state.lock().expect("state").pods = pods;
+        transport.0.lock().expect("state").pods = pods;
         transport
     }
 }
 impl Transport for FakeTransport {
     fn list_by_name(&self, _name: &str) -> Result<Vec<ApiPod>, RunPodError> {
-        Ok(self.state.lock().expect("state").pods.clone())
+        Ok(self.0.lock().expect("state").pods.clone())
     }
     fn create(&self, request: &CreatePodRequest) -> Result<ApiPod, RunPodError> {
-        let mut state = self.state.lock().expect("state");
+        let mut state = self.0.lock().expect("state");
         state.create_requests.push(request.clone());
         let mut response = state.create_response.clone().expect("create response");
         response
@@ -40,17 +38,11 @@ impl Transport for FakeTransport {
         Ok(response)
     }
     fn get(&self, pod_id: &str) -> Result<Option<ApiPod>, RunPodError> {
-        Ok(self
-            .state
-            .lock()
-            .expect("state")
-            .pods
-            .iter()
-            .find(|pod| pod.id == pod_id)
-            .cloned())
+        let state = self.0.lock().expect("state");
+        Ok(state.pods.iter().find(|pod| pod.id == pod_id).cloned())
     }
     fn delete(&self, pod_id: &str) -> Result<RunPodCleanup, RunPodError> {
-        let mut state = self.state.lock().expect("state");
+        let mut state = self.0.lock().expect("state");
         if state.fail_delete {
             return Err(RunPodError::RequestFailed {
                 operation: "pod deletion",
@@ -164,7 +156,7 @@ fn creation_uses_secure_direct_pull_and_bandwidth_constraints() {
         .ensure_worker(workflow_id, job_id, &target, &profile())
         .expect_err("cost rejected after creation");
     assert!(matches!(error, RunPodError::HourlyCostRejected { .. }));
-    let state = observer.state.lock().expect("state");
+    let state = observer.0.lock().expect("state");
     let request = state.create_requests.first().expect("creation request");
     assert_eq!(request.cloud_type, "SECURE");
     assert_eq!(request.image_name, target.image);
@@ -195,12 +187,23 @@ fn retries_reuse_one_exact_worker_and_reject_ambiguity() {
         .ensure_worker(workflow_id, job_id, &target, &profile())
         .expect("worker reused");
     assert!(matches!(result, RunPodEnsure::Reused(_)));
-    assert!(observer.state.lock().expect("state").create_requests.is_empty());
+    assert!(observer.0.lock().expect("state").create_requests.is_empty());
     let client = RunPodClient::with_transport(FakeTransport::with_pods(vec![pod.clone(), pod]));
     assert!(matches!(
         client.ensure_worker(workflow_id, job_id, &target, &profile()),
         Err(RunPodError::AmbiguousResource { count: 2, .. })
     ));
+    for deadline in ["2000-01-01T00:00:00Z", "2999-01-01T00:00:00Z"] {
+        let mut invalid = api_pod(workflow_id, job_id, &target, Some(420_000));
+        invalid.env.insert(TERMINATE_ENV.to_string(), deadline.to_string());
+        let transport = FakeTransport::with_pods(vec![invalid]);
+        let observer = transport.clone();
+        assert!(matches!(
+            RunPodClient::with_transport(transport).ensure_worker(workflow_id, job_id, &target, &profile()),
+            Err(RunPodError::LeaseDeadlineRejected { .. })
+        ));
+        assert!(observer.0.lock().expect("state").pods.is_empty());
+    }
 }
 #[test]
 fn identity_mismatch_blocks_delete_and_exact_delete_is_idempotent() {
@@ -226,12 +229,12 @@ fn identity_mismatch_blocks_delete_and_exact_delete_is_idempotent() {
         client.delete_worker(&worker),
         Err(RunPodError::ResourceIdentityMismatch)
     );
-    assert!(observer.state.lock().expect("state").deleted.is_empty());
+    assert!(observer.0.lock().expect("state").deleted.is_empty());
     let transport = FakeTransport::with_pods(vec![good]);
     let observer = transport.clone();
     let client = RunPodClient::with_transport(transport);
     assert_eq!(client.delete_worker(&worker), Ok(RunPodCleanup::Deleted));
     assert_eq!(client.inspect_worker(&worker), Ok(None));
     assert_eq!(client.delete_worker(&worker), Ok(RunPodCleanup::AlreadyAbsent));
-    assert_eq!(observer.state.lock().expect("state").deleted, [worker.pod_id]);
+    assert_eq!(observer.0.lock().expect("state").deleted, [worker.pod_id]);
 }

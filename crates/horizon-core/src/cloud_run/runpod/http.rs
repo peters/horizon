@@ -140,14 +140,24 @@ impl Transport for RunPodHttp {
             .map_err(|_| RunPodError::RequestFailed {
                 operation: "pod deletion",
             })?;
-        match response.status().as_u16() {
-            204 => Ok(RunPodCleanup::Deleted),
-            404 => Ok(RunPodCleanup::AlreadyAbsent),
-            status => Err(RunPodError::UnexpectedStatus {
+        if response.status().as_u16() != 204 {
+            return Err(RunPodError::UnexpectedStatus {
                 operation: "pod deletion",
-                status,
-            }),
+                status: response.status().as_u16(),
+            });
         }
+        if matches!(self.get(pod_id), Ok(None)) {
+            return Ok(RunPodCleanup::Deleted);
+        }
+        for delay_ms in PROPAGATION_BACKOFF_MS {
+            thread::sleep(Duration::from_millis(delay_ms));
+            if matches!(self.get(pod_id), Ok(None)) {
+                return Ok(RunPodCleanup::Deleted);
+            }
+        }
+        Err(RunPodError::DeletionVerificationFailed {
+            pod_id: pod_id.to_string(),
+        })
     }
 }
 pub(super) fn capacity_unavailable(envelope: &serde_json::Value) -> bool {
