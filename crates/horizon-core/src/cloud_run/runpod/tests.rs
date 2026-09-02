@@ -101,10 +101,8 @@ fn api_pod(
         id: "pod_123456".to_string(),
         name: resource_name(workflow_id, job_id),
         image: target.image.clone(),
-        desired_status: Some("RUNNING".to_string()),
-        runtime_status: Some("initializing".to_string()),
-        public_ip: None,
-        port_mappings: BTreeMap::new(),
+        status: Some("PROVISIONING".to_string()),
+        ssh: Some(ApiSsh::default()),
         env: BTreeMap::from([
             (WORKFLOW_ENV.to_string(), workflow_id.to_string()),
             (JOB_ENV.to_string(), job_id.to_string()),
@@ -114,16 +112,9 @@ fn api_pod(
             ),
             (TERMINATE_ENV.to_string(), terminate_after),
         ]),
-        adjusted_cost_per_hr: hourly_cost_micros,
-        cost_per_hr: None,
+        cost: hourly_cost_micros,
     }
 }
-fn ensured_status(result: RunPodEnsure) -> RunPodWorkerStatus {
-    match result {
-        RunPodEnsure::Created(status) | RunPodEnsure::Reused(status) => status,
-    }
-}
-
 #[test]
 fn api_key_validation_never_exposes_secret() {
     let key = RunPodApiKey::new("rpa_example-secret").expect("valid API key");
@@ -138,13 +129,24 @@ fn api_key_validation_never_exposes_secret() {
 #[test]
 fn provider_messages_classify_capacity_shortage() {
     let exhausted = serde_json::json!({"errors": [
-        {"message": "There are no longer any instances available. Please refresh and try again."},
+        {"message": "There are no instances currently available"},
         {"message": "This machine does not have the resources; try a different machine"}
     ]});
     assert!(http::capacity_unavailable(&exhausted));
     assert!(!http::capacity_unavailable(&serde_json::json!({
         "errors": [{"message": "invalid image reference"}]
     })));
+}
+
+#[test]
+fn v2_cold_start_accepts_null_runtime_and_ssh_endpoints() {
+    let pod: ApiPod = serde_json::from_value(serde_json::json!({
+        "id": "pod_123456", "name": "cold-start", "image": target().image,
+        "status": "PROVISIONING", "env": {}, "cost": 0.24,
+        "ssh": {"proxy": null, "direct": null}, "runtime": null
+    }))
+    .expect("valid v2 cold-start pod");
+    assert!(pod.ssh.is_some_and(|ssh| ssh.direct.is_none()));
 }
 
 #[test]
@@ -209,12 +211,13 @@ fn identity_mismatch_blocks_delete_and_exact_delete_is_idempotent() {
     let (workflow_id, job_id) = (CloudWorkflowId::new(), CloudJobId::new());
     let target = target();
     let good = api_pod(workflow_id, job_id, &target, Some(420_000));
-    let worker = ensured_status(
-        RunPodClient::with_transport(FakeTransport::with_pods(vec![good.clone()]))
-            .ensure_worker(workflow_id, job_id, &target, &profile())
-            .expect("worker reused"),
-    )
-    .worker;
+    let result = RunPodClient::with_transport(FakeTransport::with_pods(vec![good.clone()]))
+        .ensure_worker(workflow_id, job_id, &target, &profile())
+        .expect("worker reused");
+    let RunPodEnsure::Reused(status) = result else {
+        panic!("existing worker must be reused");
+    };
+    let worker = status.worker;
     let mut mutable_worker = worker.clone();
     mutable_worker.image = "registry.example/team/nativesdk:latest".to_string();
     assert_eq!(mutable_worker.validate(), Err(RunPodError::InvalidPersistedWorker));

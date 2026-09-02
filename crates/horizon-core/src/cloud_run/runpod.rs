@@ -18,7 +18,6 @@ const MAX_LEASE_SECONDS: u32 = 30 * 24 * 60 * 60;
 /// Secret `RunPod` bearer token. Debug output is always redacted.
 #[derive(Clone)]
 pub struct RunPodApiKey(String);
-
 impl RunPodApiKey {
     /// Validate a token supplied by a secret store.
     ///
@@ -29,12 +28,11 @@ impl RunPodApiKey {
         let valid = !value.is_empty()
             && value.len() <= 4_096
             && value.is_ascii()
-            && !value
+            && value
                 .bytes()
-                .any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control());
+                .all(|byte| !byte.is_ascii_whitespace() && !byte.is_ascii_control());
         valid.then_some(Self(value)).ok_or(RunPodError::InvalidApiKey)
     }
-
     /// Load the token injected by the control plane.
     ///
     /// # Errors
@@ -44,12 +42,10 @@ impl RunPodApiKey {
             .map_err(|_| RunPodError::MissingApiKey)
             .and_then(Self::new)
     }
-
     pub(super) fn expose(&self) -> &str {
         &self.0
     }
 }
-
 impl fmt::Debug for RunPodApiKey {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("RunPodApiKey(<redacted>)")
@@ -79,7 +75,6 @@ pub struct RunPodProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container_registry_auth_id: Option<String>,
 }
-
 /// Persistable provider resource identity used for exact cleanup after restart.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -111,41 +106,36 @@ impl RunPodWorker {
         Ok(())
     }
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RunPodLifecycle {
     Provisioning,
     Running,
     Exited,
+    Failed,
     Terminated,
     Unknown,
 }
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RunPodWorkerStatus {
     pub worker: RunPodWorker,
     pub lifecycle: RunPodLifecycle,
-    pub public_ip: Option<String>,
+    pub ssh_host: Option<String>,
     pub ssh_port: Option<u16>,
 }
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RunPodEnsure {
     Created(RunPodWorkerStatus),
     Reused(RunPodWorkerStatus),
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RunPodCleanup {
     Deleted,
     AlreadyAbsent,
 }
-
 /// Blocking `RunPod` client. Call it from a worker thread when used by an async UI.
 pub struct RunPodClient {
     transport: Box<dyn Transport>,
 }
-
 impl RunPodClient {
     /// Build a production client pinned to `RunPod`'s HTTPS control planes.
     /// # Errors
@@ -212,9 +202,7 @@ impl RunPodClient {
             .map(|pod| status_from_resource(&pod, worker))
             .transpose()
     }
-
     /// Delete only the exact resource proven to belong to the persisted workflow and job.
-    ///
     /// # Errors
     /// Fails closed on identity mismatch or provider errors without issuing a delete.
     pub fn delete_worker(&self, worker: &RunPodWorker) -> Result<RunPodCleanup, RunPodError> {
@@ -395,25 +383,30 @@ impl CreatePodRequest {
 struct ApiPod {
     id: String,
     name: String,
-    #[serde(alias = "imageName")]
     image: String,
-    desired_status: Option<String>,
-    runtime_status: Option<String>,
-    public_ip: Option<String>,
-    port_mappings: BTreeMap<String, u16>,
+    status: Option<String>,
+    ssh: Option<ApiSsh>,
     env: BTreeMap<String, String>,
     #[serde(default, deserialize_with = "deserialize_hourly_cost")]
-    adjusted_cost_per_hr: Option<u64>,
-    #[serde(default, deserialize_with = "deserialize_hourly_cost")]
-    cost_per_hr: Option<u64>,
+    cost: Option<u64>,
 }
-
 impl ApiPod {
     fn hourly_cost_micros(&self) -> Option<u64> {
-        self.adjusted_cost_per_hr.or(self.cost_per_hr)
+        self.cost
     }
 }
 
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+struct ApiSsh {
+    direct: Option<ApiSshEndpoint>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct ApiSshEndpoint {
+    host: String,
+    port: u16,
+}
 fn validate_target(target: &WorkerTarget, profile: &RunPodProfile) -> Result<(), RunPodError> {
     let safe_text = |value: &str| {
         !value.is_empty() && value.len() <= 191 && value.trim() == value && !value.chars().any(char::is_control)
@@ -496,25 +489,24 @@ fn status_from_resource(pod: &ApiPod, worker: &RunPodWorker) -> Result<RunPodWor
     if !owned {
         return Err(RunPodError::ResourceIdentityMismatch);
     }
-    let runtime = pod.runtime_status.as_deref().map(str::to_ascii_lowercase);
-    let desired = pod.desired_status.as_deref().map(str::to_ascii_uppercase);
-    let lifecycle = match (runtime.as_deref(), desired.as_deref()) {
-        (Some("running"), _) => RunPodLifecycle::Running,
-        (Some("initializing"), _) => RunPodLifecycle::Provisioning,
-        (Some("stopped"), _) | (_, Some("EXITED")) => RunPodLifecycle::Exited,
-        (Some("terminated"), _) | (_, Some("TERMINATED")) => RunPodLifecycle::Terminated,
-        (None, Some("RUNNING")) if pod.public_ip.is_none() => RunPodLifecycle::Provisioning,
-        (None, Some("RUNNING")) => RunPodLifecycle::Running,
+    let status = pod.status.as_deref().map(str::to_ascii_uppercase);
+    let lifecycle = match status.as_deref() {
+        Some("PROVISIONING" | "STARTING") => RunPodLifecycle::Provisioning,
+        Some("RUNNING") => RunPodLifecycle::Running,
+        Some("EXITED") => RunPodLifecycle::Exited,
+        Some("ERROR") => RunPodLifecycle::Failed,
+        Some("TERMINATED") => RunPodLifecycle::Terminated,
         _ => RunPodLifecycle::Unknown,
     };
+    let direct_ssh = pod.ssh.as_ref().and_then(|ssh| ssh.direct.as_ref());
     Ok(RunPodWorkerStatus {
         worker: RunPodWorker {
             hourly_cost_micros: pod.hourly_cost_micros().or(worker.hourly_cost_micros),
             ..worker.clone()
         },
         lifecycle,
-        public_ip: pod.public_ip.clone(),
-        ssh_port: pod.port_mappings.get("22").copied(),
+        ssh_host: direct_ssh.map(|endpoint| endpoint.host.clone()),
+        ssh_port: direct_ssh.map(|endpoint| endpoint.port),
     })
 }
 

@@ -1,15 +1,15 @@
 use super::{ApiPod, CreatePodRequest, RunPodApiKey, RunPodCleanup, RunPodError, Transport, valid_provider_id};
 use std::{thread, time::Duration};
 use url::Url;
-
-const API_BASE: &str = "https://rest.runpod.io/v1/";
+const API_BASE: &str = "https://api.runpod.io/v2/";
 const GRAPHQL_URL: &str = "https://api.runpod.io/graphql";
 const CREATE_MUTATION: &str =
     "mutation CreatePod($input: PodFindAndDeployOnDemandInput!) { podFindAndDeployOnDemand(input: $input) { id } }";
 const RESPONSE_LIMIT_BYTES: u64 = 2 * 1024 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-const CAPACITY_ERROR_MARKERS: [&str; 7] = [
+const CAPACITY_ERROR_MARKERS: [&str; 8] = [
     "no longer any instances available",
+    "no instances currently available",
     "please refresh and try again",
     "does not have the resources",
     "try a different machine",
@@ -21,6 +21,11 @@ pub(super) struct RunPodHttp {
     agent: ureq::Agent,
     base: Url,
     authorization: String,
+}
+
+#[derive(serde::Deserialize)]
+struct ListPodsResponse {
+    pods: Vec<ApiPod>,
 }
 impl RunPodHttp {
     pub(super) fn new(api_key: &RunPodApiKey) -> Result<Self, RunPodError> {
@@ -56,8 +61,7 @@ impl RunPodHttp {
 }
 impl Transport for RunPodHttp {
     fn list_by_name(&self, name: &str) -> Result<Vec<ApiPod>, RunPodError> {
-        let mut url = self.pods_url()?;
-        url.query_pairs_mut().append_pair("name", name);
+        let url = self.pods_url()?;
         let response = self
             .agent
             .get(url.as_str())
@@ -66,7 +70,8 @@ impl Transport for RunPodHttp {
             .map_err(|_| RunPodError::RequestFailed {
                 operation: "pod lookup",
             })?;
-        decode_json(response, 200, "pod lookup")
+        let response: ListPodsResponse = decode_json(response, 200, "pod lookup")?;
+        Ok(response.pods.into_iter().filter(|pod| pod.name == name).collect())
     }
     fn create(&self, request: &CreatePodRequest) -> Result<ApiPod, RunPodError> {
         let response = self
