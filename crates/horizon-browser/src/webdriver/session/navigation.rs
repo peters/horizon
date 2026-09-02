@@ -16,6 +16,12 @@ use super::{
     normalize_url, webdriver_value,
 };
 
+/// How much longer than a classic navigation's bound its HTTP read waits for
+/// the `WebDriver` timeout error: enough for a normal reply, but well inside
+/// the MCP controller's 5 s delivery headroom so a hung driver still ends in
+/// the typed `timed_out` outcome after the read gives up.
+const CLASSIC_BOUND_READ_MARGIN_MILLIS: u64 = 2_000;
+
 impl Driver {
     /// Run a `Navigate` agent action. Firefox `BiDi` dispatches with
     /// `wait: "none"` and settles from its navigation events or the bounded
@@ -96,11 +102,19 @@ impl Driver {
             .unwrap_or(u64::MAX)
             .max(1);
         // The action's bound replaces the session default in both directions
-        // (a 60 s bound must not fail at the 50 s default), and the HTTP read
-        // must outlast it so the WebDriver timeout error, not a socket
-        // timeout, ends the command.
-        let _ = self.classic_post("timeouts", &json!({ "pageLoad": bound_millis }));
-        let read_timeout = Duration::from_millis(bound_millis.saturating_add(5_000));
+        // (a 60 s bound must not fail at the 50 s default); navigating under
+        // the wrong bound would misreport the outcome, so a failed update is
+        // a typed failure. The HTTP read outlasts the bound so the WebDriver
+        // timeout error, not a socket timeout, normally ends the command, but
+        // by less than the controller's delivery headroom so a hung driver
+        // still yields the typed timeout in time.
+        if let Err(error) = self.classic_post("timeouts", &json!({ "pageLoad": bound_millis })) {
+            return Err(BrowserControlFailure::new(
+                "protocol_error",
+                format!("could not apply the navigation bound: {error}"),
+            ));
+        }
+        let read_timeout = Duration::from_millis(bound_millis.saturating_add(CLASSIC_BOUND_READ_MARGIN_MILLIS));
         self.begin_navigation();
         let _ = event_tx.send(BrowserEvent::Loading(true));
         let result = self
