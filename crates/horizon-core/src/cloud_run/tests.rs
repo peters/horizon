@@ -141,9 +141,25 @@ fn provenance_rejects_secrets_without_echoing_them() {
         );
     }
     provenance.workflow_run_url = None;
-    for key in ["https://storage.example/a?sig=x", "C:/outside", "C:relative"] {
+    for key in ["https://e.test/a?x", "C:/outside", "C:relative", "artifact\n"] {
         provenance.artifacts[0].storage_key = key.to_string();
         assert_eq!(provenance.validate(), Err(CloudProtocolError::InvalidArtifactRef(id)));
+    }
+}
+#[test]
+fn job_state_transition_matrix_is_stable() {
+    let states: Vec<CloudJobState> = serde_json::from_str(
+        r#"["queued","provisioning","pulling_image","cloning","running","checkpointing","waiting_for_approval","completed","failed","cancelled","cleaning","cleaned"]"#,
+    )
+    .expect("valid state table");
+    // Each bit corresponds to the state at the same index, covering every allowed and forbidden edge.
+    let allowed = [
+        0x242_u16, 0x31c, 0x318, 0x310, 0x3e0, 0x390, 0x391, 0x400, 0x400, 0x400, 0x900, 0,
+    ];
+    for (from, mask) in states.iter().copied().zip(allowed) {
+        for (bit, to) in states.iter().copied().enumerate() {
+            assert_eq!(from.permits(to), mask & (1 << bit) != 0, "{from:?}->{to:?}");
+        }
     }
 }
 #[test]

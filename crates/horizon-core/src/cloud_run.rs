@@ -42,6 +42,37 @@ macro_rules! string_enum {
     };
 }
 string_enum!(CloudProvider: Azure, RunPod);
+macro_rules! hex_value {
+    ($name:ident => $parser:ident; $length:literal; $error:ident; $description:literal) => {
+        #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+        #[serde(transparent)]
+        pub struct $name(String);
+        impl $name {
+            #[doc = $description]
+            /// # Errors
+            #[doc = concat!("Rejects values that are not exactly ", stringify!($length), " hexadecimal characters.")]
+            pub fn $parser(value: impl Into<String>) -> Result<Self, CloudProtocolError> {
+                let value = value.into();
+                if value.len() != $length || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                    return Err(CloudProtocolError::$error(value));
+                }
+                Ok(Self(value.to_ascii_lowercase()))
+            }
+            #[must_use]
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+        }
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                Self::$parser(String::deserialize(deserializer)?).map_err(de::Error::custom)
+            }
+        }
+    };
+}
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WorkerTarget {
     pub provider: CloudProvider,
@@ -52,33 +83,7 @@ pub struct WorkerTarget {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_hourly_cost_micros: Option<u64>,
 }
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(transparent)]
-pub struct GitCommitSha(String);
-impl GitCommitSha {
-    /// Parse a full Git object ID used to bind a workflow to exact source.
-    /// # Errors
-    /// Rejects values that are not exactly 40 hexadecimal characters.
-    pub fn parse(value: impl Into<String>) -> Result<Self, CloudProtocolError> {
-        let value = value.into();
-        if value.len() != 40 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err(CloudProtocolError::InvalidGitCommit(value));
-        }
-        Ok(Self(value.to_ascii_lowercase()))
-    }
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-impl<'de> Deserialize<'de> for GitCommitSha {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Self::parse(String::deserialize(deserializer)?).map_err(de::Error::custom)
-    }
-}
+hex_value!(GitCommitSha => parse; 40; InvalidGitCommit; "Parse an exact Git commit SHA.");
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct GitSource {
     /// Repository identity without credentials, normally `owner/name`.
@@ -87,33 +92,7 @@ pub struct GitSource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
 }
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(transparent)]
-pub struct ArtifactDigest(String);
-impl ArtifactDigest {
-    /// Parse the SHA-256 digest of an immutable artifact or image.
-    /// # Errors
-    /// Rejects values that are not exactly 64 hexadecimal characters.
-    pub fn parse_sha256(value: impl Into<String>) -> Result<Self, CloudProtocolError> {
-        let value = value.into();
-        if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err(CloudProtocolError::InvalidSha256(value));
-        }
-        Ok(Self(value.to_ascii_lowercase()))
-    }
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-impl<'de> Deserialize<'de> for ArtifactDigest {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Self::parse_sha256(String::deserialize(deserializer)?).map_err(de::Error::custom)
-    }
-}
+hex_value!(ArtifactDigest => parse_sha256; 64; InvalidSha256; "Parse a SHA-256 digest.");
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ArtifactRef {
     pub artifact_id: String,

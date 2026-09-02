@@ -276,7 +276,7 @@ fn validate_artifact(node_id: CloudJobId, artifact: &ArtifactRef) -> Result<(), 
         || key.contains(['?', '#'])
         || key.contains('\\')
         || key.split('/').any(|segment| matches!(segment, "" | "." | ".."))
-        || key.chars().any(char::is_control)
+        || artifact.storage_key.chars().any(char::is_control)
     {
         return Err(CloudProtocolError::InvalidArtifactRef(node_id));
     }
