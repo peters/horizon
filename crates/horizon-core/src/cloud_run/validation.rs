@@ -3,8 +3,18 @@ use super::{
     CloudJobState, CloudProgress, CloudProtocolError as Error, CloudWorkflow, GitSource, ProvenanceRecord,
     WorkflowNode, WorkflowNodeKind,
 };
+use regex::Regex;
 use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock;
 use url::Url;
+static OCI_IMAGE_REFERENCE: LazyLock<Option<Regex>> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"\A(?:[a-z0-9]+(?:[.-][a-z0-9]+)*(?::[0-9]+)?/)?",
+        r"[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*",
+        r"(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[a-f0-9]{64})?\z"
+    ))
+    .ok()
+});
 fn ensure(valid: bool, error: Error) -> Result<(), Error> {
     valid.then_some(()).ok_or(error)
 }
@@ -290,19 +300,9 @@ fn validate_artifact(node_id: CloudJobId, artifact: &ArtifactRef) -> Result<(), 
     Ok(())
 }
 fn valid_worker_image(value: &str) -> bool {
-    let digest = value.split_once('@').map(|(_, digest)| digest);
-    !value.is_empty()
-        && !value.starts_with('@')
-        && !value.contains("://")
-        && !value.contains(['?', '#', '\\'])
-        && !value
-            .chars()
-            .any(|character| character.is_control() || character.is_whitespace())
-        && digest.is_none_or(|digest| {
-            digest
-                .strip_prefix("sha256:")
-                .is_some_and(|hash| hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
-        })
+    OCI_IMAGE_REFERENCE
+        .as_ref()
+        .is_some_and(|pattern| pattern.is_match(value))
 }
 fn validate_git_source(source: &GitSource) -> Result<(), Error> {
     ensure(valid_repository(&source.repository), Error::InvalidRepository)?;

@@ -151,14 +151,14 @@ fn v1_json_contract_round_trips() {
     let (mut snapshot, record): (CloudWorkflow, ProvenanceRecord) =
         serde_json::from_str(golden).expect("valid v1 contract");
     assert_eq!((snapshot.validate(), record.validate()), (Ok(()), Ok(())));
-    assert_eq!(
-        serde_json::to_string(&(&snapshot, &record)).expect("serialize v1"),
-        golden
-    );
+    let serialized = serde_json::to_string(&(&snapshot, &record)).expect("serialize v1");
+    assert_eq!(serialized, golden);
     assert!(record.source.commit.as_str().len() == 40 && record.artifacts[0].sha256.as_str().len() == 64);
-    let mut bad = snapshot.clone();
-    bad.nodes[0].worker.as_mut().expect("worker").image = "https://u:p@r/i?q".to_string();
-    rejects(bad.nodes, &InvalidWorkerTarget(snapshot.nodes[0].id));
+    for image in "https://u:p@r/i?q / .. image: Org/image image@sha256:deadbeef".split_ascii_whitespace() {
+        let mut bad = snapshot.clone();
+        bad.nodes[0].worker.as_mut().expect("worker").image = image.to_string();
+        rejects(bad.nodes, &InvalidWorkerTarget(snapshot.nodes[0].id));
+    }
     let mut bad = snapshot.clone();
     bad.nodes[0].source.as_mut().expect("source").branch = Some("bad branch".to_string());
     assert_eq!(bad.validate(), Err(InvalidGitBranch));
@@ -173,8 +173,7 @@ fn v1_json_contract_round_trips() {
     bad.nodes[2].progress = CloudProgress::Pending;
     assert_eq!(bad.validate(), Err(invalid_evidence()));
     snapshot.nodes[8].release = snapshot.nodes[4].release.clone();
-    let error = InvalidApprovalGate(snapshot.nodes[8].id);
-    assert_eq!(snapshot.validate(), Err(error));
+    assert_eq!(snapshot.validate(), Err(InvalidApprovalGate(snapshot.nodes[8].id)));
 }
 #[test]
 fn inputs_are_unique_outputs_of_direct_dependencies() {
