@@ -63,11 +63,12 @@ pub(crate) struct PendingNavigation {
     dom_content_loaded: bool,
     loaded: bool,
     /// Whether the backend has answered the dispatch; until then a commit
-    /// or failure cannot be attributed and is held in `deferred`.
+    /// or failure cannot be attributed and is held in `deferred`, one entry
+    /// per navigation id, until the reply names ours.
     dispatch_known: bool,
     /// Backend identity of this navigation, once the dispatch reply names it.
     expected_id: Option<String>,
-    deferred: Option<DeferredSignal>,
+    deferred: Vec<DeferredSignal>,
 }
 
 /// A commit or failure observed before the dispatch reply identified the
@@ -153,7 +154,7 @@ impl PendingNavigation {
             loaded: false,
             dispatch_known: false,
             expected_id: None,
-            deferred: None,
+            deferred: Vec::new(),
         }
     }
 
@@ -165,11 +166,13 @@ impl PendingNavigation {
     pub(crate) fn attach_id(&mut self, id: Option<&str>, now: Instant) -> Option<NavigationResult> {
         self.dispatch_known = true;
         self.expected_id = id.map(str::to_string);
-        let deferred = self.deferred.take()?;
-        let cross_document = !matches!(deferred, DeferredSignal::SameDocument { .. });
-        if !self.correlates(deferred.id()) || (cross_document && self.foreign_to_id_less_dispatch(deferred.id())) {
-            return None;
-        }
+        // Keep the newest held signal that belongs to this navigation; every
+        // other candidate came from a navigation still in flight.
+        let candidates = std::mem::take(&mut self.deferred);
+        let deferred = candidates.into_iter().rev().find(|candidate| {
+            let cross_document = !matches!(candidate, DeferredSignal::SameDocument { .. });
+            self.correlates(candidate.id()) && !(cross_document && self.foreign_to_id_less_dispatch(candidate.id()))
+        })?;
         match deferred {
             DeferredSignal::Committed {
                 url,
@@ -260,35 +263,30 @@ impl PendingNavigation {
         }
         if !self.dispatch_known && id.is_some() {
             // Signals that name a navigation cannot be attributed before the
-            // dispatch reply names ours; hold the last one back.
+            // dispatch reply names ours; hold them back per navigation id so
+            // a foreign late signal cannot displace this navigation's own.
             match signal {
-                NavigationSignal::Committed { url, id } => {
-                    self.deferred = Some(DeferredSignal::Committed {
-                        url: url.to_string(),
-                        id: id.map(str::to_string),
-                        dom_content_loaded: false,
-                        loaded: false,
-                    });
-                }
-                NavigationSignal::SameDocument { url, id } => {
-                    self.deferred = Some(DeferredSignal::SameDocument {
-                        url: url.to_string(),
-                        id: id.map(str::to_string),
-                    });
-                }
-                NavigationSignal::Failed { message, id } => {
-                    self.deferred = Some(DeferredSignal::Failed {
-                        message: message.to_string(),
-                        id: id.map(str::to_string),
-                    });
-                }
+                NavigationSignal::Committed { url, id } => self.hold(DeferredSignal::Committed {
+                    url: url.to_string(),
+                    id: id.map(str::to_string),
+                    dom_content_loaded: false,
+                    loaded: false,
+                }),
+                NavigationSignal::SameDocument { url, id } => self.hold(DeferredSignal::SameDocument {
+                    url: url.to_string(),
+                    id: id.map(str::to_string),
+                }),
+                NavigationSignal::Failed { message, id } => self.hold(DeferredSignal::Failed {
+                    message: message.to_string(),
+                    id: id.map(str::to_string),
+                }),
                 NavigationSignal::DomContentLoaded { id } => {
-                    if let Some(deferred) = self.deferred.as_mut() {
+                    for deferred in &mut self.deferred {
                         deferred.note_readiness(id, false);
                     }
                 }
                 NavigationSignal::Load { id } => {
-                    if let Some(deferred) = self.deferred.as_mut() {
+                    for deferred in &mut self.deferred {
                         deferred.note_readiness(id, true);
                     }
                 }
@@ -297,6 +295,13 @@ impl PendingNavigation {
             return None;
         }
         self.apply(signal, now)
+    }
+
+    /// Hold a signal back, replacing an earlier one for the same navigation.
+    fn hold(&mut self, signal: DeferredSignal) {
+        let id = signal.id().map(str::to_string);
+        self.deferred.retain(|held| held.id() != id.as_deref());
+        self.deferred.push(signal);
     }
 
     fn apply(&mut self, signal: NavigationSignal<'_>, now: Instant) -> Option<NavigationResult> {
@@ -821,6 +826,82 @@ mod tests {
         );
         assert!(expired.remaining(now).is_zero());
         assert_eq!(navigation(expired.tick(now)).state, NavigationState::TimedOut);
+    }
+
+    #[test]
+    fn a_foreign_late_signal_does_not_displace_the_held_commit() {
+        let now = Instant::now();
+        // B commits before its dispatch reply; superseded A then fails and
+        // commits late. B's own commit must survive until the reply names B.
+        let mut held = pending(NavigationWait::Commit, now);
+        assert!(
+            held.observe(
+                NavigationSignal::Committed {
+                    url: "https://example.test/start",
+                    id: Some("loader-b")
+                },
+                now
+            )
+            .is_none()
+        );
+        assert!(
+            held.observe(
+                NavigationSignal::Failed {
+                    message: "a failed",
+                    id: Some("loader-a")
+                },
+                now
+            )
+            .is_none()
+        );
+        assert!(
+            held.observe(
+                NavigationSignal::Committed {
+                    url: "https://example.test/a",
+                    id: Some("loader-a")
+                },
+                now
+            )
+            .is_none()
+        );
+        assert!(
+            held.observe(NavigationSignal::Load { id: Some("loader-b") }, now)
+                .is_none()
+        );
+        let outcome = navigation(held.attach_id(Some("loader-b"), now));
+        assert_eq!(outcome.state, NavigationState::Committed);
+        assert_eq!(outcome.committed_url.as_deref(), Some("https://example.test/start"));
+        assert!(!outcome.loading, "B's own readiness was kept with B's commit");
+
+        // A later signal for the same navigation replaces the earlier one.
+        let mut replaced = pending(NavigationWait::Commit, now);
+        assert!(
+            replaced
+                .observe(
+                    NavigationSignal::Committed {
+                        url: "https://example.test/first",
+                        id: Some("loader-b")
+                    },
+                    now
+                )
+                .is_none()
+        );
+        assert!(
+            replaced
+                .observe(
+                    NavigationSignal::Failed {
+                        message: "b failed",
+                        id: Some("loader-b")
+                    },
+                    now
+                )
+                .is_none()
+        );
+        let failure = replaced
+            .attach_id(Some("loader-b"), now)
+            .expect("settled")
+            .expect_err("failed");
+        assert_eq!(failure.code, "navigation_failed");
     }
 
     #[test]
