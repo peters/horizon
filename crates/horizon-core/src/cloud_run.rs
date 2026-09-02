@@ -3,6 +3,7 @@ use serde::{Deserialize, Deserializer, Serialize, de};
 use std::{collections::HashSet, fmt};
 use thiserror::Error;
 use uuid::Uuid;
+pub mod azure;
 pub mod runpod;
 mod validation;
 pub const CLOUD_RUN_PROTOCOL_VERSION: u32 = 1;
