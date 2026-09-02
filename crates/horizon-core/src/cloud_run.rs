@@ -146,30 +146,6 @@ impl CloudProgress {
     }
 }
 string_enum!(CloudJobState: Queued, Provisioning, PullingImage, Cloning, Running, Checkpointing, WaitingForApproval, Completed, Failed, Cancelled, Cleaning, Cleaned);
-impl CloudJobState {
-    #[must_use]
-    pub const fn permits(self, next: Self) -> bool {
-        use CloudJobState::{
-            Cancelled, Checkpointing, Cleaned, Cleaning, Cloning, Completed, Failed, Provisioning, PullingImage,
-            Queued, Running, WaitingForApproval,
-        };
-        matches!(
-            (self, next),
-            (Queued, Provisioning | WaitingForApproval | Cancelled)
-                | (Provisioning, PullingImage | Cloning | Running | Failed | Cancelled)
-                | (PullingImage, Cloning | Running | Failed | Cancelled)
-                | (Cloning, Running | Failed | Cancelled)
-                | (
-                    Running,
-                    Checkpointing | WaitingForApproval | Completed | Failed | Cancelled
-                )
-                | (Checkpointing, Running | Completed | Failed | Cancelled)
-                | (WaitingForApproval, Queued | Running | Completed | Failed | Cancelled)
-                | (Completed | Failed | Cancelled, Cleaning)
-                | (Cleaning, Cleaned | Failed)
-        )
-    }
-}
 string_enum!(CloudJobOutcome: Succeeded, Failed, Cancelled);
 string_enum!(WorkflowNodeKind: Build, Test, Artifact, Approval, Merge, Publish, Deploy, Verify, Cleanup);
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -340,8 +316,8 @@ pub enum CloudProtocolError {
     MissingSupersededAttempt { node: CloudJobId, previous: CloudJobId },
     #[error("node {0} does not form a valid immutable retry chain")]
     InvalidSupersededAttempt(CloudJobId),
-    #[error("node {0} depends on itself")]
-    SelfDependency(CloudJobId),
+    #[error("node {0} has a self or duplicate dependency")]
+    InvalidDependency(CloudJobId),
     #[error("node {node} depends on missing node {dependency}")]
     MissingDependency { node: CloudJobId, dependency: CloudJobId },
     #[error("workflow dependency cycle includes node {0}")]
@@ -352,8 +328,8 @@ pub enum CloudProtocolError {
     MissingApprovalGate(CloudJobId),
     #[error("node {0} has an invalid approval gate")]
     InvalidApprovalGate(CloudJobId),
-    #[error("approval node {node} refers to missing evidence node {evidence}")]
-    MissingApprovalEvidence { node: CloudJobId, evidence: CloudJobId },
+    #[error("approval node {node} has missing or invalid evidence node {evidence}")]
+    InvalidApprovalEvidence { node: CloudJobId, evidence: CloudJobId },
     #[error("approval node {0} cannot cite itself as evidence")]
     SelfApprovalEvidence(CloudJobId),
     #[error("node {0} has an invalid artifact reference")]

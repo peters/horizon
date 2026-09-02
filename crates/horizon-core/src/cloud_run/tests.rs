@@ -146,20 +146,6 @@ fn provenance_rejects_secrets_without_echoing_them() {
     }
 }
 #[test]
-fn job_state_transition_matrix_is_stable() {
-    let json = r#"["queued","provisioning","pulling_image","cloning","running","checkpointing","waiting_for_approval","completed","failed","cancelled","cleaning","cleaned"]"#;
-    let states: Vec<CloudJobState> = serde_json::from_str(json).expect("valid state table");
-    // Each bit corresponds to the state at the same index, covering every allowed and forbidden edge.
-    let allowed = [
-        0x242_u16, 0x31c, 0x318, 0x310, 0x3e0, 0x390, 0x391, 0x400, 0x400, 0x400, 0x900, 0,
-    ];
-    for (from, mask) in states.iter().copied().zip(allowed) {
-        for (bit, to) in states.iter().copied().enumerate() {
-            assert_eq!(from.permits(to), mask & (1 << bit) != 0, "{from:?}->{to:?}");
-        }
-    }
-}
-#[test]
 fn v1_json_contract_round_trips() {
     let golden = include_str!("v1_contract.json").trim();
     let (mut snapshot, record): (CloudWorkflow, ProvenanceRecord) =
@@ -177,6 +163,16 @@ fn v1_json_contract_round_trips() {
     let mut bad = snapshot.clone();
     bad.nodes[0].source.as_mut().expect("source").branch = Some("bad branch".to_string());
     assert_eq!(bad.validate(), Err(InvalidGitBranch));
+    let (evidence, gate) = (snapshot.nodes[2].id, snapshot.nodes[4].id);
+    let invalid_evidence = || InvalidApprovalEvidence { node: gate, evidence };
+    let mut bad = snapshot.clone();
+    bad.nodes[4].depends_on.clear();
+    assert_eq!(bad.validate(), Err(invalid_evidence()));
+    bad.nodes[4].depends_on.push(evidence);
+    bad.nodes[2].state = CloudJobState::Failed;
+    bad.nodes[2].outcome = Some(CloudJobOutcome::Failed);
+    bad.nodes[2].progress = CloudProgress::Pending;
+    assert_eq!(bad.validate(), Err(invalid_evidence()));
     snapshot.nodes[8].release = snapshot.nodes[4].release.clone();
     let error = InvalidApprovalGate(snapshot.nodes[8].id);
     assert_eq!(snapshot.validate(), Err(error));
@@ -202,6 +198,11 @@ fn inputs_are_unique_outputs_of_direct_dependencies() {
         );
     }
     consumer.input_artifact_ids = vec!["candidate".to_string()];
+    consumer.depends_on = vec![producer_id; 2];
+    rejects(
+        vec![producer.clone(), consumer.clone()],
+        &InvalidDependency(consumer_id),
+    );
     consumer.depends_on.clear();
     rejects(vec![producer, consumer], &InvalidInputArtifact(consumer_id));
 }

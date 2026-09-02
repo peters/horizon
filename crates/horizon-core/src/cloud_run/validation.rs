@@ -106,7 +106,7 @@ fn validate_node(
     }
     ensure(valid_outcome(node), Error::InvalidJobOutcome(node.id))?;
     validate_retry(node, nodes)?;
-    ensure(!node.depends_on.contains(&node.id), Error::SelfDependency(node.id))?;
+    ensure(!node.depends_on.contains(&node.id), Error::InvalidDependency(node.id))?;
     for dependency in &node.depends_on {
         if !nodes.contains_key(dependency) {
             return Err(Error::MissingDependency {
@@ -175,6 +175,7 @@ fn validate_approval(
     let node_id = node.id;
     ensure(!approval.action.trim().is_empty(), Error::InvalidApprovalGate(node_id))?;
     let valid_time = |value| value >= workflow.created_at_millis && value <= workflow.updated_at_millis;
+    let approved = matches!(approval.decision, ApprovalDecision::Approved { .. });
     match &approval.decision {
         ApprovalDecision::Pending if node.outcome != Some(CloudJobOutcome::Succeeded) => {}
         ApprovalDecision::Approved {
@@ -197,12 +198,30 @@ fn validate_approval(
     }
     for evidence_id in &approval.evidence_job_ids {
         ensure(*evidence_id != node_id, Error::SelfApprovalEvidence(node_id))?;
-        if !nodes.contains_key(evidence_id) {
-            return Err(Error::MissingApprovalEvidence {
+        let Some(evidence) = nodes.get(evidence_id) else {
+            return Err(Error::InvalidApprovalEvidence {
                 node: node_id,
                 evidence: *evidence_id,
             });
-        }
+        };
+        let terminal = matches!(
+            evidence.state,
+            CloudJobState::Completed
+                | CloudJobState::Failed
+                | CloudJobState::Cancelled
+                | CloudJobState::Cleaning
+                | CloudJobState::Cleaned
+        );
+        ensure(
+            node.depends_on.contains(evidence_id)
+                && terminal
+                && evidence.outcome.is_some()
+                && (!approved || evidence.outcome == Some(CloudJobOutcome::Succeeded)),
+            Error::InvalidApprovalEvidence {
+                node: node_id,
+                evidence: *evidence_id,
+            },
+        )?;
     }
     Ok(())
 }
@@ -219,6 +238,10 @@ fn valid_progress(node: &WorkflowNode) -> bool {
 fn validate_inputs(node: &WorkflowNode, artifact_producers: &HashMap<&str, CloudJobId>) -> Result<(), Error> {
     let mut seen = HashSet::new();
     let dependencies: HashSet<_> = node.depends_on.iter().copied().collect();
+    ensure(
+        dependencies.len() == node.depends_on.len(),
+        Error::InvalidDependency(node.id),
+    )?;
     for artifact_id in &node.input_artifact_ids {
         let producer = artifact_producers.get(artifact_id.as_str());
         if artifact_id.trim().is_empty()
