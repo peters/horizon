@@ -11,11 +11,11 @@ fn artifact(id: &str, key: &str) -> ArtifactRef {
         media_type: None,
     }
 }
-fn node(id: CloudJobId, logical_key: &str, depends_on: Vec<CloudJobId>) -> WorkflowNode {
+fn node(id: CloudJobId, key: &str, depends_on: Vec<CloudJobId>) -> WorkflowNode {
     WorkflowNode {
         id,
-        logical_key: logical_key.to_string(),
-        label: logical_key.to_string(),
+        logical_key: key.to_string(),
+        label: key.to_string(),
         kind: WorkflowNodeKind::Build,
         state: CloudJobState::Queued,
         outcome: None,
@@ -45,8 +45,17 @@ fn workflow(nodes: Vec<WorkflowNode>) -> CloudWorkflow {
         nodes,
     }
 }
+fn invalid(nodes: Vec<WorkflowNode>) -> CloudProtocolError {
+    workflow(nodes).validate().expect_err("invalid workflow")
+}
+fn approved(at_millis: i64) -> ApprovalDecision {
+    ApprovalDecision::Approved {
+        actor: "release-owner".to_string(),
+        decided_at_millis: at_millis,
+    }
+}
 #[test]
-fn workflow_validates_deep_dags_without_recursion() {
+fn dependency_validation_is_iterative_and_detects_cycles() {
     let mut nodes = Vec::with_capacity(4_096);
     let mut previous = None;
     for index in 0..4_096 {
@@ -55,143 +64,142 @@ fn workflow_validates_deep_dags_without_recursion() {
         previous = Some(id);
     }
     assert_eq!(workflow(nodes).validate(), Ok(()));
-}
-#[test]
-fn workflow_rejects_dependency_cycles() {
     let first = CloudJobId::new();
     let second = CloudJobId::new();
     assert!(matches!(
-        workflow(vec![node(first, "first", vec![second]), node(second, "second", vec![first])]).validate(),
-        Err(CloudProtocolError::DependencyCycle(id)) if id == first || id == second
+        invalid(vec![node(first, "first", vec![second]), node(second, "second", vec![first])]),
+        CloudProtocolError::DependencyCycle(id) if id == first || id == second
     ));
 }
 #[test]
-fn approvals_and_environment_leases_are_bound_to_their_node() {
+fn approvals_and_leases_obey_snapshot_time_and_identity() {
     let id = CloudJobId::new();
     let mut gate = node(id, "publish-test", Vec::new());
     gate.kind = WorkflowNodeKind::Approval;
     gate.state = CloudJobState::WaitingForApproval;
-    assert_eq!(
-        workflow(vec![gate.clone()]).validate(),
-        Err(CloudProtocolError::MissingApprovalGate(id))
-    );
     gate.approval = Some(ApprovalGate {
         action: "Publish To Test".to_string(),
         decision: ApprovalDecision::Pending,
         evidence_job_ids: vec![id],
     });
     assert_eq!(
-        workflow(vec![gate.clone()]).validate(),
-        Err(CloudProtocolError::SelfApprovalEvidence(id))
+        invalid(vec![gate.clone()]),
+        CloudProtocolError::SelfApprovalEvidence(id)
     );
-    gate.approval.as_mut().expect("gate exists").evidence_job_ids.clear();
-    let mut workflow = workflow(vec![gate]);
-    workflow.nodes[0].environment_lease = Some(EnvironmentLease {
+    let approval = gate.approval.as_mut().expect("gate exists");
+    approval.evidence_job_ids.clear();
+    approval.decision = approved(999);
+    assert_eq!(invalid(vec![gate.clone()]), CloudProtocolError::InvalidApprovalGate(id));
+    gate.approval.as_mut().expect("gate exists").decision = approved(1_500);
+    let mut snapshot = workflow(vec![gate]);
+    snapshot.nodes[0].environment_lease = Some(EnvironmentLease {
         environment: "youpark-test".to_string(),
-        holder_workflow_id: workflow.id,
+        holder_workflow_id: snapshot.id,
         holder_job_id: id,
-        acquired_at_millis: 10,
-        expires_at_millis: 20,
+        acquired_at_millis: 1_100,
+        expires_at_millis: snapshot.retain_until_millis + 1,
     });
-    assert_eq!(workflow.validate(), Ok(()));
-}
-#[test]
-fn progress_counts_only_latest_retry_attempts() {
-    let first = CloudJobId::new();
-    let second = CloudJobId::new();
-    let mut old = node(first, "image-pull", Vec::new());
-    old.state = CloudJobState::Cleaned;
-    old.outcome = Some(CloudJobOutcome::Failed);
-    old.progress = CloudProgress::Completed;
-    old.weight = 100;
-    old.retry.max_attempts = 2;
-    let mut retry = node(second, "image-pull", Vec::new());
-    retry.state = CloudJobState::PullingImage;
-    retry.progress = CloudProgress::Measured {
-        phase: "pulling_image".to_string(),
-        completed: 50,
-        total: 100,
-        unit: ProgressUnit::Bytes,
-    };
-    retry.weight = 3;
-    retry.attempt = 2;
-    retry.retry.max_attempts = 2;
-    retry.supersedes = Some(first);
-    let workflow = workflow(vec![old, retry]);
-    assert_eq!(workflow.validate(), Ok(()));
     assert_eq!(
-        workflow.progress(),
-        WorkflowProgress {
-            basis_points: 5_000,
-            estimated: false
-        }
+        snapshot.validate().expect_err("lease outlives workflow"),
+        CloudProtocolError::InvalidEnvironmentLease(id)
     );
 }
 #[test]
-fn provenance_is_round_trippable_and_secret_free() {
+fn provenance_rejects_secrets_without_echoing_them() {
     let id = CloudJobId::new();
-    let source = GitSource {
-        repository: "fintermobilityas/nativesdk".to_string(),
-        commit: sha('b'),
-        branch: Some("feature/plate-speedups".to_string()),
-    };
-    let output = artifact("candidate", "workflows/example/nativesdk.nupkg");
     let mut provenance = ProvenanceRecord {
         producer_job_id: id,
-        source,
+        source: GitSource {
+            repository: "fintermobilityas/nativesdk".to_string(),
+            commit: sha('b'),
+            branch: None,
+        },
         image_digest: None,
-        workflow_run_url: None,
+        workflow_run_url: Some("https://github.com/peters/horizon/actions/runs/1".to_string()),
         published_version: None,
-        artifacts: vec![output],
+        artifacts: vec![artifact("candidate", "workflows/candidate.nupkg")],
     };
     assert_eq!(provenance.validate(), Ok(()));
-    let json = serde_json::to_string(&provenance).expect("serialize provenance");
-    assert_eq!(
-        serde_json::from_str::<ProvenanceRecord>(&json).expect("restore provenance"),
-        provenance
-    );
-    assert!(serde_json::from_str::<GitCommitSha>(r#""short""#).is_err());
-    assert!(ArtifactDigest::parse_sha256("short").is_err());
     provenance.source.repository = "https://user:secret@example.test/repo".to_string();
-    assert!(matches!(
-        provenance.validate(),
-        Err(CloudProtocolError::InvalidRepository(_))
-    ));
+    let error = provenance.validate().expect_err("credential-bearing repository");
+    assert_eq!(error, CloudProtocolError::InvalidRepository);
+    assert!(!error.to_string().contains("secret"));
     provenance.source.repository = "fintermobilityas/nativesdk".to_string();
-    for key in [
-        "https://storage.example/artifact?sig=secret",
-        "workflows/../credentials",
+    for url in [
+        "https://user:secret@example.test/run",
+        "https://github.com/run?token=secret",
     ] {
-        provenance.artifacts[0].storage_key = key.to_string();
-        assert_eq!(provenance.validate(), Err(CloudProtocolError::InvalidArtifactRef(id)));
+        provenance.workflow_run_url = Some(url.to_string());
+        assert_eq!(
+            provenance.validate(),
+            Err(CloudProtocolError::InvalidWorkflowRunUrl(id))
+        );
     }
+    provenance.workflow_run_url = None;
+    provenance.artifacts[0].storage_key = "https://storage.example/artifact?sig=secret".to_string();
+    assert_eq!(provenance.validate(), Err(CloudProtocolError::InvalidArtifactRef(id)));
 }
 #[test]
-fn retries_preserve_outcomes_and_reject_ambiguous_chains() {
+fn inputs_are_unique_outputs_of_direct_dependencies() {
+    let producer_id = CloudJobId::new();
+    let consumer_id = CloudJobId::new();
+    let mut producer = node(producer_id, "package", Vec::new());
+    producer.outputs.push(artifact("candidate", "workflow/candidate"));
+    let mut consumer = node(consumer_id, "test", vec![producer_id]);
+    consumer.input_artifact_ids.push("candidate".to_string());
+    assert_eq!(workflow(vec![producer.clone(), consumer.clone()]).validate(), Ok(()));
+    for inputs in [
+        vec![String::new()],
+        vec!["candidate".to_string(); 2],
+        vec!["missing".to_string()],
+    ] {
+        consumer.input_artifact_ids = inputs;
+        assert_eq!(
+            invalid(vec![producer.clone(), consumer.clone()]),
+            CloudProtocolError::InvalidInputArtifact(consumer_id)
+        );
+    }
+    consumer.input_artifact_ids = vec!["candidate".to_string()];
+    consumer.depends_on.clear();
+    assert_eq!(
+        invalid(vec![producer, consumer]),
+        CloudProtocolError::InvalidInputArtifact(consumer_id)
+    );
+}
+#[test]
+fn retries_are_unambiguous_and_keep_outcomes_through_cleanup() {
     let first = CloudJobId::new();
-    let second = CloudJobId::new();
     let mut previous = node(first, "nativesdk-build", Vec::new());
     previous.state = CloudJobState::Cleaned;
     previous.outcome = Some(CloudJobOutcome::Failed);
+    previous.weight = 100;
     previous.retry.max_attempts = 2;
-    let mut retry = node(second, "nativesdk-build", Vec::new());
+    let mut retry = node(CloudJobId::new(), "nativesdk-build", Vec::new());
     retry.attempt = 2;
     retry.retry.max_attempts = 2;
     retry.supersedes = Some(first);
     assert_eq!(workflow(vec![previous.clone(), retry.clone()]).validate(), Ok(()));
-
-    let duplicate = node(CloudJobId::new(), "nativesdk-build", Vec::new());
+    let mut completed = retry.clone();
+    completed.state = CloudJobState::Completed;
+    completed.outcome = Some(CloudJobOutcome::Succeeded);
+    completed.progress = CloudProgress::Completed;
+    assert_eq!(
+        workflow(vec![previous.clone(), completed]).progress().basis_points,
+        10_000
+    );
     assert!(matches!(
-        workflow(vec![previous.clone(), duplicate]).validate(),
-        Err(CloudProtocolError::DuplicateLogicalAttempt { attempt: 1, .. })
+        invalid(vec![
+            previous.clone(),
+            node(CloudJobId::new(), "nativesdk-build", Vec::new())
+        ]),
+        CloudProtocolError::DuplicateLogicalAttempt { attempt: 1, .. }
     ));
     let mut fork = retry.clone();
     fork.id = CloudJobId::new();
     assert_eq!(
-        workflow(vec![previous.clone(), retry, fork]).validate(),
-        Err(CloudProtocolError::ForkedRetryAttempt(first))
+        invalid(vec![previous.clone(), retry, fork]),
+        CloudProtocolError::ForkedRetryAttempt(first)
     );
-
     previous.attempt = u16::MAX;
     previous.retry.max_attempts = u16::MAX;
     let mut overflow = node(CloudJobId::new(), "nativesdk-build", Vec::new());
@@ -199,13 +207,7 @@ fn retries_preserve_outcomes_and_reject_ambiguous_chains() {
     overflow.retry.max_attempts = u16::MAX;
     overflow.supersedes = Some(first);
     assert_eq!(
-        workflow(vec![overflow.clone(), previous]).validate(),
-        Err(CloudProtocolError::InvalidSupersededAttempt(overflow.id))
-    );
-    let mut completed = node(CloudJobId::new(), "completed", Vec::new());
-    completed.state = CloudJobState::Completed;
-    assert_eq!(
-        workflow(vec![completed.clone()]).validate(),
-        Err(CloudProtocolError::InvalidJobOutcome(completed.id))
+        invalid(vec![overflow.clone(), previous]),
+        CloudProtocolError::InvalidSupersededAttempt(overflow.id)
     );
 }

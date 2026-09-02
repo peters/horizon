@@ -9,30 +9,24 @@ use std::{collections::HashSet, fmt};
 use serde::{Deserialize, Deserializer, Serialize, de};
 use thiserror::Error;
 use uuid::Uuid;
-
 mod validation;
-
 pub const CLOUD_RUN_PROTOCOL_VERSION: u32 = 1;
-
 macro_rules! uuid_id {
     ($name:ident) => {
         #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
         #[serde(transparent)]
         pub struct $name(Uuid);
-
         impl $name {
             #[must_use]
             pub fn new() -> Self {
                 Self(Uuid::new_v4())
             }
         }
-
         impl Default for $name {
             fn default() -> Self {
                 Self::new()
             }
         }
-
         impl fmt::Display for $name {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 self.0.fmt(formatter)
@@ -40,7 +34,6 @@ macro_rules! uuid_id {
         }
     };
 }
-
 uuid_id!(CloudWorkflowId);
 uuid_id!(CloudJobId);
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -59,11 +52,9 @@ pub struct WorkerTarget {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_hourly_cost_micros: Option<u64>,
 }
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct GitCommitSha(String);
-
 impl GitCommitSha {
     /// Parse a full Git object id used to bind a workflow to exact source.
     ///
@@ -78,13 +69,11 @@ impl GitCommitSha {
         }
         Ok(Self(value.to_ascii_lowercase()))
     }
-
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
-
 impl<'de> Deserialize<'de> for GitCommitSha {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -101,11 +90,9 @@ pub struct GitSource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
 }
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct ArtifactDigest(String);
-
 impl ArtifactDigest {
     /// Parse the SHA-256 digest of an immutable artifact or image.
     ///
@@ -120,13 +107,11 @@ impl ArtifactDigest {
         }
         Ok(Self(value.to_ascii_lowercase()))
     }
-
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
-
 impl<'de> Deserialize<'de> for ArtifactDigest {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -151,6 +136,7 @@ pub struct ProvenanceRecord {
     pub source: GitSource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_digest: Option<ArtifactDigest>,
+    /// Credential-free HTTPS URL without query or fragment data.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow_run_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -182,7 +168,6 @@ pub enum CloudProgress {
     },
     Completed,
 }
-
 impl CloudProgress {
     #[must_use]
     pub fn basis_points(&self) -> Option<u16> {
@@ -213,7 +198,6 @@ pub enum CloudJobState {
     Cleaning,
     Cleaned,
 }
-
 impl CloudJobState {
     #[must_use]
     pub const fn permits(self, next: Self) -> bool {
@@ -238,7 +222,6 @@ impl CloudJobState {
         )
     }
 }
-
 /// Immutable result of a job attempt, retained while cleanup changes its state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -247,7 +230,6 @@ pub enum CloudJobOutcome {
     Failed,
     Cancelled,
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowNodeKind {
@@ -261,13 +243,11 @@ pub enum WorkflowNodeKind {
     Verify,
     Cleanup,
 }
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RetryPolicy {
     pub max_attempts: u16,
     pub backoff_seconds: u32,
 }
-
 impl Default for RetryPolicy {
     fn default() -> Self {
         Self {
@@ -276,7 +256,6 @@ impl Default for RetryPolicy {
         }
     }
 }
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ApprovalDecision {
@@ -291,7 +270,6 @@ pub enum ApprovalDecision {
         reason: String,
     },
 }
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ApprovalGate {
     pub action: String,
@@ -299,7 +277,6 @@ pub struct ApprovalGate {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evidence_job_ids: Vec<CloudJobId>,
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReleaseAction {
@@ -308,7 +285,6 @@ pub enum ReleaseAction {
     PublishToTest,
     PublishToProduction,
 }
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ReleaseGate {
     pub action: ReleaseAction,
@@ -316,7 +292,6 @@ pub struct ReleaseGate {
     pub exact_commit: GitCommitSha,
     pub approval: ApprovalGate,
 }
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct EnvironmentLease {
     pub environment: String,
@@ -325,7 +300,6 @@ pub struct EnvironmentLease {
     pub acquired_at_millis: i64,
     pub expires_at_millis: i64,
 }
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WorkflowNode {
     pub id: CloudJobId,
@@ -348,6 +322,7 @@ pub struct WorkflowNode {
     pub source: Option<GitSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worker: Option<WorkerTarget>,
+    /// Unique artifact outputs supplied by direct dependency nodes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub input_artifact_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -359,13 +334,11 @@ pub struct WorkflowNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment_lease: Option<EnvironmentLease>,
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WorkflowProgress {
     pub basis_points: u16,
     pub estimated: bool,
 }
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CloudWorkflow {
     pub protocol_version: u32,
@@ -376,7 +349,6 @@ pub struct CloudWorkflow {
     pub retain_until_millis: i64,
     pub nodes: Vec<WorkflowNode>,
 }
-
 impl CloudWorkflow {
     #[must_use]
     pub fn progress(&self) -> WorkflowProgress {
@@ -409,7 +381,6 @@ impl CloudWorkflow {
         }
     }
 }
-
 #[derive(Debug, Error, Eq, PartialEq)]
 pub enum CloudProtocolError {
     #[error("unsupported cloud protocol version {0}")]
@@ -432,8 +403,8 @@ pub enum CloudProtocolError {
     ForkedRetryAttempt(CloudJobId),
     #[error("workflow contains duplicate artifact id {0}")]
     DuplicateArtifactId(String),
-    #[error("repository must be a credential-free owner/name identity: {0}")]
-    InvalidRepository(String),
+    #[error("repository must be a credential-free owner/name identity")]
+    InvalidRepository,
     #[error("node {0} has an empty logical key or label")]
     EmptyNodeIdentity(CloudJobId),
     #[error("node {0} has an invalid worker target")]
@@ -464,10 +435,13 @@ pub enum CloudProtocolError {
     SelfApprovalEvidence(CloudJobId),
     #[error("node {0} has an invalid artifact reference")]
     InvalidArtifactRef(CloudJobId),
+    #[error("node {0} has an invalid input artifact reference")]
+    InvalidInputArtifact(CloudJobId),
+    #[error("provenance from node {0} has an unsafe workflow run URL")]
+    InvalidWorkflowRunUrl(CloudJobId),
     #[error("node {0} has an invalid environment lease")]
     InvalidEnvironmentLease(CloudJobId),
 }
-
 #[cfg(test)]
 #[path = "cloud_run/tests.rs"]
 mod tests;
