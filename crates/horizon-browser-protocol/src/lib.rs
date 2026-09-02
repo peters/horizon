@@ -17,8 +17,9 @@ pub use audit::{
 };
 pub use command::BrowserCommand;
 pub use control::{
-    AgentAction, BrowserControlAction, DEFAULT_CLICK_COUNT, DEFAULT_NAVIGATION_TIMEOUT_MILLIS, MAX_CLICK_COUNT,
-    MAX_NAVIGATION_TIMEOUT_MILLIS, MAX_QUERY_RESULTS, MAX_SNAPSHOT_NODES, NavigationWait, normalize_navigation_target,
+    AgentAction, BrowserControlAction, DEFAULT_CLICK_COUNT, DEFAULT_NAVIGATION_TIMEOUT_MILLIS,
+    DEFAULT_WAIT_TIMEOUT_MILLIS, MAX_CLICK_COUNT, MAX_NAVIGATION_TIMEOUT_MILLIS, MAX_QUERY_RESULTS, MAX_SNAPSHOT_NODES,
+    MAX_WAIT_TIMEOUT_MILLIS, NavigationWait, normalize_navigation_target,
 };
 pub use input::{BrowserButton, BrowserEditCommand, BrowserInput, BrowserKey, BrowserModifiers};
 pub use network::{
@@ -29,7 +30,7 @@ pub use network::{
 };
 pub use semantic::{
     AgentActionResult, BrowserActionOutcome, BrowserBounds, BrowserControlFailure, BrowserControlValue, BrowserNode,
-    BrowserSnapshot, BrowserTarget, NavigationOutcome, NavigationState,
+    BrowserSnapshot, BrowserTarget, NavigationOutcome, NavigationState, SelectorState, WaitOutcome,
 };
 
 /// Browser automation backend selected for a session.

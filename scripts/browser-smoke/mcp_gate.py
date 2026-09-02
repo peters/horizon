@@ -510,6 +510,157 @@ def exercise_navigation_outcomes(
         verify_navigation_outcome(settled, "commit", "committed", f"{args.base_url}/{page}", redirected=False)
 
 
+# Milliseconds after load at which the delayed fixture mutates for the wait
+# lanes; the same figure the transition lanes use.
+DELAYED_FIXTURE_MILLIS = 4000
+
+
+def exercise_wait_outcomes(
+    client: McpClient,
+    args: argparse.Namespace,
+    panel_id: str,
+    action_ids: list[str],
+    failed_ids: list[str],
+) -> dict[str, Any]:
+    """Prove browser_wait is one engine-side audited action.
+
+    The delayed fixture hides ``#early-marker`` and appends ``#late-marker``
+    4 s after load (``?delay=4000``). A wait for the late element must settle
+    from the engine's own observation (one action id, several observations,
+    elapsed close to the DOM change), an already-satisfied wait must settle on
+    its first observation, and a wait that cannot be met must fail with the
+    typed ``wait_timeout`` code at the bound. Audit counts per action id are
+    checked after the audit read. The wait is queued only after the navigate
+    result was delivered, so on a loaded host the engine can observe only the
+    remainder of the fixture delay: the lower elapsed bound is derived from
+    the measured navigate wall time, and that gap is reported for diagnosis.
+    """
+    navigate_started = time.monotonic()
+    navigated = record_action(
+        client,
+        "browser_navigate",
+        {"panel_id": panel_id, "url": f"{args.base_url}/delayed.html?delay={DELAYED_FIXTURE_MILLIS}", "timeout_millis": 15000},
+        action_ids,
+    )
+    navigate_wall_millis = int((time.monotonic() - navigate_started) * 1000)
+    if navigated["state"] != "committed":
+        raise AssertionError(navigated)
+    started = time.monotonic()
+    delayed = record_action(
+        client,
+        "browser_wait",
+        {"panel_id": panel_id, "selector": "#late-marker", "state": "visible", "timeout_millis": 10000},
+        action_ids,
+    )
+    delayed_wall_millis = int((time.monotonic() - started) * 1000)
+    if delayed["state"] != "visible" or len(delayed["nodes"]) != 1 or delayed["nodes"][0]["text"] != "late element arrived":
+        raise AssertionError(delayed)
+    # The DOM change lands about DELAYED_FIXTURE_MILLIS after load and the
+    # wait can only observe what is left of that once the navigate result has
+    # been delivered: require most of the remainder (one second of slack for
+    # queueing, the 100 ms cadence, and result delivery) and never less than a
+    # few observations.
+    expected_wait_millis = max(0, DELAYED_FIXTURE_MILLIS - navigate_wall_millis)
+    minimum_elapsed_millis = max(300, expected_wait_millis - 1000)
+    if not minimum_elapsed_millis <= delayed["elapsed_millis"] <= 8000 or delayed["polls"] < 3:
+        raise AssertionError((delayed, navigated["elapsed_millis"], navigate_wall_millis, minimum_elapsed_millis))
+    hidden = record_action(
+        client,
+        "browser_wait",
+        {"panel_id": panel_id, "selector": "#early-marker", "state": "hidden"},
+        action_ids,
+    )
+    if hidden["polls"] != 1 or hidden["state"] != "hidden":
+        raise AssertionError(hidden)
+    started = time.monotonic()
+    _, timeout_error = client.call(
+        "browser_wait",
+        {"panel_id": panel_id, "selector": "#never-marker", "state": "present", "timeout_millis": 1500},
+        expect_error=True,
+    )
+    timed_out_wall_millis = int((time.monotonic() - started) * 1000)
+    if (
+        timeout_error is None
+        or "wait_timeout" not in timeout_error
+        or "did not become present within the 1500 ms bound" not in timeout_error
+    ):
+        raise AssertionError(timeout_error)
+    # The engine must wait the full 1500 ms bound: a bound that ran 250 ms
+    # short would fail here around 1250 ms.
+    if not 1450 <= timed_out_wall_millis <= 4000:
+        raise AssertionError(timed_out_wall_millis)
+    timed_out_id = failed_action_id(timeout_error)
+    failed_ids.append(timed_out_id)
+    # Removal, an attribute change, and a style change, each observed as a
+    # delayed transition on a fresh page load with a 4 s delay, so result
+    # delivery lag (up to about 2.5 s on a loaded host) cannot let the
+    # transition complete before the wait is queued.
+    transitions = {}
+    for key, selector, state in [
+        ("removal", "#removed-marker", "hidden"),
+        ("attribute", "#attr-marker", "visible"),
+        ("style", "#early-marker", "hidden"),
+    ]:
+        reloaded = record_action(
+            client,
+            "browser_navigate",
+            {"panel_id": panel_id, "url": f"{args.base_url}/delayed.html?delay=4000&t={key}", "timeout_millis": 15000},
+            action_ids,
+        )
+        if reloaded["state"] != "committed":
+            raise AssertionError(reloaded)
+        observed = record_action(
+            client,
+            "browser_wait",
+            {"panel_id": panel_id, "selector": selector, "state": state, "timeout_millis": 10000},
+            action_ids,
+        )
+        if observed["state"] != state or not 1500 <= observed["elapsed_millis"] <= 8000 or observed["polls"] < 3:
+            raise AssertionError((key, observed))
+        if state == "visible" and len(observed["nodes"]) != 1:
+            raise AssertionError((key, observed))
+        transitions[key] = {"action_id": observed["action_id"], "elapsed_millis": observed["elapsed_millis"], "polls": observed["polls"]}
+    return {
+        "transitions": transitions,
+        "delayed_navigate_elapsed_millis": navigated["elapsed_millis"],
+        "delayed_navigate_wall_millis": navigate_wall_millis,
+        "delayed_wait_minimum_elapsed_millis": minimum_elapsed_millis,
+        "delayed_wait_action_id": delayed["action_id"],
+        "delayed_wait_elapsed_millis": delayed["elapsed_millis"],
+        "delayed_wait_wall_millis": delayed_wall_millis,
+        "delayed_wait_polls": delayed["polls"],
+        "satisfied_wait_action_id": hidden["action_id"],
+        "satisfied_wait_polls": hidden["polls"],
+        "timed_out_wait_action_id": timed_out_id,
+        "timed_out_wait_wall_millis": timed_out_wall_millis,
+    }
+
+
+def verify_wait_audit(entries: list[dict[str, Any]], waits: dict[str, Any]) -> dict[str, int]:
+    """Each engine-side wait must own exactly one queued/dispatched/terminal lifecycle."""
+    counts: dict[str, int] = {}
+    checks = [
+        ("delayed_wait_action_id", "completed"),
+        ("satisfied_wait_action_id", "completed"),
+        ("timed_out_wait_action_id", "failed"),
+    ]
+    for key, expected in checks:
+        action_id = waits[key]
+        statuses = [entry["status"] for entry in entries if entry["action_id"] == action_id]
+        if sorted(statuses) != sorted(["queued", "dispatched", expected]):
+            raise AssertionError((action_id, statuses))
+        kinds = {entry["action"].get("type") for entry in entries if entry["action_id"] == action_id}
+        if kinds != {"wait_for_selector"}:
+            raise AssertionError((action_id, kinds))
+        counts[key] = len(statuses)
+    for key, transition in waits["transitions"].items():
+        statuses = [entry["status"] for entry in entries if entry["action_id"] == transition["action_id"]]
+        if sorted(statuses) != sorted(["queued", "dispatched", "completed"]):
+            raise AssertionError((key, transition["action_id"], statuses))
+        counts[f"transition_{key}"] = len(statuses)
+    return counts
+
+
 def wait_for_panel_url(client: McpClient, panel_id: str, url: str, timeout_seconds: float) -> None:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
@@ -1163,6 +1314,7 @@ def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
         {"panel_id": panel_id, "selector": "#next-marker", "state": "visible"},
         action_ids,
     )
+    wait_outcomes = exercise_wait_outcomes(client, args, panel_id, action_ids, failed_ids)
     exercise_navigation_outcomes(client, args, panel_id, action_ids, failed_ids)
     record_action(client, "browser_act", {"panel_id": panel_id, "action": "back"}, action_ids)
     record_action(
@@ -1251,7 +1403,9 @@ def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
         )
         network_capture["active_close_path"] = active_close["path"]
 
-    audit_entries = len(verify_audit(client, panel_id, action_ids, failed_ids, double_click_id))
+    audit_records = verify_audit(client, panel_id, action_ids, failed_ids, double_click_id)
+    audit_entries = len(audit_records)
+    wait_outcomes["audit_entries_per_wait"] = verify_wait_audit(audit_records, wait_outcomes)
     handoff_request = None
     if args.handoff:
         handoff, _ = client.call(
@@ -1327,6 +1481,7 @@ def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
 
     return {
         "audit_entries": audit_entries,
+        "wait_outcomes": wait_outcomes,
         "backend": args.backend,
         "completed_actions": len(action_ids),
         "double_click": {"count": 2, "trusted": True},

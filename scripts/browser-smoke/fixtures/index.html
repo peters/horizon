@@ -158,7 +158,7 @@
         screen: [screen.width, screen.height],
         dpr: devicePixelRatio,
         renderer,
-        horizonNames: Object.getOwnPropertyNames(window).filter((name) => /horizon/i.test(name)),
+        horizonNames: Object.getOwnPropertyNames(window).filter((name) => /^[$_]*horizon/i.test(name)),
         webdriverDescriptorPresent: Boolean(webdriverDescriptor),
         webdriverGetterNative: typeof webdriverDescriptor?.get === 'function'
           && Function.prototype.toString.call(webdriverDescriptor.get).includes('[native code]')

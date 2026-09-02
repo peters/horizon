@@ -164,6 +164,9 @@ impl PendingNavigation {
     /// navigation and dropped otherwise, so an earlier navigation still in
     /// flight cannot settle this one.
     pub(crate) fn attach_id(&mut self, id: Option<&str>, now: Instant) -> Option<NavigationResult> {
+        if let Some(expired) = self.tick(now) {
+            return Some(expired);
+        }
         self.dispatch_known = true;
         self.expected_id = id.map(str::to_string);
         // Keep the newest held signal that belongs to this navigation; every
@@ -216,6 +219,12 @@ impl PendingNavigation {
         }
     }
 
+    /// Whether an identified signal must wait for the dispatch reply before
+    /// the driver may apply page-wide side effects for it.
+    pub(crate) fn attribution_is_pending(&self, id: Option<&str>) -> bool {
+        !self.dispatch_known && id.is_some()
+    }
+
     /// A dispatch reply without an id means the backend ran a same-document
     /// navigation; an identified cross-document commit or failure cannot be
     /// ours then (it belongs to an earlier navigation still in flight).
@@ -235,6 +244,9 @@ impl PendingNavigation {
 
     /// Apply one signal; `Some` when the action is settled.
     pub(crate) fn observe(&mut self, signal: NavigationSignal<'_>, now: Instant) -> Option<NavigationResult> {
+        if let Some(expired) = self.tick(now) {
+            return Some(expired);
+        }
         let id = match signal {
             NavigationSignal::Committed { id, .. }
             | NavigationSignal::SameDocument { id, .. }
@@ -408,7 +420,7 @@ impl PendingNavigation {
 /// Whether a committed URL is the requested destination rather than a
 /// redirect. Browsers add or drop a trailing slash on bare origins, so that
 /// difference alone is not a redirect.
-fn same_destination(requested: &str, committed: &str) -> bool {
+pub(crate) fn same_destination(requested: &str, committed: &str) -> bool {
     requested == committed || bare_origin_variant(requested, committed) || bare_origin_variant(committed, requested)
 }
 
@@ -1060,6 +1072,50 @@ mod tests {
         let outcome = navigation(Some(Ok(pending.dispatched(now))));
         assert_eq!(outcome.state, NavigationState::Dispatched);
         assert!(outcome.loading);
+    }
+
+    #[test]
+    fn deadline_precedes_direct_and_deferred_protocol_signals() {
+        let now = Instant::now();
+        let after_deadline = now + Duration::from_secs(1);
+
+        let mut direct_commit = pending(NavigationWait::Commit, now);
+        let outcome = navigation(direct_commit.observe(
+            NavigationSignal::Committed {
+                url: "https://example.test/start",
+                id: None,
+            },
+            after_deadline,
+        ));
+        assert_eq!(outcome.state, NavigationState::TimedOut);
+        assert_eq!(outcome.committed_url, None);
+
+        let mut direct_failure = pending(NavigationWait::Commit, now);
+        let outcome = navigation(direct_failure.observe(
+            NavigationSignal::Failed {
+                message: "late failure",
+                id: None,
+            },
+            after_deadline,
+        ));
+        assert_eq!(outcome.state, NavigationState::TimedOut);
+
+        let mut deferred = pending(NavigationWait::Commit, now);
+        assert!(deferred.attribution_is_pending(Some("loader-b")));
+        assert!(
+            deferred
+                .observe(
+                    NavigationSignal::Committed {
+                        url: "https://example.test/start",
+                        id: Some("loader-b"),
+                    },
+                    now + Duration::from_millis(900),
+                )
+                .is_none()
+        );
+        let outcome = navigation(deferred.attach_id(Some("loader-b"), after_deadline));
+        assert_eq!(outcome.state, NavigationState::TimedOut);
+        assert_eq!(outcome.committed_url, None);
     }
 
     #[test]

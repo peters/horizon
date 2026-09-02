@@ -29,6 +29,7 @@ mod safari;
 mod scrollbar;
 mod semantic;
 mod shutdown;
+mod wait;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 const PAGE_LOAD_TIMEOUT_MILLIS: u64 = 50_000;
@@ -157,6 +158,7 @@ struct Driver {
     navigation_failed: bool,
     /// Agent navigation whose typed outcome is settled by `BiDi` events.
     pending_navigation: Option<crate::navigation::PendingNavigation>,
+    pending_wait: Option<crate::wait::PendingWait>,
     /// In-flight `browsingContext.navigate` sent without waiting: Firefox
     /// answers it only once the destination responds.
     navigate_request_id: Option<u64>,
@@ -165,14 +167,22 @@ struct Driver {
     /// Session page-load timeout a bounded classic navigation lowered and the
     /// loop still has to restore, once the typed outcome was published.
     classic_timeout_to_restore: Option<u64>,
-    /// While a bounded startup navigation is still loading, page state is
-    /// re-read every second until this instant or until the URL changes.
-    startup_refresh_until: Option<Instant>,
+    /// Script-observed identity of Safari's current document. Unlike its URL,
+    /// this changes on a same-URL reload and lets waits reject replacement
+    /// documents even though classic `WebDriver` emits no navigation events.
+    classic_document_identity: Option<String>,
+    /// A bounded classic navigation (startup or agent action) that is still
+    /// loading after its result deadline and must be polled to a document
+    /// replacement, URL change, or the page-load cutoff.
+    classic_refresh: Option<navigation::ClassicNavigationRefresh>,
     coordination_dirty: bool,
     last_coordination_write: Instant,
     last_signal_check: Instant,
     last_user_active_stamp: Option<Instant>,
     owner_seen: Option<String>,
+    /// Counts successful coordination reads; a deferred wait result is
+    /// released only under a later epoch than it was observed under.
+    signal_epoch: u64,
     handoff_seen: Option<String>,
     audit_sampler: crate::audit::BrowserAuditSampler,
     semantic: SemanticState,
@@ -219,6 +229,7 @@ pub(crate) fn run_webdriver(
         }
     };
     driver.initialize_coordination();
+    driver.initialize_classic_document_identity();
     let capabilities = driver.active_capabilities();
     frame_slot.publish_backend_capabilities(capabilities);
     let _ = event_tx.send(BrowserEvent::BackendReady(capabilities));
@@ -254,11 +265,12 @@ pub(crate) fn run_webdriver(
         driver.tick_safari_input(event_tx);
         for request in driver.tick_coordination(event_tx) {
             // A blocking action later in the batch must not delay the typed
-            // timeout of a navigation dispatched earlier in it, and a
+            // timeout of a navigation or wait dispatched earlier in it, and a
             // navigation that hit its bound earlier in the batch must have its
             // session timeout restored and page state refreshed before the
             // next request runs.
             driver.tick_pending_navigation();
+            driver.tick_pending_wait();
             driver.tick_classic_timeout_restore();
             driver.tick_page_state_refresh(event_tx);
             driver.service_agent_request(&request, event_tx);
@@ -281,6 +293,7 @@ pub(crate) fn run_webdriver(
         driver.tick_classic_timeout_restore();
         driver.tick_page_state_refresh(event_tx);
         driver.tick_pending_navigation();
+        driver.tick_pending_wait();
         driver.write_coordination(false);
         if let Some(status) = driver.service.process.child_status() {
             let _ = event_tx.send(BrowserEvent::Stopped { code: status.code() });
@@ -312,9 +325,11 @@ impl Driver {
             }
             Err(error) => return Err(format!("failed to create WebDriver session: {error}")),
         };
-        let new_session = parse_new_session_response(&response)?;
-        let session_id = new_session.id;
-        let ws_url = new_session.capabilities.get("webSocketUrl").and_then(Value::as_str);
+        let NewSession {
+            id: session_id,
+            capabilities,
+        } = parse_new_session_response(&response)?;
+        let ws_url = capabilities.get("webSocketUrl").and_then(Value::as_str);
         let mut bidi = match ws_url {
             Some(url) => match connect_bidi_with_startup_retry(url, stop_requested) {
                 Ok(link) => Some(link),
@@ -327,14 +342,12 @@ impl Driver {
             None => None,
         };
         if config.browser.backend == BackendKind::FirefoxBidi && bidi.is_none() {
-            let path = format!("/session/{session_id}");
-            let _ = service.http.delete(&path);
+            service.delete_session(&session_id);
             return Err("Firefox did not return the required WebDriver BiDi webSocketUrl".to_string());
         }
         let mut context_id = bidi.as_mut().and_then(discover_context);
         if config.browser.backend == BackendKind::FirefoxBidi && context_id.is_none() {
-            let path = format!("/session/{session_id}");
-            let _ = service.http.delete(&path);
+            service.delete_session(&session_id);
             return Err("Firefox BiDi returned no top-level browsing context".to_string());
         }
         if config.browser.backend == BackendKind::FirefoxBidi
@@ -342,8 +355,7 @@ impl Driver {
             && let Some(link) = bidi.as_mut()
             && let Err(error) = install_common_signal_preload(link)
         {
-            let path = format!("/session/{session_id}");
-            let _ = service.http.delete(&path);
+            service.delete_session(&session_id);
             return Err(format!(
                 "Firefox could not install pre-document automation disclosure minimization: {error}"
             ));
@@ -352,8 +364,7 @@ impl Driver {
             && let Err(error) = subscribe(link, config.browser.backend, context_id.as_deref())
         {
             if config.browser.backend == BackendKind::FirefoxBidi {
-                let path = format!("/session/{session_id}");
-                let _ = service.http.delete(&path);
+                service.delete_session(&session_id);
                 return Err(format!("Firefox BiDi event subscription failed: {error}"));
             }
             bidi = None;
@@ -378,16 +389,19 @@ impl Driver {
             retain_frame_during_navigation: false,
             navigation_failed: false,
             pending_navigation: None,
+            pending_wait: None,
             navigate_request_id: None,
             pending_classic_history_start: None,
             refresh_pending_at: None,
             classic_timeout_to_restore: None,
-            startup_refresh_until: None,
+            classic_document_identity: None,
+            classic_refresh: None,
             coordination_dirty: true,
             last_coordination_write: Instant::now(),
             last_signal_check: Instant::now(),
             last_user_active_stamp: None,
             owner_seen: None,
+            signal_epoch: 0,
             handoff_seen: None,
             audit_sampler: crate::audit::BrowserAuditSampler::default(),
             semantic: SemanticState::default(),
@@ -658,27 +672,31 @@ impl Driver {
         }
         if bidi_navigation_failed(method) {
             let navigation = params.get("navigation").and_then(Value::as_str);
-            if self
-                .pending_navigation
-                .as_ref()
-                .is_some_and(|pending| !pending.correlates(navigation))
-            {
-                // A superseded navigation failing late must not poison the
-                // state of the navigation that replaced it.
-                tracing::debug!(target: "browser", navigation, "ignoring failure of a superseded navigation");
-                return;
-            }
-            self.navigation_failed = true;
-            self.retain_frame_during_navigation = true;
-            self.frames.suspend_for_navigation();
-            self.frames.interaction_started_at = None;
             let url = params
                 .get("url")
                 .and_then(Value::as_str)
                 .unwrap_or("the requested page");
             let message = format!("could not navigate to {url}");
-            let _ = event_tx.send(BrowserEvent::NavigationFailed(message.clone()));
-            let _ = event_tx.send(BrowserEvent::Loading(false));
+            if let Some(pending) = self.pending_navigation.as_ref() {
+                if !pending.correlates(navigation) {
+                    // A superseded navigation failing late must not poison the
+                    // state of the navigation that replaced it.
+                    tracing::debug!(target: "browser", navigation, "ignoring failure of a superseded navigation");
+                    return;
+                }
+                if pending.attribution_is_pending(navigation) {
+                    // The dispatch reply has not named this navigation yet.
+                    // Hold the failure without changing page-wide state; the
+                    // reply either attributes it to this action or discards it
+                    // as a late failure from the navigation it replaced.
+                    self.observe_navigation_signal(crate::navigation::NavigationSignal::Failed {
+                        message: &message,
+                        id: navigation,
+                    });
+                    return;
+                }
+            }
+            self.apply_navigation_failure_state(event_tx, &message);
             self.observe_navigation_signal(crate::navigation::NavigationSignal::Failed {
                 message: &message,
                 id: navigation,
@@ -725,20 +743,6 @@ impl Driver {
         if !self.retain_frame_during_navigation {
             self.frames.invalidate();
         }
-    }
-
-    fn begin_navigation(&mut self) {
-        self.challenge_loop.document_navigation_started();
-        self.pending_classic_history_start = None;
-        self.semantic.invalidate();
-        self.generation = self.generation.wrapping_add(1);
-        self.retain_frame_during_navigation = true;
-        self.navigation_failed = false;
-        self.refresh_pending_at = None;
-        // A replacement navigation must not inherit the startup poll's cutoff.
-        self.startup_refresh_until = None;
-        self.scrollbar.reset();
-        self.frames.suspend_for_navigation();
     }
 }
 

@@ -112,6 +112,12 @@ pub enum BrowserAuditAction {
         selector_characters: usize,
         max_results: u32,
     },
+    WaitForSelector {
+        selector_characters: usize,
+        state: crate::SelectorState,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout_millis: Option<u64>,
+    },
     Click {
         target: String,
         #[serde(default = "default_click_count")]
@@ -178,6 +184,15 @@ impl BrowserAuditAction {
             BrowserControlAction::Query { selector, max_results } => Self::Query {
                 selector_characters: selector.chars().count(),
                 max_results: *max_results,
+            },
+            BrowserControlAction::WaitForSelector {
+                selector,
+                state,
+                timeout_millis,
+            } => Self::WaitForSelector {
+                selector_characters: selector.chars().count(),
+                state: *state,
+                timeout_millis: *timeout_millis,
             },
             BrowserControlAction::Click { target, count } => Self::Click {
                 target: audit_target(target),
@@ -482,6 +497,20 @@ mod tests {
 
     #[test]
     fn semantic_audits_redact_selectors_scripts_and_fill_values() {
+        let wait = BrowserAuditAction::from_control(&BrowserControlAction::WaitForSelector {
+            selector: "input[value='secret']".to_string(),
+            state: crate::SelectorState::Hidden,
+            timeout_millis: Some(1_000),
+        });
+        assert_eq!(
+            wait,
+            BrowserAuditAction::WaitForSelector {
+                selector_characters: 21,
+                state: crate::SelectorState::Hidden,
+                timeout_millis: Some(1_000),
+            }
+        );
+        assert!(!serde_json::to_string(&wait).expect("encode").contains("secret"));
         let query = BrowserAuditAction::from_control(&BrowserControlAction::Query {
             selector: "input[value='secret']".to_string(),
             max_results: 2,

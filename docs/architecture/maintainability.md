@@ -31,6 +31,9 @@ back into large multi-purpose modules.
   navigation settlement (`session/navigation.rs`) belong in focused
   `session/` leaves. The backend-neutral pending-navigation state machine
   lives in `navigation.rs` so both drivers settle the same typed outcome.
+  Selector waits follow the same shape: the backend-neutral `PendingWait`
+  state machine lives in `wait.rs`, and each driver's observation loop glue
+  in `session/wait.rs` and `webdriver/session/wait.rs`.
 - `webdriver/session.rs` orchestrates Firefox and Safari. Host coordination
   belongs in `webdriver/session/coordination.rs`, synchronous navigation
   outcomes in `webdriver/session/navigation.rs`, and HTTP, action translation,

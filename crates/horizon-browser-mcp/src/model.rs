@@ -500,10 +500,22 @@ pub(crate) struct WaitInput {
     pub(crate) selector: String,
     /// Desired selector state.
     pub(crate) state: WaitState,
-    /// Total wait timeout in milliseconds (1-60000, default 10000).
+    /// Total wait bound in milliseconds (1000-60000, default 10000); smaller
+    /// values are raised to 1000.
     pub(crate) timeout_millis: Option<u64>,
-    /// Delay between audited queries in milliseconds (100-2000, default 250).
+    /// Ignored: the engine observes the page itself at a fixed cadence. Kept
+    /// so older callers keep validating.
     pub(crate) poll_millis: Option<u64>,
+}
+
+impl From<WaitState> for horizon_browser::SelectorState {
+    fn from(state: WaitState) -> Self {
+        match state {
+            WaitState::Present => Self::Present,
+            WaitState::Visible => Self::Visible,
+            WaitState::Hidden => Self::Hidden,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -620,9 +632,38 @@ pub(crate) struct EvaluateOutput {
 #[derive(Debug, Serialize, JsonSchema)]
 pub(crate) struct WaitOutput {
     pub(crate) panel_id: String,
+    /// The single audited action id this wait ran as.
     pub(crate) action_id: String,
     pub(crate) state: String,
+    /// Page generation and revision of the reported nodes.
+    pub(crate) generation: u64,
+    pub(crate) revision: u64,
+    /// Nodes matching the selector when the condition was met.
     pub(crate) nodes: Vec<NodeOutput>,
+    /// Time from queuing the action until the condition was met.
+    pub(crate) elapsed_millis: u64,
+    /// Page observations the engine needed.
+    pub(crate) polls: u32,
+}
+
+impl WaitOutput {
+    pub(crate) fn from_outcome(panel_id: String, action_id: String, wait: horizon_browser::WaitOutcome) -> Self {
+        let state = match wait.state {
+            horizon_browser::SelectorState::Present => "present",
+            horizon_browser::SelectorState::Visible => "visible",
+            horizon_browser::SelectorState::Hidden => "hidden",
+        };
+        Self {
+            panel_id,
+            action_id,
+            state: state.to_string(),
+            generation: wait.generation,
+            revision: wait.revision,
+            nodes: wait.nodes.into_iter().map(NodeOutput::from).collect(),
+            elapsed_millis: wait.elapsed_millis,
+            polls: wait.polls,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

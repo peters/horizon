@@ -54,6 +54,12 @@ impl Driver {
         }
     }
 
+    /// Make the next `tick_coordination` re-read the manifest regardless of
+    /// the interval, so ownership and handoff state is current.
+    pub(super) fn request_signal_refresh(&mut self) {
+        self.last_signal_check = Instant::now().checked_sub(SIGNAL_INTERVAL).unwrap_or_else(Instant::now);
+    }
+
     pub(super) fn tick_coordination(&mut self, event_tx: &BrowserEventSender) -> Vec<AgentAction> {
         if self.last_signal_check.elapsed() < SIGNAL_INTERVAL {
             return Vec::new();
@@ -70,6 +76,7 @@ impl Driver {
                 return Vec::new();
             }
         };
+        self.signal_epoch = self.signal_epoch.wrapping_add(1);
         publish_owner_change(&mut self.owner_seen, signals.owner, event_tx);
         self.challenge_loop.observe_handoff_change(
             self.handoff_seen.as_deref(),
@@ -161,6 +168,12 @@ impl Driver {
         self.audit_agent_action(request, crate::BrowserAuditStatus::Dispatched);
         if matches!(request.action, crate::BrowserControlAction::Navigate { .. }) {
             if let crate::navigation::AgentActionExecution::Done(result) = self.navigate_action(request, event_tx) {
+                self.complete_agent_action(request, result);
+            }
+            return;
+        }
+        if matches!(request.action, crate::BrowserControlAction::WaitForSelector { .. }) {
+            if let crate::navigation::AgentActionExecution::Done(result) = self.begin_agent_wait(request) {
                 self.complete_agent_action(request, result);
             }
             return;

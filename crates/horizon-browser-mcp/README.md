@@ -71,7 +71,17 @@ shell commands, files, or other MCP servers.
   cross-origin policy prevents inspecting the frame document.
 - `browser_act` clicks, fills, scrolls, reloads, or traverses history. Set
   `count: 2` on a click for a backend-native trusted double-click.
-- `browser_wait` verifies present, visible, or hidden selector state.
+- `browser_wait` verifies present, visible, or hidden selector state as one
+  audited engine-side action: the browser driver observes the page itself at
+  a fixed cadence (no repeated query actions), evaluates the condition over
+  every element the selector matches (the page scan counts matches and
+  visible matches beyond the nodes it returns) and returns at most 20 of
+  them with `elapsed_millis` and `polls`, and fails with a typed code when the bound
+  elapses (`wait_timeout`), the page navigates (`wait_navigation_invalidated`),
+  the lease is lost (`wait_ownership_lost`), or a handoff is pending
+  (`wait_handoff_pending`), or a later wait on the same panel replaces it
+  (`wait_superseded`). `timeout_millis` accepts 1000-60000 ms;
+  `poll_millis` is accepted for compatibility and ignored.
 - `browser_evaluate` evaluates an explicit size-bounded expression.
 - `browser_network` starts, inspects, or stops a bounded HTTP/WebSocket
   capture and returns an explicit private NDJSON path plus connection state,

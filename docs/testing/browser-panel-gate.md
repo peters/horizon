@@ -104,6 +104,16 @@ The reusable runner:
   Firefox inside the navigation lane; Safari in its retained slow-page lane,
   where the classic navigation keeps running and the driver polls it to its
   commit);
+- proves `browser_wait` is one engine-side audited action: on `delayed.html`
+  a wait for the element that appears 4 s after load settles from the
+  engine's own observation with the matched node, an `elapsed_millis` that
+  covers most of the remaining fixture delay after the measured navigate wall
+  time (the derived minimum is reported), and several `polls`; an already-hidden element settles on its
+  first observation; a selector that never appears fails with the typed
+  `wait_timeout` code at the bound; removal, an attribute change, and a style
+  change are each observed as a delayed transition on a fresh load with a
+  4 s delay; and each wait action id owns exactly one
+  queued/dispatched/terminal audit lifecycle (reported as `wait_outcomes`);
 - disconnects the MCP stdio client, starts a fresh client with the same actor,
   rediscovers the exact live panel, and proves resumed snapshot plus complete
   audit states without restarting the browser;
@@ -568,6 +578,7 @@ Run once per host OS after the semantic gate:
 | `upload.html` + `upload.txt` | Native file-picker oracle and the documented host file-drop/workspace-open boundary |
 | `/redirect-to-next` (server route) | `302` to `next.html` for the typed `redirected` navigation outcome |
 | `/slow-navigation.html` (server route) | 11-second response for bounded `timed_out` navigation outcomes and the Safari delayed-navigation lane |
+| `delayed.html` | After load (`?delay=<ms>`, default 1.5 s) hides `#early-marker`, appends `#late-marker`, removes `#removed-marker`, and drops the `hidden` attribute of `#attr-marker`, for the engine-side `browser_wait` lanes |
 
 Keep selectors stable. When a browser behavior needs a new deterministic
 oracle, extend these fixtures and the gate together instead of creating another
