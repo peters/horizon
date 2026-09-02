@@ -52,6 +52,9 @@ impl DriverState {
         actions: Vec<AgentAction>,
     ) -> bool {
         for request in actions {
+            // A blocking action later in the batch must not delay the typed
+            // timeout of a navigation dispatched earlier in it.
+            self.tick_pending_navigation();
             if let Err(message) = request.action.validate() {
                 self.audit_agent_action(&request, BrowserAuditStatus::Rejected);
                 self.complete_agent_action(&request, Err(BrowserControlFailure::new("invalid_input", message)));

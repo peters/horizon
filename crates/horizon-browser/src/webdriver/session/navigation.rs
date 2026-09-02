@@ -113,7 +113,7 @@ impl Driver {
         let _ = self.classic_post("timeouts", &json!({ "pageLoad": PAGE_LOAD_TIMEOUT_MILLIS }));
         let now = Instant::now();
         if let Err(error) = &result
-            && (pending.remaining(now).is_zero() || error.contains("timeout"))
+            && classic_error_is_page_load_timeout(error)
         {
             self.retain_frame_during_navigation = false;
             self.navigation_failed = false;
@@ -418,4 +418,14 @@ impl Driver {
         self.refresh_pending_at = None;
         self.refresh_page_state(event_tx);
     }
+}
+
+/// Whether a classic navigation command ended because the page-load bound
+/// elapsed: either the `WebDriver` `timeout` error (the navigation keeps
+/// running in the browser) or the HTTP read timeout guarding that command.
+/// Any other error is a genuine navigation failure.
+pub(super) fn classic_error_is_page_load_timeout(error: &str) -> bool {
+    error.starts_with("WebDriver timeout:")
+        || (error.starts_with("WebDriver HTTP I/O:")
+            && (error.contains("timed out") || error.contains("temporarily unavailable")))
 }

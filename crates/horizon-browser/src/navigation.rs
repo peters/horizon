@@ -254,11 +254,12 @@ impl PendingNavigation {
             return None;
         }
         if let NavigationSignal::SameDocument { url, id: None } = signal
-            && !same_document_destination(&self.requested_url, url)
+            && !same_destination(&self.requested_url, url)
         {
-            // Chromium's same-document event carries no loader id: only a
-            // change to the requested document itself can be ours; a
-            // superseded navigation's fragment change on another page is not.
+            // Chromium's same-document event carries no loader id: only the
+            // exact requested URL, fragment included, can be ours; a
+            // superseded navigation's change to another fragment or page is
+            // not.
             return None;
         }
         if !self.dispatch_known && id.is_some() {
@@ -407,15 +408,6 @@ impl PendingNavigation {
 /// Whether a committed URL is the requested destination rather than a
 /// redirect. Browsers add or drop a trailing slash on bare origins, so that
 /// difference alone is not a redirect.
-/// Same-document changes differ from the requested URL by fragment at most.
-fn same_document_destination(requested: &str, committed: &str) -> bool {
-    let strip = |url: &str| {
-        url.split_once('#')
-            .map_or(url.to_string(), |(base, _)| base.to_string())
-    };
-    same_destination(&strip(requested), &strip(committed))
-}
-
 fn same_destination(requested: &str, committed: &str) -> bool {
     requested == committed || bare_origin_variant(requested, committed) || bare_origin_variant(committed, requested)
 }
@@ -449,6 +441,18 @@ mod tests {
         PendingNavigation::new(
             request,
             "https://example.test/start".to_string(),
+            wait,
+            Duration::from_millis(1_000),
+            Duration::ZERO,
+            now,
+        )
+    }
+
+    fn pending_at(url: &str, wait: NavigationWait, now: Instant) -> PendingNavigation {
+        let request = pending(wait, now).request;
+        PendingNavigation::new(
+            request,
+            url.to_string(),
             wait,
             Duration::from_millis(1_000),
             Duration::ZERO,
@@ -643,7 +647,7 @@ mod tests {
             .expect("settled")
             .expect_err("failed");
         assert_eq!(failure.code, "navigation_failed");
-        let mut unnamed = pending(NavigationWait::Commit, now);
+        let mut unnamed = pending_at("https://example.test/start#x", NavigationWait::Commit, now);
         assert!(unnamed.attach_id(None, now).is_none());
         let outcome = navigation(unnamed.observe(
             NavigationSignal::SameDocument {
@@ -731,32 +735,41 @@ mod tests {
     #[test]
     fn unidentified_same_document_events_must_name_the_requested_document() {
         let now = Instant::now();
-        let mut pending = pending(NavigationWait::Commit, now);
-        assert!(pending.attach_id(None, now).is_none());
-        assert!(
-            pending
-                .observe(
-                    NavigationSignal::SameDocument {
-                        url: "https://example.test/other#section",
-                        id: None
-                    },
-                    now
-                )
-                .is_none(),
-            "a superseded navigation's fragment change on another page is ignored"
-        );
-        let outcome = navigation(pending.observe(
+        let request = pending(NavigationWait::Commit, now).request;
+        let fragment = |url: &str| {
+            PendingNavigation::new(
+                request.clone(),
+                url.to_string(),
+                NavigationWait::Commit,
+                Duration::from_secs(1),
+                Duration::ZERO,
+                now,
+            )
+        };
+        // B requested `#two` after A requested `#one`; A's id-less late event
+        // must not settle B, and neither may a change on another page.
+        let mut two = fragment("https://example.test/start#two");
+        assert!(two.attach_id(None, now).is_none());
+        for foreign in [
+            "https://example.test/start#one",
+            "https://example.test/other#two",
+            "https://example.test/start",
+        ] {
+            assert!(
+                two.observe(NavigationSignal::SameDocument { url: foreign, id: None }, now)
+                    .is_none(),
+                "{foreign} is not the requested fragment navigation"
+            );
+        }
+        let outcome = navigation(two.observe(
             NavigationSignal::SameDocument {
-                url: "https://example.test/start#section",
+                url: "https://example.test/start#two",
                 id: None,
             },
             now,
         ));
         assert_eq!(outcome.state, NavigationState::Committed);
-        assert_eq!(
-            outcome.committed_url.as_deref(),
-            Some("https://example.test/start#section")
-        );
+        assert_eq!(outcome.committed_url.as_deref(), Some("https://example.test/start#two"));
     }
 
     #[test]
@@ -764,7 +777,7 @@ mod tests {
         let now = Instant::now();
         // Cross-document A is superseded by same-document B: A's loader-scoped
         // commit arrives before B's id-less reply and must not settle B.
-        let mut pending = pending(NavigationWait::Commit, now);
+        let mut pending = pending_at("https://example.test/start#x", NavigationWait::Commit, now);
         assert!(
             pending
                 .observe(
@@ -978,7 +991,7 @@ mod tests {
     #[test]
     fn same_document_changes_commit_and_load_at_once() {
         let now = Instant::now();
-        let mut pending = pending(NavigationWait::DomContentLoaded, now);
+        let mut pending = pending_at("https://example.test/start#a", NavigationWait::DomContentLoaded, now);
         let outcome = navigation(pending.observe(
             NavigationSignal::SameDocument {
                 url: "https://example.test/start#a",

@@ -238,6 +238,9 @@ pub(crate) fn run_webdriver(
         }
         driver.tick_safari_input(event_tx);
         for request in driver.tick_coordination(event_tx) {
+            // A blocking action later in the batch must not delay the typed
+            // timeout of a navigation dispatched earlier in it.
+            driver.tick_pending_navigation();
             driver.service_agent_request(&request, event_tx);
         }
         if let Err(error) = driver.drain_bidi_events(event_tx) {
@@ -982,6 +985,26 @@ fn consume_pending_history_start(pending: &mut Option<PendingHistoryStart>, url:
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_timeouts_keep_a_bounded_classic_navigation_running() {
+        use super::navigation::classic_error_is_page_load_timeout;
+        assert!(classic_error_is_page_load_timeout(
+            "WebDriver timeout: Timed out waiting for page load"
+        ));
+        assert!(classic_error_is_page_load_timeout(
+            "WebDriver HTTP I/O: Resource temporarily unavailable (os error 11)"
+        ));
+        assert!(classic_error_is_page_load_timeout(
+            "WebDriver HTTP I/O: connection timed out"
+        ));
+        assert!(!classic_error_is_page_load_timeout(
+            "WebDriver unknown error: net::ERR_NAME_NOT_RESOLVED"
+        ));
+        assert!(!classic_error_is_page_load_timeout(
+            "browser did not commit a reachable URL"
+        ));
+    }
+
     use super::{
         AdaptiveFrames, PAGE_LOAD_TIMEOUT_MILLIS, PendingHistoryStart, base_bidi_events, bidi_event_targets_context,
         bidi_navigation_complete, bidi_navigation_failed, bidi_subscription_params, capture_is_current,
