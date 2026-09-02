@@ -1,4 +1,4 @@
-use super::*;
+use super::{CloudProtocolError::*, *};
 fn sha(character: char) -> GitCommitSha {
     GitCommitSha::parse(character.to_string().repeat(40)).expect("valid test sha")
 }
@@ -48,7 +48,7 @@ fn workflow(nodes: Vec<WorkflowNode>) -> CloudWorkflow {
 fn invalid(nodes: Vec<WorkflowNode>) -> CloudProtocolError {
     workflow(nodes).validate().expect_err("invalid workflow")
 }
-fn assert_invalid(nodes: Vec<WorkflowNode>, expected: &CloudProtocolError) {
+fn rejects(nodes: Vec<WorkflowNode>, expected: &CloudProtocolError) {
     assert_eq!(&invalid(nodes), expected);
 }
 fn approved(at_millis: i64) -> ApprovalDecision {
@@ -71,7 +71,7 @@ fn dependency_validation_is_iterative_and_detects_cycles() {
     let second = CloudJobId::new();
     assert!(matches!(
         invalid(vec![node(first, "first", vec![second]), node(second, "second", vec![first])]),
-        CloudProtocolError::DependencyCycle(id) if id == first || id == second
+        DependencyCycle(id) if id == first || id == second
     ));
 }
 #[test]
@@ -79,25 +79,25 @@ fn approvals_and_leases_obey_snapshot_time_and_identity() {
     let id = CloudJobId::new();
     let mut gate = node(id, "publish-test", Vec::new());
     gate.state = CloudJobState::WaitingForApproval;
-    assert_invalid(vec![gate.clone()], &CloudProtocolError::MissingApprovalGate(id));
+    rejects(vec![gate.clone()], &MissingApprovalGate(id));
     gate.kind = WorkflowNodeKind::Approval;
     gate.approval = Some(ApprovalGate {
         action: "Publish To Test".to_string(),
         decision: ApprovalDecision::Pending,
         evidence_job_ids: vec![id],
     });
-    assert_invalid(vec![gate.clone()], &CloudProtocolError::SelfApprovalEvidence(id));
+    rejects(vec![gate.clone()], &SelfApprovalEvidence(id));
     let approval = gate.approval.as_mut().expect("gate exists");
     approval.evidence_job_ids.clear();
     approval.decision = approved(999);
-    assert_invalid(vec![gate.clone()], &CloudProtocolError::InvalidApprovalGate(id));
+    rejects(vec![gate.clone()], &InvalidApprovalGate(id));
     gate.approval.as_mut().expect("gate exists").decision = approved(1_500);
-    assert_invalid(vec![gate.clone()], &CloudProtocolError::InvalidApprovalGate(id));
+    rejects(vec![gate.clone()], &InvalidApprovalGate(id));
     gate.state = CloudJobState::Completed;
     gate.outcome = Some(CloudJobOutcome::Succeeded);
     gate.progress = CloudProgress::Completed;
     gate.approval.as_mut().expect("gate exists").decision = ApprovalDecision::Pending;
-    assert_invalid(vec![gate.clone()], &CloudProtocolError::InvalidApprovalGate(id));
+    rejects(vec![gate.clone()], &InvalidApprovalGate(id));
     gate.approval.as_mut().expect("gate exists").decision = approved(1_500);
     let mut snapshot = workflow(vec![gate]);
     snapshot.nodes[0].environment_lease = Some(EnvironmentLease {
@@ -109,7 +109,7 @@ fn approvals_and_leases_obey_snapshot_time_and_identity() {
     });
     assert_eq!(
         snapshot.validate().expect_err("lease outlives workflow"),
-        CloudProtocolError::InvalidEnvironmentLease(id)
+        InvalidEnvironmentLease(id)
     );
 }
 #[test]
@@ -130,17 +130,17 @@ fn provenance_rejects_secrets_without_echoing_them() {
     assert_eq!(record.validate(), Ok(()));
     record.source.repository = "https://user:secret@example.test/repo".to_string();
     let error = record.validate().expect_err("credential-bearing repository");
-    assert_eq!(error, CloudProtocolError::InvalidRepository);
+    assert_eq!(error, InvalidRepository);
     assert!(!error.to_string().contains("secret"));
     record.source.repository = "fintermobilityas/nativesdk".to_string();
     for url in "https://u:p@e.test/r https://e.test/r?q=x https://: https://[invalid".split_ascii_whitespace() {
         record.workflow_run_url = Some(url.to_string());
-        assert_eq!(record.validate(), Err(CloudProtocolError::InvalidWorkflowRunUrl(id)));
+        assert_eq!(record.validate(), Err(InvalidWorkflowRunUrl(id)));
     }
     record.workflow_run_url = None;
-    for key in ["https://e.test/a?x", "C:/outside", "C:relative", "artifact\n"] {
+    for key in ["https://e/a?x", "C:/x", "C:x", "x\n", "x/%2e%2e/y", "x/%2Fy"] {
         record.artifacts[0].storage_key = key.to_string();
-        assert_eq!(record.validate(), Err(CloudProtocolError::InvalidArtifactRef(id)));
+        assert_eq!(record.validate(), Err(InvalidArtifactRef(id)));
     }
 }
 #[test]
@@ -159,16 +159,19 @@ fn job_state_transition_matrix_is_stable() {
 }
 #[test]
 fn v1_json_contract_round_trips() {
-    type V1Contract = (CloudWorkflow, ProvenanceRecord);
     let golden = include_str!("v1_contract.json").trim();
-    let (mut snapshot, record): V1Contract = serde_json::from_str(golden).expect("valid v1 contract");
+    let (mut snapshot, record): (CloudWorkflow, ProvenanceRecord) =
+        serde_json::from_str(golden).expect("valid v1 contract");
     assert_eq!((snapshot.validate(), record.validate()), (Ok(()), Ok(())));
     assert_eq!(
         serde_json::to_string(&(&snapshot, &record)).expect("serialize v1"),
         golden
     );
+    let mut bad = snapshot.clone();
+    bad.nodes[0].worker.as_mut().expect("worker").image = "https://u:p@r/i?q".to_string();
+    rejects(bad.nodes, &InvalidWorkerTarget(snapshot.nodes[0].id));
     snapshot.nodes[8].release = snapshot.nodes[4].release.clone();
-    let error = CloudProtocolError::InvalidApprovalGate(snapshot.nodes[8].id);
+    let error = InvalidApprovalGate(snapshot.nodes[8].id);
     assert_eq!(snapshot.validate(), Err(error));
 }
 #[test]
@@ -186,17 +189,14 @@ fn inputs_are_unique_outputs_of_direct_dependencies() {
         vec!["missing".to_string()],
     ] {
         consumer.input_artifact_ids = inputs;
-        assert_invalid(
+        rejects(
             vec![producer.clone(), consumer.clone()],
-            &CloudProtocolError::InvalidInputArtifact(consumer_id),
+            &InvalidInputArtifact(consumer_id),
         );
     }
     consumer.input_artifact_ids = vec!["candidate".to_string()];
     consumer.depends_on.clear();
-    assert_invalid(
-        vec![producer, consumer],
-        &CloudProtocolError::InvalidInputArtifact(consumer_id),
-    );
+    rejects(vec![producer, consumer], &InvalidInputArtifact(consumer_id));
 }
 #[test]
 fn retries_are_unambiguous_and_keep_outcomes_through_cleanup() {
@@ -213,16 +213,13 @@ fn retries_are_unambiguous_and_keep_outcomes_through_cleanup() {
     retry.supersedes = Some(first);
     assert_eq!(workflow(vec![previous.clone(), retry.clone()]).validate(), Ok(()));
     retry.progress = CloudProgress::Completed;
-    assert_invalid(
-        vec![previous.clone(), retry.clone()],
-        &CloudProtocolError::InvalidProgress(retry.id),
-    );
+    rejects(vec![previous.clone(), retry.clone()], &InvalidProgress(retry.id));
     retry.progress = CloudProgress::Pending;
     let mut changed_policy = retry.clone();
     changed_policy.retry.max_attempts = 3;
-    assert_invalid(
+    rejects(
         vec![previous.clone(), changed_policy],
-        &CloudProtocolError::InvalidSupersededAttempt(retry.id),
+        &InvalidSupersededAttempt(retry.id),
     );
     let mut completed = retry.clone();
     completed.state = CloudJobState::Completed;
@@ -233,9 +230,9 @@ fn retries_are_unambiguous_and_keep_outcomes_through_cleanup() {
         total: 2,
         unit: ProgressUnit::Steps,
     };
-    assert_invalid(
+    rejects(
         vec![previous.clone(), completed.clone()],
-        &CloudProtocolError::InvalidProgress(completed.id),
+        &InvalidProgress(completed.id),
     );
     completed.progress = CloudProgress::Completed;
     assert_eq!(
@@ -247,22 +244,16 @@ fn retries_are_unambiguous_and_keep_outcomes_through_cleanup() {
             previous.clone(),
             node(CloudJobId::new(), "nativesdk-build", Vec::new())
         ]),
-        CloudProtocolError::DuplicateLogicalAttempt { attempt: 1, .. }
+        DuplicateLogicalAttempt { attempt: 1, .. }
     ));
     let mut fork = retry.clone();
     fork.id = CloudJobId::new();
-    assert_invalid(
-        vec![previous.clone(), retry, fork],
-        &CloudProtocolError::ForkedRetryAttempt(first),
-    );
+    rejects(vec![previous.clone(), retry, fork], &ForkedRetryAttempt(first));
     previous.attempt = u16::MAX;
     previous.retry.max_attempts = u16::MAX;
     let mut overflow = node(CloudJobId::new(), "nativesdk-build", Vec::new());
     overflow.attempt = u16::MAX;
     overflow.retry.max_attempts = u16::MAX;
     overflow.supersedes = Some(first);
-    assert_invalid(
-        vec![overflow.clone(), previous],
-        &CloudProtocolError::InvalidSupersededAttempt(overflow.id),
-    );
+    rejects(vec![overflow.clone(), previous], &InvalidSupersededAttempt(overflow.id));
 }

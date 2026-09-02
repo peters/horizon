@@ -1,9 +1,6 @@
-//! Provider-neutral, persistable protocol for durable cloud workflows, without
-//! provider clients or process handles tied to a Horizon session.
-
-use std::{collections::HashSet, fmt};
-
+//! Provider-neutral, persistable protocol for durable cloud workflows.
 use serde::{Deserialize, Deserializer, Serialize, de};
+use std::{collections::HashSet, fmt};
 use thiserror::Error;
 use uuid::Uuid;
 mod validation;
@@ -57,10 +54,6 @@ macro_rules! hex_value {
                     return Err(CloudProtocolError::$error);
                 }
                 Ok(Self(value.to_ascii_lowercase()))
-            }
-            #[must_use]
-            pub fn as_str(&self) -> &str {
-                &self.0
             }
         }
         impl<'de> Deserialize<'de> for $name {

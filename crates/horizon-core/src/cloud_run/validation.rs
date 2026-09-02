@@ -100,7 +100,7 @@ fn validate_node(
     }
     if let Some(worker) = &node.worker
         && (worker.profile.trim().is_empty()
-            || worker.image.trim().is_empty()
+            || !valid_worker_image(&worker.image)
             || worker.disk_gib == 0
             || worker.lease_seconds == 0)
     {
@@ -278,12 +278,28 @@ fn validate_artifact(node_id: CloudJobId, artifact: &ArtifactRef) -> Result<(), 
         || key.contains("://")
         || key.contains(['?', '#'])
         || key.contains('\\')
+        || key.contains('%')
         || key.split('/').any(|segment| matches!(segment, "" | "." | ".."))
         || artifact.storage_key.chars().any(char::is_control)
     {
         return Err(CloudProtocolError::InvalidArtifactRef(node_id));
     }
     Ok(())
+}
+fn valid_worker_image(value: &str) -> bool {
+    let digest = value.split_once('@').map(|(_, digest)| digest);
+    !value.is_empty()
+        && !value.starts_with('@')
+        && !value.contains("://")
+        && !value.contains(['?', '#', '\\'])
+        && !value
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
+        && digest.is_none_or(|digest| {
+            digest
+                .strip_prefix("sha256:")
+                .is_some_and(|hash| hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        })
 }
 fn valid_repository(repository: &str) -> bool {
     let mut segments = repository.split('/');
