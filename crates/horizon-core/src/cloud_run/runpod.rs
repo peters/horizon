@@ -6,10 +6,8 @@ use std::{collections::BTreeMap, env, fmt};
 use thiserror::Error;
 
 mod http;
-
 #[cfg(test)]
 mod tests;
-
 const WORKFLOW_ENV: &str = "HORIZON_WORKFLOW_ID";
 const JOB_ENV: &str = "HORIZON_JOB_ID";
 const PROTOCOL_ENV: &str = "HORIZON_CLOUD_PROTOCOL_VERSION";
@@ -80,8 +78,6 @@ pub struct RunPodProfile {
     pub min_disk_bandwidth_mbps: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container_registry_auth_id: Option<String>,
-    #[serde(default)]
-    pub interruptible: bool,
 }
 
 /// Persistable provider resource identity used for exact cleanup after restart.
@@ -100,14 +96,13 @@ pub struct RunPodWorker {
 
 impl RunPodWorker {
     /// Validate persisted identity before any provider mutation.
-    ///
     /// # Errors
     /// Rejects malformed IDs, names, images, or cost values.
     pub fn validate(&self) -> Result<(), RunPodError> {
         let expected_name = resource_name(self.workflow_id, self.job_id);
         if !valid_provider_id(&self.pod_id)
             || self.name != expected_name
-            || !valid_worker_image(&self.image)
+            || !valid_immutable_worker_image(&self.image)
             || time::OffsetDateTime::parse(&self.terminate_after, &time::format_description::well_known::Rfc3339)
                 .is_err()
         {
@@ -117,7 +112,6 @@ impl RunPodWorker {
     }
 }
 
-/// Provider-observed worker lifecycle.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RunPodLifecycle {
     Provisioning,
@@ -127,7 +121,6 @@ pub enum RunPodLifecycle {
     Unknown,
 }
 
-/// Current provider status without secret-bearing environment values.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RunPodWorkerStatus {
     pub worker: RunPodWorker,
@@ -136,14 +129,12 @@ pub struct RunPodWorkerStatus {
     pub ssh_port: Option<u16>,
 }
 
-/// Whether `ensure_worker` provisioned or safely adopted a prior attempt.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RunPodEnsure {
     Created(RunPodWorkerStatus),
     Reused(RunPodWorkerStatus),
 }
 
-/// Idempotent deletion result.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RunPodCleanup {
     Deleted,
@@ -157,7 +148,6 @@ pub struct RunPodClient {
 
 impl RunPodClient {
     /// Build a production client pinned to `RunPod`'s HTTPS control planes.
-    ///
     /// # Errors
     /// Returns an error if the fixed control-plane URL cannot be initialized.
     pub fn new(api_key: &RunPodApiKey) -> Result<Self, RunPodError> {
@@ -167,7 +157,6 @@ impl RunPodClient {
     }
 
     /// Create a worker once, or adopt the single exact resource from an interrupted attempt.
-    ///
     /// # Errors
     /// Fails closed on invalid configuration, ambiguous resources, identity mismatch,
     /// provider errors, missing cost data under a cost cap, or a breached cost cap.
@@ -214,7 +203,6 @@ impl RunPodClient {
     }
 
     /// Inspect an exact persisted worker, returning `None` after provider deletion.
-    ///
     /// # Errors
     /// Fails if persisted or provider identity differs from the expected workflow resource.
     pub fn inspect_worker(&self, worker: &RunPodWorker) -> Result<Option<RunPodWorkerStatus>, RunPodError> {
@@ -402,22 +390,17 @@ impl CreatePodRequest {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 struct ApiPod {
     id: String,
     name: String,
     #[serde(alias = "imageName")]
     image: String,
-    #[serde(default)]
     desired_status: Option<String>,
-    #[serde(default)]
     runtime_status: Option<String>,
-    #[serde(default)]
     public_ip: Option<String>,
-    #[serde(default)]
     port_mappings: BTreeMap<String, u16>,
-    #[serde(default)]
     env: BTreeMap<String, String>,
     #[serde(default, deserialize_with = "deserialize_hourly_cost")]
     adjusted_cost_per_hr: Option<u64>,
@@ -452,7 +435,7 @@ fn validate_target(target: &WorkerTarget, profile: &RunPodProfile) -> Result<(),
         && target.disk_gib > 0
         && (MIN_LEASE_SECONDS..=MAX_LEASE_SECONDS).contains(&target.lease_seconds)
         && target.max_hourly_cost_micros != Some(0)
-        && valid_worker_image(&target.image)
+        && valid_immutable_worker_image(&target.image)
         && safe_text(&profile.name)
         && !profile.gpu_type_ids.is_empty()
         && profile.gpu_type_ids.iter().all(|value| safe_text(value))
@@ -470,7 +453,6 @@ fn validate_target(target: &WorkerTarget, profile: &RunPodProfile) -> Result<(),
         && nonzero(profile.min_download_mbps)
         && nonzero(profile.min_upload_mbps)
         && nonzero(profile.min_disk_bandwidth_mbps)
-        && !profile.interruptible
         && profile.container_registry_auth_id.as_deref().is_none_or(safe_id);
     valid.then_some(()).ok_or(RunPodError::InvalidTarget)
 }
@@ -554,6 +536,10 @@ fn valid_provider_id(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+fn valid_immutable_worker_image(value: &str) -> bool {
+    valid_worker_image(value) && value.rsplit_once("@sha256:").is_some()
 }
 
 fn deserialize_hourly_cost<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>

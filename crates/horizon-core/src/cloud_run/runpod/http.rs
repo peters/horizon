@@ -8,13 +8,20 @@ const CREATE_MUTATION: &str =
     "mutation CreatePod($input: PodFindAndDeployOnDemandInput!) { podFindAndDeployOnDemand(input: $input) { id } }";
 const RESPONSE_LIMIT_BYTES: u64 = 2 * 1024 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-
+const CAPACITY_ERROR_MARKERS: [&str; 7] = [
+    "no longer any instances available",
+    "please refresh and try again",
+    "does not have the resources",
+    "try a different machine",
+    "insufficient capacity",
+    "out of stock",
+    "sold out",
+];
 pub(super) struct RunPodHttp {
     agent: ureq::Agent,
     base: Url,
     authorization: String,
 }
-
 impl RunPodHttp {
     pub(super) fn new(api_key: &RunPodApiKey) -> Result<Self, RunPodError> {
         let config = ureq::Agent::config_builder()
@@ -39,7 +46,6 @@ impl RunPodHttp {
             operation: "URL construction",
         })
     }
-
     fn pod_url(&self, pod_id: &str) -> Result<Url, RunPodError> {
         self.base
             .join(&format!("pods/{pod_id}"))
@@ -48,7 +54,6 @@ impl RunPodHttp {
             })
     }
 }
-
 impl Transport for RunPodHttp {
     fn list_by_name(&self, name: &str) -> Result<Vec<ApiPod>, RunPodError> {
         let mut url = self.pods_url()?;
@@ -63,7 +68,6 @@ impl Transport for RunPodHttp {
             })?;
         decode_json(response, 200, "pod lookup")
     }
-
     fn create(&self, request: &CreatePodRequest) -> Result<ApiPod, RunPodError> {
         let response = self
             .agent
@@ -83,11 +87,7 @@ impl Transport for RunPodHttp {
             .filter(|pod_id| valid_provider_id(pod_id))
             .map(str::to_string);
         let Some(pod_id) = pod_id else {
-            if envelope
-                .pointer("/errors/0/extensions/code")
-                .and_then(serde_json::Value::as_str)
-                == Some("SUPPLY_CONSTRAINT")
-            {
+            if capacity_unavailable(&envelope) {
                 return Err(RunPodError::CapacityUnavailable);
             }
             return Err(RunPodError::InvalidResponse {
@@ -105,7 +105,6 @@ impl Transport for RunPodHttp {
             Err(_) => Err(RunPodError::CreationCleanupFailed { pod_id }),
         }
     }
-
     fn get(&self, pod_id: &str) -> Result<Option<ApiPod>, RunPodError> {
         let url = self.pod_url(pod_id)?;
         let response = self
@@ -121,7 +120,6 @@ impl Transport for RunPodHttp {
         }
         decode_json(response, 200, "pod inspection").map(Some)
     }
-
     fn delete(&self, pod_id: &str) -> Result<RunPodCleanup, RunPodError> {
         let url = self.pod_url(pod_id)?;
         let response = self
@@ -142,7 +140,18 @@ impl Transport for RunPodHttp {
         }
     }
 }
-
+pub(super) fn capacity_unavailable(envelope: &serde_json::Value) -> bool {
+    envelope
+        .get("errors")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|error| error.get("message").and_then(serde_json::Value::as_str))
+        .any(|message| {
+            let normalized = message.to_ascii_lowercase();
+            CAPACITY_ERROR_MARKERS.iter().any(|marker| normalized.contains(marker))
+        })
+}
 fn decode_json<T>(
     mut response: ureq::http::Response<ureq::Body>,
     expected: u16,

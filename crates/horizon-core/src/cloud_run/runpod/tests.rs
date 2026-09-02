@@ -6,7 +6,6 @@ use std::sync::{Arc, Mutex};
 struct FakeTransport {
     state: Arc<Mutex<FakeState>>,
 }
-
 #[derive(Default)]
 struct FakeState {
     pods: Vec<ApiPod>,
@@ -22,19 +21,16 @@ impl FakeTransport {
         transport.state.lock().expect("state").create_response = Some(response);
         transport
     }
-
     fn with_pods(pods: Vec<ApiPod>) -> Self {
         let transport = Self::default();
         transport.state.lock().expect("state").pods = pods;
         transport
     }
 }
-
 impl Transport for FakeTransport {
     fn list_by_name(&self, _name: &str) -> Result<Vec<ApiPod>, RunPodError> {
         Ok(self.state.lock().expect("state").pods.clone())
     }
-
     fn create(&self, request: &CreatePodRequest) -> Result<ApiPod, RunPodError> {
         let mut state = self.state.lock().expect("state");
         state.create_requests.push(request.clone());
@@ -45,7 +41,6 @@ impl Transport for FakeTransport {
         state.pods.push(response.clone());
         Ok(response)
     }
-
     fn get(&self, pod_id: &str) -> Result<Option<ApiPod>, RunPodError> {
         Ok(self
             .state
@@ -56,7 +51,6 @@ impl Transport for FakeTransport {
             .find(|pod| pod.id == pod_id)
             .cloned())
     }
-
     fn delete(&self, pod_id: &str) -> Result<RunPodCleanup, RunPodError> {
         let mut state = self.state.lock().expect("state");
         if state.fail_delete {
@@ -69,7 +63,6 @@ impl Transport for FakeTransport {
         Ok(RunPodCleanup::Deleted)
     }
 }
-
 fn target() -> WorkerTarget {
     WorkerTarget {
         provider: CloudProvider::RunPod,
@@ -82,7 +75,6 @@ fn target() -> WorkerTarget {
         max_hourly_cost_micros: Some(750_000),
     }
 }
-
 fn profile() -> RunPodProfile {
     RunPodProfile {
         name: "nativesdk-gpu".to_string(),
@@ -96,10 +88,8 @@ fn profile() -> RunPodProfile {
         min_upload_mbps: Some(100),
         min_disk_bandwidth_mbps: Some(200),
         container_registry_auth_id: Some("registry_auth-1".to_string()),
-        interruptible: false,
     }
 }
-
 fn api_pod(
     workflow_id: CloudWorkflowId,
     job_id: CloudJobId,
@@ -128,7 +118,6 @@ fn api_pod(
         cost_per_hr: None,
     }
 }
-
 fn ensured_status(result: RunPodEnsure) -> RunPodWorkerStatus {
     match result {
         RunPodEnsure::Created(status) | RunPodEnsure::Reused(status) => status,
@@ -147,9 +136,27 @@ fn api_key_validation_never_exposes_secret() {
 }
 
 #[test]
+fn provider_messages_classify_capacity_shortage() {
+    let exhausted = serde_json::json!({"errors": [
+        {"message": "There are no longer any instances available. Please refresh and try again."},
+        {"message": "This machine does not have the resources; try a different machine"}
+    ]});
+    assert!(http::capacity_unavailable(&exhausted));
+    assert!(!http::capacity_unavailable(&serde_json::json!({
+        "errors": [{"message": "invalid image reference"}]
+    })));
+}
+
+#[test]
 fn creation_uses_secure_direct_pull_and_bandwidth_constraints() {
     let (workflow_id, job_id) = (CloudWorkflowId::new(), CloudJobId::new());
     let target = target();
+    let mut mutable_target = target.clone();
+    mutable_target.image = "registry.example/team/nativesdk:latest".to_string();
+    assert_eq!(
+        validate_target(&mutable_target, &profile()),
+        Err(RunPodError::InvalidTarget)
+    );
     let response = api_pod(workflow_id, job_id, &target, Some(900_001));
     let transport = FakeTransport::with_create_response(response);
     let observer = transport.clone();
@@ -208,6 +215,9 @@ fn identity_mismatch_blocks_delete_and_exact_delete_is_idempotent() {
             .expect("worker reused"),
     )
     .worker;
+    let mut mutable_worker = worker.clone();
+    mutable_worker.image = "registry.example/team/nativesdk:latest".to_string();
+    assert_eq!(mutable_worker.validate(), Err(RunPodError::InvalidPersistedWorker));
 
     let mut wrong = good.clone();
     wrong.env.insert(JOB_ENV.to_string(), CloudJobId::new().to_string());
