@@ -114,7 +114,7 @@ impl HorizonApp {
     }
 
     pub(super) fn render_empty_state_card(&mut self, ctx: &Context) {
-        if !should_show_empty_state_card(self.board.workspaces.len(), self.board.panels.len()) {
+        if !self.empty_state_card_visible() {
             return;
         }
 
@@ -214,10 +214,18 @@ impl HorizonApp {
                     });
             });
     }
+
+    fn empty_state_card_visible(&self) -> bool {
+        should_show_empty_state_card(
+            self.board.workspaces.len(),
+            self.board.panels.len(),
+            self.fixed_overlays_visible(),
+        )
+    }
 }
 
-fn should_show_empty_state_card(workspace_count: usize, panel_count: usize) -> bool {
-    workspace_count == 0 && panel_count == 0
+fn should_show_empty_state_card(workspace_count: usize, panel_count: usize, fixed_overlays_visible: bool) -> bool {
+    fixed_overlays_visible && workspace_count == 0 && panel_count == 0
 }
 
 fn paint_dot_grid(ui: &mut egui::Ui, canvas_view: horizon_core::CanvasViewState, cache: &mut CanvasGridCache) {
@@ -362,8 +370,9 @@ mod tests {
 
     #[test]
     fn empty_state_card_only_shows_for_truly_empty_board() {
-        assert!(should_show_empty_state_card(0, 0));
-        assert!(!should_show_empty_state_card(1, 0));
-        assert!(!should_show_empty_state_card(1, 1));
+        assert!(should_show_empty_state_card(0, 0, true));
+        assert!(!should_show_empty_state_card(1, 0, true));
+        assert!(!should_show_empty_state_card(1, 1, true));
+        assert!(!should_show_empty_state_card(0, 0, false));
     }
 }
