@@ -42,6 +42,7 @@ pub(crate) enum WaitStop {
     /// The browser backend stopped before the wait reached a terminal state.
     BrowserUnavailable,
 }
+
 pub(crate) type WaitResult = Result<BrowserControlValue, BrowserControlFailure>;
 
 /// What one observation concluded.
