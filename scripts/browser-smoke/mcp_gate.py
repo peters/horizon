@@ -510,6 +510,11 @@ def exercise_navigation_outcomes(
         verify_navigation_outcome(settled, "commit", "committed", f"{args.base_url}/{page}", redirected=False)
 
 
+# Milliseconds after load at which the delayed fixture mutates for the wait
+# lanes; the same figure the transition lanes use.
+DELAYED_FIXTURE_MILLIS = 4000
+
+
 def exercise_wait_outcomes(
     client: McpClient,
     args: argparse.Namespace,
@@ -520,20 +525,21 @@ def exercise_wait_outcomes(
     """Prove browser_wait is one engine-side audited action.
 
     The delayed fixture hides ``#early-marker`` and appends ``#late-marker``
-    3 s after load (``?delay=3000``). A wait for the late element must settle
+    4 s after load (``?delay=4000``). A wait for the late element must settle
     from the engine's own observation (one action id, several observations,
     elapsed close to the DOM change), an already-satisfied wait must settle on
     its first observation, and a wait that cannot be met must fail with the
     typed ``wait_timeout`` code at the bound. Audit counts per action id are
-    checked after the audit read. The lower elapsed bound tolerates result
-    delivery lag on a loaded host between the navigate returning and the wait
-    being queued; the measured gap is reported for diagnosis.
+    checked after the audit read. The wait is queued only after the navigate
+    result was delivered, so on a loaded host the engine can observe only the
+    remainder of the fixture delay: the lower elapsed bound is derived from
+    the measured navigate wall time, and that gap is reported for diagnosis.
     """
     navigate_started = time.monotonic()
     navigated = record_action(
         client,
         "browser_navigate",
-        {"panel_id": panel_id, "url": f"{args.base_url}/delayed.html?delay=3000", "timeout_millis": 15000},
+        {"panel_id": panel_id, "url": f"{args.base_url}/delayed.html?delay={DELAYED_FIXTURE_MILLIS}", "timeout_millis": 15000},
         action_ids,
     )
     navigate_wall_millis = int((time.monotonic() - navigate_started) * 1000)
@@ -549,8 +555,15 @@ def exercise_wait_outcomes(
     delayed_wall_millis = int((time.monotonic() - started) * 1000)
     if delayed["state"] != "visible" or len(delayed["nodes"]) != 1 or delayed["nodes"][0]["text"] != "late element arrived":
         raise AssertionError(delayed)
-    if not 1200 <= delayed["elapsed_millis"] <= 8000 or delayed["polls"] < 3:
-        raise AssertionError((delayed, navigated["elapsed_millis"], navigate_wall_millis))
+    # The DOM change lands about DELAYED_FIXTURE_MILLIS after load and the
+    # wait can only observe what is left of that once the navigate result has
+    # been delivered: require most of the remainder (one second of slack for
+    # queueing, the 100 ms cadence, and result delivery) and never less than a
+    # few observations.
+    expected_wait_millis = max(0, DELAYED_FIXTURE_MILLIS - navigate_wall_millis)
+    minimum_elapsed_millis = max(300, expected_wait_millis - 1000)
+    if not minimum_elapsed_millis <= delayed["elapsed_millis"] <= 8000 or delayed["polls"] < 3:
+        raise AssertionError((delayed, navigated["elapsed_millis"], navigate_wall_millis, minimum_elapsed_millis))
     hidden = record_action(
         client,
         "browser_wait",
@@ -611,6 +624,7 @@ def exercise_wait_outcomes(
         "transitions": transitions,
         "delayed_navigate_elapsed_millis": navigated["elapsed_millis"],
         "delayed_navigate_wall_millis": navigate_wall_millis,
+        "delayed_wait_minimum_elapsed_millis": minimum_elapsed_millis,
         "delayed_wait_action_id": delayed["action_id"],
         "delayed_wait_elapsed_millis": delayed["elapsed_millis"],
         "delayed_wait_wall_millis": delayed_wall_millis,

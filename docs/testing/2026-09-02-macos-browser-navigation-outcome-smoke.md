@@ -104,11 +104,11 @@ What the create lane proves on every backend (`create_panel` in
 What the wait lane proves on every backend (`exercise_wait_outcomes`, stacked
 PR for #349):
 
-- On `delayed.html?delay=3000`, `browser_wait` for `#late-marker` (visible)
+- On `delayed.html?delay=4000`, `browser_wait` for `#late-marker` (visible)
   settles from the engine's own observation with one matched node,
-  `elapsed_millis` between 1200 and 8000 (about 3000 minus the gap between
-  the navigate returning and the wait being queued), and at least three
-  `polls`; `#early-marker` (hidden)
+  `elapsed_millis` at most 8000 and at least the remainder of the 4000 ms
+  fixture delay after the measured navigate wall time, minus one second of
+  slack (never below 300), and at least three `polls`; `#early-marker` (hidden)
   settles with `polls: 1`; a selector that never appears fails with the typed
   `wait_timeout` code at a 1.5 s bound; and the final JSON's `wait_outcomes`
   shows `audit_entries_per_wait` of exactly 3 for all three wait action ids;
