@@ -631,6 +631,17 @@ impl Driver {
             return;
         }
         if bidi_navigation_failed(method) {
+            let navigation = params.get("navigation").and_then(Value::as_str);
+            if self
+                .pending_navigation
+                .as_ref()
+                .is_some_and(|pending| !pending.correlates(navigation))
+            {
+                // A superseded navigation failing late must not poison the
+                // state of the navigation that replaced it.
+                tracing::debug!(target: "browser", navigation, "ignoring failure of a superseded navigation");
+                return;
+            }
             self.navigation_failed = true;
             self.retain_frame_during_navigation = true;
             self.frames.suspend_for_navigation();
@@ -644,7 +655,7 @@ impl Driver {
             let _ = event_tx.send(BrowserEvent::Loading(false));
             self.observe_navigation_signal(crate::navigation::NavigationSignal::Failed {
                 message: &message,
-                id: params.get("navigation").and_then(Value::as_str),
+                id: navigation,
             });
             return;
         }

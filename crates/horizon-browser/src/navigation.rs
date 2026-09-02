@@ -74,9 +74,23 @@ pub(crate) struct PendingNavigation {
 /// navigation it belongs to.
 #[derive(Debug)]
 enum DeferredSignal {
-    Committed { url: String, id: Option<String> },
-    SameDocument { url: String, id: Option<String> },
-    Failed { message: String, id: Option<String> },
+    /// A commit, with the readiness the same navigation reached meanwhile
+    /// (Firefox reports the commit at `DOMContentLoaded`, so readiness can
+    /// precede the dispatch reply too).
+    Committed {
+        url: String,
+        id: Option<String>,
+        dom_content_loaded: bool,
+        loaded: bool,
+    },
+    SameDocument {
+        url: String,
+        id: Option<String>,
+    },
+    Failed {
+        message: String,
+        id: Option<String>,
+    },
 }
 
 impl DeferredSignal {
@@ -86,14 +100,20 @@ impl DeferredSignal {
         }
     }
 
-    fn signal(&self) -> NavigationSignal<'_> {
-        match self {
-            Self::Committed { url, id } => NavigationSignal::Committed { url, id: id.as_deref() },
-            Self::SameDocument { url, id } => NavigationSignal::SameDocument { url, id: id.as_deref() },
-            Self::Failed { message, id } => NavigationSignal::Failed {
-                message,
-                id: id.as_deref(),
-            },
+    /// Record readiness observed for the same navigation as a held commit.
+    fn note_readiness(&mut self, signal_id: Option<&str>, loaded_now: bool) {
+        if let Self::Committed {
+            id,
+            dom_content_loaded,
+            loaded,
+            ..
+        } = self
+            && (id.is_none() || signal_id.is_none() || id.as_deref() == signal_id)
+        {
+            *dom_content_loaded = true;
+            if loaded_now {
+                *loaded = true;
+            }
         }
     }
 }
@@ -149,10 +169,43 @@ impl PendingNavigation {
         if !self.correlates(deferred.id()) {
             return None;
         }
-        self.apply(deferred.signal(), now)
+        match deferred {
+            DeferredSignal::Committed {
+                url,
+                id,
+                dom_content_loaded,
+                loaded,
+            } => {
+                let id = id.as_deref();
+                self.apply(NavigationSignal::Committed { url: &url, id }, now);
+                if dom_content_loaded {
+                    self.apply(NavigationSignal::DomContentLoaded { id }, now);
+                }
+                if loaded {
+                    self.apply(NavigationSignal::Load { id }, now);
+                }
+                self.settled_state().map(|state| Ok(self.outcome(state, now)))
+            }
+            DeferredSignal::SameDocument { url, id } => self.apply(
+                NavigationSignal::SameDocument {
+                    url: &url,
+                    id: id.as_deref(),
+                },
+                now,
+            ),
+            DeferredSignal::Failed { message, id } => self.apply(
+                NavigationSignal::Failed {
+                    message: &message,
+                    id: id.as_deref(),
+                },
+                now,
+            ),
+        }
     }
 
-    fn correlates(&self, id: Option<&str>) -> bool {
+    /// Whether a signal carrying `id` belongs to this navigation, as far as
+    /// the dispatch reply has told us.
+    pub(crate) fn correlates(&self, id: Option<&str>) -> bool {
         match (self.expected_id.as_deref(), id) {
             (Some(expected), Some(observed)) => expected == observed,
             _ => true,
@@ -185,22 +238,39 @@ impl PendingNavigation {
         if !self.dispatch_known && id.is_some() {
             // Signals that name a navigation cannot be attributed before the
             // dispatch reply names ours; hold the last one back.
-            self.deferred = match signal {
-                NavigationSignal::Committed { url, id } => Some(DeferredSignal::Committed {
-                    url: url.to_string(),
-                    id: id.map(str::to_string),
-                }),
-                NavigationSignal::SameDocument { url, id } => Some(DeferredSignal::SameDocument {
-                    url: url.to_string(),
-                    id: id.map(str::to_string),
-                }),
-                NavigationSignal::Failed { message, id } => Some(DeferredSignal::Failed {
-                    message: message.to_string(),
-                    id: id.map(str::to_string),
-                }),
-                NavigationSignal::DomContentLoaded { .. } | NavigationSignal::Load { .. } => self.deferred.take(),
+            match signal {
+                NavigationSignal::Committed { url, id } => {
+                    self.deferred = Some(DeferredSignal::Committed {
+                        url: url.to_string(),
+                        id: id.map(str::to_string),
+                        dom_content_loaded: false,
+                        loaded: false,
+                    });
+                }
+                NavigationSignal::SameDocument { url, id } => {
+                    self.deferred = Some(DeferredSignal::SameDocument {
+                        url: url.to_string(),
+                        id: id.map(str::to_string),
+                    });
+                }
+                NavigationSignal::Failed { message, id } => {
+                    self.deferred = Some(DeferredSignal::Failed {
+                        message: message.to_string(),
+                        id: id.map(str::to_string),
+                    });
+                }
+                NavigationSignal::DomContentLoaded { id } => {
+                    if let Some(deferred) = self.deferred.as_mut() {
+                        deferred.note_readiness(id, false);
+                    }
+                }
+                NavigationSignal::Load { id } => {
+                    if let Some(deferred) = self.deferred.as_mut() {
+                        deferred.note_readiness(id, true);
+                    }
+                }
                 NavigationSignal::Title(_) => unreachable!("titles carry no navigation id"),
-            };
+            }
             return None;
         }
         self.apply(signal, now)
@@ -546,6 +616,79 @@ mod tests {
             now,
         ));
         assert_eq!(outcome.state, NavigationState::Committed);
+    }
+
+    #[test]
+    fn readiness_observed_before_the_dispatch_reply_is_replayed_with_the_commit() {
+        let now = Instant::now();
+        // Firefox reports the commit at DOMContentLoaded; both can precede the
+        // navigate reply.
+        let mut ready = pending(NavigationWait::DomContentLoaded, now);
+        assert!(
+            ready
+                .observe(
+                    NavigationSignal::Committed {
+                        url: "https://example.test/start",
+                        id: Some("nav-b")
+                    },
+                    now
+                )
+                .is_none()
+        );
+        assert!(
+            ready
+                .observe(NavigationSignal::DomContentLoaded { id: Some("nav-b") }, now)
+                .is_none()
+        );
+        let outcome = navigation(ready.attach_id(Some("nav-b"), now));
+        assert_eq!(outcome.state, NavigationState::DomContentLoaded);
+        assert!(outcome.loading, "load has not fired yet");
+
+        let mut loaded = pending(NavigationWait::Commit, now);
+        assert!(
+            loaded
+                .observe(
+                    NavigationSignal::Committed {
+                        url: "https://example.test/start",
+                        id: Some("nav-b")
+                    },
+                    now
+                )
+                .is_none()
+        );
+        assert!(
+            loaded
+                .observe(NavigationSignal::Load { id: Some("nav-b") }, now)
+                .is_none()
+        );
+        let outcome = navigation(loaded.attach_id(Some("nav-b"), now));
+        assert_eq!(outcome.state, NavigationState::Committed);
+        assert!(!outcome.loading, "load observed before the reply is replayed");
+
+        // Readiness from another navigation is not attributed to the held commit.
+        let mut foreign = pending(NavigationWait::DomContentLoaded, now);
+        assert!(
+            foreign
+                .observe(
+                    NavigationSignal::Committed {
+                        url: "https://example.test/start",
+                        id: Some("nav-b")
+                    },
+                    now
+                )
+                .is_none()
+        );
+        assert!(
+            foreign
+                .observe(NavigationSignal::DomContentLoaded { id: Some("nav-a") }, now)
+                .is_none()
+        );
+        assert!(
+            foreign.attach_id(Some("nav-b"), now).is_none(),
+            "a foreign DOMContentLoaded does not satisfy the wait"
+        );
+        assert!(foreign.correlates(Some("nav-b")));
+        assert!(!foreign.correlates(Some("nav-a")));
     }
 
     #[test]

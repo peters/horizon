@@ -107,7 +107,7 @@ impl DriverState {
         }
     }
 
-    fn supersede_pending_navigation(&mut self, now: Instant) {
+    pub(super) fn supersede_pending_navigation(&mut self, now: Instant) {
         if let Some(pending) = self.pending_navigation.take() {
             self.complete_agent_action(&pending.request, Ok(pending.superseded(now)));
         }

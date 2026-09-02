@@ -49,6 +49,10 @@ impl DriverState {
                 serde_json::json!({ "autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true }),
             ),
             ("Page.enable", serde_json::json!({})),
+            // Loader-scoped `Page.lifecycleEvent`s let a pending agent
+            // navigation attribute `DOMContentLoaded` and `load` to its own
+            // loader instead of a superseded one.
+            ("Page.setLifecycleEventsEnabled", serde_json::json!({ "enabled": true })),
         ];
         for (method, params) in pre_observation_setup_commands {
             if !self.setup_command(link, event_tx, frame_slot, method, &params, Some(session)) {

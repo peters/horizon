@@ -106,11 +106,15 @@ impl DriverState {
             BrowserCommand::Stop => Ok(true),
             BrowserCommand::Navigate(url) => {
                 self.invalidate_scrollbar_layout();
+                // The user (or a non-agent caller) took over the page: a
+                // pending agent navigation can no longer claim the outcome.
+                self.supersede_pending_navigation(Instant::now());
                 self.navigate_to(link, event_tx, frame_slot, &url)?;
                 Ok(false)
             }
             BrowserCommand::Reload => {
                 self.invalidate_scrollbar_layout();
+                self.supersede_pending_navigation(Instant::now());
                 match self.send_page_command(link, event_tx, frame_slot, "Page.reload", &serde_json::json!({})) {
                     Ok(_) => {
                         self.pending_restart_at = Some(Instant::now());
@@ -474,6 +478,7 @@ impl DriverState {
         frame_slot: &Arc<FrameSlot>,
         delta: i64,
     ) -> Result<(), BrowserControlFailure> {
+        self.supersede_pending_navigation(Instant::now());
         let Some(session) = self.session_id.clone() else {
             return Err(self.page_command_failure(
                 event_tx,

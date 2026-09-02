@@ -143,7 +143,10 @@ Hosts publish `AgentActionResult` values through `BrowserCoordination`. A
 terminal `Completed` audit record means the engine finished handling the
 request. A `Navigate` action carries a `NavigationWait` (`dispatched`,
 `commit`, or `dom_content_loaded`, default `commit`) and a bounded
-`timeout_millis`; the engine dispatches at once and settles a typed
+`timeout_millis`; the engine dispatches at once (`dispatched` settles when the
+command was handed to the backend; the browser's acceptance is not awaited, so
+a later rejection is a failed page state rather than a failed action) and
+settles a typed
 `NavigationOutcome` (requested and committed URL, title when known, loading,
 redirected, elapsed, and a `state` of `dispatched`, `committed`,
 `dom_content_loaded`, `timed_out`, or `superseded`) from the backend's own

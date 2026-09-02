@@ -254,7 +254,7 @@ impl Driver {
         }
     }
 
-    fn supersede_pending_navigation(&mut self, now: Instant) {
+    pub(super) fn supersede_pending_navigation(&mut self, now: Instant) {
         if let Some(pending) = self.pending_navigation.take() {
             self.complete_agent_action(&pending.request, Ok(pending.superseded(now)));
         }
@@ -262,6 +262,9 @@ impl Driver {
 
     pub(super) fn navigate(&mut self, url: &str, event_tx: &BrowserEventSender) -> Result<(), String> {
         let url = normalize_navigation_target(url);
+        // A non-agent navigation takes the page over: a pending agent
+        // navigation can no longer claim the outcome.
+        self.supersede_pending_navigation(Instant::now());
         self.begin_navigation();
         let _ = event_tx.send(BrowserEvent::Loading(true));
         let result = if self.config.browser.backend == BackendKind::FirefoxBidi {
@@ -303,6 +306,7 @@ impl Driver {
     }
 
     pub(super) fn reload(&mut self, event_tx: &BrowserEventSender) -> Result<(), String> {
+        self.supersede_pending_navigation(Instant::now());
         self.begin_navigation();
         let result = if self.config.browser.backend == BackendKind::FirefoxBidi {
             self.call_bidi(
@@ -318,6 +322,7 @@ impl Driver {
     }
 
     pub(super) fn traverse(&mut self, delta: i64, event_tx: &BrowserEventSender) -> Result<(), String> {
+        self.supersede_pending_navigation(Instant::now());
         self.begin_navigation();
         // Firefox's BiDi traversal can return without a completion event, so
         // use its blocking classic endpoint and suppress the matching late

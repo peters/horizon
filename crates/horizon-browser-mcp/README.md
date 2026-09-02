@@ -44,7 +44,9 @@ shell commands, files, or other MCP servers.
   browser, ownership lease, network capture, or MCP control.
 - `browser_navigate` changes the top-level page and reports a typed outcome.
   By default it returns once the document committed (`wait: commit`);
-  `wait: dispatched` returns after the backend accepted the command and
+  `wait: dispatched` returns as soon as the engine handed the command to the
+  backend without awaiting the browser's acceptance (a rejection after that
+  point shows as a failed page state, not as an action error), and
   `wait: dom_content_loaded` after `DOMContentLoaded`. The result carries
   `requested_url`, `committed_url`, `title`, `loading`, `redirected`,
   `elapsed_millis`, and `state`. Check `completed`: a wait that exceeds

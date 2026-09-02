@@ -41,7 +41,8 @@ separate panel for the frame.
 document committed and reports `committed_url`, `title` when known, `loading`,
 `redirected`, and `state`. Check `completed`; a `timed_out` state carries the
 latest page state so you can inspect or retry, and `wait: dom_content_loaded`
-or `wait: dispatched` change how long it waits; `timeout_millis` is raised to
+or `wait: dispatched` (handed to the backend, browser acceptance not awaited)
+change how long it waits; `timeout_millis` is raised to
 at least 1000 ms, and on Safari every wait returns once the page loaded or the
 bound elapsed. After navigation or
 interaction, verify the visible outcome with `browser_wait`, `browser_query`,

@@ -262,12 +262,11 @@ impl DriverState {
                 if on_page_session {
                     let _ = event_tx.send(BrowserEvent::Loading(false));
                     self.title_fetch_at = Some(Instant::now() + Duration::from_millis(400));
-                    self.observe_navigation_signal(NavigationSignal::Load { id: None });
                 }
             }
-            "Page.domContentEventFired" => {
+            "Page.lifecycleEvent" => {
                 if on_page_session {
-                    self.observe_navigation_signal(NavigationSignal::DomContentLoaded { id: None });
+                    self.handle_lifecycle_event(event);
                 }
             }
             "Runtime.executionContextCreated"
@@ -373,6 +372,23 @@ impl DriverState {
             url: &committed,
             id: loader_id,
         });
+    }
+
+    /// Feed loader-scoped readiness of the main frame to a pending agent
+    /// navigation; other frames and lifecycle phases are ignored.
+    fn handle_lifecycle_event(&mut self, event: CdpEvent<'_>) {
+        let frame_id = event.params.get("frameId").and_then(|id| id.as_str());
+        if frame_id.is_none() || frame_id != self.main_frame_id.as_deref() {
+            return;
+        }
+        let loader_id = event.params.get("loaderId").and_then(|id| id.as_str());
+        match event.params.get("name").and_then(|name| name.as_str()) {
+            Some("DOMContentLoaded") => {
+                self.observe_navigation_signal(NavigationSignal::DomContentLoaded { id: loader_id });
+            }
+            Some("load") => self.observe_navigation_signal(NavigationSignal::Load { id: loader_id }),
+            _ => {}
+        }
     }
 
     fn handle_same_document_navigation(
