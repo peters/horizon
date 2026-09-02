@@ -103,16 +103,6 @@ impl DriverState {
         if let Some(result) = pending.tick(self.semantic.generation(), now) {
             return Some(result);
         }
-        // A satisfied observation completes only after the signals have been
-        // re-read and events drained: the guards above ran again first.
-        if let Some(scan) = pending.take_deferred(self.signal_epoch) {
-            // Register the released scan now, so the returned references are
-            // the current ones and no earlier observation disturbed the map.
-            return Some(match self.semantic_register_scan(scan) {
-                Ok((generation, revision, nodes)) => Ok(pending.outcome(generation, revision, nodes, now)),
-                Err(failure) => Err(failure),
-            });
-        }
         if self.navigation_in_flight() {
             // The document is changing under this wait; it can only be judged
             // against the new one, which is not what it was asked about.
@@ -121,6 +111,17 @@ impl DriverState {
         }
         if pending.blocked_by_navigation() {
             return Some(pending.stopped(WaitStop::NavigationInvalidated, now));
+        }
+        // A satisfied observation completes only after the signals have been
+        // re-read, events drained, and no navigation started meanwhile: the
+        // guards above ran again first.
+        if let Some(scan) = pending.take_deferred(self.signal_epoch) {
+            // Register the released scan now, so the returned references are
+            // the current ones and no earlier observation disturbed the map.
+            return Some(match self.semantic_register_scan(scan) {
+                Ok((generation, revision, nodes)) => Ok(pending.outcome(generation, revision, nodes, now)),
+                Err(failure) => Err(failure),
+            });
         }
         if observe {
             return self.observe_wait(link, event_tx, frame_slot, pending, now);
