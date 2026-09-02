@@ -77,12 +77,18 @@ impl HorizonHome {
     }
 
     #[must_use]
+    pub fn agent_plugin_hosts_dir(&self) -> PathBuf {
+        self.root.join("runtime").join("agent-plugins")
+    }
+
+    #[must_use]
+    pub fn agent_plugin_host_dir(&self, host_instance: &str) -> PathBuf {
+        self.agent_plugin_hosts_dir().join(safe_local_id(host_instance))
+    }
+
+    #[must_use]
     pub fn claude_plugin_dir_for_host(&self, host_instance: &str) -> PathBuf {
-        self.root
-            .join("runtime")
-            .join("agent-plugins")
-            .join(safe_local_id(host_instance))
-            .join("claude-code")
+        self.agent_plugin_host_dir(host_instance).join("claude-code")
     }
 
     #[must_use]
@@ -192,6 +198,10 @@ mod tests {
         assert_eq!(
             home.claude_plugin_dir_for_host("host-a"),
             PathBuf::from("/tmp/horizon-home/runtime/agent-plugins/%686f73742d61/claude-code")
+        );
+        assert_eq!(
+            home.agent_plugin_host_dir("host-a"),
+            PathBuf::from("/tmp/horizon-home/runtime/agent-plugins/%686f73742d61")
         );
         assert_eq!(
             home.codex_browser_skill_dir(),
