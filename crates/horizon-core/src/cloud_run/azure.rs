@@ -59,13 +59,9 @@ pub struct AzureWorker {
     pub job_id: CloudJobId,
     pub resource_id: String,
     pub name: String,
-    pub profile: String,
-    pub environment_id: String,
-    pub image: String,
-    pub disk_gib: u32,
-    pub lease_seconds: u32,
+    pub target: WorkerTarget,
+    pub profile: AzureProfile,
     pub delete_after: String,
-    pub hourly_cost_micros: u64,
 }
 impl AzureWorker {
     /// # Errors
@@ -73,18 +69,13 @@ impl AzureWorker {
     pub fn validate(&self) -> Result<(), AzureError> {
         let name = resource_name(self.workflow_id, self.job_id);
         let valid = self.name == name
-            && valid_arm_id(&self.resource_id)
-            && self
-                .resource_id
-                .to_ascii_lowercase()
-                .ends_with(&format!("/providers/microsoft.app/jobs/{name}"))
-            && valid_text(&self.profile, 191)
-            && valid_arm_id(&self.environment_id)
-            && valid_immutable_image(&self.image)
-            && self.disk_gib > 0
-            && (MIN_LEASE_SECONDS..=MAX_LEASE_SECONDS).contains(&self.lease_seconds)
+            && validate_target(&self.target, &self.profile).is_ok()
             && valid_deadline(&self.delete_after)
-            && self.hourly_cost_micros > 0;
+            && self.resource_id.eq_ignore_ascii_case(&resource_id(
+                &self.profile.subscription_id,
+                &self.profile.resource_group,
+                &self.name,
+            ));
         valid.then_some(()).ok_or(AzureError::InvalidPersistedWorker)
     }
 }
@@ -137,7 +128,7 @@ impl AzureClient {
     ) -> Result<AzureEnsure, AzureError> {
         validate_target(target, &self.profile)?;
         let name = resource_name(workflow_id, job_id);
-        let (job, created) = if let Some(job) = self.transport.get(&name)? {
+        let (mut job, created) = if let Some(job) = self.transport.get(&name)? {
             (job, false)
         } else {
             enforce_cost(target, self.profile.hourly_cost_micros)?;
@@ -153,8 +144,14 @@ impl AzureClient {
         if !recovered_deadline_valid(&worker.delete_after, target.lease_seconds) {
             return self.cleanup_creation_failure(&name, workflow_id, job_id, AzureError::ResourceIdentityMismatch);
         }
+        if created && !job.ready_to_start() {
+            job = match self.await_created_job(&worker) {
+                Ok(job) => job,
+                Err(error) => return self.cleanup_creation_failure(&name, workflow_id, job_id, error),
+            };
+        }
         let result = (|| {
-            enforce_cost(target, worker.hourly_cost_micros)?;
+            enforce_cost(target, worker.profile.hourly_cost_micros)?;
             let existing = self.execution_for(&job, &worker.resource_id)?;
             // The persisted job is the at-most-once fence; retries only reconcile its execution.
             let execution = if created && existing.is_none() && job.ready_to_start() {
@@ -162,7 +159,7 @@ impl AzureClient {
             } else {
                 existing
             };
-            status_from_resource(&job, &worker, execution.as_ref(), &self.profile)
+            status_from_resource(&job, &worker, execution.as_ref())
         })();
         let status = match result {
             Ok(status) => status,
@@ -185,7 +182,7 @@ impl AzureClient {
             return Ok(None);
         };
         let execution = self.execution_for(&job, &worker.resource_id)?;
-        status_from_resource(&job, worker, execution.as_ref(), &self.profile).map(Some)
+        status_from_resource(&job, worker, execution.as_ref()).map(Some)
     }
     /// # Errors
     /// Refuses deletion when persisted or provider identity differs.
@@ -194,7 +191,7 @@ impl AzureClient {
         let Some(job) = self.transport.get(&worker.name)? else {
             return Ok(AzureCleanup::AlreadyAbsent);
         };
-        status_from_resource(&job, worker, None, &self.profile)?;
+        status_from_resource(&job, worker, None)?;
         self.transport.delete(&worker.name)
     }
     fn validate_scope(&self, worker: &AzureWorker) -> Result<(), AzureError> {
@@ -223,6 +220,20 @@ impl AzureClient {
             Ok(None)
         }
     }
+    fn await_created_job(&self, worker: &AzureWorker) -> Result<ApiJob, AzureError> {
+        let name = worker.name.as_str();
+        for delay_millis in [0, 250, 500, 1_000, 2_000, 4_000, 8_000, 16_000] {
+            std::thread::sleep(std::time::Duration::from_millis(delay_millis));
+            let job = self.transport.get(name)?.ok_or(AzureError::ResourceIdentityMismatch)?;
+            status_from_resource(&job, worker, None)?;
+            if job.ready_to_start() {
+                return Ok(job);
+            }
+        }
+        Err(AzureError::RequestFailed {
+            operation: "job provisioning",
+        })
+    }
     fn cleanup_creation_failure<T>(
         &self,
         name: &str,
@@ -237,7 +248,7 @@ impl AzureClient {
             .flatten()
             .is_some_and(|job| basic_identity_matches(&job, workflow_id, job_id, &self.profile));
         if !owned || self.transport.delete(name).is_err() {
-            return Err(AzureError::CreationCleanupFailed {
+            return Err(AzureError::CleanupFailed {
                 resource_id: resource_id(&self.profile.subscription_id, &self.profile.resource_group, name),
             });
         }
@@ -247,7 +258,7 @@ impl AzureClient {
                 return Err(error);
             }
         }
-        Err(AzureError::CreationCleanupFailed {
+        Err(AzureError::CleanupFailed {
             resource_id: resource_id(&self.profile.subscription_id, &self.profile.resource_group, name),
         })
     }
@@ -279,8 +290,8 @@ pub enum AzureError {
     UnexpectedStatus { operation: &'static str, status: u16 },
     #[error("Azure returned a malformed response during {operation}")]
     InvalidResponse { operation: &'static str },
-    #[error("Azure job creation failed identity verification and exact cleanup also failed")]
-    CreationCleanupFailed { resource_id: String },
+    #[error("Azure worker operation failed and exact cleanup also failed")]
+    CleanupFailed { resource_id: String },
     #[error("Azure hourly cost {actual} exceeded configured maximum {maximum}")]
     HourlyCostRejected { actual: u64, maximum: u64 },
 }
@@ -485,13 +496,9 @@ fn worker_from_job(
         job_id,
         resource_id: resource_id(&profile.subscription_id, &profile.resource_group, &job.name),
         name: job.name.clone(),
-        profile: profile.name.clone(),
-        environment_id: profile.environment_id.clone(),
-        image: target.image.clone(),
-        disk_gib: target.disk_gib,
-        lease_seconds: target.lease_seconds,
+        target: target.clone(),
+        profile: profile.clone(),
         delete_after,
-        hourly_cost_micros: profile.hourly_cost_micros,
     };
     worker.validate()?;
     Ok(worker)
@@ -500,20 +507,20 @@ fn status_from_resource(
     job: &ApiJob,
     worker: &AzureWorker,
     execution: Option<&ApiExecution>,
-    profile: &AzureProfile,
 ) -> Result<AzureWorkerStatus, AzureError> {
     worker.validate()?;
     let containers = job.properties.template.containers.as_deref().unwrap_or_default();
+    let (target, profile) = (&worker.target, &worker.profile);
     let owned = basic_identity_matches(job, worker.workflow_id, worker.job_id, profile)
         && job.id.eq_ignore_ascii_case(&worker.resource_id)
         && job
             .properties
             .environment_id
-            .eq_ignore_ascii_case(&worker.environment_id)
-        && job_configuration_matches(job, &worker.image, worker.lease_seconds, profile)
-        && tag_matches(job, PROFILE_TAG, &worker.profile)
-        && tag_matches(job, DISK_TAG, &worker.disk_gib.to_string())
-        && tag_matches(job, COST_TAG, &worker.hourly_cost_micros.to_string())
+            .eq_ignore_ascii_case(&profile.environment_id)
+        && job_configuration_matches(job, &target.image, target.lease_seconds, profile)
+        && tag_matches(job, PROFILE_TAG, &profile.name)
+        && tag_matches(job, DISK_TAG, &target.disk_gib.to_string())
+        && tag_matches(job, COST_TAG, &profile.hourly_cost_micros.to_string())
         && tag_matches(job, DEADLINE_TAG, &worker.delete_after)
         && containers.len() == 1
         && env_matches(&containers[0], WORKFLOW_ENV, &worker.workflow_id.to_string())
@@ -626,11 +633,11 @@ fn tag_matches(job: &ApiJob, key: &str, expected: &str) -> bool {
     job.tags.get(key).is_some_and(|value| value == expected)
 }
 fn env_matches(container: &ApiContainer, name: &str, expected: &str) -> bool {
-    container
-        .env
-        .iter()
-        .find(|entry| entry.name == name)
+    let mut entries = container.env.iter().filter(|entry| entry.name == name);
+    entries
+        .next()
         .is_some_and(|entry| entry.value.as_deref() == Some(expected))
+        && entries.next().is_none()
 }
 fn execution_belongs_to(execution_id: &str, job_resource_id: &str) -> bool {
     execution_id.len() > job_resource_id.len() + "/executions/".len()

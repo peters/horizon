@@ -65,9 +65,15 @@ impl Transport for AzureHttp {
     fn create(&self, name: &str, request: &CreateJobRequest) -> Result<CreateResult, AzureError> {
         let url = self.job_url(name, None)?;
         let response = self
-            .authorize(self.agent.put(url.as_str()))
+            .authorize(self.agent.put(url.as_str()).header("If-None-Match", "*"))
             .send_json(request)
             .map_err(request_failed("job creation"))?;
+        if response.status().as_u16() == 412 {
+            let job = self.get(name)?.ok_or(AzureError::RequestFailed {
+                operation: "job creation",
+            })?;
+            return Ok(CreateResult { job, created: false });
+        }
         let created = response.status().as_u16() == 201;
         decode_json(response, &[200, 201], "job creation").map(|job| CreateResult { job, created })
     }
