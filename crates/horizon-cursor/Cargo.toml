@@ -25,3 +25,4 @@ windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging", "W
 axuielement.workspace = true
 core-graphics = "0.25"
 global-hotkey.workspace = true
+objc2-app-kit.workspace = true

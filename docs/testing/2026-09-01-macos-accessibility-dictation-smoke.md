@@ -77,7 +77,8 @@ SMOKE_ROOT="$(mktemp -d /tmp/horizon-macos-dictation-runtime.XXXXXX)"
 SMOKE_HOME="$SMOKE_ROOT/home"
 SMOKE_CONFIG="$SMOKE_ROOT/config.yaml"
 mkdir -p "$SMOKE_HOME"
-cargo build --release --features speech
+RUSTFLAGS="-D warnings" cargo build --release --features speech
+otool -l target/release/horizon | rg -A2 'cmd LC_RPATH' | rg -F '/usr/lib/swift'
 ./packaging/macos/make_app_bundle.sh --speech
 plutil -lint target/Horizon.app/Contents/Info.plist
 /usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescription' target/Horizon.app/Contents/Info.plist
@@ -141,6 +142,11 @@ clipboard or synthetic keys.
   before capture.
 - Focus a non-editable Finder surface and press the F-key. Confirm no recording
   starts and no text appears anywhere.
+- Launch a second task-owned Horizon instance with speech disabled, focus its
+  terminal caret, and press the first instance's global F-key. Confirm the
+  owner refuses the other Horizon instance before capture with `focus is still
+  inside Horizon`; neither task-owned instance nor any pre-existing Horizon
+  process may receive text.
 
 ### Discard after capture
 

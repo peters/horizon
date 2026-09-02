@@ -9,10 +9,13 @@ use axuielement::ax_notification::{
     AX_FOCUSED_WINDOW_CHANGED_NOTIFICATION,
 };
 use axuielement::{AXError, AXRange, AXUIElement, is_process_trusted, is_process_trusted_with_prompt, system_wide};
+use objc2_app_kit::NSRunningApplication;
 
 use super::InjectError;
 
 const AX_TIMEOUT_SECONDS: f32 = 0.5;
+const HORIZON_BUNDLE_IDENTIFIER: &str = "com.github.peters.horizon";
+const HORIZON_EXECUTABLE_NAME: &str = "horizon";
 const FOCUS_NOTIFICATIONS: &[&str] = &[
     AX_APPLICATION_DEACTIVATED_NOTIFICATION,
     AX_FOCUSED_WINDOW_CHANGED_NOTIFICATION,
@@ -127,11 +130,7 @@ fn prepare_target() -> Result<PreparedTarget, InjectError> {
     let application_pid = application
         .pid()
         .map_err(|_| transport_error("failed to identify the focused application"))?;
-    let horizon_pid =
-        i32::try_from(std::process::id()).map_err(|_| transport_error("failed to identify the Horizon process"))?;
-    if application_pid == horizon_pid {
-        return Err(InjectError::Target("focus is still inside Horizon"));
-    }
+    reject_horizon_application(application_pid)?;
     application
         .set_timeout(AX_TIMEOUT_SECONDS)
         .map_err(|_| transport_error("failed to configure the focused application"))?;
@@ -157,6 +156,27 @@ fn prepare_target() -> Result<PreparedTarget, InjectError> {
         element,
         focus_events,
     })
+}
+
+fn reject_horizon_application(application_pid: i32) -> Result<(), InjectError> {
+    let application = NSRunningApplication::runningApplicationWithProcessIdentifier(application_pid)
+        .ok_or_else(|| transport_error("failed to identify the focused application identity"))?;
+    let bundle_identifier = application.bundleIdentifier().map(|identifier| identifier.to_string());
+    let executable_name = application
+        .executableURL()
+        .and_then(|url| url.lastPathComponent())
+        .map(|name| name.to_string());
+
+    if application_identity_is_horizon(bundle_identifier.as_deref(), executable_name.as_deref()) {
+        Err(InjectError::Target("focus is still inside Horizon"))
+    } else {
+        Ok(())
+    }
+}
+
+fn application_identity_is_horizon(bundle_identifier: Option<&str>, executable_name: Option<&str>) -> bool {
+    bundle_identifier == Some(HORIZON_BUNDLE_IDENTIFIER)
+        || executable_name.is_some_and(|name| name.eq_ignore_ascii_case(HORIZON_EXECUTABLE_NAME))
 }
 
 fn validate_prepared_target(target: &PreparedTarget) -> Result<(), InjectError> {
@@ -270,7 +290,7 @@ fn insertion_error() -> InjectError {
 
 #[cfg(test)]
 mod tests {
-    use super::{AXRange, InjectError, TargetFacts};
+    use super::{AXRange, HORIZON_BUNDLE_IDENTIFIER, InjectError, TargetFacts, application_identity_is_horizon};
 
     fn safe_target() -> TargetFacts {
         TargetFacts {
@@ -340,6 +360,20 @@ mod tests {
             }
             .validate(),
             Err(InjectError::Target(_))
+        ));
+    }
+
+    #[test]
+    fn every_horizon_instance_is_rejected_by_stable_application_identity() {
+        assert!(application_identity_is_horizon(
+            Some(HORIZON_BUNDLE_IDENTIFIER),
+            Some("renamed")
+        ));
+        assert!(application_identity_is_horizon(None, Some("horizon")));
+        assert!(application_identity_is_horizon(None, Some("Horizon")));
+        assert!(!application_identity_is_horizon(
+            Some("com.apple.TextEdit"),
+            Some("TextEdit")
         ));
     }
 }

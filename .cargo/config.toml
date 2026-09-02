@@ -5,9 +5,3 @@
 speech = "run --release --features speech"
 speech-cuda = "run --release --features speech-cuda"
 speech-vulkan = "run --release --features speech-vulkan"
-
-# Swift-backed macOS dependencies use @rpath for the OS Swift runtime. Keep
-# ordinary developer and release builds runnable on Intel macOS, where that
-# runtime is not necessarily resolved from the shared cache without an rpath.
-[target.'cfg(target_os = "macos")']
-rustflags = ["-C", "link-arg=-Wl,-rpath,/usr/lib/swift"]
