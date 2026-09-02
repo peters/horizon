@@ -1,14 +1,14 @@
 use super::{
-    ApprovalDecision, ApprovalGate, ArtifactRef, CLOUD_RUN_PROTOCOL_VERSION, CloudJobId, CloudJobOutcome,
-    CloudJobState, CloudProgress, CloudProtocolError as Error, CloudWorkflow, GitSource, ProvenanceRecord,
-    WorkflowNode, WorkflowNodeKind,
+    ApprovalDecision, ApprovalGate, ArtifactDigest, ArtifactRef, CLOUD_RUN_PROTOCOL_VERSION, CloudJobId,
+    CloudJobOutcome, CloudJobState, CloudProgress, CloudProtocolError as Error, CloudWorkflow, GitSource,
+    ProvenanceRecord, WorkflowNode, WorkflowNodeKind,
 };
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 use url::Url;
-static OCI_IMAGE_REFERENCE: LazyLock<Option<Regex>> = LazyLock::new(|| {
-    Regex::new(r"\A(?:(?:(?:[A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9-]*[A-Za-z0-9])(?:\.(?:[A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9-]*[A-Za-z0-9]))*|\[(?:[A-Fa-f0-9:]+)\])(?::[0-9]+)?/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@[A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*:[A-Fa-f0-9]{32,})?\z").ok()
+static OCI_REF: LazyLock<Option<Regex>> = LazyLock::new(|| {
+    Regex::new(r"\A(?:(?:(?:[A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9-]*[A-Za-z0-9])(?:\.(?:[A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9-]*[A-Za-z0-9]))*|\[(?:[A-Fa-f0-9:]+)\])(?::[0-9]+)?/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[A-Fa-f0-9]+)?\z").ok()
 });
 fn ensure(valid: bool, error: Error) -> Result<(), Error> {
     valid.then_some(()).ok_or(error)
@@ -240,10 +240,8 @@ fn valid_progress(node: &WorkflowNode) -> bool {
 fn validate_inputs(node: &WorkflowNode, artifact_producers: &HashMap<&str, CloudJobId>) -> Result<(), Error> {
     let mut seen = HashSet::new();
     let dependencies: HashSet<_> = node.depends_on.iter().copied().collect();
-    ensure(
-        dependencies.len() == node.depends_on.len(),
-        Error::InvalidDependency(node.id),
-    )?;
+    let unique_dependencies = dependencies.len() == node.depends_on.len();
+    ensure(unique_dependencies, Error::InvalidDependency(node.id))?;
     for artifact_id in &node.input_artifact_ids {
         let producer = artifact_producers.get(artifact_id.as_str());
         if artifact_id.trim().is_empty()
@@ -290,16 +288,15 @@ fn validate_artifact(node_id: CloudJobId, artifact: &ArtifactRef) -> Result<(), 
     Ok(())
 }
 pub(super) fn valid_worker_image(value: &str) -> bool {
-    OCI_IMAGE_REFERENCE
-        .as_ref()
-        .is_some_and(|pattern| pattern.is_match(value))
+    let digest = value.rsplit_once("@sha256:").map(|(_, encoded)| encoded);
+    let digest = digest.is_none_or(|encoded| ArtifactDigest::parse_sha256(encoded).is_ok());
+    let ipv6 = !value.starts_with('[') || Url::parse(&format!("https://{value}")).is_ok();
+    OCI_REF.as_ref().is_some_and(|pattern| pattern.is_match(value)) && digest && ipv6
 }
 fn validate_git_source(source: &GitSource) -> Result<(), Error> {
     ensure(valid_repository(&source.repository), Error::InvalidRepository)?;
-    ensure(
-        source.branch.as_deref().is_none_or(valid_branch),
-        Error::InvalidGitBranch,
-    )
+    let branch_is_valid = source.branch.as_deref().is_none_or(valid_branch);
+    ensure(branch_is_valid, Error::InvalidGitBranch)
 }
 fn valid_branch(branch: &str) -> bool {
     !branch.is_empty()

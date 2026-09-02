@@ -162,7 +162,7 @@ fn v1_json_contract_round_trips() {
         "registry--ha.example:5000/team/image"
     ));
     assert!(super::validation::valid_worker_image("[2001:db8::1]:5000/team/image"));
-    for image in "https://u:p@r/i?q / .. image: ghcr.io/Org/image image@sha256:deadbeef".split_ascii_whitespace() {
+    for image in "https://u:p@r/i?q / .. image: ghcr.io/Org/image image@sha256:deadbeef image@sha256:dddddddddddddddddddddddddddddddd [::::]/image".split_ascii_whitespace() {
         let mut bad = snapshot.clone();
         bad.nodes[0].worker.as_mut().expect("worker").image = image.to_string();
         rejects(bad.nodes, &InvalidWorkerTarget(snapshot.nodes[0].id));
