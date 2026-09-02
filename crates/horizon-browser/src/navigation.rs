@@ -235,6 +235,14 @@ impl PendingNavigation {
         if !self.correlates(id) {
             return None;
         }
+        if let NavigationSignal::SameDocument { url, id: None } = signal
+            && !same_document_destination(&self.requested_url, url)
+        {
+            // Chromium's same-document event carries no loader id: only a
+            // change to the requested document itself can be ours; a
+            // superseded navigation's fragment change on another page is not.
+            return None;
+        }
         if !self.dispatch_known && id.is_some() {
             // Signals that name a navigation cannot be attributed before the
             // dispatch reply names ours; hold the last one back.
@@ -379,6 +387,15 @@ impl PendingNavigation {
 /// Whether a committed URL is the requested destination rather than a
 /// redirect. Browsers add or drop a trailing slash on bare origins, so that
 /// difference alone is not a redirect.
+/// Same-document changes differ from the requested URL by fragment at most.
+fn same_document_destination(requested: &str, committed: &str) -> bool {
+    let strip = |url: &str| {
+        url.split_once('#')
+            .map_or(url.to_string(), |(base, _)| base.to_string())
+    };
+    same_destination(&strip(requested), &strip(committed))
+}
+
 fn same_destination(requested: &str, committed: &str) -> bool {
     requested == committed || bare_origin_variant(requested, committed) || bare_origin_variant(committed, requested)
 }
@@ -689,6 +706,37 @@ mod tests {
         );
         assert!(foreign.correlates(Some("nav-b")));
         assert!(!foreign.correlates(Some("nav-a")));
+    }
+
+    #[test]
+    fn unidentified_same_document_events_must_name_the_requested_document() {
+        let now = Instant::now();
+        let mut pending = pending(NavigationWait::Commit, now);
+        assert!(pending.attach_id(None, now).is_none());
+        assert!(
+            pending
+                .observe(
+                    NavigationSignal::SameDocument {
+                        url: "https://example.test/other#section",
+                        id: None
+                    },
+                    now
+                )
+                .is_none(),
+            "a superseded navigation's fragment change on another page is ignored"
+        );
+        let outcome = navigation(pending.observe(
+            NavigationSignal::SameDocument {
+                url: "https://example.test/start#section",
+                id: None,
+            },
+            now,
+        ));
+        assert_eq!(outcome.state, NavigationState::Committed);
+        assert_eq!(
+            outcome.committed_url.as_deref(),
+            Some("https://example.test/start#section")
+        );
     }
 
     #[test]

@@ -188,8 +188,10 @@ pub(crate) struct PanelInput {
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum NavigateWait {
-    /// Return as soon as the backend accepted the command; nothing about
-    /// the destination is known yet.
+    /// Return as soon as the engine handed the command to the backend. The
+    /// browser's acceptance is not awaited (a later rejection is a failed
+    /// page state, not an action error) and nothing about the destination is
+    /// known yet; use `commit` for confirmation.
     Dispatched,
     /// Return once the top-level document committed, so `committed_url` is
     /// authoritative (default).
@@ -224,8 +226,11 @@ impl From<horizon_browser::NavigationWait> for NavigateWait {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum NavigateState {
+    /// Handed to the backend; acceptance was not awaited.
     Dispatched,
+    /// The top-level document committed; `committed_url` is authoritative.
     Committed,
+    /// The committed document fired `DOMContentLoaded`.
     DomContentLoaded,
     /// The requested readiness did not arrive within `timeout_millis`; the
     /// other fields carry the latest page state. Inspect or retry.

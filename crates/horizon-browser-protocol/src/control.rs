@@ -25,8 +25,9 @@ pub const DEFAULT_NAVIGATION_TIMEOUT_MILLIS: u64 = 15_000;
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NavigationWait {
-    /// Return as soon as the engine dispatched the navigation command to the
-    /// backend; nothing about the destination is known yet.
+    /// Return as soon as the engine handed the navigation command to the
+    /// backend; the browser's acceptance is not awaited and nothing about the
+    /// destination is known yet.
     Dispatched,
     /// Return once the top-level document committed (URL is authoritative).
     #[default]

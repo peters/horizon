@@ -88,26 +88,25 @@ impl Driver {
         let bound_millis = u64::try_from(pending.remaining(Instant::now()).as_millis())
             .unwrap_or(u64::MAX)
             .max(1);
-        let bounded = bound_millis < PAGE_LOAD_TIMEOUT_MILLIS;
-        if bounded {
-            let _ = self.classic_post("timeouts", &json!({ "pageLoad": bound_millis }));
-        }
+        // The action's bound replaces the session default in both directions
+        // (a 60 s bound must not fail at the 50 s default), and the HTTP read
+        // must outlast it so the WebDriver timeout error, not a socket
+        // timeout, ends the command.
+        let _ = self.classic_post("timeouts", &json!({ "pageLoad": bound_millis }));
+        let read_timeout = Duration::from_millis(bound_millis.saturating_add(5_000));
         self.begin_navigation();
         let _ = event_tx.send(BrowserEvent::Loading(true));
         let result = self
-            .classic_navigation_post("url", &json!({ "url": &url }))
+            .classic_navigation_post_within("url", &json!({ "url": &url }), read_timeout)
             .and_then(|_| self.classic_get("url"))
             .and_then(|response| {
                 classic_navigation_committed(&response, &url, &previous_url)
                     .then_some(())
                     .ok_or_else(|| "browser did not commit a reachable URL".to_string())
             });
-        if bounded {
-            let _ = self.classic_post("timeouts", &json!({ "pageLoad": PAGE_LOAD_TIMEOUT_MILLIS }));
-        }
+        let _ = self.classic_post("timeouts", &json!({ "pageLoad": PAGE_LOAD_TIMEOUT_MILLIS }));
         let now = Instant::now();
         if let Err(error) = &result
-            && bounded
             && (pending.remaining(now).is_zero() || error.contains("timeout"))
         {
             self.retain_frame_during_navigation = false;
@@ -366,9 +365,18 @@ impl Driver {
     }
 
     fn classic_navigation_post(&self, suffix: &str, body: &serde_json::Value) -> Result<serde_json::Value, String> {
+        self.classic_navigation_post_within(suffix, body, NAVIGATION_HTTP_TIMEOUT)
+    }
+
+    fn classic_navigation_post_within(
+        &self,
+        suffix: &str,
+        body: &serde_json::Value,
+        read_timeout: Duration,
+    ) -> Result<serde_json::Value, String> {
         self.service
             .http
-            .post_with_read_timeout(&self.session_path(suffix), body, NAVIGATION_HTTP_TIMEOUT)
+            .post_with_read_timeout(&self.session_path(suffix), body, read_timeout)
             .map_err(|error| error.to_string())
     }
 

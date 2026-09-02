@@ -43,7 +43,8 @@ pub struct BrowserSnapshot {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NavigationState {
-    /// The backend accepted the command; nothing about the page is known yet.
+    /// The command was handed to the backend; its acceptance was not awaited
+    /// and nothing about the page is known yet.
     Dispatched,
     /// The top-level document committed; `committed_url` is authoritative.
     Committed,
