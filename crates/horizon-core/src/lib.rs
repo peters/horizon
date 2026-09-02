@@ -4,6 +4,7 @@ mod agents;
 mod attention;
 mod board;
 pub mod browser;
+pub mod cloud_run;
 mod config;
 mod config_migration;
 pub mod dir_search;

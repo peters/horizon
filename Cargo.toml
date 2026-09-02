@@ -46,6 +46,7 @@ profiling = "1.0.18"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_yaml = "0.9.34"
 serde_json = "1.0.151"
+url = "2.5.8"
 rmcp = { version = "3.1.4", default-features = false, features = ["macros", "server", "transport-io"] }
 schemars = "1.2.2"
 alacritty_terminal = "0.26.0"
