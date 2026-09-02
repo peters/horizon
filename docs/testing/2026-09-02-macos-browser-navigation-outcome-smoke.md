@@ -8,6 +8,11 @@ exact PR head named in the request. Do not merge until the report ends with
 the repository as the execution record; append findings to the report, do not
 rewrite the procedure.
 
+Status: the stack has merged to `main` as #365 (`2ae3383`, issue #350), #366
+(`9e2f719`, issue #348), and #367 (`82d070c`, issue #349), each after a
+`SMOKE-TEST: DONE` report. Section 6 records the post-merge verification of
+the merged tree.
+
 ## Safety contract
 
 - Do not stop, signal, reuse, or automate a pre-existing Horizon process, and
@@ -186,3 +191,18 @@ SMOKE-TEST REPORT (Mac Studio/macOS <version>, <arch>, <final-sha>)
 Summary: <evidence locations, backend notes, remaining concerns>
 SMOKE-TEST: DONE
 ```
+
+## 6. Post-merge verification on main
+
+The #367 report noted one Firefox gate attempt discarded after the Mac's temp
+volume hit `ENOSPC` before the wait lane; the clean rerun passed, but the host
+was left with about 3 GiB free. The host has since been cleaned (merged-PR
+worktrees and their build outputs, stale smoke roots, and the Homebrew cache
+removed; about 55 GiB free afterwards). Rerun the full gate once more on the
+merged tree so that the closing record comes from a healthy host.
+
+Run sections 1 to 4 unchanged against the exact head named in the request on
+this PR. That head differs from `main` at `82d070c` only by this document:
+the gate script, the fixtures, and every Rust source are byte-identical to
+the merged tree, so the run verifies what shipped. Post the report on this
+PR in the section 5 format, naming both the PR head and `82d070c`.
