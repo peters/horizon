@@ -106,13 +106,17 @@ in `scripts/browser-smoke/mcp_gate.py`):
 - Chromium and Firefox only: a 3-second bound on the 11-second page returns
   `state: timed_out`, `completed: false`, no committed URL, and the page
   later commits (`#slow-marker` becomes visible). Safari's classic WebDriver
-  blocks until load, so the gate skips the bounded timeout there and keeps
-  its existing 60-second delayed-navigation lane.
+  applies the bound as its page-load timeout and reports `timed_out` too, but
+  it cannot observe the later commit without another command, so the gate
+  keeps its existing 60-second delayed-navigation lane there instead.
 
 Backend notes to confirm in the report:
 
 - Safari: `committed` and `dom_content_loaded` are reported after the classic
-  navigation returned, with `loading: false` and a non-empty `title`.
+  navigation returned, with `loading: false` and a non-empty `title`. The
+  classic protocol has no dispatch-only navigation, so `wait: dispatched`
+  also returns after the load (the gate's dispatch lane still passes because
+  `#next-marker` is already present).
 - Firefox: the commit is observed at BiDi `DOMContentLoaded`; `committed` and
   `dom_content_loaded` therefore settle at the same event.
 - Chromium: `committed` arrives from `Page.frameNavigated` before the load

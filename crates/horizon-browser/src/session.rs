@@ -730,7 +730,13 @@ impl DriverState {
         });
         if let Some(failure) = failure {
             self.fail_navigation(event_tx, &format!("could not navigate: {failure}"));
+            return true;
         }
+        let loader_id = result
+            .and_then(|value| value.get("loaderId"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|id| !id.is_empty());
+        self.attach_navigation_id(loader_id);
         true
     }
 
@@ -739,7 +745,7 @@ impl DriverState {
         self.interaction_started_at = None;
         let _ = event_tx.send(BrowserEvent::NavigationFailed(message.to_string()));
         let _ = event_tx.send(BrowserEvent::Loading(false));
-        self.observe_navigation_signal(crate::navigation::NavigationSignal::Failed(message));
+        self.observe_navigation_signal(crate::navigation::NavigationSignal::Failed { message, id: None });
     }
 }
 

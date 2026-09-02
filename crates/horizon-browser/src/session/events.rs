@@ -262,12 +262,12 @@ impl DriverState {
                 if on_page_session {
                     let _ = event_tx.send(BrowserEvent::Loading(false));
                     self.title_fetch_at = Some(Instant::now() + Duration::from_millis(400));
-                    self.observe_navigation_signal(NavigationSignal::Load);
+                    self.observe_navigation_signal(NavigationSignal::Load { id: None });
                 }
             }
             "Page.domContentEventFired" => {
                 if on_page_session {
-                    self.observe_navigation_signal(NavigationSignal::DomContentLoaded);
+                    self.observe_navigation_signal(NavigationSignal::DomContentLoaded { id: None });
                 }
             }
             "Runtime.executionContextCreated"
@@ -331,7 +331,11 @@ impl DriverState {
             let message = format!("could not navigate to {unreachable_url}: the page was unreachable");
             let _ = event_tx.send(BrowserEvent::NavigationFailed(message.clone()));
             let _ = event_tx.send(BrowserEvent::Loading(false));
-            self.observe_navigation_signal(NavigationSignal::Failed(&message));
+            let loader_id = frame.get("loaderId").and_then(|id| id.as_str());
+            self.observe_navigation_signal(NavigationSignal::Failed {
+                message: &message,
+                id: loader_id,
+            });
             return;
         }
         self.retain_frame_during_navigation = false;
@@ -364,7 +368,11 @@ impl DriverState {
         }
         let _ = event_tx.send(BrowserEvent::Loading(true));
         let committed = self.url.clone();
-        self.observe_navigation_signal(NavigationSignal::Committed(&committed));
+        let loader_id = frame.get("loaderId").and_then(|id| id.as_str());
+        self.observe_navigation_signal(NavigationSignal::Committed {
+            url: &committed,
+            id: loader_id,
+        });
     }
 
     fn handle_same_document_navigation(
@@ -397,7 +405,7 @@ impl DriverState {
         self.manifest_dirty = true;
         self.write_manifest(true);
         self.publish_url_changed(event_tx);
-        self.observe_navigation_signal(NavigationSignal::SameDocument(url));
+        self.observe_navigation_signal(NavigationSignal::SameDocument { url, id: None });
     }
 
     /// Ack, then decode and store one screencast frame.

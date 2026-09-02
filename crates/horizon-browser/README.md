@@ -147,9 +147,15 @@ request. A `Navigate` action carries a `NavigationWait` (`dispatched`,
 `NavigationOutcome` (requested and committed URL, title when known, loading,
 redirected, elapsed, and a `state` of `dispatched`, `committed`,
 `dom_content_loaded`, `timed_out`, or `superseded`) from the backend's own
-commit, `DOMContentLoaded`, load, and failure signals. On Firefox BiDi a commit
-is observed at `DOMContentLoaded`; classic WebDriver blocks until the document
-loaded. A destination that fails after dispatch is a failed action, not a
+commit, `DOMContentLoaded`, load, and failure signals, each attributed by the
+backend's navigation identity (Chromium loader id, BiDi navigation id) so an
+earlier navigation still in flight cannot settle a later action. On Firefox
+BiDi a commit is observed at `DOMContentLoaded`; classic WebDriver has no
+dispatch-only primitive and blocks until the document loaded or the action's
+bound elapsed (applied as the session page-load timeout), reporting
+`timed_out` with whatever the browser committed meanwhile. `redirected`
+compares the committed URL with the requested one; only a bare origin and its
+root slash count as the same destination. A destination that fails after dispatch is a failed action, not a
 state. Other asynchronous page behavior (reload, history traversal, input)
 still needs an explicit later snapshot, query, or wait. Selectors, scripts,
 filled text, and returned page data are excluded from audit records.

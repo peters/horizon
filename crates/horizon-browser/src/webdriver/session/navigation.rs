@@ -12,14 +12,17 @@ use crate::{
 };
 
 use super::{
-    Driver, NAVIGATION_HTTP_TIMEOUT, PendingHistoryStart, classic_navigation_committed, normalize_url, webdriver_value,
+    Driver, NAVIGATION_HTTP_TIMEOUT, PAGE_LOAD_TIMEOUT_MILLIS, PendingHistoryStart, classic_navigation_committed,
+    normalize_url, webdriver_value,
 };
 
 impl Driver {
-    /// Run a `Navigate` agent action. Classic `WebDriver` blocks until the
-    /// document committed and loaded, so it settles at once; Firefox `BiDi`
-    /// dispatches with `wait: "none"` and settles from its navigation events
-    /// or the bounded deadline.
+    /// Run a `Navigate` agent action. Firefox `BiDi` dispatches with
+    /// `wait: "none"` and settles from its navigation events or the bounded
+    /// deadline. Classic `WebDriver` has no dispatch-only primitive: its
+    /// navigation command blocks until the document loaded or the action's
+    /// bound elapsed (applied as the session page-load timeout), so every
+    /// wait settles at once, as `timed_out` when the bound was hit.
     pub(super) fn navigate_action(
         &mut self,
         request: &AgentAction,
@@ -39,11 +42,18 @@ impl Driver {
         let (wait, timeout_millis) = (*wait, *timeout_millis);
         let now = Instant::now();
         self.supersede_pending_navigation(now);
-        let dispatch = if self.config.browser.backend == BackendKind::FirefoxBidi {
-            self.dispatch_bidi_navigate(url, event_tx)
-        } else {
-            self.navigate(url, event_tx)
-        };
+        let mut pending = PendingNavigation::new(
+            request.clone(),
+            normalize_navigation_target(url),
+            wait,
+            Duration::from_millis(timeout_millis.unwrap_or(DEFAULT_NAVIGATION_TIMEOUT_MILLIS)),
+            PendingNavigation::queued_for(request, crate::navigation::now_millis()),
+            now,
+        );
+        if self.config.browser.backend != BackendKind::FirefoxBidi {
+            return AgentActionExecution::Done(self.navigate_classic_bounded(url, &mut pending, event_tx));
+        }
+        let dispatch = self.dispatch_bidi_navigate(url, event_tx);
         tracing::debug!(
             target: "browser",
             action_id = %request.action_id,
@@ -55,23 +65,71 @@ impl Driver {
         if let Err(error) = dispatch {
             return AgentActionExecution::Done(Err(BrowserControlFailure::new("navigation_failed", error)));
         }
-        let mut pending = PendingNavigation::new(
-            request.clone(),
-            normalize_navigation_target(url),
-            wait,
-            Duration::from_millis(timeout_millis.unwrap_or(DEFAULT_NAVIGATION_TIMEOUT_MILLIS)),
-            PendingNavigation::queued_for(request, crate::navigation::now_millis()),
-            now,
-        );
-        if self.config.browser.backend != BackendKind::FirefoxBidi {
-            let (committed, title) = (self.url.clone(), self.title.clone());
-            return AgentActionExecution::Done(Ok(pending.settle_loaded(&committed, &title, Instant::now())));
-        }
         if wait == NavigationWait::Dispatched {
             return AgentActionExecution::Done(Ok(pending.dispatched(Instant::now())));
         }
         self.pending_navigation = Some(pending);
         AgentActionExecution::Pending
+    }
+
+    /// Classic `WebDriver` navigation under the action's remaining bound:
+    /// the session page-load timeout is lowered for this command and restored
+    /// afterwards. Hitting it reports `timed_out` with the URL the browser
+    /// committed meanwhile (the navigation itself keeps running); any other
+    /// error is a failed navigation.
+    fn navigate_classic_bounded(
+        &mut self,
+        url: &str,
+        pending: &mut PendingNavigation,
+        event_tx: &BrowserEventSender,
+    ) -> Result<crate::BrowserControlValue, BrowserControlFailure> {
+        let url = normalize_navigation_target(url);
+        let previous_url = self.url.clone();
+        let bound_millis = u64::try_from(pending.remaining(Instant::now()).as_millis())
+            .unwrap_or(u64::MAX)
+            .max(1);
+        let bounded = bound_millis < PAGE_LOAD_TIMEOUT_MILLIS;
+        if bounded {
+            let _ = self.classic_post("timeouts", &json!({ "pageLoad": bound_millis }));
+        }
+        self.begin_navigation();
+        let _ = event_tx.send(BrowserEvent::Loading(true));
+        let result = self
+            .classic_navigation_post("url", &json!({ "url": &url }))
+            .and_then(|_| self.classic_get("url"))
+            .and_then(|response| {
+                classic_navigation_committed(&response, &url, &previous_url)
+                    .then_some(())
+                    .ok_or_else(|| "browser did not commit a reachable URL".to_string())
+            });
+        if bounded {
+            let _ = self.classic_post("timeouts", &json!({ "pageLoad": PAGE_LOAD_TIMEOUT_MILLIS }));
+        }
+        let now = Instant::now();
+        if let Err(error) = &result
+            && bounded
+            && (pending.remaining(now).is_zero() || error.contains("timeout"))
+        {
+            self.retain_frame_during_navigation = false;
+            self.navigation_failed = false;
+            if let Ok(response) = self.classic_get("url")
+                && let Some(current) = webdriver_value(&response).and_then(Value::as_str)
+            {
+                let current = normalize_url(current).to_string();
+                if current != self.url {
+                    self.url = current;
+                    self.coordination_dirty = true;
+                    let _ = event_tx.send(BrowserEvent::UrlChanged(self.url.clone()));
+                }
+            }
+            self.frames.demand();
+            let committed = (self.url != previous_url).then(|| self.url.clone());
+            return Ok(pending.settle_timed_out(committed.as_deref(), now));
+        }
+        self.finish_page(result, &format!("navigation to {url}"), event_tx)
+            .map_err(|error| BrowserControlFailure::new("navigation_failed", error))?;
+        let (committed, title) = (self.url.clone(), self.title.clone());
+        Ok(pending.settle_loaded(&committed, &title, Instant::now()))
     }
 
     /// Send `browsingContext.navigate` without waiting for its reply. Firefox
@@ -117,7 +175,13 @@ impl Driver {
                 .and_then(Value::as_str)
                 .unwrap_or("the browser rejected the navigation");
             self.fail_agent_navigation(event_tx, &format!("could not navigate: {message}"));
+            return;
         }
+        let navigation = response
+            .pointer("/result/navigation")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty());
+        self.attach_navigation_id(navigation);
     }
 
     fn fail_agent_navigation(&mut self, event_tx: &BrowserEventSender, message: &str) {
@@ -125,22 +189,44 @@ impl Driver {
         self.frames.interaction_started_at = None;
         let _ = event_tx.send(BrowserEvent::NavigationFailed(message.to_string()));
         let _ = event_tx.send(BrowserEvent::Loading(false));
-        self.observe_navigation_signal(NavigationSignal::Failed(message));
+        self.observe_navigation_signal(NavigationSignal::Failed { message, id: None });
     }
 
-    /// Map a `BiDi` navigation-complete event onto the pending navigation.
-    pub(super) fn settle_navigation_from_bidi(&mut self, method: &str) {
+    /// The `browsingContext.navigate` reply named the navigation; attribute
+    /// any held-back event.
+    pub(super) fn attach_navigation_id(&mut self, navigation: Option<&str>) {
+        let now = Instant::now();
+        let settled = self
+            .pending_navigation
+            .as_mut()
+            .and_then(|pending| pending.attach_id(navigation, now));
+        if let Some(result) = settled
+            && let Some(pending) = self.pending_navigation.take()
+        {
+            self.complete_agent_action(&pending.request, result);
+        }
+    }
+
+    /// Map a `BiDi` navigation-complete event, identified by its navigation
+    /// id, onto the pending navigation.
+    pub(super) fn settle_navigation_from_bidi(&mut self, method: &str, navigation: Option<&str>) {
         let url = self.url.clone();
-        tracing::debug!(target: "browser", method, pending = self.pending_navigation.is_some(), "bidi navigation event");
+        tracing::debug!(target: "browser", method, navigation, pending = self.pending_navigation.is_some(), "bidi navigation event");
         if method.ends_with("fragmentNavigated") {
-            self.observe_navigation_signal(NavigationSignal::SameDocument(&url));
+            self.observe_navigation_signal(NavigationSignal::SameDocument {
+                url: &url,
+                id: navigation,
+            });
             return;
         }
-        self.observe_navigation_signal(NavigationSignal::Committed(&url));
+        self.observe_navigation_signal(NavigationSignal::Committed {
+            url: &url,
+            id: navigation,
+        });
         if method == "browsingContext.load" {
-            self.observe_navigation_signal(NavigationSignal::Load);
+            self.observe_navigation_signal(NavigationSignal::Load { id: navigation });
         } else {
-            self.observe_navigation_signal(NavigationSignal::DomContentLoaded);
+            self.observe_navigation_signal(NavigationSignal::DomContentLoaded { id: navigation });
         }
     }
 

@@ -50,7 +50,10 @@ shell commands, files, or other MCP servers.
   `elapsed_millis`, and `state`. Check `completed`: a wait that exceeds
   `timeout_millis` returns `state: timed_out` with the latest page state so the
   caller can inspect or retry, while unreachable destinations and rejected
-  commands are errors audited as failed.
+  commands are errors audited as failed. `timeout_millis` accepts 1000-60000
+  ms; smaller values are raised to 1000 so the typed outcome can be reported.
+  Safari's classic WebDriver has no dispatch-only navigation, so there every
+  wait returns once the page loaded or the bound elapsed.
 - `browser_snapshot` and `browser_query` return bounded semantic nodes with
   short-lived refs. Snapshots keep iframe boundaries discoverable even when
   cross-origin policy prevents inspecting the frame document.

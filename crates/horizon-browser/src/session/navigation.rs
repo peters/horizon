@@ -63,6 +63,22 @@ impl DriverState {
         AgentActionExecution::Pending
     }
 
+    /// The `Page.navigate` reply named the navigation's loader (or none for a
+    /// same-document change); attribute any held-back commit.
+    pub(super) fn attach_navigation_id(&mut self, loader_id: Option<&str>) {
+        let now = Instant::now();
+        let settled = self
+            .pending_navigation
+            .as_mut()
+            .and_then(|pending| pending.attach_id(loader_id, now));
+        if let Some(result) = settled
+            && let Some(pending) = self.pending_navigation.take()
+        {
+            tracing::debug!(target: "browser", action_id = %pending.request.action_id, "agent navigation settled on dispatch reply");
+            self.complete_agent_action(&pending.request, result);
+        }
+    }
+
     /// Feed a page signal to the pending navigation and complete the action
     /// once it settles.
     pub(super) fn observe_navigation_signal(&mut self, signal: NavigationSignal<'_>) {

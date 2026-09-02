@@ -256,7 +256,8 @@ pub(crate) struct NavigateInput {
     /// is bounded by `timeout_millis`; on expiry the result reports
     /// `state: "timed_out"` with the latest page state instead of failing.
     pub(crate) wait: Option<NavigateWait>,
-    /// Per-action timeout in milliseconds (1-60000).
+    /// Navigation bound in milliseconds (1000-60000, default 15000); values
+    /// below 1000 are raised so the typed `timed_out` outcome can be reported.
     pub(crate) timeout_millis: Option<u64>,
 }
 
@@ -282,7 +283,8 @@ pub(crate) struct NavigateOutput {
     pub(crate) loading: bool,
     /// The committed URL differs from the requested destination.
     pub(crate) redirected: bool,
-    /// Time from dispatch in the browser process until this report.
+    /// Time from the caller queuing the action until this report; it
+    /// includes queue latency, so it measures the caller's wall-clock wait.
     pub(crate) elapsed_millis: u64,
 }
 

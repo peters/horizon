@@ -22,16 +22,31 @@ pub(crate) enum AgentActionExecution {
 }
 
 /// A page signal relevant to a navigation in flight.
+/// A page signal with the backend's navigation identity when it carries one
+/// (Chromium loader ids, `BiDi` navigation ids); classic `WebDriver` has none.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum NavigationSignal<'a> {
     /// The top-level document committed at this URL.
-    Committed(&'a str),
+    Committed {
+        url: &'a str,
+        id: Option<&'a str>,
+    },
     /// A same-document (fragment or history API) change to this URL.
-    SameDocument(&'a str),
-    DomContentLoaded,
-    Load,
+    SameDocument {
+        url: &'a str,
+        id: Option<&'a str>,
+    },
+    DomContentLoaded {
+        id: Option<&'a str>,
+    },
+    Load {
+        id: Option<&'a str>,
+    },
     /// The navigation failed after dispatch (unreachable destination).
-    Failed(&'a str),
+    Failed {
+        message: &'a str,
+        id: Option<&'a str>,
+    },
     /// The document title became known.
     Title(&'a str),
 }
@@ -47,6 +62,40 @@ pub(crate) struct PendingNavigation {
     title: Option<String>,
     dom_content_loaded: bool,
     loaded: bool,
+    /// Whether the backend has answered the dispatch; until then a commit
+    /// or failure cannot be attributed and is held in `deferred`.
+    dispatch_known: bool,
+    /// Backend identity of this navigation, once the dispatch reply names it.
+    expected_id: Option<String>,
+    deferred: Option<DeferredSignal>,
+}
+
+/// A commit or failure observed before the dispatch reply identified the
+/// navigation it belongs to.
+#[derive(Debug)]
+enum DeferredSignal {
+    Committed { url: String, id: Option<String> },
+    SameDocument { url: String, id: Option<String> },
+    Failed { message: String, id: Option<String> },
+}
+
+impl DeferredSignal {
+    fn id(&self) -> Option<&str> {
+        match self {
+            Self::Committed { id, .. } | Self::SameDocument { id, .. } | Self::Failed { id, .. } => id.as_deref(),
+        }
+    }
+
+    fn signal(&self) -> NavigationSignal<'_> {
+        match self {
+            Self::Committed { url, id } => NavigationSignal::Committed { url, id: id.as_deref() },
+            Self::SameDocument { url, id } => NavigationSignal::SameDocument { url, id: id.as_deref() },
+            Self::Failed { message, id } => NavigationSignal::Failed {
+                message,
+                id: id.as_deref(),
+            },
+        }
+    }
 }
 
 pub(crate) type NavigationResult = Result<BrowserControlValue, BrowserControlFailure>;
@@ -82,6 +131,31 @@ impl PendingNavigation {
             title: None,
             dom_content_loaded: false,
             loaded: false,
+            dispatch_known: false,
+            expected_id: None,
+            deferred: None,
+        }
+    }
+
+    /// The backend answered the dispatch, naming the navigation (or `None`
+    /// when the backend gives none, as for same-document changes). A commit
+    /// or failure held back until now is applied if it belongs to this
+    /// navigation and dropped otherwise, so an earlier navigation still in
+    /// flight cannot settle this one.
+    pub(crate) fn attach_id(&mut self, id: Option<&str>, now: Instant) -> Option<NavigationResult> {
+        self.dispatch_known = true;
+        self.expected_id = id.map(str::to_string);
+        let deferred = self.deferred.take()?;
+        if !self.correlates(deferred.id()) {
+            return None;
+        }
+        self.apply(deferred.signal(), now)
+    }
+
+    fn correlates(&self, id: Option<&str>) -> bool {
+        match (self.expected_id.as_deref(), id) {
+            (Some(expected), Some(observed)) => expected == observed,
+            _ => true,
         }
     }
 
@@ -97,31 +171,67 @@ impl PendingNavigation {
 
     /// Apply one signal; `Some` when the action is settled.
     pub(crate) fn observe(&mut self, signal: NavigationSignal<'_>, now: Instant) -> Option<NavigationResult> {
+        let id = match signal {
+            NavigationSignal::Committed { id, .. }
+            | NavigationSignal::SameDocument { id, .. }
+            | NavigationSignal::DomContentLoaded { id }
+            | NavigationSignal::Load { id }
+            | NavigationSignal::Failed { id, .. } => id,
+            NavigationSignal::Title(_) => None,
+        };
+        if !self.correlates(id) {
+            return None;
+        }
+        if !self.dispatch_known && id.is_some() {
+            // Signals that name a navigation cannot be attributed before the
+            // dispatch reply names ours; hold the last one back.
+            self.deferred = match signal {
+                NavigationSignal::Committed { url, id } => Some(DeferredSignal::Committed {
+                    url: url.to_string(),
+                    id: id.map(str::to_string),
+                }),
+                NavigationSignal::SameDocument { url, id } => Some(DeferredSignal::SameDocument {
+                    url: url.to_string(),
+                    id: id.map(str::to_string),
+                }),
+                NavigationSignal::Failed { message, id } => Some(DeferredSignal::Failed {
+                    message: message.to_string(),
+                    id: id.map(str::to_string),
+                }),
+                NavigationSignal::DomContentLoaded { .. } | NavigationSignal::Load { .. } => self.deferred.take(),
+                NavigationSignal::Title(_) => unreachable!("titles carry no navigation id"),
+            };
+            return None;
+        }
+        self.apply(signal, now)
+    }
+
+    fn apply(&mut self, signal: NavigationSignal<'_>, now: Instant) -> Option<NavigationResult> {
         match signal {
-            NavigationSignal::Committed(url) => {
+            NavigationSignal::Committed { url, .. } => {
                 self.committed_url = Some(url.to_string());
                 self.title = None;
                 self.dom_content_loaded = false;
                 self.loaded = false;
             }
-            NavigationSignal::SameDocument(url) => {
+            NavigationSignal::SameDocument { url, .. } => {
                 self.committed_url = Some(url.to_string());
                 self.dom_content_loaded = true;
                 self.loaded = true;
             }
-            NavigationSignal::DomContentLoaded if self.committed_url.is_some() => self.dom_content_loaded = true,
-            NavigationSignal::Load if self.committed_url.is_some() => {
+            NavigationSignal::DomContentLoaded { .. } if self.committed_url.is_some() => self.dom_content_loaded = true,
+            NavigationSignal::Load { .. } if self.committed_url.is_some() => {
                 self.dom_content_loaded = true;
                 self.loaded = true;
             }
-            NavigationSignal::DomContentLoaded | NavigationSignal::Load => {}
+            NavigationSignal::DomContentLoaded { .. } | NavigationSignal::Load { .. } => {}
             NavigationSignal::Title(title) => {
                 if self.committed_url.is_some() && !title.is_empty() {
                     self.title = Some(title.to_string());
                 }
                 return None;
             }
-            NavigationSignal::Failed(message) => {
+            NavigationSignal::Failed { message, .. } => {
                 return Some(Err(BrowserControlFailure::new("navigation_failed", message)));
             }
         }
@@ -140,6 +250,18 @@ impl PendingNavigation {
 
     /// Settle a navigation the backend completed synchronously (classic
     /// `WebDriver` blocks until the document committed and loaded).
+    /// A classic backend's blocking navigation hit the action bound: report
+    /// `timed_out` with whatever the browser committed meanwhile.
+    pub(crate) fn settle_timed_out(&mut self, committed_url: Option<&str>, now: Instant) -> BrowserControlValue {
+        self.committed_url = committed_url.map(str::to_string);
+        self.outcome(NavigationState::TimedOut, now)
+    }
+
+    /// Remaining time before this navigation's bound elapses.
+    pub(crate) fn remaining(&self, now: Instant) -> Duration {
+        self.deadline.saturating_duration_since(now)
+    }
+
     pub(crate) fn settle_loaded(&mut self, committed_url: &str, title: &str, now: Instant) -> BrowserControlValue {
         self.committed_url = Some(committed_url.to_string());
         self.title = (!title.is_empty()).then(|| title.to_string());
@@ -188,7 +310,17 @@ impl PendingNavigation {
 /// redirect. Browsers add or drop a trailing slash on bare origins, so that
 /// difference alone is not a redirect.
 fn same_destination(requested: &str, committed: &str) -> bool {
-    requested == committed || requested.trim_end_matches('/') == committed.trim_end_matches('/')
+    requested == committed || bare_origin_variant(requested, committed) || bare_origin_variant(committed, requested)
+}
+
+/// `https://host` and `https://host/` name the same document because the
+/// browser adds the root slash itself; a trailing slash on a deeper path
+/// (`/docs` and `/docs/`) is a real redirect.
+fn bare_origin_variant(short: &str, long: &str) -> bool {
+    let bare_origin = short
+        .split_once("://")
+        .is_some_and(|(_, rest)| !rest.is_empty() && !rest.contains('/'));
+    bare_origin && long.len() == short.len() + 1 && long.starts_with(short) && long.ends_with('/')
 }
 
 #[cfg(test)]
@@ -228,10 +360,17 @@ mod tests {
     fn a_commit_wait_settles_on_the_committed_document() {
         let now = Instant::now();
         let mut pending = pending(NavigationWait::Commit, now);
-        assert!(pending.observe(NavigationSignal::DomContentLoaded, now).is_none());
+        assert!(
+            pending
+                .observe(NavigationSignal::DomContentLoaded { id: None }, now)
+                .is_none()
+        );
         assert!(pending.observe(NavigationSignal::Title("early"), now).is_none());
         let outcome = navigation(pending.observe(
-            NavigationSignal::Committed("https://example.test/start"),
+            NavigationSignal::Committed {
+                url: "https://example.test/start",
+                id: None,
+            },
             now + Duration::from_millis(40),
         ));
         assert_eq!(outcome.state, NavigationState::Committed);
@@ -249,7 +388,13 @@ mod tests {
     fn redirects_are_reported_but_a_trailing_slash_is_not_one() {
         let now = Instant::now();
         let mut pending = pending(NavigationWait::Commit, now);
-        let outcome = navigation(pending.observe(NavigationSignal::Committed("https://example.test/other"), now));
+        let outcome = navigation(pending.observe(
+            NavigationSignal::Committed {
+                url: "https://example.test/other",
+                id: None,
+            },
+            now,
+        ));
         assert!(outcome.redirected);
 
         let request = pending.request.clone();
@@ -261,8 +406,170 @@ mod tests {
             Duration::ZERO,
             now,
         );
-        let outcome = navigation(bare.observe(NavigationSignal::Committed("https://example.test/"), now));
+        let outcome = navigation(bare.observe(
+            NavigationSignal::Committed {
+                url: "https://example.test/",
+                id: None,
+            },
+            now,
+        ));
         assert!(!outcome.redirected);
+
+        let mut path = PendingNavigation::new(
+            bare.request.clone(),
+            "https://example.test/docs/".to_string(),
+            NavigationWait::Commit,
+            Duration::from_secs(1),
+            Duration::ZERO,
+            now,
+        );
+        let outcome = navigation(path.observe(
+            NavigationSignal::Committed {
+                url: "https://example.test/docs",
+                id: None,
+            },
+            now,
+        ));
+        assert!(outcome.redirected, "a trailing slash on a path is a real redirect");
+        assert!(same_destination("https://example.test/", "https://example.test"));
+        assert!(!same_destination("https://example.test/a", "https://example.test/a/"));
+    }
+
+    #[test]
+    fn signals_from_another_navigation_never_settle_a_pending_one() {
+        let now = Instant::now();
+        // The dispatch reply arrives first and names this navigation.
+        let mut named = pending(NavigationWait::DomContentLoaded, now);
+        assert!(named.attach_id(Some("loader-b"), now).is_none());
+        assert!(
+            named
+                .observe(
+                    NavigationSignal::Committed {
+                        url: "https://example.test/a",
+                        id: Some("loader-a")
+                    },
+                    now
+                )
+                .is_none(),
+            "an earlier navigation's commit is ignored"
+        );
+        assert!(
+            named
+                .observe(
+                    NavigationSignal::Failed {
+                        message: "a failed",
+                        id: Some("loader-a")
+                    },
+                    now
+                )
+                .is_none(),
+            "an earlier navigation's failure is ignored"
+        );
+        assert!(
+            named
+                .observe(
+                    NavigationSignal::Committed {
+                        url: "https://example.test/start",
+                        id: Some("loader-b")
+                    },
+                    now
+                )
+                .is_none()
+        );
+        assert!(
+            named
+                .observe(NavigationSignal::DomContentLoaded { id: Some("loader-a") }, now)
+                .is_none()
+        );
+        let outcome = navigation(named.observe(NavigationSignal::DomContentLoaded { id: Some("loader-b") }, now));
+        assert_eq!(outcome.state, NavigationState::DomContentLoaded);
+        assert_eq!(outcome.committed_url.as_deref(), Some("https://example.test/start"));
+
+        // The commit arrives before the dispatch reply: it is held back until
+        // the reply proves it belongs to this navigation.
+        let mut early = pending(NavigationWait::Commit, now);
+        assert!(
+            early
+                .observe(
+                    NavigationSignal::Committed {
+                        url: "https://example.test/start",
+                        id: Some("loader-b")
+                    },
+                    now
+                )
+                .is_none()
+        );
+        let outcome = navigation(early.attach_id(Some("loader-b"), now + Duration::from_millis(5)));
+        assert_eq!(outcome.state, NavigationState::Committed);
+        assert_eq!(outcome.elapsed_millis, 5);
+
+        // A held-back commit from another navigation is dropped when the reply
+        // names a different one, and the bound then reports no commit.
+        let mut foreign = pending(NavigationWait::Commit, now);
+        assert!(
+            foreign
+                .observe(
+                    NavigationSignal::Committed {
+                        url: "https://example.test/a",
+                        id: Some("loader-a")
+                    },
+                    now
+                )
+                .is_none()
+        );
+        assert!(foreign.attach_id(Some("loader-b"), now).is_none());
+        let outcome = navigation(foreign.tick(now + Duration::from_secs(1)));
+        assert_eq!(outcome.state, NavigationState::TimedOut);
+        assert!(outcome.committed_url.is_none());
+
+        // Failures carried by the dispatch reply itself have no id and apply
+        // at once; unidentified signals match once the reply arrived.
+        let mut reply_failure = pending(NavigationWait::Commit, now);
+        let failure = reply_failure
+            .observe(
+                NavigationSignal::Failed {
+                    message: "net::ERR_ABORTED",
+                    id: None,
+                },
+                now,
+            )
+            .expect("settled")
+            .expect_err("failed");
+        assert_eq!(failure.code, "navigation_failed");
+        let mut unnamed = pending(NavigationWait::Commit, now);
+        assert!(unnamed.attach_id(None, now).is_none());
+        let outcome = navigation(unnamed.observe(
+            NavigationSignal::SameDocument {
+                url: "https://example.test/start#x",
+                id: None,
+            },
+            now,
+        ));
+        assert_eq!(outcome.state, NavigationState::Committed);
+    }
+
+    #[test]
+    fn classic_backends_report_the_bound_with_whatever_committed() {
+        let now = Instant::now();
+        let mut pending = pending(NavigationWait::Commit, now);
+        assert_eq!(
+            pending.remaining(now + Duration::from_millis(400)),
+            Duration::from_millis(600)
+        );
+        let outcome = match pending.settle_timed_out(Some("https://example.test/slow"), now + Duration::from_secs(1)) {
+            BrowserControlValue::Navigation { navigation } => navigation,
+            other => panic!("unexpected value {other:?}"),
+        };
+        assert_eq!(outcome.state, NavigationState::TimedOut);
+        assert_eq!(outcome.committed_url.as_deref(), Some("https://example.test/slow"));
+        assert!(outcome.loading);
+        assert!(outcome.redirected);
+        assert_eq!(outcome.elapsed_millis, 1_000);
+        let no_commit = match pending.settle_timed_out(None, now + Duration::from_secs(1)) {
+            BrowserControlValue::Navigation { navigation } => navigation,
+            other => panic!("unexpected value {other:?}"),
+        };
+        assert!(no_commit.committed_url.is_none());
     }
 
     #[test]
@@ -270,22 +577,28 @@ mod tests {
         let now = Instant::now();
         let mut pending = pending(NavigationWait::DomContentLoaded, now);
         assert!(
-            pending.observe(NavigationSignal::Load, now).is_none(),
+            pending.observe(NavigationSignal::Load { id: None }, now).is_none(),
             "load before commit is the old page"
         );
         assert!(
             pending
-                .observe(NavigationSignal::Committed("https://example.test/start"), now)
+                .observe(
+                    NavigationSignal::Committed {
+                        url: "https://example.test/start",
+                        id: None
+                    },
+                    now
+                )
                 .is_none()
         );
         assert!(pending.observe(NavigationSignal::Title("Start"), now).is_none());
-        let outcome = navigation(pending.observe(NavigationSignal::DomContentLoaded, now));
+        let outcome = navigation(pending.observe(NavigationSignal::DomContentLoaded { id: None }, now));
         assert_eq!(outcome.state, NavigationState::DomContentLoaded);
         assert_eq!(outcome.title.as_deref(), Some("Start"));
         assert!(outcome.loading, "DOMContentLoaded precedes the load event");
 
         let mut loaded = pending_with_commit(now);
-        let outcome = navigation(loaded.observe(NavigationSignal::Load, now));
+        let outcome = navigation(loaded.observe(NavigationSignal::Load { id: None }, now));
         assert_eq!(outcome.state, NavigationState::DomContentLoaded);
         assert!(!outcome.loading);
     }
@@ -294,7 +607,13 @@ mod tests {
         let mut pending = pending(NavigationWait::DomContentLoaded, now);
         assert!(
             pending
-                .observe(NavigationSignal::Committed("https://example.test/start"), now)
+                .observe(
+                    NavigationSignal::Committed {
+                        url: "https://example.test/start",
+                        id: None
+                    },
+                    now
+                )
                 .is_none()
         );
         pending
@@ -304,7 +623,13 @@ mod tests {
     fn same_document_changes_commit_and_load_at_once() {
         let now = Instant::now();
         let mut pending = pending(NavigationWait::DomContentLoaded, now);
-        let outcome = navigation(pending.observe(NavigationSignal::SameDocument("https://example.test/start#a"), now));
+        let outcome = navigation(pending.observe(
+            NavigationSignal::SameDocument {
+                url: "https://example.test/start#a",
+                id: None,
+            },
+            now,
+        ));
         assert_eq!(outcome.state, NavigationState::DomContentLoaded);
         assert!(!outcome.loading);
     }
@@ -314,7 +639,13 @@ mod tests {
         let now = Instant::now();
         let mut pending = pending(NavigationWait::Commit, now);
         let failure = pending
-            .observe(NavigationSignal::Failed("net::ERR_CONNECTION_REFUSED"), now)
+            .observe(
+                NavigationSignal::Failed {
+                    message: "net::ERR_CONNECTION_REFUSED",
+                    id: None,
+                },
+                now,
+            )
             .expect("settled")
             .expect_err("failed");
         assert_eq!(failure.code, "navigation_failed");

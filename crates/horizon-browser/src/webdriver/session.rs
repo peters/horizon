@@ -642,7 +642,10 @@ impl Driver {
             let message = format!("could not navigate to {url}");
             let _ = event_tx.send(BrowserEvent::NavigationFailed(message.clone()));
             let _ = event_tx.send(BrowserEvent::Loading(false));
-            self.observe_navigation_signal(crate::navigation::NavigationSignal::Failed(&message));
+            self.observe_navigation_signal(crate::navigation::NavigationSignal::Failed {
+                message: &message,
+                id: params.get("navigation").and_then(Value::as_str),
+            });
             return;
         }
         let navigation_complete = bidi_navigation_complete(method);
@@ -669,7 +672,7 @@ impl Driver {
             let _ = event_tx.send(BrowserEvent::Loading(false));
             self.frames.demand();
             self.refresh_pending_at = Some(Instant::now() + Duration::from_millis(50));
-            self.settle_navigation_from_bidi(method);
+            self.settle_navigation_from_bidi(method, params.get("navigation").and_then(Value::as_str));
         } else if method.ends_with("contextDestroyed") {
             let destroyed = params.get("context").and_then(Value::as_str);
             if destroyed == self.context_id.as_deref() {

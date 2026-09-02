@@ -108,7 +108,7 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_navigate",
-        description = "Navigate a live browser panel through Horizon's audited backend-neutral control path and report a typed outcome. By default it returns once the top-level document committed (wait=commit); wait=dispatched returns after the backend accepted the command and wait=dom_content_loaded after DOMContentLoaded. The result carries requested_url, committed_url, title, loading, redirected, elapsed_millis and state; check completed, because a wait that exceeds timeout_millis returns state=timed_out with the latest page state instead of an error. Unreachable destinations and rejected commands are errors."
+        description = "Navigate a live browser panel through Horizon's audited backend-neutral control path and report a typed outcome. By default it returns once the top-level document committed (wait=commit); wait=dispatched returns after the backend accepted the command and wait=dom_content_loaded after DOMContentLoaded. The result carries requested_url, committed_url, title, loading, redirected, elapsed_millis and state; check completed, because a wait that exceeds timeout_millis (1000-60000 ms; smaller values are raised to 1000) returns state=timed_out with the latest page state instead of an error. Unreachable destinations and rejected commands are errors. Safari's classic WebDriver has no dispatch-only navigation: every wait returns once the page loaded or the bound elapsed."
     )]
     async fn browser_navigate(
         &self,
@@ -124,7 +124,7 @@ impl HorizonBrowserMcp {
                     wait: wait.into(),
                     timeout_millis: Some(engine_navigation_timeout(input.timeout_millis)),
                 },
-                input.timeout_millis,
+                Some(bounded_navigation_timeout(input.timeout_millis)),
             )
             .await
             .map_err(|error| error.to_string())?;
@@ -377,12 +377,23 @@ impl ServerHandler for HorizonBrowserMcp {
     }
 }
 
+/// Shortest navigation bound this server accepts: the engine reports its
+/// typed `timed_out` outcome on a 250 ms coordination tick, so smaller
+/// bounds could only end in this server's generic timeout.
+const MIN_NAVIGATION_TIMEOUT_MILLIS: u64 = 1_000;
+/// Margin between the engine's bound and this server's wait, so the typed
+/// report always arrives first.
+const NAVIGATION_TIMEOUT_MARGIN_MILLIS: u64 = 250;
+
+/// The wait this server applies to a navigation action.
+fn bounded_navigation_timeout(timeout_millis: Option<u64>) -> u64 {
+    crate::controller::bounded_action_timeout(timeout_millis).max(MIN_NAVIGATION_TIMEOUT_MILLIS)
+}
+
 /// Bound for the engine-side navigation wait: short enough that its typed
 /// `timed_out` report arrives before this server's own action timeout.
 fn engine_navigation_timeout(timeout_millis: Option<u64>) -> u64 {
-    crate::controller::bounded_action_timeout(timeout_millis)
-        .saturating_sub(250)
-        .max(250)
+    bounded_navigation_timeout(timeout_millis) - NAVIGATION_TIMEOUT_MARGIN_MILLIS
 }
 
 fn require_action_completed(action: ActKind, value: &BrowserControlValue) -> Result<(), String> {
@@ -530,9 +541,14 @@ mod tests {
 
         assert_eq!(engine_navigation_timeout(None), 14_750);
         assert_eq!(
+            bounded_navigation_timeout(Some(100)),
+            1_000,
+            "bounds below 1 s are raised"
+        );
+        assert_eq!(
             engine_navigation_timeout(Some(100)),
-            250,
-            "the engine bound never drops below 250 ms"
+            750,
+            "the engine always keeps a real margin under the server wait"
         );
         assert_eq!(
             engine_navigation_timeout(Some(600_000)),
