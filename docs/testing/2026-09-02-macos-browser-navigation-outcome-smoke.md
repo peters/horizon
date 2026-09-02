@@ -196,10 +196,10 @@ SMOKE-TEST: DONE
 
 The #367 report noted one Firefox gate attempt discarded after the Mac's temp
 volume hit `ENOSPC` before the wait lane; the clean rerun passed, but the host
-was left with about 3 GiB free. After the host was cleaned (merged-PR
+was left with about 3 GiB free. The host has since been cleaned (merged-PR
 worktrees and their build outputs, stale smoke roots, and the Homebrew cache
-removed; about 55 GiB free afterwards), the full gate is rerun once more on
-the merged tree so the closing record was produced on a healthy host.
+removed; about 55 GiB free afterwards). Rerun the full gate once more on the
+merged tree so that the closing record comes from a healthy host.
 
 Run sections 1 to 4 unchanged against the exact head named in the request on
 this PR. That head differs from `main` at `82d070c` only by this document:
