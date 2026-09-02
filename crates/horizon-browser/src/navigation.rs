@@ -166,7 +166,8 @@ impl PendingNavigation {
         self.dispatch_known = true;
         self.expected_id = id.map(str::to_string);
         let deferred = self.deferred.take()?;
-        if !self.correlates(deferred.id()) {
+        let cross_document = !matches!(deferred, DeferredSignal::SameDocument { .. });
+        if !self.correlates(deferred.id()) || (cross_document && self.foreign_to_id_less_dispatch(deferred.id())) {
             return None;
         }
         match deferred {
@@ -212,6 +213,13 @@ impl PendingNavigation {
         }
     }
 
+    /// A dispatch reply without an id means the backend ran a same-document
+    /// navigation; an identified cross-document commit or failure cannot be
+    /// ours then (it belongs to an earlier navigation still in flight).
+    fn foreign_to_id_less_dispatch(&self, id: Option<&str>) -> bool {
+        self.dispatch_known && self.expected_id.is_none() && id.is_some()
+    }
+
     /// Time an action spent queued before the driver picked it up.
     pub(crate) fn queued_for(request: &AgentAction, now_millis: i64) -> Duration {
         Duration::from_millis(u64::try_from(now_millis - request.requested_at_millis).unwrap_or(0))
@@ -233,6 +241,13 @@ impl PendingNavigation {
             NavigationSignal::Title(_) => None,
         };
         if !self.correlates(id) {
+            return None;
+        }
+        if matches!(
+            signal,
+            NavigationSignal::Committed { .. } | NavigationSignal::Failed { .. }
+        ) && self.foreign_to_id_less_dispatch(id)
+        {
             return None;
         }
         if let NavigationSignal::SameDocument { url, id: None } = signal
@@ -737,6 +752,75 @@ mod tests {
             outcome.committed_url.as_deref(),
             Some("https://example.test/start#section")
         );
+    }
+
+    #[test]
+    fn an_id_less_dispatch_rejects_identified_cross_document_signals() {
+        let now = Instant::now();
+        // Cross-document A is superseded by same-document B: A's loader-scoped
+        // commit arrives before B's id-less reply and must not settle B.
+        let mut pending = pending(NavigationWait::Commit, now);
+        assert!(
+            pending
+                .observe(
+                    NavigationSignal::Committed {
+                        url: "https://example.test/a",
+                        id: Some("loader-a")
+                    },
+                    now
+                )
+                .is_none()
+        );
+        assert!(
+            pending.attach_id(None, now).is_none(),
+            "the held cross-document commit is dropped"
+        );
+        assert!(
+            pending
+                .observe(
+                    NavigationSignal::Committed {
+                        url: "https://example.test/a",
+                        id: Some("loader-a")
+                    },
+                    now
+                )
+                .is_none(),
+            "identified commits stay foreign after an id-less dispatch"
+        );
+        assert!(
+            pending
+                .observe(
+                    NavigationSignal::Failed {
+                        message: "a failed",
+                        id: Some("loader-a")
+                    },
+                    now
+                )
+                .is_none()
+        );
+        let outcome = navigation(pending.observe(
+            NavigationSignal::SameDocument {
+                url: "https://example.test/start#x",
+                id: None,
+            },
+            now,
+        ));
+        assert_eq!(outcome.state, NavigationState::Committed);
+        assert_eq!(outcome.committed_url.as_deref(), Some("https://example.test/start#x"));
+
+        // A bound already exhausted in the queue reports timed_out before any
+        // dispatch would happen.
+        let request = pending.request.clone();
+        let expired = PendingNavigation::new(
+            request,
+            "https://example.test/start".to_string(),
+            NavigationWait::Commit,
+            Duration::from_millis(500),
+            Duration::from_millis(600),
+            now,
+        );
+        assert!(expired.remaining(now).is_zero());
+        assert_eq!(navigation(expired.tick(now)).state, NavigationState::TimedOut);
     }
 
     #[test]

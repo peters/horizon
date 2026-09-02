@@ -50,6 +50,12 @@ impl Driver {
             PendingNavigation::queued_for(request, crate::navigation::now_millis()),
             now,
         );
+        if let Some(expired) = pending.tick(now) {
+            // The bound elapsed while the action sat in the queue (for example
+            // behind a blocking classic navigation): report it without
+            // touching the page after the caller's deadline.
+            return AgentActionExecution::Done(expired);
+        }
         if self.config.browser.backend != BackendKind::FirefoxBidi {
             return AgentActionExecution::Done(self.navigate_classic_bounded(url, &mut pending, event_tx));
         }

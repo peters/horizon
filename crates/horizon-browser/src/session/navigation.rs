@@ -35,12 +35,6 @@ impl DriverState {
         let (wait, timeout_millis) = (*wait, *timeout_millis);
         let now = Instant::now();
         self.supersede_pending_navigation(now);
-        self.interaction_started_at.get_or_insert(now);
-        self.vertical_scrollbar_drag = None;
-        self.invalidate_scrollbar_layout();
-        if let Err(failure) = self.navigate_to(link, event_tx, frame_slot, url) {
-            return AgentActionExecution::Done(Err(failure));
-        }
         let pending = PendingNavigation::new(
             request.clone(),
             normalize_navigation_target(url),
@@ -49,6 +43,17 @@ impl DriverState {
             PendingNavigation::queued_for(request, crate::navigation::now_millis()),
             now,
         );
+        if let Some(expired) = pending.tick(now) {
+            // The bound elapsed while the action sat in the queue: report it
+            // without touching the page after the caller's deadline.
+            return AgentActionExecution::Done(expired);
+        }
+        self.interaction_started_at.get_or_insert(now);
+        self.vertical_scrollbar_drag = None;
+        self.invalidate_scrollbar_layout();
+        if let Err(failure) = self.navigate_to(link, event_tx, frame_slot, url) {
+            return AgentActionExecution::Done(Err(failure));
+        }
         if wait == NavigationWait::Dispatched {
             return AgentActionExecution::Done(Ok(pending.dispatched(Instant::now())));
         }
