@@ -1,5 +1,3 @@
-use std::time::{Duration, Instant};
-
 use horizon_browser::{BrowserControlAction, BrowserControlValue};
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
@@ -21,14 +19,12 @@ use crate::model::{
     ActInput, ActKind, ActionOutput, AuditInput, AuditOutput, BrowserListOutput, CreateInput, CreateOutput,
     EvaluateInput, EvaluateOutput, HandoffInput, HandoffOutput, NavigateInput, NavigateOutput, NetworkInput,
     NetworkOutput, NetworkWatchInput, NetworkWatchOutput, NodeOutput, NodesOutput, PanelInput, QueryInput,
-    SnapshotInput, SnapshotOutput, VisibilityInput, VisibilityOutput, WaitInput, WaitOutput, WaitState,
+    SnapshotInput, SnapshotOutput, VisibilityInput, VisibilityOutput, WaitInput, WaitOutput,
 };
 use crate::network_watch::NetworkWatchState;
 
 const DEFAULT_SNAPSHOT_NODES: u32 = 250;
 const DEFAULT_QUERY_RESULTS: u32 = 50;
-const DEFAULT_WAIT_TIMEOUT_MILLIS: u64 = 10_000;
-const DEFAULT_WAIT_POLL_MILLIS: u64 = 250;
 
 /// Stdio MCP service for live Horizon browser panels.
 #[derive(Clone, Debug)]
@@ -284,7 +280,7 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_wait",
-        description = "Wait for a CSS selector to become present, visible, or hidden using bounded audited queries."
+        description = "Wait for a CSS selector to become present, visible, or hidden as one audited engine-side action: the browser driver observes the page itself (no repeated queries) and returns the matched nodes and elapsed_millis, or a typed failure (wait_timeout, wait_navigation_invalidated when the page navigated, wait_ownership_lost, wait_handoff_pending, wait_superseded when a later wait on the same panel replaced it). timeout_millis is 1000-60000 (default 10000) and is enforced in full by the engine; poll_millis is accepted for compatibility and ignored."
     )]
     async fn browser_wait(&self, Parameters(input): Parameters<WaitInput>) -> Result<Json<WaitOutput>, String> {
         wait_for_selector(&self.controller, input).await.map(Json)
@@ -403,66 +399,48 @@ fn require_action_completed(action: ActKind, value: &BrowserControlValue) -> Res
     }
 }
 
+/// Shortest wait bound this server accepts; the engine observes on a 100 ms
+/// cadence and reports its typed timeout on a 250 ms coordination tick.
+const MIN_WAIT_TIMEOUT_MILLIS: u64 = 1_000;
+
+/// The wait this server applies to a `WaitForSelector` action.
+fn bounded_wait_timeout(timeout_millis: Option<u64>) -> u64 {
+    timeout_millis
+        .unwrap_or(horizon_browser::DEFAULT_WAIT_TIMEOUT_MILLIS)
+        .clamp(MIN_WAIT_TIMEOUT_MILLIS, MAX_ACTION_TIMEOUT_MILLIS)
+}
+
+/// One audited engine-side wait: the browser driver observes the selector
+/// itself and reports the matched nodes, the elapsed time, or a typed
+/// failure (`wait_timeout`, `wait_navigation_invalidated`,
+/// `wait_ownership_lost`, `wait_handoff_pending`, `wait_superseded`).
 async fn wait_for_selector(controller: &BrowserController, input: WaitInput) -> Result<WaitOutput, String> {
-    let timeout_millis = input
-        .timeout_millis
-        .unwrap_or(DEFAULT_WAIT_TIMEOUT_MILLIS)
-        .clamp(1, MAX_ACTION_TIMEOUT_MILLIS);
-    let poll_millis = input.poll_millis.unwrap_or(DEFAULT_WAIT_POLL_MILLIS).clamp(100, 2_000);
-    let started = Instant::now();
-    loop {
-        let remaining = timeout_millis.saturating_sub(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
-        if remaining == 0 {
-            return Err(format!(
-                "selector did not become {} within {timeout_millis} ms",
-                wait_state_name(input.state)
-            ));
-        }
-        let receipt = controller
-            .execute(
-                &input.panel_id,
-                BrowserControlAction::Query {
-                    selector: input.selector.clone(),
-                    max_results: DEFAULT_QUERY_RESULTS,
-                },
-                Some(remaining),
-            )
-            .await
-            .map_err(|error| error.to_string())?;
-        let BrowserControlValue::Nodes { nodes, .. } = receipt.value else {
-            return Err("browser returned an unexpected wait result".to_string());
-        };
-        if wait_satisfied(input.state, &nodes) {
-            return Ok(WaitOutput {
-                panel_id: input.panel_id,
-                action_id: receipt.action_id,
-                state: wait_state_name(input.state).to_string(),
-                nodes: nodes.into_iter().map(NodeOutput::from).collect(),
-            });
-        }
-        tokio::time::sleep(Duration::from_millis(poll_millis.min(remaining))).await;
+    let timeout_millis = bounded_wait_timeout(input.timeout_millis);
+    if let Some(poll_millis) = input.poll_millis {
+        tracing::debug!(target: "browser_mcp", poll_millis, "browser_wait poll_millis is ignored; the engine observes the page itself");
     }
-}
-
-fn wait_satisfied(state: WaitState, nodes: &[horizon_browser::BrowserNode]) -> bool {
-    match state {
-        WaitState::Present => !nodes.is_empty(),
-        WaitState::Visible => nodes.iter().any(|node| node.visible),
-        WaitState::Hidden => nodes.iter().all(|node| !node.visible),
-    }
-}
-
-const fn wait_state_name(state: WaitState) -> &'static str {
-    match state {
-        WaitState::Present => "present",
-        WaitState::Visible => "visible",
-        WaitState::Hidden => "hidden",
-    }
+    let receipt = controller
+        .execute_engine_bounded(
+            &input.panel_id,
+            BrowserControlAction::WaitForSelector {
+                selector: input.selector,
+                state: input.state.into(),
+                timeout_millis: Some(timeout_millis),
+            },
+            timeout_millis,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    let BrowserControlValue::Wait { wait } = receipt.value else {
+        return Err("browser returned an unexpected wait result".to_string());
+    };
+    Ok(WaitOutput::from_outcome(input.panel_id, receipt.action_id, wait))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::WaitState;
 
     #[test]
     fn server_exposes_only_the_mcp_contract() {
@@ -555,20 +533,28 @@ mod tests {
     }
 
     #[test]
-    fn wait_states_are_exact() {
-        let visible = horizon_browser::BrowserNode {
-            reference: "g1s1e1".to_string(),
-            role: "button".to_string(),
-            name: "Continue".to_string(),
-            text: String::new(),
-            visible: true,
-            enabled: true,
-            bounds: None,
-        };
-        assert!(wait_satisfied(WaitState::Present, std::slice::from_ref(&visible)));
-        assert!(wait_satisfied(WaitState::Visible, std::slice::from_ref(&visible)));
-        assert!(!wait_satisfied(WaitState::Hidden, &[visible]));
-        assert!(wait_satisfied(WaitState::Hidden, &[]));
+    fn wait_inputs_map_to_one_bounded_engine_action() {
+        assert_eq!(bounded_wait_timeout(None), 10_000);
+        assert_eq!(bounded_wait_timeout(Some(10)), 1_000, "bounds below 1 s are raised");
+        assert_eq!(bounded_wait_timeout(Some(600_000)), 60_000);
+        let state: horizon_browser::SelectorState = WaitState::Hidden.into();
+        assert_eq!(state, horizon_browser::SelectorState::Hidden);
+        let output = WaitOutput::from_outcome(
+            "panel".to_string(),
+            "action".to_string(),
+            horizon_browser::WaitOutcome {
+                state: horizon_browser::SelectorState::Visible,
+                generation: 2,
+                revision: 3,
+                nodes: Vec::new(),
+                elapsed_millis: 1_480,
+                polls: 15,
+            },
+        );
+        assert_eq!(output.state, "visible");
+        assert_eq!(output.elapsed_millis, 1_480);
+        assert_eq!(output.polls, 15);
+        assert_eq!((output.generation, output.revision), (2, 3));
     }
 
     #[test]

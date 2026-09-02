@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Horizon Browser Smoke - Delayed Element</title>
+  </head>
+  <body>
+    <h1>Delayed element fixture</h1>
+    <p id="early-marker">visible until the delayed element arrives</p>
+    <p id="removed-marker">removed from the document after the delay</p>
+    <p id="attr-marker" hidden>shown by removing the hidden attribute after the delay</p>
+    <script>
+      // Deterministic DOM change after load (default 1.5 s, `?delay=<ms>`):
+      // the early marker hides and the late marker appears, so engine-side
+      // waits can be timed.
+      const delay = Number(new URLSearchParams(location.search).get("delay")) || 1500;
+      window.setTimeout(() => {
+        document.getElementById("early-marker").style.display = "none";
+        document.getElementById("removed-marker").remove();
+        document.getElementById("attr-marker").removeAttribute("hidden");
+        const late = document.createElement("p");
+        late.id = "late-marker";
+        late.textContent = "late element arrived";
+        document.body.appendChild(late);
+      }, delay);
+    </script>
+  </body>
+</html>

@@ -37,6 +37,7 @@ mod network;
 mod semantic;
 mod shutdown;
 mod startup;
+mod wait;
 
 use clipboard::ClipboardState;
 pub(crate) use command_queue::CommandReceiver;
@@ -320,6 +321,7 @@ fn run_loop(
         let actions = state.tick_signals(event_tx);
         let _ = state.drain_agent_actions(link, event_tx, frame_slot, actions);
         state.tick_pending_navigation();
+        state.tick_pending_wait(link, event_tx, frame_slot);
 
         // 6. Chrome process liveness.
         if let Some(status) = chrome.child_status() {
@@ -415,6 +417,7 @@ struct DriverState {
     navigation_failed: bool,
     /// Agent navigation whose typed outcome is settled by page events.
     pending_navigation: Option<crate::navigation::PendingNavigation>,
+    pending_wait: Option<crate::wait::PendingWait>,
     /// In-flight `Page.navigate` request. The reply is routed asynchronously
     /// so a slow destination never blocks frames, input, or coordination.
     navigate_request_id: Option<u64>,
@@ -446,6 +449,9 @@ struct DriverState {
     last_signal_check: Instant,
     last_user_active_stamp: Option<Instant>,
     owner_seen: Option<String>,
+    /// Counts successful coordination reads; a deferred wait result is
+    /// released only under a later epoch than it was observed under.
+    signal_epoch: u64,
     handoff_seen: Option<String>,
     audit_sampler: crate::audit::BrowserAuditSampler,
     semantic: SemanticState,
@@ -482,6 +488,7 @@ impl DriverState {
             retain_frame_during_navigation: false,
             navigation_failed: false,
             pending_navigation: None,
+            pending_wait: None,
             navigate_request_id: None,
             screencast_request_id: None,
             clipboard: ClipboardState::default(),
@@ -505,6 +512,7 @@ impl DriverState {
             last_signal_check: Instant::now(),
             last_user_active_stamp: None,
             owner_seen: None,
+            signal_epoch: 0,
             handoff_seen: None,
             audit_sampler: crate::audit::BrowserAuditSampler::default(),
             semantic: SemanticState::default(),
@@ -596,6 +604,19 @@ impl DriverState {
         method: &str,
         params: &serde_json::Value,
     ) -> Result<serde_json::Value, CdpError> {
+        self.send_page_command_within(link, event_tx, frame_slot, method, params, CALL_TIMEOUT)
+    }
+
+    /// A page-session command that may block the driver for at most `timeout`.
+    pub(super) fn send_page_command_within(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        method: &str,
+        params: &serde_json::Value,
+        timeout: Duration,
+    ) -> Result<serde_json::Value, CdpError> {
         let Some(session) = self.session_id.clone() else {
             return Err(CdpError::NoPageSession {
                 method: method.to_string(),
@@ -604,7 +625,14 @@ impl DriverState {
         if method.starts_with("Runtime.") {
             self.ensure_page_runtime(link)?;
         }
-        self.call_and_ack(link, event_tx, frame_slot, method, params, Some(session.as_str()))
+        let stop_requested = Arc::clone(&self.stop_requested);
+        let outcome = link.call_and_drain_until(timeout, method, params, Some(session.as_str()), || {
+            stop_requested.load(Ordering::Acquire)
+        });
+        for message in outcome.drained {
+            self.handle_message(link, event_tx, frame_slot, message);
+        }
+        outcome.result
     }
 
     fn ensure_page_runtime(&mut self, link: &mut CdpLink) -> Result<(), CdpError> {

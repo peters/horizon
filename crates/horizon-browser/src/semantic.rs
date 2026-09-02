@@ -11,7 +11,7 @@ use serde_json::Value;
 
 pub use horizon_browser_protocol::{
     AgentActionResult, BrowserActionOutcome, BrowserBounds, BrowserControlFailure, BrowserControlValue, BrowserNode,
-    BrowserSnapshot, BrowserTarget, NavigationOutcome, NavigationState,
+    BrowserSnapshot, BrowserTarget, NavigationOutcome, NavigationState, SelectorState, WaitOutcome,
 };
 
 const MAX_CONTROL_RESULT_BYTES: usize = 1024 * 1024;
@@ -35,6 +35,12 @@ impl Default for SemanticState {
 }
 
 impl SemanticState {
+    /// Current page generation; it advances whenever a navigation invalidates
+    /// earlier references.
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
     pub(crate) fn invalidate(&mut self) {
         self.generation = self.generation.wrapping_add(1).max(1);
         self.revision = 0;

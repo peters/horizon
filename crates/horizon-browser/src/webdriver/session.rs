@@ -29,6 +29,7 @@ mod safari;
 mod scrollbar;
 mod semantic;
 mod shutdown;
+mod wait;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 const PAGE_LOAD_TIMEOUT_MILLIS: u64 = 50_000;
@@ -157,6 +158,7 @@ struct Driver {
     navigation_failed: bool,
     /// Agent navigation whose typed outcome is settled by `BiDi` events.
     pending_navigation: Option<crate::navigation::PendingNavigation>,
+    pending_wait: Option<crate::wait::PendingWait>,
     /// In-flight `browsingContext.navigate` sent without waiting: Firefox
     /// answers it only once the destination responds.
     navigate_request_id: Option<u64>,
@@ -165,14 +167,18 @@ struct Driver {
     /// Session page-load timeout a bounded classic navigation lowered and the
     /// loop still has to restore, once the typed outcome was published.
     classic_timeout_to_restore: Option<u64>,
-    /// While a bounded startup navigation is still loading, page state is
-    /// re-read every second until this instant or until the URL changes.
-    startup_refresh_until: Option<Instant>,
+    /// While a bounded classic navigation (startup or agent action) is still
+    /// loading after its bound, page state is re-read every second until this
+    /// instant or until the URL changes; the navigation counts as in flight.
+    classic_refresh_until: Option<Instant>,
     coordination_dirty: bool,
     last_coordination_write: Instant,
     last_signal_check: Instant,
     last_user_active_stamp: Option<Instant>,
     owner_seen: Option<String>,
+    /// Counts successful coordination reads; a deferred wait result is
+    /// released only under a later epoch than it was observed under.
+    signal_epoch: u64,
     handoff_seen: Option<String>,
     audit_sampler: crate::audit::BrowserAuditSampler,
     semantic: SemanticState,
@@ -254,11 +260,12 @@ pub(crate) fn run_webdriver(
         driver.tick_safari_input(event_tx);
         for request in driver.tick_coordination(event_tx) {
             // A blocking action later in the batch must not delay the typed
-            // timeout of a navigation dispatched earlier in it, and a
+            // timeout of a navigation or wait dispatched earlier in it, and a
             // navigation that hit its bound earlier in the batch must have its
             // session timeout restored and page state refreshed before the
             // next request runs.
             driver.tick_pending_navigation();
+            driver.tick_pending_wait();
             driver.tick_classic_timeout_restore();
             driver.tick_page_state_refresh(event_tx);
             driver.service_agent_request(&request, event_tx);
@@ -281,6 +288,7 @@ pub(crate) fn run_webdriver(
         driver.tick_classic_timeout_restore();
         driver.tick_page_state_refresh(event_tx);
         driver.tick_pending_navigation();
+        driver.tick_pending_wait();
         driver.write_coordination(false);
         if let Some(status) = driver.service.process.child_status() {
             let _ = event_tx.send(BrowserEvent::Stopped { code: status.code() });
@@ -378,16 +386,18 @@ impl Driver {
             retain_frame_during_navigation: false,
             navigation_failed: false,
             pending_navigation: None,
+            pending_wait: None,
             navigate_request_id: None,
             pending_classic_history_start: None,
             refresh_pending_at: None,
             classic_timeout_to_restore: None,
-            startup_refresh_until: None,
+            classic_refresh_until: None,
             coordination_dirty: true,
             last_coordination_write: Instant::now(),
             last_signal_check: Instant::now(),
             last_user_active_stamp: None,
             owner_seen: None,
+            signal_epoch: 0,
             handoff_seen: None,
             audit_sampler: crate::audit::BrowserAuditSampler::default(),
             semantic: SemanticState::default(),
@@ -725,20 +735,6 @@ impl Driver {
         if !self.retain_frame_during_navigation {
             self.frames.invalidate();
         }
-    }
-
-    fn begin_navigation(&mut self) {
-        self.challenge_loop.document_navigation_started();
-        self.pending_classic_history_start = None;
-        self.semantic.invalidate();
-        self.generation = self.generation.wrapping_add(1);
-        self.retain_frame_during_navigation = true;
-        self.navigation_failed = false;
-        self.refresh_pending_at = None;
-        // A replacement navigation must not inherit the startup poll's cutoff.
-        self.startup_refresh_until = None;
-        self.scrollbar.reset();
-        self.frames.suspend_for_navigation();
     }
 }
 

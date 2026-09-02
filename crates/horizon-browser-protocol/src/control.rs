@@ -6,6 +6,7 @@
 
 use crate::{
     BrowserCommand, BrowserInput, BrowserKey, BrowserNetworkCaptureOptions, BrowserNetworkOperation, BrowserTarget,
+    SelectorState,
 };
 
 const MAX_NAVIGATION_BYTES: usize = 8 * 1024;
@@ -20,6 +21,10 @@ pub const MAX_CLICK_COUNT: u32 = 3;
 pub const MAX_NAVIGATION_TIMEOUT_MILLIS: u64 = 60_000;
 /// Wait applied when a navigation action does not carry its own bound.
 pub const DEFAULT_NAVIGATION_TIMEOUT_MILLIS: u64 = 15_000;
+/// Longest bounded selector wait an engine performs for one action.
+pub const MAX_WAIT_TIMEOUT_MILLIS: u64 = 60_000;
+/// Selector wait applied when the action does not carry its own bound.
+pub const DEFAULT_WAIT_TIMEOUT_MILLIS: u64 = 10_000;
 
 /// How far a navigation action waits before it reports its outcome.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -106,6 +111,16 @@ pub enum BrowserControlAction {
         selector: String,
         max_results: u32,
     },
+    /// Observe a selector inside the engine until it reaches `state`, as one
+    /// audited action instead of repeated queries.
+    WaitForSelector {
+        selector: String,
+        state: SelectorState,
+        /// Bound in milliseconds; a `wait_timeout` failure reports the
+        /// elapsed time and the last observation when it elapses.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout_millis: Option<u64>,
+    },
     /// Click the center of a visible element through the backend input path.
     Click {
         target: BrowserTarget,
@@ -157,6 +172,18 @@ impl BrowserControlAction {
                 validate_selector(selector)?;
                 validate_query_limit(*max_results)
             }
+            Self::WaitForSelector {
+                selector,
+                timeout_millis,
+                ..
+            } => {
+                validate_selector(selector)?;
+                match timeout_millis {
+                    Some(0) => Err("wait timeout must be at least 1 ms"),
+                    Some(value) if *value > MAX_WAIT_TIMEOUT_MILLIS => Err("wait timeout exceeds the engine bound"),
+                    _ => Ok(()),
+                }
+            }
             Self::Click { target, count } => {
                 validate_target(target)?;
                 validate_click_count(*count)
@@ -200,6 +227,7 @@ impl BrowserControlAction {
             Self::Input { input } => Some(BrowserCommand::Input(input.clone())),
             Self::Snapshot { .. }
             | Self::Query { .. }
+            | Self::WaitForSelector { .. }
             | Self::Click { .. }
             | Self::Fill { .. }
             | Self::Scroll { .. }
@@ -439,6 +467,39 @@ mod tests {
 
         assert!(invalid_point.validate().is_err());
         assert!(oversized.validate().is_err());
+    }
+
+    #[test]
+    fn wait_actions_validate_selector_and_bound_and_stay_semantic() {
+        let wait = BrowserControlAction::WaitForSelector {
+            selector: "#late".to_string(),
+            state: SelectorState::Visible,
+            timeout_millis: Some(2_500),
+        };
+        assert!(wait.validate().is_ok());
+        assert!(wait.to_command().is_none(), "waits run in the engine's semantic path");
+        assert_eq!(
+            serde_json::to_value(&wait).expect("encode"),
+            serde_json::json!({ "type": "wait_for_selector", "selector": "#late", "state": "visible", "timeout_millis": 2500 })
+        );
+        assert_eq!(
+            BrowserControlAction::WaitForSelector {
+                selector: "[".to_string(),
+                state: SelectorState::Present,
+                timeout_millis: Some(MAX_WAIT_TIMEOUT_MILLIS + 1),
+            }
+            .validate(),
+            Err("wait timeout exceeds the engine bound")
+        );
+        assert_eq!(
+            BrowserControlAction::WaitForSelector {
+                selector: String::new(),
+                state: SelectorState::Present,
+                timeout_millis: None,
+            }
+            .validate(),
+            Err("selector must not be empty")
+        );
     }
 
     #[test]

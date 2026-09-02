@@ -65,8 +65,10 @@ cargo build
 ```
 
 The engine tests must include `navigation::tests::*` (pending-navigation
-state machine) and the MCP test
-`server::tests::navigation_outcomes_map_to_typed_tool_results`.
+state machine), `wait::tests::*` (pending-wait state machine), the MCP tests
+`server::tests::navigation_outcomes_map_to_typed_tool_results` and
+`server::tests::wait_inputs_map_to_one_bounded_engine_action`, and the host
+test `create_readiness_waits_for_the_backend_and_the_committed_first_page`.
 
 ## 3. Official MCP gate per backend
 
@@ -89,6 +91,31 @@ Each run must end with `MCP gate passed`, `gate exit=0` semantics (the runner
 exits 0), zero `audit_permission_findings`, zero `network_capture_findings`,
 and an empty `surviving_browser_processes` list in the final JSON line. Keep
 the printed smoke root's `logs/` for the report and delete the root afterwards.
+
+What the create lane proves on every backend (`create_panel` in
+`scripts/browser-smoke/mcp_gate.py`, stacked PR for #348):
+
+- `browser_create` with the fixture URL returns `navigation: "committed"`,
+  the panel already reporting the committed `index.html` URL, an integer
+  `startup_millis`, and an immediate `browser_query` for `#smoke-input` finds
+  exactly one node. Record the printed `create_startup_millis` per backend in
+  the report (Firefox is expected to be the slowest, several seconds).
+
+What the wait lane proves on every backend (`exercise_wait_outcomes`, stacked
+PR for #349):
+
+- On `delayed.html?delay=3000`, `browser_wait` for `#late-marker` (visible)
+  settles from the engine's own observation with one matched node,
+  `elapsed_millis` between 1200 and 8000 (about 3000 minus the gap between
+  the navigate returning and the wait being queued), and at least three
+  `polls`; `#early-marker` (hidden)
+  settles with `polls: 1`; a selector that never appears fails with the typed
+  `wait_timeout` code at a 1.5 s bound; and the final JSON's `wait_outcomes`
+  shows `audit_entries_per_wait` of exactly 3 for all three wait action ids;
+  removal (`#removed-marker` hidden), an attribute change (`#attr-marker`
+  visible), and a style change (`#early-marker` hidden) are each observed as
+  a delayed transition on a fresh `delayed.html?delay=4000` load and reported
+  under `wait_outcomes.transitions` with three audit entries each.
 
 What the navigation lane proves on every backend (`exercise_navigation_outcomes`
 in `scripts/browser-smoke/mcp_gate.py`):
@@ -141,7 +168,7 @@ dimensions in the report; do not commit screenshots.
 Before execution, post on the PR:
 
 ```text
-SMOKE-TEST REQUEST Mac Studio/macOS — plan: docs/testing/2026-09-02-macos-browser-navigation-outcome-smoke.md — scope: native build and matrix, Safari/Firefox/Chrome MCP gates with typed navigation outcomes, visual and lifecycle review
+SMOKE-TEST REQUEST Mac Studio/macOS — plan: docs/testing/2026-09-02-macos-browser-navigation-outcome-smoke.md — scope: native build and matrix, Safari/Firefox/Chrome MCP gates with typed navigation outcomes, create readiness, and engine-side waits, visual and lifecycle review
 ```
 
 If a behavior change is pushed, rerun every affected lane on the new SHA.
@@ -151,9 +178,9 @@ Post the final report as:
 ```text
 SMOKE-TEST REPORT (Mac Studio/macOS <version>, <arch>, <final-sha>)
 - exact-head/native build and matrix: pass | fail — ...
-- Safari MCP gate (typed navigation outcomes): pass | fail — ...
-- Firefox MCP gate (typed navigation outcomes, bounded timeout): pass | fail — ...
-- Chrome MCP gate (typed navigation outcomes, bounded timeout): pass | fail — ...
+- Safari MCP gate (typed navigation outcomes, create readiness, engine-side waits): pass | fail — ... (create_startup_millis, wait_outcomes)
+- Firefox MCP gate (typed navigation outcomes, bounded timeout, create readiness, engine-side waits): pass | fail — ... (create_startup_millis, wait_outcomes)
+- Chrome MCP gate (typed navigation outcomes, bounded timeout, create readiness, engine-side waits): pass | fail — ... (create_startup_millis, wait_outcomes)
 - visual URL chip / redirect / slow page: pass | fail — ...
 - lifecycle and process isolation: pass | fail — ...
 Summary: <evidence locations, backend notes, remaining concerns>

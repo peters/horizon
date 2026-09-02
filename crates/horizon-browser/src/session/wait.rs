@@ -1,0 +1,176 @@
+//! Selector waits on the Chromium driver: one audited action observed from
+//! the driver loop at a bounded cadence instead of repeated agent queries.
+
+use std::sync::Arc;
+use std::time::Instant;
+
+use crate::frames::FrameSlot;
+use crate::navigation::{AgentActionExecution, PendingNavigation, now_millis};
+use crate::wait::{PendingWait, WAIT_QUERY_RESULTS, WaitResult, WaitStop};
+use crate::{AgentAction, BrowserControlAction, BrowserControlFailure, BrowserControlValue};
+
+use super::{BrowserEventSender, DriverState};
+
+impl DriverState {
+    /// Start a `WaitForSelector` action: observe once now, then keep it
+    /// pending until the condition, the bound, or a cancellation.
+    pub(super) fn begin_agent_wait(
+        &mut self,
+        link: &mut crate::cdp::CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        request: &AgentAction,
+    ) -> AgentActionExecution {
+        let BrowserControlAction::WaitForSelector {
+            selector,
+            state,
+            timeout_millis,
+        } = &request.action
+        else {
+            return AgentActionExecution::Done(Err(BrowserControlFailure::new(
+                "invalid_action_state",
+                "a wait was requested for a non-wait action",
+            )));
+        };
+        let now = Instant::now();
+        let mut pending = PendingWait::new(
+            request.clone(),
+            selector.clone(),
+            *state,
+            *timeout_millis,
+            PendingNavigation::queued_for(request, now_millis()),
+            self.semantic.generation(),
+            now,
+        );
+        if let Some(expired) = pending.tick(self.semantic.generation(), now) {
+            // The bound elapsed while the action sat in the queue: report it
+            // without superseding a wait that is still valid.
+            return AgentActionExecution::Done(expired);
+        }
+        self.supersede_pending_wait(now);
+        // The first observation runs under the same guards as every later one:
+        // an already-expired bound, a lost lease, a pending handoff, or an
+        // uncommitted navigation must not let it succeed against the old page.
+        if let Some(result) = self.advance_wait(link, event_tx, frame_slot, &mut pending, now, true) {
+            return AgentActionExecution::Done(result);
+        }
+        tracing::debug!(target: "browser", action_id = %request.action_id, ?state, timeout_millis, "agent wait pending");
+        self.pending_wait = Some(pending);
+        AgentActionExecution::Pending
+    }
+
+    /// Advance the pending wait: cancel on a handoff, a lost lease, or a new
+    /// page generation; time out at the bound; otherwise observe when due.
+    pub(super) fn tick_pending_wait(
+        &mut self,
+        link: &mut crate::cdp::CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+    ) {
+        let Some(mut pending) = self.pending_wait.take() else {
+            return;
+        };
+        let now = Instant::now();
+        let observe = pending.poll_due(now);
+        let result = self.advance_wait(link, event_tx, frame_slot, &mut pending, now, observe);
+        match result {
+            Some(result) => {
+                tracing::debug!(target: "browser", action_id = %pending.request.action_id, ok = result.is_ok(), "agent wait settled");
+                self.complete_agent_action(&pending.request, result);
+            }
+            None => self.pending_wait = Some(pending),
+        }
+    }
+
+    /// Cancel on a handoff or lost lease, time out or invalidate at the bound
+    /// or a new page generation, otherwise observe when asked and no agent
+    /// navigation is still uncommitted.
+    fn advance_wait(
+        &mut self,
+        link: &mut crate::cdp::CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        pending: &mut PendingWait,
+        now: Instant,
+        observe: bool,
+    ) -> Option<WaitResult> {
+        if self.handoff_seen.is_some() {
+            return Some(pending.stopped(WaitStop::HandoffPending, now));
+        }
+        if self.owner_seen.as_deref() != Some(pending.request.actor.as_str()) {
+            return Some(pending.stopped(WaitStop::OwnershipLost, now));
+        }
+        if let Some(result) = pending.tick(self.semantic.generation(), now) {
+            return Some(result);
+        }
+        // A satisfied observation completes only after the signals have been
+        // re-read and events drained: the guards above ran again first.
+        if let Some(result) = pending.take_deferred(self.signal_epoch) {
+            return Some(result);
+        }
+        if self.navigation_in_flight() {
+            // The document is changing under this wait; it can only be judged
+            // against the new one, which is not what it was asked about.
+            pending.block_for_navigation();
+            return None;
+        }
+        if pending.blocked_by_navigation() {
+            return Some(pending.stopped(WaitStop::NavigationInvalidated, now));
+        }
+        if observe {
+            return match self.observe_wait(link, event_tx, frame_slot, pending, now) {
+                Some(Ok(result)) => {
+                    pending.defer(Ok(result), self.signal_epoch);
+                    self.request_signal_refresh();
+                    None
+                }
+                other => other,
+            };
+        }
+        None
+    }
+
+    /// Whether a document is still uncommitted: a pending agent navigation,
+    /// or any navigation the driver started (agent, user, or timed-out
+    /// action) whose commit or failure has not arrived yet.
+    fn navigation_in_flight(&self) -> bool {
+        self.pending_navigation.is_some() || (self.retain_frame_during_navigation && !self.navigation_failed)
+    }
+
+    fn observe_wait(
+        &mut self,
+        link: &mut crate::cdp::CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        pending: &mut PendingWait,
+        now: Instant,
+    ) -> Option<WaitResult> {
+        // The evaluation may block; give it no more than the remaining bound
+        // and judge the result against a fresh clock afterwards.
+        let budget = pending.observation_budget(now);
+        let observed = self.semantic_query_within(
+            link,
+            event_tx,
+            frame_slot,
+            &pending.selector,
+            WAIT_QUERY_RESULTS,
+            budget,
+        );
+        let now = Instant::now();
+        match observed {
+            Ok(BrowserControlValue::Nodes {
+                generation,
+                revision,
+                nodes,
+            }) => pending.observe(generation, revision, nodes, now),
+            Ok(_) => None,
+            Err(failure) => pending.observe_failure(failure, now),
+        }
+    }
+
+    fn supersede_pending_wait(&mut self, now: Instant) {
+        if let Some(pending) = self.pending_wait.take() {
+            self.complete_agent_action(&pending.request, pending.stopped(WaitStop::Superseded, now));
+        }
+    }
+}

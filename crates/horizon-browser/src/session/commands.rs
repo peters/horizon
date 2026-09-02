@@ -53,8 +53,9 @@ impl DriverState {
     ) -> bool {
         for request in actions {
             // A blocking action later in the batch must not delay the typed
-            // timeout of a navigation dispatched earlier in it.
+            // timeout of a navigation or wait dispatched earlier in it.
             self.tick_pending_navigation();
+            self.tick_pending_wait(link, event_tx, frame_slot);
             if let Err(message) = request.action.validate() {
                 self.audit_agent_action(&request, BrowserAuditStatus::Rejected);
                 self.complete_agent_action(&request, Err(BrowserControlFailure::new("invalid_input", message)));
@@ -66,6 +67,15 @@ impl DriverState {
                 // completes here, everything else stays pending.
                 if let AgentActionExecution::Done(result) =
                     self.begin_agent_navigation(link, event_tx, frame_slot, &request)
+                {
+                    self.complete_agent_action(&request, result);
+                }
+                continue;
+            }
+            if matches!(request.action, crate::BrowserControlAction::WaitForSelector { .. }) {
+                // Waits are observed from the driver loop; only a wait that
+                // is already satisfied (or invalid) completes here.
+                if let AgentActionExecution::Done(result) = self.begin_agent_wait(link, event_tx, frame_slot, &request)
                 {
                     self.complete_agent_action(&request, result);
                 }

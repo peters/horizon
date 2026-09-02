@@ -34,6 +34,10 @@ impl Driver {
         match &request.action {
             BrowserControlAction::Snapshot { max_nodes } => self.semantic_snapshot(*max_nodes),
             BrowserControlAction::Query { selector, max_results } => self.semantic_query(selector, *max_results),
+            BrowserControlAction::WaitForSelector { .. } => Err(BrowserControlFailure::new(
+                "invalid_action_state",
+                "selector waits are observed from the driver loop",
+            )),
             BrowserControlAction::Click { target, count } => self.semantic_click(target, *count, event_tx),
             BrowserControlAction::Fill { target, value } => self.semantic_fill(target, value, event_tx),
             BrowserControlAction::Scroll {
@@ -70,12 +74,27 @@ impl Driver {
         })
     }
 
-    fn semantic_query(
+    pub(super) fn semantic_query(
         &mut self,
         selector: &str,
         max_results: u32,
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
         let value = self.evaluate_json(&scan_expression(Some(selector), max_results))?;
+        self.register_query(value)
+    }
+
+    /// A selector query whose script call may block for at most `timeout`.
+    pub(super) fn semantic_query_within(
+        &mut self,
+        selector: &str,
+        max_results: u32,
+        timeout: std::time::Duration,
+    ) -> Result<BrowserControlValue, BrowserControlFailure> {
+        let value = self.evaluate_json_within(&scan_expression(Some(selector), max_results), Some(timeout))?;
+        self.register_query(value)
+    }
+
+    fn register_query(&mut self, value: Value) -> Result<BrowserControlValue, BrowserControlFailure> {
         let (generation, revision, nodes) = self.semantic.register_nodes(value)?;
         Ok(BrowserControlValue::Nodes {
             generation,
@@ -164,12 +183,20 @@ impl Driver {
     }
 
     fn evaluate_json(&self, expression: &str) -> Result<Value, BrowserControlFailure> {
-        let response = self
-            .classic_post(
-                "execute/sync",
-                &json!({ "script": format!("return ({expression});"), "args": [] }),
-            )
-            .map_err(|error| BrowserControlFailure::new("javascript_error", error))?;
+        self.evaluate_json_within(expression, None)
+    }
+
+    fn evaluate_json_within(
+        &self,
+        expression: &str,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<Value, BrowserControlFailure> {
+        let body = json!({ "script": format!("return ({expression});"), "args": [] });
+        let response = match timeout {
+            Some(timeout) => self.classic_navigation_post_within("execute/sync", &body, timeout),
+            None => self.classic_post("execute/sync", &body),
+        }
+        .map_err(|error| BrowserControlFailure::new("javascript_error", error))?;
         let value = webdriver_value(&response)
             .cloned()
             .ok_or_else(|| BrowserControlFailure::new("invalid_result", "WebDriver returned no script value"))?;

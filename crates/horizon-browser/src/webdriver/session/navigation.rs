@@ -149,6 +149,15 @@ impl Driver {
             self.classic_timeout_to_restore = Some(PAGE_LOAD_TIMEOUT_MILLIS);
             self.refresh_pending_at = Some(now);
             self.frames.demand();
+            // The classic navigation keeps running in the browser: it counts as
+            // in flight and the page state is polled until it commits or the
+            // page-load window passes. Classic WebDriver only reveals a commit
+            // through a URL change, so a same-URL navigation (a slow reload)
+            // is not tracked: its waits observe the current document instead
+            // of pausing for a commit that could never be recognised.
+            if url != previous_url {
+                self.classic_refresh_until = Some(now + Duration::from_millis(PAGE_LOAD_TIMEOUT_MILLIS));
+            }
             return Ok(pending.settle_timed_out(None, now));
         }
         if self
@@ -360,13 +369,31 @@ impl Driver {
             self.navigation_failed = false;
             // The window counts from the navigation start, so the overall
             // failure cutoff stays at the normal page-load window.
-            self.startup_refresh_until = Some(started + Duration::from_millis(PAGE_LOAD_TIMEOUT_MILLIS));
+            self.classic_refresh_until = Some(started + Duration::from_millis(PAGE_LOAD_TIMEOUT_MILLIS));
             self.refresh_pending_at = Some(Instant::now() + Duration::from_secs(1));
             tracing::debug!(target: "browser", url = %url, "startup navigation still loading after its bound");
             return true;
         }
         let _ = self.finish_page(result, &format!("startup navigation to {url}"), event_tx);
         false
+    }
+
+    /// Reset per-navigation state when the driver starts or observes a
+    /// document navigation.
+    pub(super) fn begin_navigation(&mut self) {
+        self.challenge_loop.document_navigation_started();
+        self.pending_classic_history_start = None;
+        self.semantic.invalidate();
+        self.generation = self.generation.wrapping_add(1);
+        self.retain_frame_during_navigation = true;
+        self.navigation_failed = false;
+        self.refresh_pending_at = None;
+        // A replacement navigation supersedes a classic navigation that was
+        // still being polled to its commit; otherwise the marker would keep
+        // every later wait paused.
+        self.classic_refresh_until = None;
+        self.scrollbar.reset();
+        self.frames.suspend_for_navigation();
     }
 
     pub(super) fn navigate(&mut self, url: &str, event_tx: &BrowserEventSender) -> Result<(), String> {
@@ -496,7 +523,8 @@ impl Driver {
         self.classic_navigation_post_within(suffix, body, NAVIGATION_HTTP_TIMEOUT)
     }
 
-    fn classic_navigation_post_within(
+    /// A classic command whose response is awaited for at most `read_timeout`.
+    pub(super) fn classic_navigation_post_within(
         &self,
         suffix: &str,
         body: &serde_json::Value,
@@ -540,6 +568,11 @@ impl Driver {
         }
     }
 
+    /// A classic navigation that outlived its bound and has not committed yet.
+    pub(super) fn classic_navigation_in_flight(&self) -> bool {
+        self.classic_refresh_until.is_some()
+    }
+
     pub(super) fn tick_page_state_refresh(&mut self, event_tx: &BrowserEventSender) {
         let Some(refresh_at) = self.refresh_pending_at else {
             return;
@@ -550,15 +583,15 @@ impl Driver {
         self.refresh_pending_at = None;
         let previous_url = self.url.clone();
         self.refresh_page_state(event_tx);
-        if let Some(until) = self.startup_refresh_until {
+        if let Some(until) = self.classic_refresh_until {
             if self.url != previous_url {
-                self.startup_refresh_until = None;
+                self.classic_refresh_until = None;
                 self.frames.demand();
             } else if Instant::now() >= until {
                 // Classic WebDriver reports no later event, so a navigation
                 // that has not committed by the page-load window is failed
                 // explicitly instead of leaving the panel silently stale.
-                self.startup_refresh_until = None;
+                self.classic_refresh_until = None;
                 self.navigation_failed = true;
                 self.frames.interaction_started_at = None;
                 let _ = event_tx.send(BrowserEvent::NavigationFailed(
