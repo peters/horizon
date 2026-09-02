@@ -41,7 +41,6 @@ impl Driver {
         };
         let (wait, timeout_millis) = (*wait, *timeout_millis);
         let now = Instant::now();
-        self.supersede_pending_navigation(now);
         let mut pending = PendingNavigation::new(
             request.clone(),
             normalize_navigation_target(url),
@@ -53,9 +52,11 @@ impl Driver {
         if let Some(expired) = pending.tick(now) {
             // The bound elapsed while the action sat in the queue (for example
             // behind a blocking classic navigation): report it without
-            // touching the page after the caller's deadline.
+            // touching the page after the caller's deadline, and without
+            // superseding a navigation that keeps running unreplaced.
             return AgentActionExecution::Done(expired);
         }
+        self.supersede_pending_navigation(now);
         if self.config.browser.backend != BackendKind::FirefoxBidi {
             return AgentActionExecution::Done(self.navigate_classic_bounded(url, &mut pending, event_tx));
         }

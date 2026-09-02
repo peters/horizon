@@ -34,7 +34,6 @@ impl DriverState {
         };
         let (wait, timeout_millis) = (*wait, *timeout_millis);
         let now = Instant::now();
-        self.supersede_pending_navigation(now);
         let pending = PendingNavigation::new(
             request.clone(),
             normalize_navigation_target(url),
@@ -45,9 +44,11 @@ impl DriverState {
         );
         if let Some(expired) = pending.tick(now) {
             // The bound elapsed while the action sat in the queue: report it
-            // without touching the page after the caller's deadline.
+            // without touching the page after the caller's deadline, and
+            // without superseding a navigation that keeps running unreplaced.
             return AgentActionExecution::Done(expired);
         }
+        self.supersede_pending_navigation(now);
         self.interaction_started_at.get_or_insert(now);
         self.vertical_scrollbar_drag = None;
         self.invalidate_scrollbar_layout();
