@@ -280,7 +280,7 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_wait",
-        description = "Wait for a CSS selector to become present, visible, or hidden as one audited engine-side action: the browser driver observes the page itself (no repeated queries) and returns the matched nodes and elapsed_millis, or a typed failure (wait_timeout, wait_navigation_invalidated when the page navigated, wait_ownership_lost, wait_handoff_pending, wait_superseded when a later wait on the same panel replaced it). timeout_millis is 1000-60000 (default 10000) and is enforced in full by the engine; poll_millis is accepted for compatibility and ignored."
+        description = "Wait for a CSS selector to become present, visible, or hidden as one audited engine-side action: the browser driver observes the page itself (no repeated queries) and returns the matched nodes and elapsed_millis, or a typed failure (wait_timeout, wait_navigation_invalidated when the page navigated, wait_ownership_lost, wait_handoff_pending, wait_superseded when a later wait on the same panel replaced it, browser_unavailable when the browser backend stops). timeout_millis is 1000-60000 (default 10000) and is enforced in full by the engine; poll_millis is accepted for compatibility and ignored."
     )]
     async fn browser_wait(&self, Parameters(input): Parameters<WaitInput>) -> Result<Json<WaitOutput>, String> {
         wait_for_selector(&self.controller, input).await.map(Json)
@@ -413,7 +413,8 @@ fn bounded_wait_timeout(timeout_millis: Option<u64>) -> u64 {
 /// One audited engine-side wait: the browser driver observes the selector
 /// itself and reports the matched nodes, the elapsed time, or a typed
 /// failure (`wait_timeout`, `wait_navigation_invalidated`,
-/// `wait_ownership_lost`, `wait_handoff_pending`, `wait_superseded`).
+/// `wait_ownership_lost`, `wait_handoff_pending`, `wait_superseded`,
+/// `browser_unavailable`).
 async fn wait_for_selector(controller: &BrowserController, input: WaitInput) -> Result<WaitOutput, String> {
     let timeout_millis = bounded_wait_timeout(input.timeout_millis);
     if let Some(poll_millis) = input.poll_millis {
@@ -472,6 +473,7 @@ mod tests {
             ]
         );
         let schemas = serde_json::to_string(&server.tool_router.list_all()).unwrap_or_default();
+        assert!(schemas.contains("browser_unavailable"));
         assert!(!schemas.contains("browser_ws"));
         assert!(!schemas.contains("manifest_path"));
         assert!(!schemas.contains("cdp_endpoint"));

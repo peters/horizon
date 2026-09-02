@@ -80,7 +80,8 @@ shell commands, files, or other MCP servers.
   elapses (`wait_timeout`), the page navigates (`wait_navigation_invalidated`),
   the lease is lost (`wait_ownership_lost`), or a handoff is pending
   (`wait_handoff_pending`), or a later wait on the same panel replaces it
-  (`wait_superseded`). `timeout_millis` accepts 1000-60000 ms;
+  (`wait_superseded`), or the browser backend stops while waiting
+  (`browser_unavailable`). `timeout_millis` accepts 1000-60000 ms;
   `poll_millis` is accepted for compatibility and ignored.
 - `browser_evaluate` evaluates an explicit size-bounded expression.
 - `browser_network` starts, inspects, or stops a bounded HTTP/WebSocket

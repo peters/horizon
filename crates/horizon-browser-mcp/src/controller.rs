@@ -450,8 +450,7 @@ impl BrowserController {
             if let Some(result) = manifest::take_action_result(panel_id, &action_id)
                 .map_err(|source| ControlError::internal_io("could not read browser action result", source))?
             {
-                self.refresh_claim(panel_id)?;
-                return outcome(result);
+                return finish_polled_result(result, || self.refresh_claim(panel_id));
             }
             if started.elapsed() >= hard_cap {
                 return Err(ControlError::Timeout {
@@ -516,10 +515,7 @@ impl BrowserController {
             if let Some(result) = manifest::take_action_result(panel_id, &action_id)
                 .map_err(|source| ControlError::internal_io("could not read browser action result", source))?
             {
-                // The result may have arrived after the host moved the panel;
-                // re-check membership under the lock before disclosing it.
-                self.refresh_claim(panel_id)?;
-                return outcome(result);
+                return finish_polled_result(result, || self.refresh_claim(panel_id));
             }
             if started.elapsed() >= timeout {
                 return Err(ControlError::Timeout {
@@ -570,6 +566,24 @@ fn bounded_create_timeout(timeout_millis: Option<u64>) -> u64 {
     timeout_millis
         .unwrap_or(DEFAULT_CREATE_TIMEOUT_MILLIS)
         .clamp(MIN_CREATE_TIMEOUT_MILLIS, MAX_ACTION_TIMEOUT_MILLIS)
+}
+
+fn finish_polled_result(
+    result: AgentActionResult,
+    refresh_claim: impl FnOnce() -> Result<(), ControlError>,
+) -> Result<ActionReceipt, ControlError> {
+    // Results normally remain panel-specific data, so ownership and workspace
+    // membership must still be live when they are disclosed. The shutdown
+    // wait result is the sole exception: it contains no page state and is
+    // deliberately published immediately before the driver removes its
+    // manifest, so requiring a live claim would make it unobservable.
+    if !matches!(
+        &result.outcome,
+        BrowserActionOutcome::Failed { error } if error.code == "browser_unavailable"
+    ) {
+        refresh_claim()?;
+    }
+    outcome(result)
 }
 
 fn outcome(result: AgentActionResult) -> Result<ActionReceipt, ControlError> {
@@ -629,6 +643,7 @@ pub(crate) fn protocol_kind(backend: BackendKind, websocket_negotiated: bool) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
 
     #[test]
     fn timeout_is_bounded() {
@@ -638,6 +653,51 @@ mod tests {
         assert_eq!(bounded_create_timeout(None), DEFAULT_CREATE_TIMEOUT_MILLIS);
         assert_eq!(bounded_create_timeout(Some(0)), MIN_CREATE_TIMEOUT_MILLIS);
         assert_eq!(bounded_create_timeout(Some(u64::MAX)), MAX_ACTION_TIMEOUT_MILLIS);
+    }
+
+    #[test]
+    fn only_browser_unavailable_can_outlive_the_driver_manifest() {
+        let unavailable = AgentActionResult::failed(
+            "shutdown-wait",
+            horizon_browser::BrowserControlFailure::new("browser_unavailable", "the browser stopped while waiting"),
+        );
+        let refreshed = Cell::new(false);
+        let error = finish_polled_result(unavailable, || {
+            refreshed.set(true);
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(!refreshed.get());
+        assert!(matches!(
+            error,
+            ControlError::Browser { ref code, .. } if code == "browser_unavailable"
+        ));
+
+        let completed = AgentActionResult::completed("completed", BrowserControlValue::Accepted);
+        let refreshed = Cell::new(false);
+        let receipt = finish_polled_result(completed, || {
+            refreshed.set(true);
+            Ok(())
+        })
+        .unwrap();
+        assert!(refreshed.get());
+        assert_eq!(receipt.action_id, "completed");
+
+        let other_failure = AgentActionResult::failed(
+            "timed-out-wait",
+            horizon_browser::BrowserControlFailure::new("wait_timeout", "selector did not match"),
+        );
+        let refreshed = Cell::new(false);
+        let error = finish_polled_result(other_failure, || {
+            refreshed.set(true);
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(refreshed.get());
+        assert!(matches!(
+            error,
+            ControlError::Browser { ref code, .. } if code == "wait_timeout"
+        ));
     }
 
     #[test]

@@ -151,7 +151,7 @@ fn take_at(path: &Path, action_id: &str) -> std::io::Result<Option<AgentActionRe
 #[cfg(test)]
 mod tests {
     use super::*;
-    use horizon_browser::{BrowserControlValue, new_action_id};
+    use horizon_browser::{BrowserControlFailure, BrowserControlValue, new_action_id};
 
     #[test]
     fn results_are_private_one_shot_files_with_confined_paths() {
@@ -212,6 +212,37 @@ mod tests {
             std::io::ErrorKind::InvalidData
         );
         assert!(path.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn driver_teardown_preserves_a_terminal_result_for_its_consumer() {
+        let root = std::env::temp_dir().join(format!(
+            "horizon-browser-results-teardown-{}-{}",
+            std::process::id(),
+            new_action_id()
+        ));
+        let panel_id = "panel";
+        let manifest_path = super::super::manifest_path_for_root(&root, panel_id);
+        let manifest = super::super::BrowserManifest {
+            panel_local_id: panel_id.to_string(),
+            host: Some("host-a".to_string()),
+            ..super::super::BrowserManifest::default()
+        };
+        super::super::write_at(&manifest_path, &manifest).unwrap();
+        let action_id = new_action_id();
+        let result_path = action_result_path_for_root(&root, panel_id, &action_id);
+        let result = AgentActionResult::failed(
+            action_id.clone(),
+            BrowserControlFailure::new("browser_unavailable", "the browser stopped while waiting"),
+        );
+        write_at(&result_path, &result).unwrap();
+
+        let removed = super::super::remove_owned_at_with_timeout(&manifest_path, "host-a", Duration::from_secs(1));
+        assert!(removed.unwrap());
+        assert!(!manifest_path.exists());
+        assert_eq!(take_at(&result_path, &action_id).unwrap(), Some(result));
+        assert_eq!(take_at(&result_path, &action_id).unwrap(), None);
         let _ = std::fs::remove_dir_all(root);
     }
 

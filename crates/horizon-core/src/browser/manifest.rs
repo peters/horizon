@@ -458,19 +458,15 @@ pub(crate) fn remove_with_timeout(panel_local_id: &str, timeout: Duration) -> bo
 }
 
 /// Remove a manifest at driver teardown only while this process still runs
-/// the panel's driver, running `prune_owned_storage` under the same lock so
-/// no other host can adopt the id between the ownership decision and the
-/// cleanup. `Some(true)` means this host owned the panel (the manifest is
-/// gone), `Some(false)` that another host adopted it and it was left alone,
-/// `None` that removal failed.
+/// the panel's driver. `Some(true)` means this host owned the panel (the
+/// manifest is gone), `Some(false)` that another host adopted it and it was
+/// left alone, `None` that removal failed. One-shot action results deliberately
+/// outlive the manifest so a consumer can observe a terminal shutdown result;
+/// driver `prepare` clears them before the panel id is reused.
 #[must_use]
-fn remove_owned_with_timeout(
-    panel_local_id: &str,
-    timeout: Duration,
-    prune_owned_storage: impl FnOnce() -> std::io::Result<()>,
-) -> Option<bool> {
+fn remove_owned_with_timeout(panel_local_id: &str, timeout: Duration) -> Option<bool> {
     let path = default_manifest_path(panel_local_id);
-    match remove_owned_at_with_timeout(&path, host_instance(), timeout, prune_owned_storage) {
+    match remove_owned_at_with_timeout(&path, host_instance(), timeout) {
         Ok(owned) => Some(owned),
         Err(error) => {
             tracing::warn!(target: "browser", path = %path.display(), "failed to remove browser manifest: {error}");
@@ -479,24 +475,18 @@ fn remove_owned_with_timeout(
     }
 }
 
-fn remove_owned_at_with_timeout(
-    path: &Path,
-    host: &str,
-    timeout: Duration,
-    prune_owned_storage: impl FnOnce() -> std::io::Result<()>,
-) -> std::io::Result<bool> {
+fn remove_owned_at_with_timeout(path: &Path, host: &str, timeout: Duration) -> std::io::Result<bool> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let _lock = ManifestLock::acquire_with_timeout(path, timeout)?;
     // Only a present manifest that names this host proves ownership; a
     // missing file or a host-less manifest written by an older Horizon that
-    // adopted the id is left untouched, results included.
+    // adopted the id is left untouched.
     if read_at(path).is_none_or(|manifest| manifest.host.as_deref() != Some(host)) {
         tracing::debug!(target: "browser", path = %path.display(), "leaving browser manifest this host does not own");
         return Ok(false);
     }
-    prune_owned_storage()?;
     match std::fs::remove_file(path) {
         Ok(()) => Ok(true),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
@@ -756,9 +746,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
     }
 
     fn remove(&self, panel_local_id: &str, timeout: Duration) -> bool {
-        // Results are pruned inside the ownership-locked removal; a panel
-        // another host adopted keeps both its manifest and its results.
-        remove_owned_with_timeout(panel_local_id, timeout, || result::remove_stale(panel_local_id)).is_some()
+        remove_owned_with_timeout(panel_local_id, timeout).is_some()
     }
 }
 
@@ -1124,7 +1112,6 @@ mod tests {
         .unwrap();
         assert_eq!(read_at(&path).unwrap().title, "from the adopting driver");
 
-        let mut pruned = 0;
         let mut effect_ran = false;
         let denied = with_owned_manifest_at(&path, "host-a", || {
             effect_ran = true;
@@ -1141,33 +1128,18 @@ mod tests {
         assert!(effect_ran);
 
         assert!(
-            !remove_owned_at_with_timeout(&path, "host-a", Duration::from_secs(1), || {
-                pruned += 1;
-                Ok(())
-            })
-            .unwrap(),
+            !remove_owned_at_with_timeout(&path, "host-a", Duration::from_secs(1)).unwrap(),
             "a superseded driver's teardown reports the manifest as not its own"
-        );
-        assert_eq!(
-            pruned, 0,
-            "a superseded driver never prunes the adopting host's storage"
         );
         assert!(
             path.exists(),
             "a superseded driver's teardown leaves the adopted manifest"
         );
-        assert!(
-            remove_owned_at_with_timeout(&path, "host-b", Duration::from_secs(1), || {
-                pruned += 1;
-                Ok(())
-            })
-            .unwrap()
-        );
-        assert_eq!(pruned, 1, "the owning host prunes under the same lock");
+        assert!(remove_owned_at_with_timeout(&path, "host-b", Duration::from_secs(1)).unwrap());
         assert!(!path.exists());
         assert!(
-            !remove_owned_at_with_timeout(&path, "host-b", Duration::from_secs(1), || Ok(())).unwrap(),
-            "a missing manifest proves nothing, so teardown prunes nothing"
+            !remove_owned_at_with_timeout(&path, "host-b", Duration::from_secs(1)).unwrap(),
+            "a missing manifest proves nothing about driver ownership"
         );
         assert_eq!(
             with_owned_manifest_at(&path, "host-a", || Ok(()))
@@ -1178,7 +1150,7 @@ mod tests {
 
         let legacy = manifest_path_for_root(&root, "legacy");
         write_at(&legacy, &sample("legacy")).unwrap();
-        assert!(!remove_owned_at_with_timeout(&legacy, "host-a", Duration::from_secs(1), || Ok(())).unwrap());
+        assert!(!remove_owned_at_with_timeout(&legacy, "host-a", Duration::from_secs(1)).unwrap());
         assert!(
             legacy.exists(),
             "a host-less manifest may belong to an older Horizon that adopted the id, so teardown leaves it"
