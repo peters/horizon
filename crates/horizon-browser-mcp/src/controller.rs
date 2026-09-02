@@ -425,8 +425,11 @@ impl BrowserController {
         engine_bound_millis: u64,
     ) -> Result<ActionReceipt, ControlError> {
         let started = Instant::now();
-        let timeout_millis = engine_bound_millis + RESULT_DELIVERY_HEADROOM_MILLIS;
-        let hard_cap = Duration::from_millis(timeout_millis + MAX_ACTION_TIMEOUT_MILLIS);
+        // What the controller actually waits: the engine bound, the delivery
+        // headroom, and the allowance for a blocked driver; the error reports
+        // this whole duration.
+        let timeout_millis = engine_bound_millis + RESULT_DELIVERY_HEADROOM_MILLIS + MAX_ACTION_TIMEOUT_MILLIS;
+        let hard_cap = Duration::from_millis(timeout_millis);
         let mut last_heartbeat = started;
         loop {
             if let Some(result) = manifest::take_action_result(panel_id, &action_id)
