@@ -1,7 +1,6 @@
 use super::*;
 use crate::cloud_run::CloudProvider;
 use std::sync::{Arc, Mutex};
-
 #[derive(Clone, Default)]
 struct FakeTransport {
     state: Arc<Mutex<FakeState>>,
@@ -14,7 +13,6 @@ struct FakeState {
     deleted: Vec<String>,
     fail_delete: bool,
 }
-
 impl FakeTransport {
     fn with_create_response(response: ApiPod) -> Self {
         let transport = Self::default();
@@ -81,7 +79,7 @@ fn profile() -> RunPodProfile {
         gpu_type_ids: vec!["NVIDIA RTX A4000".to_string(), "NVIDIA RTX A4500".to_string()],
         gpu_count: 1,
         allowed_cuda_versions: vec!["12.8".to_string()],
-        data_center_ids: vec!["EUR-NO-1".to_string()],
+        data_center_id: Some("EUR-NO-1".to_string()),
         ports: vec!["22/tcp".to_string()],
         volume_gib: 20,
         min_download_mbps: Some(250),
@@ -125,7 +123,6 @@ fn api_key_validation_never_exposes_secret() {
         assert!(invalid.is_empty() || !error.to_string().contains(invalid));
     }
 }
-
 #[test]
 fn provider_messages_classify_capacity_shortage() {
     let exhausted = serde_json::json!({"errors": [
@@ -137,7 +134,6 @@ fn provider_messages_classify_capacity_shortage() {
         "errors": [{"message": "invalid image reference"}]
     })));
 }
-
 #[test]
 fn v2_cold_start_accepts_null_runtime_and_ssh_endpoints() {
     let pod: ApiPod = serde_json::from_value(serde_json::json!({
@@ -148,17 +144,19 @@ fn v2_cold_start_accepts_null_runtime_and_ssh_endpoints() {
     .expect("valid v2 cold-start pod");
     assert!(pod.ssh.is_some_and(|ssh| ssh.direct.is_none()));
 }
-
 #[test]
 fn creation_uses_secure_direct_pull_and_bandwidth_constraints() {
     let (workflow_id, job_id) = (CloudWorkflowId::new(), CloudJobId::new());
     let target = target();
     let mut mutable_target = target.clone();
-    mutable_target.image = "registry.example/team/nativesdk:latest".to_string();
+    mutable_target.image = "registry.example/team/nativesdk@sha256:d".to_string();
     assert_eq!(
         validate_target(&mutable_target, &profile()),
         Err(RunPodError::InvalidTarget)
     );
+    let mut unreachable = profile();
+    unreachable.ports.clear();
+    assert_eq!(validate_target(&target, &unreachable), Err(RunPodError::InvalidTarget));
     let response = api_pod(workflow_id, job_id, &target, Some(900_001));
     let transport = FakeTransport::with_create_response(response);
     let observer = transport.clone();
@@ -166,7 +164,6 @@ fn creation_uses_secure_direct_pull_and_bandwidth_constraints() {
         .ensure_worker(workflow_id, job_id, &target, &profile())
         .expect_err("cost rejected after creation");
     assert!(matches!(error, RunPodError::HourlyCostRejected { .. }));
-
     let state = observer.state.lock().expect("state");
     let request = state.create_requests.first().expect("creation request");
     assert_eq!(request.cloud_type, "SECURE");
@@ -182,10 +179,11 @@ fn creation_uses_secure_direct_pull_and_bandwidth_constraints() {
             .any(|entry| entry.key == TERMINATE_ENV && entry.value == request.terminate_after)
     );
     let json = serde_json::to_value(request).expect("serialize request");
+    assert_eq!(json["dataCenterId"], "EUR-NO-1");
+    assert!(json.get("dataCenterIds").is_none());
     assert!(json.to_string().find("rpa_").is_none());
     assert_eq!(state.deleted, ["pod_123456"]);
 }
-
 #[test]
 fn retries_reuse_one_exact_worker_and_reject_ambiguity() {
     let (workflow_id, job_id) = (CloudWorkflowId::new(), CloudJobId::new());
@@ -198,14 +196,12 @@ fn retries_reuse_one_exact_worker_and_reject_ambiguity() {
         .expect("worker reused");
     assert!(matches!(result, RunPodEnsure::Reused(_)));
     assert!(observer.state.lock().expect("state").create_requests.is_empty());
-
     let client = RunPodClient::with_transport(FakeTransport::with_pods(vec![pod.clone(), pod]));
     assert!(matches!(
         client.ensure_worker(workflow_id, job_id, &target, &profile()),
         Err(RunPodError::AmbiguousResource { count: 2, .. })
     ));
 }
-
 #[test]
 fn identity_mismatch_blocks_delete_and_exact_delete_is_idempotent() {
     let (workflow_id, job_id) = (CloudWorkflowId::new(), CloudJobId::new());
@@ -221,7 +217,6 @@ fn identity_mismatch_blocks_delete_and_exact_delete_is_idempotent() {
     let mut mutable_worker = worker.clone();
     mutable_worker.image = "registry.example/team/nativesdk:latest".to_string();
     assert_eq!(mutable_worker.validate(), Err(RunPodError::InvalidPersistedWorker));
-
     let mut wrong = good.clone();
     wrong.env.insert(JOB_ENV.to_string(), CloudJobId::new().to_string());
     let transport = FakeTransport::with_pods(vec![wrong]);
@@ -232,7 +227,6 @@ fn identity_mismatch_blocks_delete_and_exact_delete_is_idempotent() {
         Err(RunPodError::ResourceIdentityMismatch)
     );
     assert!(observer.state.lock().expect("state").deleted.is_empty());
-
     let transport = FakeTransport::with_pods(vec![good]);
     let observer = transport.clone();
     let client = RunPodClient::with_transport(transport);

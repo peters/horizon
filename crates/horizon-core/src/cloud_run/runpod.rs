@@ -1,10 +1,8 @@
 //! `RunPod` Secure Cloud lifecycle adapter for durable cloud workers.
-
 use super::{CloudJobId, CloudProvider, CloudWorkflowId, WorkerTarget, validation::valid_worker_image};
 use serde::{Deserialize, Deserializer, Serialize, de};
 use std::{collections::BTreeMap, env, fmt};
 use thiserror::Error;
-
 mod http;
 #[cfg(test)]
 mod tests;
@@ -14,7 +12,6 @@ const PROTOCOL_ENV: &str = "HORIZON_CLOUD_PROTOCOL_VERSION";
 const TERMINATE_ENV: &str = "HORIZON_TERMINATE_AFTER";
 const MIN_LEASE_SECONDS: u32 = 300;
 const MAX_LEASE_SECONDS: u32 = 30 * 24 * 60 * 60;
-
 /// Secret `RunPod` bearer token. Debug output is always redacted.
 #[derive(Clone)]
 pub struct RunPodApiKey(String);
@@ -51,7 +48,6 @@ impl fmt::Debug for RunPodApiKey {
         formatter.write_str("RunPodApiKey(<redacted>)")
     }
 }
-
 /// Non-secret `RunPod` placement and connectivity settings.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -61,8 +57,8 @@ pub struct RunPodProfile {
     pub gpu_count: u16,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_cuda_versions: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub data_center_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_center_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ports: Vec<String>,
     pub volume_gib: u32,
@@ -88,7 +84,6 @@ pub struct RunPodWorker {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hourly_cost_micros: Option<u64>,
 }
-
 impl RunPodWorker {
     /// Validate persisted identity before any provider mutation.
     /// # Errors
@@ -145,7 +140,6 @@ impl RunPodClient {
             transport: Box::new(http::RunPodHttp::new(api_key)?),
         })
     }
-
     /// Create a worker once, or adopt the single exact resource from an interrupted attempt.
     /// # Errors
     /// Fails closed on invalid configuration, ambiguous resources, identity mismatch,
@@ -191,7 +185,6 @@ impl RunPodClient {
             RunPodEnsure::Reused(status)
         })
     }
-
     /// Inspect an exact persisted worker, returning `None` after provider deletion.
     /// # Errors
     /// Fails if persisted or provider identity differs from the expected workflow resource.
@@ -213,7 +206,6 @@ impl RunPodClient {
         status_from_resource(&pod, worker)?;
         self.transport.delete(&worker.pod_id)
     }
-
     fn enforce_cost_limit(&self, worker: &RunPodWorker, maximum: Option<u64>) -> Result<(), RunPodError> {
         let Some(maximum) = maximum else {
             return Ok(());
@@ -226,7 +218,6 @@ impl RunPodClient {
         }
         Ok(())
     }
-
     fn cleanup_after_cost_rejection(
         &self,
         worker: &RunPodWorker,
@@ -244,7 +235,6 @@ impl RunPodClient {
             maximum,
         })
     }
-
     #[cfg(test)]
     fn with_transport(transport: impl Transport + 'static) -> Self {
         Self {
@@ -252,7 +242,6 @@ impl RunPodClient {
         }
     }
 }
-
 #[derive(Debug, Error, Eq, PartialEq)]
 pub enum RunPodError {
     #[error("RUNPOD_API_KEY is not available")]
@@ -288,14 +277,12 @@ pub enum RunPodError {
     #[error("RunPod hourly cost was rejected but exact-resource cleanup failed")]
     CostRejectionCleanupFailed { worker: Box<RunPodWorker> },
 }
-
 trait Transport: Send + Sync {
     fn list_by_name(&self, name: &str) -> Result<Vec<ApiPod>, RunPodError>;
     fn create(&self, request: &CreatePodRequest) -> Result<ApiPod, RunPodError>;
     fn get(&self, pod_id: &str) -> Result<Option<ApiPod>, RunPodError>;
     fn delete(&self, pod_id: &str) -> Result<RunPodCleanup, RunPodError>;
 }
-
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CreatePodRequest {
@@ -304,8 +291,8 @@ struct CreatePodRequest {
     container_disk_in_gb: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     container_registry_auth_id: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    data_center_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data_center_id: Option<String>,
     env: Vec<CreatePodEnv>,
     gpu_count: u16,
     #[serde(rename = "gpuTypeIdList")]
@@ -326,13 +313,11 @@ struct CreatePodRequest {
     volume_in_gb: u32,
     volume_mount_path: &'static str,
 }
-
 #[derive(Clone, Debug, Serialize)]
 struct CreatePodEnv {
     key: String,
     value: String,
 }
-
 impl CreatePodRequest {
     fn new(
         workflow_id: CloudWorkflowId,
@@ -359,7 +344,7 @@ impl CreatePodRequest {
             cloud_type: "SECURE",
             container_disk_in_gb: target.disk_gib,
             container_registry_auth_id: profile.container_registry_auth_id.clone(),
-            data_center_ids: profile.data_center_ids.clone(),
+            data_center_id: profile.data_center_id.clone(),
             env,
             gpu_count: profile.gpu_count,
             gpu_type_ids: profile.gpu_type_ids.clone(),
@@ -377,7 +362,6 @@ impl CreatePodRequest {
         })
     }
 }
-
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 struct ApiPod {
@@ -395,13 +379,11 @@ impl ApiPod {
         self.cost
     }
 }
-
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 struct ApiSsh {
     direct: Option<ApiSshEndpoint>,
 }
-
 #[derive(Clone, Debug, Deserialize)]
 struct ApiSshEndpoint {
     host: String,
@@ -441,15 +423,15 @@ fn validate_target(target: &WorkerTarget, profile: &RunPodProfile) -> Result<(),
                     && minor.bytes().all(|byte| byte.is_ascii_digit())
             })
         })
-        && profile.data_center_ids.iter().all(|value| safe_id(value))
+        && profile.data_center_id.as_deref().is_none_or(safe_id)
         && profile.ports.iter().all(|value| safe_port(value))
+        && profile.ports.iter().any(|value| value == "22/tcp")
         && nonzero(profile.min_download_mbps)
         && nonzero(profile.min_upload_mbps)
         && nonzero(profile.min_disk_bandwidth_mbps)
         && profile.container_registry_auth_id.as_deref().is_none_or(safe_id);
     valid.then_some(()).ok_or(RunPodError::InvalidTarget)
 }
-
 fn status_from_pod(
     pod: &ApiPod,
     workflow_id: CloudWorkflowId,
@@ -476,7 +458,6 @@ fn status_from_pod(
     };
     status_from_resource(pod, &worker)
 }
-
 fn status_from_resource(pod: &ApiPod, worker: &RunPodWorker) -> Result<RunPodWorkerStatus, RunPodError> {
     worker.validate()?;
     let owned = pod.id == worker.pod_id
@@ -509,11 +490,9 @@ fn status_from_resource(pod: &ApiPod, worker: &RunPodWorker) -> Result<RunPodWor
         ssh_port: direct_ssh.map(|endpoint| endpoint.port),
     })
 }
-
 fn resource_name(workflow_id: CloudWorkflowId, job_id: CloudJobId) -> String {
     format!("horizon-{workflow_id}-{job_id}")
 }
-
 fn termination_deadline(lease_seconds: u32) -> Result<String, RunPodError> {
     time::OffsetDateTime::now_utc()
         .checked_add(time::Duration::seconds(i64::from(lease_seconds)))
@@ -521,7 +500,6 @@ fn termination_deadline(lease_seconds: u32) -> Result<String, RunPodError> {
         .format(&time::format_description::well_known::Rfc3339)
         .map_err(|_| RunPodError::InvalidTarget)
 }
-
 fn valid_provider_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 191
@@ -529,11 +507,12 @@ fn valid_provider_id(value: &str) -> bool {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
-
 fn valid_immutable_worker_image(value: &str) -> bool {
-    valid_worker_image(value) && value.rsplit_once("@sha256:").is_some()
+    valid_worker_image(value)
+        && value
+            .rsplit_once("@sha256:")
+            .is_some_and(|(_, digest)| digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()))
 }
-
 fn deserialize_hourly_cost<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
 where
     D: Deserializer<'de>,
@@ -551,7 +530,6 @@ where
         .ok_or_else(|| de::Error::custom("hourly cost must be a non-negative decimal"))
         .map(Some)
 }
-
 fn decimal_micros(value: &str) -> Option<u64> {
     let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
     if whole.is_empty()
