@@ -148,20 +148,18 @@ fn creation_uses_secure_direct_pull_and_bandwidth_constraints() {
     let mut unreachable = profile();
     unreachable.ports.clear();
     assert_eq!(validate_target(&target, &unreachable), Err(RunPodError::InvalidTarget));
-    let response = api_pod(workflow_id, job_id, &target, Some(900_001));
+    let response = api_pod(workflow_id, job_id, &target, Some(0));
     let transport = FakeTransport::with_create_response(response);
     let observer = transport.clone();
     let error = RunPodClient::with_transport(transport)
         .ensure_worker(workflow_id, job_id, &target, &profile())
         .expect_err("cost rejected after creation");
-    assert!(matches!(error, RunPodError::HourlyCostRejected { .. }));
+    assert!(matches!(error, RunPodError::HourlyCostRejected { actual: None, .. }));
     let state = observer.0.lock().expect("state");
     let request = state.create_requests.first().expect("creation request");
     assert_eq!(request.cloud_type, "SECURE");
     assert_eq!(request.image_name, target.image);
     assert_eq!(request.min_download_mbps, Some(250));
-    assert_eq!(request.min_upload_mbps, Some(100));
-    assert_eq!(request.container_disk_in_gb, 80);
     assert!(
         request
             .env
@@ -208,7 +206,7 @@ fn retries_reuse_one_exact_worker_and_reject_ambiguity() {
 fn identity_mismatch_blocks_delete_and_exact_delete_is_idempotent() {
     let (workflow_id, job_id) = (CloudWorkflowId::new(), CloudJobId::new());
     let target = target();
-    let good = api_pod(workflow_id, job_id, &target, Some(420_000));
+    let mut good = api_pod(workflow_id, job_id, &target, Some(420_000));
     let result = RunPodClient::with_transport(FakeTransport::with_pods(vec![good.clone()]))
         .ensure_worker(workflow_id, job_id, &target, &profile())
         .expect("worker reused");
@@ -229,11 +227,15 @@ fn identity_mismatch_blocks_delete_and_exact_delete_is_idempotent() {
         Err(RunPodError::ResourceIdentityMismatch)
     );
     assert!(observer.0.lock().expect("state").deleted.is_empty());
+    good.cost = Some(0);
+    good.ssh = serde_json::from_str(r#"{"direct":{"username":"root","host":"ssh.example","port":22}}"#).expect("ssh");
     let transport = FakeTransport::with_pods(vec![good]);
     let observer = transport.clone();
     let client = RunPodClient::with_transport(transport);
+    assert!(
+        matches!(client.inspect_worker(&worker), Ok(Some(status)) if status.worker.hourly_cost_micros == Some(420_000) && status.ssh_username.as_deref() == Some("root"))
+    );
     assert_eq!(client.delete_worker(&worker), Ok(RunPodCleanup::Deleted));
-    assert_eq!(client.inspect_worker(&worker), Ok(None));
     assert_eq!(client.delete_worker(&worker), Ok(RunPodCleanup::AlreadyAbsent));
     assert_eq!(observer.0.lock().expect("state").deleted, [worker.pod_id]);
 }

@@ -107,6 +107,7 @@ pub enum RunPodLifecycle {
 pub struct RunPodWorkerStatus {
     pub worker: RunPodWorker,
     pub lifecycle: RunPodLifecycle,
+    pub ssh_username: Option<String>,
     pub ssh_host: Option<String>,
     pub ssh_port: Option<u16>,
 }
@@ -382,11 +383,6 @@ struct ApiPod {
     #[serde(default, deserialize_with = "deserialize_hourly_cost")]
     cost: Option<u64>,
 }
-impl ApiPod {
-    fn hourly_cost_micros(&self) -> Option<u64> {
-        self.cost
-    }
-}
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 struct ApiSsh {
@@ -394,6 +390,7 @@ struct ApiSsh {
 }
 #[derive(Clone, Debug, Deserialize)]
 struct ApiSshEndpoint {
+    username: String,
     host: String,
     port: u16,
 }
@@ -462,7 +459,7 @@ fn status_from_pod(
         name: resource_name(workflow_id, job_id),
         image: target.image.clone(),
         terminate_after,
-        hourly_cost_micros: pod.hourly_cost_micros(),
+        hourly_cost_micros: pod.cost.filter(|cost| *cost > 0),
     };
     status_from_resource(pod, &worker)
 }
@@ -490,10 +487,11 @@ fn status_from_resource(pod: &ApiPod, worker: &RunPodWorker) -> Result<RunPodWor
     let direct_ssh = pod.ssh.as_ref().and_then(|ssh| ssh.direct.as_ref());
     Ok(RunPodWorkerStatus {
         worker: RunPodWorker {
-            hourly_cost_micros: pod.hourly_cost_micros().or(worker.hourly_cost_micros),
+            hourly_cost_micros: pod.cost.filter(|cost| *cost > 0).or(worker.hourly_cost_micros),
             ..worker.clone()
         },
         lifecycle,
+        ssh_username: direct_ssh.map(|endpoint| endpoint.username.clone()),
         ssh_host: direct_ssh.map(|endpoint| endpoint.host.clone()),
         ssh_port: direct_ssh.map(|endpoint| endpoint.port),
     })
