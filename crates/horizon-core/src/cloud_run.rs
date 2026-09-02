@@ -322,7 +322,7 @@ pub enum CloudProtocolError {
     MissingDependency { node: CloudJobId, dependency: CloudJobId },
     #[error("workflow dependency cycle includes node {0}")]
     DependencyCycle(CloudJobId),
-    #[error("node {0} has invalid measured progress")]
+    #[error("node {0} has invalid or lifecycle-inconsistent progress")]
     InvalidProgress(CloudJobId),
     #[error("approval node {0} has no approval or release gate")]
     MissingApprovalGate(CloudJobId),

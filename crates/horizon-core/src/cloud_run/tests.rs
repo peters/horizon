@@ -67,8 +67,7 @@ fn dependency_validation_is_iterative_and_detects_cycles() {
         previous = Some(id);
     }
     assert_eq!(workflow(nodes).validate(), Ok(()));
-    let first = CloudJobId::new();
-    let second = CloudJobId::new();
+    let (first, second) = (CloudJobId::new(), CloudJobId::new());
     assert!(matches!(
         invalid(vec![node(first, "first", vec![second]), node(second, "second", vec![first])]),
         DependencyCycle(id) if id == first || id == second
@@ -93,11 +92,12 @@ fn approvals_and_leases_obey_snapshot_time_and_identity() {
     rejects(vec![gate.clone()], &InvalidApprovalGate(id));
     gate.approval.as_mut().expect("gate exists").decision = approved(1_500);
     rejects(vec![gate.clone()], &InvalidApprovalGate(id));
+    gate.state = CloudJobState::Running;
+    gate.approval.as_mut().expect("gate exists").decision = ApprovalDecision::Pending;
+    rejects(vec![gate.clone()], &InvalidApprovalGate(id));
     gate.state = CloudJobState::Completed;
     gate.outcome = Some(CloudJobOutcome::Succeeded);
     gate.progress = CloudProgress::Completed;
-    gate.approval.as_mut().expect("gate exists").decision = ApprovalDecision::Pending;
-    rejects(vec![gate.clone()], &InvalidApprovalGate(id));
     gate.approval.as_mut().expect("gate exists").decision = approved(1_500);
     let mut snapshot = workflow(vec![gate]);
     snapshot.nodes[0].environment_lease = Some(EnvironmentLease {
@@ -155,8 +155,7 @@ fn v1_json_contract_round_trips() {
         serde_json::to_string(&(&snapshot, &record)).expect("serialize v1"),
         golden
     );
-    assert_eq!(record.source.commit.as_str().len(), 40);
-    assert_eq!(record.artifacts[0].sha256.as_str().len(), 64);
+    assert!(record.source.commit.as_str().len() == 40 && record.artifacts[0].sha256.as_str().len() == 64);
     let mut bad = snapshot.clone();
     bad.nodes[0].worker.as_mut().expect("worker").image = "https://u:p@r/i?q".to_string();
     rejects(bad.nodes, &InvalidWorkerTarget(snapshot.nodes[0].id));
@@ -179,8 +178,7 @@ fn v1_json_contract_round_trips() {
 }
 #[test]
 fn inputs_are_unique_outputs_of_direct_dependencies() {
-    let producer_id = CloudJobId::new();
-    let consumer_id = CloudJobId::new();
+    let (producer_id, consumer_id) = (CloudJobId::new(), CloudJobId::new());
     let mut producer = node(producer_id, "package", Vec::new());
     producer.outputs.push(artifact("candidate", "workflow/candidate"));
     let mut consumer = node(consumer_id, "test", vec![producer_id]);

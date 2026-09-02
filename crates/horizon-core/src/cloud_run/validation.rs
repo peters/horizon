@@ -172,12 +172,14 @@ fn validate_approval(
     approval: &ApprovalGate,
     nodes: &HashMap<CloudJobId, &WorkflowNode>,
 ) -> Result<(), Error> {
+    use CloudJobState::{Checkpointing, Cloning, Provisioning, PullingImage, Running};
     let node_id = node.id;
     ensure(!approval.action.trim().is_empty(), Error::InvalidApprovalGate(node_id))?;
     let valid_time = |value| value >= workflow.created_at_millis && value <= workflow.updated_at_millis;
     let approved = matches!(approval.decision, ApprovalDecision::Approved { .. });
+    let active = [Provisioning, PullingImage, Cloning, Running, Checkpointing].contains(&node.state);
     match &approval.decision {
-        ApprovalDecision::Pending if node.outcome != Some(CloudJobOutcome::Succeeded) => {}
+        ApprovalDecision::Pending if node.outcome != Some(CloudJobOutcome::Succeeded) && !active => {}
         ApprovalDecision::Approved {
             actor,
             decided_at_millis,
