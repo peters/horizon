@@ -127,15 +127,23 @@ impl Driver {
         let read_timeout = Duration::from_millis(remaining_millis.saturating_add(CLASSIC_BOUND_READ_MARGIN_MILLIS));
         self.begin_navigation();
         let _ = event_tx.send(BrowserEvent::Loading(true));
-        let result = self
-            .classic_navigation_post_within("url", &json!({ "url": &url }), read_timeout)
-            .and_then(|_| self.classic_get("url"))
+        let result = self.classic_navigation_post_within("url", &json!({ "url": &url }), read_timeout);
+        let now = Instant::now();
+        if result.is_ok() && pending.tick(now).is_some() {
+            return Ok(self.settle_classic_navigation_timeout(pending, now));
+        }
+        let get_timeout = pending.remaining(now).max(Duration::from_millis(1));
+        let result = result
+            .and_then(|_| self.classic_get_within("url", get_timeout))
             .and_then(|response| {
                 classic_navigation_committed(&response, &url, &previous_url)
                     .then_some(())
                     .ok_or_else(|| "browser did not commit a reachable URL".to_string())
             });
         let now = Instant::now();
+        if pending.tick(now).is_some() {
+            return Ok(self.settle_classic_navigation_timeout(pending, now));
+        }
         if let Err(error) = &result
             && classic_error_is_page_load_timeout(error)
         {
@@ -144,21 +152,7 @@ impl Driver {
             // own 10 s guards; against a hung driver they would eat the
             // controller's delivery headroom, so the loop runs them after the
             // result is written.
-            self.retain_frame_during_navigation = false;
-            self.navigation_failed = false;
-            self.classic_timeout_to_restore = Some(PAGE_LOAD_TIMEOUT_MILLIS);
-            self.refresh_pending_at = Some(now);
-            self.frames.demand();
-            // The classic navigation keeps running in the browser: it counts as
-            // in flight and the page state is polled until it commits or the
-            // page-load window passes. Classic WebDriver only reveals a commit
-            // through a URL change, so a same-URL navigation (a slow reload)
-            // is not tracked: its waits observe the current document instead
-            // of pausing for a commit that could never be recognised.
-            if url != previous_url {
-                self.classic_refresh_until = Some(now + Duration::from_millis(PAGE_LOAD_TIMEOUT_MILLIS));
-            }
-            return Ok(pending.settle_timed_out(None, now));
+            return Ok(self.settle_classic_navigation_timeout(pending, now));
         }
         if self
             .classic_post("timeouts", &json!({ "pageLoad": PAGE_LOAD_TIMEOUT_MILLIS }))
@@ -172,6 +166,19 @@ impl Driver {
             .map_err(|error| BrowserControlFailure::new("navigation_failed", error))?;
         let (committed, title) = (self.url.clone(), self.title.clone());
         Ok(pending.settle_loaded(&committed, &title, Instant::now()))
+    }
+
+    fn settle_classic_navigation_timeout(
+        &mut self,
+        pending: &mut PendingNavigation,
+        now: Instant,
+    ) -> crate::BrowserControlValue {
+        self.retain_frame_during_navigation = false;
+        self.navigation_failed = false;
+        self.classic_timeout_to_restore = Some(PAGE_LOAD_TIMEOUT_MILLIS);
+        self.refresh_pending_at = Some(now);
+        self.frames.demand();
+        pending.settle_timed_out(None, now)
     }
 
     /// Send `browsingContext.navigate` without waiting for its reply. Firefox
@@ -223,20 +230,26 @@ impl Driver {
             .pointer("/result/navigation")
             .and_then(Value::as_str)
             .filter(|id| !id.is_empty());
-        self.attach_navigation_id(navigation);
+        self.attach_navigation_id(navigation, event_tx);
     }
 
     fn fail_agent_navigation(&mut self, event_tx: &BrowserEventSender, message: &str) {
+        self.apply_navigation_failure_state(event_tx, message);
+        self.observe_navigation_signal(NavigationSignal::Failed { message, id: None });
+    }
+
+    pub(super) fn apply_navigation_failure_state(&mut self, event_tx: &BrowserEventSender, message: &str) {
         self.navigation_failed = true;
+        self.retain_frame_during_navigation = true;
+        self.frames.suspend_for_navigation();
         self.frames.interaction_started_at = None;
         let _ = event_tx.send(BrowserEvent::NavigationFailed(message.to_string()));
         let _ = event_tx.send(BrowserEvent::Loading(false));
-        self.observe_navigation_signal(NavigationSignal::Failed { message, id: None });
     }
 
     /// The `browsingContext.navigate` reply named the navigation; attribute
     /// any held-back event.
-    pub(super) fn attach_navigation_id(&mut self, navigation: Option<&str>) {
+    pub(super) fn attach_navigation_id(&mut self, navigation: Option<&str>, event_tx: &BrowserEventSender) {
         let now = Instant::now();
         let settled = self
             .pending_navigation
@@ -245,6 +258,9 @@ impl Driver {
         if let Some(result) = settled
             && let Some(pending) = self.pending_navigation.take()
         {
+            if let Err(failure) = &result {
+                self.apply_navigation_failure_state(event_tx, &failure.message);
+            }
             self.complete_agent_action(&pending.request, result);
         }
     }
@@ -297,11 +313,11 @@ impl Driver {
     }
 
     pub(super) fn supersede_pending_navigation(&mut self, now: Instant) {
+        // Dispatch-only and timed-out actions can leave the asynchronous reply
+        // in flight after their logical result is gone. A replacement must not
+        // route that stale reply into its own navigation state.
+        self.navigate_request_id = None;
         if let Some(pending) = self.pending_navigation.take() {
-            // The superseded navigation's `browsingContext.navigate` reply may
-            // still be in flight; a late rejection must not fail its
-            // replacement.
-            self.navigate_request_id = None;
             self.complete_agent_action(&pending.request, Ok(pending.superseded(now)));
         }
     }
@@ -533,6 +549,13 @@ impl Driver {
         self.service
             .http
             .post_with_read_timeout(&self.session_path(suffix), body, read_timeout)
+            .map_err(|error| error.to_string())
+    }
+
+    fn classic_get_within(&self, suffix: &str, read_timeout: Duration) -> Result<serde_json::Value, String> {
+        self.service
+            .http
+            .get_with_read_timeout(&self.session_path(suffix), read_timeout)
             .map_err(|error| error.to_string())
     }
 

@@ -668,27 +668,31 @@ impl Driver {
         }
         if bidi_navigation_failed(method) {
             let navigation = params.get("navigation").and_then(Value::as_str);
-            if self
-                .pending_navigation
-                .as_ref()
-                .is_some_and(|pending| !pending.correlates(navigation))
-            {
-                // A superseded navigation failing late must not poison the
-                // state of the navigation that replaced it.
-                tracing::debug!(target: "browser", navigation, "ignoring failure of a superseded navigation");
-                return;
-            }
-            self.navigation_failed = true;
-            self.retain_frame_during_navigation = true;
-            self.frames.suspend_for_navigation();
-            self.frames.interaction_started_at = None;
             let url = params
                 .get("url")
                 .and_then(Value::as_str)
                 .unwrap_or("the requested page");
             let message = format!("could not navigate to {url}");
-            let _ = event_tx.send(BrowserEvent::NavigationFailed(message.clone()));
-            let _ = event_tx.send(BrowserEvent::Loading(false));
+            if let Some(pending) = self.pending_navigation.as_ref() {
+                if !pending.correlates(navigation) {
+                    // A superseded navigation failing late must not poison the
+                    // state of the navigation that replaced it.
+                    tracing::debug!(target: "browser", navigation, "ignoring failure of a superseded navigation");
+                    return;
+                }
+                if pending.attribution_is_pending(navigation) {
+                    // The dispatch reply has not named this navigation yet.
+                    // Hold the failure without changing page-wide state; the
+                    // reply either attributes it to this action or discards it
+                    // as a late failure from the navigation it replaced.
+                    self.observe_navigation_signal(crate::navigation::NavigationSignal::Failed {
+                        message: &message,
+                        id: navigation,
+                    });
+                    return;
+                }
+            }
+            self.apply_navigation_failure_state(event_tx, &message);
             self.observe_navigation_signal(crate::navigation::NavigationSignal::Failed {
                 message: &message,
                 id: navigation,

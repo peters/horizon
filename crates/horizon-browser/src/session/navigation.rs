@@ -114,10 +114,11 @@ impl DriverState {
     }
 
     pub(super) fn supersede_pending_navigation(&mut self, now: Instant) {
+        // Dispatch-only and timed-out actions can leave the asynchronous reply
+        // in flight after their logical result is gone. A replacement must not
+        // route that stale reply into its own navigation state.
+        self.navigate_request_id = None;
         if let Some(pending) = self.pending_navigation.take() {
-            // The superseded navigation's `Page.navigate` reply may still be
-            // in flight; a late rejection must not fail its replacement.
-            self.navigate_request_id = None;
             self.complete_agent_action(&pending.request, Ok(pending.superseded(now)));
         }
     }
