@@ -442,7 +442,7 @@ mod tests {
             request,
             "https://example.test/start".to_string(),
             wait,
-            Duration::from_millis(1_000),
+            Duration::from_secs(1),
             Duration::ZERO,
             now,
         )
@@ -454,7 +454,7 @@ mod tests {
             request,
             url.to_string(),
             wait,
-            Duration::from_millis(1_000),
+            Duration::from_secs(1),
             Duration::ZERO,
             now,
         )
