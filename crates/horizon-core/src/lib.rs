@@ -46,10 +46,10 @@ pub use board::{
     Board, ForcedBrowserShutdownStatus, ShutdownProgress, WorkspaceAlignment, WorkspaceDockSide, WorkspaceLayout,
 };
 pub use cloud_run::{
-    ApprovalDecision, ApprovalGate, ArtifactDigest, ArtifactRef, CLOUD_RUN_PROTOCOL_VERSION, CloudJobId, CloudJobState,
-    CloudProgress, CloudProtocolError, CloudProvider, CloudWorkflow, CloudWorkflowId, EnvironmentLease, GitCommitSha,
-    GitSource, ProgressUnit, ProvenanceRecord, ReleaseAction, ReleaseGate, RetryPolicy, WorkerTarget, WorkflowNode,
-    WorkflowNodeKind, WorkflowProgress,
+    ApprovalDecision, ApprovalGate, ArtifactDigest, ArtifactRef, CLOUD_RUN_PROTOCOL_VERSION, CloudJobId,
+    CloudJobOutcome, CloudJobState, CloudProgress, CloudProtocolError, CloudProvider, CloudWorkflow, CloudWorkflowId,
+    EnvironmentLease, GitCommitSha, GitSource, ProgressUnit, ProvenanceRecord, ReleaseAction, ReleaseGate, RetryPolicy,
+    WorkerTarget, WorkflowNode, WorkflowNodeKind, WorkflowProgress,
 };
 pub use config::{
     AppearanceConfig, AppearanceTheme, Config, FeaturesConfig, OverlaysConfig, PresetConfig, ShortcutsConfig,

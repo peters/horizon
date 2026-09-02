@@ -1,9 +1,32 @@
 use std::collections::{HashMap, HashSet};
 
 use super::{
-    ApprovalDecision, ApprovalGate, ArtifactRef, CLOUD_RUN_PROTOCOL_VERSION, CloudJobId, CloudJobState, CloudProgress,
-    CloudProtocolError, CloudWorkflow, CloudWorkflowId, WorkflowNode, WorkflowNodeKind,
+    ApprovalDecision, ApprovalGate, ArtifactRef, CLOUD_RUN_PROTOCOL_VERSION, CloudJobId, CloudJobOutcome,
+    CloudJobState, CloudProgress, CloudProtocolError, CloudWorkflow, CloudWorkflowId, ProvenanceRecord, WorkflowNode,
+    WorkflowNodeKind,
 };
+
+impl ProvenanceRecord {
+    /// Validate persisted source and artifact references for secret-free storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CloudProtocolError`] for an invalid repository, artifact key,
+    /// or duplicate artifact identity.
+    pub fn validate(&self) -> Result<(), CloudProtocolError> {
+        if !valid_repository(&self.source.repository) {
+            return Err(CloudProtocolError::InvalidRepository(self.source.repository.clone()));
+        }
+        let mut artifact_ids = HashSet::new();
+        for artifact in &self.artifacts {
+            validate_artifact(self.producer_job_id, artifact)?;
+            if !artifact_ids.insert(artifact.artifact_id.as_str()) {
+                return Err(CloudProtocolError::DuplicateArtifactId(artifact.artifact_id.clone()));
+            }
+        }
+        Ok(())
+    }
+}
 
 impl CloudWorkflow {
     /// Validate all persisted cross-node and security invariants.
@@ -35,8 +58,21 @@ impl CloudWorkflow {
             return Err(CloudProtocolError::DuplicateNodeId);
         }
         let mut artifact_ids = HashSet::new();
+        let mut logical_attempts = HashSet::new();
+        let mut superseded_attempts = HashSet::new();
         for node in &self.nodes {
             validate_node(self.id, node, &nodes)?;
+            if let Some(previous_id) = node.supersedes
+                && !superseded_attempts.insert(previous_id)
+            {
+                return Err(CloudProtocolError::ForkedRetryAttempt(previous_id));
+            }
+            if !logical_attempts.insert((node.logical_key.as_str(), node.attempt)) {
+                return Err(CloudProtocolError::DuplicateLogicalAttempt {
+                    logical_key: node.logical_key.clone(),
+                    attempt: node.attempt,
+                });
+            }
             for artifact in &node.outputs {
                 validate_artifact(node.id, artifact)?;
                 if !artifact_ids.insert(artifact.artifact_id.as_str()) {
@@ -71,6 +107,9 @@ fn validate_node(
     }
     if node.weight == 0 || node.attempt == 0 || node.retry.max_attempts == 0 || node.attempt > node.retry.max_attempts {
         return Err(CloudProtocolError::InvalidAttempt(node.id));
+    }
+    if !valid_outcome(node) {
+        return Err(CloudProtocolError::InvalidJobOutcome(node.id));
     }
     validate_retry(node, nodes)?;
     if node.depends_on.contains(&node.id) {
@@ -128,8 +167,11 @@ fn validate_retry(node: &WorkflowNode, nodes: &HashMap<CloudJobId, &WorkflowNode
         });
     };
     if previous.logical_key != node.logical_key
-        || node.attempt != previous.attempt.saturating_add(1)
-        || !matches!(previous.state, CloudJobState::Failed | CloudJobState::Cancelled)
+        || previous.attempt.checked_add(1) != Some(node.attempt)
+        || !matches!(
+            previous.outcome,
+            Some(CloudJobOutcome::Failed | CloudJobOutcome::Cancelled)
+        )
     {
         return Err(CloudProtocolError::InvalidSupersededAttempt(node.id));
     }
@@ -160,6 +202,9 @@ fn validate_approval(
         }
     }
     for evidence_id in &approval.evidence_job_ids {
+        if *evidence_id == node_id {
+            return Err(CloudProtocolError::SelfApprovalEvidence(node_id));
+        }
         if !nodes.contains_key(evidence_id) {
             return Err(CloudProtocolError::MissingApprovalEvidence {
                 node: node_id,
@@ -168,6 +213,23 @@ fn validate_approval(
         }
     }
     Ok(())
+}
+
+fn valid_outcome(node: &WorkflowNode) -> bool {
+    use CloudJobOutcome::{Cancelled, Succeeded};
+    use CloudJobState::{
+        Cancelled as CancelledState, Checkpointing, Cleaned, Cleaning, Cloning, Completed, Failed, Provisioning,
+        PullingImage, Queued, Running, WaitingForApproval,
+    };
+    matches!(
+        (node.state, node.outcome),
+        (
+            Queued | Provisioning | PullingImage | Cloning | Running | Checkpointing | WaitingForApproval,
+            None
+        ) | (Completed, Some(Succeeded))
+            | (CancelledState, Some(Cancelled))
+            | (Failed | Cleaning | Cleaned, Some(_))
+    )
 }
 
 fn validate_artifact(node_id: CloudJobId, artifact: &ArtifactRef) -> Result<(), CloudProtocolError> {
@@ -202,32 +264,34 @@ fn valid_repository(repository: &str) -> bool {
 }
 
 fn ensure_acyclic(nodes: &HashMap<CloudJobId, &WorkflowNode>) -> Result<(), CloudProtocolError> {
-    fn visit(
-        id: CloudJobId,
-        nodes: &HashMap<CloudJobId, &WorkflowNode>,
-        visiting: &mut HashSet<CloudJobId>,
-        visited: &mut HashSet<CloudJobId>,
-    ) -> Result<(), CloudProtocolError> {
-        if visited.contains(&id) {
-            return Ok(());
+    let mut remaining: HashMap<_, _> = nodes.iter().map(|(id, node)| (*id, node.depends_on.len())).collect();
+    let mut dependents: HashMap<CloudJobId, Vec<CloudJobId>> = HashMap::new();
+    for (id, node) in nodes {
+        for dependency in &node.depends_on {
+            dependents.entry(*dependency).or_default().push(*id);
         }
-        if !visiting.insert(id) {
-            return Err(CloudProtocolError::DependencyCycle(id));
-        }
-        if let Some(node) = nodes.get(&id) {
-            for dependency in &node.depends_on {
-                visit(*dependency, nodes, visiting, visited)?;
+    }
+    let mut ready: Vec<_> = remaining
+        .iter()
+        .filter_map(|(id, count)| (*count == 0).then_some(*id))
+        .collect();
+    let mut visited = 0;
+    while let Some(id) = ready.pop() {
+        visited += 1;
+        for dependent in dependents.get(&id).into_iter().flatten() {
+            if let Some(count) = remaining.get_mut(dependent) {
+                *count -= 1;
+                if *count == 0 {
+                    ready.push(*dependent);
+                }
             }
         }
-        visiting.remove(&id);
-        visited.insert(id);
-        Ok(())
     }
-
-    let mut visiting = HashSet::new();
-    let mut visited = HashSet::new();
-    for id in nodes.keys().copied() {
-        visit(id, nodes, &mut visiting, &mut visited)?;
+    if visited == nodes.len() {
+        return Ok(());
     }
-    Ok(())
+    remaining
+        .into_iter()
+        .find_map(|(id, count)| (count > 0).then_some(CloudProtocolError::DependencyCycle(id)))
+        .map_or(Ok(()), Err)
 }

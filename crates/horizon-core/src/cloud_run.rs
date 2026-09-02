@@ -4,7 +4,7 @@
 //! safe to persist in a remote control plane and reconstruct after every
 //! Horizon client has disconnected.
 
-use std::fmt;
+use std::{collections::HashSet, fmt};
 
 use serde::{Deserialize, Deserializer, Serialize, de};
 use thiserror::Error;
@@ -25,16 +25,6 @@ macro_rules! uuid_id {
             pub fn new() -> Self {
                 Self(Uuid::new_v4())
             }
-
-            #[must_use]
-            pub const fn from_uuid(value: Uuid) -> Self {
-                Self(value)
-            }
-
-            #[must_use]
-            pub const fn as_uuid(self) -> Uuid {
-                self.0
-            }
         }
 
         impl Default for $name {
@@ -53,14 +43,12 @@ macro_rules! uuid_id {
 
 uuid_id!(CloudWorkflowId);
 uuid_id!(CloudJobId);
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CloudProvider {
     Azure,
     RunPod,
 }
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WorkerTarget {
     pub provider: CloudProvider,
@@ -105,7 +93,6 @@ impl<'de> Deserialize<'de> for GitCommitSha {
         Self::parse(String::deserialize(deserializer)?).map_err(de::Error::custom)
     }
 }
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct GitSource {
     /// Repository identity without credentials, normally `owner/name`.
@@ -148,7 +135,6 @@ impl<'de> Deserialize<'de> for ArtifactDigest {
         Self::parse_sha256(String::deserialize(deserializer)?).map_err(de::Error::custom)
     }
 }
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ArtifactRef {
     pub artifact_id: String,
@@ -159,7 +145,6 @@ pub struct ArtifactRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media_type: Option<String>,
 }
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProvenanceRecord {
     pub producer_job_id: CloudJobId,
@@ -173,7 +158,6 @@ pub struct ProvenanceRecord {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifacts: Vec<ArtifactRef>,
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProgressUnit {
@@ -182,7 +166,6 @@ pub enum ProgressUnit {
     Jobs,
     Steps,
 }
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CloudProgress {
@@ -214,7 +197,6 @@ impl CloudProgress {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CloudJobState {
@@ -233,11 +215,6 @@ pub enum CloudJobState {
 }
 
 impl CloudJobState {
-    #[must_use]
-    pub const fn has_outcome(self) -> bool {
-        matches!(self, Self::Completed | Self::Failed | Self::Cancelled | Self::Cleaned)
-    }
-
     #[must_use]
     pub const fn permits(self, next: Self) -> bool {
         use CloudJobState::{
@@ -260,6 +237,15 @@ impl CloudJobState {
                 | (Cleaning, Cleaned | Failed)
         )
     }
+}
+
+/// Immutable result of a job attempt, retained while cleanup changes its state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CloudJobOutcome {
+    Succeeded,
+    Failed,
+    Cancelled,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -348,6 +334,8 @@ pub struct WorkflowNode {
     pub label: String,
     pub kind: WorkflowNodeKind,
     pub state: CloudJobState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<CloudJobOutcome>,
     pub progress: CloudProgress,
     pub weight: u16,
     pub attempt: u16,
@@ -392,7 +380,9 @@ pub struct CloudWorkflow {
 impl CloudWorkflow {
     #[must_use]
     pub fn progress(&self) -> WorkflowProgress {
-        let total_weight: u64 = self.nodes.iter().map(|node| u64::from(node.weight)).sum();
+        let superseded: HashSet<_> = self.nodes.iter().filter_map(|node| node.supersedes).collect();
+        let latest = self.nodes.iter().filter(|node| !superseded.contains(&node.id));
+        let total_weight: u64 = latest.clone().map(|node| u64::from(node.weight)).sum();
         if total_weight == 0 {
             return WorkflowProgress {
                 basis_points: 0,
@@ -401,7 +391,7 @@ impl CloudWorkflow {
         }
         let mut known_weighted = 0_u128;
         let mut estimated = false;
-        for node in &self.nodes {
+        for node in latest {
             let basis_points = match node.progress.basis_points() {
                 Some(value) => u128::from(value),
                 None if matches!(node.state, CloudJobState::Completed | CloudJobState::Cleaned) => 10_000,
@@ -436,6 +426,10 @@ pub enum CloudProtocolError {
     InvalidWorkflowTimestamps,
     #[error("workflow contains duplicate node ids")]
     DuplicateNodeId,
+    #[error("workflow contains duplicate attempt {attempt} for logical node {logical_key}")]
+    DuplicateLogicalAttempt { logical_key: String, attempt: u16 },
+    #[error("multiple retry attempts supersede node {0}")]
+    ForkedRetryAttempt(CloudJobId),
     #[error("workflow contains duplicate artifact id {0}")]
     DuplicateArtifactId(String),
     #[error("repository must be a credential-free owner/name identity: {0}")]
@@ -446,6 +440,8 @@ pub enum CloudProtocolError {
     InvalidWorkerTarget(CloudJobId),
     #[error("node {0} has an invalid retry attempt")]
     InvalidAttempt(CloudJobId),
+    #[error("node {0} has an outcome inconsistent with its state")]
+    InvalidJobOutcome(CloudJobId),
     #[error("node {node} supersedes missing attempt {previous}")]
     MissingSupersededAttempt { node: CloudJobId, previous: CloudJobId },
     #[error("node {0} does not form a valid immutable retry chain")]
@@ -464,6 +460,8 @@ pub enum CloudProtocolError {
     InvalidApprovalGate(CloudJobId),
     #[error("approval node {node} refers to missing evidence node {evidence}")]
     MissingApprovalEvidence { node: CloudJobId, evidence: CloudJobId },
+    #[error("approval node {0} cannot cite itself as evidence")]
+    SelfApprovalEvidence(CloudJobId),
     #[error("node {0} has an invalid artifact reference")]
     InvalidArtifactRef(CloudJobId),
     #[error("node {0} has an invalid environment lease")]
