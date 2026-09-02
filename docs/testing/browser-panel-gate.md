@@ -93,6 +93,12 @@ The reusable runner:
   disclosure, redacted audit, failures, and optional handoff;
 - proves an immediate backend navigation rejection returns a typed MCP failure,
   retains the last valid page, and is audited as failed rather than completed;
+- proves `browser_navigate` reports typed outcomes: a committed navigation with
+  `committed_url`, a `302` redirect flagged `redirected`, a
+  `dom_content_loaded` wait, a dispatch-only wait, an unreachable loopback
+  destination as a `navigation_failed` action that retains the committed page,
+  and (Chromium and Firefox) a bounded wait on the 11-second page that returns
+  `state: timed_out` with the pre-commit state before the page finally commits;
 - disconnects the MCP stdio client, starts a fresh client with the same actor,
   rediscovers the exact live panel, and proves resumed snapshot plus complete
   audit states without restarting the browser;
@@ -555,6 +561,8 @@ Run once per host OS after the semantic gate:
 | `animation.html` | Deterministic CSS plus canvas repaint workload |
 | `websocket.html` | Native HTTP response body plus deterministic WebSocket disconnect/reconnect lifecycle, sent frames, a 4,096-frame burst plus 17-frame reconnect, URL redaction, bounded NDJSON export |
 | `upload.html` + `upload.txt` | Native file-picker oracle and the documented host file-drop/workspace-open boundary |
+| `/redirect-to-next` (server route) | `302` to `next.html` for the typed `redirected` navigation outcome |
+| `/slow-navigation.html` (server route) | 11-second response for bounded `timed_out` navigation outcomes and the Safari delayed-navigation lane |
 
 Keep selectors stable. When a browser behavior needs a new deterministic
 oracle, extend these fixtures and the gate together instead of creating another

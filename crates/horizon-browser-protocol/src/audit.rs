@@ -167,7 +167,7 @@ impl BrowserAuditAction {
     #[must_use]
     pub fn from_control(action: &BrowserControlAction) -> Self {
         match action {
-            BrowserControlAction::Navigate { url } => Self::Navigate {
+            BrowserControlAction::Navigate { url, .. } => Self::Navigate {
                 destination: redact_url(url),
             },
             BrowserControlAction::Reload => Self::Reload,
@@ -417,11 +417,14 @@ pub fn redact_url(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::NavigationWait;
 
     #[test]
     fn audits_redact_navigation_secrets_and_text_content() {
         let navigation = BrowserAuditAction::from_control(&BrowserControlAction::Navigate {
             url: "https://user:secret@example.test/path?token=secret#private".to_string(),
+            wait: NavigationWait::default(),
+            timeout_millis: None,
         });
         let text = BrowserAuditAction::from_control(&BrowserControlAction::Input {
             input: BrowserInput::InsertText {

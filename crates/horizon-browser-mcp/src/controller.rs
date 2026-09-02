@@ -476,6 +476,11 @@ fn bounded_timeout(timeout_millis: Option<u64>) -> u64 {
         .clamp(1, MAX_ACTION_TIMEOUT_MILLIS)
 }
 
+/// The per-action timeout this server enforces for `timeout_millis`.
+pub(crate) fn bounded_action_timeout(timeout_millis: Option<u64>) -> u64 {
+    bounded_timeout(timeout_millis)
+}
+
 fn bounded_create_timeout(timeout_millis: Option<u64>) -> u64 {
     timeout_millis
         .unwrap_or(DEFAULT_CREATE_TIMEOUT_MILLIS)

@@ -37,9 +37,14 @@ semantic tools cannot reach the embedded frame content, call `browser_handoff`
 on the original panel so the user can complete the interaction; do not open a
 separate panel for the frame.
 
-After navigation or interaction, verify the visible outcome with
-`browser_wait`, `browser_query`, or a new snapshot. Use `browser_evaluate` only
-when the semantic tools cannot answer the question.
+`browser_navigate` returns a typed outcome: by default it waits until the
+document committed and reports `committed_url`, `title` when known, `loading`,
+`redirected`, and `state`. Check `completed`; a `timed_out` state carries the
+latest page state so you can inspect or retry, and `wait: dom_content_loaded`
+or `wait: dispatched` change how long it waits. After navigation or
+interaction, verify the visible outcome with `browser_wait`, `browser_query`,
+or a new snapshot. Use `browser_evaluate` only when the semantic tools cannot
+answer the question.
 
 For HTTP or WebSocket observation, first inspect the panel's
 `network_capture` field from `browser_list` or `browser_panel`. When supported,

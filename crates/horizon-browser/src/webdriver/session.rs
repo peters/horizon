@@ -152,6 +152,11 @@ struct Driver {
     generation: u64,
     retain_frame_during_navigation: bool,
     navigation_failed: bool,
+    /// Agent navigation whose typed outcome is settled by `BiDi` events.
+    pending_navigation: Option<crate::navigation::PendingNavigation>,
+    /// In-flight `browsingContext.navigate` sent without waiting: Firefox
+    /// answers it only once the destination responds.
+    navigate_request_id: Option<u64>,
     pending_classic_history_start: Option<PendingHistoryStart>,
     refresh_pending_at: Option<Instant>,
     coordination_dirty: bool,
@@ -233,17 +238,7 @@ pub(crate) fn run_webdriver(
         }
         driver.tick_safari_input(event_tx);
         for request in driver.tick_coordination(event_tx) {
-            if let Err(message) = request.action.validate() {
-                driver.audit_agent_action(&request, crate::BrowserAuditStatus::Rejected);
-                driver.complete_agent_action(
-                    &request,
-                    Err(crate::BrowserControlFailure::new("invalid_input", message)),
-                );
-                continue;
-            }
-            driver.audit_agent_action(&request, crate::BrowserAuditStatus::Dispatched);
-            let result = driver.execute_agent_action(&request, event_tx);
-            driver.complete_agent_action(&request, result);
+            driver.service_agent_request(&request, event_tx);
         }
         if let Err(error) = driver.drain_bidi_events(event_tx) {
             tracing::warn!(backend = ?driver.config.browser.backend, "BiDi event pump failed: {error}");
@@ -261,6 +256,7 @@ pub(crate) fn run_webdriver(
             driver.capture_frame(frame_slot, event_tx);
         }
         driver.tick_page_state_refresh(event_tx);
+        driver.tick_pending_navigation();
         driver.write_coordination(false);
         if let Some(status) = driver.service.process.child_status() {
             let _ = event_tx.send(BrowserEvent::Stopped { code: status.code() });
@@ -357,6 +353,8 @@ impl Driver {
             generation: 0,
             retain_frame_during_navigation: false,
             navigation_failed: false,
+            pending_navigation: None,
+            navigate_request_id: None,
             pending_classic_history_start: None,
             refresh_pending_at: None,
             coordination_dirty: true,
@@ -601,6 +599,12 @@ impl Driver {
     }
 
     fn handle_bidi_event(&mut self, event: &Value, event_tx: &BrowserEventSender) {
+        if let Some(id) = event.get("id").and_then(Value::as_u64)
+            && self.navigate_request_id == Some(id)
+        {
+            self.handle_bidi_navigate_response(event, event_tx);
+            return;
+        }
         if self.handle_network_bidi_event(event) {
             return;
         }
@@ -635,8 +639,10 @@ impl Driver {
                 .get("url")
                 .and_then(Value::as_str)
                 .unwrap_or("the requested page");
-            let _ = event_tx.send(BrowserEvent::NavigationFailed(format!("could not navigate to {url}")));
+            let message = format!("could not navigate to {url}");
+            let _ = event_tx.send(BrowserEvent::NavigationFailed(message.clone()));
             let _ = event_tx.send(BrowserEvent::Loading(false));
+            self.observe_navigation_signal(crate::navigation::NavigationSignal::Failed(&message));
             return;
         }
         let navigation_complete = bidi_navigation_complete(method);
@@ -663,6 +669,7 @@ impl Driver {
             let _ = event_tx.send(BrowserEvent::Loading(false));
             self.frames.demand();
             self.refresh_pending_at = Some(Instant::now() + Duration::from_millis(50));
+            self.settle_navigation_from_bidi(method);
         } else if method.ends_with("contextDestroyed") {
             let destroyed = params.get("context").and_then(Value::as_str);
             if destroyed == self.context_id.as_deref() {
@@ -690,37 +697,6 @@ impl Driver {
         self.refresh_pending_at = None;
         self.scrollbar.reset();
         self.frames.suspend_for_navigation();
-    }
-
-    fn refresh_page_state(&mut self, event_tx: &BrowserEventSender) {
-        if let Ok(response) = self.classic_get("url")
-            && let Some(url) = webdriver_value(&response).and_then(Value::as_str)
-            && url != self.url
-        {
-            self.url = normalize_url(url).to_string();
-            self.coordination_dirty = true;
-            let _ = event_tx.send(BrowserEvent::UrlChanged(self.url.clone()));
-        }
-        if let Ok(response) = self.classic_get("title")
-            && let Some(title) = webdriver_value(&response).and_then(Value::as_str)
-            && title != self.title
-        {
-            self.title = title.to_string();
-            self.coordination_dirty = true;
-            let _ = event_tx.send(BrowserEvent::Title(self.title.clone()));
-        }
-        let _ = event_tx.send(BrowserEvent::Loading(false));
-    }
-
-    fn tick_page_state_refresh(&mut self, event_tx: &BrowserEventSender) {
-        let Some(refresh_at) = self.refresh_pending_at else {
-            return;
-        };
-        if Instant::now() < refresh_at {
-            return;
-        }
-        self.refresh_pending_at = None;
-        self.refresh_page_state(event_tx);
     }
 
     fn classic_get(&self, suffix: &str) -> Result<Value, String> {

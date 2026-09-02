@@ -32,6 +32,7 @@ mod handle;
 mod http_bodies;
 mod lifecycle;
 mod manifest_io;
+mod navigation;
 mod network;
 mod semantic;
 mod shutdown;
@@ -318,6 +319,7 @@ fn run_loop(
         // 5. Ownership / handoff signals from the manifest (agent side).
         let actions = state.tick_signals(event_tx);
         let _ = state.drain_agent_actions(link, event_tx, frame_slot, actions);
+        state.tick_pending_navigation();
 
         // 6. Chrome process liveness.
         if let Some(status) = chrome.child_status() {
@@ -411,6 +413,13 @@ struct DriverState {
     /// committed a reachable top-level document.
     retain_frame_during_navigation: bool,
     navigation_failed: bool,
+    /// Agent navigation whose typed outcome is settled by page events.
+    pending_navigation: Option<crate::navigation::PendingNavigation>,
+    /// In-flight `Page.navigate` request. The reply is routed asynchronously
+    /// so a slow destination never blocks frames, input, or coordination.
+    navigate_request_id: Option<u64>,
+    /// In-flight `Page.startScreencast` request, for the same reason.
+    screencast_request_id: Option<u64>,
     clipboard: ClipboardState,
     url: String,
     title: String,
@@ -472,6 +481,9 @@ impl DriverState {
             interaction_started_at: None,
             retain_frame_during_navigation: false,
             navigation_failed: false,
+            pending_navigation: None,
+            navigate_request_id: None,
+            screencast_request_id: None,
             clipboard: ClipboardState::default(),
             // The requested initial URL is not committed state. Chrome starts
             // at about:blank and navigation may fail or be cancelled.
@@ -666,46 +678,68 @@ impl DriverState {
         url: &str,
     ) -> Result<(), BrowserControlFailure> {
         let url = normalize_navigation_target(url);
+        let Some(session) = self.session_id.clone() else {
+            let error = CdpError::NoPageSession {
+                method: "Page.navigate".to_string(),
+            };
+            self.fail_navigation(event_tx, &format!("could not navigate to {url}: {error}"));
+            return Err(BrowserControlFailure::new("protocol_error", error.to_string()));
+        };
+        let _ = frame_slot;
         self.challenge_loop.document_navigation_started();
         self.retain_frame_during_navigation = true;
         self.navigation_failed = false;
-        let result = self.send_page_command(
-            link,
-            event_tx,
-            frame_slot,
-            "Page.navigate",
-            &serde_json::json!({ "url": &url }),
-        );
-        match result {
-            Ok(result) => {
-                if let Some(error) = result.get("errorText").and_then(serde_json::Value::as_str)
-                    && !error.is_empty()
-                {
-                    self.navigation_failed = true;
-                    self.interaction_started_at = None;
-                    let _ = event_tx.send(BrowserEvent::NavigationFailed(format!(
-                        "could not navigate to {url}: {error}"
-                    )));
-                    let _ = event_tx.send(BrowserEvent::Loading(false));
-                    return Err(BrowserControlFailure::new("navigation_failed", error));
-                }
-                // The committed URL remains authoritative and arrives via a
-                // navigation event. Do not overwrite it with a merely
-                // requested value.
+        // `Page.navigate` replies only once the destination starts
+        // responding, so it is sent without waiting: a slow server must not
+        // stall frames, input, or coordination. The reply is consumed by
+        // `handle_navigate_response`; the committed URL remains authoritative
+        // and arrives via a navigation event.
+        match link.send_request("Page.navigate", &serde_json::json!({ "url": &url }), Some(&session)) {
+            Ok(request_id) => {
+                self.navigate_request_id = Some(request_id);
                 self.pending_restart_at = Some(Instant::now());
                 let _ = event_tx.send(BrowserEvent::Loading(true));
                 Ok(())
             }
             Err(error) => {
-                self.navigation_failed = true;
-                self.interaction_started_at = None;
-                let _ = event_tx.send(BrowserEvent::NavigationFailed(format!(
-                    "could not navigate to {url}: {error}"
-                )));
-                let _ = event_tx.send(BrowserEvent::Loading(false));
+                self.fail_navigation(event_tx, &format!("could not navigate to {url}: {error}"));
                 Err(BrowserControlFailure::new("protocol_error", error.to_string()))
             }
         }
+    }
+
+    /// Consume the asynchronous `Page.navigate` reply: a transport error or
+    /// a non-empty `errorText` is a failed navigation.
+    pub(super) fn handle_navigate_response(
+        &mut self,
+        event_tx: &BrowserEventSender,
+        id: u64,
+        result: Option<&serde_json::Value>,
+        error: Option<&crate::cdp::CdpErrorInfo>,
+    ) -> bool {
+        if self.navigate_request_id != Some(id) {
+            return false;
+        }
+        self.navigate_request_id = None;
+        let failure = error.map(ToString::to_string).or_else(|| {
+            result
+                .and_then(|value| value.get("errorText"))
+                .and_then(serde_json::Value::as_str)
+                .filter(|text| !text.is_empty())
+                .map(str::to_string)
+        });
+        if let Some(failure) = failure {
+            self.fail_navigation(event_tx, &format!("could not navigate: {failure}"));
+        }
+        true
+    }
+
+    fn fail_navigation(&mut self, event_tx: &BrowserEventSender, message: &str) {
+        self.navigation_failed = true;
+        self.interaction_started_at = None;
+        let _ = event_tx.send(BrowserEvent::NavigationFailed(message.to_string()));
+        let _ = event_tx.send(BrowserEvent::Loading(false));
+        self.observe_navigation_signal(crate::navigation::NavigationSignal::Failed(message));
     }
 }
 

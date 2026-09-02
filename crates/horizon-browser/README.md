@@ -141,9 +141,18 @@ not impose those product storage choices on another application.
 
 Hosts publish `AgentActionResult` values through `BrowserCoordination`. A
 terminal `Completed` audit record means the engine finished handling the
-request; navigation and other asynchronous page behavior still need an
-explicit later snapshot, query, or wait in the host-facing adapter. Selectors,
-scripts, filled text, and returned page data are excluded from audit records.
+request. A `Navigate` action carries a `NavigationWait` (`dispatched`,
+`commit`, or `dom_content_loaded`, default `commit`) and a bounded
+`timeout_millis`; the engine dispatches at once and settles a typed
+`NavigationOutcome` (requested and committed URL, title when known, loading,
+redirected, elapsed, and a `state` of `dispatched`, `committed`,
+`dom_content_loaded`, `timed_out`, or `superseded`) from the backend's own
+commit, `DOMContentLoaded`, load, and failure signals. On Firefox BiDi a commit
+is observed at `DOMContentLoaded`; classic WebDriver blocks until the document
+loaded. A destination that fails after dispatch is a failed action, not a
+state. Other asynchronous page behavior (reload, history traversal, input)
+still needs an explicit later snapshot, query, or wait. Selectors, scripts,
+filled text, and returned page data are excluded from audit records.
 Only redacted shape, bounded character counts, actor, action identity, and
 status are retained.
 

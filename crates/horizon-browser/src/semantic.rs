@@ -11,7 +11,7 @@ use serde_json::Value;
 
 pub use horizon_browser_protocol::{
     AgentActionResult, BrowserActionOutcome, BrowserBounds, BrowserControlFailure, BrowserControlValue, BrowserNode,
-    BrowserSnapshot, BrowserTarget,
+    BrowserSnapshot, BrowserTarget, NavigationOutcome, NavigationState,
 };
 
 const MAX_CONTROL_RESULT_BYTES: usize = 1024 * 1024;

@@ -15,6 +15,7 @@ use crate::frames::FrameSlot;
 
 use super::clipboard::target_event_session_id;
 use super::{BrowserEvent, BrowserEventSender, DriverState, normalized_committed_url, publish_frame};
+use crate::navigation::NavigationSignal;
 
 impl DriverState {
     pub(super) fn tick_title_fetch(
@@ -90,6 +91,7 @@ impl DriverState {
         self.manifest_dirty = true;
         self.write_manifest(false);
         let _ = event_tx.send(BrowserEvent::Title(title.to_string()));
+        self.observe_navigation_signal(NavigationSignal::Title(title));
     }
 
     pub(super) fn handle_message(
@@ -107,6 +109,12 @@ impl DriverState {
             return;
         };
         if self.handle_clipboard_response(id, result.as_ref(), error.as_ref(), event_tx) {
+            return;
+        }
+        if self.handle_navigate_response(event_tx, id, result.as_ref(), error.as_ref()) {
+            return;
+        }
+        if self.handle_screencast_response(id, error.as_ref()) {
             return;
         }
         if self.handle_runtime_enable_response(id, error.as_ref()) {
@@ -205,6 +213,8 @@ impl DriverState {
                 if target_event_session_id(event.params, event.session_id) == self.session_id.as_deref() {
                     self.session_id = None;
                     self.screencast_on = false;
+                    self.screencast_request_id = None;
+                    self.navigate_request_id = None;
                     self.pending_viewport_capture_at = None;
                     self.viewport_capture_request_id = None;
                     self.invalidate_scrollbar_layout();
@@ -252,6 +262,12 @@ impl DriverState {
                 if on_page_session {
                     let _ = event_tx.send(BrowserEvent::Loading(false));
                     self.title_fetch_at = Some(Instant::now() + Duration::from_millis(400));
+                    self.observe_navigation_signal(NavigationSignal::Load);
+                }
+            }
+            "Page.domContentEventFired" => {
+                if on_page_session {
+                    self.observe_navigation_signal(NavigationSignal::DomContentLoaded);
                 }
             }
             "Runtime.executionContextCreated"
@@ -276,6 +292,8 @@ impl DriverState {
         self.target_id = None;
         self.main_frame_id = None;
         self.screencast_on = false;
+        self.screencast_request_id = None;
+        self.navigate_request_id = None;
         self.pending_viewport_capture_at = None;
         self.viewport_capture_request_id = None;
         self.invalidate_scrollbar_layout();
@@ -310,10 +328,10 @@ impl DriverState {
             self.navigation_failed = true;
             self.interaction_started_at = None;
             self.title_fetch_at = None;
-            let _ = event_tx.send(BrowserEvent::NavigationFailed(format!(
-                "could not navigate to {unreachable_url}: the page was unreachable"
-            )));
+            let message = format!("could not navigate to {unreachable_url}: the page was unreachable");
+            let _ = event_tx.send(BrowserEvent::NavigationFailed(message.clone()));
             let _ = event_tx.send(BrowserEvent::Loading(false));
+            self.observe_navigation_signal(NavigationSignal::Failed(&message));
             return;
         }
         self.retain_frame_during_navigation = false;
@@ -345,6 +363,8 @@ impl DriverState {
             }
         }
         let _ = event_tx.send(BrowserEvent::Loading(true));
+        let committed = self.url.clone();
+        self.observe_navigation_signal(NavigationSignal::Committed(&committed));
     }
 
     fn handle_same_document_navigation(
@@ -377,6 +397,7 @@ impl DriverState {
         self.manifest_dirty = true;
         self.write_manifest(true);
         self.publish_url_changed(event_tx);
+        self.observe_navigation_signal(NavigationSignal::SameDocument(url));
     }
 
     /// Ack, then decode and store one screencast frame.

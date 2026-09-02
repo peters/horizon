@@ -265,26 +265,40 @@ impl DriverState {
         false
     }
 
-    fn start_screencast(&mut self, link: &mut CdpLink, event_tx: &BrowserEventSender, frame_slot: &Arc<FrameSlot>) {
+    /// Ask Chrome to (re)start the screencast without waiting for the reply.
+    /// Page-domain commands are answered only after an in-flight navigation
+    /// commits, so a synchronous call would stall frames, input, and
+    /// coordination behind a slow destination. The reply is consumed by
+    /// `handle_screencast_response`.
+    fn start_screencast(&mut self, link: &mut CdpLink, _event_tx: &BrowserEventSender, _frame_slot: &Arc<FrameSlot>) {
         let Some(session) = self.session_id.clone() else {
             return;
         };
+        if self.screencast_request_id.is_some() {
+            return;
+        }
         let params = self.screencast_params();
-        match self.call_and_ack(
-            link,
-            event_tx,
-            frame_slot,
-            "Page.startScreencast",
-            &params,
-            Some(session.as_str()),
-        ) {
-            Ok(_) => {
-                self.screencast_on = true;
-                self.restart_attempts = 0;
+        match link.send_request("Page.startScreencast", &params, Some(session.as_str())) {
+            Ok(request_id) => {
+                self.screencast_request_id = Some(request_id);
                 self.pending_restart_at = None;
             }
             Err(error) => self.note_screencast_failure(&error.to_string()),
         }
+    }
+
+    pub(super) fn handle_screencast_response(&mut self, id: u64, error: Option<&crate::cdp::CdpErrorInfo>) -> bool {
+        if self.screencast_request_id != Some(id) {
+            return false;
+        }
+        self.screencast_request_id = None;
+        if let Some(error) = error {
+            self.note_screencast_failure(&error.to_string());
+        } else {
+            self.screencast_on = true;
+            self.restart_attempts = 0;
+        }
+        true
     }
 
     /// Exponential backoff between screencast restarts, capped so a page

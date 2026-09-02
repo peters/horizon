@@ -124,9 +124,13 @@ fn enqueue_at(
         .map(|value| normalize_navigation_target(&value))
         .filter(|value| !value.is_empty());
     if let Some(url) = &url {
-        BrowserControlAction::Navigate { url: url.clone() }
-            .validate()
-            .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
+        BrowserControlAction::Navigate {
+            url: url.clone(),
+            wait: horizon_browser::NavigationWait::default(),
+            timeout_millis: None,
+        }
+        .validate()
+        .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
     }
 
     let directory = create_directory(root);

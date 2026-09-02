@@ -19,9 +19,9 @@ use rmcp::{
 use crate::controller::{BrowserController, MAX_ACTION_TIMEOUT_MILLIS};
 use crate::model::{
     ActInput, ActKind, ActionOutput, AuditInput, AuditOutput, BrowserListOutput, CreateInput, CreateOutput,
-    EvaluateInput, EvaluateOutput, HandoffInput, HandoffOutput, NavigateInput, NetworkInput, NetworkOutput,
-    NetworkWatchInput, NetworkWatchOutput, NodeOutput, NodesOutput, PanelInput, QueryInput, SnapshotInput,
-    SnapshotOutput, VisibilityInput, VisibilityOutput, WaitInput, WaitOutput, WaitState,
+    EvaluateInput, EvaluateOutput, HandoffInput, HandoffOutput, NavigateInput, NavigateOutput, NetworkInput,
+    NetworkOutput, NetworkWatchInput, NetworkWatchOutput, NodeOutput, NodesOutput, PanelInput, QueryInput,
+    SnapshotInput, SnapshotOutput, VisibilityInput, VisibilityOutput, WaitInput, WaitOutput, WaitState,
 };
 use crate::network_watch::NetworkWatchState;
 
@@ -108,27 +108,34 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_navigate",
-        description = "Navigate a live browser panel through Horizon's audited backend-neutral control path."
+        description = "Navigate a live browser panel through Horizon's audited backend-neutral control path and report a typed outcome. By default it returns once the top-level document committed (wait=commit); wait=dispatched returns after the backend accepted the command and wait=dom_content_loaded after DOMContentLoaded. The result carries requested_url, committed_url, title, loading, redirected, elapsed_millis and state; check completed, because a wait that exceeds timeout_millis returns state=timed_out with the latest page state instead of an error. Unreachable destinations and rejected commands are errors."
     )]
     async fn browser_navigate(
         &self,
         Parameters(input): Parameters<NavigateInput>,
-    ) -> Result<Json<ActionOutput>, String> {
+    ) -> Result<Json<NavigateOutput>, String> {
+        let wait = input.wait.unwrap_or_default();
         let receipt = self
             .controller
             .execute(
                 &input.panel_id,
-                BrowserControlAction::Navigate { url: input.url },
+                BrowserControlAction::Navigate {
+                    url: input.url,
+                    wait: wait.into(),
+                    timeout_millis: Some(engine_navigation_timeout(input.timeout_millis)),
+                },
                 input.timeout_millis,
             )
             .await
             .map_err(|error| error.to_string())?;
-        require_accepted(&receipt.value)?;
-        Ok(Json(ActionOutput {
-            panel_id: input.panel_id,
-            action_id: receipt.action_id,
-            completed: true,
-        }))
+        match receipt.value {
+            BrowserControlValue::Navigation { navigation } => Ok(Json(NavigateOutput::from_outcome(
+                input.panel_id,
+                receipt.action_id,
+                navigation,
+            ))),
+            _ => Err("browser returned an unexpected navigation result".to_string()),
+        }
     }
 
     #[tool(
@@ -370,12 +377,12 @@ impl ServerHandler for HorizonBrowserMcp {
     }
 }
 
-fn require_accepted(value: &BrowserControlValue) -> Result<(), String> {
-    if matches!(value, BrowserControlValue::Accepted) {
-        Ok(())
-    } else {
-        Err("browser returned an unexpected action result".to_string())
-    }
+/// Bound for the engine-side navigation wait: short enough that its typed
+/// `timed_out` report arrives before this server's own action timeout.
+fn engine_navigation_timeout(timeout_millis: Option<u64>) -> u64 {
+    crate::controller::bounded_action_timeout(timeout_millis)
+        .saturating_sub(250)
+        .max(250)
 }
 
 fn require_action_completed(action: ActKind, value: &BrowserControlValue) -> Result<(), String> {
@@ -482,6 +489,61 @@ mod tests {
         assert!(!schemas.contains("browser_ws"));
         assert!(!schemas.contains("manifest_path"));
         assert!(!schemas.contains("cdp_endpoint"));
+    }
+
+    #[test]
+    fn navigation_outcomes_map_to_typed_tool_results() {
+        let outcome = |state| horizon_browser::NavigationOutcome {
+            requested_url: "https://example.test/".to_string(),
+            wait: horizon_browser::NavigationWait::Commit,
+            state,
+            committed_url: Some("https://example.test/landing".to_string()),
+            title: None,
+            loading: true,
+            redirected: true,
+            elapsed_millis: 12,
+        };
+        let committed = NavigateOutput::from_outcome(
+            "panel".to_string(),
+            "action".to_string(),
+            outcome(horizon_browser::NavigationState::Committed),
+        );
+        assert!(committed.completed);
+        assert_eq!(committed.state, crate::model::NavigateState::Committed);
+        assert_eq!(committed.wait, crate::model::NavigateWait::Commit);
+        assert!(committed.redirected);
+        assert_eq!(committed.committed_url.as_deref(), Some("https://example.test/landing"));
+        for state in [
+            horizon_browser::NavigationState::TimedOut,
+            horizon_browser::NavigationState::Superseded,
+        ] {
+            let output = NavigateOutput::from_outcome("panel".to_string(), "action".to_string(), outcome(state));
+            assert!(!output.completed, "{state:?} never counts as completed");
+            assert_eq!(output.elapsed_millis, 12);
+        }
+        let dispatched = NavigateOutput::from_outcome(
+            "panel".to_string(),
+            "action".to_string(),
+            outcome(horizon_browser::NavigationState::Dispatched),
+        );
+        assert!(dispatched.completed);
+
+        assert_eq!(engine_navigation_timeout(None), 14_750);
+        assert_eq!(
+            engine_navigation_timeout(Some(100)),
+            250,
+            "the engine bound never drops below 250 ms"
+        );
+        assert_eq!(
+            engine_navigation_timeout(Some(600_000)),
+            59_750,
+            "the engine bound follows the server clamp"
+        );
+        let encoded = serde_json::to_value(crate::model::NavigateWait::DomContentLoaded).expect("encode");
+        assert_eq!(encoded, serde_json::json!("dom_content_loaded"));
+        let aliased: crate::model::NavigateWait =
+            serde_json::from_value(serde_json::json!("domcontentloaded")).expect("alias decodes");
+        assert_eq!(aliased, crate::model::NavigateWait::DomContentLoaded);
     }
 
     #[test]

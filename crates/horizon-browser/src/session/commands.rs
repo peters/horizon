@@ -10,6 +10,8 @@ use crate::frames::FrameSlot;
 use crate::input::{BrowserInputCdpExt, is_user_activity};
 use crate::{AgentAction, BrowserAuditStatus, BrowserButton, BrowserControlFailure, BrowserInput};
 
+use crate::navigation::AgentActionExecution;
+
 use super::{
     BrowserCommand, BrowserEventSender, CommandReceiver, DriverState, SCROLLBAR_LAYOUT_RETRY_DELAY,
     VIEWPORT_CAPTURE_DELAY, VIEWPORT_RETRY_DELAY, VerticalScrollbarLayout,
@@ -56,6 +58,16 @@ impl DriverState {
                 continue;
             }
             self.audit_agent_action(&request, BrowserAuditStatus::Dispatched);
+            if matches!(request.action, crate::BrowserControlAction::Navigate { .. }) {
+                // Navigation settles from page events; a dispatch-only wait
+                // completes here, everything else stays pending.
+                if let AgentActionExecution::Done(result) =
+                    self.begin_agent_navigation(link, event_tx, frame_slot, &request)
+                {
+                    self.complete_agent_action(&request, result);
+                }
+                continue;
+            }
             let (result, stop) = self.execute_agent_action(link, event_tx, frame_slot, &request);
             self.complete_agent_action(&request, result);
             if stop {

@@ -146,6 +146,29 @@ impl Driver {
         );
     }
 
+    /// Validate, audit, and run one queued agent action. Navigation settles
+    /// from `BiDi` events, so only a synchronously finished navigation
+    /// completes here.
+    pub(super) fn service_agent_request(&mut self, request: &AgentAction, event_tx: &BrowserEventSender) {
+        if let Err(message) = request.action.validate() {
+            self.audit_agent_action(request, crate::BrowserAuditStatus::Rejected);
+            self.complete_agent_action(
+                request,
+                Err(crate::BrowserControlFailure::new("invalid_input", message)),
+            );
+            return;
+        }
+        self.audit_agent_action(request, crate::BrowserAuditStatus::Dispatched);
+        if matches!(request.action, crate::BrowserControlAction::Navigate { .. }) {
+            if let crate::navigation::AgentActionExecution::Done(result) = self.navigate_action(request, event_tx) {
+                self.complete_agent_action(request, result);
+            }
+            return;
+        }
+        let result = self.execute_agent_action(request, event_tx);
+        self.complete_agent_action(request, result);
+    }
+
     pub(super) fn audit_agent_action(&self, request: &AgentAction, status: BrowserAuditStatus) {
         self.record_audit(
             request.action_id.clone(),

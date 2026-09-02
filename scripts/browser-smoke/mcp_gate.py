@@ -393,6 +393,117 @@ def verify_disclosure(fingerprint: dict[str, Any], backend: str, policy: str) ->
             raise AssertionError(f"chromium webdriver getter was not native: {fingerprint}")
 
 
+def verify_navigation_outcome(
+    result: dict[str, Any],
+    wait: str,
+    state: str,
+    committed_url: str | None,
+    *,
+    redirected: bool,
+) -> None:
+    expected_completed = state in {"dispatched", "committed", "dom_content_loaded"}
+    if (
+        result.get("wait") != wait
+        or result.get("state") != state
+        or result.get("completed") is not expected_completed
+        or result.get("redirected") is not redirected
+        or not isinstance(result.get("elapsed_millis"), int)
+        or not result.get("requested_url")
+        or not result.get("action_id")
+    ):
+        raise AssertionError(f"browser_navigate did not report a typed {state} outcome: {result}")
+    if committed_url is not None and result.get("committed_url") != committed_url:
+        raise AssertionError(f"browser_navigate committed_url mismatch: {result}")
+
+
+def exercise_navigation_outcomes(
+    client: McpClient,
+    args: argparse.Namespace,
+    panel_id: str,
+    action_ids: list[str],
+    failed_ids: list[str],
+) -> None:
+    """Typed navigation outcomes: redirect, DOMContentLoaded, dispatch-only, unreachable, timeout."""
+    redirected = record_action(
+        client,
+        "browser_navigate",
+        {"panel_id": panel_id, "url": f"{args.base_url}/redirect-to-next"},
+        action_ids,
+    )
+    verify_navigation_outcome(redirected, "commit", "committed", f"{args.base_url}/next.html", redirected=True)
+    loaded = record_action(
+        client,
+        "browser_navigate",
+        {"panel_id": panel_id, "url": f"{args.base_url}/index.html", "wait": "dom_content_loaded"},
+        action_ids,
+    )
+    verify_navigation_outcome(loaded, "dom_content_loaded", "dom_content_loaded", f"{args.base_url}/index.html", redirected=False)
+    dispatched = record_action(
+        client,
+        "browser_navigate",
+        {"panel_id": panel_id, "url": f"{args.base_url}/next.html", "wait": "dispatched"},
+        action_ids,
+    )
+    verify_navigation_outcome(dispatched, "dispatched", "dispatched", None, redirected=False)
+    record_action(
+        client,
+        "browser_wait",
+        {"panel_id": panel_id, "selector": "#next-marker", "state": "visible"},
+        action_ids,
+    )
+    _, unreachable_error = client.call(
+        "browser_navigate",
+        {"panel_id": panel_id, "url": "http://127.0.0.1:9/unreachable", "timeout_millis": 20000},
+        expect_error=True,
+    )
+    if unreachable_error is None or "navigation_failed" not in unreachable_error:
+        raise AssertionError(f"unreachable destination was not a typed navigation failure: {unreachable_error}")
+    failed_ids.append(failed_action_id(unreachable_error))
+    retained, _ = client.call("browser_panel", {"panel_id": panel_id})
+    if retained is None or retained["url"] != f"{args.base_url}/next.html":
+        raise AssertionError(f"unreachable navigation replaced the committed page: {retained}")
+    if args.backend != "safari":
+        timed_out = record_action(
+            client,
+            "browser_navigate",
+            {"panel_id": panel_id, "url": f"{args.base_url}/slow-navigation.html", "timeout_millis": 3000},
+            action_ids,
+        )
+        verify_navigation_outcome(timed_out, "commit", "timed_out", None, redirected=False)
+        if timed_out.get("committed_url") is not None or timed_out["elapsed_millis"] < 2000:
+            raise AssertionError(f"timed-out navigation did not report the pre-commit state: {timed_out}")
+        # The navigation keeps running after the bounded report. Page
+        # scripting is queued behind the pending commit, so watch the host's
+        # committed URL (no browser roundtrip) before touching the DOM.
+        wait_for_panel_url(client, panel_id, f"{args.base_url}/slow-navigation.html", 30.0)
+        record_action(
+            client,
+            "browser_wait",
+            {"panel_id": panel_id, "selector": "#slow-marker", "state": "visible", "timeout_millis": 30000},
+            action_ids,
+        )
+    # Leave history as the following back/forward lane expects: index.html
+    # immediately behind next.html.
+    for page in ("index.html", "next.html"):
+        settled = record_action(
+            client,
+            "browser_navigate",
+            {"panel_id": panel_id, "url": f"{args.base_url}/{page}"},
+            action_ids,
+        )
+        verify_navigation_outcome(settled, "commit", "committed", f"{args.base_url}/{page}", redirected=False)
+
+
+def wait_for_panel_url(client: McpClient, panel_id: str, url: str, timeout_seconds: float) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        panel, _ = client.call("browser_panel", {"panel_id": panel_id})
+        if panel is not None and panel.get("url") == url:
+            return
+        time.sleep(0.5)
+    raise AssertionError(f"panel did not commit {url} within {timeout_seconds} s")
+
+
 def failed_action_id(error: str) -> str:
     match = re.search(r"browser action ([^ ]+) failed", error)
     if match is None:
@@ -1023,18 +1134,20 @@ def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
     if after_scroll is None or after_scroll["url"] != before_scroll["url"]:
         raise AssertionError("scroll changed the browser panel's committed URL")
 
-    record_action(
+    navigated = record_action(
         client,
         "browser_navigate",
         {"panel_id": panel_id, "url": f"{args.base_url}/next.html"},
         action_ids,
     )
+    verify_navigation_outcome(navigated, "commit", "committed", f"{args.base_url}/next.html", redirected=False)
     record_action(
         client,
         "browser_wait",
         {"panel_id": panel_id, "selector": "#next-marker", "state": "visible"},
         action_ids,
     )
+    exercise_navigation_outcomes(client, args, panel_id, action_ids, failed_ids)
     record_action(client, "browser_act", {"panel_id": panel_id, "action": "back"}, action_ids)
     record_action(
         client,

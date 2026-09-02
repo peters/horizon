@@ -42,7 +42,15 @@ shell commands, files, or other MCP servers.
   dialog, and consent flows instead of creating a helper panel.
 - `browser_visibility` shows or hides an existing panel without stopping its
   browser, ownership lease, network capture, or MCP control.
-- `browser_navigate` changes the top-level page.
+- `browser_navigate` changes the top-level page and reports a typed outcome.
+  By default it returns once the document committed (`wait: commit`);
+  `wait: dispatched` returns after the backend accepted the command and
+  `wait: dom_content_loaded` after `DOMContentLoaded`. The result carries
+  `requested_url`, `committed_url`, `title`, `loading`, `redirected`,
+  `elapsed_millis`, and `state`. Check `completed`: a wait that exceeds
+  `timeout_millis` returns `state: timed_out` with the latest page state so the
+  caller can inspect or retry, while unreachable destinations and rejected
+  commands are errors audited as failed.
 - `browser_snapshot` and `browser_query` return bounded semantic nodes with
   short-lived refs. Snapshots keep iframe boundaries discoverable even when
   cross-origin policy prevents inspecting the frame document.
