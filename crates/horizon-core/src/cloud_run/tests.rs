@@ -125,10 +125,7 @@ fn provenance_rejects_secrets_without_echoing_them() {
     assert_eq!(error, CloudProtocolError::InvalidRepository);
     assert!(!error.to_string().contains("secret"));
     provenance.source.repository = "fintermobilityas/nativesdk".to_string();
-    for url in [
-        "https://user:secret@example.test/run",
-        "https://github.com/run?token=secret",
-    ] {
+    for url in "https://u:p@e.test/r https://e.test/r?q=x https://: https://[invalid".split_ascii_whitespace() {
         provenance.workflow_run_url = Some(url.to_string());
         assert_eq!(
             provenance.validate(),
@@ -136,8 +133,17 @@ fn provenance_rejects_secrets_without_echoing_them() {
         );
     }
     provenance.workflow_run_url = None;
-    provenance.artifacts[0].storage_key = "https://storage.example/artifact?sig=secret".to_string();
-    assert_eq!(provenance.validate(), Err(CloudProtocolError::InvalidArtifactRef(id)));
+    for key in ["https://storage.example/a?sig=x", "C:/outside", "C:relative"] {
+        provenance.artifacts[0].storage_key = key.to_string();
+        assert_eq!(provenance.validate(), Err(CloudProtocolError::InvalidArtifactRef(id)));
+    }
+}
+#[test]
+fn v1_json_contract_round_trips() {
+    let golden = include_str!("v1_minimal.json").trim();
+    let snapshot: CloudWorkflow = serde_json::from_str(golden).expect("valid v1 workflow");
+    assert_eq!(snapshot.validate(), Ok(()));
+    assert_eq!(serde_json::to_string(&snapshot).expect("serialize v1 workflow"), golden);
 }
 #[test]
 fn inputs_are_unique_outputs_of_direct_dependencies() {

@@ -3,13 +3,11 @@ use super::{
     CloudJobState, CloudProgress, CloudProtocolError, CloudWorkflow, ProvenanceRecord, WorkflowNode, WorkflowNodeKind,
 };
 use std::collections::{HashMap, HashSet};
+use url::Url;
 impl ProvenanceRecord {
     /// Validate persisted source and artifact references for secret-free storage.
-    ///
     /// # Errors
-    ///
-    /// Returns [`CloudProtocolError`] for an invalid repository, workflow URL,
-    /// artifact key, or duplicate artifact identity.
+    /// Rejects invalid repositories, workflow URLs, and artifact identities.
     pub fn validate(&self) -> Result<(), CloudProtocolError> {
         if !valid_repository(&self.source.repository) {
             return Err(CloudProtocolError::InvalidRepository);
@@ -33,12 +31,8 @@ impl ProvenanceRecord {
 }
 impl CloudWorkflow {
     /// Validate all persisted cross-node and security invariants.
-    ///
     /// # Errors
-    ///
-    /// Returns [`CloudProtocolError`] when the protocol version, DAG, retry
-    /// chain, gate, lease, worker, source, progress, or artifact contract is
-    /// invalid.
+    /// Rejects snapshots with any invalid persisted protocol invariant.
     pub fn validate(&self) -> Result<(), CloudProtocolError> {
         if self.protocol_version != CLOUD_RUN_PROTOCOL_VERSION {
             return Err(CloudProtocolError::UnsupportedVersion(self.protocol_version));
@@ -228,11 +222,12 @@ fn validate_inputs(
     artifact_producers: &HashMap<&str, CloudJobId>,
 ) -> Result<(), CloudProtocolError> {
     let mut seen = HashSet::new();
+    let dependencies: HashSet<_> = node.depends_on.iter().copied().collect();
     for artifact_id in &node.input_artifact_ids {
         let producer = artifact_producers.get(artifact_id.as_str());
         if artifact_id.trim().is_empty()
             || !seen.insert(artifact_id.as_str())
-            || producer.is_none_or(|producer| !node.depends_on.contains(producer))
+            || producer.is_none_or(|producer| !dependencies.contains(producer))
         {
             return Err(CloudProtocolError::InvalidInputArtifact(node.id));
         }
@@ -260,6 +255,7 @@ fn validate_artifact(node_id: CloudJobId, artifact: &ArtifactRef) -> Result<(), 
     if artifact.artifact_id.trim().is_empty()
         || key.is_empty()
         || key.starts_with('/')
+        || key.as_bytes().get(1) == Some(&b':') && key.as_bytes()[0].is_ascii_alphabetic()
         || key.contains("://")
         || key.contains(['?', '#'])
         || key.contains('\\')
@@ -285,16 +281,21 @@ fn valid_repository(repository: &str) -> bool {
     )
 }
 fn valid_public_url(value: &str) -> bool {
-    let Some(rest) = value.strip_prefix("https://") else {
+    if value
+        .chars()
+        .any(|character| character.is_control() || character.is_whitespace())
+        || value.contains('\\')
+    {
         return false;
-    };
-    let authority = rest.split('/').next().unwrap_or_default();
-    !authority.is_empty()
-        && !authority.contains('@')
-        && !value.contains(['?', '#', '\\'])
-        && !value
-            .chars()
-            .any(|character| character.is_control() || character.is_whitespace())
+    }
+    Url::parse(value).is_ok_and(|url| {
+        url.scheme() == "https"
+            && url.host().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.query().is_none()
+            && url.fragment().is_none()
+    })
 }
 fn ensure_acyclic(nodes: &HashMap<CloudJobId, &WorkflowNode>) -> Result<(), CloudProtocolError> {
     let mut remaining: HashMap<_, _> = nodes.iter().map(|(id, node)| (*id, node.depends_on.len())).collect();

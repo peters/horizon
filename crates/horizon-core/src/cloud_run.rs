@@ -1,8 +1,5 @@
-//! Provider-neutral protocol for durable cloud workflows.
-//!
-//! The protocol contains no provider clients or local process handles. It is
-//! safe to persist in a remote control plane and reconstruct after every
-//! Horizon client has disconnected.
+//! Provider-neutral, persistable protocol for durable cloud workflows, without
+//! provider clients or process handles tied to a Horizon session.
 
 use std::{collections::HashSet, fmt};
 
@@ -56,12 +53,9 @@ pub struct WorkerTarget {
 #[serde(transparent)]
 pub struct GitCommitSha(String);
 impl GitCommitSha {
-    /// Parse a full Git object id used to bind a workflow to exact source.
-    ///
+    /// Parse a full Git object ID used to bind a workflow to exact source.
     /// # Errors
-    ///
-    /// Returns [`CloudProtocolError::InvalidGitCommit`] unless `value` is
-    /// exactly 40 hexadecimal characters.
+    /// Rejects values that are not exactly 40 hexadecimal characters.
     pub fn parse(value: impl Into<String>) -> Result<Self, CloudProtocolError> {
         let value = value.into();
         if value.len() != 40 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -95,11 +89,8 @@ pub struct GitSource {
 pub struct ArtifactDigest(String);
 impl ArtifactDigest {
     /// Parse the SHA-256 digest of an immutable artifact or image.
-    ///
     /// # Errors
-    ///
-    /// Returns [`CloudProtocolError::InvalidSha256`] unless `value` is
-    /// exactly 64 hexadecimal characters.
+    /// Rejects values that are not exactly 64 hexadecimal characters.
     pub fn parse_sha256(value: impl Into<String>) -> Result<Self, CloudProtocolError> {
         let value = value.into();
         if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
