@@ -110,7 +110,15 @@ impl DriverState {
         selector: &str,
         max_results: u32,
         timeout: std::time::Duration,
-    ) -> Result<(u64, Vec<crate::BrowserNode>, Value), BrowserControlFailure> {
+    ) -> Result<
+        (
+            u64,
+            Vec<crate::BrowserNode>,
+            Option<crate::semantic::ScanSummary>,
+            Value,
+        ),
+        BrowserControlFailure,
+    > {
         let value = self.evaluate_json_within(
             link,
             event_tx,
@@ -118,8 +126,8 @@ impl DriverState {
             &scan_expression(Some(selector), max_results),
             timeout,
         )?;
-        let (generation, nodes, _) = self.semantic.peek_nodes(&value)?;
-        Ok((generation, nodes, value))
+        let peeked = self.semantic.peek_nodes(&value)?;
+        Ok((peeked.generation, peeked.nodes, peeked.summary, value))
     }
 
     /// Register a previously peeked scan as the current references.

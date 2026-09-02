@@ -93,11 +93,19 @@ impl Driver {
         selector: &str,
         max_results: u32,
         timeout: std::time::Duration,
-    ) -> Result<(u64, Vec<crate::BrowserNode>, Value), BrowserControlFailure> {
+    ) -> Result<
+        (
+            u64,
+            Vec<crate::BrowserNode>,
+            Option<crate::semantic::ScanSummary>,
+            Value,
+        ),
+        BrowserControlFailure,
+    > {
         let value = self.evaluate_json_within(&scan_expression(Some(selector), max_results), Some(timeout))?;
-        let (_, nodes, document_identity) = self.semantic.peek_nodes(&value)?;
-        self.record_classic_document_identity(document_identity);
-        Ok((self.semantic.generation(), nodes, value))
+        let peeked = self.semantic.peek_nodes(&value)?;
+        self.record_classic_document_identity(peeked.document_identity);
+        Ok((self.semantic.generation(), peeked.nodes, peeked.summary, value))
     }
 
     /// Register a previously peeked scan as the current references.

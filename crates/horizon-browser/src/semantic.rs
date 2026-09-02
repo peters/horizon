@@ -50,16 +50,14 @@ impl SemanticState {
     /// Parse a scan without registering references: the page generation and
     /// the nodes (with empty references) for judging a condition, leaving the
     /// reference map of the last registered snapshot or query untouched.
-    pub(crate) fn peek_nodes(
-        &self,
-        value: &Value,
-    ) -> Result<(u64, Vec<BrowserNode>, Option<String>), BrowserControlFailure> {
+    pub(crate) fn peek_nodes(&self, value: &Value) -> Result<PeekedScan, BrowserControlFailure> {
         let response: NodeScanResponse = serde_json::from_value(value.clone())
             .map_err(|error| BrowserControlFailure::new("invalid_result", format!("invalid page snapshot: {error}")))?;
         if let Some(error) = response.error {
             return Err(error);
         }
         let document_identity = response.document_identity;
+        let summary = response.summary;
         let nodes = response
             .nodes
             .into_iter()
@@ -73,7 +71,12 @@ impl SemanticState {
                 bounds: scanned.bounds.filter(valid_bounds),
             })
             .collect();
-        Ok((self.generation, nodes, document_identity))
+        Ok(PeekedScan {
+            generation: self.generation,
+            nodes,
+            summary,
+            document_identity,
+        })
     }
 
     pub(crate) fn register_nodes(
@@ -124,7 +127,28 @@ struct NodeScanResponse {
     #[serde(default, rename = "documentIdentity")]
     document_identity: Option<String>,
     #[serde(default)]
+    summary: Option<ScanSummary>,
+    #[serde(default)]
     error: Option<BrowserControlFailure>,
+}
+
+/// A scan parsed without registering references: the page generation, the
+/// returned nodes (with empty references), the selector-wide match summary
+/// when the scan had a selector, and the script-observed document identity.
+#[derive(Debug, Default)]
+pub(crate) struct PeekedScan {
+    pub(crate) generation: u64,
+    pub(crate) nodes: Vec<BrowserNode>,
+    pub(crate) summary: Option<ScanSummary>,
+    pub(crate) document_identity: Option<String>,
+}
+
+/// Match and visibility counts over every element a selector scan matched,
+/// beyond the capped nodes it returned.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+pub(crate) struct ScanSummary {
+    pub(crate) matched: usize,
+    pub(crate) visible: usize,
 }
 
 #[derive(Deserialize)]
@@ -296,12 +320,22 @@ const NODE_SCAN_FUNCTION: &str = r"function(selector, maxNodes, semanticOnly) {
         };
     }
     const nodes = [];
+    // With a selector, match and visibility counts cover every match so a
+    // condition can be judged beyond the returned cap; a full-document
+    // snapshot keeps its early stop.
+    let matched = 0;
+    let visibleMatches = 0;
     for (const element of candidates) {
-        if (nodes.length >= maxNodes) break;
+        if (nodes.length >= maxNodes && selector === null) break;
         const style = getComputedStyle(element);
         const rect = element.getBoundingClientRect();
         const visible = style.display !== 'none' && style.visibility !== 'hidden' &&
             Number(style.opacity || 1) !== 0 && rect.width > 0 && rect.height > 0;
+        if (selector !== null) {
+            matched += 1;
+            if (visible) visibleMatches += 1;
+            if (nodes.length >= maxNodes) continue;
+        }
         const role = roleFor(element);
         const name = nameFor(element);
         const tag = element.tagName.toLowerCase();
@@ -315,7 +349,9 @@ const NODE_SCAN_FUNCTION: &str = r"function(selector, maxNodes, semanticOnly) {
             bounds: visible ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null,
         });
     }
-    return { nodes, documentIdentity };
+    return selector === null
+        ? { nodes, documentIdentity }
+        : { nodes, documentIdentity, summary: { matched, visible: visibleMatches } };
 }";
 
 const TARGET_RECT_FUNCTION: &str = r"function(selector, clear) {
@@ -423,15 +459,18 @@ mod tests {
     #[test]
     fn wait_peeks_preserve_the_script_observed_document_identity() {
         let state = SemanticState::default();
-        let (_, nodes, identity) = state
+        let peeked = state
             .peek_nodes(&serde_json::json!({
                 "nodes": [],
                 "documentIdentity": "[\"https://example.test/\",1234]"
             }))
             .unwrap_or_default();
 
-        assert!(nodes.is_empty());
-        assert_eq!(identity.as_deref(), Some("[\"https://example.test/\",1234]"));
+        assert!(peeked.nodes.is_empty());
+        assert_eq!(
+            peeked.document_identity.as_deref(),
+            Some("[\"https://example.test/\",1234]")
+        );
         assert!(scan_expression(None, 10).contains("documentIdentity"));
     }
 

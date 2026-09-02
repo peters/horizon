@@ -138,7 +138,7 @@ impl Driver {
         let observed = self.semantic_peek_within(&pending.selector, WAIT_QUERY_RESULTS, budget);
         let now = Instant::now();
         match observed {
-            Ok((generation, nodes, scan)) => match pending.observe(generation, &nodes, now) {
+            Ok((generation, nodes, summary, scan)) => match pending.observe(generation, &nodes, summary, now) {
                 Observation::Satisfied => {
                     pending.defer(scan, self.signal_epoch);
                     self.request_signal_refresh();

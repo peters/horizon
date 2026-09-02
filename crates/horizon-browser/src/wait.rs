@@ -4,6 +4,7 @@
 
 use std::time::{Duration, Instant};
 
+use crate::semantic::ScanSummary;
 use crate::{
     AgentAction, BrowserControlFailure, BrowserControlValue, BrowserNode, DEFAULT_WAIT_TIMEOUT_MILLIS, SelectorState,
     WaitOutcome,
@@ -177,11 +178,20 @@ impl PendingWait {
             .clamp(MIN_OBSERVATION_BUDGET, MAX_OBSERVATION_BUDGET)
     }
 
-    /// Judge one page observation made without registering references.
-    pub(crate) fn observe(&mut self, generation: u64, nodes: &[BrowserNode], now: Instant) -> Observation {
+    /// Judge one page observation made without registering references. The
+    /// scan's summary counts every match, beyond the capped nodes, so a
+    /// visible match past the cap still satisfies `visible` and keeps
+    /// `hidden` unsatisfied.
+    pub(crate) fn observe(
+        &mut self,
+        generation: u64,
+        nodes: &[BrowserNode],
+        summary: Option<ScanSummary>,
+        now: Instant,
+    ) -> Observation {
         self.polls = self.polls.saturating_add(1);
         self.next_poll = now + WAIT_POLL_INTERVAL;
-        self.last_match_count = nodes.len();
+        self.last_match_count = summary.map_or(nodes.len(), |summary| summary.matched);
         self.consecutive_failures = 0;
         if generation != self.generation_at_start {
             // The page navigated while the query was in flight: these nodes
@@ -193,9 +203,17 @@ impl PendingWait {
         if now >= self.deadline {
             return Observation::Done(self.timed_out(now));
         }
-        // Decide on every match the query returned; the released scan is
-        // registered and capped by the driver.
-        if self.state.satisfied_by(nodes) {
+        // Decide on every match the scan saw; the released scan is registered
+        // and capped by the driver.
+        let satisfied = match summary {
+            Some(summary) => match self.state {
+                SelectorState::Present => summary.matched > 0,
+                SelectorState::Visible => summary.visible > 0,
+                SelectorState::Hidden => summary.visible == 0,
+            },
+            None => self.state.satisfied_by(nodes),
+        };
+        if satisfied {
             self.satisfied_at = Some(now);
             Observation::Satisfied
         } else {
@@ -365,7 +383,7 @@ mod tests {
         let mut wait = pending(SelectorState::Visible, 5_000, now);
         assert!(wait.poll_due(now));
         assert!(
-            matches!(wait.observe(7, &[], now), Observation::Waiting),
+            matches!(wait.observe(7, &[], None, now), Observation::Waiting),
             "no match keeps waiting"
         );
         assert!(
@@ -375,13 +393,13 @@ mod tests {
         assert!(wait.poll_due(now + WAIT_POLL_INTERVAL));
         assert!(
             matches!(
-                wait.observe(7, &[node(false)], now + Duration::from_millis(100)),
+                wait.observe(7, &[node(false)], None, now + Duration::from_millis(100)),
                 Observation::Waiting
             ),
             "a hidden match does not satisfy visible"
         );
         assert!(matches!(
-            wait.observe(7, &[node(true)], now + Duration::from_millis(1_500)),
+            wait.observe(7, &[node(true)], None, now + Duration::from_millis(1_500)),
             Observation::Satisfied
         ));
         // Released later, after the coordination refresh: the elapsed time
@@ -393,15 +411,18 @@ mod tests {
         assert_eq!(satisfied.nodes.len(), 1);
 
         let mut hidden = pending(SelectorState::Hidden, 5_000, now);
-        assert!(matches!(hidden.observe(7, &[node(true)], now), Observation::Waiting));
+        assert!(matches!(
+            hidden.observe(7, &[node(true)], None, now),
+            Observation::Waiting
+        ));
         assert!(
-            matches!(hidden.observe(7, &[], now), Observation::Satisfied),
+            matches!(hidden.observe(7, &[], None, now), Observation::Satisfied),
             "an empty match set is hidden"
         );
 
         let mut present = pending(SelectorState::Present, 5_000, now);
         assert!(matches!(
-            present.observe(7, &[node(false)], now),
+            present.observe(7, &[node(false)], None, now),
             Observation::Satisfied
         ));
         assert_eq!(released(&present, vec![node(false)], now).polls, 1);
@@ -411,7 +432,7 @@ mod tests {
     fn timeouts_and_cancellations_are_typed_failures() {
         let now = Instant::now();
         let mut wait = pending(SelectorState::Present, 1_000, now);
-        assert!(matches!(wait.observe(7, &[], now), Observation::Waiting));
+        assert!(matches!(wait.observe(7, &[], None, now), Observation::Waiting));
         assert!(wait.tick(7, now + Duration::from_millis(999)).is_none());
         let timeout = wait
             .tick(7, now + Duration::from_secs(1))
@@ -472,7 +493,7 @@ mod tests {
         nodes.push(node(true));
         let mut visible = pending(SelectorState::Visible, 1_000, now);
         assert!(
-            matches!(visible.observe(7, &nodes, now), Observation::Satisfied),
+            matches!(visible.observe(7, &nodes, None, now), Observation::Satisfied),
             "a visible match beyond the cap counts"
         );
         assert_eq!(
@@ -481,16 +502,45 @@ mod tests {
         );
         let mut hidden = pending(SelectorState::Hidden, 1_000, now);
         assert!(
-            matches!(hidden.observe(7, &nodes, now), Observation::Waiting),
+            matches!(hidden.observe(7, &nodes, None, now), Observation::Waiting),
             "a visible match beyond the cap keeps hidden unsatisfied"
         );
+
+        // With the scan's summary, matches beyond the returned cap decide too:
+        // 300 matches of which only the 251st is visible.
+        let beyond = ScanSummary {
+            matched: 300,
+            visible: 1,
+        };
+        let capped: Vec<BrowserNode> = (0..250).map(|_| node(false)).collect();
+        let mut visible_beyond = pending(SelectorState::Visible, 1_000, now);
+        assert!(
+            matches!(
+                visible_beyond.observe(7, &capped, Some(beyond), now),
+                Observation::Satisfied
+            ),
+            "a visible match beyond the scan cap satisfies visible"
+        );
+        let mut hidden_beyond = pending(SelectorState::Hidden, 1_000, now);
+        assert!(
+            matches!(
+                hidden_beyond.observe(7, &capped, Some(beyond), now),
+                Observation::Waiting
+            ),
+            "a visible match beyond the scan cap keeps hidden unsatisfied"
+        );
+        let mut present_none = pending(SelectorState::Present, 1_000, now);
+        assert!(matches!(
+            present_none.observe(7, &[], Some(ScanSummary { matched: 0, visible: 0 }), now),
+            Observation::Waiting
+        ));
     }
 
     #[test]
     fn an_observation_from_another_page_generation_invalidates_the_wait() {
         let now = Instant::now();
         let mut pending = pending(SelectorState::Present, 1_000, now);
-        let result = done(pending.observe(7 + 1, &[node(true)], now));
+        let result = done(pending.observe(7 + 1, &[node(true)], None, now));
         assert_eq!(result.expect_err("invalidated").code, "wait_navigation_invalidated");
     }
 
@@ -511,7 +561,7 @@ mod tests {
         // the element, and a transient failure after the bound is one too.
         let late = now + Duration::from_millis(1_001);
         let mut overran = pending(SelectorState::Present, 1_000, now);
-        let failure = done(overran.observe(7, &[node(true)], late)).expect_err("timed out");
+        let failure = done(overran.observe(7, &[node(true)], None, late)).expect_err("timed out");
         assert_eq!(failure.code, "wait_timeout");
         assert!(
             failure.message.contains("within the 1000 ms bound (elapsed 1001 ms"),
@@ -609,7 +659,7 @@ mod tests {
         // later coordination-read epoch than it was observed under.
         let mut deferred = pending(SelectorState::Present, 1_000, now);
         assert!(matches!(
-            deferred.observe(7, &[node(true)], now),
+            deferred.observe(7, &[node(true)], None, now),
             Observation::Satisfied
         ));
         deferred.defer(scan(), 3);
