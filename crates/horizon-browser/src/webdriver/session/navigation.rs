@@ -141,7 +141,14 @@ impl Driver {
             self.frames.demand();
             return Ok(pending.settle_timed_out(None, now));
         }
-        let _ = self.classic_post("timeouts", &json!({ "pageLoad": PAGE_LOAD_TIMEOUT_MILLIS }));
+        if self
+            .classic_post("timeouts", &json!({ "pageLoad": PAGE_LOAD_TIMEOUT_MILLIS }))
+            .is_err()
+        {
+            // Leaving the action bound in place would time out the next
+            // reload or history traversal early; the loop retries the restore.
+            self.classic_timeout_to_restore = Some(PAGE_LOAD_TIMEOUT_MILLIS);
+        }
         self.finish_page(result, &format!("navigation to {url}"), event_tx)
             .map_err(|error| BrowserControlFailure::new("navigation_failed", error))?;
         let (committed, title) = (self.url.clone(), self.title.clone());
