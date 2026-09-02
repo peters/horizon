@@ -20,8 +20,12 @@ pub(crate) const DEFAULT_ACTION_TIMEOUT_MILLIS: u64 = 15_000;
 pub(crate) const MAX_ACTION_TIMEOUT_MILLIS: u64 = 60_000;
 /// Extra time this server waits beyond an engine-enforced bound: one
 /// coordination tick (250 ms) for the engine to notice the bound, plus result
-/// delivery through the manifest.
-pub(crate) const RESULT_DELIVERY_HEADROOM_MILLIS: u64 = 500;
+/// delivery through the manifest's locked, durably written files, which on a
+/// host under heavy load with a nearly full disk has been measured at up to
+/// about 2.5 s after the engine completed the action. The caller only waits
+/// this long when the engine's typed outcome is late; a normal outcome
+/// returns as soon as it is written.
+pub(crate) const RESULT_DELIVERY_HEADROOM_MILLIS: u64 = 5_000;
 const DEFAULT_CREATE_TIMEOUT_MILLIS: u64 = 60_000;
 const MIN_CREATE_TIMEOUT_MILLIS: u64 = 5_000;
 
