@@ -105,9 +105,10 @@ The reusable runner:
   where the classic navigation keeps running and the driver polls it to its
   commit);
 - proves `browser_wait` is one engine-side audited action: on `delayed.html`
-  a wait for the element that appears 3 s after load settles from the
-  engine's own observation with the matched node, an `elapsed_millis` near the
-  DOM change, and several `polls`; an already-hidden element settles on its
+  a wait for the element that appears 4 s after load settles from the
+  engine's own observation with the matched node, an `elapsed_millis` that
+  covers most of the remaining fixture delay after the measured navigate wall
+  time (the derived minimum is reported), and several `polls`; an already-hidden element settles on its
   first observation; a selector that never appears fails with the typed
   `wait_timeout` code at the bound; removal, an attribute change, and a style
   change are each observed as a delayed transition on a fresh load with a
