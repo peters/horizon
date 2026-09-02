@@ -18,6 +18,10 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
 const RESULT_POLL_INTERVAL: Duration = Duration::from_millis(20);
 pub(crate) const DEFAULT_ACTION_TIMEOUT_MILLIS: u64 = 15_000;
 pub(crate) const MAX_ACTION_TIMEOUT_MILLIS: u64 = 60_000;
+/// Extra time this server waits beyond an engine-enforced bound: one
+/// coordination tick (250 ms) for the engine to notice the bound, plus result
+/// delivery through the manifest.
+pub(crate) const RESULT_DELIVERY_HEADROOM_MILLIS: u64 = 500;
 const DEFAULT_CREATE_TIMEOUT_MILLIS: u64 = 60_000;
 const MIN_CREATE_TIMEOUT_MILLIS: u64 = 5_000;
 
@@ -380,6 +384,88 @@ impl BrowserController {
         let action_id = manifest::enqueue_action(panel_id, self.identity(), action)
             .map_err(|source| self.denied(panel_id, "could not queue browser action", source))?;
         self.wait_for_result(panel_id, action_id, timeout_millis).await
+    }
+
+    /// Execute an action whose bound the engine enforces itself (navigation
+    /// and selector waits): the engine gets the full documented bound and
+    /// this server waits `RESULT_DELIVERY_HEADROOM_MILLIS` longer, so the
+    /// engine's typed timeout outcome always arrives before the server's own
+    /// generic timeout.
+    pub(crate) async fn execute_engine_bounded(
+        &self,
+        panel_id: &str,
+        action: BrowserControlAction,
+        engine_bound_millis: u64,
+    ) -> Result<ActionReceipt, ControlError> {
+        let engine_bound_millis = engine_bound_millis.clamp(1, MAX_ACTION_TIMEOUT_MILLIS);
+        self.ensure_claim(panel_id)?;
+        let action_id = manifest::enqueue_action(panel_id, self.identity(), action)
+            .map_err(|source| self.denied(panel_id, "could not queue browser action", source))?;
+        self.wait_for_engine_result(panel_id, action_id, engine_bound_millis)
+            .await
+    }
+
+    /// Like `wait_for_result`, but for an action whose bound the engine
+    /// enforces itself. The engine anchors that bound at the request time, so
+    /// an action it dispatches late completes at once with its typed timeout;
+    /// while the action has not been dispatched yet (queued or claimed behind
+    /// a blocking driver operation, a classic navigation for example) this
+    /// keeps waiting for that typed result instead of returning a generic
+    /// timeout, up to a hard cap.
+    async fn wait_for_engine_result(
+        &self,
+        panel_id: &str,
+        action_id: String,
+        engine_bound_millis: u64,
+    ) -> Result<ActionReceipt, ControlError> {
+        let started = Instant::now();
+        let timeout_millis = engine_bound_millis + RESULT_DELIVERY_HEADROOM_MILLIS;
+        let timeout = Duration::from_millis(timeout_millis);
+        let hard_cap = Duration::from_millis(timeout_millis + MAX_ACTION_TIMEOUT_MILLIS);
+        let mut last_heartbeat = started;
+        let mut last_queue_check: Option<Instant> = None;
+        let mut not_dispatched = false;
+        loop {
+            if let Some(result) = manifest::take_action_result(panel_id, &action_id)
+                .map_err(|source| ControlError::internal_io("could not read browser action result", source))?
+            {
+                self.refresh_claim(panel_id)?;
+                return outcome(result);
+            }
+            let elapsed = started.elapsed();
+            if elapsed >= timeout {
+                if elapsed >= hard_cap {
+                    return Err(ControlError::Timeout {
+                        action_id,
+                        timeout_millis,
+                    });
+                }
+                if last_queue_check.is_none_or(|checked| checked.elapsed() >= HEARTBEAT_INTERVAL) {
+                    // The driver takes the whole queue at once and services it
+                    // in order, so the manifest queue cannot tell a claimed
+                    // action from a dispatched one; the audit journal can: the
+                    // driver records `dispatched` right before it starts one.
+                    not_dispatched = manifest::read_audit_for(panel_id, self.identity()).is_ok_and(|entries| {
+                        !entries.iter().any(|entry| {
+                            entry.action_id == action_id
+                                && !matches!(entry.status, horizon_browser::BrowserAuditStatus::Queued)
+                        })
+                    });
+                    last_queue_check = Some(Instant::now());
+                }
+                if !not_dispatched {
+                    return Err(ControlError::Timeout {
+                        action_id,
+                        timeout_millis,
+                    });
+                }
+            }
+            if last_heartbeat.elapsed() >= HEARTBEAT_INTERVAL {
+                self.refresh_claim(panel_id)?;
+                last_heartbeat = Instant::now();
+            }
+            tokio::time::sleep(RESULT_POLL_INTERVAL).await;
+        }
     }
 
     pub(crate) fn request_handoff(&self, panel_id: &str, reason: &str) -> Result<String, ControlError> {
