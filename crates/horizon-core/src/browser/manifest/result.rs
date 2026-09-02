@@ -69,21 +69,86 @@ pub(super) fn remove_stale_except_at(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error),
     };
-    let deadline = Instant::now() + timeout;
+    let retain_result = retained_path.try_exists()?;
+    let mut result_paths = Vec::new();
     for entry in entries {
         let path = entry?.path();
-        if path == retained_path || path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+        match path.extension().and_then(|extension| extension.to_str()) {
+            Some("json") => result_paths.push(path),
+            Some("lock") => {
+                let result_path = path.with_extension("");
+                if result_path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+                {
+                    result_paths.push(result_path);
+                }
+            }
+            Some(_) | None => {}
+        }
+    }
+    result_paths.sort();
+    result_paths.dedup();
+    let deadline = Instant::now() + timeout;
+    for path in result_paths {
+        if retain_result && path == retained_path {
             continue;
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
         let _lock = ManifestLock::acquire_with_timeout(&path, remaining)?;
-        match std::fs::remove_file(&path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
-        }
+        remove_file_if_present(&path)?;
+        remove_file_if_present(&result_lock_path(&path))?;
     }
-    Ok(())
+    remove_empty_directory(panel_dir)
+}
+
+fn result_lock_path(result_path: &Path) -> PathBuf {
+    result_path.with_extension("json.lock")
+}
+
+fn remove_file_if_present(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn remove_empty_directory(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_dir(path) {
+        Ok(()) => Ok(()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+            ) =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn remove_consumed_lock_at(root: &Path, panel_local_id: &str, result_path: &Path) -> std::io::Result<()> {
+    let manifest_path = super::manifest_path_for_root(root, panel_local_id);
+    let _manifest_lock = ManifestLock::acquire(&manifest_path)?;
+    if super::read_at(&manifest_path).is_some() {
+        return Ok(());
+    }
+    let _result_lock = match ManifestLock::acquire(result_path) {
+        Ok(lock) => lock,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if result_path.exists() {
+        return Ok(());
+    }
+    remove_file_if_present(&result_lock_path(result_path))?;
+    let Some(panel_dir) = result_path.parent() else {
+        return Ok(());
+    };
+    remove_empty_directory(panel_dir)
 }
 
 fn write_at(path: &Path, result: &AgentActionResult) -> std::io::Result<()> {
@@ -157,7 +222,22 @@ fn prune_results_at(
 /// Returns an I/O or invalid-data error. An invalid result is retained for
 /// diagnosis instead of being silently discarded.
 pub fn take_action_result(panel_local_id: &str, action_id: &str) -> std::io::Result<Option<AgentActionResult>> {
-    take_at(&default_action_result_path(panel_local_id, action_id), action_id)
+    take_action_result_at(HorizonHome::resolve().root(), panel_local_id, action_id)
+}
+
+fn take_action_result_at(
+    root: &Path,
+    panel_local_id: &str,
+    action_id: &str,
+) -> std::io::Result<Option<AgentActionResult>> {
+    let path = action_result_path_for_root(root, panel_local_id, action_id);
+    let result = take_at(&path, action_id)?;
+    if result.is_some()
+        && let Err(error) = remove_consumed_lock_at(root, panel_local_id, &path)
+    {
+        tracing::warn!(target: "browser", path = %path.display(), "failed to remove consumed browser result lock: {error}");
+    }
+    Ok(result)
 }
 
 fn take_at(path: &Path, action_id: &str) -> std::io::Result<Option<AgentActionResult>> {
@@ -287,6 +367,16 @@ mod tests {
             ),
         )
         .unwrap();
+        let consumed_action_id = new_action_id();
+        let consumed_result_path = action_result_path_for_root(&root, panel_id, &consumed_action_id);
+        write_at(
+            &consumed_result_path,
+            &AgentActionResult::completed(consumed_action_id.clone(), BrowserControlValue::Accepted),
+        )
+        .unwrap();
+        assert!(take_at(&consumed_result_path, &consumed_action_id).unwrap().is_some());
+        let consumed_lock_path = result_lock_path(&consumed_result_path);
+        assert!(consumed_lock_path.exists());
 
         let coordination = super::super::ManifestCoordination::default();
         horizon_browser::BrowserCoordination::retain_action_result_on_remove(&coordination, panel_id, &action_id);
@@ -294,8 +384,15 @@ mod tests {
         assert!(removed.unwrap());
         assert!(!manifest_path.exists());
         assert!(!unrelated_result_path.exists());
-        assert_eq!(take_at(&result_path, &action_id).unwrap(), Some(result));
-        assert_eq!(take_at(&result_path, &action_id).unwrap(), None);
+        assert!(!result_lock_path(&unrelated_result_path).exists());
+        assert!(!consumed_lock_path.exists());
+        assert_eq!(
+            take_action_result_at(&root, panel_id, &action_id).unwrap(),
+            Some(result)
+        );
+        assert!(!result_lock_path(&result_path).exists());
+        assert_eq!(take_action_result_at(&root, panel_id, &action_id).unwrap(), None);
+        assert!(!result_path.parent().unwrap().exists());
         let _ = std::fs::remove_dir_all(root);
     }
 
