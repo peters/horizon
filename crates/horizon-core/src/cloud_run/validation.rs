@@ -290,8 +290,11 @@ fn validate_artifact(node_id: CloudJobId, artifact: &ArtifactRef) -> Result<(), 
 pub(super) fn valid_worker_image(value: &str) -> bool {
     let digest = value.rsplit_once("@sha256:").map(|(_, encoded)| encoded);
     let digest = digest.is_none_or(|encoded| ArtifactDigest::parse_sha256(encoded).is_ok());
-    let ipv6 = !value.starts_with('[') || Url::parse(&format!("https://{value}")).is_ok();
-    OCI_REF.as_ref().is_some_and(|pattern| pattern.is_match(value)) && digest && ipv6
+    let host = value.split_once('/').map(|(host, _)| host);
+    let explicit = host.is_some_and(|host| host == "localhost" || host.contains(['.', ':']));
+    let usable = |url: Url| url.port().is_none_or(|port| port > 0);
+    let registry = !explicit || Url::parse(&format!("https://{value}")).is_ok_and(usable);
+    OCI_REF.as_ref().is_some_and(|pattern| pattern.is_match(value)) && digest && registry
 }
 fn validate_git_source(source: &GitSource) -> Result<(), Error> {
     ensure(valid_repository(&source.repository), Error::InvalidRepository)?;
