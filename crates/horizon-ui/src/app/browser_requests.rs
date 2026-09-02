@@ -818,7 +818,7 @@ mod tests {
     #[test]
     fn create_readiness_waits_for_the_backend_and_the_committed_first_page() {
         let now = Instant::now();
-        let deadline = now + Duration::from_secs(60);
+        let deadline = now + Duration::from_mins(1);
         let ready = BrowserStatus::Ready;
         let example = Some("https://example.test/");
         assert_eq!(
@@ -875,7 +875,7 @@ mod tests {
     #[test]
     fn create_readiness_reports_blank_failed_and_superseded_first_pages() {
         let now = Instant::now();
-        let deadline = now + Duration::from_secs(60);
+        let deadline = now + Duration::from_mins(1);
         let ready = BrowserStatus::Ready;
         let example = Some("https://example.test/");
         assert_eq!(
@@ -944,7 +944,7 @@ mod tests {
                 false,
                 Some(now),
                 near_deadline,
-                now + Duration::from_millis(2_000)
+                now + Duration::from_secs(2)
             ),
             CreateReadiness::Waiting
         );
