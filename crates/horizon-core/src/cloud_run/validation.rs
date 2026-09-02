@@ -124,22 +124,21 @@ fn validate_node(
             });
         }
     }
-    if let CloudProgress::Measured { completed, total, .. } = node.progress
-        && (total == 0 || completed > total)
-    {
+    if !valid_progress(node) {
         return Err(CloudProtocolError::InvalidProgress(node.id));
     }
-    if node.kind == WorkflowNodeKind::Approval && node.approval.is_none() && node.release.is_none() {
+    let needs_approval = node.kind == WorkflowNodeKind::Approval || node.state == CloudJobState::WaitingForApproval;
+    if needs_approval && node.approval.is_none() && node.release.is_none() {
         return Err(CloudProtocolError::MissingApprovalGate(node.id));
     }
     if let Some(approval) = &node.approval {
-        validate_approval(workflow, node.id, approval, nodes)?;
+        validate_approval(workflow, node, approval, nodes)?;
     }
     if let Some(release) = &node.release {
         if !valid_repository(&release.repository) {
             return Err(CloudProtocolError::InvalidRepository);
         }
-        validate_approval(workflow, node.id, &release.approval, nodes)?;
+        validate_approval(workflow, node, &release.approval, nodes)?;
     }
     if let Some(lease) = &node.environment_lease
         && (lease.environment.trim().is_empty()
@@ -169,6 +168,7 @@ fn validate_retry(node: &WorkflowNode, nodes: &HashMap<CloudJobId, &WorkflowNode
         });
     };
     if previous.logical_key != node.logical_key
+        || previous.retry != node.retry
         || previous.attempt.checked_add(1) != Some(node.attempt)
         || !matches!(
             previous.outcome,
@@ -181,26 +181,32 @@ fn validate_retry(node: &WorkflowNode, nodes: &HashMap<CloudJobId, &WorkflowNode
 }
 fn validate_approval(
     workflow: &CloudWorkflow,
-    node_id: CloudJobId,
+    node: &WorkflowNode,
     approval: &ApprovalGate,
     nodes: &HashMap<CloudJobId, &WorkflowNode>,
 ) -> Result<(), CloudProtocolError> {
+    let node_id = node.id;
     if approval.action.trim().is_empty() {
         return Err(CloudProtocolError::InvalidApprovalGate(node_id));
     }
     let valid_time = |value| value >= workflow.created_at_millis && value <= workflow.updated_at_millis;
     match &approval.decision {
-        ApprovalDecision::Pending => {}
+        ApprovalDecision::Pending if node.outcome != Some(CloudJobOutcome::Succeeded) => {}
         ApprovalDecision::Approved {
             actor,
             decided_at_millis,
-        } if !actor.trim().is_empty() && valid_time(*decided_at_millis) => {}
+        } if !actor.trim().is_empty()
+            && valid_time(*decided_at_millis)
+            && node.state != CloudJobState::WaitingForApproval => {}
         ApprovalDecision::Rejected {
             actor,
             decided_at_millis,
             reason,
-        } if !actor.trim().is_empty() && valid_time(*decided_at_millis) && !reason.trim().is_empty() => {}
-        ApprovalDecision::Approved { .. } | ApprovalDecision::Rejected { .. } => {
+        } if !actor.trim().is_empty()
+            && valid_time(*decided_at_millis)
+            && !reason.trim().is_empty()
+            && matches!(node.outcome, Some(CloudJobOutcome::Failed | CloudJobOutcome::Cancelled)) => {}
+        ApprovalDecision::Pending | ApprovalDecision::Approved { .. } | ApprovalDecision::Rejected { .. } => {
             return Err(CloudProtocolError::InvalidApprovalGate(node_id));
         }
     }
@@ -216,6 +222,16 @@ fn validate_approval(
         }
     }
     Ok(())
+}
+fn valid_progress(node: &WorkflowNode) -> bool {
+    let within_bounds = match node.progress {
+        CloudProgress::Measured { completed, total, .. } => total > 0 && completed <= total,
+        CloudProgress::Pending | CloudProgress::Indeterminate { .. } | CloudProgress::Completed => true,
+    };
+    let successful = node.outcome == Some(CloudJobOutcome::Succeeded);
+    within_bounds
+        && (!matches!(node.progress, CloudProgress::Completed) || successful)
+        && (!successful || node.progress.basis_points() == Some(10_000))
 }
 fn validate_inputs(
     node: &WorkflowNode,

@@ -33,12 +33,15 @@ macro_rules! uuid_id {
 }
 uuid_id!(CloudWorkflowId);
 uuid_id!(CloudJobId);
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CloudProvider {
-    Azure,
-    RunPod,
+macro_rules! string_enum {
+    ($name:ident: $($variant:ident),+ $(,)?) => {
+        #[doc = concat!("Stable `snake_case` wire values for `", stringify!($name), "`.")]
+        #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        pub enum $name { $($variant),+ }
+    };
 }
+string_enum!(CloudProvider: Azure, RunPod);
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WorkerTarget {
     pub provider: CloudProvider,
@@ -135,14 +138,7 @@ pub struct ProvenanceRecord {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifacts: Vec<ArtifactRef>,
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ProgressUnit {
-    Bytes,
-    Tests,
-    Jobs,
-    Steps,
-}
+string_enum!(ProgressUnit: Bytes, Tests, Jobs, Steps);
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CloudProgress {
@@ -173,22 +169,7 @@ impl CloudProgress {
         }
     }
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CloudJobState {
-    Queued,
-    Provisioning,
-    PullingImage,
-    Cloning,
-    Running,
-    Checkpointing,
-    WaitingForApproval,
-    Completed,
-    Failed,
-    Cancelled,
-    Cleaning,
-    Cleaned,
-}
+string_enum!(CloudJobState: Queued, Provisioning, PullingImage, Cloning, Running, Checkpointing, WaitingForApproval, Completed, Failed, Cancelled, Cleaning, Cleaned);
 impl CloudJobState {
     #[must_use]
     pub const fn permits(self, next: Self) -> bool {
@@ -213,27 +194,8 @@ impl CloudJobState {
         )
     }
 }
-/// Immutable result of a job attempt, retained while cleanup changes its state.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CloudJobOutcome {
-    Succeeded,
-    Failed,
-    Cancelled,
-}
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkflowNodeKind {
-    Build,
-    Test,
-    Artifact,
-    Approval,
-    Merge,
-    Publish,
-    Deploy,
-    Verify,
-    Cleanup,
-}
+string_enum!(CloudJobOutcome: Succeeded, Failed, Cancelled);
+string_enum!(WorkflowNodeKind: Build, Test, Artifact, Approval, Merge, Publish, Deploy, Verify, Cleanup);
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RetryPolicy {
     pub max_attempts: u16,
@@ -268,14 +230,7 @@ pub struct ApprovalGate {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evidence_job_ids: Vec<CloudJobId>,
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ReleaseAction {
-    MergePullRequest,
-    PublishPackage,
-    PublishToTest,
-    PublishToProduction,
-}
+string_enum!(ReleaseAction: MergePullRequest, PublishPackage, PublishToTest, PublishToProduction);
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ReleaseGate {
     pub action: ReleaseAction,
