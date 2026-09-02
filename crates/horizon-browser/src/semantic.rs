@@ -206,10 +206,22 @@ pub(crate) fn bounded_control_value(value: Value) -> Result<Value, BrowserContro
     }
 }
 
+/// A snapshot or query scan: it stops at `max_nodes` results.
 pub(crate) fn scan_expression(selector: Option<&str>, max_nodes: u32) -> String {
     let selector = selector.map_or_else(|| "null".to_string(), json_string);
     let semantic_only = selector == "null";
-    format!("({NODE_SCAN_FUNCTION})({selector}, {max_nodes}, {semantic_only})")
+    format!("({NODE_SCAN_FUNCTION})({selector}, {max_nodes}, {semantic_only}, false)")
+}
+
+/// A wait observation: the scan returns at most `max_nodes` results but
+/// keeps counting matches and visible matches over the whole match list, so
+/// the condition can be judged beyond the returned nodes. Only waits pay for
+/// the full pass; queries keep the early stop.
+pub(crate) fn wait_scan_expression(selector: &str, max_nodes: u32) -> String {
+    format!(
+        "({NODE_SCAN_FUNCTION})({}, {max_nodes}, false, true)",
+        json_string(selector)
+    )
 }
 
 pub(crate) fn target_rect_expression(selector: &str, clear: bool) -> String {
@@ -247,7 +259,7 @@ fn json_string(value: &str) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
 }
 
-const NODE_SCAN_FUNCTION: &str = r"function(selector, maxNodes, semanticOnly) {
+const NODE_SCAN_FUNCTION: &str = r"function(selector, maxNodes, semanticOnly, countMatches) {
     const documentIdentity = JSON.stringify([
         String(location.href), Number(globalThis.performance?.timeOrigin || 0)
     ]);
@@ -320,18 +332,18 @@ const NODE_SCAN_FUNCTION: &str = r"function(selector, maxNodes, semanticOnly) {
         };
     }
     const nodes = [];
-    // With a selector, match and visibility counts cover every match so a
-    // condition can be judged beyond the returned cap; a full-document
-    // snapshot keeps its early stop.
+    // A wait asks for match and visibility counts over every match so its
+    // condition can be judged beyond the returned cap; snapshots and queries
+    // stop at the cap and never lay out the rest of the page.
     let matched = 0;
     let visibleMatches = 0;
     for (const element of candidates) {
-        if (nodes.length >= maxNodes && selector === null) break;
+        if (nodes.length >= maxNodes && !countMatches) break;
         const style = getComputedStyle(element);
         const rect = element.getBoundingClientRect();
         const visible = style.display !== 'none' && style.visibility !== 'hidden' &&
             Number(style.opacity || 1) !== 0 && rect.width > 0 && rect.height > 0;
-        if (selector !== null) {
+        if (countMatches) {
             matched += 1;
             if (visible) visibleMatches += 1;
             if (nodes.length >= maxNodes) continue;
@@ -349,9 +361,9 @@ const NODE_SCAN_FUNCTION: &str = r"function(selector, maxNodes, semanticOnly) {
             bounds: visible ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null,
         });
     }
-    return selector === null
-        ? { nodes, documentIdentity }
-        : { nodes, documentIdentity, summary: { matched, visible: visibleMatches } };
+    return countMatches
+        ? { nodes, documentIdentity, summary: { matched, visible: visibleMatches } }
+        : { nodes, documentIdentity };
 }";
 
 const TARGET_RECT_FUNCTION: &str = r"function(selector, clear) {
@@ -437,7 +449,10 @@ mod tests {
         let expression = scan_expression(Some("button'); throw new Error('owned"), 10);
 
         assert!(expression.contains("\"button'); throw new Error('owned\""));
-        assert!(expression.ends_with(", 10, false)"));
+        assert!(expression.ends_with(", 10, false, false)"));
+        let wait = wait_scan_expression("button'); throw new Error('owned", 10);
+        assert!(wait.contains("\"button'); throw new Error('owned\""));
+        assert!(wait.ends_with(", 10, false, true)"));
     }
 
     #[test]
@@ -472,6 +487,14 @@ mod tests {
             Some("[\"https://example.test/\",1234]")
         );
         assert!(scan_expression(None, 10).contains("documentIdentity"));
+    }
+
+    #[test]
+    fn only_wait_scans_count_matches_past_the_cap() {
+        assert!(scan_expression(Some("button"), 10).ends_with("(\"button\", 10, false, false)"));
+        assert!(scan_expression(None, 10).ends_with("(null, 10, true, false)"));
+        assert!(wait_scan_expression("button", 20).ends_with("(\"button\", 20, false, true)"));
+        assert!(NODE_SCAN_FUNCTION.contains("if (nodes.length >= maxNodes && !countMatches) break;"));
     }
 
     #[test]

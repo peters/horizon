@@ -8,7 +8,7 @@ use crate::frames::FrameSlot;
 use crate::input::BrowserInputCdpExt;
 use crate::semantic::{
     bounded_control_value, check_script_error, parse_target_rect, scan_expression, scroll_expression,
-    target_rect_expression,
+    target_rect_expression, wait_scan_expression,
 };
 use crate::{
     AgentAction, BrowserButton, BrowserControlAction, BrowserControlFailure, BrowserControlValue, BrowserInput,
@@ -123,7 +123,7 @@ impl DriverState {
             link,
             event_tx,
             frame_slot,
-            &scan_expression(Some(selector), max_results),
+            &wait_scan_expression(selector, max_results),
             timeout,
         )?;
         let peeked = self.semantic.peek_nodes(&value)?;

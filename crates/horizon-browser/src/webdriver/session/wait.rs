@@ -4,7 +4,7 @@
 use std::time::Instant;
 
 use crate::navigation::{AgentActionExecution, PendingNavigation, now_millis};
-use crate::wait::{Observation, PendingWait, WAIT_QUERY_RESULTS, WaitResult, WaitStop};
+use crate::wait::{Observation, PendingWait, RELEASE_CHECK_BUDGET, WAIT_MAX_RESULTS, WaitResult, WaitStop};
 use crate::{AgentAction, BrowserControlAction, BrowserControlFailure};
 
 use super::Driver;
@@ -96,9 +96,10 @@ impl Driver {
             // Safari's document identity immediately before releasing a held
             // match so a link click, script navigation, meta refresh, or
             // same-URL reload cannot return references from the old document.
-            let budget = pending.observation_budget(now);
-            if let Err(failure) = self.refresh_classic_document_identity_within(budget) {
-                return pending.observe_failure(failure, Instant::now());
+            // The condition was met in time: this check runs on its own
+            // budget and retry count, never against the elapsed wait bound.
+            if let Err(failure) = self.refresh_classic_document_identity_within(RELEASE_CHECK_BUDGET) {
+                return pending.release_check_failure(failure);
             }
             if let Some(result) = pending.tick(self.semantic.generation(), Instant::now()) {
                 return Some(result);
@@ -135,7 +136,7 @@ impl Driver {
         // and judge the result against a fresh clock afterwards. The scan is
         // peeked, not registered: only the released scan becomes references.
         let budget = pending.observation_budget(now);
-        let observed = self.semantic_peek_within(&pending.selector, WAIT_QUERY_RESULTS, budget);
+        let observed = self.semantic_peek_within(&pending.selector, WAIT_MAX_RESULTS, budget);
         let now = Instant::now();
         match observed {
             Ok((generation, nodes, summary, scan)) => match pending.observe(generation, &nodes, summary, now) {

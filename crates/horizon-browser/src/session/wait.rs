@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use crate::frames::FrameSlot;
 use crate::navigation::{AgentActionExecution, PendingNavigation, now_millis};
-use crate::wait::{Observation, PendingWait, WAIT_QUERY_RESULTS, WaitResult, WaitStop};
+use crate::wait::{Observation, PendingWait, WAIT_MAX_RESULTS, WaitResult, WaitStop};
 use crate::{AgentAction, BrowserControlAction, BrowserControlFailure};
 
 use super::{BrowserEventSender, DriverState};
@@ -150,14 +150,8 @@ impl DriverState {
         // and judge the result against a fresh clock afterwards. The scan is
         // peeked, not registered: only the released scan becomes references.
         let budget = pending.observation_budget(now);
-        let observed = self.semantic_peek_within(
-            link,
-            event_tx,
-            frame_slot,
-            &pending.selector,
-            WAIT_QUERY_RESULTS,
-            budget,
-        );
+        let observed =
+            self.semantic_peek_within(link, event_tx, frame_slot, &pending.selector, WAIT_MAX_RESULTS, budget);
         let now = Instant::now();
         match observed {
             Ok((generation, nodes, summary, scan)) => match pending.observe(generation, &nodes, summary, now) {

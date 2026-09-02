@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 
 use crate::semantic::{
     bounded_control_value, check_script_error, parse_target_rect, scan_expression, scroll_expression,
-    target_rect_expression,
+    target_rect_expression, wait_scan_expression,
 };
 use crate::session::BrowserEventSender;
 use crate::{
@@ -102,7 +102,7 @@ impl Driver {
         ),
         BrowserControlFailure,
     > {
-        let value = self.evaluate_json_within(&scan_expression(Some(selector), max_results), Some(timeout))?;
+        let value = self.evaluate_json_within(&wait_scan_expression(selector, max_results), Some(timeout))?;
         let peeked = self.semantic.peek_nodes(&value)?;
         self.record_classic_document_identity(peeked.document_identity);
         Ok((self.semantic.generation(), peeked.nodes, peeked.summary, value))

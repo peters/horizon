@@ -19,11 +19,14 @@ pub(crate) const MAX_OBSERVATION_BUDGET: Duration = Duration::from_secs(5);
 /// Consecutive retryable observation failures tolerated before the wait
 /// surfaces the failure itself instead of retrying.
 pub(crate) const MAX_TRANSIENT_FAILURES: u32 = 5;
-/// Most matching nodes a wait reports in its outcome.
+/// Most matching nodes a wait reports in its outcome; the observation scan
+/// returns no more than this while its summary counts every match.
 pub(crate) const WAIT_MAX_RESULTS: u32 = 20;
-/// Matches the engine evaluates the condition over (the protocol's query
-/// maximum), so a visible match beyond the reported ones still counts.
-pub(crate) const WAIT_QUERY_RESULTS: u32 = crate::MAX_QUERY_RESULTS;
+/// How long one pre-release document check (the drivers' final identity
+/// read before a held match is returned) may block. The condition was met
+/// in time, so this check is bounded by its own budget and retry count, not
+/// by the wait's remaining time.
+pub(crate) const RELEASE_CHECK_BUDGET: Duration = Duration::from_secs(1);
 
 /// Why a pending wait was cancelled before its condition was met.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -234,6 +237,16 @@ impl PendingWait {
             return Some(Err(failure));
         }
         (now >= self.deadline).then(|| self.timed_out(now))
+    }
+
+    /// A failed pre-release check on a held match. The condition was met in
+    /// time, so the wait deadline no longer applies: a retryable failure is
+    /// tried again on the next tick, up to [`MAX_TRANSIENT_FAILURES`] in a
+    /// row, and every other failure, or a persistent one, is returned as is.
+    pub(crate) fn release_check_failure(&mut self, failure: BrowserControlFailure) -> Option<WaitResult> {
+        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        (!observation_failure_is_transient(&failure) || self.consecutive_failures >= MAX_TRANSIENT_FAILURES)
+            .then_some(Err(failure))
     }
 
     /// Cancel or time out the wait; `Some` when it must be completed now. A
@@ -649,6 +662,49 @@ mod tests {
             .observe_failure(BrowserControlFailure::new("protocol_error", "evaluate timed out"), now)
             .expect("settled");
         assert_eq!(surfaced.expect_err("failed").code, "protocol_error");
+    }
+
+    #[test]
+    fn a_failed_release_check_is_retried_without_the_wait_deadline() {
+        let now = Instant::now();
+        let mut held = pending(SelectorState::Present, 1_000, now);
+        assert!(matches!(
+            held.observe(7, &[node(true)], None, now),
+            Observation::Satisfied
+        ));
+        held.defer(scan(), 3);
+        let late = now + Duration::from_secs(3);
+        for _ in 1..MAX_TRANSIENT_FAILURES {
+            assert!(
+                held.release_check_failure(BrowserControlFailure::new(
+                    "javascript_error",
+                    "WebDriver HTTP I/O: Resource temporarily unavailable (os error 11)"
+                ))
+                .is_none(),
+                "a slow identity read past the deadline is retried, not timed out"
+            );
+        }
+        assert!(
+            held.tick(7, late).is_none(),
+            "the held match still ignores the deadline"
+        );
+        assert_eq!(held.polls, 1, "release checks are not observations");
+        let surfaced = held
+            .release_check_failure(BrowserControlFailure::new("javascript_error", "evaluate timed out"))
+            .expect("settled");
+        assert_eq!(surfaced.expect_err("failed").code, "javascript_error");
+
+        let mut permanent = pending(SelectorState::Present, 1_000, now);
+        assert!(matches!(
+            permanent.observe(7, &[node(true)], None, now),
+            Observation::Satisfied
+        ));
+        permanent.defer(scan(), 3);
+        let surfaced = permanent
+            .release_check_failure(BrowserControlFailure::new("invalid_result", "no document identity"))
+            .expect("settled");
+        assert_eq!(surfaced.expect_err("failed").code, "invalid_result");
+        assert!(RELEASE_CHECK_BUDGET > MIN_OBSERVATION_BUDGET);
     }
 
     #[test]
