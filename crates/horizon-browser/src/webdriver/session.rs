@@ -296,11 +296,13 @@ pub(crate) fn run_webdriver(
         driver.tick_pending_wait();
         driver.write_coordination(false);
         if let Some(status) = driver.service.process.child_status() {
+            driver.settle_pending_wait_for_shutdown(Instant::now());
             let _ = event_tx.send(BrowserEvent::Stopped { code: status.code() });
             return;
         }
         std::thread::sleep(Duration::from_millis(5));
     }
+    driver.settle_pending_wait_for_shutdown(Instant::now());
     driver.close(event_tx);
     let _ = event_tx.send(BrowserEvent::Stopped { code: None });
 }

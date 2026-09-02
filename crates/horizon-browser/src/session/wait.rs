@@ -172,4 +172,11 @@ impl DriverState {
             self.complete_agent_action(&pending.request, pending.stopped(WaitStop::Superseded, now));
         }
     }
+
+    /// Publish a terminal result before the driver loop releases its state.
+    pub(super) fn settle_pending_wait_for_shutdown(&mut self, now: Instant) {
+        if let Some(pending) = self.pending_wait.take() {
+            self.complete_agent_action(&pending.request, pending.stopped(WaitStop::BrowserUnavailable, now));
+        }
+    }
 }

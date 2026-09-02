@@ -248,6 +248,7 @@ fn run_loop(
         if state.drain_commands(link, command_rx, event_tx, frame_slot) {
             state.flush_http_response_bodies(link, event_tx, frame_slot);
             state.capture_final_url(link, event_tx, frame_slot);
+            state.settle_pending_wait_for_shutdown(Instant::now());
             // Ask Chrome to exit cleanly so it marks its profile session
             // complete (kill alone leaves a "crashed" state that makes the
             // next launch restore stale tabs); the kill below is the
@@ -285,6 +286,7 @@ fn run_loop(
             // failure and stop — the panel offers Retry.
             tracing::warn!(target: "browser", "cdp connection lost: {error}");
             let _ = event_tx.send(BrowserEvent::Warning(format!("CDP connection lost: {error}")));
+            state.settle_pending_wait_for_shutdown(Instant::now());
             let _ = chrome.kill();
             let _ = event_tx.send(BrowserEvent::Stopped { code: None });
             break;
@@ -325,6 +327,7 @@ fn run_loop(
 
         // 6. Chrome process liveness.
         if let Some(status) = chrome.child_status() {
+            state.settle_pending_wait_for_shutdown(Instant::now());
             let _ = event_tx.send(BrowserEvent::Stopped { code: status.code() });
             break;
         }
