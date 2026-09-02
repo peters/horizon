@@ -1,7 +1,8 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use horizon_core::HorizonHome;
+use horizon_core::browser::manifest;
+use horizon_core::{HorizonHome, browser_mcp_executable};
 
 struct EmbeddedFile {
     relative_path: &'static str,
@@ -50,9 +51,10 @@ const BROWSER_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
 
 pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) {
     let user_home = std::env::var_os("HOME").map(PathBuf::from);
-    let mcp_command = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("horizon"));
+    let mcp_command = browser_mcp_executable().unwrap_or_else(|| PathBuf::from("horizon"));
+    let claude_plugin_dir = horizon_home.claude_plugin_dir_for_host(manifest::host_instance());
 
-    match install_agent_plugins_impl(horizon_home, user_home.as_deref(), &mcp_command) {
+    match install_agent_plugins_impl(horizon_home, &claude_plugin_dir, user_home.as_deref(), &mcp_command) {
         Ok(updated_files) if updated_files > 0 => {
             tracing::info!(updated_files, "synced embedded Horizon agent plugins");
         }
@@ -63,14 +65,15 @@ pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) {
 
 fn install_agent_plugins_impl(
     horizon_home: &HorizonHome,
+    claude_plugin_dir: &Path,
     user_home: Option<&Path>,
     mcp_command: &Path,
 ) -> std::io::Result<usize> {
     let mut updated_files = 0usize;
 
-    updated_files += sync_plugin_files(&horizon_home.claude_plugin_dir(), CLAUDE_PLUGIN_FILES)?;
+    updated_files += sync_plugin_files(claude_plugin_dir, CLAUDE_PLUGIN_FILES)?;
     updated_files += usize::from(sync_file_if_changed(
-        &horizon_home.claude_plugin_dir().join(".mcp.json"),
+        &claude_plugin_dir.join(".mcp.json"),
         &claude_mcp_config(mcp_command)?,
     )?);
     updated_files += sync_plugin_files(&horizon_home.codex_skill_dir(), NOTIFY_SKILL_FILES)?;
@@ -196,9 +199,15 @@ mod tests {
         let temp = tempfile::tempdir().expect("temp dir");
         let horizon_home = HorizonHome::from_root(temp.path().join(".horizon"));
         let user_home = temp.path().join("user-home");
+        let claude_plugin_dir = horizon_home.claude_plugin_dir_for_host("host-a");
 
-        let updated = install_agent_plugins_impl(&horizon_home, Some(&user_home), Path::new("/opt/horizon"))
-            .expect("install plugins");
+        let updated = install_agent_plugins_impl(
+            &horizon_home,
+            &claude_plugin_dir,
+            Some(&user_home),
+            Path::new("/opt/horizon"),
+        )
+        .expect("install plugins");
 
         assert!(updated > 0);
         assert_eq!(
@@ -228,9 +237,29 @@ mod tests {
         );
         assert!(BROWSER_SKILL_FILES[0].content.contains("browser_visibility"));
         assert!(BROWSER_SKILL_FILES[0].content.contains("browser_network_watch"));
-        let mcp_config = std::fs::read_to_string(horizon_home.claude_plugin_dir().join(".mcp.json"))
+        let mcp_config = std::fs::read_to_string(claude_plugin_dir.join(".mcp.json"))
             .expect("Claude MCP config should be installed");
         assert!(mcp_config.contains("/opt/horizon"));
         assert!(mcp_config.contains("--browser-mcp"));
+    }
+
+    #[test]
+    fn install_agent_plugins_keeps_mcp_commands_isolated_per_horizon_host() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let horizon_home = HorizonHome::from_root(temp.path().join(".horizon"));
+        let first_plugin_dir = horizon_home.claude_plugin_dir_for_host("host-a");
+        let second_plugin_dir = horizon_home.claude_plugin_dir_for_host("host-b");
+
+        install_agent_plugins_impl(&horizon_home, &first_plugin_dir, None, Path::new("/opt/horizon-a"))
+            .expect("install first host plugin");
+        install_agent_plugins_impl(&horizon_home, &second_plugin_dir, None, Path::new("/opt/horizon-b"))
+            .expect("install second host plugin");
+
+        let first_config = std::fs::read_to_string(first_plugin_dir.join(".mcp.json")).expect("first host config");
+        let second_config = std::fs::read_to_string(second_plugin_dir.join(".mcp.json")).expect("second host config");
+        assert!(first_config.contains("/opt/horizon-a"));
+        assert!(!first_config.contains("/opt/horizon-b"));
+        assert!(second_config.contains("/opt/horizon-b"));
+        assert!(!second_config.contains("/opt/horizon-a"));
     }
 }

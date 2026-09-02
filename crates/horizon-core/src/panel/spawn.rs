@@ -904,8 +904,7 @@ pub fn browser_actor(local_id: &str) -> String {
 }
 
 fn horizon_codex_mcp_args() -> Vec<String> {
-    let Some(command) = std::env::current_exe()
-        .ok()
+    let Some(command) = crate::browser_mcp_executable()
         .and_then(|path| path.into_os_string().into_string().ok())
         .and_then(|path| serde_json::to_string(&path).ok())
     else {
@@ -926,7 +925,7 @@ fn horizon_codex_mcp_args() -> Vec<String> {
 }
 
 fn horizon_claude_plugin_args() -> Vec<String> {
-    let path = HorizonHome::resolve().claude_plugin_dir();
+    let path = HorizonHome::resolve().claude_plugin_dir_for_host(crate::browser::manifest::host_instance());
     if path.is_dir() {
         vec!["--plugin-dir".to_string(), path.display().to_string()]
     } else {
@@ -1024,6 +1023,8 @@ mod tests {
         assert!(command.contains("mcp_servers.horizon-browser.default_tools_approval_mode=\"approve\""));
         assert!(command.contains("--browser-mcp"));
         assert!(!command.contains("browser-cli"));
+        #[cfg(target_os = "linux")]
+        assert!(command.contains(&format!("/proc/{}/exe", std::process::id())));
     }
 
     #[test]
