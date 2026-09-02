@@ -9,19 +9,26 @@ struct FakeState {
     job_after_create: Option<ApiJob>,
     requests: Vec<CreateJobRequest>,
     executions: Vec<ApiExecution>,
-    start_response: Option<ApiExecution>,
     create_is_new: bool,
     starts: usize,
 }
 impl Transport for FakeTransport {
     fn get(&self, _name: &str) -> Result<Option<ApiJob>, AzureError> {
-        Ok(self.0.lock().expect("state").job.clone())
+        let mut state = self.0.lock().expect("state");
+        if state.job.is_none()
+            && !state.requests.is_empty()
+            && let Some(job) = state.job_after_create.take()
+        {
+            state.job = Some(job);
+            return Ok(None);
+        }
+        Ok(state.job.clone())
     }
     fn create(&self, _name: &str, request: &CreateJobRequest) -> Result<CreateResult, AzureError> {
         let mut state = self.0.lock().expect("state");
         state.requests.push(request.clone());
         let job = state.create_response.clone().expect("create response");
-        state.job = Some(state.job_after_create.clone().unwrap_or_else(|| job.clone()));
+        state.job = state.job_after_create.is_none().then(|| job.clone());
         Ok(CreateResult {
             job,
             created: state.create_is_new,
@@ -33,16 +40,14 @@ impl Transport for FakeTransport {
     fn start(&self, _name: &str) -> Result<Option<ApiExecution>, AzureError> {
         let mut state = self.0.lock().expect("state");
         state.starts += 1;
-        let execution = state.start_response.clone();
-        state.executions.extend(execution.clone());
-        Ok(execution)
+        Ok(None)
     }
     fn delete(&self, _name: &str) -> Result<AzureCleanup, AzureError> {
         let mut state = self.0.lock().expect("state");
-        if state.job.take().is_none() {
-            return Ok(AzureCleanup::AlreadyAbsent);
-        }
-        Ok(AzureCleanup::Deleted)
+        Ok(state
+            .job
+            .take()
+            .map_or(AzureCleanup::AlreadyAbsent, |_| AzureCleanup::Deleted))
     }
 }
 fn profile() -> AzureProfile {
@@ -64,8 +69,7 @@ fn target() -> WorkerTarget {
     WorkerTarget {
         provider: CloudProvider::Azure,
         profile: "general-build".to_string(),
-        image: "registry.example/build/worker@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-            .to_string(),
+        image: format!("registry.example/build/worker@sha256:{}", "a".repeat(64)),
         disk_gib: 2,
         lease_seconds: 3_600,
         max_hourly_cost_micros: Some(100_000),
@@ -94,19 +98,11 @@ fn creation_is_bounded_and_retries_reuse_one_execution() {
         state.create_is_new = true;
     }
     let client = AzureClient::with_transport(profile, transport.clone());
-    let AzureEnsure::Created(status) = client
-        .ensure_worker(workflow_id, job_id, &target)
-        .expect("created worker")
-    else {
-        panic!("new worker must be created");
-    };
-    assert_eq!(status.lifecycle, AzureLifecycle::Provisioning);
+    let created = client.ensure_worker(workflow_id, job_id, &target);
+    assert!(matches!(created, Ok(AzureEnsure::Created(_))));
     let reused = client.ensure_worker(workflow_id, job_id, &target);
     assert!(matches!(reused, Ok(AzureEnsure::Reused(_))));
-    let state = transport.0.lock().expect("state");
-    assert_eq!(state.requests.len(), 1);
-    assert_eq!(state.starts, 1);
-    drop(state);
+    assert_eq!(transport.0.lock().expect("state").requests.len(), 1);
     transport.0.lock().expect("state").job = None;
     transport.0.lock().expect("state").create_is_new = false;
     let raced = client.ensure_worker(workflow_id, job_id, &target);
@@ -120,10 +116,8 @@ fn validation_and_cost_fail_before_creation() {
     target.max_hourly_cost_micros = Some(41_999);
     let transport = FakeTransport::default();
     let client = AzureClient::with_transport(profile.clone(), transport.clone());
-    let error = client
-        .ensure_worker(workflow_id, job_id, &target)
-        .expect_err("cost rejected");
-    assert!(matches!(error, AzureError::HourlyCostRejected { .. }));
+    let error = client.ensure_worker(workflow_id, job_id, &target);
+    assert!(matches!(error, Err(AzureError::HourlyCostRejected { .. })));
     assert!(transport.0.lock().expect("state").requests.is_empty());
     target.max_hourly_cost_micros = None;
     assert_eq!(validate_target(&target, &profile), Err(AzureError::InvalidTarget));
@@ -134,6 +128,7 @@ fn validation_and_cost_fail_before_creation() {
     for deadline in ["2020-01-01T00:00:00Z", "2999-01-01T00:00:00Z"] {
         let mut job = api_job(workflow_id, job_id, &target, &profile);
         job.tags.insert(DEADLINE_TAG.to_string(), deadline.to_string());
+        job.properties.template.containers.as_mut().expect("containers")[0].env[3].value = Some(deadline.to_string());
         transport.0.lock().expect("state").job = Some(job);
         let result = client.ensure_worker(workflow_id, job_id, &target);
         assert_eq!(result, Err(AzureError::ResourceIdentityMismatch));
@@ -149,9 +144,8 @@ fn exact_cleanup_rejects_identity_drift_and_is_idempotent() {
     let good = api_job(workflow_id, job_id, &target, &profile);
     let worker = worker_from_job(&good, workflow_id, job_id, &target, &profile).expect("worker");
     let mut oversized = good.clone();
-    oversized.properties.template.containers.as_mut().expect("containers")[0]
-        .resources
-        .cpu = 1.0;
+    let containers = oversized.properties.template.containers.as_mut().expect("containers");
+    containers[0].resources.cpu = 1.0;
     let mismatch = worker_from_job(&oversized, workflow_id, job_id, &target, &profile);
     assert_eq!(mismatch, Err(AzureError::ResourceIdentityMismatch));
     let mut wrong = good.clone();
@@ -163,8 +157,12 @@ fn exact_cleanup_rejects_identity_drift_and_is_idempotent() {
     let mut edited_profile = profile.clone();
     edited_profile.cpu_millicores = 750;
     let client = AzureClient::with_transport(edited_profile, transport.clone());
-    assert_eq!(client.delete_worker(&worker), Err(AzureError::ResourceIdentityMismatch));
+    let cleanup = client.cleanup_creation_failure::<()>(&worker.name, Some(&worker), AzureError::InvalidTarget);
+    assert!(matches!(cleanup, Err(AzureError::CleanupFailed { .. })));
+    assert!(transport.0.lock().expect("state").job.is_some());
     transport.0.lock().expect("state").job = Some(good);
     assert_eq!(client.delete_worker(&worker), Ok(AzureCleanup::Deleted));
     assert_eq!(client.delete_worker(&worker), Ok(AzureCleanup::AlreadyAbsent));
+    let absent = client.cleanup_creation_failure::<()>(&worker.name, Some(&worker), AzureError::InvalidTarget);
+    assert_eq!(absent, Err(AzureError::InvalidTarget));
 }

@@ -138,16 +138,16 @@ impl AzureClient {
         };
         let worker = match worker_from_job(&job, workflow_id, job_id, target, &self.profile) {
             Ok(worker) => worker,
-            Err(error) if created => return self.cleanup_creation_failure(&name, workflow_id, job_id, error),
+            Err(error) if created => return self.cleanup_creation_failure(&name, None, error),
             Err(error) => return Err(error),
         };
         if !recovered_deadline_valid(&worker.delete_after, target.lease_seconds) {
-            return self.cleanup_creation_failure(&name, workflow_id, job_id, AzureError::ResourceIdentityMismatch);
+            return self.cleanup_creation_failure(&name, Some(&worker), AzureError::ResourceIdentityMismatch);
         }
         if created && !job.ready_to_start() {
             job = match self.await_created_job(&worker) {
                 Ok(job) => job,
-                Err(error) => return self.cleanup_creation_failure(&name, workflow_id, job_id, error),
+                Err(error) => return self.cleanup_creation_failure(&name, Some(&worker), error),
             };
         }
         let result = (|| {
@@ -164,7 +164,7 @@ impl AzureClient {
         let status = match result {
             Ok(status) => status,
             Err(error) if created || matches!(&error, AzureError::HourlyCostRejected { .. }) => {
-                return self.cleanup_creation_failure(&name, workflow_id, job_id, error);
+                return self.cleanup_creation_failure(&name, Some(&worker), error);
             }
             Err(error) => return Err(error),
         };
@@ -224,7 +224,9 @@ impl AzureClient {
         let name = worker.name.as_str();
         for delay_millis in [0, 250, 500, 1_000, 2_000, 4_000, 8_000, 16_000] {
             std::thread::sleep(std::time::Duration::from_millis(delay_millis));
-            let job = self.transport.get(name)?.ok_or(AzureError::ResourceIdentityMismatch)?;
+            let Some(job) = self.transport.get(name)? else {
+                continue;
+            };
             status_from_resource(&job, worker, None)?;
             if job.ready_to_start() {
                 return Ok(job);
@@ -237,20 +239,22 @@ impl AzureClient {
     fn cleanup_creation_failure<T>(
         &self,
         name: &str,
-        workflow_id: CloudWorkflowId,
-        job_id: CloudJobId,
+        worker: Option<&AzureWorker>,
         error: AzureError,
     ) -> Result<T, AzureError> {
-        let owned = self
-            .transport
-            .get(name)
-            .ok()
-            .flatten()
-            .is_some_and(|job| basic_identity_matches(&job, workflow_id, job_id, &self.profile));
-        if !owned || self.transport.delete(name).is_err() {
-            return Err(AzureError::CleanupFailed {
-                resource_id: resource_id(&self.profile.subscription_id, &self.profile.resource_group, name),
-            });
+        let cleanup_failed = || AzureError::CleanupFailed {
+            resource_id: resource_id(&self.profile.subscription_id, &self.profile.resource_group, name),
+        };
+        let Some(worker) = worker else {
+            return Err(cleanup_failed());
+        };
+        let job = match self.transport.get(name) {
+            Ok(Some(job)) => job,
+            Ok(None) => return Err(error),
+            Err(_) => return Err(cleanup_failed()),
+        };
+        if status_from_resource(&job, worker, None).is_err() || self.transport.delete(name).is_err() {
+            return Err(cleanup_failed());
         }
         for delay_millis in [0, 250, 500, 1_000, 2_000, 4_000, 8_000, 16_000] {
             std::thread::sleep(std::time::Duration::from_millis(delay_millis));
@@ -258,9 +262,7 @@ impl AzureClient {
                 return Err(error);
             }
         }
-        Err(AzureError::CleanupFailed {
-            resource_id: resource_id(&self.profile.subscription_id, &self.profile.resource_group, name),
-        })
+        Err(cleanup_failed())
     }
     #[cfg(test)]
     fn with_transport(profile: AzureProfile, transport: impl Transport + 'static) -> Self {
@@ -307,11 +309,6 @@ trait Transport: Send + Sync {
     fn start(&self, name: &str) -> Result<Option<ApiExecution>, AzureError>;
     fn delete(&self, name: &str) -> Result<AzureCleanup, AzureError>;
 }
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-struct Registry {
-    server: String,
-    identity: String,
-}
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 struct ApiJob {
@@ -352,7 +349,7 @@ struct ApiConfiguration {
     replica_retry_limit: u32,
     trigger_type: String,
     manual_trigger_config: ApiManualTriggerConfig,
-    registries: Option<Vec<Registry>>,
+    registries: Option<Vec<serde_json::Value>>,
 }
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
