@@ -128,13 +128,17 @@ impl DriverState {
             BrowserCommand::Reload => {
                 self.invalidate_scrollbar_layout();
                 self.supersede_pending_navigation(Instant::now());
+                // Marked before dispatch: events routed during the command's
+                // round trip (a fast reload's commit or stop) may already
+                // clear it, and must not be overwritten afterwards.
+                self.top_frame_navigating = true;
                 match self.send_page_command(link, event_tx, frame_slot, "Page.reload", &serde_json::json!({})) {
                     Ok(_) => {
-                        self.top_frame_navigating = true;
                         self.pending_restart_at = Some(Instant::now());
                         Ok(false)
                     }
                     Err(error) => {
+                        self.top_frame_navigating = false;
                         Err(self.page_command_failure(event_tx, "reload", "protocol_error", error.to_string()))
                     }
                 }
@@ -557,6 +561,9 @@ impl DriverState {
                 "CDP returned a history entry without an identifier".to_string(),
             ));
         };
+        // Marked before dispatch so events routed during the round trip can
+        // already clear it (see the reload command).
+        self.top_frame_navigating = true;
         match self.send_page_command(
             link,
             event_tx,
@@ -565,11 +572,11 @@ impl DriverState {
             &serde_json::json!({ "entryId": entry_id }),
         ) {
             Ok(_) => {
-                self.top_frame_navigating = true;
                 self.pending_restart_at = Some(Instant::now());
                 Ok(())
             }
             Err(error) => {
+                self.top_frame_navigating = false;
                 Err(self.page_command_failure(event_tx, "history traversal", "protocol_error", error.to_string()))
             }
         }
