@@ -4,7 +4,7 @@ use std::fs::OpenOptions;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use atomicwrites::{AllowOverwrite, AtomicFile};
 use horizon_browser::AgentActionResult;
@@ -46,6 +46,44 @@ fn remove_stale_at(root: &Path, panel_local_id: &str) -> std::io::Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
     }
+}
+
+pub(super) fn remove_stale_except_at(
+    root: &Path,
+    panel_local_id: &str,
+    retained_action_id: Option<&str>,
+    timeout: Duration,
+) -> std::io::Result<()> {
+    let Some(retained_action_id) = retained_action_id else {
+        return remove_stale_at(root, panel_local_id);
+    };
+    let retained_path = action_result_path_for_root(root, panel_local_id, retained_action_id);
+    let panel_dir = retained_path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "browser action result path has no parent",
+        )
+    })?;
+    let entries = match std::fs::read_dir(panel_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let deadline = Instant::now() + timeout;
+    for entry in entries {
+        let path = entry?.path();
+        if path == retained_path || path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+            continue;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let _lock = ManifestLock::acquire_with_timeout(&path, remaining)?;
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
 }
 
 fn write_at(path: &Path, result: &AgentActionResult) -> std::io::Result<()> {
@@ -237,10 +275,25 @@ mod tests {
             BrowserControlFailure::new("browser_unavailable", "the browser stopped while waiting"),
         );
         write_at(&result_path, &result).unwrap();
+        let unrelated_action_id = new_action_id();
+        let unrelated_result_path = action_result_path_for_root(&root, panel_id, &unrelated_action_id);
+        write_at(
+            &unrelated_result_path,
+            &AgentActionResult::completed(
+                unrelated_action_id,
+                BrowserControlValue::Json {
+                    value: serde_json::json!({ "private": "page data" }),
+                },
+            ),
+        )
+        .unwrap();
 
-        let removed = super::super::remove_owned_at_with_timeout(&manifest_path, "host-a", Duration::from_secs(1));
+        let coordination = super::super::ManifestCoordination::default();
+        horizon_browser::BrowserCoordination::retain_action_result_on_remove(&coordination, panel_id, &action_id);
+        let removed = coordination.remove_at(&root, panel_id, "host-a", Duration::from_secs(1));
         assert!(removed.unwrap());
         assert!(!manifest_path.exists());
+        assert!(!unrelated_result_path.exists());
         assert_eq!(take_at(&result_path, &action_id).unwrap(), Some(result));
         assert_eq!(take_at(&result_path, &action_id).unwrap(), None);
         let _ = std::fs::remove_dir_all(root);

@@ -177,6 +177,9 @@ impl DriverState {
     pub(super) fn settle_pending_wait_for_shutdown(&mut self, now: Instant) {
         if let Some(pending) = self.pending_wait.take() {
             self.complete_agent_action(&pending.request, pending.stopped(WaitStop::BrowserUnavailable, now));
+            if let Some(coordination) = self.config.coordination.as_ref() {
+                coordination.retain_action_result_on_remove(&self.config.panel_local_id, &pending.request.action_id);
+            }
         }
     }
 }

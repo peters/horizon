@@ -26,11 +26,13 @@
 //! later updates fail when teardown has removed it, so a delayed writer cannot
 //! resurrect a dead panel.
 
+use std::collections::BTreeMap;
 use std::fs::{OpenOptions, TryLockError};
 use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
@@ -458,28 +460,21 @@ pub(crate) fn remove_with_timeout(panel_local_id: &str, timeout: Duration) -> bo
 }
 
 /// Remove a manifest at driver teardown only while this process still runs
-/// the panel's driver. `Some(true)` means this host owned the panel (the
-/// manifest is gone), `Some(false)` that another host adopted it and it was
-/// left alone, `None` that removal failed. One-shot action results deliberately
-/// outlive the manifest so a consumer can observe a terminal shutdown result;
-/// driver `prepare` clears them before the panel id is reused.
-#[must_use]
-fn remove_owned_with_timeout(panel_local_id: &str, timeout: Duration) -> Option<bool> {
-    let path = default_manifest_path(panel_local_id);
-    match remove_owned_at_with_timeout(&path, host_instance(), timeout) {
-        Ok(owned) => Some(owned),
-        Err(error) => {
-            tracing::warn!(target: "browser", path = %path.display(), "failed to remove browser manifest: {error}");
-            None
-        }
-    }
-}
-
-fn remove_owned_at_with_timeout(path: &Path, host: &str, timeout: Duration) -> std::io::Result<bool> {
+/// the panel's driver. The owned-storage callback runs under that ownership
+/// check before the manifest disappears, so a superseded driver cannot prune
+/// results belonging to its replacement.
+fn remove_owned_at_with_timeout(
+    path: &Path,
+    host: &str,
+    timeout: Duration,
+    prune_owned_storage: impl FnOnce(Duration) -> std::io::Result<()>,
+) -> std::io::Result<bool> {
+    let deadline = Instant::now() + timeout;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let _lock = ManifestLock::acquire_with_timeout(path, timeout)?;
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    let _lock = ManifestLock::acquire_with_timeout(path, remaining)?;
     // Only a present manifest that names this host proves ownership; a
     // missing file or a host-less manifest written by an older Horizon that
     // adopted the id is left untouched.
@@ -487,6 +482,7 @@ fn remove_owned_at_with_timeout(path: &Path, host: &str, timeout: Duration) -> s
         tracing::debug!(target: "browser", path = %path.display(), "leaving browser manifest this host does not own");
         return Ok(false);
     }
+    prune_owned_storage(deadline.saturating_duration_since(Instant::now()))?;
     match std::fs::remove_file(path) {
         Ok(()) => Ok(true),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
@@ -619,10 +615,42 @@ fn remove_at_with_timeout(path: &Path, timeout: Duration) -> std::io::Result<()>
 #[derive(Debug, Default)]
 pub struct ManifestCoordination {
     audit: audit::AuditSink,
+    retained_results: Mutex<BTreeMap<String, String>>,
+}
+
+impl ManifestCoordination {
+    fn remove_at(&self, root: &Path, panel_local_id: &str, host: &str, timeout: Duration) -> Option<bool> {
+        let retained_action_id = self
+            .retained_results
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(panel_local_id)
+            .cloned();
+        let path = manifest_path_for_root(root, panel_local_id);
+        match remove_owned_at_with_timeout(&path, host, timeout, |remaining| {
+            result::remove_stale_except_at(root, panel_local_id, retained_action_id.as_deref(), remaining)
+        }) {
+            Ok(owned) => {
+                self.retained_results
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(panel_local_id);
+                Some(owned)
+            }
+            Err(error) => {
+                tracing::warn!(target: "browser", path = %path.display(), "failed to remove browser manifest: {error}");
+                None
+            }
+        }
+    }
 }
 
 impl horizon_browser::BrowserCoordination for ManifestCoordination {
     fn prepare(&self, panel_local_id: &str, timeout: Duration) -> bool {
+        self.retained_results
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(panel_local_id);
         let manifest_removed = remove_with_timeout(panel_local_id, timeout);
         let results_removed = result::remove_stale(panel_local_id).is_ok();
         manifest_removed && results_removed
@@ -734,6 +762,13 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
         with_owned_manifest(panel_local_id, || result::write(panel_local_id, result))
     }
 
+    fn retain_action_result_on_remove(&self, panel_local_id: &str, action_id: &str) {
+        self.retained_results
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(panel_local_id.to_string(), action_id.to_string());
+    }
+
     fn prepare_network_capture(
         &self,
         panel_local_id: &str,
@@ -746,7 +781,8 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
     }
 
     fn remove(&self, panel_local_id: &str, timeout: Duration) -> bool {
-        remove_owned_with_timeout(panel_local_id, timeout).is_some()
+        self.remove_at(HorizonHome::resolve().root(), panel_local_id, host_instance(), timeout)
+            .is_some()
     }
 }
 
@@ -1128,17 +1164,17 @@ mod tests {
         assert!(effect_ran);
 
         assert!(
-            !remove_owned_at_with_timeout(&path, "host-a", Duration::from_secs(1)).unwrap(),
+            !remove_owned_at_with_timeout(&path, "host-a", Duration::from_secs(1), |_| Ok(())).unwrap(),
             "a superseded driver's teardown reports the manifest as not its own"
         );
         assert!(
             path.exists(),
             "a superseded driver's teardown leaves the adopted manifest"
         );
-        assert!(remove_owned_at_with_timeout(&path, "host-b", Duration::from_secs(1)).unwrap());
+        assert!(remove_owned_at_with_timeout(&path, "host-b", Duration::from_secs(1), |_| Ok(())).unwrap());
         assert!(!path.exists());
         assert!(
-            !remove_owned_at_with_timeout(&path, "host-b", Duration::from_secs(1)).unwrap(),
+            !remove_owned_at_with_timeout(&path, "host-b", Duration::from_secs(1), |_| Ok(())).unwrap(),
             "a missing manifest proves nothing about driver ownership"
         );
         assert_eq!(
@@ -1150,7 +1186,7 @@ mod tests {
 
         let legacy = manifest_path_for_root(&root, "legacy");
         write_at(&legacy, &sample("legacy")).unwrap();
-        assert!(!remove_owned_at_with_timeout(&legacy, "host-a", Duration::from_secs(1)).unwrap());
+        assert!(!remove_owned_at_with_timeout(&legacy, "host-a", Duration::from_secs(1), |_| Ok(())).unwrap());
         assert!(
             legacy.exists(),
             "a host-less manifest may belong to an older Horizon that adopted the id, so teardown leaves it"

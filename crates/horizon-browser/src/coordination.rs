@@ -70,6 +70,10 @@ pub trait BrowserCoordination: Debug + Send + Sync + 'static {
     fn complete_action(&self, _panel_local_id: &str, _result: &crate::AgentActionResult) -> std::io::Result<()> {
         Ok(())
     }
+    /// Keep one already-published result available while `remove` prunes
+    /// other per-panel results. Hosts that do not persist results can ignore
+    /// this teardown hint.
+    fn retain_action_result_on_remove(&self, _panel_local_id: &str, _action_id: &str) {}
     /// Apply the host's retention policy before the engine creates an
     /// explicit network export. The default leaves storage policy with
     /// standalone embedders that do not need persistent capture directories.
