@@ -2,6 +2,7 @@
 //! driver loop: one audited action that polls the page at a bounded cadence
 //! and settles on the selector state, the deadline, or a cancellation.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::semantic::ScanSummary;
@@ -44,6 +45,20 @@ pub(crate) enum WaitStop {
 }
 
 pub(crate) type WaitResult = Result<BrowserControlValue, BrowserControlFailure>;
+
+/// A normal close can cancel an observation that was already in flight. Keep
+/// the wait pending in that case so the driver's shutdown path publishes the
+/// stable `browser_unavailable` outcome instead of the backend cancellation.
+pub(crate) fn defer_result_during_shutdown(
+    stop_requested: &AtomicBool,
+    result: Option<WaitResult>,
+) -> Option<WaitResult> {
+    if stop_requested.load(Ordering::Acquire) {
+        None
+    } else {
+        result
+    }
+}
 
 /// What one observation concluded.
 #[derive(Debug)]
@@ -384,6 +399,20 @@ mod tests {
             Observation::Done(result) => result,
             other => panic!("expected a completed wait, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn shutdown_defers_an_inflight_observation_result_for_terminal_settlement() {
+        let stop_requested = AtomicBool::new(false);
+        let failure = || BrowserControlFailure::new("protocol_error", "backend observation cancelled");
+
+        assert!(
+            defer_result_during_shutdown(&stop_requested, Some(Err(failure())))
+                .expect("running driver keeps the result")
+                .is_err()
+        );
+        stop_requested.store(true, Ordering::Release);
+        assert!(defer_result_during_shutdown(&stop_requested, Some(Err(failure()))).is_none());
     }
 
     fn released(wait: &PendingWait, nodes: Vec<BrowserNode>, now: Instant) -> WaitOutcome {

@@ -270,10 +270,10 @@ pub(crate) fn run_webdriver(
             // session timeout restored and page state refreshed before the
             // next request runs.
             driver.tick_pending_navigation();
-            driver.tick_pending_wait();
+            driver.tick_pending_wait(stop_requested);
             driver.tick_classic_timeout_restore();
             driver.tick_page_state_refresh(event_tx);
-            driver.service_agent_request(&request, event_tx);
+            driver.service_agent_request(&request, event_tx, stop_requested);
         }
         if let Err(error) = driver.drain_bidi_events(event_tx) {
             tracing::warn!(backend = ?driver.config.browser.backend, "BiDi event pump failed: {error}");
@@ -293,7 +293,7 @@ pub(crate) fn run_webdriver(
         driver.tick_classic_timeout_restore();
         driver.tick_page_state_refresh(event_tx);
         driver.tick_pending_navigation();
-        driver.tick_pending_wait();
+        driver.tick_pending_wait(stop_requested);
         driver.write_coordination(false);
         if let Some(status) = driver.service.process.child_status() {
             driver.settle_pending_wait_for_shutdown(Instant::now());

@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use crate::frames::FrameSlot;
 use crate::navigation::{AgentActionExecution, PendingNavigation, now_millis};
-use crate::wait::{Observation, PendingWait, WAIT_MAX_RESULTS, WaitResult, WaitStop};
+use crate::wait::{Observation, PendingWait, WAIT_MAX_RESULTS, WaitResult, WaitStop, defer_result_during_shutdown};
 use crate::{AgentAction, BrowserControlAction, BrowserControlFailure};
 
 use super::{BrowserEventSender, DriverState};
@@ -51,7 +51,8 @@ impl DriverState {
         // The first observation runs under the same guards as every later one:
         // an already-expired bound, a lost lease, a pending handoff, or an
         // uncommitted navigation must not let it succeed against the old page.
-        if let Some(result) = self.advance_wait(link, event_tx, frame_slot, &mut pending, now, true) {
+        let result = self.advance_wait(link, event_tx, frame_slot, &mut pending, now, true);
+        if let Some(result) = defer_result_during_shutdown(&self.stop_requested, result) {
             return AgentActionExecution::Done(result);
         }
         tracing::debug!(target: "browser", action_id = %request.action_id, ?state, timeout_millis, "agent wait pending");
@@ -73,6 +74,7 @@ impl DriverState {
         let now = Instant::now();
         let observe = pending.poll_due(now);
         let result = self.advance_wait(link, event_tx, frame_slot, &mut pending, now, observe);
+        let result = defer_result_during_shutdown(&self.stop_requested, result);
         match result {
             Some(result) => {
                 tracing::debug!(target: "browser", action_id = %pending.request.action_id, ok = result.is_ok(), "agent wait settled");
