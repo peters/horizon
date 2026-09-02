@@ -97,8 +97,11 @@ The reusable runner:
   `committed_url`, a `302` redirect flagged `redirected`, a
   `dom_content_loaded` wait, a dispatch-only wait, an unreachable loopback
   destination as a `navigation_failed` action that retains the committed page,
-  and (Chromium and Firefox) a bounded wait on the 11-second page that returns
-  `state: timed_out` with the pre-commit state before the page finally commits;
+  and a bounded wait on the 11-second page that returns `state: timed_out`
+  with the pre-commit state before the page finally commits (Chromium and
+  Firefox inside the navigation lane; Safari in its retained slow-page lane,
+  where the classic navigation keeps running and the driver polls it to its
+  commit);
 - disconnects the MCP stdio client, starts a fresh client with the same actor,
   rediscovers the exact live panel, and proves resumed snapshot plus complete
   audit states without restarting the browser;

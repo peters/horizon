@@ -106,9 +106,10 @@ in `scripts/browser-smoke/mcp_gate.py`):
 - Chromium and Firefox only: a 3-second bound on the 11-second page returns
   `state: timed_out`, `completed: false`, no committed URL, and the page
   later commits (`#slow-marker` becomes visible). Safari's classic WebDriver
-  applies the bound as its page-load timeout and reports `timed_out` too, but
-  it cannot observe the later commit without another command, so the gate
-  keeps its existing 60-second delayed-navigation lane there instead.
+  applies the bound as its page-load timeout and reports `timed_out` too; its
+  retained slow-page lane now starts with a 3-second bound that must return
+  `state: timed_out`, then waits for the panel URL to reach the slow page (the
+  driver polls the classic navigation to its commit) before `#slow-marker`.
 
 Backend notes to confirm in the report:
 

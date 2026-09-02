@@ -114,7 +114,17 @@ impl Driver {
                 format!("could not apply the navigation bound: {error}"),
             ));
         }
-        let read_timeout = Duration::from_millis(bound_millis.saturating_add(CLASSIC_BOUND_READ_MARGIN_MILLIS));
+        // Applying the timeout has its own HTTP guard; if it stalled past the
+        // deadline, report the bound instead of navigating late.
+        let now = Instant::now();
+        if let Some(expired) = pending.tick(now) {
+            self.classic_timeout_to_restore = Some(PAGE_LOAD_TIMEOUT_MILLIS);
+            return expired;
+        }
+        let remaining_millis = u64::try_from(pending.remaining(now).as_millis())
+            .unwrap_or(u64::MAX)
+            .max(1);
+        let read_timeout = Duration::from_millis(remaining_millis.saturating_add(CLASSIC_BOUND_READ_MARGIN_MILLIS));
         self.begin_navigation();
         let _ = event_tx.send(BrowserEvent::Loading(true));
         let result = self

@@ -1169,16 +1169,21 @@ def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
 
     retained_title = final_snapshot["title"]
     if args.backend == "safari":
-        record_action(
+        # Classic WebDriver: a short bound on the 11-second page must return
+        # the typed timed_out outcome (the navigation keeps running and the
+        # driver polls it to its commit), then the retained lane continues.
+        bounded = record_action(
             client,
             "browser_navigate",
             {
                 "panel_id": panel_id,
                 "url": f"{args.base_url}/slow-navigation.html",
-                "timeout_millis": 60000,
+                "timeout_millis": 3000,
             },
             action_ids,
         )
+        verify_navigation_outcome(bounded, "commit", "timed_out", None, redirected=False)
+        wait_for_panel_url(client, panel_id, f"{args.base_url}/slow-navigation.html", 30)
         record_action(
             client,
             "browser_wait",
