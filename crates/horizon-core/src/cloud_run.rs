@@ -85,7 +85,6 @@ hex_value!(GitCommitSha => parse; 40; InvalidGitCommit; "Parse an exact Git comm
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GitSource {
-    /// Repository identity without credentials, normally `owner/name`.
     pub repository: String,
     pub commit: GitCommitSha,
     #[serde(default, skip_serializing_if = "Option::is_none")]

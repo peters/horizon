@@ -156,7 +156,8 @@ fn v1_json_contract_round_trips() {
     assert_eq!(serialized, golden);
     let unknown = golden.replacen("\"weight\":10", "\"approval_typo\":null,\"weight\":10", 1);
     assert!(serde_json::from_str::<(CloudWorkflow, ProvenanceRecord)>(&unknown).is_err());
-    assert!(record.source.commit.as_str().len() == 40 && record.artifacts[0].sha256.as_str().len() == 64);
+    assert_eq!(GitCommitSha::parse("short"), Err(InvalidGitCommit));
+    assert_eq!(ArtifactDigest::parse_sha256("g".repeat(64)), Err(InvalidSha256));
     assert!(super::validation::valid_worker_image(
         "registry--ha.example:5000/team/image"
     ));
