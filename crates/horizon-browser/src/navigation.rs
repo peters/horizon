@@ -420,7 +420,7 @@ impl PendingNavigation {
 /// Whether a committed URL is the requested destination rather than a
 /// redirect. Browsers add or drop a trailing slash on bare origins, so that
 /// difference alone is not a redirect.
-fn same_destination(requested: &str, committed: &str) -> bool {
+pub(crate) fn same_destination(requested: &str, committed: &str) -> bool {
     requested == committed || bare_origin_variant(requested, committed) || bare_origin_variant(committed, requested)
 }
 

@@ -14,6 +14,9 @@ use crate::{
 
 use super::{Driver, webdriver_value};
 
+const DOCUMENT_IDENTITY_EXPRESSION: &str =
+    "JSON.stringify([String(location.href), Number(globalThis.performance?.timeOrigin || 0)])";
+
 impl Driver {
     pub(super) fn execute_agent_action(
         &mut self,
@@ -92,8 +95,9 @@ impl Driver {
         timeout: std::time::Duration,
     ) -> Result<(u64, Vec<crate::BrowserNode>, Value), BrowserControlFailure> {
         let value = self.evaluate_json_within(&scan_expression(Some(selector), max_results), Some(timeout))?;
-        let (generation, nodes) = self.semantic.peek_nodes(&value)?;
-        Ok((generation, nodes, value))
+        let (_, nodes, document_identity) = self.semantic.peek_nodes(&value)?;
+        self.record_classic_document_identity(document_identity);
+        Ok((self.semantic.generation(), nodes, value))
     }
 
     /// Register a previously peeked scan as the current references.
@@ -211,5 +215,44 @@ impl Driver {
             .cloned()
             .ok_or_else(|| BrowserControlFailure::new("invalid_result", "WebDriver returned no script value"))?;
         bounded_control_value(value)
+    }
+
+    pub(super) fn initialize_classic_document_identity(&mut self) {
+        if self.config.browser.backend == BackendKind::SafariWebDriver {
+            let _ = self.refresh_classic_document_identity_within(std::time::Duration::from_secs(1));
+        }
+    }
+
+    pub(super) fn refresh_classic_document_identity_within(
+        &mut self,
+        timeout: std::time::Duration,
+    ) -> Result<bool, BrowserControlFailure> {
+        if self.config.browser.backend != BackendKind::SafariWebDriver {
+            return Ok(false);
+        }
+        let value = self.evaluate_json_within(DOCUMENT_IDENTITY_EXPRESSION, Some(timeout))?;
+        let identity = value
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| BrowserControlFailure::new("invalid_result", "WebDriver returned no document identity"))?;
+        Ok(self.record_classic_document_identity(Some(identity)))
+    }
+
+    fn record_classic_document_identity(&mut self, identity: Option<String>) -> bool {
+        if self.config.browser.backend != BackendKind::SafariWebDriver {
+            return false;
+        }
+        let Some(identity) = identity else {
+            return false;
+        };
+        let changed = self
+            .classic_document_identity
+            .replace(identity.clone())
+            .is_some_and(|previous| previous != identity);
+        if changed {
+            self.semantic.invalidate();
+            self.advance_generation();
+        }
+        changed
     }
 }

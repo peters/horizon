@@ -136,6 +136,12 @@ impl PendingWait {
         }
     }
 
+    /// Whether the held scan has survived a later coordination refresh and
+    /// is ready for the driver's final document-identity guard.
+    pub(crate) fn deferred_ready(&self, signal_epoch: u64) -> bool {
+        matches!(self.deferred, Some((_, observed_epoch)) if observed_epoch != signal_epoch)
+    }
+
     /// The satisfied outcome from the registered nodes of the released scan.
     /// `elapsed_millis` ends when the condition was observed, not at the
     /// later release after the coordination refresh.

@@ -91,6 +91,19 @@ impl Driver {
         if pending.blocked_by_navigation() {
             return Some(pending.stopped(WaitStop::NavigationInvalidated, now));
         }
+        if pending.deferred_ready(self.signal_epoch) {
+            // Classic WebDriver has no page-navigation event stream. Re-read
+            // Safari's document identity immediately before releasing a held
+            // match so a link click, script navigation, meta refresh, or
+            // same-URL reload cannot return references from the old document.
+            let budget = pending.observation_budget(now);
+            if let Err(failure) = self.refresh_classic_document_identity_within(budget) {
+                return pending.observe_failure(failure, Instant::now());
+            }
+            if let Some(result) = pending.tick(self.semantic.generation(), Instant::now()) {
+                return Some(result);
+            }
+        }
         // A satisfied observation completes only after the signals have been
         // re-read, events drained, and no navigation started meanwhile: the
         // guards above ran again first.

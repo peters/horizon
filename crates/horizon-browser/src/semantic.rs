@@ -50,12 +50,16 @@ impl SemanticState {
     /// Parse a scan without registering references: the page generation and
     /// the nodes (with empty references) for judging a condition, leaving the
     /// reference map of the last registered snapshot or query untouched.
-    pub(crate) fn peek_nodes(&self, value: &Value) -> Result<(u64, Vec<BrowserNode>), BrowserControlFailure> {
+    pub(crate) fn peek_nodes(
+        &self,
+        value: &Value,
+    ) -> Result<(u64, Vec<BrowserNode>, Option<String>), BrowserControlFailure> {
         let response: NodeScanResponse = serde_json::from_value(value.clone())
             .map_err(|error| BrowserControlFailure::new("invalid_result", format!("invalid page snapshot: {error}")))?;
         if let Some(error) = response.error {
             return Err(error);
         }
+        let document_identity = response.document_identity;
         let nodes = response
             .nodes
             .into_iter()
@@ -69,7 +73,7 @@ impl SemanticState {
                 bounds: scanned.bounds.filter(valid_bounds),
             })
             .collect();
-        Ok((self.generation, nodes))
+        Ok((self.generation, nodes, document_identity))
     }
 
     pub(crate) fn register_nodes(
@@ -117,6 +121,8 @@ impl SemanticState {
 struct NodeScanResponse {
     #[serde(default)]
     nodes: Vec<ScannedNode>,
+    #[serde(default, rename = "documentIdentity")]
+    document_identity: Option<String>,
     #[serde(default)]
     error: Option<BrowserControlFailure>,
 }
@@ -218,6 +224,9 @@ fn json_string(value: &str) -> String {
 }
 
 const NODE_SCAN_FUNCTION: &str = r"function(selector, maxNodes, semanticOnly) {
+    const documentIdentity = JSON.stringify([
+        String(location.href), Number(globalThis.performance?.timeOrigin || 0)
+    ]);
     const roleFor = (element) => {
         const explicit = element.getAttribute('role');
         if (explicit) return explicit.split(/\s+/)[0];
@@ -281,7 +290,10 @@ const NODE_SCAN_FUNCTION: &str = r"function(selector, maxNodes, semanticOnly) {
     try {
         candidates = document.querySelectorAll(selector === null ? '*' : selector);
     } catch (error) {
-        return { nodes: [], error: { code: 'invalid_selector', message: compact(error?.message || error) } };
+        return {
+            nodes: [], documentIdentity,
+            error: { code: 'invalid_selector', message: compact(error?.message || error) }
+        };
     }
     const nodes = [];
     for (const element of candidates) {
@@ -303,7 +315,7 @@ const NODE_SCAN_FUNCTION: &str = r"function(selector, maxNodes, semanticOnly) {
             bounds: visible ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null,
         });
     }
-    return { nodes };
+    return { nodes, documentIdentity };
 }";
 
 const TARGET_RECT_FUNCTION: &str = r"function(selector, clear) {
@@ -406,6 +418,21 @@ mod tests {
         let expression = scan_expression(None, 10);
 
         assert!(expression.contains("if (tag === 'iframe') return 'iframe'"));
+    }
+
+    #[test]
+    fn wait_peeks_preserve_the_script_observed_document_identity() {
+        let state = SemanticState::default();
+        let (_, nodes, identity) = state
+            .peek_nodes(&serde_json::json!({
+                "nodes": [],
+                "documentIdentity": "[\"https://example.test/\",1234]"
+            }))
+            .unwrap_or_default();
+
+        assert!(nodes.is_empty());
+        assert_eq!(identity.as_deref(), Some("[\"https://example.test/\",1234]"));
+        assert!(scan_expression(None, 10).contains("documentIdentity"));
     }
 
     #[test]

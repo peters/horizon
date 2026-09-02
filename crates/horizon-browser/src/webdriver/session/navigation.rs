@@ -22,6 +22,23 @@ use super::{
 /// the typed `timed_out` outcome after the read gives up.
 const CLASSIC_BOUND_READ_MARGIN_MILLIS: u64 = 2_000;
 
+pub(super) struct ClassicNavigationRefresh {
+    until: Instant,
+    previous_url: String,
+    previous_document_identity: Option<String>,
+}
+
+impl ClassicNavigationRefresh {
+    fn observed_commit(&self, current_url: &str, current_document_identity: Option<&str>) -> bool {
+        !crate::navigation::same_destination(&self.previous_url, current_url)
+            || self
+                .previous_document_identity
+                .as_deref()
+                .zip(current_document_identity)
+                .is_some_and(|(previous, current)| previous != current)
+    }
+}
+
 impl Driver {
     /// Run a `Navigate` agent action. Firefox `BiDi` dispatches with
     /// `wait: "none"` and settles from its navigation events or the bounded
@@ -130,7 +147,7 @@ impl Driver {
         let result = self.classic_navigation_post_within("url", &json!({ "url": &url }), read_timeout);
         let now = Instant::now();
         if result.is_ok() && pending.tick(now).is_some() {
-            return Ok(self.settle_classic_navigation_timeout(pending, now));
+            return Ok(self.settle_classic_navigation_timeout(pending, &previous_url, now));
         }
         let get_timeout = pending.remaining(now).max(Duration::from_millis(1));
         let result = result
@@ -142,7 +159,7 @@ impl Driver {
             });
         let now = Instant::now();
         if pending.tick(now).is_some() {
-            return Ok(self.settle_classic_navigation_timeout(pending, now));
+            return Ok(self.settle_classic_navigation_timeout(pending, &previous_url, now));
         }
         if let Err(error) = &result
             && classic_error_is_page_load_timeout(error)
@@ -152,7 +169,7 @@ impl Driver {
             // own 10 s guards; against a hung driver they would eat the
             // controller's delivery headroom, so the loop runs them after the
             // result is written.
-            return Ok(self.settle_classic_navigation_timeout(pending, now));
+            return Ok(self.settle_classic_navigation_timeout(pending, &previous_url, now));
         }
         if self
             .classic_post("timeouts", &json!({ "pageLoad": PAGE_LOAD_TIMEOUT_MILLIS }))
@@ -171,12 +188,18 @@ impl Driver {
     fn settle_classic_navigation_timeout(
         &mut self,
         pending: &mut PendingNavigation,
+        previous_url: &str,
         now: Instant,
     ) -> crate::BrowserControlValue {
         self.retain_frame_during_navigation = false;
         self.navigation_failed = false;
         self.classic_timeout_to_restore = Some(PAGE_LOAD_TIMEOUT_MILLIS);
         self.refresh_pending_at = Some(now);
+        self.classic_refresh = Some(ClassicNavigationRefresh {
+            until: now + Duration::from_millis(PAGE_LOAD_TIMEOUT_MILLIS),
+            previous_url: previous_url.to_string(),
+            previous_document_identity: self.classic_document_identity.clone(),
+        });
         self.frames.demand();
         pending.settle_timed_out(None, now)
     }
@@ -385,7 +408,11 @@ impl Driver {
             self.navigation_failed = false;
             // The window counts from the navigation start, so the overall
             // failure cutoff stays at the normal page-load window.
-            self.classic_refresh_until = Some(started + Duration::from_millis(PAGE_LOAD_TIMEOUT_MILLIS));
+            self.classic_refresh = Some(ClassicNavigationRefresh {
+                until: started + Duration::from_millis(PAGE_LOAD_TIMEOUT_MILLIS),
+                previous_url,
+                previous_document_identity: self.classic_document_identity.clone(),
+            });
             self.refresh_pending_at = Some(Instant::now() + Duration::from_secs(1));
             tracing::debug!(target: "browser", url = %url, "startup navigation still loading after its bound");
             return true;
@@ -407,7 +434,7 @@ impl Driver {
         // A replacement navigation supersedes a classic navigation that was
         // still being polled to its commit; otherwise the marker would keep
         // every later wait paused.
-        self.classic_refresh_until = None;
+        self.classic_refresh = None;
         self.scrollbar.reset();
         self.frames.suspend_for_navigation();
     }
@@ -579,6 +606,7 @@ impl Driver {
             self.observe_navigation_signal(crate::navigation::NavigationSignal::Title(&title));
         }
         let _ = event_tx.send(BrowserEvent::Loading(false));
+        let _ = self.refresh_classic_document_identity_within(Duration::from_secs(1));
     }
 
     /// Restore the session page-load timeout a bounded classic navigation
@@ -593,7 +621,7 @@ impl Driver {
 
     /// A classic navigation that outlived its bound and has not committed yet.
     pub(super) fn classic_navigation_in_flight(&self) -> bool {
-        self.classic_refresh_until.is_some()
+        self.classic_refresh.is_some()
     }
 
     pub(super) fn tick_page_state_refresh(&mut self, event_tx: &BrowserEventSender) {
@@ -604,17 +632,22 @@ impl Driver {
             return;
         }
         self.refresh_pending_at = None;
-        let previous_url = self.url.clone();
         self.refresh_page_state(event_tx);
-        if let Some(until) = self.classic_refresh_until {
-            if self.url != previous_url {
-                self.classic_refresh_until = None;
+        let refresh_state = self.classic_refresh.as_ref().map(|refresh| {
+            (
+                refresh.until,
+                refresh.observed_commit(&self.url, self.classic_document_identity.as_deref()),
+            )
+        });
+        if let Some((until, committed)) = refresh_state {
+            if committed {
+                self.classic_refresh = None;
                 self.frames.demand();
             } else if Instant::now() >= until {
                 // Classic WebDriver reports no later event, so a navigation
                 // that has not committed by the page-load window is failed
                 // explicitly instead of leaving the panel silently stale.
-                self.classic_refresh_until = None;
+                self.classic_refresh = None;
                 self.navigation_failed = true;
                 self.frames.interaction_started_at = None;
                 let _ = event_tx.send(BrowserEvent::NavigationFailed(
@@ -640,4 +673,22 @@ pub(super) fn classic_error_is_page_load_timeout(error: &str) -> bool {
     error.starts_with("WebDriver timeout:")
         || (error.starts_with("WebDriver HTTP I/O:")
             && (error.contains("timed out") || error.contains("temporarily unavailable")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ClassicNavigationRefresh;
+
+    #[test]
+    fn refresh_detects_document_replacement_without_misreading_origin_slashes() {
+        let refresh = ClassicNavigationRefresh {
+            until: std::time::Instant::now(),
+            previous_url: "https://example.test".to_string(),
+            previous_document_identity: Some("old-document".to_string()),
+        };
+
+        assert!(!refresh.observed_commit("https://example.test/", Some("old-document")));
+        assert!(refresh.observed_commit("https://example.test/", Some("new-document")));
+        assert!(refresh.observed_commit("https://example.test/next", Some("old-document")));
+    }
 }

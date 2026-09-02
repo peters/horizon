@@ -167,10 +167,14 @@ struct Driver {
     /// Session page-load timeout a bounded classic navigation lowered and the
     /// loop still has to restore, once the typed outcome was published.
     classic_timeout_to_restore: Option<u64>,
-    /// While a bounded classic navigation (startup or agent action) is still
-    /// loading after its bound, page state is re-read every second until this
-    /// instant or until the URL changes; the navigation counts as in flight.
-    classic_refresh_until: Option<Instant>,
+    /// Script-observed identity of Safari's current document. Unlike its URL,
+    /// this changes on a same-URL reload and lets waits reject replacement
+    /// documents even though classic `WebDriver` emits no navigation events.
+    classic_document_identity: Option<String>,
+    /// A bounded classic navigation (startup or agent action) that is still
+    /// loading after its result deadline and must be polled to a document
+    /// replacement, URL change, or the page-load cutoff.
+    classic_refresh: Option<navigation::ClassicNavigationRefresh>,
     coordination_dirty: bool,
     last_coordination_write: Instant,
     last_signal_check: Instant,
@@ -225,6 +229,7 @@ pub(crate) fn run_webdriver(
         }
     };
     driver.initialize_coordination();
+    driver.initialize_classic_document_identity();
     let capabilities = driver.active_capabilities();
     frame_slot.publish_backend_capabilities(capabilities);
     let _ = event_tx.send(BrowserEvent::BackendReady(capabilities));
@@ -320,9 +325,11 @@ impl Driver {
             }
             Err(error) => return Err(format!("failed to create WebDriver session: {error}")),
         };
-        let new_session = parse_new_session_response(&response)?;
-        let session_id = new_session.id;
-        let ws_url = new_session.capabilities.get("webSocketUrl").and_then(Value::as_str);
+        let NewSession {
+            id: session_id,
+            capabilities,
+        } = parse_new_session_response(&response)?;
+        let ws_url = capabilities.get("webSocketUrl").and_then(Value::as_str);
         let mut bidi = match ws_url {
             Some(url) => match connect_bidi_with_startup_retry(url, stop_requested) {
                 Ok(link) => Some(link),
@@ -335,14 +342,12 @@ impl Driver {
             None => None,
         };
         if config.browser.backend == BackendKind::FirefoxBidi && bidi.is_none() {
-            let path = format!("/session/{session_id}");
-            let _ = service.http.delete(&path);
+            service.delete_session(&session_id);
             return Err("Firefox did not return the required WebDriver BiDi webSocketUrl".to_string());
         }
         let mut context_id = bidi.as_mut().and_then(discover_context);
         if config.browser.backend == BackendKind::FirefoxBidi && context_id.is_none() {
-            let path = format!("/session/{session_id}");
-            let _ = service.http.delete(&path);
+            service.delete_session(&session_id);
             return Err("Firefox BiDi returned no top-level browsing context".to_string());
         }
         if config.browser.backend == BackendKind::FirefoxBidi
@@ -350,8 +355,7 @@ impl Driver {
             && let Some(link) = bidi.as_mut()
             && let Err(error) = install_common_signal_preload(link)
         {
-            let path = format!("/session/{session_id}");
-            let _ = service.http.delete(&path);
+            service.delete_session(&session_id);
             return Err(format!(
                 "Firefox could not install pre-document automation disclosure minimization: {error}"
             ));
@@ -360,8 +364,7 @@ impl Driver {
             && let Err(error) = subscribe(link, config.browser.backend, context_id.as_deref())
         {
             if config.browser.backend == BackendKind::FirefoxBidi {
-                let path = format!("/session/{session_id}");
-                let _ = service.http.delete(&path);
+                service.delete_session(&session_id);
                 return Err(format!("Firefox BiDi event subscription failed: {error}"));
             }
             bidi = None;
@@ -391,7 +394,8 @@ impl Driver {
             pending_classic_history_start: None,
             refresh_pending_at: None,
             classic_timeout_to_restore: None,
-            classic_refresh_until: None,
+            classic_document_identity: None,
+            classic_refresh: None,
             coordination_dirty: true,
             last_coordination_write: Instant::now(),
             last_signal_check: Instant::now(),

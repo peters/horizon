@@ -118,7 +118,7 @@ impl DriverState {
             &scan_expression(Some(selector), max_results),
             timeout,
         )?;
-        let (generation, nodes) = self.semantic.peek_nodes(&value)?;
+        let (generation, nodes, _) = self.semantic.peek_nodes(&value)?;
         Ok((generation, nodes, value))
     }
 
