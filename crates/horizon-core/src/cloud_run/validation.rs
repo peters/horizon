@@ -127,6 +127,9 @@ fn validate_node(
     if !valid_progress(node) {
         return Err(CloudProtocolError::InvalidProgress(node.id));
     }
+    if node.approval.is_some() && node.release.is_some() {
+        return Err(CloudProtocolError::InvalidApprovalGate(node.id));
+    }
     let needs_approval = node.kind == WorkflowNodeKind::Approval || node.state == CloudJobState::WaitingForApproval;
     if needs_approval && node.approval.is_none() && node.release.is_none() {
         return Err(CloudProtocolError::MissingApprovalGate(node.id));

@@ -115,7 +115,7 @@ fn approvals_and_leases_obey_snapshot_time_and_identity() {
 #[test]
 fn provenance_rejects_secrets_without_echoing_them() {
     let id = CloudJobId::new();
-    let mut provenance = ProvenanceRecord {
+    let mut record = ProvenanceRecord {
         producer_job_id: id,
         source: GitSource {
             repository: "fintermobilityas/nativesdk".to_string(),
@@ -127,31 +127,26 @@ fn provenance_rejects_secrets_without_echoing_them() {
         published_version: None,
         artifacts: vec![artifact("candidate", "workflows/candidate.nupkg")],
     };
-    assert_eq!(provenance.validate(), Ok(()));
-    provenance.source.repository = "https://user:secret@example.test/repo".to_string();
-    let error = provenance.validate().expect_err("credential-bearing repository");
+    assert_eq!(record.validate(), Ok(()));
+    record.source.repository = "https://user:secret@example.test/repo".to_string();
+    let error = record.validate().expect_err("credential-bearing repository");
     assert_eq!(error, CloudProtocolError::InvalidRepository);
     assert!(!error.to_string().contains("secret"));
-    provenance.source.repository = "fintermobilityas/nativesdk".to_string();
+    record.source.repository = "fintermobilityas/nativesdk".to_string();
     for url in "https://u:p@e.test/r https://e.test/r?q=x https://: https://[invalid".split_ascii_whitespace() {
-        provenance.workflow_run_url = Some(url.to_string());
-        assert_eq!(
-            provenance.validate(),
-            Err(CloudProtocolError::InvalidWorkflowRunUrl(id))
-        );
+        record.workflow_run_url = Some(url.to_string());
+        assert_eq!(record.validate(), Err(CloudProtocolError::InvalidWorkflowRunUrl(id)));
     }
-    provenance.workflow_run_url = None;
+    record.workflow_run_url = None;
     for key in ["https://e.test/a?x", "C:/outside", "C:relative", "artifact\n"] {
-        provenance.artifacts[0].storage_key = key.to_string();
-        assert_eq!(provenance.validate(), Err(CloudProtocolError::InvalidArtifactRef(id)));
+        record.artifacts[0].storage_key = key.to_string();
+        assert_eq!(record.validate(), Err(CloudProtocolError::InvalidArtifactRef(id)));
     }
 }
 #[test]
 fn job_state_transition_matrix_is_stable() {
-    let states: Vec<CloudJobState> = serde_json::from_str(
-        r#"["queued","provisioning","pulling_image","cloning","running","checkpointing","waiting_for_approval","completed","failed","cancelled","cleaning","cleaned"]"#,
-    )
-    .expect("valid state table");
+    let json = r#"["queued","provisioning","pulling_image","cloning","running","checkpointing","waiting_for_approval","completed","failed","cancelled","cleaning","cleaned"]"#;
+    let states: Vec<CloudJobState> = serde_json::from_str(json).expect("valid state table");
     // Each bit corresponds to the state at the same index, covering every allowed and forbidden edge.
     let allowed = [
         0x242_u16, 0x31c, 0x318, 0x310, 0x3e0, 0x390, 0x391, 0x400, 0x400, 0x400, 0x900, 0,
@@ -164,10 +159,17 @@ fn job_state_transition_matrix_is_stable() {
 }
 #[test]
 fn v1_json_contract_round_trips() {
-    let golden = include_str!("v1_minimal.json").trim();
-    let snapshot: CloudWorkflow = serde_json::from_str(golden).expect("valid v1 workflow");
-    assert_eq!(snapshot.validate(), Ok(()));
-    assert_eq!(serde_json::to_string(&snapshot).expect("serialize v1 workflow"), golden);
+    type V1Contract = (CloudWorkflow, ProvenanceRecord);
+    let golden = include_str!("v1_contract.json").trim();
+    let (mut snapshot, record): V1Contract = serde_json::from_str(golden).expect("valid v1 contract");
+    assert_eq!((snapshot.validate(), record.validate()), (Ok(()), Ok(())));
+    assert_eq!(
+        serde_json::to_string(&(&snapshot, &record)).expect("serialize v1"),
+        golden
+    );
+    snapshot.nodes[8].release = snapshot.nodes[4].release.clone();
+    let error = CloudProtocolError::InvalidApprovalGate(snapshot.nodes[8].id);
+    assert_eq!(snapshot.validate(), Err(error));
 }
 #[test]
 fn inputs_are_unique_outputs_of_direct_dependencies() {
