@@ -89,6 +89,10 @@ pub(crate) struct ActionReceipt {
 pub(crate) struct CreateReceipt {
     pub(crate) action_id: String,
     pub(crate) panel: BrowserPanel,
+    /// `None` when the host predates startup readiness.
+    pub(crate) navigation: Option<horizon_core::browser::manifest::CreateNavigation>,
+    pub(crate) navigation_error: Option<String>,
+    pub(crate) startup_millis: u64,
 }
 
 #[derive(Debug)]
@@ -275,7 +279,12 @@ impl BrowserController {
                 .map_err(|source| ControlError::internal_io("could not read browser create result", source))?
             {
                 return match result.outcome {
-                    BrowserCreateOutcome::Ready { panel_local_id } => {
+                    BrowserCreateOutcome::Ready {
+                        panel_local_id,
+                        navigation,
+                        navigation_error,
+                        startup_millis,
+                    } => {
                         self.ensure_claim(&panel_local_id)?;
                         let manifest = manifest::read(&panel_local_id).ok_or_else(|| {
                             ControlError::internal_io(
@@ -286,6 +295,9 @@ impl BrowserController {
                         Ok(CreateReceipt {
                             action_id,
                             panel: BrowserPanel::from_manifest(manifest, &self.actor),
+                            navigation,
+                            navigation_error,
+                            startup_millis,
                         })
                     }
                     BrowserCreateOutcome::Failed { code, message } => Err(ControlError::Browser {
@@ -295,7 +307,10 @@ impl BrowserController {
                     }),
                 };
             }
-            if started.elapsed() >= Duration::from_millis(timeout_millis) {
+            // The host decides readiness by the request's own deadline; the
+            // result then still travels through the locked manifest files,
+            // so give its delivery the same headroom as engine-bounded actions.
+            if started.elapsed() >= Duration::from_millis(timeout_millis + RESULT_DELIVERY_HEADROOM_MILLIS) {
                 return Err(ControlError::CreateTimeout {
                     action_id,
                     timeout_millis,

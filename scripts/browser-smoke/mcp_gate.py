@@ -250,6 +250,22 @@ def create_panel(client: McpClient, args: argparse.Namespace) -> tuple[dict[str,
         or panel["visible"]
     ):
         raise AssertionError(created)
+    # Creation with a URL completes only after the backend is ready and that
+    # page committed, so the ready panel already reports the committed page
+    # and the very next semantic call can inspect it.
+    if (
+        created.get("navigation") != "committed"
+        or panel["url"] != f"{args.base_url}/index.html"
+        or not isinstance(created.get("startup_millis"), int)
+    ):
+        raise AssertionError(f"browser_create returned before its first page committed: {created}")
+    print(json.dumps({"create_startup_millis": created["startup_millis"], "backend": args.backend}), flush=True)
+    first_query, _ = client.call(
+        "browser_query",
+        {"panel_id": panel["panel_id"], "selector": "#smoke-input"},
+    )
+    if first_query is None or len(first_query["nodes"]) != 1:
+        raise AssertionError(f"the created page was not queryable immediately after browser_create: {first_query}")
     audit, _ = client.call(
         "browser_audit",
         {"panel_id": panel["panel_id"], "action_id": action_id, "limit": 10},

@@ -32,6 +32,9 @@ mod shutdown;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 const PAGE_LOAD_TIMEOUT_MILLIS: u64 = 50_000;
+/// Page-load bound for the startup navigation, so the servicing loop starts
+/// even when the first page is slow.
+const STARTUP_PAGE_LOAD_TIMEOUT_MILLIS: u64 = 10_000;
 const NAVIGATION_HTTP_TIMEOUT: Duration = Duration::from_millis(PAGE_LOAD_TIMEOUT_MILLIS + 5_000);
 const ACTIVE_FRAME_INTERVAL: Duration = Duration::from_millis(33);
 const ACTIVE_WINDOW: Duration = Duration::from_millis(900);
@@ -162,6 +165,9 @@ struct Driver {
     /// Session page-load timeout a bounded classic navigation lowered and the
     /// loop still has to restore, once the typed outcome was published.
     classic_timeout_to_restore: Option<u64>,
+    /// While a bounded startup navigation is still loading, page state is
+    /// re-read every second until this instant or until the URL changes.
+    startup_refresh_until: Option<Instant>,
     coordination_dirty: bool,
     last_coordination_write: Instant,
     last_signal_check: Instant,
@@ -216,13 +222,19 @@ pub(crate) fn run_webdriver(
     let capabilities = driver.active_capabilities();
     frame_slot.publish_backend_capabilities(capabilities);
     let _ = event_tx.send(BrowserEvent::BackendReady(capabilities));
-    let _ = event_tx.send(BrowserEvent::Ready);
-    if let Some(url) = config
+    let startup_navigation_pending = config
         .initial_url
         .as_deref()
         .filter(|url| !url.is_empty() && *url != "about:blank")
-    {
-        let _ = driver.navigate(url, event_tx);
+        .is_some_and(|url| driver.navigate_initial(url, event_tx));
+    // `Ready` means the servicing loop below is about to run: commands and
+    // agent actions are only usable from here on, so it must not be
+    // published before the (bounded) startup navigation returned. The host
+    // resets its loading flag on `Ready`, so a startup navigation that is
+    // still running is reported as loading again right after it.
+    let _ = event_tx.send(BrowserEvent::Ready);
+    if startup_navigation_pending {
+        let _ = event_tx.send(BrowserEvent::Loading(true));
     }
 
     while !stop_requested.load(Ordering::Acquire) {
@@ -370,6 +382,7 @@ impl Driver {
             pending_classic_history_start: None,
             refresh_pending_at: None,
             classic_timeout_to_restore: None,
+            startup_refresh_until: None,
             coordination_dirty: true,
             last_coordination_write: Instant::now(),
             last_signal_check: Instant::now(),
@@ -722,26 +735,10 @@ impl Driver {
         self.retain_frame_during_navigation = true;
         self.navigation_failed = false;
         self.refresh_pending_at = None;
+        // A replacement navigation must not inherit the startup poll's cutoff.
+        self.startup_refresh_until = None;
         self.scrollbar.reset();
         self.frames.suspend_for_navigation();
-    }
-
-    fn classic_get(&self, suffix: &str) -> Result<Value, String> {
-        self.service
-            .http
-            .get(&self.session_path(suffix))
-            .map_err(|error| error.to_string())
-    }
-
-    fn classic_post(&self, suffix: &str, body: &Value) -> Result<Value, String> {
-        self.service
-            .http
-            .post(&self.session_path(suffix), body)
-            .map_err(|error| error.to_string())
-    }
-
-    fn session_path(&self, suffix: &str) -> String {
-        format!("/session/{}/{}", self.session_id, suffix.trim_start_matches('/'))
     }
 }
 

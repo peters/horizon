@@ -154,12 +154,78 @@ pub(crate) struct CreateInput {
     pub(crate) timeout_millis: Option<u64>,
 }
 
+/// Where the requested first page stood when `browser_create` returned.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CreateNavigationState {
+    /// No `url` was requested; the panel is ready at a blank page.
+    NotRequested,
+    /// The requested page committed; `panel.url` is authoritative. The title
+    /// is read after commit and may still be empty or change, so read it from
+    /// `browser_panel` or a snapshot when you need it.
+    Committed,
+    /// The backend is ready and controllable, but the requested page had not
+    /// committed within the bounded startup wait; `panel.url` may still be
+    /// empty. Use `browser_wait` or `browser_panel` before reading the page.
+    /// Also reported when an older host did not record readiness for a
+    /// requested `url`.
+    Pending,
+    /// The backend is ready and controllable, but the requested page failed
+    /// to load; `navigation_error` carries the browser's message and the
+    /// panel stays at its blank document. Navigate again or fix the URL.
+    Failed,
+    /// The user navigated the panel before the requested page committed; the
+    /// panel is controllable at the user's page and the requested page is not
+    /// coming. Read `panel.url` before acting.
+    Superseded,
+}
+
+impl From<horizon_core::browser::manifest::CreateNavigation> for CreateNavigationState {
+    fn from(navigation: horizon_core::browser::manifest::CreateNavigation) -> Self {
+        match navigation {
+            horizon_core::browser::manifest::CreateNavigation::NotRequested => Self::NotRequested,
+            horizon_core::browser::manifest::CreateNavigation::Committed => Self::Committed,
+            horizon_core::browser::manifest::CreateNavigation::Pending => Self::Pending,
+            horizon_core::browser::manifest::CreateNavigation::Failed => Self::Failed,
+            horizon_core::browser::manifest::CreateNavigation::Superseded => Self::Superseded,
+        }
+    }
+}
+
+impl CreateNavigationState {
+    /// Resolve a host result that may predate startup readiness: an absent
+    /// state means the host did not record it, so a requested `url` is
+    /// conservatively `pending`, never `not_requested`.
+    pub(crate) fn resolve(
+        recorded: Option<horizon_core::browser::manifest::CreateNavigation>,
+        url_requested: bool,
+    ) -> Self {
+        recorded.map_or(
+            if url_requested {
+                Self::Pending
+            } else {
+                Self::NotRequested
+            },
+            Self::from,
+        )
+    }
+}
+
 #[derive(Debug, Serialize, JsonSchema)]
 pub(crate) struct CreateOutput {
     /// Auditable identity for the panel creation lifecycle.
     pub(crate) action_id: String,
     /// Ready panel state. Use `panel.panel_id` with all other browser tools.
     pub(crate) panel: BrowserPanel,
+    /// Whether the requested first page committed before this returned.
+    pub(crate) navigation: CreateNavigationState,
+    /// The browser's message when `navigation` is `failed`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) navigation_error: Option<String>,
+    /// Milliseconds from the host accepting the request until the panel was
+    /// ready and, when a `url` was given, its page committed or the bounded
+    /// startup wait elapsed.
+    pub(crate) startup_millis: u64,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
