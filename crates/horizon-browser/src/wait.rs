@@ -73,6 +73,9 @@ pub(crate) struct PendingWait {
     /// was observed under; it is released, and only then registered as
     /// semantic references, once a later epoch proves a refresh ran.
     deferred: Option<(serde_json::Value, u64)>,
+    /// When the observation that satisfied the condition was judged; the
+    /// reported elapsed time ends there, not at the later release.
+    satisfied_at: Option<Instant>,
 }
 
 impl PendingWait {
@@ -99,6 +102,7 @@ impl PendingWait {
             consecutive_failures: 0,
             blocked_by_navigation: false,
             deferred: None,
+            satisfied_at: None,
         }
     }
 
@@ -133,6 +137,8 @@ impl PendingWait {
     }
 
     /// The satisfied outcome from the registered nodes of the released scan.
+    /// `elapsed_millis` ends when the condition was observed, not at the
+    /// later release after the coordination refresh.
     pub(crate) fn outcome(
         &self,
         generation: u64,
@@ -147,7 +153,7 @@ impl PendingWait {
                 generation,
                 revision,
                 nodes,
-                elapsed_millis: self.elapsed_millis(now),
+                elapsed_millis: self.elapsed_millis(self.satisfied_at.unwrap_or(now)),
                 polls: self.polls,
             },
         }
@@ -184,6 +190,7 @@ impl PendingWait {
         // Decide on every match the query returned; the released scan is
         // registered and capped by the driver.
         if self.state.satisfied_by(nodes) {
+            self.satisfied_at = Some(now);
             Observation::Satisfied
         } else {
             Observation::Waiting
@@ -275,9 +282,18 @@ fn observation_failure_is_transient(failure: &BrowserControlFailure) -> bool {
         return false;
     }
     let message = failure.message.to_ascii_lowercase();
-    ["context", "timed out", "timeout", "unloaded", "navigat"]
-        .iter()
-        .any(|needle| message.contains(needle))
+    // "temporarily unavailable" is the Unix read-deadline wording
+    // (`WouldBlock`) a bounded WebDriver observation surfaces as.
+    [
+        "context",
+        "timed out",
+        "timeout",
+        "temporarily unavailable",
+        "unloaded",
+        "navigat",
+    ]
+    .iter()
+    .any(|needle| message.contains(needle))
 }
 
 #[cfg(test)]
@@ -362,7 +378,9 @@ mod tests {
             wait.observe(7, &[node(true)], now + Duration::from_millis(1_500)),
             Observation::Satisfied
         ));
-        let satisfied = released(&wait, vec![node(true)], now + Duration::from_millis(1_500));
+        // Released later, after the coordination refresh: the elapsed time
+        // still ends at the observation that met the condition.
+        let satisfied = released(&wait, vec![node(true)], now + Duration::from_millis(1_900));
         assert_eq!(satisfied.state, SelectorState::Visible);
         assert_eq!(satisfied.polls, 3);
         assert_eq!(satisfied.elapsed_millis, 1_500);
@@ -537,6 +555,18 @@ mod tests {
                 )
                 .is_none(),
             "an observation timeout is retried"
+        );
+        assert!(
+            pending_wait
+                .observe_failure(
+                    BrowserControlFailure::new(
+                        "javascript_error",
+                        "WebDriver HTTP I/O: Resource temporarily unavailable (os error 11)"
+                    ),
+                    now
+                )
+                .is_none(),
+            "a Unix read deadline on a bounded WebDriver observation is retried"
         );
         for (code, message) in [
             ("protocol_error", "CDP connection closed"),
