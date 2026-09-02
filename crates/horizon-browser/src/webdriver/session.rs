@@ -31,6 +31,8 @@ mod semantic;
 mod shutdown;
 mod wait;
 
+use shutdown::Completion;
+
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 const PAGE_LOAD_TIMEOUT_MILLIS: u64 = 50_000;
 /// Page-load bound for the startup navigation, so the servicing loop starts
@@ -49,20 +51,6 @@ const MAX_EVENT_BURST: usize = 32;
 const MAX_COMMAND_BURST: usize = 4;
 const SCROLL_STATE_INTERVAL: Duration = Duration::from_millis(100);
 const PAGE_SCROLL_STATE_SCRIPT: &str = "const root = document.scrollingElement || document.documentElement; return { scroll_x: window.scrollX, scroll_y: window.scrollY, viewport_width: window.innerWidth, viewport_height: window.innerHeight, client_width: document.documentElement.clientWidth, client_height: document.documentElement.clientHeight, content_width: root.scrollWidth, content_height: root.scrollHeight };";
-
-struct Completion {
-    tx: Option<mpsc::Sender<()>>,
-    process: ChromeProcessControl,
-}
-
-impl Drop for Completion {
-    fn drop(&mut self) {
-        self.process.mark_registration_settled();
-        if let Some(tx) = self.tx.take() {
-            let _ = tx.send(());
-        }
-    }
-}
 
 struct AdaptiveFrames {
     next_capture: Option<Instant>,
@@ -211,10 +199,7 @@ pub(crate) fn run_webdriver(
     completion_tx: mpsc::Sender<()>,
     process_control: &ChromeProcessControl,
 ) {
-    let _completion = Completion {
-        tx: Some(completion_tx),
-        process: process_control.clone(),
-    };
+    let _completion = Completion::new(completion_tx, process_control.clone());
     let Some(_coordination_lifetime) = crate::coordination::CoordinationLifetime::start(config) else {
         let _ = event_tx.send(BrowserEvent::Warning(crate::coordination::PREPARE_FAILURE.to_string()));
         let _ = event_tx.send(BrowserEvent::Stopped { code: None });
@@ -262,6 +247,9 @@ pub(crate) fn run_webdriver(
         if stop {
             break;
         }
+        if driver.stop_for_service_exit(event_tx) {
+            return;
+        }
         driver.tick_safari_input(event_tx);
         for request in driver.tick_coordination(event_tx) {
             // A blocking action later in the batch must not delay the typed
@@ -270,10 +258,13 @@ pub(crate) fn run_webdriver(
             // session timeout restored and page state refreshed before the
             // next request runs.
             driver.tick_pending_navigation();
-            driver.tick_pending_wait();
+            driver.tick_pending_wait(stop_requested);
             driver.tick_classic_timeout_restore();
             driver.tick_page_state_refresh(event_tx);
-            driver.service_agent_request(&request, event_tx);
+            driver.service_agent_request(&request, event_tx, stop_requested);
+            if driver.stop_for_service_exit(event_tx) {
+                return;
+            }
         }
         if let Err(error) = driver.drain_bidi_events(event_tx) {
             tracing::warn!(backend = ?driver.config.browser.backend, "BiDi event pump failed: {error}");
@@ -293,14 +284,14 @@ pub(crate) fn run_webdriver(
         driver.tick_classic_timeout_restore();
         driver.tick_page_state_refresh(event_tx);
         driver.tick_pending_navigation();
-        driver.tick_pending_wait();
+        driver.tick_pending_wait(stop_requested);
         driver.write_coordination(false);
-        if let Some(status) = driver.service.process.child_status() {
-            let _ = event_tx.send(BrowserEvent::Stopped { code: status.code() });
+        if driver.stop_for_service_exit(event_tx) {
             return;
         }
         std::thread::sleep(Duration::from_millis(5));
     }
+    driver.settle_pending_wait_for_shutdown(Instant::now());
     driver.close(event_tx);
     let _ = event_tx.send(BrowserEvent::Stopped { code: None });
 }

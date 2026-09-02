@@ -1,6 +1,7 @@
 //! Host coordination, auditable controls, and user/agent steering for
 //! WebDriver-backed Firefox and Safari sessions.
 
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use crate::session::{BrowserCommand, BrowserEvent, BrowserEventSender};
@@ -156,7 +157,12 @@ impl Driver {
     /// Validate, audit, and run one queued agent action. Navigation settles
     /// from `BiDi` events, so only a synchronously finished navigation
     /// completes here.
-    pub(super) fn service_agent_request(&mut self, request: &AgentAction, event_tx: &BrowserEventSender) {
+    pub(super) fn service_agent_request(
+        &mut self,
+        request: &AgentAction,
+        event_tx: &BrowserEventSender,
+        stop_requested: &AtomicBool,
+    ) {
         if let Err(message) = request.action.validate() {
             self.audit_agent_action(request, crate::BrowserAuditStatus::Rejected);
             self.complete_agent_action(
@@ -173,7 +179,9 @@ impl Driver {
             return;
         }
         if matches!(request.action, crate::BrowserControlAction::WaitForSelector { .. }) {
-            if let crate::navigation::AgentActionExecution::Done(result) = self.begin_agent_wait(request) {
+            if let crate::navigation::AgentActionExecution::Done(result) =
+                self.begin_agent_wait(request, stop_requested)
+            {
                 self.complete_agent_action(request, result);
             }
             return;

@@ -2,6 +2,7 @@
 //! driver loop: one audited action that polls the page at a bounded cadence
 //! and settles on the selector state, the deadline, or a cancellation.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::semantic::ScanSummary;
@@ -39,9 +40,52 @@ pub(crate) enum WaitStop {
     HandoffPending,
     /// A later wait on the same panel replaced this one.
     Superseded,
+    /// The browser backend stopped before the wait reached a terminal state.
+    BrowserUnavailable,
 }
 
 pub(crate) type WaitResult = Result<BrowserControlValue, BrowserControlFailure>;
+
+/// Outcome of work guarded by process-liveness checks immediately before and
+/// after it runs.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum BackendChecked<T> {
+    Available(T),
+    Unavailable,
+}
+
+/// Run one wait step only while its backend process is live. The second poll
+/// catches a process that exits during a blocking page observation, before a
+/// transport error can be published as the terminal wait result.
+pub(crate) fn run_while_backend_available<B, T>(
+    backend: &mut B,
+    mut is_unavailable: impl FnMut(&mut B) -> bool,
+    operation: impl FnOnce(&mut B) -> T,
+) -> BackendChecked<T> {
+    if is_unavailable(backend) {
+        return BackendChecked::Unavailable;
+    }
+    let result = operation(backend);
+    if is_unavailable(backend) {
+        BackendChecked::Unavailable
+    } else {
+        BackendChecked::Available(result)
+    }
+}
+
+/// A normal close can cancel an observation that was already in flight. Keep
+/// the wait pending in that case so the driver's shutdown path publishes the
+/// stable `browser_unavailable` outcome instead of the backend cancellation.
+pub(crate) fn defer_result_during_shutdown(
+    stop_requested: &AtomicBool,
+    result: Option<WaitResult>,
+) -> Option<WaitResult> {
+    if stop_requested.load(Ordering::Acquire) {
+        None
+    } else {
+        result
+    }
+}
 
 /// What one observation concluded.
 #[derive(Debug)]
@@ -285,6 +329,7 @@ impl PendingWait {
             WaitStop::OwnershipLost => ("wait_ownership_lost", "the agent lost the panel lease while waiting"),
             WaitStop::HandoffPending => ("wait_handoff_pending", "a handoff to the user is pending"),
             WaitStop::Superseded => ("wait_superseded", "a later wait replaced this one"),
+            WaitStop::BrowserUnavailable => ("browser_unavailable", "the browser stopped while waiting"),
         };
         Err(BrowserControlFailure::new(
             code,
@@ -312,8 +357,10 @@ const fn state_name(state: SelectorState) -> &'static str {
 /// Whether an observation failure is worth retrying: the drivers fold every
 /// backend error into `protocol_error` (Chromium) or `javascript_error`
 /// (`WebDriver`), so the message decides. A replaced execution context (the
-/// page is navigating) and an observation that timed out are transient; a
-/// closed backend, a missing page session, or a script error are not.
+/// page is navigating), an observation that timed out, and a transport
+/// disconnect that may precede process waitability are transient. Persistent
+/// disconnects, a missing page session, and script errors still settle at the
+/// bounded retry count.
 fn observation_failure_is_transient(failure: &BrowserControlFailure) -> bool {
     if !matches!(failure.code.as_str(), "protocol_error" | "javascript_error") {
         return false;
@@ -323,9 +370,17 @@ fn observation_failure_is_transient(failure: &BrowserControlFailure) -> bool {
     // (`WouldBlock`) a bounded WebDriver observation surfaces as.
     [
         "context",
+        "broken pipe",
+        "connection closed",
+        "connection refused",
+        "connection reset",
+        "missing header terminator",
+        "target closed",
         "timed out",
         "timeout",
         "temporarily unavailable",
+        "unexpected end of file",
+        "unexpected eof",
         "unloaded",
         "navigat",
     ]
@@ -381,6 +436,73 @@ mod tests {
             Observation::Done(result) => result,
             other => panic!("expected a completed wait, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn shutdown_defers_an_inflight_observation_result_for_terminal_settlement() {
+        let stop_requested = AtomicBool::new(false);
+        let failure = || BrowserControlFailure::new("protocol_error", "backend observation cancelled");
+
+        assert!(
+            defer_result_during_shutdown(&stop_requested, Some(Err(failure())))
+                .expect("running driver keeps the result")
+                .is_err()
+        );
+        stop_requested.store(true, Ordering::Release);
+        assert!(defer_result_during_shutdown(&stop_requested, Some(Err(failure()))).is_none());
+    }
+
+    #[test]
+    fn backend_liveness_guard_skips_work_after_an_observed_exit() {
+        #[derive(Default)]
+        struct Backend {
+            stopped: bool,
+            operations: u32,
+        }
+
+        let mut backend = Backend {
+            stopped: true,
+            operations: 0,
+        };
+        let result = run_while_backend_available(
+            &mut backend,
+            |backend| backend.stopped,
+            |backend| backend.operations += 1,
+        );
+
+        assert_eq!(result, BackendChecked::Unavailable);
+        assert_eq!(backend.operations, 0);
+    }
+
+    #[test]
+    fn backend_liveness_guard_discards_a_result_when_exit_wins_the_observation_race() {
+        #[derive(Default)]
+        struct Backend {
+            stopped: bool,
+            operations: u32,
+        }
+
+        let mut backend = Backend::default();
+        let result = run_while_backend_available(
+            &mut backend,
+            |backend| backend.stopped,
+            |backend| {
+                backend.operations += 1;
+                backend.stopped = true;
+                "transport error"
+            },
+        );
+
+        assert_eq!(result, BackendChecked::Unavailable);
+        assert_eq!(backend.operations, 1);
+    }
+
+    #[test]
+    fn backend_liveness_guard_preserves_a_result_while_running() {
+        let mut stopped = false;
+        let result = run_while_backend_available(&mut stopped, |stopped| *stopped, |_| 7_u8);
+
+        assert_eq!(result, BackendChecked::Available(7));
     }
 
     fn released(wait: &PendingWait, nodes: Vec<BrowserNode>, now: Instant) -> WaitOutcome {
@@ -468,12 +590,37 @@ mod tests {
             wait.stopped(WaitStop::Superseded, now).expect_err("cancelled").code,
             "wait_superseded"
         );
+        assert_eq!(
+            wait.stopped(WaitStop::BrowserUnavailable, now)
+                .expect_err("cancelled")
+                .code,
+            "browser_unavailable"
+        );
 
         let transient = BrowserControlFailure::new("javascript_error", "Execution context was destroyed");
         assert!(
             wait.observe_failure(transient, now).is_none(),
             "transient failures are retried"
         );
+        for (code, message) in [
+            (
+                "protocol_error",
+                "websocket connection closed while waiting for Runtime.evaluate",
+            ),
+            ("javascript_error", "WebDriver HTTP I/O: Connection reset by peer"),
+            (
+                "javascript_error",
+                "invalid WebDriver HTTP response: missing header terminator",
+            ),
+        ] {
+            let mut transport_wait = pending(SelectorState::Present, 1_000, now);
+            assert!(
+                transport_wait
+                    .observe_failure(BrowserControlFailure::new(code, message), now)
+                    .is_none(),
+                "a transport disconnect gets one more liveness pass: {message}"
+            );
+        }
         let invalid = BrowserControlFailure::new("invalid_selector", "bad selector");
         assert_eq!(
             wait.observe_failure(invalid, now)
@@ -638,7 +785,6 @@ mod tests {
             "a Unix read deadline on a bounded WebDriver observation is retried"
         );
         for (code, message) in [
-            ("protocol_error", "CDP connection closed"),
             ("protocol_error", "no page session for Runtime.evaluate"),
             ("javascript_error", "ReferenceError: foo is not defined"),
             ("invalid_result", "not a node list"),
@@ -649,6 +795,26 @@ mod tests {
                 .expect("settled");
             assert_eq!(surfaced.expect_err("failed").code, code, "{message} is permanent");
         }
+
+        let mut disconnected = pending(SelectorState::Present, 10_000, now);
+        for _ in 1..MAX_TRANSIENT_FAILURES {
+            assert!(
+                disconnected
+                    .observe_failure(
+                        BrowserControlFailure::new("protocol_error", "CDP connection closed"),
+                        now
+                    )
+                    .is_none()
+            );
+        }
+        let disconnected = disconnected
+            .observe_failure(
+                BrowserControlFailure::new("protocol_error", "CDP connection closed"),
+                now,
+            )
+            .expect("bounded retry settled")
+            .expect_err("disconnect stayed failed");
+        assert_eq!(disconnected.code, "protocol_error");
 
         let mut persistent = pending(SelectorState::Present, 10_000, now);
         for _ in 1..MAX_TRANSIENT_FAILURES {

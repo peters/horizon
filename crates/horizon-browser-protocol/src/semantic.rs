@@ -64,7 +64,8 @@ impl SelectorState {
 
 /// Result of a satisfied wait action. Timeouts and cancellations are failed
 /// actions with typed codes (`wait_timeout`, `wait_navigation_invalidated`,
-/// `wait_ownership_lost`, `wait_handoff_pending`, `wait_superseded`).
+/// `wait_ownership_lost`, `wait_handoff_pending`, `wait_superseded`,
+/// `browser_unavailable`).
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct WaitOutcome {
     pub state: SelectorState,

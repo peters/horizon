@@ -1,10 +1,14 @@
 //! Selector waits on the `WebDriver` drivers: one audited action observed
 //! from the driver loop at a bounded cadence instead of repeated queries.
 
+use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
 use crate::navigation::{AgentActionExecution, PendingNavigation, now_millis};
-use crate::wait::{Observation, PendingWait, RELEASE_CHECK_BUDGET, WAIT_MAX_RESULTS, WaitResult, WaitStop};
+use crate::wait::{
+    BackendChecked, Observation, PendingWait, RELEASE_CHECK_BUDGET, WAIT_MAX_RESULTS, WaitResult, WaitStop,
+    defer_result_during_shutdown, run_while_backend_available,
+};
 use crate::{AgentAction, BrowserControlAction, BrowserControlFailure};
 
 use super::Driver;
@@ -12,7 +16,11 @@ use super::Driver;
 impl Driver {
     /// Start a `WaitForSelector` action: observe once now, then keep it
     /// pending until the condition, the bound, or a cancellation.
-    pub(super) fn begin_agent_wait(&mut self, request: &AgentAction) -> AgentActionExecution {
+    pub(super) fn begin_agent_wait(
+        &mut self,
+        request: &AgentAction,
+        stop_requested: &AtomicBool,
+    ) -> AgentActionExecution {
         let BrowserControlAction::WaitForSelector {
             selector,
             state,
@@ -43,7 +51,18 @@ impl Driver {
         // The first observation runs under the same guards as every later one:
         // an already-expired bound, a lost lease, a pending handoff, or an
         // uncommitted navigation must not let it succeed against the old page.
-        if let Some(result) = self.advance_wait(&mut pending, now, true) {
+        let result = run_while_backend_available(
+            self,
+            |driver| driver.service.process.child_status().is_some(),
+            |driver| driver.advance_wait(&mut pending, now, true),
+        );
+        let result = match result {
+            BackendChecked::Available(result) => result,
+            BackendChecked::Unavailable => {
+                return AgentActionExecution::Done(self.retained_shutdown_wait_result(&pending, Instant::now()));
+            }
+        };
+        if let Some(result) = defer_result_during_shutdown(stop_requested, result) {
             return AgentActionExecution::Done(result);
         }
         tracing::debug!(target: "browser", action_id = %request.action_id, ?state, timeout_millis, "agent wait pending");
@@ -53,13 +72,25 @@ impl Driver {
 
     /// Advance the pending wait: cancel on a handoff, a lost lease, or a new
     /// page generation; time out at the bound; otherwise observe when due.
-    pub(super) fn tick_pending_wait(&mut self) {
+    pub(super) fn tick_pending_wait(&mut self, stop_requested: &AtomicBool) {
         let Some(mut pending) = self.pending_wait.take() else {
             return;
         };
         let now = Instant::now();
         let observe = pending.poll_due(now);
-        let result = self.advance_wait(&mut pending, now, observe);
+        let result = run_while_backend_available(
+            self,
+            |driver| driver.service.process.child_status().is_some(),
+            |driver| driver.advance_wait(&mut pending, now, observe),
+        );
+        let result = match result {
+            BackendChecked::Available(result) => result,
+            BackendChecked::Unavailable => {
+                self.complete_wait_for_shutdown(&pending, Instant::now());
+                return;
+            }
+        };
+        let result = defer_result_during_shutdown(stop_requested, result);
         match result {
             Some(result) => {
                 tracing::debug!(target: "browser", action_id = %pending.request.action_id, ok = result.is_ok(), "agent wait settled");
@@ -156,5 +187,24 @@ impl Driver {
         if let Some(pending) = self.pending_wait.take() {
             self.complete_agent_action(&pending.request, pending.stopped(WaitStop::Superseded, now));
         }
+    }
+
+    /// Publish a terminal result before the driver loop releases its state.
+    pub(super) fn settle_pending_wait_for_shutdown(&mut self, now: Instant) {
+        if let Some(pending) = self.pending_wait.take() {
+            self.complete_wait_for_shutdown(&pending, now);
+        }
+    }
+
+    fn complete_wait_for_shutdown(&mut self, pending: &PendingWait, now: Instant) {
+        let result = self.retained_shutdown_wait_result(pending, now);
+        self.complete_agent_action(&pending.request, result);
+    }
+
+    fn retained_shutdown_wait_result(&self, pending: &PendingWait, now: Instant) -> WaitResult {
+        if let Some(coordination) = self.config.coordination.as_ref() {
+            coordination.retain_action_result_on_remove(&self.config.panel_local_id, &pending.request.action_id);
+        }
+        pending.stopped(WaitStop::BrowserUnavailable, now)
     }
 }

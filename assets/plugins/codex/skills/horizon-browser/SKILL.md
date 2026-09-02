@@ -56,9 +56,10 @@ interaction, verify the visible outcome with `browser_wait`, `browser_query`,
 or a new snapshot. `browser_wait` is one audited engine-side action that
 observes the page itself: it returns the matched nodes and `elapsed_millis`,
 and fails with a typed code (`wait_timeout`, `wait_navigation_invalidated`,
-`wait_ownership_lost`, `wait_handoff_pending`, `wait_superseded`) instead of looping on
-queries, so do not poll it in a tight loop; pick a `timeout_millis` that
-covers the expected change. Use `browser_evaluate` only when the semantic tools cannot
+`wait_ownership_lost`, `wait_handoff_pending`, `wait_superseded`,
+`browser_unavailable` when the backend stops) instead of looping on queries,
+so do not poll it in a tight loop; pick a `timeout_millis` that covers the
+expected change. Use `browser_evaluate` only when the semantic tools cannot
 answer the question.
 
 For HTTP or WebSocket observation, first inspect the panel's

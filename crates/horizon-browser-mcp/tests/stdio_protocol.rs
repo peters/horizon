@@ -148,6 +148,15 @@ fn exercise_protocol(protocol_version: &str) {
             .as_str()
             .is_some_and(|description| description.contains("without stopping"))
     );
+    let wait = tools["result"]["tools"]
+        .as_array()
+        .and_then(|tools| tools.iter().find(|tool| tool["name"] == "browser_wait"))
+        .expect("browser_wait tool");
+    assert!(
+        wait["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("browser_unavailable"))
+    );
     assert!(!encoded_tools.contains("browser_ws"));
     assert!(!encoded_tools.contains("manifest_path"));
 

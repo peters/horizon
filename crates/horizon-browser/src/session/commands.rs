@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use crate::cdp::CdpLink;
 use crate::frames::FrameSlot;
 use crate::input::{BrowserInputCdpExt, is_user_activity};
+use crate::process::ChromeProcess;
 use crate::{AgentAction, BrowserAuditStatus, BrowserButton, BrowserControlFailure, BrowserInput};
 
 use crate::navigation::AgentActionExecution;
@@ -50,12 +51,13 @@ impl DriverState {
         event_tx: &BrowserEventSender,
         frame_slot: &Arc<FrameSlot>,
         actions: Vec<AgentAction>,
+        chrome: &mut ChromeProcess,
     ) -> bool {
         for request in actions {
             // A blocking action later in the batch must not delay the typed
             // timeout of a navigation or wait dispatched earlier in it.
             self.tick_pending_navigation();
-            self.tick_pending_wait(link, event_tx, frame_slot);
+            self.tick_pending_wait(link, event_tx, frame_slot, chrome);
             if let Err(message) = request.action.validate() {
                 self.audit_agent_action(&request, BrowserAuditStatus::Rejected);
                 self.complete_agent_action(&request, Err(BrowserControlFailure::new("invalid_input", message)));
@@ -75,7 +77,8 @@ impl DriverState {
             if matches!(request.action, crate::BrowserControlAction::WaitForSelector { .. }) {
                 // Waits are observed from the driver loop; only a wait that
                 // is already satisfied (or invalid) completes here.
-                if let AgentActionExecution::Done(result) = self.begin_agent_wait(link, event_tx, frame_slot, &request)
+                if let AgentActionExecution::Done(result) =
+                    self.begin_agent_wait(link, event_tx, frame_slot, &request, chrome)
                 {
                     self.complete_agent_action(&request, result);
                 }

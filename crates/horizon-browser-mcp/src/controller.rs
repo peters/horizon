@@ -447,20 +447,23 @@ impl BrowserController {
         let hard_cap = Duration::from_millis(timeout_millis);
         let mut last_heartbeat = started;
         loop {
-            if let Some(result) = manifest::take_action_result(panel_id, &action_id)
-                .map_err(|source| ControlError::internal_io("could not read browser action result", source))?
-            {
-                self.refresh_claim(panel_id)?;
-                return outcome(result);
+            if let Some(result) = poll_action_result(panel_id, &action_id)? {
+                return finish_polled_result(result, || self.refresh_claim(panel_id));
             }
             if started.elapsed() >= hard_cap {
+                if let Some(result) = poll_action_result(panel_id, &action_id)? {
+                    return finish_polled_result(result, || self.refresh_claim(panel_id));
+                }
                 return Err(ControlError::Timeout {
                     action_id,
                     timeout_millis,
                 });
             }
             if last_heartbeat.elapsed() >= HEARTBEAT_INTERVAL {
-                self.refresh_claim(panel_id)?;
+                if let Err(refresh_error) = self.refresh_claim(panel_id) {
+                    let result = poll_action_result(panel_id, &action_id)?;
+                    return finish_repolled_result(result, refresh_error);
+                }
                 last_heartbeat = Instant::now();
             }
             tokio::time::sleep(RESULT_POLL_INTERVAL).await;
@@ -513,22 +516,23 @@ impl BrowserController {
         let timeout = Duration::from_millis(timeout_millis);
         let mut last_heartbeat = started;
         loop {
-            if let Some(result) = manifest::take_action_result(panel_id, &action_id)
-                .map_err(|source| ControlError::internal_io("could not read browser action result", source))?
-            {
-                // The result may have arrived after the host moved the panel;
-                // re-check membership under the lock before disclosing it.
-                self.refresh_claim(panel_id)?;
-                return outcome(result);
+            if let Some(result) = poll_action_result(panel_id, &action_id)? {
+                return finish_polled_result(result, || self.refresh_claim(panel_id));
             }
             if started.elapsed() >= timeout {
+                if let Some(result) = poll_action_result(panel_id, &action_id)? {
+                    return finish_polled_result(result, || self.refresh_claim(panel_id));
+                }
                 return Err(ControlError::Timeout {
                     action_id,
                     timeout_millis,
                 });
             }
             if last_heartbeat.elapsed() >= HEARTBEAT_INTERVAL {
-                self.refresh_claim(panel_id)?;
+                if let Err(refresh_error) = self.refresh_claim(panel_id) {
+                    let result = poll_action_result(panel_id, &action_id)?;
+                    return finish_repolled_result(result, refresh_error);
+                }
                 last_heartbeat = Instant::now();
             }
             tokio::time::sleep(RESULT_POLL_INTERVAL).await;
@@ -553,6 +557,10 @@ impl ControlError {
             source,
         }
     }
+
+    fn is_missing_panel(&self) -> bool {
+        matches!(self, Self::Io { source, .. } if source.kind() == io::ErrorKind::NotFound)
+    }
 }
 
 fn bounded_timeout(timeout_millis: Option<u64>) -> u64 {
@@ -570,6 +578,41 @@ fn bounded_create_timeout(timeout_millis: Option<u64>) -> u64 {
     timeout_millis
         .unwrap_or(DEFAULT_CREATE_TIMEOUT_MILLIS)
         .clamp(MIN_CREATE_TIMEOUT_MILLIS, MAX_ACTION_TIMEOUT_MILLIS)
+}
+
+fn poll_action_result(panel_id: &str, action_id: &str) -> Result<Option<AgentActionResult>, ControlError> {
+    manifest::take_action_result(panel_id, action_id)
+        .map_err(|source| ControlError::internal_io("could not read browser action result", source))
+}
+
+fn finish_polled_result(
+    result: AgentActionResult,
+    refresh_claim: impl FnOnce() -> Result<(), ControlError>,
+) -> Result<ActionReceipt, ControlError> {
+    // Results normally remain panel-specific data, so ownership and workspace
+    // membership must still be live when they are disclosed. A data-free
+    // `browser_unavailable` may outlive teardown only when refresh proves that
+    // the manifest is gone; live ownership and workspace errors still win.
+    let browser_unavailable = matches!(
+        &result.outcome,
+        BrowserActionOutcome::Failed { error } if error.code == "browser_unavailable"
+    );
+    if let Err(error) = refresh_claim()
+        && !(browser_unavailable && error.is_missing_panel())
+    {
+        return Err(error);
+    }
+    outcome(result)
+}
+
+fn finish_repolled_result(
+    result: Option<AgentActionResult>,
+    refresh_error: ControlError,
+) -> Result<ActionReceipt, ControlError> {
+    let Some(result) = result else {
+        return Err(refresh_error);
+    };
+    finish_polled_result(result, || Err(refresh_error))
 }
 
 fn outcome(result: AgentActionResult) -> Result<ActionReceipt, ControlError> {
@@ -629,6 +672,7 @@ pub(crate) fn protocol_kind(backend: BackendKind, websocket_negotiated: bool) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
 
     #[test]
     fn timeout_is_bounded() {
@@ -638,6 +682,109 @@ mod tests {
         assert_eq!(bounded_create_timeout(None), DEFAULT_CREATE_TIMEOUT_MILLIS);
         assert_eq!(bounded_create_timeout(Some(0)), MIN_CREATE_TIMEOUT_MILLIS);
         assert_eq!(bounded_create_timeout(Some(u64::MAX)), MAX_ACTION_TIMEOUT_MILLIS);
+    }
+
+    #[test]
+    fn missing_manifest_refresh_is_ignored_only_for_browser_unavailable() {
+        let unavailable = AgentActionResult::failed(
+            "shutdown-wait",
+            horizon_browser::BrowserControlFailure::new("browser_unavailable", "the browser stopped while waiting"),
+        );
+        let refreshed = Cell::new(false);
+        let error = finish_polled_result(unavailable, || {
+            refreshed.set(true);
+            Err(missing_panel_error())
+        })
+        .unwrap_err();
+        assert!(refreshed.get());
+        assert!(matches!(
+            error,
+            ControlError::Browser { ref code, .. } if code == "browser_unavailable"
+        ));
+
+        let unavailable = AgentActionResult::failed(
+            "foreign-unavailable",
+            horizon_browser::BrowserControlFailure::new("browser_unavailable", "backend stopped"),
+        );
+        let error = finish_polled_result(unavailable, || {
+            Err(ControlError::PanelOutsideWorkspace {
+                panel_id: "foreign-panel".to_string(),
+            })
+        })
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            ControlError::PanelOutsideWorkspace { ref panel_id } if panel_id == "foreign-panel"
+        ));
+
+        let unavailable = AgentActionResult::failed(
+            "lost-ownership",
+            horizon_browser::BrowserControlFailure::new("browser_unavailable", "backend stopped"),
+        );
+        let error = finish_polled_result(unavailable, || {
+            Err(ControlError::internal_io(
+                "lost browser ownership while waiting",
+                io::Error::new(io::ErrorKind::PermissionDenied, "ownership changed"),
+            ))
+        })
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            ControlError::Io { ref source, .. } if source.kind() == io::ErrorKind::PermissionDenied
+        ));
+
+        let completed = AgentActionResult::completed("completed", BrowserControlValue::Accepted);
+        let refreshed = Cell::new(false);
+        let receipt = finish_polled_result(completed, || {
+            refreshed.set(true);
+            Ok(())
+        })
+        .unwrap();
+        assert!(refreshed.get());
+        assert_eq!(receipt.action_id, "completed");
+
+        let other_failure = AgentActionResult::failed(
+            "timed-out-wait",
+            horizon_browser::BrowserControlFailure::new("wait_timeout", "selector did not match"),
+        );
+        let refreshed = Cell::new(false);
+        let error = finish_polled_result(other_failure, || {
+            refreshed.set(true);
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(refreshed.get());
+        assert!(matches!(
+            error,
+            ControlError::Browser { ref code, .. } if code == "wait_timeout"
+        ));
+    }
+
+    #[test]
+    fn failed_heartbeat_repolls_for_a_published_shutdown_result() {
+        let unavailable = AgentActionResult::failed(
+            "shutdown-wait",
+            horizon_browser::BrowserControlFailure::new("browser_unavailable", "the browser stopped while waiting"),
+        );
+        let error = finish_repolled_result(Some(unavailable), missing_panel_error()).unwrap_err();
+        assert!(matches!(
+            error,
+            ControlError::Browser { ref code, .. } if code == "browser_unavailable"
+        ));
+
+        let error = finish_repolled_result(None, missing_panel_error()).unwrap_err();
+        assert!(error.is_missing_panel());
+
+        let completed = AgentActionResult::completed("completed", BrowserControlValue::Accepted);
+        let error = finish_repolled_result(Some(completed), missing_panel_error()).unwrap_err();
+        assert!(error.is_missing_panel());
+    }
+
+    fn missing_panel_error() -> ControlError {
+        ControlError::internal_io(
+            "lost browser ownership while waiting",
+            io::Error::new(io::ErrorKind::NotFound, "browser manifest missing"),
+        )
     }
 
     #[test]

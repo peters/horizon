@@ -425,7 +425,10 @@ impl DriverState {
         // A same-document history traversal (a hash or history-state entry)
         // completes here rather than through frameNavigated or
         // frameStoppedLoading, so the top-frame navigation it started ends
-        // here too; otherwise every later wait would stay navigation-blocked.
+        // here too. Invalidate first so a wait cannot observe the old
+        // generation, have this event start and settle between loop ticks,
+        // and then be released against the new history entry.
+        self.semantic.invalidate();
         self.top_frame_navigating = false;
         self.navigation_failed = false;
         self.invalidate_scrollbar_layout();
@@ -555,11 +558,13 @@ fn attached_bound_page_target<'a>(params: &'a serde_json::Value, bound_target_id
 mod tests {
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, mpsc};
+    use std::time::{Duration, Instant};
 
     use crate::cdp::CdpEvent;
     use crate::frames::FrameSlot;
     use crate::session::{BrowserEvent, BrowserEventSender, BrowserEventWake, CommittedUrl};
-    use crate::{BrowserConfig, session::BrowserSessionConfig};
+    use crate::wait::PendingWait;
+    use crate::{AgentAction, BrowserConfig, BrowserControlAction, SelectorState, session::BrowserSessionConfig};
 
     use super::{DriverState, attached_bound_page_target, href_matches_url, title_for_bound_target};
 
@@ -628,6 +633,64 @@ mod tests {
         assert_eq!(state.session_id, None);
         assert!(state.manifest_dirty);
         assert!(!state.pending_reattach);
+    }
+
+    #[test]
+    fn same_document_navigation_invalidates_a_wait_before_navigation_unblocks() {
+        let now = Instant::now();
+        let mut state = driver_state();
+        state.main_frame_id = Some("main".to_string());
+        state.url = "https://example.test/page".to_string();
+        state.top_frame_navigating = true;
+        let generation = state.semantic.generation();
+        state.pending_wait = Some(PendingWait::new(
+            AgentAction {
+                action_id: "wait-1".to_string(),
+                actor: "horizon:agent".to_string(),
+                requested_at_millis: 0,
+                action: BrowserControlAction::WaitForSelector {
+                    selector: "#ready".to_string(),
+                    state: SelectorState::Present,
+                    timeout_millis: Some(5_000),
+                },
+            },
+            "#ready".to_string(),
+            SelectorState::Present,
+            Some(5_000),
+            Duration::ZERO,
+            generation,
+            now,
+        ));
+        let (tx, _rx) = mpsc::channel();
+        let events = BrowserEventSender {
+            tx,
+            wake: BrowserEventWake::default(),
+            committed_url: CommittedUrl::default(),
+        };
+        let params = serde_json::json!({
+            "frameId": "main",
+            "url": "https://example.test/page"
+        });
+
+        state.handle_same_document_navigation(
+            &events,
+            CdpEvent {
+                method: "Page.navigatedWithinDocument",
+                params: &params,
+                session_id: Some("session"),
+            },
+            true,
+        );
+
+        assert!(!state.top_frame_navigating);
+        assert_ne!(state.semantic.generation(), generation);
+        let failure = state
+            .pending_wait
+            .as_ref()
+            .and_then(|wait| wait.tick(state.semantic.generation(), now))
+            .expect("wait should settle")
+            .expect_err("wait should be invalidated");
+        assert_eq!(failure.code, "wait_navigation_invalidated");
     }
 
     #[test]
