@@ -390,7 +390,7 @@ mod tests {
         assert!(matches!(wait.observe(7, &[], now), Observation::Waiting));
         assert!(wait.tick(7, now + Duration::from_millis(999)).is_none());
         let timeout = wait
-            .tick(7, now + Duration::from_millis(1_000))
+            .tick(7, now + Duration::from_secs(1))
             .expect("settled")
             .expect_err("timed out");
         assert_eq!(timeout.code, "wait_timeout");
@@ -474,7 +474,7 @@ mod tests {
     fn observations_are_budgeted_and_rechecked_against_the_deadline() {
         let now = Instant::now();
         let pending_wait = pending(SelectorState::Present, 1_000, now);
-        assert_eq!(pending_wait.observation_budget(now), Duration::from_millis(1_000));
+        assert_eq!(pending_wait.observation_budget(now), Duration::from_secs(1));
         assert_eq!(
             pending_wait.observation_budget(now + Duration::from_millis(900)),
             MIN_OBSERVATION_BUDGET,
