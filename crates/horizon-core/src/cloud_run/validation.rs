@@ -8,12 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 use url::Url;
 static OCI_IMAGE_REFERENCE: LazyLock<Option<Regex>> = LazyLock::new(|| {
-    Regex::new(concat!(
-        r"\A(?:[a-z0-9]+(?:[.-][a-z0-9]+)*(?::[0-9]+)?/)?",
-        r"[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*",
-        r"(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[a-f0-9]{64})?\z"
-    ))
-    .ok()
+    Regex::new(r"\A(?:[a-z0-9]+(?:[.-][a-z0-9]+)*(?::[0-9]+)?/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[a-f0-9]{64})?\z").ok()
 });
 fn ensure(valid: bool, error: Error) -> Result<(), Error> {
     valid.then_some(()).ok_or(error)
@@ -111,7 +106,8 @@ fn validate_node(
     {
         return Err(Error::InvalidWorkerTarget(node.id));
     }
-    if node.weight == 0 || node.attempt == 0 || node.retry.max_attempts == 0 || node.attempt > node.retry.max_attempts {
+    ensure(node.weight > 0, Error::InvalidWeight(node.id))?;
+    if node.attempt == 0 || node.retry.max_attempts == 0 || node.attempt > node.retry.max_attempts {
         return Err(Error::InvalidAttempt(node.id));
     }
     ensure(valid_outcome(node), Error::InvalidJobOutcome(node.id))?;
@@ -288,7 +284,7 @@ fn validate_artifact(node_id: CloudJobId, artifact: &ArtifactRef) -> Result<(), 
         || key.is_empty()
         || key.starts_with('/')
         || key.as_bytes().get(1) == Some(&b':') && key.as_bytes()[0].is_ascii_alphabetic()
-        || Url::parse(key).is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
+        || Url::parse(key).is_ok()
         || key.contains(['?', '#'])
         || key.contains('\\')
         || key.contains('%')

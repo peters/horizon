@@ -140,7 +140,7 @@ fn provenance_rejects_secrets_without_echoing_them() {
         assert_eq!(record.validate(), Err(InvalidWorkflowRunUrl(id)));
     }
     record.workflow_run_url = None;
-    for key in ["https:e/x", "x?x", "C:/x", "C:x", "x\n", "x/%2e%2e/y", "x/%2Fy"] {
+    for key in ["ftp:u:p@e/x", "x?x", "C:/x", "C:x", "x\n", "x/%2e%2e/y", "x/%2Fy"] {
         record.artifacts[0].storage_key = key.to_string();
         assert_eq!(record.validate(), Err(InvalidArtifactRef(id)));
     }
@@ -212,6 +212,8 @@ fn retries_are_unambiguous_and_keep_outcomes_through_cleanup() {
     rejects(vec![previous.clone()], &InvalidJobOutcome(first));
     previous.state = CloudJobState::Cleaned;
     previous.outcome = Some(CloudJobOutcome::Failed);
+    previous.weight = 0;
+    rejects(vec![previous.clone()], &InvalidWeight(first));
     previous.weight = 100;
     previous.retry.max_attempts = 2;
     assert!(workflow(vec![previous.clone()]).progress().estimated);

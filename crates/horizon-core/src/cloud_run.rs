@@ -308,6 +308,8 @@ pub enum CloudProtocolError {
     EmptyNodeIdentity(CloudJobId),
     #[error("node {0} has an invalid worker target")]
     InvalidWorkerTarget(CloudJobId),
+    #[error("node {0} has an invalid weight")]
+    InvalidWeight(CloudJobId),
     #[error("node {0} has an invalid retry attempt")]
     InvalidAttempt(CloudJobId),
     #[error("node {0} has an outcome inconsistent with its state")]
