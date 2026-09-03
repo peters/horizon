@@ -13,6 +13,7 @@ use super::{
 };
 use crate::error::Error;
 
+mod cwd;
 mod grok;
 mod provider_scoping;
 
