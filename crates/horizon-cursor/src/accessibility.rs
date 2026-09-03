@@ -421,6 +421,13 @@ mod platform {
         Some(candidates)
     }
 
+    fn resolve_focus_candidates<T>(collection: Option<Vec<T>>, traversal: Option<Vec<T>>) -> Option<Vec<T>> {
+        match collection {
+            Some(candidates) => Some(candidates),
+            None => traversal,
+        }
+    }
+
     fn unique_index(candidate_count: usize, empty: &'static str, multiple: &'static str) -> Result<usize, InjectError> {
         if candidate_count == 0 {
             return Err(InjectError::Target(empty));
@@ -503,15 +510,18 @@ mod platform {
             let Ok(root) = application.as_accessible_proxy(connection.connection()).await else {
                 continue;
             };
-            let discovered = match collection_candidates(&root, search).await {
-                Some(candidates) if !candidates.is_empty() => candidates,
-                Some(_) | None => {
-                    let Some(candidates) = traversal_candidates(application, connection.connection(), search).await
-                    else {
-                        continue;
-                    };
-                    candidates
-                }
+            // Collection GetMatches is authoritative, including no hits.
+            // Treating Some([]) as "unknown" walks GNOME Shell (~4s to the
+            // 2048-object cap) and the 5s preflight deadline expires before
+            // Chromium/Teams KEY_STRING.
+            let collection = collection_candidates(&root, search).await;
+            let traversal = if collection.is_none() {
+                traversal_candidates(application, connection.connection(), search).await
+            } else {
+                None
+            };
+            let Some(discovered) = resolve_focus_candidates(collection, traversal) else {
+                continue;
             };
             for candidate in discovered {
                 if !candidates.contains(&candidate) {
@@ -662,7 +672,8 @@ mod platform {
 
         use super::{
             INSERT_LOCK, InjectError, TargetFacts, TextSnapshot, can_synthesize_keys, focus_window_still_matches,
-            is_unclassified_focus, sanitize_desktop_transcript, unique_candidate_index, unique_focused_index,
+            is_unclassified_focus, resolve_focus_candidates, sanitize_desktop_transcript, unique_candidate_index,
+            unique_focused_index,
         };
 
         fn safe_target() -> TargetFacts {
@@ -678,6 +689,17 @@ mod platform {
                 ),
                 role: Role::Entry,
             }
+        }
+
+        #[test]
+        fn empty_collection_result_does_not_walk_the_tree() {
+            assert_eq!(
+                resolve_focus_candidates(Some(Vec::<i32>::new()), Some(vec![1, 2])),
+                Some(vec![])
+            );
+            assert_eq!(resolve_focus_candidates(Some(vec![7]), Some(vec![1])), Some(vec![7]));
+            assert_eq!(resolve_focus_candidates(None, Some(vec![9])), Some(vec![9]));
+            assert_eq!(resolve_focus_candidates::<i32>(None, None), None);
         }
 
         #[test]
