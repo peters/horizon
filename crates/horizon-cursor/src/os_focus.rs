@@ -7,6 +7,7 @@ pub fn current_process_has_os_focus() -> Option<bool> {
 }
 
 /// X11 input-focus window id, if this session can observe one.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 #[must_use]
 pub(crate) fn current_input_focus_window() -> Option<u32> {
     platform::current_input_focus_window()
@@ -244,10 +245,6 @@ mod platform {
 #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 mod platform {
     pub(super) const fn current_process_has_os_focus() -> Option<bool> {
-        None
-    }
-
-    pub(super) const fn current_input_focus_window() -> Option<u32> {
         None
     }
 }
