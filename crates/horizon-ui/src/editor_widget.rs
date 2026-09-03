@@ -23,7 +23,7 @@ impl<'a> MarkdownEditorView<'a> {
     }
 
     /// Renders the editor panel. Returns `true` if clicked (for focus tracking).
-    pub fn show(&mut self, ui: &mut egui::Ui, _is_active_panel: bool, save_shortcut: ShortcutBinding) -> bool {
+    pub fn show(&mut self, ui: &mut egui::Ui, is_active_panel: bool, save_shortcut: ShortcutBinding) -> bool {
         let clicked = ui.rect_contains_pointer(ui.max_rect());
         let mode_rect = {
             let Some(editor) = self.panel.content.editor_mut() else {
@@ -50,7 +50,7 @@ impl<'a> MarkdownEditorView<'a> {
             .editor()
             .map_or(PreviewMode::Edit, |editor| editor.preview_mode);
 
-        render_body(ui, self.panel, body_rect, mode, preview_cache);
+        render_body(ui, self.panel, body_rect, mode, preview_cache, is_active_panel);
         clicked
     }
 }
@@ -114,6 +114,7 @@ fn render_body(
     body_rect: Rect,
     mode: PreviewMode,
     preview_cache: Option<&mut MarkdownPreviewCache>,
+    claim_focus: bool,
 ) {
     match mode {
         PreviewMode::Edit => {
@@ -127,7 +128,7 @@ fn render_body(
                     // the vertical-only ScrollArea inherits that width and
                     // lets content overflow the panel horizontally.
                     ui.set_clip_rect(ui.max_rect().intersect(ui.clip_rect()));
-                    render_edit_pane(ui, panel);
+                    render_edit_pane(ui, panel, claim_focus);
                 },
             );
         }
@@ -157,12 +158,16 @@ fn sync_text_edit_caret(ctx: &egui::Context, id: Id, caret: usize) {
     state.store(ctx, id);
 }
 
-fn render_edit_pane(ui: &mut egui::Ui, panel: &mut Panel) -> Option<Rect> {
+fn render_edit_pane(ui: &mut egui::Ui, panel: &mut Panel, claim_focus: bool) -> Option<Rect> {
     let editor_id = editor_text_id(panel.id);
     let editor = panel.content.editor_mut()?;
     if let Some(caret) = editor.take_pending_caret() {
         sync_text_edit_caret(ui.ctx(), editor_id, caret);
-        ui.memory_mut(|memory| memory.request_focus(editor_id));
+        // Do not steal keyboard focus when the user has moved to another
+        // panel or an overlay text field while transcription was running.
+        if claim_focus && !crate::app::shortcuts::hotkey_capture_active(ui.ctx()) {
+            ui.memory_mut(|memory| memory.request_focus(editor_id));
+        }
     }
 
     let output = ScrollArea::vertical()
@@ -280,7 +285,7 @@ mod tests {
                                 UiBuilder::new()
                                     .max_rect(body_rect)
                                     .layout(Layout::top_down(Align::Min)),
-                                |ui| render_edit_pane(ui, &mut panel).expect("editor response"),
+                                |ui| render_edit_pane(ui, &mut panel, true).expect("editor response"),
                             )
                             .inner
                         })
@@ -318,7 +323,7 @@ mod tests {
                         UiBuilder::new()
                             .max_rect(body_rect)
                             .layout(Layout::top_down(Align::Min)),
-                        |ui| render_edit_pane(ui, panel),
+                        |ui| render_edit_pane(ui, panel, true),
                     );
                 });
             })

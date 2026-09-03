@@ -403,7 +403,7 @@ fn dictation_inserts_into_editor_panels_at_the_caret() {
 }
 
 #[test]
-fn dictation_dispatches_insert_text_to_browser_panels() {
+fn dictation_reports_unavailable_browser_without_a_driver() {
     let mut panel = Panel::from_content(
         PanelId(9),
         WorkspaceId(1),
@@ -412,7 +412,7 @@ fn dictation_dispatches_insert_text_to_browser_panels() {
     );
     assert_eq!(
         inject_transcript(&mut panel, "hello"),
-        TranscriptInjection::BrowserInsertText("hello ".to_owned())
+        TranscriptInjection::BrowserUnavailable
     );
 }
 

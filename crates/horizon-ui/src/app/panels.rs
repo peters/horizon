@@ -45,6 +45,8 @@ struct PanelSnapshot {
     is_renaming: bool,
     attention_badge: Option<(AttentionSeverity, String)>,
     ssh_status: Option<SshConnectionStatus>,
+    /// Browser panels only accept dictation while a driver session is alive.
+    browser_dictation_ready: bool,
 }
 
 #[derive(Default)]
@@ -365,6 +367,7 @@ impl HorizonApp {
                         .layout(Layout::top_down(Align::Min)),
                     |ui| {
                         let mut reconnect_requested = false;
+                        let claim_editor_focus = !self.speech_text_surface_active().0;
                         if let Some(panel) = self.board.panel_mut(panel_id) {
                             let preview_cache = if panel.kind == PanelKind::Editor {
                                 Some(
@@ -384,7 +387,7 @@ impl HorizonApp {
                             show_panel_body_contents(
                                 ui,
                                 panel,
-                                true,
+                                claim_editor_focus,
                                 true,
                                 PanelBodyContext {
                                     keyboard_events: &self.terminal_keyboard_events,
@@ -548,6 +551,7 @@ impl HorizonApp {
                     is_renaming: self.renaming_panel == Some(panel_id),
                     attention_badge,
                     ssh_status: panel.ssh_status(),
+                    browser_dictation_ready: panel.browser().is_none_or(|browser| browser.status.is_alive()),
                 })
             })
     }
@@ -608,7 +612,8 @@ impl HorizonApp {
                 );
                 // Terminal panels dictate through their PTY; editor panels
                 // insert at the caret; browser panels dispatch through CDP.
-                let mic_eligible = self.speech.is_some() && snapshot.kind.accepts_text_input();
+                let mic_eligible =
+                    self.speech.is_some() && snapshot.kind.accepts_text_input() && snapshot.browser_dictation_ready;
                 let mic_response = mic_eligible.then(|| {
                     let speech = self.speech.as_ref();
                     let state = speech.map_or(MicState::Idle, |speech| speech.mic_state_for(panel_id));
@@ -743,6 +748,7 @@ impl HorizonApp {
                         .layout(Layout::top_down(Align::Min)),
                     |ui| {
                         let mut reconnect_requested = false;
+                        let claim_editor_focus = snapshot.is_focused && !self.speech_text_surface_active().0;
                         let board = &mut self.board;
                         let editor_preview_cache = &mut self.panel_render_caches.editor_preview_cache;
                         let terminal_grid_cache = &mut self.panel_render_caches.terminal_grid_cache;
@@ -767,7 +773,7 @@ impl HorizonApp {
                             outcome.focus_requested |= show_panel_body_contents(
                                 ui,
                                 panel,
-                                snapshot.is_focused,
+                                claim_editor_focus,
                                 interactive,
                                 PanelBodyContext {
                                     keyboard_events: &self.terminal_keyboard_events,

@@ -328,6 +328,7 @@ enum TranscriptInjection {
     Terminal,
     Editor,
     BrowserInsertText(String),
+    BrowserUnavailable,
     Ignored,
 }
 
@@ -343,10 +344,14 @@ fn inject_transcript(panel: &mut Panel, text: &str) -> TranscriptInjection {
         return TranscriptInjection::Editor;
     }
     if let Some(browser) = panel.browser() {
-        browser.send(BrowserCommand::Input(BrowserInput::InsertText {
+        let accepted = browser.try_send(BrowserCommand::Input(BrowserInput::InsertText {
             text: payload.clone(),
         }));
-        return TranscriptInjection::BrowserInsertText(payload);
+        return if accepted {
+            TranscriptInjection::BrowserInsertText(payload)
+        } else {
+            TranscriptInjection::BrowserUnavailable
+        };
     }
     TranscriptInjection::Ignored
 }
@@ -374,13 +379,22 @@ impl HorizonApp {
             tracing::warn!("speech target panel closed before transcription finished");
             return;
         };
-        let _ = inject_transcript(panel, text);
+        let result = inject_transcript(panel, text);
+        if result == TranscriptInjection::BrowserUnavailable {
+            self.show_speech_notice(
+                "could not insert transcript (browser is not running); clipboard was not used",
+                true,
+            );
+        }
     }
 
     fn focused_horizon_text_panel(&self, ctx: &Context, root_focused: bool) -> Option<PanelId> {
         let panel_id = self.board.focused?;
         let panel = self.board.panel(panel_id)?;
         if !panel.kind.accepts_text_input() {
+            return None;
+        }
+        if !panel.browser().is_none_or(|browser| browser.status.is_alive()) {
             return None;
         }
         terminal_matches_focused_viewport(
@@ -392,7 +406,7 @@ impl HorizonApp {
         .then_some(panel_id)
     }
 
-    fn speech_text_surface_active(&self) -> (bool, bool) {
+    pub(in crate::app) fn speech_text_surface_active(&self) -> (bool, bool) {
         let search_capturing = self
             .search_overlay
             .as_ref()

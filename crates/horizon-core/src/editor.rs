@@ -77,12 +77,13 @@ impl MarkdownEditor {
         }
     }
 
-    /// Insert dictated text at the caret. Preview-only buffers switch to edit.
+    /// Insert dictated text at the caret. Non-edit modes switch to edit so
+    /// the inserted text is visible (Split is preview-only in the widget).
     pub fn insert_dictation(&mut self, text: &str) {
         if text.is_empty() {
             return;
         }
-        if self.preview_mode == PreviewMode::Preview {
+        if self.preview_mode != PreviewMode::Edit {
             self.preview_mode = PreviewMode::Edit;
         }
         let at = byte_index_for_char(&self.text, self.caret);
@@ -232,6 +233,21 @@ mod tests {
         assert!(editor.take_pending_caret().is_none());
         assert!(editor.dirty);
         assert_eq!(editor.preview_mode, PreviewMode::Edit);
+    }
+
+    #[test]
+    fn dictation_switches_split_preview_to_edit() {
+        let mut editor = MarkdownEditor {
+            text: "ab cd".to_owned(),
+            file_path: None,
+            dirty: false,
+            preview_mode: PreviewMode::Split,
+            caret: 2,
+            pending_caret: false,
+        };
+        editor.insert_dictation("XY ");
+        assert_eq!(editor.preview_mode, PreviewMode::Edit);
+        assert_eq!(editor.text, "abXY  cd");
     }
 
     #[test]
