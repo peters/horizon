@@ -1,4 +1,5 @@
 use super::*;
+use AzureCleanup::{AlreadyAbsent, Deleted};
 use std::sync::{Arc, Mutex};
 #[derive(Clone, Default)]
 struct FakeTransport(Arc<Mutex<FakeState>>);
@@ -44,10 +45,7 @@ impl Transport for FakeTransport {
     }
     fn delete(&self, _name: &str) -> Result<AzureCleanup, AzureError> {
         let mut state = self.0.lock().expect("state");
-        Ok(state
-            .job
-            .take()
-            .map_or(AzureCleanup::AlreadyAbsent, |_| AzureCleanup::Deleted))
+        Ok(state.job.take().map_or(AlreadyAbsent, |_| Deleted))
     }
 }
 fn profile() -> AzureProfile {
@@ -82,6 +80,9 @@ fn api_job(workflow: CloudWorkflowId, job: CloudJobId, target: &WorkerTarget, pr
     value["name"] = name.into();
     value["properties"]["provisioningState"] = "Succeeded".into();
     serde_json::from_value(value).expect("API job")
+}
+fn assert_mismatch<T>(result: Result<T, AzureError>) {
+    assert_eq!(result.err(), Some(AzureError::ResourceIdentityMismatch));
 }
 #[test]
 fn creation_is_bounded_and_retries_reuse_one_execution() {
@@ -130,8 +131,7 @@ fn validation_and_cost_fail_before_creation() {
         job.tags.insert(DEADLINE_TAG.to_string(), deadline.to_string());
         job.properties.template.containers.as_mut().expect("containers")[0].env[3].value = Some(deadline.to_string());
         transport.0.lock().expect("state").job = Some(job);
-        let result = client.ensure_worker(workflow_id, job_id, &target);
-        assert_eq!(result, Err(AzureError::ResourceIdentityMismatch));
+        assert_mismatch(client.ensure_worker(workflow_id, job_id, &target));
         assert!(transport.0.lock().expect("state").job.is_none());
     }
     target.image = "registry.example/build/worker:latest".to_string();
@@ -147,10 +147,16 @@ fn exact_cleanup_rejects_identity_drift_and_is_idempotent() {
     let worker = worker_from_job(&good, workflow_id, job_id, &target, &profile).expect("worker");
     let mut wrong_profile = good.clone();
     wrong_profile.properties.workload_profile_name = "Dedicated".to_string();
-    let mismatch = worker_from_job(&wrong_profile, workflow_id, job_id, &target, &profile);
-    assert_eq!(mismatch, Err(AzureError::ResourceIdentityMismatch));
+    assert_mismatch(worker_from_job(&wrong_profile, workflow_id, job_id, &target, &profile));
+    wrong_profile.properties.workload_profile_name = CONSUMPTION_PROFILE.to_string();
+    wrong_profile.location = "eastus".to_string();
+    assert_mismatch(status_from_resource(&wrong_profile, &worker, None));
     let mut wrong = good.clone();
+    wrong.properties.template.containers.as_mut().expect("containers")[0].env[1].secret_ref =
+        Some("job-override".to_string());
+    assert_mismatch(status_from_resource(&wrong, &worker, None));
     let containers = wrong.properties.template.containers.as_mut().expect("containers");
+    containers[0].env[1].secret_ref = None;
     let duplicate = containers[0].env[1].clone();
     containers[0].env.push(duplicate);
     let transport = FakeTransport::default();

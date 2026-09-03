@@ -69,14 +69,11 @@ impl AzureWorker {
     /// Rejects malformed or internally inconsistent worker identities.
     pub fn validate(&self) -> Result<(), AzureError> {
         let name = resource_name(self.workflow_id, self.job_id);
+        let expected = resource_id(&self.profile.subscription_id, &self.profile.resource_group, &self.name);
         let valid = self.name == name
             && validate_target(&self.target, &self.profile).is_ok()
             && valid_deadline(&self.delete_after)
-            && self.resource_id.eq_ignore_ascii_case(&resource_id(
-                &self.profile.subscription_id,
-                &self.profile.resource_group,
-                &self.name,
-            ));
+            && self.resource_id.eq_ignore_ascii_case(&expected);
         valid.then_some(()).ok_or(AzureError::InvalidPersistedWorker)
     }
 }
@@ -197,11 +194,9 @@ impl AzureClient {
     }
     fn validate_scope(&self, worker: &AzureWorker) -> Result<(), AzureError> {
         worker.validate()?;
-        let valid = worker.resource_id.eq_ignore_ascii_case(&resource_id(
-            &self.profile.subscription_id,
-            &self.profile.resource_group,
-            &worker.name,
-        ));
+        let profile = &self.profile;
+        let expected = resource_id(&profile.subscription_id, &profile.resource_group, &worker.name);
+        let valid = worker.resource_id.eq_ignore_ascii_case(&expected);
         valid.then_some(()).ok_or(AzureError::InvalidPersistedWorker)
     }
     fn single_execution(&self, name: &str, resource_id: &str) -> Result<Option<ApiExecution>, AzureError> {
@@ -383,6 +378,7 @@ struct ApiResources {
 struct ApiEnv {
     name: String,
     value: Option<String>,
+    secret_ref: Option<String>,
 }
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
@@ -441,7 +437,8 @@ fn validate_profile(profile: &AzureProfile) -> Result<(), AzureError> {
             .environment_id
             .get(..prefix.len())
             .is_some_and(|value| value.eq_ignore_ascii_case(&prefix))
-        && valid_location(&profile.location)
+        && valid_text(&profile.location, 90)
+        && profile.location.bytes().all(|byte| byte.is_ascii_alphanumeric())
         && (250..=4_000).contains(&profile.cpu_millicores)
         && profile.cpu_millicores.is_multiple_of(250)
         && profile.memory_mib == profile.cpu_millicores / 250 * 512
@@ -511,6 +508,7 @@ fn status_from_resource(
     let (target, profile) = (&worker.target, &worker.profile);
     let owned = basic_identity_matches(job, worker.workflow_id, worker.job_id, profile)
         && job.id.eq_ignore_ascii_case(&worker.resource_id)
+        && job.location.replace(' ', "").eq_ignore_ascii_case(&profile.location)
         && job
             .properties
             .environment_id
@@ -636,7 +634,7 @@ fn env_matches(container: &ApiContainer, name: &str, expected: &str) -> bool {
     let mut entries = container.env.iter().filter(|entry| entry.name == name);
     entries
         .next()
-        .is_some_and(|entry| entry.value.as_deref() == Some(expected))
+        .is_some_and(|entry| entry.value.as_deref() == Some(expected) && entry.secret_ref.is_none())
         && entries.next().is_none()
 }
 fn execution_belongs_to(execution_id: &str, job_resource_id: &str) -> bool {
@@ -667,9 +665,6 @@ fn valid_resource_group(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || b"._-()".contains(&byte))
-}
-fn valid_location(value: &str) -> bool {
-    valid_text(value, 90) && value.bytes().all(|byte| byte.is_ascii_alphanumeric())
 }
 fn valid_arm_id(value: &str) -> bool {
     value.starts_with("/subscriptions/")
