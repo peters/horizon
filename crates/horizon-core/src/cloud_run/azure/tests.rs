@@ -112,7 +112,7 @@ fn creation_is_bounded_and_retries_reuse_one_execution() {
 #[test]
 fn validation_and_cost_fail_before_creation() {
     let (workflow_id, job_id) = (CloudWorkflowId::new(), CloudJobId::new());
-    let (mut target, profile) = (target(), profile());
+    let (mut target, mut profile) = (target(), profile());
     target.max_hourly_cost_micros = Some(41_999);
     let transport = FakeTransport::default();
     let client = AzureClient::with_transport(profile.clone(), transport.clone());
@@ -136,6 +136,8 @@ fn validation_and_cost_fail_before_creation() {
     }
     target.image = "registry.example/build/worker:latest".to_string();
     assert_eq!(validate_target(&target, &profile), Err(AzureError::InvalidTarget));
+    (profile.cpu_millicores, profile.memory_mib) = (4_250, 8_704);
+    assert_eq!(validate_profile(&profile), Err(AzureError::InvalidProfile));
 }
 #[test]
 fn exact_cleanup_rejects_identity_drift_and_is_idempotent() {
@@ -143,22 +145,21 @@ fn exact_cleanup_rejects_identity_drift_and_is_idempotent() {
     let (target, profile) = (target(), profile());
     let good = api_job(workflow_id, job_id, &target, &profile);
     let worker = worker_from_job(&good, workflow_id, job_id, &target, &profile).expect("worker");
-    let mut oversized = good.clone();
-    let containers = oversized.properties.template.containers.as_mut().expect("containers");
-    containers[0].resources.cpu = 1.0;
-    let mismatch = worker_from_job(&oversized, workflow_id, job_id, &target, &profile);
+    let mut wrong_profile = good.clone();
+    wrong_profile.properties.workload_profile_name = "Dedicated".to_string();
+    let mismatch = worker_from_job(&wrong_profile, workflow_id, job_id, &target, &profile);
     assert_eq!(mismatch, Err(AzureError::ResourceIdentityMismatch));
     let mut wrong = good.clone();
     let containers = wrong.properties.template.containers.as_mut().expect("containers");
     let duplicate = containers[0].env[1].clone();
     containers[0].env.push(duplicate);
     let transport = FakeTransport::default();
-    transport.0.lock().expect("state").job = Some(wrong);
-    let mut edited_profile = profile.clone();
-    edited_profile.cpu_millicores = 750;
-    let client = AzureClient::with_transport(edited_profile, transport.clone());
-    let cleanup = client.cleanup_creation_failure::<()>(&worker.name, Some(&worker), AzureError::InvalidTarget);
-    assert!(matches!(cleanup, Err(AzureError::CleanupFailed { .. })));
+    transport.0.lock().expect("state").create_response = Some(wrong);
+    transport.0.lock().expect("state").create_is_new = true;
+    let client = AzureClient::with_transport(profile, transport.clone());
+    let failed = client.ensure_worker(workflow_id, job_id, &target);
+    assert!(matches!(failed, Err(AzureError::CleanupFailed { .. })));
+    assert_eq!(transport.0.lock().expect("state").starts, 0);
     assert!(transport.0.lock().expect("state").job.is_some());
     transport.0.lock().expect("state").job = Some(good);
     assert_eq!(client.delete_worker(&worker), Ok(AzureCleanup::Deleted));

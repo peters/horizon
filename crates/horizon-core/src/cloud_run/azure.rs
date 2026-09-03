@@ -21,6 +21,7 @@ const TERMINATE_ENV: &str = "HORIZON_TERMINATE_AFTER";
 const MIN_LEASE_SECONDS: u32 = 300;
 const MAX_LEASE_SECONDS: u32 = 30 * 24 * 60 * 60;
 const LEASE_CLOCK_SKEW_SECONDS: i64 = 120;
+const CONSUMPTION_PROFILE: &str = "Consumption";
 #[derive(Clone)]
 pub struct AzureAccessToken(String);
 impl AzureAccessToken {
@@ -118,8 +119,7 @@ impl AzureClient {
         Ok(Self { profile, transport })
     }
     /// # Errors
-    /// Fails closed on invalid configuration, identity drift, duplicate executions,
-    /// provider errors, or an exceeded hourly price.
+    /// Fails closed on invalid configuration, identity drift, duplicate executions, provider errors, or price.
     pub fn ensure_worker(
         &self,
         workflow_id: CloudWorkflowId,
@@ -155,6 +155,7 @@ impl AzureClient {
             let existing = self.execution_for(&job, &worker.resource_id)?;
             // The persisted job is the at-most-once fence; retries only reconcile its execution.
             let execution = if created && existing.is_none() && job.ready_to_start() {
+                status_from_resource(&job, &worker, None)?;
                 self.transport.start(&name)?
             } else {
                 existing
@@ -338,6 +339,7 @@ struct ApiIdentity {
 #[serde(default, rename_all = "camelCase")]
 struct ApiProperties {
     environment_id: String,
+    workload_profile_name: String,
     provisioning_state: Option<String>,
     configuration: ApiConfiguration,
     template: ApiTemplate,
@@ -413,7 +415,7 @@ fn create_request(
         {"name": TERMINATE_ENV, "value": deadline}
     ]);
     let properties = serde_json::json!({
-        "environmentId": profile.environment_id,
+        "environmentId": profile.environment_id, "workloadProfileName": CONSUMPTION_PROFILE,
         "configuration": {
             "triggerType": "Manual", "replicaTimeout": target.lease_seconds, "replicaRetryLimit": 0,
             "manualTriggerConfig": {"parallelism": 1, "replicaCompletionCount": 1},
@@ -440,10 +442,9 @@ fn validate_profile(profile: &AzureProfile) -> Result<(), AzureError> {
             .get(..prefix.len())
             .is_some_and(|value| value.eq_ignore_ascii_case(&prefix))
         && valid_location(&profile.location)
-        && profile.cpu_millicores >= 250
+        && (250..=4_000).contains(&profile.cpu_millicores)
         && profile.cpu_millicores.is_multiple_of(250)
-        && profile.memory_mib >= 512
-        && profile.memory_mib.is_multiple_of(256)
+        && profile.memory_mib == profile.cpu_millicores / 250 * 512
         && profile.hourly_cost_micros > 0;
     valid.then_some(()).ok_or(AzureError::InvalidProfile)
 }
@@ -576,6 +577,7 @@ fn basic_identity_matches(
 }
 fn job_configuration_matches(job: &ApiJob, image: &str, lease_seconds: u32, profile: &AzureProfile) -> bool {
     let config = &job.properties.configuration;
+    let workload_profile = &job.properties.workload_profile_name;
     let containers = job.properties.template.containers.as_deref().unwrap_or_default();
     let public_image = config.registries.as_deref().unwrap_or_default().is_empty()
         && job.identity.as_ref().is_none_or(|identity| {
@@ -583,6 +585,7 @@ fn job_configuration_matches(job: &ApiJob, image: &str, lease_seconds: u32, prof
                 && (identity.kind.is_empty() || identity.kind.eq_ignore_ascii_case("None"))
         });
     config.trigger_type.eq_ignore_ascii_case("Manual")
+        && workload_profile.eq_ignore_ascii_case(CONSUMPTION_PROFILE)
         && config.replica_timeout == lease_seconds
         && config.replica_retry_limit == 0
         && config.manual_trigger_config.parallelism == 1
