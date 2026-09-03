@@ -6,6 +6,12 @@ pub fn current_process_has_os_focus() -> Option<bool> {
     platform::current_process_has_os_focus()
 }
 
+/// X11 input-focus window id, if this session can observe one.
+#[must_use]
+pub(crate) fn current_input_focus_window() -> Option<u32> {
+    platform::current_input_focus_window()
+}
+
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod platform {
     use std::cell::RefCell;
@@ -28,6 +34,22 @@ mod platform {
 
     pub(super) fn current_process_has_os_focus() -> Option<bool> {
         process_owns_focus(std::process::id(), &focused_candidate_pids()?)
+    }
+
+    pub(super) fn current_input_focus_window() -> Option<u32> {
+        DISPLAY.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            if slot.is_none() {
+                *slot = x11rb::connect(None).ok();
+            }
+            let (conn, _) = slot.as_ref()?;
+            let focus = conn
+                .get_input_focus()
+                .ok()
+                .and_then(|cookie| cookie.reply().ok())
+                .map(|reply| reply.focus)?;
+            is_real_window(focus).then_some(focus)
+        })
     }
 
     fn focused_candidate_pids() -> Option<Vec<u32>> {
@@ -222,6 +244,10 @@ mod platform {
 #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 mod platform {
     pub(super) const fn current_process_has_os_focus() -> Option<bool> {
+        None
+    }
+
+    pub(super) const fn current_input_focus_window() -> Option<u32> {
         None
     }
 }

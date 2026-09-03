@@ -54,13 +54,15 @@ pub fn request_accessibility_permission() -> Option<bool> {
 
 /// Insert text at the caret of the focused editable accessibility object.
 ///
-/// This path never reads or writes the clipboard. It refuses ambiguous,
-/// protected, stale, hidden, read-only, or selected-text targets so failure
-/// cannot partially replace existing text. On Linux, if no AT-SPI editable
-/// field exists, keys are typed into the focused window. A unique focused
-/// object that is a password field, or that exposes a visible selection, is
-/// still refused. Chromium, Electron, and Microsoft Teams typically have no
-/// AT-SPI tree; desktop dictation types into those windows anyway.
+/// This path never reads or writes the clipboard. Direct insertion refuses
+/// ambiguous, protected, stale, hidden, read-only, or selected-text targets
+/// so failure cannot partially replace existing text. On Linux, if no AT-SPI
+/// editable field exists, keys are typed into the focused window. A unique
+/// focused object that is a password field, or that exposes a visible
+/// selection, is still refused when accessibility identifies it. Chromium,
+/// Electron, and Microsoft Teams typically have no AT-SPI tree; desktop
+/// dictation types into those windows anyway. Synthesis aborts if the OS
+/// input-focus window changes during the accessibility preflight.
 ///
 /// # Errors
 ///
@@ -236,6 +238,7 @@ mod platform {
 
     async fn insert_text_async(text: &str) -> Result<(), InjectError> {
         let text = sanitize_desktop_transcript(text);
+        let focus_window = crate::os_focus::current_input_focus_window();
         let deadline = tokio::time::Instant::now() + PREFLIGHT_TIMEOUT;
         let connection = bounded_preflight(deadline, async {
             AccessibilityConnection::new()
@@ -246,7 +249,7 @@ mod platform {
         match insert_into_editable_field(&connection, deadline, &text).await {
             Ok(()) => Ok(()),
             Err(error) if can_synthesize_keys(&error) => {
-                synthesize_into_focused_target(&connection, deadline, &text).await
+                synthesize_into_focused_target(&connection, deadline, &text, focus_window).await
             }
             Err(error) => Err(error),
         }
@@ -446,6 +449,23 @@ mod platform {
         )
     }
 
+    fn focus_window_still_matches(captured: Option<u32>, current: Option<u32>) -> Result<(), InjectError> {
+        let Some(expected) = captured else {
+            return Ok(());
+        };
+        if current == Some(expected) {
+            Ok(())
+        } else {
+            Err(InjectError::Target(
+                "focused window changed before transcript insertion",
+            ))
+        }
+    }
+
+    fn ensure_focus_window_unchanged(captured: Option<u32>) -> Result<(), InjectError> {
+        focus_window_still_matches(captured, crate::os_focus::current_input_focus_window())
+    }
+
     async fn find_unique_focus(
         connection: &AccessibilityConnection,
         search: FocusSearch,
@@ -498,6 +518,7 @@ mod platform {
         connection: &AccessibilityConnection,
         deadline: tokio::time::Instant,
         text: &str,
+        focus_window: Option<u32>,
     ) -> Result<(), InjectError> {
         match bounded_preflight(deadline, find_focused_object(connection)).await {
             Ok(target) => {
@@ -534,6 +555,7 @@ mod platform {
             Err(error) if is_unclassified_focus(&error) => {}
             Err(error) => return Err(error),
         }
+        ensure_focus_window_unchanged(focus_window)?;
         synthesize_key_string(connection, text).await
     }
 
@@ -593,8 +615,8 @@ mod platform {
         use atspi::{Interface, InterfaceSet, Role, State, StateSet};
 
         use super::{
-            INSERT_LOCK, InjectError, TargetFacts, TextSnapshot, can_synthesize_keys, is_unclassified_focus,
-            sanitize_desktop_transcript, unique_candidate_index, unique_focused_index,
+            INSERT_LOCK, InjectError, TargetFacts, TextSnapshot, can_synthesize_keys, focus_window_still_matches,
+            is_unclassified_focus, sanitize_desktop_transcript, unique_candidate_index, unique_focused_index,
         };
 
         fn safe_target() -> TargetFacts {
@@ -683,6 +705,24 @@ mod platform {
             assert_eq!(
                 disabled.validate_synthesis_target(),
                 Err(InjectError::Target("focused field is not available for input"))
+            );
+        }
+
+        #[test]
+        fn synthesis_aborts_when_the_os_focus_window_changes() {
+            assert_eq!(focus_window_still_matches(None, Some(0x3c0_0004)), Ok(()));
+            assert_eq!(focus_window_still_matches(Some(0x3c0_0004), Some(0x3c0_0004)), Ok(()));
+            assert_eq!(
+                focus_window_still_matches(Some(0x3c0_0004), Some(0x3c0_0005)),
+                Err(InjectError::Target(
+                    "focused window changed before transcript insertion"
+                ))
+            );
+            assert_eq!(
+                focus_window_still_matches(Some(0x3c0_0004), None),
+                Err(InjectError::Target(
+                    "focused window changed before transcript insertion"
+                ))
             );
         }
 
