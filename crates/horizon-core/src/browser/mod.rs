@@ -106,6 +106,10 @@ pub struct BrowserPanelState {
     /// User-typed navigation kept as the display and retry target until the
     /// driver commits a reachable page, so the input is never discarded.
     pending_user_navigation: Option<String>,
+    /// User activity that can navigate (typed URL, back, forward, reload, a
+    /// click, a key press) so far; lets a pending create tell a user takeover
+    /// from the requested first page committing.
+    user_navigations: std::sync::atomic::AtomicU32,
     /// A backend selection changed since the last output drain and must be
     /// folded into the persisted runtime state exactly once.
     persisted_config_changed: bool,
@@ -160,6 +164,7 @@ impl BrowserPanelState {
             host_focus_request: None,
             navigation_error: None,
             pending_user_navigation: None,
+            user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: profile_root_resolved,
             config,
         };
@@ -341,7 +346,33 @@ impl BrowserPanelState {
     /// Queue a command only when the driver session currently exists.
     #[must_use]
     pub fn try_send(&self, command: BrowserCommand) -> bool {
-        self.session.as_ref().is_some_and(|session| session.send(command))
+        // Chrome commands, and the input that can navigate from inside the
+        // page (a click on a link, Enter in a form), count as user activity
+        // that may take a pending startup navigation over, but only once the
+        // driver accepted them; pointer moves and wheel events do not
+        // navigate on their own.
+        let may_navigate = matches!(
+            command,
+            BrowserCommand::Navigate(_)
+                | BrowserCommand::Back
+                | BrowserCommand::Forward
+                | BrowserCommand::Reload
+                | BrowserCommand::Input(
+                    horizon_browser::BrowserInput::MousePress { .. } | horizon_browser::BrowserInput::KeyDown { .. }
+                )
+        );
+        let accepted = self.session.as_ref().is_some_and(|session| session.send(command));
+        if accepted && may_navigate {
+            self.user_navigations.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        accepted
+    }
+
+    /// Number of user actions that can navigate (typed URL, back, forward,
+    /// reload, click, key press) on this panel so far.
+    #[must_use]
+    pub fn user_navigation_count(&self) -> u32 {
+        self.user_navigations.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Submit a user-typed navigation and retain it as the display/retry
@@ -711,6 +742,7 @@ mod tests {
             host_focus_request: None,
             navigation_error: None,
             pending_user_navigation: None,
+            user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
             config: BrowserConfig::default(),
         };
@@ -750,6 +782,7 @@ mod tests {
             host_focus_request: None,
             navigation_error: None,
             pending_user_navigation: None,
+            user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
             config: BrowserConfig::default(),
         };
@@ -783,6 +816,7 @@ mod tests {
             host_focus_request: None,
             navigation_error: None,
             pending_user_navigation: None,
+            user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
             config: BrowserConfig::default(),
         };
@@ -824,6 +858,7 @@ mod tests {
             host_focus_request: None,
             navigation_error: None,
             pending_user_navigation: None,
+            user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
             config: BrowserConfig::default(),
         };
@@ -863,6 +898,7 @@ mod tests {
             host_focus_request: None,
             navigation_error: None,
             pending_user_navigation: None,
+            user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
             config: BrowserConfig {
                 command: Some("/definitely/missing/chrome".to_string()),
@@ -936,6 +972,7 @@ mod tests {
             host_focus_request: None,
             navigation_error: None,
             pending_user_navigation: None,
+            user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
             config: BrowserConfig::default(),
         };
@@ -971,6 +1008,7 @@ mod tests {
             host_focus_request: None,
             navigation_error: Some("stale error".to_string()),
             pending_user_navigation: None,
+            user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
             config: BrowserConfig::default(),
         };
@@ -1005,6 +1043,7 @@ mod tests {
             host_focus_request: None,
             navigation_error: None,
             pending_user_navigation: None,
+            user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
             config: BrowserConfig::default(),
         };
@@ -1042,6 +1081,7 @@ mod tests {
             host_focus_request: None,
             navigation_error: None,
             pending_user_navigation: None,
+            user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
             config: BrowserConfig::default(),
         };

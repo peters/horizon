@@ -46,6 +46,7 @@ profiling = "1.0.18"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_yaml = "0.9.34"
 serde_json = "1.0.151"
+url = "2.5.8"
 rmcp = { version = "3.1.4", default-features = false, features = ["macros", "server", "transport-io"] }
 schemars = "1.2.2"
 alacritty_terminal = "0.26.0"
@@ -70,8 +71,12 @@ uuid = { version = "1.24.1", features = ["serde", "v4"] }
 git2 = { version = "0.21", default-features = false }
 regex = "1.13.1"
 arboard = "3.6.1"
-tokio = { version = "1.53.1", features = ["rt", "macros"] }
-surge-core = { git = "https://github.com/fintermobilityas/surge.git", tag = "v1.0.0-beta.54", package = "surge-core" }
+atspi = { version = "0.30.0", default-features = false, features = ["connection", "proxies", "tokio"] }
+tokio = { version = "1.53.1", features = ["rt", "macros", "time"] }
+axuielement = { version = "0.9.1", default-features = false, features = ["async"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSRunningApplication", "libc"] }
+global-hotkey = "0.8.0"
+surge-core = { git = "https://github.com/fintermobilityas/surge.git", tag = "v1.0.0-beta.55", package = "surge-core" }
 # Speech input (opt-in `speech` feature): local ASR via transcribe.cpp. The
 # -sys crate vendors the whole C++ tree, so cargo builds it from source —
 # needs only CMake + a C++ compiler, no git submodules.

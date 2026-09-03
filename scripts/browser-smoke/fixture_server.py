@@ -34,6 +34,12 @@ class SmokeHandler(http.server.SimpleHTTPRequestHandler):
         if path == "/market-stream":
             self._serve_market_stream()
             return
+        if path == "/redirect-to-next":
+            self.send_response(302)
+            self.send_header("Location", "/next.html")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path == "/slow-navigation.html":
             time.sleep(11)
             body = b"<!doctype html><title>Horizon Browser Smoke - Slow Navigation</title><p id='slow-marker'>ready</p>"

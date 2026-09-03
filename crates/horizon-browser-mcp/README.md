@@ -11,7 +11,7 @@ MCP server during development:
 ```toml
 [mcp_servers.horizon-browser]
 command = "/path/to/horizon-browser-mcp"
-env_vars = ["HORIZON_BROWSER_ACTOR"]
+env_vars = ["HORIZON_BROWSER_ACTOR", "HORIZON_BROWSER_HOST_INSTANCE"]
 default_tools_approval_mode = "approve"
 ```
 
@@ -27,9 +27,24 @@ shell commands, files, or other MCP servers.
 
 ## Tool contract
 
-- `browser_list` and `browser_panel` discover safe live-panel state.
+- `browser_list` and `browser_panel` discover safe live-panel state. For an
+  agent launched inside Horizon, discovery and every control tool are scoped
+  to the workspace that contains the agent panel: panels in other workspaces
+  are never listed and their ids are rejected even when they are unowned.
+  A panel's `visible` field is host presentation state, not proof that it is
+  in the caller's workspace.
 - `browser_create` opens a panel in the calling agent's Horizon workspace and
-  returns only after it is ready and owned by that agent. It uses the configured
+  returns only after its backend is ready, it is owned by that agent, and,
+  when a `url` was given, that page has committed (`navigation: committed`,
+  with `panel.url` authoritative; the title is read after commit and may still
+  be empty or change). If the first page has not
+  committed within a bounded startup wait, the controllable panel is still
+  returned with `navigation: pending` instead of an empty URL presented as
+  ready; if that page failed to load, it is returned with `navigation: failed`
+  and the browser's `navigation_error` (an explicit `about:blank` counts as
+  committed); if the user navigated the panel before that page committed, it
+  is returned with `navigation: superseded` at the user's page. `startup_millis` reports the latency from the host accepting the
+  request until the panel was reported. It uses the configured
   backend unless explicitly overridden. Set `visible: false` to start a live
   background panel. If the same agent already owns a panel, creation is rejected
   unless the user explicitly requested another independent session and the call
@@ -37,13 +52,37 @@ shell commands, files, or other MCP servers.
   dialog, and consent flows instead of creating a helper panel.
 - `browser_visibility` shows or hides an existing panel without stopping its
   browser, ownership lease, network capture, or MCP control.
-- `browser_navigate` changes the top-level page.
+- `browser_navigate` changes the top-level page and reports a typed outcome.
+  By default it returns once the document committed (`wait: commit`);
+  `wait: dispatched` returns as soon as the engine handed the command to the
+  backend without awaiting the browser's acceptance (a rejection after that
+  point shows as a failed page state, not as an action error), and
+  `wait: dom_content_loaded` after `DOMContentLoaded`. The result carries
+  `requested_url`, `committed_url`, `title`, `loading`, `redirected`,
+  `elapsed_millis`, and `state`. Check `completed`: a wait that exceeds
+  `timeout_millis` returns `state: timed_out` with the latest page state so the
+  caller can inspect or retry, while unreachable destinations and rejected
+  commands are errors audited as failed. `timeout_millis` accepts 1000-60000
+  ms; smaller values are raised to 1000 so the typed outcome can be reported.
+  Safari's classic WebDriver has no dispatch-only navigation, so there every
+  wait returns once the page loaded or the bound elapsed.
 - `browser_snapshot` and `browser_query` return bounded semantic nodes with
   short-lived refs. Snapshots keep iframe boundaries discoverable even when
   cross-origin policy prevents inspecting the frame document.
 - `browser_act` clicks, fills, scrolls, reloads, or traverses history. Set
   `count: 2` on a click for a backend-native trusted double-click.
-- `browser_wait` verifies present, visible, or hidden selector state.
+- `browser_wait` verifies present, visible, or hidden selector state as one
+  audited engine-side action: the browser driver observes the page itself at
+  a fixed cadence (no repeated query actions), evaluates the condition over
+  every element the selector matches (the page scan counts matches and
+  visible matches beyond the nodes it returns) and returns at most 20 of
+  them with `elapsed_millis` and `polls`, and fails with a typed code when the bound
+  elapses (`wait_timeout`), the page navigates (`wait_navigation_invalidated`),
+  the lease is lost (`wait_ownership_lost`), or a handoff is pending
+  (`wait_handoff_pending`), or a later wait on the same panel replaces it
+  (`wait_superseded`), or the browser backend stops while waiting
+  (`browser_unavailable`). `timeout_millis` accepts 1000-60000 ms;
+  `poll_millis` is accepted for compatibility and ignored.
 - `browser_evaluate` evaluates an explicit size-bounded expression.
 - `browser_network` starts, inspects, or stops a bounded HTTP/WebSocket
   capture and returns an explicit private NDJSON path plus connection state,
@@ -61,11 +100,33 @@ shell commands, files, or other MCP servers.
 - `browser_audit` returns redacted ordered action records.
 
 The server automatically claims and heartbeats a panel using
-`HORIZON_BROWSER_ACTOR`. Horizon injects that identity into the agent process
-and explicitly forwards it to the bundled stdio MCP subprocess. Creation and
+`HORIZON_BROWSER_ACTOR`. Horizon injects that identity, together with the
+`HORIZON_BROWSER_HOST_INSTANCE` of the host process that launched the agent,
+into the agent process and explicitly forwards both to the bundled stdio MCP
+subprocess. A Horizon identity that reaches the server without its host
+instance receives an explicit error instead of an empty workspace. Creation and
 visibility requests are accepted only from an identity belonging to a live
 Horizon agent panel and are routed to that Horizon instance. Panel lifecycle
 and later actions share the redacted audit identity.
+The Horizon host stamps every live browser manifest with its own host
+instance and the agent identities that currently share the panel's workspace,
+and refreshes the stamp when either panel moves; the driver records its host
+at start and only that host may stamp the manifest, so a second host whose
+board carries the same persisted panel id cannot rewrite it. The stamp and
+the requested owner of a newly created panel are written in one locked
+transaction, so authorization follows
+workspace membership without restarting the browser session or the agent.
+Membership is evaluated inside the same locked manifest transaction as each
+claim, heartbeat, queued action, handoff, and audit read, so a move cannot
+race past the boundary. Because the stamp names the host and every agent
+carries the host that launched it, separate Horizon processes sharing one
+home never authorize each other's panels, even when duplicated or copied
+sessions reuse the same persisted panel ids or their workspace ids collide;
+create and visibility requests are likewise claimed only by the launching
+host. Manifests without a stamp (older hosts, or a panel whose host has not
+stamped it yet) fail closed for Horizon agents.
+Identities from outside Horizon (a standalone host or the process-local
+fallback) are not placed in any workspace and keep unscoped discovery.
 When no valid actor is injected, the server uses a process-local identity and
 releases only that identity's claims on clean shutdown. A crash retains the
 heartbeat TTL fallback, while a normal reconnect can claim the panel
@@ -78,7 +139,13 @@ audit-file, or result-file locations. Horizon's locked manifest queue remains
 private implementation plumbing, not a second API.
 
 Chromium HTTP metadata, response bodies, and WebSocket frames come directly
-from CDP. Firefox HTTP metadata and response bodies use native WebDriver BiDi;
+from CDP. CDP cannot return a `fetch()` body that the page drained straight into
+a `Blob` (`response.blob()`); Horizon records that body as an
+`http_response_body` record with an `error` and no `payload` instead of a
+zero-byte success, so read `text()` or `arrayBuffer()`, or leave the body
+unread, when the bytes matter. Separately, a top-level navigation to a PDF
+captures the PDF viewer's HTML shell as a normal successful body, not the PDF
+bytes. Firefox HTTP metadata and response bodies use native WebDriver BiDi;
 standard BiDi does not currently expose WebSocket frames, so Firefox uses an
 explicitly advertised, pre-document page bridge that batches only socket
 frames before crossing BiDi. This bridge is observable by page code and is not

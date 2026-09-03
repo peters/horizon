@@ -1,7 +1,9 @@
+use std::fs::{OpenOptions, TryLockError};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use horizon_core::HorizonHome;
+use horizon_core::browser::manifest;
+use horizon_core::{HorizonHome, browser_mcp_executable};
 
 struct EmbeddedFile {
     relative_path: &'static str,
@@ -48,29 +50,175 @@ const BROWSER_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
     )),
 }];
 
-pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) {
-    let user_home = std::env::var_os("HOME").map(PathBuf::from);
-    let mcp_command = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("horizon"));
+pub(crate) struct AgentPluginHostLease {
+    host_dir: PathBuf,
+    lock_path: PathBuf,
+    lock_file: Option<std::fs::File>,
+}
 
-    match install_agent_plugins_impl(horizon_home, user_home.as_deref(), &mcp_command) {
+impl AgentPluginHostLease {
+    fn acquire(instance_dir: PathBuf) -> std::io::Result<Self> {
+        let lock_path = agent_plugin_host_lock_path(&instance_dir)?;
+        let plugin_root = instance_dir.parent().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "agent plugin host directory has no parent",
+            )
+        })?;
+        std::fs::create_dir_all(plugin_root)?;
+        let lock_file = open_lock_file(&lock_path)?;
+        match lock_file.try_lock() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    format!("agent plugin host is already active: {}", instance_dir.display()),
+                ));
+            }
+            Err(TryLockError::Error(error)) => return Err(error),
+        }
+        if let Err(error) = std::fs::create_dir_all(&instance_dir) {
+            drop(lock_file);
+            let _ = std::fs::remove_file(&lock_path);
+            return Err(error);
+        }
+        Ok(Self {
+            host_dir: instance_dir,
+            lock_path,
+            lock_file: Some(lock_file),
+        })
+    }
+}
+
+impl Drop for AgentPluginHostLease {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_dir_all(&self.host_dir)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(path = %self.host_dir.display(), %error, "failed to remove agent plugin host directory");
+        }
+        drop(self.lock_file.take());
+        if let Err(error) = std::fs::remove_file(&self.lock_path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(path = %self.lock_path.display(), %error, "failed to remove agent plugin host lock");
+        }
+    }
+}
+
+pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) -> Option<AgentPluginHostLease> {
+    let user_home = std::env::var_os("HOME").map(PathBuf::from);
+    let mcp_command = browser_mcp_executable().unwrap_or_else(|| PathBuf::from("horizon"));
+    let host_dir = horizon_home.agent_plugin_host_dir(manifest::host_instance());
+    let claude_plugin_dir = horizon_home.claude_plugin_dir_for_host(manifest::host_instance());
+    let lease = match AgentPluginHostLease::acquire(host_dir.clone()) {
+        Ok(lease) => lease,
+        Err(error) => {
+            tracing::warn!(%error, "failed to acquire agent plugin host lease");
+            return None;
+        }
+    };
+
+    match install_agent_plugins_impl(horizon_home, &claude_plugin_dir, user_home.as_deref(), &mcp_command) {
         Ok(updated_files) if updated_files > 0 => {
             tracing::info!(updated_files, "synced embedded Horizon agent plugins");
         }
         Ok(_) => {}
         Err(error) => tracing::warn!("failed to sync embedded Horizon agent plugins: {error}"),
     }
+
+    match prune_stale_agent_plugin_hosts(&host_dir) {
+        Ok(pruned_hosts) if pruned_hosts > 0 => {
+            tracing::info!(pruned_hosts, "pruned stale agent plugin hosts");
+        }
+        Ok(_) => {}
+        Err(error) => tracing::warn!(%error, "failed to prune stale agent plugin hosts"),
+    }
+
+    Some(lease)
+}
+
+fn agent_plugin_host_lock_path(instance_dir: &Path) -> std::io::Result<PathBuf> {
+    let plugin_root = instance_dir.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "agent plugin host directory has no parent",
+        )
+    })?;
+    let host_name = instance_dir.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "agent plugin host directory has no name",
+        )
+    })?;
+    let mut lock_name = host_name.to_os_string();
+    lock_name.push(".lock");
+    Ok(plugin_root.join(lock_name))
+}
+
+fn open_lock_file(path: &Path) -> std::io::Result<std::fs::File> {
+    OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(path)
+}
+
+fn prune_stale_agent_plugin_hosts(current_instance_dir: &Path) -> std::io::Result<usize> {
+    let plugin_root = current_instance_dir.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "agent plugin host directory has no parent",
+        )
+    })?;
+    let prune_lock = open_lock_file(&plugin_root.join(".prune.lock"))?;
+    match prune_lock.try_lock() {
+        Ok(()) => {}
+        Err(TryLockError::WouldBlock) => return Ok(0),
+        Err(TryLockError::Error(error)) => return Err(error),
+    }
+
+    let mut pruned_hosts = 0usize;
+    for entry in std::fs::read_dir(plugin_root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() || entry.path() == current_instance_dir {
+            continue;
+        }
+        let candidate_dir = entry.path();
+        let host_lock_path = agent_plugin_host_lock_path(&candidate_dir)?;
+        let host_lock = open_lock_file(&host_lock_path)?;
+        match host_lock.try_lock() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => continue,
+            Err(TryLockError::Error(error)) => return Err(error),
+        }
+        match std::fs::remove_dir_all(&candidate_dir) {
+            Ok(()) => pruned_hosts += 1,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        drop(host_lock);
+        match std::fs::remove_file(host_lock_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(pruned_hosts)
 }
 
 fn install_agent_plugins_impl(
     horizon_home: &HorizonHome,
+    claude_plugin_dir: &Path,
     user_home: Option<&Path>,
     mcp_command: &Path,
 ) -> std::io::Result<usize> {
     let mut updated_files = 0usize;
 
-    updated_files += sync_plugin_files(&horizon_home.claude_plugin_dir(), CLAUDE_PLUGIN_FILES)?;
+    updated_files += sync_plugin_files(claude_plugin_dir, CLAUDE_PLUGIN_FILES)?;
     updated_files += usize::from(sync_file_if_changed(
-        &horizon_home.claude_plugin_dir().join(".mcp.json"),
+        &claude_plugin_dir.join(".mcp.json"),
         &claude_mcp_config(mcp_command)?,
     )?);
     updated_files += sync_plugin_files(&horizon_home.codex_skill_dir(), NOTIFY_SKILL_FILES)?;
@@ -144,7 +292,8 @@ mod tests {
     use horizon_core::HorizonHome;
 
     use super::{
-        BROWSER_SKILL_FILES, EmbeddedFile, NOTIFY_SKILL_FILES, install_agent_plugins_impl, sync_file_if_changed,
+        AgentPluginHostLease, BROWSER_SKILL_FILES, EmbeddedFile, NOTIFY_SKILL_FILES, agent_plugin_host_lock_path,
+        install_agent_plugins_impl, open_lock_file, prune_stale_agent_plugin_hosts, sync_file_if_changed,
         sync_plugin_files,
     };
 
@@ -196,9 +345,15 @@ mod tests {
         let temp = tempfile::tempdir().expect("temp dir");
         let horizon_home = HorizonHome::from_root(temp.path().join(".horizon"));
         let user_home = temp.path().join("user-home");
+        let claude_plugin_dir = horizon_home.claude_plugin_dir_for_host("host-a");
 
-        let updated = install_agent_plugins_impl(&horizon_home, Some(&user_home), Path::new("/opt/horizon"))
-            .expect("install plugins");
+        let updated = install_agent_plugins_impl(
+            &horizon_home,
+            &claude_plugin_dir,
+            Some(&user_home),
+            Path::new("/opt/horizon"),
+        )
+        .expect("install plugins");
 
         assert!(updated > 0);
         assert_eq!(
@@ -228,9 +383,89 @@ mod tests {
         );
         assert!(BROWSER_SKILL_FILES[0].content.contains("browser_visibility"));
         assert!(BROWSER_SKILL_FILES[0].content.contains("browser_network_watch"));
-        let mcp_config = std::fs::read_to_string(horizon_home.claude_plugin_dir().join(".mcp.json"))
+        let mcp_config = std::fs::read_to_string(claude_plugin_dir.join(".mcp.json"))
             .expect("Claude MCP config should be installed");
         assert!(mcp_config.contains("/opt/horizon"));
         assert!(mcp_config.contains("--browser-mcp"));
+    }
+
+    #[test]
+    fn install_agent_plugins_keeps_mcp_commands_isolated_per_horizon_host() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let horizon_home = HorizonHome::from_root(temp.path().join(".horizon"));
+        let first_plugin_dir = horizon_home.claude_plugin_dir_for_host("host-a");
+        let second_plugin_dir = horizon_home.claude_plugin_dir_for_host("host-b");
+
+        install_agent_plugins_impl(&horizon_home, &first_plugin_dir, None, Path::new("/opt/horizon-a"))
+            .expect("install first host plugin");
+        install_agent_plugins_impl(&horizon_home, &second_plugin_dir, None, Path::new("/opt/horizon-b"))
+            .expect("install second host plugin");
+
+        let first_config = std::fs::read_to_string(first_plugin_dir.join(".mcp.json")).expect("first host config");
+        let second_config = std::fs::read_to_string(second_plugin_dir.join(".mcp.json")).expect("second host config");
+        assert!(first_config.contains("/opt/horizon-a"));
+        assert!(!first_config.contains("/opt/horizon-b"));
+        assert!(second_config.contains("/opt/horizon-b"));
+        assert!(!second_config.contains("/opt/horizon-a"));
+    }
+
+    #[test]
+    fn agent_plugin_host_lease_removes_its_directory_and_lock_on_drop() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let horizon_home = HorizonHome::from_root(temp.path().join(".horizon"));
+        let host_dir = horizon_home.agent_plugin_host_dir("host-a");
+        let lock_path = agent_plugin_host_lock_path(&host_dir).expect("lock path");
+
+        let lease = AgentPluginHostLease::acquire(host_dir.clone()).expect("host lease");
+        assert!(host_dir.is_dir());
+        assert!(lock_path.is_file());
+
+        drop(lease);
+
+        assert!(!host_dir.exists());
+        assert!(!lock_path.exists());
+    }
+
+    #[test]
+    fn prune_stale_agent_plugin_hosts_keeps_active_hosts() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let horizon_home = HorizonHome::from_root(temp.path().join(".horizon"));
+        let current_host_dir = horizon_home.agent_plugin_host_dir("current-host");
+        let active_host_dir = horizon_home.agent_plugin_host_dir("active-host");
+        let stale_host_dir = horizon_home.agent_plugin_host_dir("stale-host");
+        let current_lease = AgentPluginHostLease::acquire(current_host_dir.clone()).expect("current lease");
+        let active_lease = AgentPluginHostLease::acquire(active_host_dir.clone()).expect("active lease");
+        std::fs::create_dir_all(stale_host_dir.join("claude-code")).expect("stale host directory");
+
+        let pruned_hosts = prune_stale_agent_plugin_hosts(&current_host_dir).expect("prune stale hosts");
+
+        assert_eq!(pruned_hosts, 1);
+        assert!(current_host_dir.is_dir());
+        assert!(active_host_dir.is_dir());
+        assert!(!stale_host_dir.exists());
+
+        drop(active_lease);
+        drop(current_lease);
+    }
+
+    #[test]
+    fn prune_stale_agent_plugin_hosts_defers_to_another_pruner() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let horizon_home = HorizonHome::from_root(temp.path().join(".horizon"));
+        let current_host_dir = horizon_home.agent_plugin_host_dir("current-host");
+        let stale_host_dir = horizon_home.agent_plugin_host_dir("stale-host");
+        let current_lease = AgentPluginHostLease::acquire(current_host_dir.clone()).expect("current lease");
+        std::fs::create_dir_all(&stale_host_dir).expect("stale host directory");
+        let prune_lock = open_lock_file(&horizon_home.agent_plugin_hosts_dir().join(".prune.lock"))
+            .expect("prune coordination file");
+        prune_lock.try_lock().expect("prune lock");
+
+        let pruned_hosts = prune_stale_agent_plugin_hosts(&current_host_dir).expect("deferred prune");
+
+        assert_eq!(pruned_hosts, 0);
+        assert!(stale_host_dir.is_dir());
+
+        drop(prune_lock);
+        drop(current_lease);
     }
 }

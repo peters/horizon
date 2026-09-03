@@ -18,6 +18,7 @@ const ASSETS: &[&str] = &[
 ];
 
 fn main() -> io::Result<()> {
+    emit_macos_swift_runtime_rpath();
     emit_cuda_runtime_link_workaround();
 
     let manifest_dir = required_path_var("CARGO_MANIFEST_DIR")?;
@@ -40,6 +41,14 @@ fn main() -> io::Result<()> {
     }
 
     Ok(())
+}
+
+/// Ensure the final Horizon binary can find the OS Swift runtime even when a
+/// workflow-level `RUSTFLAGS` overrides target flags from Cargo configuration.
+fn emit_macos_swift_runtime_rpath() {
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
+    }
 }
 
 /// Workaround for transcribe-cpp-sys 0.1.3: its `transcribe-link.json`

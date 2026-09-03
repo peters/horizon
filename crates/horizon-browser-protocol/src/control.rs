@@ -6,6 +6,7 @@
 
 use crate::{
     BrowserCommand, BrowserInput, BrowserKey, BrowserNetworkCaptureOptions, BrowserNetworkOperation, BrowserTarget,
+    SelectorState,
 };
 
 const MAX_NAVIGATION_BYTES: usize = 8 * 1024;
@@ -16,6 +17,30 @@ pub const MAX_SNAPSHOT_NODES: u32 = 1_000;
 pub const MAX_QUERY_RESULTS: u32 = 250;
 pub const DEFAULT_CLICK_COUNT: u32 = 1;
 pub const MAX_CLICK_COUNT: u32 = 3;
+/// Longest bounded wait an engine performs for one navigation action.
+pub const MAX_NAVIGATION_TIMEOUT_MILLIS: u64 = 60_000;
+/// Wait applied when a navigation action does not carry its own bound.
+pub const DEFAULT_NAVIGATION_TIMEOUT_MILLIS: u64 = 15_000;
+/// Longest bounded selector wait an engine performs for one action.
+pub const MAX_WAIT_TIMEOUT_MILLIS: u64 = 60_000;
+/// Selector wait applied when the action does not carry its own bound.
+pub const DEFAULT_WAIT_TIMEOUT_MILLIS: u64 = 10_000;
+
+/// How far a navigation action waits before it reports its outcome.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NavigationWait {
+    /// Return as soon as the engine handed the navigation command to the
+    /// backend; the browser's acceptance is not awaited and nothing about the
+    /// destination is known yet.
+    Dispatched,
+    /// Return once the top-level document committed (URL is authoritative).
+    #[default]
+    Commit,
+    /// Return once the committed document fired `DOMContentLoaded`.
+    #[serde(alias = "domcontentloaded")]
+    DomContentLoaded,
+}
 
 /// Resolve an omnibox-style navigation target without overriding an explicit
 /// scheme. Hostnames default to HTTPS; callers can still request HTTP.
@@ -63,6 +88,13 @@ fn has_explicit_browser_scheme(input: &str) -> bool {
 pub enum BrowserControlAction {
     Navigate {
         url: String,
+        /// Readiness the engine waits for before reporting the outcome.
+        #[serde(default)]
+        wait: NavigationWait,
+        /// Bound on that wait in milliseconds; the engine reports a typed
+        /// `timed_out` outcome with the latest page state when it elapses.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout_millis: Option<u64>,
     },
     Reload,
     Back,
@@ -78,6 +110,16 @@ pub enum BrowserControlAction {
     Query {
         selector: String,
         max_results: u32,
+    },
+    /// Observe a selector inside the engine until it reaches `state`, as one
+    /// audited action instead of repeated queries.
+    WaitForSelector {
+        selector: String,
+        state: SelectorState,
+        /// Bound in milliseconds; a `wait_timeout` failure reports the
+        /// elapsed time and the last observation when it elapses.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout_millis: Option<u64>,
     },
     /// Click the center of a visible element through the backend input path.
     Click {
@@ -118,12 +160,29 @@ impl BrowserControlAction {
     /// click count, or numeric coordinate is outside the engine contract.
     pub fn validate(&self) -> Result<(), &'static str> {
         match self {
-            Self::Navigate { url } => validate_navigation(url),
+            Self::Navigate {
+                url, timeout_millis, ..
+            } => {
+                validate_navigation(url)?;
+                validate_navigation_timeout(*timeout_millis)
+            }
             Self::Input { input } => validate_input(input),
             Self::Snapshot { max_nodes } => validate_snapshot_limit(*max_nodes),
             Self::Query { selector, max_results } => {
                 validate_selector(selector)?;
                 validate_query_limit(*max_results)
+            }
+            Self::WaitForSelector {
+                selector,
+                timeout_millis,
+                ..
+            } => {
+                validate_selector(selector)?;
+                match timeout_millis {
+                    Some(0) => Err("wait timeout must be at least 1 ms"),
+                    Some(value) if *value > MAX_WAIT_TIMEOUT_MILLIS => Err("wait timeout exceeds the engine bound"),
+                    _ => Ok(()),
+                }
             }
             Self::Click { target, count } => {
                 validate_target(target)?;
@@ -161,13 +220,14 @@ impl BrowserControlAction {
     #[must_use]
     pub fn to_command(&self) -> Option<BrowserCommand> {
         match self {
-            Self::Navigate { url } => Some(BrowserCommand::Navigate(normalize_navigation_target(url))),
+            Self::Navigate { url, .. } => Some(BrowserCommand::Navigate(normalize_navigation_target(url))),
             Self::Reload => Some(BrowserCommand::Reload),
             Self::Back => Some(BrowserCommand::Back),
             Self::Forward => Some(BrowserCommand::Forward),
             Self::Input { input } => Some(BrowserCommand::Input(input.clone())),
             Self::Snapshot { .. }
             | Self::Query { .. }
+            | Self::WaitForSelector { .. }
             | Self::Click { .. }
             | Self::Fill { .. }
             | Self::Scroll { .. }
@@ -197,6 +257,14 @@ fn validate_navigation(url: &str) -> Result<(), &'static str> {
         return Err("navigation URL contains control characters");
     }
     Ok(())
+}
+
+fn validate_navigation_timeout(timeout_millis: Option<u64>) -> Result<(), &'static str> {
+    match timeout_millis {
+        Some(0) => Err("navigation timeout must be at least 1 ms"),
+        Some(value) if value > MAX_NAVIGATION_TIMEOUT_MILLIS => Err("navigation timeout exceeds the engine bound"),
+        _ => Ok(()),
+    }
 }
 
 fn validate_snapshot_limit(value: u32) -> Result<(), &'static str> {
@@ -393,10 +461,95 @@ mod tests {
         };
         let oversized = BrowserControlAction::Navigate {
             url: "x".repeat(MAX_NAVIGATION_BYTES + 1),
+            wait: NavigationWait::default(),
+            timeout_millis: None,
         };
 
         assert!(invalid_point.validate().is_err());
         assert!(oversized.validate().is_err());
+    }
+
+    #[test]
+    fn wait_actions_validate_selector_and_bound_and_stay_semantic() {
+        let wait = BrowserControlAction::WaitForSelector {
+            selector: "#late".to_string(),
+            state: SelectorState::Visible,
+            timeout_millis: Some(2_500),
+        };
+        assert!(wait.validate().is_ok());
+        assert!(wait.to_command().is_none(), "waits run in the engine's semantic path");
+        assert_eq!(
+            serde_json::to_value(&wait).expect("encode"),
+            serde_json::json!({ "type": "wait_for_selector", "selector": "#late", "state": "visible", "timeout_millis": 2500 })
+        );
+        assert_eq!(
+            BrowserControlAction::WaitForSelector {
+                selector: "[".to_string(),
+                state: SelectorState::Present,
+                timeout_millis: Some(MAX_WAIT_TIMEOUT_MILLIS + 1),
+            }
+            .validate(),
+            Err("wait timeout exceeds the engine bound")
+        );
+        assert_eq!(
+            BrowserControlAction::WaitForSelector {
+                selector: String::new(),
+                state: SelectorState::Present,
+                timeout_millis: None,
+            }
+            .validate(),
+            Err("selector must not be empty")
+        );
+    }
+
+    #[test]
+    fn navigate_actions_default_to_a_committed_wait_and_keep_the_legacy_shape() {
+        let legacy: BrowserControlAction =
+            serde_json::from_value(serde_json::json!({ "type": "navigate", "url": "example.test" }))
+                .expect("legacy navigate decodes");
+        assert_eq!(
+            legacy,
+            BrowserControlAction::Navigate {
+                url: "example.test".to_string(),
+                wait: NavigationWait::Commit,
+                timeout_millis: None,
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(&legacy).expect("encode"),
+            serde_json::json!({ "type": "navigate", "url": "example.test", "wait": "commit" })
+        );
+        let explicit: BrowserControlAction = serde_json::from_value(serde_json::json!({
+            "type": "navigate", "url": "example.test", "wait": "domcontentloaded", "timeout_millis": 2000
+        }))
+        .expect("aliased wait decodes");
+        assert!(matches!(
+            explicit,
+            BrowserControlAction::Navigate {
+                wait: NavigationWait::DomContentLoaded,
+                timeout_millis: Some(2000),
+                ..
+            }
+        ));
+        assert!(explicit.validate().is_ok());
+        assert_eq!(
+            BrowserControlAction::Navigate {
+                url: "example.test".to_string(),
+                wait: NavigationWait::Commit,
+                timeout_millis: Some(0),
+            }
+            .validate(),
+            Err("navigation timeout must be at least 1 ms")
+        );
+        assert_eq!(
+            BrowserControlAction::Navigate {
+                url: "example.test".to_string(),
+                wait: NavigationWait::Commit,
+                timeout_millis: Some(MAX_NAVIGATION_TIMEOUT_MILLIS + 1),
+            }
+            .validate(),
+            Err("navigation timeout exceeds the engine bound")
+        );
     }
 
     #[test]
@@ -414,7 +567,9 @@ mod tests {
         );
         assert!(matches!(
             BrowserControlAction::Navigate {
-                url: "example.test/path".to_string()
+                url: "example.test/path".to_string(),
+                wait: NavigationWait::default(),
+                timeout_millis: None,
             }
             .to_command(),
             Some(BrowserCommand::Navigate(url)) if url == "https://example.test/path"

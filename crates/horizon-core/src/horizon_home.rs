@@ -77,6 +77,21 @@ impl HorizonHome {
     }
 
     #[must_use]
+    pub fn agent_plugin_hosts_dir(&self) -> PathBuf {
+        self.root.join("runtime").join("agent-plugins")
+    }
+
+    #[must_use]
+    pub fn agent_plugin_host_dir(&self, host_instance: &str) -> PathBuf {
+        self.agent_plugin_hosts_dir().join(safe_local_id(host_instance))
+    }
+
+    #[must_use]
+    pub fn claude_plugin_dir_for_host(&self, host_instance: &str) -> PathBuf {
+        self.agent_plugin_host_dir(host_instance).join("claude-code")
+    }
+
+    #[must_use]
     pub fn codex_integrations_dir(&self) -> PathBuf {
         self.root.join("integrations").join("codex")
     }
@@ -119,6 +134,25 @@ impl HorizonHome {
 }
 
 #[must_use]
+pub fn browser_mcp_executable() -> Option<PathBuf> {
+    browser_mcp_executable_for_process(std::process::id(), std::env::current_exe().ok())
+}
+
+fn browser_mcp_executable_for_process(process_id: u32, current_executable: Option<PathBuf>) -> Option<PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        let process_executable = PathBuf::from(format!("/proc/{process_id}/exe"));
+        if process_executable.is_file() {
+            return Some(process_executable);
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = process_id;
+
+    current_executable
+}
+
+#[must_use]
 pub(crate) fn safe_local_id(local_id: &str) -> String {
     // Always encode the exact UTF-8 bytes. Keeping an apparently safe ID
     // verbatim would make identifiers that differ only by case collide on
@@ -138,7 +172,7 @@ pub(crate) fn safe_local_id(local_id: &str) -> String {
 mod tests {
     use std::path::PathBuf;
 
-    use super::HorizonHome;
+    use super::{HorizonHome, browser_mcp_executable_for_process};
 
     #[test]
     fn session_paths_live_under_horizon_home() {
@@ -160,6 +194,14 @@ mod tests {
         assert_eq!(
             home.claude_plugin_dir(),
             PathBuf::from("/tmp/horizon-home/plugins/claude-code")
+        );
+        assert_eq!(
+            home.claude_plugin_dir_for_host("host-a"),
+            PathBuf::from("/tmp/horizon-home/runtime/agent-plugins/%686f73742d61/claude-code")
+        );
+        assert_eq!(
+            home.agent_plugin_host_dir("host-a"),
+            PathBuf::from("/tmp/horizon-home/runtime/agent-plugins/%686f73742d61")
         );
         assert_eq!(
             home.codex_browser_skill_dir(),
@@ -217,5 +259,27 @@ mod tests {
                 "{local_id} must use the canonical path encoding"
             );
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn browser_mcp_executable_uses_the_live_process_after_the_original_path_is_deleted() {
+        let deleted_path = PathBuf::from("/tmp/removed-worktree/target/release/horizon (deleted)");
+
+        let executable = browser_mcp_executable_for_process(std::process::id(), Some(deleted_path));
+
+        assert_eq!(
+            executable,
+            Some(PathBuf::from(format!("/proc/{}/exe", std::process::id())))
+        );
+    }
+
+    #[test]
+    fn browser_mcp_executable_falls_back_when_process_lookup_is_unavailable() {
+        let current_executable = PathBuf::from("/opt/horizon");
+
+        let executable = browser_mcp_executable_for_process(u32::MAX, Some(current_executable.clone()));
+
+        assert_eq!(executable, Some(current_executable));
     }
 }

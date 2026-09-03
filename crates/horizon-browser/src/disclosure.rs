@@ -39,9 +39,11 @@ impl AutomationDisclosurePolicy {
     }
 }
 
-/// A callable `WebDriver` `BiDi` preload function. It changes only the standard
-/// `navigator.webdriver` value and deliberately avoids broad fingerprint
-/// spoofing that would create internally inconsistent browser properties.
+/// A callable `WebDriver` `BiDi` preload function used by Firefox. Chromium
+/// relies on `--disable-blink-features=AutomationControlled` instead of this
+/// getter, because a script-defined `navigator.webdriver` accessor is itself a
+/// detection signal. The function changes only the standard value and
+/// deliberately avoids broad fingerprint spoofing.
 pub(crate) const COMMON_SIGNAL_PRELOAD_FUNCTION: &str = r#"() => {
     const prototype = globalThis.Navigator && globalThis.Navigator.prototype;
     if (!prototype) return;
@@ -72,10 +74,6 @@ pub(crate) const CHROMIUM_USER_AGENT_METADATA_EXPRESSION: &str = r#"navigator.us
 /// A temporary hidden target uses this network-free page to read the browser's
 /// own metadata before any caller-supplied page is allowed to execute.
 pub(crate) const CHROMIUM_DISCLOSURE_BOOTSTRAP_URL: &str = "chrome://version/";
-
-pub(crate) fn cdp_preload_source() -> String {
-    format!("({COMMON_SIGNAL_PRELOAD_FUNCTION})()")
-}
 
 pub(crate) fn chromium_user_agent_needs_override(browser_version: &serde_json::Value) -> Result<bool, &'static str> {
     browser_version
@@ -118,8 +116,25 @@ pub(crate) fn chromium_user_agent_override(
     }
     Ok(Some(serde_json::json!({
         "userAgent": user_agent.replace("HeadlessChrome/", "Chrome/"),
-        "userAgentMetadata": metadata,
+        "userAgentMetadata": rewrite_headless_chrome_brands(metadata),
     })))
+}
+
+/// Rename only the `HeadlessChrome` Client Hint brand. Platform, architecture,
+/// versions, GREASE brands, and other native fields stay browser-owned.
+fn rewrite_headless_chrome_brands(metadata: &serde_json::Map<String, serde_json::Value>) -> serde_json::Value {
+    let mut rewritten = serde_json::Value::Object(metadata.clone());
+    for field in ["brands", "fullVersionList"] {
+        let Some(serde_json::Value::Array(list)) = rewritten.get_mut(field) else {
+            continue;
+        };
+        for entry in list {
+            if entry.get("brand").and_then(serde_json::Value::as_str) == Some("HeadlessChrome") {
+                entry["brand"] = serde_json::Value::String("Chrome".to_string());
+            }
+        }
+    }
+    rewritten
 }
 
 #[cfg(test)]
@@ -139,11 +154,10 @@ mod tests {
     }
 
     #[test]
-    fn cdp_source_invokes_the_same_preload_function_used_by_bidi() {
-        let source = cdp_preload_source();
-        assert!(source.starts_with('('));
-        assert!(source.ends_with(")()"));
-        assert!(source.contains(COMMON_SIGNAL_PRELOAD_FUNCTION));
+    fn firefox_preload_only_patches_navigator_webdriver() {
+        assert!(COMMON_SIGNAL_PRELOAD_FUNCTION.contains("webdriver"));
+        assert!(COMMON_SIGNAL_PRELOAD_FUNCTION.contains("get: () => false"));
+        assert!(!COMMON_SIGNAL_PRELOAD_FUNCTION.contains("userAgent"));
     }
 
     #[test]
@@ -157,8 +171,16 @@ mod tests {
                 "value": {
                     "architecture": "x86",
                     "bitness": "64",
-                    "brands": [{ "brand": "Chromium", "version": "151" }],
-                    "fullVersionList": [{ "brand": "Chromium", "version": "151.0.7922.108" }],
+                    "brands": [
+                        { "brand": "HeadlessChrome", "version": "151" },
+                        { "brand": "Chromium", "version": "151" },
+                        { "brand": "Not.A/Brand", "version": "24" }
+                    ],
+                    "fullVersionList": [
+                        { "brand": "HeadlessChrome", "version": "151.0.7922.108" },
+                        { "brand": "Chromium", "version": "151.0.7922.108" },
+                        { "brand": "Not.A/Brand", "version": "24.0.0.0" }
+                    ],
                     "mobile": false,
                     "model": "",
                     "platform": "Linux",
@@ -175,7 +197,25 @@ mod tests {
             override_params["userAgent"],
             "Mozilla/5.0 Chrome-ish Chrome/151.0.7922.108 Safari/537.36"
         );
-        assert_eq!(override_params["userAgentMetadata"], metadata["result"]["value"]);
+        assert_eq!(
+            override_params["userAgentMetadata"]["brands"],
+            serde_json::json!([
+                { "brand": "Chrome", "version": "151" },
+                { "brand": "Chromium", "version": "151" },
+                { "brand": "Not.A/Brand", "version": "24" }
+            ])
+        );
+        assert_eq!(
+            override_params["userAgentMetadata"]["fullVersionList"],
+            serde_json::json!([
+                { "brand": "Chrome", "version": "151.0.7922.108" },
+                { "brand": "Chromium", "version": "151.0.7922.108" },
+                { "brand": "Not.A/Brand", "version": "24.0.0.0" }
+            ])
+        );
+        assert_eq!(override_params["userAgentMetadata"]["platform"], "Linux");
+        assert_eq!(override_params["userAgentMetadata"]["architecture"], "x86");
+        assert!(!override_params.to_string().contains("HeadlessChrome"));
     }
 
     #[test]

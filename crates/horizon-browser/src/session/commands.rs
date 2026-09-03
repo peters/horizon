@@ -8,7 +8,10 @@ use std::time::{Duration, Instant};
 use crate::cdp::CdpLink;
 use crate::frames::FrameSlot;
 use crate::input::{BrowserInputCdpExt, is_user_activity};
+use crate::process::ChromeProcess;
 use crate::{AgentAction, BrowserAuditStatus, BrowserButton, BrowserControlFailure, BrowserInput};
+
+use crate::navigation::AgentActionExecution;
 
 use super::{
     BrowserCommand, BrowserEventSender, CommandReceiver, DriverState, SCROLLBAR_LAYOUT_RETRY_DELAY,
@@ -48,14 +51,39 @@ impl DriverState {
         event_tx: &BrowserEventSender,
         frame_slot: &Arc<FrameSlot>,
         actions: Vec<AgentAction>,
+        chrome: &mut ChromeProcess,
     ) -> bool {
         for request in actions {
+            // A blocking action later in the batch must not delay the typed
+            // timeout of a navigation or wait dispatched earlier in it.
+            self.tick_pending_navigation();
+            self.tick_pending_wait(link, event_tx, frame_slot, chrome);
             if let Err(message) = request.action.validate() {
                 self.audit_agent_action(&request, BrowserAuditStatus::Rejected);
                 self.complete_agent_action(&request, Err(BrowserControlFailure::new("invalid_input", message)));
                 continue;
             }
             self.audit_agent_action(&request, BrowserAuditStatus::Dispatched);
+            if matches!(request.action, crate::BrowserControlAction::Navigate { .. }) {
+                // Navigation settles from page events; a dispatch-only wait
+                // completes here, everything else stays pending.
+                if let AgentActionExecution::Done(result) =
+                    self.begin_agent_navigation(link, event_tx, frame_slot, &request)
+                {
+                    self.complete_agent_action(&request, result);
+                }
+                continue;
+            }
+            if matches!(request.action, crate::BrowserControlAction::WaitForSelector { .. }) {
+                // Waits are observed from the driver loop; only a wait that
+                // is already satisfied (or invalid) completes here.
+                if let AgentActionExecution::Done(result) =
+                    self.begin_agent_wait(link, event_tx, frame_slot, &request, chrome)
+                {
+                    self.complete_agent_action(&request, result);
+                }
+                continue;
+            }
             let (result, stop) = self.execute_agent_action(link, event_tx, frame_slot, &request);
             self.complete_agent_action(&request, result);
             if stop {
@@ -94,17 +122,26 @@ impl DriverState {
             BrowserCommand::Stop => Ok(true),
             BrowserCommand::Navigate(url) => {
                 self.invalidate_scrollbar_layout();
+                // The user (or a non-agent caller) took over the page: a
+                // pending agent navigation can no longer claim the outcome.
+                self.supersede_pending_navigation(Instant::now());
                 self.navigate_to(link, event_tx, frame_slot, &url)?;
                 Ok(false)
             }
             BrowserCommand::Reload => {
                 self.invalidate_scrollbar_layout();
+                self.supersede_pending_navigation(Instant::now());
+                // Marked before dispatch: events routed during the command's
+                // round trip (a fast reload's commit or stop) may already
+                // clear it, and must not be overwritten afterwards.
+                self.top_frame_navigating = true;
                 match self.send_page_command(link, event_tx, frame_slot, "Page.reload", &serde_json::json!({})) {
                     Ok(_) => {
                         self.pending_restart_at = Some(Instant::now());
                         Ok(false)
                     }
                     Err(error) => {
+                        self.top_frame_navigating = false;
                         Err(self.page_command_failure(event_tx, "reload", "protocol_error", error.to_string()))
                     }
                 }
@@ -223,6 +260,7 @@ impl DriverState {
     }
 
     fn scroll_page_to(&mut self, link: &mut CdpLink, target: f64) {
+        self.request_runtime_for_sessions(link);
         let expression = format!("window.scrollTo(window.scrollX, {target:.3})");
         let Some(session) = self.session_id.clone() else {
             return;
@@ -244,6 +282,15 @@ impl DriverState {
             }
             self.schedule_scrollbar_layout_refresh(SCROLLBAR_LAYOUT_RETRY_DELAY);
         }
+    }
+
+    pub(super) fn viewport_override_params(width: u32, height: u32) -> serde_json::Value {
+        serde_json::json!({
+            "width": width,
+            "height": height,
+            "deviceScaleFactor": 0,
+            "mobile": false,
+        })
     }
 
     pub(super) fn invalidate_scrollbar_layout(&mut self) {
@@ -382,14 +429,7 @@ impl DriverState {
             event_tx,
             frame_slot,
             "Emulation.setDeviceMetricsOverride",
-            &serde_json::json!({
-                "width": width,
-                "height": height,
-                "screenWidth": width,
-                "screenHeight": height,
-                "deviceScaleFactor": 1,
-                "mobile": false,
-            }),
+            &Self::viewport_override_params(width, height),
         ) {
             Ok(_) => {
                 self.commit_viewport(width, height);
@@ -459,6 +499,7 @@ impl DriverState {
         frame_slot: &Arc<FrameSlot>,
         delta: i64,
     ) -> Result<(), BrowserControlFailure> {
+        self.supersede_pending_navigation(Instant::now());
         let Some(session) = self.session_id.clone() else {
             return Err(self.page_command_failure(
                 event_tx,
@@ -523,6 +564,9 @@ impl DriverState {
                 "CDP returned a history entry without an identifier".to_string(),
             ));
         };
+        // Marked before dispatch so events routed during the round trip can
+        // already clear it (see the reload command).
+        self.top_frame_navigating = true;
         match self.send_page_command(
             link,
             event_tx,
@@ -535,6 +579,7 @@ impl DriverState {
                 Ok(())
             }
             Err(error) => {
+                self.top_frame_navigating = false;
                 Err(self.page_command_failure(event_tx, "history traversal", "protocol_error", error.to_string()))
             }
         }
@@ -627,6 +672,18 @@ mod tests {
             panic!("test metrics should describe a valid layout");
         };
         layout
+    }
+
+    #[test]
+    fn viewport_override_does_not_claim_the_panel_is_the_display() {
+        let params = DriverState::viewport_override_params(1280, 800);
+
+        assert_eq!(params["width"], 1280);
+        assert_eq!(params["height"], 800);
+        assert_eq!(params["deviceScaleFactor"], 0);
+        assert_eq!(params["mobile"], serde_json::Value::Bool(false));
+        assert!(params.get("screenWidth").is_none());
+        assert!(params.get("screenHeight").is_none());
     }
 
     #[test]

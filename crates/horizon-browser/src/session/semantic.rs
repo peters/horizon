@@ -8,7 +8,7 @@ use crate::frames::FrameSlot;
 use crate::input::BrowserInputCdpExt;
 use crate::semantic::{
     bounded_control_value, check_script_error, parse_target_rect, scan_expression, scroll_expression,
-    target_rect_expression,
+    target_rect_expression, wait_scan_expression,
 };
 use crate::{
     AgentAction, BrowserButton, BrowserControlAction, BrowserControlFailure, BrowserControlValue, BrowserInput,
@@ -38,6 +38,10 @@ impl DriverState {
             BrowserControlAction::Query { selector, max_results } => {
                 self.semantic_query(link, event_tx, frame_slot, selector, *max_results)
             }
+            BrowserControlAction::WaitForSelector { .. } => Err(BrowserControlFailure::new(
+                "invalid_action_state",
+                "selector waits are observed from the driver loop",
+            )),
             BrowserControlAction::Click { target, count } => {
                 self.semantic_click(link, event_tx, frame_slot, target, *count)
             }
@@ -84,7 +88,7 @@ impl DriverState {
         })
     }
 
-    fn semantic_query(
+    pub(super) fn semantic_query(
         &mut self,
         link: &mut crate::cdp::CdpLink,
         event_tx: &BrowserEventSender,
@@ -92,11 +96,64 @@ impl DriverState {
         selector: &str,
         max_results: u32,
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
-        let value = self.evaluate_json(
+        self.semantic_query_within(link, event_tx, frame_slot, selector, max_results, super::CALL_TIMEOUT)
+    }
+
+    /// A selector scan that does not register references: for judging a wait
+    /// condition without disturbing refs a concurrent snapshot handed out.
+    /// Returns the page generation, the peeked nodes, and the raw scan.
+    pub(super) fn semantic_peek_within(
+        &mut self,
+        link: &mut crate::cdp::CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        selector: &str,
+        max_results: u32,
+        timeout: std::time::Duration,
+    ) -> Result<
+        (
+            u64,
+            Vec<crate::BrowserNode>,
+            Option<crate::semantic::ScanSummary>,
+            Value,
+        ),
+        BrowserControlFailure,
+    > {
+        let value = self.evaluate_json_within(
+            link,
+            event_tx,
+            frame_slot,
+            &wait_scan_expression(selector, max_results),
+            timeout,
+        )?;
+        let peeked = self.semantic.peek_nodes(&value)?;
+        Ok((peeked.generation, peeked.nodes, peeked.summary, value))
+    }
+
+    /// Register a previously peeked scan as the current references.
+    pub(super) fn semantic_register_scan(
+        &mut self,
+        value: Value,
+    ) -> Result<(u64, u64, Vec<crate::BrowserNode>), BrowserControlFailure> {
+        self.semantic.register_nodes(value)
+    }
+
+    /// A selector query whose page evaluation may block for at most `timeout`.
+    pub(super) fn semantic_query_within(
+        &mut self,
+        link: &mut crate::cdp::CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        selector: &str,
+        max_results: u32,
+        timeout: std::time::Duration,
+    ) -> Result<BrowserControlValue, BrowserControlFailure> {
+        let value = self.evaluate_json_within(
             link,
             event_tx,
             frame_slot,
             &scan_expression(Some(selector), max_results),
+            timeout,
         )?;
         let (generation, revision, nodes) = self.semantic.register_nodes(value)?;
         Ok(BrowserControlValue::Nodes {
@@ -187,8 +244,19 @@ impl DriverState {
         frame_slot: &Arc<FrameSlot>,
         expression: &str,
     ) -> Result<Value, BrowserControlFailure> {
+        self.evaluate_json_within(link, event_tx, frame_slot, expression, super::CALL_TIMEOUT)
+    }
+
+    fn evaluate_json_within(
+        &mut self,
+        link: &mut crate::cdp::CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        expression: &str,
+        timeout: std::time::Duration,
+    ) -> Result<Value, BrowserControlFailure> {
         let result = self
-            .send_page_command(
+            .send_page_command_within(
                 link,
                 event_tx,
                 frame_slot,
@@ -199,6 +267,7 @@ impl DriverState {
                     "awaitPromise": true,
                     "userGesture": true,
                 }),
+                timeout,
             )
             .map_err(|error| BrowserControlFailure::new("protocol_error", error.to_string()))?;
         if let Some(exception) = result.get("exceptionDetails") {

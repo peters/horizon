@@ -1,14 +1,13 @@
-//! Desktop-window dictation: sink selection, clipboard paste, global PTT.
-
-use std::sync::{Mutex, OnceLock, PoisonError};
+//! Desktop-window dictation: sink selection, accessibility insertion, global PTT.
 
 use horizon_core::{PanelId, ShortcutBinding, ShortcutKey, SpeechHotkeyMode};
-use horizon_cursor::{GlobalHotkeys, Hotkey, HotkeyError, HotkeyEvent, HotkeyKey, InjectError, send_paste_chord};
+use horizon_cursor::{
+    GlobalHotkeys, Hotkey, HotkeyError, HotkeyEvent, HotkeyKey, InjectError, capture_focused_accessible_target,
+    insert_text_into_focused_accessible, release_focused_accessible_target,
+};
 
 use super::super::HorizonApp;
 use super::SpeechSink;
-
-static CLIPBOARD_OWNER: OnceLock<Mutex<Option<arboard::Clipboard>>> = OnceLock::new();
 
 /// Choose the insert sink for a push-to-talk press.
 ///
@@ -33,20 +32,18 @@ pub(crate) fn inject_desktop_transcript(text: &str) -> Result<(), InjectError> {
     if let Some(result) = take_test_inject_result(text) {
         return result;
     }
-    let mut clipboard = arboard::Clipboard::new().map_err(|_| InjectError::Clipboard("clipboard unavailable"))?;
-    clipboard
-        .set_text(text)
-        .map_err(|_| InjectError::Clipboard("failed to copy transcript"))?;
-    let result = send_paste_chord();
-    retain_clipboard_owner(clipboard);
-    result
+    insert_text_into_focused_accessible(text)
 }
 
-fn retain_clipboard_owner(clipboard: arboard::Clipboard) {
-    *CLIPBOARD_OWNER
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Some(clipboard);
+pub(crate) fn prepare_desktop_target() -> Result<(), InjectError> {
+    if let Some(result) = test_prepare_result() {
+        return result;
+    }
+    capture_focused_accessible_target()
+}
+
+pub(crate) fn release_desktop_target() {
+    release_focused_accessible_target();
 }
 
 /// Keep the X11 grab while a hold is in flight so a surface opening cannot
@@ -86,17 +83,28 @@ pub(crate) fn hotkey_from_binding(binding: ShortcutBinding) -> Option<Hotkey> {
         ShortcutKey::Plus => HotkeyKey::Plus,
         ShortcutKey::Escape => return None,
     };
+    let ctrl = if cfg!(target_os = "macos") {
+        binding.modifiers.ctrl()
+    } else {
+        binding.modifiers.command() || binding.modifiers.ctrl()
+    };
+    let super_ = if cfg!(target_os = "macos") {
+        binding.modifiers.command() || binding.modifiers.mac_cmd()
+    } else {
+        binding.modifiers.mac_cmd()
+    };
     Some(Hotkey {
-        ctrl: binding.modifiers.command() || binding.modifiers.ctrl(),
+        ctrl,
         shift: binding.modifiers.shift(),
         alt: binding.modifiers.alt(),
-        super_: binding.modifiers.mac_cmd(),
+        super_,
         key,
     })
 }
 
 impl HorizonApp {
     pub(in crate::app) fn reset_speech_global_hotkeys(&mut self) {
+        release_desktop_target();
         self.speech_global_hotkeys = None;
         self.speech_global_hotkeys_tried = false;
         self.speech_global_hotkeys_suspended = false;
@@ -187,6 +195,14 @@ type InjectHook = fn(&str) -> Result<(), InjectError>;
 #[cfg(test)]
 static TEST_INJECT: std::sync::OnceLock<std::sync::Mutex<Option<InjectHook>>> = std::sync::OnceLock::new();
 
+#[cfg(all(test, feature = "speech"))]
+type PrepareHook = fn() -> Result<(), InjectError>;
+
+#[cfg(all(test, feature = "speech"))]
+thread_local! {
+    static TEST_PREPARE: std::cell::Cell<Option<PrepareHook>> = const { std::cell::Cell::new(None) };
+}
+
 #[cfg(test)]
 fn take_test_inject_result(text: &str) -> Option<Result<(), InjectError>> {
     TEST_INJECT
@@ -194,6 +210,16 @@ fn take_test_inject_result(text: &str) -> Option<Result<(), InjectError>> {
         .lock()
         .ok()?
         .map(|hook| hook(text))
+}
+
+#[cfg(all(test, feature = "speech"))]
+fn test_prepare_result() -> Option<Result<(), InjectError>> {
+    TEST_PREPARE.with(std::cell::Cell::get).map(|hook| hook())
+}
+
+#[cfg(not(all(test, feature = "speech")))]
+fn test_prepare_result() -> Option<Result<(), InjectError>> {
+    None
 }
 
 #[cfg(not(test))]
@@ -207,6 +233,11 @@ pub(crate) fn set_test_inject_hook(hook: Option<InjectHook>) {
         .get_or_init(|| std::sync::Mutex::new(None))
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = hook;
+}
+
+#[cfg(all(test, feature = "speech"))]
+pub(crate) fn set_test_prepare_hook(hook: Option<PrepareHook>) {
+    TEST_PREPARE.with(|slot| slot.set(hook));
 }
 
 #[cfg(test)]

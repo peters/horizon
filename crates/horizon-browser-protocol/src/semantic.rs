@@ -39,10 +39,97 @@ pub struct BrowserSnapshot {
     pub nodes: Vec<BrowserNode>,
 }
 
+/// Selector condition a wait action observes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SelectorState {
+    /// At least one element matches.
+    Present,
+    /// At least one matching element is rendered visible.
+    Visible,
+    /// No matching element is visible (an empty match set counts).
+    Hidden,
+}
+
+impl SelectorState {
+    #[must_use]
+    pub fn satisfied_by(self, nodes: &[BrowserNode]) -> bool {
+        match self {
+            Self::Present => !nodes.is_empty(),
+            Self::Visible => nodes.iter().any(|node| node.visible),
+            Self::Hidden => nodes.iter().all(|node| !node.visible),
+        }
+    }
+}
+
+/// Result of a satisfied wait action. Timeouts and cancellations are failed
+/// actions with typed codes (`wait_timeout`, `wait_navigation_invalidated`,
+/// `wait_ownership_lost`, `wait_handoff_pending`, `wait_superseded`,
+/// `browser_unavailable`).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+pub struct WaitOutcome {
+    pub state: SelectorState,
+    pub generation: u64,
+    pub revision: u64,
+    /// Nodes matching the selector when the condition was met.
+    pub nodes: Vec<BrowserNode>,
+    /// Time from the caller queuing the action until the condition was met.
+    pub elapsed_millis: u64,
+    /// Page observations the engine needed.
+    pub polls: u32,
+}
+
+/// Where a navigation action stood when its outcome was reported.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NavigationState {
+    /// The command was handed to the backend; its acceptance was not awaited
+    /// and nothing about the page is known yet.
+    Dispatched,
+    /// The top-level document committed; `committed_url` is authoritative.
+    Committed,
+    /// The committed document fired `DOMContentLoaded`.
+    DomContentLoaded,
+    /// The requested readiness did not arrive within the bound; the fields
+    /// carry the latest page state the engine observed.
+    TimedOut,
+    /// A later navigation action replaced this one before it settled.
+    Superseded,
+}
+
+/// Typed result of a navigation action. Failures (unreachable destination,
+/// rejected command) are reported as a failed action, not as a state here.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+pub struct NavigationOutcome {
+    /// Destination after omnibox normalization.
+    pub requested_url: String,
+    /// Readiness the caller asked to wait for.
+    pub wait: crate::NavigationWait,
+    pub state: NavigationState,
+    /// URL of the committed top-level document, when one committed during
+    /// this action.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub committed_url: Option<String>,
+    /// Title observed for the committed document, when already known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Whether the committed document was still loading when reported.
+    pub loading: bool,
+    /// The committed URL differs from the requested destination.
+    pub redirected: bool,
+    pub elapsed_millis: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BrowserControlValue {
     Accepted,
+    Navigation {
+        navigation: NavigationOutcome,
+    },
+    Wait {
+        wait: WaitOutcome,
+    },
     Snapshot {
         snapshot: BrowserSnapshot,
     },

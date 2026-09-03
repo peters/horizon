@@ -10,12 +10,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::cdp::{CdpEvent, CdpLink, CdpMsg};
+use crate::challenge::{DocumentCommit, REJECTION_MESSAGE};
 use crate::frames::FrameSlot;
 
 use super::clipboard::target_event_session_id;
-use super::{
-    BrowserEvent, BrowserEventSender, DriverState, TITLE_BINDING_NAME, normalized_committed_url, publish_frame,
-};
+use super::{BrowserEvent, BrowserEventSender, DriverState, normalized_committed_url, publish_frame};
+use crate::navigation::NavigationSignal;
 
 impl DriverState {
     pub(super) fn tick_title_fetch(
@@ -42,57 +42,29 @@ impl DriverState {
         event_tx: &BrowserEventSender,
         frame_slot: &Arc<FrameSlot>,
     ) {
-        let Some(session) = self.session_id.clone() else {
+        let Some(target_id) = self.target_id.clone() else {
             return;
-        };
-        // Fetch title and href together: after a navigation the session's
-        // execution context can still be the *previous* document's, so a
-        // bare `document.title` read can return the old page's title. The
-        // href check detects that and schedules a retry.
-        let params = match self.title_context_id {
-            Some(context_id) => serde_json::json!({
-                "expression": "JSON.stringify({ t: document.title, h: location.href })",
-                "returnByValue": true,
-                "contextId": context_id,
-            }),
-            None => serde_json::json!({
-                "expression": "JSON.stringify({ t: document.title, h: location.href })",
-                "returnByValue": true,
-            }),
         };
         let Ok(result) = self.call_and_ack(
             link,
             event_tx,
             frame_slot,
-            "Runtime.evaluate",
-            &params,
-            Some(session.as_str()),
+            "Target.getTargetInfo",
+            &serde_json::json!({ "targetId": target_id }),
+            None,
         ) else {
             return;
         };
-        let Some(payload) = result.pointer("/result/value").and_then(|v| v.as_str()) else {
-            return;
-        };
-        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(payload) else {
-            return;
-        };
-        let Some(href) = parsed.pointer("/h").and_then(|v| v.as_str()) else {
-            return;
-        };
-        if !href_matches_url(href, &self.url) {
-            if self.title_fetch_retries < 10 {
-                self.title_fetch_retries += 1;
-                self.title_fetch_at = Some(Instant::now() + Duration::from_millis(500));
-            }
+        if self.retain_frame_during_navigation {
             return;
         }
-        self.update_url_from_page(event_tx, href);
-        let Some(title) = parsed.pointer("/t").and_then(|v| v.as_str()) else {
+        let Some(title) = result.pointer("/targetInfo/title").and_then(serde_json::Value::as_str) else {
             return;
         };
         self.update_title(event_tx, title);
     }
 
+    #[cfg(test)]
     fn update_url_from_page(&mut self, event_tx: &BrowserEventSender, href: &str) {
         let href = normalized_committed_url(href);
         if href == self.url {
@@ -101,7 +73,14 @@ impl DriverState {
         self.url = href.to_string();
         self.manifest_dirty = true;
         self.write_manifest(false);
+        self.publish_url_changed(event_tx);
+    }
+
+    fn publish_url_changed(&self, event_tx: &BrowserEventSender) {
         let _ = event_tx.send(BrowserEvent::UrlChanged(self.url.clone()));
+        if self.challenge_loop.rejection_is_reported() {
+            let _ = event_tx.send(BrowserEvent::NavigationFailed(REJECTION_MESSAGE.to_string()));
+        }
     }
 
     fn update_title(&mut self, event_tx: &BrowserEventSender, title: &str) {
@@ -112,26 +91,7 @@ impl DriverState {
         self.manifest_dirty = true;
         self.write_manifest(false);
         let _ = event_tx.send(BrowserEvent::Title(title.to_string()));
-    }
-
-    /// Track the top-level document's default execution context for the
-    /// title fetch. Iframes also publish `isDefault` contexts, so their
-    /// `frameId` must not replace the context used for page metadata.
-    fn note_execution_context(&mut self, event: &CdpEvent<'_>) {
-        if event.method == "Runtime.executionContextCreated"
-            && let Some(id) = default_context_id_for_frame(event.params, self.main_frame_id.as_deref())
-        {
-            self.title_context_id = Some(id);
-        } else if event.method == "Runtime.executionContextsCleared" {
-            self.title_context_id = None;
-        } else if let Some(id) = event
-            .params
-            .get("executionContextId")
-            .and_then(serde_json::Value::as_u64)
-            && self.title_context_id == Some(id)
-        {
-            self.title_context_id = None;
-        }
+        self.observe_navigation_signal(NavigationSignal::Title(title));
     }
 
     pub(super) fn handle_message(
@@ -149,6 +109,16 @@ impl DriverState {
             return;
         };
         if self.handle_clipboard_response(id, result.as_ref(), error.as_ref(), event_tx) {
+            return;
+        }
+        if self.handle_navigate_response(event_tx, id, result.as_ref(), error.as_ref()) {
+            return;
+        }
+        if self.handle_screencast_response(id, error.as_ref()) {
+            return;
+        }
+        if self.handle_runtime_enable_response(id, error.as_ref()) {
+            self.flush_pending_clipboard(link);
             return;
         }
         if self.handle_scrollbar_layout_response(id, result.as_ref(), error.is_some()) {
@@ -243,16 +213,15 @@ impl DriverState {
                 if target_event_session_id(event.params, event.session_id) == self.session_id.as_deref() {
                     self.session_id = None;
                     self.screencast_on = false;
+                    self.screencast_request_id = None;
+                    self.navigate_request_id = None;
                     self.pending_viewport_capture_at = None;
                     self.viewport_capture_request_id = None;
                     self.invalidate_scrollbar_layout();
                     self.reset_clipboard_tracking();
-                    // Drop the tracked context: the next title fetch must
-                    // use a fresh default context, not a dead contextId.
-                    self.title_context_id = None;
                     self.main_frame_id = None;
                     self.title_fetch_at = None;
-                    self.title_fetch_retries = 0;
+                    self.reset_runtime_enable_state();
                     // Unexpected detach (the driver never detaches its own
                     // page session): the target usually still exists —
                     // re-bind instead of freezing. `pending_restart_tick`
@@ -285,16 +254,6 @@ impl DriverState {
                     self.update_title(event_tx, title);
                 }
             }
-            "Runtime.bindingCalled" => {
-                if !self.retain_frame_during_navigation
-                    && on_page_session
-                    && let Some((title, href)) = title_from_binding(event.params)
-                    && href_matches_url(&href, &self.url)
-                {
-                    self.update_url_from_page(event_tx, &href);
-                    self.update_title(event_tx, &title);
-                }
-            }
             "Page.frameNavigated" => self.handle_frame_navigated(event_tx, event, on_page_session),
             "Page.navigatedWithinDocument" => {
                 self.handle_same_document_navigation(event_tx, event, on_page_session);
@@ -302,17 +261,29 @@ impl DriverState {
             "Page.loadEventFired" => {
                 if on_page_session {
                     let _ = event_tx.send(BrowserEvent::Loading(false));
-                    self.title_fetch_retries = 0;
                     self.title_fetch_at = Some(Instant::now() + Duration::from_millis(400));
+                }
+            }
+            "Page.lifecycleEvent" => {
+                if on_page_session {
+                    self.handle_lifecycle_event(event);
+                }
+            }
+            "Page.frameStartedLoading" | "Page.frameStoppedLoading" => {
+                if on_page_session
+                    && event.params.get("frameId").and_then(|id| id.as_str()) == self.main_frame_id.as_deref()
+                {
+                    // Covers navigations no command of ours started (a link,
+                    // a meta refresh, a script) and the commands that do not
+                    // retain the frame; a stop without a commit ends it.
+                    self.top_frame_navigating = event.method == "Page.frameStartedLoading";
                 }
             }
             "Runtime.executionContextCreated"
             | "Runtime.executionContextDestroyed"
             | "Runtime.executionContextsCleared" => {
-                if on_page_session {
-                    self.note_execution_context(&event);
-                }
                 self.note_clipboard_execution_context(&event);
+                self.flush_pending_clipboard(link);
             }
             "Page.screencastFrame" => self.handle_screencast_frame(link, event_tx, frame_slot, event),
             _ => {}
@@ -330,11 +301,14 @@ impl DriverState {
         self.target_id = None;
         self.main_frame_id = None;
         self.screencast_on = false;
+        self.screencast_request_id = None;
+        self.navigate_request_id = None;
         self.pending_viewport_capture_at = None;
         self.viewport_capture_request_id = None;
         self.invalidate_scrollbar_layout();
         self.reset_clipboard_tracking();
         self.pending_reattach = false;
+        self.reset_runtime_enable_state();
         self.manifest_dirty = true;
         true
     }
@@ -353,6 +327,7 @@ impl DriverState {
         }
         self.invalidate_scrollbar_layout();
         self.semantic.invalidate();
+        self.top_frame_navigating = false;
         self.main_frame_id = frame.get("id").and_then(|id| id.as_str()).map(str::to_string);
         if let Some(unreachable_url) = frame
             .get("unreachableUrl")
@@ -363,31 +338,68 @@ impl DriverState {
             self.navigation_failed = true;
             self.interaction_started_at = None;
             self.title_fetch_at = None;
-            let _ = event_tx.send(BrowserEvent::NavigationFailed(format!(
-                "could not navigate to {unreachable_url}: the page was unreachable"
-            )));
+            let message = format!("could not navigate to {unreachable_url}: the page was unreachable");
+            let _ = event_tx.send(BrowserEvent::NavigationFailed(message.clone()));
             let _ = event_tx.send(BrowserEvent::Loading(false));
+            let loader_id = frame.get("loaderId").and_then(|id| id.as_str());
+            self.observe_navigation_signal(NavigationSignal::Failed {
+                message: &message,
+                id: loader_id,
+            });
             return;
         }
         self.retain_frame_during_navigation = false;
         self.navigation_failed = false;
-        if let Some(target_url) = frame.get("url").and_then(|url| url.as_str())
-            && normalized_committed_url(target_url) != self.url
-        {
-            self.url = normalized_committed_url(target_url).to_string();
+        let previous_url = self.url.clone();
+        let committed_url = frame
+            .get("url")
+            .and_then(|url| url.as_str())
+            .map_or(self.url.as_str(), normalized_committed_url)
+            .to_string();
+        let document_commit = self
+            .challenge_loop
+            .document_committed(&committed_url, frame.get("loaderId").and_then(|id| id.as_str()));
+        if committed_url != self.url {
+            self.url = committed_url;
             self.manifest_dirty = true;
         }
         self.pending_restart_at = Some(Instant::now());
         // A back/forward-cache restore can commit `frameNavigated` without a
         // later `loadEventFired`. Always schedule the title read here so the
         // panel cannot retain the destination page's title after history
-        // navigation. The href guard in `fetch_title` retries if the new
-        // execution context is not ready yet.
-        self.title_fetch_retries = 0;
+        // navigation.
         self.title_fetch_at = Some(Instant::now() + Duration::from_millis(400));
         self.write_manifest(true);
-        let _ = event_tx.send(BrowserEvent::UrlChanged(self.url.clone()));
+        match document_commit {
+            DocumentCommit::Rejected if previous_url == self.url => {}
+            DocumentCommit::Normal | DocumentCommit::Recovered | DocumentCommit::Rejected => {
+                self.publish_url_changed(event_tx);
+            }
+        }
         let _ = event_tx.send(BrowserEvent::Loading(true));
+        let committed = self.url.clone();
+        let loader_id = frame.get("loaderId").and_then(|id| id.as_str());
+        self.observe_navigation_signal(NavigationSignal::Committed {
+            url: &committed,
+            id: loader_id,
+        });
+    }
+
+    /// Feed loader-scoped readiness of the main frame to a pending agent
+    /// navigation; other frames and lifecycle phases are ignored.
+    fn handle_lifecycle_event(&mut self, event: CdpEvent<'_>) {
+        let frame_id = event.params.get("frameId").and_then(|id| id.as_str());
+        if frame_id.is_none() || frame_id != self.main_frame_id.as_deref() {
+            return;
+        }
+        let loader_id = event.params.get("loaderId").and_then(|id| id.as_str());
+        match event.params.get("name").and_then(|name| name.as_str()) {
+            Some("DOMContentLoaded") => {
+                self.observe_navigation_signal(NavigationSignal::DomContentLoaded { id: loader_id });
+            }
+            Some("load") => self.observe_navigation_signal(NavigationSignal::Load { id: loader_id }),
+            _ => {}
+        }
     }
 
     fn handle_same_document_navigation(
@@ -410,6 +422,14 @@ impl DriverState {
             return;
         }
         self.retain_frame_during_navigation = false;
+        // A same-document history traversal (a hash or history-state entry)
+        // completes here rather than through frameNavigated or
+        // frameStoppedLoading, so the top-frame navigation it started ends
+        // here too. Invalidate first so a wait cannot observe the old
+        // generation, have this event start and settle between loop ticks,
+        // and then be released against the new history entry.
+        self.semantic.invalidate();
+        self.top_frame_navigating = false;
         self.navigation_failed = false;
         self.invalidate_scrollbar_layout();
         let url = normalized_committed_url(target_url);
@@ -419,7 +439,8 @@ impl DriverState {
         self.url = url.to_string();
         self.manifest_dirty = true;
         self.write_manifest(true);
-        let _ = event_tx.send(BrowserEvent::UrlChanged(self.url.clone()));
+        self.publish_url_changed(event_tx);
+        self.observe_navigation_signal(NavigationSignal::SameDocument { url, id: None });
     }
 
     /// Ack, then decode and store one screencast frame.
@@ -533,41 +554,19 @@ fn attached_bound_page_target<'a>(params: &'a serde_json::Value, bound_target_id
     (Some(attached_target_id) == bound_target_id).then_some(attached_target_id)
 }
 
-fn title_from_binding(params: &serde_json::Value) -> Option<(String, String)> {
-    if params.get("name")?.as_str()? != TITLE_BINDING_NAME {
-        return None;
-    }
-    let payload = params.get("payload")?.as_str()?;
-    let payload = serde_json::from_str::<serde_json::Value>(payload).ok()?;
-    let title = payload.get("title")?.as_str()?.to_string();
-    let href = payload.get("href")?.as_str()?.to_string();
-    Some((title, href))
-}
-
-fn default_context_id_for_frame(params: &serde_json::Value, main_frame_id: Option<&str>) -> Option<u64> {
-    let context = params.get("context")?;
-    let is_default = context.pointer("/auxData/isDefault")?.as_bool()?;
-    let frame_id = context.pointer("/auxData/frameId")?.as_str()?;
-    if !is_default || Some(frame_id) != main_frame_id {
-        return None;
-    }
-    context.get("id")?.as_u64()
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, mpsc};
+    use std::time::{Duration, Instant};
 
     use crate::cdp::CdpEvent;
     use crate::frames::FrameSlot;
     use crate::session::{BrowserEvent, BrowserEventSender, BrowserEventWake, CommittedUrl};
-    use crate::{BrowserConfig, session::BrowserSessionConfig};
+    use crate::wait::PendingWait;
+    use crate::{AgentAction, BrowserConfig, BrowserControlAction, SelectorState, session::BrowserSessionConfig};
 
-    use super::{
-        DriverState, attached_bound_page_target, default_context_id_for_frame, href_matches_url,
-        title_for_bound_target, title_from_binding,
-    };
+    use super::{DriverState, attached_bound_page_target, href_matches_url, title_for_bound_target};
 
     fn driver_state() -> DriverState {
         DriverState::new(
@@ -585,24 +584,6 @@ mod tests {
             None,
             Arc::new(AtomicBool::new(false)),
         )
-    }
-
-    #[test]
-    fn title_context_accepts_only_the_main_frames_default_context() {
-        let main = serde_json::json!({
-            "context": { "id": 7, "auxData": { "isDefault": true, "frameId": "main" } }
-        });
-        let iframe = serde_json::json!({
-            "context": { "id": 8, "auxData": { "isDefault": true, "frameId": "child" } }
-        });
-        let isolated = serde_json::json!({
-            "context": { "id": 9, "auxData": { "isDefault": false, "frameId": "main" } }
-        });
-
-        assert_eq!(default_context_id_for_frame(&main, Some("main")), Some(7));
-        assert_eq!(default_context_id_for_frame(&iframe, Some("main")), None);
-        assert_eq!(default_context_id_for_frame(&isolated, Some("main")), None);
-        assert_eq!(default_context_id_for_frame(&main, None), None);
     }
 
     #[test]
@@ -652,6 +633,64 @@ mod tests {
         assert_eq!(state.session_id, None);
         assert!(state.manifest_dirty);
         assert!(!state.pending_reattach);
+    }
+
+    #[test]
+    fn same_document_navigation_invalidates_a_wait_before_navigation_unblocks() {
+        let now = Instant::now();
+        let mut state = driver_state();
+        state.main_frame_id = Some("main".to_string());
+        state.url = "https://example.test/page".to_string();
+        state.top_frame_navigating = true;
+        let generation = state.semantic.generation();
+        state.pending_wait = Some(PendingWait::new(
+            AgentAction {
+                action_id: "wait-1".to_string(),
+                actor: "horizon:agent".to_string(),
+                requested_at_millis: 0,
+                action: BrowserControlAction::WaitForSelector {
+                    selector: "#ready".to_string(),
+                    state: SelectorState::Present,
+                    timeout_millis: Some(5_000),
+                },
+            },
+            "#ready".to_string(),
+            SelectorState::Present,
+            Some(5_000),
+            Duration::ZERO,
+            generation,
+            now,
+        ));
+        let (tx, _rx) = mpsc::channel();
+        let events = BrowserEventSender {
+            tx,
+            wake: BrowserEventWake::default(),
+            committed_url: CommittedUrl::default(),
+        };
+        let params = serde_json::json!({
+            "frameId": "main",
+            "url": "https://example.test/page"
+        });
+
+        state.handle_same_document_navigation(
+            &events,
+            CdpEvent {
+                method: "Page.navigatedWithinDocument",
+                params: &params,
+                session_id: Some("session"),
+            },
+            true,
+        );
+
+        assert!(!state.top_frame_navigating);
+        assert_ne!(state.semantic.generation(), generation);
+        let failure = state
+            .pending_wait
+            .as_ref()
+            .and_then(|wait| wait.tick(state.semantic.generation(), now))
+            .expect("wait should settle")
+            .expect_err("wait should be invalidated");
+        assert_eq!(failure.code, "wait_navigation_invalidated");
     }
 
     #[test]
@@ -726,22 +765,85 @@ mod tests {
     }
 
     #[test]
-    fn title_binding_accepts_only_the_horizon_payload() {
-        let params = serde_json::json!({
-            "name": "__horizonBrowserTitleChanged",
-            "payload": r#"{"title":"Updated","href":"https://example.test/page"}"#,
-        });
-        let other_binding = serde_json::json!({
-            "name": "pageBinding",
-            "payload": r#"{"title":"Wrong","href":"https://example.test/page"}"#,
+    fn same_url_challenge_commit_waits_for_a_confirmed_success_before_clearing() {
+        const URL: &str = "https://example.test/protected";
+        let challenge_headers = serde_json::json!({ "cf-mitigated": "challenge" });
+        let mut state = driver_state();
+        state.url = URL.to_string();
+        state
+            .challenge_loop
+            .observe_document_response(URL, Some(403), &challenge_headers, Some("initial"));
+        state.challenge_loop.handoff_completed();
+        state
+            .challenge_loop
+            .observe_document_response(URL, Some(403), &challenge_headers, Some("challenge-reload"));
+        assert_eq!(
+            state.challenge_loop.take_rejection_after_delay_for_test(),
+            Some(crate::challenge::REJECTION_MESSAGE)
+        );
+        let (tx, rx) = mpsc::channel();
+        let events = BrowserEventSender {
+            tx,
+            wake: BrowserEventWake::default(),
+            committed_url: CommittedUrl::default(),
+        };
+        let challenge_commit = serde_json::json!({
+            "frame": { "id": "main", "loaderId": "challenge-reload", "url": URL }
         });
 
-        assert_eq!(
-            title_from_binding(&params),
-            Some(("Updated".to_string(), "https://example.test/page".to_string()))
+        state.handle_frame_navigated(
+            &events,
+            CdpEvent {
+                method: "Page.frameNavigated",
+                params: &challenge_commit,
+                session_id: Some("session"),
+            },
+            true,
         );
-        assert_eq!(title_from_binding(&other_binding), None);
-        assert_eq!(title_from_binding(&serde_json::json!({})), None);
+
+        assert_eq!(rx.recv(), Ok(BrowserEvent::Loading(true)));
+        assert_eq!(rx.try_recv(), Err(mpsc::TryRecvError::Empty));
+
+        state.update_url_from_page(&events, &format!("{URL}#metadata"));
+        assert!(matches!(rx.recv(), Ok(BrowserEvent::UrlChanged(_))));
+        assert!(matches!(rx.recv(), Ok(BrowserEvent::NavigationFailed(_))));
+        let same_document = serde_json::json!({ "frameId": "main", "url": format!("{URL}#anchor") });
+        state.handle_same_document_navigation(
+            &events,
+            CdpEvent {
+                method: "Page.navigatedWithinDocument",
+                params: &same_document,
+                session_id: Some("session"),
+            },
+            true,
+        );
+        assert!(matches!(rx.recv(), Ok(BrowserEvent::UrlChanged(_))));
+        assert!(matches!(rx.recv(), Ok(BrowserEvent::NavigationFailed(_))));
+
+        state.challenge_loop.document_navigation_started();
+        state.challenge_loop.observe_document_response(
+            URL,
+            Some(200),
+            &serde_json::Value::Null,
+            Some("successful-retry"),
+        );
+        assert_eq!(rx.try_recv(), Err(mpsc::TryRecvError::Empty));
+        let success_commit = serde_json::json!({
+            "frame": { "id": "main", "loaderId": "successful-retry", "url": URL }
+        });
+        state.handle_frame_navigated(
+            &events,
+            CdpEvent {
+                method: "Page.frameNavigated",
+                params: &success_commit,
+                session_id: Some("session"),
+            },
+            true,
+        );
+
+        assert_eq!(rx.recv(), Ok(BrowserEvent::UrlChanged(URL.to_string())));
+        assert_eq!(rx.recv(), Ok(BrowserEvent::Loading(true)));
+        assert_eq!(rx.try_recv(), Err(mpsc::TryRecvError::Empty));
     }
 
     #[test]

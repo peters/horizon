@@ -6,10 +6,11 @@ use std::time::Duration;
 use horizon_browser::{BrowserAuditAction, BrowserAuditActor, BrowserAuditEntry, new_action_id};
 use serde::{Deserialize, Serialize};
 
-use super::ManifestLock;
 use super::request_queue::{
     MAX_PENDING_REQUESTS, prune_at, queue_lock_path, read_json, request_count, write_private_json,
 };
+use super::workspace::{AgentIdentity, OUTSIDE_WORKSPACE_MESSAGE};
+use super::{ManifestLock, actor_is_workspace_scoped};
 use crate::horizon_home::{HorizonHome, safe_local_id};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -24,6 +25,10 @@ pub enum BrowserVisibilityAuditStatus {
 pub struct BrowserVisibilityRequest {
     pub request_id: String,
     pub actor: String,
+    /// The Horizon host that launched the requesting agent; only that host
+    /// may claim the request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_instance: Option<String>,
     pub panel_local_id: String,
     pub visible: bool,
     pub requested_at_millis: i64,
@@ -78,34 +83,55 @@ impl BrowserVisibilityResult {
 /// and browser panel.
 ///
 /// # Errors
-/// Returns an error when the actor does not own the live panel, the private
-/// queue is full, or coordination storage cannot be updated.
+/// Returns an error when the identity is not a Horizon agent with a known
+/// host instance, is outside the panel's workspace, does not own the live
+/// panel, when the private queue is full, or when coordination storage
+/// cannot be updated.
 pub fn enqueue_visibility(
-    actor: &str,
+    identity: AgentIdentity<'_>,
     panel_local_id: &str,
     visible: bool,
     timeout: Duration,
 ) -> std::io::Result<String> {
-    enqueue_at(HorizonHome::resolve().root(), actor, panel_local_id, visible, timeout)
+    enqueue_at(
+        HorizonHome::resolve().root(),
+        identity,
+        panel_local_id,
+        visible,
+        timeout,
+    )
 }
 
 fn enqueue_at(
     root: &Path,
-    actor: &str,
+    identity: AgentIdentity<'_>,
     panel_local_id: &str,
     visible: bool,
     timeout: Duration,
 ) -> std::io::Result<String> {
+    let actor = identity.actor;
     super::agent::validate_actor(actor)?;
-    if actor.strip_prefix("horizon:").is_none_or(str::is_empty) {
+    if !actor_is_workspace_scoped(actor) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
             "browser panel visibility can be changed only by an agent launched inside Horizon",
         ));
     }
+    let Some(host_instance) = identity.host_instance else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "browser panel visibility can be changed only when the launching Horizon host instance is known",
+        ));
+    };
     let manifest_path = super::manifest_path_for_root(root, panel_local_id);
     let manifest = super::read_at(&manifest_path)
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "browser panel is not live"))?;
+    if !manifest.permits(identity) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            OUTSIDE_WORKSPACE_MESSAGE,
+        ));
+    }
     if manifest
         .live_owner(super::now_millis())
         .map(|owner| owner.name.as_str())
@@ -134,6 +160,7 @@ fn enqueue_at(
     let request = BrowserVisibilityRequest {
         request_id: request_id.clone(),
         actor: actor.to_string(),
+        host_instance: Some(host_instance.to_string()),
         panel_local_id: panel_local_id.to_string(),
         visible,
         requested_at_millis,
@@ -181,22 +208,32 @@ fn list_at(root: &Path) -> std::io::Result<Vec<BrowserVisibilityRequest>> {
     Ok(requests)
 }
 
-/// Claim one visibility request for the exact actor.
+/// Claim one visibility request for the exact actor when it names this host.
 ///
 /// # Errors
 /// Returns an error for an identity mismatch or coordination failure.
+/// `Ok(None)` means another host already claimed the request or the request
+/// belongs to a different Horizon host instance.
 pub fn claim_visibility_request(
     request_id: &str,
     actor: &str,
+    host_instance: &str,
     claimant_pid: u32,
 ) -> std::io::Result<Option<BrowserVisibilityRequest>> {
-    claim_at(HorizonHome::resolve().root(), request_id, actor, claimant_pid)
+    claim_at(
+        HorizonHome::resolve().root(),
+        request_id,
+        actor,
+        host_instance,
+        claimant_pid,
+    )
 }
 
 fn claim_at(
     root: &Path,
     request_id: &str,
     actor: &str,
+    host_instance: &str,
     claimant_pid: u32,
 ) -> std::io::Result<Option<BrowserVisibilityRequest>> {
     let directory = visibility_directory(root);
@@ -214,7 +251,9 @@ fn claim_at(
             "browser visibility request identity did not match its path or actor",
         ));
     }
-    if request.claimed_by_pid.is_some() {
+    // Compared under the queue lock: a second live host running a copy of
+    // the same session shares the actor but never this host instance.
+    if request.claimed_by_pid.is_some() || request.host_instance.as_deref() != Some(host_instance) {
         return Ok(None);
     }
     request.claimed_by_pid = Some(claimant_pid);
@@ -334,11 +373,18 @@ mod tests {
     fn request_requires_live_ownership_and_is_audited() {
         let root = tempfile::tempdir().expect("isolated visibility root");
         let actor = "horizon:agent-panel";
+        let identity = AgentIdentity::new(actor, Some("host-a"));
         let panel_local_id = "browser-panel";
         write_at(
             &manifest_path_for_root(root.path(), panel_local_id),
             &BrowserManifest {
                 panel_local_id: panel_local_id.to_string(),
+                host: Some("host-a".to_string()),
+                workspace: Some(super::super::ManifestWorkspace::new(
+                    "host-a",
+                    "ws-a",
+                    vec![actor.to_string()],
+                )),
                 owner: Some(ManifestOwner {
                     name: actor.to_string(),
                     tty: None,
@@ -349,31 +395,33 @@ mod tests {
         )
         .expect("write manifest");
 
-        assert_eq!(
-            enqueue_at(root.path(), "external", panel_local_id, false, Duration::from_secs(30))
-                .expect_err("external actor must fail")
-                .kind(),
-            std::io::ErrorKind::PermissionDenied
-        );
-        assert_eq!(
-            enqueue_at(
-                root.path(),
-                "horizon:other-agent",
-                panel_local_id,
-                false,
-                Duration::from_secs(30),
-            )
-            .expect_err("non-owner must fail")
-            .kind(),
-            std::io::ErrorKind::PermissionDenied
-        );
+        for refused in [
+            AgentIdentity::new("external", Some("host-a")),
+            AgentIdentity::new("horizon:other-agent", Some("host-a")),
+            AgentIdentity::new(actor, Some("host-b")),
+            AgentIdentity::new(actor, None),
+        ] {
+            assert_eq!(
+                enqueue_at(root.path(), refused, panel_local_id, false, Duration::from_secs(30))
+                    .expect_err("identity outside the contract must fail")
+                    .kind(),
+                std::io::ErrorKind::PermissionDenied
+            );
+        }
 
-        let request_id =
-            enqueue_at(root.path(), actor, panel_local_id, false, Duration::from_secs(30)).expect("enqueue visibility");
-        let request = claim_at(root.path(), &request_id, actor, 42)
+        let request_id = enqueue_at(root.path(), identity, panel_local_id, false, Duration::from_secs(30))
+            .expect("enqueue visibility");
+        assert!(
+            claim_at(root.path(), &request_id, actor, "host-b", 41)
+                .expect("other host claim")
+                .is_none(),
+            "a host that did not launch the agent must not claim its request"
+        );
+        let request = claim_at(root.path(), &request_id, actor, "host-a", 42)
             .expect("claim visibility")
             .expect("request");
         assert!(!request.visible);
+        assert_eq!(request.host_instance.as_deref(), Some("host-a"));
         record_status_at(root.path(), &request, BrowserVisibilityAuditStatus::Dispatched).expect("audit dispatch");
         record_status_at(root.path(), &request, BrowserVisibilityAuditStatus::Completed).expect("audit completion");
         let result = BrowserVisibilityResult::ready(&request);

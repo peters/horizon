@@ -10,7 +10,8 @@
 //! - the **Horizon MCP adapter** (reads discovery fields, heartbeats `owner`,
 //!   writes a `handoff` request, and enqueues validated backend-neutral
 //!   actions),
-//! - the **UI** (reads ownership for the chrome chip).
+//! - the **UI host** (reads ownership for the chrome chip and stamps the
+//!   host-owned `hidden` and `workspace` fields).
 //!
 //! File-based on purpose: it works across process boundaries without putting
 //! a transport dependency in `horizon-browser`. It is not a supported agent
@@ -25,11 +26,13 @@
 //! later updates fail when teardown has removed it, so a delayed writer cannot
 //! resurrect a dead panel.
 
+use std::collections::BTreeMap;
 use std::fs::{OpenOptions, TryLockError};
 use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
@@ -45,18 +48,25 @@ mod create;
 mod request_queue;
 mod result;
 mod visibility;
+mod workspace;
 
 pub use agent::{claim, enqueue_action, heartbeat, release, request_handoff};
 pub use audit::{audit_path_for_root, default_audit_path, read_audit};
 pub use create::{
-    BrowserCreateAuditStatus, BrowserCreateOutcome, BrowserCreateRequest, BrowserCreateResult, claim_create_request,
-    complete_create_request, enqueue_create, list_create_requests, record_create_status, take_create_result,
+    BrowserCreateAuditStatus, BrowserCreateOutcome, BrowserCreateRequest, BrowserCreateResult, CreateNavigation,
+    claim_create_request, complete_create_request, enqueue_create, list_create_requests, record_create_status,
+    take_create_result,
 };
 pub use result::{action_result_path_for_root, default_action_result_path, take_action_result};
 pub use visibility::{
     BrowserVisibilityAuditStatus, BrowserVisibilityOutcome, BrowserVisibilityRequest, BrowserVisibilityResult,
     claim_visibility_request, complete_visibility_request, enqueue_visibility, list_visibility_requests,
     record_visibility_status, take_visibility_result,
+};
+pub use workspace::{
+    AgentIdentity, HOST_INSTANCE_ENV, HostStampOutcome, ManifestWorkspace, OUTSIDE_WORKSPACE_MESSAGE,
+    actor_is_workspace_scoped, host_instance, publish_requested_panel, read_audit_for, sync_host_state,
+    sync_host_state_in, valid_host_instance,
 };
 
 /// How long an agent owner heartbeat stays fresh.
@@ -112,6 +122,18 @@ pub struct BrowserManifest {
     /// session and control channel alive.
     #[serde(default)]
     pub hidden: bool,
+    /// Host-owned workspace membership stamped by the Horizon process hosting
+    /// the panel. Absent until the host stamps it and on manifests from
+    /// older hosts; workspace-scoped callers must treat both as out of scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<ManifestWorkspace>,
+    /// The Horizon process running this panel's browser driver, recorded at
+    /// driver start. Only that host may stamp `hidden` and `workspace`, so a
+    /// second host whose board carries the same persisted panel id (a copied
+    /// or taken-over session, or a failed restore placeholder) can never
+    /// rewrite the authorization stamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
     /// Private append-only JSONL action journal for this panel identity.
     #[serde(default)]
     pub audit_path: String,
@@ -146,6 +168,25 @@ impl BrowserManifest {
     pub fn user_is_active(&self, now_millis: i64) -> bool {
         let ttl_millis = i64::try_from(USER_ACTIVE_TTL.as_millis()).unwrap_or(i64::MAX);
         self.user_active && timestamp_is_fresh(now_millis, self.user_active_at, ttl_millis)
+    }
+
+    /// Whether the host running this panel's driver stamped it, launched
+    /// `identity`, and placed it in this panel's workspace. An unstamped
+    /// manifest, or a stamp left behind by a different host than the one now
+    /// running the driver, authorizes nobody.
+    #[must_use]
+    pub fn authorizes(&self, identity: AgentIdentity<'_>) -> bool {
+        self.workspace.as_ref().is_some_and(|workspace| {
+            self.host.as_deref() == Some(workspace.host_instance.as_str()) && workspace.authorizes(identity)
+        })
+    }
+
+    /// Whether `identity` may discover or control this panel: identities
+    /// from outside Horizon always may, Horizon agents only through the
+    /// host's workspace stamp.
+    #[must_use]
+    pub fn permits(&self, identity: AgentIdentity<'_>) -> bool {
+        !identity.workspace_scoped() || self.authorizes(identity)
     }
 }
 
@@ -200,8 +241,20 @@ pub fn read(panel_local_id: &str) -> Option<BrowserManifest> {
 
 #[must_use]
 pub fn read_at(path: &Path) -> Option<BrowserManifest> {
-    let raw = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str(&raw).ok()
+    try_read_at(path).ok().flatten()
+}
+
+/// Read a manifest, distinguishing an absent file (`Ok(None)`) from a read
+/// or parse failure, which callers that must retry later need to see.
+fn try_read_at(path: &Path) -> std::io::Result<Option<BrowserManifest>> {
+    let raw = match std::fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    serde_json::from_str(&raw)
+        .map(Some)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
 /// List panel local ids that currently have a valid, canonically named
@@ -272,7 +325,10 @@ fn initialize_at(
     panel_local_id: &str,
     update: impl FnOnce(&mut BrowserManifest),
 ) -> std::io::Result<BrowserManifest> {
-    mutate_at(path, panel_local_id, true, update)
+    mutate_at(path, panel_local_id, true, |manifest| {
+        update(manifest);
+        true
+    })
 }
 
 /// Atomically read, mutate, and replace one manifest while holding the
@@ -289,14 +345,19 @@ fn update_at(
     panel_local_id: &str,
     update: impl FnOnce(&mut BrowserManifest),
 ) -> std::io::Result<BrowserManifest> {
-    mutate_at(path, panel_local_id, false, update)
+    mutate_at(path, panel_local_id, false, |manifest| {
+        update(manifest);
+        true
+    })
 }
 
+/// Locked read-modify-write; the closure returns whether the manifest must
+/// be written back, so a refused transaction leaves the file untouched.
 fn mutate_at(
     path: &Path,
     panel_local_id: &str,
     create_missing: bool,
-    update: impl FnOnce(&mut BrowserManifest),
+    update: impl FnOnce(&mut BrowserManifest) -> bool,
 ) -> std::io::Result<BrowserManifest> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -315,8 +376,9 @@ fn mutate_at(
                 format!("browser manifest no longer exists: {}", path.display()),
             )
         })?;
-    update(&mut manifest);
-    write_at_locked(path, &manifest)?;
+    if update(&mut manifest) {
+        write_at_locked(path, &manifest)?;
+    }
     Ok(manifest)
 }
 
@@ -397,6 +459,114 @@ pub(crate) fn remove_with_timeout(panel_local_id: &str, timeout: Duration) -> bo
     }
 }
 
+/// Remove a manifest at driver teardown only while this process still runs
+/// the panel's driver. The owned-storage callback runs under that ownership
+/// check before the manifest disappears, so a superseded driver cannot prune
+/// results belonging to its replacement.
+fn remove_owned_at_with_timeout(
+    path: &Path,
+    host: &str,
+    timeout: Duration,
+    prune_owned_storage: impl FnOnce(Duration) -> std::io::Result<()>,
+) -> std::io::Result<bool> {
+    let deadline = Instant::now() + timeout;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    let _lock = ManifestLock::acquire_with_timeout(path, remaining)?;
+    // Only a present manifest that names this host proves ownership; a
+    // missing file or a host-less manifest written by an older Horizon that
+    // adopted the id is left untouched.
+    if read_at(path).is_none_or(|manifest| manifest.host.as_deref() != Some(host)) {
+        tracing::debug!(target: "browser", path = %path.display(), "leaving browser manifest this host does not own");
+        return Ok(false);
+    }
+    prune_owned_storage(deadline.saturating_duration_since(Instant::now()))?;
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(error),
+    }
+}
+
+/// Run a driver-owned side effect (audit, result, capture storage) while
+/// holding the manifest lock and only if a present manifest names this
+/// process as the panel's driver. A missing manifest is not proof of
+/// ownership: another host's `prepare` removes the shared file before its
+/// driver initializes, so the effect is refused until this host's own
+/// manifest is live again.
+fn with_owned_manifest<T>(panel_local_id: &str, effect: impl FnOnce() -> std::io::Result<T>) -> std::io::Result<T> {
+    with_owned_manifest_at(&default_manifest_path(panel_local_id), host_instance(), effect)
+}
+
+fn with_owned_manifest_at<T>(
+    path: &Path,
+    host: &str,
+    effect: impl FnOnce() -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let _lock = ManifestLock::acquire(path)?;
+    let manifest = read_at(path).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("browser manifest is not live: {}", path.display()),
+        )
+    })?;
+    if manifest.host.as_deref() != Some(host) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "browser manifest was adopted by another Horizon host",
+        ));
+    }
+    effect()
+}
+
+/// Apply a driver-side change only while this process still runs the
+/// panel's driver, so a superseded driver can never touch state that another
+/// host has adopted for the same persisted panel id.
+///
+/// # Errors
+/// Returns `PermissionDenied` when another host has adopted the manifest.
+fn driver_update(panel_local_id: &str, apply: impl FnOnce(&mut BrowserManifest)) -> std::io::Result<BrowserManifest> {
+    driver_update_at(
+        &default_manifest_path(panel_local_id),
+        panel_local_id,
+        host_instance(),
+        apply,
+    )
+}
+
+fn driver_update_at(
+    path: &Path,
+    panel_local_id: &str,
+    host: &str,
+    apply: impl FnOnce(&mut BrowserManifest),
+) -> std::io::Result<BrowserManifest> {
+    let mut superseded = false;
+    // A refused transaction must not rewrite the adopting host's file: the
+    // engine retries dirty updates every few hundred milliseconds.
+    let manifest = mutate_at(path, panel_local_id, false, |manifest| {
+        if manifest.host.as_deref() == Some(host) {
+            apply(manifest);
+            true
+        } else {
+            superseded = true;
+            false
+        }
+    })?;
+    if superseded {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "browser manifest was adopted by another Horizon host",
+        ))
+    } else {
+        Ok(manifest)
+    }
+}
+
 /// Owns one driver's manifest from startup through every exit path.
 #[cfg(test)]
 pub(crate) struct DriverManifestLifetime {
@@ -445,10 +615,42 @@ fn remove_at_with_timeout(path: &Path, timeout: Duration) -> std::io::Result<()>
 #[derive(Debug, Default)]
 pub struct ManifestCoordination {
     audit: audit::AuditSink,
+    retained_results: Mutex<BTreeMap<String, String>>,
+}
+
+impl ManifestCoordination {
+    fn remove_at(&self, root: &Path, panel_local_id: &str, host: &str, timeout: Duration) -> Option<bool> {
+        let retained_action_id = self
+            .retained_results
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(panel_local_id)
+            .cloned();
+        let path = manifest_path_for_root(root, panel_local_id);
+        match remove_owned_at_with_timeout(&path, host, timeout, |remaining| {
+            result::remove_stale_except_at(root, panel_local_id, retained_action_id.as_deref(), remaining)
+        }) {
+            Ok(owned) => {
+                self.retained_results
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(panel_local_id);
+                Some(owned)
+            }
+            Err(error) => {
+                tracing::warn!(target: "browser", path = %path.display(), "failed to remove browser manifest: {error}");
+                None
+            }
+        }
+    }
 }
 
 impl horizon_browser::BrowserCoordination for ManifestCoordination {
     fn prepare(&self, panel_local_id: &str, timeout: Duration) -> bool {
+        self.retained_results
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(panel_local_id);
         let manifest_removed = remove_with_timeout(panel_local_id, timeout);
         let results_removed = result::remove_stale(panel_local_id).is_ok();
         manifest_removed && results_removed
@@ -457,6 +659,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
     fn initialize(&self, panel_local_id: &str, state: &horizon_browser::CoordinationState) -> std::io::Result<()> {
         initialize(panel_local_id, |manifest| {
             manifest.panel_local_id = panel_local_id.to_string();
+            adopt_driver_host(manifest, host_instance());
             manifest.backend = state.backend;
             manifest.browser_ws.clone_from(&state.browser_ws);
             manifest.target_id.clone_from(&state.target_id);
@@ -471,7 +674,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
     }
 
     fn update(&self, panel_local_id: &str, state: &horizon_browser::CoordinationState) -> std::io::Result<()> {
-        update(panel_local_id, |manifest| {
+        driver_update(panel_local_id, |manifest| {
             manifest.backend = state.backend;
             manifest.browser_ws.clone_from(&state.browser_ws);
             manifest.target_id.clone_from(&state.target_id);
@@ -483,7 +686,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
     }
 
     fn set_user_active(&self, panel_local_id: &str, active: bool) -> std::io::Result<()> {
-        update(panel_local_id, |manifest| {
+        driver_update(panel_local_id, |manifest| {
             manifest.user_active = active;
             manifest.user_active_at = now_millis();
             manifest.updated_at = manifest.user_active_at;
@@ -495,6 +698,12 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
         let Some(snapshot) = read(panel_local_id) else {
             return Ok(horizon_browser::CoordinationSignals::default());
         };
+        if snapshot.host.as_deref() != Some(host_instance()) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "browser manifest was adopted by another Horizon host",
+            ));
+        }
         let now = now_millis();
         let legacy_handoff = snapshot
             .handoff_pending()
@@ -507,7 +716,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
         let generated_request_id = new_handoff_request_id();
         let mut actions = Vec::new();
         let mut rejected = Vec::new();
-        let manifest = update(panel_local_id, |current| {
+        let manifest = driver_update(panel_local_id, |current| {
             if let Some(current_handoff) = current.handoff.as_mut()
                 && !current_handoff.done
                 && current_handoff.request_id.is_empty()
@@ -516,7 +725,11 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
             }
             (actions, rejected) = agent::take_ready_actions(current);
         })?;
-        if let Err(error) = agent::append_rejected_actions(panel_local_id, rejected) {
+        if !rejected.is_empty()
+            && let Err(error) = with_owned_manifest(panel_local_id, || {
+                agent::append_rejected_actions(panel_local_id, rejected)
+            })
+        {
             tracing::warn!(target: "browser", "failed to append rejected-action audit: {error}");
         }
         Ok(signals_from_manifest(&manifest, actions))
@@ -524,7 +737,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
 
     fn acknowledge_handoff(&self, panel_local_id: &str, request_id: &str) -> std::io::Result<bool> {
         let mut acknowledged = false;
-        update(panel_local_id, |manifest| {
+        driver_update(panel_local_id, |manifest| {
             if let Some(handoff) = manifest
                 .handoff
                 .as_mut()
@@ -538,7 +751,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
     }
 
     fn record_action(&self, panel_local_id: &str, entry: &horizon_browser::BrowserAuditEntry) -> std::io::Result<()> {
-        self.audit.append(entry, panel_local_id)
+        with_owned_manifest(panel_local_id, || self.audit.append(entry, panel_local_id))
     }
 
     fn complete_action(
@@ -546,7 +759,14 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
         panel_local_id: &str,
         result: &horizon_browser::AgentActionResult,
     ) -> std::io::Result<()> {
-        result::write(panel_local_id, result)
+        with_owned_manifest(panel_local_id, || result::write(panel_local_id, result))
+    }
+
+    fn retain_action_result_on_remove(&self, panel_local_id: &str, action_id: &str) {
+        self.retained_results
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(panel_local_id.to_string(), action_id.to_string());
     }
 
     fn prepare_network_capture(
@@ -555,13 +775,28 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
         directory: &Path,
         requested_max_file_bytes: u64,
     ) -> std::io::Result<()> {
-        capture::prepare(panel_local_id, directory, requested_max_file_bytes)
+        with_owned_manifest(panel_local_id, || {
+            capture::prepare(panel_local_id, directory, requested_max_file_bytes)
+        })
     }
 
     fn remove(&self, panel_local_id: &str, timeout: Duration) -> bool {
-        let manifest_removed = remove_with_timeout(panel_local_id, timeout);
-        let results_removed = result::remove_stale(panel_local_id).is_ok();
-        manifest_removed && results_removed
+        self.remove_at(HorizonHome::resolve().root(), panel_local_id, host_instance(), timeout)
+            .is_some()
+    }
+}
+
+/// Record the process that now runs the panel's driver. Control state written
+/// under a different host (its stamp, owner lease, queued actions, and
+/// handoff) is dropped so nothing from that host stays effective; a driver
+/// restart inside the same host keeps its state.
+fn adopt_driver_host(manifest: &mut BrowserManifest, host: &str) {
+    if manifest.host.as_deref() != Some(host) {
+        manifest.workspace = None;
+        manifest.owner = None;
+        manifest.actions.clear();
+        manifest.handoff = None;
+        manifest.host = Some(host.to_string());
     }
 }
 
@@ -608,6 +843,8 @@ mod tests {
             url: "https://example.com".to_string(),
             title: "Example".to_string(),
             hidden: false,
+            workspace: None,
+            host: None,
             audit_path: String::new(),
             owner: None,
             user_active: false,
@@ -876,5 +1113,135 @@ mod tests {
     #[test]
     fn handoff_request_ids_are_unique_for_same_millisecond_requests() {
         assert_ne!(new_handoff_request_id(), new_handoff_request_id());
+    }
+
+    #[test]
+    fn a_superseded_driver_cannot_touch_or_remove_an_adopted_manifest() {
+        let root = test_root();
+        let path = manifest_path_for_root(&root, "adopted");
+        let mut adopted = sample("adopted");
+        adopted.host = Some("host-b".to_string());
+        write_at(&path, &adopted).unwrap();
+
+        let before = std::fs::read(&path).unwrap();
+        let modified_before = std::fs::metadata(&path).unwrap().modified().unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        let denied = driver_update_at(&path, "adopted", "host-a", |manifest| {
+            manifest.title = "from the superseded driver".to_string();
+        })
+        .unwrap_err();
+        assert_eq!(denied.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(read_at(&path).unwrap().title, "Example");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "a refused update must not rewrite the file"
+        );
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            modified_before,
+            "a refused update must not touch the adopting host's manifest"
+        );
+        driver_update_at(&path, "adopted", "host-b", |manifest| {
+            manifest.title = "from the adopting driver".to_string();
+        })
+        .unwrap();
+        assert_eq!(read_at(&path).unwrap().title, "from the adopting driver");
+
+        let mut effect_ran = false;
+        let denied = with_owned_manifest_at(&path, "host-a", || {
+            effect_ran = true;
+            Ok(())
+        })
+        .unwrap_err();
+        assert_eq!(denied.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(!effect_ran, "a superseded driver's side effect must not run");
+        with_owned_manifest_at(&path, "host-b", || {
+            effect_ran = true;
+            Ok(())
+        })
+        .unwrap();
+        assert!(effect_ran);
+
+        assert!(
+            !remove_owned_at_with_timeout(&path, "host-a", Duration::from_secs(1), |_| Ok(())).unwrap(),
+            "a superseded driver's teardown reports the manifest as not its own"
+        );
+        assert!(
+            path.exists(),
+            "a superseded driver's teardown leaves the adopted manifest"
+        );
+        assert!(remove_owned_at_with_timeout(&path, "host-b", Duration::from_secs(1), |_| Ok(())).unwrap());
+        assert!(!path.exists());
+        assert!(
+            !remove_owned_at_with_timeout(&path, "host-b", Duration::from_secs(1), |_| Ok(())).unwrap(),
+            "a missing manifest proves nothing about driver ownership"
+        );
+        assert_eq!(
+            with_owned_manifest_at(&path, "host-a", || Ok(()))
+                .expect_err("a missing manifest is not proof of ownership")
+                .kind(),
+            std::io::ErrorKind::NotFound
+        );
+
+        let legacy = manifest_path_for_root(&root, "legacy");
+        write_at(&legacy, &sample("legacy")).unwrap();
+        assert!(!remove_owned_at_with_timeout(&legacy, "host-a", Duration::from_secs(1), |_| Ok(())).unwrap());
+        assert!(
+            legacy.exists(),
+            "a host-less manifest may belong to an older Horizon that adopted the id, so teardown leaves it"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_new_driver_host_drops_control_state_written_under_the_previous_host() {
+        let now = now_millis();
+        let inherited = || BrowserManifest {
+            host: Some("host-a".to_string()),
+            workspace: Some(ManifestWorkspace::new(
+                "host-a",
+                "ws-a",
+                vec!["horizon:agent-a".to_string()],
+            )),
+            owner: Some(ManifestOwner {
+                name: "horizon:agent-a".to_string(),
+                tty: None,
+                updated_at: now,
+            }),
+            handoff: Some(ManifestHandoff {
+                request_id: "request-1".to_string(),
+                reason: "sign in".to_string(),
+                requested_at: now,
+                done: false,
+            }),
+            actions: vec![horizon_browser::AgentAction {
+                action_id: "a".to_string(),
+                actor: "horizon:agent-a".to_string(),
+                requested_at_millis: now,
+                action: horizon_browser::BrowserControlAction::Reload,
+            }],
+            ..sample("p")
+        };
+
+        let mut restarted = inherited();
+        adopt_driver_host(&mut restarted, "host-a");
+        assert_eq!(
+            restarted,
+            inherited(),
+            "a same-host driver restart keeps its control state"
+        );
+
+        let mut taken_over = inherited();
+        adopt_driver_host(&mut taken_over, "host-b");
+        assert_eq!(taken_over.host.as_deref(), Some("host-b"));
+        assert!(taken_over.workspace.is_none());
+        assert!(taken_over.owner.is_none());
+        assert!(taken_over.actions.is_empty());
+        assert!(taken_over.handoff.is_none());
+
+        let mut fresh = sample("fresh");
+        adopt_driver_host(&mut fresh, "host-b");
+        assert_eq!(fresh.host.as_deref(), Some("host-b"));
     }
 }

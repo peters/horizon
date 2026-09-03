@@ -86,13 +86,34 @@ The reusable runner:
 - launches the exact Horizon binary with an agent panel and no Browser panel;
 - invokes only the fourteen public `browser_*` MCP tools;
 - proves empty discovery followed by an audited hidden `browser_create` in the
-  requesting agent's workspace, controls it while hidden, shows it through
+  requesting agent's workspace whose result already reports the committed
+  first page (`navigation: committed`, `startup_millis`) and is queryable
+  immediately, controls it while hidden, shows it through
   `browser_visibility`, then checks schemas, navigation,
   snapshot/query/ref lifetime, trusted
   single and double click, Unicode fill, scroll, history, wait/evaluate,
   disclosure, redacted audit, failures, and optional handoff;
 - proves an immediate backend navigation rejection returns a typed MCP failure,
   retains the last valid page, and is audited as failed rather than completed;
+- proves `browser_navigate` reports typed outcomes: a committed navigation with
+  `committed_url`, a `302` redirect flagged `redirected`, a
+  `dom_content_loaded` wait, a dispatch-only wait, an unreachable loopback
+  destination as a `navigation_failed` action that retains the committed page,
+  and a bounded wait on the 11-second page that returns `state: timed_out`
+  with the pre-commit state before the page finally commits (Chromium and
+  Firefox inside the navigation lane; Safari in its retained slow-page lane,
+  where the classic navigation keeps running and the driver polls it to its
+  commit);
+- proves `browser_wait` is one engine-side audited action: on `delayed.html`
+  a wait for the element that appears 4 s after load settles from the
+  engine's own observation with the matched node, an `elapsed_millis` that
+  covers most of the remaining fixture delay after the measured navigate wall
+  time (the derived minimum is reported), and several `polls`; an already-hidden element settles on its
+  first observation; a selector that never appears fails with the typed
+  `wait_timeout` code at the bound; removal, an attribute change, and a style
+  change are each observed as a delayed transition on a fresh load with a
+  4 s delay; and each wait action id owns exactly one
+  queued/dispatched/terminal audit lifecycle (reported as `wait_outcomes`);
 - disconnects the MCP stdio client, starts a fresh client with the same actor,
   rediscovers the exact live panel, and proves resumed snapshot plus complete
   audit states without restarting the browser;
@@ -494,8 +515,9 @@ Run once per host OS after the semantic gate:
    `horizon-browser` skill and Claude plugin descriptor without adding a
    permanent MCP registration to the operator's configuration.
 2. Create a default supported agent panel with no Browser panel. The default
-   launch receives the transient `horizon-browser` stdio MCP registration and
-   stable `HORIZON_BROWSER_ACTOR`, and that exact variable is forwarded to the
+   launch receives the transient `horizon-browser` stdio MCP registration,
+   stable `HORIZON_BROWSER_ACTOR`, and the launching host's
+   `HORIZON_BROWSER_HOST_INSTANCE`, and both variables are forwarded to the
    stdio MCP child. The default Codex registration sets only this MCP server's
    tool approval mode to `approve`, so browser calls proceed without repeated
    operator prompts while unrelated tool approvals keep their normal policy; a
@@ -554,6 +576,9 @@ Run once per host OS after the semantic gate:
 | `animation.html` | Deterministic CSS plus canvas repaint workload |
 | `websocket.html` | Native HTTP response body plus deterministic WebSocket disconnect/reconnect lifecycle, sent frames, a 4,096-frame burst plus 17-frame reconnect, URL redaction, bounded NDJSON export |
 | `upload.html` + `upload.txt` | Native file-picker oracle and the documented host file-drop/workspace-open boundary |
+| `/redirect-to-next` (server route) | `302` to `next.html` for the typed `redirected` navigation outcome |
+| `/slow-navigation.html` (server route) | 11-second response for bounded `timed_out` navigation outcomes and the Safari delayed-navigation lane |
+| `delayed.html` | After load (`?delay=<ms>`, default 1.5 s) hides `#early-marker`, appends `#late-marker`, removes `#removed-marker`, and drops the `hidden` attribute of `#attr-marker`, for the engine-side `browser_wait` lanes |
 
 Keep selectors stable. When a browser behavior needs a new deterministic
 oracle, extend these fixtures and the gate together instead of creating another

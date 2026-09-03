@@ -38,6 +38,11 @@ impl Drop for SafariLease {
 }
 
 impl WebDriverService {
+    pub(super) fn delete_session(&self, session_id: &str) {
+        let path = format!("/session/{session_id}");
+        let _ = self.http.delete(&path);
+    }
+
     pub(super) fn start(
         config: &BrowserConfig,
         control: &ChromeProcessControl,

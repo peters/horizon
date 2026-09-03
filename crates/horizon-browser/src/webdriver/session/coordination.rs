@@ -1,6 +1,7 @@
 //! Host coordination, auditable controls, and user/agent steering for
 //! WebDriver-backed Firefox and Safari sessions.
 
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use crate::session::{BrowserCommand, BrowserEvent, BrowserEventSender};
@@ -54,6 +55,12 @@ impl Driver {
         }
     }
 
+    /// Make the next `tick_coordination` re-read the manifest regardless of
+    /// the interval, so ownership and handoff state is current.
+    pub(super) fn request_signal_refresh(&mut self) {
+        self.last_signal_check = Instant::now().checked_sub(SIGNAL_INTERVAL).unwrap_or_else(Instant::now);
+    }
+
     pub(super) fn tick_coordination(&mut self, event_tx: &BrowserEventSender) -> Vec<AgentAction> {
         if self.last_signal_check.elapsed() < SIGNAL_INTERVAL {
             return Vec::new();
@@ -70,7 +77,12 @@ impl Driver {
                 return Vec::new();
             }
         };
+        self.signal_epoch = self.signal_epoch.wrapping_add(1);
         publish_owner_change(&mut self.owner_seen, signals.owner, event_tx);
+        self.challenge_loop.observe_handoff_change(
+            self.handoff_seen.as_deref(),
+            signals.handoff.as_ref().map(|handoff| handoff.request_id.as_str()),
+        );
         publish_handoff_change(&mut self.handoff_seen, signals.handoff, event_tx);
         signals.actions
     }
@@ -91,6 +103,7 @@ impl Driver {
         match coordination.acknowledge_handoff(&self.config.panel_local_id, request_id) {
             Ok(true) => {
                 self.handoff_seen = None;
+                self.challenge_loop.handoff_completed();
                 let _ = event_tx.send(BrowserEvent::HandoffCleared);
             }
             Ok(false) => {
@@ -139,6 +152,42 @@ impl Driver {
             BrowserAuditStatus::Dispatched,
             BrowserAuditAction::from_command(command),
         );
+    }
+
+    /// Validate, audit, and run one queued agent action. Navigation settles
+    /// from `BiDi` events, so only a synchronously finished navigation
+    /// completes here.
+    pub(super) fn service_agent_request(
+        &mut self,
+        request: &AgentAction,
+        event_tx: &BrowserEventSender,
+        stop_requested: &AtomicBool,
+    ) {
+        if let Err(message) = request.action.validate() {
+            self.audit_agent_action(request, crate::BrowserAuditStatus::Rejected);
+            self.complete_agent_action(
+                request,
+                Err(crate::BrowserControlFailure::new("invalid_input", message)),
+            );
+            return;
+        }
+        self.audit_agent_action(request, crate::BrowserAuditStatus::Dispatched);
+        if matches!(request.action, crate::BrowserControlAction::Navigate { .. }) {
+            if let crate::navigation::AgentActionExecution::Done(result) = self.navigate_action(request, event_tx) {
+                self.complete_agent_action(request, result);
+            }
+            return;
+        }
+        if matches!(request.action, crate::BrowserControlAction::WaitForSelector { .. }) {
+            if let crate::navigation::AgentActionExecution::Done(result) =
+                self.begin_agent_wait(request, stop_requested)
+            {
+                self.complete_agent_action(request, result);
+            }
+            return;
+        }
+        let result = self.execute_agent_action(request, event_tx);
+        self.complete_agent_action(request, result);
     }
 
     pub(super) fn audit_agent_action(&self, request: &AgentAction, status: BrowserAuditStatus) {

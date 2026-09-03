@@ -7,17 +7,20 @@
 
 mod audit;
 pub mod cdp;
+mod challenge;
 mod coordination;
 mod disclosure;
 mod error;
 pub mod frames;
 pub mod input;
+mod navigation;
 mod network;
 mod paths;
 pub mod process;
 mod profile;
 mod semantic;
 pub mod session;
+mod wait;
 mod webdriver;
 mod websocket;
 
@@ -30,7 +33,9 @@ pub use error::BrowserError;
 pub use frames::{FrameData, FrameMetrics, FrameSlot, PageScrollState};
 pub use horizon_browser_protocol::{
     AgentAction, BackendAvailability, BackendCapabilities, BackendKind, BrowserControlAction, DEFAULT_CLICK_COUNT,
-    FrameDelivery, MAX_CLICK_COUNT, MAX_QUERY_RESULTS, MAX_SNAPSHOT_NODES, normalize_navigation_target,
+    DEFAULT_NAVIGATION_TIMEOUT_MILLIS, DEFAULT_WAIT_TIMEOUT_MILLIS, FrameDelivery, MAX_CLICK_COUNT,
+    MAX_NAVIGATION_TIMEOUT_MILLIS, MAX_QUERY_RESULTS, MAX_SNAPSHOT_NODES, MAX_WAIT_TIMEOUT_MILLIS, NavigationWait,
+    normalize_navigation_target,
 };
 pub use input::{BrowserButton, BrowserEditCommand, BrowserInput, BrowserKey, BrowserModifiers};
 pub use network::{
@@ -41,7 +46,7 @@ pub use network::{
 };
 pub use semantic::{
     AgentActionResult, BrowserActionOutcome, BrowserBounds, BrowserControlFailure, BrowserControlValue, BrowserNode,
-    BrowserSnapshot, BrowserTarget,
+    BrowserSnapshot, BrowserTarget, NavigationOutcome, NavigationState, SelectorState, WaitOutcome,
 };
 pub use session::{
     BrowserCommand, BrowserEvent, BrowserEventWaker, BrowserSession, BrowserSessionConfig, BrowserShutdownSignal,

@@ -541,10 +541,10 @@ features:
     hotkey: "F9"         # push-to-talk; same syntax as the shortcuts table, "" disables
     hotkey_mode: hold    # hold (Ventrilo-style) | toggle
     preload: false       # true = load the model at startup
-    desktop_injection: false  # true = PTT pastes into the focused OS window when no Horizon window is focused (X11)
+    desktop_injection: false  # true = direct accessibility insertion into another app (macOS or X11 Linux); no clipboard
 ```
 
-The push-to-talk hotkey listens in the main window. Panels in detached windows can still dictate via their title-bar mic button. With `desktop_injection: true` on X11, the same hotkey is grabbed globally: a focused Horizon window receives the transcript; otherwise it is pasted into the focused OS application. Background push-to-talk currently requires X11 (`XGrabKey`) and is unavailable on a pure Wayland session.
+The push-to-talk hotkey listens in focused Horizon windows, and panels in detached windows can also dictate via their title-bar mic button. With `desktop_injection: true`, the same hotkey is grabbed globally on macOS and X11 Linux. A focused Horizon window still receives the transcript locally. On macOS, an external editable field is captured through Accessibility when recording starts and any later focus change discards the transcript. On Linux, the focused AT-SPI editable field is validated when the transcript is ready. Both paths insert directly without reading or writing the clipboard, sending a paste shortcut, or pressing Return. Background push-to-talk is unavailable in a pure Wayland session.
 
 Recommended models (prebuilt GGUFs under [`handy-computer`](https://huggingface.co/handy-computer) on Hugging Face): `whisper-large-v3-turbo` (fast multilingual), `whisper-large-v3` (multilingual with a working `translate` task), `parakeet-tdt-0.6b-v3` (fast, 25 European languages). For Norwegian — including dialects — convert [NB-Whisper Large](https://huggingface.co/NbAiLab/nb-whisper-large) to GGUF per the transcribe.cpp docs and set `language: "no"` (or `"nn"`). NB-Whisper normalizes dialect speech into standard written Norwegian and ignores the `translate` task; spoken-Norwegian → English text needs stock `whisper-large-v3`.
 

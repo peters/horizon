@@ -13,6 +13,14 @@ use super::{
 };
 
 impl DriverState {
+    /// Make the next `tick_signals` re-read the manifest regardless of the
+    /// interval, so ownership and handoff state is current.
+    pub(super) fn request_signal_refresh(&mut self) {
+        self.last_signal_check = Instant::now()
+            .checked_sub(SIGNAL_MIN_INTERVAL)
+            .unwrap_or_else(Instant::now);
+    }
+
     /// User clicked "hand back": acknowledge only the exact request that the
     /// engine previously surfaced, so a replacement request cannot be lost.
     pub(super) fn resolve_handoff(&mut self, event_tx: &BrowserEventSender) {
@@ -31,6 +39,7 @@ impl DriverState {
         match coordination.acknowledge_handoff(&self.config.panel_local_id, request_id) {
             Ok(true) => {
                 self.handoff_seen = None;
+                self.challenge_loop.handoff_completed();
                 let _ = event_tx.send(BrowserEvent::HandoffCleared);
             }
             Ok(false) => {
@@ -62,7 +71,12 @@ impl DriverState {
                 return Vec::new();
             }
         };
+        self.signal_epoch = self.signal_epoch.wrapping_add(1);
         publish_owner_change(&mut self.owner_seen, signals.owner, event_tx);
+        self.challenge_loop.observe_handoff_change(
+            self.handoff_seen.as_deref(),
+            signals.handoff.as_ref().map(|handoff| handoff.request_id.as_str()),
+        );
         publish_handoff_change(&mut self.handoff_seen, signals.handoff, event_tx);
         signals.actions
     }

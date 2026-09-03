@@ -4,6 +4,7 @@ mod agents;
 mod attention;
 mod board;
 pub mod browser;
+pub mod cloud_run;
 mod config;
 mod config_migration;
 pub mod dir_search;
@@ -54,7 +55,7 @@ pub use error::{Error, Result};
 pub use git_changes::DiffViewer;
 pub use git_status::{DiffHunk, DiffLine, DiffLineKind, FileChange, FileDiff, FileStatus, GitStatus};
 pub use git_watcher::GitWatcher;
-pub use horizon_home::HorizonHome;
+pub use horizon_home::{HorizonHome, browser_mcp_executable};
 pub use managed_install::ManagedInstall;
 pub use panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume, browser_actor};
 pub use remote_hosts::{

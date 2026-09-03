@@ -68,10 +68,22 @@ NETWORK_CAPABILITIES = [
 
 
 class McpClient:
-    def __init__(self, command: Path, log_path: Path, timeout: float, actor: str) -> None:
+    def __init__(
+        self,
+        command: Path,
+        log_path: Path,
+        timeout: float,
+        actor: str,
+        host_instance: str | None = None,
+    ) -> None:
         self.log = log_path.open("w", encoding="utf-8")
         environment = os.environ.copy()
         environment["HORIZON_BROWSER_ACTOR"] = actor
+        # Horizon injects the launching host next to the actor; the workspace
+        # stamp on every browser manifest only matches identities from it.
+        environment.pop("HORIZON_BROWSER_HOST_INSTANCE", None)
+        if host_instance:
+            environment["HORIZON_BROWSER_HOST_INSTANCE"] = host_instance
         environment["RUST_LOG"] = "off"
         self.process = subprocess.Popen(
             [str(command), "--browser-mcp"],
@@ -238,6 +250,22 @@ def create_panel(client: McpClient, args: argparse.Namespace) -> tuple[dict[str,
         or panel["visible"]
     ):
         raise AssertionError(created)
+    # Creation with a URL completes only after the backend is ready and that
+    # page committed, so the ready panel already reports the committed page
+    # and the very next semantic call can inspect it.
+    if (
+        created.get("navigation") != "committed"
+        or panel["url"] != f"{args.base_url}/index.html"
+        or not isinstance(created.get("startup_millis"), int)
+    ):
+        raise AssertionError(f"browser_create returned before its first page committed: {created}")
+    print(json.dumps({"create_startup_millis": created["startup_millis"], "backend": args.backend}), flush=True)
+    first_query, _ = client.call(
+        "browser_query",
+        {"panel_id": panel["panel_id"], "selector": "#smoke-input"},
+    )
+    if first_query is None or len(first_query["nodes"]) != 1:
+        raise AssertionError(f"the created page was not queryable immediately after browser_create: {first_query}")
     audit, _ = client.call(
         "browser_audit",
         {"panel_id": panel["panel_id"], "action_id": action_id, "limit": 10},
@@ -300,7 +328,11 @@ def wait_for_fingerprint(
     panel_id: str,
     action_ids: list[str],
 ) -> dict[str, Any]:
-    expression = "({fingerprint: window.__fingerprint ?? null, iframe: window.__iframeWebdriver ?? null})"
+    expression = (
+        "({fingerprint: window.__fingerprint ?? null, "
+        "iframeReady: window.__iframeProbeReady === true, "
+        "crossOriginReady: window.__crossOriginProbeReady === true})"
+    )
     deadline = time.monotonic() + 10
     value: Any = None
     while time.monotonic() < deadline:
@@ -311,10 +343,29 @@ def wait_for_fingerprint(
             action_ids,
         )
         value = result["value"]
-        if isinstance(value, dict) and isinstance(value.get("fingerprint"), dict) and value.get("iframe") is not None:
+        if (
+            isinstance(value, dict)
+            and isinstance(value.get("fingerprint"), dict)
+            and value.get("iframeReady") is True
+            and value.get("crossOriginReady") is True
+        ):
             return value["fingerprint"]
         time.sleep(0.1)
     raise AssertionError(f"fingerprint did not settle: {value}")
+
+
+def _webdriver_hidden(value: Any) -> bool:
+    return value in {False, None}
+
+
+def _positive_pair(value: Any, name: str, fingerprint: dict[str, Any]) -> tuple[float, float]:
+    if not (
+        isinstance(value, list)
+        and len(value) == 2
+        and all(isinstance(item, (int, float)) and not isinstance(item, bool) and item > 0 for item in value)
+    ):
+        raise AssertionError(f"{name} geometry was missing or invalid: {fingerprint}")
+    return float(value[0]), float(value[1])
 
 
 def verify_disclosure(fingerprint: dict[str, Any], backend: str, policy: str) -> None:
@@ -322,15 +373,302 @@ def verify_disclosure(fingerprint: dict[str, Any], backend: str, policy: str) ->
         fingerprint.get("earlyWebdriver"),
         fingerprint.get("currentWebdriver"),
         fingerprint.get("iframeWebdriver"),
+        fingerprint.get("crossOriginWebdriver"),
     ]
     if policy == "browser_default":
-        if observed != [True, True, True]:
+        if observed != [True, True, True, True]:
             raise AssertionError(f"browser-default disclosure mismatch: {fingerprint}")
-    elif backend in {"chromium", "firefox"} and observed != [False, False, False]:
-        raise AssertionError(f"common-signal minimization mismatch: {fingerprint}")
+    elif backend == "firefox":
+        if observed != [False, False, False, False]:
+            raise AssertionError(f"common-signal minimization mismatch: {fingerprint}")
+    elif backend == "chromium":
+        if not all(_webdriver_hidden(value) for value in observed):
+            raise AssertionError(f"common-signal minimization mismatch: {fingerprint}")
+    horizon_names = fingerprint.get("horizonNames") or []
+    if horizon_names:
+        raise AssertionError(f"page advertised Horizon identifiers: {fingerprint}")
+    viewport = _positive_pair(fingerprint.get("viewport"), "viewport", fingerprint)
+    screen = _positive_pair(fingerprint.get("screen"), "screen", fingerprint)
+    dpr = fingerprint.get("dpr")
+    if not isinstance(dpr, (int, float)) or isinstance(dpr, bool) or dpr <= 0:
+        raise AssertionError(f"device pixel ratio was missing or invalid: {fingerprint}")
+    if viewport == screen:
+        raise AssertionError(f"viewport claimed the display size: {fingerprint}")
     if policy == "minimize_common_signals" and backend == "chromium":
         if "HeadlessChrome" in str(fingerprint.get("userAgent")):
             raise AssertionError(f"headless token remained: {fingerprint}")
+        brands = list(fingerprint.get("brands") or []) + list(
+            (fingerprint.get("high") or {}).get("fullVersionList") or []
+        )
+        brand_names = [entry.get("brand") for entry in brands if isinstance(entry, dict)]
+        if "HeadlessChrome" in brand_names:
+            raise AssertionError(f"headless client-hint brand remained: {fingerprint}")
+        if not any(name in {"Chrome", "Chromium"} for name in brand_names):
+            raise AssertionError(f"client-hint brands omitted Chrome/Chromium: {fingerprint}")
+        if fingerprint.get("webdriverDescriptorPresent") is True and fingerprint.get("webdriverGetterNative") is not True:
+            raise AssertionError(f"chromium webdriver getter was not native: {fingerprint}")
+
+
+def verify_navigation_outcome(
+    result: dict[str, Any],
+    wait: str,
+    state: str,
+    committed_url: str | None,
+    *,
+    redirected: bool,
+) -> None:
+    expected_completed = state in {"dispatched", "committed", "dom_content_loaded"}
+    if (
+        result.get("wait") != wait
+        or result.get("state") != state
+        or result.get("completed") is not expected_completed
+        or result.get("redirected") is not redirected
+        or not isinstance(result.get("elapsed_millis"), int)
+        or not result.get("requested_url")
+        or not result.get("action_id")
+    ):
+        raise AssertionError(f"browser_navigate did not report a typed {state} outcome: {result}")
+    if committed_url is not None and result.get("committed_url") != committed_url:
+        raise AssertionError(f"browser_navigate committed_url mismatch: {result}")
+
+
+def exercise_navigation_outcomes(
+    client: McpClient,
+    args: argparse.Namespace,
+    panel_id: str,
+    action_ids: list[str],
+    failed_ids: list[str],
+) -> None:
+    """Typed navigation outcomes: redirect, DOMContentLoaded, dispatch-only, unreachable, timeout."""
+    redirected = record_action(
+        client,
+        "browser_navigate",
+        {"panel_id": panel_id, "url": f"{args.base_url}/redirect-to-next"},
+        action_ids,
+    )
+    verify_navigation_outcome(redirected, "commit", "committed", f"{args.base_url}/next.html", redirected=True)
+    loaded = record_action(
+        client,
+        "browser_navigate",
+        {"panel_id": panel_id, "url": f"{args.base_url}/index.html", "wait": "dom_content_loaded"},
+        action_ids,
+    )
+    verify_navigation_outcome(loaded, "dom_content_loaded", "dom_content_loaded", f"{args.base_url}/index.html", redirected=False)
+    dispatched = record_action(
+        client,
+        "browser_navigate",
+        {"panel_id": panel_id, "url": f"{args.base_url}/next.html", "wait": "dispatched"},
+        action_ids,
+    )
+    verify_navigation_outcome(dispatched, "dispatched", "dispatched", None, redirected=False)
+    record_action(
+        client,
+        "browser_wait",
+        {"panel_id": panel_id, "selector": "#next-marker", "state": "visible"},
+        action_ids,
+    )
+    _, unreachable_error = client.call(
+        "browser_navigate",
+        {"panel_id": panel_id, "url": "http://127.0.0.1:9/unreachable", "timeout_millis": 20000},
+        expect_error=True,
+    )
+    if unreachable_error is None or "navigation_failed" not in unreachable_error:
+        raise AssertionError(f"unreachable destination was not a typed navigation failure: {unreachable_error}")
+    failed_ids.append(failed_action_id(unreachable_error))
+    retained, _ = client.call("browser_panel", {"panel_id": panel_id})
+    if retained is None or retained["url"] != f"{args.base_url}/next.html":
+        raise AssertionError(f"unreachable navigation replaced the committed page: {retained}")
+    if args.backend != "safari":
+        timed_out = record_action(
+            client,
+            "browser_navigate",
+            {"panel_id": panel_id, "url": f"{args.base_url}/slow-navigation.html", "timeout_millis": 3000},
+            action_ids,
+        )
+        verify_navigation_outcome(timed_out, "commit", "timed_out", None, redirected=False)
+        if timed_out.get("committed_url") is not None or timed_out["elapsed_millis"] < 2000:
+            raise AssertionError(f"timed-out navigation did not report the pre-commit state: {timed_out}")
+        # The navigation keeps running after the bounded report. Page
+        # scripting is queued behind the pending commit, so watch the host's
+        # committed URL (no browser roundtrip) before touching the DOM.
+        wait_for_panel_url(client, panel_id, f"{args.base_url}/slow-navigation.html", 30.0)
+        record_action(
+            client,
+            "browser_wait",
+            {"panel_id": panel_id, "selector": "#slow-marker", "state": "visible", "timeout_millis": 30000},
+            action_ids,
+        )
+    # Leave history as the following back/forward lane expects: index.html
+    # immediately behind next.html.
+    for page in ("index.html", "next.html"):
+        settled = record_action(
+            client,
+            "browser_navigate",
+            {"panel_id": panel_id, "url": f"{args.base_url}/{page}"},
+            action_ids,
+        )
+        verify_navigation_outcome(settled, "commit", "committed", f"{args.base_url}/{page}", redirected=False)
+
+
+# Milliseconds after load at which the delayed fixture mutates for the wait
+# lanes; the same figure the transition lanes use.
+DELAYED_FIXTURE_MILLIS = 4000
+
+
+def exercise_wait_outcomes(
+    client: McpClient,
+    args: argparse.Namespace,
+    panel_id: str,
+    action_ids: list[str],
+    failed_ids: list[str],
+) -> dict[str, Any]:
+    """Prove browser_wait is one engine-side audited action.
+
+    The delayed fixture hides ``#early-marker`` and appends ``#late-marker``
+    4 s after load (``?delay=4000``). A wait for the late element must settle
+    from the engine's own observation (one action id, several observations,
+    elapsed close to the DOM change), an already-satisfied wait must settle on
+    its first observation, and a wait that cannot be met must fail with the
+    typed ``wait_timeout`` code at the bound. Audit counts per action id are
+    checked after the audit read. The wait is queued only after the navigate
+    result was delivered, so on a loaded host the engine can observe only the
+    remainder of the fixture delay: the lower elapsed bound is derived from
+    the measured navigate wall time, and that gap is reported for diagnosis.
+    """
+    navigate_started = time.monotonic()
+    navigated = record_action(
+        client,
+        "browser_navigate",
+        {"panel_id": panel_id, "url": f"{args.base_url}/delayed.html?delay={DELAYED_FIXTURE_MILLIS}", "timeout_millis": 15000},
+        action_ids,
+    )
+    navigate_wall_millis = int((time.monotonic() - navigate_started) * 1000)
+    if navigated["state"] != "committed":
+        raise AssertionError(navigated)
+    started = time.monotonic()
+    delayed = record_action(
+        client,
+        "browser_wait",
+        {"panel_id": panel_id, "selector": "#late-marker", "state": "visible", "timeout_millis": 10000},
+        action_ids,
+    )
+    delayed_wall_millis = int((time.monotonic() - started) * 1000)
+    if delayed["state"] != "visible" or len(delayed["nodes"]) != 1 or delayed["nodes"][0]["text"] != "late element arrived":
+        raise AssertionError(delayed)
+    # The DOM change lands about DELAYED_FIXTURE_MILLIS after load and the
+    # wait can only observe what is left of that once the navigate result has
+    # been delivered: require most of the remainder (one second of slack for
+    # queueing, the 100 ms cadence, and result delivery) and never less than a
+    # few observations.
+    expected_wait_millis = max(0, DELAYED_FIXTURE_MILLIS - navigate_wall_millis)
+    minimum_elapsed_millis = max(300, expected_wait_millis - 1000)
+    if not minimum_elapsed_millis <= delayed["elapsed_millis"] <= 8000 or delayed["polls"] < 3:
+        raise AssertionError((delayed, navigated["elapsed_millis"], navigate_wall_millis, minimum_elapsed_millis))
+    hidden = record_action(
+        client,
+        "browser_wait",
+        {"panel_id": panel_id, "selector": "#early-marker", "state": "hidden"},
+        action_ids,
+    )
+    if hidden["polls"] != 1 or hidden["state"] != "hidden":
+        raise AssertionError(hidden)
+    started = time.monotonic()
+    _, timeout_error = client.call(
+        "browser_wait",
+        {"panel_id": panel_id, "selector": "#never-marker", "state": "present", "timeout_millis": 1500},
+        expect_error=True,
+    )
+    timed_out_wall_millis = int((time.monotonic() - started) * 1000)
+    if (
+        timeout_error is None
+        or "wait_timeout" not in timeout_error
+        or "did not become present within the 1500 ms bound" not in timeout_error
+    ):
+        raise AssertionError(timeout_error)
+    # The engine must wait the full 1500 ms bound: a bound that ran 250 ms
+    # short would fail here around 1250 ms.
+    if not 1450 <= timed_out_wall_millis <= 4000:
+        raise AssertionError(timed_out_wall_millis)
+    timed_out_id = failed_action_id(timeout_error)
+    failed_ids.append(timed_out_id)
+    # Removal, an attribute change, and a style change, each observed as a
+    # delayed transition on a fresh page load with a 4 s delay, so result
+    # delivery lag (up to about 2.5 s on a loaded host) cannot let the
+    # transition complete before the wait is queued.
+    transitions = {}
+    for key, selector, state in [
+        ("removal", "#removed-marker", "hidden"),
+        ("attribute", "#attr-marker", "visible"),
+        ("style", "#early-marker", "hidden"),
+    ]:
+        reloaded = record_action(
+            client,
+            "browser_navigate",
+            {"panel_id": panel_id, "url": f"{args.base_url}/delayed.html?delay=4000&t={key}", "timeout_millis": 15000},
+            action_ids,
+        )
+        if reloaded["state"] != "committed":
+            raise AssertionError(reloaded)
+        observed = record_action(
+            client,
+            "browser_wait",
+            {"panel_id": panel_id, "selector": selector, "state": state, "timeout_millis": 10000},
+            action_ids,
+        )
+        if observed["state"] != state or not 1500 <= observed["elapsed_millis"] <= 8000 or observed["polls"] < 3:
+            raise AssertionError((key, observed))
+        if state == "visible" and len(observed["nodes"]) != 1:
+            raise AssertionError((key, observed))
+        transitions[key] = {"action_id": observed["action_id"], "elapsed_millis": observed["elapsed_millis"], "polls": observed["polls"]}
+    return {
+        "transitions": transitions,
+        "delayed_navigate_elapsed_millis": navigated["elapsed_millis"],
+        "delayed_navigate_wall_millis": navigate_wall_millis,
+        "delayed_wait_minimum_elapsed_millis": minimum_elapsed_millis,
+        "delayed_wait_action_id": delayed["action_id"],
+        "delayed_wait_elapsed_millis": delayed["elapsed_millis"],
+        "delayed_wait_wall_millis": delayed_wall_millis,
+        "delayed_wait_polls": delayed["polls"],
+        "satisfied_wait_action_id": hidden["action_id"],
+        "satisfied_wait_polls": hidden["polls"],
+        "timed_out_wait_action_id": timed_out_id,
+        "timed_out_wait_wall_millis": timed_out_wall_millis,
+    }
+
+
+def verify_wait_audit(entries: list[dict[str, Any]], waits: dict[str, Any]) -> dict[str, int]:
+    """Each engine-side wait must own exactly one queued/dispatched/terminal lifecycle."""
+    counts: dict[str, int] = {}
+    checks = [
+        ("delayed_wait_action_id", "completed"),
+        ("satisfied_wait_action_id", "completed"),
+        ("timed_out_wait_action_id", "failed"),
+    ]
+    for key, expected in checks:
+        action_id = waits[key]
+        statuses = [entry["status"] for entry in entries if entry["action_id"] == action_id]
+        if sorted(statuses) != sorted(["queued", "dispatched", expected]):
+            raise AssertionError((action_id, statuses))
+        kinds = {entry["action"].get("type") for entry in entries if entry["action_id"] == action_id}
+        if kinds != {"wait_for_selector"}:
+            raise AssertionError((action_id, kinds))
+        counts[key] = len(statuses)
+    for key, transition in waits["transitions"].items():
+        statuses = [entry["status"] for entry in entries if entry["action_id"] == transition["action_id"]]
+        if sorted(statuses) != sorted(["queued", "dispatched", "completed"]):
+            raise AssertionError((key, transition["action_id"], statuses))
+        counts[f"transition_{key}"] = len(statuses)
+    return counts
+
+
+def wait_for_panel_url(client: McpClient, panel_id: str, url: str, timeout_seconds: float) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        panel, _ = client.call("browser_panel", {"panel_id": panel_id})
+        if panel is not None and panel.get("url") == url:
+            return
+        time.sleep(0.5)
+    raise AssertionError(f"panel did not commit {url} within {timeout_seconds} s")
 
 
 def failed_action_id(error: str) -> str:
@@ -437,6 +775,7 @@ def exercise_network_capture(
         args.log.with_name(f"{args.log.stem}-watch{args.log.suffix}"),
         args.timeout,
         args.actor,
+        args.host_instance,
     )
     initialize(watch_client)
 
@@ -596,6 +935,7 @@ def exercise_network_capture(
         args.log.with_name(f"{args.log.stem}-stop-watch{args.log.suffix}"),
         args.timeout,
         args.actor,
+        args.host_instance,
     )
     initialize(stop_watch_client)
 
@@ -961,18 +1301,21 @@ def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
     if after_scroll is None or after_scroll["url"] != before_scroll["url"]:
         raise AssertionError("scroll changed the browser panel's committed URL")
 
-    record_action(
+    navigated = record_action(
         client,
         "browser_navigate",
         {"panel_id": panel_id, "url": f"{args.base_url}/next.html"},
         action_ids,
     )
+    verify_navigation_outcome(navigated, "commit", "committed", f"{args.base_url}/next.html", redirected=False)
     record_action(
         client,
         "browser_wait",
         {"panel_id": panel_id, "selector": "#next-marker", "state": "visible"},
         action_ids,
     )
+    wait_outcomes = exercise_wait_outcomes(client, args, panel_id, action_ids, failed_ids)
+    exercise_navigation_outcomes(client, args, panel_id, action_ids, failed_ids)
     record_action(client, "browser_act", {"panel_id": panel_id, "action": "back"}, action_ids)
     record_action(
         client,
@@ -994,16 +1337,21 @@ def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
 
     retained_title = final_snapshot["title"]
     if args.backend == "safari":
-        record_action(
+        # Classic WebDriver: a short bound on the 11-second page must return
+        # the typed timed_out outcome (the navigation keeps running and the
+        # driver polls it to its commit), then the retained lane continues.
+        bounded = record_action(
             client,
             "browser_navigate",
             {
                 "panel_id": panel_id,
                 "url": f"{args.base_url}/slow-navigation.html",
-                "timeout_millis": 60000,
+                "timeout_millis": 3000,
             },
             action_ids,
         )
+        verify_navigation_outcome(bounded, "commit", "timed_out", None, redirected=False)
+        wait_for_panel_url(client, panel_id, f"{args.base_url}/slow-navigation.html", 30)
         record_action(
             client,
             "browser_wait",
@@ -1055,7 +1403,9 @@ def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
         )
         network_capture["active_close_path"] = active_close["path"]
 
-    audit_entries = len(verify_audit(client, panel_id, action_ids, failed_ids, double_click_id))
+    audit_records = verify_audit(client, panel_id, action_ids, failed_ids, double_click_id)
+    audit_entries = len(audit_records)
+    wait_outcomes["audit_entries_per_wait"] = verify_wait_audit(audit_records, wait_outcomes)
     handoff_request = None
     if args.handoff:
         handoff, _ = client.call(
@@ -1131,6 +1481,7 @@ def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
 
     return {
         "audit_entries": audit_entries,
+        "wait_outcomes": wait_outcomes,
         "backend": args.backend,
         "completed_actions": len(action_ids),
         "double_click": {"count": 2, "trusted": True},
@@ -1195,6 +1546,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--log", type=Path, required=True)
     parser.add_argument("--actor", required=True, help="exact HORIZON_BROWSER_ACTOR from the owning agent panel")
+    parser.add_argument(
+        "--host-instance",
+        default=None,
+        help="exact HORIZON_BROWSER_HOST_INSTANCE injected next to the actor by the launching Horizon host",
+    )
     parser.add_argument("--timeout", type=float, default=60, help="individual MCP request timeout")
     parser.add_argument("--handoff", action="store_true", help="request handoff and wait for visible user hand-back")
     parser.add_argument("--handoff-timeout", type=float, default=300)
@@ -1207,7 +1563,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not command.is_file():
         raise SystemExit(f"Horizon binary does not exist: {command}")
     args.log.parent.mkdir(parents=True, exist_ok=True)
-    client: McpClient | None = McpClient(command, args.log, args.timeout, args.actor)
+    client: McpClient | None = McpClient(command, args.log, args.timeout, args.actor, args.host_instance)
     try:
         assert client is not None
         result = exercise(client, args)
@@ -1215,7 +1571,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         client = None
         first_client.close()
         reconnect_log = args.log.with_name(f"{args.log.stem}-reconnect{args.log.suffix}")
-        client = McpClient(command, reconnect_log, args.timeout, args.actor)
+        client = McpClient(command, reconnect_log, args.timeout, args.actor, args.host_instance)
         result["mcp_reconnect"] = exercise_reconnect(
             client,
             args.backend,

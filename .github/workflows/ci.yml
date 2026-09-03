@@ -118,6 +118,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.cache_key }}
+      - name: Link the Swift runtime in macOS test binaries
+        if: startsWith(matrix.os, 'macos-')
+        run: echo "RUSTFLAGS=${RUSTFLAGS} -C link-arg=-Wl,-rpath,/usr/lib/swift" >> "$GITHUB_ENV"
       - run: cargo test --workspace
       # Speech tests (resampler, GGUF reader, shortcut matchers, engine
       # state machine) run on every OS in the matrix so the native audio

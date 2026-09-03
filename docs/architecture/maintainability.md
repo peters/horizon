@@ -27,8 +27,13 @@ back into large multi-purpose modules.
 - Host-specific IPC, authentication, persistence, and retention stay outside
   the crate behind `BrowserCoordination`.
 - `session.rs` orchestrates the Chromium driver; command dispatch, event
-  transitions, host coordination, lifecycle, startup, and shutdown belong in
-  focused `session/` leaves.
+  transitions, host coordination, lifecycle, startup, shutdown, and agent
+  navigation settlement (`session/navigation.rs`) belong in focused
+  `session/` leaves. The backend-neutral pending-navigation state machine
+  lives in `navigation.rs` so both drivers settle the same typed outcome.
+  Selector waits follow the same shape: the backend-neutral `PendingWait`
+  state machine lives in `wait.rs`, and each driver's observation loop glue
+  in `session/wait.rs` and `webdriver/session/wait.rs`.
 - `webdriver/session.rs` orchestrates Firefox and Safari. Host coordination
   belongs in `webdriver/session/coordination.rs`, synchronous navigation
   outcomes in `webdriver/session/navigation.rs`, and HTTP, action translation,
@@ -54,8 +59,9 @@ back into large multi-purpose modules.
   `browser/manifest/agent.rs`, bounded host-routed panel creation in
   `browser/manifest/create.rs`, visibility requests in
   `browser/manifest/visibility.rs`, their shared private queue primitives in
-  `browser/manifest/request_queue.rs`, and append-only audit storage in
-  `browser/manifest/audit.rs`.
+  `browser/manifest/request_queue.rs`, host-stamped workspace membership that
+  scopes MCP discovery and control in `browser/manifest/workspace.rs`, and
+  append-only audit storage in `browser/manifest/audit.rs`.
 - `runtime_state.rs` should stay focused on persisted board/window state; agent
   binding orchestration, discovery, and external-store parsing belong in
   `runtime_state/` helper modules. Binding validation and assignment live in
@@ -76,8 +82,9 @@ back into large multi-purpose modules.
 - `app/` leaf modules stay focused:
   - `actions/`: overlay/layout math, panel lifecycle helpers, palette/shortcut
     dispatch, picker flows, and canvas interaction helpers
-  - `browser_requests`: transient host polling, panel creation, and visibility
-    changes for authenticated requests routed from a live agent panel
+  - `browser_requests`: transient host polling, panel creation, visibility
+    changes for authenticated requests routed from a live agent panel, and the
+    host-owned workspace stamp that keeps MCP authorization current
   - `canvas`: canvas rendering and HUD
   - `lifecycle`: frame orchestration and repaint pacing, with application-exit
     ownership and persistence sequencing in `lifecycle/shutdown.rs`

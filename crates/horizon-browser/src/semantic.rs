@@ -11,7 +11,7 @@ use serde_json::Value;
 
 pub use horizon_browser_protocol::{
     AgentActionResult, BrowserActionOutcome, BrowserBounds, BrowserControlFailure, BrowserControlValue, BrowserNode,
-    BrowserSnapshot, BrowserTarget,
+    BrowserSnapshot, BrowserTarget, NavigationOutcome, NavigationState, SelectorState, WaitOutcome,
 };
 
 const MAX_CONTROL_RESULT_BYTES: usize = 1024 * 1024;
@@ -35,10 +35,48 @@ impl Default for SemanticState {
 }
 
 impl SemanticState {
+    /// Current page generation; it advances whenever a navigation invalidates
+    /// earlier references.
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
     pub(crate) fn invalidate(&mut self) {
         self.generation = self.generation.wrapping_add(1).max(1);
         self.revision = 0;
         self.references.clear();
+    }
+
+    /// Parse a scan without registering references: the page generation and
+    /// the nodes (with empty references) for judging a condition, leaving the
+    /// reference map of the last registered snapshot or query untouched.
+    pub(crate) fn peek_nodes(&self, value: &Value) -> Result<PeekedScan, BrowserControlFailure> {
+        let response: NodeScanResponse = serde_json::from_value(value.clone())
+            .map_err(|error| BrowserControlFailure::new("invalid_result", format!("invalid page snapshot: {error}")))?;
+        if let Some(error) = response.error {
+            return Err(error);
+        }
+        let document_identity = response.document_identity;
+        let summary = response.summary;
+        let nodes = response
+            .nodes
+            .into_iter()
+            .map(|scanned| BrowserNode {
+                reference: String::new(),
+                role: truncate_utf8(scanned.role, MAX_NODE_STRING_BYTES),
+                name: truncate_utf8(scanned.name, MAX_NODE_STRING_BYTES),
+                text: truncate_utf8(scanned.text, MAX_NODE_STRING_BYTES),
+                visible: scanned.visible,
+                enabled: scanned.enabled,
+                bounds: scanned.bounds.filter(valid_bounds),
+            })
+            .collect();
+        Ok(PeekedScan {
+            generation: self.generation,
+            nodes,
+            summary,
+            document_identity,
+        })
     }
 
     pub(crate) fn register_nodes(
@@ -86,8 +124,31 @@ impl SemanticState {
 struct NodeScanResponse {
     #[serde(default)]
     nodes: Vec<ScannedNode>,
+    #[serde(default, rename = "documentIdentity")]
+    document_identity: Option<String>,
+    #[serde(default)]
+    summary: Option<ScanSummary>,
     #[serde(default)]
     error: Option<BrowserControlFailure>,
+}
+
+/// A scan parsed without registering references: the page generation, the
+/// returned nodes (with empty references), the selector-wide match summary
+/// when the scan had a selector, and the script-observed document identity.
+#[derive(Debug, Default)]
+pub(crate) struct PeekedScan {
+    pub(crate) generation: u64,
+    pub(crate) nodes: Vec<BrowserNode>,
+    pub(crate) summary: Option<ScanSummary>,
+    pub(crate) document_identity: Option<String>,
+}
+
+/// Match and visibility counts over every element a selector scan matched,
+/// beyond the capped nodes it returned.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+pub(crate) struct ScanSummary {
+    pub(crate) matched: usize,
+    pub(crate) visible: usize,
 }
 
 #[derive(Deserialize)]
@@ -145,10 +206,22 @@ pub(crate) fn bounded_control_value(value: Value) -> Result<Value, BrowserContro
     }
 }
 
+/// A snapshot or query scan: it stops at `max_nodes` results.
 pub(crate) fn scan_expression(selector: Option<&str>, max_nodes: u32) -> String {
     let selector = selector.map_or_else(|| "null".to_string(), json_string);
     let semantic_only = selector == "null";
-    format!("({NODE_SCAN_FUNCTION})({selector}, {max_nodes}, {semantic_only})")
+    format!("({NODE_SCAN_FUNCTION})({selector}, {max_nodes}, {semantic_only}, false)")
+}
+
+/// A wait observation: the scan returns at most `max_nodes` results but
+/// keeps counting matches and visible matches over the whole match list, so
+/// the condition can be judged beyond the returned nodes. Only waits pay for
+/// the full pass; queries keep the early stop.
+pub(crate) fn wait_scan_expression(selector: &str, max_nodes: u32) -> String {
+    format!(
+        "({NODE_SCAN_FUNCTION})({}, {max_nodes}, false, true)",
+        json_string(selector)
+    )
 }
 
 pub(crate) fn target_rect_expression(selector: &str, clear: bool) -> String {
@@ -186,7 +259,10 @@ fn json_string(value: &str) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
 }
 
-const NODE_SCAN_FUNCTION: &str = r"function(selector, maxNodes, semanticOnly) {
+const NODE_SCAN_FUNCTION: &str = r"function(selector, maxNodes, semanticOnly, countMatches) {
+    const documentIdentity = JSON.stringify([
+        String(location.href), Number(globalThis.performance?.timeOrigin || 0)
+    ]);
     const roleFor = (element) => {
         const explicit = element.getAttribute('role');
         if (explicit) return explicit.split(/\s+/)[0];
@@ -250,15 +326,28 @@ const NODE_SCAN_FUNCTION: &str = r"function(selector, maxNodes, semanticOnly) {
     try {
         candidates = document.querySelectorAll(selector === null ? '*' : selector);
     } catch (error) {
-        return { nodes: [], error: { code: 'invalid_selector', message: compact(error?.message || error) } };
+        return {
+            nodes: [], documentIdentity,
+            error: { code: 'invalid_selector', message: compact(error?.message || error) }
+        };
     }
     const nodes = [];
+    // A wait asks for match and visibility counts over every match so its
+    // condition can be judged beyond the returned cap; snapshots and queries
+    // stop at the cap and never lay out the rest of the page.
+    let matched = 0;
+    let visibleMatches = 0;
     for (const element of candidates) {
-        if (nodes.length >= maxNodes) break;
+        if (nodes.length >= maxNodes && !countMatches) break;
         const style = getComputedStyle(element);
         const rect = element.getBoundingClientRect();
         const visible = style.display !== 'none' && style.visibility !== 'hidden' &&
             Number(style.opacity || 1) !== 0 && rect.width > 0 && rect.height > 0;
+        if (countMatches) {
+            matched += 1;
+            if (visible) visibleMatches += 1;
+            if (nodes.length >= maxNodes) continue;
+        }
         const role = roleFor(element);
         const name = nameFor(element);
         const tag = element.tagName.toLowerCase();
@@ -272,7 +361,9 @@ const NODE_SCAN_FUNCTION: &str = r"function(selector, maxNodes, semanticOnly) {
             bounds: visible ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null,
         });
     }
-    return { nodes };
+    return countMatches
+        ? { nodes, documentIdentity, summary: { matched, visible: visibleMatches } }
+        : { nodes, documentIdentity };
 }";
 
 const TARGET_RECT_FUNCTION: &str = r"function(selector, clear) {
@@ -358,7 +449,10 @@ mod tests {
         let expression = scan_expression(Some("button'); throw new Error('owned"), 10);
 
         assert!(expression.contains("\"button'); throw new Error('owned\""));
-        assert!(expression.ends_with(", 10, false)"));
+        assert!(expression.ends_with(", 10, false, false)"));
+        let wait = wait_scan_expression("button'); throw new Error('owned", 10);
+        assert!(wait.contains("\"button'); throw new Error('owned\""));
+        assert!(wait.ends_with(", 10, false, true)"));
     }
 
     #[test]
@@ -375,6 +469,32 @@ mod tests {
         let expression = scan_expression(None, 10);
 
         assert!(expression.contains("if (tag === 'iframe') return 'iframe'"));
+    }
+
+    #[test]
+    fn wait_peeks_preserve_the_script_observed_document_identity() {
+        let state = SemanticState::default();
+        let peeked = state
+            .peek_nodes(&serde_json::json!({
+                "nodes": [],
+                "documentIdentity": "[\"https://example.test/\",1234]"
+            }))
+            .unwrap_or_default();
+
+        assert!(peeked.nodes.is_empty());
+        assert_eq!(
+            peeked.document_identity.as_deref(),
+            Some("[\"https://example.test/\",1234]")
+        );
+        assert!(scan_expression(None, 10).contains("documentIdentity"));
+    }
+
+    #[test]
+    fn only_wait_scans_count_matches_past_the_cap() {
+        assert!(scan_expression(Some("button"), 10).ends_with("(\"button\", 10, false, false)"));
+        assert!(scan_expression(None, 10).ends_with("(null, 10, true, false)"));
+        assert!(wait_scan_expression("button", 20).ends_with("(\"button\", 20, false, true)"));
+        assert!(NODE_SCAN_FUNCTION.contains("if (nodes.length >= maxNodes && !countMatches) break;"));
     }
 
     #[test]

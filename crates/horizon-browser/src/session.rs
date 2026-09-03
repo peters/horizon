@@ -29,12 +29,15 @@ mod command_queue;
 mod commands;
 mod events;
 mod handle;
+mod http_bodies;
 mod lifecycle;
 mod manifest_io;
+mod navigation;
 mod network;
 mod semantic;
 mod shutdown;
 mod startup;
+mod wait;
 
 use clipboard::ClipboardState;
 pub(crate) use command_queue::CommandReceiver;
@@ -45,7 +48,7 @@ pub use horizon_browser_protocol::BrowserCommand;
 pub use shutdown::BrowserShutdownSignal;
 use startup::run_driver;
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
@@ -67,6 +70,7 @@ pub enum BrowserEvent {
     /// Chrome is up and the page session is attached.
     Ready,
     Title(String),
+    /// A top-level document committed or recovered; the URL may repeat to clear a prior failure.
     UrlChanged(String),
     NavigationFailed(String),
     Loading(bool),
@@ -157,28 +161,6 @@ const USER_ACTIVE_TTL: Duration = Duration::from_secs(5);
 const VIEWPORT_CAPTURE_DELAY: Duration = Duration::from_millis(75);
 const VIEWPORT_RETRY_DELAY: Duration = Duration::from_millis(100);
 const SCROLLBAR_LAYOUT_RETRY_DELAY: Duration = Duration::from_millis(100);
-const TITLE_BINDING_NAME: &str = "__horizonBrowserTitleChanged";
-const TITLE_OBSERVER_SCRIPT: &str = r"(() => {
-    if (window !== top || window.__horizonBrowserTitleObserver) return;
-    let lastTitle;
-    const publish = () => {
-        const title = document.title;
-        if (title === lastTitle) return;
-        lastTitle = title;
-        window.__horizonBrowserTitleChanged(JSON.stringify({ title, href: location.href }));
-    };
-    const install = () => {
-        if (window.__horizonBrowserTitleObserver) return;
-        const root = document.head || document.documentElement;
-        if (!root) return;
-        const observer = new MutationObserver(publish);
-        observer.observe(root, { childList: true, characterData: true, subtree: true });
-        window.__horizonBrowserTitleObserver = observer;
-        publish();
-    };
-    if (document.documentElement) install();
-    else addEventListener('DOMContentLoaded', install, { once: true });
-})()";
 
 /// Spawn the driver thread. Browser startup problems are reported through
 /// the event channel rather than failing here.
@@ -266,6 +248,7 @@ fn run_loop(
         if state.drain_commands(link, command_rx, event_tx, frame_slot) {
             state.flush_http_response_bodies(link, event_tx, frame_slot);
             state.capture_final_url(link, event_tx, frame_slot);
+            state.settle_pending_wait_for_shutdown(Instant::now());
             // Ask Chrome to exit cleanly so it marks its profile session
             // complete (kill alone leaves a "crashed" state that makes the
             // next launch restore stale tabs); the kill below is the
@@ -303,6 +286,7 @@ fn run_loop(
             // failure and stop — the panel offers Retry.
             tracing::warn!(target: "browser", "cdp connection lost: {error}");
             let _ = event_tx.send(BrowserEvent::Warning(format!("CDP connection lost: {error}")));
+            state.settle_pending_wait_for_shutdown(Instant::now());
             let _ = chrome.kill();
             let _ = event_tx.send(BrowserEvent::Stopped { code: None });
             break;
@@ -312,6 +296,9 @@ fn run_loop(
         // loading-finished event. Keep each pass bounded so network traffic
         // cannot starve input, frames, or coordination.
         state.tick_http_response_bodies(link, event_tx, frame_slot);
+        if let Some(message) = state.challenge_loop.take_rejection() {
+            let _ = event_tx.send(BrowserEvent::NavigationFailed(message.to_string()));
+        }
 
         // 3. Flush a pending throttled manifest write (the loop always
         //    iterates, so a quiet page still gets its url/title flushed).
@@ -333,17 +320,33 @@ fn run_loop(
         state.pending_restart_tick(link, event_tx, frame_slot);
 
         // 5. Ownership / handoff signals from the manifest (agent side).
+        if stop_for_chrome_exit(state, chrome, event_tx) {
+            break;
+        }
         let actions = state.tick_signals(event_tx);
-        let _ = state.drain_agent_actions(link, event_tx, frame_slot, actions);
+        let _ = state.drain_agent_actions(link, event_tx, frame_slot, actions, chrome);
+        if stop_for_chrome_exit(state, chrome, event_tx) {
+            break;
+        }
+        state.tick_pending_navigation();
+        state.tick_pending_wait(link, event_tx, frame_slot, chrome);
 
         // 6. Chrome process liveness.
-        if let Some(status) = chrome.child_status() {
-            let _ = event_tx.send(BrowserEvent::Stopped { code: status.code() });
+        if stop_for_chrome_exit(state, chrome, event_tx) {
             break;
         }
 
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+fn stop_for_chrome_exit(state: &mut DriverState, chrome: &mut ChromeProcess, event_tx: &BrowserEventSender) -> bool {
+    let Some(status) = chrome.child_status() else {
+        return false;
+    };
+    state.settle_pending_wait_for_shutdown(Instant::now());
+    let _ = event_tx.send(BrowserEvent::Stopped { code: status.code() });
+    true
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -428,24 +431,31 @@ struct DriverState {
     /// committed a reachable top-level document.
     retain_frame_during_navigation: bool,
     navigation_failed: bool,
+    /// Agent navigation whose typed outcome is settled by page events.
+    pending_navigation: Option<crate::navigation::PendingNavigation>,
+    pending_wait: Option<crate::wait::PendingWait>,
+    /// The top frame started a navigation (reload, history, page-initiated,
+    /// or command) whose commit or failure has not arrived yet.
+    top_frame_navigating: bool,
+    /// In-flight `Page.navigate` request. The reply is routed asynchronously
+    /// so a slow destination never blocks frames, input, or coordination.
+    navigate_request_id: Option<u64>,
+    /// In-flight `Page.startScreencast` request, for the same reason.
+    screencast_request_id: Option<u64>,
     clipboard: ClipboardState,
     url: String,
     title: String,
     initial_navigated: bool,
     screencast_on: bool,
     pending_restart_at: Option<Instant>,
-    /// Default execution context of the current document. After a
-    /// navigation, `Runtime.evaluate` without an explicit `contextId` can
-    /// still hit the old document's context for a while, so the title
-    /// fetch targets the latest default context explicitly.
-    title_context_id: Option<u64>,
-    /// `executionContextCreated` for the new document can land after
-    /// `loadEventFired`, so the post-load fetch is slightly delayed to let
-    /// the context tracking catch up first.
+    /// Delayed `Target.getTargetInfo` read after navigation. Title updates
+    /// come from protocol target metadata, not a page-JS binding.
     title_fetch_at: Option<Instant>,
-    /// Retries for a title fetch that still evaluated in the previous
-    /// document's execution context (detected via `location.href`).
-    title_fetch_retries: u32,
+    /// `Runtime.enable` is deferred until snapshot, evaluate, clipboard, or
+    /// scrollbar scrolling actually needs it. Enabling it at attach is a
+    /// script-visible CDP signal.
+    runtime_enable_requested: HashSet<String>,
+    runtime_enable_inflight: HashMap<u64, String>,
     restart_attempts: u32,
     pending_reattach: bool,
     reattach_in_flight: bool,
@@ -458,11 +468,16 @@ struct DriverState {
     last_signal_check: Instant,
     last_user_active_stamp: Option<Instant>,
     owner_seen: Option<String>,
+    /// Counts successful coordination reads; a deferred wait result is
+    /// released only under a later epoch than it was observed under.
+    signal_epoch: u64,
     handoff_seen: Option<String>,
     audit_sampler: crate::audit::BrowserAuditSampler,
     semantic: SemanticState,
+    challenge_loop: crate::challenge::ChallengeLoopDetector,
     network: crate::network::NetworkCaptureState,
-    pending_http_bodies: VecDeque<(String, String)>,
+    pending_http_bodies: VecDeque<http_bodies::PendingHttpBody>,
+    http_body_evidence: http_bodies::HttpBodyEvidenceTable,
     stop_requested: Arc<AtomicBool>,
 }
 
@@ -491,6 +506,11 @@ impl DriverState {
             interaction_started_at: None,
             retain_frame_during_navigation: false,
             navigation_failed: false,
+            pending_navigation: None,
+            pending_wait: None,
+            top_frame_navigating: false,
+            navigate_request_id: None,
+            screencast_request_id: None,
             clipboard: ClipboardState::default(),
             // The requested initial URL is not committed state. Chrome starts
             // at about:blank and navigation may fail or be cancelled.
@@ -499,9 +519,9 @@ impl DriverState {
             initial_navigated: false,
             screencast_on: false,
             pending_restart_at: None,
-            title_context_id: None,
             title_fetch_at: None,
-            title_fetch_retries: 0,
+            runtime_enable_requested: HashSet::new(),
+            runtime_enable_inflight: HashMap::new(),
             restart_attempts: 0,
             pending_reattach: false,
             reattach_in_flight: false,
@@ -512,11 +532,14 @@ impl DriverState {
             last_signal_check: Instant::now(),
             last_user_active_stamp: None,
             owner_seen: None,
+            signal_epoch: 0,
             handoff_seen: None,
             audit_sampler: crate::audit::BrowserAuditSampler::default(),
             semantic: SemanticState::default(),
+            challenge_loop: crate::challenge::ChallengeLoopDetector::default(),
             network: crate::network::NetworkCaptureState::default(),
             pending_http_bodies: VecDeque::new(),
+            http_body_evidence: http_bodies::HttpBodyEvidenceTable::default(),
             stop_requested,
         }
     }
@@ -601,12 +624,98 @@ impl DriverState {
         method: &str,
         params: &serde_json::Value,
     ) -> Result<serde_json::Value, CdpError> {
+        self.send_page_command_within(link, event_tx, frame_slot, method, params, CALL_TIMEOUT)
+    }
+
+    /// A page-session command that may block the driver for at most `timeout`.
+    pub(super) fn send_page_command_within(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        method: &str,
+        params: &serde_json::Value,
+        timeout: Duration,
+    ) -> Result<serde_json::Value, CdpError> {
         let Some(session) = self.session_id.clone() else {
             return Err(CdpError::NoPageSession {
                 method: method.to_string(),
             });
         };
-        self.call_and_ack(link, event_tx, frame_slot, method, params, Some(session.as_str()))
+        if method.starts_with("Runtime.") {
+            self.ensure_page_runtime(link)?;
+        }
+        let stop_requested = Arc::clone(&self.stop_requested);
+        let outcome = link.call_and_drain_until(timeout, method, params, Some(session.as_str()), || {
+            stop_requested.load(Ordering::Acquire)
+        });
+        for message in outcome.drained {
+            self.handle_message(link, event_tx, frame_slot, message);
+        }
+        outcome.result
+    }
+
+    fn ensure_page_runtime(&mut self, link: &mut CdpLink) -> Result<(), CdpError> {
+        if self.session_id.is_none() {
+            return Err(CdpError::NoPageSession {
+                method: "Runtime.enable".to_string(),
+            });
+        }
+        self.request_runtime_for_sessions(link);
+        Ok(())
+    }
+
+    fn request_runtime_for_sessions(&mut self, link: &mut CdpLink) {
+        let Some(page_session) = self.session_id.clone() else {
+            return;
+        };
+        self.queue_runtime_enable(link, &page_session);
+        let iframe_sessions: Vec<String> = self.clipboard.iframe_sessions.iter().cloned().collect();
+        for session in iframe_sessions {
+            self.queue_runtime_enable(link, &session);
+        }
+    }
+
+    fn queue_runtime_enable(&mut self, link: &mut CdpLink, session: &str) {
+        if self.runtime_enable_requested.contains(session) {
+            return;
+        }
+        match link.send_request("Runtime.enable", &serde_json::json!({}), Some(session)) {
+            Ok(request_id) => {
+                self.runtime_enable_requested.insert(session.to_string());
+                self.runtime_enable_inflight.insert(request_id, session.to_string());
+            }
+            Err(error) => tracing::debug!(
+                target: "browser",
+                session,
+                "Runtime.enable request failed: {error}"
+            ),
+        }
+    }
+
+    fn handle_runtime_enable_response(&mut self, id: u64, error: Option<&crate::cdp::CdpErrorInfo>) -> bool {
+        let Some(session) = self.runtime_enable_inflight.remove(&id) else {
+            return false;
+        };
+        if error.is_some() {
+            self.runtime_enable_requested.remove(&session);
+            return true;
+        }
+        true
+    }
+
+    fn forget_runtime_session(&mut self, session: &str) {
+        forget_tracked_runtime_session(
+            &mut self.runtime_enable_requested,
+            &mut self.runtime_enable_inflight,
+            session,
+        );
+    }
+
+    fn reset_runtime_enable_state(&mut self) {
+        self.runtime_enable_requested.clear();
+        self.runtime_enable_inflight.clear();
+        self.clipboard.pending_capture = false;
     }
 
     fn navigate_to(
@@ -617,45 +726,75 @@ impl DriverState {
         url: &str,
     ) -> Result<(), BrowserControlFailure> {
         let url = normalize_navigation_target(url);
+        let Some(session) = self.session_id.clone() else {
+            let error = CdpError::NoPageSession {
+                method: "Page.navigate".to_string(),
+            };
+            self.fail_navigation(event_tx, &format!("could not navigate to {url}: {error}"));
+            return Err(BrowserControlFailure::new("protocol_error", error.to_string()));
+        };
+        let _ = frame_slot;
+        self.challenge_loop.document_navigation_started();
         self.retain_frame_during_navigation = true;
         self.navigation_failed = false;
-        let result = self.send_page_command(
-            link,
-            event_tx,
-            frame_slot,
-            "Page.navigate",
-            &serde_json::json!({ "url": &url }),
-        );
-        match result {
-            Ok(result) => {
-                if let Some(error) = result.get("errorText").and_then(serde_json::Value::as_str)
-                    && !error.is_empty()
-                {
-                    self.navigation_failed = true;
-                    self.interaction_started_at = None;
-                    let _ = event_tx.send(BrowserEvent::NavigationFailed(format!(
-                        "could not navigate to {url}: {error}"
-                    )));
-                    let _ = event_tx.send(BrowserEvent::Loading(false));
-                    return Err(BrowserControlFailure::new("navigation_failed", error));
-                }
-                // The committed URL remains authoritative and arrives via a
-                // navigation event. Do not overwrite it with a merely
-                // requested value.
+        // `Page.navigate` replies only once the destination starts
+        // responding, so it is sent without waiting: a slow server must not
+        // stall frames, input, or coordination. The reply is consumed by
+        // `handle_navigate_response`; the committed URL remains authoritative
+        // and arrives via a navigation event.
+        match link.send_request("Page.navigate", &serde_json::json!({ "url": &url }), Some(&session)) {
+            Ok(request_id) => {
+                self.navigate_request_id = Some(request_id);
                 self.pending_restart_at = Some(Instant::now());
                 let _ = event_tx.send(BrowserEvent::Loading(true));
                 Ok(())
             }
             Err(error) => {
-                self.navigation_failed = true;
-                self.interaction_started_at = None;
-                let _ = event_tx.send(BrowserEvent::NavigationFailed(format!(
-                    "could not navigate to {url}: {error}"
-                )));
-                let _ = event_tx.send(BrowserEvent::Loading(false));
+                self.fail_navigation(event_tx, &format!("could not navigate to {url}: {error}"));
                 Err(BrowserControlFailure::new("protocol_error", error.to_string()))
             }
         }
+    }
+
+    /// Consume the asynchronous `Page.navigate` reply: a transport error or
+    /// a non-empty `errorText` is a failed navigation.
+    pub(super) fn handle_navigate_response(
+        &mut self,
+        event_tx: &BrowserEventSender,
+        id: u64,
+        result: Option<&serde_json::Value>,
+        error: Option<&crate::cdp::CdpErrorInfo>,
+    ) -> bool {
+        if self.navigate_request_id != Some(id) {
+            return false;
+        }
+        self.navigate_request_id = None;
+        let failure = error.map(ToString::to_string).or_else(|| {
+            result
+                .and_then(|value| value.get("errorText"))
+                .and_then(serde_json::Value::as_str)
+                .filter(|text| !text.is_empty())
+                .map(str::to_string)
+        });
+        if let Some(failure) = failure {
+            self.fail_navigation(event_tx, &format!("could not navigate: {failure}"));
+            return true;
+        }
+        let loader_id = result
+            .and_then(|value| value.get("loaderId"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|id| !id.is_empty());
+        self.attach_navigation_id(loader_id);
+        true
+    }
+
+    fn fail_navigation(&mut self, event_tx: &BrowserEventSender, message: &str) {
+        self.navigation_failed = true;
+        self.top_frame_navigating = false;
+        self.interaction_started_at = None;
+        let _ = event_tx.send(BrowserEvent::NavigationFailed(message.to_string()));
+        let _ = event_tx.send(BrowserEvent::Loading(false));
+        self.observe_navigation_signal(crate::navigation::NavigationSignal::Failed { message, id: None });
     }
 }
 
@@ -679,6 +818,11 @@ fn normalized_committed_url(url: &str) -> &str {
     } else {
         url
     }
+}
+
+fn forget_tracked_runtime_session(requested: &mut HashSet<String>, inflight: &mut HashMap<u64, String>, session: &str) {
+    requested.remove(session);
+    inflight.retain(|_, tracked| tracked != session);
 }
 
 #[cfg(test)]
@@ -707,5 +851,16 @@ mod tests {
         }));
         assert!(!is_user_activity(&BrowserCommand::HandoffDone));
         assert!(!is_user_activity(&BrowserCommand::Stop));
+    }
+
+    #[test]
+    fn forgetting_a_runtime_session_drops_requested_and_inflight_entries() {
+        let mut requested = HashSet::from(["page".to_string(), "oopif".to_string()]);
+        let mut inflight = HashMap::from([(7, "oopif".to_string()), (8, "page".to_string())]);
+
+        forget_tracked_runtime_session(&mut requested, &mut inflight, "oopif");
+
+        assert_eq!(requested, HashSet::from(["page".to_string()]));
+        assert_eq!(inflight, HashMap::from([(8, "page".to_string())]));
     }
 }

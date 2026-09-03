@@ -25,6 +25,10 @@ pub(crate) struct BrowserPanel {
     pub(crate) protocol: ProtocolKind,
     pub(crate) url: String,
     pub(crate) title: String,
+    /// Host presentation state (shown or hidden). It says nothing about
+    /// workspace membership: for a Horizon-injected agent identity every
+    /// returned panel is already in that agent's workspace, while identities
+    /// from outside Horizon see every live panel.
     pub(crate) visible: bool,
     pub(crate) owner: Option<String>,
     #[serde(flatten)]
@@ -150,12 +154,78 @@ pub(crate) struct CreateInput {
     pub(crate) timeout_millis: Option<u64>,
 }
 
+/// Where the requested first page stood when `browser_create` returned.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CreateNavigationState {
+    /// No `url` was requested; the panel is ready at a blank page.
+    NotRequested,
+    /// The requested page committed; `panel.url` is authoritative. The title
+    /// is read after commit and may still be empty or change, so read it from
+    /// `browser_panel` or a snapshot when you need it.
+    Committed,
+    /// The backend is ready and controllable, but the requested page had not
+    /// committed within the bounded startup wait; `panel.url` may still be
+    /// empty. Use `browser_wait` or `browser_panel` before reading the page.
+    /// Also reported when an older host did not record readiness for a
+    /// requested `url`.
+    Pending,
+    /// The backend is ready and controllable, but the requested page failed
+    /// to load; `navigation_error` carries the browser's message and the
+    /// panel stays at its blank document. Navigate again or fix the URL.
+    Failed,
+    /// The user navigated the panel before the requested page committed; the
+    /// panel is controllable at the user's page and the requested page is not
+    /// coming. Read `panel.url` before acting.
+    Superseded,
+}
+
+impl From<horizon_core::browser::manifest::CreateNavigation> for CreateNavigationState {
+    fn from(navigation: horizon_core::browser::manifest::CreateNavigation) -> Self {
+        match navigation {
+            horizon_core::browser::manifest::CreateNavigation::NotRequested => Self::NotRequested,
+            horizon_core::browser::manifest::CreateNavigation::Committed => Self::Committed,
+            horizon_core::browser::manifest::CreateNavigation::Pending => Self::Pending,
+            horizon_core::browser::manifest::CreateNavigation::Failed => Self::Failed,
+            horizon_core::browser::manifest::CreateNavigation::Superseded => Self::Superseded,
+        }
+    }
+}
+
+impl CreateNavigationState {
+    /// Resolve a host result that may predate startup readiness: an absent
+    /// state means the host did not record it, so a requested `url` is
+    /// conservatively `pending`, never `not_requested`.
+    pub(crate) fn resolve(
+        recorded: Option<horizon_core::browser::manifest::CreateNavigation>,
+        url_requested: bool,
+    ) -> Self {
+        recorded.map_or(
+            if url_requested {
+                Self::Pending
+            } else {
+                Self::NotRequested
+            },
+            Self::from,
+        )
+    }
+}
+
 #[derive(Debug, Serialize, JsonSchema)]
 pub(crate) struct CreateOutput {
     /// Auditable identity for the panel creation lifecycle.
     pub(crate) action_id: String,
     /// Ready panel state. Use `panel.panel_id` with all other browser tools.
     pub(crate) panel: BrowserPanel,
+    /// Whether the requested first page committed before this returned.
+    pub(crate) navigation: CreateNavigationState,
+    /// The browser's message when `navigation` is `failed`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) navigation_error: Option<String>,
+    /// Milliseconds from the host accepting the request until the panel was
+    /// ready and, when a `url` was given, its page committed or the bounded
+    /// startup wait elapsed.
+    pub(crate) startup_millis: u64,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -180,14 +250,139 @@ pub(crate) struct PanelInput {
     pub(crate) panel_id: String,
 }
 
+/// Readiness `browser_navigate` waits for before it returns.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum NavigateWait {
+    /// Return as soon as the engine handed the command to the backend. The
+    /// browser's acceptance is not awaited (a later rejection is a failed
+    /// page state, not an action error) and nothing about the destination is
+    /// known yet; use `commit` for confirmation.
+    Dispatched,
+    /// Return once the top-level document committed, so `committed_url` is
+    /// authoritative (default).
+    #[default]
+    Commit,
+    /// Return once the committed document fired `DOMContentLoaded`.
+    #[serde(alias = "domcontentloaded")]
+    DomContentLoaded,
+}
+
+impl From<NavigateWait> for horizon_browser::NavigationWait {
+    fn from(wait: NavigateWait) -> Self {
+        match wait {
+            NavigateWait::Dispatched => Self::Dispatched,
+            NavigateWait::Commit => Self::Commit,
+            NavigateWait::DomContentLoaded => Self::DomContentLoaded,
+        }
+    }
+}
+
+impl From<horizon_browser::NavigationWait> for NavigateWait {
+    fn from(wait: horizon_browser::NavigationWait) -> Self {
+        match wait {
+            horizon_browser::NavigationWait::Dispatched => Self::Dispatched,
+            horizon_browser::NavigationWait::Commit => Self::Commit,
+            horizon_browser::NavigationWait::DomContentLoaded => Self::DomContentLoaded,
+        }
+    }
+}
+
+/// Where the navigation stood when `browser_navigate` returned.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum NavigateState {
+    /// Handed to the backend; acceptance was not awaited.
+    Dispatched,
+    /// The top-level document committed; `committed_url` is authoritative.
+    Committed,
+    /// The committed document fired `DOMContentLoaded`.
+    DomContentLoaded,
+    /// The requested readiness did not arrive within `timeout_millis`; the
+    /// other fields carry the latest page state. Inspect or retry.
+    TimedOut,
+    /// A later navigation on the same panel replaced this one.
+    Superseded,
+}
+
+impl From<horizon_browser::NavigationState> for NavigateState {
+    fn from(state: horizon_browser::NavigationState) -> Self {
+        match state {
+            horizon_browser::NavigationState::Dispatched => Self::Dispatched,
+            horizon_browser::NavigationState::Committed => Self::Committed,
+            horizon_browser::NavigationState::DomContentLoaded => Self::DomContentLoaded,
+            horizon_browser::NavigationState::TimedOut => Self::TimedOut,
+            horizon_browser::NavigationState::Superseded => Self::Superseded,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(crate) struct NavigateInput {
     /// Stable panel id returned by `browser_list`.
     pub(crate) panel_id: String,
     /// Destination URL.
     pub(crate) url: String,
-    /// Per-action timeout in milliseconds (1-60000).
+    /// Readiness to wait for before returning (default `commit`). The wait
+    /// is bounded by `timeout_millis`; on expiry the result reports
+    /// `state: "timed_out"` with the latest page state instead of failing.
+    pub(crate) wait: Option<NavigateWait>,
+    /// Navigation bound in milliseconds (1000-60000, default 15000); values
+    /// below 1000 are raised so the typed `timed_out` outcome can be reported.
     pub(crate) timeout_millis: Option<u64>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub(crate) struct NavigateOutput {
+    pub(crate) panel_id: String,
+    pub(crate) action_id: String,
+    /// Whether the requested readiness was reached. `false` for
+    /// `timed_out` and `superseded`; unreachable destinations and rejected
+    /// commands are reported as errors instead.
+    pub(crate) completed: bool,
+    pub(crate) state: NavigateState,
+    /// Readiness that was requested.
+    pub(crate) wait: NavigateWait,
+    /// Destination after omnibox normalization.
+    pub(crate) requested_url: String,
+    /// Committed top-level document URL, once a document committed during
+    /// this navigation.
+    pub(crate) committed_url: Option<String>,
+    /// Title of the committed document, when already known.
+    pub(crate) title: Option<String>,
+    /// Whether the committed document was still loading when reported.
+    pub(crate) loading: bool,
+    /// The committed URL differs from the requested destination.
+    pub(crate) redirected: bool,
+    /// Time from the caller queuing the action until this report; it
+    /// includes queue latency, so it measures the caller's wall-clock wait.
+    pub(crate) elapsed_millis: u64,
+}
+
+impl NavigateOutput {
+    pub(crate) fn from_outcome(
+        panel_id: String,
+        action_id: String,
+        navigation: horizon_browser::NavigationOutcome,
+    ) -> Self {
+        let state = NavigateState::from(navigation.state);
+        Self {
+            panel_id,
+            action_id,
+            completed: matches!(
+                state,
+                NavigateState::Dispatched | NavigateState::Committed | NavigateState::DomContentLoaded
+            ),
+            state,
+            wait: navigation.wait.into(),
+            requested_url: navigation.requested_url,
+            committed_url: navigation.committed_url,
+            title: navigation.title,
+            loading: navigation.loading,
+            redirected: navigation.redirected,
+            elapsed_millis: navigation.elapsed_millis,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -305,10 +500,22 @@ pub(crate) struct WaitInput {
     pub(crate) selector: String,
     /// Desired selector state.
     pub(crate) state: WaitState,
-    /// Total wait timeout in milliseconds (1-60000, default 10000).
+    /// Total wait bound in milliseconds (1000-60000, default 10000); smaller
+    /// values are raised to 1000.
     pub(crate) timeout_millis: Option<u64>,
-    /// Delay between audited queries in milliseconds (100-2000, default 250).
+    /// Ignored: the engine observes the page itself at a fixed cadence. Kept
+    /// so older callers keep validating.
     pub(crate) poll_millis: Option<u64>,
+}
+
+impl From<WaitState> for horizon_browser::SelectorState {
+    fn from(state: WaitState) -> Self {
+        match state {
+            WaitState::Present => Self::Present,
+            WaitState::Visible => Self::Visible,
+            WaitState::Hidden => Self::Hidden,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -425,9 +632,38 @@ pub(crate) struct EvaluateOutput {
 #[derive(Debug, Serialize, JsonSchema)]
 pub(crate) struct WaitOutput {
     pub(crate) panel_id: String,
+    /// The single audited action id this wait ran as.
     pub(crate) action_id: String,
     pub(crate) state: String,
+    /// Page generation and revision of the reported nodes.
+    pub(crate) generation: u64,
+    pub(crate) revision: u64,
+    /// Nodes matching the selector when the condition was met.
     pub(crate) nodes: Vec<NodeOutput>,
+    /// Time from queuing the action until the condition was met.
+    pub(crate) elapsed_millis: u64,
+    /// Page observations the engine needed.
+    pub(crate) polls: u32,
+}
+
+impl WaitOutput {
+    pub(crate) fn from_outcome(panel_id: String, action_id: String, wait: horizon_browser::WaitOutcome) -> Self {
+        let state = match wait.state {
+            horizon_browser::SelectorState::Present => "present",
+            horizon_browser::SelectorState::Visible => "visible",
+            horizon_browser::SelectorState::Hidden => "hidden",
+        };
+        Self {
+            panel_id,
+            action_id,
+            state: state.to_string(),
+            generation: wait.generation,
+            revision: wait.revision,
+            nodes: wait.nodes.into_iter().map(NodeOutput::from).collect(),
+            elapsed_millis: wait.elapsed_millis,
+            polls: wait.polls,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

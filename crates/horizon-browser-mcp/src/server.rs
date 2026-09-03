@@ -1,5 +1,3 @@
-use std::time::{Duration, Instant};
-
 use horizon_browser::{BrowserControlAction, BrowserControlValue};
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
@@ -19,16 +17,14 @@ use rmcp::{
 use crate::controller::{BrowserController, MAX_ACTION_TIMEOUT_MILLIS};
 use crate::model::{
     ActInput, ActKind, ActionOutput, AuditInput, AuditOutput, BrowserListOutput, CreateInput, CreateOutput,
-    EvaluateInput, EvaluateOutput, HandoffInput, HandoffOutput, NavigateInput, NetworkInput, NetworkOutput,
-    NetworkWatchInput, NetworkWatchOutput, NodeOutput, NodesOutput, PanelInput, QueryInput, SnapshotInput,
-    SnapshotOutput, VisibilityInput, VisibilityOutput, WaitInput, WaitOutput, WaitState,
+    EvaluateInput, EvaluateOutput, HandoffInput, HandoffOutput, NavigateInput, NavigateOutput, NetworkInput,
+    NetworkOutput, NetworkWatchInput, NetworkWatchOutput, NodeOutput, NodesOutput, PanelInput, QueryInput,
+    SnapshotInput, SnapshotOutput, VisibilityInput, VisibilityOutput, WaitInput, WaitOutput,
 };
 use crate::network_watch::NetworkWatchState;
 
 const DEFAULT_SNAPSHOT_NODES: u32 = 250;
 const DEFAULT_QUERY_RESULTS: u32 = 50;
-const DEFAULT_WAIT_TIMEOUT_MILLIS: u64 = 10_000;
-const DEFAULT_WAIT_POLL_MILLIS: u64 = 250;
 
 /// Stdio MCP service for live Horizon browser panels.
 #[derive(Clone, Debug)]
@@ -58,19 +54,20 @@ impl HorizonBrowserMcp {
 impl HorizonBrowserMcp {
     #[tool(
         name = "browser_list",
-        description = "List live Horizon browser panels and safe capabilities. Raw CDP, BiDi, and WebDriver endpoints are never exposed."
+        description = "List live Horizon browser panels with their safe capabilities. For an agent identity injected by Horizon, only panels in that agent's current workspace are listed; identities from outside Horizon keep unscoped discovery. A panel's visible field is host presentation state, not workspace membership. Raw CDP, BiDi, and WebDriver endpoints are never exposed."
     )]
-    fn browser_list(&self) -> Json<BrowserListOutput> {
-        Json(BrowserListOutput {
-            panels: self.controller.list_panels(),
-        })
+    fn browser_list(&self) -> Result<Json<BrowserListOutput>, String> {
+        let panels = self.controller.list_panels().map_err(|error| error.to_string())?;
+        Ok(Json(BrowserListOutput { panels }))
     }
 
     #[tool(
         name = "browser_create",
-        description = "Create a browser panel in the calling agent's Horizon workspace and wait until it is controllable. Use this when browser_list is empty. Reuse an existing panel for iframes, popups, dialogs, and consent flows; never create a helper panel for them. Only when the user explicitly requests an independent session, set allow_additional=true. Set visible=false for a live background panel; omit backend to use Horizon's configured browser. Bare hostnames default to HTTPS and explicit HTTP is preserved."
+        description = "Create a browser panel in the calling agent's Horizon workspace and wait until its backend is ready and, when url is given, that page has committed; if the page has not committed within a bounded startup wait the panel is still returned with navigation=pending, and if the first page failed to load it is returned with navigation=failed and navigation_error (the panel is controllable; navigate again). Use this when browser_list is empty. Reuse an existing panel for iframes, popups, dialogs, and consent flows; never create a helper panel for them. Only when the user explicitly requests an independent session, set allow_additional=true. Set visible=false for a live background panel; omit backend to use Horizon's configured browser. Bare hostnames default to HTTPS and explicit HTTP is preserved."
     )]
     async fn browser_create(&self, Parameters(input): Parameters<CreateInput>) -> Result<Json<CreateOutput>, String> {
+        // Matches the request normalization: a blank url is no navigation.
+        let url_requested = input.url.as_deref().is_some_and(|url| !url.trim().is_empty());
         let receipt = self
             .controller
             .create(
@@ -85,12 +82,15 @@ impl HorizonBrowserMcp {
         Ok(Json(CreateOutput {
             action_id: receipt.action_id,
             panel: receipt.panel,
+            navigation: crate::model::CreateNavigationState::resolve(receipt.navigation, url_requested),
+            navigation_error: receipt.navigation_error,
+            startup_millis: receipt.startup_millis,
         }))
     }
 
     #[tool(
         name = "browser_visibility",
-        description = "Show or hide a live browser panel without stopping its browser session, network capture, ownership, or MCP control. Hidden panels remain listed and auditable."
+        description = "Show or hide a live browser panel without stopping its browser session, network capture, ownership, or MCP control. Hidden panels remain listed and auditable. For a Horizon-injected agent identity the panel must already be in the calling agent's workspace; visible=true never moves a panel there."
     )]
     async fn browser_visibility(
         &self,
@@ -109,27 +109,34 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_navigate",
-        description = "Navigate a live browser panel through Horizon's audited backend-neutral control path."
+        description = "Navigate a live browser panel through Horizon's audited backend-neutral control path and report a typed outcome. By default it returns once the top-level document committed (wait=commit); wait=dispatched returns as soon as the engine handed the command to the backend, without awaiting the browser's acceptance (a rejection after that point shows as a failed page state, not as an action error; use commit when you need confirmation), and wait=dom_content_loaded after DOMContentLoaded. The result carries requested_url, committed_url, title, loading, redirected, elapsed_millis and state; check completed, because a wait that exceeds timeout_millis (1000-60000 ms, enforced in full by the engine; smaller values are raised to 1000) returns state=timed_out with the latest page state instead of an error. Unreachable destinations and rejected commands are errors. Safari's classic WebDriver has no dispatch-only navigation: every wait returns once the page loaded or the bound elapsed."
     )]
     async fn browser_navigate(
         &self,
         Parameters(input): Parameters<NavigateInput>,
-    ) -> Result<Json<ActionOutput>, String> {
+    ) -> Result<Json<NavigateOutput>, String> {
+        let wait = input.wait.unwrap_or_default();
         let receipt = self
             .controller
-            .execute(
+            .execute_engine_bounded(
                 &input.panel_id,
-                BrowserControlAction::Navigate { url: input.url },
-                input.timeout_millis,
+                BrowserControlAction::Navigate {
+                    url: input.url,
+                    wait: wait.into(),
+                    timeout_millis: Some(bounded_navigation_timeout(input.timeout_millis)),
+                },
+                bounded_navigation_timeout(input.timeout_millis),
             )
             .await
             .map_err(|error| error.to_string())?;
-        require_accepted(&receipt.value)?;
-        Ok(Json(ActionOutput {
-            panel_id: input.panel_id,
-            action_id: receipt.action_id,
-            completed: true,
-        }))
+        match receipt.value {
+            BrowserControlValue::Navigation { navigation } => Ok(Json(NavigateOutput::from_outcome(
+                input.panel_id,
+                receipt.action_id,
+                navigation,
+            ))),
+            _ => Err("browser returned an unexpected navigation result".to_string()),
+        }
     }
 
     #[tool(
@@ -242,7 +249,7 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_network",
-        description = "Start, inspect, or stop a bounded browser network capture. Start before navigation; set include_http_bodies for native bounded response bodies. Inspect status or tail -f the returned private NDJSON path with jq/rg. Chromium WebSocket frames are protocol-native; Firefox WebSocket frames use disclosed page instrumentation; HTTP lifecycle and bodies are native on both. Safari is unsupported."
+        description = "Start, inspect, or stop a bounded browser network capture. Start before navigation; set include_http_bodies for native bounded response bodies. Inspect status or tail -f the returned private NDJSON path with jq/rg. Chromium WebSocket frames are protocol-native; Firefox WebSocket frames use disclosed page instrumentation; HTTP lifecycle and bodies are native on both. Chromium cannot return a body the page drained with response.blob(); such http_response_body records carry an error and no payload, so read text()/arrayBuffer() or leave the body unread when the bytes matter. Safari is unsupported."
     )]
     async fn browser_network(
         &self,
@@ -273,7 +280,7 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_wait",
-        description = "Wait for a CSS selector to become present, visible, or hidden using bounded audited queries."
+        description = "Wait for a CSS selector to become present, visible, or hidden as one audited engine-side action: the browser driver observes the page itself (no repeated queries) and returns the matched nodes and elapsed_millis, or a typed failure (wait_timeout, wait_navigation_invalidated when the page navigated, wait_ownership_lost, wait_handoff_pending, wait_superseded when a later wait on the same panel replaced it, browser_unavailable when the browser backend stops). timeout_millis is 1000-60000 (default 10000) and is enforced in full by the engine; poll_millis is accepted for compatibility and ignored."
     )]
     async fn browser_wait(&self, Parameters(input): Parameters<WaitInput>) -> Result<Json<WaitOutput>, String> {
         wait_for_selector(&self.controller, input).await.map(Json)
@@ -323,18 +330,16 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_panel",
-        description = "Read one live Horizon browser panel's safe state. Use browser_list when the panel id is unknown."
+        description = "Read one live Horizon browser panel's safe state. For a Horizon-injected agent identity, panel ids outside the calling agent's workspace are rejected. Use browser_list when the panel id is unknown."
     )]
     fn browser_panel(
         &self,
         Parameters(input): Parameters<PanelInput>,
     ) -> Result<Json<crate::model::BrowserPanel>, String> {
         self.controller
-            .list_panels()
-            .into_iter()
-            .find(|panel| panel.panel_id == input.panel_id)
+            .panel(&input.panel_id)
             .map(Json)
-            .ok_or_else(|| format!("browser panel {} is not live", input.panel_id))
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -343,7 +348,7 @@ impl ServerHandler for HorizonBrowserMcp {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("horizon-browser", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "MCP is the sole agent control contract for Horizon browser panels. Start with browser_list; if it is empty, call browser_create in your current Horizon workspace. Reuse an existing panel for iframe, popup, dialog, and consent interactions: never create or reveal a helper panel as a workaround. If the current top-level semantic tools cannot reach embedded frame content, call browser_handoff on the original panel. Only set browser_create allow_additional=true when the user explicitly requests an independent browser session. Use visible=false for a live background panel and browser_visibility to show or hide it later without stopping automation or capture. Each panel advertises navigation, DOM, steering, audit, and backend-specific network capabilities. For WebSocket or HTTP observation, call browser_network start before browser_navigate; opt into native bounded response bodies with include_http_bodies. Prefer browser_network_watch with its returned capture_id and next_sequence for bounded event-driven monitoring, or tail the exact private NDJSON path returned by browser_network with ordinary read-only Unix tools; call browser_network stop to flush. Take a fresh semantic snapshot or query before acting through refs, and verify afterward. Never use raw browser endpoints or Horizon's private runtime files.",
+                "MCP is the sole agent control contract for Horizon browser panels. For agent identities injected by Horizon, discovery and control are scoped to the workspace that contains the calling agent panel: browser_list shows only that workspace's panels, every other tool rejects panel ids outside it, and a panel's visible field is host presentation state rather than proof that it is in your workspace; identities from outside Horizon keep unscoped discovery. Start with browser_list; if it is empty, call browser_create in your current Horizon workspace. Reuse an existing panel for iframe, popup, dialog, and consent interactions: never create or reveal a helper panel as a workaround. If the current top-level semantic tools cannot reach embedded frame content, call browser_handoff on the original panel. Only set browser_create allow_additional=true when the user explicitly requests an independent browser session. Use visible=false for a live background panel and browser_visibility to show or hide it later without stopping automation or capture. Each panel advertises navigation, DOM, steering, audit, and backend-specific network capabilities. For WebSocket or HTTP observation, call browser_network start before browser_navigate; opt into native bounded response bodies with include_http_bodies. Prefer browser_network_watch with its returned capture_id and next_sequence for bounded event-driven monitoring, or tail the exact private NDJSON path returned by browser_network with ordinary read-only Unix tools; call browser_network stop to flush. Take a fresh semantic snapshot or query before acting through refs, and verify afterward. Never use raw browser endpoints or Horizon's private runtime files.",
             )
     }
 
@@ -373,12 +378,15 @@ impl ServerHandler for HorizonBrowserMcp {
     }
 }
 
-fn require_accepted(value: &BrowserControlValue) -> Result<(), String> {
-    if matches!(value, BrowserControlValue::Accepted) {
-        Ok(())
-    } else {
-        Err("browser returned an unexpected action result".to_string())
-    }
+/// Shortest navigation bound this server accepts: the engine reports its
+/// typed `timed_out` outcome on a 250 ms coordination tick, so smaller
+/// bounds could only end in this server's generic timeout.
+const MIN_NAVIGATION_TIMEOUT_MILLIS: u64 = 1_000;
+
+/// The bound the engine enforces for a navigation action; the controller
+/// waits `RESULT_DELIVERY_HEADROOM_MILLIS` longer for the typed report.
+fn bounded_navigation_timeout(timeout_millis: Option<u64>) -> u64 {
+    crate::controller::bounded_action_timeout(timeout_millis).max(MIN_NAVIGATION_TIMEOUT_MILLIS)
 }
 
 fn require_action_completed(action: ActKind, value: &BrowserControlValue) -> Result<(), String> {
@@ -391,66 +399,49 @@ fn require_action_completed(action: ActKind, value: &BrowserControlValue) -> Res
     }
 }
 
+/// Shortest wait bound this server accepts; the engine observes on a 100 ms
+/// cadence and reports its typed timeout on a 250 ms coordination tick.
+const MIN_WAIT_TIMEOUT_MILLIS: u64 = 1_000;
+
+/// The wait this server applies to a `WaitForSelector` action.
+fn bounded_wait_timeout(timeout_millis: Option<u64>) -> u64 {
+    timeout_millis
+        .unwrap_or(horizon_browser::DEFAULT_WAIT_TIMEOUT_MILLIS)
+        .clamp(MIN_WAIT_TIMEOUT_MILLIS, MAX_ACTION_TIMEOUT_MILLIS)
+}
+
+/// One audited engine-side wait: the browser driver observes the selector
+/// itself and reports the matched nodes, the elapsed time, or a typed
+/// failure (`wait_timeout`, `wait_navigation_invalidated`,
+/// `wait_ownership_lost`, `wait_handoff_pending`, `wait_superseded`,
+/// `browser_unavailable`).
 async fn wait_for_selector(controller: &BrowserController, input: WaitInput) -> Result<WaitOutput, String> {
-    let timeout_millis = input
-        .timeout_millis
-        .unwrap_or(DEFAULT_WAIT_TIMEOUT_MILLIS)
-        .clamp(1, MAX_ACTION_TIMEOUT_MILLIS);
-    let poll_millis = input.poll_millis.unwrap_or(DEFAULT_WAIT_POLL_MILLIS).clamp(100, 2_000);
-    let started = Instant::now();
-    loop {
-        let remaining = timeout_millis.saturating_sub(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
-        if remaining == 0 {
-            return Err(format!(
-                "selector did not become {} within {timeout_millis} ms",
-                wait_state_name(input.state)
-            ));
-        }
-        let receipt = controller
-            .execute(
-                &input.panel_id,
-                BrowserControlAction::Query {
-                    selector: input.selector.clone(),
-                    max_results: DEFAULT_QUERY_RESULTS,
-                },
-                Some(remaining),
-            )
-            .await
-            .map_err(|error| error.to_string())?;
-        let BrowserControlValue::Nodes { nodes, .. } = receipt.value else {
-            return Err("browser returned an unexpected wait result".to_string());
-        };
-        if wait_satisfied(input.state, &nodes) {
-            return Ok(WaitOutput {
-                panel_id: input.panel_id,
-                action_id: receipt.action_id,
-                state: wait_state_name(input.state).to_string(),
-                nodes: nodes.into_iter().map(NodeOutput::from).collect(),
-            });
-        }
-        tokio::time::sleep(Duration::from_millis(poll_millis.min(remaining))).await;
+    let timeout_millis = bounded_wait_timeout(input.timeout_millis);
+    if let Some(poll_millis) = input.poll_millis {
+        tracing::debug!(target: "browser_mcp", poll_millis, "browser_wait poll_millis is ignored; the engine observes the page itself");
     }
-}
-
-fn wait_satisfied(state: WaitState, nodes: &[horizon_browser::BrowserNode]) -> bool {
-    match state {
-        WaitState::Present => !nodes.is_empty(),
-        WaitState::Visible => nodes.iter().any(|node| node.visible),
-        WaitState::Hidden => nodes.iter().all(|node| !node.visible),
-    }
-}
-
-const fn wait_state_name(state: WaitState) -> &'static str {
-    match state {
-        WaitState::Present => "present",
-        WaitState::Visible => "visible",
-        WaitState::Hidden => "hidden",
-    }
+    let receipt = controller
+        .execute_engine_bounded(
+            &input.panel_id,
+            BrowserControlAction::WaitForSelector {
+                selector: input.selector,
+                state: input.state.into(),
+                timeout_millis: Some(timeout_millis),
+            },
+            timeout_millis,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    let BrowserControlValue::Wait { wait } = receipt.value else {
+        return Err("browser returned an unexpected wait result".to_string());
+    };
+    Ok(WaitOutput::from_outcome(input.panel_id, receipt.action_id, wait))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::WaitState;
 
     #[test]
     fn server_exposes_only_the_mcp_contract() {
@@ -482,26 +473,90 @@ mod tests {
             ]
         );
         let schemas = serde_json::to_string(&server.tool_router.list_all()).unwrap_or_default();
+        assert!(schemas.contains("browser_unavailable"));
         assert!(!schemas.contains("browser_ws"));
         assert!(!schemas.contains("manifest_path"));
         assert!(!schemas.contains("cdp_endpoint"));
     }
 
     #[test]
-    fn wait_states_are_exact() {
-        let visible = horizon_browser::BrowserNode {
-            reference: "g1s1e1".to_string(),
-            role: "button".to_string(),
-            name: "Continue".to_string(),
-            text: String::new(),
-            visible: true,
-            enabled: true,
-            bounds: None,
+    fn navigation_outcomes_map_to_typed_tool_results() {
+        let outcome = |state| horizon_browser::NavigationOutcome {
+            requested_url: "https://example.test/".to_string(),
+            wait: horizon_browser::NavigationWait::Commit,
+            state,
+            committed_url: Some("https://example.test/landing".to_string()),
+            title: None,
+            loading: true,
+            redirected: true,
+            elapsed_millis: 12,
         };
-        assert!(wait_satisfied(WaitState::Present, std::slice::from_ref(&visible)));
-        assert!(wait_satisfied(WaitState::Visible, std::slice::from_ref(&visible)));
-        assert!(!wait_satisfied(WaitState::Hidden, &[visible]));
-        assert!(wait_satisfied(WaitState::Hidden, &[]));
+        let committed = NavigateOutput::from_outcome(
+            "panel".to_string(),
+            "action".to_string(),
+            outcome(horizon_browser::NavigationState::Committed),
+        );
+        assert!(committed.completed);
+        assert_eq!(committed.state, crate::model::NavigateState::Committed);
+        assert_eq!(committed.wait, crate::model::NavigateWait::Commit);
+        assert!(committed.redirected);
+        assert_eq!(committed.committed_url.as_deref(), Some("https://example.test/landing"));
+        for state in [
+            horizon_browser::NavigationState::TimedOut,
+            horizon_browser::NavigationState::Superseded,
+        ] {
+            let output = NavigateOutput::from_outcome("panel".to_string(), "action".to_string(), outcome(state));
+            assert!(!output.completed, "{state:?} never counts as completed");
+            assert_eq!(output.elapsed_millis, 12);
+        }
+        let dispatched = NavigateOutput::from_outcome(
+            "panel".to_string(),
+            "action".to_string(),
+            outcome(horizon_browser::NavigationState::Dispatched),
+        );
+        assert!(dispatched.completed);
+
+        assert_eq!(bounded_navigation_timeout(None), 15_000);
+        assert_eq!(
+            bounded_navigation_timeout(Some(100)),
+            1_000,
+            "bounds below 1 s are raised"
+        );
+        assert_eq!(
+            bounded_navigation_timeout(Some(600_000)),
+            60_000,
+            "the engine gets the full documented bound; the controller adds delivery headroom"
+        );
+        let encoded = serde_json::to_value(crate::model::NavigateWait::DomContentLoaded).expect("encode");
+        assert_eq!(encoded, serde_json::json!("dom_content_loaded"));
+        let aliased: crate::model::NavigateWait =
+            serde_json::from_value(serde_json::json!("domcontentloaded")).expect("alias decodes");
+        assert_eq!(aliased, crate::model::NavigateWait::DomContentLoaded);
+    }
+
+    #[test]
+    fn wait_inputs_map_to_one_bounded_engine_action() {
+        assert_eq!(bounded_wait_timeout(None), 10_000);
+        assert_eq!(bounded_wait_timeout(Some(10)), 1_000, "bounds below 1 s are raised");
+        assert_eq!(bounded_wait_timeout(Some(600_000)), 60_000);
+        let state: horizon_browser::SelectorState = WaitState::Hidden.into();
+        assert_eq!(state, horizon_browser::SelectorState::Hidden);
+        let output = WaitOutput::from_outcome(
+            "panel".to_string(),
+            "action".to_string(),
+            horizon_browser::WaitOutcome {
+                state: horizon_browser::SelectorState::Visible,
+                generation: 2,
+                revision: 3,
+                nodes: Vec::new(),
+                elapsed_millis: 1_480,
+                polls: 15,
+            },
+        );
+        assert_eq!(output.state, "visible");
+        assert_eq!(output.elapsed_millis, 1_480);
+        assert_eq!(output.polls, 15);
+        assert_eq!((output.generation, output.revision), (2, 3));
     }
 
     #[test]

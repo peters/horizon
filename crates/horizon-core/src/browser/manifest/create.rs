@@ -9,10 +9,11 @@ use horizon_browser::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::ManifestLock;
 use super::request_queue::{
     MAX_PENDING_REQUESTS, prune_at, queue_lock_path, read_json, request_count, write_private_json,
 };
+use super::workspace::AgentIdentity;
+use super::{ManifestLock, actor_is_workspace_scoped};
 use crate::horizon_home::{HorizonHome, safe_local_id};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -27,6 +28,10 @@ pub enum BrowserCreateAuditStatus {
 pub struct BrowserCreateRequest {
     pub request_id: String,
     pub actor: String,
+    /// The Horizon host that launched the requesting agent; only that host
+    /// may claim the request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_instance: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -46,20 +51,70 @@ pub struct BrowserCreateResult {
     pub outcome: BrowserCreateOutcome,
 }
 
+/// Where the requested startup navigation stood when creation completed.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CreateNavigation {
+    /// No initial URL was requested; the panel is ready at its blank page.
+    #[default]
+    NotRequested,
+    /// The requested page committed; the manifest URL is authoritative.
+    Committed,
+    /// The backend is ready but the requested page had not committed within
+    /// the bounded startup wait; the panel is controllable and still loading.
+    Pending,
+    /// The backend is ready but the requested page failed to load; the panel
+    /// is controllable at its previous (blank) document and
+    /// `navigation_error` carries the browser's message.
+    Failed,
+    /// The user navigated the panel before the requested page committed; the
+    /// panel is controllable at the user's page, and the requested page is
+    /// not coming.
+    Superseded,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum BrowserCreateOutcome {
-    Ready { panel_local_id: String },
-    Failed { code: String, message: String },
+    Ready {
+        panel_local_id: String,
+        /// Absent in results written by hosts that predate startup
+        /// readiness; readers must not treat that as proof that no URL was
+        /// requested.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        navigation: Option<CreateNavigation>,
+        /// The browser's message when `navigation` is `failed`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        navigation_error: Option<String>,
+        /// Milliseconds from the host accepting the request until the panel
+        /// was reported ready.
+        #[serde(default)]
+        startup_millis: u64,
+    },
+    Failed {
+        code: String,
+        message: String,
+    },
 }
 
 impl BrowserCreateResult {
     #[must_use]
-    pub fn ready(request: &BrowserCreateRequest, panel_local_id: String) -> Self {
+    pub fn ready(
+        request: &BrowserCreateRequest,
+        panel_local_id: String,
+        navigation: CreateNavigation,
+        navigation_error: Option<String>,
+        startup_millis: u64,
+    ) -> Self {
         Self {
             request_id: request.request_id.clone(),
             actor: request.actor.clone(),
-            outcome: BrowserCreateOutcome::Ready { panel_local_id },
+            outcome: BrowserCreateOutcome::Ready {
+                panel_local_id,
+                navigation: Some(navigation),
+                navigation_error,
+                startup_millis,
+            },
         }
     }
 
@@ -76,43 +131,56 @@ impl BrowserCreateResult {
     }
 }
 
-/// Queue a request that only the Horizon host containing `actor` may claim.
+/// Queue a request that only the Horizon host that launched `identity` may
+/// claim.
 ///
 /// # Errors
-/// Returns an error for a non-Horizon actor, invalid URL, a full queue, or a
-/// private coordination filesystem failure.
+/// Returns an error for a non-Horizon identity, a Horizon identity without a
+/// forwarded host instance, an invalid URL, a full queue, or a private
+/// coordination filesystem failure.
 pub fn enqueue_create(
-    actor: &str,
+    identity: AgentIdentity<'_>,
     url: Option<String>,
     backend: Option<BackendKind>,
     visible: bool,
     timeout: Duration,
 ) -> std::io::Result<String> {
-    enqueue_at(HorizonHome::resolve().root(), actor, url, backend, visible, timeout)
+    enqueue_at(HorizonHome::resolve().root(), identity, url, backend, visible, timeout)
 }
 
 fn enqueue_at(
     root: &Path,
-    actor: &str,
+    identity: AgentIdentity<'_>,
     url: Option<String>,
     backend: Option<BackendKind>,
     visible: bool,
     timeout: Duration,
 ) -> std::io::Result<String> {
+    let actor = identity.actor;
     super::agent::validate_actor(actor)?;
-    if actor.strip_prefix("horizon:").is_none_or(str::is_empty) {
+    if !actor_is_workspace_scoped(actor) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
             "browser panels can be created only by an agent launched inside Horizon",
         ));
     }
+    let Some(host_instance) = identity.host_instance else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "browser panels can be created only when the launching Horizon host instance is known",
+        ));
+    };
     let url = url
         .map(|value| normalize_navigation_target(&value))
         .filter(|value| !value.is_empty());
     if let Some(url) = &url {
-        BrowserControlAction::Navigate { url: url.clone() }
-            .validate()
-            .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
+        BrowserControlAction::Navigate {
+            url: url.clone(),
+            wait: horizon_browser::NavigationWait::default(),
+            timeout_millis: None,
+        }
+        .validate()
+        .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
     }
 
     let directory = create_directory(root);
@@ -132,6 +200,7 @@ fn enqueue_at(
     let request = BrowserCreateRequest {
         request_id: request_id.clone(),
         actor: actor.to_string(),
+        host_instance: Some(host_instance.to_string()),
         url,
         backend,
         visible,
@@ -185,23 +254,32 @@ fn list_at(root: &Path) -> std::io::Result<Vec<BrowserCreateRequest>> {
 }
 
 /// Atomically claim one request for this Horizon process when its actor still
-/// matches the candidate agent panel.
+/// matches the candidate agent panel and the request names this host.
 ///
 /// # Errors
 /// Returns an error for an identity mismatch, invalid data, or filesystem
-/// failure. `Ok(None)` means another host already claimed the request.
+/// failure. `Ok(None)` means another host already claimed the request or the
+/// request belongs to a different Horizon host instance.
 pub fn claim_create_request(
     request_id: &str,
     actor: &str,
+    host_instance: &str,
     claimant_pid: u32,
 ) -> std::io::Result<Option<BrowserCreateRequest>> {
-    claim_at(HorizonHome::resolve().root(), request_id, actor, claimant_pid)
+    claim_at(
+        HorizonHome::resolve().root(),
+        request_id,
+        actor,
+        host_instance,
+        claimant_pid,
+    )
 }
 
 fn claim_at(
     root: &Path,
     request_id: &str,
     actor: &str,
+    host_instance: &str,
     claimant_pid: u32,
 ) -> std::io::Result<Option<BrowserCreateRequest>> {
     let directory = create_directory(root);
@@ -223,7 +301,9 @@ fn claim_at(
             "browser create request identity did not match its path or actor",
         ));
     }
-    if request.claimed_by_pid.is_some() {
+    // Compared under the queue lock: a second live host running a copy of
+    // the same session shares the actor but never this host instance.
+    if request.claimed_by_pid.is_some() || request.host_instance.as_deref() != Some(host_instance) {
         return Ok(None);
     }
     request.claimed_by_pid = Some(claimant_pid);
@@ -342,6 +422,42 @@ const fn default_visible() -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn ready_outcomes_keep_the_legacy_shape_and_default_the_navigation_state() {
+        let legacy: BrowserCreateOutcome =
+            serde_json::from_value(serde_json::json!({ "status": "ready", "panel_local_id": "panel" }))
+                .expect("legacy ready outcome decodes");
+        assert_eq!(
+            legacy,
+            BrowserCreateOutcome::Ready {
+                panel_local_id: "panel".to_string(),
+                navigation: None,
+                navigation_error: None,
+                startup_millis: 0,
+            },
+            "a legacy result leaves the navigation state unknown rather than claiming no URL was requested"
+        );
+        let encoded = serde_json::to_value(BrowserCreateOutcome::Ready {
+            panel_local_id: "panel".to_string(),
+            navigation: Some(CreateNavigation::Pending),
+            navigation_error: None,
+            startup_millis: 1234,
+        })
+        .expect("encode");
+        assert_eq!(encoded["navigation"], "pending");
+        assert_eq!(encoded["startup_millis"], 1234);
+        assert!(encoded.get("navigation_error").is_none());
+        let failed = serde_json::to_value(BrowserCreateOutcome::Ready {
+            panel_local_id: "panel".to_string(),
+            navigation: Some(CreateNavigation::Failed),
+            navigation_error: Some("could not navigate to https://down.test/".to_string()),
+            startup_millis: 900,
+        })
+        .expect("encode");
+        assert_eq!(failed["navigation"], "failed");
+        assert_eq!(failed["navigation_error"], "could not navigate to https://down.test/");
+    }
+
     fn root() -> tempfile::TempDir {
         tempfile::tempdir().expect("isolated create root")
     }
@@ -350,9 +466,10 @@ mod tests {
     fn create_request_is_private_claimed_once_and_consumed_by_its_actor() {
         let root = root();
         let actor = "horizon:agent-panel";
+        let identity = AgentIdentity::new(actor, Some("host-a"));
         let request_id = enqueue_at(
             root.path(),
-            actor,
+            identity,
             Some("example.test/path".to_string()),
             Some(BackendKind::FirefoxBidi),
             false,
@@ -362,19 +479,32 @@ mod tests {
         let requests = list_at(root.path()).expect("list create requests");
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].url.as_deref(), Some("https://example.test/path"));
+        assert_eq!(requests[0].host_instance.as_deref(), Some("host-a"));
         assert!(!requests[0].visible);
 
-        let claimed = claim_at(root.path(), &request_id, actor, 42)
+        assert!(
+            claim_at(root.path(), &request_id, actor, "host-b", 41)
+                .expect("other host claim")
+                .is_none(),
+            "a host that did not launch the agent must not claim its request"
+        );
+        let claimed = claim_at(root.path(), &request_id, actor, "host-a", 42)
             .expect("claim create")
             .expect("unclaimed request");
         assert!(
-            claim_at(root.path(), &request_id, actor, 43)
+            claim_at(root.path(), &request_id, actor, "host-a", 43)
                 .expect("second claim")
                 .is_none()
         );
         assert!(list_at(root.path()).expect("list claimed requests").is_empty());
 
-        let result = BrowserCreateResult::ready(&claimed, "browser-panel".to_string());
+        let result = BrowserCreateResult::ready(
+            &claimed,
+            "browser-panel".to_string(),
+            CreateNavigation::Committed,
+            None,
+            1_500,
+        );
         complete_at(root.path(), &result).expect("complete create");
         assert_eq!(
             take_at(root.path(), &request_id, actor).expect("take result"),
@@ -394,7 +524,7 @@ mod tests {
         {
             use std::os::unix::fs::PermissionsExt;
             let another =
-                enqueue_at(root.path(), actor, None, None, true, Duration::from_secs(30)).expect("second request");
+                enqueue_at(root.path(), identity, None, None, true, Duration::from_secs(30)).expect("second request");
             assert_eq!(
                 std::fs::metadata(request_path(root.path(), &another))
                     .expect("request metadata")
@@ -410,23 +540,43 @@ mod tests {
     fn create_request_requires_a_horizon_actor_and_exact_result_identity() {
         let root = root();
         assert_eq!(
-            enqueue_at(root.path(), "external", None, None, true, Duration::from_secs(30))
-                .expect_err("external actor must fail")
-                .kind(),
+            enqueue_at(
+                root.path(),
+                AgentIdentity::new("external", Some("host-a")),
+                None,
+                None,
+                true,
+                Duration::from_secs(30),
+            )
+            .expect_err("external actor must fail")
+            .kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            enqueue_at(
+                root.path(),
+                AgentIdentity::new("horizon:agent-panel", None),
+                None,
+                None,
+                true,
+                Duration::from_secs(30),
+            )
+            .expect_err("a Horizon actor without a host instance must fail")
+            .kind(),
             std::io::ErrorKind::PermissionDenied
         );
 
         let actor = "horizon:agent-panel";
         let request_id = enqueue_at(
             root.path(),
-            actor,
+            AgentIdentity::new(actor, Some("host-a")),
             Some("http://127.0.0.1:3000".to_string()),
             None,
             true,
             Duration::from_secs(30),
         )
         .expect("enqueue create");
-        let request = claim_at(root.path(), &request_id, actor, 42)
+        let request = claim_at(root.path(), &request_id, actor, "host-a", 42)
             .expect("claim")
             .expect("request");
         assert_eq!(request.url.as_deref(), Some("http://127.0.0.1:3000"));
@@ -455,9 +605,10 @@ mod tests {
             let barrier = std::sync::Arc::clone(&barrier);
             workers.push(std::thread::spawn(move || {
                 barrier.wait();
+                let actor = format!("horizon:agent-{index}");
                 enqueue_at(
                     &root_path,
-                    &format!("horizon:agent-{index}"),
+                    AgentIdentity::new(&actor, Some("host-a")),
                     None,
                     None,
                     true,

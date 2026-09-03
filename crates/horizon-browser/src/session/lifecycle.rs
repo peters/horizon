@@ -6,12 +6,11 @@ use std::time::{Duration, Instant};
 
 use crate::AutomationDisclosurePolicy;
 use crate::cdp::CdpLink;
-use crate::disclosure::{cdp_preload_source, chromium_user_agent_needs_override, chromium_user_agent_override};
+use crate::disclosure::{chromium_user_agent_needs_override, chromium_user_agent_override};
 use crate::frames::FrameSlot;
 
 use super::{
     BrowserEvent, BrowserEventSender, DriverState, MAX_RESTART_ATTEMPTS, RESTART_BACKOFF, RESTART_BACKOFF_CAP,
-    TITLE_BINDING_NAME, TITLE_OBSERVER_SCRIPT,
 };
 
 impl DriverState {
@@ -37,24 +36,44 @@ impl DriverState {
         if self.session_id.as_deref() != Some(session) {
             self.reset_clipboard_tracking();
             self.invalidate_scrollbar_layout();
+            self.reset_runtime_enable_state();
         }
         self.session_id = Some(session.to_string());
         self.target_id = Some(target.to_string());
         // Browser-level auto-attach does not recurse into site-isolated child
         // targets. Enable it on the bound page session as well so OOPIF
         // execution contexts remain available to frame-aware input bridges.
-        let initial_setup_commands = [
+        let pre_observation_setup_commands = [
             (
                 "Target.setAutoAttach",
                 serde_json::json!({ "autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true }),
             ),
             ("Page.enable", serde_json::json!({})),
-            ("Runtime.enable", serde_json::json!({})),
+            // Loader-scoped `Page.lifecycleEvent`s let a pending agent
+            // navigation attribute `DOMContentLoaded` and `load` to its own
+            // loader instead of a superseded one.
+            ("Page.setLifecycleEventsEnabled", serde_json::json!({ "enabled": true })),
         ];
-        for (method, params) in initial_setup_commands {
+        for (method, params) in pre_observation_setup_commands {
             if !self.setup_command(link, event_tx, frame_slot, method, &params, Some(session)) {
                 return false;
             }
+        }
+        if !self.resolve_main_frame_id(link, event_tx, frame_slot, session) {
+            return false;
+        }
+        // Observe only top-level response metadata so a completed user
+        // handoff can report a repeated Cloudflare challenge. The driver
+        // receives response headers but never emits them or request bodies.
+        if !self.setup_command(
+            link,
+            event_tx,
+            frame_slot,
+            "Network.enable",
+            &serde_json::json!({}),
+            Some(session),
+        ) {
+            return false;
         }
         self.restore_network_capture(link, event_tx, frame_slot, session);
         if self.config.browser.automation_disclosure == AutomationDisclosurePolicy::MinimizeCommonSignals
@@ -62,36 +81,20 @@ impl DriverState {
         {
             return false;
         }
-        let remaining_setup_commands = [
-            ("Runtime.addBinding", serde_json::json!({ "name": TITLE_BINDING_NAME })),
-            (
-                "Page.addScriptToEvaluateOnNewDocument",
-                serde_json::json!({ "source": TITLE_OBSERVER_SCRIPT }),
-            ),
-            (
-                "Runtime.evaluate",
-                serde_json::json!({ "expression": TITLE_OBSERVER_SCRIPT }),
-            ),
-            (
-                "Emulation.setDeviceMetricsOverride",
-                serde_json::json!({
-                    "width": self.viewport_w,
-                    "height": self.viewport_h,
-                    "screenWidth": self.viewport_w,
-                    "screenHeight": self.viewport_h,
-                    "deviceScaleFactor": 1,
-                    "mobile": false,
-                }),
-            ),
-        ];
-        for (method, params) in remaining_setup_commands {
-            if !self.setup_command(link, event_tx, frame_slot, method, &params, Some(session)) {
-                return false;
-            }
+        if !self.setup_command(
+            link,
+            event_tx,
+            frame_slot,
+            "Emulation.setDeviceMetricsOverride",
+            &Self::viewport_override_params(self.viewport_w, self.viewport_h),
+            Some(session),
+        ) {
+            return false;
         }
         // Never expose the internal metadata-bootstrap page in a screencast.
-        // The disclosure shim and UA override are already active before this
-        // first caller-supplied navigation can execute page author script.
+        // Native automation-flag suppression and any UA override are already
+        // active before this first caller-supplied navigation can execute
+        // page author script.
         self.navigate_initial_url(link, event_tx, frame_slot);
         // A page that loaded before we attached (restart case) already has
         // its title; a fresh about:blank fetch returns empty and is skipped.
@@ -118,6 +121,35 @@ impl DriverState {
         let _ = event_tx.send(BrowserEvent::BackendReady(capabilities));
         let _ = event_tx.send(BrowserEvent::Ready);
         !self.stop_requested.load(Ordering::Acquire)
+    }
+
+    fn resolve_main_frame_id(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        session: &str,
+    ) -> bool {
+        let Some(frame_tree) = self.setup_command_result(
+            link,
+            event_tx,
+            frame_slot,
+            "Page.getFrameTree",
+            &serde_json::json!({}),
+            Some(session),
+        ) else {
+            return false;
+        };
+        let Some(frame_id) = main_frame_id_from_tree(&frame_tree).map(str::to_string) else {
+            return self.setup_failure(
+                event_tx,
+                frame_slot,
+                "Page.getFrameTree",
+                "response omitted the top-level frame id",
+            );
+        };
+        self.main_frame_id = Some(frame_id);
+        true
     }
 
     fn navigate_initial_url(&mut self, link: &mut CdpLink, event_tx: &BrowserEventSender, frame_slot: &Arc<FrameSlot>) {
@@ -169,7 +201,7 @@ impl DriverState {
         };
         let user_agent_override = match chromium_user_agent_override(&version, user_agent_metadata) {
             Ok(value) => value,
-            Err(error) => return self.setup_failure(event_tx, frame_slot, "Runtime.evaluate", error),
+            Err(error) => return self.setup_failure(event_tx, frame_slot, "Emulation.setUserAgentOverride", error),
         };
         if let Some(params) = user_agent_override
             && !self.setup_command(
@@ -182,20 +214,6 @@ impl DriverState {
             )
         {
             return false;
-        }
-        for (method, params) in [
-            (
-                "Page.addScriptToEvaluateOnNewDocument",
-                serde_json::json!({ "source": cdp_preload_source() }),
-            ),
-            (
-                "Runtime.evaluate",
-                serde_json::json!({ "expression": cdp_preload_source() }),
-            ),
-        ] {
-            if !self.setup_command(link, event_tx, frame_slot, method, &params, Some(session)) {
-                return false;
-            }
         }
         true
     }
@@ -251,26 +269,40 @@ impl DriverState {
         false
     }
 
-    fn start_screencast(&mut self, link: &mut CdpLink, event_tx: &BrowserEventSender, frame_slot: &Arc<FrameSlot>) {
+    /// Ask Chrome to (re)start the screencast without waiting for the reply.
+    /// Page-domain commands are answered only after an in-flight navigation
+    /// commits, so a synchronous call would stall frames, input, and
+    /// coordination behind a slow destination. The reply is consumed by
+    /// `handle_screencast_response`.
+    fn start_screencast(&mut self, link: &mut CdpLink, _event_tx: &BrowserEventSender, _frame_slot: &Arc<FrameSlot>) {
         let Some(session) = self.session_id.clone() else {
             return;
         };
+        if self.screencast_request_id.is_some() {
+            return;
+        }
         let params = self.screencast_params();
-        match self.call_and_ack(
-            link,
-            event_tx,
-            frame_slot,
-            "Page.startScreencast",
-            &params,
-            Some(session.as_str()),
-        ) {
-            Ok(_) => {
-                self.screencast_on = true;
-                self.restart_attempts = 0;
+        match link.send_request("Page.startScreencast", &params, Some(session.as_str())) {
+            Ok(request_id) => {
+                self.screencast_request_id = Some(request_id);
                 self.pending_restart_at = None;
             }
             Err(error) => self.note_screencast_failure(&error.to_string()),
         }
+    }
+
+    pub(super) fn handle_screencast_response(&mut self, id: u64, error: Option<&crate::cdp::CdpErrorInfo>) -> bool {
+        if self.screencast_request_id != Some(id) {
+            return false;
+        }
+        self.screencast_request_id = None;
+        if let Some(error) = error {
+            self.note_screencast_failure(&error.to_string());
+        } else {
+            self.screencast_on = true;
+            self.restart_attempts = 0;
+        }
+        true
     }
 
     /// Exponential backoff between screencast restarts, capped so a page
@@ -365,5 +397,27 @@ impl DriverState {
         if self.session_id.is_some() {
             self.start_screencast(link, event_tx, frame_slot);
         }
+    }
+}
+
+fn main_frame_id_from_tree(frame_tree: &serde_json::Value) -> Option<&str> {
+    frame_tree.pointer("/frameTree/frame/id")?.as_str()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::main_frame_id_from_tree;
+
+    #[test]
+    fn frame_tree_requires_a_top_level_frame_id() {
+        let frame_tree = serde_json::json!({
+            "frameTree": {
+                "frame": { "id": "main", "url": "about:blank" },
+                "childFrames": [{ "frame": { "id": "child" } }]
+            }
+        });
+
+        assert_eq!(main_frame_id_from_tree(&frame_tree), Some("main"));
+        assert_eq!(main_frame_id_from_tree(&serde_json::json!({ "frameTree": {} })), None);
     }
 }

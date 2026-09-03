@@ -6,6 +6,9 @@
 //! Rust side writes through the same bounded, non-blocking capture pipeline as
 //! Chromium CDP.
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -272,6 +275,7 @@ impl Driver {
     pub(super) fn handle_network_bidi_event(&mut self, event: &Value) -> bool {
         let method = event.get("method").and_then(Value::as_str).unwrap_or_default();
         let params = event.get("params").unwrap_or(&Value::Null);
+        self.observe_challenge_response(method, params);
         if method == "script.message" {
             let Some(page) = self.firefox_network.as_ref().and_then(|bridge| bridge.page.as_ref()) else {
                 return false;
@@ -360,6 +364,24 @@ impl Driver {
             _ => {}
         }
         false
+    }
+
+    fn observe_challenge_response(&mut self, method: &str, params: &Value) {
+        if method != "network.responseStarted"
+            || !params.get("navigation").is_some_and(Value::is_string)
+            || params.get("context").and_then(Value::as_str) != self.context_id.as_deref()
+        {
+            return;
+        }
+        let Some(url) = string_at(params, "/response/url") else {
+            return;
+        };
+        self.challenge_loop.observe_document_response(
+            url,
+            u16_at(params, "/response/status"),
+            params.pointer("/response/headers").unwrap_or(&Value::Null),
+            params.get("navigation").and_then(Value::as_str),
+        );
     }
 
     pub(super) fn tick_firefox_http_response_bodies(&mut self, event_tx: &BrowserEventSender) {
@@ -559,8 +581,8 @@ impl Driver {
         options: &BrowserNetworkCaptureOptions,
         event_tx: &BrowserEventSender,
     ) -> Result<(), BrowserControlFailure> {
-        let channel = format!("horizon-network-{capture_id}");
-        let control_key = format!("__horizonNetworkCapture_{capture_id}");
+        let channel = firefox_page_channel(capture_id);
+        let control_key = firefox_page_control_key(capture_id);
         let function = page_bridge_function(&control_key, options);
         let channel_argument = json!({
             "type": "channel",
@@ -720,6 +742,18 @@ impl Driver {
     }
 }
 
+fn firefox_page_control_key(capture_id: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    capture_id.hash(&mut hasher);
+    format!("_{:016x}", hasher.finish())
+}
+
+fn firefox_page_channel(capture_id: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    capture_id.hash(&mut hasher);
+    format!("ws-{:016x}", hasher.finish())
+}
+
 fn page_bridge_function(control_key: &str, options: &BrowserNetworkCaptureOptions) -> String {
     PAGE_BRIDGE_TEMPLATE
         .replace(
@@ -761,7 +795,6 @@ fn firefox_network_events(options: &BrowserNetworkCaptureOptions) -> Vec<&'stati
     if options.include_http {
         events.extend([
             "network.beforeRequestSent",
-            "network.responseStarted",
             "network.responseCompleted",
             "network.fetchError",
         ]);
@@ -813,6 +846,24 @@ mod tests {
         assert!(source.contains("const includeSent = false"));
         assert!(source.contains("const maxPayloadBytes = 1234"));
         assert!(!source.contains("__MAX_PAYLOAD_BYTES__"));
+        assert!(!source.to_ascii_lowercase().contains("horizon"));
+    }
+
+    #[test]
+    fn firefox_page_bridge_names_are_not_horizon_branded() {
+        let capture_id = "panel-capture-1";
+        let control_key = firefox_page_control_key(capture_id);
+        let channel = firefox_page_channel(capture_id);
+
+        assert!(control_key.starts_with('_'));
+        assert_ne!(control_key, firefox_page_control_key("other-capture"));
+        assert!(!control_key.to_ascii_lowercase().contains("horizon"));
+        assert!(!channel.to_ascii_lowercase().contains("horizon"));
+        assert!(
+            !page_bridge_function(&control_key, &BrowserNetworkCaptureOptions::default())
+                .to_ascii_lowercase()
+                .contains("horizon")
+        );
     }
 
     #[test]
@@ -825,6 +876,7 @@ mod tests {
 
         assert_eq!(firefox_network_transport(&options), "webdriver_bidi");
         assert!(!firefox_network_events(&options).contains(&"script.message"));
+        assert!(!firefox_network_events(&options).contains(&"network.responseStarted"));
         assert!(firefox_network_events(&options).contains(&"network.responseCompleted"));
     }
 }

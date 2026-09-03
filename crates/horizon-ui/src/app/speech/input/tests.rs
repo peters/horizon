@@ -7,13 +7,31 @@ use horizon_core::{PanelId, WorkspaceId};
 
 use super::{
     HoldHotkeyTransition, SPEECH_RELEASE_OWNERSHIP_TIMEOUT, SpeechActivity, hold_hotkey_transition,
-    terminal_matches_focused_viewport,
+    should_release_desktop_target, terminal_matches_focused_viewport,
 };
 #[cfg(feature = "speech")]
-use super::{apply_global_hotkey_events, handle_profile_hotkeys};
+use super::{apply_global_hotkey_events, handle_profile_hotkeys, start_speech};
 use crate::app::HeldSpeechBinding;
 use crate::app::speech::SpeechSink;
 use crate::app::test_support::test_app;
+
+#[cfg(feature = "speech")]
+struct PrepareHookGuard;
+
+#[cfg(feature = "speech")]
+impl PrepareHookGuard {
+    fn install(hook: fn() -> Result<(), horizon_cursor::InjectError>) -> Self {
+        crate::app::speech::desktop::set_test_prepare_hook(Some(hook));
+        Self
+    }
+}
+
+#[cfg(feature = "speech")]
+impl Drop for PrepareHookGuard {
+    fn drop(&mut self) {
+        crate::app::speech::desktop::set_test_prepare_hook(None);
+    }
+}
 
 /// Root focus may move directly into a detached Horizon viewport. Keep
 /// ownership across a transient all-unfocused pass, but bound it in case
@@ -257,6 +275,7 @@ fn hold_hotkey_drops_stale_ownership_after_recording_ends() {
 #[cfg(feature = "speech")]
 #[test]
 fn global_hold_defers_same_drain_release_until_the_next_batch() {
+    let _prepare = PrepareHookGuard::install(|| Ok(()));
     let (mut speech, channels) = crate::app::speech::SpeechSystem::with_test_bindings(&["F1"]);
     let sink = Some(SpeechSink::Desktop);
     let mut notices = Vec::new();
@@ -289,6 +308,7 @@ fn global_hold_defers_same_drain_release_until_the_next_batch() {
 #[cfg(feature = "speech")]
 #[test]
 fn global_listener_disconnect_cancels_an_active_hold() {
+    let _prepare = PrepareHookGuard::install(|| Ok(()));
     let (mut speech, channels) = crate::app::speech::SpeechSystem::with_test_bindings(&["F1"]);
     let sink = Some(SpeechSink::Desktop);
     let mut notices = Vec::new();
@@ -317,6 +337,36 @@ fn global_listener_disconnect_cancels_an_active_hold() {
     assert!(disconnected);
     assert!(deferred.is_empty());
     assert_eq!(speech.recording_sink(), None);
+}
+
+#[cfg(feature = "speech")]
+#[test]
+fn unsafe_desktop_target_refuses_before_microphone_capture() {
+    fn reject_target() -> Result<(), horizon_cursor::InjectError> {
+        Err(horizon_cursor::InjectError::Target("focused field changed"))
+    }
+
+    let (mut speech, channels) = crate::app::speech::SpeechSystem::with_test_bindings(&["F1"]);
+    let mut events = Vec::new();
+    let _prepare = PrepareHookGuard::install(reject_target);
+    let started = start_speech(&mut speech, SpeechSink::Desktop, 0, &mut events);
+
+    assert!(!started);
+    assert_eq!(speech.recording_sink(), None);
+    assert!(!channels.capture_start_requested());
+    assert!(matches!(
+        events.as_slice(),
+        [super::SpeechEvent::Error(message)]
+            if message.contains("focused field changed") && message.contains("clipboard was not used")
+    ));
+}
+
+#[test]
+fn queued_desktop_insertion_keeps_the_captured_target_owned() {
+    assert!(!should_release_desktop_target(false, false, true));
+    assert!(!should_release_desktop_target(true, false, false));
+    assert!(!should_release_desktop_target(false, true, false));
+    assert!(should_release_desktop_target(false, false, false));
 }
 
 #[test]

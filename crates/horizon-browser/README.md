@@ -34,20 +34,27 @@ multiple concurrent sessions.
 `BrowserConfig::default()` uses
 `AutomationDisclosurePolicy::MinimizeCommonSignals`. Chromium avoids
 automation-only launch switches, suppresses Blink's standard automation flag,
-installs a pre-document `navigator.webdriver` compatibility shim, and removes
-only the `HeadlessChrome` user-agent token while preserving Chromium-owned
-Client Hint brands, platform, architecture, and versions. The engine reads
-those native values on a network-free temporary target and closes that target
+and removes only the `HeadlessChrome` user-agent token and Client Hint brand
+while preserving Chromium-owned platform, architecture, versions, and GREASE
+brands. It does not install a script-defined `navigator.webdriver` getter,
+because that accessor is itself a detection signal. The engine reads native
+Client Hint values on a network-free temporary target and closes that target
 before attaching the caller's `about:blank` page, so it cannot enter caller
-history or frames. Firefox installs the same narrow value shim with WebDriver BiDi
-`script.addPreloadScript` before the initial navigation; startup fails instead
-of silently downgrading when that required BiDi command is rejected.
+history or frames. Title updates use protocol target metadata rather than a
+page-JS binding. Firefox installs a narrow `navigator.webdriver` value shim
+with WebDriver BiDi `script.addPreloadScript` before the initial navigation;
+startup fails instead of silently downgrading when that required BiDi command
+is rejected. Chromium panels minimizing common signals also use a reserved
+nonzero loopback DevTools port so Chromium does not enable its port-zero
+`AutomationControlled` behavior. Startup retries with a fresh reservation when
+another local process wins the required socket handoff. Callers that need the
+browser's unmodified behavior can select
+`AutomationDisclosurePolicy::BrowserDefault` on any backend; Chromium then
+retains its native port-zero automation signal.
 
 Safari's public automation surface cannot currently establish the same
 pre-document contract, so an active Safari session reports
-`AutomationDisclosureStatus::UnsupportedByBackend`. Callers that need the
-browser's unmodified behavior can select
-`AutomationDisclosurePolicy::BrowserDefault` on any backend.
+`AutomationDisclosureStatus::UnsupportedByBackend`.
 
 This policy minimizes a small set of common script-visible disclosures; it is
 not an undetectability or anti-bot guarantee. Pages can still infer automation
@@ -134,9 +141,27 @@ not impose those product storage choices on another application.
 
 Hosts publish `AgentActionResult` values through `BrowserCoordination`. A
 terminal `Completed` audit record means the engine finished handling the
-request; navigation and other asynchronous page behavior still need an
-explicit later snapshot, query, or wait in the host-facing adapter. Selectors,
-scripts, filled text, and returned page data are excluded from audit records.
+request. A `Navigate` action carries a `NavigationWait` (`dispatched`,
+`commit`, or `dom_content_loaded`, default `commit`) and a bounded
+`timeout_millis`; the engine dispatches at once (`dispatched` settles when the
+command was handed to the backend; the browser's acceptance is not awaited, so
+a later rejection is a failed page state rather than a failed action) and
+settles a typed
+`NavigationOutcome` (requested and committed URL, title when known, loading,
+redirected, elapsed, and a `state` of `dispatched`, `committed`,
+`dom_content_loaded`, `timed_out`, or `superseded`) from the backend's own
+commit, `DOMContentLoaded`, load, and failure signals, each attributed by the
+backend's navigation identity (Chromium loader id, BiDi navigation id) so an
+earlier navigation still in flight cannot settle a later action. On Firefox
+BiDi a commit is observed at `DOMContentLoaded`; classic WebDriver has no
+dispatch-only primitive and blocks until the document loaded or the action's
+bound elapsed (applied as the session page-load timeout), reporting
+`timed_out` with whatever the browser committed meanwhile. `redirected`
+compares the committed URL with the requested one; only a bare origin and its
+root slash count as the same destination. A destination that fails after dispatch is a failed action, not a
+state. Other asynchronous page behavior (reload, history traversal, input)
+still needs an explicit later snapshot, query, or wait. Selectors, scripts,
+filled text, and returned page data are excluded from audit records.
 Only redacted shape, bounded character counts, actor, action identity, and
 status are retained.
 

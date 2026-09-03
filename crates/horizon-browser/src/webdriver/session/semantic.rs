@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 
 use crate::semantic::{
     bounded_control_value, check_script_error, parse_target_rect, scan_expression, scroll_expression,
-    target_rect_expression,
+    target_rect_expression, wait_scan_expression,
 };
 use crate::session::BrowserEventSender;
 use crate::{
@@ -13,6 +13,9 @@ use crate::{
 };
 
 use super::{Driver, webdriver_value};
+
+const DOCUMENT_IDENTITY_EXPRESSION: &str =
+    "JSON.stringify([String(location.href), Number(globalThis.performance?.timeOrigin || 0)])";
 
 impl Driver {
     pub(super) fn execute_agent_action(
@@ -34,6 +37,10 @@ impl Driver {
         match &request.action {
             BrowserControlAction::Snapshot { max_nodes } => self.semantic_snapshot(*max_nodes),
             BrowserControlAction::Query { selector, max_results } => self.semantic_query(selector, *max_results),
+            BrowserControlAction::WaitForSelector { .. } => Err(BrowserControlFailure::new(
+                "invalid_action_state",
+                "selector waits are observed from the driver loop",
+            )),
             BrowserControlAction::Click { target, count } => self.semantic_click(target, *count, event_tx),
             BrowserControlAction::Fill { target, value } => self.semantic_fill(target, value, event_tx),
             BrowserControlAction::Scroll {
@@ -70,12 +77,46 @@ impl Driver {
         })
     }
 
-    fn semantic_query(
+    pub(super) fn semantic_query(
         &mut self,
         selector: &str,
         max_results: u32,
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
         let value = self.evaluate_json(&scan_expression(Some(selector), max_results))?;
+        self.register_query(value)
+    }
+
+    /// A selector scan that does not register references: for judging a wait
+    /// condition without disturbing refs a concurrent snapshot handed out.
+    pub(super) fn semantic_peek_within(
+        &mut self,
+        selector: &str,
+        max_results: u32,
+        timeout: std::time::Duration,
+    ) -> Result<
+        (
+            u64,
+            Vec<crate::BrowserNode>,
+            Option<crate::semantic::ScanSummary>,
+            Value,
+        ),
+        BrowserControlFailure,
+    > {
+        let value = self.evaluate_json_within(&wait_scan_expression(selector, max_results), Some(timeout))?;
+        let peeked = self.semantic.peek_nodes(&value)?;
+        self.record_classic_document_identity(peeked.document_identity);
+        Ok((self.semantic.generation(), peeked.nodes, peeked.summary, value))
+    }
+
+    /// Register a previously peeked scan as the current references.
+    pub(super) fn semantic_register_scan(
+        &mut self,
+        value: Value,
+    ) -> Result<(u64, u64, Vec<crate::BrowserNode>), BrowserControlFailure> {
+        self.semantic.register_nodes(value)
+    }
+
+    fn register_query(&mut self, value: Value) -> Result<BrowserControlValue, BrowserControlFailure> {
         let (generation, revision, nodes) = self.semantic.register_nodes(value)?;
         Ok(BrowserControlValue::Nodes {
             generation,
@@ -164,15 +205,62 @@ impl Driver {
     }
 
     fn evaluate_json(&self, expression: &str) -> Result<Value, BrowserControlFailure> {
-        let response = self
-            .classic_post(
-                "execute/sync",
-                &json!({ "script": format!("return ({expression});"), "args": [] }),
-            )
-            .map_err(|error| BrowserControlFailure::new("javascript_error", error))?;
+        self.evaluate_json_within(expression, None)
+    }
+
+    fn evaluate_json_within(
+        &self,
+        expression: &str,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<Value, BrowserControlFailure> {
+        let body = json!({ "script": format!("return ({expression});"), "args": [] });
+        let response = match timeout {
+            Some(timeout) => self.classic_navigation_post_within("execute/sync", &body, timeout),
+            None => self.classic_post("execute/sync", &body),
+        }
+        .map_err(|error| BrowserControlFailure::new("javascript_error", error))?;
         let value = webdriver_value(&response)
             .cloned()
             .ok_or_else(|| BrowserControlFailure::new("invalid_result", "WebDriver returned no script value"))?;
         bounded_control_value(value)
+    }
+
+    pub(super) fn initialize_classic_document_identity(&mut self) {
+        if self.config.browser.backend == BackendKind::SafariWebDriver {
+            let _ = self.refresh_classic_document_identity_within(std::time::Duration::from_secs(1));
+        }
+    }
+
+    pub(super) fn refresh_classic_document_identity_within(
+        &mut self,
+        timeout: std::time::Duration,
+    ) -> Result<bool, BrowserControlFailure> {
+        if self.config.browser.backend != BackendKind::SafariWebDriver {
+            return Ok(false);
+        }
+        let value = self.evaluate_json_within(DOCUMENT_IDENTITY_EXPRESSION, Some(timeout))?;
+        let identity = value
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| BrowserControlFailure::new("invalid_result", "WebDriver returned no document identity"))?;
+        Ok(self.record_classic_document_identity(Some(identity)))
+    }
+
+    fn record_classic_document_identity(&mut self, identity: Option<String>) -> bool {
+        if self.config.browser.backend != BackendKind::SafariWebDriver {
+            return false;
+        }
+        let Some(identity) = identity else {
+            return false;
+        };
+        let changed = self
+            .classic_document_identity
+            .replace(identity.clone())
+            .is_some_and(|previous| previous != identity);
+        if changed {
+            self.semantic.invalidate();
+            self.advance_generation();
+        }
+        changed
     }
 }
