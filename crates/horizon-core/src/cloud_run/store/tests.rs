@@ -246,6 +246,46 @@ fn creation_claim_is_durable_atomic_and_bound_to_the_persisted_job() {
 }
 
 #[test]
+fn corrupt_creation_claim_values_are_bounded_before_materialization() {
+    let temp = TempDir::new().expect("temp dir");
+    let store = store(&temp);
+    let workflow = retained_workflow(CloudProvider::RunPod, 1_000);
+    let job_id = workflow.nodes[0].id;
+    let target = worker_target(&workflow);
+    store.create(&workflow).expect("create workflow");
+    store
+        .claim_worker_creation(workflow.id, job_id, target, "horizon-worker-1")
+        .expect("claim worker");
+
+    let connection = Connection::open(store.path()).expect("open raw store");
+    connection
+        .pragma_update(None, "foreign_keys", "OFF")
+        .expect("disable foreign keys for corruption fixture");
+    connection
+        .execute_batch(
+            "UPDATE cloud_worker_creation_claims
+             SET workflow_id=printf('%4096s','x'), job_id=printf('%4096s','x')",
+        )
+        .expect("oversize claim identity");
+    assert!(matches!(
+        store.claim_worker_creation(workflow.id, job_id, target, "horizon-worker-1"),
+        Err(CloudStoreError::ClaimIdentityConflict)
+    ));
+
+    connection
+        .execute(
+            "UPDATE cloud_worker_creation_claims
+             SET workflow_id=?1, job_id=?2, resource_name=printf('%4096s','x')",
+            params![workflow.id.to_string(), job_id.to_string()],
+        )
+        .expect("oversize claim resource name");
+    assert!(matches!(
+        store.claim_worker_creation(workflow.id, job_id, target, "horizon-worker-2"),
+        Err(CloudStoreError::ClaimIdentityConflict)
+    ));
+}
+
+#[test]
 fn replacement_scales_across_many_claimed_workers() {
     let temp = TempDir::new().expect("temp dir");
     let store = store(&temp);

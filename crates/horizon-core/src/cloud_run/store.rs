@@ -270,37 +270,39 @@ impl CloudWorkflowStore {
         }
         validate_claim_target(&workflow.workflow, job_id, target)?;
         let provider_name = provider_name(target.provider);
+        let job_id_text = job_id.to_string();
         let existing = transaction
             .query_row(
-                "SELECT workflow_id, job_id FROM cloud_worker_creation_claims
+                "SELECT substr(workflow_id, 1, 37), substr(job_id, 1, 37)
+                 FROM cloud_worker_creation_claims
                  WHERE provider = ?1 AND resource_name = ?2",
                 params![provider_name, resource_name],
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
             )
             .optional()?;
         if let Some(existing) = existing {
-            if existing == (workflow_id.to_string(), job_id.to_string()) {
+            if existing.0 == id && existing.1 == job_id_text {
                 transaction.commit()?;
                 return Ok(false);
             }
             return Err(CloudStoreError::ClaimIdentityConflict);
         }
-        let job_already_claimed = transaction
-            .query_row(
-                "SELECT resource_name FROM cloud_worker_creation_claims
-                 WHERE provider = ?1 AND workflow_id = ?2 AND job_id = ?3",
-                params![provider_name, id, job_id.to_string()],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?;
-        if job_already_claimed.is_some() {
+        let job_already_claimed = transaction.query_row(
+            "SELECT EXISTS(
+                    SELECT 1 FROM cloud_worker_creation_claims
+                    WHERE provider = ?1 AND workflow_id = ?2 AND job_id = ?3
+                 )",
+            params![provider_name, id, job_id_text],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if job_already_claimed {
             return Err(CloudStoreError::ClaimIdentityConflict);
         }
         transaction.execute(
             "INSERT INTO cloud_worker_creation_claims (
                 provider, workflow_id, job_id, resource_name, claimed_at_millis
              ) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![provider_name, id, job_id.to_string(), resource_name, claimed_at_millis],
+            params![provider_name, id, job_id_text, resource_name, claimed_at_millis],
         )?;
         transaction.commit()?;
         Ok(true)
@@ -643,7 +645,7 @@ pub enum CloudStoreError {
     RecoveryLimitExceeded,
     #[error("cloud worker resource name is invalid")]
     InvalidResourceName,
-    #[error("cloud job {0} is not a persisted worker for the requested provider")]
+    #[error("requested worker target does not exactly match persisted cloud job {0}")]
     ClaimTargetMismatch(CloudJobId),
     #[error("cloud job {0} is not ready for worker creation")]
     ClaimTargetNotReady(CloudJobId),
