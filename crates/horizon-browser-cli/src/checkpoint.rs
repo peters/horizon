@@ -1,5 +1,7 @@
 //! Explicit resume policy for interrupted deterministic plan runs.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -124,6 +126,12 @@ pub enum ResumeError {
     /// Saved completions do not match the saved plan prefix.
     #[error("durable checkpoint does not match the saved plan prefix")]
     PrefixMismatch,
+    /// The job was recorded before checkpoints existed.
+    #[error("durable job `{0}` was recorded before checkpoints; resume would replay completed mutations")]
+    LegacyState(String),
+    /// Another resume already holds this job.
+    #[error("durable job `{0}` is already being resumed")]
+    Locked(String),
 }
 
 impl UncertainPolicy {
@@ -151,50 +159,58 @@ pub fn select_resume(
     policy: UncertainPolicy,
 ) -> Result<ResumeSelection, ResumeError> {
     let checkpoint = checkpoint.cloned().unwrap_or_default();
-    if !prefix_matches(plan, &checkpoint.completed) {
-        return Err(ResumeError::PrefixMismatch);
-    }
-    let mut start_index = checkpoint.completed.len();
-    start_index += skipped_count_at(plan, &checkpoint.skipped, start_index);
-    let mut skipped = None;
-    if let Some(intent) = checkpoint.intent.as_ref() {
-        let expected = plan.steps.get(start_index).map(|step| step.id.as_str());
-        if expected != Some(intent.step_id.as_str()) {
-            return Err(ResumeError::PrefixMismatch);
-        }
-        match policy {
-            UncertainPolicy::Fail => {
-                return Err(ResumeError::Uncertain {
-                    step: intent.step_id.clone(),
-                    tool: intent.tool.clone(),
-                });
+    let reports = reports_by_id(&checkpoint.completed)?;
+    let skipped_ids = checkpoint.skipped.iter().cloned().collect::<BTreeSet<_>>();
+    let mut completed = Vec::new();
+    let mut start_index = 0;
+    let mut skip_intent = None;
+    for (index, step) in plan.steps.iter().enumerate() {
+        if let Some(report) = reports.get(step.id.as_str()) {
+            if report.tool != step.tool {
+                return Err(ResumeError::PrefixMismatch);
             }
-            UncertainPolicy::Skip => {
-                skipped = Some(intent.step_id.clone());
-                start_index = start_index.saturating_add(1);
+            completed.push((*report).clone());
+            start_index = index.saturating_add(1);
+            continue;
+        }
+        if skipped_ids.contains(&step.id) {
+            start_index = index.saturating_add(1);
+            continue;
+        }
+        if let Some(intent) = checkpoint.intent.as_ref() {
+            if intent.step_id != step.id {
+                return Err(ResumeError::PrefixMismatch);
+            }
+            match policy {
+                UncertainPolicy::Fail => {
+                    return Err(ResumeError::Uncertain {
+                        step: intent.step_id.clone(),
+                        tool: intent.tool.clone(),
+                    });
+                }
+                UncertainPolicy::Skip => {
+                    skip_intent = Some(intent.step_id.clone());
+                    start_index = index.saturating_add(1);
+                }
             }
         }
+        break;
     }
     Ok(ResumeSelection {
-        completed: checkpoint.completed,
+        completed,
         start_index,
-        skipped,
+        skipped: skip_intent,
     })
 }
 
-fn prefix_matches(plan: &Plan, completed: &[StepReport]) -> bool {
-    completed.len() <= plan.steps.len()
-        && completed
-            .iter()
-            .zip(&plan.steps)
-            .all(|(report, step)| report.id == step.id && report.tool == step.tool)
-}
-
-fn skipped_count_at(plan: &Plan, skipped: &[String], start_index: usize) -> usize {
-    skipped
-        .iter()
-        .take_while(|step_id| plan.steps.get(start_index).is_some_and(|step| step.id == **step_id))
-        .count()
+fn reports_by_id(completed: &[StepReport]) -> Result<BTreeMap<&str, &StepReport>, ResumeError> {
+    let mut reports = BTreeMap::new();
+    for report in completed {
+        if reports.insert(report.id.as_str(), report).is_some() {
+            return Err(ResumeError::PrefixMismatch);
+        }
+    }
+    Ok(reports)
 }
 
 /// True when `job-` is followed by a UUID and no path separators.
@@ -299,6 +315,28 @@ mod tests {
         };
         let error = select_resume(&plan(), Some(&checkpoint), UncertainPolicy::Fail).expect_err("dispatched");
         assert!(matches!(error, ResumeError::Uncertain { step, .. } if step == "list"));
+    }
+
+    #[test]
+    fn skipped_steps_are_merged_in_plan_order() {
+        let checkpoint = RunCheckpoint {
+            completed: vec![
+                completed("list", "browser_list"),
+                completed("title", "browser_evaluate"),
+            ],
+            intent: None,
+            skipped: vec!["navigate".to_string()],
+        };
+        let selection = select_resume(&plan(), Some(&checkpoint), UncertainPolicy::Fail).expect("merge");
+        assert_eq!(selection.start_index, 3);
+        assert_eq!(
+            selection
+                .completed
+                .iter()
+                .map(|step| step.id.as_str())
+                .collect::<Vec<_>>(),
+            ["list", "title"]
+        );
     }
 
     #[test]

@@ -20,9 +20,11 @@ use crate::checkpoint::{
 use crate::{ExecutionReport, Plan, PlanStep, StepReport, execution_control::ExecutionStopReason};
 
 const STATE_VERSION: u32 = 3;
+const MIN_RESUME_VERSION: u32 = 3;
 const PLAN_FILE: &str = "plan.json";
 const REPORT_FILE: &str = "report.json";
 const STATE_FILE: &str = "state.json";
+const RESUME_LOCK_FILE: &str = "resume.lock";
 
 /// Persisted lifecycle state for one deterministic plan run.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -117,6 +119,7 @@ pub struct DurableRun {
     directory: PathBuf,
     state_path: PathBuf,
     state: RunState,
+    lock_path: Option<PathBuf>,
 }
 
 /// Detached finalization view of an already published durable run.
@@ -220,6 +223,7 @@ impl DurableRun {
                 directory: self.directory.clone(),
                 state_path: self.state_path.clone(),
                 state: self.state.clone(),
+                lock_path: None,
             },
         }
     }
@@ -276,6 +280,7 @@ impl DurableRun {
             state_path: directory.join(STATE_FILE),
             directory,
             state,
+            lock_path: None,
         };
         if let Err(source) = sync_directory(root) {
             return Err(DurablePreparationError::published(run, source));
@@ -373,6 +378,7 @@ impl DurableRun {
             directory,
             state_path,
             state,
+            lock_path: None,
         })
     }
 
@@ -382,7 +388,11 @@ impl DurableRun {
     /// Returns when the job is missing, still leased, already succeeded, or
     /// would replay an uncertain mutation.
     pub fn prepare_resume(job_id: &str, policy: UncertainPolicy) -> Result<(Self, Plan, ResumeSelection), ResumeError> {
-        let run = Self::open(job_id)?;
+        let mut run = Self::open(job_id)?;
+        run.acquire_resume_lock()?;
+        if run.state.version < MIN_RESUME_VERSION {
+            return Err(ResumeError::LegacyState(job_id.to_string()));
+        }
         let plan = run.load_plan()?;
         match run.state.effective_status_at(now_millis()) {
             RunStatus::Prepared | RunStatus::Running => return Err(ResumeError::StillRunning(job_id.to_string())),
@@ -446,8 +456,41 @@ impl DurableRun {
         self.persist_state().map_err(|error| error.to_string())
     }
 
+    fn acquire_resume_lock(&mut self) -> Result<(), ResumeError> {
+        let path = self.directory.join(RESUME_LOCK_FILE);
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut file) => {
+                let pid = format!("{}\n", std::process::id());
+                file.write_all(pid.as_bytes())
+                    .and_then(|()| file.sync_all())
+                    .map_err(|source| ResumeError::Decode(format!("could not write {}: {source}", path.display())))?;
+                self.lock_path = Some(path);
+                Ok(())
+            }
+            Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => {
+                if resume_lock_is_stale(&path) {
+                    let _ = std::fs::remove_file(&path);
+                    return self.acquire_resume_lock();
+                }
+                Err(ResumeError::Locked(self.state.job_id.clone()))
+            }
+            Err(source) => Err(ResumeError::Decode(format!(
+                "could not lock {}: {source}",
+                path.display()
+            ))),
+        }
+    }
+
     fn write_json(&self, name: &str, value: &impl Serialize, artifact: &'static str) -> Result<(), RunStateError> {
         write_private_json(&self.directory.join(name), value, artifact)
+    }
+}
+
+impl Drop for DurableRun {
+    fn drop(&mut self) {
+        if let Some(path) = self.lock_path.take() {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
 
@@ -602,6 +645,33 @@ fn write_private_json(path: &Path, value: &impl Serialize, artifact: &'static st
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
         .map_err(|source| io_error(format!("could not secure {}", path.display()), source))?;
     Ok(())
+}
+
+fn resume_lock_is_stale(path: &Path) -> bool {
+    let Ok(bytes) = std::fs::read(path) else {
+        return true;
+    };
+    let Ok(pid) = std::str::from_utf8(&bytes) else {
+        return true;
+    };
+    let Ok(pid) = pid.trim().parse::<u32>() else {
+        return true;
+    };
+    if pid == std::process::id() {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .status()
+            .is_ok_and(|status| !status.success())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        false
+    }
 }
 
 fn io_error(operation: String, source: std::io::Error) -> RunStateError {

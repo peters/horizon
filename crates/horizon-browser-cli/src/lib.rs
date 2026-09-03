@@ -341,9 +341,14 @@ async fn execute_steps(
             break;
         }
         let params = CallToolRequestParams::new(step.tool.clone()).with_arguments(arguments);
-        let outcome = match wait_for_browser_action(control, client.call_tool(params)).await {
-            Ok(Ok(result)) => step_outcome(step, result),
-            Ok(Err(error)) => failed_step(step, format!("MCP call failed: {error}")),
+        let result = match wait_for_browser_action(control, client.call_tool(params)).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(error)) => {
+                if let Some(store) = checkpoint.as_mut() {
+                    let _ = store.record_uncertain(step);
+                }
+                return execution_report(false, steps, Some(format!("MCP call failed: {error}")), None);
+            }
             Err(stopped) => {
                 if let Some(store) = checkpoint.as_mut() {
                     let _ = if stopped.request_started {
@@ -355,22 +360,41 @@ async fn execute_steps(
                 return stopped_report(steps, &stopped);
             }
         };
-        if outcome.ok {
-            if let Some(store) = checkpoint.as_mut()
-                && let Err(error) = store.record_completion(&outcome)
-            {
-                steps.push(failed_step(step, format!("could not persist step completion: {error}")));
-                break;
+        if result.is_error.unwrap_or(false) {
+            let outcome = step_outcome(step, result);
+            if let Some(store) = checkpoint.as_mut() {
+                let _ = store.clear_intent();
             }
-        } else if let Some(store) = checkpoint.as_mut() {
-            let _ = store.clear_intent();
-        }
-        let ok = outcome.ok;
-        result_indexes.insert(step.id.clone(), steps.len());
-        steps.push(outcome);
-        if !ok {
+            result_indexes.insert(step.id.clone(), steps.len());
+            steps.push(outcome);
             break;
         }
+        let Some(structured) = result.structured_content else {
+            if let Some(store) = checkpoint.as_mut() {
+                let _ = store.record_uncertain(step);
+            }
+            return execution_report(
+                false,
+                steps,
+                Some("MCP tool returned no structured content".to_string()),
+                None,
+            );
+        };
+        let outcome = StepReport {
+            id: step.id.clone(),
+            tool: step.tool.clone(),
+            ok: true,
+            result: Some(structured),
+            error: None,
+        };
+        if let Some(store) = checkpoint.as_mut()
+            && let Err(error) = store.record_completion(&outcome)
+        {
+            steps.push(failed_step(step, format!("could not persist step completion: {error}")));
+            break;
+        }
+        result_indexes.insert(step.id.clone(), steps.len());
+        steps.push(outcome);
     }
     let ok = steps.len() == plan.steps.len() && steps.iter().all(|step| step.ok);
     execution_report(ok, steps, None, None)

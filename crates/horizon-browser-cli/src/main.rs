@@ -46,8 +46,8 @@ COMMANDS:
            Saves durable job state; reads stdin when PLAN is '-' and writes
            JSON to stdout by default. Ctrl-C preserves progress and exits 130.
     resume Continue a cancelled, timed-out, or failed job from verified
-           checkpoints. Uncertain in-flight mutations are not replayed unless
-           --on-uncertain skip is set after inspecting the browser audit.
+           checkpoints. Uncertain in-flight calls are never replayed.
+           --on-uncertain skip continues later steps after audit inspection.
     mcp    Serve the browser MCP contract over stdio. Outside Horizon it owns
            a standalone browser; --connect uses existing Horizon panels only.
 
@@ -57,7 +57,8 @@ OPTIONS:
     --json                Emit stable JSONL job progress and completion events.
     -o, --output <PATH>    Write the JSON report to PATH; '-' means stdout.
     --timeout <SECONDS>    Bound durable preparation and MCP work (default 1800, max 86400).
-    --on-uncertain <MODE>  resume: fail (default) or skip an in-flight mutation.
+    --on-uncertain <MODE>  resume: fail (default) or continue after the
+                           uncertain step without replaying it.
     -h, --help             Print this help.
     -V, --version          Print the version.
 "#;
