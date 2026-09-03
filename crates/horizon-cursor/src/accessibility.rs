@@ -536,44 +536,7 @@ mod platform {
         text: &str,
         focus_window: Option<u32>,
     ) -> Result<(), InjectError> {
-        match bounded_preflight(deadline, find_focused_object(connection)).await {
-            Ok(target) => {
-                let accessible = bounded_preflight(deadline, async {
-                    target
-                        .as_accessible_proxy(connection.connection())
-                        .await
-                        .map_err(|_| InjectError::Failed("focused accessibility target disappeared"))
-                })
-                .await?;
-                let facts = bounded_preflight(deadline, read_target_facts(&accessible)).await?;
-                facts.validate_synthesis_target()?;
-                if facts.interfaces.contains(Interface::Text) {
-                    let selected = async {
-                        let proxies = accessible
-                            .proxies()
-                            .await
-                            .map_err(|_| InjectError::Failed("failed to inspect focused field interfaces"))?;
-                        let text_proxy = proxies
-                            .text()
-                            .await
-                            .map_err(|_| InjectError::Target("focused field does not expose readable text state"))?;
-                        let selection_count = text_proxy
-                            .get_n_selections()
-                            .await
-                            .map_err(|_| InjectError::Failed("failed to inspect focused field selection"))?;
-                        Ok(selection_count != 0)
-                    };
-                    if let Ok(true) = bounded_preflight(deadline, selected).await {
-                        return Err(InjectError::Target(
-                            "selected text cannot be replaced safely by direct dictation",
-                        ));
-                    }
-                }
-            }
-            // No AT-SPI focused object (Chromium/Teams). Type into OS focus.
-            Err(error) if is_unclassified_focus(&error) => {}
-            Err(error) => return Err(error),
-        }
+        ensure_synthesis_target_still_safe(connection, deadline).await?;
         synthesize_key_string(connection, deadline, text, focus_window).await
     }
 
@@ -590,10 +553,66 @@ mod platform {
         })
         .await?;
         ensure_focus_window_unchanged(focus_window)?;
+        // Tab/click can move focus to a password or selection in the same
+        // window while the device proxy is created. Re-classify immediately
+        // before the mutating call; unclassified Chromium/Teams still type.
+        ensure_synthesis_target_still_safe(connection, deadline).await?;
+        ensure_focus_window_unchanged(focus_window)?;
         proxy
             .generate_keyboard_event(0, text, KeySynthType::String)
             .await
             .map_err(|_| InjectError::Failed("focused application rejected synthesized key input"))?;
+        Ok(())
+    }
+
+    async fn ensure_synthesis_target_still_safe(
+        connection: &AccessibilityConnection,
+        deadline: tokio::time::Instant,
+    ) -> Result<(), InjectError> {
+        match bounded_preflight(deadline, find_focused_object(connection)).await {
+            Ok(target) => validate_classified_synthesis_target(connection, deadline, target).await,
+            // No AT-SPI focused object (Chromium/Teams). Type into OS focus.
+            Err(error) if is_unclassified_focus(&error) => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn validate_classified_synthesis_target(
+        connection: &AccessibilityConnection,
+        deadline: tokio::time::Instant,
+        target: ObjectRefOwned,
+    ) -> Result<(), InjectError> {
+        let accessible = bounded_preflight(deadline, async {
+            target
+                .as_accessible_proxy(connection.connection())
+                .await
+                .map_err(|_| InjectError::Failed("focused accessibility target disappeared"))
+        })
+        .await?;
+        let facts = bounded_preflight(deadline, read_target_facts(&accessible)).await?;
+        facts.validate_synthesis_target()?;
+        if facts.interfaces.contains(Interface::Text) {
+            let selected = async {
+                let proxies = accessible
+                    .proxies()
+                    .await
+                    .map_err(|_| InjectError::Failed("failed to inspect focused field interfaces"))?;
+                let text_proxy = proxies
+                    .text()
+                    .await
+                    .map_err(|_| InjectError::Target("focused field does not expose readable text state"))?;
+                let selection_count = text_proxy
+                    .get_n_selections()
+                    .await
+                    .map_err(|_| InjectError::Failed("failed to inspect focused field selection"))?;
+                Ok(selection_count != 0)
+            };
+            if let Ok(true) = bounded_preflight(deadline, selected).await {
+                return Err(InjectError::Target(
+                    "selected text cannot be replaced safely by direct dictation",
+                ));
+            }
+        }
         Ok(())
     }
 

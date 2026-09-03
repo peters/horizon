@@ -108,15 +108,20 @@ mod platform {
                 .and_then(|cookie| cookie.reply().ok())
                 .map(|reply| reply.focus);
             let mut pids = Vec::new();
-            for window in [active, input_focus]
-                .into_iter()
-                .flatten()
-                .filter(|window| is_focus_candidate(*window, root))
-            {
+            if let Some(window) = preferred_focus_window(input_focus, active, root) {
                 collect_pids_around(conn, window, root, net_pid, &mut pids);
             }
             Some(pids)
         })
+    }
+
+    /// `KEY_STRING` is delivered to the input-focus window, so that candidate
+    /// owns routing. `_NET_ACTIVE_WINDOW` is only a fallback when input focus
+    /// cannot be attributed to a real client window.
+    fn preferred_focus_window(input_focus: Option<Window>, active: Option<Window>, root: Window) -> Option<Window> {
+        [input_focus, active]
+            .into_iter()
+            .find_map(|window| window.filter(|candidate| is_focus_candidate(*candidate, root)))
     }
 
     fn collect_pids_around(conn: &RustConnection, window: Window, root: Window, pid_atom: Atom, pids: &mut Vec<u32>) {
@@ -259,7 +264,7 @@ mod platform {
     mod tests {
         use super::{
             MAX_CHILD_WINDOWS, NONE, POINTER_ROOT, child_window_budget_exhausted, is_focus_candidate, is_real_window,
-            process_owns_focus,
+            preferred_focus_window, process_owns_focus,
         };
 
         #[test]
@@ -275,6 +280,18 @@ mod platform {
             assert!(!is_focus_candidate(ROOT, ROOT));
             assert!(!is_focus_candidate(NONE, ROOT));
             assert!(is_focus_candidate(0x3c0_0004, ROOT));
+        }
+
+        #[test]
+        fn input_focus_window_wins_over_stale_active_window() {
+            const ROOT: u32 = 0x21;
+            const HORIZON: u32 = 0x3c0_0004;
+            const TEAMS: u32 = 0x3c0_0005;
+            assert_eq!(preferred_focus_window(Some(TEAMS), Some(HORIZON), ROOT), Some(TEAMS));
+            assert_eq!(preferred_focus_window(None, Some(HORIZON), ROOT), Some(HORIZON));
+            assert_eq!(preferred_focus_window(Some(ROOT), Some(HORIZON), ROOT), Some(HORIZON));
+            assert_eq!(preferred_focus_window(Some(NONE), Some(HORIZON), ROOT), Some(HORIZON));
+            assert_eq!(preferred_focus_window(None, None, ROOT), None);
         }
 
         #[test]
