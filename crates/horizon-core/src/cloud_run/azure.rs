@@ -420,7 +420,10 @@ fn valid_dns_label(value: &str) -> bool {
         && bytes.iter().all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
 }
 fn valid_arm_id(value: &str) -> bool {
-    value.starts_with("/subscriptions/")
+    let prefix = "/subscriptions/";
+    value
+        .get(..prefix.len())
+        .is_some_and(|value| value.eq_ignore_ascii_case(prefix))
         && valid_text(value, 2_048)
         && !value.contains(['?', '#'])
         && value.bytes().all(|byte| !byte.is_ascii_whitespace())

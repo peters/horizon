@@ -132,6 +132,9 @@ fn validation_and_cost_fail_before_creation() {
     target.max_hourly_cost_micros = Some(41_999);
     let transport = FakeTransport::default();
     let client = AzureClient::with_transport(profile.clone(), transport.clone());
+    let identity_id = &mut profile.registry.as_mut().expect("registry").identity_id;
+    *identity_id = identity_id.replacen("/subscriptions/", "/Subscriptions/", 1);
+    assert_eq!(validate_profile(&profile), Ok(()));
     let mut public_profile = profile.clone();
     public_profile.registry = None;
     let public_request = create_request(workflow_id, job_id, &target, &public_profile).expect("public request");
