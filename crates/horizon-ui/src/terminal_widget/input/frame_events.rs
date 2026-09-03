@@ -222,6 +222,26 @@ mod tests {
     }
 
     #[test]
+    fn pointer_events_ignore_positions_outside_rect() {
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(20.0, 20.0));
+        let events = vec![
+            Event::PointerMoved(Pos2::new(40.0, 6.0)),
+            Event::PointerButton {
+                pos: Pos2::new(40.0, 6.0),
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            },
+        ];
+
+        assert!(!pointer_event_targets_rect(&events, None, rect));
+        assert_eq!(
+            PointerFrameEvents::collect(&events, None, rect, TermMode::NONE).body_primary_press_pos,
+            None
+        );
+    }
+
+    #[test]
     fn osc8_lookup_replays_at_the_press_position() {
         let inside = Pos2::new(4.0, 4.0);
         let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(20.0, 20.0));

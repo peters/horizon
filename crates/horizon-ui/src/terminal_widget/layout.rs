@@ -33,6 +33,21 @@ pub(super) struct TerminalInteraction {
     pub(super) scrollbar: egui::Response,
 }
 
+impl TerminalInteraction {
+    /// Clip-aware hit target for pointer events.
+    ///
+    /// `layout.body` is the full terminal grid and can extend under fixed
+    /// overlays such as the settings YAML panel. Widget `interact_rect` is
+    /// already intersected with the canvas clip.
+    pub(super) fn body_hit_rect(&self) -> Rect {
+        self.body.interact_rect
+    }
+
+    pub(super) fn scrollbar_hit_rect(&self) -> Rect {
+        self.scrollbar.interact_rect
+    }
+}
+
 pub(super) fn terminal_layout(available: Vec2, char_width: f32, line_height: f32) -> TerminalLayout {
     let body_size = Vec2::new(
         (available.x - SCROLLBAR_WIDTH - SCROLLBAR_GAP).max(char_width),
