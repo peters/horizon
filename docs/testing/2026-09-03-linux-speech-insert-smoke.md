@@ -1,7 +1,8 @@
 # Linux Speech Insertion Smoke Test
 
 Temporary validation for desktop dictation into Horizon terminals and apps
-that do not expose an AT-SPI editable field (Microsoft Teams / Chromium PWAs).
+that do not expose an AT-SPI editable field (Microsoft Teams / Chromium PWAs,
+Firefox content).
 
 Run against the exact candidate head. Do not stop or reuse a pre-existing
 Horizon process. Use an isolated config and `--ephemeral`. Never log
@@ -36,6 +37,7 @@ cargo build --features speech
 4. Confirm the marker appears at the caret in the compose box and the chat is not sent.
 5. Confirm the clipboard is unchanged.
 6. Confirm insertion finishes without an accessibility preflight timeout toast. On GNOME, Shell's AT-SPI tree is large; an empty Collection match must not fall through to a full tree walk or Chromium never receives KEY_STRING.
+7. With Firefox (or another AT-SPI app) still open in the background, dictate into Teams/Chromium again. Insertion must not fail with `multiple focused fields were reported`; leftover focused objects in other apps must not veto KEY_STRING.
 
 ## 4. Refusals
 
