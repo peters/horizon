@@ -536,8 +536,11 @@ impl DurableRun {
 
     /// Record a verified completion on an owned I/O worker.
     ///
+    /// Uses required I/O so a racing stop cannot roll back a structured MCP
+    /// outcome that already reached disk.
+    ///
     /// # Errors
-    /// Returns when the durable write fails or a stop is observed first.
+    /// Returns when the durable write fails.
     pub async fn record_completion_controlled(
         &mut self,
         report: &StepReport,
@@ -546,7 +549,7 @@ impl DurableRun {
         let previous = self.state.checkpoint.clone();
         self.state.checkpoint.intent = None;
         self.state.checkpoint.completed.push(report.clone());
-        self.persist_checkpoint_controlled(control, true, previous).await
+        self.persist_checkpoint_controlled(control, false, previous).await
     }
 
     /// Mark an in-flight step uncertain without requiring a live deadline.
