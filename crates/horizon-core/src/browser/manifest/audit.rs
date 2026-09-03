@@ -11,6 +11,7 @@ use horizon_browser::BrowserAuditEntry;
 use serde::{Deserialize, Serialize};
 
 use super::ManifestLock;
+use super::request_queue;
 use crate::horizon_home::{HorizonHome, safe_local_id};
 
 const MAX_AUDIT_SEGMENT_BYTES: u64 = 8 * 1024 * 1024;
@@ -67,6 +68,21 @@ pub struct AuditPage {
 #[derive(Debug, Default, Deserialize, Serialize)]
 struct AuditDropMeta {
     older_records_dropped: u64,
+    #[serde(default)]
+    applied_generation: u64,
+}
+
+#[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct PendingDrop {
+    records: u64,
+    generation: u64,
+    fingerprint: SegmentFingerprint,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct SegmentFingerprint {
+    len: u64,
+    checksum: u64,
 }
 
 impl AuditPageRequest {
@@ -235,43 +251,127 @@ fn write_entry(
     encoded.push(b'\n');
     let encoded_len = u64::try_from(encoded.len()).unwrap_or(u64::MAX);
     let current_len = file.metadata()?.len();
+    settle_pending_drop(path)?;
     if current_len > 0 && current_len.saturating_add(encoded_len) > max_segment_bytes {
-        record_rotated_out(path)?;
+        stage_drop_for_rotated_segment(path)?;
         copy_private(path, &rotated_path(path))?;
         file.set_len(0)?;
+        settle_pending_drop(path)?;
     }
     file.write_all(&encoded)
 }
 
-fn record_rotated_out(path: &Path) -> std::io::Result<()> {
+fn stage_drop_for_rotated_segment(path: &Path) -> std::io::Result<()> {
     let rotated = rotated_path(path);
     if !rotated.exists() {
         return Ok(());
     }
-    let dropped = count_records(&rotated)?;
-    if dropped == 0 {
+    let pending_path = pending_drop_path(path);
+    if pending_path.exists() {
         return Ok(());
     }
-    let meta_path = drop_meta_path(path);
-    let meta = AuditDropMeta {
-        older_records_dropped: read_drop_meta(&meta_path)?.saturating_add(dropped),
+    let records = count_records(&rotated)?;
+    if records == 0 {
+        return Ok(());
+    }
+    let meta = read_drop_meta(path)?;
+    let pending = PendingDrop {
+        records,
+        generation: meta.applied_generation.saturating_add(1),
+        fingerprint: fingerprint(&rotated)?,
     };
-    write_drop_meta(&meta_path, &meta)
+    request_queue::write_private_json(&pending_path, &pending)
+}
+
+fn settle_pending_drop(path: &Path) -> std::io::Result<u64> {
+    let meta_path = drop_meta_path(path);
+    let pending_path = pending_drop_path(path);
+    let mut meta = read_drop_meta(path)?;
+    let Some(pending) = read_pending(&pending_path)? else {
+        return Ok(meta.older_records_dropped);
+    };
+    if rotated_segment_matches(path, &pending.fingerprint)? {
+        return Ok(meta.older_records_dropped);
+    }
+    if pending.generation > meta.applied_generation {
+        meta.older_records_dropped = meta.older_records_dropped.saturating_add(pending.records);
+        meta.applied_generation = pending.generation;
+        request_queue::write_private_json(&meta_path, &meta)?;
+    }
+    match std::fs::remove_file(&pending_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    Ok(meta.older_records_dropped)
+}
+
+fn rotated_segment_matches(path: &Path, expected: &SegmentFingerprint) -> std::io::Result<bool> {
+    match fingerprint(&rotated_path(path)) {
+        Ok(actual) => Ok(actual == *expected),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 fn count_records(path: &Path) -> std::io::Result<u64> {
+    let mut records = 0_u64;
+    for_each_nonempty_record(path, |_| {
+        records = records.saturating_add(1);
+        Ok(())
+    })?;
+    Ok(records)
+}
+
+fn for_each_nonempty_record(path: &Path, mut visit: impl FnMut(&[u8]) -> std::io::Result<()>) -> std::io::Result<()> {
     let file = match std::fs::File::open(path) {
         Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error),
     };
-    let mut records = 0_u64;
-    for line in std::io::BufReader::new(file).lines() {
-        if !line?.trim().is_empty() {
-            records = records.saturating_add(1);
+    let mut reader = std::io::BufReader::new(file);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        let read = reader.read_until(b'\n', &mut line)?;
+        if read == 0 {
+            return Ok(());
+        }
+        let record = trim_ascii(&line);
+        if !record.is_empty() {
+            visit(record)?;
         }
     }
-    Ok(records)
+}
+
+fn trim_ascii(bytes: &[u8]) -> &[u8] {
+    let is_whitespace = |byte: u8| matches!(byte, b' ' | b'\t' | b'\n' | b'\r');
+    let start = bytes
+        .iter()
+        .position(|byte| !is_whitespace(*byte))
+        .unwrap_or(bytes.len());
+    let end = bytes
+        .iter()
+        .rposition(|byte| !is_whitespace(*byte))
+        .map_or(start, |index| index.saturating_add(1));
+    bytes.get(start..end).unwrap_or(&[])
+}
+
+fn fingerprint(path: &Path) -> std::io::Result<SegmentFingerprint> {
+    let bytes = std::fs::read(path)?;
+    Ok(SegmentFingerprint {
+        len: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+        checksum: fnv1a64(&bytes),
+    })
+}
+
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    hash
 }
 
 fn drop_meta_path(path: &Path) -> PathBuf {
@@ -280,32 +380,21 @@ fn drop_meta_path(path: &Path) -> PathBuf {
     PathBuf::from(meta)
 }
 
-fn read_drop_meta(path: &Path) -> std::io::Result<u64> {
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
-        Err(error) => return Err(error),
-    };
-    if bytes.is_empty() {
-        return Ok(0);
-    }
-    let meta: AuditDropMeta =
-        serde_json::from_slice(&bytes).map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
-    Ok(meta.older_records_dropped)
+fn pending_drop_path(path: &Path) -> PathBuf {
+    let mut pending = path.as_os_str().to_os_string();
+    pending.push(".dropping");
+    PathBuf::from(pending)
 }
 
-fn write_drop_meta(path: &Path, meta: &AuditDropMeta) -> std::io::Result<()> {
-    let mut encoded = serde_json::to_vec(meta).map_err(std::io::Error::other)?;
-    encoded.push(b'\n');
-    let mut options = OpenOptions::new();
-    options.create(true).write(true).truncate(true);
-    #[cfg(unix)]
-    options.mode(0o600);
-    let mut file = options.open(path)?;
-    #[cfg(unix)]
-    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-    file.write_all(&encoded)?;
-    file.flush()
+fn read_drop_meta(path: &Path) -> std::io::Result<AuditDropMeta> {
+    match request_queue::read_json(&drop_meta_path(path))? {
+        Some(meta) => Ok(meta),
+        None => Ok(AuditDropMeta::default()),
+    }
+}
+
+fn read_pending(path: &Path) -> std::io::Result<Option<PendingDrop>> {
+    request_queue::read_json(path)
 }
 
 fn copy_private(source_path: &Path, destination_path: &Path) -> std::io::Result<()> {
@@ -358,12 +447,13 @@ pub(super) fn read_journal_at(path: &Path) -> std::io::Result<AuditJournal> {
     // mistaking an in-progress final append for journal corruption.
     let rotated = rotated_path(path);
     let meta_path = drop_meta_path(path);
-    if !path.exists() && !rotated.exists() && !meta_path.exists() {
+    let pending_path = pending_drop_path(path);
+    if !path.exists() && !rotated.exists() && !meta_path.exists() && !pending_path.exists() {
         return Ok(AuditJournal::default());
     }
     let _lock = ManifestLock::acquire(path)?;
     let mut journal = AuditJournal {
-        older_records_dropped: read_drop_meta(&meta_path)?,
+        older_records_dropped: settle_pending_drop(path)?,
         ..AuditJournal::default()
     };
     read_segment(&rotated, &mut journal)?;
@@ -372,22 +462,13 @@ pub(super) fn read_journal_at(path: &Path) -> std::io::Result<AuditJournal> {
 }
 
 fn read_segment(path: &Path, journal: &mut AuditJournal) -> std::io::Result<()> {
-    let file = match std::fs::File::open(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error),
-    };
-    for line in std::io::BufReader::new(file).lines() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        match serde_json::from_str(&line) {
+    for_each_nonempty_record(path, |record| {
+        match serde_json::from_slice(record) {
             Ok(entry) => journal.entries.push(entry),
             Err(_) => journal.malformed_records = journal.malformed_records.saturating_add(1),
         }
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 #[cfg(test)]
@@ -618,5 +699,63 @@ mod tests {
         assert_eq!(request.limit, 1);
         let wide = AuditPageRequest::new(None, false, None, Some(10_000));
         assert_eq!(wide.limit, MAX_AUDIT_PAGE_LIMIT);
+    }
+
+    #[test]
+    fn journal_counts_invalid_utf8_lines_as_malformed() {
+        let root = tempfile::tempdir().unwrap();
+        let path = audit_path_for_root(root.path(), "panel");
+        let valid = entry("event-2", "action-a");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut bytes = b"\xff\xfe not utf8\n".to_vec();
+        bytes.extend(serde_json::to_vec(&valid).unwrap());
+        bytes.push(b'\n');
+        std::fs::write(&path, bytes).unwrap();
+
+        let journal = read_journal_at(&path).unwrap();
+        assert_eq!(journal.entries, [valid]);
+        assert_eq!(journal.malformed_records, 1);
+    }
+
+    #[test]
+    fn rotation_counts_invalid_utf8_records_without_aborting() {
+        let root = tempfile::tempdir().unwrap();
+        let path = audit_path_for_root(root.path(), "panel");
+        let first = entry("e1", "a");
+        let second = entry("e2", "a");
+        append_at_with_limit(&path, &first, 1).unwrap();
+        append_at_with_limit(&path, &second, 1).unwrap();
+        std::fs::write(rotated_path(&path), b"\xff\n").unwrap();
+        let third = entry("e3", "a");
+        append_at_with_limit(&path, &third, 1).unwrap();
+
+        let journal = read_journal_at(&path).unwrap();
+        assert_eq!(journal.entries, [second, third]);
+        assert_eq!(journal.older_records_dropped, 1);
+    }
+
+    #[test]
+    fn pending_drop_is_held_until_the_rotated_segment_is_replaced() {
+        let root = tempfile::tempdir().unwrap();
+        let path = audit_path_for_root(root.path(), "panel");
+        let first = entry("e1", "a");
+        let second = entry("e2", "a");
+        append_at_with_limit(&path, &first, 1).unwrap();
+        append_at_with_limit(&path, &second, 1).unwrap();
+        request_queue::write_private_json(
+            &pending_drop_path(&path),
+            &PendingDrop {
+                records: 9,
+                generation: 1,
+                fingerprint: fingerprint(&rotated_path(&path)).unwrap(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(read_journal_at(&path).unwrap().older_records_dropped, 0);
+        append_at_with_limit(&path, &entry("e3", "a"), 1).unwrap();
+        assert_eq!(read_journal_at(&path).unwrap().older_records_dropped, 9);
+        append_at_with_limit(&path, &entry("e4", "a"), 1).unwrap();
+        assert_eq!(read_journal_at(&path).unwrap().older_records_dropped, 10);
     }
 }
