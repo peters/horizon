@@ -171,7 +171,7 @@ fn creation_claim_is_durable_atomic_and_bound_to_the_persisted_job() {
     let store = store(&temp);
     let workflow = retained_workflow(CloudProvider::RunPod, 1_000);
     let job_id = workflow.nodes[0].id;
-    store.create(&workflow).expect("create workflow");
+    let stored = store.create(&workflow).expect("create workflow");
     let target = worker_target(&workflow).clone();
     let barrier = Arc::new(Barrier::new(3));
     let mut threads = Vec::new();
@@ -197,6 +197,23 @@ fn creation_claim_is_durable_atomic_and_bound_to_the_persisted_job() {
             .claim_worker_creation(workflow.id, job_id, &target, "horizon-worker-1")
             .expect("repeat claim")
     );
+    for provider in [CloudProvider::RunPod, CloudProvider::Azure] {
+        let mut changed = workflow.clone();
+        changed.updated_at_millis += 1;
+        let changed_target = changed.nodes[0].worker.as_mut().expect("worker target");
+        changed_target.provider = provider;
+        changed_target.max_hourly_cost_micros = Some(900_000);
+        assert!(matches!(
+            reopened.replace(&stored, &changed),
+            Err(CloudStoreError::ClaimedTargetChanged(id)) if id == job_id
+        ));
+    }
+    let mut provisioning = workflow.clone();
+    provisioning.updated_at_millis += 1;
+    provisioning.nodes[0].state = CloudJobState::Provisioning;
+    reopened
+        .replace(&stored, &provisioning)
+        .expect("replace without target drift");
     let mut wrong_target = target.clone();
     wrong_target.max_hourly_cost_micros = Some(900_000);
     assert!(matches!(

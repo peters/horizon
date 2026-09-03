@@ -208,6 +208,27 @@ impl CloudWorkflowStore {
         if current.workflow != expected.workflow {
             return Err(CloudStoreError::SnapshotConflict(expected.workflow.id));
         }
+        for node in &current.workflow.nodes {
+            let Some(target) = node.worker.as_ref() else {
+                continue;
+            };
+            let claimed = transaction.query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM cloud_worker_creation_claims
+                    WHERE provider = ?1 AND workflow_id = ?2 AND job_id = ?3
+                 )",
+                params![provider_name(target.provider), id, node.id.to_string()],
+                |row| row.get::<_, bool>(0),
+            )?;
+            let next_target = next
+                .nodes
+                .iter()
+                .find(|candidate| candidate.id == node.id)
+                .and_then(|candidate| candidate.worker.as_ref());
+            if claimed && next_target != Some(target) {
+                return Err(CloudStoreError::ClaimedTargetChanged(node.id));
+            }
+        }
         let revision = expected
             .revision
             .checked_add(1)
@@ -575,6 +596,8 @@ pub enum CloudStoreError {
     ClaimTargetMismatch(CloudJobId),
     #[error("cloud job {0} is not ready for worker creation")]
     ClaimTargetNotReady(CloudJobId),
+    #[error("cloud job {0} cannot change its worker target after creation was claimed")]
+    ClaimedTargetChanged(CloudJobId),
     #[error("cloud worker creation claim conflicts with a different persisted identity")]
     ClaimIdentityConflict,
     #[error("cloud workflow timestamp is invalid")]
