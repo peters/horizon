@@ -108,57 +108,7 @@ fn exercise_protocol(protocol_version: &str) {
         "method": "tools/list",
         "params": {}
     }));
-    let encoded_tools = tools.to_string();
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(14));
-    let create = tools["result"]["tools"]
-        .as_array()
-        .and_then(|tools| tools.iter().find(|tool| tool["name"] == "browser_create"))
-        .expect("browser_create tool");
-    assert!(
-        create["description"]
-            .as_str()
-            .is_some_and(|description| description.contains("browser_list is empty")
-                && description.contains("never create a helper panel")
-                && description.contains("allow_additional=true"))
-    );
-    assert!(create["inputSchema"].to_string().contains("allow_additional"));
-    let network = tools["result"]["tools"]
-        .as_array()
-        .and_then(|tools| tools.iter().find(|tool| tool["name"] == "browser_network"))
-        .expect("browser_network tool");
-    assert!(
-        network["description"]
-            .as_str()
-            .is_some_and(|description| description.contains("tail -f"))
-    );
-    assert!(network["inputSchema"].to_string().contains("Start only"));
-    let watch = tools["result"]["tools"]
-        .as_array()
-        .and_then(|tools| tools.iter().find(|tool| tool["name"] == "browser_network_watch"))
-        .expect("browser_network_watch tool");
-    assert!(watch["description"].as_str().is_some_and(|description| {
-        description.contains("next_sequence") && description.contains("no capture path")
-    }));
-    let visibility = tools["result"]["tools"]
-        .as_array()
-        .and_then(|tools| tools.iter().find(|tool| tool["name"] == "browser_visibility"))
-        .expect("browser_visibility tool");
-    assert!(
-        visibility["description"]
-            .as_str()
-            .is_some_and(|description| description.contains("without stopping"))
-    );
-    let wait = tools["result"]["tools"]
-        .as_array()
-        .and_then(|tools| tools.iter().find(|tool| tool["name"] == "browser_wait"))
-        .expect("browser_wait tool");
-    assert!(
-        wait["description"]
-            .as_str()
-            .is_some_and(|description| description.contains("browser_unavailable"))
-    );
-    assert!(!encoded_tools.contains("browser_ws"));
-    assert!(!encoded_tools.contains("manifest_path"));
+    assert_listed_tools_keep_the_browser_contract(&tools);
 
     let list = process.send(&json!({
         "jsonrpc": "2.0",
@@ -171,4 +121,57 @@ fn exercise_protocol(protocol_version: &str) {
     assert!(!list.to_string().contains("browser_ws"));
 
     process.close();
+}
+
+fn listed_tool<'a>(tools: &'a Value, name: &str) -> &'a Value {
+    tools["result"]["tools"]
+        .as_array()
+        .and_then(|tools| tools.iter().find(|tool| tool["name"] == name))
+        .unwrap_or_else(|| panic!("{name} tool"))
+}
+
+fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
+    let encoded_tools = tools.to_string();
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(14));
+    let create = listed_tool(tools, "browser_create");
+    assert!(
+        create["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("browser_list is empty")
+                && description.contains("never create a helper panel")
+                && description.contains("allow_additional=true"))
+    );
+    assert!(create["inputSchema"].to_string().contains("allow_additional"));
+    let network = listed_tool(tools, "browser_network");
+    assert!(
+        network["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("tail -f"))
+    );
+    assert!(network["inputSchema"].to_string().contains("Start only"));
+    let watch = listed_tool(tools, "browser_network_watch");
+    assert!(watch["description"].as_str().is_some_and(|description| {
+        description.contains("next_sequence") && description.contains("no capture path")
+    }));
+    let visibility = listed_tool(tools, "browser_visibility");
+    assert!(
+        visibility["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("without stopping"))
+    );
+    let wait = listed_tool(tools, "browser_wait");
+    assert!(
+        wait["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("browser_unavailable"))
+    );
+    let audit = listed_tool(tools, "browser_audit");
+    assert!(audit["description"].as_str().is_some_and(|description| {
+        description.contains("next_event_id")
+            && description.contains("from_start")
+            && description.contains("older_records_dropped")
+    }));
+    assert!(audit["inputSchema"].to_string().contains("after_event_id"));
+    assert!(!encoded_tools.contains("browser_ws"));
+    assert!(!encoded_tools.contains("manifest_path"));
 }

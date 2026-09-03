@@ -81,7 +81,9 @@ fn audit_reads_are_gated_by_workspace_membership_under_the_manifest_lock() {
     )
     .expect("append audit");
 
-    let entries = read_audit_for_at(root.path(), panel, member()).expect("member reads audit");
+    let entries = read_audit_journal_for_at(root.path(), panel, member())
+        .expect("member reads audit")
+        .entries;
     assert_eq!(entries.len(), 1);
     for outsider in [
         AgentIdentity::new("horizon:agent-b", Some(HOST_A)),
@@ -89,20 +91,21 @@ fn audit_reads_are_gated_by_workspace_membership_under_the_manifest_lock() {
         AgentIdentity::new("horizon:agent-a", None),
     ] {
         assert_eq!(
-            read_audit_for_at(root.path(), panel, outsider)
+            read_audit_journal_for_at(root.path(), panel, outsider)
                 .expect_err("non-member is refused")
                 .kind(),
             std::io::ErrorKind::PermissionDenied
         );
     }
     assert_eq!(
-        read_audit_for_at(root.path(), panel, AgentIdentity::new("browser-cli-test", None))
+        read_audit_journal_for_at(root.path(), panel, AgentIdentity::new("browser-cli-test", None))
             .expect("unscoped identity reads audit")
+            .entries
             .len(),
         1
     );
     assert_eq!(
-        read_audit_for_at(root.path(), "missing", member())
+        read_audit_journal_for_at(root.path(), "missing", member())
             .expect_err("missing panel")
             .kind(),
         std::io::ErrorKind::NotFound

@@ -476,11 +476,16 @@ impl BrowserController {
             .map_err(|source| self.denied(panel_id, "could not request browser handoff", source))
     }
 
-    pub(crate) fn read_audit(&self, panel_id: &str) -> Result<Vec<horizon_browser::BrowserAuditEntry>, ControlError> {
+    pub(crate) fn read_audit_page(
+        &self,
+        panel_id: &str,
+        request: &manifest::AuditPageRequest,
+    ) -> Result<manifest::AuditPage, ControlError> {
         self.authorized_manifest(panel_id)?;
         tracing::debug!(actor = %self.actor, panel_id, "reading browser action audit");
-        manifest::read_audit_for(panel_id, self.identity())
-            .map_err(|source| self.denied(panel_id, "could not read browser audit", source))
+        let journal = manifest::read_audit_journal_for(panel_id, self.identity())
+            .map_err(|source| self.denied(panel_id, "could not read browser audit", source))?;
+        Ok(manifest::page_audit(&journal, request))
     }
 
     fn ensure_claim(&self, panel_id: &str) -> Result<(), ControlError> {
