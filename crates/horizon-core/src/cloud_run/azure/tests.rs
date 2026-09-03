@@ -1,3 +1,4 @@
+use super::model::{ApiIdentity, IdentitySetting, Registry};
 use super::*;
 use AzureCleanup::{AlreadyAbsent, Deleted};
 use std::sync::{Arc, Mutex};
@@ -61,6 +62,12 @@ fn profile() -> AzureProfile {
         cpu_millicores: 500,
         memory_mib: 1_024,
         hourly_cost_micros: 42_000,
+        registry: Some(AzureRegistry {
+            server: "registry.example".to_string(),
+            identity_id: format!(
+                "/subscriptions/{subscription}/resourceGroups/horizon-workers/providers/Microsoft.ManagedIdentity/userAssignedIdentities/pull"
+            ),
+        }),
     }
 }
 fn target() -> WorkerTarget {
@@ -88,7 +95,10 @@ fn assert_mismatch<T>(result: Result<T, AzureError>) {
 fn creation_is_bounded_and_retries_reuse_one_execution() {
     let (workflow_id, job_id) = (CloudWorkflowId::new(), CloudJobId::new());
     let (target, profile) = (target(), profile());
-    let job = api_job(workflow_id, job_id, &target, &profile);
+    let mut job = api_job(workflow_id, job_id, &target, &profile);
+    job.properties.configuration.registries.as_mut().expect("registry")[0]
+        .identity
+        .make_ascii_uppercase();
     let mut provisioning = job.clone();
     provisioning.properties.provisioning_state = Some("Provisioning".to_string());
     let transport = FakeTransport::default();
@@ -105,6 +115,11 @@ fn creation_is_bounded_and_retries_reuse_one_execution() {
     assert!(matches!(reused, Ok(AzureEnsure::Reused(_))));
     let state = transport.0.lock().expect("state");
     assert_eq!((state.requests.len(), state.starts), (1, 1));
+    assert_eq!(state.requests[0]["identity"]["type"], "UserAssigned");
+    assert_eq!(
+        state.requests[0]["properties"]["configuration"]["registries"][0]["server"],
+        "registry.example"
+    );
     drop(state);
     let mut visibility = [None, Some(job.clone())].into_iter();
     let adopted = await_job(|| Ok(visibility.next().flatten()), |_| Ok(true), "job creation").expect("adopt winner");
@@ -117,12 +132,45 @@ fn validation_and_cost_fail_before_creation() {
     target.max_hourly_cost_micros = Some(41_999);
     let transport = FakeTransport::default();
     let client = AzureClient::with_transport(profile.clone(), transport.clone());
+    let mut public_profile = profile.clone();
+    public_profile.registry = None;
+    let public_request = create_request(workflow_id, job_id, &target, &public_profile).expect("public request");
+    assert_eq!(public_request["identity"]["type"], "None");
+    let mut invalid_profile = profile.clone();
+    invalid_profile.registry.as_mut().expect("registry").identity_id = "/subscriptions/incomplete".to_string();
+    assert_eq!(validate_profile(&invalid_profile), Err(AzureError::InvalidProfile));
+    invalid_profile.registry.as_mut().expect("registry").identity_id = format!(
+        "/subscriptions/{}/resourceGroups/horizon-workers/providers/Microsoft.ManagedIdentity/userAssignedIdentities/ab",
+        profile.subscription_id
+    );
+    assert_eq!(validate_profile(&invalid_profile), Err(AzureError::InvalidProfile));
+    for server in [
+        ".",
+        "registry..example",
+        "-registry.example",
+        "registry-.example",
+        "registry.example-",
+    ] {
+        let mut invalid_profile = profile.clone();
+        invalid_profile.registry.as_mut().expect("registry").server = server.to_string();
+        assert_eq!(validate_profile(&invalid_profile), Err(AzureError::InvalidProfile));
+    }
+    let mut invalid_profile = profile.clone();
+    invalid_profile.registry.as_mut().expect("registry").server = format!("{}.example", "a".repeat(64));
+    assert_eq!(validate_profile(&invalid_profile), Err(AzureError::InvalidProfile));
     let error = client.ensure_worker(workflow_id, job_id, &target);
     assert!(matches!(error, Err(AzureError::HourlyCostRejected { .. })));
     assert!(transport.0.lock().expect("state").requests.is_empty());
     target.max_hourly_cost_micros = None;
     assert_eq!(validate_target(&target, &profile), Err(AzureError::InvalidTarget));
     target.max_hourly_cost_micros = Some(100_000);
+    target.image = format!("other.example/build/worker@sha256:{}", "a".repeat(64));
+    assert!(matches!(
+        client.ensure_worker(workflow_id, job_id, &target),
+        Err(AzureError::InvalidTarget)
+    ));
+    assert!(transport.0.lock().expect("state").requests.is_empty());
+    target.image = format!("registry.example/build/worker@sha256:{}", "a".repeat(64));
     target.disk_gib = 3;
     assert_eq!(validate_target(&target, &profile), Err(AzureError::InvalidTarget));
     target.disk_gib = 2;
@@ -151,6 +199,24 @@ fn exact_cleanup_rejects_identity_drift_and_is_idempotent() {
     wrong_profile.properties.workload_profile_name = CONSUMPTION_PROFILE.to_string();
     wrong_profile.location = "eastus".to_string();
     assert_mismatch(status_from_resource(&wrong_profile, &worker, None));
+    let mut exposed = good.clone();
+    exposed
+        .properties
+        .configuration
+        .identity_settings
+        .as_mut()
+        .expect("settings")[0]
+        .lifecycle = "All".to_string();
+    assert_mismatch(worker_from_job(&exposed, workflow_id, job_id, &target, &profile));
+    let mut credentialed = good.clone();
+    credentialed
+        .properties
+        .configuration
+        .registries
+        .as_mut()
+        .expect("registry")[0]
+        .password_secret_ref = Some("legacy-password".to_string());
+    assert_mismatch(worker_from_job(&credentialed, workflow_id, job_id, &target, &profile));
     let mut wrong = good.clone();
     wrong.properties.template.containers.as_mut().expect("containers")[0].env[1].secret_ref =
         Some("job-override".to_string());
@@ -172,4 +238,45 @@ fn exact_cleanup_rejects_identity_drift_and_is_idempotent() {
     assert_eq!(client.delete_worker(&worker), Ok(AzureCleanup::AlreadyAbsent));
     let absent = client.cleanup_creation_failure::<()>(&worker.name, Some(&worker), AzureError::InvalidTarget);
     assert_eq!(absent, Err(AzureError::InvalidTarget));
+}
+#[test]
+fn public_adoption_accepts_clean_identity_and_rejects_drift() {
+    let (workflow_id, job_id) = (CloudWorkflowId::new(), CloudJobId::new());
+    let (target, mut profile) = (target(), profile());
+    profile.registry = None;
+    let good = api_job(workflow_id, job_id, &target, &profile);
+    let worker = worker_from_job(&good, workflow_id, job_id, &target, &profile).expect("worker");
+    let transport = FakeTransport::default();
+    transport.0.lock().expect("state").job = Some(good.clone());
+    let client = AzureClient::with_transport(profile, transport.clone());
+    assert!(matches!(
+        client.ensure_worker(workflow_id, job_id, &target),
+        Ok(AzureEnsure::Reused(_))
+    ));
+    assert!(client.inspect_worker(&worker).expect("inspection").is_some());
+    let reject = |job| {
+        transport.0.lock().expect("state").job = Some(job);
+        assert_eq!(
+            client.inspect_worker(&worker),
+            Err(AzureError::ResourceIdentityMismatch)
+        );
+    };
+    let mut drift = good.clone();
+    drift.identity = Some(ApiIdentity {
+        kind: "UserAssigned".to_string(),
+        ..ApiIdentity::default()
+    });
+    reject(drift);
+    let mut drift = good.clone();
+    drift.properties.configuration.registries = Some(vec![Registry {
+        server: "registry.example".to_string(),
+        ..Registry::default()
+    }]);
+    reject(drift);
+    let mut drift = good;
+    drift.properties.configuration.identity_settings = Some(vec![IdentitySetting {
+        identity: "drift".to_string(),
+        lifecycle: "None".to_string(),
+    }]);
+    reject(drift);
 }

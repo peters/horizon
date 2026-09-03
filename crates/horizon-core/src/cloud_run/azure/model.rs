@@ -4,9 +4,23 @@ use super::{
     DEADLINE_TAG, DISK_TAG, JOB_ENV, JOB_TAG, OWNER_TAG, PROFILE_TAG, PROTOCOL_ENV, PROTOCOL_TAG, TERMINATE_ENV,
     WORKFLOW_ENV, WORKFLOW_TAG, resource_id, resource_name, valid_deadline,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 pub(super) type CreateJobRequest = serde_json::Value;
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub(super) struct Registry {
+    pub(super) server: String,
+    pub(super) identity: String,
+    pub(super) username: Option<String>,
+    pub(super) password_secret_ref: Option<String>,
+}
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub(super) struct IdentitySetting {
+    pub(super) identity: String,
+    pub(super) lifecycle: String,
+}
 #[derive(Clone, Debug, Default, Deserialize)]
 pub(super) struct ApiJob {
     pub(super) id: String,
@@ -47,7 +61,8 @@ pub(super) struct ApiConfiguration {
     pub(super) replica_retry_limit: u32,
     pub(super) trigger_type: String,
     pub(super) manual_trigger_config: ApiManualTriggerConfig,
-    pub(super) registries: Option<Vec<serde_json::Value>>,
+    pub(super) registries: Option<Vec<Registry>>,
+    pub(super) identity_settings: Option<Vec<IdentitySetting>>,
 }
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -105,12 +120,24 @@ pub(super) fn create_request(
         {"name": PROTOCOL_ENV, "value": super::super::CLOUD_RUN_PROTOCOL_VERSION.to_string()},
         {"name": TERMINATE_ENV, "value": deadline}
     ]);
+    let (identity, registries, identity_settings) = profile.registry.as_ref().map_or_else(
+        || (serde_json::json!({"type": "None"}), Vec::new(), Vec::new()),
+        |registry| {
+            (
+                serde_json::json!({
+                    "type": "UserAssigned", "userAssignedIdentities": {&registry.identity_id: {}}
+                }),
+                vec![serde_json::json!({"server": registry.server, "identity": registry.identity_id})],
+                vec![serde_json::json!({"identity": registry.identity_id, "lifecycle": "None"})],
+            )
+        },
+    );
     let properties = serde_json::json!({
         "environmentId": profile.environment_id, "workloadProfileName": CONSUMPTION_PROFILE,
         "configuration": {
             "triggerType": "Manual", "replicaTimeout": target.lease_seconds, "replicaRetryLimit": 0,
             "manualTriggerConfig": {"parallelism": 1, "replicaCompletionCount": 1},
-            "registries": [], "identitySettings": []
+            "registries": registries, "identitySettings": identity_settings
         },
         "template": {"containers": [{
             "name": "worker", "image": target.image, "env": env,
@@ -119,7 +146,7 @@ pub(super) fn create_request(
         }]}
     });
     Ok(serde_json::json!({
-        "location": profile.location, "tags": tags, "identity": {"type": "None"}, "properties": properties
+        "location": profile.location, "tags": tags, "identity": identity, "properties": properties
     }))
 }
 pub(super) fn worker_from_job(
@@ -230,11 +257,37 @@ fn job_configuration_matches(job: &ApiJob, image: &str, lease_seconds: u32, prof
     let config = &job.properties.configuration;
     let workload_profile = &job.properties.workload_profile_name;
     let containers = job.properties.template.containers.as_deref().unwrap_or_default();
-    let public_image = config.registries.as_deref().unwrap_or_default().is_empty()
-        && job.identity.as_ref().is_none_or(|identity| {
-            identity.user_assigned_identities.is_empty()
-                && (identity.kind.is_empty() || identity.kind.eq_ignore_ascii_case("None"))
-        });
+    let registry_matches = profile.registry.as_ref().map_or_else(
+        || {
+            config.registries.as_deref().unwrap_or_default().is_empty()
+                && config.identity_settings.as_deref().unwrap_or_default().is_empty()
+                && job.identity.as_ref().is_none_or(|identity| {
+                    identity.user_assigned_identities.is_empty()
+                        && (identity.kind.is_empty() || identity.kind.eq_ignore_ascii_case("None"))
+                })
+        },
+        |registry| {
+            matches!(
+                config.registries.as_deref(),
+                Some([actual])
+                    if actual.server.eq_ignore_ascii_case(&registry.server)
+                        && actual.identity.eq_ignore_ascii_case(&registry.identity_id)
+                        && actual.username.is_none()
+                        && actual.password_secret_ref.is_none()
+            ) && job.identity.as_ref().is_some_and(|identity| {
+                identity.kind.eq_ignore_ascii_case("UserAssigned")
+                    && identity.user_assigned_identities.len() == 1
+                    && identity
+                        .user_assigned_identities
+                        .keys()
+                        .any(|id| id.eq_ignore_ascii_case(&registry.identity_id))
+            }) && config.identity_settings.as_deref().is_some_and(|settings| {
+                settings.len() == 1
+                    && settings[0].identity.eq_ignore_ascii_case(&registry.identity_id)
+                    && settings[0].lifecycle.eq_ignore_ascii_case("None")
+            })
+        },
+    );
     config.trigger_type.eq_ignore_ascii_case("Manual")
         && workload_profile.eq_ignore_ascii_case(CONSUMPTION_PROFILE)
         && config.replica_timeout == lease_seconds
@@ -246,7 +299,7 @@ fn job_configuration_matches(job: &ApiJob, image: &str, lease_seconds: u32, prof
         && containers[0].image == image
         && (containers[0].resources.cpu - f64::from(profile.cpu_millicores) / 1_000.0).abs() < f64::EPSILON
         && memory_matches(&containers[0].resources.memory, profile.memory_mib)
-        && public_image
+        && registry_matches
 }
 fn memory_matches(value: &str, expected_mib: u32) -> bool {
     value

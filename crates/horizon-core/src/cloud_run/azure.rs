@@ -46,6 +46,12 @@ impl fmt::Debug for AzureAccessToken {
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct AzureRegistry {
+    pub server: String,
+    pub identity_id: String,
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AzureProfile {
     pub name: String,
     pub subscription_id: String,
@@ -55,6 +61,8 @@ pub struct AzureProfile {
     pub cpu_millicores: u32,
     pub memory_mib: u32,
     pub hourly_cost_micros: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry: Option<AzureRegistry>,
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -328,17 +336,27 @@ fn validate_profile(profile: &AzureProfile) -> Result<(), AzureError> {
         && (250..=4_000).contains(&profile.cpu_millicores)
         && profile.cpu_millicores.is_multiple_of(250)
         && profile.memory_mib == profile.cpu_millicores / 250 * 512
-        && profile.hourly_cost_micros > 0;
+        && profile.hourly_cost_micros > 0
+        && profile.registry.as_ref().is_none_or(|registry| {
+            valid_registry_server(&registry.server) && valid_user_assigned_identity_id(&registry.identity_id)
+        });
     valid.then_some(()).ok_or(AzureError::InvalidProfile)
 }
 fn validate_target(target: &WorkerTarget, profile: &AzureProfile) -> Result<(), AzureError> {
     validate_profile(profile)?;
+    let registry_matches = profile.registry.as_ref().is_none_or(|registry| {
+        target
+            .image
+            .split_once('/')
+            .is_some_and(|(server, _)| server.eq_ignore_ascii_case(&registry.server))
+    });
     let valid = target.provider == CloudProvider::Azure
         && target.profile == profile.name
         && (1..=ephemeral_disk_limit(profile.cpu_millicores)).contains(&target.disk_gib)
         && (MIN_LEASE_SECONDS..=MAX_LEASE_SECONDS).contains(&target.lease_seconds)
         && target.max_hourly_cost_micros.is_some_and(|maximum| maximum > 0)
-        && valid_immutable_image(&target.image);
+        && valid_immutable_image(&target.image)
+        && registry_matches;
     valid.then_some(()).ok_or(AzureError::InvalidTarget)
 }
 fn enforce_cost(target: &WorkerTarget, actual: u64) -> Result<(), AzureError> {
@@ -391,11 +409,51 @@ fn valid_resource_group(value: &str) -> bool {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || b"._-()".contains(&byte))
 }
+fn valid_registry_server(value: &str) -> bool {
+    valid_text(value, 253) && value.contains('.') && value.split('.').all(valid_dns_label)
+}
+fn valid_dns_label(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    (1..=63).contains(&bytes.len())
+        && bytes.first().is_some_and(u8::is_ascii_alphanumeric)
+        && bytes.last().is_some_and(u8::is_ascii_alphanumeric)
+        && bytes.iter().all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
+}
 fn valid_arm_id(value: &str) -> bool {
     value.starts_with("/subscriptions/")
         && valid_text(value, 2_048)
         && !value.contains(['?', '#'])
         && value.bytes().all(|byte| !byte.is_ascii_whitespace())
+}
+fn valid_user_assigned_identity_id(value: &str) -> bool {
+    let segments: Vec<_> = value.split('/').collect();
+    let [
+        "",
+        subscriptions,
+        subscription,
+        resource_groups,
+        group,
+        providers,
+        namespace,
+        identities,
+        name,
+    ] = segments.as_slice()
+    else {
+        return false;
+    };
+    valid_arm_id(value)
+        && subscriptions.eq_ignore_ascii_case("subscriptions")
+        && uuid::Uuid::parse_str(subscription).is_ok()
+        && resource_groups.eq_ignore_ascii_case("resourceGroups")
+        && valid_resource_group(group)
+        && providers.eq_ignore_ascii_case("providers")
+        && namespace.eq_ignore_ascii_case("Microsoft.ManagedIdentity")
+        && identities.eq_ignore_ascii_case("userAssignedIdentities")
+        && (3..=128).contains(&name.len())
+        && name.as_bytes()[0].is_ascii_alphanumeric()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 fn valid_text(value: &str, maximum: usize) -> bool {
     !value.is_empty()
