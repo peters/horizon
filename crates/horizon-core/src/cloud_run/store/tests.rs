@@ -340,6 +340,34 @@ fn corrupt_creation_claim_values_are_bounded_before_materialization() {
 }
 
 #[test]
+fn mismatched_claim_provider_fails_closed() {
+    let temp = TempDir::new().expect("temp dir");
+    let store = store(&temp);
+    let workflow = retained_workflow(CloudProvider::RunPod, 1_000);
+    let job_id = workflow.nodes[0].id;
+    let target = worker_target(&workflow);
+    store.create(&workflow).expect("create workflow");
+    store
+        .claim_worker_creation(workflow.id, job_id, target, "horizon-worker-1")
+        .expect("claim worker");
+
+    let connection = Connection::open(store.path()).expect("open raw store");
+    connection
+        .execute("UPDATE cloud_worker_creation_claims SET provider='azure'", [])
+        .expect("corrupt claim provider");
+    assert!(matches!(
+        store.claim_worker_creation(workflow.id, job_id, target, "horizon-worker-2"),
+        Err(CloudStoreError::ClaimIdentityConflict)
+    ));
+    let claim_count = connection
+        .query_row("SELECT COUNT(*) FROM cloud_worker_creation_claims", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .expect("claim count");
+    assert_eq!(claim_count, 1);
+}
+
+#[test]
 fn replacement_scales_across_many_claimed_workers() {
     let temp = TempDir::new().expect("temp dir");
     let store = store(&temp);

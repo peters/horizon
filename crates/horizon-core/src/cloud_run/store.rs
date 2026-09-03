@@ -302,9 +302,9 @@ impl CloudWorkflowStore {
         let job_already_claimed = transaction.query_row(
             "SELECT EXISTS(
                     SELECT 1 FROM cloud_worker_creation_claims
-                    WHERE provider = ?1 AND workflow_id = ?2 AND job_id = ?3
+                    WHERE workflow_id = ?1 AND job_id = ?2
                  )",
-            params![provider_name, id, job_id_text],
+            params![id, job_id_text],
             |row| row.get::<_, bool>(0),
         )?;
         if job_already_claimed {
