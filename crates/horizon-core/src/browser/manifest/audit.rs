@@ -27,7 +27,8 @@ pub struct AuditJournal {
     pub entries: Vec<BrowserAuditEntry>,
     /// JSONL lines that could not be decoded and were skipped.
     pub malformed_records: u64,
-    /// Valid records overwritten out of the rotated segment and no longer retained.
+    /// Non-empty JSONL records overwritten out of the rotated segment.
+    /// Malformed lines are included; this is not a decoded-entry count.
     pub older_records_dropped: u64,
 }
 
@@ -257,12 +258,14 @@ fn write_entry(
     encoded.push(b'\n');
     let encoded_len = u64::try_from(encoded.len()).unwrap_or(u64::MAX);
     settle_pending_drop(path)?;
-    complete_interrupted_rotation(Some(file), path)?;
+    recover_interrupted_rotation(Some(file), path)?;
     let current_len = file.metadata()?.len();
     if current_len > 0 && current_len.saturating_add(encoded_len) > max_segment_bytes {
         stage_drop_for_rotated_segment(path)?;
-        copy_private(path, &rotated_path(path))?;
+        write_rotation_marker(path)?;
+        replace_file_atomically(path, &rotated_path(path))?;
         file.set_len(0)?;
+        clear_rotation_marker(path)?;
         settle_pending_drop(path)?;
     }
     file.write_all(&encoded)
@@ -290,15 +293,22 @@ fn stage_drop_for_rotated_segment(path: &Path) -> std::io::Result<()> {
     request_queue::write_private_json(&pending_path, &pending)
 }
 
-fn complete_interrupted_rotation(file: Option<&mut std::fs::File>, path: &Path) -> std::io::Result<()> {
-    if !live_segment_duplicates_rotated(path)? {
+fn recover_interrupted_rotation(file: Option<&mut std::fs::File>, path: &Path) -> std::io::Result<()> {
+    if !rotation_marker_path(path).exists() {
         return Ok(());
     }
-    match file {
-        Some(file) => file.set_len(0)?,
-        None => OpenOptions::new().write(true).open(path)?.set_len(0)?,
+    match std::fs::remove_file(rotated_tmp_path(path)) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
     }
-    Ok(())
+    if live_segment_duplicates_rotated(path)? {
+        match file {
+            Some(file) => file.set_len(0)?,
+            None => OpenOptions::new().write(true).open(path)?.set_len(0)?,
+        }
+    }
+    clear_rotation_marker(path)
 }
 
 fn live_segment_duplicates_rotated(path: &Path) -> std::io::Result<bool> {
@@ -412,6 +422,46 @@ fn pending_drop_path(path: &Path) -> PathBuf {
     PathBuf::from(pending)
 }
 
+fn rotation_marker_path(path: &Path) -> PathBuf {
+    let mut marker = path.as_os_str().to_os_string();
+    marker.push(".rotating");
+    PathBuf::from(marker)
+}
+
+fn rotated_tmp_path(path: &Path) -> PathBuf {
+    let mut tmp = rotated_path(path).into_os_string();
+    tmp.push(".tmp");
+    PathBuf::from(tmp)
+}
+
+fn write_rotation_marker(path: &Path) -> std::io::Result<()> {
+    request_queue::write_private_json(&rotation_marker_path(path), &true)
+}
+
+fn clear_rotation_marker(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(rotation_marker_path(path)) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn replace_file_atomically(source: &Path, dest: &Path) -> std::io::Result<()> {
+    let tmp = {
+        let mut tmp = dest.as_os_str().to_os_string();
+        tmp.push(".tmp");
+        PathBuf::from(tmp)
+    };
+    copy_private(source, &tmp)?;
+    match std::fs::rename(&tmp, dest) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = std::fs::remove_file(&tmp);
+            Err(error)
+        }
+    }
+}
+
 fn read_drop_meta(path: &Path) -> std::io::Result<AuditDropMeta> {
     match request_queue::read_json(&drop_meta_path(path))? {
         Some(meta) => Ok(meta),
@@ -474,7 +524,8 @@ pub(super) fn read_journal_at(path: &Path) -> std::io::Result<AuditJournal> {
     let rotated = rotated_path(path);
     let meta_path = drop_meta_path(path);
     let pending_path = pending_drop_path(path);
-    if !path.exists() && !rotated.exists() && !meta_path.exists() && !pending_path.exists() {
+    let marker_path = rotation_marker_path(path);
+    if !path.exists() && !rotated.exists() && !meta_path.exists() && !pending_path.exists() && !marker_path.exists() {
         return Ok(AuditJournal::default());
     }
     let _lock = ManifestLock::acquire(path)?;
@@ -482,7 +533,7 @@ pub(super) fn read_journal_at(path: &Path) -> std::io::Result<AuditJournal> {
         older_records_dropped: settle_pending_drop(path)?,
         ..AuditJournal::default()
     };
-    complete_interrupted_rotation(None, path)?;
+    recover_interrupted_rotation(None, path)?;
     read_segment(&rotated, &mut journal)?;
     read_segment(path, &mut journal)?;
     Ok(journal)
@@ -796,6 +847,7 @@ mod tests {
         let second = entry("e2", "a");
         append_at_with_limit(&path, &first, 1).unwrap();
         append_at_with_limit(&path, &second, 1).unwrap();
+        write_rotation_marker(&path).unwrap();
         copy_private(&path, &rotated_path(&path)).unwrap();
 
         let journal = read_journal_at(&path).unwrap();
