@@ -11,11 +11,12 @@ mod os_focus;
 
 pub use accessibility::{
     accessibility_permission_granted, capture_focused_accessible_target, insert_text_into_focused_accessible,
-    release_focused_accessible_target, request_accessibility_permission,
+    insert_text_into_focused_accessible_for_window, release_focused_accessible_target,
+    request_accessibility_permission,
 };
 pub use hotkey::{GlobalHotkeys, Hotkey, HotkeyError, HotkeyEvent, HotkeyKey};
 pub use inject::InjectError;
-pub use os_focus::{current_process_has_os_focus, current_process_has_os_focus_fresh};
+pub use os_focus::{current_input_focus_window, current_process_has_os_focus, current_process_has_os_focus_fresh};
 
 /// Query the current global cursor position in screen (root-window)
 /// coordinates.  Returns `None` when the platform backend is

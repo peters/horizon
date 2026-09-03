@@ -3,7 +3,7 @@
 use horizon_core::{PanelId, ShortcutBinding, ShortcutKey, SpeechHotkeyMode};
 use horizon_cursor::{
     GlobalHotkeys, Hotkey, HotkeyError, HotkeyEvent, HotkeyKey, InjectError, capture_focused_accessible_target,
-    insert_text_into_focused_accessible, release_focused_accessible_target,
+    insert_text_into_focused_accessible_for_window, release_focused_accessible_target,
 };
 
 use super::super::HorizonApp;
@@ -73,11 +73,11 @@ pub(crate) const fn desktop_insert_route(
     }
 }
 
-pub(crate) fn inject_desktop_transcript(text: &str) -> Result<(), InjectError> {
+pub(crate) fn inject_desktop_transcript(text: &str, expected_window: Option<u32>) -> Result<(), InjectError> {
     if let Some(result) = take_test_inject_result(text) {
         return result;
     }
-    insert_text_into_focused_accessible(text)
+    insert_text_into_focused_accessible_for_window(text, expected_window)
 }
 
 pub(crate) fn prepare_desktop_target() -> Result<(), InjectError> {
@@ -392,10 +392,10 @@ mod tests {
     #[test]
     fn inject_hook_short_circuits_the_os_path() {
         super::set_test_inject_hook(Some(|_| Ok(())));
-        assert!(super::inject_desktop_transcript("hello ").is_ok());
+        assert!(super::inject_desktop_transcript("hello ", None).is_ok());
         super::set_test_inject_hook(Some(|_| Err(horizon_cursor::InjectError::Unsupported)));
         assert_eq!(
-            super::inject_desktop_transcript("hello "),
+            super::inject_desktop_transcript("hello ", None),
             Err(horizon_cursor::InjectError::Unsupported)
         );
         super::set_test_inject_hook(None);

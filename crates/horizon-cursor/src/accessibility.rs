@@ -71,7 +71,20 @@ pub fn request_accessibility_permission() -> Option<bool> {
 /// unsupported, and [`InjectError::Failed`] for accessibility transport
 /// failures.
 pub fn insert_text_into_focused_accessible(text: &str) -> Result<(), InjectError> {
-    platform::insert_text(text)
+    insert_text_into_focused_accessible_for_window(text, None)
+}
+
+/// Insert into the focused accessibility target, requiring `expected_window`
+/// to still be the X11 input-focus window when the Linux path starts.
+///
+/// # Errors
+///
+/// Same as [`insert_text_into_focused_accessible`].
+pub fn insert_text_into_focused_accessible_for_window(
+    text: &str,
+    expected_window: Option<u32>,
+) -> Result<(), InjectError> {
+    platform::insert_text(text, expected_window)
 }
 
 #[cfg(target_os = "linux")]
@@ -218,7 +231,7 @@ mod platform {
         }
     }
 
-    pub(super) fn insert_text(text: &str) -> Result<(), InjectError> {
+    pub(super) fn insert_text(text: &str, expected_window: Option<u32>) -> Result<(), InjectError> {
         if text.is_empty() {
             return Ok(());
         }
@@ -233,12 +246,19 @@ mod platform {
             .enable_all()
             .build()
             .map_err(|_| InjectError::Failed("failed to start accessibility runtime"))?;
-        runtime.block_on(insert_text_async(text))
+        runtime.block_on(insert_text_async(text, expected_window))
     }
 
-    async fn insert_text_async(text: &str) -> Result<(), InjectError> {
+    async fn insert_text_async(text: &str, expected_window: Option<u32>) -> Result<(), InjectError> {
         let text = sanitize_desktop_transcript(text);
-        let focus_window = crate::os_focus::current_input_focus_window();
+        let observed = crate::os_focus::current_input_focus_window();
+        let focus_window = match expected_window {
+            Some(expected) => {
+                focus_window_still_matches(Some(expected), observed)?;
+                Some(expected)
+            }
+            None => observed,
+        };
         let deadline = tokio::time::Instant::now() + PREFLIGHT_TIMEOUT;
         let connection = bounded_preflight(deadline, async {
             AccessibilityConnection::new()
@@ -825,7 +845,7 @@ mod platform {
 
         #[test]
         fn empty_text_is_a_no_op_without_an_accessibility_session() {
-            assert_eq!(super::insert_text(""), Ok(()));
+            assert_eq!(super::insert_text("", None), Ok(()));
         }
 
         #[test]
@@ -872,7 +892,7 @@ mod platform {
         fn concurrent_insertion_is_rejected_before_starting_a_runtime() {
             let _guard = INSERT_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
             assert_eq!(
-                super::insert_text("hello"),
+                super::insert_text("hello", None),
                 Err(InjectError::Target("another desktop insertion is still pending"))
             );
         }
@@ -880,14 +900,14 @@ mod platform {
         #[test]
         #[ignore = "live AT-SPI editable-field smoke"]
         fn live_accessibility_insert() {
-            super::insert_text("direct blå final marker zephyr").expect("accessibility insertion");
+            super::insert_text("direct blå final marker zephyr", None).expect("accessibility insertion");
         }
 
         #[test]
         #[ignore = "live AT-SPI unsafe-target smoke"]
         fn live_accessibility_rejects_unsafe_target() {
             assert!(matches!(
-                super::insert_text("must not appear"),
+                super::insert_text("must not appear", None),
                 Err(InjectError::Target(_))
             ));
         }
@@ -895,7 +915,10 @@ mod platform {
         #[test]
         #[ignore = "live unavailable-AT-SPI smoke"]
         fn live_unavailable_accessibility_bus_is_unsupported() {
-            assert_eq!(super::insert_text("must not appear"), Err(InjectError::Unsupported));
+            assert_eq!(
+                super::insert_text("must not appear", None),
+                Err(InjectError::Unsupported)
+            );
         }
     }
 }
@@ -914,7 +937,7 @@ mod platform {
 
     pub(super) const fn release_target() {}
 
-    pub(super) fn insert_text(_text: &str) -> Result<(), InjectError> {
+    pub(super) fn insert_text(_text: &str, _expected_window: Option<u32>) -> Result<(), InjectError> {
         Err(InjectError::Unsupported)
     }
 }

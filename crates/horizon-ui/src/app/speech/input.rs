@@ -624,6 +624,18 @@ impl HorizonApp {
                             }
                             DesktopInsertRoute::External => {}
                         }
+                        let expected_window = horizon_cursor::current_input_focus_window();
+                        if cfg!(any(target_os = "linux", target_os = "freebsd")) && expected_window.is_none() {
+                            tracing::info!("desktop dictation discarded; X11 focus window was not observable");
+                            ctx.data_mut(|data| {
+                                data.insert_temp(
+                                    egui::Id::new(DESKTOP_INSERT_ERROR_ID),
+                                    "could not insert transcript (focused window was not observable); clipboard was not used".to_owned(),
+                                );
+                            });
+                            ctx.request_repaint();
+                            continue;
+                        }
                         let payload = format!("{text} ");
                         let result_ctx = ctx.clone();
                         ctx.data_mut(|data| {
@@ -632,7 +644,7 @@ impl HorizonApp {
                         if std::thread::Builder::new()
                             .name("horizon-speech-direct-insert".to_owned())
                             .spawn(move || {
-                                let result = inject_desktop_transcript(&payload);
+                                let result = inject_desktop_transcript(&payload, expected_window);
                                 result_ctx.data_mut(|data| {
                                     data.remove_temp::<bool>(egui::Id::new(DESKTOP_INSERT_PENDING_ID));
                                     if let Err(error) = result {
