@@ -246,6 +246,71 @@ fn creation_claim_is_durable_atomic_and_bound_to_the_persisted_job() {
 }
 
 #[test]
+fn replacement_scales_across_many_claimed_workers() {
+    let temp = TempDir::new().expect("temp dir");
+    let store = store(&temp);
+    let mut workflow = retained_workflow(CloudProvider::RunPod, 1_000);
+    let template = workflow.nodes.pop().expect("worker template");
+    workflow.nodes = (0..1_024)
+        .map(|index| {
+            let mut node = template.clone();
+            node.id = CloudJobId::new();
+            node.logical_key = format!("worker-{index}");
+            node.label = format!("Worker {index}");
+            node
+        })
+        .collect();
+    let stored = store.create(&workflow).expect("create many-worker workflow");
+    {
+        let mut connection = Connection::open(store.path()).expect("open raw store");
+        connection
+            .pragma_update(None, "foreign_keys", "ON")
+            .expect("foreign keys");
+        let transaction = connection.transaction().expect("claim transaction");
+        {
+            let mut insert = transaction
+                .prepare(
+                    "INSERT INTO cloud_worker_creation_claims (
+                        provider, workflow_id, job_id, resource_name, claimed_at_millis
+                     ) VALUES ('run_pod', ?1, ?2, ?3, 1000)",
+                )
+                .expect("prepare claims");
+            for (index, node) in workflow.nodes.iter().enumerate() {
+                insert
+                    .execute(params![
+                        workflow.id.to_string(),
+                        node.id.to_string(),
+                        format!("worker-{index}")
+                    ])
+                    .expect("insert claim");
+            }
+        }
+        transaction.commit().expect("commit claims");
+    }
+    let mut provisioning = workflow.clone();
+    provisioning.updated_at_millis += 1;
+    provisioning.nodes[0].state = CloudJobState::Provisioning;
+    let replaced = store
+        .replace(&stored, &provisioning)
+        .expect("replace many claimed workers");
+    let changed_job = provisioning.nodes.last().expect("last worker").id;
+    let mut changed = provisioning;
+    changed.updated_at_millis += 1;
+    changed
+        .nodes
+        .last_mut()
+        .expect("last worker")
+        .worker
+        .as_mut()
+        .expect("worker target")
+        .max_hourly_cost_micros = Some(900_000);
+    assert!(matches!(
+        store.replace(&replaced, &changed),
+        Err(CloudStoreError::ClaimedTargetChanged(id)) if id == changed_job
+    ));
+}
+
+#[test]
 fn expired_terminal_and_dependency_blocked_jobs_cannot_claim_creation() {
     let temp = TempDir::new().expect("temp dir");
     let store = store(&temp);

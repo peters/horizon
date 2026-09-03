@@ -1,5 +1,6 @@
 //! Durable local control-plane storage for cloud workflow snapshots and creation claims.
 
+use std::collections::HashMap;
 #[cfg(unix)]
 use std::fs::OpenOptions;
 #[cfg(unix)]
@@ -214,27 +215,7 @@ impl CloudWorkflowStore {
         if current.workflow != expected.workflow {
             return Err(CloudStoreError::SnapshotConflict(expected.workflow.id));
         }
-        for node in &current.workflow.nodes {
-            let Some(target) = node.worker.as_ref() else {
-                continue;
-            };
-            let claimed = transaction.query_row(
-                "SELECT EXISTS(
-                    SELECT 1 FROM cloud_worker_creation_claims
-                    WHERE provider = ?1 AND workflow_id = ?2 AND job_id = ?3
-                 )",
-                params![provider_name(target.provider), id, node.id.to_string()],
-                |row| row.get::<_, bool>(0),
-            )?;
-            let next_target = next
-                .nodes
-                .iter()
-                .find(|candidate| candidate.id == node.id)
-                .and_then(|candidate| candidate.worker.as_ref());
-            if claimed && next_target != Some(target) {
-                return Err(CloudStoreError::ClaimedTargetChanged(node.id));
-            }
-        }
+        ensure_claimed_targets_unchanged(&transaction, &id, &current.workflow, next)?;
         let revision = expected
             .revision
             .checked_add(1)
@@ -390,6 +371,54 @@ fn workflow_row(connection: &Connection, workflow_id: &str) -> rusqlite::Result<
         .optional()
 }
 
+fn ensure_claimed_targets_unchanged(
+    connection: &Connection,
+    workflow_id: &str,
+    current: &CloudWorkflow,
+    next: &CloudWorkflow,
+) -> Result<(), CloudStoreError> {
+    let current_targets: HashMap<_, _> = current
+        .nodes
+        .iter()
+        .filter_map(|node| node.worker.as_ref().map(|target| (node.id, target)))
+        .collect();
+    let next_targets: HashMap<_, _> = next
+        .nodes
+        .iter()
+        .filter_map(|node| node.worker.as_ref().map(|target| (node.id, target)))
+        .collect();
+    let query_limit = current_targets
+        .len()
+        .checked_add(1)
+        .and_then(|limit| i64::try_from(limit).ok())
+        .ok_or(CloudStoreError::InvalidStoredCreationClaim)?;
+    let mut statement = connection.prepare(
+        "SELECT substr(provider, 1, 9), substr(job_id, 1, 37)
+         FROM cloud_worker_creation_claims
+         WHERE workflow_id = ?1
+         LIMIT ?2",
+    )?;
+    let rows = statement.query_map(params![workflow_id, query_limit], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    for (index, row) in rows.enumerate() {
+        if index >= current_targets.len() {
+            return Err(CloudStoreError::InvalidStoredCreationClaim);
+        }
+        let (provider, job_id) = row?;
+        let job_id = parse_job_id(&job_id)?;
+        let target = current_targets
+            .get(&job_id)
+            .copied()
+            .filter(|target| provider == provider_name(target.provider))
+            .ok_or(CloudStoreError::InvalidStoredCreationClaim)?;
+        if next_targets.get(&job_id).copied() != Some(target) {
+            return Err(CloudStoreError::ClaimedTargetChanged(job_id));
+        }
+    }
+    Ok(())
+}
+
 fn encode_workflow(workflow: &CloudWorkflow) -> Result<Vec<u8>, CloudStoreError> {
     workflow.validate()?;
     let snapshot = serde_json::to_vec(workflow)?;
@@ -490,6 +519,13 @@ fn parse_workflow_id(value: &str) -> Result<CloudWorkflowId, CloudStoreError> {
     (id.to_string() == value)
         .then_some(id)
         .ok_or(CloudStoreError::InvalidStoredWorkflowId)
+}
+
+fn parse_job_id(value: &str) -> Result<CloudJobId, CloudStoreError> {
+    let id: CloudJobId = value.parse().map_err(|_| CloudStoreError::InvalidStoredCreationClaim)?;
+    (id.to_string() == value)
+        .then_some(id)
+        .ok_or(CloudStoreError::InvalidStoredCreationClaim)
 }
 
 fn valid_resource_name(value: &str) -> bool {
@@ -613,6 +649,8 @@ pub enum CloudStoreError {
     ClaimTargetNotReady(CloudJobId),
     #[error("cloud job {0} cannot change its worker target after creation was claimed")]
     ClaimedTargetChanged(CloudJobId),
+    #[error("stored cloud worker creation claim is invalid")]
+    InvalidStoredCreationClaim,
     #[error("cloud worker creation claim conflicts with a different persisted identity")]
     ClaimIdentityConflict,
     #[error("cloud workflow timestamp is invalid")]
