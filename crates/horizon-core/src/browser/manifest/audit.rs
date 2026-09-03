@@ -32,7 +32,7 @@ pub struct AuditJournal {
 }
 
 /// Bounded read of a retained audit journal.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AuditPageRequest {
     /// Exclusive resume cursor. When set, `from_start` is ignored.
     pub after_event_id: Option<String>,
@@ -83,6 +83,12 @@ struct PendingDrop {
 struct SegmentFingerprint {
     len: u64,
     checksum: u64,
+}
+
+impl Default for AuditPageRequest {
+    fn default() -> Self {
+        Self::new(None, false, None, None)
+    }
 }
 
 impl AuditPageRequest {
@@ -699,6 +705,8 @@ mod tests {
         assert_eq!(request.limit, 1);
         let wide = AuditPageRequest::new(None, false, None, Some(10_000));
         assert_eq!(wide.limit, MAX_AUDIT_PAGE_LIMIT);
+        assert_eq!(AuditPageRequest::default().limit, DEFAULT_AUDIT_PAGE_LIMIT);
+        assert!(!AuditPageRequest::default().from_start);
     }
 
     #[test]
