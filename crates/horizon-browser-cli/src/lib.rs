@@ -8,6 +8,7 @@
 
 pub mod execution_control;
 pub mod job;
+pub mod observability;
 pub mod run_state;
 pub mod standalone;
 
@@ -25,6 +26,7 @@ use serde_json::{Map, Value};
 use thiserror::Error;
 
 use execution_control::{ExecutionControl, ExecutionStopReason};
+use observability::ObservabilitySummary;
 
 const PLAN_VERSION: u32 = 1;
 const MAX_PLAN_STEPS: usize = 256;
@@ -72,6 +74,8 @@ pub struct ExecutionReport {
     /// Explicit cancellation or deadline stop condition.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_reason: Option<ExecutionStopReason>,
+    /// Audit completeness and network-capture health from executed MCP results.
+    pub observability: ObservabilitySummary,
 }
 
 /// Result of one MCP tool call.
@@ -330,14 +334,7 @@ async fn execute_steps(
         result_indexes.insert(step.id.clone(), steps.len() - 1);
     }
     let ok = steps.len() == plan.steps.len() && steps.iter().all(|step| step.ok);
-    ExecutionReport {
-        version: PLAN_VERSION,
-        ok,
-        completed_steps: steps.len(),
-        steps,
-        error: None,
-        stop_reason: None,
-    }
+    execution_report(ok, steps, None, None)
 }
 
 async fn wait_for_browser_action<T>(
@@ -383,13 +380,28 @@ fn stopped_report(steps: Vec<StepReport>, stopped: &ActionWaitStopped) -> Execut
     } else {
         stopped.reason.message()
     };
+    execution_report(false, steps, Some(message.to_string()), Some(stopped.reason))
+}
+
+fn execution_report(
+    ok: bool,
+    steps: Vec<StepReport>,
+    error: Option<String>,
+    stop_reason: Option<ExecutionStopReason>,
+) -> ExecutionReport {
+    let observability = ObservabilitySummary::from_results(
+        steps
+            .iter()
+            .filter_map(|step| step.result.as_ref().map(|result| (step.tool.as_str(), result))),
+    );
     ExecutionReport {
         version: PLAN_VERSION,
-        ok: false,
+        ok,
         completed_steps: steps.len(),
         steps,
-        error: Some(message.to_string()),
-        stop_reason: Some(stopped.reason),
+        error,
+        stop_reason,
+        observability,
     }
 }
 

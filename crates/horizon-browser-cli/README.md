@@ -62,7 +62,9 @@ an owner-only job directory under `~/.horizon/browser-jobs/`; MCP runtime
 profiles use a separate temporary home and are removed after each job.
 
 Every completed prompt job also writes a private redacted `trace.jsonl`, a
-validated `executed-plan.json`, and `report.json`. The plan replaces the
+validated `executed-plan.json`, and `report.json`. The report includes the
+same `observability` summary as deterministic `run` when the agent event
+stream carries MCP results. The plan replaces the
 standalone panel id with a typed reference to the recorded `browser_list`
 result. The report marks the plan non-replayable when execution depended on
 ephemeral semantic references or when selectors, scripts, text, values, URL
@@ -132,7 +134,12 @@ and never copies tool arguments into its report. Plans are limited to 1 MiB and
 256 steps.
 
 The report is JSON with top-level `job_id`, `job_dir`, `state_path`, `ok`,
-`completed_steps`, and ordered step results. Every invocation stages its
+`completed_steps`, ordered step results, and an `observability` summary of
+audit completeness and network-capture health taken from executed MCP results
+(`records_retained`, `malformed_records`, `older_records_dropped`,
+`cursor_lost`, sequence gaps, records written/dropped, truncation, file
+limits, and writer failure). Tools that were not called are reported as
+`observed: false`. Every invocation stages its
 validated plan and initial `prepared` state in an owner-only directory, flushes
 both artifacts, and atomically publishes the complete job under
 `~/.horizon/browser-jobs/`; later lifecycle updates remain atomic. The prepared
