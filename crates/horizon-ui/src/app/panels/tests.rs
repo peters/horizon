@@ -130,10 +130,11 @@ fn mic_control_availability_matches_engine_and_viewport_state() {
 }
 
 #[test]
-fn browser_panels_are_eligible_for_dictation() {
+fn text_panels_are_eligible_for_dictation() {
     assert!(PanelKind::Browser.accepts_text_input());
     assert!(PanelKind::Shell.accepts_text_input());
-    assert!(!PanelKind::Editor.accepts_text_input());
+    assert!(PanelKind::Editor.accepts_text_input());
+    assert!(!PanelKind::GitChanges.accepts_text_input());
 }
 
 #[test]

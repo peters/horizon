@@ -3,11 +3,12 @@ use std::time::{Duration, Instant};
 #[cfg(feature = "speech")]
 use crate::test_egui::DiscardTextures;
 use egui::Context;
-use horizon_core::{PanelId, WorkspaceId};
+use horizon_core::browser::BrowserPanelState;
+use horizon_core::{Panel, PanelContent, PanelId, PanelKind, PanelOptions, WorkspaceId};
 
 use super::{
-    HoldHotkeyTransition, SPEECH_RELEASE_OWNERSHIP_TIMEOUT, SpeechActivity, hold_hotkey_transition,
-    should_release_desktop_target, terminal_matches_focused_viewport,
+    HoldHotkeyTransition, SPEECH_RELEASE_OWNERSHIP_TIMEOUT, SpeechActivity, TranscriptInjection,
+    hold_hotkey_transition, inject_transcript, should_release_desktop_target, terminal_matches_focused_viewport,
 };
 #[cfg(feature = "speech")]
 use super::{apply_global_hotkey_events, handle_profile_hotkeys, start_speech};
@@ -377,4 +378,54 @@ fn terminal_matches_the_viewport_that_has_os_focus() {
     assert!(!terminal_matches_focused_viewport(detached, true, true, None));
     assert!(terminal_matches_focused_viewport(detached, true, false, Some(detached)));
     assert!(!terminal_matches_focused_viewport(root, false, false, Some(detached)));
+}
+
+#[test]
+fn dictation_inserts_into_editor_panels_at_the_caret() {
+    let mut panel = Panel::spawn(
+        PanelId(3),
+        WorkspaceId(1),
+        PanelOptions {
+            kind: PanelKind::Editor,
+            ..PanelOptions::default()
+        },
+    )
+    .expect("scratch editor");
+    {
+        let editor = panel.editor_mut().expect("editor content");
+        editor.text = "ab cd".to_owned();
+        editor.set_caret(2);
+    }
+    assert_eq!(inject_transcript(&mut panel, "hello"), TranscriptInjection::Editor);
+    let editor = panel.editor().expect("editor content");
+    assert_eq!(editor.text, "abhello  cd");
+    assert_eq!(editor.caret, 8);
+}
+
+#[test]
+fn dictation_reports_unavailable_browser_without_a_driver() {
+    let mut panel = Panel::from_content(
+        PanelId(9),
+        WorkspaceId(1),
+        PanelKind::Browser,
+        PanelContent::Browser(Box::new(BrowserPanelState::inert())),
+    );
+    assert_eq!(
+        inject_transcript(&mut panel, "hello"),
+        TranscriptInjection::BrowserUnavailable
+    );
+}
+
+#[test]
+fn dictation_ignores_panels_without_a_text_surface() {
+    let mut panel = Panel::spawn(
+        PanelId(4),
+        WorkspaceId(1),
+        PanelOptions {
+            kind: PanelKind::GitChanges,
+            ..PanelOptions::default()
+        },
+    )
+    .expect("git changes panel");
+    assert_eq!(inject_transcript(&mut panel, "hello"), TranscriptInjection::Ignored);
 }

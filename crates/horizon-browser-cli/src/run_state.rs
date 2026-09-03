@@ -477,6 +477,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::observability::ObservabilitySummary;
     use crate::{PlanStep, StepReport};
 
     fn plan() -> Plan {
@@ -499,6 +500,7 @@ mod tests {
             steps: Vec::new(),
             error: None,
             stop_reason: None,
+            observability: ObservabilitySummary::default(),
         }
     }
 
@@ -544,6 +546,7 @@ mod tests {
             }],
             error: None,
             stop_reason: None,
+            observability: ObservabilitySummary::default(),
         };
         run.finish(&report).expect("finish durable run");
         let succeeded: RunState = serde_json::from_slice(&std::fs::read(&run.state_path).expect("terminal state"))

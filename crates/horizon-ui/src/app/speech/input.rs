@@ -6,7 +6,8 @@
 use std::time::{Duration, Instant};
 
 use egui::Context;
-use horizon_core::{PanelId, WorkspaceId};
+use horizon_core::browser::{BrowserCommand, BrowserInput};
+use horizon_core::{Panel, PanelId, WorkspaceId};
 
 use super::super::shortcuts;
 use super::super::{HorizonApp, SpeechNotice};
@@ -91,7 +92,7 @@ fn no_start_notice(activity: SpeechActivity) -> SpeechEvent {
         SpeechActivity::Busy => {
             "Hotkey ignored — still processing the previous dictation (the first use also loads the model, which can take a while)."
         }
-        SpeechActivity::Idle => "Focus a terminal panel to dictate into it.",
+        SpeechActivity::Idle => "Focus a terminal, editor, or browser panel to dictate into it.",
     };
     SpeechEvent::Notice(message.to_string())
 }
@@ -323,6 +324,39 @@ fn apply_global_hotkeys(
     (engaged_profile, disconnected)
 }
 
+#[derive(Debug, PartialEq)]
+enum TranscriptInjection {
+    Terminal,
+    Editor,
+    BrowserInsertText(String),
+    BrowserUnavailable,
+    Ignored,
+}
+
+fn inject_transcript(panel: &mut Panel, text: &str) -> TranscriptInjection {
+    let payload = format!("{text} ");
+    if let Some(mode) = panel.terminal().map(horizon_core::Terminal::mode) {
+        let bytes = input::paste_bytes(&payload, mode, true);
+        panel.write_input(&bytes);
+        return TranscriptInjection::Terminal;
+    }
+    if let Some(editor) = panel.editor_mut() {
+        editor.insert_dictation(&payload);
+        return TranscriptInjection::Editor;
+    }
+    if let Some(browser) = panel.browser() {
+        let accepted = browser.try_send(BrowserCommand::Input(BrowserInput::InsertText {
+            text: payload.clone(),
+        }));
+        return if accepted {
+            TranscriptInjection::BrowserInsertText(payload)
+        } else {
+            TranscriptInjection::BrowserUnavailable
+        };
+    }
+    TranscriptInjection::Ignored
+}
+
 impl HorizonApp {
     pub(in crate::app) fn cancel_speech_target(&mut self, panel_id: PanelId) -> bool {
         let Some(speech) = self.speech.as_mut() else {
@@ -340,11 +374,30 @@ impl HorizonApp {
     }
 
     /// Push-to-talk hotkey handling plus draining speech results into the
-    /// target panel's PTY input (mirrors `poll_primary_selection_paste`).
-    fn focused_horizon_terminal(&self, ctx: &Context, root_focused: bool, os_focus: Option<bool>) -> Option<PanelId> {
+    /// focused panel that can receive text.
+    fn inject_transcript_into_panel(&mut self, panel_id: PanelId, text: &str) {
+        let Some(panel) = self.board.panel_mut(panel_id) else {
+            tracing::warn!("speech target panel closed before transcription finished");
+            return;
+        };
+        let result = inject_transcript(panel, text);
+        if result == TranscriptInjection::BrowserUnavailable {
+            self.show_speech_notice(
+                "could not insert transcript (browser is not running); clipboard was not used",
+                true,
+            );
+        }
+    }
+
+    fn focused_horizon_text_panel(&self, ctx: &Context, root_focused: bool, os_focus: Option<bool>) -> Option<PanelId> {
         let panel_id = self.board.focused?;
         let panel = self.board.panel(panel_id)?;
-        panel.terminal()?;
+        if !panel.kind.accepts_text_input() {
+            return None;
+        }
+        if !panel.browser().is_none_or(|browser| browser.status.is_alive()) {
+            return None;
+        }
         let matches_viewport = terminal_matches_focused_viewport(
             panel.workspace_id,
             self.workspace_is_detached(panel.workspace_id),
@@ -354,7 +407,7 @@ impl HorizonApp {
         use_logically_focused_terminal(matches_viewport, os_focus).then_some(panel_id)
     }
 
-    fn speech_text_surface_active(&self) -> (bool, bool) {
+    pub(in crate::app) fn speech_text_surface_active(&self) -> (bool, bool) {
         let search_capturing = self
             .search_overlay
             .as_ref()
@@ -388,22 +441,16 @@ impl HorizonApp {
         }
     }
 
-    fn logically_focused_terminal(&self) -> Option<PanelId> {
+    fn logically_focused_text_panel(&self) -> Option<PanelId> {
         let panel_id = self.board.focused?;
-        self.board.panel(panel_id)?.terminal()?;
+        let panel = self.board.panel(panel_id)?;
+        if !panel.kind.accepts_text_input() {
+            return None;
+        }
+        if !panel.browser().is_none_or(|browser| browser.status.is_alive()) {
+            return None;
+        }
         Some(panel_id)
-    }
-
-    fn inject_transcript_into_panel(&mut self, panel_id: PanelId, text: &str) {
-        let Some(panel) = self.board.panel_mut(panel_id) else {
-            tracing::warn!("speech target panel closed before transcription finished");
-            return;
-        };
-        let Some(mode) = panel.terminal().map(horizon_core::Terminal::mode) else {
-            return;
-        };
-        let bytes = input::paste_bytes(&format!("{text} "), mode, true);
-        panel.write_input(&bytes);
     }
 
     fn speech_focus_and_sink(&self, ctx: &Context) -> (bool, bool, Option<SpeechSink>) {
@@ -418,7 +465,7 @@ impl HorizonApp {
         };
         let horizon_focused = horizon_session_focused(root_focused, detached_focused, os_focus);
         let sink = dictation_sink(
-            self.focused_horizon_terminal(ctx, root_focused, os_focus),
+            self.focused_horizon_text_panel(ctx, root_focused, os_focus),
             self.template_config.features.speech.desktop_injection,
             horizon_focused,
         );
@@ -604,19 +651,19 @@ impl HorizonApp {
                     SpeechSink::Desktop => {
                         match desktop_insert_route(
                             horizon_cursor::current_process_has_os_focus_fresh(),
-                            self.logically_focused_terminal(),
+                            self.logically_focused_text_panel(),
                         ) {
                             DesktopInsertRoute::Panel(panel_id) => {
-                                tracing::info!("desktop dictation delivered to the focused Horizon terminal");
+                                tracing::info!("desktop dictation delivered to the focused Horizon panel");
                                 self.inject_transcript_into_panel(panel_id, &text);
                                 continue;
                             }
                             DesktopInsertRoute::HorizonWithoutTerminal => {
-                                tracing::info!("desktop dictation discarded; Horizon is focused but has no terminal");
+                                tracing::info!("desktop dictation discarded; Horizon is focused but has no text panel");
                                 ctx.data_mut(|data| {
                                     data.insert_temp(
                                         egui::Id::new(DESKTOP_INSERT_ERROR_ID),
-                                        "could not insert transcript (Horizon is focused but has no terminal); clipboard was not used".to_owned(),
+                                        "could not insert transcript (Horizon is focused but has no text panel); clipboard was not used".to_owned(),
                                     );
                                 });
                                 ctx.request_repaint();
