@@ -7,7 +7,7 @@ use horizon_browser_protocol::redact_url;
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 
-use crate::{Plan, PlanStep};
+use crate::{Plan, PlanStep, observability::ObservabilitySummary};
 
 use super::{JobError, JobOptions, create_private, io_error, write_private};
 
@@ -29,6 +29,7 @@ struct RecordedCall {
     tool: String,
     arguments: Map<String, Value>,
     ok: bool,
+    health: Option<Value>,
 }
 
 #[derive(Serialize)]
@@ -52,6 +53,7 @@ struct JobReport<'a> {
     replayable: bool,
     trace: String,
     executed_plan: String,
+    observability: ObservabilitySummary,
 }
 
 pub(super) struct ReportArtifacts {
@@ -148,6 +150,11 @@ impl JobTrace {
             replayable,
             trace: self.trace_path.display().to_string(),
             executed_plan: plan_path.display().to_string(),
+            observability: ObservabilitySummary::from_results(
+                self.calls
+                    .iter()
+                    .filter_map(|call| call.health.as_ref().map(|health| (call.tool.as_str(), health))),
+            ),
         };
         let mut report_bytes = serde_json::to_vec_pretty(&report)
             .map_err(|error| JobError::Result(format!("could not encode job report: {error}")))?;
@@ -208,11 +215,17 @@ fn parse_tool_call(line: &str) -> Option<RecordedCall> {
     if item.get("type")?.as_str()? != "mcp_tool_call" || item.get("server")?.as_str()? != "horizon-browser" {
         return None;
     }
+    let tool = item.get("tool")?.as_str()?.to_string();
+    let result = item
+        .get("result")
+        .or_else(|| item.get("output"))
+        .or_else(|| item.get("structured_content"));
     Some(RecordedCall {
-        tool: item.get("tool")?.as_str()?.to_string(),
         arguments: item.get("arguments")?.as_object()?.clone(),
         ok: item.get("status").and_then(Value::as_str) == Some("completed")
             && item.get("error").is_none_or(Value::is_null),
+        health: result.and_then(|result| ObservabilitySummary::health_payload(&tool, result)),
+        tool,
     })
 }
 
@@ -350,6 +363,71 @@ mod tests {
         let report: Value =
             serde_json::from_slice(&std::fs::read(&artifacts.report).expect("report bytes")).expect("validated report");
         assert_eq!(report["backend"], "firefox");
+        assert_eq!(report["observability"]["audit"]["observed"], false);
+        assert_eq!(report["observability"]["network"]["observed"], false);
+    }
+
+    #[test]
+    fn audit_and_network_results_are_summarized_without_payloads() {
+        let directory = tempfile::tempdir().expect("job directory");
+        let mut trace = JobTrace::start(directory.path()).expect("trace");
+        trace
+            .record_line(&event_with_result(
+                "browser_audit",
+                &json!({"panel_id":"p1"}),
+                &json!({
+                    "records_retained": 3,
+                    "records_returned": 3,
+                    "malformed_records": 1,
+                    "older_records_dropped": 2,
+                    "cursor_lost": true,
+                    "has_more": false,
+                    "entries": [{"event_id":"secret"}]
+                }),
+            ))
+            .expect("audit event");
+        trace
+            .record_line(&event_with_result(
+                "browser_network_watch",
+                &json!({"panel_id":"p1"}),
+                &json!({
+                    "sequence_gaps": 4,
+                    "records_dropped": 1,
+                    "writer_failed": true,
+                    "records": [{"payload":"secret"}]
+                }),
+            ))
+            .expect("watch event");
+        let options = JobOptions {
+            prompt: "observe".to_string(),
+            backend: None,
+            visible: false,
+            json: true,
+        };
+        let artifacts = trace
+            .finish(
+                directory.path(),
+                &ReportInput {
+                    options: &options,
+                    backend: BackendKind::ChromiumCdp,
+                    ok: true,
+                    summary: "done",
+                    artifact: None,
+                    browser_cleanup_ok: true,
+                },
+            )
+            .expect("report artifacts");
+        let report: Value =
+            serde_json::from_slice(&std::fs::read(&artifacts.report).expect("report bytes")).expect("validated report");
+        assert_eq!(report["observability"]["audit"]["observed"], true);
+        assert_eq!(report["observability"]["audit"]["records_retained"], 3);
+        assert_eq!(report["observability"]["audit"]["older_records_dropped"], 2);
+        assert_eq!(report["observability"]["audit"]["cursor_lost"], true);
+        assert_eq!(report["observability"]["network"]["sequence_gaps"], 4);
+        assert_eq!(report["observability"]["network"]["writer_failed"], true);
+        let report_text = report.to_string();
+        assert!(!report_text.contains("secret"));
+        assert!(!report_text.contains("payload"));
     }
 
     #[test]
@@ -388,6 +466,10 @@ mod tests {
     }
 
     fn event(tool: &str, arguments: &Value) -> String {
+        event_with_result(tool, arguments, &Value::Null)
+    }
+
+    fn event_with_result(tool: &str, arguments: &Value, result: &Value) -> String {
         json!({
             "type":"item.completed",
             "item":{
@@ -396,7 +478,11 @@ mod tests {
                 "tool":tool,
                 "arguments":arguments,
                 "status":"completed",
-                "error":null
+                "error":null,
+                "result":{
+                    "content":[],
+                    "structured_content":result
+                }
             }
         })
         .to_string()
