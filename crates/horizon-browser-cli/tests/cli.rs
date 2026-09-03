@@ -25,6 +25,8 @@ fn run_writes_the_same_structured_report_to_stdout_or_a_private_file() {
     );
     let stdout_report: Value = serde_json::from_slice(&stdout.stdout).expect("stdout report");
     assert_eq!(stdout_report["ok"], true);
+    assert_eq!(stdout_report["observability"]["audit"]["observed"], false);
+    assert_eq!(stdout_report["observability"]["network"]["observed"], false);
     assert_eq!(stdout_report["steps"][0]["tool"], "browser_list");
     assert_eq!(stdout_report["steps"][0]["result"]["panels"], json!([]));
     let job_dir = std::path::PathBuf::from(stdout_report["job_dir"].as_str().expect("job directory"));
