@@ -351,6 +351,12 @@ async fn execute_steps(
             PersistOutcome::Break => break,
             PersistOutcome::Stop(report) => return *report,
         }
+        if let Err(reason) = control.check() {
+            if let Err(stop) = persist_post_dispatch(checkpoint.as_deref_mut(), control, step, false).await {
+                return stop_execution(std::mem::take(&mut steps), stop, false);
+            }
+            return stop_execution(std::mem::take(&mut steps), reason, false);
+        }
         match dispatch_step(client, control, checkpoint.as_deref_mut(), step, arguments, &steps).await {
             DispatchOutcome::Stop(report) => return *report,
             DispatchOutcome::FailFast(report) => {

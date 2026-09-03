@@ -202,14 +202,15 @@ impl ExecutionControl {
 
     /// Run blocking I/O on an owned thread while still observing stop signals.
     ///
-    /// [`BlockingIoMode::Bound`] observes the deadline and cancellation, then
-    /// joins the writer so it cannot race a later finalizer. [`BlockingIoMode::Required`]
-    /// always runs and joins the writer, even when already cancelled.
+    /// [`BlockingIoMode::Bound`] observes the deadline and cancellation. After a
+    /// stop, the writer is joined for one second; a stalled join exits 124/130
+    /// instead of racing a later finalizer. [`BlockingIoMode::Required`] still
+    /// runs after Ctrl-C, with the same bounded drain.
     ///
     /// # Errors
-    /// Returns a stop reason when a bound wait observes cancellation or the
-    /// deadline, or an infrastructure failure when the worker cannot start or
-    /// panics. The worker is still joined before this returns.
+    /// Returns when the worker cannot start or panics. A completed worker
+    /// result is returned even if a stop was observed, so callers can persist
+    /// that outcome and then apply `check()`.
     pub async fn wait_owned_blocking<T: Send + 'static>(
         &mut self,
         worker_name: &'static str,
@@ -223,26 +224,53 @@ impl ExecutionControl {
             .name(worker_name.to_string())
             .spawn(operation)
             .map_err(|error| BlockingIoError::Failed(format!("could not start {worker_name}: {error}")))?;
-        let stopped = match mode {
-            BlockingIoMode::Required => Ok(()),
-            BlockingIoMode::Bound => {
-                self.wait(async {
-                    while !handle.is_finished() {
-                        tokio::time::sleep(Duration::from_millis(5)).await;
-                    }
-                })
-                .await
+        let finished = async {
+            while !handle.is_finished() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
             }
         };
-        let Ok(Ok(value)) = tokio::task::spawn_blocking(move || handle.join()).await else {
-            return Err(BlockingIoError::Failed(format!(
-                "{worker_name} stopped without a result"
-            )));
+        let stopped = match mode {
+            BlockingIoMode::Required => {
+                tokio::select! {
+                    biased;
+                    () = cancellation_requested(&mut self.cancellation) => Err(ExecutionStopReason::Cancelled),
+                    () = finished => Ok(()),
+                }
+            }
+            BlockingIoMode::Bound => self.wait(finished).await,
         };
-        match (mode, stopped) {
-            (_, Ok(())) | (BlockingIoMode::Required, _) => Ok(value),
-            (BlockingIoMode::Bound, Err(reason)) => Err(BlockingIoError::Stopped(reason)),
+        match stopped {
+            Ok(()) => join_worker(handle, worker_name, None).await,
+            Err(reason) => join_worker(handle, worker_name, Some(reason)).await,
         }
+    }
+}
+
+const BLOCKING_IO_DRAIN: Duration = Duration::from_secs(1);
+
+async fn join_worker<T: Send + 'static>(
+    handle: std::thread::JoinHandle<T>,
+    worker_name: &'static str,
+    stop: Option<ExecutionStopReason>,
+) -> Result<T, BlockingIoError> {
+    let join = tokio::task::spawn_blocking(move || handle.join());
+    if stop.is_none() {
+        return match join.await {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(_)) | Err(_) => Err(BlockingIoError::Failed(format!(
+                "{worker_name} stopped without a result"
+            ))),
+        };
+    }
+    match tokio::time::timeout(BLOCKING_IO_DRAIN, join).await {
+        Ok(Ok(Ok(value))) => Ok(value),
+        Ok(_) => Err(BlockingIoError::Failed(format!(
+            "{worker_name} stopped without a result"
+        ))),
+        Err(_) => std::process::exit(match stop {
+            Some(ExecutionStopReason::DeadlineExceeded) => 124,
+            Some(ExecutionStopReason::Cancelled) | None => 130,
+        }),
     }
 }
 
