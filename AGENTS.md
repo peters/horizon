@@ -154,11 +154,11 @@ cargo clippy --workspace --all-targets --features speech -- -D warnings -W clipp
 ### Pull Request Scope
 
 - Deliver one independently testable outcome per PR. Split multi-part issues, refactoring, migrations, and cleanup into serial PRs.
-- Stop and request explicit user approval before a PR changes more than 10 source or test files, changes more than 500 non-generated source or test lines (additions plus deletions), or spans multiple independent subsystems. Temporary smoke-test plans do not count toward these limits.
+- Stop and request explicit user approval before a PR changes more than 10 source or test files, changes more than 1,000 non-generated source or test lines (additions plus deletions), or spans multiple independent subsystems. Temporary smoke-test plans do not count toward these limits.
 - Migrate only the call sites required by the acceptance criteria. Treat similar pre-existing code as follow-up work.
 - Fix only problems that the PR introduces or worsens, acceptance-criteria violations, security or data-loss risks, and merge blockers in the same PR.
 - Keep local and agent self-review findings local and deduplicated. Do not publish automated self-review findings unless the user explicitly requests them; this does not replace the repository-mandated independent review below.
-- After two material fix rounds, or once the source/test file count or changed-line count grows by more than 25 percent from the first locally reviewed candidate diff, stop and propose a new split before continuing.
+- Reassess scope after material fix rounds, but do not split solely because of the number of fix rounds or percentage diff growth. Split when the absolute source/test file or changed-line limits above are crossed, the work spans multiple independent subsystems, or review uncovers a separately testable outcome.
 - Put purely mechanical module moves in a separate prerequisite PR.
 - Request cross-machine smoke testing only after local review is complete and CI has stabilized on the candidate head.
 
