@@ -1,9 +1,35 @@
 //! Whether this process currently owns the OS-focused window.
 
+use std::cell::RefCell;
+use std::time::{Duration, Instant};
+
+/// Speech input polls this from the frame loop. Reuse a recent observation so
+/// background desktop injection does not walk the X11 tree every egui pass.
+const OS_FOCUS_CACHE_TTL: Duration = Duration::from_millis(100);
+
+thread_local! {
+    static OS_FOCUS_CACHE: RefCell<Option<(Instant, Option<bool>)>> = const { RefCell::new(None) };
+}
+
 /// `None` means this session cannot determine OS focus (typical on pure Wayland).
 #[must_use]
 pub fn current_process_has_os_focus() -> Option<bool> {
-    platform::current_process_has_os_focus()
+    OS_FOCUS_CACHE.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let now = Instant::now();
+        if let Some((cached_at, value)) = *slot
+            && os_focus_cache_fresh(cached_at, now)
+        {
+            return value;
+        }
+        let value = platform::current_process_has_os_focus();
+        *slot = Some((now, value));
+        value
+    })
+}
+
+fn os_focus_cache_fresh(cached_at: Instant, now: Instant) -> bool {
+    now.saturating_duration_since(cached_at) < OS_FOCUS_CACHE_TTL
 }
 
 /// X11 input-focus window id, if this session can observe one.
@@ -246,5 +272,20 @@ mod platform {
 mod platform {
     pub(super) const fn current_process_has_os_focus() -> Option<bool> {
         None
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use std::time::{Duration, Instant};
+
+    use super::{OS_FOCUS_CACHE_TTL, os_focus_cache_fresh};
+
+    #[test]
+    fn os_focus_cache_covers_a_speech_poll_interval() {
+        let start = Instant::now();
+        assert_eq!(OS_FOCUS_CACHE_TTL, Duration::from_millis(100));
+        assert!(os_focus_cache_fresh(start, start + Duration::from_millis(99)));
+        assert!(!os_focus_cache_fresh(start, start + Duration::from_millis(100)));
     }
 }
