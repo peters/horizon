@@ -530,10 +530,15 @@ pub(crate) struct HandoffInput {
 pub(crate) struct AuditInput {
     /// Stable panel id returned by `browser_list`.
     pub(crate) panel_id: String,
-    /// Optional action id filter.
+    /// Optional action id filter applied before paging.
     pub(crate) action_id: Option<String>,
-    /// Maximum newest entries to return (1-500, default 100).
+    /// Maximum matching entries to return (1-500, default 100).
     pub(crate) limit: Option<usize>,
+    /// Exclusive resume cursor from a previous `next_event_id`.
+    pub(crate) after_event_id: Option<String>,
+    /// When true and `after_event_id` is omitted, start at the oldest retained match.
+    /// Default false returns the newest matching page.
+    pub(crate) from_start: Option<bool>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -677,6 +682,13 @@ pub(crate) struct HandoffOutput {
 pub(crate) struct AuditOutput {
     pub(crate) panel_id: String,
     pub(crate) entries: Vec<serde_json::Value>,
+    pub(crate) next_event_id: Option<String>,
+    pub(crate) has_more: bool,
+    pub(crate) records_returned: u64,
+    pub(crate) records_retained: u64,
+    pub(crate) malformed_records: u64,
+    pub(crate) older_records_dropped: u64,
+    pub(crate) cursor_lost: bool,
 }
 
 fn backend_name(backend: BackendKind) -> &'static str {

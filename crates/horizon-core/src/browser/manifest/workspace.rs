@@ -129,20 +129,33 @@ pub(super) fn permit(manifest: &BrowserManifest, identity: AgentIdentity<'_>) ->
 /// Returns `NotFound` for a panel that is not live, `PermissionDenied` for an
 /// identity outside its workspace, or an audit storage failure.
 pub fn read_audit_for(panel_local_id: &str, identity: AgentIdentity<'_>) -> std::io::Result<Vec<BrowserAuditEntry>> {
-    read_audit_for_at(HorizonHome::resolve().root(), panel_local_id, identity)
+    Ok(read_audit_journal_for(panel_local_id, identity)?.entries)
 }
 
-fn read_audit_for_at(
+/// Read retained audit records and loss counters when `identity` may control
+/// the panel, checking membership and reading under the manifest lock.
+///
+/// # Errors
+/// Returns `NotFound` for a panel that is not live, `PermissionDenied` for an
+/// identity outside its workspace, or an audit storage failure.
+pub fn read_audit_journal_for(
+    panel_local_id: &str,
+    identity: AgentIdentity<'_>,
+) -> std::io::Result<audit::AuditJournal> {
+    read_audit_journal_for_at(HorizonHome::resolve().root(), panel_local_id, identity)
+}
+
+fn read_audit_journal_for_at(
     root: &Path,
     panel_local_id: &str,
     identity: AgentIdentity<'_>,
-) -> std::io::Result<Vec<BrowserAuditEntry>> {
+) -> std::io::Result<audit::AuditJournal> {
     let manifest_path = manifest_path_for_root(root, panel_local_id);
     let _lock = ManifestLock::acquire(&manifest_path)?;
     let manifest = read_at(&manifest_path)
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "browser panel is not live"))?;
     permit(&manifest, identity)?;
-    audit::read_at(&audit::audit_path_for_root(root, panel_local_id))
+    audit::read_journal_at(&audit::audit_path_for_root(root, panel_local_id))
 }
 
 impl ManifestWorkspace {
