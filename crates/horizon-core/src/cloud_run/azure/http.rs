@@ -69,9 +69,7 @@ impl Transport for AzureHttp {
             .send_json(request)
             .map_err(request_failed("job creation"))?;
         if response.status().as_u16() == 412 {
-            let job = self.get(name)?.ok_or(AzureError::RequestFailed {
-                operation: "job creation",
-            })?;
+            let job = super::await_job(|| self.get(name), |_| Ok(true), "job creation")?;
             return Ok(CreateResult { job, created: false });
         }
         let created = response.status().as_u16() == 201;

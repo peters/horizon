@@ -103,12 +103,12 @@ fn creation_is_bounded_and_retries_reuse_one_execution() {
     assert!(matches!(created, Ok(AzureEnsure::Created(_))));
     let reused = client.ensure_worker(workflow_id, job_id, &target);
     assert!(matches!(reused, Ok(AzureEnsure::Reused(_))));
-    assert_eq!(transport.0.lock().expect("state").requests.len(), 1);
-    transport.0.lock().expect("state").job = None;
-    transport.0.lock().expect("state").create_is_new = false;
-    let raced = client.ensure_worker(workflow_id, job_id, &target);
-    assert!(matches!(raced, Ok(AzureEnsure::Reused(_))));
-    assert_eq!(transport.0.lock().expect("state").starts, 1);
+    let state = transport.0.lock().expect("state");
+    assert_eq!((state.requests.len(), state.starts), (1, 1));
+    drop(state);
+    let mut visibility = [None, Some(job.clone())].into_iter();
+    let adopted = await_job(|| Ok(visibility.next().flatten()), |_| Ok(true), "job creation").expect("adopt winner");
+    assert_eq!(adopted.id, job.id);
 }
 #[test]
 fn validation_and_cost_fail_before_creation() {

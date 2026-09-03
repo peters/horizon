@@ -1,9 +1,11 @@
 //! Azure Container Apps Jobs lifecycle adapter for durable cloud work.
 use super::{CloudJobId, CloudProvider, CloudWorkflowId, WorkerTarget, validation::valid_worker_image};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, fmt};
+use std::fmt;
 use thiserror::Error;
 mod http;
+mod model;
+use model::{ApiExecution, ApiJob, CreateJobRequest, create_request, status_from_resource, worker_from_job};
 #[cfg(test)]
 mod tests;
 const OWNER_TAG: &str = "horizon-owned-by";
@@ -22,6 +24,7 @@ const MIN_LEASE_SECONDS: u32 = 300;
 const MAX_LEASE_SECONDS: u32 = 30 * 24 * 60 * 60;
 const LEASE_CLOCK_SKEW_SECONDS: i64 = 120;
 const CONSUMPTION_PROFILE: &str = "Consumption";
+const JOB_POLL_BACKOFF_MS: [u64; 8] = [0, 250, 500, 1_000, 2_000, 4_000, 8_000, 16_000];
 #[derive(Clone)]
 pub struct AzureAccessToken(String);
 impl AzureAccessToken {
@@ -210,27 +213,20 @@ impl AzureClient {
         Ok(executions.into_iter().next())
     }
     fn execution_for(&self, job: &ApiJob, resource_id: &str) -> Result<Option<ApiExecution>, AzureError> {
-        if job.ready_to_start() {
-            self.single_execution(&job.name, resource_id)
-        } else {
-            Ok(None)
+        if !job.ready_to_start() {
+            return Ok(None);
         }
+        self.single_execution(&job.name, resource_id)
     }
     fn await_created_job(&self, worker: &AzureWorker) -> Result<ApiJob, AzureError> {
-        let name = worker.name.as_str();
-        for delay_millis in [0, 250, 500, 1_000, 2_000, 4_000, 8_000, 16_000] {
-            std::thread::sleep(std::time::Duration::from_millis(delay_millis));
-            let Some(job) = self.transport.get(name)? else {
-                continue;
-            };
-            status_from_resource(&job, worker, None)?;
-            if job.ready_to_start() {
-                return Ok(job);
-            }
-        }
-        Err(AzureError::RequestFailed {
-            operation: "job provisioning",
-        })
+        await_job(
+            || self.transport.get(&worker.name),
+            |job| {
+                status_from_resource(job, worker, None)?;
+                Ok(job.ready_to_start())
+            },
+            "job provisioning",
+        )
     }
     fn cleanup_creation_failure<T>(
         &self,
@@ -252,7 +248,7 @@ impl AzureClient {
         if status_from_resource(&job, worker, None).is_err() || self.transport.delete(name).is_err() {
             return Err(cleanup_failed());
         }
-        for delay_millis in [0, 250, 500, 1_000, 2_000, 4_000, 8_000, 16_000] {
+        for delay_millis in JOB_POLL_BACKOFF_MS {
             std::thread::sleep(std::time::Duration::from_millis(delay_millis));
             if matches!(self.transport.get(name), Ok(None)) {
                 return Err(error);
@@ -262,11 +258,24 @@ impl AzureClient {
     }
     #[cfg(test)]
     fn with_transport(profile: AzureProfile, transport: impl Transport + 'static) -> Self {
-        Self {
-            profile,
-            transport: Box::new(transport),
+        let transport = Box::new(transport);
+        Self { profile, transport }
+    }
+}
+fn await_job(
+    mut inspect: impl FnMut() -> Result<Option<ApiJob>, AzureError>,
+    mut ready: impl FnMut(&ApiJob) -> Result<bool, AzureError>,
+    operation: &'static str,
+) -> Result<ApiJob, AzureError> {
+    for delay_millis in JOB_POLL_BACKOFF_MS {
+        std::thread::sleep(std::time::Duration::from_millis(delay_millis));
+        if let Some(job) = inspect()?
+            && ready(&job)?
+        {
+            return Ok(job);
         }
     }
+    Err(AzureError::RequestFailed { operation })
 }
 #[derive(Debug, Error, Eq, PartialEq)]
 pub enum AzureError {
@@ -288,12 +297,11 @@ pub enum AzureError {
     UnexpectedStatus { operation: &'static str, status: u16 },
     #[error("Azure returned a malformed response during {operation}")]
     InvalidResponse { operation: &'static str },
-    #[error("Azure worker operation failed and exact cleanup also failed")]
+    #[error("Azure worker operation failed and exact cleanup also failed for {resource_id}")]
     CleanupFailed { resource_id: String },
     #[error("Azure hourly cost {actual} exceeded configured maximum {maximum}")]
     HourlyCostRejected { actual: u64, maximum: u64 },
 }
-type CreateJobRequest = serde_json::Value;
 struct CreateResult {
     job: ApiJob,
     created: bool,
@@ -305,132 +313,10 @@ trait Transport: Send + Sync {
     fn start(&self, name: &str) -> Result<Option<ApiExecution>, AzureError>;
     fn delete(&self, name: &str) -> Result<AzureCleanup, AzureError>;
 }
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-struct ApiJob {
-    id: String,
-    name: String,
-    location: String,
-    tags: BTreeMap<String, String>,
-    identity: Option<ApiIdentity>,
-    properties: ApiProperties,
-}
-impl ApiJob {
-    fn ready_to_start(&self) -> bool {
-        self.properties
-            .provisioning_state
-            .as_deref()
-            .is_some_and(|state| state.eq_ignore_ascii_case("Succeeded"))
-    }
-}
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-struct ApiIdentity {
-    #[serde(rename = "type")]
-    kind: String,
-    user_assigned_identities: BTreeMap<String, serde_json::Value>,
-}
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-struct ApiProperties {
-    environment_id: String,
-    workload_profile_name: String,
-    provisioning_state: Option<String>,
-    configuration: ApiConfiguration,
-    template: ApiTemplate,
-}
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-struct ApiConfiguration {
-    replica_timeout: u32,
-    replica_retry_limit: u32,
-    trigger_type: String,
-    manual_trigger_config: ApiManualTriggerConfig,
-    registries: Option<Vec<serde_json::Value>>,
-}
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-struct ApiManualTriggerConfig {
-    parallelism: u32,
-    replica_completion_count: u32,
-}
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default)]
-struct ApiTemplate {
-    containers: Option<Vec<ApiContainer>>,
-}
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default)]
-struct ApiContainer {
-    name: String,
-    image: String,
-    env: Vec<ApiEnv>,
-    resources: ApiResources,
-}
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default)]
-struct ApiResources {
-    cpu: f64,
-    memory: String,
-}
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-struct ApiEnv {
-    name: String,
-    value: Option<String>,
-    secret_ref: Option<String>,
-}
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default)]
-struct ApiExecution {
-    id: String,
-    properties: ApiExecutionProperties,
-}
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-struct ApiExecutionProperties {
-    status: Option<String>,
-}
-fn create_request(
-    workflow_id: CloudWorkflowId,
-    job_id: CloudJobId,
-    target: &WorkerTarget,
-    profile: &AzureProfile,
-) -> Result<CreateJobRequest, AzureError> {
-    let deadline = deletion_deadline(target.lease_seconds)?;
-    let tags = serde_json::json!({
-        OWNER_TAG: "horizon", WORKFLOW_TAG: workflow_id.to_string(), JOB_TAG: job_id.to_string(),
-        PROTOCOL_TAG: super::CLOUD_RUN_PROTOCOL_VERSION.to_string(), PROFILE_TAG: profile.name,
-        DEADLINE_TAG: deadline, COST_TAG: profile.hourly_cost_micros.to_string(),
-        DISK_TAG: target.disk_gib.to_string()
-    });
-    let env = serde_json::json!([
-        {"name": WORKFLOW_ENV, "value": workflow_id.to_string()},
-        {"name": JOB_ENV, "value": job_id.to_string()},
-        {"name": PROTOCOL_ENV, "value": super::CLOUD_RUN_PROTOCOL_VERSION.to_string()},
-        {"name": TERMINATE_ENV, "value": deadline}
-    ]);
-    let properties = serde_json::json!({
-        "environmentId": profile.environment_id, "workloadProfileName": CONSUMPTION_PROFILE,
-        "configuration": {
-            "triggerType": "Manual", "replicaTimeout": target.lease_seconds, "replicaRetryLimit": 0,
-            "manualTriggerConfig": {"parallelism": 1, "replicaCompletionCount": 1},
-            "registries": [], "identitySettings": []
-        },
-        "template": {"containers": [{
-            "name": "worker", "image": target.image, "env": env,
-            "resources": {"cpu": f64::from(profile.cpu_millicores) / 1_000.0,
-                          "memory": format!("{:.2}Gi", f64::from(profile.memory_mib) / 1_024.0)}
-        }]}
-    });
-    Ok(serde_json::json!({
-        "location": profile.location, "tags": tags, "identity": {"type": "None"}, "properties": properties
-    }))
-}
 fn validate_profile(profile: &AzureProfile) -> Result<(), AzureError> {
     let prefix = format!("/subscriptions/{}/", profile.subscription_id);
     let valid = valid_text(&profile.name, 191)
-        && valid_subscription(&profile.subscription_id)
+        && uuid::Uuid::parse_str(&profile.subscription_id).is_ok()
         && valid_resource_group(&profile.resource_group)
         && valid_arm_id(&profile.environment_id)
         && profile
@@ -456,144 +342,12 @@ fn validate_target(target: &WorkerTarget, profile: &AzureProfile) -> Result<(), 
     valid.then_some(()).ok_or(AzureError::InvalidTarget)
 }
 fn enforce_cost(target: &WorkerTarget, actual: u64) -> Result<(), AzureError> {
-    let Some(maximum) = target.max_hourly_cost_micros else {
-        return Ok(());
-    };
-    if actual > maximum {
-        return Err(AzureError::HourlyCostRejected { actual, maximum });
+    let maximum = target.max_hourly_cost_micros.ok_or(AzureError::InvalidTarget)?;
+    if actual <= maximum {
+        Ok(())
+    } else {
+        Err(AzureError::HourlyCostRejected { actual, maximum })
     }
-    Ok(())
-}
-fn worker_from_job(
-    job: &ApiJob,
-    workflow_id: CloudWorkflowId,
-    job_id: CloudJobId,
-    target: &WorkerTarget,
-    profile: &AzureProfile,
-) -> Result<AzureWorker, AzureError> {
-    if !basic_identity_matches(job, workflow_id, job_id, profile)
-        || !tag_matches(job, PROFILE_TAG, &profile.name)
-        || !tag_matches(job, DISK_TAG, &target.disk_gib.to_string())
-        || !tag_matches(job, COST_TAG, &profile.hourly_cost_micros.to_string())
-        || !job.location.replace(' ', "").eq_ignore_ascii_case(&profile.location)
-        || !job_configuration_matches(job, &target.image, target.lease_seconds, profile)
-    {
-        return Err(AzureError::ResourceIdentityMismatch);
-    }
-    let delete_after = job
-        .tags
-        .get(DEADLINE_TAG)
-        .filter(|value| valid_deadline(value))
-        .cloned()
-        .ok_or(AzureError::ResourceIdentityMismatch)?;
-    let worker = AzureWorker {
-        workflow_id,
-        job_id,
-        resource_id: resource_id(&profile.subscription_id, &profile.resource_group, &job.name),
-        name: job.name.clone(),
-        target: target.clone(),
-        profile: profile.clone(),
-        delete_after,
-    };
-    worker.validate()?;
-    Ok(worker)
-}
-fn status_from_resource(
-    job: &ApiJob,
-    worker: &AzureWorker,
-    execution: Option<&ApiExecution>,
-) -> Result<AzureWorkerStatus, AzureError> {
-    worker.validate()?;
-    let containers = job.properties.template.containers.as_deref().unwrap_or_default();
-    let (target, profile) = (&worker.target, &worker.profile);
-    let owned = basic_identity_matches(job, worker.workflow_id, worker.job_id, profile)
-        && job.id.eq_ignore_ascii_case(&worker.resource_id)
-        && job.location.replace(' ', "").eq_ignore_ascii_case(&profile.location)
-        && job
-            .properties
-            .environment_id
-            .eq_ignore_ascii_case(&profile.environment_id)
-        && job_configuration_matches(job, &target.image, target.lease_seconds, profile)
-        && tag_matches(job, PROFILE_TAG, &profile.name)
-        && tag_matches(job, DISK_TAG, &target.disk_gib.to_string())
-        && tag_matches(job, COST_TAG, &profile.hourly_cost_micros.to_string())
-        && tag_matches(job, DEADLINE_TAG, &worker.delete_after)
-        && containers.len() == 1
-        && env_matches(&containers[0], WORKFLOW_ENV, &worker.workflow_id.to_string())
-        && env_matches(&containers[0], JOB_ENV, &worker.job_id.to_string())
-        && env_matches(
-            &containers[0],
-            PROTOCOL_ENV,
-            &super::CLOUD_RUN_PROTOCOL_VERSION.to_string(),
-        )
-        && env_matches(&containers[0], TERMINATE_ENV, &worker.delete_after);
-    if !owned {
-        return Err(AzureError::ResourceIdentityMismatch);
-    }
-    if let Some(execution) = execution
-        && !execution_belongs_to(&execution.id, &worker.resource_id)
-    {
-        return Err(AzureError::ResourceIdentityMismatch);
-    }
-    Ok(AzureWorkerStatus {
-        worker: worker.clone(),
-        lifecycle: lifecycle(job, execution),
-        execution_id: execution.map(|value| value.id.clone()),
-    })
-}
-fn lifecycle(job: &ApiJob, execution: Option<&ApiExecution>) -> AzureLifecycle {
-    let Some(execution) = execution else {
-        return match job.properties.provisioning_state.as_deref() {
-            Some(state) if matches_ci(state, &["Failed", "Canceled"]) => AzureLifecycle::Failed,
-            Some(state) if state.eq_ignore_ascii_case("Deleting") => AzureLifecycle::Stopped,
-            Some(_) => AzureLifecycle::Provisioning,
-            None => AzureLifecycle::Unknown,
-        };
-    };
-    match execution.properties.status.as_deref() {
-        Some(state) if matches_ci(state, &["Running", "Processing"]) => AzureLifecycle::Running,
-        Some(state) if state.eq_ignore_ascii_case("Succeeded") => AzureLifecycle::Succeeded,
-        Some(state) if matches_ci(state, &["Failed", "Degraded"]) => AzureLifecycle::Failed,
-        Some(state) if state.eq_ignore_ascii_case("Stopped") => AzureLifecycle::Stopped,
-        Some(_) | None => AzureLifecycle::Unknown,
-    }
-}
-fn basic_identity_matches(
-    job: &ApiJob,
-    workflow_id: CloudWorkflowId,
-    job_id: CloudJobId,
-    profile: &AzureProfile,
-) -> bool {
-    let name = resource_name(workflow_id, job_id);
-    let id = resource_id(&profile.subscription_id, &profile.resource_group, &name);
-    job.name == name
-        && job.id.eq_ignore_ascii_case(&id)
-        && tag_matches(job, OWNER_TAG, "horizon")
-        && tag_matches(job, WORKFLOW_TAG, &workflow_id.to_string())
-        && tag_matches(job, JOB_TAG, &job_id.to_string())
-        && tag_matches(job, PROTOCOL_TAG, &super::CLOUD_RUN_PROTOCOL_VERSION.to_string())
-}
-fn job_configuration_matches(job: &ApiJob, image: &str, lease_seconds: u32, profile: &AzureProfile) -> bool {
-    let config = &job.properties.configuration;
-    let workload_profile = &job.properties.workload_profile_name;
-    let containers = job.properties.template.containers.as_deref().unwrap_or_default();
-    let public_image = config.registries.as_deref().unwrap_or_default().is_empty()
-        && job.identity.as_ref().is_none_or(|identity| {
-            identity.user_assigned_identities.is_empty()
-                && (identity.kind.is_empty() || identity.kind.eq_ignore_ascii_case("None"))
-        });
-    config.trigger_type.eq_ignore_ascii_case("Manual")
-        && workload_profile.eq_ignore_ascii_case(CONSUMPTION_PROFILE)
-        && config.replica_timeout == lease_seconds
-        && config.replica_retry_limit == 0
-        && config.manual_trigger_config.parallelism == 1
-        && config.manual_trigger_config.replica_completion_count == 1
-        && containers.len() == 1
-        && containers[0].name == "worker"
-        && containers[0].image == image
-        && (containers[0].resources.cpu - f64::from(profile.cpu_millicores) / 1_000.0).abs() < f64::EPSILON
-        && memory_matches(&containers[0].resources.memory, profile.memory_mib)
-        && public_image
 }
 fn resource_name(workflow_id: CloudWorkflowId, job_id: CloudJobId) -> String {
     let workflow = workflow_id.to_string().replace('-', "");
@@ -621,32 +375,6 @@ fn recovered_deadline_valid(value: &str, lease_seconds: u32) -> bool {
 fn ephemeral_disk_limit(cpu_millicores: u32) -> u32 {
     (cpu_millicores / 250).checked_next_power_of_two().unwrap_or(8).min(8)
 }
-fn memory_matches(value: &str, expected_mib: u32) -> bool {
-    value
-        .strip_suffix("Gi")
-        .and_then(|amount| amount.parse::<f64>().ok())
-        .is_some_and(|amount| (amount - f64::from(expected_mib) / 1_024.0).abs() < f64::EPSILON)
-}
-fn tag_matches(job: &ApiJob, key: &str, expected: &str) -> bool {
-    job.tags.get(key).is_some_and(|value| value == expected)
-}
-fn env_matches(container: &ApiContainer, name: &str, expected: &str) -> bool {
-    let mut entries = container.env.iter().filter(|entry| entry.name == name);
-    entries
-        .next()
-        .is_some_and(|entry| entry.value.as_deref() == Some(expected) && entry.secret_ref.is_none())
-        && entries.next().is_none()
-}
-fn execution_belongs_to(execution_id: &str, job_resource_id: &str) -> bool {
-    execution_id.len() > job_resource_id.len() + "/executions/".len()
-        && execution_id
-            .get(..job_resource_id.len())
-            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(job_resource_id))
-        && execution_id[job_resource_id.len()..].starts_with("/executions/")
-}
-fn matches_ci(value: &str, options: &[&str]) -> bool {
-    options.iter().any(|option| value.eq_ignore_ascii_case(option))
-}
 fn valid_immutable_image(value: &str) -> bool {
     valid_worker_image(value)
         && value
@@ -655,9 +383,6 @@ fn valid_immutable_image(value: &str) -> bool {
 }
 fn valid_deadline(value: &str) -> bool {
     time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339).is_ok()
-}
-fn valid_subscription(value: &str) -> bool {
-    uuid::Uuid::parse_str(value).is_ok()
 }
 fn valid_resource_group(value: &str) -> bool {
     valid_text(value, 90)
