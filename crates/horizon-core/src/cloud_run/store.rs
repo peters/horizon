@@ -329,12 +329,12 @@ impl WorkflowRow {
 }
 
 fn initialize_schema(connection: &mut Connection) -> Result<(), CloudStoreError> {
-    let version = connection.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))?;
+    connection.pragma_update(None, "journal_mode", "WAL")?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let version = transaction.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))?;
     if version > STORE_SCHEMA_VERSION {
         return Err(CloudStoreError::UnsupportedSchema(version));
     }
-    connection.pragma_update(None, "journal_mode", "WAL")?;
-    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     transaction.execute_batch(SCHEMA)?;
     transaction.pragma_update(None, "user_version", STORE_SCHEMA_VERSION)?;
     transaction.commit()?;
@@ -448,7 +448,10 @@ fn check_recovery_budget(workflow_count: usize, snapshot_bytes: usize) -> Result
 }
 
 fn parse_workflow_id(value: &str) -> Result<CloudWorkflowId, CloudStoreError> {
-    value.parse().map_err(|_| CloudStoreError::InvalidStoredWorkflowId)
+    let id: CloudWorkflowId = value.parse().map_err(|_| CloudStoreError::InvalidStoredWorkflowId)?;
+    (id.to_string() == value)
+        .then_some(id)
+        .ok_or(CloudStoreError::InvalidStoredWorkflowId)
 }
 
 fn valid_resource_name(value: &str) -> bool {

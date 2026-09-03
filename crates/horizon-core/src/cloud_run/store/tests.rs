@@ -79,14 +79,12 @@ fn snapshots_round_trip_and_revision_compare_and_swap_is_exact() {
         store.create(&original),
         Err(CloudStoreError::WorkflowExists(id)) if id == original.id
     ));
-
     let mut next = original.clone();
     next.updated_at_millis += 1;
     next.nodes[0].state = CloudJobState::Provisioning;
     let replaced = store.replace(&stored, &next).expect("replace workflow");
     assert_eq!(replaced.revision(), 2);
     assert_eq!(replaced.workflow(), &next);
-
     let mut stale = next.clone();
     stale.updated_at_millis += 1;
     assert!(matches!(
@@ -102,7 +100,6 @@ fn replacement_preserves_identity_time_and_retention() {
     let store = store(&temp);
     let original = test_workflow(CloudProvider::Azure, 2_000);
     let stored = store.create(&original).expect("create workflow");
-
     let mut changed_id = original.clone();
     changed_id.id = CloudWorkflowId::new();
     changed_id.updated_at_millis += 1;
@@ -134,7 +131,6 @@ fn recovery_lists_only_retained_valid_snapshots() {
     let retained = test_workflow(CloudProvider::Azure, 100_000);
     store.create(&expired).expect("create expired");
     store.create(&retained).expect("create retained");
-
     let recovered = store.list_retained(70_000).expect("list retained");
     assert_eq!(recovered.len(), 1);
     assert_eq!(recovered[0].workflow(), &retained);
@@ -189,7 +185,6 @@ fn creation_claim_is_durable_atomic_and_bound_to_the_persisted_job() {
         .collect::<Vec<_>>();
     outcomes.sort_unstable();
     assert_eq!(outcomes, vec![false, true]);
-
     let reopened = CloudWorkflowStore::open_path(store.path().to_path_buf()).expect("reopen store");
     assert!(
         !reopened
@@ -204,7 +199,6 @@ fn creation_claim_is_durable_atomic_and_bound_to_the_persisted_job() {
         reopened.claim_worker_creation(CloudProvider::RunPod, workflow.id, job_id, "bad/name"),
         Err(CloudStoreError::InvalidResourceName)
     ));
-
     let other = retained_workflow(CloudProvider::RunPod, 3_000);
     let other_job = other.nodes[0].id;
     reopened.create(&other).expect("create other workflow");
@@ -222,7 +216,6 @@ fn creation_claim_is_durable_atomic_and_bound_to_the_persisted_job() {
 fn expired_terminal_and_dependency_blocked_jobs_cannot_claim_creation() {
     let temp = TempDir::new().expect("temp dir");
     let store = store(&temp);
-
     let expired = test_workflow(CloudProvider::RunPod, 1_000);
     let expired_job = expired.nodes[0].id;
     store.create(&expired).expect("create expired workflow");
@@ -230,7 +223,6 @@ fn expired_terminal_and_dependency_blocked_jobs_cannot_claim_creation() {
         store.claim_worker_creation(CloudProvider::RunPod, expired.id, expired_job, "horizon-expired"),
         Err(CloudStoreError::WorkflowExpired(id)) if id == expired.id
     ));
-
     let mut terminal = retained_workflow(CloudProvider::RunPod, 10_000);
     let terminal_job = terminal.nodes[0].id;
     terminal.nodes[0].state = CloudJobState::Completed;
@@ -297,6 +289,11 @@ fn invalid_snapshots_and_future_schema_fail_closed() {
     invalid.title.clear();
     assert!(matches!(store.create(&invalid), Err(CloudStoreError::Protocol(_))));
     assert!(store.load(invalid.id).expect("load missing").is_none());
+    assert!(parse_workflow_id("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa").is_ok());
+    assert!(matches!(
+        parse_workflow_id("AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"),
+        Err(CloudStoreError::InvalidStoredWorkflowId)
+    ));
 
     let future_path = temp.path().join("future").join("workflows.sqlite3");
     CloudWorkflowStore::open_path(&future_path).expect("initialize future store");
