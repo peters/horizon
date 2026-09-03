@@ -28,6 +28,27 @@ pub(crate) fn dictation_sink(
     }
 }
 
+/// Combine egui viewport focus with the OS-focused window.
+///
+/// Global X11 grabs can make egui report the root viewport as unfocused while
+/// the Horizon window still has input focus. Treating that as background
+/// dictation sends the transcript through AT-SPI, which Horizon terminals
+/// never expose.
+#[must_use]
+pub(crate) fn horizon_session_focused(root_focused: bool, detached_focused: bool, os_focus: Option<bool>) -> bool {
+    root_focused || detached_focused || os_focus.unwrap_or(false)
+}
+
+/// Whether the logically focused terminal should receive dictation.
+///
+/// When this process owns OS focus, egui's per-viewport focused flag can still
+/// be false (global hotkey grabs, detached windows). Route to the board's
+/// focused terminal instead of falling through to desktop insertion.
+#[must_use]
+pub(crate) const fn use_logically_focused_terminal(matches_viewport: bool, os_focus: Option<bool>) -> bool {
+    matches_viewport || matches!(os_focus, Some(true))
+}
+
 pub(crate) fn inject_desktop_transcript(text: &str) -> Result<(), InjectError> {
     if let Some(result) = take_test_inject_result(text) {
         return result;
@@ -246,6 +267,23 @@ mod tests {
 
     use super::dictation_sink;
     use crate::app::speech::SpeechSink;
+
+    #[test]
+    fn os_window_focus_counts_as_a_horizon_session() {
+        assert!(super::horizon_session_focused(false, false, Some(true)));
+        assert!(!super::horizon_session_focused(false, false, Some(false)));
+        assert!(!super::horizon_session_focused(false, false, None));
+        assert!(super::horizon_session_focused(true, false, Some(false)));
+        assert!(super::horizon_session_focused(false, true, None));
+    }
+
+    #[test]
+    fn os_focus_keeps_the_logically_focused_terminal() {
+        assert!(super::use_logically_focused_terminal(false, Some(true)));
+        assert!(!super::use_logically_focused_terminal(false, Some(false)));
+        assert!(!super::use_logically_focused_terminal(false, None));
+        assert!(super::use_logically_focused_terminal(true, Some(false)));
+    }
 
     #[test]
     fn focused_terminal_wins_over_desktop_flag_while_root_is_focused() {

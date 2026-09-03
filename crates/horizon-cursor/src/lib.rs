@@ -7,6 +7,7 @@
 mod accessibility;
 mod hotkey;
 mod inject;
+mod os_focus;
 
 pub use accessibility::{
     accessibility_permission_granted, capture_focused_accessible_target, insert_text_into_focused_accessible,
@@ -14,6 +15,7 @@ pub use accessibility::{
 };
 pub use hotkey::{GlobalHotkeys, Hotkey, HotkeyError, HotkeyEvent, HotkeyKey};
 pub use inject::InjectError;
+pub use os_focus::current_process_has_os_focus;
 
 /// Query the current global cursor position in screen (root-window)
 /// coordinates.  Returns `None` when the platform backend is

@@ -56,7 +56,9 @@ pub fn request_accessibility_permission() -> Option<bool> {
 ///
 /// This path never reads or writes the clipboard. It refuses ambiguous,
 /// protected, stale, hidden, read-only, or selected-text targets so failure
-/// cannot partially replace existing text.
+/// cannot partially replace existing text. On Linux, if the focused app does
+/// not expose an editable AT-SPI field, the transcript is typed through the
+/// accessibility key controller instead of being discarded.
 ///
 /// # Errors
 ///
@@ -70,12 +72,14 @@ pub fn insert_text_into_focused_accessible(text: &str) -> Result<(), InjectError
 
 #[cfg(target_os = "linux")]
 mod platform {
+    use std::borrow::Cow;
     use std::collections::{HashSet, VecDeque};
     use std::future::Future;
     use std::sync::{Mutex, TryLockError};
     use std::time::Duration;
 
     use atspi::proxy::accessible::{AccessibleProxy, ObjectRefExt as _};
+    use atspi::proxy::device_event_controller::{DeviceEventControllerProxy, KeySynthType};
     use atspi::proxy::proxy_ext::ProxyExt as _;
     use atspi::proxy::text::TextProxy;
     use atspi::{
@@ -206,6 +210,7 @@ mod platform {
     }
 
     async fn insert_text_async(text: &str) -> Result<(), InjectError> {
+        let text = sanitize_desktop_transcript(text);
         let deadline = tokio::time::Instant::now() + PREFLIGHT_TIMEOUT;
         let connection = bounded_preflight(deadline, async {
             AccessibilityConnection::new()
@@ -213,7 +218,19 @@ mod platform {
                 .map_err(|_| InjectError::Unsupported)
         })
         .await?;
-        let target = bounded_preflight(deadline, find_focused_target(&connection)).await?;
+        match insert_into_editable_field(&connection, deadline, &text).await {
+            Ok(()) => Ok(()),
+            Err(error) if can_synthesize_keys(&error) => synthesize_key_string(&connection, &text).await,
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn insert_into_editable_field(
+        connection: &AccessibilityConnection,
+        deadline: tokio::time::Instant,
+        text: &str,
+    ) -> Result<(), InjectError> {
+        let target = bounded_preflight(deadline, find_focused_target(connection)).await?;
         let accessible = bounded_preflight(deadline, async {
             target
                 .as_accessible_proxy(connection.connection())
@@ -386,6 +403,36 @@ mod platform {
         Ok(0)
     }
 
+    fn sanitize_desktop_transcript(text: &str) -> Cow<'_, str> {
+        if text.chars().any(char::is_control) {
+            Cow::Owned(text.chars().map(|ch| if ch.is_control() { ' ' } else { ch }).collect())
+        } else {
+            Cow::Borrowed(text)
+        }
+    }
+
+    fn can_synthesize_keys(error: &InjectError) -> bool {
+        matches!(
+            error,
+            InjectError::Target(
+                "focused application does not expose an editable text field"
+                    | "focused field does not support direct text insertion"
+                    | "focused field does not expose readable text state"
+            )
+        )
+    }
+
+    async fn synthesize_key_string(connection: &AccessibilityConnection, text: &str) -> Result<(), InjectError> {
+        let proxy = DeviceEventControllerProxy::new(connection.connection())
+            .await
+            .map_err(|_| InjectError::Failed("failed to reach the accessibility key controller"))?;
+        proxy
+            .generate_keyboard_event(0, text, KeySynthType::String)
+            .await
+            .map_err(|_| InjectError::Failed("focused application rejected synthesized key input"))?;
+        Ok(())
+    }
+
     async fn read_target_facts(accessible: &AccessibleProxy<'_>) -> Result<TargetFacts, InjectError> {
         let interfaces = accessible
             .get_interfaces()
@@ -430,7 +477,10 @@ mod platform {
 
         use atspi::{Interface, InterfaceSet, Role, State, StateSet};
 
-        use super::{INSERT_LOCK, InjectError, TargetFacts, TextSnapshot, unique_candidate_index};
+        use super::{
+            INSERT_LOCK, InjectError, TargetFacts, TextSnapshot, can_synthesize_keys, sanitize_desktop_transcript,
+            unique_candidate_index,
+        };
 
         fn safe_target() -> TargetFacts {
             TargetFacts {
@@ -445,6 +495,34 @@ mod platform {
                 ),
                 role: Role::Entry,
             }
+        }
+
+        #[test]
+        fn control_characters_are_replaced_before_desktop_insertion() {
+            assert_eq!(sanitize_desktop_transcript("hello"), "hello");
+            assert_eq!(sanitize_desktop_transcript("hello\nworld\r"), "hello world ");
+        }
+
+        #[test]
+        fn key_synthesis_is_only_used_when_no_editable_field_exists() {
+            assert!(can_synthesize_keys(&InjectError::Target(
+                "focused application does not expose an editable text field"
+            )));
+            assert!(can_synthesize_keys(&InjectError::Target(
+                "focused field does not support direct text insertion"
+            )));
+            assert!(can_synthesize_keys(&InjectError::Target(
+                "focused field does not expose readable text state"
+            )));
+            assert!(!can_synthesize_keys(&InjectError::Target(
+                "dictation into password fields is disabled"
+            )));
+            assert!(!can_synthesize_keys(&InjectError::Target(
+                "selected text cannot be replaced safely by direct dictation"
+            )));
+            assert!(!can_synthesize_keys(&InjectError::Target(
+                "multiple focused editable fields were reported"
+            )));
         }
 
         #[test]
