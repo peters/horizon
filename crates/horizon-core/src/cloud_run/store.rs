@@ -1,5 +1,6 @@
 //! Durable local control-plane storage for cloud workflow snapshots and creation claims.
 
+#[cfg(unix)]
 use std::fs::OpenOptions;
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
@@ -11,6 +12,7 @@ use thiserror::Error;
 
 use super::{
     CloudJobId, CloudJobOutcome, CloudJobState, CloudProtocolError, CloudProvider, CloudWorkflow, CloudWorkflowId,
+    WorkerTarget,
 };
 use crate::HorizonHome;
 
@@ -239,9 +241,9 @@ impl CloudWorkflowStore {
     /// claim identities, corrupt snapshots, and storage failures.
     pub fn claim_worker_creation(
         &self,
-        provider: CloudProvider,
         workflow_id: CloudWorkflowId,
         job_id: CloudJobId,
+        target: &WorkerTarget,
         resource_name: &str,
     ) -> Result<bool, CloudStoreError> {
         if !valid_resource_name(resource_name) {
@@ -253,7 +255,12 @@ impl CloudWorkflowStore {
         let workflow = workflow_row(&transaction, &id)?
             .ok_or(CloudStoreError::WorkflowMissing(workflow_id))
             .and_then(|row| decode_workflow_row(workflow_id, &row))?;
-        let provider_name = provider_name(provider);
+        let claimed_at_millis = current_unix_millis()?;
+        if workflow.workflow.retain_until_millis < claimed_at_millis {
+            return Err(CloudStoreError::WorkflowExpired(workflow_id));
+        }
+        validate_claim_target(&workflow.workflow, job_id, target)?;
+        let provider_name = provider_name(target.provider);
         let existing = transaction
             .query_row(
                 "SELECT workflow_id, job_id FROM cloud_worker_creation_claims
@@ -269,11 +276,6 @@ impl CloudWorkflowStore {
             }
             return Err(CloudStoreError::ClaimIdentityConflict);
         }
-        let claimed_at_millis = current_unix_millis()?;
-        if workflow.workflow.retain_until_millis < claimed_at_millis {
-            return Err(CloudStoreError::WorkflowExpired(workflow_id));
-        }
-        validate_claim_target(&workflow.workflow, job_id, provider)?;
         let job_already_claimed = transaction
             .query_row(
                 "SELECT resource_name FROM cloud_worker_creation_claims
@@ -408,13 +410,13 @@ fn validate_replacement(previous: &CloudWorkflow, next: &CloudWorkflow) -> Resul
 fn validate_claim_target(
     workflow: &CloudWorkflow,
     job_id: CloudJobId,
-    provider: CloudProvider,
+    target: &WorkerTarget,
 ) -> Result<(), CloudStoreError> {
     let node = workflow
         .nodes
         .iter()
         .find(|node| node.id == job_id)
-        .filter(|node| node.worker.as_ref().is_some_and(|target| target.provider == provider))
+        .filter(|node| node.worker.as_ref() == Some(target))
         .ok_or(CloudStoreError::ClaimTargetMismatch(job_id))?;
     let active = matches!(node.state, CloudJobState::Queued | CloudJobState::Provisioning);
     let dependencies_ready = node.depends_on.iter().all(|dependency_id| {
@@ -498,21 +500,29 @@ fn prepare_private_store(path: &Path) -> Result<PathBuf, CloudStoreError> {
         .join(path.file_name().unwrap_or(path.as_os_str()));
     #[cfg(not(unix))]
     let path = path.to_path_buf();
+    #[cfg(not(unix))]
     match std::fs::symlink_metadata(&path) {
         Ok(metadata) if metadata.file_type().is_symlink() => return Err(CloudStoreError::SymlinkStorePath),
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
     }
-    let mut options = OpenOptions::new();
-    options.create(true).read(true).write(true);
     #[cfg(unix)]
-    options.mode(0o600);
-    let file = options.open(&path)?;
-    #[cfg(unix)]
-    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-    #[cfg(not(unix))]
-    drop(file);
+    {
+        let mut options = OpenOptions::new();
+        options
+            .create(true)
+            .read(true)
+            .write(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW);
+        let file = match options.open(&path) {
+            Ok(file) => file,
+            Err(error) if error.raw_os_error() == Some(libc::ELOOP) => return Err(CloudStoreError::SymlinkStorePath),
+            Err(error) => return Err(error.into()),
+        };
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
     Ok(path)
 }
 

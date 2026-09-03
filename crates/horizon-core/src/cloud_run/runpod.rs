@@ -117,37 +117,14 @@ pub enum RunPodCleanup {
 pub trait RunPodCreationFence: Send + Sync {
     /// # Errors
     /// Returns an error when the durable claim cannot be read or recorded.
-    fn claim_once(
-        &self,
-        workflow_id: CloudWorkflowId,
-        job_id: CloudJobId,
-        resource_name: &str,
-    ) -> Result<bool, RunPodError>;
+    fn claim_once(&self, resource_name: &str) -> Result<bool, RunPodError>;
 }
 impl<F> RunPodCreationFence for F
 where
-    F: Fn(CloudWorkflowId, CloudJobId, &str) -> Result<bool, RunPodError> + Send + Sync,
+    F: Fn(&str) -> Result<bool, RunPodError> + Send + Sync,
 {
-    fn claim_once(
-        &self,
-        workflow_id: CloudWorkflowId,
-        job_id: CloudJobId,
-        resource_name: &str,
-    ) -> Result<bool, RunPodError> {
-        self(workflow_id, job_id, resource_name)
-    }
-}
-impl RunPodCreationFence for super::CloudWorkflowStore {
-    fn claim_once(
-        &self,
-        workflow_id: CloudWorkflowId,
-        job_id: CloudJobId,
-        resource_name: &str,
-    ) -> Result<bool, RunPodError> {
-        self.claim_worker_creation(CloudProvider::RunPod, workflow_id, job_id, resource_name)
-            .map_err(|error| RunPodError::CreationFenceFailed {
-                reason: error.to_string(),
-            })
+    fn claim_once(&self, resource_name: &str) -> Result<bool, RunPodError> {
+        self(resource_name)
     }
 }
 pub struct RunPodClient {
@@ -174,7 +151,7 @@ impl RunPodClient {
         validate_target(target, profile)?;
         let name = resource_name(workflow_id, job_id);
         let matches = self.reconcile_by_name(&name)?;
-        let may_create = !matches.is_empty() || self.creation_fence.claim_once(workflow_id, job_id, &name)?;
+        let may_create = !matches.is_empty() || self.creation_fence.claim_once(&name)?;
         let (pod, created, expected_deadline) = match matches.as_slice() {
             [] if !may_create => return Err(RunPodError::CreationUnresolved { name }),
             [] => {
@@ -283,7 +260,7 @@ impl RunPodClient {
     fn with_transport(transport: impl Transport + 'static) -> Self {
         Self {
             transport: Box::new(transport),
-            creation_fence: Box::new(|_, _, _: &str| Ok(true)),
+            creation_fence: Box::new(|_: &str| Ok(true)),
         }
     }
 }
@@ -303,8 +280,6 @@ pub enum RunPodError {
     AmbiguousResource { name: String, count: usize },
     #[error("RunPod creation for {name} was already claimed but no pod became visible")]
     CreationUnresolved { name: String },
-    #[error("RunPod durable creation fence failed: {reason}")]
-    CreationFenceFailed { reason: String },
     #[error("RunPod request failed during {operation}")]
     RequestFailed { operation: &'static str },
     #[error("RunPod returned HTTP {status} during {operation}")]

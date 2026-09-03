@@ -1986,6 +1986,7 @@ dependencies = [
  "comrak",
  "git2",
  "horizon-browser",
+ "libc",
  "profiling",
  "regex",
  "rusqlite",

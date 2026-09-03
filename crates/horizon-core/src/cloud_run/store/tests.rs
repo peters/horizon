@@ -54,6 +54,10 @@ fn retained_workflow(provider: CloudProvider, timestamp: i64) -> CloudWorkflow {
     workflow
 }
 
+fn worker_target(workflow: &CloudWorkflow) -> &WorkerTarget {
+    workflow.nodes[0].worker.as_ref().expect("worker target")
+}
+
 fn store(temp: &TempDir) -> CloudWorkflowStore {
     #[cfg(unix)]
     let root = {
@@ -168,14 +172,16 @@ fn creation_claim_is_durable_atomic_and_bound_to_the_persisted_job() {
     let workflow = retained_workflow(CloudProvider::RunPod, 1_000);
     let job_id = workflow.nodes[0].id;
     store.create(&workflow).expect("create workflow");
+    let target = worker_target(&workflow).clone();
     let barrier = Arc::new(Barrier::new(3));
     let mut threads = Vec::new();
     for _ in 0..2 {
         let store = store.clone();
         let barrier = Arc::clone(&barrier);
+        let target = target.clone();
         threads.push(std::thread::spawn(move || {
             barrier.wait();
-            store.claim_worker_creation(CloudProvider::RunPod, workflow.id, job_id, "horizon-worker-1")
+            store.claim_worker_creation(workflow.id, job_id, &target, "horizon-worker-1")
         }));
     }
     barrier.wait();
@@ -188,26 +194,28 @@ fn creation_claim_is_durable_atomic_and_bound_to_the_persisted_job() {
     let reopened = CloudWorkflowStore::open_path(store.path().to_path_buf()).expect("reopen store");
     assert!(
         !reopened
-            .claim_worker_creation(CloudProvider::RunPod, workflow.id, job_id, "horizon-worker-1")
+            .claim_worker_creation(workflow.id, job_id, &target, "horizon-worker-1")
             .expect("repeat claim")
     );
+    let mut wrong_target = target.clone();
+    wrong_target.max_hourly_cost_micros = Some(900_000);
     assert!(matches!(
-        reopened.claim_worker_creation(CloudProvider::Azure, workflow.id, job_id, "horizon-worker-1"),
+        reopened.claim_worker_creation(workflow.id, job_id, &wrong_target, "horizon-worker-1"),
         Err(CloudStoreError::ClaimTargetMismatch(id)) if id == job_id
     ));
     assert!(matches!(
-        reopened.claim_worker_creation(CloudProvider::RunPod, workflow.id, job_id, "bad/name"),
+        reopened.claim_worker_creation(workflow.id, job_id, &target, "bad/name"),
         Err(CloudStoreError::InvalidResourceName)
     ));
     let other = retained_workflow(CloudProvider::RunPod, 3_000);
     let other_job = other.nodes[0].id;
     reopened.create(&other).expect("create other workflow");
     assert!(matches!(
-        reopened.claim_worker_creation(CloudProvider::RunPod, other.id, other_job, "horizon-worker-1"),
+        reopened.claim_worker_creation(other.id, other_job, worker_target(&other), "horizon-worker-1"),
         Err(CloudStoreError::ClaimIdentityConflict)
     ));
     assert!(matches!(
-        reopened.claim_worker_creation(CloudProvider::RunPod, workflow.id, job_id, "horizon-worker-2"),
+        reopened.claim_worker_creation(workflow.id, job_id, &target, "horizon-worker-2"),
         Err(CloudStoreError::ClaimIdentityConflict)
     ));
 }
@@ -220,7 +228,7 @@ fn expired_terminal_and_dependency_blocked_jobs_cannot_claim_creation() {
     let expired_job = expired.nodes[0].id;
     store.create(&expired).expect("create expired workflow");
     assert!(matches!(
-        store.claim_worker_creation(CloudProvider::RunPod, expired.id, expired_job, "horizon-expired"),
+        store.claim_worker_creation(expired.id, expired_job, worker_target(&expired), "horizon-expired"),
         Err(CloudStoreError::WorkflowExpired(id)) if id == expired.id
     ));
     let mut terminal = retained_workflow(CloudProvider::RunPod, 10_000);
@@ -230,7 +238,7 @@ fn expired_terminal_and_dependency_blocked_jobs_cannot_claim_creation() {
     terminal.nodes[0].progress = CloudProgress::Completed;
     store.create(&terminal).expect("create terminal workflow");
     assert!(matches!(
-        store.claim_worker_creation(CloudProvider::RunPod, terminal.id, terminal_job, "horizon-terminal"),
+        store.claim_worker_creation(terminal.id, terminal_job, worker_target(&terminal), "horizon-terminal"),
         Err(CloudStoreError::ClaimTargetNotReady(id)) if id == terminal_job
     ));
 
@@ -246,7 +254,7 @@ fn expired_terminal_and_dependency_blocked_jobs_cannot_claim_creation() {
     blocked.nodes.push(dependency);
     let stored = store.create(&blocked).expect("create dependency-blocked workflow");
     assert!(matches!(
-        store.claim_worker_creation(CloudProvider::RunPod, blocked.id, blocked_job, "horizon-blocked"),
+        store.claim_worker_creation(blocked.id, blocked_job, worker_target(&blocked), "horizon-blocked"),
         Err(CloudStoreError::ClaimTargetNotReady(id)) if id == blocked_job
     ));
 
@@ -258,26 +266,8 @@ fn expired_terminal_and_dependency_blocked_jobs_cannot_claim_creation() {
     store.replace(&stored, &ready).expect("complete dependency");
     assert!(
         store
-            .claim_worker_creation(CloudProvider::RunPod, ready.id, blocked_job, "horizon-ready")
+            .claim_worker_creation(ready.id, blocked_job, worker_target(&ready), "horizon-ready")
             .expect("claim ready worker")
-    );
-}
-
-#[test]
-fn runpod_fence_uses_the_durable_workflow_claim() {
-    let temp = TempDir::new().expect("temp dir");
-    let store = store(&temp);
-    let workflow = retained_workflow(CloudProvider::RunPod, 30_000);
-    let job_id = workflow.nodes[0].id;
-    store.create(&workflow).expect("create workflow");
-
-    assert!(
-        super::super::runpod::RunPodCreationFence::claim_once(&store, workflow.id, job_id, "horizon-worker-trait")
-            .expect("first claim")
-    );
-    assert!(
-        !super::super::runpod::RunPodCreationFence::claim_once(&store, workflow.id, job_id, "horizon-worker-trait")
-            .expect("repeated claim")
     );
 }
 
