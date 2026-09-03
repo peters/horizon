@@ -684,8 +684,13 @@ fn reserve_new_local_id(reserved: &mut HashSet<String>) -> String {
     }
 }
 
+/// Lexically normalize a configured cwd so equivalent spellings match in
+/// history lookups: `~` expands, and trailing or duplicate separators plus
+/// interior `.` components fold. Parent components and symlinks remain unresolved.
 fn normalize_cwd(cwd: Option<&str>) -> Option<String> {
-    cwd.map(Config::expand_tilde).map(|path| path.display().to_string())
+    cwd.map(Config::expand_tilde)
+        .map(|path| path.components().collect::<PathBuf>())
+        .map(|path| path.display().to_string())
 }
 
 #[cfg(test)]
