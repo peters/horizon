@@ -17,7 +17,9 @@ use horizon_browser_cli::{
     Plan, PlanResume,
     checkpoint::{UncertainPolicy, valid_job_id},
     execute_plan_with_resume,
-    execution_control::{BlockingIoMode, CancellationHandle, CancellationProbe, ExecutionControl, ExecutionStopReason},
+    execution_control::{
+        BlockingIoError, BlockingIoMode, CancellationHandle, CancellationProbe, ExecutionControl, ExecutionStopReason,
+    },
     job::JobOptions,
     run_state::{DurableExecutionReport, DurablePreparationError, DurableRun},
     standalone::StandaloneOptions,
@@ -335,9 +337,15 @@ async fn resume_controlled(
     mut finalization_cancellation: CancellationProbe,
 ) -> ExitCode {
     let deadline = control.start_timeout(timeout);
+    let timeout_secs = timeout.as_secs();
+    let deadline_millis = deadline.unix_millis();
     let prepared = match control
         .wait_owned_blocking("horizon-browser-resume-prepare", BlockingIoMode::Bound, move || {
-            DurableRun::prepare_resume(&job_id, policy)
+            let (mut durable, plan, selection) = DurableRun::prepare_resume(&job_id, policy)?;
+            durable
+                .rearm(timeout_secs, deadline_millis, selection.skipped.clone())
+                .map_err(|error| horizon_browser_cli::checkpoint::ResumeError::Decode(error.to_string()))?;
+            Ok((durable, plan, selection))
         })
         .await
     {
@@ -346,13 +354,13 @@ async fn resume_controlled(
             eprintln!("error: {error}");
             return resume_error_exit(&error);
         }
-        Err(reason) => return stop_exit_code(reason),
+        Err(BlockingIoError::Stopped(reason)) => return stop_exit_code(reason),
+        Err(BlockingIoError::Failed(error)) => {
+            eprintln!("error: {error}");
+            return ExitCode::FAILURE;
+        }
     };
     let (mut durable, plan, selection) = prepared;
-    if let Err(error) = durable.rearm(timeout.as_secs(), deadline.unix_millis(), selection.skipped.clone()) {
-        eprintln!("error: {error}");
-        return ExitCode::FAILURE;
-    }
     if let Err(reason) = control.check() {
         return persist_stopped(&durable, reason, &mut finalization_cancellation).await;
     }

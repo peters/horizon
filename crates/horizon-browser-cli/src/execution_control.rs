@@ -207,24 +207,22 @@ impl ExecutionControl {
     /// always runs and joins the writer, even when already cancelled.
     ///
     /// # Errors
-    /// Returns when a bound wait observes cancellation or the deadline. The
-    /// worker is still joined before this returns.
+    /// Returns a stop reason when a bound wait observes cancellation or the
+    /// deadline, or an infrastructure failure when the worker cannot start or
+    /// panics. The worker is still joined before this returns.
     pub async fn wait_owned_blocking<T: Send + 'static>(
         &mut self,
         worker_name: &'static str,
         mode: BlockingIoMode,
         operation: impl FnOnce() -> T + Send + 'static,
-    ) -> Result<T, ExecutionStopReason> {
+    ) -> Result<T, BlockingIoError> {
         if mode == BlockingIoMode::Bound {
-            self.check()?;
+            self.check().map_err(BlockingIoError::Stopped)?;
         }
         let handle = std::thread::Builder::new()
             .name(worker_name.to_string())
             .spawn(operation)
-            .map_err(|error| {
-                tracing::warn!(%error, "could not start {worker_name}");
-                ExecutionStopReason::Cancelled
-            })?;
+            .map_err(|error| BlockingIoError::Failed(format!("could not start {worker_name}: {error}")))?;
         let stopped = match mode {
             BlockingIoMode::Required => Ok(()),
             BlockingIoMode::Bound => {
@@ -237,13 +235,24 @@ impl ExecutionControl {
             }
         };
         let Ok(Ok(value)) = tokio::task::spawn_blocking(move || handle.join()).await else {
-            return Err(ExecutionStopReason::Cancelled);
+            return Err(BlockingIoError::Failed(format!(
+                "{worker_name} stopped without a result"
+            )));
         };
         match (mode, stopped) {
             (_, Ok(())) | (BlockingIoMode::Required, _) => Ok(value),
-            (BlockingIoMode::Bound, Err(reason)) => Err(reason),
+            (BlockingIoMode::Bound, Err(reason)) => Err(BlockingIoError::Stopped(reason)),
         }
     }
+}
+
+/// Failure from owned blocking I/O.
+#[derive(Debug)]
+pub enum BlockingIoError {
+    /// Cancellation or deadline won a bound wait.
+    Stopped(ExecutionStopReason),
+    /// The worker could not start or panicked.
+    Failed(String),
 }
 
 /// How owned blocking I/O cooperates with job control.
@@ -307,7 +316,10 @@ mod tests {
             })
             .await
             .expect_err("deadline must win");
-        assert_eq!(error, ExecutionStopReason::DeadlineExceeded);
+        assert!(matches!(
+            error,
+            BlockingIoError::Stopped(ExecutionStopReason::DeadlineExceeded)
+        ));
     }
 
     #[tokio::test]

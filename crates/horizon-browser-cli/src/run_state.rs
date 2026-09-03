@@ -19,7 +19,7 @@ use crate::checkpoint::{
 };
 use crate::{
     ExecutionReport, Plan, PlanStep, StepReport,
-    execution_control::{BlockingIoMode, ExecutionControl, ExecutionStopReason},
+    execution_control::{BlockingIoError, BlockingIoMode, ExecutionControl, ExecutionStopReason},
 };
 
 const STATE_VERSION: u32 = 3;
@@ -500,7 +500,11 @@ impl DurableRun {
                 self.restore_checkpoint(previous);
                 Err(CheckpointPersistError::Io(error.to_string()))
             }
-            Err(reason) => {
+            Err(BlockingIoError::Failed(error)) => {
+                self.restore_checkpoint(previous);
+                Err(CheckpointPersistError::Io(error))
+            }
+            Err(BlockingIoError::Stopped(reason)) => {
                 self.restore_checkpoint(previous);
                 Err(CheckpointPersistError::Stopped(reason))
             }
