@@ -256,8 +256,9 @@ fn write_entry(
     let mut encoded = serde_json::to_vec(entry).map_err(std::io::Error::other)?;
     encoded.push(b'\n');
     let encoded_len = u64::try_from(encoded.len()).unwrap_or(u64::MAX);
-    let current_len = file.metadata()?.len();
     settle_pending_drop(path)?;
+    complete_interrupted_rotation(Some(file), path)?;
+    let current_len = file.metadata()?.len();
     if current_len > 0 && current_len.saturating_add(encoded_len) > max_segment_bytes {
         stage_drop_for_rotated_segment(path)?;
         copy_private(path, &rotated_path(path))?;
@@ -287,6 +288,25 @@ fn stage_drop_for_rotated_segment(path: &Path) -> std::io::Result<()> {
         fingerprint: fingerprint(&rotated)?,
     };
     request_queue::write_private_json(&pending_path, &pending)
+}
+
+fn complete_interrupted_rotation(file: Option<&mut std::fs::File>, path: &Path) -> std::io::Result<()> {
+    if !live_segment_duplicates_rotated(path)? {
+        return Ok(());
+    }
+    match file {
+        Some(file) => file.set_len(0)?,
+        None => OpenOptions::new().write(true).open(path)?.set_len(0)?,
+    }
+    Ok(())
+}
+
+fn live_segment_duplicates_rotated(path: &Path) -> std::io::Result<bool> {
+    let rotated = rotated_path(path);
+    if !path.exists() || !rotated.exists() {
+        return Ok(false);
+    }
+    Ok(fingerprint(path)? == fingerprint(&rotated)?)
 }
 
 fn settle_pending_drop(path: &Path) -> std::io::Result<u64> {
@@ -462,6 +482,7 @@ pub(super) fn read_journal_at(path: &Path) -> std::io::Result<AuditJournal> {
         older_records_dropped: settle_pending_drop(path)?,
         ..AuditJournal::default()
     };
+    complete_interrupted_rotation(None, path)?;
     read_segment(&rotated, &mut journal)?;
     read_segment(path, &mut journal)?;
     Ok(journal)
@@ -765,5 +786,36 @@ mod tests {
         assert_eq!(read_journal_at(&path).unwrap().older_records_dropped, 9);
         append_at_with_limit(&path, &entry("e4", "a"), 1).unwrap();
         assert_eq!(read_journal_at(&path).unwrap().older_records_dropped, 10);
+    }
+
+    #[test]
+    fn interrupted_copy_does_not_duplicate_event_ids_or_loop_pages() {
+        let root = tempfile::tempdir().unwrap();
+        let path = audit_path_for_root(root.path(), "panel");
+        let first = entry("e1", "a");
+        let second = entry("e2", "a");
+        append_at_with_limit(&path, &first, 1).unwrap();
+        append_at_with_limit(&path, &second, 1).unwrap();
+        copy_private(&path, &rotated_path(&path)).unwrap();
+
+        let journal = read_journal_at(&path).unwrap();
+        assert_eq!(
+            journal
+                .entries
+                .iter()
+                .map(|entry| entry.event_id.as_str())
+                .collect::<Vec<_>>(),
+            ["e2"]
+        );
+
+        let first_page = page_audit(&journal, &AuditPageRequest::new(None, true, None, Some(1)));
+        assert_eq!(first_page.next_event_id.as_deref(), Some("e2"));
+        assert!(!first_page.has_more);
+        let second_page = page_audit(
+            &journal,
+            &AuditPageRequest::new(first_page.next_event_id.clone(), false, None, Some(1)),
+        );
+        assert!(second_page.entries.is_empty());
+        assert!(!second_page.has_more);
     }
 }
