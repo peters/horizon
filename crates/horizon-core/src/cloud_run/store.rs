@@ -44,6 +44,8 @@ CREATE TABLE IF NOT EXISTS cloud_worker_creation_claims (
     UNIQUE (provider, workflow_id, job_id),
     FOREIGN KEY (workflow_id) REFERENCES cloud_workflows(workflow_id) ON DELETE CASCADE
 ) STRICT;
+CREATE INDEX IF NOT EXISTS cloud_worker_creation_claims_workflow
+    ON cloud_worker_creation_claims(workflow_id, job_id, provider);
 ";
 
 #[derive(Clone, Debug, Eq, PartialEq)]

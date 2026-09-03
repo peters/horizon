@@ -174,6 +174,25 @@ fn recovery_budget_rejects_unbounded_snapshot_sets() {
 }
 
 #[test]
+fn creation_claim_lookup_has_a_covering_workflow_index() {
+    let temp = TempDir::new().expect("temp dir");
+    let store = store(&temp);
+    let connection = Connection::open(store.path()).expect("open raw store");
+    let detail = connection
+        .query_row(
+            "EXPLAIN QUERY PLAN
+             SELECT substr(provider, 1, 9), substr(job_id, 1, 37)
+             FROM cloud_worker_creation_claims
+             WHERE workflow_id = ?1
+             LIMIT ?2",
+            params![CloudWorkflowId::new().to_string(), 1],
+            |row| row.get::<_, String>(3),
+        )
+        .expect("query plan");
+    assert!(detail.contains("USING COVERING INDEX cloud_worker_creation_claims_workflow"));
+}
+
+#[test]
 fn creation_claim_is_durable_atomic_and_bound_to_the_persisted_job() {
     let temp = TempDir::new().expect("temp dir");
     let store = store(&temp);
