@@ -161,6 +161,8 @@ pub fn select_resume(
     let checkpoint = checkpoint.cloned().unwrap_or_default();
     let reports = reports_by_id(&checkpoint.completed)?;
     let skipped_ids = checkpoint.skipped.iter().cloned().collect::<BTreeSet<_>>();
+    let mut unused_reports = reports.keys().copied().collect::<BTreeSet<_>>();
+    let mut unused_skips = skipped_ids.clone();
     let mut completed = Vec::new();
     let mut start_index = 0;
     let mut skip_intent = None;
@@ -169,11 +171,12 @@ pub fn select_resume(
             if report.tool != step.tool {
                 return Err(ResumeError::PrefixMismatch);
             }
+            unused_reports.remove(step.id.as_str());
             completed.push((*report).clone());
             start_index = index.saturating_add(1);
             continue;
         }
-        if skipped_ids.contains(&step.id) {
+        if unused_skips.remove(&step.id) {
             start_index = index.saturating_add(1);
             continue;
         }
@@ -195,6 +198,9 @@ pub fn select_resume(
             }
         }
         break;
+    }
+    if !unused_reports.is_empty() || !unused_skips.is_empty() {
+        return Err(ResumeError::PrefixMismatch);
     }
     Ok(ResumeSelection {
         completed,
@@ -337,6 +343,17 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["list", "title"]
         );
+    }
+
+    #[test]
+    fn unconsumed_completion_is_a_prefix_mismatch() {
+        let checkpoint = RunCheckpoint {
+            completed: vec![completed("title", "browser_evaluate")],
+            intent: None,
+            skipped: Vec::new(),
+        };
+        let error = select_resume(&plan(), Some(&checkpoint), UncertainPolicy::Fail).expect_err("gap");
+        assert!(matches!(error, ResumeError::PrefixMismatch));
     }
 
     #[test]

@@ -17,7 +17,7 @@ use horizon_browser_cli::{
     Plan, PlanResume,
     checkpoint::{UncertainPolicy, valid_job_id},
     execute_plan_with_resume,
-    execution_control::{CancellationHandle, CancellationProbe, ExecutionControl, ExecutionStopReason},
+    execution_control::{BlockingIoMode, CancellationHandle, CancellationProbe, ExecutionControl, ExecutionStopReason},
     job::JobOptions,
     run_state::{DurableExecutionReport, DurablePreparationError, DurableRun},
     standalone::StandaloneOptions,
@@ -334,14 +334,21 @@ async fn resume_controlled(
     mut control: ExecutionControl,
     mut finalization_cancellation: CancellationProbe,
 ) -> ExitCode {
-    let (mut durable, plan, selection) = match DurableRun::prepare_resume(&job_id, policy) {
-        Ok(parts) => parts,
-        Err(error) => {
+    let deadline = control.start_timeout(timeout);
+    let prepared = match control
+        .wait_owned_blocking("horizon-browser-resume-prepare", BlockingIoMode::Bound, move || {
+            DurableRun::prepare_resume(&job_id, policy)
+        })
+        .await
+    {
+        Ok(Ok(parts)) => parts,
+        Ok(Err(error)) => {
             eprintln!("error: {error}");
             return resume_error_exit(&error);
         }
+        Err(reason) => return stop_exit_code(reason),
     };
-    let deadline = control.start_timeout(timeout);
+    let (mut durable, plan, selection) = prepared;
     if let Err(error) = durable.rearm(timeout.as_secs(), deadline.unix_millis(), selection.skipped.clone()) {
         eprintln!("error: {error}");
         return ExitCode::FAILURE;

@@ -19,7 +19,7 @@ use crate::checkpoint::{
 };
 use crate::{
     ExecutionReport, Plan, PlanStep, StepReport,
-    execution_control::{ExecutionControl, ExecutionStopReason},
+    execution_control::{BlockingIoMode, ExecutionControl, ExecutionStopReason},
 };
 
 const STATE_VERSION: u32 = 3;
@@ -484,9 +484,15 @@ impl DurableRun {
         let state_path = self.state_path.clone();
         let directory = self.directory.clone();
         match control
-            .wait_owned_blocking("horizon-browser-checkpoint", honor_deadline, move || {
-                write_private_json(&state_path, &state, "state").and_then(|()| sync_directory(&directory))
-            })
+            .wait_owned_blocking(
+                "horizon-browser-checkpoint",
+                if honor_deadline {
+                    BlockingIoMode::Bound
+                } else {
+                    BlockingIoMode::Required
+                },
+                move || write_private_json(&state_path, &state, "state").and_then(|()| sync_directory(&directory)),
+            )
             .await
         {
             Ok(Ok(())) => Ok(()),
