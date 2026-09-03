@@ -261,6 +261,57 @@ fn resume_refuses_an_uncertain_in_flight_step() {
 }
 
 #[test]
+fn resume_skip_runs_later_steps_without_replaying_or_succeeding() {
+    let root = tempfile::tempdir().expect("isolated root");
+    let (plan, manifest_path) = write_blocking_plan_with_followup(root.path());
+    let output = run_deadline_after_action(root.path(), &plan, &manifest_path, None);
+    assert_eq!(output.status.code(), Some(124));
+    let report: Value = serde_json::from_slice(&output.stdout).expect("deadline report");
+    let job_id = report["job_id"].as_str().expect("job id");
+    let job_dir = std::path::Path::new(report["job_dir"].as_str().expect("job directory"));
+    let state: Value = serde_json::from_slice(&std::fs::read(job_dir.join("state.json")).expect("deadline state"))
+        .expect("decode deadline state");
+    assert_eq!(state["checkpoint"]["completed"][0]["id"], "list");
+    assert_eq!(state["checkpoint"]["intent"]["status"], "uncertain");
+    assert_eq!(state["checkpoint"]["intent"]["step_id"], "snapshot");
+
+    let skipped = run_command(root.path(), ["resume", job_id, "--on-uncertain", "skip"]);
+    assert_eq!(skipped.status.code(), Some(1));
+    assert!(
+        skipped.stderr.is_empty(),
+        "stderr: {}",
+        String::from_utf8_lossy(&skipped.stderr)
+    );
+    let resume_report: Value = serde_json::from_slice(&skipped.stdout).expect("skip resume report");
+    assert_eq!(resume_report["ok"], false);
+    assert_eq!(resume_report["completed_steps"], 2);
+    assert_eq!(
+        resume_report["steps"]
+            .as_array()
+            .expect("step reports")
+            .iter()
+            .map(|step| step["id"].as_str())
+            .collect::<Vec<_>>(),
+        [Some("list"), Some("followup")]
+    );
+
+    let resumed: Value = serde_json::from_slice(&std::fs::read(job_dir.join("state.json")).expect("resumed state"))
+        .expect("decode resumed state");
+    assert_eq!(resumed["status"], "failed");
+    assert_eq!(resumed["checkpoint"]["skipped"], json!(["snapshot"]));
+    assert_eq!(
+        resumed["checkpoint"]["completed"]
+            .as_array()
+            .expect("completed reports")
+            .iter()
+            .map(|step| step["id"].as_str())
+            .collect::<Vec<_>>(),
+        [Some("list"), Some("followup")]
+    );
+    assert!(resumed["checkpoint"].get("intent").is_none());
+}
+
+#[test]
 fn run_timeout_starts_after_stdin_plan_validation() {
     let root = tempfile::tempdir().expect("isolated root");
     let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
@@ -572,6 +623,14 @@ fn run_deadline_after_action(
 }
 
 fn write_blocking_plan(home: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    write_blocking_plan_with(home, "")
+}
+
+fn write_blocking_plan_with_followup(home: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    write_blocking_plan_with(home, r#",{"id":"followup","tool":"browser_list"}"#)
+}
+
+fn write_blocking_plan_with(home: &std::path::Path, extra_steps: &str) -> (std::path::PathBuf, std::path::PathBuf) {
     let panel_id = "blocked-panel";
     let manifest_path = manifest::manifest_path_for_root(&home.join(".horizon"), panel_id);
     manifest::write_at(
@@ -586,7 +645,7 @@ fn write_blocking_plan(home: &std::path::Path) -> (std::path::PathBuf, std::path
     std::fs::write(
         &plan,
         format!(
-            r#"{{"version":1,"steps":[{{"id":"list","tool":"browser_list"}},{{"id":"snapshot","tool":"browser_snapshot","arguments":{{"panel_id":"{panel_id}","timeout_millis":60000}}}}]}}"#
+            r#"{{"version":1,"steps":[{{"id":"list","tool":"browser_list"}},{{"id":"snapshot","tool":"browser_snapshot","arguments":{{"panel_id":"{panel_id}","timeout_millis":60000}}}}{extra_steps}]}}"#
         ),
     )
     .expect("write blocking plan");

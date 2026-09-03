@@ -129,8 +129,8 @@ pub enum ResumeError {
     /// The job was recorded before checkpoints existed.
     #[error("durable job `{0}` was recorded before checkpoints; resume would replay completed mutations")]
     LegacyState(String),
-    /// Another resume already holds this job.
-    #[error("durable job `{0}` is already being resumed")]
+    /// The original run or another resume already holds this job.
+    #[error("durable job `{0}` is already running or being resumed")]
     Locked(String),
 }
 
@@ -344,5 +344,9 @@ mod tests {
         assert!(valid_job_id("job-4e212c23-d0dd-4ae2-bf69-9ec08fdad2b4"));
         assert!(!valid_job_id("../job-4e212c23-d0dd-4ae2-bf69-9ec08fdad2b4"));
         assert!(!valid_job_id("job-not-a-uuid"));
+        assert_eq!(
+            ResumeError::Locked("job-4e212c23-d0dd-4ae2-bf69-9ec08fdad2b4".to_string()).to_string(),
+            "durable job `job-4e212c23-d0dd-4ae2-bf69-9ec08fdad2b4` is already running or being resumed"
+        );
     }
 }
