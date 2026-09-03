@@ -11,8 +11,8 @@ use horizon_core::{PanelId, WorkspaceId};
 use super::super::shortcuts;
 use super::super::{HorizonApp, SpeechNotice};
 use super::desktop::{
-    dictation_sink, horizon_session_focused, inject_desktop_transcript, prepare_desktop_target, recv_global_hotkey,
-    release_desktop_target, use_logically_focused_terminal,
+    dictation_sink, horizon_session_focused, inject_desktop_transcript, panel_override_for_desktop_insert,
+    prepare_desktop_target, recv_global_hotkey, release_desktop_target, use_logically_focused_terminal,
 };
 use super::{SpeechEvent, SpeechSink, SpeechSystem};
 use crate::input;
@@ -388,6 +388,24 @@ impl HorizonApp {
         }
     }
 
+    fn logically_focused_terminal(&self) -> Option<PanelId> {
+        let panel_id = self.board.focused?;
+        self.board.panel(panel_id)?.terminal()?;
+        Some(panel_id)
+    }
+
+    fn inject_transcript_into_panel(&mut self, panel_id: PanelId, text: &str) {
+        let Some(panel) = self.board.panel_mut(panel_id) else {
+            tracing::warn!("speech target panel closed before transcription finished");
+            return;
+        };
+        let Some(mode) = panel.terminal().map(horizon_core::Terminal::mode) else {
+            return;
+        };
+        let bytes = input::paste_bytes(&format!("{text} "), mode, true);
+        panel.write_input(&bytes);
+    }
+
     fn speech_focus_and_sink(&self, ctx: &Context) -> (bool, bool, Option<SpeechSink>) {
         let root_focused = ctx.input(|input| input.viewport().focused.unwrap_or(true));
         let detached_focused = self.any_detached_viewport_focused(ctx);
@@ -582,19 +600,16 @@ impl HorizonApp {
         for event in events {
             match event {
                 SpeechEvent::Text { target, text } => match target {
-                    SpeechSink::Panel(panel_id) => {
-                        let Some(panel) = self.board.panel_mut(panel_id) else {
-                            tracing::warn!("speech target panel closed before transcription finished");
-                            continue;
-                        };
-                        let Some(mode) = panel.terminal().map(horizon_core::Terminal::mode) else {
-                            continue;
-                        };
-                        // Trailing space so consecutive dictations don't fuse words.
-                        let bytes = input::paste_bytes(&format!("{text} "), mode, true);
-                        panel.write_input(&bytes);
-                    }
+                    SpeechSink::Panel(panel_id) => self.inject_transcript_into_panel(panel_id, &text),
                     SpeechSink::Desktop => {
+                        if let Some(panel_id) = panel_override_for_desktop_insert(
+                            horizon_cursor::current_process_has_os_focus(),
+                            self.logically_focused_terminal(),
+                        ) {
+                            tracing::info!("desktop dictation delivered to the focused Horizon terminal");
+                            self.inject_transcript_into_panel(panel_id, &text);
+                            continue;
+                        }
                         let payload = format!("{text} ");
                         let result_ctx = ctx.clone();
                         ctx.data_mut(|data| {

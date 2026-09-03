@@ -49,6 +49,19 @@ pub(crate) const fn use_logically_focused_terminal(matches_viewport: bool, os_fo
     matches_viewport || matches!(os_focus, Some(true))
 }
 
+/// If a desktop dictation finishes while this process still owns OS focus,
+/// deliver into the logically focused terminal instead of AT-SPI.
+#[must_use]
+pub(crate) const fn panel_override_for_desktop_insert(
+    os_focus: Option<bool>,
+    focused_terminal: Option<PanelId>,
+) -> Option<PanelId> {
+    match os_focus {
+        Some(true) => focused_terminal,
+        _ => None,
+    }
+}
+
 pub(crate) fn inject_desktop_transcript(text: &str) -> Result<(), InjectError> {
     if let Some(result) = take_test_inject_result(text) {
         return result;
@@ -283,6 +296,17 @@ mod tests {
         assert!(!super::use_logically_focused_terminal(false, Some(false)));
         assert!(!super::use_logically_focused_terminal(false, None));
         assert!(super::use_logically_focused_terminal(true, Some(false)));
+    }
+
+    #[test]
+    fn desktop_insert_redirects_to_the_focused_terminal_when_horizon_owns_os_focus() {
+        let panel = PanelId(4);
+        assert_eq!(
+            super::panel_override_for_desktop_insert(Some(true), Some(panel)),
+            Some(panel)
+        );
+        assert_eq!(super::panel_override_for_desktop_insert(Some(true), None), None);
+        assert_eq!(super::panel_override_for_desktop_insert(Some(false), Some(panel)), None);
     }
 
     #[test]
