@@ -17,7 +17,10 @@ use crate::checkpoint::{
     CheckpointIntent, CheckpointStore, IntentStatus, ResumeError, ResumeSelection, RunCheckpoint, UncertainPolicy,
     select_resume, valid_job_id,
 };
-use crate::{ExecutionReport, Plan, PlanStep, StepReport, execution_control::ExecutionStopReason};
+use crate::{
+    ExecutionReport, Plan, PlanStep, StepReport,
+    execution_control::{ExecutionControl, ExecutionStopReason},
+};
 
 const STATE_VERSION: u32 = 3;
 const MIN_RESUME_VERSION: u32 = 3;
@@ -126,6 +129,15 @@ pub struct DurableRun {
 #[derive(Debug)]
 pub struct DurablePostProcessor {
     run: DurableRun,
+}
+
+/// Failure while persisting a checkpoint under execution control.
+#[derive(Debug, Error)]
+pub enum CheckpointPersistError {
+    #[error("{0}")]
+    Io(String),
+    #[error("{}", .0.message())]
+    Stopped(ExecutionStopReason),
 }
 
 /// Failure to create or atomically update durable plan-run state.
@@ -456,7 +468,106 @@ impl DurableRun {
     }
 
     fn persist_state(&self) -> Result<(), RunStateError> {
-        write_private_json(&self.state_path, &self.state, "state")
+        write_private_json(&self.state_path, &self.state, "state")?;
+        sync_directory(&self.directory)
+    }
+
+    async fn persist_checkpoint_controlled(
+        &mut self,
+        control: &mut ExecutionControl,
+        honor_deadline: bool,
+        previous: RunCheckpoint,
+    ) -> Result<(), CheckpointPersistError> {
+        self.state.updated_at_millis = now_millis();
+        self.state.completed_steps = self.state.checkpoint.completed.len();
+        let state = self.state.clone();
+        let state_path = self.state_path.clone();
+        let directory = self.directory.clone();
+        match control
+            .wait_owned_blocking("horizon-browser-checkpoint", honor_deadline, move || {
+                write_private_json(&state_path, &state, "state").and_then(|()| sync_directory(&directory))
+            })
+            .await
+        {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => {
+                self.restore_checkpoint(previous);
+                Err(CheckpointPersistError::Io(error.to_string()))
+            }
+            Err(reason) => {
+                self.restore_checkpoint(previous);
+                Err(CheckpointPersistError::Stopped(reason))
+            }
+        }
+    }
+
+    fn restore_checkpoint(&mut self, previous: RunCheckpoint) {
+        self.state.checkpoint = previous;
+        self.state.completed_steps = self.state.checkpoint.completed.len();
+    }
+
+    /// Record intent on an owned I/O worker before the MCP future is polled.
+    ///
+    /// # Errors
+    /// Returns when the durable write fails or a stop is observed first.
+    pub async fn record_intent_controlled(
+        &mut self,
+        step: &PlanStep,
+        control: &mut ExecutionControl,
+    ) -> Result<(), CheckpointPersistError> {
+        let previous = self.state.checkpoint.clone();
+        self.state.checkpoint.intent = Some(CheckpointIntent {
+            step_id: step.id.clone(),
+            tool: step.tool.clone(),
+            status: IntentStatus::Dispatched,
+        });
+        self.persist_checkpoint_controlled(control, true, previous).await
+    }
+
+    /// Record a verified completion on an owned I/O worker.
+    ///
+    /// # Errors
+    /// Returns when the durable write fails or a stop is observed first.
+    pub async fn record_completion_controlled(
+        &mut self,
+        report: &StepReport,
+        control: &mut ExecutionControl,
+    ) -> Result<(), CheckpointPersistError> {
+        let previous = self.state.checkpoint.clone();
+        self.state.checkpoint.intent = None;
+        self.state.checkpoint.completed.push(report.clone());
+        self.persist_checkpoint_controlled(control, true, previous).await
+    }
+
+    /// Mark an in-flight step uncertain without requiring a live deadline.
+    ///
+    /// # Errors
+    /// Returns when the durable write fails or cancellation wins first.
+    pub async fn record_uncertain_controlled(
+        &mut self,
+        step: &PlanStep,
+        control: &mut ExecutionControl,
+    ) -> Result<(), CheckpointPersistError> {
+        let previous = self.state.checkpoint.clone();
+        self.state.checkpoint.intent = Some(CheckpointIntent {
+            step_id: step.id.clone(),
+            tool: step.tool.clone(),
+            status: IntentStatus::Uncertain,
+        });
+        self.persist_checkpoint_controlled(control, false, previous).await
+    }
+
+    /// Drop a not-yet-polled intent without requiring a live deadline.
+    ///
+    /// # Errors
+    /// Returns when the durable write fails or cancellation wins first.
+    pub async fn clear_intent_controlled(
+        &mut self,
+        control: &mut ExecutionControl,
+    ) -> Result<(), CheckpointPersistError> {
+        let previous = self.state.checkpoint.clone();
+        self.state.checkpoint.intent = None;
+        self.persist_checkpoint_controlled(control, false, previous).await
     }
 
     fn persist_checkpoint(&mut self) -> Result<(), String> {

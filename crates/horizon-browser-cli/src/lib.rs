@@ -26,9 +26,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
 
-use checkpoint::CheckpointStore;
 use execution_control::{ExecutionControl, ExecutionStopReason};
 use observability::ObservabilitySummary;
+use run_state::{CheckpointPersistError, DurableRun};
 
 const PLAN_VERSION: u32 = 1;
 const MAX_PLAN_STEPS: usize = 256;
@@ -88,7 +88,7 @@ pub struct PlanResume<'a> {
     /// First plan index that is still eligible to run.
     pub start_index: usize,
     /// Durable intent/completion sink; omitted for in-memory tests.
-    pub checkpoint: Option<&'a mut dyn CheckpointStore>,
+    pub checkpoint: Option<&'a mut DurableRun>,
 }
 
 /// Result of one MCP tool call.
@@ -310,6 +310,18 @@ pub async fn execute_plan_with_resume(
     Ok(report)
 }
 
+enum PersistOutcome {
+    Continue,
+    Break,
+    Stop(Box<ExecutionReport>),
+}
+
+enum DispatchOutcome {
+    Next(StepReport),
+    FailFast(StepReport),
+    Stop(Box<ExecutionReport>),
+}
+
 async fn execute_steps(
     plan: &Plan,
     client: &rmcp::service::RunningService<rmcp::RoleClient, PlanClient>,
@@ -334,76 +346,191 @@ async fn execute_steps(
                 break;
             }
         };
-        if let Some(store) = checkpoint.as_mut()
-            && let Err(error) = store.record_intent(step)
-        {
-            steps.push(failed_step(step, format!("could not persist step intent: {error}")));
-            break;
+        match persist_intent(checkpoint.as_deref_mut(), control, step, &mut steps).await {
+            PersistOutcome::Continue => {}
+            PersistOutcome::Break => break,
+            PersistOutcome::Stop(report) => return *report,
         }
-        let params = CallToolRequestParams::new(step.tool.clone()).with_arguments(arguments);
-        let result = match wait_for_browser_action(control, client.call_tool(params)).await {
-            Ok(Ok(result)) => result,
-            Ok(Err(error)) => {
-                if let Some(store) = checkpoint.as_mut() {
-                    let _ = store.record_uncertain(step);
+        match dispatch_step(client, control, checkpoint.as_deref_mut(), step, arguments, &steps).await {
+            DispatchOutcome::Stop(report) => return *report,
+            DispatchOutcome::FailFast(report) => {
+                steps.push(report);
+                break;
+            }
+            DispatchOutcome::Next(outcome) => {
+                match persist_completion(checkpoint.as_deref_mut(), control, step, &outcome, &mut steps).await {
+                    PersistOutcome::Continue => {}
+                    PersistOutcome::Break => break,
+                    PersistOutcome::Stop(report) => return *report,
                 }
-                return execution_report(false, steps, Some(format!("MCP call failed: {error}")), None);
+                result_indexes.insert(step.id.clone(), steps.len());
+                steps.push(outcome);
             }
-            Err(stopped) => {
-                if let Some(store) = checkpoint.as_mut() {
-                    let _ = if stopped.request_started {
-                        store.record_uncertain(step)
-                    } else {
-                        store.clear_intent()
-                    };
-                }
-                return stopped_report(steps, &stopped);
-            }
-        };
-        if result.is_error.unwrap_or(false) {
-            if let Some(store) = checkpoint.as_mut() {
-                let _ = store.record_uncertain(step);
-            }
-            steps.push(StepReport {
-                id: step.id.clone(),
-                tool: step.tool.clone(),
-                ok: false,
-                result: result.structured_content,
-                error: Some(tool_error_text(&result.content)),
-            });
-            break;
         }
-        let Some(structured) = result.structured_content else {
-            if let Some(store) = checkpoint.as_mut() {
-                let _ = store.record_uncertain(step);
-            }
-            return execution_report(
-                false,
-                steps,
-                Some("MCP tool returned no structured content".to_string()),
-                None,
-            );
-        };
-        let outcome = StepReport {
-            id: step.id.clone(),
-            tool: step.tool.clone(),
-            ok: true,
-            result: Some(structured),
-            error: None,
-        };
-        if let Some(store) = checkpoint.as_mut()
-            && let Err(error) = store.record_completion(&outcome)
-        {
-            steps.push(failed_step(step, format!("could not persist step completion: {error}")));
-            break;
-        }
-        result_indexes.insert(step.id.clone(), steps.len());
-        steps.push(outcome);
     }
     // Skipped plan indexes are absent from `steps`, so success still requires
     // one successful report for every plan step.
     let ok = steps.len() == plan.steps.len() && steps.iter().all(|step| step.ok);
     execution_report(ok, steps, None, None)
+}
+
+fn stop_execution(steps: Vec<StepReport>, reason: ExecutionStopReason, request_started: bool) -> ExecutionReport {
+    stopped_report(
+        steps,
+        &ActionWaitStopped {
+            reason,
+            request_started,
+        },
+    )
+}
+
+async fn persist_intent(
+    checkpoint: Option<&mut DurableRun>,
+    control: &mut ExecutionControl,
+    step: &PlanStep,
+    steps: &mut Vec<StepReport>,
+) -> PersistOutcome {
+    let Some(store) = checkpoint else {
+        return PersistOutcome::Continue;
+    };
+    match store.record_intent_controlled(step, control).await {
+        Ok(()) => PersistOutcome::Continue,
+        Err(CheckpointPersistError::Io(error)) => {
+            steps.push(failed_step(step, format!("could not persist step intent: {error}")));
+            PersistOutcome::Break
+        }
+        Err(CheckpointPersistError::Stopped(reason)) => {
+            PersistOutcome::Stop(Box::new(stop_execution(std::mem::take(steps), reason, false)))
+        }
+    }
+}
+
+async fn persist_completion(
+    checkpoint: Option<&mut DurableRun>,
+    control: &mut ExecutionControl,
+    step: &PlanStep,
+    outcome: &StepReport,
+    steps: &mut Vec<StepReport>,
+) -> PersistOutcome {
+    let Some(store) = checkpoint else {
+        return PersistOutcome::Continue;
+    };
+    match store.record_completion_controlled(outcome, control).await {
+        Ok(()) => PersistOutcome::Continue,
+        Err(CheckpointPersistError::Io(error)) => {
+            steps.push(failed_step(step, format!("could not persist step completion: {error}")));
+            PersistOutcome::Break
+        }
+        Err(CheckpointPersistError::Stopped(reason)) => {
+            PersistOutcome::Stop(Box::new(stop_execution(std::mem::take(steps), reason, true)))
+        }
+    }
+}
+
+async fn dispatch_step(
+    client: &rmcp::service::RunningService<rmcp::RoleClient, PlanClient>,
+    control: &mut ExecutionControl,
+    checkpoint: Option<&mut DurableRun>,
+    step: &PlanStep,
+    arguments: Map<String, Value>,
+    steps: &[StepReport],
+) -> DispatchOutcome {
+    let params = CallToolRequestParams::new(step.tool.clone()).with_arguments(arguments);
+    let result = match wait_for_browser_action(control, client.call_tool(params)).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(error)) => {
+            return finish_after_dispatch(
+                checkpoint,
+                control,
+                step,
+                true,
+                steps,
+                execution_report(false, steps.to_vec(), Some(format!("MCP call failed: {error}")), None),
+            )
+            .await;
+        }
+        Err(stopped) => {
+            return finish_after_dispatch(
+                checkpoint,
+                control,
+                step,
+                stopped.request_started,
+                steps,
+                stopped_report(steps.to_vec(), &stopped),
+            )
+            .await;
+        }
+    };
+    if result.is_error.unwrap_or(false) {
+        if let Err(reason) = persist_post_dispatch(checkpoint, control, step, true).await {
+            return DispatchOutcome::Stop(Box::new(stop_execution(steps.to_vec(), reason, true)));
+        }
+        return DispatchOutcome::FailFast(StepReport {
+            id: step.id.clone(),
+            tool: step.tool.clone(),
+            ok: false,
+            result: result.structured_content,
+            error: Some(tool_error_text(&result.content)),
+        });
+    }
+    let Some(structured) = result.structured_content else {
+        return finish_after_dispatch(
+            checkpoint,
+            control,
+            step,
+            true,
+            steps,
+            execution_report(
+                false,
+                steps.to_vec(),
+                Some("MCP tool returned no structured content".to_string()),
+                None,
+            ),
+        )
+        .await;
+    };
+    DispatchOutcome::Next(StepReport {
+        id: step.id.clone(),
+        tool: step.tool.clone(),
+        ok: true,
+        result: Some(structured),
+        error: None,
+    })
+}
+
+async fn finish_after_dispatch(
+    checkpoint: Option<&mut DurableRun>,
+    control: &mut ExecutionControl,
+    step: &PlanStep,
+    request_started: bool,
+    steps: &[StepReport],
+    report: ExecutionReport,
+) -> DispatchOutcome {
+    if let Err(reason) = persist_post_dispatch(checkpoint, control, step, request_started).await {
+        DispatchOutcome::Stop(Box::new(stop_execution(steps.to_vec(), reason, request_started)))
+    } else {
+        DispatchOutcome::Stop(Box::new(report))
+    }
+}
+
+async fn persist_post_dispatch(
+    checkpoint: Option<&mut DurableRun>,
+    control: &mut ExecutionControl,
+    step: &PlanStep,
+    request_started: bool,
+) -> Result<(), ExecutionStopReason> {
+    let Some(store) = checkpoint else {
+        return Ok(());
+    };
+    let result = if request_started {
+        store.record_uncertain_controlled(step, control).await
+    } else {
+        store.clear_intent_controlled(control).await
+    };
+    match result {
+        Err(CheckpointPersistError::Stopped(reason)) => Err(reason),
+        Err(CheckpointPersistError::Io(_)) | Ok(()) => Ok(()),
+    }
 }
 
 async fn wait_for_browser_action<T>(
