@@ -160,7 +160,7 @@ impl CloudWorkflowStore {
         let query_limit =
             isize::try_from(MAX_RECOVERED_WORKFLOWS + 1).map_err(|_| CloudStoreError::RecoveryLimitExceeded)?;
         let mut statement = connection.prepare(
-            "SELECT workflow_id, revision, created_at_millis, updated_at_millis, retain_until_millis,
+            "SELECT substr(workflow_id, 1, 37), revision, created_at_millis, updated_at_millis, retain_until_millis,
                     substr(snapshot, 1, ?3)
              FROM cloud_workflows
              WHERE retain_until_millis >= ?1

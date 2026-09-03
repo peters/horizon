@@ -138,7 +138,6 @@ fn recovery_lists_only_retained_valid_snapshots() {
     let recovered = store.list_retained(70_000).expect("list retained");
     assert_eq!(recovered.len(), 1);
     assert_eq!(recovered[0].workflow(), &retained);
-
     let connection = Connection::open(store.path()).expect("open raw store");
     connection
         .execute(
@@ -151,6 +150,11 @@ fn recovery_lists_only_retained_valid_snapshots() {
         Err(CloudStoreError::SnapshotTooLarge { size, maximum })
             if size == MAX_SNAPSHOT_BYTES + 1 && maximum == MAX_SNAPSHOT_BYTES
     ));
+    connection
+        .execute_batch("UPDATE cloud_workflows SET workflow_id=printf('%4096s','x') WHERE length(snapshot)>4194304")
+        .expect("oversize id");
+    let error = store.list_retained(0).expect_err("reject oversize id");
+    assert!(matches!(error, CloudStoreError::InvalidStoredWorkflowId));
 }
 
 #[test]
