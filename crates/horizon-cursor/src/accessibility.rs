@@ -421,10 +421,16 @@ mod platform {
         Some(candidates)
     }
 
-    fn resolve_focus_candidates<T>(collection: Option<Vec<T>>, traversal: Option<Vec<T>>) -> Option<Vec<T>> {
+    async fn resolve_focus_candidates<T, Fut>(
+        collection: Option<Vec<T>>,
+        traversal: impl FnOnce() -> Fut,
+    ) -> Option<Vec<T>>
+    where
+        Fut: Future<Output = Option<Vec<T>>>,
+    {
         match collection {
             Some(candidates) => Some(candidates),
-            None => traversal,
+            None => traversal().await,
         }
     }
 
@@ -514,13 +520,11 @@ mod platform {
             // Treating Some([]) as "unknown" walks GNOME Shell (~4s to the
             // 2048-object cap) and the 5s preflight deadline expires before
             // Chromium/Teams KEY_STRING.
-            let collection = collection_candidates(&root, search).await;
-            let traversal = if collection.is_none() {
-                traversal_candidates(application, connection.connection(), search).await
-            } else {
-                None
-            };
-            let Some(discovered) = resolve_focus_candidates(collection, traversal) else {
+            let Some(discovered) = resolve_focus_candidates(collection_candidates(&root, search).await, || {
+                traversal_candidates(application, connection.connection(), search)
+            })
+            .await
+            else {
                 continue;
             };
             for candidate in discovered {
@@ -666,6 +670,7 @@ mod platform {
 
     #[cfg(test)]
     mod tests {
+        use std::future::Future;
         use std::sync::PoisonError;
 
         use atspi::{Interface, InterfaceSet, Role, State, StateSet};
@@ -691,15 +696,44 @@ mod platform {
             }
         }
 
+        fn block_on_test<T>(future: impl Future<Output = T>) -> T {
+            tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap_or_else(|error| panic!("{error}"))
+                .block_on(future)
+        }
+
         #[test]
         fn empty_collection_result_does_not_walk_the_tree() {
-            assert_eq!(
-                resolve_focus_candidates(Some(Vec::<i32>::new()), Some(vec![1, 2])),
-                Some(vec![])
-            );
-            assert_eq!(resolve_focus_candidates(Some(vec![7]), Some(vec![1])), Some(vec![7]));
-            assert_eq!(resolve_focus_candidates(None, Some(vec![9])), Some(vec![9]));
-            assert_eq!(resolve_focus_candidates::<i32>(None, None), None);
+            let mut walked = false;
+            let empty = block_on_test(resolve_focus_candidates(Some(Vec::<i32>::new()), || {
+                walked = true;
+                async { Some(vec![1, 2]) }
+            }));
+            assert_eq!(empty, Some(vec![]));
+            assert!(!walked);
+
+            let hit = block_on_test(resolve_focus_candidates(Some(vec![7]), || {
+                walked = true;
+                async { Some(vec![1]) }
+            }));
+            assert_eq!(hit, Some(vec![7]));
+            assert!(!walked);
+
+            let from_walk = block_on_test(resolve_focus_candidates(None, || {
+                walked = true;
+                async { Some(vec![9]) }
+            }));
+            assert_eq!(from_walk, Some(vec![9]));
+            assert!(walked);
+
+            walked = false;
+            let missing = block_on_test(resolve_focus_candidates::<i32, _>(None, || {
+                walked = true;
+                async { None }
+            }));
+            assert_eq!(missing, None);
+            assert!(walked);
         }
 
         #[test]
