@@ -162,6 +162,41 @@ fn recovery_lists_only_retained_valid_snapshots() {
 }
 
 #[test]
+fn retained_recovery_bounds_the_index_scan_before_sorting() {
+    let temp = TempDir::new().expect("temp dir");
+    let store = store(&temp);
+    let mut newest = test_workflow(CloudProvider::RunPod, 3_000);
+    newest.retain_until_millis = 100_000;
+    let mut oldest = test_workflow(CloudProvider::Azure, 1_000);
+    oldest.retain_until_millis = 50_000;
+    let mut middle = test_workflow(CloudProvider::RunPod, 2_000);
+    middle.retain_until_millis = 70_000;
+    for workflow in [&oldest, &middle, &newest] {
+        store.create(workflow).expect("create retained workflow");
+    }
+
+    let recovered = store.list_retained(0).expect("list retained");
+    let recovered_ids = recovered.iter().map(|stored| stored.workflow().id).collect::<Vec<_>>();
+    assert_eq!(recovered_ids, vec![newest.id, middle.id, oldest.id]);
+
+    let connection = Connection::open(store.path()).expect("open raw store");
+    let detail = connection
+        .query_row(
+            "EXPLAIN QUERY PLAN
+             SELECT workflow_id
+             FROM cloud_workflows
+             INDEXED BY cloud_workflows_retention
+             WHERE retain_until_millis >= ?1
+             LIMIT ?2",
+            params![0_i64, 1_i64],
+            |row| row.get::<_, String>(3),
+        )
+        .expect("query plan");
+    assert!(detail.contains("SEARCH cloud_workflows USING"));
+    assert!(detail.contains("INDEX cloud_workflows_retention"));
+}
+
+#[test]
 fn recovery_budget_rejects_unbounded_snapshot_sets() {
     assert!(matches!(
         check_recovery_budget(MAX_RECOVERED_WORKFLOWS + 1, 0),
@@ -456,6 +491,18 @@ fn invalid_snapshots_and_future_schema_fail_closed() {
         "horizon-stale-schema",
     ));
     assert_unsupported_schema(&CloudWorkflowStore::open_path(future_path));
+
+    let corrupt_path = temp.path().join("corrupt-schema").join("workflows.sqlite3");
+    CloudWorkflowStore::open_path(&corrupt_path).expect("initialize corrupt store");
+    let connection = Connection::open(&corrupt_path).expect("corrupt store");
+    connection
+        .pragma_update(None, "user_version", -1)
+        .expect("negative schema version");
+    drop(connection);
+    assert!(matches!(
+        CloudWorkflowStore::open_path(corrupt_path),
+        Err(CloudStoreError::UnsupportedSchema(-1))
+    ));
 }
 
 #[cfg(unix)]

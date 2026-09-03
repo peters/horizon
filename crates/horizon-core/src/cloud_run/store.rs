@@ -171,26 +171,36 @@ impl CloudWorkflowStore {
             "SELECT substr(workflow_id, 1, 37), revision, created_at_millis, updated_at_millis, retain_until_millis,
                     substr(snapshot, 1, ?3)
              FROM cloud_workflows
+             INDEXED BY cloud_workflows_retention
              WHERE retain_until_millis >= ?1
-             ORDER BY updated_at_millis DESC, workflow_id ASC
              LIMIT ?2",
         )?;
         let rows = statement.query_map(
             params![now_millis, query_limit, MAX_MATERIALIZED_SNAPSHOT_BYTES],
             |row| Ok((row.get::<_, String>(0)?, WorkflowRow::from_row(row, 1)?)),
         )?;
-        let mut workflows = Vec::new();
+        let mut retained_rows = Vec::new();
         let mut snapshot_bytes = 0_usize;
         for row in rows {
             let (id, row) = row?;
             snapshot_bytes = snapshot_bytes
                 .checked_add(row.snapshot.len())
                 .ok_or(CloudStoreError::RecoveryLimitExceeded)?;
-            check_recovery_budget(workflows.len() + 1, snapshot_bytes)?;
+            check_recovery_budget(retained_rows.len() + 1, snapshot_bytes)?;
             let workflow_id = parse_workflow_id(&id)?;
-            workflows.push(decode_workflow_row(workflow_id, &row)?);
+            retained_rows.push((id, workflow_id, row));
         }
-        Ok(workflows)
+        retained_rows.sort_unstable_by(|left, right| {
+            right
+                .2
+                .updated_at_millis
+                .cmp(&left.2.updated_at_millis)
+                .then_with(|| left.0.cmp(&right.0))
+        });
+        retained_rows
+            .into_iter()
+            .map(|(_, workflow_id, row)| decode_workflow_row(workflow_id, &row))
+            .collect()
     }
 
     /// Replace a snapshot only when the caller still owns its exact revision.
@@ -347,7 +357,7 @@ fn initialize_schema(connection: &mut Connection) -> Result<(), CloudStoreError>
     connection.pragma_update(None, "journal_mode", "WAL")?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let version = transaction.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))?;
-    if version > STORE_SCHEMA_VERSION {
+    if version != 0 && version != STORE_SCHEMA_VERSION {
         return Err(CloudStoreError::UnsupportedSchema(version));
     }
     transaction.execute_batch(SCHEMA)?;
@@ -481,17 +491,16 @@ fn validate_claim_target(
     job_id: CloudJobId,
     target: &WorkerTarget,
 ) -> Result<(), CloudStoreError> {
-    let node = workflow
-        .nodes
-        .iter()
-        .find(|node| node.id == job_id)
+    let nodes: HashMap<_, _> = workflow.nodes.iter().map(|node| (node.id, node)).collect();
+    let node = nodes
+        .get(&job_id)
+        .copied()
         .filter(|node| node.worker.as_ref() == Some(target))
         .ok_or(CloudStoreError::ClaimTargetMismatch(job_id))?;
     let active = matches!(node.state, CloudJobState::Queued | CloudJobState::Provisioning);
     let dependencies_ready = node.depends_on.iter().all(|dependency_id| {
-        workflow.nodes.iter().any(|dependency| {
-            dependency.id == *dependency_id
-                && matches!(dependency.state, CloudJobState::Completed | CloudJobState::Cleaned)
+        nodes.get(dependency_id).is_some_and(|dependency| {
+            matches!(dependency.state, CloudJobState::Completed | CloudJobState::Cleaned)
                 && dependency.outcome == Some(CloudJobOutcome::Succeeded)
         })
     });
