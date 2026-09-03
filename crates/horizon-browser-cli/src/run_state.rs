@@ -276,7 +276,7 @@ impl DurableRun {
             .map_err(DurablePreparationError::unpublished)?;
         sync_directory(staging.path()).map_err(DurablePreparationError::unpublished)?;
         publish_job_directory(staging, &directory).map_err(DurablePreparationError::unpublished)?;
-        let run = Self {
+        let mut run = Self {
             state_path: directory.join(STATE_FILE),
             directory,
             state,
@@ -284,6 +284,15 @@ impl DurableRun {
         };
         if let Err(source) = sync_directory(root) {
             return Err(DurablePreparationError::published(run, source));
+        }
+        if let Err(error) = run.acquire_resume_lock() {
+            return Err(DurablePreparationError::published(
+                run,
+                io_error(
+                    error.to_string(),
+                    std::io::Error::from(std::io::ErrorKind::AlreadyExists),
+                ),
+            ));
         }
         Ok(run)
     }
@@ -456,6 +465,17 @@ impl DurableRun {
         self.persist_state().map_err(|error| error.to_string())
     }
 
+    fn persist_checkpoint_or_restore(&mut self, previous: RunCheckpoint) -> Result<(), String> {
+        match self.persist_checkpoint() {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.state.checkpoint = previous;
+                self.state.completed_steps = self.state.checkpoint.completed.len();
+                Err(error)
+            }
+        }
+    }
+
     fn acquire_resume_lock(&mut self) -> Result<(), ResumeError> {
         let path = self.directory.join(RESUME_LOCK_FILE);
         match OpenOptions::new().write(true).create_new(true).open(&path) {
@@ -496,32 +516,36 @@ impl Drop for DurableRun {
 
 impl CheckpointStore for DurableRun {
     fn record_intent(&mut self, step: &PlanStep) -> Result<(), String> {
+        let previous = self.state.checkpoint.clone();
         self.state.checkpoint.intent = Some(CheckpointIntent {
             step_id: step.id.clone(),
             tool: step.tool.clone(),
             status: IntentStatus::Dispatched,
         });
-        self.persist_checkpoint()
+        self.persist_checkpoint_or_restore(previous)
     }
 
     fn record_completion(&mut self, report: &StepReport) -> Result<(), String> {
+        let previous = self.state.checkpoint.clone();
         self.state.checkpoint.intent = None;
         self.state.checkpoint.completed.push(report.clone());
-        self.persist_checkpoint()
+        self.persist_checkpoint_or_restore(previous)
     }
 
     fn record_uncertain(&mut self, step: &PlanStep) -> Result<(), String> {
+        let previous = self.state.checkpoint.clone();
         self.state.checkpoint.intent = Some(CheckpointIntent {
             step_id: step.id.clone(),
             tool: step.tool.clone(),
             status: IntentStatus::Uncertain,
         });
-        self.persist_checkpoint()
+        self.persist_checkpoint_or_restore(previous)
     }
 
     fn clear_intent(&mut self) -> Result<(), String> {
+        let previous = self.state.checkpoint.clone();
         self.state.checkpoint.intent = None;
-        self.persist_checkpoint()
+        self.persist_checkpoint_or_restore(previous)
     }
 }
 
@@ -649,14 +673,18 @@ fn write_private_json(path: &Path, value: &impl Serialize, artifact: &'static st
 
 fn resume_lock_is_stale(path: &Path) -> bool {
     let Ok(bytes) = std::fs::read(path) else {
-        return true;
+        return false;
     };
     let Ok(pid) = std::str::from_utf8(&bytes) else {
-        return true;
+        return false;
     };
     let Ok(pid) = pid.trim().parse::<u32>() else {
-        return true;
+        return false;
     };
+    !process_is_alive(pid)
+}
+
+fn process_is_alive(pid: u32) -> bool {
     if pid == std::process::id() {
         return true;
     }
@@ -665,12 +693,19 @@ fn resume_lock_is_stale(path: &Path) -> bool {
         std::process::Command::new("kill")
             .args(["-0", &pid.to_string()])
             .status()
-            .is_ok_and(|status| !status.success())
+            .is_ok_and(|status| status.success())
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        std::process::Command::new("tasklist")
+            .args(["/NH", "/FI", &format!("PID eq {pid}")])
+            .output()
+            .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).contains(&pid.to_string()))
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = pid;
-        false
+        true
     }
 }
 
@@ -689,7 +724,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::checkpoint::{CheckpointStore, IntentStatus, UncertainPolicy, select_resume};
+    use crate::checkpoint::{CheckpointStore, IntentStatus, ResumeError, UncertainPolicy, select_resume};
     use crate::observability::ObservabilitySummary;
     use crate::{PlanStep, StepReport};
 
@@ -906,6 +941,32 @@ mod tests {
         let selection = select_resume(&two_step_plan(), Some(&timed_out.checkpoint), UncertainPolicy::Skip)
             .expect("skip remaining");
         assert_eq!(selection.start_index, 2);
+    }
+
+    #[test]
+    fn failed_intent_persist_does_not_keep_in_memory_dispatch() {
+        let root = tempfile::tempdir().expect("temporary job root");
+        let mut run = DurableRun::prepare_in(root.path(), &two_step_plan(), Some(30), None).expect("prepare");
+        std::fs::remove_file(&run.state_path).expect("remove state file");
+        std::fs::create_dir(&run.state_path).expect("block state path with a directory");
+        run.record_intent(&two_step_plan().steps[0])
+            .expect_err("persist must fail");
+        assert!(run.state().checkpoint.intent.is_none());
+        std::fs::remove_dir(&run.state_path).expect("unblock state path");
+    }
+
+    #[test]
+    fn incomplete_resume_lock_is_not_stolen() {
+        let root = tempfile::tempdir().expect("temporary job root");
+        let mut run = DurableRun::prepare_in(root.path(), &two_step_plan(), Some(30), None).expect("prepare");
+        run.stop(ExecutionStopReason::Cancelled).expect("cancel");
+        let job_id = run.job_id().to_string();
+        let directory = run.state_path.parent().expect("job directory").to_path_buf();
+        drop(run);
+        std::fs::write(directory.join("resume.lock"), b"").expect("empty lock");
+        let mut opened = DurableRun::open_in(root.path(), &job_id).expect("open");
+        let error = opened.acquire_resume_lock().expect_err("empty lock is live");
+        assert!(matches!(error, ResumeError::Locked(_)));
     }
 
     fn two_step_plan() -> Plan {
