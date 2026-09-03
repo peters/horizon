@@ -28,13 +28,12 @@ cargo build --features speech
 4. Confirm the marker appears in the focused panel and no speech-insert error toast is shown.
 5. Repeat with the pointer over empty canvas chrome while the same panel remains the board-focused terminal: the marker must still land in that panel, not an AT-SPI error.
 
-## 3. Microsoft Teams / Chromium compose box
+## 3. Unclassifiable Chromium / Teams targets
 
-1. Focus a Teams (or other Chromium PWA) message box. Do not select existing text.
+1. Focus a Teams (or other Chromium PWA) message box.
 2. Hold PTT from a background Horizon with `desktop_injection: true`.
-3. Speak a unique marker that contains no newline.
-4. Confirm the marker appears at the caret in the compose box and the chat is not sent.
-5. Confirm the clipboard is unchanged.
+3. Confirm insertion is refused (no text appears, no Return is sent) because the app does not expose a classifiable AT-SPI text field.
+4. Confirm the clipboard is unchanged.
 
 ## 4. Refusals
 

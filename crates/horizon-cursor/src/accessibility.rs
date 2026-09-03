@@ -56,9 +56,11 @@ pub fn request_accessibility_permission() -> Option<bool> {
 ///
 /// This path never reads or writes the clipboard. It refuses ambiguous,
 /// protected, stale, hidden, read-only, or selected-text targets so failure
-/// cannot partially replace existing text. On Linux, if the focused app does
-/// not expose an editable AT-SPI field, the transcript is typed through the
-/// accessibility key controller instead of being discarded.
+/// cannot partially replace existing text. On Linux, if no AT-SPI editable
+/// field exists, keys are synthesized only into a unique focused terminal or
+/// plain text widget that is not a password field and has no selection.
+/// Unclassifiable targets, including Chromium surfaces with no AT-SPI tree,
+/// remain failures.
 ///
 /// # Errors
 ///
@@ -127,6 +129,35 @@ mod platform {
 
         fn is_focused_text_target(self) -> bool {
             self.states.contains(State::Focused) && self.interfaces.contains(Interface::Text | Interface::EditableText)
+        }
+
+        fn is_focused(self) -> bool {
+            self.states.contains(State::Focused)
+        }
+
+        fn allows_key_synthesis(self) -> bool {
+            matches!(self.role, Role::Terminal | Role::Entry | Role::Text | Role::Editbar)
+        }
+
+        fn validate_synthesis_target(self) -> Result<(), InjectError> {
+            if self.role == Role::PasswordText {
+                return Err(InjectError::Target("dictation into password fields is disabled"));
+            }
+            if self.states.intersects(State::Defunct | State::Stale) {
+                return Err(InjectError::Target("focused accessibility target is stale"));
+            }
+            if !self.states.contains(State::Focused) {
+                return Err(InjectError::Target("focused accessibility target changed"));
+            }
+            if !self.allows_key_synthesis() {
+                return Err(InjectError::Target(
+                    "focused application does not expose a classifiable text field",
+                ));
+            }
+            if self.states.contains(State::ReadOnly) {
+                return Err(InjectError::Target("focused field is not editable"));
+            }
+            Ok(())
         }
 
         fn validate(self) -> Result<(), InjectError> {
@@ -220,7 +251,9 @@ mod platform {
         .await?;
         match insert_into_editable_field(&connection, deadline, &text).await {
             Ok(()) => Ok(()),
-            Err(error) if can_synthesize_keys(&error) => synthesize_key_string(&connection, &text).await,
+            Err(error) if can_synthesize_keys(&error) => {
+                synthesize_into_classifiable_focus(&connection, deadline, &text).await
+            }
             Err(error) => Err(error),
         }
     }
@@ -301,57 +334,32 @@ mod platform {
     }
 
     async fn find_focused_target(connection: &AccessibilityConnection) -> Result<ObjectRefOwned, InjectError> {
-        let registry = connection
-            .root_accessible_on_registry()
-            .await
-            .map_err(|_| InjectError::Failed("failed to inspect the accessibility registry"))?;
-        let applications = registry
-            .get_children()
-            .await
-            .map_err(|_| InjectError::Failed("failed to inspect accessible applications"))?;
-        let mut candidates = Vec::new();
-        for application in applications {
-            if application.is_null() {
-                continue;
-            }
-            let Ok(root) = application.as_accessible_proxy(connection.connection()).await else {
-                continue;
-            };
-            let discovered = match collection_candidates(&root).await {
-                Some(candidates) if !candidates.is_empty() => candidates,
-                Some(_) | None => {
-                    let Some(candidates) = traversal_candidates(application, connection.connection()).await else {
-                        continue;
-                    };
-                    candidates
-                }
-            };
-            for candidate in discovered {
-                if !candidates.contains(&candidate) {
-                    candidates.push(candidate);
-                }
-            }
-            if candidates.len() > 1 {
-                break;
-            }
-        }
-        let index = unique_candidate_index(candidates.len())?;
-        Ok(candidates.swap_remove(index))
+        find_unique_focus(connection, FocusSearch::EditableText, unique_candidate_index).await
     }
 
-    async fn collection_candidates(root: &AccessibleProxy<'_>) -> Option<Vec<ObjectRefOwned>> {
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum FocusSearch {
+        EditableText,
+        FocusedOnly,
+    }
+
+    async fn collection_candidates(root: &AccessibleProxy<'_>, search: FocusSearch) -> Option<Vec<ObjectRefOwned>> {
         let proxies = root.proxies().await.ok()?;
         let collection = proxies.collection().await.ok()?;
-        let rule = ObjectMatchRule::builder()
-            .states([State::Focused], MatchType::All)
-            .interfaces([Interface::Text, Interface::EditableText], MatchType::All)
-            .build();
-        collection.get_matches(rule, SortOrder::Canonical, 2, true).await.ok()
+        let mut rule = ObjectMatchRule::builder().states([State::Focused], MatchType::All);
+        if search == FocusSearch::EditableText {
+            rule = rule.interfaces([Interface::Text, Interface::EditableText], MatchType::All);
+        }
+        collection
+            .get_matches(rule.build(), SortOrder::Canonical, 2, true)
+            .await
+            .ok()
     }
 
     async fn traversal_candidates(
         root: ObjectRefOwned,
         connection: &atspi::zbus::Connection,
+        search: FocusSearch,
     ) -> Option<Vec<ObjectRefOwned>> {
         let mut queue = VecDeque::from([root]);
         let mut visited = HashSet::new();
@@ -375,7 +383,12 @@ mod platform {
             let Ok(states) = accessible.get_state().await else {
                 continue;
             };
-            if TargetFacts::new(interfaces, states, Role::Invalid).is_focused_text_target() {
+            let facts = TargetFacts::new(interfaces, states, Role::Invalid);
+            let matched = match search {
+                FocusSearch::EditableText => facts.is_focused_text_target(),
+                FocusSearch::FocusedOnly => facts.is_focused(),
+            };
+            if matched {
                 candidates.push(object.clone());
                 if candidates.len() > 1 {
                     return Some(candidates);
@@ -391,16 +404,30 @@ mod platform {
         Some(candidates)
     }
 
-    fn unique_candidate_index(candidate_count: usize) -> Result<usize, InjectError> {
+    fn unique_index(candidate_count: usize, empty: &'static str, multiple: &'static str) -> Result<usize, InjectError> {
         if candidate_count == 0 {
-            return Err(InjectError::Target(
-                "focused application does not expose an editable text field",
-            ));
+            return Err(InjectError::Target(empty));
         }
         if candidate_count > 1 {
-            return Err(InjectError::Target("multiple focused editable fields were reported"));
+            return Err(InjectError::Target(multiple));
         }
         Ok(0)
+    }
+
+    fn unique_candidate_index(candidate_count: usize) -> Result<usize, InjectError> {
+        unique_index(
+            candidate_count,
+            "focused application does not expose an editable text field",
+            "multiple focused editable fields were reported",
+        )
+    }
+
+    fn unique_focused_index(candidate_count: usize) -> Result<usize, InjectError> {
+        unique_index(
+            candidate_count,
+            "focused application does not expose a classifiable text field",
+            "multiple focused fields were reported",
+        )
     }
 
     fn sanitize_desktop_transcript(text: &str) -> Cow<'_, str> {
@@ -414,12 +441,96 @@ mod platform {
     fn can_synthesize_keys(error: &InjectError) -> bool {
         matches!(
             error,
-            InjectError::Target(
-                "focused application does not expose an editable text field"
-                    | "focused field does not support direct text insertion"
-                    | "focused field does not expose readable text state"
-            )
+            InjectError::Target("focused application does not expose an editable text field")
         )
+    }
+
+    async fn find_unique_focus(
+        connection: &AccessibilityConnection,
+        search: FocusSearch,
+        unique_index: fn(usize) -> Result<usize, InjectError>,
+    ) -> Result<ObjectRefOwned, InjectError> {
+        let registry = connection
+            .root_accessible_on_registry()
+            .await
+            .map_err(|_| InjectError::Failed("failed to inspect the accessibility registry"))?;
+        let applications = registry
+            .get_children()
+            .await
+            .map_err(|_| InjectError::Failed("failed to inspect accessible applications"))?;
+        let mut candidates = Vec::new();
+        for application in applications {
+            if application.is_null() {
+                continue;
+            }
+            let Ok(root) = application.as_accessible_proxy(connection.connection()).await else {
+                continue;
+            };
+            let discovered = match collection_candidates(&root, search).await {
+                Some(candidates) if !candidates.is_empty() => candidates,
+                Some(_) | None => {
+                    let Some(candidates) = traversal_candidates(application, connection.connection(), search).await
+                    else {
+                        continue;
+                    };
+                    candidates
+                }
+            };
+            for candidate in discovered {
+                if !candidates.contains(&candidate) {
+                    candidates.push(candidate);
+                }
+            }
+            if candidates.len() > 1 {
+                break;
+            }
+        }
+        let index = unique_index(candidates.len())?;
+        Ok(candidates.swap_remove(index))
+    }
+
+    async fn find_focused_object(connection: &AccessibilityConnection) -> Result<ObjectRefOwned, InjectError> {
+        find_unique_focus(connection, FocusSearch::FocusedOnly, unique_focused_index).await
+    }
+
+    async fn synthesize_into_classifiable_focus(
+        connection: &AccessibilityConnection,
+        deadline: tokio::time::Instant,
+        text: &str,
+    ) -> Result<(), InjectError> {
+        let target = bounded_preflight(deadline, find_focused_object(connection)).await?;
+        let accessible = bounded_preflight(deadline, async {
+            target
+                .as_accessible_proxy(connection.connection())
+                .await
+                .map_err(|_| InjectError::Failed("focused accessibility target disappeared"))
+        })
+        .await?;
+        let facts = bounded_preflight(deadline, read_target_facts(&accessible)).await?;
+        facts.validate_synthesis_target()?;
+        if facts.interfaces.contains(Interface::Text) {
+            let proxies = bounded_preflight(deadline, async {
+                accessible
+                    .proxies()
+                    .await
+                    .map_err(|_| InjectError::Failed("failed to inspect focused field interfaces"))
+            })
+            .await?;
+            let text_proxy = bounded_preflight(deadline, async {
+                proxies
+                    .text()
+                    .await
+                    .map_err(|_| InjectError::Target("focused field does not expose readable text state"))
+            })
+            .await?;
+            let snapshot = bounded_preflight(deadline, read_text_snapshot(&text_proxy)).await?;
+            if snapshot.selection_count != 0 {
+                return Err(InjectError::Target(
+                    "selected text cannot be replaced safely by direct dictation",
+                ));
+            }
+        }
+        synthesize_key_string(connection, text).await
     }
 
     async fn synthesize_key_string(connection: &AccessibilityConnection, text: &str) -> Result<(), InjectError> {
@@ -508,10 +619,10 @@ mod platform {
             assert!(can_synthesize_keys(&InjectError::Target(
                 "focused application does not expose an editable text field"
             )));
-            assert!(can_synthesize_keys(&InjectError::Target(
+            assert!(!can_synthesize_keys(&InjectError::Target(
                 "focused field does not support direct text insertion"
             )));
-            assert!(can_synthesize_keys(&InjectError::Target(
+            assert!(!can_synthesize_keys(&InjectError::Target(
                 "focused field does not expose readable text state"
             )));
             assert!(!can_synthesize_keys(&InjectError::Target(
@@ -523,6 +634,34 @@ mod platform {
             assert!(!can_synthesize_keys(&InjectError::Target(
                 "multiple focused editable fields were reported"
             )));
+        }
+
+        #[test]
+        fn key_synthesis_requires_a_classifiable_non_password_focus() {
+            let mut terminal = safe_target();
+            terminal.role = Role::Terminal;
+            terminal.interfaces = InterfaceSet::new(Interface::Text);
+            assert_eq!(terminal.validate_synthesis_target(), Ok(()));
+
+            let password = TargetFacts {
+                role: Role::PasswordText,
+                ..terminal
+            };
+            assert_eq!(
+                password.validate_synthesis_target(),
+                Err(InjectError::Target("dictation into password fields is disabled"))
+            );
+
+            let frame = TargetFacts {
+                role: Role::Frame,
+                ..terminal
+            };
+            assert_eq!(
+                frame.validate_synthesis_target(),
+                Err(InjectError::Target(
+                    "focused application does not expose a classifiable text field"
+                ))
+            );
         }
 
         #[test]
