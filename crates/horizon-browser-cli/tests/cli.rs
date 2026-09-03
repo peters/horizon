@@ -104,6 +104,9 @@ fn run_writes_the_same_structured_report_to_stdout_or_a_private_file() {
     .expect("decode failed job state");
     assert_eq!(failed_state["status"], "failed");
     assert_eq!(failed_state["completed_steps"], 1);
+    assert_eq!(failed_state["checkpoint"]["intent"]["status"], "uncertain");
+    assert_eq!(failed_state["checkpoint"]["intent"]["step_id"], "fill");
+    assert!(failed_state["checkpoint"].get("completed").is_none());
 }
 
 #[test]

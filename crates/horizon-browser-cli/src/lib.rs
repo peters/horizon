@@ -325,7 +325,6 @@ async fn execute_steps(
     for (index, step) in completed.iter().enumerate() {
         result_indexes.insert(step.id.clone(), index);
     }
-    let prefix_len = completed.len();
     let mut steps = completed;
     for step in plan.steps.iter().skip(start_index) {
         let arguments = match resolve_arguments(step, &steps, &result_indexes) {
@@ -365,7 +364,14 @@ async fn execute_steps(
             if let Some(store) = checkpoint.as_mut() {
                 let _ = store.record_uncertain(step);
             }
-            return execution_report(false, steps, Some(tool_error_text(&result.content)), None);
+            steps.push(StepReport {
+                id: step.id.clone(),
+                tool: step.tool.clone(),
+                ok: false,
+                result: result.structured_content,
+                error: Some(tool_error_text(&result.content)),
+            });
+            break;
         }
         let Some(structured) = result.structured_content else {
             if let Some(store) = checkpoint.as_mut() {
@@ -394,8 +400,9 @@ async fn execute_steps(
         result_indexes.insert(step.id.clone(), steps.len());
         steps.push(outcome);
     }
-    let ran = steps.len().saturating_sub(prefix_len);
-    let ok = steps.iter().all(|step| step.ok) && start_index.saturating_add(ran) == plan.steps.len();
+    // Skipped plan indexes are absent from `steps`, so success still requires
+    // one successful report for every plan step.
+    let ok = steps.len() == plan.steps.len() && steps.iter().all(|step| step.ok);
     execution_report(ok, steps, None, None)
 }
 
@@ -757,6 +764,30 @@ mod tests {
             "kept"
         );
         assert_eq!(report.steps[1].id, "second");
+    }
+
+    #[tokio::test]
+    async fn resume_after_a_skipped_gap_does_not_report_success() {
+        let plan = plan(
+            br#"{"version":1,"steps":[{"id":"first","tool":"browser_list"},{"id":"skipped","tool":"browser_list"},{"id":"third","tool":"browser_list"}]}"#,
+        );
+        let report = execute_plan_with_resume(
+            &plan,
+            &mut ExecutionControl::unbounded(),
+            PlanResume {
+                completed: vec![successful_step("first", json!({"panels":[]}))],
+                start_index: 2,
+                checkpoint: None,
+            },
+        )
+        .await
+        .expect("resume after skip");
+        assert!(!report.ok);
+        assert_eq!(report.completed_steps, 2);
+        assert_eq!(
+            report.steps.iter().map(|step| step.id.as_str()).collect::<Vec<_>>(),
+            ["first", "third"]
+        );
     }
 
     fn successful_step(id: &str, result: Value) -> StepReport {

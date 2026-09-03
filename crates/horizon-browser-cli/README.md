@@ -162,8 +162,10 @@ horizon-browser resume job-<id> --on-uncertain skip
 `resume` refuses a live prepared lease, a successful job, and any uncertain
 in-flight mutation unless `--on-uncertain skip` is set after inspecting the
 browser audit. Skip never replays the uncertain call; it continues later
-steps. Remaining steps currently start a new MCP session; reconnecting the
-same standalone browser is a later slice.
+steps. A skipped step is not a successful completion, so the job cannot
+report `ok` until every plan step has a verified result. Remaining steps
+currently start a new MCP session; reconnecting the same standalone browser
+is a later slice.
 
 Every deterministic run gets one action deadline. The default is 1800 seconds;
 `--timeout` accepts 1 through 86400 whole seconds. The budget is selected after
