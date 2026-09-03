@@ -113,6 +113,7 @@ impl CloudWorkflowStore {
         let snapshot = encode_workflow(workflow)?;
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        ensure_current_schema(&transaction)?;
         let id = workflow.id.to_string();
         if workflow_row(&transaction, &id)?.is_some() {
             return Err(CloudStoreError::WorkflowExists(workflow.id));
@@ -141,8 +142,10 @@ impl CloudWorkflowStore {
     /// # Errors
     /// Fails closed when the stored snapshot or indexed metadata is corrupt.
     pub fn load(&self, workflow_id: CloudWorkflowId) -> Result<Option<StoredWorkflow>, CloudStoreError> {
-        let connection = self.connection()?;
-        workflow_row(&connection, &workflow_id.to_string())?
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        ensure_current_schema(&transaction)?;
+        workflow_row(&transaction, &workflow_id.to_string())?
             .map(|row| decode_workflow_row(workflow_id, &row))
             .transpose()
     }
@@ -156,10 +159,12 @@ impl CloudWorkflowStore {
         if now_millis < 0 {
             return Err(CloudStoreError::InvalidTimestamp);
         }
-        let connection = self.connection()?;
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        ensure_current_schema(&transaction)?;
         let query_limit =
             isize::try_from(MAX_RECOVERED_WORKFLOWS + 1).map_err(|_| CloudStoreError::RecoveryLimitExceeded)?;
-        let mut statement = connection.prepare(
+        let mut statement = transaction.prepare(
             "SELECT substr(workflow_id, 1, 37), revision, created_at_millis, updated_at_millis, retain_until_millis,
                     substr(snapshot, 1, ?3)
              FROM cloud_workflows
@@ -195,6 +200,7 @@ impl CloudWorkflowStore {
         let snapshot = encode_workflow(next)?;
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        ensure_current_schema(&transaction)?;
         let id = expected.workflow.id.to_string();
         let current = workflow_row(&transaction, &id)?
             .ok_or(CloudStoreError::WorkflowMissing(expected.workflow.id))
@@ -272,6 +278,7 @@ impl CloudWorkflowStore {
         }
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        ensure_current_schema(&transaction)?;
         let id = workflow_id.to_string();
         let workflow = workflow_row(&transaction, &id)?
             .ok_or(CloudStoreError::WorkflowMissing(workflow_id))
@@ -361,6 +368,14 @@ fn initialize_schema(connection: &mut Connection) -> Result<(), CloudStoreError>
     transaction.execute_batch(SCHEMA)?;
     transaction.pragma_update(None, "user_version", STORE_SCHEMA_VERSION)?;
     transaction.commit()?;
+    Ok(())
+}
+
+fn ensure_current_schema(connection: &Connection) -> Result<(), CloudStoreError> {
+    let version = connection.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))?;
+    if version != STORE_SCHEMA_VERSION {
+        return Err(CloudStoreError::UnsupportedSchema(version));
+    }
     Ok(())
 }
 
@@ -561,7 +576,7 @@ pub enum CloudStoreError {
     SymlinkStorePath,
     #[error("cloud workflow store database failed: {0}")]
     Database(#[from] rusqlite::Error),
-    #[error("cloud workflow store schema {0} is newer than this binary supports")]
+    #[error("cloud workflow store schema {0} is not supported by this binary")]
     UnsupportedSchema(i64),
     #[error("cloud workflow {0} already exists")]
     WorkflowExists(CloudWorkflowId),

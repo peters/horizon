@@ -58,6 +58,10 @@ fn worker_target(workflow: &CloudWorkflow) -> &WorkerTarget {
     workflow.nodes[0].worker.as_ref().expect("worker target")
 }
 
+fn assert_unsupported_schema<T>(result: &Result<T, CloudStoreError>) {
+    assert!(matches!(result, Err(CloudStoreError::UnsupportedSchema(2))));
+}
+
 fn store(temp: &TempDir) -> CloudWorkflowStore {
     #[cfg(unix)]
     let root = {
@@ -307,16 +311,27 @@ fn invalid_snapshots_and_future_schema_fail_closed() {
     ));
 
     let future_path = temp.path().join("future").join("workflows.sqlite3");
-    CloudWorkflowStore::open_path(&future_path).expect("initialize future store");
+    let stale_store = CloudWorkflowStore::open_path(&future_path).expect("initialize future store");
+    let workflow = retained_workflow(CloudProvider::RunPod, 2_000);
+    let stored = stale_store.create(&workflow).expect("create future workflow");
+    let mut replacement = workflow.clone();
+    replacement.updated_at_millis += 1;
     let connection = Connection::open(&future_path).expect("future store");
     connection
         .pragma_update(None, "user_version", 2)
         .expect("future version");
     drop(connection);
-    assert!(matches!(
-        CloudWorkflowStore::open_path(future_path),
-        Err(CloudStoreError::UnsupportedSchema(2))
+    assert_unsupported_schema(&stale_store.load(workflow.id));
+    assert_unsupported_schema(&stale_store.list_retained(0));
+    assert_unsupported_schema(&stale_store.create(&workflow));
+    assert_unsupported_schema(&stale_store.replace(&stored, &replacement));
+    assert_unsupported_schema(&stale_store.claim_worker_creation(
+        workflow.id,
+        workflow.nodes[0].id,
+        worker_target(&workflow),
+        "horizon-stale-schema",
     ));
+    assert_unsupported_schema(&CloudWorkflowStore::open_path(future_path));
 }
 
 #[cfg(unix)]
