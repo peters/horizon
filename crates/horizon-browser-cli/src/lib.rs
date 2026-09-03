@@ -325,6 +325,7 @@ async fn execute_steps(
     for (index, step) in completed.iter().enumerate() {
         result_indexes.insert(step.id.clone(), index);
     }
+    let prefix_len = completed.len();
     let mut steps = completed;
     for step in plan.steps.iter().skip(start_index) {
         let arguments = match resolve_arguments(step, &steps, &result_indexes) {
@@ -361,13 +362,10 @@ async fn execute_steps(
             }
         };
         if result.is_error.unwrap_or(false) {
-            let outcome = step_outcome(step, result);
             if let Some(store) = checkpoint.as_mut() {
-                let _ = store.clear_intent();
+                let _ = store.record_uncertain(step);
             }
-            result_indexes.insert(step.id.clone(), steps.len());
-            steps.push(outcome);
-            break;
+            return execution_report(false, steps, Some(tool_error_text(&result.content)), None);
         }
         let Some(structured) = result.structured_content else {
             if let Some(store) = checkpoint.as_mut() {
@@ -396,30 +394,9 @@ async fn execute_steps(
         result_indexes.insert(step.id.clone(), steps.len());
         steps.push(outcome);
     }
-    let ok = steps.len() == plan.steps.len() && steps.iter().all(|step| step.ok);
+    let ran = steps.len().saturating_sub(prefix_len);
+    let ok = steps.iter().all(|step| step.ok) && start_index.saturating_add(ran) == plan.steps.len();
     execution_report(ok, steps, None, None)
-}
-
-fn step_outcome(step: &PlanStep, result: rmcp::model::CallToolResult) -> StepReport {
-    if result.is_error.unwrap_or(false) {
-        return StepReport {
-            id: step.id.clone(),
-            tool: step.tool.clone(),
-            ok: false,
-            result: result.structured_content,
-            error: Some(tool_error_text(&result.content)),
-        };
-    }
-    match result.structured_content {
-        Some(structured) => StepReport {
-            id: step.id.clone(),
-            tool: step.tool.clone(),
-            ok: true,
-            result: Some(structured),
-            error: None,
-        },
-        None => failed_step(step, "MCP tool returned no structured content".to_string()),
-    }
 }
 
 async fn wait_for_browser_action<T>(

@@ -119,7 +119,7 @@ pub struct DurableRun {
     directory: PathBuf,
     state_path: PathBuf,
     state: RunState,
-    lock_path: Option<PathBuf>,
+    lock_file: Option<std::fs::File>,
 }
 
 /// Detached finalization view of an already published durable run.
@@ -223,7 +223,7 @@ impl DurableRun {
                 directory: self.directory.clone(),
                 state_path: self.state_path.clone(),
                 state: self.state.clone(),
-                lock_path: None,
+                lock_file: None,
             },
         }
     }
@@ -280,7 +280,7 @@ impl DurableRun {
             state_path: directory.join(STATE_FILE),
             directory,
             state,
-            lock_path: None,
+            lock_file: None,
         };
         if let Err(source) = sync_directory(root) {
             return Err(DurablePreparationError::published(run, source));
@@ -387,7 +387,7 @@ impl DurableRun {
             directory,
             state_path,
             state,
-            lock_path: None,
+            lock_file: None,
         })
     }
 
@@ -478,23 +478,19 @@ impl DurableRun {
 
     fn acquire_resume_lock(&mut self) -> Result<(), ResumeError> {
         let path = self.directory.join(RESUME_LOCK_FILE);
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(mut file) => {
-                let pid = format!("{}\n", std::process::id());
-                file.write_all(pid.as_bytes())
-                    .and_then(|()| file.sync_all())
-                    .map_err(|source| ResumeError::Decode(format!("could not write {}: {source}", path.display())))?;
-                self.lock_path = Some(path);
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .map_err(|source| ResumeError::Decode(format!("could not open {}: {source}", path.display())))?;
+        match file.try_lock() {
+            Ok(()) => {
+                self.lock_file = Some(file);
                 Ok(())
             }
-            Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => {
-                if resume_lock_is_stale(&path) {
-                    let _ = std::fs::remove_file(&path);
-                    return self.acquire_resume_lock();
-                }
-                Err(ResumeError::Locked(self.state.job_id.clone()))
-            }
-            Err(source) => Err(ResumeError::Decode(format!(
+            Err(std::fs::TryLockError::WouldBlock) => Err(ResumeError::Locked(self.state.job_id.clone())),
+            Err(std::fs::TryLockError::Error(source)) => Err(ResumeError::Decode(format!(
                 "could not lock {}: {source}",
                 path.display()
             ))),
@@ -503,14 +499,6 @@ impl DurableRun {
 
     fn write_json(&self, name: &str, value: &impl Serialize, artifact: &'static str) -> Result<(), RunStateError> {
         write_private_json(&self.directory.join(name), value, artifact)
-    }
-}
-
-impl Drop for DurableRun {
-    fn drop(&mut self) {
-        if let Some(path) = self.lock_path.take() {
-            let _ = std::fs::remove_file(path);
-        }
     }
 }
 
@@ -669,44 +657,6 @@ fn write_private_json(path: &Path, value: &impl Serialize, artifact: &'static st
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
         .map_err(|source| io_error(format!("could not secure {}", path.display()), source))?;
     Ok(())
-}
-
-fn resume_lock_is_stale(path: &Path) -> bool {
-    let Ok(bytes) = std::fs::read(path) else {
-        return false;
-    };
-    let Ok(pid) = std::str::from_utf8(&bytes) else {
-        return false;
-    };
-    let Ok(pid) = pid.trim().parse::<u32>() else {
-        return false;
-    };
-    !process_is_alive(pid)
-}
-
-fn process_is_alive(pid: u32) -> bool {
-    if pid == std::process::id() {
-        return true;
-    }
-    #[cfg(unix)]
-    {
-        std::process::Command::new("kill")
-            .args(["-0", &pid.to_string()])
-            .status()
-            .is_ok_and(|status| status.success())
-    }
-    #[cfg(windows)]
-    {
-        std::process::Command::new("tasklist")
-            .args(["/NH", "/FI", &format!("PID eq {pid}")])
-            .output()
-            .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).contains(&pid.to_string()))
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = pid;
-        true
-    }
 }
 
 fn io_error(operation: String, source: std::io::Error) -> RunStateError {
@@ -956,17 +906,14 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_resume_lock_is_not_stolen() {
+    fn resume_lock_is_exclusive_while_the_owner_lives() {
         let root = tempfile::tempdir().expect("temporary job root");
-        let mut run = DurableRun::prepare_in(root.path(), &two_step_plan(), Some(30), None).expect("prepare");
-        run.stop(ExecutionStopReason::Cancelled).expect("cancel");
-        let job_id = run.job_id().to_string();
-        let directory = run.state_path.parent().expect("job directory").to_path_buf();
-        drop(run);
-        std::fs::write(directory.join("resume.lock"), b"").expect("empty lock");
-        let mut opened = DurableRun::open_in(root.path(), &job_id).expect("open");
-        let error = opened.acquire_resume_lock().expect_err("empty lock is live");
+        let run = DurableRun::prepare_in(root.path(), &two_step_plan(), Some(30), None).expect("prepare");
+        let mut contender = DurableRun::open_in(root.path(), run.job_id()).expect("open");
+        let error = contender.acquire_resume_lock().expect_err("owner holds lock");
         assert!(matches!(error, ResumeError::Locked(_)));
+        drop(run);
+        contender.acquire_resume_lock().expect("lock released on drop");
     }
 
     fn two_step_plan() -> Plan {
