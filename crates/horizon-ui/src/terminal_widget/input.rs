@@ -94,7 +94,7 @@ pub(super) fn handle_terminal_pointer_input(
     let Some(terminal_mode) = panel.terminal_mut().map(|terminal| terminal.mode()) else {
         return;
     };
-    let frame_events = PointerFrameEvents::collect(&events, from_global, interaction.layout.body, terminal_mode);
+    let frame_events = PointerFrameEvents::collect(&events, from_global, interaction.body_hit_rect(), terminal_mode);
     let pointer_buttons = ui.input(|input| input::PointerButtons {
         primary: input.pointer.primary_down(),
         middle: input.pointer.middle_down(),
@@ -107,7 +107,7 @@ pub(super) fn handle_terminal_pointer_input(
     let hovered_point = interaction
         .body
         .hover_pos()
-        .filter(|position| interaction.layout.body.contains(*position))
+        .filter(|position| interaction.body_hit_rect().contains(*position))
         .and_then(|position| {
             grid_point_from_position(interaction.layout.body, position, metrics, visible_rows, visible_cols)
         });
@@ -214,8 +214,8 @@ fn should_handle_terminal_pointer(
         || interaction.scrollbar.clicked()
         || pointer_gesture_active
         || ui.input(|input| {
-            pointer_event_targets_rect(&input.events, from_global, interaction.layout.body)
-                || pointer_event_targets_rect(&input.events, from_global, interaction.layout.scrollbar)
+            pointer_event_targets_rect(&input.events, from_global, interaction.body_hit_rect())
+                || pointer_event_targets_rect(&input.events, from_global, interaction.scrollbar_hit_rect())
         })
 }
 
@@ -232,6 +232,7 @@ fn handle_pointer_events(
     let mut event_pointer_buttons = pointer_buttons_at_frame_start(events, pointer.pointer_buttons);
     let mut event_modifiers = pointer.current_modifiers;
     let body = pointer.interaction.layout.body;
+    let body_hit = pointer.interaction.body_hit_rect();
     let frame = pointer.ui_ctx.cumulative_frame_nr();
     for (index, event) in events.iter().enumerate() {
         if let Some(modifiers) = modifiers_for_event(event) {
@@ -240,7 +241,7 @@ fn handle_pointer_events(
         let pointer_buttons_before_event = event_pointer_buttons;
         update_pointer_buttons_for_event(&mut event_pointer_buttons, event);
         let local_selection_claimed =
-            local_selection_events.claims(event, pointer.from_global, body, pointer.terminal_mode);
+            local_selection_events.claims(event, pointer.from_global, body_hit, pointer.terminal_mode);
         match event {
             egui::Event::PointerButton {
                 pos,
@@ -282,7 +283,7 @@ fn handle_pointer_events(
                 if primary_released {
                     continue;
                 }
-                if !body.contains(pos)
+                if !body_hit.contains(pos)
                     || (*pressed && !body_layer_is_topmost_at(pointer, pos))
                     || !pointer_button_event_needs_handling(pointer.terminal_mode, *button, *pressed, *modifiers)
                 {
@@ -393,7 +394,7 @@ fn handle_pointer_motion(
         _ => (pointer.terminal_mode, modifiers),
     };
     let pos = transform_pos(pointer.from_global, pos);
-    if pointer.interaction.layout.body.contains(pos)
+    if pointer.interaction.body_hit_rect().contains(pos)
         && pointer_motion_routes_to_pty_mouse(terminal_mode, pointer_buttons, modifiers)
         && let Some(point) = grid_point_from_position(
             pointer.interaction.layout.body,

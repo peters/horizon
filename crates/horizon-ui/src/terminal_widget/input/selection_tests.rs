@@ -25,6 +25,7 @@ struct PointerHarness {
     _transcript_root: tempfile::TempDir,
     frame_index: u32,
     repaint_delay: Duration,
+    clip_rect: Option<Rect>,
 }
 
 impl PointerHarness {
@@ -65,6 +66,7 @@ impl PointerHarness {
             _transcript_root: transcript_root,
             frame_index: 0,
             repaint_delay: Duration::MAX,
+            clip_rect: None,
         }
     }
 
@@ -90,6 +92,9 @@ impl PointerHarness {
             .fixed_pos(Pos2::new(60.0, 80.0))
             .movable(false)
             .show(&self.ctx, |ui| {
+                if let Some(clip) = self.clip_rect {
+                    ui.set_clip_rect(ui.clip_rect().intersect(clip));
+                }
                 let metrics = grid_metrics();
                 let layout = terminal_layout(TEST_PANEL_SIZE, CHAR_WIDTH, LINE_HEIGHT);
                 let interaction = terminal_interaction(ui, layout, self.panel.id.0, true);
@@ -135,6 +140,10 @@ impl PointerHarness {
             .get(viewport_top + row)
             .unwrap_or_else(|| panic!("missing viewport row {row} at scrollback {}", terminal.scrollback()))
             .clone()
+    }
+
+    fn has_selection(&self) -> bool {
+        self.panel.terminal().expect("terminal").has_selection()
     }
 
     fn selected_first_line(&self) -> String {
@@ -739,4 +748,46 @@ fn release_wheel_and_press_in_one_frame_anchor_the_new_drag_post_scroll() {
         harness.viewport_line(6),
         "the drag restarted across a same-frame scroll must stay extendable by the held pointer"
     );
+}
+
+#[test]
+fn clipped_overlay_drag_does_not_select_intersecting_terminal_text() {
+    let mut harness = PointerHarness::new(0);
+    harness.frame(Vec::new());
+    let body_rect = harness.frame(Vec::new());
+    let visible_max_x = body_rect.min.x + body_rect.width() * 0.5;
+    harness.clip_rect = Some(Rect::from_min_max(
+        body_rect.min,
+        Pos2::new(visible_max_x, body_rect.max.y),
+    ));
+
+    let overlay_start = Pos2::new(visible_max_x + CHAR_WIDTH * 2.0, body_rect.min.y + LINE_HEIGHT);
+    let overlay_end = Pos2::new(body_rect.max.x - CHAR_WIDTH, body_rect.min.y + LINE_HEIGHT * 4.0);
+    assert!(
+        body_rect.contains(overlay_start) && body_rect.contains(overlay_end),
+        "the overlay drag must still sit inside the unclipped terminal grid"
+    );
+
+    harness.frame(primary_press(overlay_start));
+    harness.frame(vec![Event::PointerMoved(overlay_end)]);
+    harness.frame(primary_release(overlay_end));
+
+    assert!(
+        !harness.has_selection(),
+        "a drag over a clipped overlay must not select terminal text"
+    );
+
+    let visible_start = cell_position(body_rect, 1, 0, 0.25);
+    let visible_end = cell_position(body_rect, 3, 10, 0.75);
+    assert!(
+        visible_start.x < visible_max_x && visible_end.x < visible_max_x,
+        "the follow-up drag must stay in the visible clip"
+    );
+
+    harness.frame(primary_press(visible_start));
+    harness.frame(vec![Event::PointerMoved(visible_end)]);
+
+    assert!(harness.has_selection());
+    assert_eq!(harness.selected_first_line(), harness.viewport_line(1));
+    assert_eq!(harness.selected_last_line(), harness.viewport_line(3));
 }
