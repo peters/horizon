@@ -59,13 +59,21 @@ mod platform {
 
     fn collect_pids_around(conn: &RustConnection, window: Window, root: Window, pid_atom: Atom, pids: &mut Vec<u32>) {
         let mut current = window;
+        let mut windows_visited = 0;
         for _ in 0..MAX_PARENT_WALKS {
             push_pid(pids, window_pid(conn, current, pid_atom));
             let Some(tree) = conn.query_tree(current).ok().and_then(|cookie| cookie.reply().ok()) else {
                 break;
             };
             if current == window {
-                collect_child_pids(conn, &tree.children, pid_atom, CHILD_WALK_DEPTH, pids);
+                collect_child_pids(
+                    conn,
+                    &tree.children,
+                    pid_atom,
+                    CHILD_WALK_DEPTH,
+                    pids,
+                    &mut windows_visited,
+                );
             }
             if tree.parent == NONE || tree.parent == root || tree.parent == current {
                 push_pid(pids, window_pid(conn, tree.parent, pid_atom));
@@ -75,14 +83,25 @@ mod platform {
         }
     }
 
-    fn collect_child_pids(conn: &RustConnection, children: &[Window], pid_atom: Atom, depth: u8, pids: &mut Vec<u32>) {
-        if depth == 0 || pids.len() >= MAX_CHILD_WINDOWS {
+    fn collect_child_pids(
+        conn: &RustConnection,
+        children: &[Window],
+        pid_atom: Atom,
+        depth: u8,
+        pids: &mut Vec<u32>,
+        windows_visited: &mut usize,
+    ) {
+        if depth == 0 || child_window_budget_exhausted(*windows_visited) {
             return;
         }
         for &child in children {
-            if pids.len() >= MAX_CHILD_WINDOWS || !is_real_window(child) {
+            if child_window_budget_exhausted(*windows_visited) {
+                return;
+            }
+            if !is_real_window(child) {
                 continue;
             }
+            *windows_visited += 1;
             push_pid(pids, window_pid(conn, child, pid_atom));
             if depth == 1 {
                 continue;
@@ -90,8 +109,19 @@ mod platform {
             let Some(tree) = conn.query_tree(child).ok().and_then(|cookie| cookie.reply().ok()) else {
                 continue;
             };
-            collect_child_pids(conn, &tree.children, pid_atom, depth.saturating_sub(1), pids);
+            collect_child_pids(
+                conn,
+                &tree.children,
+                pid_atom,
+                depth.saturating_sub(1),
+                pids,
+                windows_visited,
+            );
         }
+    }
+
+    const fn child_window_budget_exhausted(windows_visited: usize) -> bool {
+        windows_visited >= MAX_CHILD_WINDOWS
     }
 
     fn push_pid(pids: &mut Vec<u32>, pid: Option<u32>) {
@@ -161,7 +191,9 @@ mod platform {
 
     #[cfg(test)]
     mod tests {
-        use super::{NONE, POINTER_ROOT, is_real_window, process_owns_focus};
+        use super::{
+            MAX_CHILD_WINDOWS, NONE, POINTER_ROOT, child_window_budget_exhausted, is_real_window, process_owns_focus,
+        };
 
         #[test]
         fn x11_none_and_pointer_root_are_not_client_windows() {
@@ -175,6 +207,14 @@ mod platform {
             assert_eq!(process_owns_focus(16617, &[6766, 16617]), Some(true));
             assert_eq!(process_owns_focus(16617, &[14474]), Some(false));
             assert_eq!(process_owns_focus(16617, &[]), None);
+        }
+
+        #[test]
+        fn child_walk_budget_counts_windows_not_pids() {
+            assert_eq!(MAX_CHILD_WINDOWS, 64);
+            assert!(!child_window_budget_exhausted(0));
+            assert!(!child_window_budget_exhausted(MAX_CHILD_WINDOWS - 1));
+            assert!(child_window_budget_exhausted(MAX_CHILD_WINDOWS));
         }
     }
 }

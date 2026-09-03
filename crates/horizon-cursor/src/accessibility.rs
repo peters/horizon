@@ -145,6 +145,12 @@ mod platform {
             if !self.states.contains(State::Focused) {
                 return Err(InjectError::Target("focused accessibility target changed"));
             }
+            if !self.states.contains(State::Enabled | State::Sensitive) {
+                return Err(InjectError::Target("focused field is not available for input"));
+            }
+            if !self.states.contains(State::Visible | State::Showing) {
+                return Err(InjectError::Target("focused field is not visible"));
+            }
             Ok(())
         }
 
@@ -665,6 +671,19 @@ mod platform {
             let mut read_only_frame = frame;
             read_only_frame.states.insert(State::ReadOnly);
             assert_eq!(read_only_frame.validate_synthesis_target(), Ok(()));
+
+            let mut hidden = frame;
+            hidden.states.remove(State::Showing);
+            assert_eq!(
+                hidden.validate_synthesis_target(),
+                Err(InjectError::Target("focused field is not visible"))
+            );
+            let mut disabled = frame;
+            disabled.states.remove(State::Enabled);
+            assert_eq!(
+                disabled.validate_synthesis_target(),
+                Err(InjectError::Target("focused field is not available for input"))
+            );
         }
 
         #[test]
