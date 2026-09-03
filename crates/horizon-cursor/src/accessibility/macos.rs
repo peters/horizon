@@ -98,7 +98,7 @@ pub(super) fn request_permission() -> bool {
     is_process_trusted_with_prompt()
 }
 
-pub(super) fn insert_text(text: &str) -> Result<(), InjectError> {
+pub(super) fn insert_text(text: &str, _expected_window: Option<u32>) -> Result<(), InjectError> {
     let mut slot = PREPARED_TARGET.lock().unwrap_or_else(PoisonError::into_inner);
     let prepared = slot
         .as_ref()

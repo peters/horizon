@@ -12,7 +12,8 @@ use horizon_core::{Panel, PanelId, WorkspaceId};
 use super::super::shortcuts;
 use super::super::{HorizonApp, SpeechNotice};
 use super::desktop::{
-    dictation_sink, inject_desktop_transcript, prepare_desktop_target, recv_global_hotkey, release_desktop_target,
+    DesktopInsertRoute, desktop_insert_route, dictation_sink, horizon_session_focused, inject_desktop_transcript,
+    prepare_desktop_target, recv_global_hotkey, release_desktop_target, use_logically_focused_terminal,
 };
 use super::{SpeechEvent, SpeechSink, SpeechSystem};
 use crate::input;
@@ -388,7 +389,7 @@ impl HorizonApp {
         }
     }
 
-    fn focused_horizon_text_panel(&self, ctx: &Context, root_focused: bool) -> Option<PanelId> {
+    fn focused_horizon_text_panel(&self, ctx: &Context, root_focused: bool, os_focus: Option<bool>) -> Option<PanelId> {
         let panel_id = self.board.focused?;
         let panel = self.board.panel(panel_id)?;
         if !panel.kind.accepts_text_input() {
@@ -397,13 +398,13 @@ impl HorizonApp {
         if !panel.browser().is_none_or(|browser| browser.status.is_alive()) {
             return None;
         }
-        terminal_matches_focused_viewport(
+        let matches_viewport = terminal_matches_focused_viewport(
             panel.workspace_id,
             self.workspace_is_detached(panel.workspace_id),
             root_focused,
             self.focused_detached_workspace_id(ctx),
-        )
-        .then_some(panel_id)
+        );
+        use_logically_focused_terminal(matches_viewport, os_focus).then_some(panel_id)
     }
 
     pub(in crate::app) fn speech_text_surface_active(&self) -> (bool, bool) {
@@ -440,11 +441,41 @@ impl HorizonApp {
         }
     }
 
+    fn logically_focused_text_panel(&self) -> Option<PanelId> {
+        let panel_id = self.board.focused?;
+        let panel = self.board.panel(panel_id)?;
+        if !panel.kind.accepts_text_input() {
+            return None;
+        }
+        if !panel.browser().is_none_or(|browser| browser.status.is_alive()) {
+            return None;
+        }
+        Some(panel_id)
+    }
+
+    fn speech_focus_and_sink(&self, ctx: &Context) -> (bool, bool, Option<SpeechSink>) {
+        let root_focused = ctx.input(|input| input.viewport().focused.unwrap_or(true));
+        let detached_focused = self.any_detached_viewport_focused(ctx);
+        let os_focus = if self.template_config.features.speech.desktop_injection
+            && !horizon_session_focused(root_focused, detached_focused, None)
+        {
+            horizon_cursor::current_process_has_os_focus()
+        } else {
+            None
+        };
+        let horizon_focused = horizon_session_focused(root_focused, detached_focused, os_focus);
+        let sink = dictation_sink(
+            self.focused_horizon_text_panel(ctx, root_focused, os_focus),
+            self.template_config.features.speech.desktop_injection,
+            horizon_focused,
+        );
+        (root_focused, horizon_focused, sink)
+    }
+
     pub(in crate::app) fn handle_speech_input(&mut self, ctx: &Context) {
         let now = Instant::now();
         self.expire_speech_release_ownership(now);
         self.speech_escape_cancelled = false;
-        let desktop_injection = self.template_config.features.speech.desktop_injection;
         // Capture-state hygiene must run even without a speech runtime
         // (stub builds, or Speech Input disabled with Rebind still armed):
         // a stale flag would suppress global shortcuts indefinitely.
@@ -453,16 +484,10 @@ impl HorizonApp {
         // release is seen; if the window loses focus first, that release may
         // never arrive (Wayland/macOS), so recover the pending key here or it
         // would disable every shortcut indefinitely.
-        let root_focused_now = ctx.input(|input| input.viewport().focused.unwrap_or(true));
-        let horizon_focused = root_focused_now || self.any_detached_viewport_focused(ctx);
+        let (root_focused_now, horizon_focused, sink) = self.speech_focus_and_sink(ctx);
         let (text_surface_active, search_capturing) = self.speech_text_surface_active();
         self.sync_speech_global_hotkeys_for_surfaces(capturing_hotkey, text_surface_active, horizon_focused);
         self.install_speech_global_wake(ctx);
-        let sink = dictation_sink(
-            self.focused_horizon_text_panel(ctx, root_focused_now),
-            desktop_injection,
-            horizon_focused,
-        );
         if !root_focused_now {
             ctx.data_mut(|data| {
                 data.insert_temp(
@@ -624,6 +649,40 @@ impl HorizonApp {
                 SpeechEvent::Text { target, text } => match target {
                     SpeechSink::Panel(panel_id) => self.inject_transcript_into_panel(panel_id, &text),
                     SpeechSink::Desktop => {
+                        match desktop_insert_route(
+                            horizon_cursor::current_process_has_os_focus_fresh(),
+                            self.logically_focused_text_panel(),
+                        ) {
+                            DesktopInsertRoute::Panel(panel_id) => {
+                                tracing::info!("desktop dictation delivered to the focused Horizon panel");
+                                self.inject_transcript_into_panel(panel_id, &text);
+                                continue;
+                            }
+                            DesktopInsertRoute::HorizonWithoutTerminal => {
+                                tracing::info!("desktop dictation discarded; Horizon is focused but has no text panel");
+                                ctx.data_mut(|data| {
+                                    data.insert_temp(
+                                        egui::Id::new(DESKTOP_INSERT_ERROR_ID),
+                                        "could not insert transcript (Horizon is focused but has no text panel); clipboard was not used".to_owned(),
+                                    );
+                                });
+                                ctx.request_repaint();
+                                continue;
+                            }
+                            DesktopInsertRoute::External => {}
+                        }
+                        let expected_window = horizon_cursor::current_input_focus_window();
+                        if cfg!(any(target_os = "linux", target_os = "freebsd")) && expected_window.is_none() {
+                            tracing::info!("desktop dictation discarded; X11 focus window was not observable");
+                            ctx.data_mut(|data| {
+                                data.insert_temp(
+                                    egui::Id::new(DESKTOP_INSERT_ERROR_ID),
+                                    "could not insert transcript (focused window was not observable); clipboard was not used".to_owned(),
+                                );
+                            });
+                            ctx.request_repaint();
+                            continue;
+                        }
                         let payload = format!("{text} ");
                         let result_ctx = ctx.clone();
                         ctx.data_mut(|data| {
@@ -632,7 +691,7 @@ impl HorizonApp {
                         if std::thread::Builder::new()
                             .name("horizon-speech-direct-insert".to_owned())
                             .spawn(move || {
-                                let result = inject_desktop_transcript(&payload);
+                                let result = inject_desktop_transcript(&payload, expected_window);
                                 result_ctx.data_mut(|data| {
                                     data.remove_temp::<bool>(egui::Id::new(DESKTOP_INSERT_PENDING_ID));
                                     if let Err(error) = result {

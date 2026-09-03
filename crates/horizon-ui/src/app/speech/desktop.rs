@@ -3,7 +3,7 @@
 use horizon_core::{PanelId, ShortcutBinding, ShortcutKey, SpeechHotkeyMode};
 use horizon_cursor::{
     GlobalHotkeys, Hotkey, HotkeyError, HotkeyEvent, HotkeyKey, InjectError, capture_focused_accessible_target,
-    insert_text_into_focused_accessible, release_focused_accessible_target,
+    insert_text_into_focused_accessible_for_window, release_focused_accessible_target,
 };
 
 use super::super::HorizonApp;
@@ -28,11 +28,56 @@ pub(crate) fn dictation_sink(
     }
 }
 
-pub(crate) fn inject_desktop_transcript(text: &str) -> Result<(), InjectError> {
+/// Combine egui viewport focus with the OS-focused window.
+///
+/// Global X11 grabs can make egui report the root viewport as unfocused while
+/// the Horizon window still has input focus. Treating that as background
+/// dictation sends the transcript through AT-SPI, which Horizon terminals
+/// never expose.
+#[must_use]
+pub(crate) fn horizon_session_focused(root_focused: bool, detached_focused: bool, os_focus: Option<bool>) -> bool {
+    root_focused || detached_focused || os_focus.unwrap_or(false)
+}
+
+/// Whether the logically focused terminal should receive dictation.
+///
+/// When this process owns OS focus, egui's per-viewport focused flag can still
+/// be false (global hotkey grabs, detached windows). Route to the board's
+/// focused terminal instead of falling through to desktop insertion.
+#[must_use]
+pub(crate) const fn use_logically_focused_terminal(matches_viewport: bool, os_focus: Option<bool>) -> bool {
+    matches_viewport || matches!(os_focus, Some(true))
+}
+
+/// Where a completed desktop dictation should go once OS focus is known.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DesktopInsertRoute {
+    Panel(PanelId),
+    External,
+    HorizonWithoutTerminal,
+}
+
+/// If a desktop dictation finishes while this process still owns OS focus,
+/// deliver into the logically focused terminal instead of AT-SPI.
+#[must_use]
+pub(crate) const fn desktop_insert_route(
+    os_focus: Option<bool>,
+    focused_terminal: Option<PanelId>,
+) -> DesktopInsertRoute {
+    match os_focus {
+        Some(true) => match focused_terminal {
+            Some(panel) => DesktopInsertRoute::Panel(panel),
+            None => DesktopInsertRoute::HorizonWithoutTerminal,
+        },
+        _ => DesktopInsertRoute::External,
+    }
+}
+
+pub(crate) fn inject_desktop_transcript(text: &str, expected_window: Option<u32>) -> Result<(), InjectError> {
     if let Some(result) = take_test_inject_result(text) {
         return result;
     }
-    insert_text_into_focused_accessible(text)
+    insert_text_into_focused_accessible_for_window(text, expected_window)
 }
 
 pub(crate) fn prepare_desktop_target() -> Result<(), InjectError> {
@@ -248,6 +293,40 @@ mod tests {
     use crate::app::speech::SpeechSink;
 
     #[test]
+    fn os_window_focus_counts_as_a_horizon_session() {
+        assert!(super::horizon_session_focused(false, false, Some(true)));
+        assert!(!super::horizon_session_focused(false, false, Some(false)));
+        assert!(!super::horizon_session_focused(false, false, None));
+        assert!(super::horizon_session_focused(true, false, Some(false)));
+        assert!(super::horizon_session_focused(false, true, None));
+    }
+
+    #[test]
+    fn os_focus_keeps_the_logically_focused_terminal() {
+        assert!(super::use_logically_focused_terminal(false, Some(true)));
+        assert!(!super::use_logically_focused_terminal(false, Some(false)));
+        assert!(!super::use_logically_focused_terminal(false, None));
+        assert!(super::use_logically_focused_terminal(true, Some(false)));
+    }
+
+    #[test]
+    fn desktop_insert_redirects_to_the_focused_terminal_when_horizon_owns_os_focus() {
+        let panel = PanelId(4);
+        assert_eq!(
+            super::desktop_insert_route(Some(true), Some(panel)),
+            super::DesktopInsertRoute::Panel(panel)
+        );
+        assert_eq!(
+            super::desktop_insert_route(Some(true), None),
+            super::DesktopInsertRoute::HorizonWithoutTerminal
+        );
+        assert_eq!(
+            super::desktop_insert_route(Some(false), Some(panel)),
+            super::DesktopInsertRoute::External
+        );
+    }
+
+    #[test]
     fn focused_terminal_wins_over_desktop_flag_while_root_is_focused() {
         let panel = PanelId(3);
         assert_eq!(dictation_sink(Some(panel), true, true), Some(SpeechSink::Panel(panel)));
@@ -313,10 +392,10 @@ mod tests {
     #[test]
     fn inject_hook_short_circuits_the_os_path() {
         super::set_test_inject_hook(Some(|_| Ok(())));
-        assert!(super::inject_desktop_transcript("hello ").is_ok());
+        assert!(super::inject_desktop_transcript("hello ", None).is_ok());
         super::set_test_inject_hook(Some(|_| Err(horizon_cursor::InjectError::Unsupported)));
         assert_eq!(
-            super::inject_desktop_transcript("hello "),
+            super::inject_desktop_transcript("hello ", None),
             Err(horizon_cursor::InjectError::Unsupported)
         );
         super::set_test_inject_hook(None);
