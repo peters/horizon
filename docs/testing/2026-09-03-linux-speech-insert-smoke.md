@@ -10,7 +10,7 @@ transcripts, field contents, window titles, or credentials.
 ## Safety contract
 
 - Direct insertion must not use the clipboard or press Return.
-- Password fields must still refuse insertion.
+- AT-SPI `PasswordText` fields must still refuse insertion.
 - Scope automation to the exact candidate PID.
 
 ## 1. Build
@@ -28,16 +28,17 @@ cargo build --features speech
 4. Confirm the marker appears in the focused panel and no speech-insert error toast is shown.
 5. Repeat with the pointer over empty canvas chrome while the same panel remains the board-focused terminal: the marker must still land in that panel, not an AT-SPI error.
 
-## 3. Unclassifiable Chromium / Teams targets
+## 3. Microsoft Teams / Chromium compose box
 
-1. Focus a Teams (or other Chromium PWA) message box.
+1. Focus a Teams (or other Chromium PWA) message box. Do not select existing text.
 2. Hold PTT from a background Horizon with `desktop_injection: true`.
-3. Confirm insertion is refused (no text appears, no Return is sent) because the app does not expose a classifiable AT-SPI text field.
-4. Confirm the clipboard is unchanged.
+3. Speak a unique marker that contains no newline.
+4. Confirm the marker appears at the caret in the compose box and the chat is not sent.
+5. Confirm the clipboard is unchanged.
 
 ## 4. Refusals
 
-1. Focus a password field and dictate: insertion must fail closed without typing.
+1. Focus a GTK or Qt password field that exposes AT-SPI `PasswordText` and dictate: insertion must fail closed without typing.
 2. Select text in a GTK entry that exposes AT-SPI EditableText and dictate: insertion must refuse rather than replace the selection.
 
 ## 5. Cleanup

@@ -205,7 +205,7 @@ const fn desktop_injection_copy() -> &'static str {
     if cfg!(target_os = "macos") {
         "With Horizon in the background, push-to-talk inserts directly into the exact editable field captured when you press it. Any focus change discards the transcript. macOS Accessibility is used; the clipboard is never used."
     } else if cfg!(target_os = "linux") {
-        "When no Horizon window is focused, push-to-talk inserts through Linux accessibility into a unique focused editable field. If that field cannot be classified — Chromium, Electron, and Microsoft Teams typically expose no AT-SPI tree — insertion is refused so password fields stay fail-closed. The clipboard is never used and Return is never sent. Background dictation currently requires X11."
+        "When no Horizon window is focused, push-to-talk inserts through Linux accessibility. If the app does not expose an editable field — common for Chromium, Electron, and Microsoft Teams — the transcript is typed into the focused window. Password fields and selected text are left unchanged when accessibility identifies them. The clipboard is never used and Return is never sent. Background dictation currently requires X11."
     } else {
         "Insertion into other apps is not supported on this platform. Horizon never uses the clipboard for speech input."
     }
@@ -866,6 +866,11 @@ mod tests {
         let copy = desktop_injection_copy();
         assert!(copy.contains("clipboard"));
         assert!(!copy.contains("paste"));
+        #[cfg(target_os = "linux")]
+        {
+            assert!(copy.contains("typed into the focused window"));
+            assert!(!copy.contains("refused"));
+        }
     }
 
     #[test]

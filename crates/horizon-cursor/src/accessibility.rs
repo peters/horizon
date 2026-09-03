@@ -57,10 +57,10 @@ pub fn request_accessibility_permission() -> Option<bool> {
 /// This path never reads or writes the clipboard. It refuses ambiguous,
 /// protected, stale, hidden, read-only, or selected-text targets so failure
 /// cannot partially replace existing text. On Linux, if no AT-SPI editable
-/// field exists, keys are synthesized only into a unique focused terminal or
-/// plain text widget that is not a password field and has no selection.
-/// Unclassifiable targets, including Chromium surfaces with no AT-SPI tree,
-/// remain failures.
+/// field exists, keys are typed into the focused window. A unique focused
+/// object that is a password field, or that exposes a visible selection, is
+/// still refused. Chromium, Electron, and Microsoft Teams typically have no
+/// AT-SPI tree; desktop dictation types into those windows anyway.
 ///
 /// # Errors
 ///
@@ -135,10 +135,6 @@ mod platform {
             self.states.contains(State::Focused)
         }
 
-        fn allows_key_synthesis(self) -> bool {
-            matches!(self.role, Role::Terminal | Role::Entry | Role::Text | Role::Editbar)
-        }
-
         fn validate_synthesis_target(self) -> Result<(), InjectError> {
             if self.role == Role::PasswordText {
                 return Err(InjectError::Target("dictation into password fields is disabled"));
@@ -148,14 +144,6 @@ mod platform {
             }
             if !self.states.contains(State::Focused) {
                 return Err(InjectError::Target("focused accessibility target changed"));
-            }
-            if !self.allows_key_synthesis() {
-                return Err(InjectError::Target(
-                    "focused application does not expose a classifiable text field",
-                ));
-            }
-            if self.states.contains(State::ReadOnly) {
-                return Err(InjectError::Target("focused field is not editable"));
             }
             Ok(())
         }
@@ -252,7 +240,7 @@ mod platform {
         match insert_into_editable_field(&connection, deadline, &text).await {
             Ok(()) => Ok(()),
             Err(error) if can_synthesize_keys(&error) => {
-                synthesize_into_classifiable_focus(&connection, deadline, &text).await
+                synthesize_into_focused_target(&connection, deadline, &text).await
             }
             Err(error) => Err(error),
         }
@@ -425,7 +413,7 @@ mod platform {
     fn unique_focused_index(candidate_count: usize) -> Result<usize, InjectError> {
         unique_index(
             candidate_count,
-            "focused application does not expose a classifiable text field",
+            "focused application does not expose a focused accessibility object",
             "multiple focused fields were reported",
         )
     }
@@ -442,6 +430,13 @@ mod platform {
         matches!(
             error,
             InjectError::Target("focused application does not expose an editable text field")
+        )
+    }
+
+    fn is_unclassified_focus(error: &InjectError) -> bool {
+        matches!(
+            error,
+            InjectError::Target("focused application does not expose a focused accessibility object")
         )
     }
 
@@ -493,42 +488,45 @@ mod platform {
         find_unique_focus(connection, FocusSearch::FocusedOnly, unique_focused_index).await
     }
 
-    async fn synthesize_into_classifiable_focus(
+    async fn synthesize_into_focused_target(
         connection: &AccessibilityConnection,
         deadline: tokio::time::Instant,
         text: &str,
     ) -> Result<(), InjectError> {
-        let target = bounded_preflight(deadline, find_focused_object(connection)).await?;
-        let accessible = bounded_preflight(deadline, async {
-            target
-                .as_accessible_proxy(connection.connection())
-                .await
-                .map_err(|_| InjectError::Failed("focused accessibility target disappeared"))
-        })
-        .await?;
-        let facts = bounded_preflight(deadline, read_target_facts(&accessible)).await?;
-        facts.validate_synthesis_target()?;
-        if facts.interfaces.contains(Interface::Text) {
-            let proxies = bounded_preflight(deadline, async {
-                accessible
-                    .proxies()
-                    .await
-                    .map_err(|_| InjectError::Failed("failed to inspect focused field interfaces"))
-            })
-            .await?;
-            let text_proxy = bounded_preflight(deadline, async {
-                proxies
-                    .text()
-                    .await
-                    .map_err(|_| InjectError::Target("focused field does not expose readable text state"))
-            })
-            .await?;
-            let snapshot = bounded_preflight(deadline, read_text_snapshot(&text_proxy)).await?;
-            if snapshot.selection_count != 0 {
-                return Err(InjectError::Target(
-                    "selected text cannot be replaced safely by direct dictation",
-                ));
+        match bounded_preflight(deadline, find_focused_object(connection)).await {
+            Ok(target) => {
+                let accessible = bounded_preflight(deadline, async {
+                    target
+                        .as_accessible_proxy(connection.connection())
+                        .await
+                        .map_err(|_| InjectError::Failed("focused accessibility target disappeared"))
+                })
+                .await?;
+                let facts = bounded_preflight(deadline, read_target_facts(&accessible)).await?;
+                facts.validate_synthesis_target()?;
+                if facts.interfaces.contains(Interface::Text) {
+                    let selected = async {
+                        let proxies = accessible
+                            .proxies()
+                            .await
+                            .map_err(|_| InjectError::Failed("failed to inspect focused field interfaces"))?;
+                        let text_proxy = proxies
+                            .text()
+                            .await
+                            .map_err(|_| InjectError::Target("focused field does not expose readable text state"))?;
+                        let snapshot = read_text_snapshot(&text_proxy).await?;
+                        Ok(snapshot.selection_count != 0)
+                    };
+                    if let Ok(true) = bounded_preflight(deadline, selected).await {
+                        return Err(InjectError::Target(
+                            "selected text cannot be replaced safely by direct dictation",
+                        ));
+                    }
+                }
             }
+            // No AT-SPI focused object (Chromium/Teams). Type into OS focus.
+            Err(error) if is_unclassified_focus(&error) => {}
+            Err(error) => return Err(error),
         }
         synthesize_key_string(connection, text).await
     }
@@ -589,8 +587,8 @@ mod platform {
         use atspi::{Interface, InterfaceSet, Role, State, StateSet};
 
         use super::{
-            INSERT_LOCK, InjectError, TargetFacts, TextSnapshot, can_synthesize_keys, sanitize_desktop_transcript,
-            unique_candidate_index,
+            INSERT_LOCK, InjectError, TargetFacts, TextSnapshot, can_synthesize_keys, is_unclassified_focus,
+            sanitize_desktop_transcript, unique_candidate_index, unique_focused_index,
         };
 
         fn safe_target() -> TargetFacts {
@@ -637,7 +635,7 @@ mod platform {
         }
 
         #[test]
-        fn key_synthesis_requires_a_classifiable_non_password_focus() {
+        fn key_synthesis_refuses_password_fields_not_unclassified_focus() {
             let mut terminal = safe_target();
             terminal.role = Role::Terminal;
             terminal.interfaces = InterfaceSet::new(Interface::Text);
@@ -656,11 +654,40 @@ mod platform {
                 role: Role::Frame,
                 ..terminal
             };
+            assert_eq!(frame.validate_synthesis_target(), Ok(()));
+
+            let document = TargetFacts {
+                role: Role::DocumentWeb,
+                ..terminal
+            };
+            assert_eq!(document.validate_synthesis_target(), Ok(()));
+
+            let mut read_only_frame = frame;
+            read_only_frame.states.insert(State::ReadOnly);
+            assert_eq!(read_only_frame.validate_synthesis_target(), Ok(()));
+        }
+
+        #[test]
+        fn unclassified_focus_is_typed_into_the_focused_window() {
+            assert!(is_unclassified_focus(&InjectError::Target(
+                "focused application does not expose a focused accessibility object"
+            )));
+            assert!(!is_unclassified_focus(&InjectError::Target(
+                "multiple focused fields were reported"
+            )));
+            assert!(!is_unclassified_focus(&InjectError::Target(
+                "dictation into password fields is disabled"
+            )));
+            assert_eq!(unique_focused_index(1), Ok(0));
             assert_eq!(
-                frame.validate_synthesis_target(),
+                unique_focused_index(0),
                 Err(InjectError::Target(
-                    "focused application does not expose a classifiable text field"
+                    "focused application does not expose a focused accessibility object"
                 ))
+            );
+            assert_eq!(
+                unique_focused_index(2),
+                Err(InjectError::Target("multiple focused fields were reported"))
             );
         }
 
