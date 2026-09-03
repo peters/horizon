@@ -3,8 +3,8 @@ use egui::{Context, Event, Id, Key, Modifiers, PointerButton, Pos2, RawInput, Re
 use horizon_core::{AgentSessionBinding, PanelKind};
 
 use super::{
-    MicState, clip_screen_rect_to_canvas, mic_accessibility_label, mic_control_enabled, mic_control_response,
-    mic_widget_info, render_session_rebind_options,
+    CanvasClippedArea, MicState, clip_screen_rect_to_canvas, mic_accessibility_label, mic_control_enabled,
+    mic_control_response, mic_widget_info, render_session_rebind_options,
 };
 
 fn key_press(key: Key) -> Event {
@@ -80,6 +80,63 @@ fn session_binding(session_id: &str) -> AgentSessionBinding {
     )
 }
 
+fn overlay_click_frame(ctx: &Context, events: Vec<Event>, panel_clip: Rect) -> bool {
+    let input = RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(500.0, 240.0))),
+        events,
+        ..RawInput::default()
+    };
+    let mut clicked = false;
+    let _ = ctx
+        .run_ui(input, |ui| {
+            clicked = ui
+                .put(
+                    Rect::from_min_size(Pos2::new(300.0, 80.0), Vec2::new(100.0, 30.0)),
+                    egui::Button::new("YAML"),
+                )
+                .clicked();
+            egui::Area::new(Id::new("panel-overlap-test"))
+                .fixed_pos(Pos2::ZERO)
+                .clip_to_canvas(panel_clip)
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    let _ = ui.allocate_exact_size(Vec2::new(500.0, 200.0), egui::Sense::click_and_drag());
+                });
+        })
+        .discard_textures();
+    clicked
+}
+
+fn click_overlay_through_panel_clip(panel_clip: Rect) -> bool {
+    let ctx = Context::default();
+    let target = Pos2::new(350.0, 95.0);
+    assert!(!overlay_click_frame(&ctx, Vec::new(), panel_clip));
+    assert!(!overlay_click_frame(&ctx, Vec::new(), panel_clip));
+    assert!(!overlay_click_frame(
+        &ctx,
+        vec![
+            Event::PointerMoved(target),
+            Event::PointerButton {
+                pos: target,
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            },
+        ],
+        panel_clip,
+    ));
+    overlay_click_frame(
+        &ctx,
+        vec![Event::PointerButton {
+            pos: target,
+            button: PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        }],
+        panel_clip,
+    )
+}
+
 #[test]
 fn clip_screen_rect_to_canvas_intersects_with_canvas_bounds() {
     let canvas_rect = Rect::from_min_max(Pos2::new(100.0, 80.0), Pos2::new(420.0, 320.0));
@@ -97,6 +154,15 @@ fn clip_screen_rect_to_canvas_rejects_non_positive_intersections() {
     let raw_rect = Rect::from_min_size(Pos2::new(430.0, 90.0), Vec2::new(80.0, 80.0));
 
     assert_eq!(clip_screen_rect_to_canvas(raw_rect, canvas_rect), None);
+}
+
+#[test]
+fn canvas_clipped_panel_area_does_not_block_overlay_input() {
+    let full_panel_clip = Rect::from_min_size(Pos2::ZERO, Vec2::new(500.0, 240.0));
+    assert!(!click_overlay_through_panel_clip(full_panel_clip));
+
+    let canvas_clip = Rect::from_min_size(Pos2::ZERO, Vec2::new(200.0, 240.0));
+    assert!(click_overlay_through_panel_clip(canvas_clip));
 }
 
 #[test]
