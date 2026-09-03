@@ -158,11 +158,14 @@ fn render_edit_pane(ui: &mut egui::Ui, panel: &mut Panel) -> Option<Rect> {
             let row_height = ui.fonts_mut(|fonts| fonts.row_height(&FontId::monospace(FONT_SIZE)));
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let desired_rows = (viewport.height() / row_height).ceil().max(1.0) as usize;
-            let response = ui.add(markdown_text_edit(&mut editor.text, viewport.size(), desired_rows));
-            if response.changed() {
+            let output = markdown_text_edit(&mut editor.text, viewport.size(), desired_rows).show(ui);
+            if output.response.changed() {
                 editor.dirty = true;
             }
-            response.rect
+            if let Some(range) = output.cursor_range {
+                editor.caret = range.primary.index.into();
+            }
+            output.response.rect
         });
     Some(output.inner)
 }

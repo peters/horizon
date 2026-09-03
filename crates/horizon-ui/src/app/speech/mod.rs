@@ -1,5 +1,5 @@
 //! Speech-to-text input: a per-panel mic button and a global push-to-talk
-//! hotkey that dictate into a terminal panel as if the text had been typed.
+//! hotkey that dictate into the focused panel as if the text had been typed.
 //!
 //! The whole subsystem is opt-in behind the `speech` cargo feature. Without
 //! the feature this module compiles down to an inert stub with the same API,
@@ -14,7 +14,7 @@ use horizon_core::PanelId;
 /// Where a finished transcript should be inserted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SpeechSink {
-    /// Typed into this terminal panel's PTY.
+    /// Inserted into this panel (PTY, editor caret, or browser page).
     Panel(PanelId),
     /// Pasted into the currently focused OS window.
     Desktop,

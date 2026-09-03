@@ -606,8 +606,8 @@ impl HorizonApp {
                     ui.make_persistent_id(("panel_close", panel_id.0)),
                     if interactive { Sense::click() } else { Sense::hover() },
                 );
-                // Terminal panels dictate through their PTY; browser panels
-                // dispatch text to the focused page element through CDP.
+                // Terminal panels dictate through their PTY; editor panels
+                // insert at the caret; browser panels dispatch through CDP.
                 let mic_eligible = self.speech.is_some() && snapshot.kind.accepts_text_input();
                 let mic_response = mic_eligible.then(|| {
                     let speech = self.speech.as_ref();

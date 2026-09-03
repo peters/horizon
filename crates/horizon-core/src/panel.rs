@@ -62,11 +62,11 @@ impl PanelKind {
     }
 
     /// Whether this panel owns a text-input surface that can receive typed
-    /// or dictated text. Terminal-backed panels write to their PTY; browser
-    /// panels dispatch text to the focused page element through CDP.
+    /// or dictated text. Terminal-backed panels write to their PTY; editor
+    /// panels insert at the caret; browser panels dispatch through CDP.
     #[must_use]
     pub const fn accepts_text_input(self) -> bool {
-        !matches!(self, Self::Editor | Self::GitChanges | Self::Usage)
+        !matches!(self, Self::GitChanges | Self::Usage)
     }
 
     #[must_use]
@@ -909,17 +909,18 @@ mod tests {
     }
 
     #[test]
-    fn terminal_and_browser_panels_accept_text_input() {
+    fn text_panels_accept_dictation() {
         for kind in [
             PanelKind::Shell,
             PanelKind::Ssh,
             PanelKind::Codex,
             PanelKind::Command,
             PanelKind::Browser,
+            PanelKind::Editor,
         ] {
             assert!(kind.accepts_text_input(), "kind {kind:?} must accept text input");
         }
-        for kind in [PanelKind::Editor, PanelKind::GitChanges, PanelKind::Usage] {
+        for kind in [PanelKind::GitChanges, PanelKind::Usage] {
             assert!(!kind.accepts_text_input(), "kind {kind:?} must reject text input");
         }
     }
