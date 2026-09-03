@@ -324,7 +324,7 @@ trait Transport: Send + Sync {
 fn validate_profile(profile: &AzureProfile) -> Result<(), AzureError> {
     let prefix = format!("/subscriptions/{}/", profile.subscription_id);
     let valid = valid_text(&profile.name, 191)
-        && uuid::Uuid::parse_str(&profile.subscription_id).is_ok()
+        && valid_subscription_id(&profile.subscription_id)
         && valid_resource_group(&profile.resource_group)
         && valid_arm_id(&profile.environment_id)
         && profile
@@ -428,6 +428,9 @@ fn valid_arm_id(value: &str) -> bool {
         && !value.contains(['?', '#'])
         && value.bytes().all(|byte| !byte.is_ascii_whitespace())
 }
+fn valid_subscription_id(value: &str) -> bool {
+    uuid::Uuid::parse_str(value).is_ok_and(|id| id.hyphenated().to_string().eq_ignore_ascii_case(value))
+}
 fn valid_user_assigned_identity_id(value: &str) -> bool {
     let segments: Vec<_> = value.split('/').collect();
     let [
@@ -446,7 +449,7 @@ fn valid_user_assigned_identity_id(value: &str) -> bool {
     };
     valid_arm_id(value)
         && subscriptions.eq_ignore_ascii_case("subscriptions")
-        && uuid::Uuid::parse_str(subscription).is_ok()
+        && valid_subscription_id(subscription)
         && resource_groups.eq_ignore_ascii_case("resourceGroups")
         && valid_resource_group(group)
         && providers.eq_ignore_ascii_case("providers")
