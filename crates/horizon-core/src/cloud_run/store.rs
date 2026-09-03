@@ -292,23 +292,26 @@ impl CloudWorkflowStore {
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
             )
             .optional()?;
-        if let Some(existing) = existing {
-            if existing.0 == id && existing.1 == job_id_text {
-                transaction.commit()?;
-                return Ok(false);
-            }
-            return Err(CloudStoreError::ClaimIdentityConflict);
-        }
-        let job_already_claimed = transaction.query_row(
+        let resource_matches = match existing {
+            Some(existing) if existing.0 == id && existing.1 == job_id_text => true,
+            Some(_) => return Err(CloudStoreError::ClaimIdentityConflict),
+            None => false,
+        };
+        let job_claimed_elsewhere = transaction.query_row(
             "SELECT EXISTS(
                     SELECT 1 FROM cloud_worker_creation_claims
                     WHERE workflow_id = ?1 AND job_id = ?2
+                      AND (provider != ?3 OR resource_name != ?4)
                  )",
-            params![id, job_id_text],
+            params![id, job_id_text, provider_name, resource_name],
             |row| row.get::<_, bool>(0),
         )?;
-        if job_already_claimed {
+        if job_claimed_elsewhere {
             return Err(CloudStoreError::ClaimIdentityConflict);
+        }
+        if resource_matches {
+            transaction.commit()?;
+            return Ok(false);
         }
         transaction.execute(
             "INSERT INTO cloud_worker_creation_claims (

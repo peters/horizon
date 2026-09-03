@@ -340,7 +340,7 @@ fn corrupt_creation_claim_values_are_bounded_before_materialization() {
 }
 
 #[test]
-fn mismatched_claim_provider_fails_closed() {
+fn mismatched_and_duplicate_claim_providers_fail_closed() {
     let temp = TempDir::new().expect("temp dir");
     let store = store(&temp);
     let workflow = retained_workflow(CloudProvider::RunPod, 1_000);
@@ -365,6 +365,22 @@ fn mismatched_claim_provider_fails_closed() {
         })
         .expect("claim count");
     assert_eq!(claim_count, 1);
+
+    connection
+        .execute("UPDATE cloud_worker_creation_claims SET provider='run_pod'", [])
+        .expect("restore claim provider");
+    connection
+        .execute(
+            "INSERT INTO cloud_worker_creation_claims (
+                provider, workflow_id, job_id, resource_name, claimed_at_millis
+             ) VALUES ('azure', ?1, ?2, 'horizon-worker-corrupt', 1000)",
+            params![workflow.id.to_string(), job_id.to_string()],
+        )
+        .expect("insert duplicate cross-provider claim");
+    assert!(matches!(
+        store.claim_worker_creation(workflow.id, job_id, target, "horizon-worker-1"),
+        Err(CloudStoreError::ClaimIdentityConflict)
+    ));
 }
 
 #[test]
