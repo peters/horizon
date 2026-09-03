@@ -653,7 +653,7 @@ pub enum CloudStoreError {
     },
     #[error("stored cloud workflow has an invalid identity")]
     InvalidStoredWorkflowId,
-    #[error("cloud workflow snapshot has {size} bytes; maximum is {maximum}")]
+    #[error("cloud workflow snapshot has at least {size} bytes; maximum is {maximum}")]
     SnapshotTooLarge { size: usize, maximum: usize },
     #[error("retained cloud workflows exceed the bounded recovery budget")]
     RecoveryLimitExceeded,

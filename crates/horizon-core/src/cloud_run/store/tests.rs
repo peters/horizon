@@ -149,11 +149,13 @@ fn recovery_lists_only_retained_valid_snapshots() {
             params![retained.id.to_string(), MAX_MATERIALIZED_SNAPSHOT_BYTES],
         )
         .expect("oversize snapshot");
+    let oversize_error = store.load(retained.id).expect_err("oversize stored snapshot");
     assert!(matches!(
-        store.load(retained.id),
-        Err(CloudStoreError::SnapshotTooLarge { size, maximum })
-            if size == MAX_SNAPSHOT_BYTES + 1 && maximum == MAX_SNAPSHOT_BYTES
+        &oversize_error,
+        CloudStoreError::SnapshotTooLarge { size, maximum }
+            if *size == MAX_SNAPSHOT_BYTES + 1 && *maximum == MAX_SNAPSHOT_BYTES
     ));
+    assert!(oversize_error.to_string().contains("has at least 4194305 bytes"));
     connection
         .execute_batch("UPDATE cloud_workflows SET workflow_id=printf('%4096s','x') WHERE length(snapshot)>4194304")
         .expect("oversize id");
