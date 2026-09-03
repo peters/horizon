@@ -25,6 +25,8 @@ cargo build --features speech
 2. Hold PTT or click the title-bar mic, speak a unique marker, release.
 3. Confirm the marker is inserted at the caret, not only at the end, and the
    buffer is dirty.
+4. Dictate a second unique marker without moving the caret. Confirm it appears
+   after the first marker, not before it. The visible caret stays after both.
 
 ## 4. Browser panel
 

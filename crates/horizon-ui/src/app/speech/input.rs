@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use egui::Context;
 use horizon_core::browser::{BrowserCommand, BrowserInput};
-use horizon_core::{PanelId, WorkspaceId};
+use horizon_core::{Panel, PanelId, WorkspaceId};
 
 use super::super::shortcuts;
 use super::super::{HorizonApp, SpeechNotice};
@@ -91,7 +91,7 @@ fn no_start_notice(activity: SpeechActivity) -> SpeechEvent {
         SpeechActivity::Busy => {
             "Hotkey ignored — still processing the previous dictation (the first use also loads the model, which can take a while)."
         }
-        SpeechActivity::Idle => "Focus a terminal panel to dictate into it.",
+        SpeechActivity::Idle => "Focus a terminal, editor, or browser panel to dictate into it.",
     };
     SpeechEvent::Notice(message.to_string())
 }
@@ -323,6 +323,34 @@ fn apply_global_hotkeys(
     (engaged_profile, disconnected)
 }
 
+#[derive(Debug, PartialEq)]
+enum TranscriptInjection {
+    Terminal,
+    Editor,
+    BrowserInsertText(String),
+    Ignored,
+}
+
+fn inject_transcript(panel: &mut Panel, text: &str) -> TranscriptInjection {
+    let payload = format!("{text} ");
+    if let Some(mode) = panel.terminal().map(horizon_core::Terminal::mode) {
+        let bytes = input::paste_bytes(&payload, mode, true);
+        panel.write_input(&bytes);
+        return TranscriptInjection::Terminal;
+    }
+    if let Some(editor) = panel.editor_mut() {
+        editor.insert_dictation(&payload);
+        return TranscriptInjection::Editor;
+    }
+    if let Some(browser) = panel.browser() {
+        browser.send(BrowserCommand::Input(BrowserInput::InsertText {
+            text: payload.clone(),
+        }));
+        return TranscriptInjection::BrowserInsertText(payload);
+    }
+    TranscriptInjection::Ignored
+}
+
 impl HorizonApp {
     pub(in crate::app) fn cancel_speech_target(&mut self, panel_id: PanelId) -> bool {
         let Some(speech) = self.speech.as_mut() else {
@@ -346,19 +374,7 @@ impl HorizonApp {
             tracing::warn!("speech target panel closed before transcription finished");
             return;
         };
-        let payload = format!("{text} ");
-        if let Some(mode) = panel.terminal().map(horizon_core::Terminal::mode) {
-            let bytes = input::paste_bytes(&payload, mode, true);
-            panel.write_input(&bytes);
-            return;
-        }
-        if let Some(editor) = panel.editor_mut() {
-            editor.insert_dictation(&payload);
-            return;
-        }
-        if let Some(browser) = panel.browser() {
-            browser.send(BrowserCommand::Input(BrowserInput::InsertText { text: payload }));
-        }
+        let _ = inject_transcript(panel, text);
     }
 
     fn focused_horizon_text_panel(&self, ctx: &Context, root_focused: bool) -> Option<PanelId> {

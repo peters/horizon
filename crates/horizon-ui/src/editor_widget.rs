@@ -1,7 +1,8 @@
 use egui::containers::scroll_area::ScrollBarVisibility;
-use egui::{Align, Color32, CornerRadius, FontId, Layout, Pos2, Rect, RichText, ScrollArea, Vec2};
+use egui::text::{CCursor, CCursorRange};
+use egui::{Align, Color32, CornerRadius, FontId, Id, Layout, Pos2, Rect, RichText, ScrollArea, TextEdit, Vec2};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
-use horizon_core::{MarkdownEditor, Panel, PreviewMode, ShortcutBinding};
+use horizon_core::{MarkdownEditor, Panel, PanelId, PreviewMode, ShortcutBinding};
 
 use crate::app::shortcuts::shortcut_pressed;
 use crate::theme;
@@ -144,8 +145,25 @@ fn render_body(
     }
 }
 
+fn editor_text_id(panel_id: PanelId) -> Id {
+    Id::new(("horizon_editor_text", panel_id.0))
+}
+
+fn sync_text_edit_caret(ctx: &egui::Context, id: Id, caret: usize) {
+    let mut state = TextEdit::load_state(ctx, id).unwrap_or_default();
+    state
+        .cursor
+        .set_char_range(Some(CCursorRange::one(CCursor::new(caret))));
+    state.store(ctx, id);
+}
+
 fn render_edit_pane(ui: &mut egui::Ui, panel: &mut Panel) -> Option<Rect> {
+    let editor_id = editor_text_id(panel.id);
     let editor = panel.content.editor_mut()?;
+    if let Some(caret) = editor.take_pending_caret() {
+        sync_text_edit_caret(ui.ctx(), editor_id, caret);
+        ui.memory_mut(|memory| memory.request_focus(editor_id));
+    }
 
     let output = ScrollArea::vertical()
         .scroll_bar_visibility(ScrollBarVisibility::AlwaysVisible)
@@ -158,7 +176,7 @@ fn render_edit_pane(ui: &mut egui::Ui, panel: &mut Panel) -> Option<Rect> {
             let row_height = ui.fonts_mut(|fonts| fonts.row_height(&FontId::monospace(FONT_SIZE)));
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let desired_rows = (viewport.height() / row_height).ceil().max(1.0) as usize;
-            let output = markdown_text_edit(&mut editor.text, viewport.size(), desired_rows).show(ui);
+            let output = markdown_text_edit(&mut editor.text, viewport.size(), desired_rows, editor_id).show(ui);
             if output.response.changed() {
                 editor.dirty = true;
             }
@@ -170,8 +188,9 @@ fn render_edit_pane(ui: &mut egui::Ui, panel: &mut Panel) -> Option<Rect> {
     Some(output.inner)
 }
 
-fn markdown_text_edit(text: &mut String, min_size: Vec2, desired_rows: usize) -> egui::TextEdit<'_> {
-    egui::TextEdit::multiline(text)
+fn markdown_text_edit(text: &mut String, min_size: Vec2, desired_rows: usize, id: Id) -> TextEdit<'_> {
+    TextEdit::multiline(text)
+        .id(id)
         .font(FontId::monospace(FONT_SIZE))
         .desired_width(f32::INFINITY)
         .desired_rows(desired_rows)
@@ -211,10 +230,10 @@ mod tests {
     use crate::test_egui::DiscardTextures;
     use std::path::PathBuf;
 
-    use egui::{Align, Context, Layout, Pos2, Rect, UiBuilder, Vec2};
-    use horizon_core::{AppearanceTheme, Panel, PanelId, PanelKind, PanelOptions, WorkspaceId};
+    use egui::{Align, Context, Layout, Pos2, RawInput, Rect, UiBuilder, Vec2, ViewportId};
+    use horizon_core::{AppearanceTheme, Panel, PanelId, PanelKind, PanelOptions, PreviewMode, WorkspaceId};
 
-    use super::render_edit_pane;
+    use super::{editor_text_id, render_edit_pane};
     use crate::theme;
 
     fn test_editor_panel(text: &str) -> Panel {
@@ -284,5 +303,59 @@ mod tests {
                 "expected editor hitbox {text_rect:?} to contain {point:?}"
             );
         }
+    }
+
+    fn run_focused_edit_pane(ctx: &Context, panel: &mut Panel, body_rect: Rect) {
+        let mut input = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(640.0, 480.0))),
+            ..RawInput::default()
+        };
+        input.viewport_id = ViewportId::ROOT;
+        let _ = ctx
+            .run_ui(input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui.scope_builder(
+                        UiBuilder::new()
+                            .max_rect(body_rect)
+                            .layout(Layout::top_down(Align::Min)),
+                        |ui| render_edit_pane(ui, panel),
+                    );
+                });
+            })
+            .discard_textures();
+    }
+
+    #[test]
+    fn consecutive_dictation_keeps_order_in_a_focused_editor() {
+        let ctx = Context::default();
+        theme::apply(&ctx, AppearanceTheme::Dark);
+        let body_rect = Rect::from_min_size(Pos2::new(20.0, 24.0), Vec2::new(320.0, 200.0));
+        let mut panel = test_editor_panel("ab cd");
+        {
+            let editor = panel.content.editor_mut().expect("editor content");
+            editor.preview_mode = PreviewMode::Edit;
+            editor.set_caret(2);
+        }
+
+        run_focused_edit_pane(&ctx, &mut panel, body_rect);
+        ctx.memory_mut(|memory| memory.request_focus(editor_text_id(panel.id)));
+        run_focused_edit_pane(&ctx, &mut panel, body_rect);
+
+        panel
+            .content
+            .editor_mut()
+            .expect("editor content")
+            .insert_dictation("XY ");
+        run_focused_edit_pane(&ctx, &mut panel, body_rect);
+        panel
+            .content
+            .editor_mut()
+            .expect("editor content")
+            .insert_dictation("ZW ");
+        run_focused_edit_pane(&ctx, &mut panel, body_rect);
+
+        let editor = panel.editor().expect("editor content");
+        assert_eq!(editor.text, "abXY ZW  cd");
+        assert_eq!(editor.caret, 8);
     }
 }

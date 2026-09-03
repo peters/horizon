@@ -24,6 +24,10 @@ pub struct MarkdownEditor {
     pub preview_mode: PreviewMode,
     /// Character offset for dictation insert, updated from the edit widget.
     pub caret: usize,
+    /// When set, the edit widget must push `caret` into egui before reading
+    /// the widget's cursor back; otherwise a focused `TextEdit` restores the
+    /// pre-dictation range and the next insert lands before the last one.
+    pending_caret: bool,
 }
 
 impl MarkdownEditor {
@@ -41,6 +45,7 @@ impl MarkdownEditor {
             dirty: false,
             preview_mode: PreviewMode::Preview,
             caret,
+            pending_caret: false,
         })
     }
 
@@ -53,6 +58,7 @@ impl MarkdownEditor {
             dirty: false,
             preview_mode: PreviewMode::Edit,
             caret: 0,
+            pending_caret: false,
         }
     }
 
@@ -82,7 +88,24 @@ impl MarkdownEditor {
         let at = byte_index_for_char(&self.text, self.caret);
         self.text.insert_str(at, text);
         self.caret += text.chars().count();
+        self.pending_caret = true;
         self.dirty = true;
+    }
+
+    /// Push a programmatic caret into the next edit-widget frame.
+    pub fn set_caret(&mut self, caret: usize) {
+        self.caret = caret.min(self.text.chars().count());
+        self.pending_caret = true;
+    }
+
+    /// Take a dictation caret that the edit widget must apply before show.
+    #[must_use]
+    pub fn take_pending_caret(&mut self) -> Option<usize> {
+        if !self.pending_caret {
+            return None;
+        }
+        self.pending_caret = false;
+        Some(self.caret)
     }
 
     /// Save only if dirty and a file path is set. Silently succeeds otherwise.
@@ -200,11 +223,23 @@ mod tests {
             dirty: false,
             preview_mode: PreviewMode::Preview,
             caret: 2,
+            pending_caret: false,
         };
         editor.insert_dictation("XY ");
         assert_eq!(editor.text, "abXY  cd");
         assert_eq!(editor.caret, 5);
+        assert_eq!(editor.take_pending_caret(), Some(5));
+        assert!(editor.take_pending_caret().is_none());
         assert!(editor.dirty);
         assert_eq!(editor.preview_mode, PreviewMode::Edit);
+    }
+
+    #[test]
+    fn consecutive_dictation_advances_the_pending_caret() {
+        let mut editor = MarkdownEditor::scratch();
+        editor.insert_dictation("alpha ");
+        editor.insert_dictation("bravo ");
+        assert_eq!(editor.text, "alpha bravo ");
+        assert_eq!(editor.take_pending_caret(), Some(12));
     }
 }

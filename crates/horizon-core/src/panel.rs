@@ -311,6 +311,35 @@ impl Panel {
         spawn_panel(id, workspace_id, opts)
     }
 
+    /// Wrap existing content without opening a PTY or browser driver.
+    #[must_use]
+    pub fn from_content(id: PanelId, workspace_id: WorkspaceId, kind: PanelKind, content: PanelContent) -> Self {
+        Self {
+            id,
+            local_id: format!("panel-{}", id.0),
+            title: kind.display_name().to_string(),
+            terminal_title: String::new(),
+            kind,
+            resume: PanelResume::Fresh,
+            layout: PanelLayout::default(),
+            visible: true,
+            workspace_id,
+            content,
+            session_binding: None,
+            template: None,
+            launched_at_millis: 0,
+            has_custom_name: false,
+            had_recent_output: false,
+            agent_status: AgentStatus::default(),
+            last_output_at_millis: None,
+            launch_command: None,
+            launch_args: Vec::new(),
+            launch_cwd: None,
+            ssh_connection: None,
+            ssh_status: None,
+        }
+    }
+
     /// Build a terminal-backed placeholder for a panel that failed to restore.
     ///
     /// # Errors

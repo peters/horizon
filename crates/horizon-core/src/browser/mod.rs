@@ -128,6 +128,36 @@ pub struct BrowserDrainOutput {
 }
 
 impl BrowserPanelState {
+    /// Driver-less panel for tests that only exercise command dispatch.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn inert() -> Self {
+        Self {
+            status: BrowserStatus::Stopped { code: None },
+            url: None,
+            title: String::new(),
+            loading: false,
+            frame_slot: Arc::new(FrameSlot::new()),
+            session: None,
+            committed_url: session::CommittedUrl::default(),
+            teardown_signal: None,
+            pending_relaunch: None,
+            panel_local_id: "inert".to_string(),
+            requested_url: None,
+            owner: None,
+            handoff_reason: None,
+            handoff_error: None,
+            handoff_resolution_pending: false,
+            pending_clipboard_text: None,
+            host_focus_request: None,
+            navigation_error: None,
+            pending_user_navigation: None,
+            user_navigations: std::sync::atomic::AtomicU32::new(0),
+            persisted_config_changed: false,
+            config: BrowserConfig::default(),
+        }
+    }
+
     /// Create the state and start the driver thread.
     ///
     /// # Errors

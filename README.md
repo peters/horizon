@@ -517,7 +517,7 @@ target/debug/horizon-browser mcp --backend firefox --visible
 
 ## Speech Input (opt-in)
 
-Dictate into a terminal or a browser page. Terminal-backed and Browser panels get a mic button in the title bar (Editor, Git Changes, and Usage panels do not). A Ventrilo-style **push-to-talk hotkey** (default `F9`, hold to record) dictates into the focused text-input panel. Audio is transcribed locally by [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) — nothing leaves the machine — and the text is inserted as if typed. Browser dictation targets the page element that currently owns DOM focus.
+Dictate into a terminal, editor, or browser page. Terminal, Editor, and Browser panels get a mic button in the title bar (Git Changes and Usage do not). A Ventrilo-style **push-to-talk hotkey** (default `F9`, hold to record) dictates into the focused text-input panel. Audio is transcribed locally by [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) — nothing leaves the machine — and the text is inserted as if typed. Browser dictation targets the page element that currently owns DOM focus. Editor dictation inserts at the caret.
 
 Speech is a compile-time opt-in because it builds a native C++ inference library. You need **CMake and a C++ compiler**, plus on Linux the ALSA headers (`libasound2-dev` / `alsa-lib-devel`):
 
