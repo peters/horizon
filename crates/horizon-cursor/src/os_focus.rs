@@ -14,10 +14,23 @@ thread_local! {
 /// `None` means this session cannot determine OS focus (typical on pure Wayland).
 #[must_use]
 pub fn current_process_has_os_focus() -> Option<bool> {
+    observe_process_os_focus(true)
+}
+
+/// Same as [`current_process_has_os_focus`], but always re-queries X11.
+///
+/// Use this at transcript delivery so a stale cache cannot reroute a result.
+#[must_use]
+pub fn current_process_has_os_focus_fresh() -> Option<bool> {
+    observe_process_os_focus(false)
+}
+
+fn observe_process_os_focus(allow_cache: bool) -> Option<bool> {
     OS_FOCUS_CACHE.with(|slot| {
         let mut slot = slot.borrow_mut();
         let now = Instant::now();
-        if let Some((cached_at, value)) = *slot
+        if allow_cache
+            && let Some((cached_at, value)) = *slot
             && os_focus_cache_fresh(cached_at, now)
         {
             return value;
@@ -69,13 +82,14 @@ mod platform {
             if slot.is_none() {
                 *slot = x11rb::connect(None).ok();
             }
-            let (conn, _) = slot.as_ref()?;
+            let (conn, screen_num) = slot.as_ref()?;
+            let root = conn.setup().roots.get(*screen_num)?.root;
             let focus = conn
                 .get_input_focus()
                 .ok()
                 .and_then(|cookie| cookie.reply().ok())
                 .map(|reply| reply.focus)?;
-            is_real_window(focus).then_some(focus)
+            is_focus_candidate(focus, root).then_some(focus)
         })
     }
 
@@ -98,7 +112,7 @@ mod platform {
             for window in [active, input_focus]
                 .into_iter()
                 .flatten()
-                .filter(|window| is_real_window(*window))
+                .filter(|window| is_focus_candidate(*window, root))
             {
                 collect_pids_around(conn, window, root, net_pid, &mut pids);
             }
@@ -238,10 +252,15 @@ mod platform {
         window != NONE && window != POINTER_ROOT
     }
 
+    const fn is_focus_candidate(window: Window, root: Window) -> bool {
+        is_real_window(window) && window != root
+    }
+
     #[cfg(test)]
     mod tests {
         use super::{
-            MAX_CHILD_WINDOWS, NONE, POINTER_ROOT, child_window_budget_exhausted, is_real_window, process_owns_focus,
+            MAX_CHILD_WINDOWS, NONE, POINTER_ROOT, child_window_budget_exhausted, is_focus_candidate, is_real_window,
+            process_owns_focus,
         };
 
         #[test]
@@ -249,6 +268,14 @@ mod platform {
             assert!(!is_real_window(NONE));
             assert!(!is_real_window(POINTER_ROOT));
             assert!(is_real_window(0x3c0_0004));
+        }
+
+        #[test]
+        fn screen_root_is_not_a_focus_candidate() {
+            const ROOT: u32 = 0x21;
+            assert!(!is_focus_candidate(ROOT, ROOT));
+            assert!(!is_focus_candidate(NONE, ROOT));
+            assert!(is_focus_candidate(0x3c0_0004, ROOT));
         }
 
         #[test]

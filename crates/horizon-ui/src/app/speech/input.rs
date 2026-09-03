@@ -603,7 +603,7 @@ impl HorizonApp {
                     SpeechSink::Panel(panel_id) => self.inject_transcript_into_panel(panel_id, &text),
                     SpeechSink::Desktop => {
                         if let Some(panel_id) = panel_override_for_desktop_insert(
-                            horizon_cursor::current_process_has_os_focus(),
+                            horizon_cursor::current_process_has_os_focus_fresh(),
                             self.logically_focused_terminal(),
                         ) {
                             tracing::info!("desktop dictation delivered to the focused Horizon terminal");

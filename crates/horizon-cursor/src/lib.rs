@@ -15,7 +15,7 @@ pub use accessibility::{
 };
 pub use hotkey::{GlobalHotkeys, Hotkey, HotkeyError, HotkeyEvent, HotkeyKey};
 pub use inject::InjectError;
-pub use os_focus::current_process_has_os_focus;
+pub use os_focus::{current_process_has_os_focus, current_process_has_os_focus_fresh};
 
 /// Query the current global cursor position in screen (root-window)
 /// coordinates.  Returns `None` when the platform backend is

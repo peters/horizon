@@ -450,15 +450,11 @@ mod platform {
     }
 
     fn focus_window_still_matches(captured: Option<u32>, current: Option<u32>) -> Result<(), InjectError> {
-        let Some(expected) = captured else {
-            return Ok(());
-        };
-        if current == Some(expected) {
-            Ok(())
-        } else {
-            Err(InjectError::Target(
+        match (captured, current) {
+            (Some(expected), Some(now)) if expected == now => Ok(()),
+            _ => Err(InjectError::Target(
                 "focused window changed before transcript insertion",
-            ))
+            )),
         }
     }
 
@@ -541,8 +537,11 @@ mod platform {
                             .text()
                             .await
                             .map_err(|_| InjectError::Target("focused field does not expose readable text state"))?;
-                        let snapshot = read_text_snapshot(&text_proxy).await?;
-                        Ok(snapshot.selection_count != 0)
+                        let selection_count = text_proxy
+                            .get_n_selections()
+                            .await
+                            .map_err(|_| InjectError::Failed("failed to inspect focused field selection"))?;
+                        Ok(selection_count != 0)
                     };
                     if let Ok(true) = bounded_preflight(deadline, selected).await {
                         return Err(InjectError::Target(
@@ -710,8 +709,13 @@ mod platform {
 
         #[test]
         fn synthesis_aborts_when_the_os_focus_window_changes() {
-            assert_eq!(focus_window_still_matches(None, Some(0x3c0_0004)), Ok(()));
             assert_eq!(focus_window_still_matches(Some(0x3c0_0004), Some(0x3c0_0004)), Ok(()));
+            assert_eq!(
+                focus_window_still_matches(None, Some(0x3c0_0004)),
+                Err(InjectError::Target(
+                    "focused window changed before transcript insertion"
+                ))
+            );
             assert_eq!(
                 focus_window_still_matches(Some(0x3c0_0004), Some(0x3c0_0005)),
                 Err(InjectError::Target(
