@@ -11,7 +11,7 @@ use horizon_core::{PanelId, WorkspaceId};
 use super::super::shortcuts;
 use super::super::{HorizonApp, SpeechNotice};
 use super::desktop::{
-    dictation_sink, horizon_session_focused, inject_desktop_transcript, panel_override_for_desktop_insert,
+    DesktopInsertRoute, desktop_insert_route, dictation_sink, horizon_session_focused, inject_desktop_transcript,
     prepare_desktop_target, recv_global_hotkey, release_desktop_target, use_logically_focused_terminal,
 };
 use super::{SpeechEvent, SpeechSink, SpeechSystem};
@@ -602,13 +602,27 @@ impl HorizonApp {
                 SpeechEvent::Text { target, text } => match target {
                     SpeechSink::Panel(panel_id) => self.inject_transcript_into_panel(panel_id, &text),
                     SpeechSink::Desktop => {
-                        if let Some(panel_id) = panel_override_for_desktop_insert(
+                        match desktop_insert_route(
                             horizon_cursor::current_process_has_os_focus_fresh(),
                             self.logically_focused_terminal(),
                         ) {
-                            tracing::info!("desktop dictation delivered to the focused Horizon terminal");
-                            self.inject_transcript_into_panel(panel_id, &text);
-                            continue;
+                            DesktopInsertRoute::Panel(panel_id) => {
+                                tracing::info!("desktop dictation delivered to the focused Horizon terminal");
+                                self.inject_transcript_into_panel(panel_id, &text);
+                                continue;
+                            }
+                            DesktopInsertRoute::HorizonWithoutTerminal => {
+                                tracing::info!("desktop dictation discarded; Horizon is focused but has no terminal");
+                                ctx.data_mut(|data| {
+                                    data.insert_temp(
+                                        egui::Id::new(DESKTOP_INSERT_ERROR_ID),
+                                        "could not insert transcript (Horizon is focused but has no terminal); clipboard was not used".to_owned(),
+                                    );
+                                });
+                                ctx.request_repaint();
+                                continue;
+                            }
+                            DesktopInsertRoute::External => {}
                         }
                         let payload = format!("{text} ");
                         let result_ctx = ctx.clone();

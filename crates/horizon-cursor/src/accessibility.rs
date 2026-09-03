@@ -554,14 +554,22 @@ mod platform {
             Err(error) if is_unclassified_focus(&error) => {}
             Err(error) => return Err(error),
         }
-        ensure_focus_window_unchanged(focus_window)?;
-        synthesize_key_string(connection, text).await
+        synthesize_key_string(connection, deadline, text, focus_window).await
     }
 
-    async fn synthesize_key_string(connection: &AccessibilityConnection, text: &str) -> Result<(), InjectError> {
-        let proxy = DeviceEventControllerProxy::new(connection.connection())
-            .await
-            .map_err(|_| InjectError::Failed("failed to reach the accessibility key controller"))?;
+    async fn synthesize_key_string(
+        connection: &AccessibilityConnection,
+        deadline: tokio::time::Instant,
+        text: &str,
+        focus_window: Option<u32>,
+    ) -> Result<(), InjectError> {
+        let proxy = bounded_preflight(deadline, async {
+            DeviceEventControllerProxy::new(connection.connection())
+                .await
+                .map_err(|_| InjectError::Failed("failed to reach the accessibility key controller"))
+        })
+        .await?;
+        ensure_focus_window_unchanged(focus_window)?;
         proxy
             .generate_keyboard_event(0, text, KeySynthType::String)
             .await

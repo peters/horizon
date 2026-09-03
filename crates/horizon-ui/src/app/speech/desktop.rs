@@ -49,16 +49,27 @@ pub(crate) const fn use_logically_focused_terminal(matches_viewport: bool, os_fo
     matches_viewport || matches!(os_focus, Some(true))
 }
 
+/// Where a completed desktop dictation should go once OS focus is known.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DesktopInsertRoute {
+    Panel(PanelId),
+    External,
+    HorizonWithoutTerminal,
+}
+
 /// If a desktop dictation finishes while this process still owns OS focus,
 /// deliver into the logically focused terminal instead of AT-SPI.
 #[must_use]
-pub(crate) const fn panel_override_for_desktop_insert(
+pub(crate) const fn desktop_insert_route(
     os_focus: Option<bool>,
     focused_terminal: Option<PanelId>,
-) -> Option<PanelId> {
+) -> DesktopInsertRoute {
     match os_focus {
-        Some(true) => focused_terminal,
-        _ => None,
+        Some(true) => match focused_terminal {
+            Some(panel) => DesktopInsertRoute::Panel(panel),
+            None => DesktopInsertRoute::HorizonWithoutTerminal,
+        },
+        _ => DesktopInsertRoute::External,
     }
 }
 
@@ -302,11 +313,17 @@ mod tests {
     fn desktop_insert_redirects_to_the_focused_terminal_when_horizon_owns_os_focus() {
         let panel = PanelId(4);
         assert_eq!(
-            super::panel_override_for_desktop_insert(Some(true), Some(panel)),
-            Some(panel)
+            super::desktop_insert_route(Some(true), Some(panel)),
+            super::DesktopInsertRoute::Panel(panel)
         );
-        assert_eq!(super::panel_override_for_desktop_insert(Some(true), None), None);
-        assert_eq!(super::panel_override_for_desktop_insert(Some(false), Some(panel)), None);
+        assert_eq!(
+            super::desktop_insert_route(Some(true), None),
+            super::DesktopInsertRoute::HorizonWithoutTerminal
+        );
+        assert_eq!(
+            super::desktop_insert_route(Some(false), Some(panel)),
+            super::DesktopInsertRoute::External
+        );
     }
 
     #[test]
