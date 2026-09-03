@@ -87,8 +87,10 @@ impl CloudWorkflowStore {
     /// # Errors
     /// Fails when the private store cannot be created or initialized.
     pub fn open_path(path: impl Into<PathBuf>) -> Result<Self, CloudStoreError> {
-        let store = Self { path: path.into() };
-        prepare_private_store(&store.path)?;
+        let path = path.into();
+        let store = Self {
+            path: prepare_private_store(&path)?,
+        };
         let mut connection = store.connection()?;
         initialize_schema(&mut connection)?;
         Ok(store)
@@ -469,7 +471,7 @@ fn current_unix_millis() -> Result<i64, CloudStoreError> {
     i64::try_from(millis).map_err(|_| CloudStoreError::InvalidTimestamp)
 }
 
-fn prepare_private_store(path: &Path) -> Result<(), CloudStoreError> {
+fn prepare_private_store(path: &Path) -> Result<PathBuf, CloudStoreError> {
     if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
         #[cfg(not(unix))]
         std::fs::create_dir_all(parent)?;
@@ -482,7 +484,18 @@ fn prepare_private_store(path: &Path) -> Result<(), CloudStoreError> {
             }
         }
     }
-    match std::fs::symlink_metadata(path) {
+    #[cfg(unix)]
+    let path = {
+        let file_name = path.file_name().unwrap_or(path.as_os_str());
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        parent.canonicalize()?.join(file_name)
+    };
+    #[cfg(not(unix))]
+    let path = path.to_path_buf();
+    match std::fs::symlink_metadata(&path) {
         Ok(metadata) if metadata.file_type().is_symlink() => return Err(CloudStoreError::SymlinkStorePath),
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -492,10 +505,12 @@ fn prepare_private_store(path: &Path) -> Result<(), CloudStoreError> {
     options.create(true).read(true).write(true);
     #[cfg(unix)]
     options.mode(0o600);
-    let file = options.open(path)?;
+    let file = options.open(&path)?;
     #[cfg(unix)]
     file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-    Ok(())
+    #[cfg(not(unix))]
+    drop(file);
+    Ok(path)
 }
 
 #[derive(Debug, Error)]

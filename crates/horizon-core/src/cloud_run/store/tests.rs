@@ -55,7 +55,15 @@ fn retained_workflow(provider: CloudProvider, timestamp: i64) -> CloudWorkflow {
 }
 
 fn store(temp: &TempDir) -> CloudWorkflowStore {
-    CloudWorkflowStore::open_path(temp.path().join("cloud-run").join("workflows.sqlite3")).expect("store")
+    #[cfg(unix)]
+    let root = {
+        let root = temp.path().join("root-link");
+        std::os::unix::fs::symlink(temp.path(), &root).expect("root symlink");
+        root
+    };
+    #[cfg(not(unix))]
+    let root = temp.path().to_path_buf();
+    CloudWorkflowStore::open_path(root.join("cloud-run").join("workflows.sqlite3")).expect("store")
 }
 
 #[test]
