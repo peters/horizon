@@ -355,11 +355,15 @@ async fn execute_steps(
                 return stopped_report(steps, &stopped);
             }
         };
-        if let Some(store) = checkpoint.as_mut()
-            && let Err(error) = store.record_completion(&outcome)
-        {
-            steps.push(failed_step(step, format!("could not persist step completion: {error}")));
-            break;
+        if outcome.ok {
+            if let Some(store) = checkpoint.as_mut()
+                && let Err(error) = store.record_completion(&outcome)
+            {
+                steps.push(failed_step(step, format!("could not persist step completion: {error}")));
+                break;
+            }
+        } else if let Some(store) = checkpoint.as_mut() {
+            let _ = store.clear_intent();
         }
         let ok = outcome.ok;
         result_indexes.insert(step.id.clone(), steps.len());
