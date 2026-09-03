@@ -1,7 +1,6 @@
 use super::{ApiPod, CreatePodRequest, RunPodApiKey, RunPodCleanup, RunPodError, Transport, valid_provider_id};
 use std::{thread, time::Duration};
-use url::Url;
-const API_BASE: &str = "https://api.runpod.io/v2/";
+const PODS_URL: &str = "https://api.runpod.io/v2/pods";
 const GRAPHQL_URL: &str = "https://api.runpod.io/graphql";
 const CREATE_MUTATION: &str =
     "mutation CreatePod($input: PodFindAndDeployOnDemandInput!) { podFindAndDeployOnDemand(input: $input) { id } }";
@@ -20,7 +19,6 @@ const CAPACITY_ERROR_MARKERS: [&str; 8] = [
 ];
 pub(super) struct RunPodHttp {
     agent: ureq::Agent,
-    base: Url,
     authorization: String,
 }
 #[derive(serde::Deserialize)]
@@ -28,7 +26,7 @@ struct ListPodsResponse {
     pods: Vec<ApiPod>,
 }
 impl RunPodHttp {
-    pub(super) fn new(api_key: &RunPodApiKey) -> Result<Self, RunPodError> {
+    pub(super) fn new(api_key: &RunPodApiKey) -> Self {
         let config = ureq::Agent::config_builder()
             .https_only(true)
             .http_status_as_error(false)
@@ -36,34 +34,22 @@ impl RunPodHttp {
             .timeout_global(Some(REQUEST_TIMEOUT))
             .user_agent(concat!("horizon/", env!("CARGO_PKG_VERSION")))
             .build();
-        let base = Url::parse(API_BASE).map_err(|_| RunPodError::InvalidResponse {
-            operation: "client initialization",
-        })?;
-        Ok(Self {
+        Self {
             agent: ureq::Agent::new_with_config(config),
-            base,
             authorization: format!("Bearer {}", api_key.expose()),
-        })
+        }
     }
-    fn pods_url(&self) -> Result<Url, RunPodError> {
-        self.base.join("pods").map_err(|_| RunPodError::InvalidResponse {
-            operation: "URL construction",
-        })
-    }
-    fn pod_url(&self, pod_id: &str) -> Result<Url, RunPodError> {
-        self.base
-            .join(&format!("pods/{pod_id}"))
-            .map_err(|_| RunPodError::InvalidResponse {
-                operation: "URL construction",
-            })
+    fn pod_url(pod_id: &str) -> Result<String, RunPodError> {
+        valid_provider_id(pod_id)
+            .then(|| format!("{PODS_URL}/{pod_id}"))
+            .ok_or(RunPodError::ResourceIdentityMismatch)
     }
 }
 impl Transport for RunPodHttp {
     fn list_by_name(&self, name: &str) -> Result<Vec<ApiPod>, RunPodError> {
-        let url = self.pods_url()?;
         let response = self
             .agent
-            .get(url.as_str())
+            .get(PODS_URL)
             .header("Authorization", &self.authorization)
             .call()
             .map_err(|_| RunPodError::RequestFailed {
@@ -91,11 +77,12 @@ impl Transport for RunPodHttp {
             .filter(|pod_id| valid_provider_id(pod_id))
             .map(str::to_string);
         let Some(pod_id) = pod_id else {
-            if capacity_unavailable(&envelope) {
-                return Err(RunPodError::CapacityUnavailable);
-            }
-            return Err(RunPodError::InvalidResponse {
-                operation: "pod creation",
+            return Err(if capacity_unavailable(&envelope) {
+                RunPodError::CapacityUnavailable
+            } else {
+                RunPodError::InvalidResponse {
+                    operation: "pod creation",
+                }
             });
         };
         for delay_ms in PROPAGATION_BACKOFF_MS {
@@ -110,7 +97,7 @@ impl Transport for RunPodHttp {
         Err(RunPodError::CreationVerificationFailed { pod_id })
     }
     fn get(&self, pod_id: &str) -> Result<Option<ApiPod>, RunPodError> {
-        let url = self.pod_url(pod_id)?;
+        let url = Self::pod_url(pod_id)?;
         let response = self
             .agent
             .get(url.as_str())
@@ -123,13 +110,12 @@ impl Transport for RunPodHttp {
             return Ok(None);
         }
         let pod: ApiPod = decode_json(response, 200, "pod inspection")?;
-        if pod.id != pod_id {
-            return Err(RunPodError::ResourceIdentityMismatch);
-        }
-        Ok(Some(pod))
+        (pod.id == pod_id)
+            .then_some(Some(pod))
+            .ok_or(RunPodError::ResourceIdentityMismatch)
     }
     fn delete(&self, pod_id: &str) -> Result<RunPodCleanup, RunPodError> {
-        let url = self.pod_url(pod_id)?;
+        let url = Self::pod_url(pod_id)?;
         let response = self
             .agent
             .delete(url.as_str())

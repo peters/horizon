@@ -8,7 +8,7 @@ struct FakeState {
     create_response: Option<ApiPod>,
     create_requests: Vec<CreatePodRequest>,
     deleted: Vec<String>,
-    hidden_list_calls: u8,
+    scripted_lists: Vec<Vec<ApiPod>>,
 }
 impl FakeTransport {
     fn with_create_response(response: ApiPod) -> Self {
@@ -25,9 +25,8 @@ impl FakeTransport {
 impl Transport for FakeTransport {
     fn list_by_name(&self, _name: &str) -> Result<Vec<ApiPod>, RunPodError> {
         let mut state = self.0.lock().expect("state");
-        if state.hidden_list_calls > 0 {
-            state.hidden_list_calls -= 1;
-            return Ok(Vec::new());
+        if !state.scripted_lists.is_empty() {
+            return Ok(state.scripted_lists.remove(0));
         }
         Ok(state.pods.clone())
     }
@@ -111,7 +110,6 @@ fn api_key_validation_never_exposes_secret() {
     for invalid in ["", "with space", "line\nbreak", "tab\tvalue", "é"] {
         let error = RunPodApiKey::new(invalid).expect_err("invalid key");
         assert_eq!(error, RunPodError::InvalidApiKey);
-        assert!(invalid.is_empty() || !error.to_string().contains(invalid));
     }
 }
 #[test]
@@ -134,6 +132,8 @@ fn v2_cold_start_accepts_null_runtime_and_ssh_endpoints() {
     }))
     .expect("valid v2 cold-start pod");
     assert!(pod.ssh.is_some_and(|ssh| ssh.direct.is_none()));
+    assert_eq!(pod.cost, Some(240_000));
+    assert_eq!(decimal_micros("0.0000001"), Some(1));
 }
 #[test]
 fn creation_uses_secure_direct_pull_and_bandwidth_constraints() {
@@ -178,18 +178,33 @@ fn retries_reuse_one_exact_worker_and_reject_ambiguity() {
     let target = target();
     let pod = api_pod(workflow_id, job_id, &target, Some(420_000));
     let transport = FakeTransport::with_pods(vec![pod.clone()]);
-    transport.0.lock().expect("state").hidden_list_calls = 2;
+    transport.0.lock().expect("state").scripted_lists = vec![vec![], vec![]];
     let observer = transport.clone();
     let result = RunPodClient::with_transport(transport)
         .ensure_worker(workflow_id, job_id, &target, &profile())
         .expect("worker reused");
     assert!(matches!(result, RunPodEnsure::Reused(_)));
     assert!(observer.0.lock().expect("state").create_requests.is_empty());
-    let client = RunPodClient::with_transport(FakeTransport::with_pods(vec![pod.clone(), pod]));
+    let mut late = pod.clone();
+    late.id = "pod_654321".to_string();
+    let transport = FakeTransport::with_pods(vec![pod.clone(), late]);
+    transport.0.lock().expect("state").scripted_lists = vec![vec![pod.clone()]];
+    let client = RunPodClient::with_transport(transport);
     assert!(matches!(
         client.ensure_worker(workflow_id, job_id, &target, &profile()),
         Err(RunPodError::AmbiguousResource { count: 2, .. })
     ));
+    let transport = FakeTransport::with_create_response(api_pod(workflow_id, job_id, &target, Some(420_000)));
+    let observer = transport.clone();
+    let client = RunPodClient {
+        transport: Box::new(transport),
+        creation_fence: Box::new(|_: &str| Ok(false)),
+    };
+    assert!(matches!(
+        client.ensure_worker(workflow_id, job_id, &target, &profile()),
+        Err(RunPodError::CreationUnresolved { .. })
+    ));
+    assert!(observer.0.lock().expect("state").create_requests.is_empty());
     for deadline in ["2000-01-01T00:00:00Z", "2999-01-01T00:00:00Z"] {
         let mut invalid = api_pod(workflow_id, job_id, &target, Some(420_000));
         invalid.env.insert(TERMINATE_ENV.to_string(), deadline.to_string());

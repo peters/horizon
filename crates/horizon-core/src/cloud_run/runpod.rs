@@ -20,12 +20,7 @@ impl RunPodApiKey {
     /// # Errors
     pub fn new(value: impl Into<String>) -> Result<Self, RunPodError> {
         let value = value.into();
-        let valid = !value.is_empty()
-            && value.len() <= 4_096
-            && value.is_ascii()
-            && value
-                .bytes()
-                .all(|byte| !byte.is_ascii_whitespace() && !byte.is_ascii_control());
+        let valid = !value.is_empty() && value.len() <= 4_096 && value.bytes().all(|byte| byte.is_ascii_graphic());
         valid.then_some(Self(value)).ok_or(RunPodError::InvalidApiKey)
     }
     /// Load the token injected by the control plane.
@@ -82,16 +77,12 @@ impl RunPodWorker {
     /// Validate persisted identity before any provider mutation.
     /// # Errors
     pub fn validate(&self) -> Result<(), RunPodError> {
-        let expected_name = resource_name(self.workflow_id, self.job_id);
-        if !valid_provider_id(&self.pod_id)
-            || self.name != expected_name
-            || !valid_immutable_worker_image(&self.image)
-            || time::OffsetDateTime::parse(&self.terminate_after, &time::format_description::well_known::Rfc3339)
-                .is_err()
-        {
-            return Err(RunPodError::InvalidPersistedWorker);
-        }
-        Ok(())
+        let valid = valid_provider_id(&self.pod_id)
+            && self.name == resource_name(self.workflow_id, self.job_id)
+            && valid_immutable_worker_image(&self.image)
+            && time::OffsetDateTime::parse(&self.terminate_after, &time::format_description::well_known::Rfc3339)
+                .is_ok();
+        valid.then_some(()).ok_or(RunPodError::InvalidPersistedWorker)
     }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -121,16 +112,32 @@ pub enum RunPodCleanup {
     Deleted,
     AlreadyAbsent,
 }
+/// Durable, cross-controller compare-and-set whose claim survives process exit.
+/// A resource name may return `true` at most once.
+pub trait RunPodCreationFence: Send + Sync {
+    /// # Errors
+    /// Returns an error when the durable claim cannot be read or recorded.
+    fn claim_once(&self, resource_name: &str) -> Result<bool, RunPodError>;
+}
+impl<F> RunPodCreationFence for F
+where
+    F: Fn(&str) -> Result<bool, RunPodError> + Send + Sync,
+{
+    fn claim_once(&self, resource_name: &str) -> Result<bool, RunPodError> {
+        self(resource_name)
+    }
+}
 pub struct RunPodClient {
     transport: Box<dyn Transport>,
+    creation_fence: Box<dyn RunPodCreationFence>,
 }
 impl RunPodClient {
     /// Build a production client pinned to `RunPod`'s HTTPS control planes.
-    /// # Errors
-    pub fn new(api_key: &RunPodApiKey) -> Result<Self, RunPodError> {
-        Ok(Self {
-            transport: Box::new(http::RunPodHttp::new(api_key)?),
-        })
+    pub fn new(api_key: &RunPodApiKey, creation_fence: impl RunPodCreationFence + 'static) -> Self {
+        Self {
+            transport: Box::new(http::RunPodHttp::new(api_key)),
+            creation_fence: Box::new(creation_fence),
+        }
     }
     /// Create a worker once, or adopt the single exact resource from an interrupted attempt.
     /// # Errors
@@ -143,15 +150,10 @@ impl RunPodClient {
     ) -> Result<RunPodEnsure, RunPodError> {
         validate_target(target, profile)?;
         let name = resource_name(workflow_id, job_id);
-        let mut matches = self.transport.list_by_name(&name)?;
-        for delay_ms in http::PROPAGATION_BACKOFF_MS {
-            if !matches.is_empty() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-            matches = self.transport.list_by_name(&name)?;
-        }
+        let matches = self.reconcile_by_name(&name)?;
+        let may_create = !matches.is_empty() || self.creation_fence.claim_once(&name)?;
         let (pod, created, expected_deadline) = match matches.as_slice() {
+            [] if !may_create => return Err(RunPodError::CreationUnresolved { name }),
             [] => {
                 let request = CreatePodRequest::new(workflow_id, job_id, target, profile, name.clone())?;
                 let expected_deadline = request.terminate_after.clone();
@@ -190,6 +192,26 @@ impl RunPodClient {
             RunPodEnsure::Reused(status)
         })
     }
+    fn reconcile_by_name(&self, name: &str) -> Result<Vec<ApiPod>, RunPodError> {
+        let mut matches = BTreeMap::new();
+        let mut observe = || {
+            for pod in self.transport.list_by_name(name)? {
+                if !valid_provider_id(&pod.id) {
+                    return Err(RunPodError::ResourceIdentityMismatch);
+                }
+                matches.insert(pod.id.clone(), pod);
+            }
+            Ok(())
+        };
+        observe()?;
+        for delay_ms in http::PROPAGATION_BACKOFF_MS {
+            if !cfg!(test) {
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+            }
+            observe()?;
+        }
+        Ok(matches.into_values().collect())
+    }
     /// Inspect an exact persisted worker, returning `None` after provider deletion.
     /// # Errors
     pub fn inspect_worker(&self, worker: &RunPodWorker) -> Result<Option<RunPodWorkerStatus>, RunPodError> {
@@ -213,13 +235,10 @@ impl RunPodClient {
         let Some(maximum) = maximum else {
             return Ok(());
         };
-        let Some(actual) = worker.hourly_cost_micros else {
-            return self.cleanup_after_cost_rejection(worker, None, maximum);
-        };
-        if actual > maximum {
-            return self.cleanup_after_cost_rejection(worker, Some(actual), maximum);
+        match worker.hourly_cost_micros {
+            Some(actual) if actual <= maximum => Ok(()),
+            actual => self.cleanup_after_cost_rejection(worker, actual, maximum),
         }
-        Ok(())
     }
     fn cleanup_after_cost_rejection(
         &self,
@@ -227,11 +246,10 @@ impl RunPodClient {
         actual: Option<u64>,
         maximum: u64,
     ) -> Result<(), RunPodError> {
-        if self.delete_worker(worker).is_err() {
-            return Err(RunPodError::CostRejectionCleanupFailed {
+        self.delete_worker(worker)
+            .map_err(|_| RunPodError::CostRejectionCleanupFailed {
                 worker: Box::new(worker.clone()),
-            });
-        }
+            })?;
         Err(RunPodError::HourlyCostRejected {
             worker: Box::new(worker.clone()),
             actual,
@@ -242,6 +260,7 @@ impl RunPodClient {
     fn with_transport(transport: impl Transport + 'static) -> Self {
         Self {
             transport: Box::new(transport),
+            creation_fence: Box::new(|_: &str| Ok(true)),
         }
     }
 }
@@ -259,6 +278,8 @@ pub enum RunPodError {
     ResourceIdentityMismatch,
     #[error("RunPod returned {count} resources for deterministic name {name}")]
     AmbiguousResource { name: String, count: usize },
+    #[error("RunPod creation for {name} was already claimed but no pod became visible")]
+    CreationUnresolved { name: String },
     #[error("RunPod request failed during {operation}")]
     RequestFailed { operation: &'static str },
     #[error("RunPod returned HTTP {status} during {operation}")]
@@ -398,17 +419,15 @@ fn validate_target(target: &WorkerTarget, profile: &RunPodProfile) -> Result<(),
     let safe_text = |value: &str| {
         !value.is_empty() && value.len() <= 191 && value.trim() == value && !value.chars().any(char::is_control)
     };
-    let safe_id = |value: &str| {
-        safe_text(value)
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
-    };
+    let safe_id_byte = |byte: u8| byte.is_ascii_alphanumeric() || b"._-".contains(&byte);
+    let safe_id = |value: &str| safe_text(value) && value.bytes().all(safe_id_byte);
     let safe_port = |value: &str| {
         value.split_once('/').is_some_and(|(port, protocol)| {
             port.parse::<u16>().is_ok_and(|port| port > 0) && matches!(protocol, "tcp" | "http")
         })
     };
+    let digits = |value: &str| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit());
+    let valid_cuda = |value: &str| value.split('.').count() == 2 && value.split('.').all(digits);
     let nonzero = |value: Option<u32>| value.is_none_or(|value| value > 0);
     let valid = target.provider == CloudProvider::RunPod
         && target.profile == profile.name
@@ -420,14 +439,7 @@ fn validate_target(target: &WorkerTarget, profile: &RunPodProfile) -> Result<(),
         && !profile.gpu_type_ids.is_empty()
         && profile.gpu_type_ids.iter().all(|value| safe_text(value))
         && profile.gpu_count > 0
-        && profile.allowed_cuda_versions.iter().all(|value| {
-            value.split_once('.').is_some_and(|(major, minor)| {
-                !major.is_empty()
-                    && !minor.is_empty()
-                    && major.bytes().all(|byte| byte.is_ascii_digit())
-                    && minor.bytes().all(|byte| byte.is_ascii_digit())
-            })
-        })
+        && profile.allowed_cuda_versions.iter().all(|value| valid_cuda(value))
         && profile.data_center_id.as_deref().is_none_or(safe_id)
         && profile.ports.iter().all(|value| safe_port(value))
         && profile.ports.iter().any(|value| value == "22/tcp")
@@ -515,11 +527,8 @@ fn recovered_deadline_valid(value: &str, lease_seconds: u32) -> bool {
         && deadline <= now + time::Duration::seconds(i64::from(lease_seconds) + LEASE_CLOCK_SKEW_SECONDS)
 }
 fn valid_provider_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 191
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    let valid_byte = |byte: u8| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_');
+    !value.is_empty() && value.len() <= 191 && value.bytes().all(valid_byte)
 }
 fn valid_immutable_worker_image(value: &str) -> bool {
     valid_worker_image(value)
@@ -546,25 +555,15 @@ where
 }
 fn decimal_micros(value: &str) -> Option<u64> {
     let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
-    if whole.is_empty()
-        || !whole.bytes().all(|byte| byte.is_ascii_digit())
-        || !fraction.bytes().all(|byte| byte.is_ascii_digit())
-    {
-        return None;
-    }
-    let whole = whole.parse::<u64>().ok()?.checked_mul(1_000_000)?;
+    (!whole.is_empty()
+        && whole.bytes().all(|byte| byte.is_ascii_digit())
+        && fraction.bytes().all(|byte| byte.is_ascii_digit()))
+    .then_some(())?;
     let kept = &fraction[..fraction.len().min(6)];
-    let mut fraction_micros = if kept.is_empty() {
-        0
-    } else {
-        kept.parse::<u64>().ok()? * 10_u64.pow(u32::try_from(6 - kept.len()).ok()?)
-    };
-    if fraction
+    let micros = format!("{whole}{kept:0<6}").parse::<u64>().ok()?;
+    let round_up = fraction
         .as_bytes()
         .get(6..)
-        .is_some_and(|tail| tail.iter().any(|byte| *byte != b'0'))
-    {
-        fraction_micros = fraction_micros.checked_add(1)?;
-    }
-    whole.checked_add(fraction_micros)
+        .is_some_and(|tail| tail.iter().any(|byte| *byte != b'0'));
+    micros.checked_add(u64::from(round_up))
 }
