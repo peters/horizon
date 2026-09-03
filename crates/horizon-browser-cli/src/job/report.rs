@@ -479,7 +479,10 @@ mod tests {
                 "arguments":arguments,
                 "status":"completed",
                 "error":null,
-                "result":result
+                "result":{
+                    "content":[],
+                    "structured_content":result
+                }
             }
         })
         .to_string()

@@ -1,5 +1,7 @@
 //! Capture health and audit-completeness summaries for job reports.
 
+use std::collections::BTreeMap;
+
 use serde::Serialize;
 use serde_json::Value;
 
@@ -52,6 +54,8 @@ pub struct NetworkObservability {
     #[serde(skip_serializing_if = "is_zero")]
     pub connections_truncated: u64,
     #[serde(skip_serializing_if = "is_zero")]
+    pub connection_urls_truncated: u64,
+    #[serde(skip_serializing_if = "is_zero")]
     pub returned_payloads_truncated: u64,
     #[serde(skip_serializing_if = "is_zero")]
     pub malformed_records: u64,
@@ -78,11 +82,31 @@ impl ObservabilitySummary {
         I: IntoIterator<Item = (&'a str, &'a Value)>,
     {
         let mut summary = Self::default();
+        let mut captures = BTreeMap::<String, CaptureTotals>::new();
+        let mut anonymous = CaptureTotals::default();
+        let mut saw_network = false;
         for (tool, result) in results {
+            let result = structured_content(result);
             match tool {
                 "browser_audit" => summary.audit.observe(result),
-                "browser_network" | "browser_network_watch" => summary.network.observe(result),
+                "browser_network" | "browser_network_watch" => {
+                    saw_network = true;
+                    match result
+                        .get("capture_id")
+                        .and_then(Value::as_str)
+                        .filter(|id| !id.is_empty())
+                    {
+                        Some(capture_id) => captures.entry(capture_id.to_string()).or_default().observe(result),
+                        None => anonymous.observe(result),
+                    }
+                }
                 _ => {}
+            }
+        }
+        if saw_network {
+            summary.network.observed = true;
+            for capture in captures.values().chain(std::iter::once(&anonymous)) {
+                summary.network.absorb(capture);
             }
         }
         summary
@@ -94,7 +118,7 @@ impl ObservabilitySummary {
         if !matches!(tool, "browser_audit" | "browser_network" | "browser_network_watch") {
             return None;
         }
-        let mut object = result.as_object()?.clone();
+        let mut object = structured_content(result).as_object()?.clone();
         object.remove("entries");
         object.remove("records");
         object.remove("known_connections");
@@ -116,11 +140,44 @@ impl AuditObservability {
 }
 
 impl NetworkObservability {
+    fn absorb(&mut self, capture: &CaptureTotals) {
+        self.sequence_gaps = self.sequence_gaps.saturating_add(capture.sequence_gaps);
+        self.records_written = self.records_written.saturating_add(capture.records_written);
+        self.records_dropped = self.records_dropped.saturating_add(capture.records_dropped);
+        self.records_enqueued = self.records_enqueued.saturating_add(capture.records_enqueued);
+        self.payloads_truncated = self.payloads_truncated.saturating_add(capture.payloads_truncated);
+        self.connections_truncated = self.connections_truncated.saturating_add(capture.connections_truncated);
+        self.connection_urls_truncated = self
+            .connection_urls_truncated
+            .saturating_add(capture.connection_urls_truncated);
+        self.returned_payloads_truncated = self
+            .returned_payloads_truncated
+            .saturating_add(capture.returned_payloads_truncated);
+        self.malformed_records = self.malformed_records.saturating_add(capture.malformed_records);
+        self.loss.file_limit_reached |= capture.file_limit_reached;
+        self.loss.writer_failed |= capture.writer_failed;
+        self.loss.file_reset |= capture.file_reset;
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct CaptureTotals {
+    records_written: u64,
+    records_dropped: u64,
+    records_enqueued: u64,
+    payloads_truncated: u64,
+    connections_truncated: u64,
+    sequence_gaps: u64,
+    returned_payloads_truncated: u64,
+    malformed_records: u64,
+    connection_urls_truncated: u64,
+    file_limit_reached: bool,
+    writer_failed: bool,
+    file_reset: bool,
+}
+
+impl CaptureTotals {
     fn observe(&mut self, result: &Value) {
-        self.observed = true;
-        self.sequence_gaps = self
-            .sequence_gaps
-            .saturating_add(u64_field(result, "sequence_gaps").unwrap_or(0));
         self.records_written = self
             .records_written
             .max(u64_field(result, "records_written").unwrap_or(0));
@@ -136,16 +193,26 @@ impl NetworkObservability {
         self.connections_truncated = self
             .connections_truncated
             .max(u64_field(result, "connections_truncated").unwrap_or(0));
+        self.sequence_gaps = self
+            .sequence_gaps
+            .saturating_add(u64_field(result, "sequence_gaps").unwrap_or(0));
         self.returned_payloads_truncated = self
             .returned_payloads_truncated
             .saturating_add(u64_field(result, "returned_payloads_truncated").unwrap_or(0));
         self.malformed_records = self
             .malformed_records
             .saturating_add(u64_field(result, "malformed_records").unwrap_or(0));
-        self.loss.file_limit_reached |= bool_field(result, "file_limit_reached").unwrap_or(false);
-        self.loss.writer_failed |= bool_field(result, "writer_failed").unwrap_or(false);
-        self.loss.file_reset |= bool_field(result, "file_reset").unwrap_or(false);
+        self.connection_urls_truncated = self
+            .connection_urls_truncated
+            .saturating_add(u64_field(result, "connection_urls_truncated").unwrap_or(0));
+        self.file_limit_reached |= bool_field(result, "file_limit_reached").unwrap_or(false);
+        self.writer_failed |= bool_field(result, "writer_failed").unwrap_or(false);
+        self.file_reset |= bool_field(result, "file_reset").unwrap_or(false);
     }
+}
+
+fn structured_content(result: &Value) -> &Value {
+    result.get("structured_content").unwrap_or(result)
 }
 
 fn u64_field(value: &Value, key: &str) -> Option<u64> {
@@ -215,6 +282,7 @@ mod tests {
     #[test]
     fn network_watch_and_status_counters_are_merged() {
         let status = json!({
+            "capture_id": "cap-1",
             "records_written": 10,
             "records_dropped": 2,
             "records_enqueued": 12,
@@ -225,10 +293,12 @@ mod tests {
             "records": [{"sequence":1}]
         });
         let watch = json!({
+            "capture_id": "cap-1",
             "sequence_gaps": 3,
             "records_dropped": 2,
             "payloads_truncated": 1,
             "returned_payloads_truncated": 4,
+            "connection_urls_truncated": 5,
             "malformed_records": 1,
             "file_limit_reached": true,
             "writer_failed": true,
@@ -241,6 +311,7 @@ mod tests {
         assert_eq!(summary.network.records_written, 10);
         assert_eq!(summary.network.records_dropped, 2);
         assert_eq!(summary.network.returned_payloads_truncated, 4);
+        assert_eq!(summary.network.connection_urls_truncated, 5);
         assert_eq!(summary.network.malformed_records, 1);
         assert!(summary.network.loss.file_limit_reached);
         assert!(summary.network.loss.writer_failed);
@@ -249,5 +320,46 @@ mod tests {
             ObservabilitySummary::health_payload("browser_network", &status)
                 .is_some_and(|payload| payload.get("records").is_none())
         );
+    }
+
+    #[test]
+    fn per_capture_totals_are_summed_and_envelopes_are_unwrapped() {
+        let first = json!({
+            "capture_id": "a",
+            "records_written": 10,
+            "records_dropped": 1
+        });
+        let first_again = json!({
+            "capture_id": "a",
+            "records_written": 12,
+            "records_dropped": 1
+        });
+        let second = json!({
+            "structured_content": {
+                "capture_id": "b",
+                "records_written": 7,
+                "records_dropped": 2,
+                "connection_urls_truncated": 3
+            }
+        });
+        let summary = ObservabilitySummary::from_results([
+            ("browser_network", &first),
+            ("browser_network", &first_again),
+            ("browser_network_watch", &second),
+        ]);
+        assert_eq!(summary.network.records_written, 19);
+        assert_eq!(summary.network.records_dropped, 3);
+        assert_eq!(summary.network.connection_urls_truncated, 3);
+        let envelope = json!({
+            "content": [],
+            "structured_content": {
+                "records_retained": 8,
+                "entries": [{"event_id":"hidden"}]
+            }
+        });
+        let payload = ObservabilitySummary::health_payload("browser_audit", &envelope).expect("payload");
+        assert_eq!(payload["records_retained"], 8);
+        assert!(payload.get("entries").is_none());
+        assert!(payload.get("structured_content").is_none());
     }
 }
