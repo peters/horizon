@@ -13,9 +13,13 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::{ExecutionReport, Plan, execution_control::ExecutionStopReason};
+use crate::checkpoint::{
+    CheckpointIntent, CheckpointStore, IntentStatus, ResumeError, ResumeSelection, RunCheckpoint, UncertainPolicy,
+    select_resume, valid_job_id,
+};
+use crate::{ExecutionReport, Plan, PlanStep, StepReport, execution_control::ExecutionStopReason};
 
-const STATE_VERSION: u32 = 2;
+const STATE_VERSION: u32 = 3;
 const PLAN_FILE: &str = "plan.json";
 const REPORT_FILE: &str = "report.json";
 const STATE_FILE: &str = "state.json";
@@ -49,6 +53,9 @@ pub struct RunState {
     pub report_file: Option<String>,
     /// Number of step reports produced before the run stopped.
     pub completed_steps: usize,
+    /// Verified completions and any in-flight or skipped uncertain step.
+    #[serde(default, skip_serializing_if = "RunCheckpoint::is_empty")]
+    pub checkpoint: RunCheckpoint,
     /// Private initialization, plan-execution, or MCP shutdown error.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -256,6 +263,7 @@ impl DurableRun {
             plan_file: PLAN_FILE.to_string(),
             report_file: None,
             completed_steps: 0,
+            checkpoint: RunCheckpoint::default(),
             error: None,
         };
         write_private_json(&staging.path().join(PLAN_FILE), plan, "plan")
@@ -331,12 +339,146 @@ impl DurableRun {
         self.persist_state()
     }
 
+    /// Open a previously published job by id.
+    ///
+    /// # Errors
+    /// Returns when the id is invalid, the job is missing, or state cannot be read.
+    pub fn open(job_id: &str) -> Result<Self, ResumeError> {
+        let root = HorizonHome::resolve().root().join("browser-jobs");
+        Self::open_in(&root, job_id)
+    }
+
+    pub(crate) fn open_in(root: &Path, job_id: &str) -> Result<Self, ResumeError> {
+        if !valid_job_id(job_id) {
+            return Err(ResumeError::InvalidJobId(job_id.to_string()));
+        }
+        let directory = root.join(job_id);
+        let state_path = directory.join(STATE_FILE);
+        let bytes = std::fs::read(&state_path).map_err(|source| {
+            if source.kind() == std::io::ErrorKind::NotFound {
+                ResumeError::NotFound(job_id.to_string())
+            } else {
+                ResumeError::Decode(format!("could not read {}: {source}", state_path.display()))
+            }
+        })?;
+        let state: RunState = serde_json::from_slice(&bytes)
+            .map_err(|source| ResumeError::Decode(format!("could not decode {}: {source}", state_path.display())))?;
+        if state.job_id != job_id {
+            return Err(ResumeError::Decode(format!(
+                "durable job `{job_id}` does not match state id `{}`",
+                state.job_id
+            )));
+        }
+        Ok(Self {
+            directory,
+            state_path,
+            state,
+        })
+    }
+
+    /// Load a terminal job and choose remaining work for an explicit resume.
+    ///
+    /// # Errors
+    /// Returns when the job is missing, still leased, already succeeded, or
+    /// would replay an uncertain mutation.
+    pub fn prepare_resume(job_id: &str, policy: UncertainPolicy) -> Result<(Self, Plan, ResumeSelection), ResumeError> {
+        let run = Self::open(job_id)?;
+        let plan = run.load_plan()?;
+        match run.state.effective_status_at(now_millis()) {
+            RunStatus::Prepared | RunStatus::Running => return Err(ResumeError::StillRunning(job_id.to_string())),
+            RunStatus::Succeeded => return Err(ResumeError::AlreadySucceeded(job_id.to_string())),
+            RunStatus::Failed | RunStatus::Cancelled | RunStatus::TimedOut => {}
+        }
+        let selection = select_resume(&plan, Some(&run.state.checkpoint), policy)?;
+        if selection.start_index >= plan.steps.len() {
+            return Err(ResumeError::NothingToResume(job_id.to_string()));
+        }
+        Ok((run, plan, selection))
+    }
+
+    /// Saved plan for this durable run.
+    ///
+    /// # Errors
+    /// Returns when the plan file cannot be read or validated.
+    pub fn load_plan(&self) -> Result<Plan, ResumeError> {
+        let path = self.directory.join(&self.state.plan_file);
+        let bytes = std::fs::read(&path)
+            .map_err(|source| ResumeError::Decode(format!("could not read {}: {source}", path.display())))?;
+        Plan::from_slice(&bytes).map_err(|source| ResumeError::Decode(source.to_string()))
+    }
+
+    /// Current durable snapshot.
+    #[must_use]
+    pub fn state(&self) -> &RunState {
+        &self.state
+    }
+
+    /// Re-arm a terminal job for an explicit resume without creating a new id.
+    ///
+    /// # Errors
+    /// Returns when the updated lease cannot be persisted.
+    pub fn rearm(
+        &mut self,
+        execution_timeout_seconds: u64,
+        deadline_at_millis: u64,
+        skipped: Option<String>,
+    ) -> Result<(), RunStateError> {
+        self.state.status = RunStatus::Prepared;
+        self.state.execution_timeout_seconds = Some(execution_timeout_seconds);
+        self.state.deadline_at_millis = Some(deadline_at_millis);
+        self.state.updated_at_millis = now_millis();
+        self.state.runner_pid = std::process::id();
+        self.state.error = None;
+        if let Some(step_id) = skipped {
+            self.state.checkpoint.skipped.push(step_id);
+            self.state.checkpoint.intent = None;
+        }
+        self.persist_state()
+    }
+
     fn persist_state(&self) -> Result<(), RunStateError> {
         write_private_json(&self.state_path, &self.state, "state")
     }
 
+    fn persist_checkpoint(&mut self) -> Result<(), String> {
+        self.state.updated_at_millis = now_millis();
+        self.state.completed_steps = self.state.checkpoint.completed.len();
+        self.persist_state().map_err(|error| error.to_string())
+    }
+
     fn write_json(&self, name: &str, value: &impl Serialize, artifact: &'static str) -> Result<(), RunStateError> {
         write_private_json(&self.directory.join(name), value, artifact)
+    }
+}
+
+impl CheckpointStore for DurableRun {
+    fn record_intent(&mut self, step: &PlanStep) -> Result<(), String> {
+        self.state.checkpoint.intent = Some(CheckpointIntent {
+            step_id: step.id.clone(),
+            tool: step.tool.clone(),
+            status: IntentStatus::Dispatched,
+        });
+        self.persist_checkpoint()
+    }
+
+    fn record_completion(&mut self, report: &StepReport) -> Result<(), String> {
+        self.state.checkpoint.intent = None;
+        self.state.checkpoint.completed.push(report.clone());
+        self.persist_checkpoint()
+    }
+
+    fn record_uncertain(&mut self, step: &PlanStep) -> Result<(), String> {
+        self.state.checkpoint.intent = Some(CheckpointIntent {
+            step_id: step.id.clone(),
+            tool: step.tool.clone(),
+            status: IntentStatus::Uncertain,
+        });
+        self.persist_checkpoint()
+    }
+
+    fn clear_intent(&mut self) -> Result<(), String> {
+        self.state.checkpoint.intent = None;
+        self.persist_checkpoint()
     }
 }
 
@@ -477,6 +619,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::checkpoint::{CheckpointStore, IntentStatus, UncertainPolicy, select_resume};
     use crate::observability::ObservabilitySummary;
     use crate::{PlanStep, StepReport};
 
@@ -646,6 +789,71 @@ mod tests {
             cancelled.error.as_deref(),
             Some(ExecutionStopReason::Cancelled.message())
         );
+    }
+
+    #[test]
+    fn checkpoints_record_intent_then_only_verified_completions() {
+        let root = tempfile::tempdir().expect("temporary job root");
+        let mut run = DurableRun::prepare_in(root.path(), &two_step_plan(), Some(30), None).expect("prepare");
+        let first = &two_step_plan().steps[0];
+        run.record_intent(first).expect("intent");
+        let dispatched: RunState =
+            serde_json::from_slice(&std::fs::read(&run.state_path).expect("state")).expect("decode dispatched");
+        assert_eq!(
+            dispatched.checkpoint.intent.as_ref().map(|intent| intent.status),
+            Some(IntentStatus::Dispatched)
+        );
+        assert!(dispatched.checkpoint.completed.is_empty());
+
+        let report = StepReport {
+            id: first.id.clone(),
+            tool: first.tool.clone(),
+            ok: true,
+            result: Some(json!({"panels": []})),
+            error: None,
+        };
+        run.record_completion(&report).expect("completion");
+        let completed: RunState =
+            serde_json::from_slice(&std::fs::read(&run.state_path).expect("state")).expect("decode completed");
+        assert!(completed.checkpoint.intent.is_none());
+        assert_eq!(completed.checkpoint.completed.len(), 1);
+        assert_eq!(completed.completed_steps, 1);
+
+        let second = &two_step_plan().steps[1];
+        run.record_intent(second).expect("second intent");
+        run.record_uncertain(second).expect("uncertain");
+        run.stop(ExecutionStopReason::DeadlineExceeded).expect("timeout");
+        let timed_out: RunState =
+            serde_json::from_slice(&std::fs::read(&run.state_path).expect("state")).expect("decode timed out");
+        assert_eq!(
+            timed_out.checkpoint.intent.as_ref().map(|intent| intent.status),
+            Some(IntentStatus::Uncertain)
+        );
+        assert_eq!(timed_out.checkpoint.completed.len(), 1);
+
+        let opened = DurableRun::open_in(root.path(), run.job_id()).expect("open");
+        assert_eq!(opened.state().checkpoint.completed.len(), 1);
+        let selection = select_resume(&two_step_plan(), Some(&timed_out.checkpoint), UncertainPolicy::Skip)
+            .expect("skip remaining");
+        assert_eq!(selection.start_index, 2);
+    }
+
+    fn two_step_plan() -> Plan {
+        Plan {
+            version: 1,
+            steps: vec![
+                PlanStep {
+                    id: "list".to_string(),
+                    tool: "browser_list".to_string(),
+                    arguments: serde_json::Map::new(),
+                },
+                PlanStep {
+                    id: "again".to_string(),
+                    tool: "browser_list".to_string(),
+                    arguments: serde_json::Map::new(),
+                },
+            ],
+        }
     }
 
     #[cfg(unix)]

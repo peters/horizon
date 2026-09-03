@@ -144,7 +144,7 @@ fn run_publishes_a_complete_relative_job_when_home_is_unset() {
     assert!(job_dir.join("plan.json").is_file());
     let state: Value = serde_json::from_slice(&std::fs::read(job_dir.join("state.json")).expect("job state"))
         .expect("decode job state");
-    assert_eq!(state["version"], 2);
+    assert_eq!(state["version"], 3);
     assert_eq!(state["status"], "succeeded");
     assert!(state["deadline_at_millis"].as_u64().is_some());
     assert_eq!(state["report_file"], "report.json");
@@ -223,6 +223,38 @@ fn run_deadline_persists_a_partial_report_and_stable_exit_code() {
     );
     assert_eq!(failed_output.status.code(), Some(124));
     assert!(String::from_utf8_lossy(&failed_output.stderr).contains("could not open report"));
+}
+
+#[test]
+fn resume_refuses_an_uncertain_in_flight_step() {
+    let root = tempfile::tempdir().expect("isolated root");
+    let (plan, manifest_path) = write_blocking_plan(root.path());
+    let output = run_deadline_after_action(root.path(), &plan, &manifest_path, None);
+    assert_eq!(output.status.code(), Some(124));
+    let report: Value = serde_json::from_slice(&output.stdout).expect("deadline report");
+    let job_id = report["job_id"].as_str().expect("job id");
+    let job_dir = std::path::Path::new(report["job_dir"].as_str().expect("job directory"));
+    let state: Value = serde_json::from_slice(&std::fs::read(job_dir.join("state.json")).expect("deadline state"))
+        .expect("decode deadline state");
+    assert_eq!(state["checkpoint"]["completed"].as_array().map(Vec::len), Some(1));
+    assert_eq!(state["checkpoint"]["intent"]["status"], "uncertain");
+    assert_eq!(state["checkpoint"]["intent"]["step_id"], "snapshot");
+
+    let refused = run_command(root.path(), ["resume", job_id]);
+    assert_eq!(refused.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("uncertain step `snapshot`"),
+        "stderr: {}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+
+    let skipped = run_command(root.path(), ["resume", job_id, "--on-uncertain", "skip"]);
+    assert_eq!(skipped.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&skipped.stderr).contains("no remaining steps to resume"),
+        "stderr: {}",
+        String::from_utf8_lossy(&skipped.stderr)
+    );
 }
 
 #[test]

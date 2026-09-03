@@ -6,6 +6,7 @@
 //! add a second browser action API: it connects an MCP client to the same
 //! [`horizon_browser_mcp::HorizonBrowserMcp`] service used by agents.
 
+pub mod checkpoint;
 pub mod execution_control;
 pub mod job;
 pub mod observability;
@@ -25,6 +26,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
 
+use checkpoint::CheckpointStore;
 use execution_control::{ExecutionControl, ExecutionStopReason};
 use observability::ObservabilitySummary;
 
@@ -78,8 +80,19 @@ pub struct ExecutionReport {
     pub observability: ObservabilitySummary,
 }
 
+/// Prefix reused by an explicit resume and optional durable checkpoint sink.
+#[derive(Default)]
+pub struct PlanResume<'a> {
+    /// Verified reports from earlier attempts, used for `$ref` resolution.
+    pub completed: Vec<StepReport>,
+    /// First plan index that is still eligible to run.
+    pub start_index: usize,
+    /// Durable intent/completion sink; omitted for in-memory tests.
+    pub checkpoint: Option<&'a mut dyn CheckpointStore>,
+}
+
 /// Result of one MCP tool call.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StepReport {
     /// Plan step identifier.
     pub id: String,
@@ -199,6 +212,19 @@ pub async fn execute_plan_with_control(
     plan: &Plan,
     control: &mut ExecutionControl,
 ) -> Result<ExecutionReport, RunError> {
+    execute_plan_with_resume(plan, control, PlanResume::default()).await
+}
+
+/// Execute remaining plan steps after an explicit resume selection.
+///
+/// # Errors
+/// Returns for plan validation, MCP initialization, unavailable tools, or a
+/// stop before step execution begins.
+pub async fn execute_plan_with_resume(
+    plan: &Plan,
+    control: &mut ExecutionControl,
+    resume: PlanResume<'_>,
+) -> Result<ExecutionReport, RunError> {
     validate_plan(plan)?;
     control.check().map_err(RunError::Stopped)?;
     let (server_transport, client_transport) = tokio::io::duplex(MCP_BUFFER_BYTES);
@@ -250,7 +276,7 @@ pub async fn execute_plan_with_control(
         }
     }
 
-    let mut report = execute_steps(plan, &client, control).await;
+    let mut report = execute_steps(plan, &client, control, resume).await;
     if report.stop_reason.is_some() {
         drop(client);
         server_task.abort();
@@ -288,10 +314,19 @@ async fn execute_steps(
     plan: &Plan,
     client: &rmcp::service::RunningService<rmcp::RoleClient, PlanClient>,
     control: &mut ExecutionControl,
+    resume: PlanResume<'_>,
 ) -> ExecutionReport {
+    let PlanResume {
+        completed,
+        start_index,
+        mut checkpoint,
+    } = resume;
     let mut result_indexes = BTreeMap::new();
-    let mut steps = Vec::with_capacity(plan.steps.len());
-    for step in &plan.steps {
+    for (index, step) in completed.iter().enumerate() {
+        result_indexes.insert(step.id.clone(), index);
+    }
+    let mut steps = completed;
+    for step in plan.steps.iter().skip(start_index) {
         let arguments = match resolve_arguments(step, &steps, &result_indexes) {
             Ok(arguments) => arguments,
             Err(error) => {
@@ -299,42 +334,64 @@ async fn execute_steps(
                 break;
             }
         };
-        let params = CallToolRequestParams::new(step.tool.clone()).with_arguments(arguments);
-        let result = match wait_for_browser_action(control, client.call_tool(params)).await {
-            Ok(Ok(result)) => result,
-            Ok(Err(error)) => {
-                steps.push(failed_step(step, format!("MCP call failed: {error}")));
-                break;
-            }
-            Err(stopped) => return stopped_report(steps, &stopped),
-        };
-        let structured = result.structured_content;
-        if result.is_error.unwrap_or(false) {
-            let error = tool_error_text(&result.content);
-            steps.push(StepReport {
-                id: step.id.clone(),
-                tool: step.tool.clone(),
-                ok: false,
-                result: structured,
-                error: Some(error),
-            });
+        if let Some(store) = checkpoint.as_mut()
+            && let Err(error) = store.record_intent(step)
+        {
+            steps.push(failed_step(step, format!("could not persist step intent: {error}")));
             break;
         }
-        let Some(structured) = structured else {
-            steps.push(failed_step(step, "MCP tool returned no structured content".to_string()));
-            break;
+        let params = CallToolRequestParams::new(step.tool.clone()).with_arguments(arguments);
+        let outcome = match wait_for_browser_action(control, client.call_tool(params)).await {
+            Ok(Ok(result)) => step_outcome(step, result),
+            Ok(Err(error)) => failed_step(step, format!("MCP call failed: {error}")),
+            Err(stopped) => {
+                if let Some(store) = checkpoint.as_mut() {
+                    let _ = if stopped.request_started {
+                        store.record_uncertain(step)
+                    } else {
+                        store.clear_intent()
+                    };
+                }
+                return stopped_report(steps, &stopped);
+            }
         };
-        steps.push(StepReport {
+        if let Some(store) = checkpoint.as_mut()
+            && let Err(error) = store.record_completion(&outcome)
+        {
+            steps.push(failed_step(step, format!("could not persist step completion: {error}")));
+            break;
+        }
+        let ok = outcome.ok;
+        result_indexes.insert(step.id.clone(), steps.len());
+        steps.push(outcome);
+        if !ok {
+            break;
+        }
+    }
+    let ok = steps.len() == plan.steps.len() && steps.iter().all(|step| step.ok);
+    execution_report(ok, steps, None, None)
+}
+
+fn step_outcome(step: &PlanStep, result: rmcp::model::CallToolResult) -> StepReport {
+    if result.is_error.unwrap_or(false) {
+        return StepReport {
+            id: step.id.clone(),
+            tool: step.tool.clone(),
+            ok: false,
+            result: result.structured_content,
+            error: Some(tool_error_text(&result.content)),
+        };
+    }
+    match result.structured_content {
+        Some(structured) => StepReport {
             id: step.id.clone(),
             tool: step.tool.clone(),
             ok: true,
             result: Some(structured),
             error: None,
-        });
-        result_indexes.insert(step.id.clone(), steps.len() - 1);
+        },
+        None => failed_step(step, "MCP tool returned no structured content".to_string()),
     }
-    let ok = steps.len() == plan.steps.len() && steps.iter().all(|step| step.ok);
-    execution_report(ok, steps, None, None)
 }
 
 async fn wait_for_browser_action<T>(
@@ -669,6 +726,32 @@ mod tests {
             Some(ExecutionStopReason::DeadlineExceeded.message())
         );
         assert_eq!(report.stop_reason, Some(ExecutionStopReason::DeadlineExceeded));
+    }
+
+    #[tokio::test]
+    async fn resume_reuses_verified_prefix_without_replaying_it() {
+        let plan = plan(
+            br#"{"version":1,"steps":[{"id":"first","tool":"browser_list"},{"id":"second","tool":"browser_list"}]}"#,
+        );
+        let report = execute_plan_with_resume(
+            &plan,
+            &mut ExecutionControl::unbounded(),
+            PlanResume {
+                completed: vec![successful_step("first", json!({"panels":[{"panel_id":"kept"}]}))],
+                start_index: 1,
+                checkpoint: None,
+            },
+        )
+        .await
+        .expect("resume remaining list");
+        assert!(report.ok);
+        assert_eq!(report.steps.len(), 2);
+        assert_eq!(report.steps[0].id, "first");
+        assert_eq!(
+            report.steps[0].result.as_ref().expect("prefix result")["panels"][0]["panel_id"],
+            "kept"
+        );
+        assert_eq!(report.steps[1].id, "second");
     }
 
     fn successful_step(id: &str, result: Value) -> StepReport {
