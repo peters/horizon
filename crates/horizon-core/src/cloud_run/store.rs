@@ -16,6 +16,7 @@ use crate::HorizonHome;
 
 const STORE_SCHEMA_VERSION: i64 = 1;
 const MAX_SNAPSHOT_BYTES: usize = 4 * 1024 * 1024;
+const MAX_MATERIALIZED_SNAPSHOT_BYTES: i64 = 4 * 1024 * 1024 + 1;
 const MAX_RECOVERED_WORKFLOWS: usize = 512;
 const MAX_RECOVERED_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(2);
@@ -157,15 +158,17 @@ impl CloudWorkflowStore {
         let query_limit =
             isize::try_from(MAX_RECOVERED_WORKFLOWS + 1).map_err(|_| CloudStoreError::RecoveryLimitExceeded)?;
         let mut statement = connection.prepare(
-            "SELECT workflow_id, revision, created_at_millis, updated_at_millis, retain_until_millis, snapshot
+            "SELECT workflow_id, revision, created_at_millis, updated_at_millis, retain_until_millis,
+                    substr(snapshot, 1, ?3)
              FROM cloud_workflows
              WHERE retain_until_millis >= ?1
              ORDER BY updated_at_millis DESC, workflow_id ASC
              LIMIT ?2",
         )?;
-        let rows = statement.query_map(params![now_millis, query_limit], |row| {
-            Ok((row.get::<_, String>(0)?, WorkflowRow::from_row(row, 1)?))
-        })?;
+        let rows = statement.query_map(
+            params![now_millis, query_limit, MAX_MATERIALIZED_SNAPSHOT_BYTES],
+            |row| Ok((row.get::<_, String>(0)?, WorkflowRow::from_row(row, 1)?)),
+        )?;
         let mut workflows = Vec::new();
         let mut snapshot_bytes = 0_usize;
         for row in rows {
@@ -341,9 +344,9 @@ fn initialize_schema(connection: &mut Connection) -> Result<(), CloudStoreError>
 fn workflow_row(connection: &Connection, workflow_id: &str) -> rusqlite::Result<Option<WorkflowRow>> {
     connection
         .query_row(
-            "SELECT revision, created_at_millis, updated_at_millis, retain_until_millis, snapshot
+            "SELECT revision, created_at_millis, updated_at_millis, retain_until_millis, substr(snapshot, 1, ?2)
              FROM cloud_workflows WHERE workflow_id = ?1",
-            [workflow_id],
+            params![workflow_id, MAX_MATERIALIZED_SNAPSHOT_BYTES],
             |row| WorkflowRow::from_row(row, 0),
         )
         .optional()
@@ -472,27 +475,24 @@ fn current_unix_millis() -> Result<i64, CloudStoreError> {
 }
 
 fn prepare_private_store(path: &Path) -> Result<PathBuf, CloudStoreError> {
-    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
-        #[cfg(not(unix))]
-        std::fs::create_dir_all(parent)?;
-        #[cfg(unix)]
-        {
-            let mut builder = std::fs::DirBuilder::new();
-            builder.recursive(true).mode(0o700).create(parent)?;
-            if parent.metadata()?.permissions().mode() & 0o077 != 0 {
-                return Err(CloudStoreError::InsecureStoreDirectory);
-            }
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    #[cfg(not(unix))]
+    std::fs::create_dir_all(parent)?;
+    #[cfg(unix)]
+    {
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true).mode(0o700).create(parent)?;
+        if parent.metadata()?.permissions().mode() & 0o077 != 0 {
+            return Err(CloudStoreError::InsecureStoreDirectory);
         }
     }
     #[cfg(unix)]
-    let path = {
-        let file_name = path.file_name().unwrap_or(path.as_os_str());
-        let parent = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or(Path::new("."));
-        parent.canonicalize()?.join(file_name)
-    };
+    let path = parent
+        .canonicalize()?
+        .join(path.file_name().unwrap_or(path.as_os_str()));
     #[cfg(not(unix))]
     let path = path.to_path_buf();
     match std::fs::symlink_metadata(&path) {

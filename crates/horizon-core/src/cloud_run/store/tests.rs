@@ -142,13 +142,14 @@ fn recovery_lists_only_retained_valid_snapshots() {
     let connection = Connection::open(store.path()).expect("open raw store");
     connection
         .execute(
-            "UPDATE cloud_workflows SET snapshot = X'7B7D' WHERE workflow_id = ?1",
-            [retained.id.to_string()],
+            "UPDATE cloud_workflows SET snapshot = zeroblob(?2) WHERE workflow_id = ?1",
+            params![retained.id.to_string(), MAX_MATERIALIZED_SNAPSHOT_BYTES],
         )
-        .expect("corrupt snapshot");
+        .expect("oversize snapshot");
     assert!(matches!(
         store.load(retained.id),
-        Err(CloudStoreError::InvalidStoredWorkflow { workflow_id, .. }) if workflow_id == retained.id
+        Err(CloudStoreError::SnapshotTooLarge { size, maximum })
+            if size == MAX_SNAPSHOT_BYTES + 1 && maximum == MAX_SNAPSHOT_BYTES
     ));
 }
 
