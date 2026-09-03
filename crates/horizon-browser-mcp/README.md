@@ -97,7 +97,13 @@ shell commands, files, or other MCP servers.
   sequence gaps and capture health explicitly, and wakes on a matching record,
   capture stop, capture replacement, or timeout.
 - `browser_handoff` pauses automation so the user can steer.
-- `browser_audit` returns redacted ordered action records.
+- `browser_audit` returns a bounded page of redacted ordered action records.
+  The default page is the newest matching entries (`limit` 1-500, default 100).
+  Set `from_start` to iterate from the oldest retained match, then reuse
+  `next_event_id` as `after_event_id` until `has_more` is false. The response
+  reports `records_returned`, `records_retained`, `malformed_records`,
+  `older_records_dropped`, and `cursor_lost` when the resume cursor is no
+  longer retained.
 
 The server automatically claims and heartbeats a panel using
 `HORIZON_BROWSER_ACTOR`. Horizon injects that identity, together with the

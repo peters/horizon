@@ -1,4 +1,5 @@
 use horizon_browser::{BrowserControlAction, BrowserControlValue};
+use horizon_core::browser::manifest::AuditPageRequest;
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
     handler::server::{
@@ -304,27 +305,37 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_audit",
-        description = "Read the newest redacted audit entries for a browser panel, optionally filtered by action id."
+        description = "Read a bounded page of redacted audit entries for a browser panel. The default page is the newest matching records (limit 1-500, default 100). Set from_start=true to iterate from the oldest retained match; reuse next_event_id as after_event_id until has_more is false. Optional action_id filter. The response includes pagination and loss metadata: records_returned, records_retained, malformed_records, older_records_dropped, and cursor_lost when after_event_id is no longer retained."
     )]
     fn browser_audit(&self, Parameters(input): Parameters<AuditInput>) -> Result<Json<AuditOutput>, String> {
-        let limit = input.limit.unwrap_or(100).clamp(1, 500);
-        let mut entries = self
+        let page = self
             .controller
-            .read_audit(&input.panel_id)
+            .read_audit_page(
+                &input.panel_id,
+                &AuditPageRequest::new(
+                    input.after_event_id,
+                    input.from_start.unwrap_or(false),
+                    input.action_id,
+                    input.limit,
+                ),
+            )
             .map_err(|error| error.to_string())?;
-        if let Some(action_id) = input.action_id.as_deref() {
-            entries.retain(|entry| entry.action_id == action_id);
-        }
-        let start = entries.len().saturating_sub(limit);
-        let entries = entries
+        let entries = page
+            .entries
             .into_iter()
-            .skip(start)
             .map(serde_json::to_value)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| format!("could not encode browser audit: {error}"))?;
         Ok(Json(AuditOutput {
             panel_id: input.panel_id,
             entries,
+            next_event_id: page.next_event_id,
+            has_more: page.has_more,
+            records_returned: page.records_returned,
+            records_retained: page.records_retained,
+            malformed_records: page.malformed_records,
+            older_records_dropped: page.older_records_dropped,
+            cursor_lost: page.cursor_lost,
         }))
     }
 
@@ -474,6 +485,11 @@ mod tests {
         );
         let schemas = serde_json::to_string(&server.tool_router.list_all()).unwrap_or_default();
         assert!(schemas.contains("browser_unavailable"));
+        assert!(schemas.contains("after_event_id"));
+        assert!(schemas.contains("from_start"));
+        assert!(schemas.contains("next_event_id"));
+        assert!(schemas.contains("older_records_dropped"));
+        assert!(schemas.contains("cursor_lost"));
         assert!(!schemas.contains("browser_ws"));
         assert!(!schemas.contains("manifest_path"));
         assert!(!schemas.contains("cdp_endpoint"));

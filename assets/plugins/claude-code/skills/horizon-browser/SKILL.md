@@ -94,4 +94,8 @@ Do not describe Firefox WebSocket instrumentation as undetectable.
 When the user must steer, call `browser_handoff` with a concise reason and stop
 issuing actions. Poll `browser_list` until `handoff_pending` becomes false,
 then take a fresh snapshot before continuing. Use `browser_audit` to review the
-redacted ordered action history or to verify a specific action id.
+redacted ordered action history or to verify a specific action id. The default
+page is the newest matching records (`limit` 1-500, default 100). To iterate
+every retained record, call with `from_start: true` and reuse `next_event_id`
+as `after_event_id` until `has_more` is false. Treat `cursor_lost`,
+`malformed_records`, and `older_records_dropped` as explicit loss.
