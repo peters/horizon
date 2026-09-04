@@ -37,6 +37,11 @@ impl HorizonHome {
     }
 
     #[must_use]
+    pub fn cloud_workflow_store_path(&self) -> PathBuf {
+        self.root.join("cloud-run").join("workflows.sqlite3")
+    }
+
+    #[must_use]
     pub fn session_index_path(&self) -> PathBuf {
         self.sessions_dir().join("index.yaml")
     }
@@ -179,6 +184,10 @@ mod tests {
         let home = HorizonHome::from_root("/tmp/horizon-home".into());
 
         assert_eq!(home.config_path(), PathBuf::from("/tmp/horizon-home/config.yaml"));
+        assert_eq!(
+            home.cloud_workflow_store_path(),
+            PathBuf::from("/tmp/horizon-home/cloud-run/workflows.sqlite3")
+        );
         assert_eq!(
             home.session_index_path(),
             PathBuf::from("/tmp/horizon-home/sessions/index.yaml")

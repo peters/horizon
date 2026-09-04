@@ -4,7 +4,9 @@ use std::{collections::HashSet, fmt};
 use thiserror::Error;
 use uuid::Uuid;
 pub mod runpod;
+mod store;
 mod validation;
+pub use store::{CloudStoreError, CloudWorkflowStore, StoredWorkflow};
 pub const CLOUD_RUN_PROTOCOL_VERSION: u32 = 1;
 macro_rules! uuid_id {
     ($name:ident) => {
@@ -25,6 +27,12 @@ macro_rules! uuid_id {
         impl fmt::Display for $name {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 self.0.fmt(formatter)
+            }
+        }
+        impl std::str::FromStr for $name {
+            type Err = uuid::Error;
+            fn from_str(value: &str) -> Result<Self, Self::Err> {
+                value.parse().map(Self)
             }
         }
     };
