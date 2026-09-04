@@ -498,7 +498,7 @@ fn interactive_adapter_rejects_invalid_handles_before_transport_io() {
             job_id,
             resource_id: "pod_123456".to_string(),
         },
-        image: request.target.image,
+        target: request.target,
         ssh_public_key: request.ssh_public_key,
         lease: InteractiveWorkerLease {
             terminate_after: termination_deadline(900).expect("termination deadline"),

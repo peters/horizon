@@ -27,16 +27,7 @@ impl InteractiveWorkerRequest {
     /// Check the provider-neutral fields before invoking a concrete provider.
     #[must_use]
     pub fn is_valid_for(&self, provider: CloudProvider) -> bool {
-        self.target.provider == provider
-            && !self.target.profile.trim().is_empty()
-            && self.target.profile.trim() == self.target.profile
-            && self.target.profile.len() <= 191
-            && !self.target.profile.chars().any(char::is_control)
-            && valid_immutable_image(&self.target.image)
-            && self.target.disk_gib > 0
-            && (1..=MAX_INTERACTIVE_WORKER_LEASE_SECONDS).contains(&self.target.lease_seconds)
-            && self.target.max_hourly_cost_micros != Some(0)
-            && valid_ed25519_key(&self.ssh_public_key, true)
+        valid_worker_target(&self.target, provider) && valid_ed25519_key(&self.ssh_public_key, true)
     }
 }
 
@@ -98,8 +89,8 @@ impl InteractiveWorkerLease {
 #[serde(deny_unknown_fields)]
 pub struct InteractiveWorker {
     pub identity: InteractiveWorkerIdentity,
-    /// Exact immutable image reference used to create the resource.
-    pub image: String,
+    /// Exact provider target used to create the resource.
+    pub target: WorkerTarget,
     /// Ephemeral client public key installed in this runtime generation.
     pub ssh_public_key: String,
     pub lease: InteractiveWorkerLease,
@@ -112,7 +103,7 @@ impl InteractiveWorker {
     #[must_use]
     pub fn has_valid_shape(&self) -> bool {
         self.identity.is_valid()
-            && valid_immutable_image(&self.image)
+            && valid_worker_target(&self.target, self.identity.provider)
             && valid_ssh_public_key(&self.ssh_public_key)
             && self.lease.has_valid_shape()
     }
@@ -178,7 +169,7 @@ impl InteractiveWorkerStatus {
             && self.worker.is_valid_for(request.target.provider)
             && identity.workflow_id == request.workflow_id
             && identity.job_id == request.job_id
-            && self.worker.image == request.target.image
+            && self.worker.target == request.target
             && self.worker.ssh_public_key == request.ssh_public_key
             && self
                 .worker
@@ -256,6 +247,18 @@ pub trait InteractiveWorkerProvider: Send + Sync {
     /// the worker is malformed or belongs to another provider, or unless
     /// absence is verified.
     fn delete_worker(&self, worker: &InteractiveWorker) -> Result<InteractiveWorkerCleanup, Self::Error>;
+}
+
+fn valid_worker_target(target: &WorkerTarget, provider: CloudProvider) -> bool {
+    target.provider == provider
+        && !target.profile.trim().is_empty()
+        && target.profile.trim() == target.profile
+        && target.profile.len() <= 191
+        && !target.profile.chars().any(char::is_control)
+        && valid_immutable_image(&target.image)
+        && target.disk_gib > 0
+        && (1..=MAX_INTERACTIVE_WORKER_LEASE_SECONDS).contains(&target.lease_seconds)
+        && target.max_hourly_cost_micros != Some(0)
 }
 
 fn valid_immutable_image(value: &str) -> bool {
@@ -385,7 +388,14 @@ mod tests {
                     job_id: CloudJobId::new(),
                     resource_id: "pod-123".to_string(),
                 },
-                image: format!("registry.example/horizon/worker@sha256:{}", "d".repeat(64)),
+                target: WorkerTarget {
+                    provider: CloudProvider::RunPod,
+                    profile: "gpu".to_string(),
+                    image: format!("registry.example/horizon/worker@sha256:{}", "d".repeat(64)),
+                    disk_gib: 20,
+                    lease_seconds: 900,
+                    max_hourly_cost_micros: Some(500_000),
+                },
                 ssh_public_key: ed25519_key(None),
                 lease: InteractiveWorkerLease {
                     terminate_after: "2026-09-04T12:00:00Z".to_string(),
@@ -405,14 +415,7 @@ mod tests {
         InteractiveWorkerRequest {
             workflow_id: status.worker.identity.workflow_id,
             job_id: status.worker.identity.job_id,
-            target: WorkerTarget {
-                provider: status.worker.identity.provider,
-                profile: "gpu".to_string(),
-                image: status.worker.image.clone(),
-                disk_gib: 20,
-                lease_seconds: 900,
-                max_hourly_cost_micros: Some(500_000),
-            },
+            target: status.worker.target.clone(),
             ssh_public_key: status.worker.ssh_public_key.clone(),
         }
     }
@@ -496,7 +499,10 @@ mod tests {
         status.worker.identity.job_id = CloudJobId::new();
         assert!(!status.is_ready_for(&request, observed_at()));
         status = original.clone();
-        status.worker.image = format!("registry.example/horizon/worker@sha256:{}", "a".repeat(64));
+        status.worker.target.image = format!("registry.example/horizon/worker@sha256:{}", "a".repeat(64));
+        assert!(!status.is_ready_for(&request, observed_at()));
+        status = original.clone();
+        status.worker.target.disk_gib += 1;
         assert!(!status.is_ready_for(&request, observed_at()));
         status = original.clone();
         status.worker.ssh_public_key = {
@@ -516,14 +522,7 @@ mod tests {
         let mut request = InteractiveWorkerRequest {
             workflow_id: status.worker.identity.workflow_id,
             job_id: status.worker.identity.job_id,
-            target: WorkerTarget {
-                provider: CloudProvider::RunPod,
-                profile: "gpu".to_string(),
-                image: status.worker.image,
-                disk_gib: 20,
-                lease_seconds: 900,
-                max_hourly_cost_micros: None,
-            },
+            target: status.worker.target,
             ssh_public_key: ed25519_key(Some("user@example")),
         };
         assert!(request.is_valid_for(CloudProvider::RunPod));
@@ -553,7 +552,7 @@ mod tests {
         assert!(!worker.has_valid_shape());
         assert!(!worker.is_valid_for(CloudProvider::RunPod));
         worker = worker_status().worker;
-        worker.image = "registry.example/horizon/worker:latest".to_string();
+        worker.target.image = "registry.example/horizon/worker:latest".to_string();
         assert!(!worker.has_valid_shape());
         worker = worker_status().worker;
         worker.ssh_public_key = "ssh-rsa unsupported".to_string();
