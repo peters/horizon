@@ -100,6 +100,8 @@ pub struct InteractiveWorker {
     pub identity: InteractiveWorkerIdentity,
     /// Exact immutable image reference used to create the resource.
     pub image: String,
+    /// Ephemeral client public key installed in this runtime generation.
+    pub ssh_public_key: String,
     pub lease: InteractiveWorkerLease,
 }
 
@@ -109,7 +111,10 @@ impl InteractiveWorker {
     /// validation through [`InteractiveWorkerStatus::is_ready_for`].
     #[must_use]
     pub fn has_valid_shape(&self) -> bool {
-        self.identity.is_valid() && valid_immutable_image(&self.image) && self.lease.has_valid_shape()
+        self.identity.is_valid()
+            && valid_immutable_image(&self.image)
+            && valid_ssh_public_key(&self.ssh_public_key)
+            && self.lease.has_valid_shape()
     }
 
     /// Check the durable handle before any provider-specific inspection or
@@ -146,10 +151,7 @@ pub struct InteractiveWorkerSshEndpoint {
 impl InteractiveWorkerSshEndpoint {
     #[must_use]
     pub fn is_complete(&self) -> bool {
-        valid_ssh_host(&self.host)
-            && self.port > 0
-            && valid_ssh_username(&self.username)
-            && valid_ed25519_key(&self.host_key, false)
+        valid_ssh_coordinates(&self.host, self.port, &self.username) && valid_ed25519_key(&self.host_key, false)
     }
 }
 
@@ -177,6 +179,7 @@ impl InteractiveWorkerStatus {
             && identity.workflow_id == request.workflow_id
             && identity.job_id == request.job_id
             && self.worker.image == request.target.image
+            && self.worker.ssh_public_key == request.ssh_public_key
             && self
                 .worker
                 .lease
@@ -278,6 +281,10 @@ fn valid_ssh_host(value: &str) -> bool {
     value.parse::<IpAddr>().is_ok() || value.split('.').all(valid_dns_label)
 }
 
+pub(super) fn valid_ssh_coordinates(host: &str, port: u16, username: &str) -> bool {
+    valid_ssh_host(host) && port > 0 && valid_ssh_username(username)
+}
+
 fn valid_dns_label(value: &str) -> bool {
     (1..=63).contains(&value.len())
         && value.as_bytes().first().is_some_and(u8::is_ascii_alphanumeric)
@@ -292,6 +299,10 @@ fn valid_ssh_username(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
+pub(super) fn valid_ssh_public_key(value: &str) -> bool {
+    valid_ed25519_key(value, true)
 }
 
 fn valid_ed25519_key(value: &str, allow_comment: bool) -> bool {
@@ -375,6 +386,7 @@ mod tests {
                     resource_id: "pod-123".to_string(),
                 },
                 image: format!("registry.example/horizon/worker@sha256:{}", "d".repeat(64)),
+                ssh_public_key: ed25519_key(None),
                 lease: InteractiveWorkerLease {
                     terminate_after: "2026-09-04T12:00:00Z".to_string(),
                 },
@@ -401,7 +413,7 @@ mod tests {
                 lease_seconds: 900,
                 max_hourly_cost_micros: Some(500_000),
             },
-            ssh_public_key: ed25519_key(None),
+            ssh_public_key: status.worker.ssh_public_key.clone(),
         }
     }
 
@@ -486,6 +498,13 @@ mod tests {
         status = original.clone();
         status.worker.image = format!("registry.example/horizon/worker@sha256:{}", "a".repeat(64));
         assert!(!status.is_ready_for(&request, observed_at()));
+        status = original.clone();
+        status.worker.ssh_public_key = {
+            let mut blob = ED25519_BLOB_PREFIX.to_vec();
+            blob.extend([43; 32]);
+            format!("ssh-ed25519 {}", STANDARD.encode(blob))
+        };
+        assert!(!status.is_ready_for(&request, observed_at()));
         status = original;
         status.worker.lease.terminate_after = "2999-09-04T12:00:00Z".to_string();
         assert!(!status.is_ready_for(&request, observed_at()));
@@ -537,6 +556,9 @@ mod tests {
         worker.image = "registry.example/horizon/worker:latest".to_string();
         assert!(!worker.has_valid_shape());
         worker = worker_status().worker;
+        worker.ssh_public_key = "ssh-rsa unsupported".to_string();
+        assert!(!worker.has_valid_shape());
+        worker = worker_status().worker;
         worker.lease.terminate_after = "in two hours".to_string();
         assert!(!worker.has_valid_shape());
     }
@@ -547,6 +569,7 @@ mod tests {
         let encoded = serde_json::to_string(&status).expect("serialize status");
         assert!(encoded.contains("\"lifecycle\":\"ready\""));
         assert!(encoded.contains("\"host_key\":\"ssh-ed25519"));
+        assert!(encoded.contains("\"ssh_public_key\":\"ssh-ed25519"));
         let decoded = serde_json::from_str::<InteractiveWorkerStatus>(&encoded).expect("deserialize status");
         assert_eq!(decoded, status);
 

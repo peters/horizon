@@ -1,14 +1,22 @@
 //! `RunPod` Secure Cloud lifecycle adapter for durable cloud workers.
-use super::{CloudJobId, CloudProvider, CloudWorkflowId, WorkerTarget, validation::valid_worker_image};
+use super::{
+    CloudJobId, CloudProvider, CloudWorkflowId, WorkerTarget, interactive_worker::valid_ssh_public_key,
+    validation::valid_worker_image,
+};
 use serde::{Deserialize, Deserializer, Serialize, de};
 use std::{collections::BTreeMap, env, fmt};
 use thiserror::Error;
 mod http;
+mod interactive;
 #[cfg(test)]
 mod tests;
+
+pub use interactive::{RunPodHostKeySource, RunPodInteractiveWorkerProvider};
+
 const WORKFLOW_ENV: &str = "HORIZON_WORKFLOW_ID";
 const JOB_ENV: &str = "HORIZON_JOB_ID";
 const PROTOCOL_ENV: &str = "HORIZON_CLOUD_PROTOCOL_VERSION";
+const SSH_PUBLIC_KEY_ENV: &str = "HORIZON_SSH_PUBLIC_KEY";
 const TERMINATE_ENV: &str = "HORIZON_TERMINATE_AFTER";
 const MIN_LEASE_SECONDS: u32 = 300;
 const MAX_LEASE_SECONDS: u32 = 30 * 24 * 60 * 60;
@@ -94,6 +102,14 @@ pub enum RunPodLifecycle {
     Terminated,
     Unknown,
 }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RunPodSshEndpoint {
+    pub username: String,
+    pub host: String,
+    pub port: u16,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RunPodWorkerStatus {
     pub worker: RunPodWorker,
@@ -174,14 +190,40 @@ impl RunPodClient {
         target: &WorkerTarget,
         profile: &RunPodProfile,
     ) -> Result<RunPodEnsure, RunPodError> {
+        self.ensure_worker_with_ssh_public_key(workflow_id, job_id, target, profile, None)
+    }
+
+    fn ensure_interactive_worker(
+        &self,
+        workflow_id: CloudWorkflowId,
+        job_id: CloudJobId,
+        target: &WorkerTarget,
+        profile: &RunPodProfile,
+        ssh_public_key: &str,
+    ) -> Result<RunPodEnsure, RunPodError> {
+        self.ensure_worker_with_ssh_public_key(workflow_id, job_id, target, profile, Some(ssh_public_key))
+    }
+
+    fn ensure_worker_with_ssh_public_key(
+        &self,
+        workflow_id: CloudWorkflowId,
+        job_id: CloudJobId,
+        target: &WorkerTarget,
+        profile: &RunPodProfile,
+        ssh_public_key: Option<&str>,
+    ) -> Result<RunPodEnsure, RunPodError> {
         validate_target(target, profile)?;
+        if ssh_public_key.is_some_and(|key| !valid_ssh_public_key(key)) {
+            return Err(RunPodError::InvalidTarget);
+        }
         let name = resource_name(workflow_id, job_id);
         let matches = self.reconcile_by_name(&name)?;
         let may_create = !matches.is_empty() || self.creation_fence.claim_once(workflow_id, job_id, target, &name)?;
         let (pod, created, expected_deadline) = match matches.as_slice() {
             [] if !may_create => return Err(RunPodError::CreationUnresolved { name }),
             [] => {
-                let request = CreatePodRequest::new(workflow_id, job_id, target, profile, name.clone())?;
+                let request =
+                    CreatePodRequest::new(workflow_id, job_id, target, profile, name.clone(), ssh_public_key)?;
                 let expected_deadline = request.terminate_after.clone();
                 (self.transport.create(&request)?, true, Some(expected_deadline))
             }
@@ -193,7 +235,14 @@ impl RunPodClient {
                 });
             }
         };
-        let status = match status_from_pod(&pod, workflow_id, job_id, target, expected_deadline.as_deref()) {
+        let status = match status_from_pod(
+            &pod,
+            workflow_id,
+            job_id,
+            target,
+            expected_deadline.as_deref(),
+            ssh_public_key,
+        ) {
             Ok(status) => status,
             Err(error) if created => {
                 if self.transport.delete(&pod.id).is_err() {
@@ -244,7 +293,22 @@ impl RunPodClient {
         worker.validate()?;
         self.transport
             .get(&worker.pod_id)?
-            .map(|pod| status_from_resource(&pod, worker))
+            .map(|pod| status_from_resource(&pod, worker, None))
+            .transpose()
+    }
+
+    fn inspect_interactive_worker(
+        &self,
+        worker: &RunPodWorker,
+        ssh_public_key: &str,
+    ) -> Result<Option<RunPodWorkerStatus>, RunPodError> {
+        worker.validate()?;
+        if !valid_ssh_public_key(ssh_public_key) {
+            return Err(RunPodError::InvalidPersistedWorker);
+        }
+        self.transport
+            .get(&worker.pod_id)?
+            .map(|pod| status_from_resource(&pod, worker, Some(ssh_public_key)))
             .transpose()
     }
     /// Delete only the exact resource proven to belong to the persisted workflow and job.
@@ -254,7 +318,23 @@ impl RunPodClient {
         let Some(pod) = self.transport.get(&worker.pod_id)? else {
             return Ok(RunPodCleanup::AlreadyAbsent);
         };
-        status_from_resource(&pod, worker)?;
+        status_from_resource(&pod, worker, None)?;
+        self.transport.delete(&worker.pod_id)
+    }
+
+    fn delete_interactive_worker(
+        &self,
+        worker: &RunPodWorker,
+        ssh_public_key: &str,
+    ) -> Result<RunPodCleanup, RunPodError> {
+        worker.validate()?;
+        if !valid_ssh_public_key(ssh_public_key) {
+            return Err(RunPodError::InvalidPersistedWorker);
+        }
+        let Some(pod) = self.transport.get(&worker.pod_id)? else {
+            return Ok(RunPodCleanup::AlreadyAbsent);
+        };
+        status_from_resource(&pod, worker, Some(ssh_public_key))?;
         self.transport.delete(&worker.pod_id)
     }
     fn enforce_cost_limit(&self, worker: &RunPodWorker, maximum: Option<u64>) -> Result<(), RunPodError> {
@@ -383,9 +463,10 @@ impl CreatePodRequest {
         target: &WorkerTarget,
         profile: &RunPodProfile,
         name: String,
+        ssh_public_key: Option<&str>,
     ) -> Result<Self, RunPodError> {
         let terminate_after = termination_deadline(target.lease_seconds)?;
-        let env = [
+        let mut env: Vec<_> = [
             (WORKFLOW_ENV, workflow_id.to_string()),
             (JOB_ENV, job_id.to_string()),
             (PROTOCOL_ENV, super::CLOUD_RUN_PROTOCOL_VERSION.to_string()),
@@ -397,6 +478,12 @@ impl CreatePodRequest {
             value,
         })
         .collect();
+        if let Some(ssh_public_key) = ssh_public_key {
+            env.push(CreatePodEnv {
+                key: SSH_PUBLIC_KEY_ENV.to_string(),
+                value: ssh_public_key.to_string(),
+            });
+        }
         Ok(Self {
             allowed_cuda_versions: profile.allowed_cuda_versions.clone(),
             cloud_type: "SECURE",
@@ -483,6 +570,7 @@ fn status_from_pod(
     job_id: CloudJobId,
     target: &WorkerTarget,
     expected_deadline: Option<&str>,
+    ssh_public_key: Option<&str>,
 ) -> Result<RunPodWorkerStatus, RunPodError> {
     let terminate_after = pod
         .env
@@ -501,9 +589,13 @@ fn status_from_pod(
         terminate_after,
         hourly_cost_micros: pod.cost.filter(|cost| *cost > 0),
     };
-    status_from_resource(pod, &worker)
+    status_from_resource(pod, &worker, ssh_public_key)
 }
-fn status_from_resource(pod: &ApiPod, worker: &RunPodWorker) -> Result<RunPodWorkerStatus, RunPodError> {
+fn status_from_resource(
+    pod: &ApiPod,
+    worker: &RunPodWorker,
+    ssh_public_key: Option<&str>,
+) -> Result<RunPodWorkerStatus, RunPodError> {
     worker.validate()?;
     let owned = pod.id == worker.pod_id
         && pod.name == worker.name
@@ -511,7 +603,9 @@ fn status_from_resource(pod: &ApiPod, worker: &RunPodWorker) -> Result<RunPodWor
         && pod.env.get(WORKFLOW_ENV) == Some(&worker.workflow_id.to_string())
         && pod.env.get(JOB_ENV) == Some(&worker.job_id.to_string())
         && pod.env.get(PROTOCOL_ENV) == Some(&super::CLOUD_RUN_PROTOCOL_VERSION.to_string());
-    let owned = owned && pod.env.get(TERMINATE_ENV) == Some(&worker.terminate_after);
+    let owned = owned
+        && pod.env.get(TERMINATE_ENV) == Some(&worker.terminate_after)
+        && ssh_public_key.is_none_or(|key| pod.env.get(SSH_PUBLIC_KEY_ENV).is_some_and(|value| value == key));
     if !owned {
         return Err(RunPodError::ResourceIdentityMismatch);
     }
