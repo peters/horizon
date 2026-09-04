@@ -27,7 +27,7 @@ const MIN_RESUME_VERSION: u32 = 3;
 const PLAN_FILE: &str = "plan.json";
 const REPORT_FILE: &str = "report.json";
 const STATE_FILE: &str = "state.json";
-const RESUME_LOCK_FILE: &str = "resume.lock";
+const RESUME_LOCK_DIRECTORY: &str = "browser-job-locks";
 
 /// Persisted lifecycle state for one deterministic plan run.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -121,6 +121,7 @@ pub struct DurableExecutionReport<'a> {
 pub struct DurableRun {
     directory: PathBuf,
     state_path: PathBuf,
+    lock_path: PathBuf,
     state: RunState,
     lock_file: Option<std::fs::File>,
 }
@@ -228,8 +229,16 @@ impl DurableRun {
         execution_timeout_seconds: u64,
         deadline_at_millis: u64,
     ) -> Result<Self, DurablePreparationError> {
-        let root = HorizonHome::resolve().root().join("browser-jobs");
-        Self::prepare_cancellable_in(&root, plan, Some(execution_timeout_seconds), Some(deadline_at_millis))
+        let horizon_root = HorizonHome::resolve().root().to_path_buf();
+        let job_root = horizon_root.join("browser-jobs");
+        let lock_root = horizon_root.join(RESUME_LOCK_DIRECTORY);
+        Self::prepare_cancellable_in(
+            &job_root,
+            &lock_root,
+            plan,
+            Some(execution_timeout_seconds),
+            Some(deadline_at_millis),
+        )
     }
 
     /// Stable id of this durable run.
@@ -251,6 +260,7 @@ impl DurableRun {
             run: Self {
                 directory: self.directory.clone(),
                 state_path: self.state_path.clone(),
+                lock_path: self.lock_path.clone(),
                 state: self.state.clone(),
                 lock_file: None,
             },
@@ -264,19 +274,23 @@ impl DurableRun {
         execution_timeout_seconds: Option<u64>,
         deadline_at_millis: Option<u64>,
     ) -> Result<Self, RunStateError> {
-        Self::prepare_cancellable_in(root, plan, execution_timeout_seconds, deadline_at_millis)
+        let lock_root = root.join(".locks");
+        Self::prepare_cancellable_in(root, &lock_root, plan, execution_timeout_seconds, deadline_at_millis)
             .map_err(|error| error.into_parts().1)
     }
 
     fn prepare_cancellable_in(
         root: &Path,
+        lock_root: &Path,
         plan: &Plan,
         execution_timeout_seconds: Option<u64>,
         deadline_at_millis: Option<u64>,
     ) -> Result<Self, DurablePreparationError> {
         ensure_private_directory(root).map_err(DurablePreparationError::unpublished)?;
+        ensure_private_directory(lock_root).map_err(DurablePreparationError::unpublished)?;
         let job_id = format!("job-{}", Uuid::new_v4());
         let directory = root.join(&job_id);
+        let lock_path = resume_lock_path(lock_root, &job_id);
         let staging = tempfile::Builder::new()
             .prefix(".preparing-")
             .tempdir_in(root)
@@ -303,14 +317,16 @@ impl DurableRun {
             .map_err(DurablePreparationError::unpublished)?;
         write_private_json(&staging.path().join(STATE_FILE), &state, "state")
             .map_err(DurablePreparationError::unpublished)?;
-        let lock_file = acquire_resume_lock_file(staging.path())
+        let lock_file = acquire_resume_lock_file(&lock_path)
             .map_err(|source| io_error(format!("could not lock staged durable job {}", state.job_id), source))
             .map_err(DurablePreparationError::unpublished)?;
+        sync_directory(lock_root).map_err(DurablePreparationError::unpublished)?;
         sync_directory(staging.path()).map_err(DurablePreparationError::unpublished)?;
         publish_job_directory(staging, &directory).map_err(DurablePreparationError::unpublished)?;
         let run = Self {
             state_path: directory.join(STATE_FILE),
             directory,
+            lock_path,
             state,
             lock_file: Some(lock_file),
         };
@@ -381,20 +397,31 @@ impl DurableRun {
     /// # Errors
     /// Returns when the id is invalid, the job is missing, or state cannot be read.
     pub fn open(job_id: &str) -> Result<Self, ResumeError> {
-        let root = HorizonHome::resolve().root().join("browser-jobs");
-        Self::open_in(&root, job_id)
+        let horizon_root = HorizonHome::resolve().root().to_path_buf();
+        let job_root = horizon_root.join("browser-jobs");
+        let lock_root = horizon_root.join(RESUME_LOCK_DIRECTORY);
+        Self::open_in_with_lock_root(&job_root, &lock_root, job_id)
     }
 
-    pub(crate) fn open_in(root: &Path, job_id: &str) -> Result<Self, ResumeError> {
+    #[cfg(test)]
+    fn open_in(root: &Path, job_id: &str) -> Result<Self, ResumeError> {
+        let lock_root = root.join(".locks");
+        Self::open_in_with_lock_root(root, &lock_root, job_id)
+    }
+
+    fn open_in_with_lock_root(root: &Path, lock_root: &Path, job_id: &str) -> Result<Self, ResumeError> {
         if !valid_job_id(job_id) {
             return Err(ResumeError::InvalidJobId(job_id.to_string()));
         }
+        ensure_private_directory(lock_root)
+            .map_err(|error| ResumeError::Decode(format!("could not prepare resume locks: {error}")))?;
         let directory = root.join(job_id);
         let state_path = directory.join(STATE_FILE);
         let state = read_run_state(&state_path, job_id)?;
         Ok(Self {
             directory,
             state_path,
+            lock_path: resume_lock_path(lock_root, job_id),
             state,
             lock_file: None,
         })
@@ -606,8 +633,7 @@ impl DurableRun {
     }
 
     fn acquire_resume_lock(&mut self) -> Result<(), ResumeError> {
-        let path = self.directory.join(RESUME_LOCK_FILE);
-        match acquire_resume_lock_file(&self.directory) {
+        match acquire_resume_lock_file(&self.lock_path) {
             Ok(file) => {
                 self.lock_file = Some(file);
                 Ok(())
@@ -617,7 +643,7 @@ impl DurableRun {
             }
             Err(source) => Err(ResumeError::Decode(format!(
                 "could not lock {}: {source}",
-                path.display()
+                self.lock_path.display()
             ))),
         }
     }
@@ -731,12 +757,18 @@ fn parent_for_sync(path: &Path) -> &Path {
         .unwrap_or(Path::new("."))
 }
 
-fn acquire_resume_lock_file(directory: &Path) -> Result<std::fs::File, std::io::Error> {
+// Keep the live lease outside the staged job tree: Windows cannot rename a
+// directory while a locked descendant handle is open.
+fn resume_lock_path(lock_root: &Path, job_id: &str) -> PathBuf {
+    lock_root.join(format!("{job_id}.lock"))
+}
+
+fn acquire_resume_lock_file(path: &Path) -> Result<std::fs::File, std::io::Error> {
     let mut options = OpenOptions::new();
     options.create(true).truncate(false).write(true);
     #[cfg(unix)]
     options.mode(0o600);
-    let file = options.open(directory.join(RESUME_LOCK_FILE))?;
+    let file = options.open(path)?;
     match file.try_lock() {
         Ok(()) => Ok(file),
         Err(std::fs::TryLockError::WouldBlock) => Err(std::io::Error::from(std::io::ErrorKind::WouldBlock)),
@@ -904,6 +936,11 @@ mod tests {
         );
         let published = std::fs::read_dir(&root)
             .expect("list job root")
+            .filter(|entry| {
+                entry
+                    .as_ref()
+                    .is_ok_and(|entry| entry.file_name().to_string_lossy().starts_with("job-"))
+            })
             .collect::<Result<Vec<_>, _>>()
             .expect("read job entries");
         assert_eq!(published.len(), 1);
@@ -1292,18 +1329,21 @@ mod tests {
     }
 
     #[test]
-    fn staging_lock_remains_held_across_atomic_publication() {
+    fn external_lock_remains_held_across_atomic_publication() {
         let root = tempfile::tempdir().expect("temporary root");
+        let lock_root = root.path().join(".locks");
+        ensure_private_directory(&lock_root).expect("create lock root");
         let staging = tempfile::Builder::new()
             .prefix(".preparing-")
             .tempdir_in(root.path())
             .expect("stage job");
-        let held = acquire_resume_lock_file(staging.path()).expect("lock staged job");
         let destination = root.path().join("job-published");
+        let lock_path = resume_lock_path(&lock_root, "job-published");
+        let held = acquire_resume_lock_file(&lock_path).expect("lock staged job");
 
         publish_job_directory(staging, &destination).expect("publish locked job");
 
-        let error = acquire_resume_lock_file(&destination).expect_err("published lock remains held");
+        let error = acquire_resume_lock_file(&lock_path).expect_err("published lock remains held");
         assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
         drop(held);
     }
