@@ -94,6 +94,7 @@ fn request() -> InteractiveWorkerRequest {
 fn provider(fake: FakeDocker) -> LocalDockerInteractiveWorkerProvider {
     let profile = LocalDockerProfile {
         name: "local".to_string(),
+        docker_host: "unix:///var/run/docker.sock".to_string(),
     };
     LocalDockerInteractiveWorkerProvider::with_transport(profile, fake)
 }
@@ -113,20 +114,23 @@ fn creates_reuses_inspects_and_deletes_one_exact_worker() {
         Ok(InteractiveWorkerEnsure::Reused(_))
     ));
     assert_eq!(provider.inspect_worker(&status.worker), Ok(Some(status.clone())));
-    assert_eq!(
-        provider.delete_worker(&status.worker),
-        Ok(InteractiveWorkerCleanup::Deleted)
-    );
-    assert_eq!(
-        provider.delete_worker(&status.worker),
-        Ok(InteractiveWorkerCleanup::AlreadyAbsent)
-    );
+    let deleted = provider.delete_worker(&status.worker);
+    let absent = provider.delete_worker(&status.worker);
+    assert!(matches!(deleted, Ok(InteractiveWorkerCleanup::Deleted)));
+    assert!(matches!(absent, Ok(InteractiveWorkerCleanup::AlreadyAbsent)));
     let state = fake.state();
     assert_eq!((state.create_calls, state.delete_calls), (1, 1));
 }
 
 #[test]
 fn rejects_preflight_and_resource_drift_without_unsafe_io() {
+    assert!(matches!(
+        LocalDockerInteractiveWorkerProvider::new(LocalDockerProfile {
+            name: "local".to_string(),
+            docker_host: "ssh://remote.example/run/docker.sock".to_string(),
+        }),
+        Err(LocalDockerError::NonLocalDockerHost)
+    ));
     let fake = FakeDocker::default();
     let provider = provider(fake.clone());
     let mut invalid = request();
@@ -142,12 +146,8 @@ fn rejects_preflight_and_resource_drift_without_unsafe_io() {
         provider.ensure_worker(&drifted),
         Err(LocalDockerError::ResourceIdentityMismatch)
     );
-    fake.state()
-        .container
-        .as_mut()
-        .expect("container")
-        .labels
-        .insert(TARGET_LABEL.to_string(), "spoofed".to_string());
+    let mut worker = worker;
+    worker.target.disk_gib += 1;
     assert_eq!(
         provider.inspect_worker(&worker),
         Err(LocalDockerError::ResourceIdentityMismatch)

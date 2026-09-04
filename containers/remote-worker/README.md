@@ -100,10 +100,12 @@ disabled. Root login is public-key-only.
 
 `horizon_core::cloud_run::local_docker` implements the interactive-worker
 contract against the local Docker daemon. Its profile name must match the
-worker target, and the target image must be an immutable digest reference that
-already exists locally. Creation uses `--pull=never`, restart policy `no`, and
-an ephemeral SSH port bound only to `127.0.0.1`; registry pulls and credentials
-remain outside the provider boundary.
+worker target and its `docker_host` must explicitly name a local Unix socket or
+Windows named pipe; ambient and remote Docker contexts are rejected. The target
+image must be an immutable digest reference that already exists locally.
+Creation uses `--pull=never`, restart policy `no`, and an ephemeral SSH port
+bound only to `127.0.0.1`; registry pulls and credentials remain outside the
+provider boundary.
 
 One workflow/job pair maps to one deterministic container name. The provider
 stores the complete target, workflow and job IDs, client public key, protocol

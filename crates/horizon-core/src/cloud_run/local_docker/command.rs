@@ -19,12 +19,14 @@ const RESPONSE_LIMIT_BYTES: usize = 1024 * 1024;
 
 pub(super) struct DockerCli {
     executable: OsString,
+    docker_host: OsString,
 }
 
 impl DockerCli {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(docker_host: &str) -> Self {
         Self {
             executable: OsString::from("docker"),
+            docker_host: OsString::from(docker_host),
         }
     }
 
@@ -34,6 +36,8 @@ impl DockerCli {
         S: AsRef<OsStr>,
     {
         let mut child = Command::new(&self.executable)
+            .arg("--host")
+            .arg(&self.docker_host)
             .args(args)
             .env("DOCKER_CLIENT_TIMEOUT", COMMAND_TIMEOUT.as_secs().to_string())
             .stdin(Stdio::null())
@@ -215,11 +219,7 @@ fn object_missing(stderr: &[u8]) -> bool {
 }
 
 fn parse_inspection(value: &str) -> Result<DockerContainer, LocalDockerError> {
-    let mut records: Vec<Inspection> = serde_json::from_str(value).map_err(|_| invalid_inspection())?;
-    if records.len() != 1 {
-        return Err(invalid_inspection());
-    }
-    let record = records.pop().ok_or_else(invalid_inspection)?;
+    let [record] = serde_json::from_str::<[Inspection; 1]>(value).map_err(|_| invalid_inspection())?;
     let name = record.name.strip_prefix('/').unwrap_or(&record.name).to_string();
     let ssh_bindings = record
         .network_settings
@@ -270,9 +270,7 @@ struct Inspection {
 #[serde(rename_all = "PascalCase")]
 struct InspectionConfig {
     image: String,
-    #[serde(default)]
     labels: Option<BTreeMap<String, String>>,
-    #[serde(default)]
     env: Option<Vec<String>>,
 }
 
@@ -299,7 +297,6 @@ struct InspectionState {
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct InspectionNetworkSettings {
-    #[serde(default)]
     ports: Option<InspectionPorts>,
 }
 

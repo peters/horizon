@@ -35,6 +35,7 @@ const HOST_KEY_PATH: &str = "/etc/ssh/ssh_host_ed25519_key.pub";
 #[serde(deny_unknown_fields)]
 pub struct LocalDockerProfile {
     pub name: String,
+    pub docker_host: String,
 }
 
 /// Disposable worker provider backed by the local Docker daemon.
@@ -44,12 +45,17 @@ pub struct LocalDockerInteractiveWorkerProvider {
 }
 
 impl LocalDockerInteractiveWorkerProvider {
-    #[must_use]
-    pub fn new(profile: LocalDockerProfile) -> Self {
-        Self {
-            transport: Box::new(command::DockerCli::new()),
-            profile,
-        }
+    /// Build a provider pinned to an explicit local Unix socket or Windows named pipe.
+    ///
+    /// # Errors
+    /// Returns [`LocalDockerError::NonLocalDockerHost`] for ambient or remote daemon endpoints.
+    pub fn new(profile: LocalDockerProfile) -> Result<Self, LocalDockerError> {
+        valid_local_docker_host(&profile.docker_host)
+            .then(|| Self {
+                transport: Box::new(command::DockerCli::new(&profile.docker_host)),
+                profile,
+            })
+            .ok_or(LocalDockerError::NonLocalDockerHost)
     }
 
     #[cfg(test)]
@@ -256,6 +262,8 @@ pub enum LocalDockerError {
     InvalidTarget,
     #[error("persisted local Docker worker identity is invalid")]
     InvalidPersistedWorker,
+    #[error("local Docker provider requires an explicit local Unix socket or Windows named pipe")]
+    NonLocalDockerHost,
     #[error("required command 'docker' is unavailable")]
     DockerUnavailable,
     #[error("local Docker command timed out during {operation}")]
@@ -344,6 +352,14 @@ fn validate_request(request: &InteractiveWorkerRequest, profile: &LocalDockerPro
         .ok_or(LocalDockerError::InvalidTarget)
 }
 
+fn valid_local_docker_host(value: &str) -> bool {
+    let safe = |path: &str| !path.is_empty() && !path.chars().any(char::is_control);
+    value
+        .strip_prefix("unix://")
+        .is_some_and(|path| path.len() > 1 && path.starts_with('/') && safe(path))
+        || value.strip_prefix("npipe:////./pipe/").is_some_and(safe)
+}
+
 fn validate_worker(worker: &InteractiveWorker) -> Result<(), LocalDockerError> {
     (worker.is_valid_for(CloudProvider::LocalDocker) && valid_container_id(&worker.identity.resource_id))
         .then_some(())
@@ -362,16 +378,13 @@ fn worker_for_request(
             job_id: request.job_id,
             resource_id: container.id.clone(),
         },
-        image: request.target.image.clone(),
+        target: request.target.clone(),
         ssh_public_key: request.ssh_public_key.clone(),
         lease: InteractiveWorkerLease {
             terminate_after: terminate_after.to_string(),
         },
     };
     verify_container_for_worker(container, &worker)?;
-    if container.labels.get(TARGET_LABEL) != request_labels(request)?.get(TARGET_LABEL) {
-        return Err(LocalDockerError::ResourceIdentityMismatch);
-    }
     Ok(worker)
 }
 
@@ -392,7 +405,7 @@ fn verify_container_for_worker(
     ];
     let valid = container.id == worker.identity.resource_id
         && container.name == expected_name
-        && container.image == worker.image
+        && container.image == worker.target.image
         && container.restart_policy == "no"
         && exact_labels
             .iter()
@@ -407,16 +420,7 @@ fn valid_target_label(labels: &BTreeMap<String, String>, worker: &InteractiveWor
     labels
         .get(TARGET_LABEL)
         .and_then(|value| serde_json::from_str::<WorkerTarget>(value).ok())
-        .is_some_and(|target| {
-            target.image == worker.image
-                && InteractiveWorkerRequest {
-                    workflow_id: worker.identity.workflow_id,
-                    job_id: worker.identity.job_id,
-                    target,
-                    ssh_public_key: worker.ssh_public_key.clone(),
-                }
-                .is_valid_for(CloudProvider::LocalDocker)
-        })
+        .is_some_and(|target| target == worker.target)
 }
 
 fn request_labels(request: &InteractiveWorkerRequest) -> Result<BTreeMap<String, String>, LocalDockerError> {
