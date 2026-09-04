@@ -12,19 +12,22 @@ struct FakeState {
     create_calls: usize,
     delete_calls: usize,
     fail_create_after_insert: bool,
+    failed_inspections_after_create: usize,
     hidden_inspections_after_create: usize,
     binding_host: Option<String>,
 }
-
 impl FakeDocker {
     fn state(&self) -> std::sync::MutexGuard<'_, FakeState> {
         self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
-
 impl DockerTransport for FakeDocker {
     fn inspect(&self, reference: &str) -> DockerResult<Option<DockerContainer>> {
         let mut state = self.state();
+        if state.container.is_some() && state.failed_inspections_after_create > 0 {
+            state.failed_inspections_after_create -= 1;
+            return Err(invalid_response("container inspection"));
+        }
         if state.container.is_some() && state.hidden_inspections_after_create > 0 {
             state.hidden_inspections_after_create -= 1;
             return Ok(None);
@@ -75,13 +78,11 @@ impl DockerTransport for FakeDocker {
         Ok(true)
     }
 }
-
 fn ed25519_key(seed: u8) -> String {
     let mut blob = b"\0\0\0\x0bssh-ed25519\0\0\0\x20".to_vec();
     blob.extend([seed; 32]);
     format!("ssh-ed25519 {}", STANDARD.encode(blob))
 }
-
 fn request() -> InteractiveWorkerRequest {
     InteractiveWorkerRequest {
         workflow_id: "00000000-0000-4000-8000-000000000001".parse().expect("workflow ID"),
@@ -97,21 +98,18 @@ fn request() -> InteractiveWorkerRequest {
         ssh_public_key: ed25519_key(3),
     }
 }
-
 fn profile(name: &str, docker_host: &str) -> LocalDockerProfile {
     LocalDockerProfile {
         name: name.to_string(),
         docker_host: docker_host.to_string(),
     }
 }
-
 fn provider(name: &str, fake: FakeDocker) -> LocalDockerInteractiveWorkerProvider {
     LocalDockerInteractiveWorkerProvider {
         transport: Box::new(fake),
         profile: profile(name, "unix:///var/run/docker.sock"),
     }
 }
-
 #[test]
 fn creates_reuses_inspects_and_deletes_one_exact_worker() {
     let fake = FakeDocker::default();
@@ -166,9 +164,10 @@ fn rejects_preflight_and_resource_drift_without_unsafe_io() {
 }
 
 #[test]
-fn reconciles_delayed_lost_create_response_and_cleans_invalid_new_endpoints() {
+fn reconciles_failed_and_delayed_inspection_and_cleans_invalid_endpoint() {
     let recovered = FakeDocker::default();
     recovered.state().fail_create_after_insert = true;
+    recovered.state().failed_inspections_after_create = 1;
     recovered.state().hidden_inspections_after_create = 2;
     let reconciled = provider("local", recovered.clone()).ensure_worker(&request());
     assert!(matches!(reconciled, Ok(InteractiveWorkerEnsure::Reused(_))));

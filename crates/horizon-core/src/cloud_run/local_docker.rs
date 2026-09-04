@@ -152,7 +152,7 @@ impl LocalDockerInteractiveWorkerProvider {
             if remaining.is_zero() {
                 break;
             }
-            if let Some(container) = self.transport.inspect_with_timeout(&create.name, remaining)? {
+            if let Ok(Some(container)) = self.transport.inspect_with_timeout(&create.name, remaining) {
                 return match self.ensure_existing(request, &container) {
                     Ok(status) => Ok(InteractiveWorkerEnsure::Reused(status)),
                     Err(error) => self.cleanup_invalid_creation(&container, create, error),
