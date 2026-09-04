@@ -142,11 +142,12 @@ mod platform {
             }
         }
 
+        fn has_text_interfaces(self) -> bool {
+            self.interfaces.contains(Interface::Text | Interface::EditableText)
+        }
+
         fn is_focused_text_target(self) -> bool {
-            self.states.contains(State::Focused)
-                && self.states.contains(State::Editable)
-                && !self.states.contains(State::ReadOnly)
-                && self.interfaces.contains(Interface::Text | Interface::EditableText)
+            self.states.contains(State::Focused) && self.has_text_interfaces()
         }
 
         fn is_focused(self) -> bool {
@@ -169,6 +170,12 @@ mod platform {
             if !self.states.contains(State::Visible | State::Showing) {
                 return Err(InjectError::Target("focused field is not visible"));
             }
+            // GTK read-only entries still expose Text+EditableText. Chromium
+            // Frame/DocumentWeb often report ReadOnly without those interfaces;
+            // KEY_STRING into that unclassified window must keep working.
+            if self.has_text_interfaces() && self.states.contains(State::ReadOnly) {
+                return Err(InjectError::Target("focused field is not editable"));
+            }
             Ok(())
         }
 
@@ -182,13 +189,20 @@ mod platform {
             if !self.states.contains(State::Focused) {
                 return Err(InjectError::Target("focused accessibility target changed"));
             }
-            if !self.interfaces.contains(Interface::Text | Interface::EditableText) {
+            if !self.has_text_interfaces() {
                 return Err(InjectError::Target(
                     "focused field does not support direct text insertion",
                 ));
             }
-            if !self.states.contains(State::Editable) || self.states.contains(State::ReadOnly) {
+            if self.states.contains(State::ReadOnly) {
                 return Err(InjectError::Target("focused field is not editable"));
+            }
+            if !self.states.contains(State::Editable) {
+                // Firefox documents expose EditableText without Editable.
+                // Keep them classified, then fall back to KEY_STRING.
+                return Err(InjectError::Target(
+                    "focused application does not expose an editable text field",
+                ));
             }
             if !self.states.contains(State::Enabled | State::Sensitive) {
                 return Err(InjectError::Target("focused field is not available for input"));
@@ -381,9 +395,7 @@ mod platform {
         let collection = proxies.collection().await.ok()?;
         let mut rule = ObjectMatchRule::builder().states([State::Focused], MatchType::All);
         if search == FocusSearch::EditableText {
-            rule = rule
-                .states([State::Focused, State::Editable], MatchType::All)
-                .interfaces([Interface::Text, Interface::EditableText], MatchType::All);
+            rule = rule.interfaces([Interface::Text, Interface::EditableText], MatchType::All);
         }
         collection
             .get_matches(rule.build(), SortOrder::Canonical, 2, true)
@@ -801,15 +813,23 @@ mod platform {
         }
 
         #[test]
-        fn focused_text_targets_require_an_editable_state() {
+        fn focused_text_targets_include_read_only_and_non_editable_text() {
             assert!(safe_target().is_focused_text_target());
             let mut document = safe_target();
             document.role = Role::DocumentWeb;
             document.states.remove(State::Editable);
-            assert!(!document.is_focused_text_target());
+            assert!(document.is_focused_text_target());
             let mut read_only = safe_target();
             read_only.states.insert(State::ReadOnly);
-            assert!(!read_only.is_focused_text_target());
+            assert!(read_only.is_focused_text_target());
+            let mut unfocused = safe_target();
+            unfocused.states.remove(State::Focused);
+            assert!(!unfocused.is_focused_text_target());
+            let missing_interface = TargetFacts {
+                interfaces: InterfaceSet::new(Interface::Text),
+                ..safe_target()
+            };
+            assert!(!missing_interface.is_focused_text_target());
         }
 
         #[test]
@@ -837,6 +857,9 @@ mod platform {
             )));
             assert!(!can_synthesize_keys(&InjectError::Target(
                 "multiple focused editable fields were reported"
+            )));
+            assert!(!can_synthesize_keys(&InjectError::Target(
+                "focused field is not editable"
             )));
         }
 
@@ -871,6 +894,18 @@ mod platform {
             let mut read_only_frame = frame;
             read_only_frame.states.insert(State::ReadOnly);
             assert_eq!(read_only_frame.validate_synthesis_target(), Ok(()));
+
+            let mut read_only_text = safe_target();
+            read_only_text.states.insert(State::ReadOnly);
+            assert_eq!(
+                read_only_text.validate_synthesis_target(),
+                Err(InjectError::Target("focused field is not editable"))
+            );
+
+            let mut firefox_document = safe_target();
+            firefox_document.role = Role::DocumentWeb;
+            firefox_document.states.remove(State::Editable);
+            assert_eq!(firefox_document.validate_synthesis_target(), Ok(()));
 
             let mut hidden = frame;
             hidden.states.remove(State::Showing);
@@ -992,6 +1027,18 @@ mod platform {
                 assert!(matches!(unsafe_target.validate(), Err(InjectError::Target(_))));
             }
             assert_eq!(safe_target().validate(), Ok(()));
+            assert_eq!(
+                not_editable.validate(),
+                Err(InjectError::Target(
+                    "focused application does not expose an editable text field"
+                ))
+            );
+            assert!(can_synthesize_keys(&not_editable.validate().unwrap_err()));
+            assert_eq!(
+                read_only.validate(),
+                Err(InjectError::Target("focused field is not editable"))
+            );
+            assert!(!can_synthesize_keys(&read_only.validate().unwrap_err()));
         }
 
         #[test]
