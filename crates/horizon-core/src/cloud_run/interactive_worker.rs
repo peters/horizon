@@ -251,7 +251,7 @@ pub trait InteractiveWorkerProvider: Send + Sync {
     fn delete_worker(&self, worker: &InteractiveWorker) -> Result<InteractiveWorkerCleanup, Self::Error>;
 }
 
-fn valid_worker_target(target: &WorkerTarget, provider: CloudProvider) -> bool {
+pub(crate) fn valid_worker_target(target: &WorkerTarget, provider: CloudProvider) -> bool {
     target.provider == provider
         && !target.profile.trim().is_empty()
         && target.profile.trim() == target.profile

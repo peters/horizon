@@ -296,6 +296,14 @@ pub(super) fn valid_worker_image(value: &str) -> bool {
     let registry = !explicit || Url::parse(&format!("https://{value}")).is_ok_and(usable);
     OCI_REF.as_ref().is_some_and(|pattern| pattern.is_match(value)) && digest && registry
 }
+impl GitSource {
+    /// Validate the credential-free repository identity and optional branch.
+    /// # Errors
+    /// Rejects invalid repository slugs and Git branch names.
+    pub fn validate(&self) -> Result<(), Error> {
+        validate_git_source(self)
+    }
+}
 fn validate_git_source(source: &GitSource) -> Result<(), Error> {
     ensure(valid_repository(&source.repository), Error::InvalidRepository)?;
     let branch_is_valid = source.branch.as_deref().is_none_or(valid_branch);
