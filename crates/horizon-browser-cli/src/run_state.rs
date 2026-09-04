@@ -444,7 +444,7 @@ impl DurableRun {
             RunStatus::Failed | RunStatus::Cancelled | RunStatus::TimedOut => {}
         }
         let selection = select_resume(&plan, Some(&run.state.checkpoint), policy)?;
-        if selection.start_index >= plan.steps.len() {
+        if selection.start_index >= plan.steps.len() && selection.skipped.is_none() {
             return Err(ResumeError::NothingToResume(job_id.to_string()));
         }
         Ok((run, plan, selection))

@@ -254,10 +254,33 @@ fn resume_refuses_an_uncertain_in_flight_step() {
     let skipped = run_command(root.path(), ["resume", job_id, "--on-uncertain", "skip"]);
     assert_eq!(skipped.status.code(), Some(1));
     assert!(
-        String::from_utf8_lossy(&skipped.stderr).contains("no remaining steps to resume"),
+        skipped.stderr.is_empty(),
         "stderr: {}",
         String::from_utf8_lossy(&skipped.stderr)
     );
+    let skipped_report: Value = serde_json::from_slice(&skipped.stdout).expect("skipped final-step report");
+    assert_eq!(skipped_report["ok"], false);
+    assert_eq!(skipped_report["completed_steps"], 1);
+    assert_eq!(
+        skipped_report["steps"]
+            .as_array()
+            .expect("step reports")
+            .iter()
+            .map(|step| step["id"].as_str())
+            .collect::<Vec<_>>(),
+        [Some("list")]
+    );
+    assert_eq!(
+        skipped_report["error"],
+        "plan remains incomplete because resume explicitly skipped uncertain steps: snapshot"
+    );
+    let skipped_state: Value =
+        serde_json::from_slice(&std::fs::read(job_dir.join("state.json")).expect("skipped final-step state"))
+            .expect("decode skipped final-step state");
+    assert_eq!(skipped_state["status"], "failed");
+    assert_eq!(skipped_state["report_file"], "report.json");
+    assert_eq!(skipped_state["checkpoint"]["skipped"], json!(["snapshot"]));
+    assert!(skipped_state["checkpoint"].get("intent").is_none());
 }
 
 #[test]

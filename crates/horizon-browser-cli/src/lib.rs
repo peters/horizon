@@ -227,6 +227,9 @@ pub async fn execute_plan_with_resume(
 ) -> Result<ExecutionReport, RunError> {
     validate_plan(plan)?;
     control.check().map_err(RunError::Stopped)?;
+    if resume.start_index >= plan.steps.len() {
+        return Ok(completed_execution_report(plan, resume.completed, resume.start_index));
+    }
     let (server_transport, client_transport) = tokio::io::duplex(MCP_BUFFER_BYTES);
     let mut server_task = tokio::spawn(async move {
         let service = horizon_browser_mcp::HorizonBrowserMcp::from_environment()
@@ -374,14 +377,20 @@ async fn execute_steps(
             }
         }
     }
+    completed_execution_report(plan, steps, start_index)
+}
+
+fn completed_execution_report(plan: &Plan, steps: Vec<StepReport>, start_index: usize) -> ExecutionReport {
     let all_reports_succeeded = steps.iter().all(|step| step.ok);
-    let skipped_ids = plan
-        .steps
-        .iter()
-        .take(start_index)
-        .filter(|step| !result_indexes.contains_key(&step.id))
-        .map(|step| step.id.as_str())
-        .collect::<Vec<_>>();
+    let skipped_ids = {
+        let reported_ids = steps.iter().map(|step| step.id.as_str()).collect::<BTreeSet<_>>();
+        plan.steps
+            .iter()
+            .take(start_index)
+            .filter(|step| !reported_ids.contains(step.id.as_str()))
+            .map(|step| step.id.as_str())
+            .collect::<Vec<_>>()
+    };
     let ok = skipped_ids.is_empty() && steps.len() == plan.steps.len() && all_reports_succeeded;
     let error = if all_reports_succeeded && !skipped_ids.is_empty() {
         Some(format!(
