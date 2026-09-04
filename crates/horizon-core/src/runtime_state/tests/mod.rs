@@ -1,4 +1,5 @@
 mod panels;
+mod versioning;
 mod workspaces;
 
 use crate::board::WorkspaceLayout;

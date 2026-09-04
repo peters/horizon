@@ -65,8 +65,10 @@ back into large multi-purpose modules.
 - `runtime_state.rs` should stay focused on persisted board/window orchestration.
   Persisted workspace, panel, template, and session-binding models live in
   `runtime_state/models.rs`, with board/workspace and panel persistence tests in
-  `runtime_state/tests/`. Agent binding orchestration, discovery, and
-  external-store parsing belong in `runtime_state/` helper modules.
+  `runtime_state/tests/`. `runtime_state/versioning.rs` guards schema compatibility
+  on read and write serialization boundaries; supported legacy snapshots still
+  migrate in memory. Agent binding orchestration, discovery, and external-store
+  parsing belong in `runtime_state/` helper modules.
   Binding validation and assignment live in
   `runtime_state/binding_bootstrap.rs`; provider-specific session-store parsing
   belongs in focused leaves such as `runtime_state/agent_sessions/codex.rs`.
