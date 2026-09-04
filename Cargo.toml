@@ -74,7 +74,7 @@ uuid = { version = "1.24.1", features = ["serde", "v4"] }
 git2 = { version = "0.21", default-features = false }
 regex = "1.13.1"
 arboard = "3.6.1"
-atspi = { version = "0.30.0", default-features = false, features = ["connection", "proxies", "tokio"] }
+atspi = { version = "0.30.0", default-features = false, features = ["connection", "proxies", "tokio", "zbus"] }
 tokio = { version = "1.53.1", features = ["rt", "macros", "time"] }
 axuielement = { version = "0.9.1", default-features = false, features = ["async"] }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSRunningApplication", "libc"] }

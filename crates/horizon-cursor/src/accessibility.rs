@@ -142,8 +142,12 @@ mod platform {
             }
         }
 
+        fn has_text_interfaces(self) -> bool {
+            self.interfaces.contains(Interface::Text | Interface::EditableText)
+        }
+
         fn is_focused_text_target(self) -> bool {
-            self.states.contains(State::Focused) && self.interfaces.contains(Interface::Text | Interface::EditableText)
+            self.states.contains(State::Focused) && self.has_text_interfaces()
         }
 
         fn is_focused(self) -> bool {
@@ -166,6 +170,12 @@ mod platform {
             if !self.states.contains(State::Visible | State::Showing) {
                 return Err(InjectError::Target("focused field is not visible"));
             }
+            // Chromium Frame/DocumentWeb often report ReadOnly without being
+            // an editable field. A read-only Entry/text object must still
+            // refuse KEY_STRING even when it exposes only Interface::Text.
+            if self.states.contains(State::ReadOnly) && !matches!(self.role, Role::Frame | Role::DocumentWeb) {
+                return Err(InjectError::Target("focused field is not editable"));
+            }
             Ok(())
         }
 
@@ -179,13 +189,20 @@ mod platform {
             if !self.states.contains(State::Focused) {
                 return Err(InjectError::Target("focused accessibility target changed"));
             }
-            if !self.interfaces.contains(Interface::Text | Interface::EditableText) {
+            if !self.has_text_interfaces() {
                 return Err(InjectError::Target(
                     "focused field does not support direct text insertion",
                 ));
             }
-            if !self.states.contains(State::Editable) || self.states.contains(State::ReadOnly) {
+            if self.states.contains(State::ReadOnly) {
                 return Err(InjectError::Target("focused field is not editable"));
+            }
+            if !self.states.contains(State::Editable) {
+                // Firefox documents expose EditableText without Editable.
+                // Keep them classified, then fall back to KEY_STRING.
+                return Err(InjectError::Target(
+                    "focused application does not expose an editable text field",
+                ));
             }
             if !self.states.contains(State::Enabled | State::Sensitive) {
                 return Err(InjectError::Target("focused field is not available for input"));
@@ -266,10 +283,13 @@ mod platform {
                 .map_err(|_| InjectError::Unsupported)
         })
         .await?;
-        match insert_into_editable_field(&connection, deadline, &text).await {
+        let focus_pids = focus_window
+            .and_then(crate::os_focus::window_candidate_pids)
+            .unwrap_or_default();
+        match insert_into_editable_field(&connection, deadline, &text, &focus_pids).await {
             Ok(()) => Ok(()),
             Err(error) if can_synthesize_keys(&error) => {
-                synthesize_into_focused_target(&connection, deadline, &text, focus_window).await
+                synthesize_into_focused_target(&connection, deadline, &text, focus_window, &focus_pids).await
             }
             Err(error) => Err(error),
         }
@@ -279,8 +299,9 @@ mod platform {
         connection: &AccessibilityConnection,
         deadline: tokio::time::Instant,
         text: &str,
+        focus_pids: &[u32],
     ) -> Result<(), InjectError> {
-        let target = bounded_preflight(deadline, find_focused_target(connection)).await?;
+        let target = bounded_preflight(deadline, find_focused_target(connection, focus_pids)).await?;
         let accessible = bounded_preflight(deadline, async {
             target
                 .as_accessible_proxy(connection.connection())
@@ -350,8 +371,17 @@ mod platform {
             .map_err(|_| InjectError::Failed("accessibility preflight timed out"))?
     }
 
-    async fn find_focused_target(connection: &AccessibilityConnection) -> Result<ObjectRefOwned, InjectError> {
-        find_unique_focus(connection, FocusSearch::EditableText, unique_candidate_index).await
+    async fn find_focused_target(
+        connection: &AccessibilityConnection,
+        focus_pids: &[u32],
+    ) -> Result<ObjectRefOwned, InjectError> {
+        find_unique_focus(
+            connection,
+            FocusSearch::EditableText,
+            unique_candidate_index,
+            focus_pids,
+        )
+        .await
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -360,15 +390,28 @@ mod platform {
         FocusedOnly,
     }
 
-    async fn collection_candidates(root: &AccessibleProxy<'_>, search: FocusSearch) -> Option<Vec<ObjectRefOwned>> {
-        let proxies = root.proxies().await.ok()?;
-        let collection = proxies.collection().await.ok()?;
+    fn collection_match_rule(search: FocusSearch) -> ObjectMatchRule {
         let mut rule = ObjectMatchRule::builder().states([State::Focused], MatchType::All);
         if search == FocusSearch::EditableText {
             rule = rule.interfaces([Interface::Text, Interface::EditableText], MatchType::All);
         }
+        let mut rule = rule.build();
+        // atspi-rs defaults unused match types to Invalid. GTK's Collection
+        // treats Invalid as "match nothing", so a Focused-only rule returns
+        // empty and KEY_STRING replaces a classified selection.
+        rule.attr_mt = MatchType::All;
+        rule.roles_mt = MatchType::All;
+        if search != FocusSearch::EditableText {
+            rule.ifaces_mt = MatchType::All;
+        }
+        rule
+    }
+
+    async fn collection_candidates(root: &AccessibleProxy<'_>, search: FocusSearch) -> Option<Vec<ObjectRefOwned>> {
+        let proxies = root.proxies().await.ok()?;
+        let collection = proxies.collection().await.ok()?;
         collection
-            .get_matches(rule.build(), SortOrder::Canonical, 2, true)
+            .get_matches(collection_match_rule(search), SortOrder::Canonical, 2, true)
             .await
             .ok()
     }
@@ -419,6 +462,35 @@ mod platform {
             }
         }
         Some(candidates)
+    }
+
+    async fn resolve_focus_candidates<T, Fut>(
+        collection: Option<Vec<T>>,
+        traversal: impl FnOnce() -> Fut,
+    ) -> Option<Vec<T>>
+    where
+        Fut: Future<Output = Option<Vec<T>>>,
+    {
+        match collection {
+            Some(candidates) => Some(candidates),
+            None => traversal().await,
+        }
+    }
+
+    fn include_atspi_app(app_pid: Option<u32>, focus_pids: &[u32]) -> bool {
+        match app_pid {
+            Some(app) if !focus_pids.is_empty() => focus_pids.contains(&app),
+            _ => true,
+        }
+    }
+
+    async fn atspi_application_pid(
+        dbus: &atspi::zbus::fdo::DBusProxy<'_>,
+        application: &ObjectRefOwned,
+    ) -> Option<u32> {
+        let name = application.name()?;
+        let bus_name = atspi::zbus::names::BusName::try_from(name.as_str()).ok()?;
+        dbus.get_connection_unix_process_id(bus_name).await.ok()
     }
 
     fn unique_index(candidate_count: usize, empty: &'static str, multiple: &'static str) -> Result<usize, InjectError> {
@@ -486,6 +558,7 @@ mod platform {
         connection: &AccessibilityConnection,
         search: FocusSearch,
         unique_index: fn(usize) -> Result<usize, InjectError>,
+        focus_pids: &[u32],
     ) -> Result<ObjectRefOwned, InjectError> {
         let registry = connection
             .root_accessible_on_registry()
@@ -495,23 +568,32 @@ mod platform {
             .get_children()
             .await
             .map_err(|_| InjectError::Failed("failed to inspect accessible applications"))?;
+        let dbus = atspi::zbus::fdo::DBusProxy::new(connection.connection()).await.ok();
         let mut candidates = Vec::new();
         for application in applications {
             if application.is_null() {
                 continue;
             }
+            let app_pid = match dbus.as_ref() {
+                Some(proxy) => atspi_application_pid(proxy, &application).await,
+                None => None,
+            };
+            if !include_atspi_app(app_pid, focus_pids) {
+                continue;
+            }
             let Ok(root) = application.as_accessible_proxy(connection.connection()).await else {
                 continue;
             };
-            let discovered = match collection_candidates(&root, search).await {
-                Some(candidates) if !candidates.is_empty() => candidates,
-                Some(_) | None => {
-                    let Some(candidates) = traversal_candidates(application, connection.connection(), search).await
-                    else {
-                        continue;
-                    };
-                    candidates
-                }
+            // Collection GetMatches is authoritative, including no hits.
+            // Treating Some([]) as "unknown" walks GNOME Shell (~4s to the
+            // 2048-object cap) and the 5s preflight deadline expires before
+            // Chromium/Teams KEY_STRING.
+            let Some(discovered) = resolve_focus_candidates(collection_candidates(&root, search).await, || {
+                traversal_candidates(application, connection.connection(), search)
+            })
+            .await
+            else {
+                continue;
             };
             for candidate in discovered {
                 if !candidates.contains(&candidate) {
@@ -526,8 +608,11 @@ mod platform {
         Ok(candidates.swap_remove(index))
     }
 
-    async fn find_focused_object(connection: &AccessibilityConnection) -> Result<ObjectRefOwned, InjectError> {
-        find_unique_focus(connection, FocusSearch::FocusedOnly, unique_focused_index).await
+    async fn find_focused_object(
+        connection: &AccessibilityConnection,
+        focus_pids: &[u32],
+    ) -> Result<ObjectRefOwned, InjectError> {
+        find_unique_focus(connection, FocusSearch::FocusedOnly, unique_focused_index, focus_pids).await
     }
 
     async fn synthesize_into_focused_target(
@@ -535,9 +620,10 @@ mod platform {
         deadline: tokio::time::Instant,
         text: &str,
         focus_window: Option<u32>,
+        focus_pids: &[u32],
     ) -> Result<(), InjectError> {
-        ensure_synthesis_target_still_safe(connection, deadline).await?;
-        synthesize_key_string(connection, deadline, text, focus_window).await
+        ensure_synthesis_target_still_safe(connection, deadline, focus_pids).await?;
+        synthesize_key_string(connection, deadline, text, focus_window, focus_pids).await
     }
 
     async fn synthesize_key_string(
@@ -545,6 +631,7 @@ mod platform {
         deadline: tokio::time::Instant,
         text: &str,
         focus_window: Option<u32>,
+        focus_pids: &[u32],
     ) -> Result<(), InjectError> {
         let proxy = bounded_preflight(deadline, async {
             DeviceEventControllerProxy::new(connection.connection())
@@ -556,7 +643,7 @@ mod platform {
         // Tab/click can move focus to a password or selection in the same
         // window while the device proxy is created. Re-classify immediately
         // before the mutating call; unclassified Chromium/Teams still type.
-        ensure_synthesis_target_still_safe(connection, deadline).await?;
+        ensure_synthesis_target_still_safe(connection, deadline, focus_pids).await?;
         ensure_focus_window_unchanged(focus_window)?;
         proxy
             .generate_keyboard_event(0, text, KeySynthType::String)
@@ -568,8 +655,9 @@ mod platform {
     async fn ensure_synthesis_target_still_safe(
         connection: &AccessibilityConnection,
         deadline: tokio::time::Instant,
+        focus_pids: &[u32],
     ) -> Result<(), InjectError> {
-        match bounded_preflight(deadline, find_focused_object(connection)).await {
+        match bounded_preflight(deadline, find_focused_object(connection, focus_pids)).await {
             Ok(target) => validate_classified_synthesis_target(connection, deadline, target).await,
             // No AT-SPI focused object (Chromium/Teams). Type into OS focus.
             Err(error) if is_unclassified_focus(&error) => Ok(()),
@@ -601,10 +689,7 @@ mod platform {
                     .text()
                     .await
                     .map_err(|_| InjectError::Target("focused field does not expose readable text state"))?;
-                let selection_count = text_proxy
-                    .get_n_selections()
-                    .await
-                    .map_err(|_| InjectError::Failed("failed to inspect focused field selection"))?;
+                let selection_count = read_visible_selection_count(&text_proxy).await?;
                 Ok(selection_count != 0)
             };
             if let Ok(true) = bounded_preflight(deadline, selected).await {
@@ -634,11 +719,30 @@ mod platform {
         Ok(TargetFacts::new(interfaces, states, role))
     }
 
-    async fn read_text_snapshot(text: &TextProxy<'_>) -> Result<TextSnapshot, InjectError> {
-        let selection_count = text
+    fn visible_selection_count(reported: i32, first_selection: Option<(i32, i32)>) -> i32 {
+        if reported != 0 {
+            reported
+        } else {
+            i32::from(first_selection.is_some_and(|(start, end)| start != end))
+        }
+    }
+
+    async fn read_visible_selection_count(text: &TextProxy<'_>) -> Result<i32, InjectError> {
+        let reported = text
             .get_n_selections()
             .await
             .map_err(|_| InjectError::Failed("failed to inspect focused field selection"))?;
+        if reported != 0 {
+            return Ok(reported);
+        }
+        // GTK can report a caret-range selection via GetSelection(0) while
+        // GetNSelections is 0. Treat a non-empty range as selected so dictation
+        // cannot replace highlighted text.
+        Ok(visible_selection_count(reported, text.get_selection(0).await.ok()))
+    }
+
+    async fn read_text_snapshot(text: &TextProxy<'_>) -> Result<TextSnapshot, InjectError> {
+        let selection_count = read_visible_selection_count(text).await?;
         let caret = text
             .caret_offset()
             .await
@@ -656,13 +760,16 @@ mod platform {
 
     #[cfg(test)]
     mod tests {
+        use std::future::Future;
         use std::sync::PoisonError;
 
-        use atspi::{Interface, InterfaceSet, Role, State, StateSet};
+        use atspi::{Interface, InterfaceSet, MatchType, Role, State, StateSet};
 
         use super::{
-            INSERT_LOCK, InjectError, TargetFacts, TextSnapshot, can_synthesize_keys, focus_window_still_matches,
-            is_unclassified_focus, sanitize_desktop_transcript, unique_candidate_index, unique_focused_index,
+            FocusSearch, INSERT_LOCK, InjectError, TargetFacts, TextSnapshot, can_synthesize_keys,
+            collection_match_rule, focus_window_still_matches, include_atspi_app, is_unclassified_focus,
+            resolve_focus_candidates, sanitize_desktop_transcript, unique_candidate_index, unique_focused_index,
+            visible_selection_count,
         };
 
         fn safe_target() -> TargetFacts {
@@ -678,6 +785,95 @@ mod platform {
                 ),
                 role: Role::Entry,
             }
+        }
+
+        fn block_on_test<T>(future: impl Future<Output = T>) -> T {
+            tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap_or_else(|error| panic!("{error}"))
+                .block_on(future)
+        }
+
+        #[test]
+        fn empty_collection_result_does_not_walk_the_tree() {
+            let mut walked = false;
+            let empty = block_on_test(resolve_focus_candidates(Some(Vec::<i32>::new()), || {
+                walked = true;
+                async { Some(vec![1, 2]) }
+            }));
+            assert_eq!(empty, Some(vec![]));
+            assert!(!walked);
+
+            let hit = block_on_test(resolve_focus_candidates(Some(vec![7]), || {
+                walked = true;
+                async { Some(vec![1]) }
+            }));
+            assert_eq!(hit, Some(vec![7]));
+            assert!(!walked);
+
+            let from_walk = block_on_test(resolve_focus_candidates(None, || {
+                walked = true;
+                async { Some(vec![9]) }
+            }));
+            assert_eq!(from_walk, Some(vec![9]));
+            assert!(walked);
+
+            walked = false;
+            let missing = block_on_test(resolve_focus_candidates::<i32, _>(None, || {
+                walked = true;
+                async { None }
+            }));
+            assert_eq!(missing, None);
+            assert!(walked);
+        }
+
+        #[test]
+        fn collection_rules_do_not_leave_unused_match_types_invalid() {
+            let editable = collection_match_rule(FocusSearch::EditableText);
+            assert_eq!(editable.states_mt, MatchType::All);
+            assert_eq!(editable.ifaces_mt, MatchType::All);
+            assert_eq!(editable.roles_mt, MatchType::All);
+            assert_eq!(editable.attr_mt, MatchType::All);
+            let focused = collection_match_rule(FocusSearch::FocusedOnly);
+            assert_eq!(focused.states_mt, MatchType::All);
+            assert_eq!(focused.ifaces_mt, MatchType::All);
+            assert_eq!(focused.roles_mt, MatchType::All);
+            assert_eq!(focused.attr_mt, MatchType::All);
+        }
+
+        #[test]
+        fn leftover_focused_apps_do_not_claim_the_os_focus_target() {
+            const TEAMS: u32 = 54_087;
+            const FIREFOX: u32 = 14_474;
+            const GNOME_SHELL: u32 = 6_749;
+            const FRAME: u32 = 6_766;
+            assert!(include_atspi_app(Some(TEAMS), &[TEAMS]));
+            assert!(include_atspi_app(Some(TEAMS), &[FRAME, TEAMS]));
+            assert!(!include_atspi_app(Some(FIREFOX), &[TEAMS]));
+            assert!(!include_atspi_app(Some(GNOME_SHELL), &[TEAMS]));
+            assert!(include_atspi_app(None, &[TEAMS]));
+            assert!(include_atspi_app(Some(FIREFOX), &[]));
+            assert!(include_atspi_app(None, &[]));
+        }
+
+        #[test]
+        fn focused_text_targets_include_read_only_and_non_editable_text() {
+            assert!(safe_target().is_focused_text_target());
+            let mut document = safe_target();
+            document.role = Role::DocumentWeb;
+            document.states.remove(State::Editable);
+            assert!(document.is_focused_text_target());
+            let mut read_only = safe_target();
+            read_only.states.insert(State::ReadOnly);
+            assert!(read_only.is_focused_text_target());
+            let mut unfocused = safe_target();
+            unfocused.states.remove(State::Focused);
+            assert!(!unfocused.is_focused_text_target());
+            let missing_interface = TargetFacts {
+                interfaces: InterfaceSet::new(Interface::Text),
+                ..safe_target()
+            };
+            assert!(!missing_interface.is_focused_text_target());
         }
 
         #[test]
@@ -705,6 +901,9 @@ mod platform {
             )));
             assert!(!can_synthesize_keys(&InjectError::Target(
                 "multiple focused editable fields were reported"
+            )));
+            assert!(!can_synthesize_keys(&InjectError::Target(
+                "focused field is not editable"
             )));
         }
 
@@ -739,6 +938,30 @@ mod platform {
             let mut read_only_frame = frame;
             read_only_frame.states.insert(State::ReadOnly);
             assert_eq!(read_only_frame.validate_synthesis_target(), Ok(()));
+
+            let mut read_only_document = document;
+            read_only_document.states.insert(State::ReadOnly);
+            assert_eq!(read_only_document.validate_synthesis_target(), Ok(()));
+
+            let mut read_only_text_only_entry = terminal;
+            read_only_text_only_entry.role = Role::Entry;
+            read_only_text_only_entry.states.insert(State::ReadOnly);
+            assert_eq!(
+                read_only_text_only_entry.validate_synthesis_target(),
+                Err(InjectError::Target("focused field is not editable"))
+            );
+
+            let mut read_only_text = safe_target();
+            read_only_text.states.insert(State::ReadOnly);
+            assert_eq!(
+                read_only_text.validate_synthesis_target(),
+                Err(InjectError::Target("focused field is not editable"))
+            );
+
+            let mut firefox_document = safe_target();
+            firefox_document.role = Role::DocumentWeb;
+            firefox_document.states.remove(State::Editable);
+            assert_eq!(firefox_document.validate_synthesis_target(), Ok(()));
 
             let mut hidden = frame;
             hidden.states.remove(State::Showing);
@@ -860,6 +1083,18 @@ mod platform {
                 assert!(matches!(unsafe_target.validate(), Err(InjectError::Target(_))));
             }
             assert_eq!(safe_target().validate(), Ok(()));
+            assert_eq!(
+                not_editable.validate(),
+                Err(InjectError::Target(
+                    "focused application does not expose an editable text field"
+                ))
+            );
+            assert!(can_synthesize_keys(&not_editable.validate().unwrap_err()));
+            assert_eq!(
+                read_only.validate(),
+                Err(InjectError::Target("focused field is not editable"))
+            );
+            assert!(!can_synthesize_keys(&read_only.validate().unwrap_err()));
         }
 
         #[test]
@@ -880,6 +1115,11 @@ mod platform {
                     "selected text cannot be replaced safely by direct dictation"
                 ))
             );
+            assert_eq!(visible_selection_count(1, None), 1);
+            assert_eq!(visible_selection_count(0, Some((0, 7))), 1);
+            assert_eq!(visible_selection_count(0, Some((7, 0))), 1);
+            assert_eq!(visible_selection_count(0, Some((0, 0))), 0);
+            assert_eq!(visible_selection_count(0, None), 0);
         }
 
         #[test]
