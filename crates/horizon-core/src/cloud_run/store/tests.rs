@@ -502,6 +502,53 @@ fn expired_terminal_and_dependency_blocked_jobs_cannot_claim_creation() {
 }
 
 #[test]
+fn runpod_fence_uses_the_durable_workflow_claim() {
+    let temp = TempDir::new().expect("temp dir");
+    let store = store(&temp);
+    let workflow = retained_workflow(CloudProvider::RunPod, 30_000);
+    let job_id = workflow.nodes[0].id;
+    let target = worker_target(&workflow);
+    store.create(&workflow).expect("create workflow");
+
+    assert!(
+        super::super::runpod::RunPodCreationFence::claim_once(
+            &store,
+            workflow.id,
+            job_id,
+            target,
+            "horizon-worker-trait",
+        )
+        .expect("first claim")
+    );
+    assert!(
+        !super::super::runpod::RunPodCreationFence::claim_once(
+            &store,
+            workflow.id,
+            job_id,
+            target,
+            "horizon-worker-trait",
+        )
+        .expect("repeated claim")
+    );
+    let connection = Connection::open(store.path()).expect("open raw store");
+    connection
+        .pragma_update(None, "user_version", 2)
+        .expect("set unsupported schema");
+    drop(connection);
+    let failed_claim = super::super::runpod::RunPodCreationFence::claim_once(
+        &store,
+        workflow.id,
+        job_id,
+        target,
+        "horizon-worker-trait",
+    );
+    assert!(matches!(
+        failed_claim,
+        Err(super::super::runpod::RunPodError::CreationFenceFailed { .. })
+    ));
+}
+
+#[test]
 fn invalid_snapshots_and_future_schema_fail_closed() {
     let temp = TempDir::new().expect("temp dir");
     let store = store(&temp);
