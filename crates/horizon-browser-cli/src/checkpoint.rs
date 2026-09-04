@@ -129,6 +129,15 @@ pub enum ResumeError {
     /// The job was recorded before checkpoints existed.
     #[error("durable job `{0}` was recorded before checkpoints; resume would replay completed mutations")]
     LegacyState(String),
+    /// The job was written by a newer state schema than this binary supports.
+    #[error(
+        "durable job `{job_id}` uses unsupported state version {version}; this binary supports version {supported}"
+    )]
+    UnsupportedStateVersion {
+        job_id: String,
+        version: u32,
+        supported: u32,
+    },
     /// The original run or another resume already holds this job.
     #[error("durable job `{0}` is already running or being resumed")]
     Locked(String),

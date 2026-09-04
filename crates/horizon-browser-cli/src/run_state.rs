@@ -185,6 +185,23 @@ impl DurablePreparationError {
     }
 }
 
+/// Rearm failure that retains exclusive job ownership for terminal recovery.
+#[derive(Debug, Error)]
+#[error("{source}")]
+pub struct DurableRearmError {
+    run: Box<DurableRun>,
+    #[source]
+    source: RunStateError,
+}
+
+impl DurableRearmError {
+    /// Split the still-owned run handle from the underlying persistence error.
+    #[must_use]
+    pub fn into_parts(self) -> (DurableRun, RunStateError) {
+        (*self.run, self.source)
+    }
+}
+
 impl DurableRun {
     /// Create a private job directory and persist a deadline-bound prepared
     /// state plus the validated plan before any MCP action is attempted.
@@ -392,9 +409,7 @@ impl DurableRun {
         let mut run = Self::open(job_id)?;
         run.acquire_resume_lock()?;
         run.reload_state(job_id)?;
-        if run.state.version < MIN_RESUME_VERSION {
-            return Err(ResumeError::LegacyState(job_id.to_string()));
-        }
+        validate_resume_version(&run.state)?;
         let plan = run.load_plan()?;
         match run.state.effective_status_at(now_millis()) {
             RunStatus::Prepared | RunStatus::Running => return Err(ResumeError::StillRunning(job_id.to_string())),
@@ -428,24 +443,33 @@ impl DurableRun {
     /// Re-arm a terminal job for an explicit resume without creating a new id.
     ///
     /// # Errors
-    /// Returns when the updated lease cannot be persisted.
+    /// Returns the still-owned run when the updated lease cannot be persisted,
+    /// so the caller can record a terminal state before releasing its lock.
     pub fn rearm(
-        &mut self,
+        mut self,
         execution_timeout_seconds: u64,
         deadline_at_millis: u64,
         skipped: Option<String>,
-    ) -> Result<(), RunStateError> {
+    ) -> Result<Self, DurableRearmError> {
         self.state.status = RunStatus::Prepared;
         self.state.execution_timeout_seconds = Some(execution_timeout_seconds);
         self.state.deadline_at_millis = Some(deadline_at_millis);
         self.state.updated_at_millis = now_millis();
         self.state.runner_pid = std::process::id();
+        self.state.report_file = None;
+        self.state.completed_steps = self.state.checkpoint.completed.len();
         self.state.error = None;
         if let Some(step_id) = skipped {
             self.state.checkpoint.skipped.push(step_id);
             self.state.checkpoint.intent = None;
         }
-        self.persist_state()
+        match self.persist_state() {
+            Ok(()) => Ok(self),
+            Err(source) => Err(DurableRearmError {
+                run: Box::new(self),
+                source,
+            }),
+        }
     }
 
     fn persist_state(&self) -> Result<(), RunStateError> {
@@ -739,6 +763,20 @@ fn read_run_state(state_path: &Path, job_id: &str) -> Result<RunState, ResumeErr
     Ok(state)
 }
 
+fn validate_resume_version(state: &RunState) -> Result<(), ResumeError> {
+    if state.version < MIN_RESUME_VERSION {
+        Err(ResumeError::LegacyState(state.job_id.clone()))
+    } else if state.version > STATE_VERSION {
+        Err(ResumeError::UnsupportedStateVersion {
+            job_id: state.job_id.clone(),
+            version: state.version,
+            supported: STATE_VERSION,
+        })
+    } else {
+        Ok(())
+    }
+}
+
 fn publish_job_directory(staging: tempfile::TempDir, destination: &Path) -> Result<(), RunStateError> {
     std::fs::rename(staging.path(), destination).map_err(|source| {
         io_error(
@@ -951,6 +989,84 @@ mod tests {
         }))
         .expect("decode incomplete prepared state");
         assert_eq!(prepared_without_deadline.effective_status_at(1), RunStatus::TimedOut);
+    }
+
+    #[test]
+    fn resume_version_window_rejects_legacy_and_future_schemas() {
+        let root = tempfile::tempdir().expect("temporary job root");
+        let mut run = DurableRun::prepare_in(root.path(), &plan(), Some(30), None).expect("prepare");
+        let job_id = run.job_id().to_string();
+
+        run.state.version = MIN_RESUME_VERSION - 1;
+        assert_eq!(
+            validate_resume_version(run.state()),
+            Err(ResumeError::LegacyState(job_id.clone()))
+        );
+
+        run.state.version = STATE_VERSION + 1;
+        assert_eq!(
+            validate_resume_version(run.state()),
+            Err(ResumeError::UnsupportedStateVersion {
+                job_id,
+                version: STATE_VERSION + 1,
+                supported: STATE_VERSION,
+            })
+        );
+    }
+
+    #[test]
+    fn rearm_clears_previous_attempt_metadata() {
+        let root = tempfile::tempdir().expect("temporary job root");
+        let mut run = DurableRun::prepare_in(root.path(), &plan(), Some(30), None).expect("prepare");
+        run.state.checkpoint.completed.push(StepReport {
+            id: "panels".to_string(),
+            tool: "browser_list".to_string(),
+            ok: true,
+            result: Some(json!({"panels": []})),
+            error: None,
+        });
+        run.state.report_file = Some(REPORT_FILE.to_string());
+        run.state.completed_steps = 9;
+        run.state.error = Some("previous failure".to_string());
+        run.persist_state().expect("persist previous attempt");
+
+        let run = run.rearm(45, 1_234, None).expect("rearm");
+
+        assert_eq!(run.state.status, RunStatus::Prepared);
+        assert_eq!(run.state.execution_timeout_seconds, Some(45));
+        assert_eq!(run.state.deadline_at_millis, Some(1_234));
+        assert_eq!(run.state.report_file, None);
+        assert_eq!(run.state.completed_steps, 1);
+        assert_eq!(run.state.error, None);
+    }
+
+    #[test]
+    fn rearm_failure_retains_lock_owner_for_terminal_recovery() {
+        let root = tempfile::tempdir().expect("temporary job root");
+        let mut run = DurableRun::prepare_in(root.path(), &plan(), Some(30), None).expect("prepare");
+        run.stop(ExecutionStopReason::DeadlineExceeded)
+            .expect("persist terminal state");
+        let job_id = run.job_id().to_string();
+        let directory = run.directory.clone();
+        let state_path = run.state_path.clone();
+        run.directory = root.path().join("missing-sync-directory");
+
+        let error = run.rearm(45, 1_234, None).expect_err("directory sync must fail");
+        let (mut retained, _source) = error.into_parts();
+        let partially_rearmed: RunState = serde_json::from_slice(&std::fs::read(&state_path).expect("state"))
+            .expect("decode partially rearmed state");
+        assert_eq!(partially_rearmed.status, RunStatus::Prepared);
+
+        let mut contender = DurableRun::open_in(root.path(), &job_id).expect("open contender");
+        assert!(matches!(contender.acquire_resume_lock(), Err(ResumeError::Locked(_))));
+
+        retained.directory = directory;
+        retained.fail("resume rearm failed").expect("persist terminal recovery");
+        let recovered: RunState = serde_json::from_slice(&std::fs::read(&state_path).expect("recovered state"))
+            .expect("decode recovered state");
+        assert_eq!(recovered.status, RunStatus::Failed);
+        drop(retained);
+        acquire_lock_after_owner_exit(&mut contender);
     }
 
     #[test]

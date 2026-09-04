@@ -15,7 +15,7 @@ use std::time::Duration;
 use horizon_browser::BackendKind;
 use horizon_browser_cli::{
     Plan, PlanResume,
-    checkpoint::{UncertainPolicy, valid_job_id},
+    checkpoint::{ResumeError, ResumeSelection, UncertainPolicy, valid_job_id},
     execute_plan_with_resume,
     execution_control::{
         BlockingIoError, BlockingIoMode, CancellationHandle, CancellationProbe, ExecutionControl, ExecutionStopReason,
@@ -156,6 +156,18 @@ struct PreparedRun {
     plan: Plan,
     durable: DurableRun,
     control: ExecutionControl,
+}
+
+struct PreparedResume {
+    durable: DurableRun,
+    plan: Plan,
+    selection: ResumeSelection,
+}
+
+enum ResumePreparation {
+    Completed(Box<PreparedResume>),
+    Rejected(ResumeError),
+    RearmFailed { durable: Box<DurableRun>, error: String },
 }
 
 enum BlockingCompletion<T> {
@@ -341,21 +353,40 @@ async fn resume_controlled(
     let deadline_millis = deadline.unix_millis();
     let prepared = match control
         .wait_owned_blocking("horizon-browser-resume-prepare", BlockingIoMode::Bound, move || {
-            let (mut durable, plan, selection) = DurableRun::prepare_resume(&job_id, policy)?;
-            durable
-                .rearm(timeout_secs, deadline_millis, selection.skipped.clone())
-                .map_err(|error| horizon_browser_cli::checkpoint::ResumeError::Decode(error.to_string()))?;
-            Ok((durable, plan, selection))
+            let (durable, plan, selection) = match DurableRun::prepare_resume(&job_id, policy) {
+                Ok(prepared) => prepared,
+                Err(error) => return ResumePreparation::Rejected(error),
+            };
+            match durable.rearm(timeout_secs, deadline_millis, selection.skipped.clone()) {
+                Ok(durable) => ResumePreparation::Completed(Box::new(PreparedResume {
+                    durable,
+                    plan,
+                    selection,
+                })),
+                Err(error) => {
+                    let (durable, source) = error.into_parts();
+                    ResumePreparation::RearmFailed {
+                        durable: Box::new(durable),
+                        error: source.to_string(),
+                    }
+                }
+            }
         })
         .await
     {
-        Ok(Ok(parts)) => parts,
-        Ok(Err(error)) => {
+        Ok(ResumePreparation::Completed(prepared)) => *prepared,
+        Ok(ResumePreparation::Rejected(error)) => {
             if let Some(reason) = pending_stop_reason(&control) {
                 return stop_exit_code(reason);
             }
             eprintln!("error: {error}");
             return resume_error_exit(&error);
+        }
+        Ok(ResumePreparation::RearmFailed { durable, error }) => {
+            if let Some(reason) = pending_stop_reason(&control) {
+                return persist_stopped(&durable, reason, &mut finalization_cancellation).await;
+            }
+            return persist_failed(&durable, error, &mut finalization_cancellation).await;
         }
         Err(BlockingIoError::Stopped(reason)) => return stop_exit_code(reason),
         Err(BlockingIoError::Failed(error)) => {
@@ -366,7 +397,11 @@ async fn resume_controlled(
             return ExitCode::FAILURE;
         }
     };
-    let (mut durable, plan, selection) = prepared;
+    let PreparedResume {
+        mut durable,
+        plan,
+        selection,
+    } = prepared;
     if let Err(reason) = control.check() {
         return persist_stopped(&durable, reason, &mut finalization_cancellation).await;
     }
@@ -412,10 +447,9 @@ async fn resume_controlled(
     }
 }
 
-fn resume_error_exit(error: &horizon_browser_cli::checkpoint::ResumeError) -> ExitCode {
+fn resume_error_exit(error: &ResumeError) -> ExitCode {
     match error {
-        horizon_browser_cli::checkpoint::ResumeError::InvalidJobId(_)
-        | horizon_browser_cli::checkpoint::ResumeError::Uncertain { .. } => ExitCode::from(2),
+        ResumeError::InvalidJobId(_) | ResumeError::Uncertain { .. } => ExitCode::from(2),
         _ => ExitCode::FAILURE,
     }
 }
