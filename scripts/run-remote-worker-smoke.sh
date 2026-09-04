@@ -64,18 +64,23 @@ built_image=false
 
 cleanup() {
   local exit_code=$?
+  local cleanup_status=0
   local container_name
   for container_name in "${containers[@]}"; do
-    docker rm --force "${container_name}" >/dev/null 2>&1 || true
+    docker rm --force "${container_name}" >/dev/null 2>&1 || cleanup_status=1
   done
   if [[ "${built_image}" == true && "${keep_image}" != true ]]; then
-    docker image rm --force "${image}" >/dev/null 2>&1 || true
+    docker image rm --force "${image}" >/dev/null 2>&1 || cleanup_status=1
   fi
   case "${temp_dir}" in
     /tmp/horizon-remote-worker-smoke.*)
-      rm -rf -- "${temp_dir}"
+      rm -rf -- "${temp_dir}" || cleanup_status=1
       ;;
   esac
+  if ((exit_code == 0 && cleanup_status != 0)); then
+    printf '%s\n' "remote-worker smoke cleanup failed" >&2
+    exit "${cleanup_status}"
+  fi
   return "${exit_code}"
 }
 trap cleanup EXIT
