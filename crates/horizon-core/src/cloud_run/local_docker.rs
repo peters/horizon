@@ -9,7 +9,10 @@ use super::{
     },
 };
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    time::{Duration, Instant},
+};
 use thiserror::Error;
 
 mod command;
@@ -29,8 +32,10 @@ const TERMINATE_ENV: &str = "HORIZON_TERMINATE_AFTER";
 const LOCAL_HOST: &str = "127.0.0.1";
 const SSH_USERNAME: &str = "root";
 const HOST_KEY_PATH: &str = "/etc/ssh/ssh_host_ed25519_key.pub";
-const CREATE_RECONCILE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
-const CREATE_RECONCILE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+const CREATE_RECONCILE_TIMEOUT: Duration = Duration::from_secs(2);
+const CREATE_RECONCILE_POLL_INTERVAL: Duration = Duration::from_millis(50);
+type DockerResult<T> = Result<T, LocalDockerError>;
 
 /// Non-secret configuration for the local Docker daemon provider.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -105,14 +110,16 @@ impl LocalDockerInteractiveWorkerProvider {
         let create = DockerCreateRequest::new(request, container_name)?;
         match self.transport.create(&create) {
             Ok(resource_id) if valid_container_id(&resource_id) => {
-                let Some(container) = self.transport.inspect(&resource_id)? else {
-                    return self.reconcile_uncertain_create(
-                        request,
-                        container_name,
-                        LocalDockerError::InvalidResponse {
-                            operation: "container creation verification",
-                        },
-                    );
+                let container = match self.transport.inspect(&resource_id) {
+                    Ok(Some(container)) => container,
+                    Ok(None) => {
+                        return self.reconcile_uncertain_create(
+                            request,
+                            &create,
+                            invalid_response("container creation verification"),
+                        );
+                    }
+                    Err(error) => return self.reconcile_uncertain_create(request, &create, error),
                 };
                 if container.id != resource_id {
                     return Err(LocalDockerError::ResourceIdentityMismatch);
@@ -133,31 +140,31 @@ impl LocalDockerInteractiveWorkerProvider {
                     Err(error) => self.cleanup_invalid_creation(&container, &create, error),
                 }
             }
-            Ok(_) => self.reconcile_uncertain_create(
-                request,
-                container_name,
-                LocalDockerError::InvalidResponse {
-                    operation: "container creation",
-                },
-            ),
-            Err(error) => self.reconcile_uncertain_create(request, container_name, error),
+            Ok(_) => self.reconcile_uncertain_create(request, &create, invalid_response("container creation")),
+            Err(error) => self.reconcile_uncertain_create(request, &create, error),
         }
     }
 
     fn reconcile_uncertain_create(
         &self,
         request: &InteractiveWorkerRequest,
-        container_name: &str,
+        create: &DockerCreateRequest,
         original: LocalDockerError,
     ) -> Result<InteractiveWorkerEnsure, LocalDockerError> {
-        let deadline = std::time::Instant::now() + CREATE_RECONCILE_TIMEOUT;
-        while std::time::Instant::now() < deadline {
-            if let Some(container) = self.transport.inspect(container_name)? {
-                return self
-                    .ensure_existing(request, &container)
-                    .map(InteractiveWorkerEnsure::Reused);
+        let deadline = Instant::now() + CREATE_RECONCILE_TIMEOUT;
+        while Instant::now() < deadline {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
             }
-            std::thread::sleep(CREATE_RECONCILE_POLL_INTERVAL);
+            if let Some(container) = self.transport.inspect_with_timeout(&create.name, remaining)? {
+                return match self.ensure_existing(request, &container) {
+                    Ok(status) => Ok(InteractiveWorkerEnsure::Reused(status)),
+                    Err(error) => self.cleanup_invalid_creation(&container, create, error),
+                };
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            std::thread::sleep(CREATE_RECONCILE_POLL_INTERVAL.min(remaining));
         }
         Err(original)
     }
@@ -295,12 +302,12 @@ pub enum LocalDockerError {
 }
 
 trait DockerTransport: Send + Sync {
-    fn inspect(&self, reference: &str) -> Result<Option<DockerContainer>, LocalDockerError>;
-    fn create(&self, request: &DockerCreateRequest) -> Result<String, LocalDockerError>;
-    fn read_host_key(&self, resource_id: &str) -> Result<Option<String>, LocalDockerError>;
-    fn delete(&self, resource_id: &str) -> Result<bool, LocalDockerError>;
+    fn inspect(&self, reference: &str) -> DockerResult<Option<DockerContainer>>;
+    fn inspect_with_timeout(&self, reference: &str, timeout: Duration) -> DockerResult<Option<DockerContainer>>;
+    fn create(&self, request: &DockerCreateRequest) -> DockerResult<String>;
+    fn read_host_key(&self, resource_id: &str) -> DockerResult<Option<String>>;
+    fn delete(&self, resource_id: &str) -> DockerResult<bool>;
 }
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct DockerContainer {
     id: String,
@@ -314,13 +321,11 @@ struct DockerContainer {
     exit_code: i64,
     ssh_bindings: Vec<DockerPortBinding>,
 }
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct DockerPortBinding {
     host: String,
     port: u16,
 }
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct DockerCreateRequest {
     name: String,
@@ -351,13 +356,11 @@ impl DockerCreateRequest {
         })
     }
 }
-
 fn validate_request(request: &InteractiveWorkerRequest, profile: &LocalDockerProfile) -> Result<(), LocalDockerError> {
     (request.target.profile == profile.name && request.is_valid_for(CloudProvider::LocalDocker))
         .then_some(())
         .ok_or(LocalDockerError::InvalidTarget)
 }
-
 fn valid_local_docker_host(value: &str) -> bool {
     let safe = |path: &str| !path.is_empty() && !path.chars().any(char::is_control);
     value
@@ -365,13 +368,11 @@ fn valid_local_docker_host(value: &str) -> bool {
         .is_some_and(|path| path.len() > 1 && path.starts_with('/') && safe(path))
         || value.strip_prefix("npipe:////./pipe/").is_some_and(safe)
 }
-
 fn validate_worker(worker: &InteractiveWorker) -> Result<(), LocalDockerError> {
     (worker.is_valid_for(CloudProvider::LocalDocker) && valid_container_id(&worker.identity.resource_id))
         .then_some(())
         .ok_or(LocalDockerError::InvalidPersistedWorker)
 }
-
 fn worker_for_request(
     container: &DockerContainer,
     request: &InteractiveWorkerRequest,
@@ -393,7 +394,6 @@ fn worker_for_request(
     verify_container_for_worker(container, &worker)?;
     Ok(worker)
 }
-
 fn verify_container_for_worker(
     container: &DockerContainer,
     worker: &InteractiveWorker,
@@ -421,14 +421,12 @@ fn verify_container_for_worker(
         && valid_target_label(&container.labels, worker);
     valid.then_some(()).ok_or(LocalDockerError::ResourceIdentityMismatch)
 }
-
 fn valid_target_label(labels: &BTreeMap<String, String>, worker: &InteractiveWorker) -> bool {
     labels
         .get(TARGET_LABEL)
         .and_then(|value| serde_json::from_str::<WorkerTarget>(value).ok())
         .is_some_and(|target| target == worker.target)
 }
-
 fn request_labels(request: &InteractiveWorkerRequest) -> Result<BTreeMap<String, String>, LocalDockerError> {
     let target = serde_json::to_string(&request.target).map_err(|_| LocalDockerError::InvalidTarget)?;
     Ok(BTreeMap::from([
@@ -440,7 +438,6 @@ fn request_labels(request: &InteractiveWorkerRequest) -> Result<BTreeMap<String,
         (TARGET_LABEL.to_string(), target),
     ]))
 }
-
 fn required_environment<'a>(container: &'a DockerContainer, key: &str) -> Result<&'a str, LocalDockerError> {
     let prefix = format!("{key}=");
     let mut values = container
@@ -453,7 +450,6 @@ fn required_environment<'a>(container: &'a DockerContainer, key: &str) -> Result
     }
     Ok(value)
 }
-
 fn created_container_matches(container: &DockerContainer, create: &DockerCreateRequest) -> bool {
     valid_container_id(&container.id)
         && container.name == create.name
@@ -466,7 +462,6 @@ fn created_container_matches(container: &DockerContainer, create: &DockerCreateR
         && required_environment(container, SSH_PUBLIC_KEY_ENV) == Ok(create.ssh_public_key.as_str())
         && required_environment(container, TERMINATE_ENV) == Ok(create.terminate_after.as_str())
 }
-
 fn canonical_host_key(value: &str) -> Option<String> {
     if !valid_ssh_public_key(value) {
         return None;
@@ -474,11 +469,12 @@ fn canonical_host_key(value: &str) -> Option<String> {
     let mut fields = value.split_ascii_whitespace();
     Some(format!("{} {}", fields.next()?, fields.next()?))
 }
-
 fn container_name(workflow_id: super::CloudWorkflowId, job_id: super::CloudJobId) -> String {
     format!("horizon-local-{workflow_id}-{job_id}")
 }
-
 fn valid_container_id(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+}
+fn invalid_response(operation: &'static str) -> LocalDockerError {
+    LocalDockerError::InvalidResponse { operation }
 }

@@ -410,7 +410,7 @@ fn ensure_claimed_targets_unchanged(
         .and_then(|limit| i64::try_from(limit).ok())
         .ok_or(CloudStoreError::InvalidStoredCreationClaim)?;
     let mut statement = connection.prepare(
-        "SELECT substr(provider, 1, 9), substr(job_id, 1, 37)
+        "SELECT substr(provider, 1, 13), substr(job_id, 1, 37)
          FROM cloud_worker_creation_claims
          WHERE workflow_id = ?1
          LIMIT ?2",

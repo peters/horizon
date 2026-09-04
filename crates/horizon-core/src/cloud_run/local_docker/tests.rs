@@ -6,7 +6,6 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Default)]
 struct FakeDocker(Arc<Mutex<FakeState>>);
-
 #[derive(Default)]
 struct FakeState {
     container: Option<DockerContainer>,
@@ -24,7 +23,7 @@ impl FakeDocker {
 }
 
 impl DockerTransport for FakeDocker {
-    fn inspect(&self, reference: &str) -> Result<Option<DockerContainer>, LocalDockerError> {
+    fn inspect(&self, reference: &str) -> DockerResult<Option<DockerContainer>> {
         let mut state = self.state();
         if state.container.is_some() && state.hidden_inspections_after_create > 0 {
             state.hidden_inspections_after_create -= 1;
@@ -33,7 +32,10 @@ impl DockerTransport for FakeDocker {
         let container = state.container.clone();
         Ok(container.filter(|container| container.id == reference || container.name == reference))
     }
-
+    fn inspect_with_timeout(&self, reference: &str, timeout: Duration) -> DockerResult<Option<DockerContainer>> {
+        assert!(!timeout.is_zero() && timeout <= CREATE_RECONCILE_TIMEOUT);
+        self.inspect(reference)
+    }
     fn create(&self, request: &DockerCreateRequest) -> Result<String, LocalDockerError> {
         let mut state = self.state();
         state.create_calls += 1;
@@ -63,11 +65,9 @@ impl DockerTransport for FakeDocker {
         }
         Ok(id)
     }
-
     fn read_host_key(&self, _resource_id: &str) -> Result<Option<String>, LocalDockerError> {
         Ok(Some(format!("{} worker@local", ed25519_key(7))))
     }
-
     fn delete(&self, _resource_id: &str) -> Result<bool, LocalDockerError> {
         let mut state = self.state();
         state.delete_calls += 1;
@@ -163,6 +163,7 @@ fn reconciles_delayed_lost_create_response_and_cleans_invalid_new_endpoints() {
     assert!(matches!(reconciled, Ok(InteractiveWorkerEnsure::Reused(_))));
     assert_eq!(recovered.state().create_calls, 1);
     let invalid = FakeDocker::default();
+    invalid.state().fail_create_after_insert = true;
     invalid.state().binding_host = Some("0.0.0.0".to_string());
     let rejected = provider("local", invalid.clone()).ensure_worker(&request());
     assert_eq!(rejected.err(), Some(InvalidSshEndpoint));

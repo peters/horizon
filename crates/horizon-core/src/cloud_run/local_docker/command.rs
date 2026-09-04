@@ -1,6 +1,6 @@
 use super::{
-    DockerContainer, DockerCreateRequest, DockerPortBinding, DockerTransport, HOST_KEY_PATH, SSH_PUBLIC_KEY_ENV,
-    TERMINATE_ENV,
+    COMMAND_TIMEOUT, DockerContainer, DockerCreateRequest, DockerPortBinding, DockerResult, DockerTransport,
+    HOST_KEY_PATH, SSH_PUBLIC_KEY_ENV, TERMINATE_ENV, invalid_response,
 };
 use crate::cloud_run::local_docker::LocalDockerError;
 use serde::Deserialize;
@@ -13,7 +13,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const RESPONSE_LIMIT_BYTES: usize = 1024 * 1024;
 
@@ -30,7 +29,7 @@ impl DockerCli {
         }
     }
 
-    fn output<I, S>(&self, args: I, operation: &'static str) -> Result<CapturedOutput, LocalDockerError>
+    fn output<I, S>(&self, args: I, operation: &'static str, timeout: Duration) -> DockerResult<CapturedOutput>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
@@ -39,7 +38,7 @@ impl DockerCli {
             .arg("--host")
             .arg(&self.docker_host)
             .args(args)
-            .env("DOCKER_CLIENT_TIMEOUT", COMMAND_TIMEOUT.as_secs().to_string())
+            .env("DOCKER_CLIENT_TIMEOUT", timeout.as_secs().saturating_add(1).to_string())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -51,13 +50,18 @@ impl DockerCli {
                     LocalDockerError::CommandFailed { operation }
                 }
             })?;
-        capture_output(&mut child, operation)
+        capture_output(&mut child, operation, timeout)
     }
 }
 
 impl DockerTransport for DockerCli {
-    fn inspect(&self, reference: &str) -> Result<Option<DockerContainer>, LocalDockerError> {
-        let output = self.output(["container", "inspect", "--", reference], "container inspection")?;
+    fn inspect(&self, reference: &str) -> DockerResult<Option<DockerContainer>> {
+        self.inspect_with_timeout(reference, COMMAND_TIMEOUT)
+    }
+
+    fn inspect_with_timeout(&self, reference: &str, timeout: Duration) -> DockerResult<Option<DockerContainer>> {
+        let args = ["container", "inspect", "--", reference];
+        let output = self.output(args, "container inspection", timeout)?;
         if !output.status.success() {
             return if object_missing(&output.stderr) {
                 Ok(None)
@@ -90,7 +94,7 @@ impl DockerTransport for DockerCli {
             args.push(OsString::from(format!("{key}={value}")));
         }
         args.push(OsString::from(&request.image));
-        let output = self.output(args, "container creation")?;
+        let output = self.output(args, "container creation", COMMAND_TIMEOUT)?;
         if !output.status.success() {
             return Err(LocalDockerError::CommandFailed {
                 operation: "container creation",
@@ -103,6 +107,7 @@ impl DockerTransport for DockerCli {
         let output = self.output(
             ["exec", "--", resource_id, "cat", HOST_KEY_PATH],
             "SSH host-key inspection",
+            COMMAND_TIMEOUT,
         )?;
         if !output.status.success() {
             return host_key_unavailable(&output.stderr)
@@ -115,7 +120,8 @@ impl DockerTransport for DockerCli {
     }
 
     fn delete(&self, resource_id: &str) -> Result<bool, LocalDockerError> {
-        let output = self.output(["container", "rm", "--force", "--", resource_id], "container deletion")?;
+        let args = ["container", "rm", "--force", "--", resource_id];
+        let output = self.output(args, "container deletion", COMMAND_TIMEOUT)?;
         if output.status.success() {
             return Ok(true);
         }
@@ -148,7 +154,7 @@ impl CapturedOutput {
     }
 }
 
-fn capture_output(child: &mut Child, operation: &'static str) -> Result<CapturedOutput, LocalDockerError> {
+fn capture_output(child: &mut Child, operation: &'static str, timeout: Duration) -> DockerResult<CapturedOutput> {
     let stdout = child
         .stdout
         .take()
@@ -167,12 +173,12 @@ fn capture_output(child: &mut Child, operation: &'static str) -> Result<Captured
         {
             break status;
         }
-        if started.elapsed() >= COMMAND_TIMEOUT {
+        if started.elapsed() >= timeout {
             let _ = child.kill();
             let _ = child.wait();
             return Err(LocalDockerError::CommandTimedOut { operation });
         }
-        thread::sleep(COMMAND_POLL_INTERVAL);
+        thread::sleep(COMMAND_POLL_INTERVAL.min(timeout.saturating_sub(started.elapsed())));
     };
     let (stdout, stdout_oversized) = stdout_reader
         .join()
@@ -248,11 +254,8 @@ fn parse_inspection(value: &str) -> Result<DockerContainer, LocalDockerError> {
 }
 
 fn invalid_inspection() -> LocalDockerError {
-    LocalDockerError::InvalidResponse {
-        operation: "container inspection",
-    }
+    invalid_response("container inspection")
 }
-
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct Inspection {
@@ -263,7 +266,6 @@ struct Inspection {
     state: InspectionState,
     network_settings: InspectionNetworkSettings,
 }
-
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct InspectionConfig {
@@ -271,19 +273,16 @@ struct InspectionConfig {
     labels: Option<BTreeMap<String, String>>,
     env: Option<Vec<String>>,
 }
-
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct InspectionHostConfig {
     restart_policy: InspectionRestartPolicy,
 }
-
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct InspectionRestartPolicy {
     name: String,
 }
-
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct InspectionState {
@@ -291,19 +290,16 @@ struct InspectionState {
     status: String,
     exit_code: i64,
 }
-
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct InspectionNetworkSettings {
     ports: Option<InspectionPorts>,
 }
-
 #[derive(Deserialize)]
 struct InspectionPorts {
     #[serde(rename = "22/tcp", default)]
     ssh: Option<Vec<InspectionBinding>>,
 }
-
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct InspectionBinding {
