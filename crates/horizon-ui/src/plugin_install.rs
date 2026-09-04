@@ -50,6 +50,21 @@ const BROWSER_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
     )),
 }];
 
+/// `$HOME`-relative skill roots for every built-in agent that discovers
+/// `SKILL.md` directories. Claude also receives the same files through the
+/// host plugin tree; these user paths cover sessions that do not load that
+/// plugin.
+const USER_AGENT_SKILL_ROOTS: &[&[&str]] = &[
+    &[".agents", "skills"],
+    &[".codex", "skills"],
+    &[".claude", "skills"],
+    &[".grok", "skills"],
+    &[".config", "opencode", "skills"],
+    &[".gemini", "skills"],
+    &[".kilocode", "skills"],
+    &[".pi", "agent", "skills"],
+];
+
 pub(crate) struct AgentPluginHostLease {
     host_dir: PathBuf,
     lock_path: PathBuf,
@@ -229,16 +244,22 @@ fn install_agent_plugins_impl(
             ("horizon-notify", NOTIFY_SKILL_FILES),
             ("horizon-browser", BROWSER_SKILL_FILES),
         ] {
-            let codex_home_skill_dir = home.join(".codex").join("skills").join(skill_name);
-            updated_files += sync_plugin_files(&codex_home_skill_dir, files)?;
-            let codex_export_dir = home.join(".agents").join("skills").join(skill_name);
-            updated_files += sync_plugin_files(&codex_export_dir, files)?;
-            let kilo_export_dir = home.join(".kilocode").join("skills").join(skill_name);
-            updated_files += sync_plugin_files(&kilo_export_dir, files)?;
+            for skill_root in USER_AGENT_SKILL_ROOTS {
+                updated_files += sync_plugin_files(&user_skill_dir(home, skill_root, skill_name), files)?;
+            }
         }
     }
 
     Ok(updated_files)
+}
+
+fn user_skill_dir(home: &Path, skill_root: &[&str], skill_name: &str) -> PathBuf {
+    let mut dir = home.to_path_buf();
+    for part in skill_root {
+        dir.push(part);
+    }
+    dir.push(skill_name);
+    dir
 }
 
 fn claude_mcp_config(command: &Path) -> std::io::Result<String> {
@@ -292,9 +313,9 @@ mod tests {
     use horizon_core::HorizonHome;
 
     use super::{
-        AgentPluginHostLease, BROWSER_SKILL_FILES, EmbeddedFile, NOTIFY_SKILL_FILES, agent_plugin_host_lock_path,
-        install_agent_plugins_impl, open_lock_file, prune_stale_agent_plugin_hosts, sync_file_if_changed,
-        sync_plugin_files,
+        AgentPluginHostLease, BROWSER_SKILL_FILES, CLAUDE_PLUGIN_FILES, EmbeddedFile, NOTIFY_SKILL_FILES,
+        USER_AGENT_SKILL_ROOTS, agent_plugin_host_lock_path, install_agent_plugins_impl, open_lock_file,
+        prune_stale_agent_plugin_hosts, sync_file_if_changed, sync_plugin_files, user_skill_dir,
     };
 
     #[test]
@@ -341,7 +362,7 @@ mod tests {
     }
 
     #[test]
-    fn install_agent_plugins_syncs_codex_skill_into_current_codex_home() {
+    fn install_agent_plugins_syncs_notify_skill_into_every_agent_home() {
         let temp = tempfile::tempdir().expect("temp dir");
         let horizon_home = HorizonHome::from_root(temp.path().join(".horizon"));
         let user_home = temp.path().join("user-home");
@@ -356,30 +377,33 @@ mod tests {
         .expect("install plugins");
 
         assert!(updated > 0);
-        assert_eq!(
-            std::fs::read_to_string(user_home.join(".codex/skills/horizon-notify/SKILL.md"))
-                .expect("codex skill should be exported"),
-            NOTIFY_SKILL_FILES[0].content,
-        );
-        assert_eq!(
-            std::fs::read_to_string(user_home.join(".agents/skills/horizon-notify/SKILL.md"))
-                .expect("legacy codex skill export should still exist"),
-            NOTIFY_SKILL_FILES[0].content,
-        );
-        assert_eq!(
-            std::fs::read_to_string(user_home.join(".kilocode/skills/horizon-notify/SKILL.md"))
-                .expect("kilo skill should be exported"),
-            NOTIFY_SKILL_FILES[0].content,
-        );
+        for skill_root in USER_AGENT_SKILL_ROOTS {
+            let notify_path = user_skill_dir(&user_home, skill_root, "horizon-notify").join("SKILL.md");
+            assert_eq!(
+                std::fs::read_to_string(&notify_path)
+                    .unwrap_or_else(|_| panic!("notify skill missing at {}", notify_path.display())),
+                NOTIFY_SKILL_FILES[0].content,
+            );
+            let browser_path = user_skill_dir(&user_home, skill_root, "horizon-browser").join("SKILL.md");
+            assert_eq!(
+                std::fs::read_to_string(&browser_path)
+                    .unwrap_or_else(|_| panic!("browser skill missing at {}", browser_path.display())),
+                BROWSER_SKILL_FILES[0].content,
+            );
+        }
         assert_eq!(
             std::fs::read_to_string(horizon_home.codex_skill_dir().join("SKILL.md"))
                 .expect("horizon codex integration should be synced"),
             NOTIFY_SKILL_FILES[0].content,
         );
         assert_eq!(
-            std::fs::read_to_string(user_home.join(".codex/skills/horizon-browser/SKILL.md"))
-                .expect("browser skill should be exported"),
-            BROWSER_SKILL_FILES[0].content,
+            std::fs::read_to_string(claude_plugin_dir.join("skills/horizon-notify/SKILL.md"))
+                .expect("claude plugin notify skill should be installed"),
+            CLAUDE_PLUGIN_FILES
+                .iter()
+                .find(|file| file.relative_path == "skills/horizon-notify/SKILL.md")
+                .expect("claude notify file")
+                .content,
         );
         assert!(BROWSER_SKILL_FILES[0].content.contains("browser_visibility"));
         assert!(BROWSER_SKILL_FILES[0].content.contains("browser_network_watch"));
