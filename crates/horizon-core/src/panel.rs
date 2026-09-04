@@ -382,7 +382,10 @@ impl Panel {
             return PanelProcessOutput::default();
         };
         let had_output = terminal.process_events();
-        let terminal_title = had_output.then(|| terminal.title().to_string());
+        let title_changed = self.terminal_title != terminal.title();
+        if title_changed {
+            self.terminal_title = terminal.title().to_string();
+        }
         let current_cwd = if had_output && should_track_live_cwd {
             terminal.current_cwd()
         } else {
@@ -391,10 +394,6 @@ impl Panel {
         self.had_recent_output = had_output;
         if had_output {
             self.last_output_at_millis = Some(current_unix_millis());
-        }
-
-        if let Some(title) = terminal_title {
-            self.terminal_title = title;
         }
         if self.kind == PanelKind::Ssh {
             if terminal.child_exited() {
@@ -895,6 +894,57 @@ mod tests {
         let panel = test_panel("Backend", "Backend", true);
 
         assert_eq!(panel.display_title(), "Backend");
+    }
+
+    #[test]
+    fn process_output_copies_pinned_horizon_title_into_the_titlebar() {
+        use std::collections::HashMap;
+        use std::time::Duration;
+
+        use alacritty_terminal::event::Event;
+
+        use crate::terminal::{Terminal, TerminalSpawnOptions};
+
+        let mut terminal = Terminal::spawn(TerminalSpawnOptions {
+            program: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()),
+            args: vec!["-c".to_string(), "exit".to_string()],
+            cwd: None,
+            rows: 24,
+            cols: 80,
+            cell_width: 8,
+            cell_height: 16,
+            scrollback_limit: 256,
+            window_id: 42,
+            replay_bytes: Vec::new(),
+            env: HashMap::new(),
+            kitty_keyboard: true,
+        })
+        .expect("terminal should spawn");
+        assert!(
+            terminal.shutdown_with_timeout(Duration::from_secs(2)),
+            "test terminal should shut down before title injection"
+        );
+        let _ = terminal.process_events();
+        terminal.handle_event(Event::Title(
+            "HORIZON_TITLE:set:PR comments: Docker lifecycle".to_string(),
+        ));
+        terminal.handle_event(Event::Title(": horizon".to_string()));
+        terminal.handle_event(Event::ResetTitle);
+
+        let mut panel = Panel::from_content(
+            PanelId(1),
+            WorkspaceId(1),
+            PanelKind::Codex,
+            PanelContent::Terminal(terminal),
+        );
+        assert!(panel.rename("Codex"));
+
+        let output = panel.process_output();
+        assert_eq!(panel.display_title(), "Codex — PR comments: Docker lifecycle");
+        assert!(
+            !output.activity.terminal,
+            "title copy after the PTY has exited must not count as grid output"
+        );
     }
 
     #[test]
