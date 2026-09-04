@@ -100,6 +100,23 @@ mod tests {
         assert!(rx.try_recv().is_err());
     }
 
+    #[test]
+    fn replaying_osc_bytes_pins_horizon_title_over_later_ordinary_titles() {
+        let (term, event_rx) = replay_test_term();
+
+        replay_terminal_bytes(
+            &term,
+            b"\x1b]0;HORIZON_TITLE:set:PR comments: Docker lifecycle\x07\x1b]0;: horizon\x07",
+        );
+
+        let state = drain_replay_events(&event_rx);
+
+        assert_eq!(
+            state.title,
+            super::RuntimeTitle::Pinned("PR comments: Docker lifecycle".to_string())
+        );
+    }
+
     fn replay_test_term() -> (Arc<FairMutex<Term<TerminalEventProxy>>>, mpsc::Receiver<Event>) {
         let (event_tx, event_rx) = mpsc::channel();
         let dimensions = TerminalDimensions::new(24, 80);

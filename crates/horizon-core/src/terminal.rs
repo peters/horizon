@@ -388,8 +388,8 @@ mod tests {
     #[test]
     fn horizon_title_clear_event_clears_existing_title() {
         let mut terminal = spawn_test_terminal();
-        terminal.title = RuntimeTitle::Open("Build running".to_string());
 
+        terminal.handle_event(Event::Title("HORIZON_TITLE:set:Build running".to_string()));
         terminal.handle_event(Event::Title("HORIZON_TITLE:clear".to_string()));
 
         assert!(terminal.title().is_empty());

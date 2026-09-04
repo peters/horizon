@@ -406,7 +406,7 @@ impl Panel {
         let cwd_changed = self.update_tracked_cwd(current_cwd);
         PanelProcessOutput {
             activity: PanelProcessActivity {
-                terminal: had_output || title_changed,
+                terminal: had_output,
                 browser: false,
             },
             cwd_changed,
@@ -894,6 +894,59 @@ mod tests {
         let panel = test_panel("Backend", "Backend", true);
 
         assert_eq!(panel.display_title(), "Backend");
+    }
+
+    #[test]
+    fn process_output_copies_pinned_horizon_title_into_the_titlebar() {
+        use std::collections::HashMap;
+        use std::time::Duration;
+
+        use alacritty_terminal::event::Event;
+
+        use crate::terminal::{Terminal, TerminalSpawnOptions};
+
+        let mut terminal = Terminal::spawn(TerminalSpawnOptions {
+            program: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()),
+            args: vec!["-c".to_string(), "exit".to_string()],
+            cwd: None,
+            rows: 24,
+            cols: 80,
+            cell_width: 8,
+            cell_height: 16,
+            scrollback_limit: 256,
+            window_id: 42,
+            replay_bytes: Vec::new(),
+            env: HashMap::new(),
+            kitty_keyboard: true,
+        })
+        .expect("terminal should spawn");
+        terminal.handle_event(Event::Title(
+            "HORIZON_TITLE:set:PR comments: Docker lifecycle".to_string(),
+        ));
+        terminal.handle_event(Event::Title(": horizon".to_string()));
+        terminal.handle_event(Event::ResetTitle);
+
+        let mut panel = Panel::from_content(
+            PanelId(1),
+            WorkspaceId(1),
+            PanelKind::Codex,
+            PanelContent::Terminal(terminal),
+        );
+        assert!(panel.rename("Codex"));
+
+        let output = panel.process_output();
+        assert_eq!(panel.display_title(), "Codex — PR comments: Docker lifecycle");
+        assert!(
+            !output.activity.terminal,
+            "title copy after events were already drained must not count as grid output"
+        );
+
+        assert!(
+            panel
+                .terminal_mut()
+                .is_some_and(|terminal| terminal.shutdown_with_timeout(Duration::from_secs(2))),
+            "test terminal should shut down"
+        );
     }
 
     #[test]

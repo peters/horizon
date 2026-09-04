@@ -76,7 +76,7 @@ impl Terminal {
         }
     }
 
-    pub(super) fn handle_event(&mut self, event: Event) {
+    pub(crate) fn handle_event(&mut self, event: Event) {
         match event {
             Event::Title(title) => {
                 if let Some(notification) = self.title.apply_incoming(&title) {
