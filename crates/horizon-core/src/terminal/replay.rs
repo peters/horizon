@@ -2,11 +2,11 @@ use std::sync::mpsc;
 
 use alacritty_terminal::event::Event;
 
-use super::{HorizonOscTitle, Terminal};
+use super::RuntimeTitle;
 
 #[derive(Default)]
 pub(super) struct ReplayRestoreState {
-    pub(super) title: String,
+    pub(super) title: RuntimeTitle,
 }
 
 pub(super) fn drain_replay_events(event_rx: &mpsc::Receiver<Event>) -> ReplayRestoreState {
@@ -14,15 +14,10 @@ pub(super) fn drain_replay_events(event_rx: &mpsc::Receiver<Event>) -> ReplayRes
 
     while let Ok(event) = event_rx.try_recv() {
         match event {
-            Event::Title(title) => match Terminal::parse_horizon_title(&title) {
-                Some(HorizonOscTitle::SetTitle(next_title)) => state.title = next_title,
-                Some(HorizonOscTitle::ClearTitle) => state.title.clear(),
-                Some(HorizonOscTitle::Notification(_) | HorizonOscTitle::Ignore) => {}
-                None => state.title = title,
-            },
-            Event::ResetTitle => {
-                state.title.clear();
+            Event::Title(title) => {
+                let _ = state.title.apply_incoming(&title);
             }
+            Event::ResetTitle => state.title.reset(),
             Event::ClipboardStore(_, _)
             | Event::ClipboardLoad(_, _)
             | Event::ColorRequest(_, _)
@@ -85,7 +80,23 @@ mod tests {
 
         let state = drain_replay_events(&rx);
 
-        assert_eq!(state.title, "restored title");
+        assert_eq!(state.title, super::RuntimeTitle::Open("restored title".to_string()));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn drain_replay_events_keeps_horizon_title_over_later_ordinary_titles() {
+        let (tx, rx) = mpsc::channel();
+
+        tx.send(Event::Title("HORIZON_TITLE:set:PR comments".to_string()))
+            .expect("horizon title event");
+        tx.send(Event::Title(": horizon".to_string()))
+            .expect("ordinary title event");
+        tx.send(Event::ResetTitle).expect("reset title event");
+
+        let state = drain_replay_events(&rx);
+
+        assert_eq!(state.title, super::RuntimeTitle::Pinned("PR comments".to_string()));
         assert!(rx.try_recv().is_err());
     }
 

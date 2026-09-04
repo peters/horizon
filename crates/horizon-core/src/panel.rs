@@ -382,7 +382,10 @@ impl Panel {
             return PanelProcessOutput::default();
         };
         let had_output = terminal.process_events();
-        let terminal_title = had_output.then(|| terminal.title().to_string());
+        let title_changed = self.terminal_title != terminal.title();
+        if title_changed {
+            self.terminal_title = terminal.title().to_string();
+        }
         let current_cwd = if had_output && should_track_live_cwd {
             terminal.current_cwd()
         } else {
@@ -391,10 +394,6 @@ impl Panel {
         self.had_recent_output = had_output;
         if had_output {
             self.last_output_at_millis = Some(current_unix_millis());
-        }
-
-        if let Some(title) = terminal_title {
-            self.terminal_title = title;
         }
         if self.kind == PanelKind::Ssh {
             if terminal.child_exited() {
@@ -407,7 +406,7 @@ impl Panel {
         let cwd_changed = self.update_tracked_cwd(current_cwd);
         PanelProcessOutput {
             activity: PanelProcessActivity {
-                terminal: had_output,
+                terminal: had_output || title_changed,
                 browser: false,
             },
             cwd_changed,

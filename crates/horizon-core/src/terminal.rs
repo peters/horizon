@@ -74,6 +74,57 @@ enum HorizonOscTitle {
     Ignore,
 }
 
+/// Live OSC title, pinned by `HORIZON_TITLE:set` until `HORIZON_TITLE:clear`.
+///
+/// Agent TUIs keep writing ordinary OSC 0 titles for cwd/spinner status; those
+/// must not clobber an explicit agent-set title.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RuntimeTitle {
+    Open(String),
+    Pinned(String),
+}
+
+impl Default for RuntimeTitle {
+    fn default() -> Self {
+        Self::Open(String::new())
+    }
+}
+
+impl RuntimeTitle {
+    fn as_str(&self) -> &str {
+        match self {
+            Self::Open(title) | Self::Pinned(title) => title,
+        }
+    }
+
+    fn apply_incoming(&mut self, incoming: &str) -> Option<AgentNotification> {
+        match Terminal::parse_horizon_title(incoming) {
+            Some(HorizonOscTitle::Notification(notification)) => Some(notification),
+            Some(HorizonOscTitle::SetTitle(next_title)) => {
+                *self = Self::Pinned(next_title);
+                None
+            }
+            Some(HorizonOscTitle::ClearTitle) => {
+                *self = Self::Open(String::new());
+                None
+            }
+            Some(HorizonOscTitle::Ignore) => None,
+            None => {
+                if let Self::Open(title) = self {
+                    incoming.clone_into(title);
+                }
+                None
+            }
+        }
+    }
+
+    fn reset(&mut self) {
+        if let Self::Open(title) = self {
+            title.clear();
+        }
+    }
+}
+
 #[derive(Clone)]
 struct TerminalEventProxy {
     event_tx: mpsc::Sender<Event>,
@@ -125,7 +176,7 @@ pub struct Terminal {
     cell_width: u16,
     cell_height: u16,
     scrollback_limit: usize,
-    title: String,
+    title: RuntimeTitle,
     clipboard_contents: String,
     selection_contents: String,
     pending_pty_resize: Option<std::time::Instant>,
@@ -145,9 +196,9 @@ mod tests {
     #[cfg(target_os = "linux")]
     use super::current_cwd_for_pid;
     use super::{
-        AgentNotification, HorizonOscTitle, Terminal, TerminalDimensions, TerminalEventProxy, TerminalSpawnOptions,
-        default_terminal_rgb, find_file_path_at_column, find_url_at_column, queue_debounced_pty_resize,
-        replay_terminal_bytes, should_debounce_pty_resize,
+        AgentNotification, HorizonOscTitle, RuntimeTitle, Terminal, TerminalDimensions, TerminalEventProxy,
+        TerminalSpawnOptions, default_terminal_rgb, find_file_path_at_column, find_url_at_column,
+        queue_debounced_pty_resize, replay_terminal_bytes, should_debounce_pty_resize,
     };
     use alacritty_terminal::event::Event;
     use alacritty_terminal::grid::Dimensions;
@@ -289,11 +340,30 @@ mod tests {
     #[test]
     fn horizon_notify_event_sets_notification_without_overwriting_title() {
         let mut terminal = spawn_test_terminal();
-        terminal.title = "Existing title".to_string();
+        terminal.title = RuntimeTitle::Open("Existing title".to_string());
 
         terminal.handle_event(Event::Title("HORIZON_NOTIFY:info:Saved".to_string()));
 
         assert_eq!(terminal.title(), "Existing title");
+        assert_eq!(
+            terminal.take_notification(),
+            Some(AgentNotification {
+                severity: "info".to_string(),
+                message: "Saved".to_string(),
+            })
+        );
+        assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn horizon_notify_does_not_unlock_horizon_title() {
+        let mut terminal = spawn_test_terminal();
+
+        terminal.handle_event(Event::Title("HORIZON_TITLE:set:Build running".to_string()));
+        terminal.handle_event(Event::Title("HORIZON_NOTIFY:info:Saved".to_string()));
+        terminal.handle_event(Event::Title(": horizon".to_string()));
+
+        assert_eq!(terminal.title(), "Build running");
         assert_eq!(
             terminal.take_notification(),
             Some(AgentNotification {
@@ -318,7 +388,7 @@ mod tests {
     #[test]
     fn horizon_title_clear_event_clears_existing_title() {
         let mut terminal = spawn_test_terminal();
-        terminal.title = "Build running".to_string();
+        terminal.title = RuntimeTitle::Open("Build running".to_string());
 
         terminal.handle_event(Event::Title("HORIZON_TITLE:clear".to_string()));
 
@@ -330,7 +400,7 @@ mod tests {
     #[test]
     fn invalid_horizon_title_event_does_not_clobber_existing_title() {
         let mut terminal = spawn_test_terminal();
-        terminal.title = "Build running".to_string();
+        terminal.title = RuntimeTitle::Open("Build running".to_string());
 
         terminal.handle_event(Event::Title("HORIZON_TITLE:rename:other".to_string()));
 
@@ -342,7 +412,7 @@ mod tests {
     #[test]
     fn malformed_horizon_notify_event_does_not_leak_into_visible_title() {
         let mut terminal = spawn_test_terminal();
-        terminal.title = "Existing title".to_string();
+        terminal.title = RuntimeTitle::Open("Existing title".to_string());
 
         terminal.handle_event(Event::Title("HORIZON_NOTIFY:attention".to_string()));
 
@@ -352,10 +422,39 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_terminal_title_replaces_horizon_title() {
+    fn later_horizon_title_set_replaces_pinned_title() {
+        let mut terminal = spawn_test_terminal();
+
+        terminal.handle_event(Event::Title("HORIZON_TITLE:set:First task".to_string()));
+        terminal.handle_event(Event::Title(
+            "HORIZON_TITLE:set:PR comments: Docker lifecycle".to_string(),
+        ));
+
+        assert_eq!(terminal.title(), "PR comments: Docker lifecycle");
+        assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn ordinary_terminal_title_does_not_replace_horizon_title() {
+        let mut terminal = spawn_test_terminal();
+
+        terminal.handle_event(Event::Title(
+            "HORIZON_TITLE:set:PR comments: Docker lifecycle".to_string(),
+        ));
+        terminal.handle_event(Event::Title(": horizon".to_string()));
+        terminal.handle_event(Event::ResetTitle);
+
+        assert_eq!(terminal.title(), "PR comments: Docker lifecycle");
+        assert_eq!(terminal.take_notification(), None);
+        assert!(terminal.shutdown_with_timeout(Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn clearing_horizon_title_allows_ordinary_titles_again() {
         let mut terminal = spawn_test_terminal();
 
         terminal.handle_event(Event::Title("HORIZON_TITLE:set:Build running".to_string()));
+        terminal.handle_event(Event::Title("HORIZON_TITLE:clear".to_string()));
         terminal.handle_event(Event::Title("cargo test".to_string()));
 
         assert_eq!(terminal.title(), "cargo test");
