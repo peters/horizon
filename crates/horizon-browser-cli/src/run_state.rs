@@ -1,5 +1,7 @@
 //! Durable metadata for deterministic browser plan runs.
 
+mod checkpoint_artifacts;
+
 use std::fs::OpenOptions;
 use std::io::Write as _;
 #[cfg(unix)]
@@ -7,18 +9,28 @@ use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use atomicwrites::{AllowOverwrite, AtomicFile};
+use atomicwrites::{AllowOverwrite, AtomicFile, DisallowOverwrite, OverwriteBehavior};
 use horizon_core::HorizonHome;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::{ExecutionReport, Plan, execution_control::ExecutionStopReason};
+use crate::checkpoint::{
+    CheckpointIntent, CheckpointStore, IntentStatus, ResumeError, ResumeSelection, RunCheckpoint, UncertainPolicy,
+    select_resume, valid_job_id,
+};
+use crate::{
+    ExecutionReport, Plan, PlanStep, StepReport,
+    execution_control::{BlockingIoError, BlockingIoMode, ExecutionControl, ExecutionStopReason},
+};
+use checkpoint_artifacts::PendingCompletion;
 
-const STATE_VERSION: u32 = 2;
+const STATE_VERSION: u32 = 4;
+const MIN_RESUME_VERSION: u32 = 4;
 const PLAN_FILE: &str = "plan.json";
 const REPORT_FILE: &str = "report.json";
 const STATE_FILE: &str = "state.json";
+const RESUME_LOCK_DIRECTORY: &str = "browser-job-locks";
 
 /// Persisted lifecycle state for one deterministic plan run.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -49,9 +61,18 @@ pub struct RunState {
     pub report_file: Option<String>,
     /// Number of step reports produced before the run stopped.
     pub completed_steps: usize,
+    /// Verified completions and any in-flight or skipped uncertain step.
+    #[serde(default, skip_serializing_if = "RunCheckpoint::is_empty")]
+    pub checkpoint: RunCheckpoint,
     /// Private initialization, plan-execution, or MCP shutdown error.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct StateHeader {
+    version: u32,
+    job_id: String,
 }
 
 /// Durable plan-run lifecycle state.
@@ -109,13 +130,26 @@ pub struct DurableExecutionReport<'a> {
 pub struct DurableRun {
     directory: PathBuf,
     state_path: PathBuf,
+    lock_path: PathBuf,
     state: RunState,
+    completed_reports: Vec<StepReport>,
+    pending_completion: Option<PendingCompletion>,
+    lock_file: Option<std::fs::File>,
 }
 
 /// Detached finalization view of an already published durable run.
 #[derive(Debug)]
 pub struct DurablePostProcessor {
     run: DurableRun,
+}
+
+/// Failure while persisting a checkpoint under execution control.
+#[derive(Debug, Error)]
+pub enum CheckpointPersistError {
+    #[error("{0}")]
+    Io(String),
+    #[error("{}", .0.message())]
+    Stopped(ExecutionStopReason),
 }
 
 /// Failure to create or atomically update durable plan-run state.
@@ -163,6 +197,23 @@ impl DurablePreparationError {
     }
 }
 
+/// Rearm failure that retains exclusive job ownership for terminal recovery.
+#[derive(Debug, Error)]
+#[error("{source}")]
+pub struct DurableRearmError {
+    run: Box<DurableRun>,
+    #[source]
+    source: RunStateError,
+}
+
+impl DurableRearmError {
+    /// Split the still-owned run handle from the underlying persistence error.
+    #[must_use]
+    pub fn into_parts(self) -> (DurableRun, RunStateError) {
+        (*self.run, self.source)
+    }
+}
+
 impl DurableRun {
     /// Create a private job directory and persist a deadline-bound prepared
     /// state plus the validated plan before any MCP action is attempted.
@@ -189,8 +240,16 @@ impl DurableRun {
         execution_timeout_seconds: u64,
         deadline_at_millis: u64,
     ) -> Result<Self, DurablePreparationError> {
-        let root = HorizonHome::resolve().root().join("browser-jobs");
-        Self::prepare_cancellable_in(&root, plan, Some(execution_timeout_seconds), Some(deadline_at_millis))
+        let horizon_root = HorizonHome::resolve().root().to_path_buf();
+        let job_root = horizon_root.join("browser-jobs");
+        let lock_root = horizon_root.join(RESUME_LOCK_DIRECTORY);
+        Self::prepare_cancellable_in(
+            &job_root,
+            &lock_root,
+            plan,
+            Some(execution_timeout_seconds),
+            Some(deadline_at_millis),
+        )
     }
 
     /// Stable id of this durable run.
@@ -212,7 +271,11 @@ impl DurableRun {
             run: Self {
                 directory: self.directory.clone(),
                 state_path: self.state_path.clone(),
+                lock_path: self.lock_path.clone(),
                 state: self.state.clone(),
+                completed_reports: Vec::new(),
+                pending_completion: self.pending_completion.clone(),
+                lock_file: None,
             },
         }
     }
@@ -224,25 +287,31 @@ impl DurableRun {
         execution_timeout_seconds: Option<u64>,
         deadline_at_millis: Option<u64>,
     ) -> Result<Self, RunStateError> {
-        Self::prepare_cancellable_in(root, plan, execution_timeout_seconds, deadline_at_millis)
+        let lock_root = root.join(".locks");
+        Self::prepare_cancellable_in(root, &lock_root, plan, execution_timeout_seconds, deadline_at_millis)
             .map_err(|error| error.into_parts().1)
     }
 
     fn prepare_cancellable_in(
         root: &Path,
+        lock_root: &Path,
         plan: &Plan,
         execution_timeout_seconds: Option<u64>,
         deadline_at_millis: Option<u64>,
     ) -> Result<Self, DurablePreparationError> {
         ensure_private_directory(root).map_err(DurablePreparationError::unpublished)?;
+        ensure_private_directory(lock_root).map_err(DurablePreparationError::unpublished)?;
         let job_id = format!("job-{}", Uuid::new_v4());
         let directory = root.join(&job_id);
+        let lock_path = resume_lock_path(lock_root, &job_id);
         let staging = tempfile::Builder::new()
             .prefix(".preparing-")
             .tempdir_in(root)
             .map_err(|source| io_error(format!("could not stage {job_id}"), source))
             .map_err(DurablePreparationError::unpublished)?;
         secure_directory(staging.path()).map_err(DurablePreparationError::unpublished)?;
+        ensure_private_directory(&staging.path().join(checkpoint_artifacts::DIRECTORY))
+            .map_err(DurablePreparationError::unpublished)?;
         let created_at_millis = now_millis();
         let state = RunState {
             version: STATE_VERSION,
@@ -256,18 +325,27 @@ impl DurableRun {
             plan_file: PLAN_FILE.to_string(),
             report_file: None,
             completed_steps: 0,
+            checkpoint: RunCheckpoint::default(),
             error: None,
         };
         write_private_json(&staging.path().join(PLAN_FILE), plan, "plan")
             .map_err(DurablePreparationError::unpublished)?;
         write_private_json(&staging.path().join(STATE_FILE), &state, "state")
             .map_err(DurablePreparationError::unpublished)?;
+        let lock_file = acquire_resume_lock_file(&lock_path)
+            .map_err(|source| io_error(format!("could not lock staged durable job {}", state.job_id), source))
+            .map_err(DurablePreparationError::unpublished)?;
+        sync_directory(lock_root).map_err(DurablePreparationError::unpublished)?;
         sync_directory(staging.path()).map_err(DurablePreparationError::unpublished)?;
         publish_job_directory(staging, &directory).map_err(DurablePreparationError::unpublished)?;
         let run = Self {
             state_path: directory.join(STATE_FILE),
             directory,
+            lock_path,
             state,
+            completed_reports: Vec::new(),
+            pending_completion: None,
+            lock_file: Some(lock_file),
         };
         if let Err(source) = sync_directory(root) {
             return Err(DurablePreparationError::published(run, source));
@@ -331,12 +409,318 @@ impl DurableRun {
         self.persist_state()
     }
 
-    fn persist_state(&self) -> Result<(), RunStateError> {
-        write_private_json(&self.state_path, &self.state, "state")
+    /// Open a previously published job by id.
+    ///
+    /// # Errors
+    /// Returns when the id is invalid, the job is missing, or state cannot be read.
+    pub fn open(job_id: &str) -> Result<Self, ResumeError> {
+        let horizon_root = HorizonHome::resolve().root().to_path_buf();
+        let job_root = horizon_root.join("browser-jobs");
+        let lock_root = horizon_root.join(RESUME_LOCK_DIRECTORY);
+        Self::open_in_with_lock_root(&job_root, &lock_root, job_id)
+    }
+
+    #[cfg(test)]
+    fn open_in(root: &Path, job_id: &str) -> Result<Self, ResumeError> {
+        let lock_root = root.join(".locks");
+        Self::open_in_with_lock_root(root, &lock_root, job_id)
+    }
+
+    fn open_in_with_lock_root(root: &Path, lock_root: &Path, job_id: &str) -> Result<Self, ResumeError> {
+        if !valid_job_id(job_id) {
+            return Err(ResumeError::InvalidJobId(job_id.to_string()));
+        }
+        ensure_private_directory(lock_root)
+            .map_err(|error| ResumeError::Decode(format!("could not prepare resume locks: {error}")))?;
+        let directory = root.join(job_id);
+        let state_path = directory.join(STATE_FILE);
+        let state = read_run_state(&state_path, job_id)?;
+        Ok(Self {
+            directory,
+            state_path,
+            lock_path: resume_lock_path(lock_root, job_id),
+            state,
+            completed_reports: Vec::new(),
+            pending_completion: None,
+            lock_file: None,
+        })
+    }
+
+    /// Load a terminal job and choose remaining work for an explicit resume.
+    ///
+    /// # Errors
+    /// Returns when the job is missing, still leased, already succeeded, or
+    /// would replay an uncertain mutation.
+    pub fn prepare_resume(job_id: &str, policy: UncertainPolicy) -> Result<(Self, Plan, ResumeSelection), ResumeError> {
+        let mut run = Self::open(job_id)?;
+        run.acquire_resume_lock()?;
+        run.reload_state(job_id)?;
+        validate_resume_version(&run.state)?;
+        let plan = run.load_plan()?;
+        match run.state.effective_status_at(now_millis()) {
+            RunStatus::Prepared | RunStatus::Running => return Err(ResumeError::StillRunning(job_id.to_string())),
+            RunStatus::Succeeded => return Err(ResumeError::AlreadySucceeded(job_id.to_string())),
+            RunStatus::Failed | RunStatus::Cancelled | RunStatus::TimedOut => {}
+        }
+        run.load_completed_reports()?;
+        let selection = select_resume(&plan, Some(&run.state.checkpoint), &run.completed_reports, policy)?;
+        if selection.start_index >= plan.steps.len() && selection.skipped.is_none() {
+            return Err(ResumeError::NothingToResume(job_id.to_string()));
+        }
+        Ok((run, plan, selection))
+    }
+
+    /// Saved plan for this durable run.
+    ///
+    /// # Errors
+    /// Returns when the plan file cannot be read or validated.
+    pub fn load_plan(&self) -> Result<Plan, ResumeError> {
+        let path = self.directory.join(&self.state.plan_file);
+        let bytes = std::fs::read(&path)
+            .map_err(|source| ResumeError::Decode(format!("could not read {}: {source}", path.display())))?;
+        Plan::from_slice(&bytes).map_err(|source| ResumeError::Decode(source.to_string()))
+    }
+
+    /// Current durable snapshot.
+    #[must_use]
+    pub fn state(&self) -> &RunState {
+        &self.state
+    }
+
+    /// Re-arm a terminal job for an explicit resume without creating a new id.
+    ///
+    /// # Errors
+    /// Returns the still-owned run when the updated lease cannot be persisted,
+    /// so the caller can record a terminal state before releasing its lock.
+    pub fn rearm(
+        mut self,
+        execution_timeout_seconds: u64,
+        deadline_at_millis: u64,
+        skipped: Option<String>,
+    ) -> Result<Self, DurableRearmError> {
+        self.state.status = RunStatus::Prepared;
+        self.state.execution_timeout_seconds = Some(execution_timeout_seconds);
+        self.state.deadline_at_millis = Some(deadline_at_millis);
+        self.state.updated_at_millis = now_millis();
+        self.state.runner_pid = std::process::id();
+        self.state.report_file = None;
+        self.state.completed_steps = self.state.checkpoint.completed.len();
+        self.state.error = None;
+        if let Some(step_id) = skipped {
+            self.state.checkpoint.skipped.push(step_id);
+            self.state.checkpoint.intent = None;
+        }
+        match self.persist_state() {
+            Ok(()) => Ok(self),
+            Err(source) => Err(DurableRearmError {
+                run: Box::new(self),
+                source,
+            }),
+        }
+    }
+
+    fn persist_state(&mut self) -> Result<(), RunStateError> {
+        let result = checkpoint_artifacts::persist_snapshot(
+            &self.directory,
+            &self.state_path,
+            &self.state,
+            self.pending_completion.as_ref(),
+        );
+        if result.is_ok() {
+            self.pending_completion = None;
+        }
+        result
+    }
+
+    async fn persist_checkpoint_controlled(
+        &mut self,
+        control: &mut ExecutionControl,
+        honor_deadline: bool,
+    ) -> Result<(), CheckpointPersistError> {
+        self.state.updated_at_millis = now_millis();
+        self.state.completed_steps = self.state.checkpoint.completed.len();
+        let state = self.state.clone();
+        let pending = self.pending_completion.clone();
+        let state_path = self.state_path.clone();
+        let directory = self.directory.clone();
+        match control
+            .wait_owned_blocking(
+                "horizon-browser-checkpoint",
+                if honor_deadline {
+                    BlockingIoMode::Bound
+                } else {
+                    BlockingIoMode::Required
+                },
+                move || checkpoint_artifacts::persist_snapshot(&directory, &state_path, &state, pending.as_ref()),
+            )
+            .await
+        {
+            Ok(Ok(())) => {
+                self.pending_completion = None;
+                Ok(())
+            }
+            Ok(Err(error)) => Err(CheckpointPersistError::Io(error.to_string())),
+            Err(BlockingIoError::Failed(error)) => Err(CheckpointPersistError::Io(error)),
+            Err(BlockingIoError::Stopped(reason)) => Err(CheckpointPersistError::Stopped(reason)),
+        }
+    }
+
+    fn stage_completion(&mut self, report: &StepReport) -> Result<(), String> {
+        if self.pending_completion.is_some() {
+            return Err("a previous step completion still needs durable persistence".to_string());
+        }
+        let index = self.state.checkpoint.completed.len();
+        self.state.checkpoint.intent = None;
+        self.state
+            .checkpoint
+            .completed
+            .push(checkpoint_artifacts::metadata(index, report));
+        self.completed_reports.push(report.clone());
+        self.pending_completion = Some(PendingCompletion {
+            index,
+            report: report.clone(),
+        });
+        Ok(())
+    }
+
+    /// Record intent on an owned I/O worker before the MCP future is polled.
+    ///
+    /// # Errors
+    /// Returns when the durable write fails or a stop is observed first.
+    pub async fn record_intent_controlled(
+        &mut self,
+        step: &PlanStep,
+        control: &mut ExecutionControl,
+    ) -> Result<(), CheckpointPersistError> {
+        let previous = self.state.checkpoint.intent.clone();
+        self.state.checkpoint.intent = Some(CheckpointIntent {
+            step_id: step.id.clone(),
+            tool: step.tool.clone(),
+            status: IntentStatus::Dispatched,
+        });
+        let result = self.persist_checkpoint_controlled(control, true).await;
+        if result.is_err() {
+            self.state.checkpoint.intent = previous;
+        }
+        result
+    }
+
+    /// Record a verified completion on an owned I/O worker.
+    ///
+    /// Uses required I/O so a racing stop cannot roll back a structured MCP
+    /// outcome that already reached disk.
+    ///
+    /// # Errors
+    /// Returns when the durable write fails.
+    pub async fn record_completion_controlled(
+        &mut self,
+        report: &StepReport,
+        control: &mut ExecutionControl,
+    ) -> Result<(), CheckpointPersistError> {
+        self.stage_completion(report).map_err(CheckpointPersistError::Io)?;
+        self.persist_checkpoint_controlled(control, false).await
+    }
+
+    /// Mark an in-flight step uncertain without requiring a live deadline.
+    ///
+    /// # Errors
+    /// Returns when the durable write fails or cancellation wins first.
+    pub async fn record_uncertain_controlled(
+        &mut self,
+        step: &PlanStep,
+        control: &mut ExecutionControl,
+    ) -> Result<(), CheckpointPersistError> {
+        self.state.checkpoint.intent = Some(CheckpointIntent {
+            step_id: step.id.clone(),
+            tool: step.tool.clone(),
+            status: IntentStatus::Uncertain,
+        });
+        self.persist_checkpoint_controlled(control, false).await
+    }
+
+    /// Drop a not-yet-polled intent without requiring a live deadline.
+    ///
+    /// # Errors
+    /// Returns when the durable write fails or cancellation wins first.
+    pub async fn clear_intent_controlled(
+        &mut self,
+        control: &mut ExecutionControl,
+    ) -> Result<(), CheckpointPersistError> {
+        self.state.checkpoint.intent = None;
+        self.persist_checkpoint_controlled(control, false).await
+    }
+
+    fn persist_checkpoint(&mut self) -> Result<(), String> {
+        self.state.updated_at_millis = now_millis();
+        self.state.completed_steps = self.state.checkpoint.completed.len();
+        self.persist_state().map_err(|error| error.to_string())
+    }
+
+    fn acquire_resume_lock(&mut self) -> Result<(), ResumeError> {
+        match acquire_resume_lock_file(&self.lock_path) {
+            Ok(file) => {
+                self.lock_file = Some(file);
+                Ok(())
+            }
+            Err(source) if source.kind() == std::io::ErrorKind::WouldBlock => {
+                Err(ResumeError::Locked(self.state.job_id.clone()))
+            }
+            Err(source) => Err(ResumeError::Decode(format!(
+                "could not lock {}: {source}",
+                self.lock_path.display()
+            ))),
+        }
+    }
+
+    fn reload_state(&mut self, job_id: &str) -> Result<(), ResumeError> {
+        self.state = read_run_state(&self.state_path, job_id)?;
+        self.completed_reports.clear();
+        self.pending_completion = None;
+        Ok(())
+    }
+
+    fn load_completed_reports(&mut self) -> Result<(), ResumeError> {
+        self.completed_reports = checkpoint_artifacts::load(&self.directory, &self.state.checkpoint.completed)?;
+        Ok(())
     }
 
     fn write_json(&self, name: &str, value: &impl Serialize, artifact: &'static str) -> Result<(), RunStateError> {
         write_private_json(&self.directory.join(name), value, artifact)
+    }
+}
+
+impl CheckpointStore for DurableRun {
+    fn record_intent(&mut self, step: &PlanStep) -> Result<(), String> {
+        let previous = self.state.checkpoint.intent.clone();
+        self.state.checkpoint.intent = Some(CheckpointIntent {
+            step_id: step.id.clone(),
+            tool: step.tool.clone(),
+            status: IntentStatus::Dispatched,
+        });
+        let result = self.persist_checkpoint();
+        if result.is_err() {
+            self.state.checkpoint.intent = previous;
+        }
+        result
+    }
+
+    fn record_completion(&mut self, report: &StepReport) -> Result<(), String> {
+        self.stage_completion(report)?;
+        self.persist_checkpoint()
+    }
+
+    fn record_uncertain(&mut self, step: &PlanStep) -> Result<(), String> {
+        self.state.checkpoint.intent = Some(CheckpointIntent {
+            step_id: step.id.clone(),
+            tool: step.tool.clone(),
+            status: IntentStatus::Uncertain,
+        });
+        self.persist_checkpoint()
+    }
+
+    fn clear_intent(&mut self) -> Result<(), String> {
+        self.state.checkpoint.intent = None;
+        self.persist_checkpoint()
     }
 }
 
@@ -404,6 +788,65 @@ fn parent_for_sync(path: &Path) -> &Path {
         .unwrap_or(Path::new("."))
 }
 
+// Keep the live lease outside the staged job tree: Windows cannot rename a
+// directory while a locked descendant handle is open.
+fn resume_lock_path(lock_root: &Path, job_id: &str) -> PathBuf {
+    lock_root.join(format!("{job_id}.lock"))
+}
+
+fn acquire_resume_lock_file(path: &Path) -> Result<std::fs::File, std::io::Error> {
+    let mut options = OpenOptions::new();
+    options.create(true).truncate(false).write(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let file = options.open(path)?;
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        Err(std::fs::TryLockError::WouldBlock) => Err(std::io::Error::from(std::io::ErrorKind::WouldBlock)),
+        Err(std::fs::TryLockError::Error(source)) => Err(source),
+    }
+}
+
+fn read_run_state(state_path: &Path, job_id: &str) -> Result<RunState, ResumeError> {
+    let bytes = std::fs::read(state_path).map_err(|source| {
+        if source.kind() == std::io::ErrorKind::NotFound {
+            ResumeError::NotFound(job_id.to_string())
+        } else {
+            ResumeError::Decode(format!("could not read {}: {source}", state_path.display()))
+        }
+    })?;
+    let header: StateHeader = serde_json::from_slice(&bytes)
+        .map_err(|source| ResumeError::Decode(format!("could not decode {}: {source}", state_path.display())))?;
+    if header.job_id != job_id {
+        return Err(ResumeError::Decode(format!(
+            "durable job `{job_id}` does not match state id `{}`",
+            header.job_id
+        )));
+    }
+    validate_resume_version_fields(&header.job_id, header.version)?;
+    let state: RunState = serde_json::from_slice(&bytes)
+        .map_err(|source| ResumeError::Decode(format!("could not decode {}: {source}", state_path.display())))?;
+    Ok(state)
+}
+
+fn validate_resume_version(state: &RunState) -> Result<(), ResumeError> {
+    validate_resume_version_fields(&state.job_id, state.version)
+}
+
+fn validate_resume_version_fields(job_id: &str, version: u32) -> Result<(), ResumeError> {
+    if version < MIN_RESUME_VERSION {
+        Err(ResumeError::LegacyState(job_id.to_string()))
+    } else if version > STATE_VERSION {
+        Err(ResumeError::UnsupportedStateVersion {
+            job_id: job_id.to_string(),
+            version,
+            supported: STATE_VERSION,
+        })
+    } else {
+        Ok(())
+    }
+}
+
 fn publish_job_directory(staging: tempfile::TempDir, destination: &Path) -> Result<(), RunStateError> {
     std::fs::rename(staging.path(), destination).map_err(|source| {
         io_error(
@@ -446,13 +889,26 @@ fn secure_directory(path: &Path) -> Result<(), RunStateError> {
 }
 
 fn write_private_json(path: &Path, value: &impl Serialize, artifact: &'static str) -> Result<(), RunStateError> {
+    write_private_json_with(path, value, artifact, AllowOverwrite)
+}
+
+fn write_private_json_once(path: &Path, value: &impl Serialize, artifact: &'static str) -> Result<(), RunStateError> {
+    write_private_json_with(path, value, artifact, DisallowOverwrite)
+}
+
+fn write_private_json_with(
+    path: &Path,
+    value: &impl Serialize,
+    artifact: &'static str,
+    overwrite: OverwriteBehavior,
+) -> Result<(), RunStateError> {
     let mut bytes = serde_json::to_vec_pretty(value).map_err(|source| RunStateError::Encode { artifact, source })?;
     bytes.push(b'\n');
     let mut options = OpenOptions::new();
     options.create(true).truncate(true).write(true);
     #[cfg(unix)]
     options.mode(0o600);
-    AtomicFile::new(path, AllowOverwrite)
+    AtomicFile::new(path, overwrite)
         .write_with_options(|file| file.write_all(&bytes).and_then(|()| file.sync_all()), options)
         .map_err(std::io::Error::from)
         .map_err(|source| io_error(format!("could not write {}", path.display()), source))?;
@@ -474,9 +930,12 @@ fn now_millis() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
     use serde_json::json;
 
     use super::*;
+    use crate::checkpoint::{CheckpointStore, IntentStatus, ResumeError, UncertainPolicy, select_resume};
     use crate::observability::ObservabilitySummary;
     use crate::{PlanStep, StepReport};
 
@@ -528,6 +987,11 @@ mod tests {
         );
         let published = std::fs::read_dir(&root)
             .expect("list job root")
+            .filter(|entry| {
+                entry
+                    .as_ref()
+                    .is_ok_and(|entry| entry.file_name().to_string_lossy().starts_with("job-"))
+            })
             .collect::<Result<Vec<_>, _>>()
             .expect("read job entries");
         assert_eq!(published.len(), 1);
@@ -616,6 +1080,113 @@ mod tests {
     }
 
     #[test]
+    fn resume_version_window_rejects_legacy_and_future_schemas() {
+        let root = tempfile::tempdir().expect("temporary job root");
+        let mut run = DurableRun::prepare_in(root.path(), &plan(), Some(30), None).expect("prepare");
+        let job_id = run.job_id().to_string();
+
+        run.state.version = MIN_RESUME_VERSION - 1;
+        assert_eq!(
+            validate_resume_version(run.state()),
+            Err(ResumeError::LegacyState(job_id.clone()))
+        );
+
+        run.state.version = STATE_VERSION + 1;
+        assert_eq!(
+            validate_resume_version(run.state()),
+            Err(ResumeError::UnsupportedStateVersion {
+                job_id,
+                version: STATE_VERSION + 1,
+                supported: STATE_VERSION,
+            })
+        );
+    }
+
+    #[test]
+    fn legacy_embedded_results_are_rejected_as_a_schema_version() {
+        let root = tempfile::tempdir().expect("temporary job root");
+        let job_id = "job-4e212c23-d0dd-4ae2-bf69-9ec08fdad2b4";
+        let state_path = root.path().join(STATE_FILE);
+        std::fs::write(
+            &state_path,
+            serde_json::to_vec(&json!({
+                "version": STATE_VERSION - 1,
+                "job_id": job_id,
+                "checkpoint": {
+                    "completed": [{
+                        "id": "panels",
+                        "tool": "browser_list",
+                        "ok": true,
+                        "result": {"panels": []}
+                    }]
+                }
+            }))
+            .expect("encode legacy state"),
+        )
+        .expect("write legacy state");
+
+        let error = read_run_state(&state_path, job_id).expect_err("legacy state");
+
+        assert_eq!(error, ResumeError::LegacyState(job_id.to_string()));
+    }
+
+    #[test]
+    fn rearm_clears_previous_attempt_metadata() {
+        let root = tempfile::tempdir().expect("temporary job root");
+        let mut run = DurableRun::prepare_in(root.path(), &plan(), Some(30), None).expect("prepare");
+        run.record_completion(&StepReport {
+            id: "panels".to_string(),
+            tool: "browser_list".to_string(),
+            ok: true,
+            result: Some(json!({"panels": []})),
+            error: None,
+        })
+        .expect("persist completion");
+        run.state.report_file = Some(REPORT_FILE.to_string());
+        run.state.completed_steps = 9;
+        run.state.error = Some("previous failure".to_string());
+        run.persist_state().expect("persist previous attempt");
+
+        let run = run.rearm(45, 1_234, None).expect("rearm");
+
+        assert_eq!(run.state.status, RunStatus::Prepared);
+        assert_eq!(run.state.execution_timeout_seconds, Some(45));
+        assert_eq!(run.state.deadline_at_millis, Some(1_234));
+        assert_eq!(run.state.report_file, None);
+        assert_eq!(run.state.completed_steps, 1);
+        assert_eq!(run.state.error, None);
+    }
+
+    #[test]
+    fn rearm_failure_retains_lock_owner_for_terminal_recovery() {
+        let root = tempfile::tempdir().expect("temporary job root");
+        let mut run = DurableRun::prepare_in(root.path(), &plan(), Some(30), None).expect("prepare");
+        run.stop(ExecutionStopReason::DeadlineExceeded)
+            .expect("persist terminal state");
+        let job_id = run.job_id().to_string();
+        let directory = run.directory.clone();
+        let state_path = run.state_path.clone();
+        run.directory = root.path().join("missing-sync-directory");
+
+        let error = run.rearm(45, 1_234, None).expect_err("directory sync must fail");
+        let (mut retained, _source) = error.into_parts();
+        let partially_rearmed: RunState = serde_json::from_slice(&std::fs::read(&state_path).expect("state"))
+            .expect("decode partially rearmed state");
+        assert_eq!(partially_rearmed.status, RunStatus::Prepared);
+
+        let mut contender = DurableRun::open_in(root.path(), &job_id).expect("open contender");
+        assert!(matches!(contender.acquire_resume_lock(), Err(ResumeError::Locked(_))));
+
+        retained.directory = directory;
+        retained.fail("resume rearm failed").expect("persist terminal recovery");
+        let recovered: RunState = serde_json::from_slice(&std::fs::read(&state_path).expect("recovered state"))
+            .expect("decode recovered state");
+        assert_eq!(recovered.status, RunStatus::Failed);
+        drop(retained);
+        acquire_lock_after_owner_exit(&mut contender);
+    }
+
+    #[test]
     fn initialization_failure_is_durable() {
         let root = tempfile::tempdir().expect("temporary job root");
         let mut run = DurableRun::prepare_in(
@@ -646,6 +1217,295 @@ mod tests {
             cancelled.error.as_deref(),
             Some(ExecutionStopReason::Cancelled.message())
         );
+    }
+
+    #[test]
+    fn checkpoints_record_intent_then_only_verified_completions() {
+        let root = tempfile::tempdir().expect("temporary job root");
+        let mut run = DurableRun::prepare_in(root.path(), &two_step_plan(), Some(30), None).expect("prepare");
+        let first = &two_step_plan().steps[0];
+        run.record_intent(first).expect("intent");
+        let dispatched: RunState =
+            serde_json::from_slice(&std::fs::read(&run.state_path).expect("state")).expect("decode dispatched");
+        assert_eq!(
+            dispatched.checkpoint.intent.as_ref().map(|intent| intent.status),
+            Some(IntentStatus::Dispatched)
+        );
+        assert!(dispatched.checkpoint.completed.is_empty());
+
+        let report = StepReport {
+            id: first.id.clone(),
+            tool: first.tool.clone(),
+            ok: true,
+            result: Some(json!({"panels": []})),
+            error: None,
+        };
+        run.record_completion(&report).expect("completion");
+        let completed: RunState =
+            serde_json::from_slice(&std::fs::read(&run.state_path).expect("state")).expect("decode completed");
+        assert!(completed.checkpoint.intent.is_none());
+        assert_eq!(completed.checkpoint.completed.len(), 1);
+        assert_eq!(completed.completed_steps, 1);
+
+        let second = &two_step_plan().steps[1];
+        run.record_intent(second).expect("second intent");
+        run.record_uncertain(second).expect("uncertain");
+        run.stop(ExecutionStopReason::DeadlineExceeded).expect("timeout");
+        let timed_out: RunState =
+            serde_json::from_slice(&std::fs::read(&run.state_path).expect("state")).expect("decode timed out");
+        assert_eq!(
+            timed_out.checkpoint.intent.as_ref().map(|intent| intent.status),
+            Some(IntentStatus::Uncertain)
+        );
+        assert_eq!(timed_out.checkpoint.completed.len(), 1);
+
+        let opened = DurableRun::open_in(root.path(), run.job_id()).expect("open");
+        assert_eq!(opened.state().checkpoint.completed.len(), 1);
+        let selection = select_resume(
+            &two_step_plan(),
+            Some(&timed_out.checkpoint),
+            &[report],
+            UncertainPolicy::Skip,
+        )
+        .expect("skip remaining");
+        assert_eq!(selection.start_index, 2);
+    }
+
+    #[test]
+    fn failed_intent_persist_does_not_keep_in_memory_dispatch() {
+        let root = tempfile::tempdir().expect("temporary job root");
+        let mut run = DurableRun::prepare_in(root.path(), &two_step_plan(), Some(30), None).expect("prepare");
+        std::fs::remove_file(&run.state_path).expect("remove state file");
+        std::fs::create_dir(&run.state_path).expect("block state path with a directory");
+        run.record_intent(&two_step_plan().steps[0])
+            .expect_err("persist must fail");
+        assert!(run.state().checkpoint.intent.is_none());
+        std::fs::remove_dir(&run.state_path).expect("unblock state path");
+    }
+
+    #[tokio::test]
+    async fn failed_clear_keeps_intent_cleared_for_terminal_retry() {
+        let root = tempfile::tempdir().expect("temporary job root");
+        let plan = two_step_plan();
+        let mut run = DurableRun::prepare_in(root.path(), &plan, Some(30), None).expect("prepare");
+        run.record_intent(&plan.steps[0]).expect("intent");
+        std::fs::remove_file(&run.state_path).expect("remove state file");
+        std::fs::create_dir(&run.state_path).expect("block state path with a directory");
+
+        let error = run
+            .clear_intent_controlled(&mut ExecutionControl::unbounded())
+            .await
+            .expect_err("persist must fail");
+
+        assert!(matches!(error, CheckpointPersistError::Io(_)));
+        assert!(run.state().checkpoint.intent.is_none());
+        std::fs::remove_dir(&run.state_path).expect("unblock state path");
+        run.stop(ExecutionStopReason::DeadlineExceeded)
+            .expect("terminal persistence retries cleared intent");
+        let state: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&run.state_path).expect("terminal state")).expect("decode state");
+        assert!(state["checkpoint"].get("intent").is_none());
+    }
+
+    #[tokio::test]
+    async fn failed_completion_artifact_is_retried_by_terminal_persistence() {
+        let root = tempfile::tempdir().expect("temporary job root");
+        let plan = two_step_plan();
+        let mut run = DurableRun::prepare_in(root.path(), &plan, Some(30), None).expect("prepare");
+        let step = &plan.steps[0];
+        let report = StepReport {
+            id: step.id.clone(),
+            tool: step.tool.clone(),
+            ok: true,
+            result: Some(json!({"panels": ["verified"]})),
+            error: None,
+        };
+        run.record_intent(step).expect("intent");
+        let checkpoint_directory = run.directory.join(checkpoint_artifacts::DIRECTORY);
+        std::fs::remove_dir(&checkpoint_directory).expect("remove empty checkpoint directory");
+        std::fs::write(&checkpoint_directory, b"block checkpoint artifacts").expect("block checkpoint directory");
+
+        let error = run
+            .record_completion_controlled(&report, &mut ExecutionControl::unbounded())
+            .await
+            .expect_err("artifact persistence must fail");
+
+        assert!(matches!(error, CheckpointPersistError::Io(_)));
+        assert!(run.state().checkpoint.intent.is_none());
+        assert_eq!(run.state().checkpoint.completed.len(), 1);
+        assert!(run.pending_completion.is_some());
+        std::fs::remove_file(&checkpoint_directory).expect("unblock checkpoint directory");
+        ensure_private_directory(&checkpoint_directory).expect("restore checkpoint directory");
+        run.stop(ExecutionStopReason::DeadlineExceeded)
+            .expect("terminal persistence retries completion");
+        run.load_completed_reports().expect("reload completion artifact");
+        assert_eq!(run.completed_reports, vec![report]);
+    }
+
+    #[tokio::test]
+    async fn orphaned_uncertain_result_does_not_block_a_later_skipped_step() {
+        let root = tempfile::tempdir().expect("temporary job root");
+        let plan = two_step_plan();
+        let mut run = DurableRun::prepare_in(root.path(), &plan, Some(30), None).expect("prepare");
+        let first = StepReport {
+            id: plan.steps[0].id.clone(),
+            tool: plan.steps[0].tool.clone(),
+            ok: true,
+            result: Some(json!({"attempt": "orphaned"})),
+            error: None,
+        };
+        run.record_intent(&plan.steps[0]).expect("first intent");
+        let state_path = run.state_path.clone();
+        run.state_path = run.directory.join("missing/state.json");
+        run.record_completion_controlled(&first, &mut ExecutionControl::unbounded())
+            .await
+            .expect_err("state persistence must fail after the artifact write");
+        let orphan = run.directory.join(&run.state.checkpoint.completed[0].report_file);
+        assert!(orphan.is_file());
+
+        run.state_path = state_path;
+        let job_id = run.job_id().to_string();
+        run.reload_state(&job_id).expect("reload state before failed write");
+        assert!(run.state.checkpoint.completed.is_empty());
+        run.state.checkpoint.skipped.push(plan.steps[0].id.clone());
+        run.state.checkpoint.intent = None;
+        let second = StepReport {
+            id: plan.steps[1].id.clone(),
+            tool: plan.steps[1].tool.clone(),
+            ok: true,
+            result: Some(json!({"attempt": "verified"})),
+            error: None,
+        };
+        run.record_intent(&plan.steps[1]).expect("second intent");
+        run.record_completion(&second).expect("later completion");
+
+        let verified = run.directory.join(&run.state.checkpoint.completed[0].report_file);
+        assert_ne!(orphan, verified);
+        assert!(orphan.is_file());
+        assert!(verified.is_file());
+        run.load_completed_reports().expect("load later result");
+        assert_eq!(run.completed_reports, vec![second]);
+    }
+
+    #[test]
+    fn large_checkpoint_results_live_in_linear_per_step_artifacts() {
+        let root = tempfile::tempdir().expect("temporary job root");
+        let plan = two_step_plan();
+        let mut run = DurableRun::prepare_in(root.path(), &plan, Some(30), None).expect("prepare");
+        let payload = "x".repeat(256 * 1024);
+        let reports = plan
+            .steps
+            .iter()
+            .map(|step| StepReport {
+                id: step.id.clone(),
+                tool: step.tool.clone(),
+                ok: true,
+                result: Some(json!({"payload": payload})),
+                error: None,
+            })
+            .collect::<Vec<_>>();
+        for (step, report) in plan.steps.iter().zip(&reports) {
+            run.record_intent(step).expect("intent");
+            run.record_completion(report).expect("completion");
+        }
+
+        let state_bytes = std::fs::read(&run.state_path).expect("compact state");
+        assert!(
+            state_bytes.len() < 4 * 1024,
+            "state grew to {} bytes",
+            state_bytes.len()
+        );
+        let state: serde_json::Value = serde_json::from_slice(&state_bytes).expect("decode compact state");
+        let completed = state["checkpoint"]["completed"]
+            .as_array()
+            .expect("completion metadata");
+        assert_eq!(completed.len(), reports.len());
+        assert!(completed.iter().all(|entry| entry.get("result").is_none()));
+        let artifact_sizes = completed
+            .iter()
+            .map(|entry| {
+                let path = run.directory.join(entry["report_file"].as_str().expect("result path"));
+                std::fs::metadata(path).expect("result artifact").len()
+            })
+            .collect::<Vec<_>>();
+        assert!(artifact_sizes.iter().all(|size| *size > 256 * 1024));
+
+        run.stop(ExecutionStopReason::DeadlineExceeded).expect("terminal state");
+        let job_id = run.job_id().to_string();
+        drop(run);
+        let mut opened = DurableRun::open_in(root.path(), &job_id).expect("open compact state");
+        opened.load_completed_reports().expect("load per-step results");
+        let selection = select_resume(
+            &plan,
+            Some(&opened.state.checkpoint),
+            &opened.completed_reports,
+            UncertainPolicy::Fail,
+        )
+        .expect("select verified prefix");
+        assert_eq!(selection.completed, reports);
+        assert_eq!(selection.start_index, plan.steps.len());
+    }
+
+    #[test]
+    fn resume_lock_is_exclusive_while_the_owner_lives() {
+        let root = tempfile::tempdir().expect("temporary job root");
+        let run = DurableRun::prepare_in(root.path(), &two_step_plan(), Some(30), None).expect("prepare");
+        let mut contender = DurableRun::open_in(root.path(), run.job_id()).expect("open");
+        let error = contender.acquire_resume_lock().expect_err("owner holds lock");
+        assert!(matches!(error, ResumeError::Locked(_)));
+        drop(run);
+        acquire_lock_after_owner_exit(&mut contender);
+    }
+
+    #[test]
+    fn resume_lock_refreshes_a_snapshot_read_before_the_prior_owner_finished() {
+        let root = tempfile::tempdir().expect("temporary job root");
+        let mut owner = DurableRun::prepare_in(root.path(), &two_step_plan(), Some(30), None).expect("prepare");
+        owner
+            .stop(ExecutionStopReason::DeadlineExceeded)
+            .expect("persist terminal state");
+        let job_id = owner.job_id().to_string();
+        let mut stale = DurableRun::open_in(root.path(), &job_id).expect("open stale snapshot");
+        assert_eq!(stale.state.status, RunStatus::TimedOut);
+
+        owner.state.status = RunStatus::Succeeded;
+        owner.persist_state().expect("persist newer terminal state");
+        drop(owner);
+
+        acquire_lock_after_owner_exit(&mut stale);
+        stale.reload_state(&job_id).expect("reload protected state");
+        assert_eq!(stale.state.status, RunStatus::Succeeded);
+    }
+
+    fn acquire_lock_after_owner_exit(run: &mut DurableRun) {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            match run.acquire_resume_lock() {
+                Ok(()) => return,
+                Err(ResumeError::Locked(_)) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => panic!("acquire released lock: {error}"),
+            }
+        }
+    }
+
+    fn two_step_plan() -> Plan {
+        Plan {
+            version: 1,
+            steps: vec![
+                PlanStep {
+                    id: "list".to_string(),
+                    tool: "browser_list".to_string(),
+                    arguments: serde_json::Map::new(),
+                },
+                PlanStep {
+                    id: "again".to_string(),
+                    tool: "browser_list".to_string(),
+                    arguments: serde_json::Map::new(),
+                },
+            ],
+        }
     }
 
     #[cfg(unix)]
@@ -714,6 +1574,26 @@ mod tests {
             std::fs::read(staging_path.join("sentinel")).expect("read sentinel"),
             b"keep me"
         );
+    }
+
+    #[test]
+    fn external_lock_remains_held_across_atomic_publication() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let lock_root = root.path().join(".locks");
+        ensure_private_directory(&lock_root).expect("create lock root");
+        let staging = tempfile::Builder::new()
+            .prefix(".preparing-")
+            .tempdir_in(root.path())
+            .expect("stage job");
+        let destination = root.path().join("job-published");
+        let lock_path = resume_lock_path(&lock_root, "job-published");
+        let held = acquire_resume_lock_file(&lock_path).expect("lock staged job");
+
+        publish_job_directory(staging, &destination).expect("publish locked job");
+
+        let error = acquire_resume_lock_file(&lock_path).expect_err("published lock remains held");
+        assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
+        drop(held);
     }
 
     #[cfg(unix)]

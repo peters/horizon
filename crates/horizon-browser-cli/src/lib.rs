@@ -6,6 +6,7 @@
 //! add a second browser action API: it connects an MCP client to the same
 //! [`horizon_browser_mcp::HorizonBrowserMcp`] service used by agents.
 
+pub mod checkpoint;
 pub mod execution_control;
 pub mod job;
 pub mod observability;
@@ -27,6 +28,7 @@ use thiserror::Error;
 
 use execution_control::{ExecutionControl, ExecutionStopReason};
 use observability::ObservabilitySummary;
+use run_state::{CheckpointPersistError, DurableRun};
 
 const PLAN_VERSION: u32 = 1;
 const MAX_PLAN_STEPS: usize = 256;
@@ -78,8 +80,19 @@ pub struct ExecutionReport {
     pub observability: ObservabilitySummary,
 }
 
+/// Prefix reused by an explicit resume and optional durable checkpoint sink.
+#[derive(Default)]
+pub struct PlanResume<'a> {
+    /// Verified reports from earlier attempts, used for `$ref` resolution.
+    pub completed: Vec<StepReport>,
+    /// First plan index that is still eligible to run.
+    pub start_index: usize,
+    /// Durable intent/completion sink; omitted for in-memory tests.
+    pub checkpoint: Option<&'a mut DurableRun>,
+}
+
 /// Result of one MCP tool call.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StepReport {
     /// Plan step identifier.
     pub id: String,
@@ -199,8 +212,29 @@ pub async fn execute_plan_with_control(
     plan: &Plan,
     control: &mut ExecutionControl,
 ) -> Result<ExecutionReport, RunError> {
+    execute_plan_with_resume(plan, control, PlanResume::default()).await
+}
+
+/// Execute remaining plan steps after an explicit resume selection.
+///
+/// # Errors
+/// Returns for plan validation, MCP initialization, unavailable tools, or a
+/// stop before step execution begins.
+pub async fn execute_plan_with_resume(
+    plan: &Plan,
+    control: &mut ExecutionControl,
+    resume: PlanResume<'_>,
+) -> Result<ExecutionReport, RunError> {
     validate_plan(plan)?;
     control.check().map_err(RunError::Stopped)?;
+    if resume.start_index >= plan.steps.len() {
+        return Ok(completed_execution_report(
+            plan,
+            resume.completed,
+            resume.start_index,
+            None,
+        ));
+    }
     let (server_transport, client_transport) = tokio::io::duplex(MCP_BUFFER_BYTES);
     let mut server_task = tokio::spawn(async move {
         let service = horizon_browser_mcp::HorizonBrowserMcp::from_environment()
@@ -239,7 +273,7 @@ pub async fn execute_plan_with_control(
     .into_iter()
     .map(|tool| tool.name.into_owned())
     .collect::<BTreeSet<_>>();
-    for step in &plan.steps {
+    for step in plan.steps.iter().skip(resume.start_index) {
         if !tools.contains(&step.tool) {
             drop(client);
             server_task.abort();
@@ -250,7 +284,7 @@ pub async fn execute_plan_with_control(
         }
     }
 
-    let mut report = execute_steps(plan, &client, control).await;
+    let mut report = execute_steps(plan, &client, control, resume).await;
     if report.stop_reason.is_some() {
         drop(client);
         server_task.abort();
@@ -284,14 +318,36 @@ pub async fn execute_plan_with_control(
     Ok(report)
 }
 
+enum PersistOutcome {
+    Continue,
+    Break(Option<String>),
+    Stop(Box<ExecutionReport>),
+}
+
+enum DispatchOutcome {
+    Next(StepReport),
+    FailFast(StepReport),
+    Stop(Box<ExecutionReport>),
+}
+
 async fn execute_steps(
     plan: &Plan,
     client: &rmcp::service::RunningService<rmcp::RoleClient, PlanClient>,
     control: &mut ExecutionControl,
+    resume: PlanResume<'_>,
 ) -> ExecutionReport {
+    let PlanResume {
+        completed,
+        start_index,
+        mut checkpoint,
+    } = resume;
     let mut result_indexes = BTreeMap::new();
-    let mut steps = Vec::with_capacity(plan.steps.len());
-    for step in &plan.steps {
+    for (index, step) in completed.iter().enumerate() {
+        result_indexes.insert(step.id.clone(), index);
+    }
+    let mut steps = completed;
+    let mut persistence_error = None;
+    for step in plan.steps.iter().skip(start_index) {
         let arguments = match resolve_arguments(step, &steps, &result_indexes) {
             Ok(arguments) => arguments,
             Err(error) => {
@@ -299,42 +355,233 @@ async fn execute_steps(
                 break;
             }
         };
-        let params = CallToolRequestParams::new(step.tool.clone()).with_arguments(arguments);
-        let result = match wait_for_browser_action(control, client.call_tool(params)).await {
-            Ok(Ok(result)) => result,
-            Ok(Err(error)) => {
-                steps.push(failed_step(step, format!("MCP call failed: {error}")));
+        match persist_intent(checkpoint.as_deref_mut(), control, step, &mut steps).await {
+            PersistOutcome::Continue => {}
+            PersistOutcome::Break(error) => {
+                persistence_error = error;
                 break;
             }
-            Err(stopped) => return stopped_report(steps, &stopped),
-        };
-        let structured = result.structured_content;
-        if result.is_error.unwrap_or(false) {
-            let error = tool_error_text(&result.content);
-            steps.push(StepReport {
-                id: step.id.clone(),
-                tool: step.tool.clone(),
-                ok: false,
-                result: structured,
-                error: Some(error),
-            });
-            break;
+            PersistOutcome::Stop(report) => return *report,
         }
-        let Some(structured) = structured else {
-            steps.push(failed_step(step, "MCP tool returned no structured content".to_string()));
-            break;
-        };
-        steps.push(StepReport {
+        if let Err(reason) = control.check() {
+            if let Err(stop) = persist_post_dispatch(checkpoint.as_deref_mut(), control, step, false).await {
+                return stop_execution(std::mem::take(&mut steps), stop, false);
+            }
+            return stop_execution(std::mem::take(&mut steps), reason, false);
+        }
+        match dispatch_step(client, control, checkpoint.as_deref_mut(), step, arguments, &steps).await {
+            DispatchOutcome::Stop(report) => return *report,
+            DispatchOutcome::FailFast(report) => {
+                steps.push(report);
+                break;
+            }
+            DispatchOutcome::Next(outcome) => {
+                match persist_completion(checkpoint.as_deref_mut(), control, &outcome, &mut steps).await {
+                    PersistOutcome::Continue => {}
+                    PersistOutcome::Break(error) => {
+                        persistence_error = error;
+                        break;
+                    }
+                    PersistOutcome::Stop(report) => return *report,
+                }
+                result_indexes.insert(step.id.clone(), steps.len());
+                steps.push(outcome);
+            }
+        }
+    }
+    completed_execution_report(plan, steps, start_index, persistence_error)
+}
+
+fn completed_execution_report(
+    plan: &Plan,
+    steps: Vec<StepReport>,
+    start_index: usize,
+    persistence_error: Option<String>,
+) -> ExecutionReport {
+    let all_reports_succeeded = steps.iter().all(|step| step.ok);
+    let skipped_ids = {
+        let reported_ids = steps.iter().map(|step| step.id.as_str()).collect::<BTreeSet<_>>();
+        plan.steps
+            .iter()
+            .take(start_index)
+            .filter(|step| !reported_ids.contains(step.id.as_str()))
+            .map(|step| step.id.as_str())
+            .collect::<Vec<_>>()
+    };
+    let ok = skipped_ids.is_empty() && steps.len() == plan.steps.len() && all_reports_succeeded;
+    let error = if ok {
+        None
+    } else if let Some(error) = persistence_error {
+        Some(error)
+    } else if all_reports_succeeded && !skipped_ids.is_empty() {
+        Some(format!(
+            "plan remains incomplete because resume explicitly skipped uncertain steps: {}",
+            skipped_ids.join(", ")
+        ))
+    } else {
+        None
+    };
+    execution_report(ok, steps, error, None)
+}
+
+fn stop_execution(steps: Vec<StepReport>, reason: ExecutionStopReason, request_started: bool) -> ExecutionReport {
+    stopped_report(
+        steps,
+        &ActionWaitStopped {
+            reason,
+            request_started,
+        },
+    )
+}
+
+async fn persist_intent(
+    checkpoint: Option<&mut DurableRun>,
+    control: &mut ExecutionControl,
+    step: &PlanStep,
+    steps: &mut Vec<StepReport>,
+) -> PersistOutcome {
+    let Some(store) = checkpoint else {
+        return PersistOutcome::Continue;
+    };
+    match store.record_intent_controlled(step, control).await {
+        Ok(()) => PersistOutcome::Continue,
+        Err(CheckpointPersistError::Io(error)) => {
+            steps.push(failed_step(step, format!("could not persist step intent: {error}")));
+            PersistOutcome::Break(None)
+        }
+        Err(CheckpointPersistError::Stopped(reason)) => {
+            PersistOutcome::Stop(Box::new(stop_execution(std::mem::take(steps), reason, false)))
+        }
+    }
+}
+
+async fn persist_completion(
+    checkpoint: Option<&mut DurableRun>,
+    control: &mut ExecutionControl,
+    outcome: &StepReport,
+    steps: &mut Vec<StepReport>,
+) -> PersistOutcome {
+    let Some(store) = checkpoint else {
+        return PersistOutcome::Continue;
+    };
+    match store.record_completion_controlled(outcome, control).await {
+        Ok(()) => PersistOutcome::Continue,
+        Err(CheckpointPersistError::Io(error)) => {
+            steps.push(outcome.clone());
+            PersistOutcome::Break(Some(format!("could not persist step completion: {error}")))
+        }
+        Err(CheckpointPersistError::Stopped(reason)) => {
+            let mut completed = std::mem::take(steps);
+            completed.push(outcome.clone());
+            PersistOutcome::Stop(Box::new(stop_execution(completed, reason, true)))
+        }
+    }
+}
+
+async fn dispatch_step(
+    client: &rmcp::service::RunningService<rmcp::RoleClient, PlanClient>,
+    control: &mut ExecutionControl,
+    checkpoint: Option<&mut DurableRun>,
+    step: &PlanStep,
+    arguments: Map<String, Value>,
+    steps: &[StepReport],
+) -> DispatchOutcome {
+    let params = CallToolRequestParams::new(step.tool.clone()).with_arguments(arguments);
+    let result = match wait_for_browser_action(control, client.call_tool(params)).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(error)) => {
+            return finish_after_dispatch(
+                checkpoint,
+                control,
+                step,
+                true,
+                steps,
+                execution_report(false, steps.to_vec(), Some(format!("MCP call failed: {error}")), None),
+            )
+            .await;
+        }
+        Err(stopped) => {
+            return finish_after_dispatch(
+                checkpoint,
+                control,
+                step,
+                stopped.request_started,
+                steps,
+                stopped_report(steps.to_vec(), &stopped),
+            )
+            .await;
+        }
+    };
+    if result.is_error.unwrap_or(false) {
+        if let Err(reason) = persist_post_dispatch(checkpoint, control, step, true).await {
+            return DispatchOutcome::Stop(Box::new(stop_execution(steps.to_vec(), reason, true)));
+        }
+        return DispatchOutcome::FailFast(StepReport {
             id: step.id.clone(),
             tool: step.tool.clone(),
-            ok: true,
-            result: Some(structured),
-            error: None,
+            ok: false,
+            result: result.structured_content,
+            error: Some(tool_error_text(&result.content)),
         });
-        result_indexes.insert(step.id.clone(), steps.len() - 1);
     }
-    let ok = steps.len() == plan.steps.len() && steps.iter().all(|step| step.ok);
-    execution_report(ok, steps, None, None)
+    let Some(structured) = result.structured_content else {
+        return finish_after_dispatch(
+            checkpoint,
+            control,
+            step,
+            true,
+            steps,
+            execution_report(
+                false,
+                steps.to_vec(),
+                Some("MCP tool returned no structured content".to_string()),
+                None,
+            ),
+        )
+        .await;
+    };
+    DispatchOutcome::Next(StepReport {
+        id: step.id.clone(),
+        tool: step.tool.clone(),
+        ok: true,
+        result: Some(structured),
+        error: None,
+    })
+}
+
+async fn finish_after_dispatch(
+    checkpoint: Option<&mut DurableRun>,
+    control: &mut ExecutionControl,
+    step: &PlanStep,
+    request_started: bool,
+    steps: &[StepReport],
+    report: ExecutionReport,
+) -> DispatchOutcome {
+    if let Err(reason) = persist_post_dispatch(checkpoint, control, step, request_started).await {
+        DispatchOutcome::Stop(Box::new(stop_execution(steps.to_vec(), reason, request_started)))
+    } else {
+        DispatchOutcome::Stop(Box::new(report))
+    }
+}
+
+async fn persist_post_dispatch(
+    checkpoint: Option<&mut DurableRun>,
+    control: &mut ExecutionControl,
+    step: &PlanStep,
+    request_started: bool,
+) -> Result<(), ExecutionStopReason> {
+    let Some(store) = checkpoint else {
+        return Ok(());
+    };
+    let result = if request_started {
+        store.record_uncertain_controlled(step, control).await
+    } else {
+        store.clear_intent_controlled(control).await
+    };
+    match result {
+        Err(CheckpointPersistError::Stopped(reason)) => Err(reason),
+        Err(CheckpointPersistError::Io(_)) | Ok(()) => Ok(()),
+    }
 }
 
 async fn wait_for_browser_action<T>(
@@ -669,6 +916,149 @@ mod tests {
             Some(ExecutionStopReason::DeadlineExceeded.message())
         );
         assert_eq!(report.stop_reason, Some(ExecutionStopReason::DeadlineExceeded));
+    }
+
+    #[tokio::test]
+    async fn resume_reuses_verified_prefix_without_replaying_it() {
+        let plan = plan(
+            br#"{"version":1,"steps":[{"id":"first","tool":"browser_list"},{"id":"second","tool":"browser_list"}]}"#,
+        );
+        let report = execute_plan_with_resume(
+            &plan,
+            &mut ExecutionControl::unbounded(),
+            PlanResume {
+                completed: vec![successful_step("first", json!({"panels":[{"panel_id":"kept"}]}))],
+                start_index: 1,
+                checkpoint: None,
+            },
+        )
+        .await
+        .expect("resume remaining list");
+        assert!(report.ok);
+        assert_eq!(report.steps.len(), 2);
+        assert_eq!(report.steps[0].id, "first");
+        assert_eq!(
+            report.steps[0].result.as_ref().expect("prefix result")["panels"][0]["panel_id"],
+            "kept"
+        );
+        assert_eq!(report.steps[1].id, "second");
+    }
+
+    #[tokio::test]
+    async fn resume_does_not_require_tools_from_the_verified_prefix() {
+        let plan = plan(
+            br#"{"version":1,"steps":[{"id":"retired","tool":"browser_retired"},{"id":"remaining","tool":"browser_list"}]}"#,
+        );
+        let report = execute_plan_with_resume(
+            &plan,
+            &mut ExecutionControl::unbounded(),
+            PlanResume {
+                completed: vec![StepReport {
+                    id: "retired".to_string(),
+                    tool: "browser_retired".to_string(),
+                    ok: true,
+                    result: Some(json!({"verified": true})),
+                    error: None,
+                }],
+                start_index: 1,
+                checkpoint: None,
+            },
+        )
+        .await
+        .expect("resume supported suffix");
+
+        assert!(report.ok);
+        assert_eq!(
+            report.steps.iter().map(|step| step.id.as_str()).collect::<Vec<_>>(),
+            ["retired", "remaining"]
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_does_not_require_tools_from_the_skipped_prefix() {
+        let plan = plan(
+            br#"{"version":1,"steps":[{"id":"retired","tool":"browser_retired"},{"id":"remaining","tool":"browser_list"}]}"#,
+        );
+        let report = execute_plan_with_resume(
+            &plan,
+            &mut ExecutionControl::unbounded(),
+            PlanResume {
+                completed: Vec::new(),
+                start_index: 1,
+                checkpoint: None,
+            },
+        )
+        .await
+        .expect("resume supported suffix");
+
+        assert!(!report.ok);
+        assert_eq!(report.steps.len(), 1);
+        assert_eq!(report.steps[0].id, "remaining");
+        assert_eq!(
+            report.error.as_deref(),
+            Some("plan remains incomplete because resume explicitly skipped uncertain steps: retired")
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_after_a_skipped_gap_does_not_report_success() {
+        let plan = plan(
+            br#"{"version":1,"steps":[{"id":"first","tool":"browser_list"},{"id":"skipped","tool":"browser_list"},{"id":"third","tool":"browser_list"}]}"#,
+        );
+        let report = execute_plan_with_resume(
+            &plan,
+            &mut ExecutionControl::unbounded(),
+            PlanResume {
+                completed: vec![successful_step("first", json!({"panels":[]}))],
+                start_index: 2,
+                checkpoint: None,
+            },
+        )
+        .await
+        .expect("resume after skip");
+        assert!(!report.ok);
+        assert_eq!(report.completed_steps, 2);
+        assert_eq!(
+            report.steps.iter().map(|step| step.id.as_str()).collect::<Vec<_>>(),
+            ["first", "third"]
+        );
+        assert_eq!(
+            report.error.as_deref(),
+            Some("plan remains incomplete because resume explicitly skipped uncertain steps: skipped")
+        );
+    }
+
+    #[test]
+    fn incomplete_checkpoint_persistence_keeps_the_verified_result_and_error() {
+        let plan = plan(
+            br#"{"version":1,"steps":[{"id":"first","tool":"browser_list"},{"id":"second","tool":"browser_list"}]}"#,
+        );
+        let report = completed_execution_report(
+            &plan,
+            vec![successful_step("first", json!({"panels": []}))],
+            0,
+            Some("checkpoint storage unavailable".to_string()),
+        );
+
+        assert!(!report.ok);
+        assert_eq!(report.completed_steps, 1);
+        assert!(report.steps[0].ok);
+        assert_eq!(report.error.as_deref(), Some("checkpoint storage unavailable"));
+    }
+
+    #[test]
+    fn terminal_persistence_can_heal_the_final_checkpoint_write() {
+        let plan = plan(br#"{"version":1,"steps":[{"id":"only","tool":"browser_list"}]}"#);
+        let report = completed_execution_report(
+            &plan,
+            vec![successful_step("only", json!({"panels": []}))],
+            0,
+            Some("transient checkpoint error".to_string()),
+        );
+
+        assert!(report.ok);
+        assert_eq!(report.completed_steps, 1);
+        assert_eq!(report.error, None);
     }
 
     fn successful_step(id: &str, result: Value) -> StepReport {

@@ -39,6 +39,7 @@ fn run_writes_the_same_structured_report_to_stdout_or_a_private_file() {
     assert!(state["deadline_at_millis"].as_u64().is_some());
     assert_eq!(state["completed_steps"], 1);
     assert_eq!(state["report_file"], "report.json");
+    assert_checkpoint_artifact(&job_dir, &state, &stdout_report["steps"][0]);
     assert_eq!(
         serde_json::from_slice::<Value>(&std::fs::read(job_dir.join("report.json")).expect("durable report"))
             .expect("decode durable report"),
@@ -104,6 +105,44 @@ fn run_writes_the_same_structured_report_to_stdout_or_a_private_file() {
     .expect("decode failed job state");
     assert_eq!(failed_state["status"], "failed");
     assert_eq!(failed_state["completed_steps"], 1);
+    assert_eq!(failed_state["checkpoint"]["intent"]["status"], "uncertain");
+    assert_eq!(failed_state["checkpoint"]["intent"]["step_id"], "fill");
+    assert!(failed_state["checkpoint"].get("completed").is_none());
+}
+
+fn assert_checkpoint_artifact(job_dir: &std::path::Path, state: &Value, expected: &Value) {
+    assert!(state["checkpoint"]["completed"][0].get("result").is_none());
+    let checkpoint_report = job_dir.join(
+        state["checkpoint"]["completed"][0]["report_file"]
+            .as_str()
+            .expect("checkpoint result path"),
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&std::fs::read(&checkpoint_report).expect("checkpoint result"))
+            .expect("decode checkpoint result"),
+        *expected
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        assert_eq!(
+            std::fs::metadata(job_dir.join("checkpoints"))
+                .expect("checkpoint directory metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(checkpoint_report)
+                .expect("checkpoint result metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
 }
 
 #[test]
@@ -144,7 +183,7 @@ fn run_publishes_a_complete_relative_job_when_home_is_unset() {
     assert!(job_dir.join("plan.json").is_file());
     let state: Value = serde_json::from_slice(&std::fs::read(job_dir.join("state.json")).expect("job state"))
         .expect("decode job state");
-    assert_eq!(state["version"], 2);
+    assert_eq!(state["version"], 4);
     assert_eq!(state["status"], "succeeded");
     assert!(state["deadline_at_millis"].as_u64().is_some());
     assert_eq!(state["report_file"], "report.json");
@@ -223,6 +262,116 @@ fn run_deadline_persists_a_partial_report_and_stable_exit_code() {
     );
     assert_eq!(failed_output.status.code(), Some(124));
     assert!(String::from_utf8_lossy(&failed_output.stderr).contains("could not open report"));
+}
+
+#[test]
+fn resume_refuses_an_uncertain_in_flight_step() {
+    let root = tempfile::tempdir().expect("isolated root");
+    let (plan, manifest_path) = write_blocking_plan(root.path());
+    let output = run_deadline_after_action(root.path(), &plan, &manifest_path, None);
+    assert_eq!(output.status.code(), Some(124));
+    let report: Value = serde_json::from_slice(&output.stdout).expect("deadline report");
+    let job_id = report["job_id"].as_str().expect("job id");
+    let job_dir = std::path::Path::new(report["job_dir"].as_str().expect("job directory"));
+    let state: Value = serde_json::from_slice(&std::fs::read(job_dir.join("state.json")).expect("deadline state"))
+        .expect("decode deadline state");
+    assert_eq!(state["checkpoint"]["completed"].as_array().map(Vec::len), Some(1));
+    assert_eq!(state["checkpoint"]["intent"]["status"], "uncertain");
+    assert_eq!(state["checkpoint"]["intent"]["step_id"], "snapshot");
+
+    let refused = run_command(root.path(), ["resume", job_id]);
+    assert_eq!(refused.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("uncertain step `snapshot`"),
+        "stderr: {}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+
+    let skipped = run_command(root.path(), ["resume", job_id, "--on-uncertain", "skip"]);
+    assert_eq!(skipped.status.code(), Some(1));
+    assert!(
+        skipped.stderr.is_empty(),
+        "stderr: {}",
+        String::from_utf8_lossy(&skipped.stderr)
+    );
+    let skipped_report: Value = serde_json::from_slice(&skipped.stdout).expect("skipped final-step report");
+    assert_eq!(skipped_report["ok"], false);
+    assert_eq!(skipped_report["completed_steps"], 1);
+    assert_eq!(
+        skipped_report["steps"]
+            .as_array()
+            .expect("step reports")
+            .iter()
+            .map(|step| step["id"].as_str())
+            .collect::<Vec<_>>(),
+        [Some("list")]
+    );
+    assert_eq!(
+        skipped_report["error"],
+        "plan remains incomplete because resume explicitly skipped uncertain steps: snapshot"
+    );
+    let skipped_state: Value =
+        serde_json::from_slice(&std::fs::read(job_dir.join("state.json")).expect("skipped final-step state"))
+            .expect("decode skipped final-step state");
+    assert_eq!(skipped_state["status"], "failed");
+    assert_eq!(skipped_state["report_file"], "report.json");
+    assert_eq!(skipped_state["checkpoint"]["skipped"], json!(["snapshot"]));
+    assert!(skipped_state["checkpoint"].get("intent").is_none());
+}
+
+#[test]
+fn resume_skip_runs_later_steps_without_replaying_or_succeeding() {
+    let root = tempfile::tempdir().expect("isolated root");
+    let (plan, manifest_path) = write_blocking_plan_with_followup(root.path());
+    let output = run_deadline_after_action(root.path(), &plan, &manifest_path, None);
+    assert_eq!(output.status.code(), Some(124));
+    let report: Value = serde_json::from_slice(&output.stdout).expect("deadline report");
+    let job_id = report["job_id"].as_str().expect("job id");
+    let job_dir = std::path::Path::new(report["job_dir"].as_str().expect("job directory"));
+    let state: Value = serde_json::from_slice(&std::fs::read(job_dir.join("state.json")).expect("deadline state"))
+        .expect("decode deadline state");
+    assert_eq!(state["checkpoint"]["completed"][0]["id"], "list");
+    assert_eq!(state["checkpoint"]["intent"]["status"], "uncertain");
+    assert_eq!(state["checkpoint"]["intent"]["step_id"], "snapshot");
+
+    let skipped = run_command(root.path(), ["resume", job_id, "--on-uncertain", "skip"]);
+    assert_eq!(skipped.status.code(), Some(1));
+    assert!(
+        skipped.stderr.is_empty(),
+        "stderr: {}",
+        String::from_utf8_lossy(&skipped.stderr)
+    );
+    let resume_report: Value = serde_json::from_slice(&skipped.stdout).expect("skip resume report");
+    assert_eq!(resume_report["ok"], false);
+    assert_eq!(resume_report["completed_steps"], 2);
+    assert_eq!(
+        resume_report["error"],
+        "plan remains incomplete because resume explicitly skipped uncertain steps: snapshot"
+    );
+    assert_eq!(
+        resume_report["steps"]
+            .as_array()
+            .expect("step reports")
+            .iter()
+            .map(|step| step["id"].as_str())
+            .collect::<Vec<_>>(),
+        [Some("list"), Some("followup")]
+    );
+
+    let resumed: Value = serde_json::from_slice(&std::fs::read(job_dir.join("state.json")).expect("resumed state"))
+        .expect("decode resumed state");
+    assert_eq!(resumed["status"], "failed");
+    assert_eq!(resumed["checkpoint"]["skipped"], json!(["snapshot"]));
+    assert_eq!(
+        resumed["checkpoint"]["completed"]
+            .as_array()
+            .expect("completed reports")
+            .iter()
+            .map(|step| step["id"].as_str())
+            .collect::<Vec<_>>(),
+        [Some("list"), Some("followup")]
+    );
+    assert!(resumed["checkpoint"].get("intent").is_none());
 }
 
 #[test]
@@ -537,6 +686,14 @@ fn run_deadline_after_action(
 }
 
 fn write_blocking_plan(home: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    write_blocking_plan_with(home, "")
+}
+
+fn write_blocking_plan_with_followup(home: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    write_blocking_plan_with(home, r#",{"id":"followup","tool":"browser_list"}"#)
+}
+
+fn write_blocking_plan_with(home: &std::path::Path, extra_steps: &str) -> (std::path::PathBuf, std::path::PathBuf) {
     let panel_id = "blocked-panel";
     let manifest_path = manifest::manifest_path_for_root(&home.join(".horizon"), panel_id);
     manifest::write_at(
@@ -551,7 +708,7 @@ fn write_blocking_plan(home: &std::path::Path) -> (std::path::PathBuf, std::path
     std::fs::write(
         &plan,
         format!(
-            r#"{{"version":1,"steps":[{{"id":"list","tool":"browser_list"}},{{"id":"snapshot","tool":"browser_snapshot","arguments":{{"panel_id":"{panel_id}","timeout_millis":60000}}}}]}}"#
+            r#"{{"version":1,"steps":[{{"id":"list","tool":"browser_list"}},{{"id":"snapshot","tool":"browser_snapshot","arguments":{{"panel_id":"{panel_id}","timeout_millis":60000}}}}{extra_steps}]}}"#
         ),
     )
     .expect("write blocking plan");

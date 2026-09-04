@@ -74,6 +74,15 @@ back into large multi-purpose modules.
   workspace metadata, or format panel/workspace domain labels, prefer adding a
   core API instead of rebuilding that logic in `horizon-ui`.
 
+### `horizon-browser-cli`
+
+- Owns deterministic browser plans, bounded execution control, durable job
+  lifecycle, explicit resume policy, and user-facing reports.
+- `run_state.rs` coordinates lifecycle metadata and exclusive resume leases.
+  Large verified step results live in immutable files managed by
+  `run_state/checkpoint_artifacts.rs`; `state.json` retains only compact result
+  references so intent updates never rewrite prior payloads.
+
 ### `horizon-ui`
 
 - Owns rendering, egui interaction, transient view state, and deferred UI

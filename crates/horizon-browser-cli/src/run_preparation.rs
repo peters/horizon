@@ -9,7 +9,7 @@ use horizon_browser_cli::{
 use super::{CANCELLATION_FLUSH_GRACE, EXIT_CANCELLED};
 
 pub(super) enum PreparationCompletion {
-    Completed(Result<DurableRun, DurablePreparationError>),
+    Completed(Result<Box<DurableRun>, DurablePreparationError>),
     InfrastructureFailed(String),
 }
 
@@ -30,13 +30,13 @@ pub(super) async fn prepare_durable(
     deadline_at_millis: u64,
 ) -> Result<PreparationCompletion, ExecutionStopReason> {
     match await_worker(control, cancellation, "horizon-browser-state-prepare", move || {
-        DurableRun::prepare_cancellable(&plan, timeout_seconds, deadline_at_millis)
+        DurableRun::prepare_cancellable(&plan, timeout_seconds, deadline_at_millis).map(Box::new)
     })
     .await?
     {
         WorkerCompletion::Completed(outcome) => Ok(PreparationCompletion::Completed(outcome)),
         WorkerCompletion::Cancelled { result, flush_deadline } => {
-            persist_cancelled_preparation(result, flush_deadline).await;
+            persist_cancelled_preparation(result.map(|run| *run), flush_deadline).await;
             Err(ExecutionStopReason::Cancelled)
         }
         WorkerCompletion::InfrastructureFailed(error) => Ok(PreparationCompletion::InfrastructureFailed(error)),

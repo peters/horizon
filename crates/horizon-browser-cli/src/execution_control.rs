@@ -199,6 +199,89 @@ impl ExecutionControl {
             output = future => Ok(output),
         }
     }
+
+    /// Run blocking I/O on an owned thread while still observing stop signals.
+    ///
+    /// [`BlockingIoMode::Bound`] observes the deadline and cancellation. After a
+    /// stop, the writer is joined for one second; a stalled join exits 124/130
+    /// instead of racing a later finalizer. [`BlockingIoMode::Required`] starts
+    /// even when a stop is already pending, then observes the same deadline,
+    /// cancellation, and bounded drain.
+    ///
+    /// # Errors
+    /// Returns when the worker cannot start or panics. A completed worker
+    /// result is returned even if a stop was observed, so callers can persist
+    /// that outcome and then apply `check()`.
+    pub async fn wait_owned_blocking<T: Send + 'static>(
+        &mut self,
+        worker_name: &'static str,
+        mode: BlockingIoMode,
+        operation: impl FnOnce() -> T + Send + 'static,
+    ) -> Result<T, BlockingIoError> {
+        if mode == BlockingIoMode::Bound {
+            self.check().map_err(BlockingIoError::Stopped)?;
+        }
+        let handle = std::thread::Builder::new()
+            .name(worker_name.to_string())
+            .spawn(operation)
+            .map_err(|error| BlockingIoError::Failed(format!("could not start {worker_name}: {error}")))?;
+        let finished = async {
+            while !handle.is_finished() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        };
+        let stopped = self.wait(finished).await;
+        match stopped {
+            Ok(()) => join_worker(handle, worker_name, None).await,
+            Err(reason) => join_worker(handle, worker_name, Some(reason)).await,
+        }
+    }
+}
+
+const BLOCKING_IO_DRAIN: Duration = Duration::from_secs(1);
+
+async fn join_worker<T: Send + 'static>(
+    handle: std::thread::JoinHandle<T>,
+    worker_name: &'static str,
+    stop: Option<ExecutionStopReason>,
+) -> Result<T, BlockingIoError> {
+    let join = tokio::task::spawn_blocking(move || handle.join());
+    if stop.is_none() {
+        return match join.await {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(_)) | Err(_) => Err(BlockingIoError::Failed(format!(
+                "{worker_name} stopped without a result"
+            ))),
+        };
+    }
+    match tokio::time::timeout(BLOCKING_IO_DRAIN, join).await {
+        Ok(Ok(Ok(value))) => Ok(value),
+        Ok(_) => Err(BlockingIoError::Failed(format!(
+            "{worker_name} stopped without a result"
+        ))),
+        Err(_) => std::process::exit(match stop {
+            Some(ExecutionStopReason::DeadlineExceeded) => 124,
+            Some(ExecutionStopReason::Cancelled) | None => 130,
+        }),
+    }
+}
+
+/// Failure from owned blocking I/O.
+#[derive(Debug)]
+pub enum BlockingIoError {
+    /// Cancellation or deadline won a bound wait.
+    Stopped(ExecutionStopReason),
+    /// The worker could not start or panicked.
+    Failed(String),
+}
+
+/// How owned blocking I/O cooperates with job control.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BlockingIoMode {
+    /// Observe deadline and cancellation, then join the writer.
+    Bound,
+    /// Start even if the job already stopped, then observe the bounded drain.
+    Required,
 }
 
 async fn cancellation_requested(receiver: &mut watch::Receiver<bool>) {
@@ -241,5 +324,31 @@ mod tests {
         let deadline = control.start_timeout(Duration::from_secs(1));
 
         assert_eq!(control.deadline_at_millis(), Some(deadline.unix_millis()));
+    }
+
+    #[tokio::test]
+    async fn owned_blocking_work_observes_a_ready_deadline() {
+        let mut control = ExecutionControl::with_timeout(Duration::ZERO);
+        let error = control
+            .wait_owned_blocking("horizon-browser-test-deadline", BlockingIoMode::Bound, || {
+                std::thread::sleep(Duration::from_secs(5));
+                1
+            })
+            .await
+            .expect_err("deadline must win");
+        assert!(matches!(
+            error,
+            BlockingIoError::Stopped(ExecutionStopReason::DeadlineExceeded)
+        ));
+    }
+
+    #[tokio::test]
+    async fn required_blocking_work_runs_after_a_ready_deadline() {
+        let mut control = ExecutionControl::with_timeout(Duration::ZERO);
+        let value = control
+            .wait_owned_blocking("horizon-browser-test-required", BlockingIoMode::Required, || 7)
+            .await
+            .expect("required I/O");
+        assert_eq!(value, 7);
     }
 }
