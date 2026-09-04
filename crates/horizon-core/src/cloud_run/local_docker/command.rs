@@ -105,22 +105,15 @@ impl DockerTransport for DockerCli {
             "SSH host-key inspection",
         )?;
         if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
-            return if object_missing(&output.stderr)
-                || stderr.contains("no such file or directory")
-                || stderr.contains("is not running")
-            {
-                Ok(None)
-            } else {
-                Err(LocalDockerError::CommandFailed {
+            return host_key_unavailable(&output.stderr)
+                .then_some(None)
+                .ok_or(LocalDockerError::CommandFailed {
                     operation: "SSH host-key inspection",
-                })
-            };
+                });
         }
         output
             .stdout_text("SSH host-key inspection")
-            .map(str::to_string)
-            .map(Some)
+            .map(|value| Some(value.to_string()))
     }
 
     fn delete(&self, resource_id: &str) -> Result<bool, LocalDockerError> {
@@ -216,6 +209,13 @@ fn read_bounded(mut reader: impl Read) -> std::io::Result<(Vec<u8>, bool)> {
 fn object_missing(stderr: &[u8]) -> bool {
     let stderr = String::from_utf8_lossy(stderr).to_ascii_lowercase();
     stderr.contains("no such object") || stderr.contains("no such container")
+}
+
+fn host_key_unavailable(stderr: &[u8]) -> bool {
+    let stderr = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+    object_missing(stderr.as_bytes())
+        || stderr.contains("is not running")
+        || (stderr.contains(HOST_KEY_PATH) && stderr.contains("no such file or directory"))
 }
 
 fn parse_inspection(value: &str) -> Result<DockerContainer, LocalDockerError> {
@@ -325,5 +325,13 @@ mod tests {
         assert_eq!(parsed.ssh_bindings[0].host, "127.0.0.1");
         assert_eq!(parsed.ssh_bindings[0].port, 49_152);
         assert!(parse_inspection("[]").is_err());
+    }
+
+    #[test]
+    fn missing_host_key_does_not_hide_a_missing_daemon_socket() {
+        let missing_key = format!("cat: {HOST_KEY_PATH}: No such file or directory");
+        assert!(host_key_unavailable(missing_key.as_bytes()));
+        let missing_socket = b"dial unix /tmp/docker.sock: connect: no such file or directory";
+        assert!(!host_key_unavailable(missing_socket));
     }
 }

@@ -1,4 +1,5 @@
 use super::*;
+use LocalDockerError::*;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::sync::{Arc, Mutex};
 
@@ -91,28 +92,32 @@ fn request() -> InteractiveWorkerRequest {
     }
 }
 
-fn provider(fake: FakeDocker) -> LocalDockerInteractiveWorkerProvider {
-    let profile = LocalDockerProfile {
-        name: "local".to_string(),
-        docker_host: "unix:///var/run/docker.sock".to_string(),
-    };
-    LocalDockerInteractiveWorkerProvider::with_transport(profile, fake)
+fn profile(name: &str, docker_host: &str) -> LocalDockerProfile {
+    LocalDockerProfile {
+        name: name.to_string(),
+        docker_host: docker_host.to_string(),
+    }
+}
+
+fn provider(name: &str, fake: FakeDocker) -> LocalDockerInteractiveWorkerProvider {
+    LocalDockerInteractiveWorkerProvider {
+        transport: Box::new(fake),
+        profile: profile(name, "unix:///var/run/docker.sock"),
+    }
 }
 
 #[test]
 fn creates_reuses_inspects_and_deletes_one_exact_worker() {
     let fake = FakeDocker::default();
-    let provider = provider(fake.clone());
+    let provider = provider("local", fake.clone());
     let request = request();
     let InteractiveWorkerEnsure::Created(status) = provider.ensure_worker(&request).expect("create") else {
         panic!("expected a created worker");
     };
     assert!(status.is_ready_for(&request, time::OffsetDateTime::now_utc()));
     assert_eq!(status.ssh.as_ref().expect("SSH").host_key, ed25519_key(7, None));
-    assert!(matches!(
-        provider.ensure_worker(&request),
-        Ok(InteractiveWorkerEnsure::Reused(_))
-    ));
+    let reused = provider.ensure_worker(&request);
+    assert!(matches!(reused, Ok(InteractiveWorkerEnsure::Reused(_))));
     assert_eq!(provider.inspect_worker(&status.worker), Ok(Some(status.clone())));
     let deleted = provider.delete_worker(&status.worker);
     let absent = provider.delete_worker(&status.worker);
@@ -124,38 +129,33 @@ fn creates_reuses_inspects_and_deletes_one_exact_worker() {
 
 #[test]
 fn rejects_preflight_and_resource_drift_without_unsafe_io() {
-    assert!(matches!(
-        LocalDockerInteractiveWorkerProvider::new(LocalDockerProfile {
-            name: "local".to_string(),
-            docker_host: "ssh://remote.example/run/docker.sock".to_string(),
-        }),
-        Err(LocalDockerError::NonLocalDockerHost)
-    ));
+    let remote = LocalDockerInteractiveWorkerProvider::new(profile("local", "ssh://remote.example/run/docker.sock"));
+    assert_eq!(remote.err(), Some(NonLocalDockerHost));
+    let other_provider = provider("other", FakeDocker::default());
     let fake = FakeDocker::default();
-    let provider = provider(fake.clone());
+    let provider = provider("local", fake.clone());
     let mut invalid = request();
     invalid.target.provider = CloudProvider::RunPod;
-    assert_eq!(provider.ensure_worker(&invalid), Err(LocalDockerError::InvalidTarget));
+    assert_eq!(provider.ensure_worker(&invalid).err(), Some(InvalidTarget));
     assert_eq!(fake.state().create_calls, 0);
 
     let request = request();
     let worker = provider.ensure_worker(&request).expect("create").into_status().worker;
+    assert_eq!(
+        other_provider.inspect_worker(&worker).err(),
+        Some(InvalidPersistedWorker)
+    );
+    assert_eq!(
+        other_provider.delete_worker(&worker).err(),
+        Some(InvalidPersistedWorker)
+    );
     let mut drifted = request;
     drifted.target.disk_gib += 1;
-    assert_eq!(
-        provider.ensure_worker(&drifted),
-        Err(LocalDockerError::ResourceIdentityMismatch)
-    );
+    assert_eq!(provider.ensure_worker(&drifted).err(), Some(ResourceIdentityMismatch));
     let mut worker = worker;
     worker.target.disk_gib += 1;
-    assert_eq!(
-        provider.inspect_worker(&worker),
-        Err(LocalDockerError::ResourceIdentityMismatch)
-    );
-    assert_eq!(
-        provider.delete_worker(&worker),
-        Err(LocalDockerError::ResourceIdentityMismatch)
-    );
+    assert_eq!(provider.inspect_worker(&worker).err(), Some(ResourceIdentityMismatch));
+    assert_eq!(provider.delete_worker(&worker).err(), Some(ResourceIdentityMismatch));
     assert_eq!(fake.state().delete_calls, 0);
 }
 
@@ -163,18 +163,14 @@ fn rejects_preflight_and_resource_drift_without_unsafe_io() {
 fn reconciles_a_lost_create_response_and_cleans_invalid_new_endpoints() {
     let recovered = FakeDocker::default();
     recovered.state().fail_create_after_insert = true;
-    assert!(matches!(
-        provider(recovered.clone()).ensure_worker(&request()),
-        Ok(InteractiveWorkerEnsure::Reused(_))
-    ));
+    let reconciled = provider("local", recovered.clone()).ensure_worker(&request());
+    assert!(matches!(reconciled, Ok(InteractiveWorkerEnsure::Reused(_))));
     assert_eq!(recovered.state().create_calls, 1);
 
     let invalid = FakeDocker::default();
     invalid.state().binding_host = Some("0.0.0.0".to_string());
-    assert_eq!(
-        provider(invalid.clone()).ensure_worker(&request()),
-        Err(LocalDockerError::InvalidSshEndpoint)
-    );
+    let rejected = provider("local", invalid.clone()).ensure_worker(&request());
+    assert_eq!(rejected.err(), Some(InvalidSshEndpoint));
     let state = invalid.state();
     assert!(state.container.is_none());
     assert_eq!(state.delete_calls, 1);

@@ -58,14 +58,6 @@ impl LocalDockerInteractiveWorkerProvider {
             .ok_or(LocalDockerError::NonLocalDockerHost)
     }
 
-    #[cfg(test)]
-    fn with_transport(profile: LocalDockerProfile, transport: impl DockerTransport + 'static) -> Self {
-        Self {
-            transport: Box::new(transport),
-            profile,
-        }
-    }
-
     fn ensure_existing(
         &self,
         request: &InteractiveWorkerRequest,
@@ -79,6 +71,13 @@ impl LocalDockerInteractiveWorkerProvider {
             return self.reject_unbounded_lease(&worker, container);
         }
         self.observe(container, worker)
+    }
+
+    fn validate_persisted_worker(&self, worker: &InteractiveWorker) -> Result<(), LocalDockerError> {
+        validate_worker(worker)?;
+        (worker.target.profile == self.profile.name)
+            .then_some(())
+            .ok_or(LocalDockerError::InvalidPersistedWorker)
     }
 
     fn reject_unbounded_lease(
@@ -231,7 +230,7 @@ impl InteractiveWorkerProvider for LocalDockerInteractiveWorkerProvider {
     }
 
     fn inspect_worker(&self, worker: &InteractiveWorker) -> Result<Option<InteractiveWorkerStatus>, Self::Error> {
-        validate_worker(worker)?;
+        self.validate_persisted_worker(worker)?;
         let Some(container) = self.transport.inspect(&worker.identity.resource_id)? else {
             return Ok(None);
         };
@@ -240,7 +239,7 @@ impl InteractiveWorkerProvider for LocalDockerInteractiveWorkerProvider {
     }
 
     fn delete_worker(&self, worker: &InteractiveWorker) -> Result<InteractiveWorkerCleanup, Self::Error> {
-        validate_worker(worker)?;
+        self.validate_persisted_worker(worker)?;
         let resource_id = &worker.identity.resource_id;
         let Some(container) = self.transport.inspect(resource_id)? else {
             return Ok(InteractiveWorkerCleanup::AlreadyAbsent);
@@ -474,8 +473,5 @@ fn container_name(workflow_id: super::CloudWorkflowId, job_id: super::CloudJobId
 }
 
 fn valid_container_id(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    value.len() == 64 && value.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
