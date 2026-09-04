@@ -56,7 +56,7 @@ pub use git_changes::DiffViewer;
 pub use git_status::{DiffHunk, DiffLine, DiffLineKind, FileChange, FileDiff, FileStatus, GitStatus};
 pub use git_watcher::GitWatcher;
 pub use horizon_home::{HorizonHome, browser_mcp_executable};
-pub use local_store::user_home_dir;
+pub use local_store::{codex_home_dir, grok_home_dir, user_home_dir};
 pub use managed_install::ManagedInstall;
 pub use panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelKind, PanelLayout, PanelOptions, PanelResume, browser_actor};
 pub use remote_hosts::{

@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use horizon_core::browser::manifest;
-use horizon_core::{HorizonHome, browser_mcp_executable, user_home_dir};
+use horizon_core::{HorizonHome, browser_mcp_executable, codex_home_dir, grok_home_dir, user_home_dir};
 
 struct EmbeddedFile {
     relative_path: &'static str,
@@ -55,9 +55,7 @@ const BROWSER_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
 /// the host plugin tree.
 const NOTIFY_SKILL_ROOTS: &[&[&str]] = &[
     &[".agents", "skills"],
-    &[".codex", "skills"],
     &[".claude", "skills"],
-    &[".grok", "skills"],
     &[".config", "opencode", "skills"],
     &[".gemini", "skills"],
     &[".kilocode", "skills"],
@@ -66,7 +64,7 @@ const NOTIFY_SKILL_ROOTS: &[&[&str]] = &[
 
 /// Browser MCP skill stays on the agents that already had Horizon browser
 /// integration. Expanding it to Grok/Gemini/Pi/OpenCode is separate work.
-const BROWSER_SKILL_ROOTS: &[&[&str]] = &[&[".agents", "skills"], &[".codex", "skills"], &[".kilocode", "skills"]];
+const BROWSER_SKILL_ROOTS: &[&[&str]] = &[&[".agents", "skills"], &[".kilocode", "skills"]];
 
 pub(crate) struct AgentPluginHostLease {
     host_dir: PathBuf,
@@ -126,6 +124,8 @@ impl Drop for AgentPluginHostLease {
 
 pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) -> Option<AgentPluginHostLease> {
     let user_home = user_home_dir();
+    let grok_home = grok_home_dir();
+    let codex_home = codex_home_dir();
     let mcp_command = browser_mcp_executable().unwrap_or_else(|| PathBuf::from("horizon"));
     let host_dir = horizon_home.agent_plugin_host_dir(manifest::host_instance());
     let claude_plugin_dir = horizon_home.claude_plugin_dir_for_host(manifest::host_instance());
@@ -137,7 +137,14 @@ pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) -> Option<AgentP
         }
     };
 
-    match install_agent_plugins_impl(horizon_home, &claude_plugin_dir, user_home.as_deref(), &mcp_command) {
+    match install_agent_plugins_impl(
+        horizon_home,
+        &claude_plugin_dir,
+        user_home.as_deref(),
+        grok_home.as_deref(),
+        codex_home.as_deref(),
+        &mcp_command,
+    ) {
         Ok(updated_files) if updated_files > 0 => {
             tracing::info!(updated_files, "synced embedded Horizon agent plugins");
         }
@@ -230,6 +237,8 @@ fn install_agent_plugins_impl(
     horizon_home: &HorizonHome,
     claude_plugin_dir: &Path,
     user_home: Option<&Path>,
+    grok_home: Option<&Path>,
+    codex_home: Option<&Path>,
     mcp_command: &Path,
 ) -> std::io::Result<usize> {
     let mut updated_files = 0usize;
@@ -255,7 +264,21 @@ fn install_agent_plugins_impl(
         }
     }
 
+    if let Some(grok_root) = provider_home(grok_home, user_home, ".grok") {
+        updated_files += sync_plugin_files(&grok_root.join("skills").join("horizon-notify"), NOTIFY_SKILL_FILES)?;
+    }
+    if let Some(codex_root) = provider_home(codex_home, user_home, ".codex") {
+        updated_files += sync_plugin_files(&codex_root.join("skills").join("horizon-notify"), NOTIFY_SKILL_FILES)?;
+        updated_files += sync_plugin_files(&codex_root.join("skills").join("horizon-browser"), BROWSER_SKILL_FILES)?;
+    }
+
     Ok(updated_files)
+}
+
+fn provider_home(override_home: Option<&Path>, user_home: Option<&Path>, default_dir: &str) -> Option<PathBuf> {
+    override_home
+        .map(Path::to_path_buf)
+        .or_else(|| user_home.map(|home| home.join(default_dir)))
 }
 
 fn user_skill_dir(home: &Path, skill_root: &[&str], skill_name: &str) -> PathBuf {
@@ -377,6 +400,8 @@ mod tests {
             &horizon_home,
             &claude_plugin_dir,
             Some(&user_home),
+            None,
+            None,
             Path::new("/opt/horizon"),
         )
         .expect("install plugins");
@@ -398,6 +423,21 @@ mod tests {
                 BROWSER_SKILL_FILES[0].content,
             );
         }
+        assert_eq!(
+            std::fs::read_to_string(user_home.join(".grok/skills/horizon-notify/SKILL.md"))
+                .expect("grok skill should fall back to ~/.grok"),
+            NOTIFY_SKILL_FILES[0].content,
+        );
+        assert_eq!(
+            std::fs::read_to_string(user_home.join(".codex/skills/horizon-notify/SKILL.md"))
+                .expect("codex skill should fall back to ~/.codex"),
+            NOTIFY_SKILL_FILES[0].content,
+        );
+        assert_eq!(
+            std::fs::read_to_string(user_home.join(".codex/skills/horizon-browser/SKILL.md"))
+                .expect("codex browser skill should fall back to ~/.codex"),
+            BROWSER_SKILL_FILES[0].content,
+        );
         assert!(
             !user_home.join(".grok/skills/horizon-browser/SKILL.md").exists(),
             "browser MCP skill must not be exported to agents without Horizon MCP injection"
@@ -425,16 +465,59 @@ mod tests {
     }
 
     #[test]
+    fn install_agent_plugins_honors_grok_home_override() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let horizon_home = HorizonHome::from_root(temp.path().join(".horizon"));
+        let user_home = temp.path().join("user-home");
+        let grok_home = temp.path().join("custom-grok");
+        let claude_plugin_dir = horizon_home.claude_plugin_dir_for_host("host-a");
+
+        install_agent_plugins_impl(
+            &horizon_home,
+            &claude_plugin_dir,
+            Some(&user_home),
+            Some(&grok_home),
+            None,
+            Path::new("/opt/horizon"),
+        )
+        .expect("install plugins");
+
+        assert_eq!(
+            std::fs::read_to_string(grok_home.join("skills/horizon-notify/SKILL.md"))
+                .expect("notify skill should be installed under GROK_HOME"),
+            NOTIFY_SKILL_FILES[0].content,
+        );
+        assert!(
+            !user_home.join(".grok/skills/horizon-notify/SKILL.md").exists(),
+            "GROK_HOME must replace ~/.grok rather than writing both"
+        );
+    }
+
+    #[test]
     fn install_agent_plugins_keeps_mcp_commands_isolated_per_horizon_host() {
         let temp = tempfile::tempdir().expect("temp dir");
         let horizon_home = HorizonHome::from_root(temp.path().join(".horizon"));
         let first_plugin_dir = horizon_home.claude_plugin_dir_for_host("host-a");
         let second_plugin_dir = horizon_home.claude_plugin_dir_for_host("host-b");
 
-        install_agent_plugins_impl(&horizon_home, &first_plugin_dir, None, Path::new("/opt/horizon-a"))
-            .expect("install first host plugin");
-        install_agent_plugins_impl(&horizon_home, &second_plugin_dir, None, Path::new("/opt/horizon-b"))
-            .expect("install second host plugin");
+        install_agent_plugins_impl(
+            &horizon_home,
+            &first_plugin_dir,
+            None,
+            None,
+            None,
+            Path::new("/opt/horizon-a"),
+        )
+        .expect("install first host plugin");
+        install_agent_plugins_impl(
+            &horizon_home,
+            &second_plugin_dir,
+            None,
+            None,
+            None,
+            Path::new("/opt/horizon-b"),
+        )
+        .expect("install second host plugin");
 
         let first_config = std::fs::read_to_string(first_plugin_dir.join(".mcp.json")).expect("first host config");
         let second_config = std::fs::read_to_string(second_plugin_dir.join(".mcp.json")).expect("second host config");

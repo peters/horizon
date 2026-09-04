@@ -7,9 +7,9 @@ Temporary plan for `fix/sticky-agent-terminal-title`. Delete after the UI pass.
 1. Launch the candidate from this worktree with an isolated config (`--config` + `--ephemeral`).
 2. After launch, confirm Horizon wrote `horizon-notify/SKILL.md` into every built-in agent home (use `%USERPROFILE%` on Windows if `HOME` is unset):
    - `~/.agents/skills/horizon-notify/SKILL.md`
-   - `~/.codex/skills/horizon-notify/SKILL.md`
    - `~/.claude/skills/horizon-notify/SKILL.md`
-   - `~/.grok/skills/horizon-notify/SKILL.md`
+   - `$GROK_HOME/skills/horizon-notify/SKILL.md` when `GROK_HOME` is set, otherwise `~/.grok/skills/horizon-notify/SKILL.md`
+   - `$CODEX_HOME/skills/horizon-notify/SKILL.md` when `CODEX_HOME` is set, otherwise `~/.codex/skills/horizon-notify/SKILL.md`
    - `~/.config/opencode/skills/horizon-notify/SKILL.md`
    - `~/.gemini/skills/horizon-notify/SKILL.md`
    - `~/.kilocode/skills/horizon-notify/SKILL.md`

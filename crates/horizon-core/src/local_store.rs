@@ -15,11 +15,13 @@ pub fn user_home_dir() -> Option<PathBuf> {
     user_home_dir_from_env(env_path("HOME"), env_path("USERPROFILE"))
 }
 
-pub(crate) fn codex_home_dir() -> Option<PathBuf> {
+#[must_use]
+pub fn codex_home_dir() -> Option<PathBuf> {
     codex_home_dir_from_env(env_path("CODEX_HOME"), user_home_dir())
 }
 
-pub(crate) fn grok_home_dir() -> Option<PathBuf> {
+#[must_use]
+pub fn grok_home_dir() -> Option<PathBuf> {
     grok_home_dir_from_env(env_path("GROK_HOME"), user_home_dir())
 }
 
