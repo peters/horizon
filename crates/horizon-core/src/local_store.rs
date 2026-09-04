@@ -10,7 +10,8 @@ pub(crate) fn env_path(name: &str) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-pub(crate) fn user_home_dir() -> Option<PathBuf> {
+#[must_use]
+pub fn user_home_dir() -> Option<PathBuf> {
     user_home_dir_from_env(env_path("HOME"), env_path("USERPROFILE"))
 }
 

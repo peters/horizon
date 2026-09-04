@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use horizon_core::browser::manifest;
-use horizon_core::{HorizonHome, browser_mcp_executable};
+use horizon_core::{HorizonHome, browser_mcp_executable, user_home_dir};
 
 struct EmbeddedFile {
     relative_path: &'static str,
@@ -125,7 +125,7 @@ impl Drop for AgentPluginHostLease {
 }
 
 pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) -> Option<AgentPluginHostLease> {
-    let user_home = std::env::var_os("HOME").map(PathBuf::from);
+    let user_home = user_home_dir();
     let mcp_command = browser_mcp_executable().unwrap_or_else(|| PathBuf::from("horizon"));
     let host_dir = horizon_home.agent_plugin_host_dir(manifest::host_instance());
     let claude_plugin_dir = horizon_home.claude_plugin_dir_for_host(manifest::host_instance());
