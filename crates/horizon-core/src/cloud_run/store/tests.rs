@@ -218,7 +218,7 @@ fn creation_claim_lookup_has_a_covering_workflow_index() {
     let detail = connection
         .query_row(
             "EXPLAIN QUERY PLAN
-             SELECT substr(provider, 1, 9), substr(job_id, 1, 37)
+             SELECT substr(provider, 1, 13), substr(job_id, 1, 37)
              FROM cloud_worker_creation_claims
              WHERE workflow_id = ?1
              LIMIT ?2",
@@ -233,7 +233,7 @@ fn creation_claim_lookup_has_a_covering_workflow_index() {
 fn creation_claim_is_durable_atomic_and_bound_to_the_persisted_job() {
     let temp = TempDir::new().expect("temp dir");
     let store = store(&temp);
-    let workflow = retained_workflow(CloudProvider::RunPod, 1_000);
+    let workflow = retained_workflow(CloudProvider::LocalDocker, 1_000);
     let job_id = workflow.nodes[0].id;
     let stored = store.create(&workflow).expect("create workflow");
     let target = worker_target(&workflow).clone();
@@ -288,7 +288,7 @@ fn creation_claim_is_durable_atomic_and_bound_to_the_persisted_job() {
         reopened.claim_worker_creation(workflow.id, job_id, &target, "bad/name"),
         Err(CloudStoreError::InvalidResourceName)
     ));
-    let other = retained_workflow(CloudProvider::RunPod, 3_000);
+    let other = retained_workflow(CloudProvider::LocalDocker, 3_000);
     let other_job = other.nodes[0].id;
     reopened.create(&other).expect("create other workflow");
     assert!(matches!(

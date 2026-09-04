@@ -65,7 +65,7 @@ impl InteractiveWorkerLease {
         time::OffsetDateTime::parse(&self.terminate_after, &time::format_description::well_known::Rfc3339).is_ok()
     }
 
-    fn is_bounded_at(&self, lease_seconds: u32, observed_at: time::OffsetDateTime) -> bool {
+    pub(super) fn is_bounded_at(&self, lease_seconds: u32, observed_at: time::OffsetDateTime) -> bool {
         let Ok(deadline) =
             time::OffsetDateTime::parse(&self.terminate_after, &time::format_description::well_known::Rfc3339)
         else {

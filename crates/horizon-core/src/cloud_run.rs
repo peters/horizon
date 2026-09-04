@@ -4,6 +4,7 @@ use std::{collections::HashSet, fmt};
 use thiserror::Error;
 use uuid::Uuid;
 pub mod interactive_worker;
+pub mod local_docker;
 pub mod runpod;
 mod store;
 mod validation;
@@ -48,7 +49,7 @@ macro_rules! string_enum {
         pub enum $name { $($variant),+ }
     };
 }
-string_enum!(CloudProvider: Azure, RunPod);
+string_enum!(CloudProvider: Azure, RunPod, LocalDocker);
 macro_rules! hex_value {
     ($name:ident => $parser:ident; $length:literal; $error:ident; $description:literal) => {
         #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
