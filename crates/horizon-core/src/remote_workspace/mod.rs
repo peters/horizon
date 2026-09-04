@@ -5,6 +5,8 @@
 mod tests;
 mod validation;
 
+pub(crate) use validation::valid_local_id;
+
 use crate::{
     PanelKind,
     cloud_run::{

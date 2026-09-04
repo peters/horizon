@@ -8,7 +8,9 @@ pub mod local_docker;
 pub mod runpod;
 mod store;
 mod validation;
-pub use store::{CloudStoreError, CloudWorkflowStore, StoredWorkflow};
+pub use store::{
+    CloudStoreError, CloudWorkflowStore, RemoteWorkspaceStoreError, StoredRemoteWorkspace, StoredWorkflow,
+};
 pub const CLOUD_RUN_PROTOCOL_VERSION: u32 = 1;
 macro_rules! uuid_id {
     ($name:ident) => {

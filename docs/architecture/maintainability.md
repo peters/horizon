@@ -82,6 +82,11 @@ back into large multi-purpose modules.
   Its `cloud_run/store/database.rs` leaf owns private-path preparation, connection policy,
   schema initialization, and compatibility checks. Keep database opening separate
   from domain-specific record operations.
+- `cloud_run/store/remote_workspaces.rs` owns validated, session-owned remote
+  snapshot storage with exact revisions and bounded recovery. Replacement
+  invariants live in its `validation.rs` leaf. These records are independent of
+  board snapshots and session-file deletion; provider/workflow coordination and
+  runtime-state references remain separate integration responsibilities.
 - Shared domain helpers belong here when both core and UI need them.
 - If a UI feature needs to reconstruct runtime state, sync template-backed
   workspace metadata, or format panel/workspace domain labels, prefer adding a

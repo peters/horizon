@@ -195,7 +195,7 @@ impl RepositoryCheckpoint {
     }
 }
 
-pub(super) fn valid_local_id(value: &str) -> bool {
+pub(crate) fn valid_local_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
         && value
