@@ -351,11 +351,17 @@ async fn resume_controlled(
     {
         Ok(Ok(parts)) => parts,
         Ok(Err(error)) => {
+            if let Some(reason) = pending_stop_reason(&control) {
+                return stop_exit_code(reason);
+            }
             eprintln!("error: {error}");
             return resume_error_exit(&error);
         }
         Err(BlockingIoError::Stopped(reason)) => return stop_exit_code(reason),
         Err(BlockingIoError::Failed(error)) => {
+            if let Some(reason) = pending_stop_reason(&control) {
+                return stop_exit_code(reason);
+            }
             eprintln!("error: {error}");
             return ExitCode::FAILURE;
         }
@@ -412,6 +418,10 @@ fn resume_error_exit(error: &horizon_browser_cli::checkpoint::ResumeError) -> Ex
         | horizon_browser_cli::checkpoint::ResumeError::Uncertain { .. } => ExitCode::from(2),
         _ => ExitCode::FAILURE,
     }
+}
+
+fn pending_stop_reason(control: &ExecutionControl) -> Option<ExecutionStopReason> {
+    control.check().err()
 }
 
 async fn run(plan_path: PathBuf, output_path: Option<&Path>, timeout: Duration) -> ExitCode {
@@ -854,6 +864,19 @@ mod tests {
         assert_eq!(options.backend, Some(BackendKind::FirefoxBidi));
         assert!(options.visible);
         assert!(parse_args(["mcp", "--connect", "--visible"].map(OsString::from)).is_err());
+    }
+
+    #[test]
+    fn pending_stop_reason_wins_over_a_late_resume_preparation_error() {
+        let (cancelled, cancellation) = ExecutionControl::cancellable();
+        cancellation.cancel();
+        assert_eq!(pending_stop_reason(&cancelled), Some(ExecutionStopReason::Cancelled));
+
+        let expired = ExecutionControl::with_timeout(Duration::ZERO);
+        assert_eq!(
+            pending_stop_reason(&expired),
+            Some(ExecutionStopReason::DeadlineExceeded)
+        );
     }
 
     #[test]

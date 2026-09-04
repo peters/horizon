@@ -204,8 +204,9 @@ impl ExecutionControl {
     ///
     /// [`BlockingIoMode::Bound`] observes the deadline and cancellation. After a
     /// stop, the writer is joined for one second; a stalled join exits 124/130
-    /// instead of racing a later finalizer. [`BlockingIoMode::Required`] still
-    /// runs after Ctrl-C, with the same bounded drain.
+    /// instead of racing a later finalizer. [`BlockingIoMode::Required`] starts
+    /// even when a stop is already pending, then observes the same deadline,
+    /// cancellation, and bounded drain.
     ///
     /// # Errors
     /// Returns when the worker cannot start or panics. A completed worker
@@ -229,16 +230,7 @@ impl ExecutionControl {
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
         };
-        let stopped = match mode {
-            BlockingIoMode::Required => {
-                tokio::select! {
-                    biased;
-                    () = cancellation_requested(&mut self.cancellation) => Err(ExecutionStopReason::Cancelled),
-                    () = finished => Ok(()),
-                }
-            }
-            BlockingIoMode::Bound => self.wait(finished).await,
-        };
+        let stopped = self.wait(finished).await;
         match stopped {
             Ok(()) => join_worker(handle, worker_name, None).await,
             Err(reason) => join_worker(handle, worker_name, Some(reason)).await,
@@ -288,7 +280,7 @@ pub enum BlockingIoError {
 pub enum BlockingIoMode {
     /// Observe deadline and cancellation, then join the writer.
     Bound,
-    /// Run and join even if the job already stopped.
+    /// Start even if the job already stopped, then observe the bounded drain.
     Required,
 }
 

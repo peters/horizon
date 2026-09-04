@@ -286,25 +286,19 @@ impl DurableRun {
             .map_err(DurablePreparationError::unpublished)?;
         write_private_json(&staging.path().join(STATE_FILE), &state, "state")
             .map_err(DurablePreparationError::unpublished)?;
+        let lock_file = acquire_resume_lock_file(staging.path())
+            .map_err(|source| io_error(format!("could not lock staged durable job {}", state.job_id), source))
+            .map_err(DurablePreparationError::unpublished)?;
         sync_directory(staging.path()).map_err(DurablePreparationError::unpublished)?;
         publish_job_directory(staging, &directory).map_err(DurablePreparationError::unpublished)?;
-        let mut run = Self {
+        let run = Self {
             state_path: directory.join(STATE_FILE),
             directory,
             state,
-            lock_file: None,
+            lock_file: Some(lock_file),
         };
         if let Err(source) = sync_directory(root) {
             return Err(DurablePreparationError::published(run, source));
-        }
-        if let Err(error) = run.acquire_resume_lock() {
-            return Err(DurablePreparationError::published(
-                run,
-                io_error(
-                    error.to_string(),
-                    std::io::Error::from(std::io::ErrorKind::AlreadyExists),
-                ),
-            ));
         }
         Ok(run)
     }
@@ -380,21 +374,7 @@ impl DurableRun {
         }
         let directory = root.join(job_id);
         let state_path = directory.join(STATE_FILE);
-        let bytes = std::fs::read(&state_path).map_err(|source| {
-            if source.kind() == std::io::ErrorKind::NotFound {
-                ResumeError::NotFound(job_id.to_string())
-            } else {
-                ResumeError::Decode(format!("could not read {}: {source}", state_path.display()))
-            }
-        })?;
-        let state: RunState = serde_json::from_slice(&bytes)
-            .map_err(|source| ResumeError::Decode(format!("could not decode {}: {source}", state_path.display())))?;
-        if state.job_id != job_id {
-            return Err(ResumeError::Decode(format!(
-                "durable job `{job_id}` does not match state id `{}`",
-                state.job_id
-            )));
-        }
+        let state = read_run_state(&state_path, job_id)?;
         Ok(Self {
             directory,
             state_path,
@@ -411,6 +391,7 @@ impl DurableRun {
     pub fn prepare_resume(job_id: &str, policy: UncertainPolicy) -> Result<(Self, Plan, ResumeSelection), ResumeError> {
         let mut run = Self::open(job_id)?;
         run.acquire_resume_lock()?;
+        run.reload_state(job_id)?;
         if run.state.version < MIN_RESUME_VERSION {
             return Err(ResumeError::LegacyState(job_id.to_string()));
         }
@@ -602,23 +583,24 @@ impl DurableRun {
 
     fn acquire_resume_lock(&mut self) -> Result<(), ResumeError> {
         let path = self.directory.join(RESUME_LOCK_FILE);
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&path)
-            .map_err(|source| ResumeError::Decode(format!("could not open {}: {source}", path.display())))?;
-        match file.try_lock() {
-            Ok(()) => {
+        match acquire_resume_lock_file(&self.directory) {
+            Ok(file) => {
                 self.lock_file = Some(file);
                 Ok(())
             }
-            Err(std::fs::TryLockError::WouldBlock) => Err(ResumeError::Locked(self.state.job_id.clone())),
-            Err(std::fs::TryLockError::Error(source)) => Err(ResumeError::Decode(format!(
+            Err(source) if source.kind() == std::io::ErrorKind::WouldBlock => {
+                Err(ResumeError::Locked(self.state.job_id.clone()))
+            }
+            Err(source) => Err(ResumeError::Decode(format!(
                 "could not lock {}: {source}",
                 path.display()
             ))),
         }
+    }
+
+    fn reload_state(&mut self, job_id: &str) -> Result<(), ResumeError> {
+        self.state = read_run_state(&self.state_path, job_id)?;
+        Ok(())
     }
 
     fn write_json(&self, name: &str, value: &impl Serialize, artifact: &'static str) -> Result<(), RunStateError> {
@@ -723,6 +705,38 @@ fn parent_for_sync(path: &Path) -> &Path {
     path.parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or(Path::new("."))
+}
+
+fn acquire_resume_lock_file(directory: &Path) -> Result<std::fs::File, std::io::Error> {
+    let mut options = OpenOptions::new();
+    options.create(true).truncate(false).write(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let file = options.open(directory.join(RESUME_LOCK_FILE))?;
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        Err(std::fs::TryLockError::WouldBlock) => Err(std::io::Error::from(std::io::ErrorKind::WouldBlock)),
+        Err(std::fs::TryLockError::Error(source)) => Err(source),
+    }
+}
+
+fn read_run_state(state_path: &Path, job_id: &str) -> Result<RunState, ResumeError> {
+    let bytes = std::fs::read(state_path).map_err(|source| {
+        if source.kind() == std::io::ErrorKind::NotFound {
+            ResumeError::NotFound(job_id.to_string())
+        } else {
+            ResumeError::Decode(format!("could not read {}: {source}", state_path.display()))
+        }
+    })?;
+    let state: RunState = serde_json::from_slice(&bytes)
+        .map_err(|source| ResumeError::Decode(format!("could not decode {}: {source}", state_path.display())))?;
+    if state.job_id != job_id {
+        return Err(ResumeError::Decode(format!(
+            "durable job `{job_id}` does not match state id `{}`",
+            state.job_id
+        )));
+    }
+    Ok(state)
 }
 
 fn publish_job_directory(staging: tempfile::TempDir, destination: &Path) -> Result<(), RunStateError> {
@@ -1040,6 +1054,26 @@ mod tests {
         contender.acquire_resume_lock().expect("lock released on drop");
     }
 
+    #[test]
+    fn resume_lock_refreshes_a_snapshot_read_before_the_prior_owner_finished() {
+        let root = tempfile::tempdir().expect("temporary job root");
+        let mut owner = DurableRun::prepare_in(root.path(), &two_step_plan(), Some(30), None).expect("prepare");
+        owner
+            .stop(ExecutionStopReason::DeadlineExceeded)
+            .expect("persist terminal state");
+        let job_id = owner.job_id().to_string();
+        let mut stale = DurableRun::open_in(root.path(), &job_id).expect("open stale snapshot");
+        assert_eq!(stale.state.status, RunStatus::TimedOut);
+
+        owner.state.status = RunStatus::Succeeded;
+        owner.persist_state().expect("persist newer terminal state");
+        drop(owner);
+
+        stale.acquire_resume_lock().expect("acquire released lock");
+        stale.reload_state(&job_id).expect("reload protected state");
+        assert_eq!(stale.state.status, RunStatus::Succeeded);
+    }
+
     fn two_step_plan() -> Plan {
         Plan {
             version: 1,
@@ -1124,6 +1158,23 @@ mod tests {
             std::fs::read(staging_path.join("sentinel")).expect("read sentinel"),
             b"keep me"
         );
+    }
+
+    #[test]
+    fn staging_lock_remains_held_across_atomic_publication() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let staging = tempfile::Builder::new()
+            .prefix(".preparing-")
+            .tempdir_in(root.path())
+            .expect("stage job");
+        let held = acquire_resume_lock_file(staging.path()).expect("lock staged job");
+        let destination = root.path().join("job-published");
+
+        publish_job_directory(staging, &destination).expect("publish locked job");
+
+        let error = acquire_resume_lock_file(&destination).expect_err("published lock remains held");
+        assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
+        drop(held);
     }
 
     #[cfg(unix)]
