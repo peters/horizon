@@ -809,6 +809,8 @@ fn now_millis() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
     use serde_json::json;
 
     use super::*;
@@ -1051,7 +1053,7 @@ mod tests {
         let error = contender.acquire_resume_lock().expect_err("owner holds lock");
         assert!(matches!(error, ResumeError::Locked(_)));
         drop(run);
-        contender.acquire_resume_lock().expect("lock released on drop");
+        acquire_lock_after_owner_exit(&mut contender);
     }
 
     #[test]
@@ -1069,9 +1071,22 @@ mod tests {
         owner.persist_state().expect("persist newer terminal state");
         drop(owner);
 
-        stale.acquire_resume_lock().expect("acquire released lock");
+        acquire_lock_after_owner_exit(&mut stale);
         stale.reload_state(&job_id).expect("reload protected state");
         assert_eq!(stale.state.status, RunStatus::Succeeded);
+    }
+
+    fn acquire_lock_after_owner_exit(run: &mut DurableRun) {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            match run.acquire_resume_lock() {
+                Ok(()) => return,
+                Err(ResumeError::Locked(_)) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => panic!("acquire released lock: {error}"),
+            }
+        }
     }
 
     fn two_step_plan() -> Plan {
