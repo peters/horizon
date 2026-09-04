@@ -1,8 +1,7 @@
 use super::{
     COMMAND_TIMEOUT, DockerContainer, DockerCreateRequest, DockerPortBinding, DockerResult, DockerTransport,
-    HOST_KEY_PATH, SSH_PUBLIC_KEY_ENV, TERMINATE_ENV, invalid_response,
+    HOST_KEY_PATH, LocalDockerError, SSH_PUBLIC_KEY_ENV, TERMINATE_ENV, invalid_response,
 };
-use crate::cloud_run::local_docker::LocalDockerError;
 use serde::Deserialize;
 use std::{
     collections::BTreeMap,
@@ -33,10 +32,12 @@ impl DockerCli {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let mut child = Command::new(&self.executable)
-            .arg("--host")
-            .arg(&self.docker_host)
-            .args(args)
+        let mut command = Command::new(&self.executable);
+        command.arg("--host").arg(&self.docker_host).args(args);
+        if !command_fits(&command) {
+            return Err(LocalDockerError::CommandTooLong { operation });
+        }
+        let mut child = command
             .env("DOCKER_CLIENT_TIMEOUT", timeout.as_secs().saturating_add(1).to_string())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -71,21 +72,24 @@ impl DockerTransport for DockerCli {
         }
         parse_inspection(output.stdout_text("container inspection")?).map(Some)
     }
-    fn create(&self, request: &DockerCreateRequest) -> Result<String, LocalDockerError> {
-        let mut args = vec![
-            OsString::from("run"),
-            OsString::from("--detach"),
-            OsString::from("--pull=never"),
-            OsString::from("--restart=no"),
-            OsString::from("--name"),
-            OsString::from(&request.name),
-            OsString::from("--publish"),
-            OsString::from("127.0.0.1::22"),
-            OsString::from("--env"),
-            OsString::from(format!("{SSH_PUBLIC_KEY_ENV}={}", request.ssh_public_key)),
-            OsString::from("--env"),
-            OsString::from(format!("{TERMINATE_ENV}={}", request.terminate_after)),
-        ];
+    fn create(&self, request: &DockerCreateRequest) -> DockerResult<String> {
+        let mut args: Vec<OsString> = [
+            "run",
+            "--detach",
+            "--pull=never",
+            "--restart=no",
+            "--name",
+            &request.name,
+            "--publish",
+            "127.0.0.1::22",
+            "--env",
+            &format!("{SSH_PUBLIC_KEY_ENV}={}", request.ssh_public_key),
+            "--env",
+            &format!("{TERMINATE_ENV}={}", request.terminate_after),
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect();
         for (key, value) in &request.labels {
             args.push(OsString::from("--label"));
             args.push(OsString::from(format!("{key}={value}")));
@@ -99,13 +103,16 @@ impl DockerTransport for DockerCli {
         }
         output.stdout_text("container creation").map(str::to_string)
     }
-    fn read_host_key(&self, resource_id: &str) -> Result<Option<String>, LocalDockerError> {
+    fn read_host_key(&self, resource_id: &str) -> DockerResult<Option<String>> {
         let output = self.output(
             ["exec", "--", resource_id, "cat", HOST_KEY_PATH],
             "SSH host-key inspection",
             COMMAND_TIMEOUT,
         )?;
         if !output.status.success() {
+            if object_missing(&output.stderr) {
+                return Err(LocalDockerError::ResourceAbsent);
+            }
             return host_key_unavailable(&output.stderr)
                 .then_some(None)
                 .ok_or(LocalDockerError::CommandFailed {
@@ -114,7 +121,7 @@ impl DockerTransport for DockerCli {
         }
         Ok(Some(output.stdout_text("SSH host-key inspection")?.to_string()))
     }
-    fn delete(&self, resource_id: &str) -> Result<bool, LocalDockerError> {
+    fn delete(&self, resource_id: &str) -> DockerResult<bool> {
         let args = ["container", "rm", "--force", "--", resource_id];
         let output = self.output(args, "container deletion", COMMAND_TIMEOUT)?;
         if output.status.success() {
@@ -130,6 +137,16 @@ impl DockerTransport for DockerCli {
     }
 }
 
+fn command_fits(command: &Command) -> bool {
+    // Bound UTF-16 plus worst-case Windows quoting, separators, and the terminating NUL.
+    std::iter::once(command.get_program())
+        .chain(command.get_args())
+        .fold(1usize, |length, arg| {
+            length.saturating_add(arg.as_encoded_bytes().len().saturating_mul(2).saturating_add(3))
+        })
+        <= 32_767
+}
+
 struct CapturedOutput {
     status: ExitStatus,
     stdout: Vec<u8>,
@@ -137,7 +154,7 @@ struct CapturedOutput {
 }
 
 impl CapturedOutput {
-    fn stdout_text(&self, operation: &'static str) -> Result<&str, LocalDockerError> {
+    fn stdout_text(&self, operation: &'static str) -> DockerResult<&str> {
         let value = std::str::from_utf8(&self.stdout)
             .map_err(|_| LocalDockerError::InvalidResponse { operation })?
             .trim();
@@ -210,12 +227,10 @@ fn object_missing(stderr: &[u8]) -> bool {
 
 fn host_key_unavailable(stderr: &[u8]) -> bool {
     let stderr = String::from_utf8_lossy(stderr).to_ascii_lowercase();
-    object_missing(stderr.as_bytes())
-        || stderr.contains("is not running")
-        || (stderr.contains(HOST_KEY_PATH) && stderr.contains("no such file or directory"))
+    stderr.contains(HOST_KEY_PATH) && stderr.contains("no such file or directory")
 }
 
-fn parse_inspection(value: &str) -> Result<DockerContainer, LocalDockerError> {
+fn parse_inspection(value: &str) -> DockerResult<DockerContainer> {
     let [record] = serde_json::from_str::<[Inspection; 1]>(value).map_err(|_| invalid_inspection())?;
     let name = record.name.strip_prefix('/').unwrap_or(&record.name).to_string();
     let ssh_bindings = record
@@ -319,7 +334,27 @@ mod tests {
         let missing_key = format!("cat: {HOST_KEY_PATH}: No such file or directory");
         assert!(host_key_unavailable(missing_key.as_bytes()));
         assert!(!host_key_unavailable(
+            b"Error response from daemon: No such container: abc"
+        ));
+        assert!(!host_key_unavailable(
             b"dial unix /tmp/docker.sock: connect: no such file or directory"
         ));
+    }
+
+    #[test]
+    fn oversized_arguments_are_rejected_before_process_creation() {
+        let cli = DockerCli {
+            executable: "missing-test-docker".into(),
+            docker_host: "unix:///docker.sock".into(),
+        };
+        let mut request = super::super::tests::request();
+        request.target.image = format!("{}@sha256:{}", "a".repeat(16_384), "d".repeat(64));
+        let create = DockerCreateRequest::new(&request, "worker").expect("create request");
+        assert_eq!(
+            cli.create(&create),
+            Err(LocalDockerError::CommandTooLong {
+                operation: "container creation"
+            })
+        );
     }
 }

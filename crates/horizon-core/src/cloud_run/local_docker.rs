@@ -68,7 +68,7 @@ impl LocalDockerInteractiveWorkerProvider {
         &self,
         request: &InteractiveWorkerRequest,
         container: &DockerContainer,
-    ) -> Result<InteractiveWorkerStatus, LocalDockerError> {
+    ) -> DockerResult<InteractiveWorkerStatus> {
         let worker = worker_for_request(container, request)?;
         if !worker
             .lease
@@ -78,7 +78,7 @@ impl LocalDockerInteractiveWorkerProvider {
         }
         self.observe(container, worker)
     }
-    fn validate_persisted_worker(&self, worker: &InteractiveWorker) -> Result<(), LocalDockerError> {
+    fn validate_persisted_worker(&self, worker: &InteractiveWorker) -> DockerResult<()> {
         validate_worker(worker)?;
         (worker.target.profile == self.profile.name)
             .then_some(())
@@ -88,7 +88,7 @@ impl LocalDockerInteractiveWorkerProvider {
         &self,
         worker: &InteractiveWorker,
         container: &DockerContainer,
-    ) -> Result<InteractiveWorkerStatus, LocalDockerError> {
+    ) -> DockerResult<InteractiveWorkerStatus> {
         let resource_id = worker.identity.resource_id.clone();
         if verify_container_for_worker(container, worker).is_err()
             || self.transport.delete(&resource_id).is_err()
@@ -102,7 +102,7 @@ impl LocalDockerInteractiveWorkerProvider {
         &self,
         request: &InteractiveWorkerRequest,
         container_name: &str,
-    ) -> Result<InteractiveWorkerEnsure, LocalDockerError> {
+    ) -> DockerResult<InteractiveWorkerEnsure> {
         let create = DockerCreateRequest::new(request, container_name)?;
         match self.transport.create(&create) {
             Ok(resource_id) if valid_container_id(&resource_id) => {
@@ -134,6 +134,9 @@ impl LocalDockerInteractiveWorkerProvider {
                 }
                 match self.observe(&container, worker) {
                     Ok(status) => Ok(InteractiveWorkerEnsure::Created(status)),
+                    Err(error @ LocalDockerError::ResourceAbsent) => {
+                        self.reconcile_uncertain_create(request, &create, error)
+                    }
                     Err(error) => self.cleanup_invalid_creation(&container, &create, error),
                 }
             }
@@ -146,7 +149,7 @@ impl LocalDockerInteractiveWorkerProvider {
         request: &InteractiveWorkerRequest,
         create: &DockerCreateRequest,
         original: LocalDockerError,
-    ) -> Result<InteractiveWorkerEnsure, LocalDockerError> {
+    ) -> DockerResult<InteractiveWorkerEnsure> {
         let deadline = Instant::now() + CREATE_RECONCILE_TIMEOUT;
         while Instant::now() < deadline {
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -154,10 +157,11 @@ impl LocalDockerInteractiveWorkerProvider {
                 break;
             }
             if let Ok(Some(container)) = self.transport.inspect_with_timeout(&create.name, remaining) {
-                return match self.ensure_existing(request, &container) {
-                    Ok(status) => Ok(InteractiveWorkerEnsure::Reused(status)),
-                    Err(error) => self.cleanup_invalid_creation(&container, create, error),
-                };
+                match self.ensure_existing(request, &container) {
+                    Ok(status) => return Ok(InteractiveWorkerEnsure::Reused(status)),
+                    Err(LocalDockerError::ResourceAbsent) => {}
+                    Err(error) => return self.cleanup_invalid_creation(&container, create, error),
+                }
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
             std::thread::sleep(CREATE_RECONCILE_POLL_INTERVAL.min(remaining));
@@ -169,7 +173,7 @@ impl LocalDockerInteractiveWorkerProvider {
         container: &DockerContainer,
         create: &DockerCreateRequest,
         original: LocalDockerError,
-    ) -> Result<InteractiveWorkerEnsure, LocalDockerError> {
+    ) -> DockerResult<InteractiveWorkerEnsure> {
         let resource_id = container.id.clone();
         if !created_container_matches(container, create) {
             return Err(original);
@@ -179,11 +183,7 @@ impl LocalDockerInteractiveWorkerProvider {
         }
         Err(original)
     }
-    fn observe(
-        &self,
-        container: &DockerContainer,
-        worker: InteractiveWorker,
-    ) -> Result<InteractiveWorkerStatus, LocalDockerError> {
+    fn observe(&self, container: &DockerContainer, worker: InteractiveWorker) -> DockerResult<InteractiveWorkerStatus> {
         let (lifecycle, ssh) = match (container.state.as_str(), container.running) {
             ("running", true) => self.running_connection(container)?,
             ("created" | "restarting", false) => (InteractiveWorkerLifecycle::Provisioning, None),
@@ -197,7 +197,7 @@ impl LocalDockerInteractiveWorkerProvider {
     fn running_connection(
         &self,
         container: &DockerContainer,
-    ) -> Result<(InteractiveWorkerLifecycle, Option<InteractiveWorkerSshEndpoint>), LocalDockerError> {
+    ) -> DockerResult<(InteractiveWorkerLifecycle, Option<InteractiveWorkerSshEndpoint>)> {
         let Some(binding) = container.ssh_bindings.as_slice().first() else {
             return Ok((InteractiveWorkerLifecycle::Provisioning, None));
         };
@@ -227,9 +227,10 @@ impl InteractiveWorkerProvider for LocalDockerInteractiveWorkerProvider {
         validate_request(request, &self.profile)?;
         let container_name = container_name(request.workflow_id, request.job_id);
         if let Some(container) = self.transport.inspect(&container_name)? {
-            return self
-                .ensure_existing(request, &container)
-                .map(InteractiveWorkerEnsure::Reused);
+            match self.ensure_existing(request, &container) {
+                Err(LocalDockerError::ResourceAbsent) => {}
+                result => return result.map(InteractiveWorkerEnsure::Reused),
+            }
         }
         self.create_worker(request, &container_name)
     }
@@ -239,7 +240,10 @@ impl InteractiveWorkerProvider for LocalDockerInteractiveWorkerProvider {
             return Ok(None);
         };
         verify_container_for_worker(&container, worker)?;
-        self.observe(&container, worker.clone()).map(Some)
+        match self.observe(&container, worker.clone()) {
+            Err(LocalDockerError::ResourceAbsent) => Ok(None),
+            result => result.map(Some),
+        }
     }
     fn delete_worker(&self, worker: &InteractiveWorker) -> Result<InteractiveWorkerCleanup, Self::Error> {
         self.validate_persisted_worker(worker)?;
@@ -267,6 +271,10 @@ pub enum LocalDockerError {
     NonLocalDockerHost,
     #[error("required command 'docker' is unavailable")]
     DockerUnavailable,
+    #[error("local Docker command exceeds the portable argument limit during {operation}")]
+    CommandTooLong { operation: &'static str },
+    #[error("local Docker worker disappeared during inspection")]
+    ResourceAbsent,
     #[error("local Docker command timed out during {operation}")]
     CommandTimedOut { operation: &'static str },
     #[error("local Docker command failed during {operation}")]
@@ -324,7 +332,7 @@ struct DockerCreateRequest {
 }
 
 impl DockerCreateRequest {
-    fn new(request: &InteractiveWorkerRequest, name: &str) -> Result<Self, LocalDockerError> {
+    fn new(request: &InteractiveWorkerRequest, name: &str) -> DockerResult<Self> {
         let now = time::OffsetDateTime::now_utc();
         let deadline = now
             .checked_add(time::Duration::seconds(i64::from(request.target.lease_seconds)))
@@ -345,7 +353,7 @@ impl DockerCreateRequest {
         })
     }
 }
-fn validate_request(request: &InteractiveWorkerRequest, profile: &LocalDockerProfile) -> Result<(), LocalDockerError> {
+fn validate_request(request: &InteractiveWorkerRequest, profile: &LocalDockerProfile) -> DockerResult<()> {
     (request.target.profile == profile.name && request.is_valid_for(CloudProvider::LocalDocker))
         .then_some(())
         .ok_or(LocalDockerError::InvalidTarget)
@@ -357,7 +365,7 @@ fn valid_local_docker_host(value: &str) -> bool {
         .is_some_and(|path| path.len() > 1 && path.starts_with('/') && safe(path))
         || value.strip_prefix("npipe:////./pipe/").is_some_and(safe)
 }
-fn validate_worker(worker: &InteractiveWorker) -> Result<(), LocalDockerError> {
+fn validate_worker(worker: &InteractiveWorker) -> DockerResult<()> {
     (worker.is_valid_for(CloudProvider::LocalDocker) && valid_container_id(&worker.identity.resource_id))
         .then_some(())
         .ok_or(LocalDockerError::InvalidPersistedWorker)
@@ -365,7 +373,7 @@ fn validate_worker(worker: &InteractiveWorker) -> Result<(), LocalDockerError> {
 fn worker_for_request(
     container: &DockerContainer,
     request: &InteractiveWorkerRequest,
-) -> Result<InteractiveWorker, LocalDockerError> {
+) -> DockerResult<InteractiveWorker> {
     let terminate_after = required_environment(container, TERMINATE_ENV)?;
     let worker = InteractiveWorker {
         identity: InteractiveWorkerIdentity {
@@ -383,10 +391,7 @@ fn worker_for_request(
     verify_container_for_worker(container, &worker)?;
     Ok(worker)
 }
-fn verify_container_for_worker(
-    container: &DockerContainer,
-    worker: &InteractiveWorker,
-) -> Result<(), LocalDockerError> {
+fn verify_container_for_worker(container: &DockerContainer, worker: &InteractiveWorker) -> DockerResult<()> {
     validate_worker(worker)?;
     let ssh_public_key =
         canonical_ed25519_key(&worker.ssh_public_key).ok_or(LocalDockerError::InvalidPersistedWorker)?;
@@ -418,7 +423,7 @@ fn valid_target_label(labels: &BTreeMap<String, String>, worker: &InteractiveWor
         .and_then(|value| serde_json::from_str::<WorkerTarget>(value).ok())
         .is_some_and(|target| target == worker.target)
 }
-fn request_labels(request: &InteractiveWorkerRequest) -> Result<BTreeMap<String, String>, LocalDockerError> {
+fn request_labels(request: &InteractiveWorkerRequest) -> DockerResult<BTreeMap<String, String>> {
     let target = serde_json::to_string(&request.target).map_err(|_| LocalDockerError::InvalidTarget)?;
     Ok(BTreeMap::from([
         (MANAGED_LABEL.to_string(), "true".to_string()),
@@ -429,7 +434,7 @@ fn request_labels(request: &InteractiveWorkerRequest) -> Result<BTreeMap<String,
         (TARGET_LABEL.to_string(), target),
     ]))
 }
-fn required_environment<'a>(container: &'a DockerContainer, key: &str) -> Result<&'a str, LocalDockerError> {
+fn required_environment<'a>(container: &'a DockerContainer, key: &str) -> DockerResult<&'a str> {
     let prefix = format!("{key}=");
     let mut values = container
         .environment

@@ -115,8 +115,10 @@ the runtime environment and exact 64-character container ID before reuse,
 inspection, or deletion. A mismatched or malformed resource fails closed. A
 delete succeeds only after inspection proves that exact ID is absent.
 
-Docker CLI calls have bounded output and a 30-second process deadline. The
-provider reports `Ready` only after Docker exposes exactly one loopback SSH
+Docker CLI calls have bounded output, a conservative Windows-compatible
+argument budget, and a 30-second process deadline. A container disappearing
+during host-key discovery is reported as absent or reconciled before reuse.
+The provider reports `Ready` only after Docker exposes exactly one loopback SSH
 binding and the container's Ed25519 host key can be read and validated.
 
 ## Local security smoke

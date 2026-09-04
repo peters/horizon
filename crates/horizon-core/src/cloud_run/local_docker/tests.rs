@@ -16,6 +16,7 @@ struct FakeState {
     failed_inspections_after_create: usize,
     hidden_inspections_after_create: usize,
     binding_host: Option<String>,
+    disappear_during_key_read: bool,
 }
 impl FakeDocker {
     fn state(&self) -> std::sync::MutexGuard<'_, FakeState> {
@@ -71,6 +72,11 @@ impl DockerTransport for FakeDocker {
         Ok(state.create_response_id.clone().unwrap_or(id))
     }
     fn read_host_key(&self, _resource_id: &str) -> Result<Option<String>, LocalDockerError> {
+        let mut state = self.state();
+        if std::mem::take(&mut state.disappear_during_key_read) {
+            state.container = None;
+            return Err(ResourceAbsent);
+        }
         Ok(Some(format!("{} worker@local", ed25519_key(7))))
     }
     fn delete(&self, _resource_id: &str) -> Result<bool, LocalDockerError> {
@@ -85,7 +91,7 @@ fn ed25519_key(seed: u8) -> String {
     blob.extend([seed; 32]);
     format!("ssh-ed25519 {}", STANDARD.encode(blob))
 }
-fn request() -> InteractiveWorkerRequest {
+pub(super) fn request() -> InteractiveWorkerRequest {
     InteractiveWorkerRequest {
         workflow_id: "00000000-0000-4000-8000-000000000001".parse().expect("workflow ID"),
         job_id: "00000000-0000-4000-8000-000000000002".parse().expect("job ID"),
@@ -99,6 +105,23 @@ fn request() -> InteractiveWorkerRequest {
         },
         ssh_public_key: ed25519_key(3),
     }
+}
+
+#[test]
+fn disappearance_during_key_discovery_is_absent_or_recreated() {
+    let fake = FakeDocker::default();
+    let provider = provider("local", fake.clone());
+    let request = request();
+    let worker = provider.ensure_worker(&request).expect("create").into_status().worker;
+    fake.state().disappear_during_key_read = true;
+    assert_eq!(provider.inspect_worker(&worker), Ok(None));
+    provider.ensure_worker(&request).expect("recreate");
+    fake.state().disappear_during_key_read = true;
+    assert!(matches!(
+        provider.ensure_worker(&request),
+        Ok(InteractiveWorkerEnsure::Created(_))
+    ));
+    assert_eq!(fake.state().create_calls, 3);
 }
 fn profile(name: &str, docker_host: &str) -> LocalDockerProfile {
     LocalDockerProfile {
