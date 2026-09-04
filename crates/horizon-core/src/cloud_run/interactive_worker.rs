@@ -3,10 +3,11 @@
 use super::{CloudJobId, CloudProvider, CloudWorkflowId, WorkerTarget};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
-use std::error::Error;
+use std::{error::Error, net::IpAddr};
 
 /// Maximum lease accepted by the common disposable-worker contract.
 pub const MAX_INTERACTIVE_WORKER_LEASE_SECONDS: u32 = 30 * 24 * 60 * 60;
+const INTERACTIVE_WORKER_LEASE_CLOCK_SKEW_SECONDS: i64 = 120;
 const ED25519_BLOB_PREFIX: &[u8] = b"\0\0\0\x0bssh-ed25519\0\0\0\x20";
 
 /// Inputs shared by every interactive-worker provider.
@@ -66,9 +67,29 @@ pub struct InteractiveWorkerLease {
 }
 
 impl InteractiveWorkerLease {
+    /// Check the durable timestamp shape without treating an expired worker as
+    /// invalid for exact-resource cleanup.
     #[must_use]
-    pub fn is_valid(&self) -> bool {
+    pub fn has_valid_shape(&self) -> bool {
         time::OffsetDateTime::parse(&self.terminate_after, &time::format_description::well_known::Rfc3339).is_ok()
+    }
+
+    fn is_bounded_at(&self, lease_seconds: u32, observed_at: time::OffsetDateTime) -> bool {
+        let Ok(deadline) =
+            time::OffsetDateTime::parse(&self.terminate_after, &time::format_description::well_known::Rfc3339)
+        else {
+            return false;
+        };
+        let skew = time::Duration::seconds(INTERACTIVE_WORKER_LEASE_CLOCK_SKEW_SECONDS);
+        let Some(earliest) = observed_at.checked_sub(skew) else {
+            return false;
+        };
+        let Some(latest) = observed_at.checked_add(time::Duration::seconds(
+            i64::from(lease_seconds) + INTERACTIVE_WORKER_LEASE_CLOCK_SKEW_SECONDS,
+        )) else {
+            return false;
+        };
+        (earliest..=latest).contains(&deadline)
     }
 }
 
@@ -83,9 +104,12 @@ pub struct InteractiveWorker {
 }
 
 impl InteractiveWorker {
+    /// Check fields needed to safely persist, inspect, or delete this exact
+    /// resource. Attachment additionally requires request- and time-bound
+    /// validation through [`InteractiveWorkerStatus::is_ready_for`].
     #[must_use]
-    pub fn is_valid(&self) -> bool {
-        self.identity.is_valid() && valid_immutable_image(&self.image) && self.lease.is_valid()
+    pub fn has_valid_shape(&self) -> bool {
+        self.identity.is_valid() && valid_immutable_image(&self.image) && self.lease.has_valid_shape()
     }
 }
 
@@ -134,11 +158,23 @@ pub struct InteractiveWorkerStatus {
 }
 
 impl InteractiveWorkerStatus {
-    /// A worker is attachable only when its lifecycle and SSH data agree.
+    /// A worker is attachable only when its lifecycle, request identity, lease,
+    /// image, and SSH data agree. `observed_at` must be a freshly sampled,
+    /// trusted UTC time from immediately before attachment.
     #[must_use]
-    pub fn is_ready(&self) -> bool {
-        matches!(self.lifecycle, InteractiveWorkerLifecycle::Ready)
-            && self.worker.is_valid()
+    pub fn is_ready_for(&self, request: &InteractiveWorkerRequest, observed_at: time::OffsetDateTime) -> bool {
+        let identity = &self.worker.identity;
+        request.is_valid_for(request.target.provider)
+            && matches!(self.lifecycle, InteractiveWorkerLifecycle::Ready)
+            && self.worker.has_valid_shape()
+            && identity.provider == request.target.provider
+            && identity.workflow_id == request.workflow_id
+            && identity.job_id == request.job_id
+            && self.worker.image == request.target.image
+            && self
+                .worker
+                .lease
+                .is_bounded_at(request.target.lease_seconds, observed_at)
             && self.ssh.as_ref().is_some_and(InteractiveWorkerSshEndpoint::is_complete)
     }
 }
@@ -222,10 +258,17 @@ fn valid_single_token(value: &str, maximum_length: usize) -> bool {
 }
 
 fn valid_ssh_host(value: &str) -> bool {
-    valid_single_token(value, 255)
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b':' | b'[' | b']' | b'%'))
+    if !valid_single_token(value, 253) {
+        return false;
+    }
+    value.parse::<IpAddr>().is_ok() || value.split('.').all(valid_dns_label)
+}
+
+fn valid_dns_label(value: &str) -> bool {
+    (1..=63).contains(&value.len())
+        && value.as_bytes().first().is_some_and(u8::is_ascii_alphanumeric)
+        && value.as_bytes().last().is_some_and(u8::is_ascii_alphanumeric)
+        && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
 }
 
 fn valid_ssh_username(value: &str) -> bool {
@@ -316,16 +359,12 @@ mod tests {
         }
     }
 
-    #[test]
-    fn provider_trait_is_object_safe_and_preserves_exact_status() {
-        let status = worker_status();
-        let provider = FakeProvider { status: status.clone() };
-        let provider: &dyn InteractiveWorkerProvider<Error = Infallible> = &provider;
-        let request = InteractiveWorkerRequest {
+    fn worker_request(status: &InteractiveWorkerStatus) -> InteractiveWorkerRequest {
+        InteractiveWorkerRequest {
             workflow_id: status.worker.identity.workflow_id,
             job_id: status.worker.identity.job_id,
             target: WorkerTarget {
-                provider: CloudProvider::RunPod,
+                provider: status.worker.identity.provider,
                 profile: "gpu".to_string(),
                 image: status.worker.image.clone(),
                 disk_gib: 20,
@@ -333,7 +372,20 @@ mod tests {
                 max_hourly_cost_micros: Some(500_000),
             },
             ssh_public_key: ed25519_key(None),
-        };
+        }
+    }
+
+    fn observed_at() -> time::OffsetDateTime {
+        time::OffsetDateTime::parse("2026-09-04T11:50:00Z", &time::format_description::well_known::Rfc3339)
+            .expect("observation timestamp")
+    }
+
+    #[test]
+    fn provider_trait_is_object_safe_and_preserves_exact_status() {
+        let status = worker_status();
+        let provider = FakeProvider { status: status.clone() };
+        let provider: &dyn InteractiveWorkerProvider<Error = Infallible> = &provider;
+        let request = worker_request(&status);
 
         assert_eq!(provider.provider(), CloudProvider::RunPod);
         assert!(request.is_valid_for(provider.provider()));
@@ -350,23 +402,58 @@ mod tests {
     #[test]
     fn ready_requires_complete_ssh_data() {
         let mut status = worker_status();
-        assert!(status.is_ready());
+        let request = worker_request(&status);
+        assert!(status.is_ready_for(&request, observed_at()));
 
         status.ssh = None;
-        assert!(!status.is_ready());
+        assert!(!status.is_ready_for(&request, observed_at()));
         status.lifecycle = InteractiveWorkerLifecycle::Provisioning;
         status.ssh = worker_status().ssh;
-        assert!(!status.is_ready());
+        assert!(!status.is_ready_for(&request, observed_at()));
 
         status.lifecycle = InteractiveWorkerLifecycle::Ready;
         status.ssh.as_mut().expect("SSH endpoint").port = 0;
-        assert!(!status.is_ready());
+        assert!(!status.is_ready_for(&request, observed_at()));
         status.ssh = worker_status().ssh;
         status.ssh.as_mut().expect("SSH endpoint").host_key = "ssh-rsa unsupported".to_string();
-        assert!(!status.is_ready());
+        assert!(!status.is_ready_for(&request, observed_at()));
         status.ssh = worker_status().ssh;
         status.ssh.as_mut().expect("SSH endpoint").host = "-oProxyCommand=bad".to_string();
-        assert!(!status.is_ready());
+        assert!(!status.is_ready_for(&request, observed_at()));
+
+        for host in [".", "[", ":::", "[2001:db8::1]", "bad_host"] {
+            status.ssh = worker_status().ssh;
+            status.ssh.as_mut().expect("SSH endpoint").host = host.to_string();
+            assert!(
+                !status.is_ready_for(&request, observed_at()),
+                "accepted invalid host {host}"
+            );
+        }
+        status.ssh = worker_status().ssh;
+        status.ssh.as_mut().expect("SSH endpoint").host = "2001:db8::1".to_string();
+        assert!(status.is_ready_for(&request, observed_at()));
+    }
+
+    #[test]
+    fn ready_rejects_request_drift_and_unbounded_deadlines() {
+        let original = worker_status();
+        let request = worker_request(&original);
+
+        let mut status = original.clone();
+        status.worker.identity.provider = CloudProvider::Azure;
+        assert!(!status.is_ready_for(&request, observed_at()));
+        status = original.clone();
+        status.worker.identity.workflow_id = CloudWorkflowId::new();
+        assert!(!status.is_ready_for(&request, observed_at()));
+        status = original.clone();
+        status.worker.identity.job_id = CloudJobId::new();
+        assert!(!status.is_ready_for(&request, observed_at()));
+        status = original.clone();
+        status.worker.image = format!("registry.example/horizon/worker@sha256:{}", "a".repeat(64));
+        assert!(!status.is_ready_for(&request, observed_at()));
+        status = original;
+        status.worker.lease.terminate_after = "2999-09-04T12:00:00Z".to_string();
+        assert!(!status.is_ready_for(&request, observed_at()));
     }
 
     #[test]
@@ -404,16 +491,16 @@ mod tests {
     #[test]
     fn persisted_handle_rejects_ambiguous_identity_and_lease() {
         let mut worker = worker_status().worker;
-        assert!(worker.is_valid());
+        assert!(worker.has_valid_shape());
 
         worker.identity.resource_id = "display name".to_string();
-        assert!(!worker.is_valid());
+        assert!(!worker.has_valid_shape());
         worker = worker_status().worker;
         worker.image = "registry.example/horizon/worker:latest".to_string();
-        assert!(!worker.is_valid());
+        assert!(!worker.has_valid_shape());
         worker = worker_status().worker;
         worker.lease.terminate_after = "in two hours".to_string();
-        assert!(!worker.is_valid());
+        assert!(!worker.has_valid_shape());
     }
 
     #[test]
