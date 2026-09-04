@@ -111,9 +111,7 @@ impl DockerTransport for DockerCli {
                     operation: "SSH host-key inspection",
                 });
         }
-        output
-            .stdout_text("SSH host-key inspection")
-            .map(|value| Some(value.to_string()))
+        Ok(Some(output.stdout_text("SSH host-key inspection")?.to_string()))
     }
 
     fn delete(&self, resource_id: &str) -> Result<bool, LocalDockerError> {
@@ -331,7 +329,8 @@ mod tests {
     fn missing_host_key_does_not_hide_a_missing_daemon_socket() {
         let missing_key = format!("cat: {HOST_KEY_PATH}: No such file or directory");
         assert!(host_key_unavailable(missing_key.as_bytes()));
-        let missing_socket = b"dial unix /tmp/docker.sock: connect: no such file or directory";
-        assert!(!host_key_unavailable(missing_socket));
+        assert!(!host_key_unavailable(
+            b"dial unix /tmp/docker.sock: connect: no such file or directory"
+        ));
     }
 }

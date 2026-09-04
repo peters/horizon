@@ -1,4 +1,5 @@
 use super::*;
+use InteractiveWorkerCleanup::{AlreadyAbsent, Deleted};
 use LocalDockerError::*;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::sync::{Arc, Mutex};
@@ -12,6 +13,7 @@ struct FakeState {
     create_calls: usize,
     delete_calls: usize,
     fail_create_after_insert: bool,
+    hidden_inspections_after_create: usize,
     binding_host: Option<String>,
 }
 
@@ -23,7 +25,12 @@ impl FakeDocker {
 
 impl DockerTransport for FakeDocker {
     fn inspect(&self, reference: &str) -> Result<Option<DockerContainer>, LocalDockerError> {
-        let container = self.state().container.clone();
+        let mut state = self.state();
+        if state.container.is_some() && state.hidden_inspections_after_create > 0 {
+            state.hidden_inspections_after_create -= 1;
+            return Ok(None);
+        }
+        let container = state.container.clone();
         Ok(container.filter(|container| container.id == reference || container.name == reference))
     }
 
@@ -50,7 +57,7 @@ impl DockerTransport for FakeDocker {
             }],
         });
         if state.fail_create_after_insert {
-            return Err(LocalDockerError::CommandFailed {
+            return Err(CommandFailed {
                 operation: "container creation",
             });
         }
@@ -58,7 +65,7 @@ impl DockerTransport for FakeDocker {
     }
 
     fn read_host_key(&self, _resource_id: &str) -> Result<Option<String>, LocalDockerError> {
-        Ok(Some(ed25519_key(7, Some("worker@local"))))
+        Ok(Some(format!("{} worker@local", ed25519_key(7))))
     }
 
     fn delete(&self, _resource_id: &str) -> Result<bool, LocalDockerError> {
@@ -69,11 +76,10 @@ impl DockerTransport for FakeDocker {
     }
 }
 
-fn ed25519_key(seed: u8, comment: Option<&str>) -> String {
+fn ed25519_key(seed: u8) -> String {
     let mut blob = b"\0\0\0\x0bssh-ed25519\0\0\0\x20".to_vec();
     blob.extend([seed; 32]);
-    let key = format!("ssh-ed25519 {}", STANDARD.encode(blob));
-    comment.map_or(key.clone(), |comment| format!("{key} {comment}"))
+    format!("ssh-ed25519 {}", STANDARD.encode(blob))
 }
 
 fn request() -> InteractiveWorkerRequest {
@@ -88,7 +94,7 @@ fn request() -> InteractiveWorkerRequest {
             lease_seconds: 900,
             max_hourly_cost_micros: None,
         },
-        ssh_public_key: ed25519_key(3, Some("client@local")),
+        ssh_public_key: ed25519_key(3),
     }
 }
 
@@ -111,18 +117,14 @@ fn creates_reuses_inspects_and_deletes_one_exact_worker() {
     let fake = FakeDocker::default();
     let provider = provider("local", fake.clone());
     let request = request();
-    let InteractiveWorkerEnsure::Created(status) = provider.ensure_worker(&request).expect("create") else {
-        panic!("expected a created worker");
-    };
+    let status = provider.ensure_worker(&request).expect("create").into_status();
     assert!(status.is_ready_for(&request, time::OffsetDateTime::now_utc()));
-    assert_eq!(status.ssh.as_ref().expect("SSH").host_key, ed25519_key(7, None));
+    assert_eq!(status.ssh.as_ref().expect("SSH").host_key, ed25519_key(7));
     let reused = provider.ensure_worker(&request);
     assert!(matches!(reused, Ok(InteractiveWorkerEnsure::Reused(_))));
     assert_eq!(provider.inspect_worker(&status.worker), Ok(Some(status.clone())));
-    let deleted = provider.delete_worker(&status.worker);
-    let absent = provider.delete_worker(&status.worker);
-    assert!(matches!(deleted, Ok(InteractiveWorkerCleanup::Deleted)));
-    assert!(matches!(absent, Ok(InteractiveWorkerCleanup::AlreadyAbsent)));
+    assert_eq!(provider.delete_worker(&status.worker), Ok(Deleted));
+    assert_eq!(provider.delete_worker(&status.worker), Ok(AlreadyAbsent));
     let state = fake.state();
     assert_eq!((state.create_calls, state.delete_calls), (1, 1));
 }
@@ -131,24 +133,17 @@ fn creates_reuses_inspects_and_deletes_one_exact_worker() {
 fn rejects_preflight_and_resource_drift_without_unsafe_io() {
     let remote = LocalDockerInteractiveWorkerProvider::new(profile("local", "ssh://remote.example/run/docker.sock"));
     assert_eq!(remote.err(), Some(NonLocalDockerHost));
-    let other_provider = provider("other", FakeDocker::default());
+    let other = provider("other", FakeDocker::default());
     let fake = FakeDocker::default();
     let provider = provider("local", fake.clone());
     let mut invalid = request();
     invalid.target.provider = CloudProvider::RunPod;
     assert_eq!(provider.ensure_worker(&invalid).err(), Some(InvalidTarget));
     assert_eq!(fake.state().create_calls, 0);
-
     let request = request();
     let worker = provider.ensure_worker(&request).expect("create").into_status().worker;
-    assert_eq!(
-        other_provider.inspect_worker(&worker).err(),
-        Some(InvalidPersistedWorker)
-    );
-    assert_eq!(
-        other_provider.delete_worker(&worker).err(),
-        Some(InvalidPersistedWorker)
-    );
+    assert_eq!(other.inspect_worker(&worker).err(), Some(InvalidPersistedWorker));
+    assert_eq!(other.delete_worker(&worker).err(), Some(InvalidPersistedWorker));
     let mut drifted = request;
     drifted.target.disk_gib += 1;
     assert_eq!(provider.ensure_worker(&drifted).err(), Some(ResourceIdentityMismatch));
@@ -160,18 +155,17 @@ fn rejects_preflight_and_resource_drift_without_unsafe_io() {
 }
 
 #[test]
-fn reconciles_a_lost_create_response_and_cleans_invalid_new_endpoints() {
+fn reconciles_delayed_lost_create_response_and_cleans_invalid_new_endpoints() {
     let recovered = FakeDocker::default();
     recovered.state().fail_create_after_insert = true;
+    recovered.state().hidden_inspections_after_create = 2;
     let reconciled = provider("local", recovered.clone()).ensure_worker(&request());
     assert!(matches!(reconciled, Ok(InteractiveWorkerEnsure::Reused(_))));
     assert_eq!(recovered.state().create_calls, 1);
-
     let invalid = FakeDocker::default();
     invalid.state().binding_host = Some("0.0.0.0".to_string());
     let rejected = provider("local", invalid.clone()).ensure_worker(&request());
     assert_eq!(rejected.err(), Some(InvalidSshEndpoint));
     let state = invalid.state();
-    assert!(state.container.is_none());
-    assert_eq!(state.delete_calls, 1);
+    assert_eq!((state.container.is_none(), state.delete_calls), (true, 1));
 }

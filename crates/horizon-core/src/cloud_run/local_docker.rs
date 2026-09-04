@@ -29,6 +29,8 @@ const TERMINATE_ENV: &str = "HORIZON_TERMINATE_AFTER";
 const LOCAL_HOST: &str = "127.0.0.1";
 const SSH_USERNAME: &str = "root";
 const HOST_KEY_PATH: &str = "/etc/ssh/ssh_host_ed25519_key.pub";
+const CREATE_RECONCILE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+const CREATE_RECONCILE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
 
 /// Non-secret configuration for the local Docker daemon provider.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -148,11 +150,16 @@ impl LocalDockerInteractiveWorkerProvider {
         container_name: &str,
         original: LocalDockerError,
     ) -> Result<InteractiveWorkerEnsure, LocalDockerError> {
-        let Some(container) = self.transport.inspect(container_name)? else {
-            return Err(original);
-        };
-        self.ensure_existing(request, &container)
-            .map(InteractiveWorkerEnsure::Reused)
+        let deadline = std::time::Instant::now() + CREATE_RECONCILE_TIMEOUT;
+        while std::time::Instant::now() < deadline {
+            if let Some(container) = self.transport.inspect(container_name)? {
+                return self
+                    .ensure_existing(request, &container)
+                    .map(InteractiveWorkerEnsure::Reused);
+            }
+            std::thread::sleep(CREATE_RECONCILE_POLL_INTERVAL);
+        }
+        Err(original)
     }
 
     fn cleanup_invalid_creation(
