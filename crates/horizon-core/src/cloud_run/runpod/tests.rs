@@ -321,7 +321,7 @@ fn identity_mismatch_blocks_delete_and_exact_delete_is_idempotent() {
     let observer = transport.clone();
     let client = RunPodClient::with_transport(transport);
     assert!(
-        matches!(client.inspect_worker(&worker), Ok(Some(status)) if status.worker.hourly_cost_micros == Some(420_000) && status.ssh.as_ref().map(|ssh| ssh.username.as_str()) == Some("root"))
+        matches!(client.inspect_worker(&worker), Ok(Some(status)) if status.worker.hourly_cost_micros == Some(420_000) && status.ssh_username.as_deref() == Some("root"))
     );
     assert_eq!(client.delete_worker(&worker), Ok(RunPodCleanup::Deleted));
     assert_eq!(client.delete_worker(&worker), Ok(RunPodCleanup::AlreadyAbsent));

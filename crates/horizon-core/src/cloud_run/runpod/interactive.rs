@@ -48,14 +48,9 @@ impl RunPodInteractiveWorkerProvider {
         }
     }
 
-    fn adapt_status(&self, status: RunPodWorkerStatus) -> Result<InteractiveWorkerStatus, RunPodError> {
-        let ssh_public_key = status
-            .worker
-            .ssh_public_key
-            .clone()
-            .ok_or(RunPodError::InvalidPersistedWorker)?;
+    fn adapt_status(&self, status: RunPodWorkerStatus, ssh_public_key: &str) -> InteractiveWorkerStatus {
         let (lifecycle, ssh) = self.adapt_connection(&status);
-        Ok(InteractiveWorkerStatus {
+        InteractiveWorkerStatus {
             worker: InteractiveWorker {
                 identity: InteractiveWorkerIdentity {
                     provider: CloudProvider::RunPod,
@@ -64,14 +59,14 @@ impl RunPodInteractiveWorkerProvider {
                     resource_id: status.worker.pod_id,
                 },
                 image: status.worker.image,
-                ssh_public_key,
+                ssh_public_key: ssh_public_key.to_string(),
                 lease: InteractiveWorkerLease {
                     terminate_after: status.worker.terminate_after,
                 },
             },
             lifecycle,
             ssh,
-        })
+        }
     }
 
     fn adapt_connection(
@@ -91,13 +86,24 @@ impl RunPodInteractiveWorkerProvider {
         &self,
         status: &RunPodWorkerStatus,
     ) -> (InteractiveWorkerLifecycle, Option<InteractiveWorkerSshEndpoint>) {
-        let Some(endpoint) = status.ssh.as_ref() else {
+        let Some((username, host, port)) = status
+            .ssh_username
+            .as_ref()
+            .zip(status.ssh_host.as_ref())
+            .zip(status.ssh_port)
+            .map(|((username, host), port)| (username, host, port))
+        else {
             return (InteractiveWorkerLifecycle::Provisioning, None);
+        };
+        let endpoint = RunPodSshEndpoint {
+            username: username.clone(),
+            host: host.clone(),
+            port,
         };
         if !valid_ssh_coordinates(&endpoint.host, endpoint.port, &endpoint.username) {
             return (InteractiveWorkerLifecycle::Failed, None);
         }
-        let Some(host_key) = self.host_keys.host_key(&status.worker, endpoint) else {
+        let Some(host_key) = self.host_keys.host_key(&status.worker, &endpoint) else {
             return (InteractiveWorkerLifecycle::Provisioning, None);
         };
         let endpoint = InteractiveWorkerSshEndpoint {
@@ -133,22 +139,27 @@ impl InteractiveWorkerProvider for RunPodInteractiveWorkerProvider {
             &request.ssh_public_key,
         )?;
         Ok(match ensured {
-            RunPodEnsure::Created(status) => InteractiveWorkerEnsure::Created(self.adapt_status(status)?),
-            RunPodEnsure::Reused(status) => InteractiveWorkerEnsure::Reused(self.adapt_status(status)?),
+            RunPodEnsure::Created(status) => {
+                InteractiveWorkerEnsure::Created(self.adapt_status(status, &request.ssh_public_key))
+            }
+            RunPodEnsure::Reused(status) => {
+                InteractiveWorkerEnsure::Reused(self.adapt_status(status, &request.ssh_public_key))
+            }
         })
     }
 
     fn inspect_worker(&self, worker: &InteractiveWorker) -> Result<Option<InteractiveWorkerStatus>, Self::Error> {
+        let ssh_public_key = worker.ssh_public_key.clone();
         let worker = runpod_worker(worker)?;
         self.client
-            .inspect_worker(&worker)?
-            .map(|status| self.adapt_status(status))
-            .transpose()
+            .inspect_interactive_worker(&worker, &ssh_public_key)
+            .map(|status| status.map(|status| self.adapt_status(status, &ssh_public_key)))
     }
 
     fn delete_worker(&self, worker: &InteractiveWorker) -> Result<InteractiveWorkerCleanup, Self::Error> {
+        let ssh_public_key = worker.ssh_public_key.clone();
         let worker = runpod_worker(worker)?;
-        Ok(match self.client.delete_worker(&worker)? {
+        Ok(match self.client.delete_interactive_worker(&worker, &ssh_public_key)? {
             RunPodCleanup::Deleted => InteractiveWorkerCleanup::Deleted,
             RunPodCleanup::AlreadyAbsent => InteractiveWorkerCleanup::AlreadyAbsent,
         })
@@ -166,7 +177,6 @@ fn runpod_worker(worker: &InteractiveWorker) -> Result<RunPodWorker, RunPodError
         name: resource_name(worker.identity.workflow_id, worker.identity.job_id),
         image: worker.image.clone(),
         terminate_after: worker.lease.terminate_after.clone(),
-        ssh_public_key: Some(worker.ssh_public_key.clone()),
         hourly_cost_micros: None,
     };
     runpod_worker.validate()?;
