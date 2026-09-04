@@ -46,15 +46,16 @@ credentials are excluded from the build context and final image.
 
 Each worker requires:
 
-- `HORIZON_SSH_PUBLIC_KEY`: exactly one valid OpenSSH public key, with a
-  16 KiB limit.
+- `HORIZON_SSH_PUBLIC_KEY`: exactly one valid OpenSSH Ed25519 public key, with
+  a 16 KiB limit.
 - `HORIZON_TERMINATE_AFTER`: a future RFC 3339 timestamp no more than 30 days
   away.
 
-The optional GitHub token must be mounted as a read-only secret file. Set
-`HORIZON_GITHUB_TOKEN_FILE` to its absolute path inside the container. Direct
-`HORIZON_GITHUB_TOKEN` injection is rejected because container environment
-values remain inspectable.
+The optional GitHub token must be mounted as the exact read-only file
+`/run/secrets/github-token`, with `HORIZON_GITHUB_TOKEN_FILE` set to that path.
+Writable mounts, other paths, symlinks, and direct `HORIZON_GITHUB_TOKEN`
+injection are rejected because container environment values and writable host
+binds violate the secret boundary.
 
 Example:
 
@@ -77,7 +78,8 @@ At startup the entrypoint:
 1. validates the lease, public key, and optional secret file;
 2. creates a new SSH host identity in the container's writable layer;
 3. installs only the supplied public key for root login;
-4. copies the optional token to a root-only runtime file; and
+4. copies the optional token to a root-only runtime file and configures shared
+   Git authentication once, before SSH accepts concurrent sessions; and
 5. starts a watchdog that terminates the worker at the lease deadline.
 
 The in-container watchdog is defense in depth. The provider remains responsible
@@ -109,9 +111,10 @@ proves:
   baked into the image;
 - both workers accept only the supplied client key;
 - strict known-host verification works and the two runtime host keys differ;
-- repeated token-backed session setup remains idempotent;
+- concurrent token-backed sessions do not race or mutate shared Git state;
 - the optional token is copied with mode `0600` without entering image history
-  or container environment values; and
+  or container environment values, and writable or incorrectly located mounts
+  fail closed; and
 - a short lease terminates its worker and emits the watchdog marker.
 
 Use `--image <reference>` to test an existing image. By default, an image built

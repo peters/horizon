@@ -219,7 +219,9 @@ docker run --rm --entrypoint /bin/sh "${image}" -eu -c '
 
 ssh-keygen -q -t ed25519 -N '' -f "${temp_dir}/client"
 ssh-keygen -q -t ed25519 -N '' -f "${temp_dir}/wrong-client"
+ssh-keygen -q -t rsa -b 2048 -N '' -f "${temp_dir}/unsupported-client"
 client_public_key=$(<"${temp_dir}/client.pub")
+unsupported_public_key=$(<"${temp_dir}/unsupported-client.pub")
 fake_token="ghp_horizon_worker_smoke_${smoke_id}_not_real"
 printf '%s' "${fake_token}" >"${temp_dir}/github-token"
 chmod 0600 "${temp_dir}/github-token"
@@ -234,6 +236,10 @@ expect_usage_failure \
 expect_usage_failure \
   malformed-key \
   --env HORIZON_SSH_PUBLIC_KEY=not-a-public-key \
+  --env "HORIZON_TERMINATE_AFTER=${normal_deadline}"
+expect_usage_failure \
+  unsupported-key \
+  --env "HORIZON_SSH_PUBLIC_KEY=${unsupported_public_key}" \
   --env "HORIZON_TERMINATE_AFTER=${normal_deadline}"
 expect_usage_failure \
   missing-lease \
@@ -252,6 +258,18 @@ expect_usage_failure \
   --env "HORIZON_SSH_PUBLIC_KEY=${client_public_key}" \
   --env "HORIZON_TERMINATE_AFTER=${normal_deadline}" \
   --mount "type=bind,src=${temp_dir}/oversized-token,dst=/run/secrets/github-token,readonly" \
+  --env HORIZON_GITHUB_TOKEN_FILE=/run/secrets/github-token
+expect_usage_failure \
+  misplaced-token \
+  --env "HORIZON_SSH_PUBLIC_KEY=${client_public_key}" \
+  --env "HORIZON_TERMINATE_AFTER=${normal_deadline}" \
+  --mount "type=bind,src=${temp_dir}/github-token,dst=/run/secrets/other-token,readonly" \
+  --env HORIZON_GITHUB_TOKEN_FILE=/run/secrets/other-token
+expect_usage_failure \
+  writable-token \
+  --env "HORIZON_SSH_PUBLIC_KEY=${client_public_key}" \
+  --env "HORIZON_TERMINATE_AFTER=${normal_deadline}" \
+  --mount "type=bind,src=${temp_dir}/github-token,dst=/run/secrets/github-token" \
   --env HORIZON_GITHUB_TOKEN_FILE=/run/secrets/github-token
 
 worker_a="${smoke_id}-worker-a"
@@ -296,14 +314,30 @@ ssh_worker \
   grep -qx 'HORIZON=1' ||
   fail "horizon-agent-session did not mark the remote environment"
 
-for _ in 1 2; do
-  ssh_worker \
-    "${temp_dir}/client" \
-    "${temp_dir}/worker-a-known-hosts" \
-    "${worker_a_port}" \
-    'horizon-agent-session true' ||
-    fail "a repeated token-backed agent session failed"
-done
+git_config_before=$(docker exec "${worker_a}" sha256sum /root/.gitconfig | awk '{print $1}')
+ssh_worker \
+  "${temp_dir}/client" \
+  "${temp_dir}/worker-a-known-hosts" \
+  "${worker_a_port}" \
+  'horizon-agent-session sleep 2' &
+session_one_pid=$!
+ssh_worker \
+  "${temp_dir}/client" \
+  "${temp_dir}/worker-a-known-hosts" \
+  "${worker_a_port}" \
+  'horizon-agent-session sleep 2' &
+session_two_pid=$!
+set +e
+wait "${session_one_pid}"
+session_one_status=$?
+wait "${session_two_pid}"
+session_two_status=$?
+set -e
+[[ "${session_one_status}" -eq 0 && "${session_two_status}" -eq 0 ]] ||
+  fail "concurrent token-backed agent sessions failed"
+git_config_after=$(docker exec "${worker_a}" sha256sum /root/.gitconfig | awk '{print $1}')
+[[ "${git_config_after}" == "${git_config_before}" ]] ||
+  fail "token-backed agent sessions changed shared Git configuration"
 git_rewrites=$(
   docker exec "${worker_a}" \
     git config --global --get-all url.https://github.com/.insteadOf

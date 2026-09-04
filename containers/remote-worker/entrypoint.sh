@@ -2,6 +2,7 @@
 set -eu
 
 readonly EX_USAGE=64
+readonly GITHUB_TOKEN_MOUNT=/run/secrets/github-token
 readonly MAX_LEASE_SECONDS=2592000
 readonly MAX_PUBLIC_KEY_BYTES=16384
 readonly MAX_TOKEN_BYTES=16384
@@ -55,8 +56,8 @@ if [ "${public_key_bytes}" -gt "${MAX_PUBLIC_KEY_BYTES}" ]; then
 fi
 public_key_kind=${ssh_public_key%%[[:space:]]*}
 case "${public_key_kind}" in
-    ssh-* | ecdsa-* | sk-*) ;;
-    *) fail_usage "HORIZON_SSH_PUBLIC_KEY must start with an OpenSSH key type" ;;
+    ssh-ed25519) ;;
+    *) fail_usage "HORIZON_SSH_PUBLIC_KEY must use an ssh-ed25519 key" ;;
 esac
 
 if [ -n "${HORIZON_GITHUB_TOKEN:-}" ]; then
@@ -79,18 +80,38 @@ rm -f /run/horizon/github-token
 github_token_file=${HORIZON_GITHUB_TOKEN_FILE:-}
 token_bytes=0
 if [ -n "${github_token_file}" ]; then
-    case "${github_token_file}" in
-        /*) ;;
-        *) fail_usage "HORIZON_GITHUB_TOKEN_FILE must be an absolute path" ;;
-    esac
-    if [ ! -f "${github_token_file}" ] || [ ! -r "${github_token_file}" ] || [ ! -s "${github_token_file}" ]; then
+    if [ "${github_token_file}" != "${GITHUB_TOKEN_MOUNT}" ]; then
+        fail_usage "HORIZON_GITHUB_TOKEN_FILE must be ${GITHUB_TOKEN_MOUNT}"
+    fi
+    if [ -L "${github_token_file}" ] || [ ! -f "${github_token_file}" ] || [ ! -r "${github_token_file}" ] || [ ! -s "${github_token_file}" ]; then
         fail_usage "HORIZON_GITHUB_TOKEN_FILE must name a readable non-empty regular file"
+    fi
+    if ! awk -v target="${GITHUB_TOKEN_MOUNT}" '
+        $5 == target {
+            option_count = split($6, options, ",")
+            for (i = 1; i <= option_count; i++) {
+                if (options[i] == "ro") {
+                    read_only = 1
+                }
+            }
+        }
+        END { exit read_only ? 0 : 1 }
+    ' /proc/self/mountinfo; then
+        fail_usage "${GITHUB_TOKEN_MOUNT} must be mounted as a read-only file"
     fi
     token_bytes=$(wc -c < "${github_token_file}" | tr -d '[:space:]')
     if [ "${token_bytes}" -gt "${MAX_TOKEN_BYTES}" ]; then
         fail_usage "HORIZON_GITHUB_TOKEN_FILE exceeds the 16384-byte limit"
     fi
     install -m 0600 "${github_token_file}" /run/horizon/github-token
+
+    GITHUB_TOKEN=$(cat /run/horizon/github-token)
+    export GITHUB_TOKEN
+    GH_TOKEN=${GITHUB_TOKEN}
+    export GH_TOKEN
+    gh auth setup-git
+    git config --global --replace-all url.https://github.com/.insteadOf git@github.com:
+    git config --global --add url.https://github.com/.insteadOf ssh://git@github.com/
 fi
 
 ssh-keygen -A >/dev/null
@@ -103,10 +124,12 @@ unset \
     authorized_key_candidate \
     deadline_epoch \
     github_token_file \
+    GH_TOKEN \
     HORIZON_GITHUB_TOKEN \
     HORIZON_GITHUB_TOKEN_FILE \
     HORIZON_SSH_PUBLIC_KEY \
     HORIZON_TERMINATE_AFTER \
+    GITHUB_TOKEN \
     now_epoch \
     public_key_bytes \
     public_key_kind \
