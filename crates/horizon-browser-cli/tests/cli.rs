@@ -286,6 +286,10 @@ fn resume_skip_runs_later_steps_without_replaying_or_succeeding() {
     assert_eq!(resume_report["ok"], false);
     assert_eq!(resume_report["completed_steps"], 2);
     assert_eq!(
+        resume_report["error"],
+        "plan remains incomplete because resume explicitly skipped uncertain steps: snapshot"
+    );
+    assert_eq!(
         resume_report["steps"]
             .as_array()
             .expect("step reports")

@@ -265,7 +265,7 @@ pub async fn execute_plan_with_resume(
     .into_iter()
     .map(|tool| tool.name.into_owned())
     .collect::<BTreeSet<_>>();
-    for step in &plan.steps {
+    for step in plan.steps.iter().skip(resume.start_index) {
         if !tools.contains(&step.tool) {
             drop(client);
             server_task.abort();
@@ -374,10 +374,24 @@ async fn execute_steps(
             }
         }
     }
-    // Skipped plan indexes are absent from `steps`, so success still requires
-    // one successful report for every plan step.
-    let ok = steps.len() == plan.steps.len() && steps.iter().all(|step| step.ok);
-    execution_report(ok, steps, None, None)
+    let all_reports_succeeded = steps.iter().all(|step| step.ok);
+    let skipped_ids = plan
+        .steps
+        .iter()
+        .take(start_index)
+        .filter(|step| !result_indexes.contains_key(&step.id))
+        .map(|step| step.id.as_str())
+        .collect::<Vec<_>>();
+    let ok = skipped_ids.is_empty() && steps.len() == plan.steps.len() && all_reports_succeeded;
+    let error = if all_reports_succeeded && !skipped_ids.is_empty() {
+        Some(format!(
+            "plan remains incomplete because resume explicitly skipped uncertain steps: {}",
+            skipped_ids.join(", ")
+        ))
+    } else {
+        None
+    };
+    execution_report(ok, steps, error, None)
 }
 
 fn stop_execution(steps: Vec<StepReport>, reason: ExecutionStopReason, request_started: bool) -> ExecutionReport {
@@ -900,6 +914,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resume_does_not_require_tools_from_the_verified_prefix() {
+        let plan = plan(
+            br#"{"version":1,"steps":[{"id":"retired","tool":"browser_retired"},{"id":"remaining","tool":"browser_list"}]}"#,
+        );
+        let report = execute_plan_with_resume(
+            &plan,
+            &mut ExecutionControl::unbounded(),
+            PlanResume {
+                completed: vec![StepReport {
+                    id: "retired".to_string(),
+                    tool: "browser_retired".to_string(),
+                    ok: true,
+                    result: Some(json!({"verified": true})),
+                    error: None,
+                }],
+                start_index: 1,
+                checkpoint: None,
+            },
+        )
+        .await
+        .expect("resume supported suffix");
+
+        assert!(report.ok);
+        assert_eq!(
+            report.steps.iter().map(|step| step.id.as_str()).collect::<Vec<_>>(),
+            ["retired", "remaining"]
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_does_not_require_tools_from_the_skipped_prefix() {
+        let plan = plan(
+            br#"{"version":1,"steps":[{"id":"retired","tool":"browser_retired"},{"id":"remaining","tool":"browser_list"}]}"#,
+        );
+        let report = execute_plan_with_resume(
+            &plan,
+            &mut ExecutionControl::unbounded(),
+            PlanResume {
+                completed: Vec::new(),
+                start_index: 1,
+                checkpoint: None,
+            },
+        )
+        .await
+        .expect("resume supported suffix");
+
+        assert!(!report.ok);
+        assert_eq!(report.steps.len(), 1);
+        assert_eq!(report.steps[0].id, "remaining");
+        assert_eq!(
+            report.error.as_deref(),
+            Some("plan remains incomplete because resume explicitly skipped uncertain steps: retired")
+        );
+    }
+
+    #[tokio::test]
     async fn resume_after_a_skipped_gap_does_not_report_success() {
         let plan = plan(
             br#"{"version":1,"steps":[{"id":"first","tool":"browser_list"},{"id":"skipped","tool":"browser_list"},{"id":"third","tool":"browser_list"}]}"#,
@@ -920,6 +990,10 @@ mod tests {
         assert_eq!(
             report.steps.iter().map(|step| step.id.as_str()).collect::<Vec<_>>(),
             ["first", "third"]
+        );
+        assert_eq!(
+            report.error.as_deref(),
+            Some("plan remains incomplete because resume explicitly skipped uncertain steps: skipped")
         );
     }
 
