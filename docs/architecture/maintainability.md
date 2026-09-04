@@ -69,6 +69,10 @@ back into large multi-purpose modules.
   belongs in focused leaves such as `runtime_state/agent_sessions/codex.rs`.
 - `local_store.rs` centralizes agent-store environment paths and read-only
   SQLite opening so discovery, validation, and usage reporting agree.
+- `remote_workspace/` owns the versioned remote-workspace aggregate, desired
+  panels, disposable runtime generation, and repository checkpoint metadata.
+  Its validation is pure: provider I/O, runtime-state migration, coordination,
+  repository transfer, and UI integration belong in later focused modules.
 - Shared domain helpers belong here when both core and UI need them.
 - If a UI feature needs to reconstruct runtime state, sync template-backed
   workspace metadata, or format panel/workspace domain labels, prefer adding a
