@@ -37,6 +37,9 @@ boundary exposes no automatic retention or record-deletion API.
 Once recorded, the exact cleanup reason and request timestamp remain immutable
 while that runtime exists. Later cleanup observations cannot replace the original
 intent or reset its age; only verified runtime disposal can retire it.
+The first trusted SSH endpoint may be recorded once while the runtime exists. Once pinned,
+its host, port, user, and host key cannot be replaced or dropped within that
+runtime generation, even while reconnecting or reconciling.
 
 Domain-valid in-memory state can exceed the storage limits. Callers must persist
 intent successfully before provider side effects and surface storage-capacity

@@ -196,17 +196,12 @@ fn pending_cleanup_preserves_its_exact_reason_and_request_time() {
     );
 }
 
-#[test]
-fn expired_exact_worker_handles_and_pinned_endpoints_remain_durable_for_reconciliation() {
+fn expired_runtime() -> RemoteWorkspaceState {
     use crate::cloud_run::interactive_worker::{
         InteractiveWorker, InteractiveWorkerIdentity, InteractiveWorkerLease, InteractiveWorkerSshEndpoint,
     };
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
-    let (_directory, store) = store();
     let mut state = provisioning(workspace("workspace"));
-    let mut blob = b"\0\0\0\x0bssh-ed25519\0\0\0\x20".to_vec();
-    blob.extend([7; 32]);
-    let key = format!("ssh-ed25519 {}", STANDARD.encode(blob));
+    let key = public_key(7);
     let runtime = state.runtime.as_mut().expect("runtime");
     runtime.phase = RemoteRuntimePhase::Ready;
     runtime.worker = Some(InteractiveWorker {
@@ -217,7 +212,7 @@ fn expired_exact_worker_handles_and_pinned_endpoints_remain_durable_for_reconcil
             resource_id: "synthetic-exact-worker".into(),
         },
         target: state.spec.target.clone(),
-        ssh_public_key: key.clone(),
+        ssh_public_key: public_key(6),
         lease: InteractiveWorkerLease {
             terminate_after: "2020-01-01T00:00:00Z".into(),
         },
@@ -228,6 +223,20 @@ fn expired_exact_worker_handles_and_pinned_endpoints_remain_durable_for_reconcil
         username: "developer".into(),
         host_key: key,
     });
+    state
+}
+
+fn public_key(byte: u8) -> String {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    let mut blob = b"\0\0\0\x0bssh-ed25519\0\0\0\x20".to_vec();
+    blob.extend([byte; 32]);
+    format!("ssh-ed25519 {}", STANDARD.encode(blob))
+}
+
+#[test]
+fn expired_exact_worker_handles_and_pinned_endpoints_remain_durable_for_reconciliation() {
+    let (_directory, store) = store();
+    let mut state = expired_runtime();
     let stored = store
         .create_remote_workspace(OWNER, &state)
         .expect("store expired handle");
@@ -249,4 +258,60 @@ fn expired_exact_worker_handles_and_pinned_endpoints_remain_durable_for_reconcil
         reopened.replace_remote_workspace(&stored, &state),
         Err(RemoteWorkspaceStoreError::ReplacementIdentityMismatch)
     ));
+}
+
+#[test]
+fn first_endpoint_can_be_pinned_but_never_replaced_within_the_same_runtime() {
+    use crate::cloud_run::interactive_worker::InteractiveWorkerSshEndpoint;
+    let (_directory, store) = store();
+    let state = expired_runtime();
+    let endpoint = state.runtime.as_ref().expect("runtime").ssh.as_ref().expect("endpoint");
+    let mut unpinned = state.clone();
+    let runtime = unpinned.runtime.as_mut().expect("runtime");
+    runtime.phase = RemoteRuntimePhase::Reconciling;
+    runtime.ssh = None;
+    let pending = store
+        .create_remote_workspace(OWNER, &unpinned)
+        .expect("no endpoint yet");
+    let pinned = store
+        .replace_remote_workspace(&pending, &state)
+        .expect("pin the first trusted endpoint");
+    for changed_endpoint in [
+        None,
+        Some(InteractiveWorkerSshEndpoint {
+            host: "192.0.2.44".into(),
+            ..endpoint.clone()
+        }),
+        Some(InteractiveWorkerSshEndpoint {
+            port: 2223,
+            ..endpoint.clone()
+        }),
+        Some(InteractiveWorkerSshEndpoint {
+            username: "another-user".into(),
+            ..endpoint.clone()
+        }),
+        Some(InteractiveWorkerSshEndpoint {
+            host_key: public_key(8),
+            ..endpoint.clone()
+        }),
+    ] {
+        let mut changed = state.clone();
+        let runtime = changed.runtime.as_mut().expect("runtime");
+        runtime.phase = RemoteRuntimePhase::Reconciling;
+        runtime.ssh = changed_endpoint;
+        changed.validate().expect("domain-valid observation");
+        assert!(matches!(
+            store.replace_remote_workspace(&pinned, &changed),
+            Err(RemoteWorkspaceStoreError::ReplacementIdentityMismatch)
+        ));
+    }
+    let reopened = CloudWorkflowStore::open_path(store.path()).expect("reopen");
+    assert_eq!(
+        reopened.load_remote_workspace(OWNER, "workspace").expect("load pin"),
+        Some(pinned.clone())
+    );
+    unpinned.runtime.as_mut().expect("runtime").ssh = Some(endpoint.clone());
+    reopened
+        .replace_remote_workspace(&pinned, &unpinned)
+        .expect("reconciliation retains the same endpoint");
 }

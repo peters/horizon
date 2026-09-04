@@ -56,7 +56,11 @@ pub(super) fn validate_replacement(previous: &RemoteWorkspaceState, next: &Remot
             || runtime
                 .worker
                 .as_ref()
-                .is_some_and(|worker| next_runtime.worker.as_ref() != Some(worker)))
+                .is_some_and(|worker| next_runtime.worker.as_ref() != Some(worker))
+            || runtime
+                .ssh
+                .as_ref()
+                .is_some_and(|ssh| next_runtime.ssh.as_ref() != Some(ssh)))
     {
         return Err(Error::ReplacementIdentityMismatch);
     }
