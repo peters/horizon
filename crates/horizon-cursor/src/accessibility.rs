@@ -390,15 +390,28 @@ mod platform {
         FocusedOnly,
     }
 
-    async fn collection_candidates(root: &AccessibleProxy<'_>, search: FocusSearch) -> Option<Vec<ObjectRefOwned>> {
-        let proxies = root.proxies().await.ok()?;
-        let collection = proxies.collection().await.ok()?;
+    fn collection_match_rule(search: FocusSearch) -> ObjectMatchRule {
         let mut rule = ObjectMatchRule::builder().states([State::Focused], MatchType::All);
         if search == FocusSearch::EditableText {
             rule = rule.interfaces([Interface::Text, Interface::EditableText], MatchType::All);
         }
+        let mut rule = rule.build();
+        // atspi-rs defaults unused match types to Invalid. GTK's Collection
+        // treats Invalid as "match nothing", so a Focused-only rule returns
+        // empty and KEY_STRING replaces a classified selection.
+        rule.attr_mt = MatchType::All;
+        rule.roles_mt = MatchType::All;
+        if search != FocusSearch::EditableText {
+            rule.ifaces_mt = MatchType::All;
+        }
+        rule
+    }
+
+    async fn collection_candidates(root: &AccessibleProxy<'_>, search: FocusSearch) -> Option<Vec<ObjectRefOwned>> {
+        let proxies = root.proxies().await.ok()?;
+        let collection = proxies.collection().await.ok()?;
         collection
-            .get_matches(rule.build(), SortOrder::Canonical, 2, true)
+            .get_matches(collection_match_rule(search), SortOrder::Canonical, 2, true)
             .await
             .ok()
     }
@@ -676,10 +689,7 @@ mod platform {
                     .text()
                     .await
                     .map_err(|_| InjectError::Target("focused field does not expose readable text state"))?;
-                let selection_count = text_proxy
-                    .get_n_selections()
-                    .await
-                    .map_err(|_| InjectError::Failed("failed to inspect focused field selection"))?;
+                let selection_count = read_visible_selection_count(&text_proxy).await?;
                 Ok(selection_count != 0)
             };
             if let Ok(true) = bounded_preflight(deadline, selected).await {
@@ -709,11 +719,30 @@ mod platform {
         Ok(TargetFacts::new(interfaces, states, role))
     }
 
-    async fn read_text_snapshot(text: &TextProxy<'_>) -> Result<TextSnapshot, InjectError> {
-        let selection_count = text
+    fn visible_selection_count(reported: i32, first_selection: Option<(i32, i32)>) -> i32 {
+        if reported != 0 {
+            reported
+        } else {
+            i32::from(first_selection.is_some_and(|(start, end)| start != end))
+        }
+    }
+
+    async fn read_visible_selection_count(text: &TextProxy<'_>) -> Result<i32, InjectError> {
+        let reported = text
             .get_n_selections()
             .await
             .map_err(|_| InjectError::Failed("failed to inspect focused field selection"))?;
+        if reported != 0 {
+            return Ok(reported);
+        }
+        // GTK can report a caret-range selection via GetSelection(0) while
+        // GetNSelections is 0. Treat a non-empty range as selected so dictation
+        // cannot replace highlighted text.
+        Ok(visible_selection_count(reported, text.get_selection(0).await.ok()))
+    }
+
+    async fn read_text_snapshot(text: &TextProxy<'_>) -> Result<TextSnapshot, InjectError> {
+        let selection_count = read_visible_selection_count(text).await?;
         let caret = text
             .caret_offset()
             .await
@@ -734,12 +763,13 @@ mod platform {
         use std::future::Future;
         use std::sync::PoisonError;
 
-        use atspi::{Interface, InterfaceSet, Role, State, StateSet};
+        use atspi::{Interface, InterfaceSet, MatchType, Role, State, StateSet};
 
         use super::{
-            INSERT_LOCK, InjectError, TargetFacts, TextSnapshot, can_synthesize_keys, focus_window_still_matches,
-            include_atspi_app, is_unclassified_focus, resolve_focus_candidates, sanitize_desktop_transcript,
-            unique_candidate_index, unique_focused_index,
+            FocusSearch, INSERT_LOCK, InjectError, TargetFacts, TextSnapshot, can_synthesize_keys,
+            collection_match_rule, focus_window_still_matches, include_atspi_app, is_unclassified_focus,
+            resolve_focus_candidates, sanitize_desktop_transcript, unique_candidate_index, unique_focused_index,
+            visible_selection_count,
         };
 
         fn safe_target() -> TargetFacts {
@@ -795,6 +825,20 @@ mod platform {
             }));
             assert_eq!(missing, None);
             assert!(walked);
+        }
+
+        #[test]
+        fn collection_rules_do_not_leave_unused_match_types_invalid() {
+            let editable = collection_match_rule(FocusSearch::EditableText);
+            assert_eq!(editable.states_mt, MatchType::All);
+            assert_eq!(editable.ifaces_mt, MatchType::All);
+            assert_eq!(editable.roles_mt, MatchType::All);
+            assert_eq!(editable.attr_mt, MatchType::All);
+            let focused = collection_match_rule(FocusSearch::FocusedOnly);
+            assert_eq!(focused.states_mt, MatchType::All);
+            assert_eq!(focused.ifaces_mt, MatchType::All);
+            assert_eq!(focused.roles_mt, MatchType::All);
+            assert_eq!(focused.attr_mt, MatchType::All);
         }
 
         #[test]
@@ -1059,6 +1103,11 @@ mod platform {
                     "selected text cannot be replaced safely by direct dictation"
                 ))
             );
+            assert_eq!(visible_selection_count(1, None), 1);
+            assert_eq!(visible_selection_count(0, Some((0, 7))), 1);
+            assert_eq!(visible_selection_count(0, Some((7, 0))), 1);
+            assert_eq!(visible_selection_count(0, Some((0, 0))), 0);
+            assert_eq!(visible_selection_count(0, None), 0);
         }
 
         #[test]
