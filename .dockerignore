@@ -1,0 +1,15 @@
+**
+!Cargo.toml
+!Cargo.lock
+!crates/
+!crates/*/
+crates/*/**
+!crates/*/Cargo.toml
+!containers/
+!containers/remote-worker/
+containers/remote-worker/**
+!containers/remote-worker/Dockerfile
+!containers/remote-worker/entrypoint.sh
+!containers/remote-worker/rust-path.sh
+!containers/remote-worker/session.sh
+!containers/remote-worker/sshd_config
