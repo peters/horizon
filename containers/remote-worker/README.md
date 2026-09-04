@@ -59,7 +59,10 @@ values remain inspectable.
 Example:
 
 ```bash
-deadline=$(date -u --date='+30 minutes' +%Y-%m-%dT%H:%M:%SZ)
+deadline=$(
+  docker run --rm --entrypoint date horizon-remote-worker:0.1.0 \
+    -u --date='+30 minutes' +%Y-%m-%dT%H:%M:%SZ
+)
 docker run --rm \
   --publish 127.0.0.1::22 \
   --env "HORIZON_SSH_PUBLIC_KEY=$(ssh-keygen -y -f /path/to/ephemeral-worker-key)" \
@@ -106,6 +109,7 @@ proves:
   baked into the image;
 - both workers accept only the supplied client key;
 - strict known-host verification works and the two runtime host keys differ;
+- repeated token-backed session setup remains idempotent;
 - the optional token is copied with mode `0600` without entering image history
   or container environment values; and
 - a short lease terminates its worker and emits the watchdog marker.

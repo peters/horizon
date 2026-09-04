@@ -14,7 +14,7 @@ if [ -f /run/horizon/github-token ]; then
     GH_TOKEN=${GITHUB_TOKEN}
     export GH_TOKEN
     gh auth setup-git
-    git config --global url.https://github.com/.insteadOf git@github.com:
+    git config --global --replace-all url.https://github.com/.insteadOf git@github.com:
     git config --global --add url.https://github.com/.insteadOf ssh://git@github.com/
 fi
 

@@ -5,7 +5,6 @@ FROM node:24-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c
 FROM ${WORKER_BASE_IMAGE}
 
 ARG WORKER_BASE_IMAGE
-ARG WORKER_IMAGE_VERSION=0.1.0
 ARG CODEX_VERSION=0.153.2
 ARG CLAUDE_VERSION=2.1.260
 ARG GEMINI_VERSION=0.58.0
@@ -17,14 +16,9 @@ ARG GROK_AMD64_SHA256=42f6efb496feafea3e8807b75852cc1f792cba0bd0be8ecbd1c9f7ed58
 ARG GROK_ARM64_SHA256=e5c96058b6f88b2e9ae7d61401e80ac6bcbcaf1be5681eae19e36a2b8aff121d
 ARG TARGETARCH
 
-LABEL org.opencontainers.image.title="Horizon remote worker" \
-      org.opencontainers.image.description="Provider-neutral interactive coding worker for Horizon" \
-      org.opencontainers.image.version="${WORKER_IMAGE_VERSION}"
-
 ENV CARGO_HOME=/usr/local/cargo
 ENV RUSTUP_HOME=/usr/local/rustup
 ENV RUSTUP_TOOLCHAIN=1.95.0
-ENV HORIZON_WORKER_IMAGE_VERSION=${WORKER_IMAGE_VERSION}
 ENV PATH="/usr/local/cargo/bin:${PATH}"
 
 RUN case "${WORKER_BASE_IMAGE}" in \
@@ -174,6 +168,12 @@ RUN chmod 0755 /usr/local/bin/horizon-worker-entrypoint /usr/local/bin/horizon-a
         /root/.rustup \
         /root/.ssh \
     && mkdir -p /run/sshd /workspace/horizon
+
+ARG WORKER_IMAGE_VERSION=0.1.0
+LABEL org.opencontainers.image.title="Horizon remote worker" \
+      org.opencontainers.image.description="Provider-neutral interactive coding worker for Horizon" \
+      org.opencontainers.image.version="${WORKER_IMAGE_VERSION}"
+ENV HORIZON_WORKER_IMAGE_VERSION=${WORKER_IMAGE_VERSION}
 
 EXPOSE 22
 STOPSIGNAL SIGTERM

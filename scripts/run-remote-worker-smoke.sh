@@ -81,7 +81,8 @@ cleanup() {
 trap cleanup EXIT
 
 deadline_after() {
-  date -u --date="+$1 seconds" +%Y-%m-%dT%H:%M:%SZ
+  docker run --rm --entrypoint /bin/date "${image}" \
+    -u --date="+$1 seconds" +%Y-%m-%dT%H:%M:%SZ
 }
 
 record_container() {
@@ -294,6 +295,22 @@ ssh_worker \
   'horizon-agent-session env' |
   grep -qx 'HORIZON=1' ||
   fail "horizon-agent-session did not mark the remote environment"
+
+for _ in 1 2; do
+  ssh_worker \
+    "${temp_dir}/client" \
+    "${temp_dir}/worker-a-known-hosts" \
+    "${worker_a_port}" \
+    'horizon-agent-session true' ||
+    fail "a repeated token-backed agent session failed"
+done
+git_rewrites=$(
+  docker exec "${worker_a}" \
+    git config --global --get-all url.https://github.com/.insteadOf
+)
+expected_git_rewrites=$'git@github.com:\nssh://git@github.com/'
+[[ "${git_rewrites}" == "${expected_git_rewrites}" ]] ||
+  fail "repeated token-backed sessions left unexpected Git URL rewrites"
 
 set +e
 ssh_worker \
