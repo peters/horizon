@@ -158,9 +158,11 @@ pub struct InteractiveWorkerStatus {
 }
 
 impl InteractiveWorkerStatus {
-    /// A worker is attachable only when its lifecycle, request identity, lease,
-    /// image, and SSH data agree. `observed_at` must be a freshly sampled,
-    /// trusted UTC time from immediately before attachment.
+    /// A worker is attachable only when its lifecycle, request identity,
+    /// complete target, lease, and SSH data agree. The target comparison covers
+    /// provider, profile, image, disk, requested lease, and cost limit.
+    /// `observed_at` must be a freshly sampled, trusted UTC time from
+    /// immediately before attachment.
     #[must_use]
     pub fn is_ready_for(&self, request: &InteractiveWorkerRequest, observed_at: time::OffsetDateTime) -> bool {
         let identity = &self.worker.identity;
