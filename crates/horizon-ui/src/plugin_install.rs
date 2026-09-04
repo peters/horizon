@@ -50,11 +50,10 @@ const BROWSER_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
     )),
 }];
 
-/// `$HOME`-relative skill roots for every built-in agent that discovers
-/// `SKILL.md` directories. Claude also receives the same files through the
-/// host plugin tree; these user paths cover sessions that do not load that
-/// plugin.
-const USER_AGENT_SKILL_ROOTS: &[&[&str]] = &[
+/// `$HOME`-relative skill roots that receive `horizon-notify`. This is the
+/// title/notify skill every built-in agent needs. Claude also gets it through
+/// the host plugin tree.
+const NOTIFY_SKILL_ROOTS: &[&[&str]] = &[
     &[".agents", "skills"],
     &[".codex", "skills"],
     &[".claude", "skills"],
@@ -64,6 +63,10 @@ const USER_AGENT_SKILL_ROOTS: &[&[&str]] = &[
     &[".kilocode", "skills"],
     &[".pi", "agent", "skills"],
 ];
+
+/// Browser MCP skill stays on the agents that already had Horizon browser
+/// integration. Expanding it to Grok/Gemini/Pi/OpenCode is separate work.
+const BROWSER_SKILL_ROOTS: &[&[&str]] = &[&[".agents", "skills"], &[".codex", "skills"], &[".kilocode", "skills"]];
 
 pub(crate) struct AgentPluginHostLease {
     host_dir: PathBuf,
@@ -240,13 +243,15 @@ fn install_agent_plugins_impl(
     updated_files += sync_plugin_files(&horizon_home.codex_browser_skill_dir(), BROWSER_SKILL_FILES)?;
 
     if let Some(home) = user_home {
-        for (skill_name, files) in [
-            ("horizon-notify", NOTIFY_SKILL_FILES),
-            ("horizon-browser", BROWSER_SKILL_FILES),
-        ] {
-            for skill_root in USER_AGENT_SKILL_ROOTS {
-                updated_files += sync_plugin_files(&user_skill_dir(home, skill_root, skill_name), files)?;
-            }
+        for skill_root in NOTIFY_SKILL_ROOTS {
+            updated_files +=
+                sync_plugin_files(&user_skill_dir(home, skill_root, "horizon-notify"), NOTIFY_SKILL_FILES)?;
+        }
+        for skill_root in BROWSER_SKILL_ROOTS {
+            updated_files += sync_plugin_files(
+                &user_skill_dir(home, skill_root, "horizon-browser"),
+                BROWSER_SKILL_FILES,
+            )?;
         }
     }
 
@@ -313,9 +318,9 @@ mod tests {
     use horizon_core::HorizonHome;
 
     use super::{
-        AgentPluginHostLease, BROWSER_SKILL_FILES, CLAUDE_PLUGIN_FILES, EmbeddedFile, NOTIFY_SKILL_FILES,
-        USER_AGENT_SKILL_ROOTS, agent_plugin_host_lock_path, install_agent_plugins_impl, open_lock_file,
-        prune_stale_agent_plugin_hosts, sync_file_if_changed, sync_plugin_files, user_skill_dir,
+        AgentPluginHostLease, BROWSER_SKILL_FILES, BROWSER_SKILL_ROOTS, CLAUDE_PLUGIN_FILES, EmbeddedFile,
+        NOTIFY_SKILL_FILES, NOTIFY_SKILL_ROOTS, agent_plugin_host_lock_path, install_agent_plugins_impl,
+        open_lock_file, prune_stale_agent_plugin_hosts, sync_file_if_changed, sync_plugin_files, user_skill_dir,
     };
 
     #[test]
@@ -377,13 +382,15 @@ mod tests {
         .expect("install plugins");
 
         assert!(updated > 0);
-        for skill_root in USER_AGENT_SKILL_ROOTS {
+        for skill_root in NOTIFY_SKILL_ROOTS {
             let notify_path = user_skill_dir(&user_home, skill_root, "horizon-notify").join("SKILL.md");
             assert_eq!(
                 std::fs::read_to_string(&notify_path)
                     .unwrap_or_else(|_| panic!("notify skill missing at {}", notify_path.display())),
                 NOTIFY_SKILL_FILES[0].content,
             );
+        }
+        for skill_root in BROWSER_SKILL_ROOTS {
             let browser_path = user_skill_dir(&user_home, skill_root, "horizon-browser").join("SKILL.md");
             assert_eq!(
                 std::fs::read_to_string(&browser_path)
@@ -391,6 +398,10 @@ mod tests {
                 BROWSER_SKILL_FILES[0].content,
             );
         }
+        assert!(
+            !user_home.join(".grok/skills/horizon-browser/SKILL.md").exists(),
+            "browser MCP skill must not be exported to agents without Horizon MCP injection"
+        );
         assert_eq!(
             std::fs::read_to_string(horizon_home.codex_skill_dir().join("SKILL.md"))
                 .expect("horizon codex integration should be synced"),
