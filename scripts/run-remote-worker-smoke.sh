@@ -167,6 +167,15 @@ if [[ -z "${image}" ]]; then
     --tag "${image}" \
     "${repo_root}"
   built_image=true
+  set +e
+  empty_version_output=$(docker build \
+    --file "${repo_root}/containers/remote-worker/Dockerfile" \
+    --build-arg WORKER_IMAGE_VERSION= "${repo_root}" 2>&1)
+  empty_version_status=$?
+  set -e
+  [[ "${empty_version_status}" -ne 0 ]] || fail "worker image build accepted an empty version"
+  grep -qF 'WORKER_IMAGE_VERSION must not be empty' <<<"${empty_version_output}" ||
+    fail "empty-version build did not reach the expected validation"
 else
   worker_image_version=$(
     docker image inspect \

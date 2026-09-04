@@ -170,6 +170,9 @@ RUN chmod 0755 /usr/local/bin/horizon-worker-entrypoint /usr/local/bin/horizon-a
     && mkdir -p /run/sshd /workspace/horizon
 
 ARG WORKER_IMAGE_VERSION=0.1.0
+RUN if [ -z "${WORKER_IMAGE_VERSION}" ]; then \
+        echo "WORKER_IMAGE_VERSION must not be empty" >&2; exit 64; \
+    fi
 LABEL org.opencontainers.image.title="Horizon remote worker" \
       org.opencontainers.image.description="Provider-neutral interactive coding worker for Horizon" \
       org.opencontainers.image.version="${WORKER_IMAGE_VERSION}"
