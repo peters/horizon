@@ -116,10 +116,21 @@ fn provider(name: &str, fake: FakeDocker) -> LocalDockerInteractiveWorkerProvide
 fn creates_reuses_inspects_and_deletes_one_exact_worker() {
     let fake = FakeDocker::default();
     let provider = provider("local", fake.clone());
-    let request = request();
+    let mut request = request();
+    request.ssh_public_key.push(' ');
+    request
+        .ssh_public_key
+        .push_str(&"x".repeat(16 * 1_024 - request.ssh_public_key.len()));
     let status = provider.ensure_worker(&request).expect("create").into_status();
     assert!(status.is_ready_for(&request, time::OffsetDateTime::now_utc()));
     assert_eq!(status.ssh.as_ref().expect("SSH").host_key, ed25519_key(7));
+    let stored = fake.state().container.clone().expect("container");
+    let canonical_key = ed25519_key(3);
+    assert_eq!(
+        required_environment(&stored, SSH_PUBLIC_KEY_ENV),
+        Ok(canonical_key.as_str())
+    );
+    assert_eq!(stored.labels.get(SSH_KEY_LABEL), Some(&canonical_key));
     let reused = provider.ensure_worker(&request);
     assert!(matches!(reused, Ok(InteractiveWorkerEnsure::Reused(_))));
     assert_eq!(provider.inspect_worker(&status.worker), Ok(Some(status.clone())));

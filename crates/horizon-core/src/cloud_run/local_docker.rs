@@ -64,7 +64,6 @@ impl LocalDockerInteractiveWorkerProvider {
             })
             .ok_or(LocalDockerError::NonLocalDockerHost)
     }
-
     fn ensure_existing(
         &self,
         request: &InteractiveWorkerRequest,
@@ -79,14 +78,12 @@ impl LocalDockerInteractiveWorkerProvider {
         }
         self.observe(container, worker)
     }
-
     fn validate_persisted_worker(&self, worker: &InteractiveWorker) -> Result<(), LocalDockerError> {
         validate_worker(worker)?;
         (worker.target.profile == self.profile.name)
             .then_some(())
             .ok_or(LocalDockerError::InvalidPersistedWorker)
     }
-
     fn reject_unbounded_lease(
         &self,
         worker: &InteractiveWorker,
@@ -101,7 +98,6 @@ impl LocalDockerInteractiveWorkerProvider {
         }
         Err(LocalDockerError::LeaseDeadlineRejected { resource_id })
     }
-
     fn create_worker(
         &self,
         request: &InteractiveWorkerRequest,
@@ -144,7 +140,6 @@ impl LocalDockerInteractiveWorkerProvider {
             Err(error) => self.reconcile_uncertain_create(request, &create, error),
         }
     }
-
     fn reconcile_uncertain_create(
         &self,
         request: &InteractiveWorkerRequest,
@@ -168,7 +163,6 @@ impl LocalDockerInteractiveWorkerProvider {
         }
         Err(original)
     }
-
     fn cleanup_invalid_creation(
         &self,
         container: &DockerContainer,
@@ -184,7 +178,6 @@ impl LocalDockerInteractiveWorkerProvider {
         }
         Err(original)
     }
-
     fn observe(
         &self,
         container: &DockerContainer,
@@ -200,7 +193,6 @@ impl LocalDockerInteractiveWorkerProvider {
         };
         Ok(InteractiveWorkerStatus { worker, lifecycle, ssh })
     }
-
     fn running_connection(
         &self,
         container: &DockerContainer,
@@ -214,7 +206,7 @@ impl LocalDockerInteractiveWorkerProvider {
         let Some(raw_host_key) = self.transport.read_host_key(&container.id)? else {
             return Ok((InteractiveWorkerLifecycle::Provisioning, None));
         };
-        let host_key = canonical_host_key(&raw_host_key).ok_or(LocalDockerError::InvalidHostKey)?;
+        let host_key = canonical_ed25519_key(&raw_host_key).ok_or(LocalDockerError::InvalidHostKey)?;
         let endpoint = InteractiveWorkerSshEndpoint {
             host: LOCAL_HOST.to_string(),
             port: binding.port,
@@ -227,11 +219,9 @@ impl LocalDockerInteractiveWorkerProvider {
 
 impl InteractiveWorkerProvider for LocalDockerInteractiveWorkerProvider {
     type Error = LocalDockerError;
-
     fn provider(&self) -> CloudProvider {
         CloudProvider::LocalDocker
     }
-
     fn ensure_worker(&self, request: &InteractiveWorkerRequest) -> Result<InteractiveWorkerEnsure, Self::Error> {
         validate_request(request, &self.profile)?;
         let container_name = container_name(request.workflow_id, request.job_id);
@@ -242,7 +232,6 @@ impl InteractiveWorkerProvider for LocalDockerInteractiveWorkerProvider {
         }
         self.create_worker(request, &container_name)
     }
-
     fn inspect_worker(&self, worker: &InteractiveWorker) -> Result<Option<InteractiveWorkerStatus>, Self::Error> {
         self.validate_persisted_worker(worker)?;
         let Some(container) = self.transport.inspect(&worker.identity.resource_id)? else {
@@ -251,7 +240,6 @@ impl InteractiveWorkerProvider for LocalDockerInteractiveWorkerProvider {
         verify_container_for_worker(&container, worker)?;
         self.observe(&container, worker.clone()).map(Some)
     }
-
     fn delete_worker(&self, worker: &InteractiveWorker) -> Result<InteractiveWorkerCleanup, Self::Error> {
         self.validate_persisted_worker(worker)?;
         let resource_id = &worker.identity.resource_id;
@@ -268,7 +256,6 @@ impl InteractiveWorkerProvider for LocalDockerInteractiveWorkerProvider {
         Ok(InteractiveWorkerCleanup::Deleted)
     }
 }
-
 #[derive(Debug, Error, Eq, PartialEq)]
 pub enum LocalDockerError {
     #[error("local Docker worker target or profile is invalid")]
@@ -344,14 +331,15 @@ impl DockerCreateRequest {
         let terminate_after = deadline
             .format(&time::format_description::well_known::Rfc3339)
             .map_err(|_| LocalDockerError::InvalidTarget)?;
+        let ssh_public_key = canonical_ed25519_key(&request.ssh_public_key).ok_or(LocalDockerError::InvalidTarget)?;
         let mut labels = request_labels(request)?;
-        labels.insert(SSH_KEY_LABEL.to_string(), request.ssh_public_key.clone());
+        labels.insert(SSH_KEY_LABEL.to_string(), ssh_public_key.clone());
         labels.insert(TERMINATE_LABEL.to_string(), terminate_after.clone());
         Ok(Self {
             name: name.to_string(),
             image: request.target.image.clone(),
             labels,
-            ssh_public_key: request.ssh_public_key.clone(),
+            ssh_public_key,
             terminate_after,
         })
     }
@@ -399,6 +387,8 @@ fn verify_container_for_worker(
     worker: &InteractiveWorker,
 ) -> Result<(), LocalDockerError> {
     validate_worker(worker)?;
+    let ssh_public_key =
+        canonical_ed25519_key(&worker.ssh_public_key).ok_or(LocalDockerError::InvalidPersistedWorker)?;
     let expected_name = container_name(worker.identity.workflow_id, worker.identity.job_id);
     let exact_labels = [
         (MANAGED_LABEL, "true".to_string()),
@@ -406,7 +396,7 @@ fn verify_container_for_worker(
         (PROTOCOL_LABEL, CLOUD_RUN_PROTOCOL_VERSION.to_string()),
         (WORKFLOW_LABEL, worker.identity.workflow_id.to_string()),
         (JOB_LABEL, worker.identity.job_id.to_string()),
-        (SSH_KEY_LABEL, worker.ssh_public_key.clone()),
+        (SSH_KEY_LABEL, ssh_public_key.clone()),
         (TERMINATE_LABEL, worker.lease.terminate_after.clone()),
     ];
     let valid = container.id == worker.identity.resource_id
@@ -416,7 +406,7 @@ fn verify_container_for_worker(
         && exact_labels
             .iter()
             .all(|(key, value)| container.labels.get(*key) == Some(value))
-        && required_environment(container, SSH_PUBLIC_KEY_ENV) == Ok(worker.ssh_public_key.as_str())
+        && required_environment(container, SSH_PUBLIC_KEY_ENV) == Ok(ssh_public_key.as_str())
         && required_environment(container, TERMINATE_ENV) == Ok(worker.lease.terminate_after.as_str())
         && valid_target_label(&container.labels, worker);
     valid.then_some(()).ok_or(LocalDockerError::ResourceIdentityMismatch)
@@ -462,7 +452,7 @@ fn created_container_matches(container: &DockerContainer, create: &DockerCreateR
         && required_environment(container, SSH_PUBLIC_KEY_ENV) == Ok(create.ssh_public_key.as_str())
         && required_environment(container, TERMINATE_ENV) == Ok(create.terminate_after.as_str())
 }
-fn canonical_host_key(value: &str) -> Option<String> {
+fn canonical_ed25519_key(value: &str) -> Option<String> {
     if !valid_ssh_public_key(value) {
         return None;
     }
