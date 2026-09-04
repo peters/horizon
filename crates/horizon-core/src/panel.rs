@@ -920,6 +920,11 @@ mod tests {
             kitty_keyboard: true,
         })
         .expect("terminal should spawn");
+        assert!(
+            terminal.shutdown_with_timeout(Duration::from_secs(2)),
+            "test terminal should shut down before title injection"
+        );
+        let _ = terminal.process_events();
         terminal.handle_event(Event::Title(
             "HORIZON_TITLE:set:PR comments: Docker lifecycle".to_string(),
         ));
@@ -938,14 +943,7 @@ mod tests {
         assert_eq!(panel.display_title(), "Codex — PR comments: Docker lifecycle");
         assert!(
             !output.activity.terminal,
-            "title copy after events were already drained must not count as grid output"
-        );
-
-        assert!(
-            panel
-                .terminal_mut()
-                .is_some_and(|terminal| terminal.shutdown_with_timeout(Duration::from_secs(2))),
-            "test terminal should shut down"
+            "title copy after the PTY has exited must not count as grid output"
         );
     }
 
