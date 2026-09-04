@@ -3,6 +3,7 @@ use serde::{Deserialize, Deserializer, Serialize, de};
 use std::{collections::HashSet, fmt};
 use thiserror::Error;
 use uuid::Uuid;
+pub mod interactive_worker;
 pub mod runpod;
 mod store;
 mod validation;

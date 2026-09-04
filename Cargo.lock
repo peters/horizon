@@ -1983,6 +1983,7 @@ version = "0.2.7"
 dependencies = [
  "alacritty_terminal",
  "atomicwrites",
+ "base64 0.23.1",
  "comrak",
  "git2",
  "horizon-browser",
