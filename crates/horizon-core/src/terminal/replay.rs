@@ -32,6 +32,10 @@ pub(super) fn drain_replay_events(event_rx: &mpsc::Receiver<Event>) -> ReplayRes
         }
     }
 
+    // Pinning is a live-session contract. Replay still prefers an in-stream
+    // HORIZON_TITLE over later ordinary OSC 0 / ResetTitle, then releases the
+    // pin so a restored panel does not ignore post-restart title updates.
+    state.title.release_pin();
     state
 }
 
@@ -96,7 +100,7 @@ mod tests {
 
         let state = drain_replay_events(&rx);
 
-        assert_eq!(state.title, super::RuntimeTitle::Pinned("PR comments".to_string()));
+        assert_eq!(state.title, super::RuntimeTitle::Open("PR comments".to_string()));
         assert!(rx.try_recv().is_err());
     }
 
@@ -113,7 +117,7 @@ mod tests {
 
         assert_eq!(
             state.title,
-            super::RuntimeTitle::Pinned("PR comments: Docker lifecycle".to_string())
+            super::RuntimeTitle::Open("PR comments: Docker lifecycle".to_string())
         );
     }
 

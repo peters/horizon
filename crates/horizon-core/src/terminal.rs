@@ -123,6 +123,14 @@ impl RuntimeTitle {
             title.clear();
         }
     }
+
+    /// Keep the visible title after transcript replay, but drop the pin so a
+    /// restored session can accept ordinary OSC 0 titles again.
+    fn release_pin(&mut self) {
+        if let Self::Pinned(title) = self {
+            *self = Self::Open(std::mem::take(title));
+        }
+    }
 }
 
 #[derive(Clone)]
