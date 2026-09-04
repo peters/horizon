@@ -12,6 +12,7 @@ struct FakeState {
     create_calls: usize,
     delete_calls: usize,
     fail_create_after_insert: bool,
+    create_response_id: Option<String>,
     failed_inspections_after_create: usize,
     hidden_inspections_after_create: usize,
     binding_host: Option<String>,
@@ -33,7 +34,8 @@ impl DockerTransport for FakeDocker {
             return Ok(None);
         }
         let container = state.container.clone();
-        Ok(container.filter(|container| container.id == reference || container.name == reference))
+        let alias = state.create_response_id.as_deref() == Some(reference);
+        Ok(container.filter(|container| alias || container.id == reference || container.name == reference))
     }
     fn inspect_with_timeout(&self, reference: &str, timeout: Duration) -> DockerResult<Option<DockerContainer>> {
         assert!(!timeout.is_zero() && timeout <= CREATE_RECONCILE_TIMEOUT);
@@ -66,7 +68,7 @@ impl DockerTransport for FakeDocker {
                 operation: "container creation",
             });
         }
-        Ok(id)
+        Ok(state.create_response_id.clone().unwrap_or(id))
     }
     fn read_host_key(&self, _resource_id: &str) -> Result<Option<String>, LocalDockerError> {
         Ok(Some(format!("{} worker@local", ed25519_key(7))))
@@ -164,7 +166,7 @@ fn rejects_preflight_and_resource_drift_without_unsafe_io() {
 }
 
 #[test]
-fn reconciles_failed_and_delayed_inspection_and_cleans_invalid_endpoint() {
+fn reconciles_uncertain_creates_and_cleans_invalid_endpoint() {
     let recovered = FakeDocker::default();
     recovered.state().fail_create_after_insert = true;
     recovered.state().failed_inspections_after_create = 1;
@@ -172,6 +174,10 @@ fn reconciles_failed_and_delayed_inspection_and_cleans_invalid_endpoint() {
     let reconciled = provider("local", recovered.clone()).ensure_worker(&request());
     assert!(matches!(reconciled, Ok(InteractiveWorkerEnsure::Reused(_))));
     assert_eq!(recovered.state().create_calls, 1);
+    let mismatched = FakeDocker::default();
+    mismatched.state().create_response_id = Some("b".repeat(64));
+    let reconciled = provider("local", mismatched).ensure_worker(&request());
+    assert!(matches!(reconciled, Ok(InteractiveWorkerEnsure::Reused(_))));
     let invalid = FakeDocker::default();
     invalid.state().fail_create_after_insert = true;
     invalid.state().binding_host = Some("0.0.0.0".to_string());

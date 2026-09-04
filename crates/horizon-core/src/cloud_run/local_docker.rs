@@ -118,7 +118,8 @@ impl LocalDockerInteractiveWorkerProvider {
                     Err(error) => return self.reconcile_uncertain_create(request, &create, error),
                 };
                 if container.id != resource_id {
-                    return Err(LocalDockerError::ResourceIdentityMismatch);
+                    let error = LocalDockerError::ResourceIdentityMismatch;
+                    return self.reconcile_uncertain_create(request, &create, error);
                 }
                 let worker = match worker_for_request(&container, request) {
                     Ok(worker) => worker,

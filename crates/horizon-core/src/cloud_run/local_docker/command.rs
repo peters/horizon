@@ -28,7 +28,6 @@ impl DockerCli {
             docker_host: OsString::from(docker_host),
         }
     }
-
     fn output<I, S>(&self, args: I, operation: &'static str, timeout: Duration) -> DockerResult<CapturedOutput>
     where
         I: IntoIterator<Item = S>,
@@ -58,7 +57,6 @@ impl DockerTransport for DockerCli {
     fn inspect(&self, reference: &str) -> DockerResult<Option<DockerContainer>> {
         self.inspect_with_timeout(reference, COMMAND_TIMEOUT)
     }
-
     fn inspect_with_timeout(&self, reference: &str, timeout: Duration) -> DockerResult<Option<DockerContainer>> {
         let args = ["container", "inspect", "--", reference];
         let output = self.output(args, "container inspection", timeout)?;
@@ -73,7 +71,6 @@ impl DockerTransport for DockerCli {
         }
         parse_inspection(output.stdout_text("container inspection")?).map(Some)
     }
-
     fn create(&self, request: &DockerCreateRequest) -> Result<String, LocalDockerError> {
         let mut args = vec![
             OsString::from("run"),
@@ -102,7 +99,6 @@ impl DockerTransport for DockerCli {
         }
         output.stdout_text("container creation").map(str::to_string)
     }
-
     fn read_host_key(&self, resource_id: &str) -> Result<Option<String>, LocalDockerError> {
         let output = self.output(
             ["exec", "--", resource_id, "cat", HOST_KEY_PATH],
@@ -118,7 +114,6 @@ impl DockerTransport for DockerCli {
         }
         Ok(Some(output.stdout_text("SSH host-key inspection")?.to_string()))
     }
-
     fn delete(&self, resource_id: &str) -> Result<bool, LocalDockerError> {
         let args = ["container", "rm", "--force", "--", resource_id];
         let output = self.output(args, "container deletion", COMMAND_TIMEOUT)?;
@@ -153,7 +148,6 @@ impl CapturedOutput {
         }
     }
 }
-
 fn capture_output(child: &mut Child, operation: &'static str, timeout: Duration) -> DockerResult<CapturedOutput> {
     let stdout = child
         .stdout
@@ -193,7 +187,6 @@ fn capture_output(child: &mut Child, operation: &'static str, timeout: Duration)
     }
     Ok(CapturedOutput { status, stdout, stderr })
 }
-
 fn read_bounded(mut reader: impl Read) -> std::io::Result<(Vec<u8>, bool)> {
     let mut retained = Vec::new();
     let mut oversized = false;
