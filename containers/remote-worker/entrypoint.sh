@@ -60,8 +60,8 @@ case "${public_key_kind}" in
     *) fail_usage "HORIZON_SSH_PUBLIC_KEY must use an ssh-ed25519 key" ;;
 esac
 
-if [ -n "${HORIZON_GITHUB_TOKEN:-}" ]; then
-    fail_usage "HORIZON_GITHUB_TOKEN is not accepted; mount a secret file and set HORIZON_GITHUB_TOKEN_FILE"
+if [ -n "${HORIZON_GITHUB_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ] || [ -n "${GH_TOKEN:-}" ]; then
+    fail_usage "GitHub tokens are not accepted through environment variables; mount a secret file and set HORIZON_GITHUB_TOKEN_FILE"
 fi
 
 mkdir -p /run/horizon /run/sshd /root/.ssh
@@ -118,6 +118,13 @@ ssh-keygen -A >/dev/null
 if [ ! -s /etc/ssh/ssh_host_ed25519_key ]; then
     printf '%s\n' "failed to generate the runtime SSH host key" >&2
     exit 1
+fi
+
+now_epoch=$(date +%s)
+lease_seconds=$((deadline_epoch - now_epoch))
+if [ "${lease_seconds}" -le 0 ]; then
+    printf '%s\n' "horizon-worker: lease deadline reached; terminating worker" >&2
+    exit 0
 fi
 
 unset \

@@ -54,8 +54,9 @@ Each worker requires:
 The optional GitHub token must be mounted as the exact read-only file
 `/run/secrets/github-token`, with `HORIZON_GITHUB_TOKEN_FILE` set to that path.
 Writable mounts, other paths, symlinks, and direct `HORIZON_GITHUB_TOKEN`
-injection are rejected because container environment values and writable host
-binds violate the secret boundary.
+injection are rejected. The standard `GITHUB_TOKEN` and `GH_TOKEN` environment
+variables are rejected too, because container environment values and writable
+host binds violate the secret boundary.
 
 Example:
 

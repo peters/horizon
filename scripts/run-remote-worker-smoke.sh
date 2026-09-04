@@ -254,6 +254,16 @@ expect_usage_failure \
   --env "HORIZON_TERMINATE_AFTER=${normal_deadline}" \
   --env "HORIZON_GITHUB_TOKEN=${fake_token}"
 expect_usage_failure \
+  github-token-env \
+  --env "HORIZON_SSH_PUBLIC_KEY=${client_public_key}" \
+  --env "HORIZON_TERMINATE_AFTER=${normal_deadline}" \
+  --env "GITHUB_TOKEN=${fake_token}"
+expect_usage_failure \
+  gh-token-env \
+  --env "HORIZON_SSH_PUBLIC_KEY=${client_public_key}" \
+  --env "HORIZON_TERMINATE_AFTER=${normal_deadline}" \
+  --env "GH_TOKEN=${fake_token}"
+expect_usage_failure \
   oversized-token \
   --env "HORIZON_SSH_PUBLIC_KEY=${client_public_key}" \
   --env "HORIZON_TERMINATE_AFTER=${normal_deadline}" \
@@ -271,6 +281,37 @@ expect_usage_failure \
   --env "HORIZON_TERMINATE_AFTER=${normal_deadline}" \
   --mount "type=bind,src=${temp_dir}/github-token,dst=/run/secrets/github-token" \
   --env HORIZON_GITHUB_TOKEN_FILE=/run/secrets/github-token
+
+printf '%s\n' '#!/bin/sh' 'sleep 7' 'exit 0' >"${temp_dir}/slow-gh"
+chmod 0755 "${temp_dir}/slow-gh"
+startup_expiry_worker="${smoke_id}-startup-expiry"
+record_container "${startup_expiry_worker}"
+docker run --detach \
+  --name "${startup_expiry_worker}" \
+  --label horizon.remote-worker-smoke=true \
+  --env "HORIZON_SSH_PUBLIC_KEY=${client_public_key}" \
+  --env "HORIZON_TERMINATE_AFTER=$(deadline_after 5)" \
+  --mount "type=bind,src=${temp_dir}/github-token,dst=/run/secrets/github-token,readonly" \
+  --env HORIZON_GITHUB_TOKEN_FILE=/run/secrets/github-token \
+  --mount "type=bind,src=${temp_dir}/slow-gh,dst=/usr/bin/gh,readonly" \
+  "${image}" >/dev/null
+startup_expired=false
+for _ in {1..20}; do
+  if [[ "$(docker inspect --format '{{.State.Running}}' "${startup_expiry_worker}")" != true ]]; then
+    startup_expired=true
+    break
+  fi
+  sleep 1
+done
+[[ "${startup_expired}" == true ]] ||
+  fail "worker did not enforce a deadline that expired during initialization"
+startup_expiry_logs=$(docker logs "${startup_expiry_worker}" 2>&1)
+grep -qF 'horizon-worker: lease deadline reached; terminating worker' \
+  <<<"${startup_expiry_logs}" ||
+  fail "startup-expiry worker did not log the watchdog marker"
+if grep -qF 'Server listening on' <<<"${startup_expiry_logs}"; then
+  fail "worker accepted SSH after its deadline expired during initialization"
+fi
 
 worker_a="${smoke_id}-worker-a"
 worker_b="${smoke_id}-worker-b"
@@ -377,7 +418,7 @@ pid_one_environment=$(
   docker exec "${worker_a}" /bin/sh -c "tr '\\0' '\\n' </proc/1/environ"
 )
 if [[ "${pid_one_environment}" == *"${fake_token}"* ]] ||
-  grep -Eq '^HORIZON_(GITHUB_TOKEN|GITHUB_TOKEN_FILE|SSH_PUBLIC_KEY|TERMINATE_AFTER)=' \
+  grep -Eq '^(GH_TOKEN|GITHUB_TOKEN|HORIZON_(GITHUB_TOKEN|GITHUB_TOKEN_FILE|SSH_PUBLIC_KEY|TERMINATE_AFTER))=' \
     <<<"${pid_one_environment}"; then
   fail "runtime credentials remained in the SSH daemon environment"
 fi
