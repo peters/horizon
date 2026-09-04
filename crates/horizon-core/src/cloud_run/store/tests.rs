@@ -261,7 +261,7 @@ fn creation_claim_is_durable_atomic_and_bound_to_the_persisted_job() {
             .claim_worker_creation(workflow.id, job_id, &target, "horizon-worker-1")
             .expect("repeat claim")
     );
-    for provider in [CloudProvider::RunPod, CloudProvider::Azure] {
+    for provider in [CloudProvider::RunPod, CloudProvider::Azure, CloudProvider::LocalDocker] {
         let mut changed = workflow.clone();
         changed.updated_at_millis += 1;
         let changed_target = changed.nodes[0].worker.as_mut().expect("worker target");

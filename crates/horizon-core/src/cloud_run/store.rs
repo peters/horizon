@@ -556,6 +556,7 @@ fn provider_name(provider: CloudProvider) -> &'static str {
     match provider {
         CloudProvider::Azure => "azure",
         CloudProvider::RunPod => "run_pod",
+        CloudProvider::LocalDocker => "local_docker",
     }
 }
 
