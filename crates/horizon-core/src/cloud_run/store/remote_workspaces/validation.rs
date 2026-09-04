@@ -43,7 +43,7 @@ pub(super) fn validate_replacement(previous: &RemoteWorkspaceState, next: &Remot
     }
     if let (Some(runtime), Some(next_runtime)) = (&previous.runtime, &next.runtime)
         && runtime.cleanup.is_some()
-        && next_runtime.cleanup.is_none()
+        && next_runtime.cleanup != runtime.cleanup
     {
         return Err(Error::NonMonotonicReplacement);
     }

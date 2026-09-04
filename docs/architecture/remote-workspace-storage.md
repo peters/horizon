@@ -34,6 +34,10 @@ transaction so accepted writes cannot make recovery exceed its budget.
 All record operations run synchronously off the render thread. This storage
 boundary exposes no automatic retention or record-deletion API.
 
+Once recorded, the exact cleanup reason and request timestamp remain immutable
+while that runtime exists. Later cleanup observations cannot replace the original
+intent or reset its age; only verified runtime disposal can retire it.
+
 Domain-valid in-memory state can exceed the storage limits. Callers must persist
 intent successfully before provider side effects and surface storage-capacity
 errors without discarding the last saved runtime or cleanup record.

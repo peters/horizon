@@ -156,6 +156,47 @@ fn replacements_preserve_identity_runtime_and_checkpoint_watermarks() {
 }
 
 #[test]
+fn pending_cleanup_preserves_its_exact_reason_and_request_time() {
+    let (_directory, store) = store();
+    let mut state = provisioning(workspace("workspace"));
+    let runtime = state.runtime.as_mut().expect("runtime");
+    runtime.phase = RemoteRuntimePhase::Cancelling;
+    runtime.cleanup = Some(RemoteCleanupIntent {
+        reason: RemoteCleanupReason::Cancelled,
+        requested_at_millis: 2000,
+    });
+    let stored = store.create_remote_workspace(OWNER, &state).expect("pending cleanup");
+    for (reason, requested_at_millis) in [
+        (RemoteCleanupReason::LastPanelClosed, 2000),
+        (RemoteCleanupReason::Cancelled, 1999),
+        (RemoteCleanupReason::Cancelled, 2001),
+    ] {
+        let mut changed = state.clone();
+        changed.runtime.as_mut().expect("runtime").cleanup = Some(RemoteCleanupIntent {
+            reason,
+            requested_at_millis,
+        });
+        assert!(matches!(
+            store.replace_remote_workspace(&stored, &changed),
+            Err(RemoteWorkspaceStoreError::NonMonotonicReplacement)
+        ));
+    }
+    let reopened = CloudWorkflowStore::open_path(store.path()).expect("reopen");
+    assert_eq!(
+        reopened.load_remote_workspace(OWNER, "workspace").expect("load intent"),
+        Some(stored.clone())
+    );
+    state.runtime.as_mut().expect("runtime").phase = RemoteRuntimePhase::Failed;
+    let failed = reopened
+        .replace_remote_workspace(&stored, &state)
+        .expect("phase update retains the same cleanup intent");
+    assert_eq!(
+        failed.state().runtime.as_ref().expect("runtime").cleanup,
+        stored.state().runtime.as_ref().expect("runtime").cleanup
+    );
+}
+
+#[test]
 fn expired_exact_worker_handles_and_pinned_endpoints_remain_durable_for_reconciliation() {
     use crate::cloud_run::interactive_worker::{
         InteractiveWorker, InteractiveWorkerIdentity, InteractiveWorkerLease, InteractiveWorkerSshEndpoint,
