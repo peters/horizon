@@ -1,0 +1,11 @@
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+ChallengeResponseAuthentication no
+PermitEmptyPasswords no
+PermitRootLogin prohibit-password
+PubkeyAuthentication yes
+AuthenticationMethods publickey
+StrictModes yes
+AllowAgentForwarding no
+X11Forwarding no
+PermitUserEnvironment no

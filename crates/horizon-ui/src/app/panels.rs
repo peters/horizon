@@ -19,6 +19,7 @@ pub(super) use super::panel_chrome::{
 use super::shortcut_inventory::{global_shortcut_bindings, ssh_reconnect_shortcut_conflicts};
 use super::speech::MicState;
 use super::util::primary_shortcut_label;
+use super::view::canvas_scene_transform;
 use super::{HorizonApp, PANEL_PADDING, PANEL_TITLEBAR_HEIGHT, RESIZE_HANDLE_SIZE, RenameEditAction};
 
 mod interaction;
@@ -265,6 +266,18 @@ fn clip_screen_rect_to_canvas(raw_rect: Rect, canvas_rect: Rect) -> Option<Rect>
         && clipped.max.x.is_finite()
         && clipped.max.y.is_finite())
     .then_some(clipped)
+}
+
+trait CanvasClippedArea {
+    fn clip_to_canvas(self, canvas_layer_clip: Rect) -> Self;
+}
+
+impl CanvasClippedArea for egui::Area {
+    fn clip_to_canvas(self, canvas_layer_clip: Rect) -> Self {
+        // Keep the explicit clip for hit-testing without forcing the panel's
+        // freely positioned canvas coordinates inside that rectangle.
+        self.constrain_to(canvas_layer_clip).constrain(false)
+    }
 }
 
 impl HorizonApp {
@@ -580,13 +593,17 @@ impl HorizonApp {
         } else {
             &all_shortcut_bindings[..]
         };
+        // Area registers its parent response before the closure applies the
+        // canvas transform and clip. Give that response the same local-layer
+        // clip so an off-canvas panel cannot block fixed overlay controls.
+        let canvas_layer_clip = canvas_scene_transform(canvas_rect, self.canvas_view).inverse() * canvas_rect;
 
         // The area must stay interactable: since egui 0.36, non-interactable
         // layers are skipped by hit-testing, which makes every widget inside
         // (titlebar drag, close, resize handles) click-through.
         egui::Area::new(Id::new(("panel", panel_id.0)))
             .fixed_pos(snapshot.canvas_position)
-            .constrain(false)
+            .clip_to_canvas(canvas_layer_clip)
             .order(if snapshot.is_focused {
                 Order::Foreground
             } else {

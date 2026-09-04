@@ -141,13 +141,36 @@ audit completeness and network-capture health taken from executed MCP results
 limits, and writer failure). Tools that were not called are reported as
 `observed: false`. Every invocation stages its
 validated plan and initial `prepared` state in an owner-only directory, flushes
-both artifacts, and atomically publishes the complete job under
-`~/.horizon/browser-jobs/`; later lifecycle updates remain atomic. The prepared
+both artifacts plus an empty checkpoint-artifact directory, and atomically
+publishes the complete job under `~/.horizon/browser-jobs/`; later lifecycle
+updates remain atomic. The prepared
 state records an absolute deadline and acts as a lease: it may represent a live
 runner before the deadline, and must be treated as `timed_out` at or after the
 deadline without relying on another write. Runs that reach plan execution also
-save a final report. Legacy `running` states remain readable. Automatic
-continuation is not enabled yet.
+save a final report. Legacy lifecycle schemas remain recognizable but are not
+resumable because they lack the current checkpoint contract. Automatic
+continuation remains disabled; resume is always explicit.
+
+Before each MCP call the runner persists intent in `state.json`. Only a
+verified structured outcome becomes a checkpointed completion. `state.json`
+stores compact completion metadata, while each structured result is written
+once to an owner-only immutable file under the job's `checkpoints/` directory;
+later checkpoint updates do not rewrite earlier results.
+An interrupt after dispatch records that step as `uncertain`. Resume is
+explicit:
+
+```bash
+horizon-browser resume job-<id>
+horizon-browser resume job-<id> --on-uncertain skip
+```
+
+`resume` refuses a live prepared lease, a successful job, and any uncertain
+in-flight mutation unless `--on-uncertain skip` is set after inspecting the
+browser audit. Skip never replays the uncertain call; it continues later
+steps. A skipped step is not a successful completion, so the job cannot
+report `ok` until every plan step has a verified result. Remaining steps
+currently start a new MCP session; reconnecting the same standalone browser
+is a later slice.
 
 Every deterministic run gets one action deadline. The default is 1800 seconds;
 `--timeout` accepts 1 through 86400 whole seconds. The budget is selected after
@@ -174,7 +197,7 @@ and records `timed_out` in `state.json`; the state also records the configured
 `execution_timeout_seconds` and absolute `deadline_at_millis`. If durable
 preparation consumes the deadline, no MCP action starts. An already-dispatched
 browser mutation may still complete, so inspect the browser audit before
-retrying it; automatic replay remains disabled.
+retrying it; `resume` will not automatically replay an uncertain mutation.
 
 Stdout contains only the report; diagnostics use stderr. A file report is
 created with owner-only permissions on Unix. Stable exit codes are 0 for

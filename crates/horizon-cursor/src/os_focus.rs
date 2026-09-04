@@ -51,6 +51,16 @@ pub fn current_input_focus_window() -> Option<u32> {
     platform::current_input_focus_window()
 }
 
+/// `_NET_WM_PID` values around `window`, including parent frames and children.
+///
+/// Compositor frames can own the X11 focus window while the client PID lives
+/// on a child. A single parent-chain PID would then miss the focused app.
+#[cfg(target_os = "linux")]
+#[must_use]
+pub fn window_candidate_pids(window: u32) -> Option<Vec<u32>> {
+    platform::window_candidate_pids(window)
+}
+
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod platform {
     use std::cell::RefCell;
@@ -89,6 +99,25 @@ mod platform {
                 .and_then(|cookie| cookie.reply().ok())
                 .map(|reply| reply.focus)?;
             is_focus_candidate(focus, root).then_some(focus)
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn window_candidate_pids(window: Window) -> Option<Vec<u32>> {
+        DISPLAY.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            if slot.is_none() {
+                *slot = x11rb::connect(None).ok();
+            }
+            let (conn, screen_num) = slot.as_ref()?;
+            let root = conn.setup().roots.get(*screen_num)?.root;
+            if !is_focus_candidate(window, root) {
+                return Some(Vec::new());
+            }
+            let (_, net_pid) = net_atoms(conn)?;
+            let mut pids = Vec::new();
+            collect_pids_around(conn, window, root, net_pid, &mut pids);
+            Some(pids)
         })
     }
 

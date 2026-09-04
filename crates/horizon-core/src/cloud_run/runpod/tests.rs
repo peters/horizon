@@ -1,5 +1,13 @@
+use super::super::interactive_worker::{
+    InteractiveWorker, InteractiveWorkerCleanup, InteractiveWorkerEnsure, InteractiveWorkerIdentity,
+    InteractiveWorkerLease, InteractiveWorkerLifecycle, InteractiveWorkerProvider, InteractiveWorkerRequest,
+};
 use super::*;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::sync::{Arc, Mutex};
+
+const ED25519_BLOB_PREFIX: &[u8] = b"\0\0\0\x0bssh-ed25519\0\0\0\x20";
+
 #[derive(Clone, Default)]
 struct FakeTransport(Arc<Mutex<FakeState>>);
 #[derive(Default)]
@@ -8,6 +16,7 @@ struct FakeState {
     create_response: Option<ApiPod>,
     create_requests: Vec<CreatePodRequest>,
     deleted: Vec<String>,
+    inspected: Vec<String>,
     scripted_lists: Vec<Vec<ApiPod>>,
 }
 impl FakeTransport {
@@ -34,14 +43,15 @@ impl Transport for FakeTransport {
         let mut state = self.0.lock().expect("state");
         state.create_requests.push(request.clone());
         let mut response = state.create_response.clone().expect("create response");
-        response
-            .env
-            .insert(TERMINATE_ENV.to_string(), request.terminate_after.clone());
+        for entry in &request.env {
+            response.env.insert(entry.key.clone(), entry.value.clone());
+        }
         state.pods.push(response.clone());
         Ok(response)
     }
     fn get(&self, pod_id: &str) -> Result<Option<ApiPod>, RunPodError> {
-        let state = self.0.lock().expect("state");
+        let mut state = self.0.lock().expect("state");
+        state.inspected.push(pod_id.to_string());
         Ok(state.pods.iter().find(|pod| pod.id == pod_id).cloned())
     }
     fn delete(&self, pod_id: &str) -> Result<RunPodCleanup, RunPodError> {
@@ -78,6 +88,13 @@ fn profile() -> RunPodProfile {
         container_registry_auth_id: Some("registry_auth-1".to_string()),
     }
 }
+
+fn ed25519_key(byte: u8) -> String {
+    let mut blob = ED25519_BLOB_PREFIX.to_vec();
+    blob.extend([byte; 32]);
+    format!("ssh-ed25519 {}", STANDARD.encode(blob))
+}
+
 fn api_pod(
     workflow_id: CloudWorkflowId,
     job_id: CloudJobId,
@@ -101,6 +118,53 @@ fn api_pod(
             (TERMINATE_ENV.to_string(), terminate_after),
         ]),
         cost: hourly_cost_micros,
+    }
+}
+
+fn interactive_request(workflow_id: CloudWorkflowId, job_id: CloudJobId) -> InteractiveWorkerRequest {
+    InteractiveWorkerRequest {
+        workflow_id,
+        job_id,
+        target: target(),
+        ssh_public_key: ed25519_key(41),
+    }
+}
+
+fn running_pod(workflow_id: CloudWorkflowId, job_id: CloudJobId, target: &WorkerTarget) -> ApiPod {
+    let mut pod = api_pod(workflow_id, job_id, target, Some(420_000));
+    pod.status = Some("RUNNING".to_string());
+    pod.ssh = Some(ApiSsh {
+        direct: Some(ApiSshEndpoint {
+            username: "root".to_string(),
+            host: "worker.example".to_string(),
+            port: 22,
+        }),
+    });
+    pod
+}
+
+#[derive(Clone)]
+struct FakeHostKeySource {
+    host_key: Option<String>,
+    calls: Arc<Mutex<Vec<(String, String, u16)>>>,
+}
+
+impl FakeHostKeySource {
+    fn new(host_key: Option<String>) -> Self {
+        Self {
+            host_key,
+            calls: Arc::default(),
+        }
+    }
+}
+
+impl RunPodHostKeySource for FakeHostKeySource {
+    fn host_key(&self, worker: &RunPodWorker, endpoint: &RunPodSshEndpoint) -> Option<String> {
+        self.calls
+            .lock()
+            .expect("host key calls")
+            .push((worker.pod_id.clone(), endpoint.host.clone(), endpoint.port));
+        self.host_key.clone()
     }
 }
 #[test]
@@ -196,9 +260,18 @@ fn retries_reuse_one_exact_worker_and_reject_ambiguity() {
     ));
     let transport = FakeTransport::with_create_response(api_pod(workflow_id, job_id, &target, Some(420_000)));
     let observer = transport.clone();
+    let expected_target = target.clone();
     let client = RunPodClient {
         transport: Box::new(transport),
-        creation_fence: Box::new(|_: &str| Ok(false)),
+        creation_fence: Box::new(
+            move |actual_workflow, actual_job, actual_target: &WorkerTarget, name: &str| {
+                assert_eq!(actual_workflow, workflow_id);
+                assert_eq!(actual_job, job_id);
+                assert_eq!(actual_target, &expected_target);
+                assert_eq!(name, resource_name(workflow_id, job_id));
+                Ok(false)
+            },
+        ),
     };
     assert!(matches!(
         client.ensure_worker(workflow_id, job_id, &target, &profile()),
@@ -253,4 +326,205 @@ fn identity_mismatch_blocks_delete_and_exact_delete_is_idempotent() {
     assert_eq!(client.delete_worker(&worker), Ok(RunPodCleanup::Deleted));
     assert_eq!(client.delete_worker(&worker), Ok(RunPodCleanup::AlreadyAbsent));
     assert_eq!(observer.0.lock().expect("state").deleted, [worker.pod_id]);
+}
+
+#[test]
+fn interactive_adapter_preserves_identity_and_reaches_attested_ready_state() {
+    let (workflow_id, job_id) = (CloudWorkflowId::new(), CloudJobId::new());
+    let request = interactive_request(workflow_id, job_id);
+    let transport = FakeTransport::with_create_response(running_pod(workflow_id, job_id, &request.target));
+    let observer = transport.clone();
+    let host_keys = FakeHostKeySource::new(Some(ed25519_key(73)));
+    let host_key_calls = host_keys.calls.clone();
+    let provider = RunPodInteractiveWorkerProvider::new(RunPodClient::with_transport(transport), profile(), host_keys);
+
+    assert_eq!(provider.provider(), CloudProvider::RunPod);
+    let InteractiveWorkerEnsure::Created(status) = provider.ensure_worker(&request).expect("create interactive worker")
+    else {
+        panic!("new worker must be created");
+    };
+    assert_eq!(status.worker.identity.resource_id, "pod_123456");
+    assert_eq!(status.worker.ssh_public_key, request.ssh_public_key);
+    assert!(status.is_ready_for(&request, time::OffsetDateTime::now_utc()));
+    assert_eq!(
+        status.ssh.as_ref().map(|ssh| (ssh.host.as_str(), ssh.port)),
+        Some(("worker.example", 22))
+    );
+
+    let InteractiveWorkerEnsure::Reused(reused) = provider.ensure_worker(&request).expect("reuse interactive worker")
+    else {
+        panic!("existing worker must be reused");
+    };
+    assert_eq!(reused, status);
+
+    let inspected = provider
+        .inspect_worker(&status.worker)
+        .expect("inspect interactive worker")
+        .expect("worker present");
+    assert!(inspected.is_ready_for(&request, time::OffsetDateTime::now_utc()));
+    assert_eq!(
+        provider.delete_worker(&status.worker),
+        Ok(InteractiveWorkerCleanup::Deleted)
+    );
+    assert_eq!(
+        provider.delete_worker(&status.worker),
+        Ok(InteractiveWorkerCleanup::AlreadyAbsent)
+    );
+
+    let state = observer.0.lock().expect("state");
+    assert_eq!(state.create_requests.len(), 1);
+    assert!(
+        state.create_requests[0]
+            .env
+            .iter()
+            .any(|entry| entry.key == SSH_PUBLIC_KEY_ENV && entry.value == request.ssh_public_key)
+    );
+    assert_eq!(state.deleted, ["pod_123456"]);
+    assert_eq!(
+        *host_key_calls.lock().expect("host key calls"),
+        [
+            ("pod_123456".to_string(), "worker.example".to_string(), 22),
+            ("pod_123456".to_string(), "worker.example".to_string(), 22),
+            ("pod_123456".to_string(), "worker.example".to_string(), 22),
+        ]
+    );
+}
+
+#[test]
+fn interactive_adapter_rejects_recovered_client_key_drift() {
+    let (workflow_id, job_id) = (CloudWorkflowId::new(), CloudJobId::new());
+    let request = interactive_request(workflow_id, job_id);
+    let mut pod = running_pod(workflow_id, job_id, &request.target);
+    pod.env.insert(SSH_PUBLIC_KEY_ENV.to_string(), ed25519_key(99));
+    let transport = FakeTransport::with_pods(vec![pod]);
+    let observer = transport.clone();
+    let provider = RunPodInteractiveWorkerProvider::new(
+        RunPodClient::with_transport(transport),
+        profile(),
+        FakeHostKeySource::new(Some(ed25519_key(73))),
+    );
+
+    assert_eq!(
+        provider.ensure_worker(&request),
+        Err(RunPodError::ResourceIdentityMismatch)
+    );
+    let state = observer.0.lock().expect("state");
+    assert!(state.create_requests.is_empty());
+    assert!(state.deleted.is_empty());
+}
+
+#[test]
+fn interactive_adapter_waits_for_trusted_host_key_and_fails_closed_on_invalid_data() {
+    let (workflow_id, job_id) = (CloudWorkflowId::new(), CloudJobId::new());
+    let request = interactive_request(workflow_id, job_id);
+    let pending_provider = RunPodInteractiveWorkerProvider::new(
+        RunPodClient::with_transport(FakeTransport::with_create_response(running_pod(
+            workflow_id,
+            job_id,
+            &request.target,
+        ))),
+        profile(),
+        FakeHostKeySource::new(None),
+    );
+    let pending = pending_provider
+        .ensure_worker(&request)
+        .expect("pending worker")
+        .into_status();
+    assert_eq!(pending.lifecycle, InteractiveWorkerLifecycle::Provisioning);
+    assert!(pending.ssh.is_none());
+
+    let invalid_key_provider = RunPodInteractiveWorkerProvider::new(
+        RunPodClient::with_transport(FakeTransport::with_create_response(running_pod(
+            workflow_id,
+            job_id,
+            &request.target,
+        ))),
+        profile(),
+        FakeHostKeySource::new(Some("ssh-rsa unsupported".to_string())),
+    );
+    let invalid_key = invalid_key_provider
+        .ensure_worker(&request)
+        .expect("worker identity remains recoverable")
+        .into_status();
+    assert_eq!(invalid_key.lifecycle, InteractiveWorkerLifecycle::Failed);
+    assert!(invalid_key.ssh.is_none());
+
+    let mut invalid_endpoint = running_pod(workflow_id, job_id, &request.target);
+    invalid_endpoint
+        .ssh
+        .as_mut()
+        .expect("SSH response")
+        .direct
+        .as_mut()
+        .expect("direct SSH")
+        .host = "-oProxyCommand=bad".to_string();
+    let host_keys = FakeHostKeySource::new(Some(ed25519_key(73)));
+    let host_key_calls = host_keys.calls.clone();
+    let invalid_endpoint_provider = RunPodInteractiveWorkerProvider::new(
+        RunPodClient::with_transport(FakeTransport::with_create_response(invalid_endpoint)),
+        profile(),
+        host_keys,
+    );
+    let invalid_endpoint = invalid_endpoint_provider
+        .ensure_worker(&request)
+        .expect("worker identity remains recoverable")
+        .into_status();
+    assert_eq!(invalid_endpoint.lifecycle, InteractiveWorkerLifecycle::Failed);
+    assert!(invalid_endpoint.ssh.is_none());
+    assert!(host_key_calls.lock().expect("host key calls").is_empty());
+}
+
+#[test]
+fn interactive_adapter_rejects_invalid_handles_before_transport_io() {
+    let (workflow_id, job_id) = (CloudWorkflowId::new(), CloudJobId::new());
+    let request = interactive_request(workflow_id, job_id);
+    let transport = FakeTransport::default();
+    let observer = transport.clone();
+    let provider = RunPodInteractiveWorkerProvider::new(
+        RunPodClient::with_transport(transport),
+        profile(),
+        FakeHostKeySource::new(None),
+    );
+    let mut invalid_request = request.clone();
+    invalid_request.ssh_public_key = "ssh-rsa unsupported".to_string();
+    assert_eq!(
+        provider.ensure_worker(&invalid_request),
+        Err(RunPodError::InvalidTarget)
+    );
+    let mut worker = InteractiveWorker {
+        identity: InteractiveWorkerIdentity {
+            provider: CloudProvider::Azure,
+            workflow_id,
+            job_id,
+            resource_id: "pod_123456".to_string(),
+        },
+        target: request.target,
+        ssh_public_key: request.ssh_public_key,
+        lease: InteractiveWorkerLease {
+            terminate_after: termination_deadline(900).expect("termination deadline"),
+        },
+    };
+
+    assert_eq!(
+        provider.inspect_worker(&worker),
+        Err(RunPodError::InvalidPersistedWorker)
+    );
+    assert_eq!(
+        provider.delete_worker(&worker),
+        Err(RunPodError::InvalidPersistedWorker)
+    );
+    worker.identity.provider = CloudProvider::RunPod;
+    worker.identity.resource_id = "x".repeat(192);
+    assert_eq!(
+        provider.inspect_worker(&worker),
+        Err(RunPodError::InvalidPersistedWorker)
+    );
+    assert_eq!(
+        provider.delete_worker(&worker),
+        Err(RunPodError::InvalidPersistedWorker)
+    );
+
+    let state = observer.0.lock().expect("state");
+    assert!(state.inspected.is_empty());
+    assert!(state.deleted.is_empty());
 }

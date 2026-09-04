@@ -14,8 +14,12 @@ use std::time::Duration;
 
 use horizon_browser::BackendKind;
 use horizon_browser_cli::{
-    Plan,
-    execution_control::{CancellationHandle, CancellationProbe, ExecutionControl, ExecutionStopReason},
+    Plan, PlanResume,
+    checkpoint::{ResumeError, ResumeSelection, UncertainPolicy, valid_job_id},
+    execute_plan_with_resume,
+    execution_control::{
+        BlockingIoError, BlockingIoMode, CancellationHandle, CancellationProbe, ExecutionControl, ExecutionStopReason,
+    },
     job::JobOptions,
     run_state::{DurableExecutionReport, DurablePreparationError, DurableRun},
     standalone::StandaloneOptions,
@@ -34,6 +38,7 @@ USAGE:
     horizon-browser "<GOAL>" [--backend <auto|chromium|firefox|safari>] [--visible] [--json]
     horizon-browser do "<GOAL>" [OPTIONS]
     horizon-browser run <PLAN.json|-> [--output <REPORT.json|->] [--timeout <SECONDS>]
+    horizon-browser resume <JOB-ID> [--output <REPORT.json|->] [--timeout <SECONDS>] [--on-uncertain fail|skip]
     horizon-browser mcp [--standalone|--connect] [--backend <BACKEND>] [--visible]
 
 COMMANDS:
@@ -42,6 +47,9 @@ COMMANDS:
     run    Execute a fail-fast JSON plan through the existing MCP tools.
            Saves durable job state; reads stdin when PLAN is '-' and writes
            JSON to stdout by default. Ctrl-C preserves progress and exits 130.
+    resume Continue a cancelled, timed-out, or failed job from verified
+           checkpoints. Uncertain in-flight calls are never replayed.
+           --on-uncertain skip continues later steps after audit inspection.
     mcp    Serve the browser MCP contract over stdio. Outside Horizon it owns
            a standalone browser; --connect uses existing Horizon panels only.
 
@@ -51,6 +59,8 @@ OPTIONS:
     --json                Emit stable JSONL job progress and completion events.
     -o, --output <PATH>    Write the JSON report to PATH; '-' means stdout.
     --timeout <SECONDS>    Bound durable preparation and MCP work (default 1800, max 86400).
+    --on-uncertain <MODE>  resume: fail (default) or continue after the
+                           uncertain step without replaying it.
     -h, --help             Print this help.
     -V, --version          Print the version.
 "#;
@@ -60,6 +70,12 @@ enum Command {
         plan: PathBuf,
         output: Option<PathBuf>,
         timeout: Duration,
+    },
+    Resume {
+        job_id: String,
+        output: Option<PathBuf>,
+        timeout: Duration,
+        on_uncertain: UncertainPolicy,
     },
     Do(JobOptions),
     Mcp {
@@ -85,6 +101,12 @@ async fn main() -> ExitCode {
         Ok(Command::Do(options)) => run_job(&options),
         Ok(Command::Mcp { standalone, options }) => serve_mcp(standalone, options).await,
         Ok(Command::Run { plan, output, timeout }) => run(plan, output.as_deref(), timeout).await,
+        Ok(Command::Resume {
+            job_id,
+            output,
+            timeout,
+            on_uncertain,
+        }) => resume(job_id, output.as_deref(), timeout, on_uncertain).await,
         Err(error) => {
             eprintln!("error: {error}\n\n{HELP}");
             ExitCode::from(2)
@@ -134,6 +156,18 @@ struct PreparedRun {
     plan: Plan,
     durable: DurableRun,
     control: ExecutionControl,
+}
+
+struct PreparedResume {
+    durable: DurableRun,
+    plan: Plan,
+    selection: ResumeSelection,
+}
+
+enum ResumePreparation {
+    Completed(Box<PreparedResume>),
+    Rejected(ResumeError),
+    RearmFailed { durable: Box<DurableRun>, error: String },
 }
 
 enum BlockingCompletion<T> {
@@ -213,7 +247,7 @@ async fn prepare_run(
     )
     .await
     {
-        Ok(PreparationCompletion::Completed(prepared)) => prepared,
+        Ok(PreparationCompletion::Completed(prepared)) => prepared.map(|run| *run),
         Ok(PreparationCompletion::InfrastructureFailed(error)) => {
             eprintln!("error: {error}");
             return Err(ExitCode::FAILURE);
@@ -244,13 +278,23 @@ async fn run_controlled(
 ) -> ExitCode {
     let PreparedRun {
         plan,
-        durable,
+        mut durable,
         mut control,
     } = match prepare_run(plan_path, timeout, control, &mut preparation_cancellation).await {
         Ok(prepared) => prepared,
         Err(exit) => return exit,
     };
-    let report = match horizon_browser_cli::execute_plan_with_control(&plan, &mut control).await {
+    let report = match execute_plan_with_resume(
+        &plan,
+        &mut control,
+        PlanResume {
+            completed: Vec::new(),
+            start_index: 0,
+            checkpoint: Some(&mut durable),
+        },
+    )
+    .await
+    {
         Ok(report) => report,
         Err(horizon_browser_cli::RunError::Stopped(reason)) => {
             return persist_stopped(&durable, reason, &mut finalization_cancellation).await;
@@ -280,6 +324,138 @@ async fn run_controlled(
     } else {
         ExitCode::FAILURE
     }
+}
+
+async fn resume(job_id: String, output_path: Option<&Path>, timeout: Duration, policy: UncertainPolicy) -> ExitCode {
+    let (control, cancellation) = ExecutionControl::cancellable();
+    let finalization_cancellation = cancellation.probe();
+    let execution = resume_controlled(job_id, output_path, timeout, policy, control, finalization_cancellation);
+    let interrupts = forward_interrupts(cancellation);
+    tokio::pin!(execution);
+    tokio::pin!(interrupts);
+    tokio::select! {
+        biased;
+        never = &mut interrupts => match never {},
+        result = &mut execution => result,
+    }
+}
+
+async fn resume_controlled(
+    job_id: String,
+    output_path: Option<&Path>,
+    timeout: Duration,
+    policy: UncertainPolicy,
+    mut control: ExecutionControl,
+    mut finalization_cancellation: CancellationProbe,
+) -> ExitCode {
+    let deadline = control.start_timeout(timeout);
+    let timeout_secs = timeout.as_secs();
+    let deadline_millis = deadline.unix_millis();
+    let prepared = match control
+        .wait_owned_blocking("horizon-browser-resume-prepare", BlockingIoMode::Bound, move || {
+            let (durable, plan, selection) = match DurableRun::prepare_resume(&job_id, policy) {
+                Ok(prepared) => prepared,
+                Err(error) => return ResumePreparation::Rejected(error),
+            };
+            match durable.rearm(timeout_secs, deadline_millis, selection.skipped.clone()) {
+                Ok(durable) => ResumePreparation::Completed(Box::new(PreparedResume {
+                    durable,
+                    plan,
+                    selection,
+                })),
+                Err(error) => {
+                    let (durable, source) = error.into_parts();
+                    ResumePreparation::RearmFailed {
+                        durable: Box::new(durable),
+                        error: source.to_string(),
+                    }
+                }
+            }
+        })
+        .await
+    {
+        Ok(ResumePreparation::Completed(prepared)) => *prepared,
+        Ok(ResumePreparation::Rejected(error)) => {
+            if let Some(reason) = pending_stop_reason(&control) {
+                return stop_exit_code(reason);
+            }
+            eprintln!("error: {error}");
+            return resume_error_exit(&error);
+        }
+        Ok(ResumePreparation::RearmFailed { durable, error }) => {
+            if let Some(reason) = pending_stop_reason(&control) {
+                return persist_stopped(&durable, reason, &mut finalization_cancellation).await;
+            }
+            return persist_failed(&durable, error, &mut finalization_cancellation).await;
+        }
+        Err(BlockingIoError::Stopped(reason)) => return stop_exit_code(reason),
+        Err(BlockingIoError::Failed(error)) => {
+            if let Some(reason) = pending_stop_reason(&control) {
+                return stop_exit_code(reason);
+            }
+            eprintln!("error: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let PreparedResume {
+        mut durable,
+        plan,
+        selection,
+    } = prepared;
+    if let Err(reason) = control.check() {
+        return persist_stopped(&durable, reason, &mut finalization_cancellation).await;
+    }
+    let report = match execute_plan_with_resume(
+        &plan,
+        &mut control,
+        PlanResume {
+            completed: selection.completed,
+            start_index: selection.start_index,
+            checkpoint: Some(&mut durable),
+        },
+    )
+    .await
+    {
+        Ok(report) => report,
+        Err(horizon_browser_cli::RunError::Stopped(reason)) => {
+            return persist_stopped(&durable, reason, &mut finalization_cancellation).await;
+        }
+        Err(error) => {
+            return persist_failed(&durable, error.to_string(), &mut finalization_cancellation).await;
+        }
+    };
+    let post_process_error_exit = report.stop_reason.map_or(ExitCode::FAILURE, stop_exit_code);
+    let finalization =
+        run_finalization::finalize_report(&durable, &report, output_path, &mut finalization_cancellation).await;
+    if let Err(error) = finalization.result {
+        eprintln!("error: {error}");
+        return if finalization.interrupted {
+            ExitCode::from(EXIT_CANCELLED)
+        } else {
+            post_process_error_exit
+        };
+    }
+    if finalization.interrupted {
+        return ExitCode::from(EXIT_CANCELLED);
+    }
+    if let Some(reason) = report.stop_reason {
+        stop_exit_code(reason)
+    } else if report.ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+fn resume_error_exit(error: &ResumeError) -> ExitCode {
+    match error {
+        ResumeError::InvalidJobId(_) | ResumeError::Uncertain { .. } => ExitCode::from(2),
+        _ => ExitCode::FAILURE,
+    }
+}
+
+fn pending_stop_reason(control: &ExecutionControl) -> Option<ExecutionStopReason> {
+    control.check().err()
 }
 
 async fn run(plan_path: PathBuf, output_path: Option<&Path>, timeout: Duration) -> ExitCode {
@@ -406,6 +582,7 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Command, Strin
         Some("mcp") => parse_mcp(args),
         Some("do") => parse_do(args),
         Some("run") => parse_run(args),
+        Some("resume") => parse_resume(args),
         Some(prompt) if !prompt.starts_with('-') => parse_job(prompt.to_string(), args),
         Some(command) => Err(format!("unknown command or option `{command}`")),
         None => Err("command is not valid UTF-8".to_string()),
@@ -531,6 +708,54 @@ fn parse_run(mut args: impl Iterator<Item = OsString>) -> Result<Command, String
     Ok(Command::Run { plan, output, timeout })
 }
 
+fn parse_resume(mut args: impl Iterator<Item = OsString>) -> Result<Command, String> {
+    let job_id = args
+        .next()
+        .and_then(|value| value.into_string().ok())
+        .ok_or_else(|| "resume requires a job id".to_string())?;
+    if !valid_job_id(&job_id) {
+        return Err(format!("invalid job id `{job_id}`"));
+    }
+    let mut output = None;
+    let mut timeout = Duration::from_secs(DEFAULT_RUN_TIMEOUT_SECONDS);
+    let mut timeout_seen = false;
+    let mut on_uncertain = UncertainPolicy::Fail;
+    let mut on_uncertain_seen = false;
+    while let Some(argument) = args.next() {
+        match argument.to_str() {
+            Some("-o" | "--output") if output.is_none() => {
+                output = Some(PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| "--output requires a path or '-'".to_string())?,
+                ));
+            }
+            Some("-o" | "--output") => return Err("--output may be specified only once".to_string()),
+            Some("--timeout") if !timeout_seen => {
+                timeout_seen = true;
+                timeout = parse_run_timeout(args.next().as_ref())?;
+            }
+            Some("--timeout") => return Err("--timeout may be specified only once".to_string()),
+            Some("--on-uncertain") if !on_uncertain_seen => {
+                on_uncertain_seen = true;
+                let value = args
+                    .next()
+                    .and_then(|value| value.into_string().ok())
+                    .ok_or_else(|| "--on-uncertain requires fail or skip".to_string())?;
+                on_uncertain = UncertainPolicy::parse(&value)?;
+            }
+            Some("--on-uncertain") => return Err("--on-uncertain may be specified only once".to_string()),
+            Some(argument) => return Err(format!("unexpected resume argument `{argument}`")),
+            None => return Err("resume argument is not valid UTF-8".to_string()),
+        }
+    }
+    Ok(Command::Resume {
+        job_id,
+        output,
+        timeout,
+        on_uncertain,
+    })
+}
+
 fn parse_run_timeout(value: Option<&OsString>) -> Result<Duration, String> {
     let seconds = value
         .and_then(|value| value.to_str())
@@ -631,6 +856,36 @@ mod tests {
         assert!(parse_args(["run", "plan.json", "--timeout", "86401"].map(OsString::from)).is_err());
         assert!(parse_args(["run", "plan.json", "--timeout", "1", "--timeout", "2"].map(OsString::from)).is_err());
         assert!(parse_args(["run", "plan.json", "--actor", "spoof"].map(OsString::from)).is_err());
+        let Command::Resume {
+            job_id, on_uncertain, ..
+        } = parse_args(
+            [
+                "resume",
+                "job-4e212c23-d0dd-4ae2-bf69-9ec08fdad2b4",
+                "--on-uncertain",
+                "skip",
+            ]
+            .map(OsString::from),
+        )
+        .expect("valid resume command")
+        else {
+            panic!("expected resume command");
+        };
+        assert_eq!(job_id, "job-4e212c23-d0dd-4ae2-bf69-9ec08fdad2b4");
+        assert_eq!(on_uncertain, UncertainPolicy::Skip);
+        assert!(parse_args(["resume", "../job-4e212c23-d0dd-4ae2-bf69-9ec08fdad2b4"].map(OsString::from)).is_err());
+        assert!(
+            parse_args(
+                [
+                    "resume",
+                    "job-4e212c23-d0dd-4ae2-bf69-9ec08fdad2b4",
+                    "--on-uncertain",
+                    "retry"
+                ]
+                .map(OsString::from)
+            )
+            .is_err()
+        );
         assert!(parse_args(["mcp", "extra"].map(OsString::from)).is_err());
 
         let Command::Mcp { standalone, options } =
@@ -643,6 +898,19 @@ mod tests {
         assert_eq!(options.backend, Some(BackendKind::FirefoxBidi));
         assert!(options.visible);
         assert!(parse_args(["mcp", "--connect", "--visible"].map(OsString::from)).is_err());
+    }
+
+    #[test]
+    fn pending_stop_reason_wins_over_a_late_resume_preparation_error() {
+        let (cancelled, cancellation) = ExecutionControl::cancellable();
+        cancellation.cancel();
+        assert_eq!(pending_stop_reason(&cancelled), Some(ExecutionStopReason::Cancelled));
+
+        let expired = ExecutionControl::with_timeout(Duration::ZERO);
+        assert_eq!(
+            pending_stop_reason(&expired),
+            Some(ExecutionStopReason::DeadlineExceeded)
+        );
     }
 
     #[test]
