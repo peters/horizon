@@ -269,11 +269,13 @@ mod platform {
                 .map_err(|_| InjectError::Unsupported)
         })
         .await?;
-        let focus_pid = focus_window.and_then(crate::os_focus::window_process_id);
-        match insert_into_editable_field(&connection, deadline, &text, focus_pid).await {
+        let focus_pids = focus_window
+            .and_then(crate::os_focus::window_candidate_pids)
+            .unwrap_or_default();
+        match insert_into_editable_field(&connection, deadline, &text, &focus_pids).await {
             Ok(()) => Ok(()),
             Err(error) if can_synthesize_keys(&error) => {
-                synthesize_into_focused_target(&connection, deadline, &text, focus_window, focus_pid).await
+                synthesize_into_focused_target(&connection, deadline, &text, focus_window, &focus_pids).await
             }
             Err(error) => Err(error),
         }
@@ -283,9 +285,9 @@ mod platform {
         connection: &AccessibilityConnection,
         deadline: tokio::time::Instant,
         text: &str,
-        focus_pid: Option<u32>,
+        focus_pids: &[u32],
     ) -> Result<(), InjectError> {
-        let target = bounded_preflight(deadline, find_focused_target(connection, focus_pid)).await?;
+        let target = bounded_preflight(deadline, find_focused_target(connection, focus_pids)).await?;
         let accessible = bounded_preflight(deadline, async {
             target
                 .as_accessible_proxy(connection.connection())
@@ -357,9 +359,15 @@ mod platform {
 
     async fn find_focused_target(
         connection: &AccessibilityConnection,
-        focus_pid: Option<u32>,
+        focus_pids: &[u32],
     ) -> Result<ObjectRefOwned, InjectError> {
-        find_unique_focus(connection, FocusSearch::EditableText, unique_candidate_index, focus_pid).await
+        find_unique_focus(
+            connection,
+            FocusSearch::EditableText,
+            unique_candidate_index,
+            focus_pids,
+        )
+        .await
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -444,8 +452,11 @@ mod platform {
         }
     }
 
-    fn include_atspi_app(app_pid: Option<u32>, focus_pid: Option<u32>) -> bool {
-        matches!((app_pid, focus_pid), (Some(app), Some(focus)) if app == focus)
+    fn include_atspi_app(app_pid: Option<u32>, focus_pids: &[u32]) -> bool {
+        match app_pid {
+            Some(app) if !focus_pids.is_empty() => focus_pids.contains(&app),
+            _ => true,
+        }
     }
 
     async fn atspi_application_pid(
@@ -522,7 +533,7 @@ mod platform {
         connection: &AccessibilityConnection,
         search: FocusSearch,
         unique_index: fn(usize) -> Result<usize, InjectError>,
-        focus_pid: Option<u32>,
+        focus_pids: &[u32],
     ) -> Result<ObjectRefOwned, InjectError> {
         let registry = connection
             .root_accessible_on_registry()
@@ -542,7 +553,7 @@ mod platform {
                 Some(proxy) => atspi_application_pid(proxy, &application).await,
                 None => None,
             };
-            if !include_atspi_app(app_pid, focus_pid) {
+            if !include_atspi_app(app_pid, focus_pids) {
                 continue;
             }
             let Ok(root) = application.as_accessible_proxy(connection.connection()).await else {
@@ -574,9 +585,9 @@ mod platform {
 
     async fn find_focused_object(
         connection: &AccessibilityConnection,
-        focus_pid: Option<u32>,
+        focus_pids: &[u32],
     ) -> Result<ObjectRefOwned, InjectError> {
-        find_unique_focus(connection, FocusSearch::FocusedOnly, unique_focused_index, focus_pid).await
+        find_unique_focus(connection, FocusSearch::FocusedOnly, unique_focused_index, focus_pids).await
     }
 
     async fn synthesize_into_focused_target(
@@ -584,10 +595,10 @@ mod platform {
         deadline: tokio::time::Instant,
         text: &str,
         focus_window: Option<u32>,
-        focus_pid: Option<u32>,
+        focus_pids: &[u32],
     ) -> Result<(), InjectError> {
-        ensure_synthesis_target_still_safe(connection, deadline, focus_pid).await?;
-        synthesize_key_string(connection, deadline, text, focus_window, focus_pid).await
+        ensure_synthesis_target_still_safe(connection, deadline, focus_pids).await?;
+        synthesize_key_string(connection, deadline, text, focus_window, focus_pids).await
     }
 
     async fn synthesize_key_string(
@@ -595,7 +606,7 @@ mod platform {
         deadline: tokio::time::Instant,
         text: &str,
         focus_window: Option<u32>,
-        focus_pid: Option<u32>,
+        focus_pids: &[u32],
     ) -> Result<(), InjectError> {
         let proxy = bounded_preflight(deadline, async {
             DeviceEventControllerProxy::new(connection.connection())
@@ -607,7 +618,7 @@ mod platform {
         // Tab/click can move focus to a password or selection in the same
         // window while the device proxy is created. Re-classify immediately
         // before the mutating call; unclassified Chromium/Teams still type.
-        ensure_synthesis_target_still_safe(connection, deadline, focus_pid).await?;
+        ensure_synthesis_target_still_safe(connection, deadline, focus_pids).await?;
         ensure_focus_window_unchanged(focus_window)?;
         proxy
             .generate_keyboard_event(0, text, KeySynthType::String)
@@ -619,9 +630,9 @@ mod platform {
     async fn ensure_synthesis_target_still_safe(
         connection: &AccessibilityConnection,
         deadline: tokio::time::Instant,
-        focus_pid: Option<u32>,
+        focus_pids: &[u32],
     ) -> Result<(), InjectError> {
-        match bounded_preflight(deadline, find_focused_object(connection, focus_pid)).await {
+        match bounded_preflight(deadline, find_focused_object(connection, focus_pids)).await {
             Ok(target) => validate_classified_synthesis_target(connection, deadline, target).await,
             // No AT-SPI focused object (Chromium/Teams). Type into OS focus.
             Err(error) if is_unclassified_focus(&error) => Ok(()),
@@ -779,12 +790,14 @@ mod platform {
             const TEAMS: u32 = 54_087;
             const FIREFOX: u32 = 14_474;
             const GNOME_SHELL: u32 = 6_749;
-            assert!(include_atspi_app(Some(TEAMS), Some(TEAMS)));
-            assert!(!include_atspi_app(Some(FIREFOX), Some(TEAMS)));
-            assert!(!include_atspi_app(Some(GNOME_SHELL), Some(TEAMS)));
-            assert!(!include_atspi_app(None, Some(TEAMS)));
-            assert!(!include_atspi_app(Some(TEAMS), None));
-            assert!(!include_atspi_app(None, None));
+            const FRAME: u32 = 6_766;
+            assert!(include_atspi_app(Some(TEAMS), &[TEAMS]));
+            assert!(include_atspi_app(Some(TEAMS), &[FRAME, TEAMS]));
+            assert!(!include_atspi_app(Some(FIREFOX), &[TEAMS]));
+            assert!(!include_atspi_app(Some(GNOME_SHELL), &[TEAMS]));
+            assert!(include_atspi_app(None, &[TEAMS]));
+            assert!(include_atspi_app(Some(FIREFOX), &[]));
+            assert!(include_atspi_app(None, &[]));
         }
 
         #[test]

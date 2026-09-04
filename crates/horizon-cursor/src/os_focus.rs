@@ -51,10 +51,14 @@ pub fn current_input_focus_window() -> Option<u32> {
     platform::current_input_focus_window()
 }
 
-/// `_NET_WM_PID` of `window`, walking parents when the focused child has none.
+/// `_NET_WM_PID` values around `window`, including parent frames and children.
+///
+/// Compositor frames can own the X11 focus window while the client PID lives
+/// on a child. A single parent-chain PID would then miss the focused app.
+#[cfg(target_os = "linux")]
 #[must_use]
-pub fn window_process_id(window: u32) -> Option<u32> {
-    platform::window_process_id(window)
+pub fn window_candidate_pids(window: u32) -> Option<Vec<u32>> {
+    platform::window_candidate_pids(window)
 }
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -98,7 +102,8 @@ mod platform {
         })
     }
 
-    pub(super) fn window_process_id(window: Window) -> Option<u32> {
+    #[cfg(target_os = "linux")]
+    pub(super) fn window_candidate_pids(window: Window) -> Option<Vec<u32>> {
         DISPLAY.with(|slot| {
             let mut slot = slot.borrow_mut();
             if slot.is_none() {
@@ -106,27 +111,14 @@ mod platform {
             }
             let (conn, screen_num) = slot.as_ref()?;
             let root = conn.setup().roots.get(*screen_num)?.root;
+            if !is_focus_candidate(window, root) {
+                return Some(Vec::new());
+            }
             let (_, net_pid) = net_atoms(conn)?;
-            pid_for_window_or_parent(conn, window, root, net_pid)
+            let mut pids = Vec::new();
+            collect_pids_around(conn, window, root, net_pid, &mut pids);
+            Some(pids)
         })
-    }
-
-    fn pid_for_window_or_parent(conn: &RustConnection, window: Window, root: Window, pid_atom: Atom) -> Option<u32> {
-        if !is_focus_candidate(window, root) {
-            return None;
-        }
-        let mut current = window;
-        for _ in 0..MAX_PARENT_WALKS {
-            if let Some(pid) = window_pid(conn, current, pid_atom) {
-                return Some(pid);
-            }
-            let tree = conn.query_tree(current).ok()?.reply().ok()?;
-            if tree.parent == NONE || tree.parent == root || tree.parent == current {
-                return window_pid(conn, tree.parent, pid_atom);
-            }
-            current = tree.parent;
-        }
-        None
     }
 
     fn focused_candidate_pids() -> Option<Vec<u32>> {
@@ -355,10 +347,6 @@ mod platform {
     }
 
     pub(super) const fn current_input_focus_window() -> Option<u32> {
-        None
-    }
-
-    pub(super) const fn window_process_id(_window: u32) -> Option<u32> {
         None
     }
 }
