@@ -170,10 +170,10 @@ mod platform {
             if !self.states.contains(State::Visible | State::Showing) {
                 return Err(InjectError::Target("focused field is not visible"));
             }
-            // GTK read-only entries still expose Text+EditableText. Chromium
-            // Frame/DocumentWeb often report ReadOnly without those interfaces;
-            // KEY_STRING into that unclassified window must keep working.
-            if self.has_text_interfaces() && self.states.contains(State::ReadOnly) {
+            // Chromium Frame/DocumentWeb often report ReadOnly without being
+            // an editable field. A read-only Entry/text object must still
+            // refuse KEY_STRING even when it exposes only Interface::Text.
+            if self.states.contains(State::ReadOnly) && !matches!(self.role, Role::Frame | Role::DocumentWeb) {
                 return Err(InjectError::Target("focused field is not editable"));
             }
             Ok(())
@@ -938,6 +938,18 @@ mod platform {
             let mut read_only_frame = frame;
             read_only_frame.states.insert(State::ReadOnly);
             assert_eq!(read_only_frame.validate_synthesis_target(), Ok(()));
+
+            let mut read_only_document = document;
+            read_only_document.states.insert(State::ReadOnly);
+            assert_eq!(read_only_document.validate_synthesis_target(), Ok(()));
+
+            let mut read_only_text_only_entry = terminal;
+            read_only_text_only_entry.role = Role::Entry;
+            read_only_text_only_entry.states.insert(State::ReadOnly);
+            assert_eq!(
+                read_only_text_only_entry.validate_synthesis_target(),
+                Err(InjectError::Target("focused field is not editable"))
+            );
 
             let mut read_only_text = safe_target();
             read_only_text.states.insert(State::ReadOnly);
