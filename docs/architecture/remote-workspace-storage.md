@@ -1,7 +1,7 @@
 # ADR-383: Session-owned remote records in the control-plane database
 
 Status: Proposed implementation boundary for issue #383.
-Date: 2026-09-05
+Date: 2026-09-05 (Europe/Oslo; 2026-09-04 UTC)
 Deciders: Repository maintainer through the issue and reviewed implementation PRs.
 
 ## Context
@@ -31,7 +31,7 @@ Each snapshot is limited to 4 MiB, with session recovery capped at 512 records
 and 64 MiB of serialized snapshots. Reads are bounded before materialization;
 creates and replacements enforce the same per-session limits in their write
 transaction so accepted writes cannot make recovery exceed its budget.
-all record operations run synchronously off the render thread. This storage
+All record operations run synchronously off the render thread. This storage
 boundary exposes no automatic retention or record-deletion API.
 
 Domain-valid in-memory state can exceed the storage limits. Callers must persist
