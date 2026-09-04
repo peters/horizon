@@ -228,7 +228,12 @@ pub async fn execute_plan_with_resume(
     validate_plan(plan)?;
     control.check().map_err(RunError::Stopped)?;
     if resume.start_index >= plan.steps.len() {
-        return Ok(completed_execution_report(plan, resume.completed, resume.start_index));
+        return Ok(completed_execution_report(
+            plan,
+            resume.completed,
+            resume.start_index,
+            None,
+        ));
     }
     let (server_transport, client_transport) = tokio::io::duplex(MCP_BUFFER_BYTES);
     let mut server_task = tokio::spawn(async move {
@@ -315,7 +320,7 @@ pub async fn execute_plan_with_resume(
 
 enum PersistOutcome {
     Continue,
-    Break,
+    Break(Option<String>),
     Stop(Box<ExecutionReport>),
 }
 
@@ -341,6 +346,7 @@ async fn execute_steps(
         result_indexes.insert(step.id.clone(), index);
     }
     let mut steps = completed;
+    let mut persistence_error = None;
     for step in plan.steps.iter().skip(start_index) {
         let arguments = match resolve_arguments(step, &steps, &result_indexes) {
             Ok(arguments) => arguments,
@@ -351,7 +357,10 @@ async fn execute_steps(
         };
         match persist_intent(checkpoint.as_deref_mut(), control, step, &mut steps).await {
             PersistOutcome::Continue => {}
-            PersistOutcome::Break => break,
+            PersistOutcome::Break(error) => {
+                persistence_error = error;
+                break;
+            }
             PersistOutcome::Stop(report) => return *report,
         }
         if let Err(reason) = control.check() {
@@ -367,9 +376,12 @@ async fn execute_steps(
                 break;
             }
             DispatchOutcome::Next(outcome) => {
-                match persist_completion(checkpoint.as_deref_mut(), control, step, &outcome, &mut steps).await {
+                match persist_completion(checkpoint.as_deref_mut(), control, &outcome, &mut steps).await {
                     PersistOutcome::Continue => {}
-                    PersistOutcome::Break => break,
+                    PersistOutcome::Break(error) => {
+                        persistence_error = error;
+                        break;
+                    }
                     PersistOutcome::Stop(report) => return *report,
                 }
                 result_indexes.insert(step.id.clone(), steps.len());
@@ -377,10 +389,15 @@ async fn execute_steps(
             }
         }
     }
-    completed_execution_report(plan, steps, start_index)
+    completed_execution_report(plan, steps, start_index, persistence_error)
 }
 
-fn completed_execution_report(plan: &Plan, steps: Vec<StepReport>, start_index: usize) -> ExecutionReport {
+fn completed_execution_report(
+    plan: &Plan,
+    steps: Vec<StepReport>,
+    start_index: usize,
+    persistence_error: Option<String>,
+) -> ExecutionReport {
     let all_reports_succeeded = steps.iter().all(|step| step.ok);
     let skipped_ids = {
         let reported_ids = steps.iter().map(|step| step.id.as_str()).collect::<BTreeSet<_>>();
@@ -392,7 +409,11 @@ fn completed_execution_report(plan: &Plan, steps: Vec<StepReport>, start_index: 
             .collect::<Vec<_>>()
     };
     let ok = skipped_ids.is_empty() && steps.len() == plan.steps.len() && all_reports_succeeded;
-    let error = if all_reports_succeeded && !skipped_ids.is_empty() {
+    let error = if ok {
+        None
+    } else if let Some(error) = persistence_error {
+        Some(error)
+    } else if all_reports_succeeded && !skipped_ids.is_empty() {
         Some(format!(
             "plan remains incomplete because resume explicitly skipped uncertain steps: {}",
             skipped_ids.join(", ")
@@ -426,7 +447,7 @@ async fn persist_intent(
         Ok(()) => PersistOutcome::Continue,
         Err(CheckpointPersistError::Io(error)) => {
             steps.push(failed_step(step, format!("could not persist step intent: {error}")));
-            PersistOutcome::Break
+            PersistOutcome::Break(None)
         }
         Err(CheckpointPersistError::Stopped(reason)) => {
             PersistOutcome::Stop(Box::new(stop_execution(std::mem::take(steps), reason, false)))
@@ -437,7 +458,6 @@ async fn persist_intent(
 async fn persist_completion(
     checkpoint: Option<&mut DurableRun>,
     control: &mut ExecutionControl,
-    step: &PlanStep,
     outcome: &StepReport,
     steps: &mut Vec<StepReport>,
 ) -> PersistOutcome {
@@ -447,11 +467,13 @@ async fn persist_completion(
     match store.record_completion_controlled(outcome, control).await {
         Ok(()) => PersistOutcome::Continue,
         Err(CheckpointPersistError::Io(error)) => {
-            steps.push(failed_step(step, format!("could not persist step completion: {error}")));
-            PersistOutcome::Break
+            steps.push(outcome.clone());
+            PersistOutcome::Break(Some(format!("could not persist step completion: {error}")))
         }
         Err(CheckpointPersistError::Stopped(reason)) => {
-            PersistOutcome::Stop(Box::new(stop_execution(std::mem::take(steps), reason, true)))
+            let mut completed = std::mem::take(steps);
+            completed.push(outcome.clone());
+            PersistOutcome::Stop(Box::new(stop_execution(completed, reason, true)))
         }
     }
 }
@@ -1004,6 +1026,39 @@ mod tests {
             report.error.as_deref(),
             Some("plan remains incomplete because resume explicitly skipped uncertain steps: skipped")
         );
+    }
+
+    #[test]
+    fn incomplete_checkpoint_persistence_keeps_the_verified_result_and_error() {
+        let plan = plan(
+            br#"{"version":1,"steps":[{"id":"first","tool":"browser_list"},{"id":"second","tool":"browser_list"}]}"#,
+        );
+        let report = completed_execution_report(
+            &plan,
+            vec![successful_step("first", json!({"panels": []}))],
+            0,
+            Some("checkpoint storage unavailable".to_string()),
+        );
+
+        assert!(!report.ok);
+        assert_eq!(report.completed_steps, 1);
+        assert!(report.steps[0].ok);
+        assert_eq!(report.error.as_deref(), Some("checkpoint storage unavailable"));
+    }
+
+    #[test]
+    fn terminal_persistence_can_heal_the_final_checkpoint_write() {
+        let plan = plan(br#"{"version":1,"steps":[{"id":"only","tool":"browser_list"}]}"#);
+        let report = completed_execution_report(
+            &plan,
+            vec![successful_step("only", json!({"panels": []}))],
+            0,
+            Some("transient checkpoint error".to_string()),
+        );
+
+        assert!(report.ok);
+        assert_eq!(report.completed_steps, 1);
+        assert_eq!(report.error, None);
     }
 
     fn successful_step(id: &str, result: Value) -> StepReport {

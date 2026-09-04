@@ -141,16 +141,21 @@ audit completeness and network-capture health taken from executed MCP results
 limits, and writer failure). Tools that were not called are reported as
 `observed: false`. Every invocation stages its
 validated plan and initial `prepared` state in an owner-only directory, flushes
-both artifacts, and atomically publishes the complete job under
-`~/.horizon/browser-jobs/`; later lifecycle updates remain atomic. The prepared
+both artifacts plus an empty checkpoint-artifact directory, and atomically
+publishes the complete job under `~/.horizon/browser-jobs/`; later lifecycle
+updates remain atomic. The prepared
 state records an absolute deadline and acts as a lease: it may represent a live
 runner before the deadline, and must be treated as `timed_out` at or after the
 deadline without relying on another write. Runs that reach plan execution also
-save a final report. Legacy `running` states remain readable. Automatic
-continuation is not enabled yet.
+save a final report. Legacy lifecycle schemas remain recognizable but are not
+resumable because they lack the current checkpoint contract. Automatic
+continuation remains disabled; resume is always explicit.
 
 Before each MCP call the runner persists intent in `state.json`. Only a
-verified structured outcome becomes a checkpointed completion.
+verified structured outcome becomes a checkpointed completion. `state.json`
+stores compact completion metadata, while each structured result is written
+once to an owner-only immutable file under the job's `checkpoints/` directory;
+later checkpoint updates do not rewrite earlier results.
 An interrupt after dispatch records that step as `uncertain`. Resume is
 explicit:
 

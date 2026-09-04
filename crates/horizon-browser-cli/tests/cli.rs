@@ -39,6 +39,7 @@ fn run_writes_the_same_structured_report_to_stdout_or_a_private_file() {
     assert!(state["deadline_at_millis"].as_u64().is_some());
     assert_eq!(state["completed_steps"], 1);
     assert_eq!(state["report_file"], "report.json");
+    assert_checkpoint_artifact(&job_dir, &state, &stdout_report["steps"][0]);
     assert_eq!(
         serde_json::from_slice::<Value>(&std::fs::read(job_dir.join("report.json")).expect("durable report"))
             .expect("decode durable report"),
@@ -109,6 +110,41 @@ fn run_writes_the_same_structured_report_to_stdout_or_a_private_file() {
     assert!(failed_state["checkpoint"].get("completed").is_none());
 }
 
+fn assert_checkpoint_artifact(job_dir: &std::path::Path, state: &Value, expected: &Value) {
+    assert!(state["checkpoint"]["completed"][0].get("result").is_none());
+    let checkpoint_report = job_dir.join(
+        state["checkpoint"]["completed"][0]["report_file"]
+            .as_str()
+            .expect("checkpoint result path"),
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&std::fs::read(&checkpoint_report).expect("checkpoint result"))
+            .expect("decode checkpoint result"),
+        *expected
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        assert_eq!(
+            std::fs::metadata(job_dir.join("checkpoints"))
+                .expect("checkpoint directory metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(checkpoint_report)
+                .expect("checkpoint result metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+}
+
 #[test]
 fn run_publishes_a_complete_relative_job_when_home_is_unset() {
     let current_dir = tempfile::tempdir().expect("isolated working directory");
@@ -147,7 +183,7 @@ fn run_publishes_a_complete_relative_job_when_home_is_unset() {
     assert!(job_dir.join("plan.json").is_file());
     let state: Value = serde_json::from_slice(&std::fs::read(job_dir.join("state.json")).expect("job state"))
         .expect("decode job state");
-    assert_eq!(state["version"], 3);
+    assert_eq!(state["version"], 4);
     assert_eq!(state["status"], "succeeded");
     assert!(state["deadline_at_millis"].as_u64().is_some());
     assert_eq!(state["report_file"], "report.json");

@@ -11,15 +11,27 @@ use crate::{Plan, PlanStep, StepReport};
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunCheckpoint {
-    /// Tool results persisted only after MCP returned a structured outcome.
+    /// Compact references to results persisted after MCP returned a structured outcome.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub completed: Vec<StepReport>,
+    pub completed: Vec<CheckpointCompletion>,
     /// Step whose mutation may have been dispatched but is not yet verified.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intent: Option<CheckpointIntent>,
     /// Uncertain steps the operator chose not to replay.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skipped: Vec<String>,
+}
+
+/// Compact durable reference to one verified step-result artifact.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CheckpointCompletion {
+    /// Plan step identifier.
+    pub id: String,
+    /// Exact MCP tool that produced the result.
+    pub tool: String,
+    /// Job-directory-relative immutable result artifact.
+    pub report_file: String,
 }
 
 impl RunCheckpoint {
@@ -165,10 +177,12 @@ impl UncertainPolicy {
 pub fn select_resume(
     plan: &Plan,
     checkpoint: Option<&RunCheckpoint>,
+    completed_reports: &[StepReport],
     policy: UncertainPolicy,
 ) -> Result<ResumeSelection, ResumeError> {
     let checkpoint = checkpoint.cloned().unwrap_or_default();
-    let reports = reports_by_id(&checkpoint.completed)?;
+    validate_completion_metadata(&checkpoint.completed, completed_reports)?;
+    let reports = reports_by_id(completed_reports)?;
     let skipped_ids = checkpoint.skipped.iter().cloned().collect::<BTreeSet<_>>();
     let mut unused_reports = reports.keys().copied().collect::<BTreeSet<_>>();
     let mut unused_skips = skipped_ids.clone();
@@ -218,6 +232,18 @@ pub fn select_resume(
     })
 }
 
+fn validate_completion_metadata(completed: &[CheckpointCompletion], reports: &[StepReport]) -> Result<(), ResumeError> {
+    if completed.len() != reports.len()
+        || completed
+            .iter()
+            .zip(reports)
+            .any(|(metadata, report)| metadata.id != report.id || metadata.tool != report.tool)
+    {
+        return Err(ResumeError::PrefixMismatch);
+    }
+    Ok(())
+}
+
 fn reports_by_id(completed: &[StepReport]) -> Result<BTreeMap<&str, &StepReport>, ResumeError> {
     let mut reports = BTreeMap::new();
     for report in completed {
@@ -263,24 +289,32 @@ mod tests {
         }
     }
 
-    fn completed(id: &str, tool: &str) -> StepReport {
-        StepReport {
-            id: id.to_string(),
-            tool: tool.to_string(),
-            ok: true,
-            result: Some(json!({"ok": true})),
-            error: None,
-        }
+    fn completed(id: &str, tool: &str) -> (CheckpointCompletion, StepReport) {
+        (
+            CheckpointCompletion {
+                id: id.to_string(),
+                tool: tool.to_string(),
+                report_file: format!("checkpoints/{id}.json"),
+            },
+            StepReport {
+                id: id.to_string(),
+                tool: tool.to_string(),
+                ok: true,
+                result: Some(json!({"ok": true})),
+                error: None,
+            },
+        )
     }
 
     #[test]
     fn resume_continues_after_verified_completions() {
+        let (metadata, report) = completed("list", "browser_list");
         let checkpoint = RunCheckpoint {
-            completed: vec![completed("list", "browser_list")],
+            completed: vec![metadata],
             intent: None,
             skipped: Vec::new(),
         };
-        let selection = select_resume(&plan(), Some(&checkpoint), UncertainPolicy::Fail).expect("resume");
+        let selection = select_resume(&plan(), Some(&checkpoint), &[report], UncertainPolicy::Fail).expect("resume");
         assert_eq!(selection.start_index, 1);
         assert_eq!(selection.completed.len(), 1);
         assert!(selection.skipped.is_none());
@@ -288,8 +322,9 @@ mod tests {
 
     #[test]
     fn uncertain_intent_is_not_replayed_by_default() {
+        let (metadata, report) = completed("list", "browser_list");
         let checkpoint = RunCheckpoint {
-            completed: vec![completed("list", "browser_list")],
+            completed: vec![metadata],
             intent: Some(CheckpointIntent {
                 step_id: "navigate".to_string(),
                 tool: "browser_navigate".to_string(),
@@ -297,14 +332,15 @@ mod tests {
             }),
             skipped: Vec::new(),
         };
-        let error = select_resume(&plan(), Some(&checkpoint), UncertainPolicy::Fail).expect_err("uncertain");
+        let error = select_resume(&plan(), Some(&checkpoint), &[report], UncertainPolicy::Fail).expect_err("uncertain");
         assert!(matches!(error, ResumeError::Uncertain { step, .. } if step == "navigate"));
     }
 
     #[test]
     fn skip_policy_advances_past_the_uncertain_step() {
+        let (metadata, report) = completed("list", "browser_list");
         let checkpoint = RunCheckpoint {
-            completed: vec![completed("list", "browser_list")],
+            completed: vec![metadata],
             intent: Some(CheckpointIntent {
                 step_id: "navigate".to_string(),
                 tool: "browser_navigate".to_string(),
@@ -312,7 +348,7 @@ mod tests {
             }),
             skipped: Vec::new(),
         };
-        let selection = select_resume(&plan(), Some(&checkpoint), UncertainPolicy::Skip).expect("skip");
+        let selection = select_resume(&plan(), Some(&checkpoint), &[report], UncertainPolicy::Skip).expect("skip");
         assert_eq!(selection.start_index, 2);
         assert_eq!(selection.skipped.as_deref(), Some("navigate"));
     }
@@ -328,21 +364,26 @@ mod tests {
             }),
             skipped: Vec::new(),
         };
-        let error = select_resume(&plan(), Some(&checkpoint), UncertainPolicy::Fail).expect_err("dispatched");
+        let error = select_resume(&plan(), Some(&checkpoint), &[], UncertainPolicy::Fail).expect_err("dispatched");
         assert!(matches!(error, ResumeError::Uncertain { step, .. } if step == "list"));
     }
 
     #[test]
     fn skipped_steps_are_merged_in_plan_order() {
+        let (first_metadata, first_report) = completed("list", "browser_list");
+        let (last_metadata, last_report) = completed("title", "browser_evaluate");
         let checkpoint = RunCheckpoint {
-            completed: vec![
-                completed("list", "browser_list"),
-                completed("title", "browser_evaluate"),
-            ],
+            completed: vec![first_metadata, last_metadata],
             intent: None,
             skipped: vec!["navigate".to_string()],
         };
-        let selection = select_resume(&plan(), Some(&checkpoint), UncertainPolicy::Fail).expect("merge");
+        let selection = select_resume(
+            &plan(),
+            Some(&checkpoint),
+            &[first_report, last_report],
+            UncertainPolicy::Fail,
+        )
+        .expect("merge");
         assert_eq!(selection.start_index, 3);
         assert_eq!(
             selection
@@ -356,12 +397,28 @@ mod tests {
 
     #[test]
     fn unconsumed_completion_is_a_prefix_mismatch() {
+        let (metadata, report) = completed("title", "browser_evaluate");
         let checkpoint = RunCheckpoint {
-            completed: vec![completed("title", "browser_evaluate")],
+            completed: vec![metadata],
             intent: None,
             skipped: Vec::new(),
         };
-        let error = select_resume(&plan(), Some(&checkpoint), UncertainPolicy::Fail).expect_err("gap");
+        let error = select_resume(&plan(), Some(&checkpoint), &[report], UncertainPolicy::Fail).expect_err("gap");
+        assert!(matches!(error, ResumeError::PrefixMismatch));
+    }
+
+    #[test]
+    fn completion_metadata_must_match_loaded_reports() {
+        let (metadata, mut report) = completed("list", "browser_list");
+        report.tool = "browser_snapshot".to_string();
+        let checkpoint = RunCheckpoint {
+            completed: vec![metadata],
+            intent: None,
+            skipped: Vec::new(),
+        };
+
+        let error = select_resume(&plan(), Some(&checkpoint), &[report], UncertainPolicy::Fail).expect_err("mismatch");
+
         assert!(matches!(error, ResumeError::PrefixMismatch));
     }
 
