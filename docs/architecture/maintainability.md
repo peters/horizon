@@ -78,6 +78,10 @@ back into large multi-purpose modules.
   panels, disposable runtime generation, and repository checkpoint metadata.
   Its validation is pure: provider I/O, runtime-state migration, coordination,
   repository transfer, and UI integration belong in later focused modules.
+- `cloud_run/store.rs` owns workflow snapshots and creation-claim transactions.
+  Its `cloud_run/store/database.rs` leaf owns private-path preparation, connection policy,
+  schema initialization, and compatibility checks. Keep database opening separate
+  from domain-specific record operations.
 - Shared domain helpers belong here when both core and UI need them.
 - If a UI feature needs to reconstruct runtime state, sync template-backed
   workspace metadata, or format panel/workspace domain labels, prefer adding a
