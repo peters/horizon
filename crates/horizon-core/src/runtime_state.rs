@@ -2,6 +2,7 @@ mod agent_sessions;
 mod binding_bootstrap;
 mod claude_live_sessions;
 mod models;
+mod versioning;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -39,6 +40,7 @@ const PI_SESSION_TAIL_BYTES: u64 = 64 * 1024;
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct RuntimeState {
+    #[serde(with = "versioning")]
     pub version: u32,
     pub window: Option<WindowConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -89,7 +91,9 @@ impl RuntimeState {
     ///
     /// # Errors
     ///
-    /// Returns an error if the state file exists but cannot be read or parsed.
+    /// Returns an error if the state file exists but cannot be read or parsed,
+    /// or its version is newer than this binary supports. Loading never rewrites
+    /// the source file, including when migration fails.
     pub fn load(path: &Path) -> Result<Option<Self>> {
         if !path.exists() {
             return Ok(None);
@@ -107,7 +111,7 @@ impl RuntimeState {
     ///
     /// # Errors
     ///
-    /// Returns an error if serialization fails.
+    /// Returns an error if serialization fails or the state version is unsupported.
     pub fn to_yaml(&self) -> Result<String> {
         serde_yaml::to_string(self).map_err(|error| Error::State(error.to_string()))
     }
