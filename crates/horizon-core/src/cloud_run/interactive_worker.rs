@@ -111,6 +111,13 @@ impl InteractiveWorker {
     pub fn has_valid_shape(&self) -> bool {
         self.identity.is_valid() && valid_immutable_image(&self.image) && self.lease.has_valid_shape()
     }
+
+    /// Check the durable handle before any provider-specific inspection or
+    /// deletion call.
+    #[must_use]
+    pub fn is_valid_for(&self, provider: CloudProvider) -> bool {
+        self.identity.provider == provider && self.has_valid_shape()
+    }
 }
 
 /// Provider-neutral lifecycle observed for an exact worker resource.
@@ -166,8 +173,7 @@ impl InteractiveWorkerStatus {
         let identity = &self.worker.identity;
         request.is_valid_for(request.target.provider)
             && matches!(self.lifecycle, InteractiveWorkerLifecycle::Ready)
-            && self.worker.has_valid_shape()
-            && identity.provider == request.target.provider
+            && self.worker.is_valid_for(request.target.provider)
             && identity.workflow_id == request.workflow_id
             && identity.job_id == request.job_id
             && self.worker.image == request.target.image
@@ -212,9 +218,13 @@ pub enum InteractiveWorkerCleanup {
 /// Blocking provider boundary for one disposable interactive worker.
 ///
 /// Callers must invoke provider operations away from the render thread. An
-/// implementation must validate that request targets match [`Self::provider`],
-/// make `ensure_worker` idempotent across controllers, preserve the exact
-/// returned handle for later inspection, and delete only that exact resource.
+/// implementation must reject an ensure request unless
+/// [`InteractiveWorkerRequest::is_valid_for`] accepts [`Self::provider`]. It
+/// must also reject inspect and delete operations before provider I/O unless
+/// [`InteractiveWorker::is_valid_for`] accepts [`Self::provider`]. Valid
+/// operations must make `ensure_worker` idempotent across controllers,
+/// preserve the exact returned handle for later inspection, and delete only
+/// that exact resource.
 pub trait InteractiveWorkerProvider: Send + Sync {
     type Error: Error + Send + Sync + 'static;
 
@@ -231,13 +241,17 @@ pub trait InteractiveWorkerProvider: Send + Sync {
     /// Inspect only the exact persisted worker, returning `None` when absent.
     ///
     /// # Errors
-    /// Returns a redacted, provider-specific error when state is ambiguous.
+    /// Returns a redacted, provider-specific error before provider I/O when
+    /// the worker is malformed or belongs to another provider, or when state
+    /// is ambiguous.
     fn inspect_worker(&self, worker: &InteractiveWorker) -> Result<Option<InteractiveWorkerStatus>, Self::Error>;
 
     /// Delete only the exact persisted worker. Repeated deletion is idempotent.
     ///
     /// # Errors
-    /// Returns a redacted, provider-specific error unless absence is verified.
+    /// Returns a redacted, provider-specific error before provider I/O when
+    /// the worker is malformed or belongs to another provider, or unless
+    /// absence is verified.
     fn delete_worker(&self, worker: &InteractiveWorker) -> Result<InteractiveWorkerCleanup, Self::Error>;
 }
 
@@ -297,7 +311,14 @@ fn valid_ed25519_key(value: &str, allow_comment: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::convert::Infallible;
+
+    #[derive(Debug, Eq, PartialEq, thiserror::Error)]
+    enum FakeError {
+        #[error("invalid request")]
+        InvalidRequest,
+        #[error("invalid worker")]
+        InvalidWorker,
+    }
 
     #[derive(Clone)]
     struct FakeProvider {
@@ -305,21 +326,30 @@ mod tests {
     }
 
     impl InteractiveWorkerProvider for FakeProvider {
-        type Error = Infallible;
+        type Error = FakeError;
 
         fn provider(&self) -> CloudProvider {
             CloudProvider::RunPod
         }
 
-        fn ensure_worker(&self, _request: &InteractiveWorkerRequest) -> Result<InteractiveWorkerEnsure, Self::Error> {
+        fn ensure_worker(&self, request: &InteractiveWorkerRequest) -> Result<InteractiveWorkerEnsure, Self::Error> {
+            if !request.is_valid_for(self.provider()) {
+                return Err(FakeError::InvalidRequest);
+            }
             Ok(InteractiveWorkerEnsure::Created(self.status.clone()))
         }
 
-        fn inspect_worker(&self, _worker: &InteractiveWorker) -> Result<Option<InteractiveWorkerStatus>, Self::Error> {
+        fn inspect_worker(&self, worker: &InteractiveWorker) -> Result<Option<InteractiveWorkerStatus>, Self::Error> {
+            if !worker.is_valid_for(self.provider()) {
+                return Err(FakeError::InvalidWorker);
+            }
             Ok(Some(self.status.clone()))
         }
 
-        fn delete_worker(&self, _worker: &InteractiveWorker) -> Result<InteractiveWorkerCleanup, Self::Error> {
+        fn delete_worker(&self, worker: &InteractiveWorker) -> Result<InteractiveWorkerCleanup, Self::Error> {
+            if !worker.is_valid_for(self.provider()) {
+                return Err(FakeError::InvalidWorker);
+            }
             Ok(InteractiveWorkerCleanup::Deleted)
         }
     }
@@ -384,7 +414,7 @@ mod tests {
     fn provider_trait_is_object_safe_and_preserves_exact_status() {
         let status = worker_status();
         let provider = FakeProvider { status: status.clone() };
-        let provider: &dyn InteractiveWorkerProvider<Error = Infallible> = &provider;
+        let provider: &dyn InteractiveWorkerProvider<Error = FakeError> = &provider;
         let request = worker_request(&status);
 
         assert_eq!(provider.provider(), CloudProvider::RunPod);
@@ -397,6 +427,11 @@ mod tests {
             provider.delete_worker(&status.worker),
             Ok(InteractiveWorkerCleanup::Deleted)
         );
+
+        let mut wrong_provider = status.worker;
+        wrong_provider.identity.provider = CloudProvider::Azure;
+        assert_eq!(provider.inspect_worker(&wrong_provider), Err(FakeError::InvalidWorker));
+        assert_eq!(provider.delete_worker(&wrong_provider), Err(FakeError::InvalidWorker));
     }
 
     #[test]
@@ -492,9 +527,12 @@ mod tests {
     fn persisted_handle_rejects_ambiguous_identity_and_lease() {
         let mut worker = worker_status().worker;
         assert!(worker.has_valid_shape());
+        assert!(worker.is_valid_for(CloudProvider::RunPod));
+        assert!(!worker.is_valid_for(CloudProvider::Azure));
 
         worker.identity.resource_id = "display name".to_string();
         assert!(!worker.has_valid_shape());
+        assert!(!worker.is_valid_for(CloudProvider::RunPod));
         worker = worker_status().worker;
         worker.image = "registry.example/horizon/worker:latest".to_string();
         assert!(!worker.has_valid_shape());
