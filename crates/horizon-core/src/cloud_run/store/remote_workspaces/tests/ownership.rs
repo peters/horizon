@@ -37,6 +37,33 @@ fn records_survive_reopen_and_cannot_be_read_or_adopted_by_another_session() {
 }
 
 #[test]
+fn persistent_runtime_round_trips_without_expiry_or_new_identity() {
+    use crate::cloud_run::interactive_worker::InteractiveWorkerLifetime;
+
+    let (_directory, store) = store();
+    let mut state = expired_runtime();
+    state.spec.target.lifetime = WorkerLifetime::Persistent;
+    let worker = state
+        .runtime
+        .as_mut()
+        .expect("runtime")
+        .worker
+        .as_mut()
+        .expect("worker");
+    worker.target = state.spec.target.clone();
+    worker.lifetime = InteractiveWorkerLifetime::Persistent;
+    state.validate().expect("persistent aggregate");
+    let stored = store.create_remote_workspace(OWNER, &state).expect("persist worker");
+    let reopened = CloudWorkflowStore::open_path(store.path()).expect("reopen");
+    assert_eq!(
+        reopened.load_remote_workspace(OWNER, "workspace").expect("recover"),
+        Some(stored.clone())
+    );
+    assert_eq!(reopened.list_remote_workspaces(OWNER).expect("inventory"), vec![stored]);
+    assert!(state.runtime.as_ref().expect("runtime").cleanup.is_none());
+}
+
+#[test]
 fn concurrent_writers_have_exactly_one_winner_and_preserve_the_winning_intent() {
     let (_directory, store) = store();
     let stored = store
@@ -198,7 +225,8 @@ fn pending_cleanup_preserves_its_exact_reason_and_request_time() {
 
 fn expired_runtime() -> RemoteWorkspaceState {
     use crate::cloud_run::interactive_worker::{
-        InteractiveWorker, InteractiveWorkerIdentity, InteractiveWorkerLease, InteractiveWorkerSshEndpoint,
+        InteractiveWorker, InteractiveWorkerIdentity, InteractiveWorkerLease, InteractiveWorkerLifetime,
+        InteractiveWorkerSshEndpoint,
     };
     let mut state = provisioning(workspace("workspace"));
     let key = public_key(7);
@@ -213,9 +241,9 @@ fn expired_runtime() -> RemoteWorkspaceState {
         },
         target: state.spec.target.clone(),
         ssh_public_key: public_key(6),
-        lease: InteractiveWorkerLease {
+        lifetime: InteractiveWorkerLifetime::TimeLimited(InteractiveWorkerLease {
             terminate_after: "2020-01-01T00:00:00Z".into(),
-        },
+        }),
     });
     runtime.ssh = Some(InteractiveWorkerSshEndpoint {
         host: "127.0.0.1".into(),

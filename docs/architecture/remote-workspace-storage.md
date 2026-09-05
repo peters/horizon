@@ -32,9 +32,22 @@ event loop remaining available. A dedicated Remote Environments overview will
 expose reconnect and explicit stop/kill or manual cleanup/delete actions.
 
 The image permits an unset expiry for persistent execution and retains a bounded
-watchdog only for explicitly time-limited jobs. Existing provider deadline types,
-profiles, and integration still require the corresponding lifetime correction;
-neither record storage nor the image alone completes persistent cloud workspaces.
+watchdog only for explicitly time-limited jobs. Provider-neutral targets and
+worker handles distinguish persistent execution from explicit time limits; a
+worker observation must match its target's lifetime policy before attachment.
+Provider implementations and profiles still need persistent execution support:
+the existing adapters reject unsupported persistent requests/handles before I/O.
+Neither record storage nor these contracts alone complete persistent cloud workspaces.
+
+The product policy defaults to persistent, but saved records never infer that
+policy from missing or malformed data. Persistent targets contain the explicit
+`"lifetime":"persistent"` marker; legacy timed targets retain `lease_seconds`
+and their exact v1 wire representation. Observed worker lifetimes keep the v1
+`lease` field name: a timed observation contains `terminate_after`, while a
+persistent observation contains only `"lifetime":"persistent"`. Missing, null,
+conflicting, and unknown policies fail closed. Older clients reject the new
+marker instead of silently treating a persistent environment as temporary.
+Existing time-limited jobs are never converted into unbounded compute.
 
 ### Durable local identity records
 

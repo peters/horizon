@@ -1,3 +1,4 @@
+use super::super::WorkerLifetime;
 use super::*;
 use InteractiveWorkerCleanup::{AlreadyAbsent, Deleted};
 use LocalDockerError::*;
@@ -9,6 +10,8 @@ struct FakeDocker(Arc<Mutex<FakeState>>);
 #[derive(Default)]
 struct FakeState {
     container: Option<DockerContainer>,
+    inspect_calls: usize,
+    host_key_calls: usize,
     create_calls: usize,
     delete_calls: usize,
     fail_create_after_insert: bool,
@@ -26,6 +29,7 @@ impl FakeDocker {
 impl DockerTransport for FakeDocker {
     fn inspect(&self, reference: &str) -> DockerResult<Option<DockerContainer>> {
         let mut state = self.state();
+        state.inspect_calls += 1;
         if state.container.is_some() && state.failed_inspections_after_create > 0 {
             state.failed_inspections_after_create -= 1;
             return Err(invalid_response("container inspection"));
@@ -73,6 +77,7 @@ impl DockerTransport for FakeDocker {
     }
     fn read_host_key(&self, _resource_id: &str) -> Result<Option<String>, LocalDockerError> {
         let mut state = self.state();
+        state.host_key_calls += 1;
         if std::mem::take(&mut state.disappear_during_key_read) {
             state.container = None;
             return Err(ResourceAbsent);
@@ -100,7 +105,7 @@ pub(super) fn request() -> InteractiveWorkerRequest {
             profile: "local".to_string(),
             image: format!("registry.example/horizon/worker@sha256:{}", "d".repeat(64)),
             disk_gib: 20,
-            lease_seconds: 900,
+            lifetime: WorkerLifetime::TimeLimited { seconds: 900 },
             max_hourly_cost_micros: None,
         },
         ssh_public_key: ed25519_key(3),
@@ -135,6 +140,41 @@ fn provider(name: &str, fake: FakeDocker) -> LocalDockerInteractiveWorkerProvide
         profile: profile(name, "unix:///var/run/docker.sock"),
     }
 }
+
+#[test]
+fn unsupported_persistent_requests_and_handles_fail_before_provider_io() {
+    let fake = FakeDocker::default();
+    let provider = provider("local", fake.clone());
+    let mut request = request();
+    request.target.lifetime = WorkerLifetime::Persistent;
+    assert!(request.is_valid_for(CloudProvider::LocalDocker));
+    assert_eq!(provider.ensure_worker(&request), Err(InvalidTarget));
+    let worker = InteractiveWorker {
+        identity: InteractiveWorkerIdentity {
+            provider: CloudProvider::LocalDocker,
+            workflow_id: request.workflow_id,
+            job_id: request.job_id,
+            resource_id: "a".repeat(64),
+        },
+        target: request.target,
+        ssh_public_key: request.ssh_public_key,
+        lifetime: InteractiveWorkerLifetime::Persistent,
+    };
+    assert!(worker.is_valid_for(CloudProvider::LocalDocker));
+    assert_eq!(provider.inspect_worker(&worker), Err(InvalidPersistedWorker));
+    assert_eq!(provider.delete_worker(&worker), Err(InvalidPersistedWorker));
+    let state = fake.state();
+    assert_eq!(
+        (
+            state.inspect_calls,
+            state.create_calls,
+            state.host_key_calls,
+            state.delete_calls
+        ),
+        (0, 0, 0, 0)
+    );
+}
+
 #[test]
 fn creates_reuses_inspects_and_deletes_one_exact_worker() {
     let fake = FakeDocker::default();

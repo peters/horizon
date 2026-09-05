@@ -75,9 +75,13 @@ back into large multi-purpose modules.
 - `local_store.rs` centralizes agent-store environment paths and read-only
   SQLite opening so discovery, validation, and usage reporting agree.
 - `remote_workspace/` owns the versioned remote-workspace aggregate, desired
-  panels, disposable runtime generation, and repository checkpoint metadata.
+  panels, exact runtime generation, and repository checkpoint metadata.
   Its validation is pure: provider I/O, runtime-state migration, coordination,
   repository transfer, and UI integration belong in later focused modules.
+- `cloud_run/worker_lifetime.rs` owns explicit execution lifetime and compatible
+  target serialization. `interactive_worker.rs` validates observed lifetime
+  against that policy; neither represents the client/creation ownership lease.
+  Missing or malformed legacy metadata never selects persistent execution.
 - `cloud_run/store.rs` owns workflow snapshots and creation-claim transactions.
   Its `cloud_run/store/database.rs` leaf owns private-path preparation, connection policy,
   schema initialization, and compatibility checks. Keep database opening separate

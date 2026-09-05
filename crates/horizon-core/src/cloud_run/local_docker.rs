@@ -4,8 +4,8 @@ use super::{
     CLOUD_RUN_PROTOCOL_VERSION, CloudProvider, WorkerTarget,
     interactive_worker::{
         InteractiveWorker, InteractiveWorkerCleanup, InteractiveWorkerEnsure, InteractiveWorkerIdentity,
-        InteractiveWorkerLease, InteractiveWorkerLifecycle, InteractiveWorkerProvider, InteractiveWorkerRequest,
-        InteractiveWorkerSshEndpoint, InteractiveWorkerStatus, valid_ssh_public_key,
+        InteractiveWorkerLease, InteractiveWorkerLifecycle, InteractiveWorkerLifetime, InteractiveWorkerProvider,
+        InteractiveWorkerRequest, InteractiveWorkerSshEndpoint, InteractiveWorkerStatus, valid_ssh_public_key,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -71,8 +71,8 @@ impl LocalDockerInteractiveWorkerProvider {
     ) -> DockerResult<InteractiveWorkerStatus> {
         let worker = worker_for_request(container, request)?;
         if !worker
-            .lease
-            .is_bounded_at(request.target.lease_seconds, time::OffsetDateTime::now_utc())
+            .lifetime
+            .is_valid_at(request.target.lifetime, time::OffsetDateTime::now_utc())
         {
             return self.reject_unbounded_lease(&worker, container);
         }
@@ -125,7 +125,12 @@ impl LocalDockerInteractiveWorkerProvider {
                     Ok(worker) => worker,
                     Err(error) => return self.cleanup_invalid_creation(&container, &create, error),
                 };
-                if worker.lease.terminate_after != create.terminate_after {
+                if worker
+                    .lifetime
+                    .as_time_limited()
+                    .map(|lease| lease.terminate_after.as_str())
+                    != Some(create.terminate_after.as_str())
+                {
                     return self.cleanup_invalid_creation(
                         &container,
                         &create,
@@ -334,8 +339,13 @@ struct DockerCreateRequest {
 impl DockerCreateRequest {
     fn new(request: &InteractiveWorkerRequest, name: &str) -> DockerResult<Self> {
         let now = time::OffsetDateTime::now_utc();
+        let seconds = request
+            .target
+            .lifetime
+            .time_limit_seconds()
+            .ok_or(LocalDockerError::InvalidTarget)?;
         let deadline = now
-            .checked_add(time::Duration::seconds(i64::from(request.target.lease_seconds)))
+            .checked_add(time::Duration::seconds(i64::from(seconds)))
             .ok_or(LocalDockerError::InvalidTarget)?;
         let terminate_after = deadline
             .format(&time::format_description::well_known::Rfc3339)
@@ -354,9 +364,11 @@ impl DockerCreateRequest {
     }
 }
 fn validate_request(request: &InteractiveWorkerRequest, profile: &LocalDockerProfile) -> DockerResult<()> {
-    (request.target.profile == profile.name && request.is_valid_for(CloudProvider::LocalDocker))
-        .then_some(())
-        .ok_or(LocalDockerError::InvalidTarget)
+    (request.target.profile == profile.name
+        && request.is_valid_for(CloudProvider::LocalDocker)
+        && request.target.lifetime.time_limit_seconds().is_some())
+    .then_some(())
+    .ok_or(LocalDockerError::InvalidTarget)
 }
 fn valid_local_docker_host(value: &str) -> bool {
     let safe = |path: &str| !path.is_empty() && !path.chars().any(char::is_control);
@@ -366,9 +378,11 @@ fn valid_local_docker_host(value: &str) -> bool {
         || value.strip_prefix("npipe:////./pipe/").is_some_and(safe)
 }
 fn validate_worker(worker: &InteractiveWorker) -> DockerResult<()> {
-    (worker.is_valid_for(CloudProvider::LocalDocker) && valid_container_id(&worker.identity.resource_id))
-        .then_some(())
-        .ok_or(LocalDockerError::InvalidPersistedWorker)
+    (worker.is_valid_for(CloudProvider::LocalDocker)
+        && worker.lifetime.as_time_limited().is_some()
+        && valid_container_id(&worker.identity.resource_id))
+    .then_some(())
+    .ok_or(LocalDockerError::InvalidPersistedWorker)
 }
 fn worker_for_request(
     container: &DockerContainer,
@@ -384,15 +398,19 @@ fn worker_for_request(
         },
         target: request.target.clone(),
         ssh_public_key: request.ssh_public_key.clone(),
-        lease: InteractiveWorkerLease {
+        lifetime: InteractiveWorkerLifetime::TimeLimited(InteractiveWorkerLease {
             terminate_after: terminate_after.to_string(),
-        },
+        }),
     };
     verify_container_for_worker(container, &worker)?;
     Ok(worker)
 }
 fn verify_container_for_worker(container: &DockerContainer, worker: &InteractiveWorker) -> DockerResult<()> {
     validate_worker(worker)?;
+    let lease = worker
+        .lifetime
+        .as_time_limited()
+        .ok_or(LocalDockerError::InvalidPersistedWorker)?;
     let ssh_public_key =
         canonical_ed25519_key(&worker.ssh_public_key).ok_or(LocalDockerError::InvalidPersistedWorker)?;
     let expected_name = container_name(worker.identity.workflow_id, worker.identity.job_id);
@@ -403,7 +421,7 @@ fn verify_container_for_worker(container: &DockerContainer, worker: &Interactive
         (WORKFLOW_LABEL, worker.identity.workflow_id.to_string()),
         (JOB_LABEL, worker.identity.job_id.to_string()),
         (SSH_KEY_LABEL, ssh_public_key.clone()),
-        (TERMINATE_LABEL, worker.lease.terminate_after.clone()),
+        (TERMINATE_LABEL, lease.terminate_after.clone()),
     ];
     let valid = container.id == worker.identity.resource_id
         && container.name == expected_name
@@ -413,7 +431,7 @@ fn verify_container_for_worker(container: &DockerContainer, worker: &Interactive
             .iter()
             .all(|(key, value)| container.labels.get(*key) == Some(value))
         && required_environment(container, SSH_PUBLIC_KEY_ENV) == Ok(ssh_public_key.as_str())
-        && required_environment(container, TERMINATE_ENV) == Ok(worker.lease.terminate_after.as_str())
+        && required_environment(container, TERMINATE_ENV) == Ok(lease.terminate_after.as_str())
         && valid_target_label(&container.labels, worker);
     valid.then_some(()).ok_or(LocalDockerError::ResourceIdentityMismatch)
 }

@@ -1,7 +1,7 @@
 use super::*;
 use crate::PanelKind;
 use crate::cloud_run::{
-    ArtifactDigest, CloudJobId, CloudProvider, CloudWorkflowId, GitCommitSha, GitSource, WorkerTarget,
+    ArtifactDigest, CloudJobId, CloudProvider, CloudWorkflowId, GitCommitSha, GitSource, WorkerLifetime, WorkerTarget,
 };
 use crate::remote_workspace::{
     RemoteCleanupIntent, RemoteCleanupReason, RemotePanelBinding, RemoteRuntimeGeneration, RemoteRuntimePhase,
@@ -20,7 +20,7 @@ fn workspace(id: &str) -> RemoteWorkspaceState {
             profile: "local-development".into(),
             image: format!("registry.example/worker@sha256:{}", "a".repeat(64)),
             disk_gib: 20,
-            lease_seconds: 900,
+            lifetime: WorkerLifetime::TimeLimited { seconds: 900 },
             max_hourly_cost_micros: None,
         },
         repository: GitSource {

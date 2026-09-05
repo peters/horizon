@@ -1,11 +1,11 @@
-//! Provider-neutral lifecycle contract for disposable interactive workers.
+//! Provider-neutral lifecycle contract for persistent or time-limited interactive workers.
 
-use super::{CloudJobId, CloudProvider, CloudWorkflowId, WorkerTarget};
+use super::{CloudJobId, CloudProvider, CloudWorkflowId, WorkerLifetime, WorkerTarget};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use std::{error::Error, net::IpAddr};
 
-/// Maximum lease accepted by the common disposable-worker contract.
+/// Maximum explicitly selected time limit accepted by the common worker contract.
 pub const MAX_INTERACTIVE_WORKER_LEASE_SECONDS: u32 = 30 * 24 * 60 * 60;
 const INTERACTIVE_WORKER_LEASE_CLOCK_SKEW_SECONDS: i64 = 120;
 const ED25519_BLOB_PREFIX: &[u8] = b"\0\0\0\x0bssh-ed25519\0\0\0\x20";
@@ -19,7 +19,7 @@ pub struct InteractiveWorkerRequest {
     pub workflow_id: CloudWorkflowId,
     pub job_id: CloudJobId,
     pub target: WorkerTarget,
-    /// Ephemeral client public key authorized by the worker image.
+    /// Client public key retained for reconnect during this runtime generation.
     pub ssh_public_key: String,
 }
 
@@ -31,7 +31,7 @@ impl InteractiveWorkerRequest {
     }
 }
 
-/// Exact, provider-qualified ownership identity for one disposable worker.
+/// Exact, provider-qualified ownership identity for one interactive worker.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InteractiveWorkerIdentity {
@@ -49,7 +49,7 @@ impl InteractiveWorkerIdentity {
     }
 }
 
-/// Immutable lease data returned by a provider.
+/// Immutable expiry returned for an explicitly time-limited worker.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InteractiveWorkerLease {
@@ -84,6 +84,80 @@ impl InteractiveWorkerLease {
     }
 }
 
+/// Observed execution lifetime. This is not a client or ownership lease.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(from = "ObservedLifetimeSnapshot", into = "ObservedLifetimeSnapshot")]
+pub enum InteractiveWorkerLifetime {
+    Persistent,
+    TimeLimited(InteractiveWorkerLease),
+}
+
+impl InteractiveWorkerLifetime {
+    #[must_use]
+    pub const fn as_time_limited(&self) -> Option<&InteractiveWorkerLease> {
+        match self {
+            Self::Persistent => None,
+            Self::TimeLimited(lease) => Some(lease),
+        }
+    }
+
+    #[must_use]
+    pub fn has_valid_shape(&self) -> bool {
+        self.as_time_limited()
+            .is_none_or(InteractiveWorkerLease::has_valid_shape)
+    }
+
+    fn matches_policy(&self, policy: WorkerLifetime) -> bool {
+        matches!(
+            (self, policy),
+            (Self::Persistent, WorkerLifetime::Persistent) | (Self::TimeLimited(_), WorkerLifetime::TimeLimited { .. })
+        )
+    }
+
+    pub(super) fn is_valid_at(&self, policy: WorkerLifetime, observed_at: time::OffsetDateTime) -> bool {
+        match (self, policy) {
+            (Self::Persistent, WorkerLifetime::Persistent) => true,
+            (Self::TimeLimited(lease), WorkerLifetime::TimeLimited { seconds }) => {
+                lease.is_bounded_at(seconds, observed_at)
+            }
+            _ => false,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+enum ObservedLifetimeSnapshot {
+    TimeLimited(InteractiveWorkerLease),
+    Persistent { lifetime: PersistentObservedMarker },
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum PersistentObservedMarker {
+    Persistent,
+}
+
+impl From<ObservedLifetimeSnapshot> for InteractiveWorkerLifetime {
+    fn from(value: ObservedLifetimeSnapshot) -> Self {
+        match value {
+            ObservedLifetimeSnapshot::TimeLimited(lease) => Self::TimeLimited(lease),
+            ObservedLifetimeSnapshot::Persistent { .. } => Self::Persistent,
+        }
+    }
+}
+
+impl From<InteractiveWorkerLifetime> for ObservedLifetimeSnapshot {
+    fn from(value: InteractiveWorkerLifetime) -> Self {
+        match value {
+            InteractiveWorkerLifetime::TimeLimited(lease) => Self::TimeLimited(lease),
+            InteractiveWorkerLifetime::Persistent => Self::Persistent {
+                lifetime: PersistentObservedMarker::Persistent,
+            },
+        }
+    }
+}
+
 /// Durable worker handle used for inspection and exact-resource cleanup.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -91,9 +165,11 @@ pub struct InteractiveWorker {
     pub identity: InteractiveWorkerIdentity,
     /// Exact provider target used to create the resource.
     pub target: WorkerTarget,
-    /// Ephemeral client public key installed in this runtime generation.
+    /// Client public key installed for this runtime generation's reconnects.
     pub ssh_public_key: String,
-    pub lease: InteractiveWorkerLease,
+    /// The v1 wire field name remains `lease` to preserve bounded records.
+    #[serde(rename = "lease")]
+    pub lifetime: InteractiveWorkerLifetime,
 }
 
 impl InteractiveWorker {
@@ -105,7 +181,8 @@ impl InteractiveWorker {
         self.identity.is_valid()
             && valid_worker_target(&self.target, self.identity.provider)
             && valid_ssh_public_key(&self.ssh_public_key)
-            && self.lease.has_valid_shape()
+            && self.lifetime.has_valid_shape()
+            && self.lifetime.matches_policy(self.target.lifetime)
     }
 
     /// Check the durable handle before any provider-specific inspection or
@@ -159,8 +236,8 @@ pub struct InteractiveWorkerStatus {
 
 impl InteractiveWorkerStatus {
     /// A worker is attachable only when its lifecycle, request identity,
-    /// complete target, lease, and SSH data agree. The target comparison covers
-    /// provider, profile, image, disk, requested lease, and cost limit.
+    /// complete target, lifetime, and SSH data agree. The target comparison covers
+    /// provider, profile, image, disk, explicit lifetime policy, and cost limit.
     /// `observed_at` must be a freshly sampled, trusted UTC time from
     /// immediately before attachment.
     #[must_use]
@@ -173,10 +250,7 @@ impl InteractiveWorkerStatus {
             && identity.job_id == request.job_id
             && self.worker.target == request.target
             && self.worker.ssh_public_key == request.ssh_public_key
-            && self
-                .worker
-                .lease
-                .is_bounded_at(request.target.lease_seconds, observed_at)
+            && self.worker.lifetime.is_valid_at(request.target.lifetime, observed_at)
             && self.ssh.as_ref().is_some_and(InteractiveWorkerSshEndpoint::is_complete)
     }
 }
@@ -211,7 +285,7 @@ pub enum InteractiveWorkerCleanup {
     AlreadyAbsent,
 }
 
-/// Blocking provider boundary for one disposable interactive worker.
+/// Blocking provider boundary for one interactive worker.
 ///
 /// Callers must invoke provider operations away from the render thread. An
 /// implementation must reject an ensure request unless
@@ -221,6 +295,8 @@ pub enum InteractiveWorkerCleanup {
 /// operations must make `ensure_worker` idempotent across controllers,
 /// preserve the exact returned handle for later inspection, and delete only
 /// that exact resource.
+/// Providers must reject unsupported lifetime policies before provider I/O;
+/// they must not silently convert a persistent request to a time-limited job.
 pub trait InteractiveWorkerProvider: Send + Sync {
     type Error: Error + Send + Sync + 'static;
 
@@ -259,7 +335,11 @@ pub(crate) fn valid_worker_target(target: &WorkerTarget, provider: CloudProvider
         && !target.profile.chars().any(char::is_control)
         && valid_immutable_image(&target.image)
         && target.disk_gib > 0
-        && (1..=MAX_INTERACTIVE_WORKER_LEASE_SECONDS).contains(&target.lease_seconds)
+        && target.lifetime.is_valid()
+        && target
+            .lifetime
+            .time_limit_seconds()
+            .is_none_or(|seconds| seconds <= MAX_INTERACTIVE_WORKER_LEASE_SECONDS)
         && target.max_hourly_cost_micros != Some(0)
 }
 
@@ -325,6 +405,9 @@ fn valid_ed25519_key(value: &str, allow_comment: bool) -> bool {
 }
 
 #[cfg(test)]
+mod lifetime_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -381,7 +464,7 @@ mod tests {
         }
     }
 
-    fn worker_status() -> InteractiveWorkerStatus {
+    pub(super) fn worker_status() -> InteractiveWorkerStatus {
         InteractiveWorkerStatus {
             worker: InteractiveWorker {
                 identity: InteractiveWorkerIdentity {
@@ -395,13 +478,13 @@ mod tests {
                     profile: "gpu".to_string(),
                     image: format!("registry.example/horizon/worker@sha256:{}", "d".repeat(64)),
                     disk_gib: 20,
-                    lease_seconds: 900,
+                    lifetime: WorkerLifetime::TimeLimited { seconds: 900 },
                     max_hourly_cost_micros: Some(500_000),
                 },
                 ssh_public_key: ed25519_key(None),
-                lease: InteractiveWorkerLease {
+                lifetime: InteractiveWorkerLifetime::TimeLimited(InteractiveWorkerLease {
                     terminate_after: "2026-09-04T12:00:00Z".to_string(),
-                },
+                }),
             },
             lifecycle: InteractiveWorkerLifecycle::Ready,
             ssh: Some(InteractiveWorkerSshEndpoint {
@@ -514,7 +597,9 @@ mod tests {
         };
         assert!(!status.is_ready_for(&request, observed_at()));
         status = original;
-        status.worker.lease.terminate_after = "2999-09-04T12:00:00Z".to_string();
+        status.worker.lifetime = InteractiveWorkerLifetime::TimeLimited(InteractiveWorkerLease {
+            terminate_after: "2999-09-04T12:00:00Z".to_string(),
+        });
         assert!(!status.is_ready_for(&request, observed_at()));
     }
 
@@ -536,9 +621,11 @@ mod tests {
         request.ssh_public_key = "ssh-rsa unsupported".to_string();
         assert!(!request.is_valid_for(CloudProvider::RunPod));
         request.ssh_public_key = ed25519_key(None);
-        request.target.lease_seconds = MAX_INTERACTIVE_WORKER_LEASE_SECONDS + 1;
+        request.target.lifetime = WorkerLifetime::TimeLimited {
+            seconds: MAX_INTERACTIVE_WORKER_LEASE_SECONDS + 1,
+        };
         assert!(!request.is_valid_for(CloudProvider::RunPod));
-        request.target.lease_seconds = 900;
+        request.target.lifetime = WorkerLifetime::TimeLimited { seconds: 900 };
         request.target.max_hourly_cost_micros = Some(0);
         assert!(!request.is_valid_for(CloudProvider::RunPod));
     }
@@ -560,7 +647,9 @@ mod tests {
         worker.ssh_public_key = "ssh-rsa unsupported".to_string();
         assert!(!worker.has_valid_shape());
         worker = worker_status().worker;
-        worker.lease.terminate_after = "in two hours".to_string();
+        worker.lifetime = InteractiveWorkerLifetime::TimeLimited(InteractiveWorkerLease {
+            terminate_after: "in two hours".to_string(),
+        });
         assert!(!worker.has_valid_shape());
     }
 

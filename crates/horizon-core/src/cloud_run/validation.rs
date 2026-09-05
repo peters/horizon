@@ -102,7 +102,7 @@ fn validate_node(
         && (worker.profile.trim().is_empty()
             || !valid_worker_image(&worker.image)
             || worker.disk_gib == 0
-            || worker.lease_seconds == 0)
+            || !worker.lifetime.is_valid())
     {
         return Err(Error::InvalidWorkerTarget(node.id));
     }
