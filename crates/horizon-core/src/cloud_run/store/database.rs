@@ -91,12 +91,7 @@ pub(super) fn initialize_schema(connection: &mut Connection) -> Result<(), Cloud
         "SELECT workspace_local_id, session_id, revision, snapshot
          FROM remote_workspaces INDEXED BY remote_workspaces_session LIMIT 0",
     )?);
-    for index in ["remote_runtime_allocations_workflow", "remote_runtime_allocations_job"] {
-        drop(transaction.prepare(&format!(
-            "SELECT workspace_local_id, session_id, generation, workflow_id, job_id
-             FROM remote_runtime_allocations INDEXED BY {index} LIMIT 0"
-        ))?);
-    }
+    validate_allocation_schema(&transaction)?;
     transaction.pragma_update(None, "user_version", STORE_SCHEMA_VERSION)?;
     transaction.commit()?;
     Ok(())
@@ -106,6 +101,27 @@ pub(super) fn ensure_current_schema(connection: &Connection) -> Result<(), Cloud
     let version = connection.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))?;
     if version != STORE_SCHEMA_VERSION {
         return Err(CloudStoreError::UnsupportedSchema(version));
+    }
+    validate_allocation_schema(connection)
+}
+
+fn validate_allocation_schema(connection: &Connection) -> Result<(), CloudStoreError> {
+    // These owned CREATE definitions are versioned data; keep their normalized SQL stable.
+    // Exact matching includes constraints that column/index-name probes cannot inspect.
+    for definition in REMOTE_ALLOCATION_SCHEMA
+        .split(';')
+        .map(str::trim)
+        .filter(|sql| !sql.is_empty())
+    {
+        let matches: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM main.sqlite_schema
+             WHERE tbl_name = 'remote_runtime_allocations' AND sql = ?1)",
+            [definition],
+            |row| row.get(0),
+        )?;
+        if !matches {
+            return Err(CloudStoreError::InvalidAllocationSchema);
+        }
     }
     Ok(())
 }

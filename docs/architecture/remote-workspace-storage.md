@@ -102,7 +102,13 @@ legacy runtime references. The new table starts empty.
 
 Older clients reject the newer database version. Missing or partial allocation
 tables/indexes and ambiguous interrupted-version fixtures are rejected rather
-than silently repaired or adopted. The foreign keys prevent deleting a parent
+than silently repaired or adopted. Before migration commit and on every operation,
+validate the owned table and index definitions against their exact, versioned
+`sqlite_schema.sql` representation. This includes uniqueness, indexed columns,
+the primary key, positive generation, foreign keys and strict typing; equivalent
+but unexpected definitions are not adopted. Keep these CREATE definitions stable
+until an explicit schema migration replaces them.
+The foreign keys prevent deleting a parent
 snapshot while an allocation binding still references it; there is no implicit
 ownership cascade or provider cleanup.
 

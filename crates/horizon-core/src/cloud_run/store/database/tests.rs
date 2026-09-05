@@ -170,6 +170,86 @@ fn partial_or_missing_allocation_schema_fails_without_repairing_or_losing_record
 }
 
 #[test]
+fn malformed_allocation_constraints_are_rejected_without_losing_records() {
+    for (original, replacement) in [
+        ("TEXT PRIMARY KEY NOT NULL", "TEXT NOT NULL"),
+        ("session_id TEXT NOT NULL", "session_id TEXT"),
+        ("CHECK (generation > 0)", "CHECK (generation >= 0)"),
+        (" REFERENCES remote_workspaces(workspace_local_id)", ""),
+        (" REFERENCES cloud_workflows(workflow_id)", ""),
+        (
+            "REFERENCES cloud_workflows(workflow_id)",
+            "REFERENCES cloud_workflows(workflow_id) ON DELETE CASCADE",
+        ),
+        (
+            "remote_runtime_allocations_workflow ON remote_runtime_allocations(workflow_id)",
+            "remote_runtime_allocations_workflow ON remote_runtime_allocations(session_id)",
+        ),
+        ("CREATE UNIQUE INDEX", "CREATE INDEX"),
+        (
+            "remote_runtime_allocations(job_id)",
+            "remote_runtime_allocations(job_id) WHERE generation = 1",
+        ),
+        (
+            "remote_runtime_allocations(job_id)",
+            "remote_runtime_allocations(job_id, generation)",
+        ),
+        (
+            "remote_runtime_allocations(workflow_id)",
+            "remote_runtime_allocations(lower(workflow_id))",
+        ),
+        (
+            "remote_runtime_allocations(job_id)",
+            "remote_runtime_allocations(job_id COLLATE NOCASE)",
+        ),
+        (
+            "remote_runtime_allocations(job_id)",
+            "remote_runtime_allocations(job_id DESC)",
+        ),
+        (
+            "remote_runtime_allocations(workflow_id)",
+            "remote_runtime_allocations(workflow_id) WHERE generation = 1",
+        ),
+        (
+            "remote_runtime_allocations(job_id)",
+            "remote_runtime_allocations(session_id)",
+        ),
+        (
+            "CREATE UNIQUE INDEX remote_runtime_allocations_job",
+            "CREATE INDEX remote_runtime_allocations_job",
+        ),
+        (
+            "CREATE UNIQUE INDEX remote_runtime_allocations_workflow",
+            "CREATE INDEX remote_runtime_allocations_workflow",
+        ),
+        (
+            "REFERENCES remote_workspaces(workspace_local_id)",
+            "REFERENCES remote_workspaces(workspace_local_id) ON DELETE CASCADE",
+        ),
+        (" STRICT", ""),
+    ] {
+        let fixture = fixture();
+        let connection = open_connection(fixture.store.path()).expect("raw store");
+        let before = saved_bytes(&connection);
+        let malformed = REMOTE_ALLOCATION_SCHEMA.replace(original, replacement);
+        assert_ne!(malformed, REMOTE_ALLOCATION_SCHEMA);
+        connection
+            .execute_batch("DROP TABLE remote_runtime_allocations")
+            .expect("remove empty table");
+        connection.execute_batch(&malformed).expect("malformed fixture");
+        assert!(
+            CloudWorkflowStore::open_path(fixture.store.path()).is_err(),
+            "{original} -> {replacement}"
+        );
+        assert!(matches!(
+            fixture.store.load(fixture.workflow.workflow().id),
+            Err(super::super::CloudStoreError::InvalidAllocationSchema)
+        ));
+        assert_eq!(saved_bytes(&connection), before);
+    }
+}
+
+#[test]
 fn allocation_schema_restricts_parent_loss_and_duplicate_workflow_or_job_identity() {
     let fixture = fixture();
     let connection = open_connection(fixture.store.path()).expect("foreign-key enabled connection");
