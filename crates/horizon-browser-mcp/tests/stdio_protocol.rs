@@ -65,13 +65,17 @@ impl Drop for McpProcess {
 }
 
 #[test]
-fn stdio_negotiates_legacy_and_current_protocols_without_leaking_private_endpoints() {
-    for protocol_version in ["2025-06-18", "2026-07-28"] {
-        exercise_protocol(protocol_version);
+fn stdio_negotiates_handshake_protocols_without_leaking_private_endpoints() {
+    for (requested_version, negotiated_version) in [
+        ("2025-06-18", "2025-06-18"),
+        ("2025-11-25", "2025-11-25"),
+        ("2026-07-28", "2025-11-25"),
+    ] {
+        exercise_protocol(requested_version, negotiated_version);
     }
 }
 
-fn exercise_protocol(protocol_version: &str) {
+fn exercise_protocol(requested_version: &str, negotiated_version: &str) {
     let home = tempfile::tempdir().expect("isolated home");
     let mut process = McpProcess::start(home.path());
     let initialize = process.send(&json!({
@@ -79,12 +83,12 @@ fn exercise_protocol(protocol_version: &str) {
         "id": 1,
         "method": "initialize",
         "params": {
-            "protocolVersion": protocol_version,
+            "protocolVersion": requested_version,
             "capabilities": {},
             "clientInfo": { "name": "horizon-test", "version": "1" }
         }
     }));
-    assert_eq!(initialize["result"]["protocolVersion"], protocol_version);
+    assert_eq!(initialize["result"]["protocolVersion"], negotiated_version);
     assert_eq!(initialize["result"]["serverInfo"]["name"], "horizon-browser");
     assert!(
         initialize["result"]["instructions"]

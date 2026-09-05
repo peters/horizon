@@ -65,6 +65,7 @@ NETWORK_CAPABILITIES = [
     "websocket_capture",
     "ndjson_export",
 ]
+HANDSHAKE_PROTOCOL_VERSION = "2025-11-25"
 
 
 class McpClient:
@@ -175,13 +176,13 @@ def initialize(client: McpClient) -> list[dict[str, Any]]:
     response = client.request(
         "initialize",
         {
-            "protocolVersion": "2026-07-28",
+            "protocolVersion": HANDSHAKE_PROTOCOL_VERSION,
             "capabilities": {},
             "clientInfo": {"name": "horizon-browser-smoke", "version": "1"},
         },
     )
     result = response["result"]
-    if result["protocolVersion"] != "2026-07-28":
+    if result["protocolVersion"] != HANDSHAKE_PROTOCOL_VERSION:
         raise AssertionError(result)
     if result["serverInfo"]["name"] != "horizon-browser":
         raise AssertionError(result)
