@@ -170,9 +170,11 @@ ordinary workflows remain usable. A future atomic allocator may bypass this
 negative legacy fence only through its separately verified, complete current
 allocation binding; absence of a binding can never be sufficient authority.
 Reopening a store or recreating an ordinary workflow with a saved runtime's IDs
-cannot mint a replacement worker. Update/delete triggers protect the append-only
-rows, and exact versioned table/index/trigger validation runs on open and every
-operation. Missing or altered metadata is rejected, not repaired or adopted.
+cannot mint a replacement worker. The two identity columns are the physical row
+key, with no implicit rowid that could redirect a replacement. Update/delete
+triggers protect the append-only rows, and exact versioned table/index/trigger
+validation runs on open and every operation. Missing or altered metadata is
+rejected, not repaired or adopted.
 
 ## Options considered
 

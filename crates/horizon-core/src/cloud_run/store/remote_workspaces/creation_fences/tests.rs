@@ -311,6 +311,18 @@ fn creation_denials_are_immutable_and_lookup_uses_both_identity_indexes() {
             .execute("UPDATE remote_runtime_creation_fences SET job_id = workflow_id", [])
             .is_err()
     );
+    connection
+        .pragma_update(None, "recursive_triggers", false)
+        .expect("non-recursive triggers");
+    assert!(
+        connection
+            .execute(
+                "INSERT OR REPLACE INTO remote_runtime_creation_fences (rowid, workflow_id, job_id) VALUES (1, ?1, ?2)",
+                params![CloudWorkflowId::new().to_string(), CloudJobId::new().to_string()],
+            )
+            .is_err(),
+        "an implicit row identity must not allow replacing a creation denial"
+    );
     assert_eq!(fence_count(&connection), 1);
     assert_denied(&upgraded, &fixture.workflow);
     let mut statement = connection
@@ -335,8 +347,7 @@ fn creation_denials_are_immutable_and_lookup_uses_both_identity_indexes() {
         "{plan:?}"
     );
     assert!(
-        plan.iter()
-            .any(|detail| detail.contains("sqlite_autoindex_remote_runtime_creation_fences_1")),
+        plan.iter().any(|detail| detail.contains("USING PRIMARY KEY")),
         "{plan:?}"
     );
     assert!(
@@ -428,7 +439,7 @@ fn schema_four_definitions_match_the_frozen_storage_format() {
                 "    workflow_id TEXT NOT NULL CHECK (length(workflow_id) = 36),\n",
                 "    job_id TEXT NOT NULL CHECK (length(job_id) = 36),\n",
                 "    PRIMARY KEY (workflow_id, job_id)\n",
-                ") STRICT",
+                ") STRICT, WITHOUT ROWID",
             ),
             "CREATE INDEX remote_runtime_creation_fences_job ON remote_runtime_creation_fences(job_id)",
             "CREATE TRIGGER remote_runtime_creation_fences_no_update BEFORE UPDATE ON remote_runtime_creation_fences BEGIN SELECT RAISE(ABORT, 'remote creation fences are immutable'); END",

@@ -9,7 +9,7 @@ const SCHEMA: [&str; 4] = [
     workflow_id TEXT NOT NULL CHECK (length(workflow_id) = 36),
     job_id TEXT NOT NULL CHECK (length(job_id) = 36),
     PRIMARY KEY (workflow_id, job_id)
-) STRICT",
+) STRICT, WITHOUT ROWID",
     "CREATE INDEX remote_runtime_creation_fences_job ON remote_runtime_creation_fences(job_id)",
     "CREATE TRIGGER remote_runtime_creation_fences_no_update BEFORE UPDATE ON remote_runtime_creation_fences BEGIN SELECT RAISE(ABORT, 'remote creation fences are immutable'); END",
     "CREATE TRIGGER remote_runtime_creation_fences_no_delete BEFORE DELETE ON remote_runtime_creation_fences BEGIN SELECT RAISE(ABORT, 'remote creation fences are immutable'); END",
