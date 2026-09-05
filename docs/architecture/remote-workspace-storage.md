@@ -144,7 +144,7 @@ new workflow node kind, worker creation, adoption, lifetime policy, or UI behavi
 The future allocator must commit and validate both snapshots with their binding
 in one transaction before the existing creation fence can grant provider creation.
 
-### Legacy runtime creation denials
+### Durable runtime creation denials
 
 Schema 4 adds `remote_runtime_creation_fences`. During the immediate migration
 transaction, stream every existing remote snapshot across all sessions, bounded
@@ -159,16 +159,22 @@ Each saved runtime contributes an append-only creation denial, including when
 its ordinary workflow is missing, expired, or has never consumed a claim. The
 denial is not an allocation binding, consumed claim, or ownership grant. Preserve
 all existing snapshot bytes, revisions, and creation claims. Generic record APIs
-cannot introduce another runtime or change an active runtime's identity, so no
-ordinary record write can omit a newly introduced legacy identity from this set.
+cannot introduce another runtime or change an active runtime's identity.
+The private prepared replacement also records the canonical workflow/job denial
+in the same transaction as every nonempty runtime snapshot. Future allocation
+therefore publishes the denial before committing its runtime/workflow/binding;
+a later failure rolls back the snapshot and denial together. Repeated writes
+preserve the same append-only identity. No public runtime-import path is added.
 Neither runtime retirement nor workflow deletion removes these denials; future
 allocations must use fresh identity. No provider resource is touched.
 
 Generic worker creation checks both workflow and job denials inside its existing
 immediate transaction using two bounded indexed existence queries. Unrelated
 ordinary workflows remain usable. A future atomic allocator may bypass this
-negative legacy fence only through its separately verified, complete current
+negative fence only through its separately verified, complete current
 allocation binding; absence of a binding can never be sufficient authority.
+Copying a saved job ID into another ordinary workflow cannot obtain another
+grant, even after losing the original binding or retiring its runtime snapshot.
 Reopening a store or recreating an ordinary workflow with a saved runtime's IDs
 cannot mint a replacement worker. The two identity columns are the physical row
 key, with no implicit rowid that could redirect a replacement. Update/delete

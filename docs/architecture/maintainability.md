@@ -97,8 +97,10 @@ back into large multi-purpose modules.
   integration responsibilities.
 - The remote record store's `creation_fences.rs` leaf owns the schema-four
   migration of legacy runtime identities into append-only creation denials,
-  exact schema validation, and indexed claim checks. Migration reuses the
-  aggregate decoder and does not confer allocation ownership or provider authority.
+  transactional publication alongside every prepared runtime write, exact schema
+  validation, and indexed claim checks. Migration reuses the aggregate decoder;
+  no denial confers allocation ownership or provider authority. Migration and
+  runtime-write regressions live separately under its colocated test tree.
 - Shared domain helpers belong here when both core and UI need them.
 - If a UI feature needs to reconstruct runtime state, sync template-backed
   workspace metadata, or format panel/workspace domain labels, prefer adding a

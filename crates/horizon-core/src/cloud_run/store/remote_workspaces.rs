@@ -227,6 +227,9 @@ impl<'a> WorkspaceReplacement<'a> {
         if changed != 1 {
             return Err(RemoteWorkspaceStoreError::SnapshotConflict);
         }
+        if let Some(runtime) = &next.runtime {
+            creation_fences::record_identity(transaction, runtime.workflow_id, runtime.job_id)?;
+        }
         Ok(StoredRemoteWorkspace {
             session_id: expected.session_id.clone(),
             state: next.clone(),
