@@ -1,4 +1,59 @@
+use super::super::super::{PreparedWorkflowInsert, decode_workflow_row, tests::retained_workflow, workflow_row};
 use super::*;
+
+#[test]
+fn prepared_writes_share_the_callers_transaction_without_committing() {
+    let (_directory, store) = store();
+    let original = store
+        .create_remote_workspace(OWNER, &workspace("workspace"))
+        .expect("record");
+    let next = provisioning(original.state().clone());
+    let replacement = WorkspaceReplacement::new(&original, &next).expect("prepare");
+    let workflow = retained_workflow(CloudProvider::LocalDocker, 1000);
+    let prepared_workflow = PreparedWorkflowInsert::new(&workflow).expect("prepare workflow");
+    let mut connection = store.connection().expect("connection");
+    {
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .expect("transaction");
+        ensure_current_schema(&transaction).expect("schema");
+        let pending = replacement.persist(&transaction).expect("replace within transaction");
+        let pending_workflow = prepared_workflow
+            .persist(&transaction)
+            .expect("insert within transaction");
+        assert_eq!(pending_workflow.workflow(), &workflow);
+        let row = workflow_row(&transaction, &workflow.id.to_string())
+            .expect("pending workflow")
+            .expect("row");
+        assert_eq!(
+            decode_workflow_row(workflow.id, &row).expect("metadata matches snapshot"),
+            pending_workflow
+        );
+        assert_eq!(pending.revision(), original.revision() + 1);
+        assert_eq!(
+            load_owned(&transaction, OWNER, "workspace").expect("pending read"),
+            Some(pending)
+        );
+    }
+    assert_eq!(
+        store.load_remote_workspace(OWNER, "workspace").expect("rolled back"),
+        Some(original.clone())
+    );
+    assert!(store.load(workflow.id).expect("workflow rolled back").is_none());
+    let committed = store
+        .replace_remote_workspace(&original, &next)
+        .expect("normal replacement");
+    assert_eq!(committed.revision(), original.revision() + 1);
+    assert_eq!(
+        store.load_remote_workspace(OWNER, "workspace").expect("committed read"),
+        Some(committed)
+    );
+    let stored_workflow = store.create(&workflow).expect("normal workflow creation");
+    assert_eq!(
+        store.load(workflow.id).expect("workflow committed"),
+        Some(stored_workflow)
+    );
+}
 
 #[test]
 fn records_survive_reopen_and_cannot_be_read_or_adopted_by_another_session() {

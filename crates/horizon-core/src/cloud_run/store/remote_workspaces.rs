@@ -139,14 +139,46 @@ impl CloudWorkflowStore {
         expected: &StoredRemoteWorkspace,
         next: &RemoteWorkspaceState,
     ) -> Result<StoredRemoteWorkspace, RemoteWorkspaceStoreError> {
-        validate_key(&expected.session_id, &expected.state.spec.workspace_local_id)?;
-        validate_replacement(&expected.state, next)?;
-        let snapshot = encode(&expected.session_id, next)?;
+        let replacement = WorkspaceReplacement::new(expected, next)?;
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         ensure_current_schema(&transaction)?;
+        let stored = replacement.persist(&transaction)?;
+        transaction.commit()?;
+        Ok(stored)
+    }
+}
+
+pub(super) struct WorkspaceReplacement<'a> {
+    expected: &'a StoredRemoteWorkspace,
+    next: &'a RemoteWorkspaceState,
+    snapshot: Vec<u8>,
+}
+
+impl<'a> WorkspaceReplacement<'a> {
+    pub(super) fn new(
+        expected: &'a StoredRemoteWorkspace,
+        next: &'a RemoteWorkspaceState,
+    ) -> Result<Self, RemoteWorkspaceStoreError> {
+        validate_key(&expected.session_id, &expected.state.spec.workspace_local_id)?;
+        validate_replacement(&expected.state, next)?;
+        Ok(Self {
+            expected,
+            next,
+            snapshot: encode(&expected.session_id, next)?,
+        })
+    }
+
+    /// The caller must check the current schema in an immediate write transaction.
+    /// The returned value is provisional until that caller commits.
+    pub(super) fn persist(
+        &self,
+        transaction: &rusqlite::Transaction<'_>,
+    ) -> Result<StoredRemoteWorkspace, RemoteWorkspaceStoreError> {
+        let expected = self.expected;
+        let next = self.next;
         let current = load_owned(
-            &transaction,
+            transaction,
             &expected.session_id,
             &expected.state.spec.workspace_local_id,
         )?
@@ -161,10 +193,10 @@ impl CloudWorkflowStore {
             return Err(RemoteWorkspaceStoreError::SnapshotConflict);
         }
         ensure_session_budget(
-            &transaction,
+            transaction,
             &expected.session_id,
             &expected.state.spec.workspace_local_id,
-            snapshot.len(),
+            self.snapshot.len(),
         )?;
         let revision = expected
             .revision
@@ -177,14 +209,13 @@ impl CloudWorkflowStore {
             params![
                 expected.state.spec.workspace_local_id,
                 revision,
-                snapshot,
+                self.snapshot,
                 expected.session_id
             ],
         )?;
         if changed != 1 {
             return Err(RemoteWorkspaceStoreError::SnapshotConflict);
         }
-        transaction.commit()?;
         Ok(StoredRemoteWorkspace {
             session_id: expected.session_id.clone(),
             state: next.clone(),

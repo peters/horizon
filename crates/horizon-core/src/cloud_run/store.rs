@@ -2,8 +2,10 @@
 
 mod database;
 mod remote_workspaces;
+mod workflow_writes;
 
 pub use remote_workspaces::{RemoteWorkspaceStoreError, StoredRemoteWorkspace};
+use workflow_writes::PreparedWorkflowInsert;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -90,31 +92,13 @@ impl CloudWorkflowStore {
     /// Rejects invalid snapshots, duplicate workflow identities, and storage
     /// failures.
     pub fn create(&self, workflow: &CloudWorkflow) -> Result<StoredWorkflow, CloudStoreError> {
-        let snapshot = encode_workflow(workflow)?;
+        let prepared = PreparedWorkflowInsert::new(workflow)?;
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         ensure_current_schema(&transaction)?;
-        let id = workflow.id.to_string();
-        if workflow_row(&transaction, &id)?.is_some() {
-            return Err(CloudStoreError::WorkflowExists(workflow.id));
-        }
-        transaction.execute(
-            "INSERT INTO cloud_workflows (
-                workflow_id, revision, created_at_millis, updated_at_millis, retain_until_millis, snapshot
-             ) VALUES (?1, 1, ?2, ?3, ?4, ?5)",
-            params![
-                id,
-                workflow.created_at_millis,
-                workflow.updated_at_millis,
-                workflow.retain_until_millis,
-                snapshot
-            ],
-        )?;
+        let stored = prepared.persist(&transaction)?;
         transaction.commit()?;
-        Ok(StoredWorkflow {
-            workflow: workflow.clone(),
-            revision: 1,
-        })
+        Ok(stored)
     }
 
     /// Load and revalidate one workflow snapshot.
