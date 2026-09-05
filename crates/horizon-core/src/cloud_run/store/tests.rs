@@ -59,7 +59,7 @@ fn worker_target(workflow: &CloudWorkflow) -> &WorkerTarget {
 }
 
 fn assert_unsupported_schema<T>(result: &Result<T, CloudStoreError>) {
-    assert!(matches!(result, Err(CloudStoreError::UnsupportedSchema(3))));
+    assert!(matches!(result, Err(CloudStoreError::UnsupportedSchema(4))));
 }
 
 fn store(temp: &TempDir) -> CloudWorkflowStore {
@@ -532,7 +532,7 @@ fn runpod_fence_uses_the_durable_workflow_claim() {
     );
     let connection = Connection::open(store.path()).expect("open raw store");
     connection
-        .pragma_update(None, "user_version", 3)
+        .pragma_update(None, "user_version", 4)
         .expect("set unsupported schema");
     drop(connection);
     let failed_claim = super::super::runpod::RunPodCreationFence::claim_once(
@@ -570,7 +570,7 @@ fn invalid_snapshots_and_future_schema_fail_closed() {
     replacement.updated_at_millis += 1;
     let connection = Connection::open(&future_path).expect("future store");
     connection
-        .pragma_update(None, "user_version", 3)
+        .pragma_update(None, "user_version", 4)
         .expect("future version");
     drop(connection);
     assert_unsupported_schema(&stale_store.load(workflow.id));

@@ -11,7 +11,7 @@ use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 
 use super::CloudStoreError;
 
-const STORE_SCHEMA_VERSION: i64 = 2;
+const STORE_SCHEMA_VERSION: i64 = 3;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(2);
 const SCHEMA: &str = r"
 CREATE TABLE IF NOT EXISTS cloud_workflows (
@@ -49,6 +49,18 @@ CREATE INDEX remote_workspaces_session
     ON remote_workspaces(session_id, workspace_local_id);
 ";
 
+const REMOTE_ALLOCATION_SCHEMA: [&str; 3] = [
+    r"CREATE TABLE remote_runtime_allocations (
+    workspace_local_id TEXT PRIMARY KEY NOT NULL REFERENCES remote_workspaces(workspace_local_id),
+    session_id TEXT NOT NULL,
+    generation INTEGER NOT NULL CHECK (generation > 0),
+    workflow_id TEXT NOT NULL REFERENCES cloud_workflows(workflow_id),
+    job_id TEXT NOT NULL
+) STRICT",
+    "CREATE UNIQUE INDEX remote_runtime_allocations_workflow ON remote_runtime_allocations(workflow_id)",
+    "CREATE UNIQUE INDEX remote_runtime_allocations_job ON remote_runtime_allocations(job_id)",
+];
+
 pub(super) fn open_connection(path: &Path) -> Result<Connection, CloudStoreError> {
     let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
         | OpenFlags::SQLITE_OPEN_CREATE
@@ -72,10 +84,16 @@ pub(super) fn initialize_schema(connection: &mut Connection) -> Result<(), Cloud
     if version < 2 {
         transaction.execute_batch(REMOTE_WORKSPACE_SCHEMA)?;
     }
+    if version < 3 {
+        for definition in REMOTE_ALLOCATION_SCHEMA {
+            transaction.execute_batch(definition)?;
+        }
+    }
     drop(transaction.prepare(
         "SELECT workspace_local_id, session_id, revision, snapshot
          FROM remote_workspaces INDEXED BY remote_workspaces_session LIMIT 0",
     )?);
+    validate_allocation_schema(&transaction)?;
     transaction.pragma_update(None, "user_version", STORE_SCHEMA_VERSION)?;
     transaction.commit()?;
     Ok(())
@@ -85,6 +103,21 @@ pub(super) fn ensure_current_schema(connection: &Connection) -> Result<(), Cloud
     let version = connection.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))?;
     if version != STORE_SCHEMA_VERSION {
         return Err(CloudStoreError::UnsupportedSchema(version));
+    }
+    validate_allocation_schema(connection)
+}
+
+fn validate_allocation_schema(connection: &Connection) -> Result<(), CloudStoreError> {
+    // These owned CREATE definitions are versioned data; keep their normalized SQL stable.
+    // Exact matching includes constraints that column/index-name probes cannot inspect.
+    let matches: bool = connection.query_row(
+        "SELECT COUNT(*) = 3 AND COUNT(CASE WHEN sql IN (?1, ?2, ?3) THEN 1 END) = 3
+         FROM main.sqlite_schema WHERE tbl_name = 'remote_runtime_allocations' AND sql IS NOT NULL",
+        REMOTE_ALLOCATION_SCHEMA,
+        |row| row.get(0),
+    )?;
+    if !matches {
+        return Err(CloudStoreError::InvalidAllocationSchema);
     }
     Ok(())
 }
@@ -135,3 +168,6 @@ pub(super) fn prepare_private_store(path: &Path) -> Result<PathBuf, CloudStoreEr
     }
     Ok(path)
 }
+
+#[cfg(test)]
+mod tests;

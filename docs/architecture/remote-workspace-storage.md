@@ -92,6 +92,41 @@ Domain-valid in-memory state can exceed the storage limits. Callers must persist
 intent successfully before provider side effects and surface storage-capacity
 errors without discarding the last saved runtime or cleanup record.
 
+### Reserved allocation identity schema
+
+Schema 3 reserves `remote_runtime_allocations`: one primary workspace identity,
+unique workflow/job indexes, and foreign keys to the workspace and workflow
+snapshots. Migration from schema 2 preserves the existing snapshots, revisions,
+and consumed creation claims without manufacturing allocation bindings from
+legacy runtime references. The new table starts empty.
+
+Older clients reject the newer database version. Missing or partial allocation
+tables/indexes and ambiguous interrupted-version fixtures are rejected rather
+than silently repaired or adopted. Before migration commit and on every operation,
+validate the owned table and index definitions against their exact, versioned
+`sqlite_schema.sql` representation. This includes uniqueness, indexed columns,
+the primary key, positive generation, foreign keys and strict typing; equivalent
+but unexpected definitions are not adopted. Keep these CREATE definitions stable
+until an explicit schema migration replaces them, including parent-table renames.
+A frozen format fixture prevents accidental definition drift; unexpected extra
+indexes or triggers are also rejected. The foreign keys prevent deleting a
+parent snapshot while an allocation binding still references it; there is no
+implicit ownership cascade or provider cleanup.
+
+Generation zero describes a specification that has never allocated a runtime;
+bindings require a positive generation. A future allocation increments the
+specification generation and commits that same value in the runtime and binding.
+The allocator must validate bounded metadata and all cross-record identities;
+the schema alone does not establish session ownership or job membership.
+Retention expiry cannot remove a bound workflow or its consumed creation claim.
+Any future retirement operation must explicitly retire the binding in the same
+transaction, after its separate cleanup/recovery contract permits retirement.
+
+This schema prerequisite exposes no allocation read/write API and introduces no
+new workflow node kind, worker creation, adoption, lifetime policy, or UI behavior.
+The future allocator must commit and validate both snapshots with their binding
+in one transaction before the existing creation fence can grant provider creation.
+
 ## Options considered
 
 ### Embed the whole aggregate in runtime YAML

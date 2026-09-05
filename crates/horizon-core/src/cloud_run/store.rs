@@ -516,6 +516,8 @@ pub enum CloudStoreError {
     Database(#[from] rusqlite::Error),
     #[error("cloud workflow store schema {0} is not supported by this binary")]
     UnsupportedSchema(i64),
+    #[error("remote allocation schema does not match its versioned table and constraint definitions")]
+    InvalidAllocationSchema,
     #[error("cloud workflow {0} already exists")]
     WorkflowExists(CloudWorkflowId),
     #[error("cloud workflow {0} does not exist")]
