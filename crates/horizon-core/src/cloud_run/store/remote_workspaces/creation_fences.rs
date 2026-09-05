@@ -1,4 +1,4 @@
-//! Migration-only, append-only denials: saved runtime identities never grant creation.
+//! Append-only denials: saved runtime identities never grant creation by themselves.
 
 use super::super::{CloudJobId, CloudWorkflowId};
 use super::{CloudStoreError, MAX_MATERIALIZED_SNAPSHOT_BYTES, WorkspaceRow, decode, validation};
@@ -41,12 +41,22 @@ pub(in crate::cloud_run::store) fn migrate(transaction: &Transaction<'_>) -> Res
         let saved =
             decode(&owner, &workspace_local_id, row).map_err(|_| CloudStoreError::InvalidLegacyRuntimeSnapshot)?;
         if let Some(runtime) = saved.state.runtime {
-            transaction.execute(
-                "INSERT OR IGNORE INTO remote_runtime_creation_fences (workflow_id, job_id) VALUES (?1, ?2)",
-                params![runtime.workflow_id.to_string(), runtime.job_id.to_string()],
-            )?;
+            record_identity(transaction, runtime.workflow_id, runtime.job_id)?;
         }
     }
+    Ok(())
+}
+
+/// Publish the denial in the same transaction as its validated runtime snapshot.
+pub(super) fn record_identity(
+    transaction: &Transaction<'_>,
+    workflow_id: CloudWorkflowId,
+    job_id: CloudJobId,
+) -> Result<(), CloudStoreError> {
+    transaction.execute(
+        "INSERT OR IGNORE INTO remote_runtime_creation_fences (workflow_id, job_id) VALUES (?1, ?2)",
+        params![workflow_id.to_string(), job_id.to_string()],
+    )?;
     Ok(())
 }
 
