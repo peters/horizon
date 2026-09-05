@@ -50,6 +50,11 @@ back into large multi-purpose modules.
   `board/arrangement/reordering.rs`.
 - Large board test surfaces should live in `board/tests/` topic files so
   `board.rs` can stay focused on production orchestration.
+- `panel.rs` owns panel models and content access; explicit restart logic lives
+  in `panel/lifecycle.rs`. `panel/spawn.rs` keeps content selection and command
+  resolution, while `panel/spawn/terminal.rs` owns terminal construction,
+  transcript restoration and disconnected/failure snapshots. These boundaries
+  preserve existing behavior and do not introduce remote execution ownership.
 - `terminal.rs` should keep the terminal types and shared imports; lifecycle,
   event handling, resize policy, selection logic, and content helpers belong in
   `terminal/` leaf modules.
