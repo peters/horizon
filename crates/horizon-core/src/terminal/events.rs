@@ -51,7 +51,7 @@ impl Terminal {
 
     #[must_use]
     pub fn title(&self) -> &str {
-        &self.title
+        self.title.as_str()
     }
 
     #[must_use]
@@ -76,26 +76,14 @@ impl Terminal {
         }
     }
 
-    pub(super) fn handle_event(&mut self, event: Event) {
+    pub(crate) fn handle_event(&mut self, event: Event) {
         match event {
-            Event::Title(title) => match Self::parse_horizon_title(&title) {
-                Some(HorizonOscTitle::Notification(notification)) => {
+            Event::Title(title) => {
+                if let Some(notification) = self.title.apply_incoming(&title) {
                     self.pending_notification = Some(notification);
                 }
-                Some(HorizonOscTitle::SetTitle(next_title)) => {
-                    self.title = next_title;
-                }
-                Some(HorizonOscTitle::ClearTitle) => {
-                    self.title.clear();
-                }
-                Some(HorizonOscTitle::Ignore) => {}
-                None => {
-                    self.title = title;
-                }
-            },
-            Event::ResetTitle => {
-                self.title.clear();
             }
+            Event::ResetTitle => self.title.reset(),
             Event::ClipboardStore(clipboard, contents) => match clipboard {
                 term::ClipboardType::Clipboard => self.clipboard_contents = contents,
                 term::ClipboardType::Selection => self.selection_contents = contents,

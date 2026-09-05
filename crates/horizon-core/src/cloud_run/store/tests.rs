@@ -48,7 +48,7 @@ fn test_workflow(provider: CloudProvider, timestamp: i64) -> CloudWorkflow {
     }
 }
 
-fn retained_workflow(provider: CloudProvider, timestamp: i64) -> CloudWorkflow {
+pub(super) fn retained_workflow(provider: CloudProvider, timestamp: i64) -> CloudWorkflow {
     let mut workflow = test_workflow(provider, timestamp);
     workflow.retain_until_millis = i64::MAX;
     workflow
@@ -59,7 +59,7 @@ fn worker_target(workflow: &CloudWorkflow) -> &WorkerTarget {
 }
 
 fn assert_unsupported_schema<T>(result: &Result<T, CloudStoreError>) {
-    assert!(matches!(result, Err(CloudStoreError::UnsupportedSchema(2))));
+    assert!(matches!(result, Err(CloudStoreError::UnsupportedSchema(3))));
 }
 
 fn store(temp: &TempDir) -> CloudWorkflowStore {
@@ -218,7 +218,7 @@ fn creation_claim_lookup_has_a_covering_workflow_index() {
     let detail = connection
         .query_row(
             "EXPLAIN QUERY PLAN
-             SELECT substr(provider, 1, 9), substr(job_id, 1, 37)
+             SELECT substr(provider, 1, 13), substr(job_id, 1, 37)
              FROM cloud_worker_creation_claims
              WHERE workflow_id = ?1
              LIMIT ?2",
@@ -233,7 +233,7 @@ fn creation_claim_lookup_has_a_covering_workflow_index() {
 fn creation_claim_is_durable_atomic_and_bound_to_the_persisted_job() {
     let temp = TempDir::new().expect("temp dir");
     let store = store(&temp);
-    let workflow = retained_workflow(CloudProvider::RunPod, 1_000);
+    let workflow = retained_workflow(CloudProvider::LocalDocker, 1_000);
     let job_id = workflow.nodes[0].id;
     let stored = store.create(&workflow).expect("create workflow");
     let target = worker_target(&workflow).clone();
@@ -288,7 +288,7 @@ fn creation_claim_is_durable_atomic_and_bound_to_the_persisted_job() {
         reopened.claim_worker_creation(workflow.id, job_id, &target, "bad/name"),
         Err(CloudStoreError::InvalidResourceName)
     ));
-    let other = retained_workflow(CloudProvider::RunPod, 3_000);
+    let other = retained_workflow(CloudProvider::LocalDocker, 3_000);
     let other_job = other.nodes[0].id;
     reopened.create(&other).expect("create other workflow");
     assert!(matches!(
@@ -532,7 +532,7 @@ fn runpod_fence_uses_the_durable_workflow_claim() {
     );
     let connection = Connection::open(store.path()).expect("open raw store");
     connection
-        .pragma_update(None, "user_version", 2)
+        .pragma_update(None, "user_version", 3)
         .expect("set unsupported schema");
     drop(connection);
     let failed_claim = super::super::runpod::RunPodCreationFence::claim_once(
@@ -570,7 +570,7 @@ fn invalid_snapshots_and_future_schema_fail_closed() {
     replacement.updated_at_millis += 1;
     let connection = Connection::open(&future_path).expect("future store");
     connection
-        .pragma_update(None, "user_version", 2)
+        .pragma_update(None, "user_version", 3)
         .expect("future version");
     drop(connection);
     assert_unsupported_schema(&stale_store.load(workflow.id));

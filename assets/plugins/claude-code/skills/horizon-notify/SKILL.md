@@ -28,4 +28,7 @@ Related OSC API for terminal titles:
 - Clear title:
   `printf '\033]0;HORIZON_TITLE:clear\007' > "/dev/$(ps -o tty= -p $PPID | tr -d ' ')"`
 
+A set title stays on the panel titlebar until you clear it. Later OSC 0 titles
+from the TUI (cwd, spinner, status) do not overwrite it.
+
 Keep titles under 80 chars and avoid newlines.

@@ -65,7 +65,7 @@ impl InteractiveWorkerLease {
         time::OffsetDateTime::parse(&self.terminate_after, &time::format_description::well_known::Rfc3339).is_ok()
     }
 
-    fn is_bounded_at(&self, lease_seconds: u32, observed_at: time::OffsetDateTime) -> bool {
+    pub(super) fn is_bounded_at(&self, lease_seconds: u32, observed_at: time::OffsetDateTime) -> bool {
         let Ok(deadline) =
             time::OffsetDateTime::parse(&self.terminate_after, &time::format_description::well_known::Rfc3339)
         else {
@@ -251,7 +251,7 @@ pub trait InteractiveWorkerProvider: Send + Sync {
     fn delete_worker(&self, worker: &InteractiveWorker) -> Result<InteractiveWorkerCleanup, Self::Error>;
 }
 
-fn valid_worker_target(target: &WorkerTarget, provider: CloudProvider) -> bool {
+pub(crate) fn valid_worker_target(target: &WorkerTarget, provider: CloudProvider) -> bool {
     target.provider == provider
         && !target.profile.trim().is_empty()
         && target.profile.trim() == target.profile

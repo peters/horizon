@@ -4,7 +4,7 @@ use std::io::Cursor;
 use rusqlite::Connection;
 use uuid::Uuid;
 
-use super::super::{AgentSessionBinding, PanelResume, PanelState, RuntimeState, WorkspaceState};
+use super::super::{AgentSessionBinding, PanelState, RuntimeState, WorkspaceState};
 use super::{
     AgentSessionBootstrapCatalog, AgentSessionCatalog, AgentSessionRecord, ClaudeSessionSummary,
     ExactSessionResolution, PanelKind, PiSessionSummary, codex::CodexSessions, finish_codex_load,
@@ -12,6 +12,7 @@ use super::{
     scan_claude_session_reader, scan_pi_session_reader,
 };
 use crate::error::Error;
+use crate::panel::PanelResume;
 
 mod cwd;
 mod grok;
