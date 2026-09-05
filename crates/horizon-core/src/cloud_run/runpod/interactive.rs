@@ -160,6 +160,15 @@ impl InteractiveWorkerProvider for RunPodInteractiveWorkerProvider {
             .map(|status| status.map(|status| self.adapt_status(status, &target, &ssh_public_key)))
     }
 
+    fn reconcile_worker(
+        &self,
+        request: &InteractiveWorkerRequest,
+    ) -> Result<Option<InteractiveWorkerStatus>, Self::Error> {
+        self.client
+            .reconcile_interactive_worker(request, &self.profile)
+            .map(|status| status.map(|status| self.adapt_status(status, &request.target, &request.ssh_public_key)))
+    }
+
     fn delete_worker(&self, worker: &InteractiveWorker) -> Result<InteractiveWorkerCleanup, Self::Error> {
         let ssh_public_key = worker.ssh_public_key.clone();
         let worker = runpod_worker(worker)?;

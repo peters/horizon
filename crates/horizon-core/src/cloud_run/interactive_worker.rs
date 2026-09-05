@@ -310,6 +310,23 @@ pub trait InteractiveWorkerProvider: Send + Sync {
     /// safely produce an exact worker identity.
     fn ensure_worker(&self, request: &InteractiveWorkerRequest) -> Result<InteractiveWorkerEnsure, Self::Error>;
 
+    /// Recover an exact worker after losing a creation response, without creating.
+    ///
+    /// Resolve the deterministic request identity and reject ambiguous or
+    /// mismatched resources. Absence is an observation, never a creation grant.
+    /// This operation must not create, restart, delete, or consume a creation
+    /// claim, including for expired, over-budget, or stopped workers. A returned
+    /// observation does not establish the caller's durable ownership; attachment
+    /// also requires that ownership and fresh [`InteractiveWorkerStatus::is_ready_for`].
+    ///
+    /// # Errors
+    /// Rejects invalid requests before provider I/O and returns redacted errors
+    /// for failed, ambiguous, identity-mismatched, or policy-rejected recovery.
+    fn reconcile_worker(
+        &self,
+        request: &InteractiveWorkerRequest,
+    ) -> Result<Option<InteractiveWorkerStatus>, Self::Error>;
+
     /// Inspect only the exact persisted worker, returning `None` when absent.
     ///
     /// # Errors
@@ -441,6 +458,16 @@ mod tests {
         fn inspect_worker(&self, worker: &InteractiveWorker) -> Result<Option<InteractiveWorkerStatus>, Self::Error> {
             if !worker.is_valid_for(self.provider()) {
                 return Err(FakeError::InvalidWorker);
+            }
+            Ok(Some(self.status.clone()))
+        }
+
+        fn reconcile_worker(
+            &self,
+            request: &InteractiveWorkerRequest,
+        ) -> Result<Option<InteractiveWorkerStatus>, Self::Error> {
+            if !request.is_valid_for(self.provider()) {
+                return Err(FakeError::InvalidRequest);
             }
             Ok(Some(self.status.clone()))
         }

@@ -259,6 +259,21 @@ impl InteractiveWorkerProvider for LocalDockerInteractiveWorkerProvider {
             result => result.map(Some),
         }
     }
+    fn reconcile_worker(
+        &self,
+        request: &InteractiveWorkerRequest,
+    ) -> Result<Option<InteractiveWorkerStatus>, Self::Error> {
+        validate_request(request, &self.profile)?;
+        let name = container_name(request.workflow_id, request.job_id);
+        let Some(container) = self.transport.inspect(&name)? else {
+            return Ok(None);
+        };
+        let worker = worker_for_request(&container, request)?;
+        match self.observe(&container, worker) {
+            Err(LocalDockerError::ResourceAbsent) => Ok(None),
+            result => result.map(Some),
+        }
+    }
     fn delete_worker(&self, worker: &InteractiveWorker) -> Result<InteractiveWorkerCleanup, Self::Error> {
         self.validate_persisted_worker(worker)?;
         let resource_id = &worker.identity.resource_id;

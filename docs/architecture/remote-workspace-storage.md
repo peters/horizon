@@ -60,6 +60,14 @@ errors include the worker and observed limit and warn that billing may continue.
 This covers newly created resources too, because another client may already be
 using the worker. Reconciliation identities alone do not establish ownership.
 Only explicit, freshly identity-verified deletion removes persistent compute.
+Recovery after losing a create response has an explicit non-creating provider
+operation. It resolves the deterministic request identity without consuming a
+creation claim, and absence never falls through to create. Stopped, expired,
+ambiguous, and identity-mismatched resources do not trigger restart or cleanup.
+Cost-rejected recovery retains the exact observed identity and reports that it
+may remain billable, for both lifetime policies. The bounded lookup is separate
+from ensure and exact-handle inspection; callers still require durable ownership,
+fresh lifetime validation and a trusted pinned endpoint before attachment.
 Provider-wide manual management and the remaining remote implementations still
 need integration. Schema and synthetic-transport tests do not establish live
 provider scheduling, storage durability or PC-off acceptance.

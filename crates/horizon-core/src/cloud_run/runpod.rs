@@ -1,7 +1,9 @@
 //! `RunPod` Secure Cloud lifecycle adapter for durable cloud workers.
 use super::{
     CloudJobId, CloudProvider, CloudWorkflowId, WorkerLifetime, WorkerTarget,
-    interactive_worker::{InteractiveWorkerLease, InteractiveWorkerLifetime, valid_ssh_public_key},
+    interactive_worker::{
+        InteractiveWorkerLease, InteractiveWorkerLifetime, InteractiveWorkerRequest, valid_ssh_public_key,
+    },
     validation::valid_worker_image,
 };
 use serde::{Deserialize, Deserializer, de};
@@ -218,6 +220,52 @@ impl RunPodClient {
                 error
             }
         })
+    }
+    fn reconcile_interactive_worker(
+        &self,
+        request: &InteractiveWorkerRequest,
+        profile: &RunPodProfile,
+    ) -> Result<Option<RunPodWorkerStatus>, RunPodError> {
+        if !request.is_valid_for(CloudProvider::RunPod) {
+            return Err(RunPodError::InvalidTarget);
+        }
+        validate_target(&request.target, profile)?;
+        let name = resource_name(request.workflow_id, request.job_id);
+        let matches = self.reconcile_by_name(&name)?;
+        let pod = match matches.as_slice() {
+            [] => return Ok(None),
+            [pod] => pod,
+            _ => {
+                return Err(RunPodError::AmbiguousResource {
+                    name,
+                    count: matches.len(),
+                });
+            }
+        };
+        let Some(current) = self.transport.get(&pod.id)? else {
+            return Ok(None);
+        };
+        if current.id != pod.id {
+            return Err(RunPodError::ResourceIdentityMismatch);
+        }
+        let status = status_from_pod(
+            &current,
+            request.workflow_id,
+            request.job_id,
+            &request.target,
+            None,
+            Some(&request.ssh_public_key),
+        )?;
+        if let Some(maximum) = request.target.max_hourly_cost_micros
+            && status.worker.hourly_cost_micros.is_none_or(|actual| actual > maximum)
+        {
+            return Err(RunPodError::WorkerRecoveryCostRejected {
+                actual: status.worker.hourly_cost_micros,
+                worker: Box::new(status.worker),
+                maximum,
+            });
+        }
+        Ok(Some(status))
     }
     fn reconcile_by_name(&self, name: &str) -> Result<Vec<ApiPod>, RunPodError> {
         let mut matches = BTreeMap::new();
