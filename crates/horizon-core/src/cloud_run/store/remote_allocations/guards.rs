@@ -1,6 +1,6 @@
 //! Keep generic workflow/record APIs from bypassing committed runtime ownership.
 
-use super::super::{decode_workflow_row, workflow_row};
+use super::super::{decode_workflow_row, validate_claim_target, workflow_row};
 use super::{CloudJobId, CloudStoreError, CloudWorkflow, RemoteRuntimePhase, WorkflowNodeKind, binding};
 use crate::remote_workspace::RemoteWorkspaceState;
 use rusqlite::{Connection, params};
@@ -23,10 +23,15 @@ pub(in crate::cloud_run::store) fn validate_workflow_replacement(
 ) -> Result<(), CloudStoreError> {
     if let Some(row) = binding::load_workflow(connection, &previous.id.to_string())? {
         let allocation = binding::recover(connection, &row)?;
-        if next.retain_until_millis != previous.retain_until_millis {
+        let state = allocation.workspace.state();
+        let runtime = state.runtime.as_ref().ok_or(CloudStoreError::InvalidRemoteAllocation)?;
+        if next.retain_until_millis != previous.retain_until_millis
+            || (validate_claim_target(previous, runtime.job_id, &state.spec.target).is_err()
+                && validate_claim_target(next, runtime.job_id, &state.spec.target).is_ok())
+        {
             return Err(CloudStoreError::InvalidRemoteAllocation);
         }
-        row.validate_workflow(allocation.workspace.state(), next)
+        row.validate_workflow(state, next)
     } else {
         validate_unbound_snapshot(previous)?;
         ensure_unbound_workflow(next)

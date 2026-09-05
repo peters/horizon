@@ -165,6 +165,8 @@ binding cannot reclassify its saved remote workflow as a legacy unbound record.
 Creation grants require the intact allocation to remain provisioning without
 an observed worker or cleanup intent. A later observation or uncertain claim
 outcome requires non-creating reconciliation, not a retry interpreted as a grant.
+The bound workflow also cannot return to a creation-eligible queued/provisioning
+state after leaving it, even if the runtime snapshot is still provisioning.
 Historical close/exit cleanup records remain recoverable and non-creating; they
 are not authority for provider deletion under the corrected product contract.
 

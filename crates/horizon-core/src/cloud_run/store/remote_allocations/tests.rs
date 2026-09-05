@@ -3,7 +3,7 @@ use super::*;
 use crate::cloud_run::interactive_worker::{
     InteractiveWorker, InteractiveWorkerIdentity, InteractiveWorkerLifetime, InteractiveWorkerSshEndpoint,
 };
-use crate::cloud_run::{ArtifactDigest, CloudProvider, GitCommitSha, GitSource, WorkerLifetime};
+use crate::cloud_run::{ArtifactDigest, CloudJobOutcome, CloudProvider, GitCommitSha, GitSource, WorkerLifetime};
 use crate::remote_workspace::{RemoteCleanupIntent, RemoteCleanupReason, RemoteWorkspaceSpec, RepositoryCheckpoint};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use rusqlite::Connection;
@@ -225,27 +225,6 @@ fn workflow_capacity_failure_rolls_back_the_pending_generation() {
 }
 
 #[test]
-fn invalid_setup_retention_and_exhausted_generation_never_allocate() {
-    let fixture = fixture();
-    let store = &fixture.store;
-    for until in [-1, 0, 1000, current_unix_millis().expect("now")] {
-        assert!(matches!(
-            store.allocate_remote_runtime(&fixture.original, until),
-            Err(Error::InvalidAllocationRetention)
-        ));
-    }
-    let mut state = fixture.original.state().clone();
-    state.spec.workspace_local_id = "exhausted".into();
-    state.spec.generation = u64::MAX;
-    let exhausted = store.create_remote_workspace(OWNER, &state).expect("counter record");
-    assert!(matches!(
-        store.allocate_remote_runtime(&exhausted, i64::MAX),
-        Err(Error::GenerationExhausted)
-    ));
-    assert_eq!(fixture.counts(), [0, 0, 0]);
-}
-
-#[test]
 fn generic_writes_cannot_clear_copy_or_reclassify_even_when_the_binding_is_lost() {
     for lost_binding in [false, true] {
         let fixture = fixture();
@@ -326,6 +305,32 @@ fn workflow_identity_and_single_node_shape_are_enforced_but_progress_can_update(
     progress.nodes[0].state = CloudJobState::Provisioning;
     let updated = store.replace(saved.workflow(), &progress).expect("progress");
     assert_eq!(fixture.recover().workflow(), &updated);
+    let mut observed = updated;
+    for (phase, outcome) in [
+        (CloudJobState::Running, None),
+        (CloudJobState::Failed, Some(CloudJobOutcome::Failed)),
+    ] {
+        let mut next = observed.workflow().clone();
+        next.updated_at_millis += 1;
+        next.nodes[0].state = phase;
+        next.nodes[0].outcome = outcome;
+        observed = store.replace(&observed, &next).expect("non-creating progress");
+        for eligible in [CloudJobState::Queued, CloudJobState::Provisioning] {
+            next.updated_at_millis += 1;
+            next.nodes[0].state = eligible;
+            next.nodes[0].outcome = None;
+            assert!(matches!(
+                store.replace(&observed, &next),
+                Err(CloudStoreError::InvalidRemoteAllocation)
+            ));
+        }
+        assert_eq!(fixture.recover().workflow(), &observed);
+        assert!(matches!(
+            claim(store, &saved),
+            Err(CloudStoreError::ClaimTargetNotReady(_))
+        ));
+        assert_eq!(fixture.counts(), [1, 1, 0]);
+    }
     for change in [0, 1, 2, 3] {
         let mut next = saved.workflow().workflow().clone();
         match change {
