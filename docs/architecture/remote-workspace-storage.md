@@ -35,8 +35,18 @@ The image permits an unset expiry for persistent execution and retains a bounded
 watchdog only for explicitly time-limited jobs. Provider-neutral targets and
 worker handles distinguish persistent execution from explicit time limits; a
 worker observation must match its target's lifetime policy before attachment.
-Provider implementations and profiles still need persistent execution support:
-the existing adapters reject unsupported persistent requests/handles before I/O.
+The local container adapter supports both explicit policies, rejects expiry
+metadata on a persistent worker, and preserves the same worker across controller
+drop/reopen. Inspection never creates a missing worker, and finding a stopped
+worker does not restart or replace it. If a newly created persistent worker
+has conflicting image-supplied expiry metadata, its exact identity is returned
+for manual inspection; metadata drift never authorizes automatic deletion.
+After an ambiguous persistent create response, a recovered worker is retained
+if inspection fails: another controller may already be using it. The returned
+exact identity permits reconciliation, not an unverified cleanup or replacement.
+The remote GPU adapter still rejects
+unsupported persistent requests/handles before I/O; product profiles and the
+remaining remote implementations still need persistent execution support.
 Neither record storage nor these contracts alone complete persistent cloud workspaces.
 
 The product policy defaults to persistent, but saved records never infer that

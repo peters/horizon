@@ -84,12 +84,14 @@ impl DockerTransport for DockerCli {
             "127.0.0.1::22",
             "--env",
             &format!("{SSH_PUBLIC_KEY_ENV}={}", request.ssh_public_key),
-            "--env",
-            &format!("{TERMINATE_ENV}={}", request.terminate_after),
         ]
         .into_iter()
         .map(OsString::from)
         .collect();
+        if let Some(deadline) = &request.terminate_after {
+            args.push(OsString::from("--env"));
+            args.push(OsString::from(format!("{TERMINATE_ENV}={deadline}")));
+        }
         for (key, value) in &request.labels {
             args.push(OsString::from("--label"));
             args.push(OsString::from(format!("{key}={value}")));

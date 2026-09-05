@@ -1,9 +1,10 @@
-use super::super::WorkerLifetime;
 use super::*;
 use InteractiveWorkerCleanup::{AlreadyAbsent, Deleted};
 use LocalDockerError::*;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::sync::{Arc, Mutex};
+
+mod lifetime;
 
 #[derive(Clone, Default)]
 struct FakeDocker(Arc<Mutex<FakeState>>);
@@ -15,11 +16,13 @@ struct FakeState {
     create_calls: usize,
     delete_calls: usize,
     fail_create_after_insert: bool,
+    reject_create: bool,
     create_response_id: Option<String>,
     failed_inspections_after_create: usize,
     hidden_inspections_after_create: usize,
     binding_host: Option<String>,
     disappear_during_key_read: bool,
+    image_environment: Vec<String>,
 }
 impl FakeDocker {
     fn state(&self) -> std::sync::MutexGuard<'_, FakeState> {
@@ -49,16 +52,23 @@ impl DockerTransport for FakeDocker {
     fn create(&self, request: &DockerCreateRequest) -> Result<String, LocalDockerError> {
         let mut state = self.state();
         state.create_calls += 1;
+        if state.reject_create {
+            return Err(CommandFailed {
+                operation: "container creation",
+            });
+        }
         let id = "a".repeat(64);
+        let mut environment = vec![format!("{SSH_PUBLIC_KEY_ENV}={}", request.ssh_public_key)];
+        if let Some(deadline) = &request.terminate_after {
+            environment.push(format!("{TERMINATE_ENV}={deadline}"));
+        }
+        environment.extend(state.image_environment.iter().cloned());
         state.container = Some(DockerContainer {
             id: id.clone(),
             name: request.name.clone(),
             image: request.image.clone(),
             labels: request.labels.clone(),
-            environment: vec![
-                format!("{SSH_PUBLIC_KEY_ENV}={}", request.ssh_public_key),
-                format!("{TERMINATE_ENV}={}", request.terminate_after),
-            ],
+            environment,
             restart_policy: "no".to_string(),
             running: true,
             state: "running".to_string(),
@@ -142,13 +152,15 @@ fn provider(name: &str, fake: FakeDocker) -> LocalDockerInteractiveWorkerProvide
 }
 
 #[test]
-fn unsupported_persistent_requests_and_handles_fail_before_provider_io() {
+fn malformed_lifetime_handles_fail_before_provider_io() {
     let fake = FakeDocker::default();
     let provider = provider("local", fake.clone());
     let mut request = request();
     request.target.lifetime = WorkerLifetime::Persistent;
     assert!(request.is_valid_for(CloudProvider::LocalDocker));
-    assert_eq!(provider.ensure_worker(&request), Err(InvalidTarget));
+    let mut invalid_request = request.clone();
+    invalid_request.target.lifetime = WorkerLifetime::TimeLimited { seconds: 0 };
+    assert_eq!(provider.ensure_worker(&invalid_request), Err(InvalidTarget));
     let worker = InteractiveWorker {
         identity: InteractiveWorkerIdentity {
             provider: CloudProvider::LocalDocker,
@@ -158,11 +170,19 @@ fn unsupported_persistent_requests_and_handles_fail_before_provider_io() {
         },
         target: request.target,
         ssh_public_key: request.ssh_public_key,
-        lifetime: InteractiveWorkerLifetime::Persistent,
+        lifetime: InteractiveWorkerLifetime::TimeLimited(InteractiveWorkerLease {
+            terminate_after: termination_deadline(900).expect("bounded observation"),
+        }),
     };
-    assert!(worker.is_valid_for(CloudProvider::LocalDocker));
+    assert!(!worker.is_valid_for(CloudProvider::LocalDocker));
     assert_eq!(provider.inspect_worker(&worker), Err(InvalidPersistedWorker));
     assert_eq!(provider.delete_worker(&worker), Err(InvalidPersistedWorker));
+    let mut reverse = worker;
+    reverse.target.lifetime = WorkerLifetime::TimeLimited { seconds: 900 };
+    reverse.lifetime = InteractiveWorkerLifetime::Persistent;
+    assert!(!reverse.is_valid_for(CloudProvider::LocalDocker));
+    assert_eq!(provider.inspect_worker(&reverse), Err(InvalidPersistedWorker));
+    assert_eq!(provider.delete_worker(&reverse), Err(InvalidPersistedWorker));
     let state = fake.state();
     assert_eq!(
         (
