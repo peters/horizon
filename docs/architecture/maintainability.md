@@ -82,6 +82,12 @@ back into large multi-purpose modules.
   target serialization. `interactive_worker.rs` validates observed lifetime
   against that policy; neither represents the client/creation ownership lease.
   Missing or malformed legacy metadata never selects persistent execution.
+- `cloud_run/runpod.rs` coordinates provider operations and exact ownership
+  reconciliation. Its `models.rs` leaf owns profiles, persisted worker identity,
+  lifecycle results and typed errors; `create_request.rs` owns serialized
+  creation-request construction. Public type re-exports remain stable. HTTP
+  transport and common interactive-worker adaptation stay in their existing
+  `http.rs` and `interactive.rs` leaves.
 - `cloud_run/store.rs` owns workflow snapshots and creation-claim transactions.
   Its `cloud_run/store/database.rs` leaf owns private-path preparation, connection policy,
   schema initialization, and compatibility checks. Keep database opening separate
