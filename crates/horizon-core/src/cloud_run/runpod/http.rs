@@ -85,16 +85,7 @@ impl Transport for RunPodHttp {
                 }
             });
         };
-        for delay_ms in PROPAGATION_BACKOFF_MS {
-            thread::sleep(Duration::from_millis(delay_ms));
-            if let Ok(Some(pod)) = self.get(&pod_id) {
-                return Ok(pod);
-            }
-        }
-        if self.delete(&pod_id) != Ok(RunPodCleanup::Deleted) || !matches!(self.get(&pod_id), Ok(None)) {
-            return Err(RunPodError::CreationCleanupFailed { pod_id });
-        }
-        Err(RunPodError::CreationVerificationFailed { pod_id })
+        reconcile_creation(self, request, pod_id)
     }
     fn get(&self, pod_id: &str) -> Result<Option<ApiPod>, RunPodError> {
         let url = Self::pod_url(pod_id)?;
@@ -140,6 +131,30 @@ impl Transport for RunPodHttp {
             pod_id: pod_id.to_string(),
         })
     }
+}
+pub(super) fn reconcile_creation(
+    transport: &dyn Transport,
+    request: &CreatePodRequest,
+    pod_id: String,
+) -> Result<ApiPod, RunPodError> {
+    for delay_ms in PROPAGATION_BACKOFF_MS {
+        if !cfg!(test) {
+            thread::sleep(Duration::from_millis(delay_ms));
+        }
+        if let Ok(Some(pod)) = transport.get(&pod_id) {
+            return Ok(pod);
+        }
+    }
+    if request.terminate_after.is_none() {
+        return Err(RunPodError::PersistentCreationReconciliationRequired {
+            name: request.name.clone(),
+            pod_id,
+        });
+    }
+    if transport.delete(&pod_id) != Ok(RunPodCleanup::Deleted) || !matches!(transport.get(&pod_id), Ok(None)) {
+        return Err(RunPodError::CreationCleanupFailed { pod_id });
+    }
+    Err(RunPodError::CreationVerificationFailed { pod_id })
 }
 pub(super) fn capacity_unavailable(envelope: &serde_json::Value) -> bool {
     envelope

@@ -107,7 +107,7 @@ impl InteractiveWorkerLifetime {
             .is_none_or(InteractiveWorkerLease::has_valid_shape)
     }
 
-    fn matches_policy(&self, policy: WorkerLifetime) -> bool {
+    pub(super) fn matches_policy(&self, policy: WorkerLifetime) -> bool {
         matches!(
             (self, policy),
             (Self::Persistent, WorkerLifetime::Persistent) | (Self::TimeLimited(_), WorkerLifetime::TimeLimited { .. })

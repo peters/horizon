@@ -1,7 +1,7 @@
 use super::super::CLOUD_RUN_PROTOCOL_VERSION;
 use super::{
-    CloudJobId, CloudWorkflowId, JOB_ENV, PROTOCOL_ENV, RunPodError, RunPodProfile, SSH_PUBLIC_KEY_ENV, TERMINATE_ENV,
-    WORKFLOW_ENV, WorkerTarget, termination_deadline,
+    CloudJobId, CloudWorkflowId, JOB_ENV, LIFETIME_ENV, PERSISTENT_LIFETIME, PROTOCOL_ENV, RunPodError, RunPodProfile,
+    SSH_PUBLIC_KEY_ENV, TERMINATE_ENV, WORKFLOW_ENV, WorkerTarget, termination_deadline,
 };
 use serde::Serialize;
 
@@ -31,7 +31,8 @@ pub(super) struct CreatePodRequest {
     pub(super) ports: String,
     pub(super) start_ssh: bool,
     pub(super) support_public_ip: bool,
-    pub(super) terminate_after: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) terminate_after: Option<String>,
     pub(super) volume_in_gb: u32,
     pub(super) volume_mount_path: &'static str,
 }
@@ -49,13 +50,20 @@ impl CreatePodRequest {
         name: String,
         ssh_public_key: Option<&str>,
     ) -> Result<Self, RunPodError> {
-        let seconds = target.lifetime.time_limit_seconds().ok_or(RunPodError::InvalidTarget)?;
-        let terminate_after = termination_deadline(seconds)?;
+        let terminate_after = target
+            .lifetime
+            .time_limit_seconds()
+            .map(termination_deadline)
+            .transpose()?;
+        let lifetime_entry = match &terminate_after {
+            Some(deadline) => (TERMINATE_ENV, deadline.clone()),
+            None => (LIFETIME_ENV, PERSISTENT_LIFETIME.to_string()),
+        };
         let mut env: Vec<_> = [
             (WORKFLOW_ENV, workflow_id.to_string()),
             (JOB_ENV, job_id.to_string()),
             (PROTOCOL_ENV, CLOUD_RUN_PROTOCOL_VERSION.to_string()),
-            (TERMINATE_ENV, terminate_after.clone()),
+            lifetime_entry,
         ]
         .into_iter()
         .map(|(key, value)| CreatePodEnv {

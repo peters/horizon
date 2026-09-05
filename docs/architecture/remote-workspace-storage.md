@@ -44,9 +44,25 @@ for manual inspection; metadata drift never authorizes automatic deletion.
 After an ambiguous persistent create response, a recovered worker is retained
 if inspection fails: another controller may already be using it. The returned
 exact identity permits reconciliation, not an unverified cleanup or replacement.
-The remote GPU adapter still rejects
-unsupported persistent requests/handles before I/O; product profiles and the
-remaining remote implementations still need persistent execution support.
+The remote GPU adapter uses the same explicit lifetime contract. Persistent
+creation omits the provider deadline and image watchdog environment entry and
+records `HORIZON_WORKER_LIFETIME=persistent`. Recovery requires that marker and
+no expiry entry; legacy timed workers retain their exact deadline representation.
+Missing, contradictory or mismatched lifetime metadata cannot authorize adoption
+or cleanup. Flat provider snapshots retain the legacy `terminate_after` field
+for timed workers and require an explicit `lifetime` marker for persistence.
+
+An uncertain persistent creation preserves the deterministic resource name and,
+when acknowledged, its exact provider ID for reconciliation. Exhausting the
+bounded visibility window does not delete it or renew its one-shot creation
+grant. Persistent validation or cost rejection also retains the resource; cost
+errors include the worker and observed limit and warn that billing may continue.
+This covers newly created resources too, because another client may already be
+using the worker. Reconciliation identities alone do not establish ownership.
+Only explicit, freshly identity-verified deletion removes persistent compute.
+Provider-wide manual management and the remaining remote implementations still
+need integration. Schema and synthetic-transport tests do not establish live
+provider scheduling, storage durability or PC-off acceptance.
 Neither record storage nor these contracts alone complete persistent cloud workspaces.
 
 The product policy defaults to persistent, but saved records never infer that
