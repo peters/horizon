@@ -125,7 +125,7 @@ fn invalid_keys_snapshots_and_future_schema_never_replace_saved_records() {
         .query_row("SELECT snapshot FROM remote_workspaces", [], |row| row.get(0))
         .expect("before");
     connection
-        .pragma_update(None, "user_version", 3)
+        .pragma_update(None, "user_version", 4)
         .expect("future schema");
     assert!(
         store

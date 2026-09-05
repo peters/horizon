@@ -10,7 +10,8 @@ mod store;
 mod validation;
 mod worker_lifetime;
 pub use store::{
-    CloudStoreError, CloudWorkflowStore, RemoteWorkspaceStoreError, StoredRemoteWorkspace, StoredWorkflow,
+    CloudStoreError, CloudWorkflowStore, RemoteWorkspaceStoreError, StoredRemoteAllocation, StoredRemoteWorkspace,
+    StoredWorkflow,
 };
 pub use worker_lifetime::WorkerLifetime;
 pub const CLOUD_RUN_PROTOCOL_VERSION: u32 = 1;
@@ -168,7 +169,7 @@ impl CloudProgress {
 }
 string_enum!(CloudJobState: Queued, Provisioning, PullingImage, Cloning, Running, Checkpointing, WaitingForApproval, Completed, Failed, Cancelled, Cleaning, Cleaned);
 string_enum!(CloudJobOutcome: Succeeded, Failed, Cancelled);
-string_enum!(WorkflowNodeKind: Build, Test, Artifact, Approval, Merge, Publish, Deploy, Verify, Cleanup);
+string_enum!(WorkflowNodeKind: Build, Test, Artifact, Approval, Merge, Publish, Deploy, Verify, Cleanup, RemoteWorkspace);
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RetryPolicy {
@@ -335,6 +336,8 @@ pub enum CloudProtocolError {
     EmptyNodeIdentity(CloudJobId),
     #[error("node {0} has an invalid worker target")]
     InvalidWorkerTarget(CloudJobId),
+    #[error("remote workspace node {0} must be the workflow's only node with a source, worker, and single attempt")]
+    InvalidRemoteWorkspaceNode(CloudJobId),
     #[error("worker target requires exactly one valid explicit lifetime policy")]
     InvalidWorkerLifetime,
     #[error("node {0} has an invalid weight")]

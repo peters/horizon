@@ -1,6 +1,6 @@
 # ADR-383: Session-owned remote records in the control-plane database
 
-Status: Accepted record-storage boundary; persistent-lifetime integration pending.
+Status: Accepted record-storage and atomic allocation boundaries; product integration pending.
 Date: 2026-09-05 (Europe/Oslo; 2026-09-04 UTC)
 Deciders: Repository maintainer through the issue and reviewed implementation PRs.
 
@@ -68,10 +68,10 @@ revision and snapshot. Keep remote records out of board snapshot replacement and
 session-file deletion. Later runtime snapshots reference session-owned records;
 they do not copy live provider handles.
 
-The initial storage PR adds schema migration, validated record operations,
-bounded session recovery, and ownership/revision regressions. It performs no
-provider calls and adds no UI consumer. Generation/workflow allocation will be
-one transaction in a subsequent coordinator slice using this same database.
+The record store adds schema migration, validated record operations, bounded
+session recovery, and ownership/revision regressions. Runtime allocation uses
+one transaction in this same database. Neither API performs provider calls or
+adds a UI consumer; the lifecycle coordinator remains a separate integration.
 The record store is not permission to create, attach, or delete a worker.
 
 Each snapshot is limited to 4 MiB, with session recovery capped at 512 records
@@ -92,6 +92,66 @@ Domain-valid in-memory state can exceed the storage limits. Callers must persist
 intent successfully before provider side effects and surface storage-capacity
 errors without discarding the last saved runtime or cleanup record.
 
+### Atomic runtime allocation
+
+`allocate_remote_runtime` accepts an exact dormant stored snapshot. An explicitly
+requested environment can have zero panel intents; those intents are not local
+attachment counts and do not own compute lifetime. Allocation generates fresh
+workflow/job identities, increments the generation, and persists three related
+records in one immediate transaction: the workspace snapshot, one explicit
+`RemoteWorkspace` workflow node, and an allocation binding. The node has one
+attempt, no dependencies, and the exact repository and complete target from the
+workspace specification, including its explicit lifetime policy. Revision and
+generation arithmetic is checked. Allocation obeys the record/session budgets
+and cannot exceed the retained-workflow recovery count or byte limits.
+
+The workflow is a setup/creation-control record, not the running environment's
+lifetime supervisor. Its finite retention must end after its creation timestamp;
+it does not have to cover an execution deadline and never supplies one to a
+persistent target. Generic workflow updates cannot extend this setup window.
+Retention expiry prevents new creation grants but does not
+stop/delete a worker, clear the allocation, or prevent non-creating recovery of
+its identity. Remote workspace records and checkpoint updates remain available
+after setup retention expires. Ongoing task supervision and checkpoints still
+must run remotely, independently of this local control-plane store.
+
+Schema 3 adds `remote_runtime_allocations`, keyed by workspace with unique
+workflow/job indexes and foreign keys to both snapshots. Migration from schema 2
+preserves existing records and creation claims without manufacturing bindings.
+An active legacy snapshot remains available through the record API but cannot
+be adopted by the allocator. Partial/newer schemas fail closed.
+
+`load_remote_allocation` validates owner, workspace, generation, workflow/job,
+node kind, source, and target together in one consistent read transaction,
+including after setup expiry. Recovered records are not permission to create,
+attach, stop, or delete: attachment requires a fresh exact provider observation.
+
+The durable creation fence validates the committed relationship before granting
+creation and rejects pending cleanup, non-provisioning, already-observed-worker,
+or expired setup state. Removing panel intents does not cancel requested
+provisioning or renew its one-shot grant. Allocation and recovery never consume
+or renew that grant. Generic record/workflow writes cannot clear a bound runtime,
+adopt its workflow/job into another workspace, change its source/target, or
+construct an unbound explicit remote node. A lost binding cannot be used to clear
+the saved runtime or copy it into another workspace. Legacy cleanup records remain visible
+and block new creation; their close/exit reasons are never converted into
+explicit user deletion consent. This slice has no cleanup executor.
+
+Routine lifecycle denial uses `ClaimTargetNotReady`; `InvalidRemoteAllocation`
+denotes a broken/incompatible persisted relationship, including a missing binding
+for a saved remote workflow. `RemoteAllocationRequired` applies to caller misuse
+when attempting to insert an unbound remote workflow. A creation claim records
+permission consumed, not proof of provider resource existence. The coordinator
+must reconcile exact identity after lost responses, even when no worker handle
+was saved, and must never probe creation to infer absence.
+
+Retirement/rebinding is intentionally absent here. Explicit deletion or verified
+loss recovery must verify the exact provider outcome and retire the relationship
+atomically before another generation can be allocated. Client restart, zero
+local views, and setup expiry are not retirement triggers. Legal lifecycle
+transitions, manual stop/delete, cross-session/provider inventory, runtime
+references, and the Remote Environments widget remain separate integration work.
+
 ## Options considered
 
 ### Embed the whole aggregate in runtime YAML
@@ -106,7 +166,7 @@ a separate transactional ownership store.
 
 Moderate implementation complexity; no new dependencies or hosted-service cost.
 Uses existing transaction, privacy, and compatibility policy. Indexed, bounded
-recovery fits local workspace counts. Shared transactions can later bind runtime
+recovery fits local workspace counts. Shared transactions bind runtime
 generations to single-worker workflows. Requires explicit UI references and
 eventual cleanup-aware record retirement.
 

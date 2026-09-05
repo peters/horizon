@@ -11,7 +11,7 @@ use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 
 use super::CloudStoreError;
 
-const STORE_SCHEMA_VERSION: i64 = 2;
+const STORE_SCHEMA_VERSION: i64 = 3;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(2);
 const SCHEMA: &str = r"
 CREATE TABLE IF NOT EXISTS cloud_workflows (
@@ -49,6 +49,18 @@ CREATE INDEX remote_workspaces_session
     ON remote_workspaces(session_id, workspace_local_id);
 ";
 
+const REMOTE_ALLOCATION_SCHEMA: &str = r"
+CREATE TABLE remote_runtime_allocations (
+    workspace_local_id TEXT PRIMARY KEY NOT NULL REFERENCES remote_workspaces(workspace_local_id),
+    session_id TEXT NOT NULL,
+    generation INTEGER NOT NULL CHECK (generation > 0),
+    workflow_id TEXT NOT NULL REFERENCES cloud_workflows(workflow_id),
+    job_id TEXT NOT NULL
+) STRICT;
+CREATE UNIQUE INDEX remote_runtime_allocations_workflow ON remote_runtime_allocations(workflow_id);
+CREATE UNIQUE INDEX remote_runtime_allocations_job ON remote_runtime_allocations(job_id);
+";
+
 pub(super) fn open_connection(path: &Path) -> Result<Connection, CloudStoreError> {
     let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
         | OpenFlags::SQLITE_OPEN_CREATE
@@ -72,10 +84,19 @@ pub(super) fn initialize_schema(connection: &mut Connection) -> Result<(), Cloud
     if version < 2 {
         transaction.execute_batch(REMOTE_WORKSPACE_SCHEMA)?;
     }
+    if version < 3 {
+        transaction.execute_batch(REMOTE_ALLOCATION_SCHEMA)?;
+    }
     drop(transaction.prepare(
         "SELECT workspace_local_id, session_id, revision, snapshot
          FROM remote_workspaces INDEXED BY remote_workspaces_session LIMIT 0",
     )?);
+    for index in ["remote_runtime_allocations_workflow", "remote_runtime_allocations_job"] {
+        drop(transaction.prepare(&format!(
+            "SELECT workspace_local_id, session_id, generation, workflow_id, job_id
+             FROM remote_runtime_allocations INDEXED BY {index} LIMIT 0"
+        ))?);
+    }
     transaction.pragma_update(None, "user_version", STORE_SCHEMA_VERSION)?;
     transaction.commit()?;
     Ok(())

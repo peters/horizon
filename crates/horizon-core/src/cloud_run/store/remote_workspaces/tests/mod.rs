@@ -9,10 +9,10 @@ use crate::remote_workspace::{
 };
 use std::sync::{Arc, Barrier};
 
-const OWNER: &str = "11111111-1111-4111-8111-111111111111";
-const OTHER_OWNER: &str = "22222222-2222-4222-8222-222222222222";
+pub(in crate::cloud_run::store) const OWNER: &str = "11111111-1111-4111-8111-111111111111";
+pub(in crate::cloud_run::store) const OTHER_OWNER: &str = "22222222-2222-4222-8222-222222222222";
 
-fn workspace(id: &str) -> RemoteWorkspaceState {
+pub(in crate::cloud_run::store) fn workspace(id: &str) -> RemoteWorkspaceState {
     RemoteWorkspaceState::new(RemoteWorkspaceSpec {
         workspace_local_id: id.into(),
         target: WorkerTarget {
@@ -42,14 +42,14 @@ fn workspace(id: &str) -> RemoteWorkspaceState {
     .expect("valid workspace")
 }
 
-fn store() -> (tempfile::TempDir, CloudWorkflowStore) {
+pub(in crate::cloud_run::store) fn store() -> (tempfile::TempDir, CloudWorkflowStore) {
     let directory = tempfile::tempdir().expect("private test directory");
     let store = CloudWorkflowStore::open_path(directory.path().join("control-plane/workflows.sqlite3"))
         .expect("open test store");
     (directory, store)
 }
 
-fn provisioning(mut state: RemoteWorkspaceState) -> RemoteWorkspaceState {
+pub(in crate::cloud_run::store) fn provisioning(mut state: RemoteWorkspaceState) -> RemoteWorkspaceState {
     state.spec.generation += 1;
     state.runtime = Some(RemoteRuntimeGeneration {
         workspace_local_id: state.spec.workspace_local_id.clone(),
