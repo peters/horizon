@@ -58,6 +58,9 @@ impl CloudWorkflowStore {
     ) -> Result<StoredRemoteWorkspace, RemoteWorkspaceStoreError> {
         validate_key(session_id, &state.spec.workspace_local_id)?;
         let snapshot = encode(session_id, state)?;
+        if state.runtime.is_some() {
+            return Err(RemoteWorkspaceStoreError::RuntimeAllocationRequired);
+        }
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         ensure_current_schema(&transaction)?;
@@ -68,9 +71,6 @@ impl CloudWorkflowStore {
         )?;
         if exists {
             return Err(RemoteWorkspaceStoreError::AlreadyExists);
-        }
-        if state.runtime.is_some() {
-            return Err(RemoteWorkspaceStoreError::RuntimeAllocationRequired);
         }
         ensure_session_budget(&transaction, session_id, &state.spec.workspace_local_id, snapshot.len())?;
         transaction.execute(

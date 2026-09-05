@@ -39,6 +39,9 @@ fn non_creating_observations_cannot_revert_to_provisioning() {
         let (_directory, store) = store();
         let mut state = provisioning(workspace("workspace"));
         let original = seed_legacy_workspace(&store, &state);
+        let original = store
+            .replace_remote_workspace(&original, &state)
+            .expect("still provisioning");
         state.runtime.as_mut().expect("runtime").phase = phase;
         let observed = store
             .replace_remote_workspace(&original, &state)

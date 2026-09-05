@@ -81,12 +81,15 @@ prepared replacement may stage identity inside the caller's immediate transactio
 the allocator must commit the matching workflow and ownership binding with it.
 There is no public import shortcut for active runtimes. Already-persisted legacy
 snapshots remain readable and updateable with their original identity.
+Generic replacements cannot advance the specification's generation; that is also
+allocator-owned, and the shared replacement validation retains its allocation path.
 
 Once an existing generation leaves provisioning, a replacement cannot move it
 back to provisioning, including from reconciling or failed with no observed
 worker. This rule also applies to legacy snapshots and survives reopening the
-store. Reconciliation and attachment may still progress between non-creating
-phases; local panel intent remains independent of the runtime's lifetime.
+store. Reconciliation and attachment may still move between non-creating phases;
+ordering among them remains coordinator policy. Local panel intent remains
+independent of the runtime's lifetime.
 
 Each snapshot is limited to 4 MiB, with session recovery capped at 512 records
 and 64 MiB of serialized snapshots. Reads are bounded before materialization;

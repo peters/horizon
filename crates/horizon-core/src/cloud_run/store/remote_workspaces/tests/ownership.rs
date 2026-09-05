@@ -127,13 +127,13 @@ fn concurrent_writers_have_exactly_one_winner_and_preserve_the_winning_intent() 
         .expect("create");
     let barrier = Arc::new(Barrier::new(3));
     let writers: Vec<_> = (0..2)
-        .map(|_| {
+        .map(|index| {
             let store = store.clone();
             let expected = stored.clone();
             let barrier = Arc::clone(&barrier);
             std::thread::spawn(move || {
                 let mut next = expected.state().clone();
-                next.spec.working_directory = "src".into();
+                next.spec.working_directory = format!("src-{index}");
                 barrier.wait();
                 store.replace_remote_workspace(&expected, &next)
             })
