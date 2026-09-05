@@ -1,9 +1,11 @@
 //! Durable local control-plane storage for cloud workflow snapshots and creation claims.
 
 mod database;
+mod remote_allocations;
 mod remote_workspaces;
 mod workflow_writes;
 
+pub use remote_allocations::StoredRemoteAllocation;
 pub use remote_workspaces::{RemoteWorkspaceStoreError, StoredRemoteWorkspace};
 use workflow_writes::PreparedWorkflowInsert;
 
@@ -92,6 +94,7 @@ impl CloudWorkflowStore {
     /// Rejects invalid snapshots, duplicate workflow identities, and storage
     /// failures.
     pub fn create(&self, workflow: &CloudWorkflow) -> Result<StoredWorkflow, CloudStoreError> {
+        remote_allocations::ensure_unbound_workflow(workflow)?;
         let prepared = PreparedWorkflowInsert::new(workflow)?;
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -188,6 +191,7 @@ impl CloudWorkflowStore {
         if current.workflow != expected.workflow {
             return Err(CloudStoreError::SnapshotConflict(expected.workflow.id));
         }
+        remote_allocations::validate_workflow_replacement(&transaction, &current.workflow, next)?;
         ensure_claimed_targets_unchanged(&transaction, &id, &current.workflow, next)?;
         let revision = expected
             .revision
@@ -242,7 +246,7 @@ impl CloudWorkflowStore {
             return Err(CloudStoreError::WorkflowExpired(workflow_id));
         }
         validate_claim_target(&workflow.workflow, job_id, target)?;
-        remote_workspaces::creation_fences::ensure_unreferenced(&transaction, workflow_id, job_id)?;
+        remote_allocations::validate_creation_claim(&transaction, &workflow.workflow, job_id)?;
         let provider_name = provider_name(target.provider);
         let job_id_text = job_id.to_string();
         let existing = transaction
@@ -566,6 +570,10 @@ pub enum CloudStoreError {
     ClaimIdentityConflict,
     #[error("cloud workflow timestamp is invalid")]
     InvalidTimestamp,
+    #[error("remote workflow requires an intact session-owned runtime allocation")]
+    InvalidRemoteAllocation,
+    #[error("remote workspace workflows must be created through the runtime allocator")]
+    RemoteAllocationRequired,
 }
 
 #[cfg(test)]

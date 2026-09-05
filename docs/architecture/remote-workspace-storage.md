@@ -1,6 +1,6 @@
 # ADR-383: Session-owned remote records in the control-plane database
 
-Status: Accepted record-storage boundary; persistent-lifetime integration pending.
+Status: Accepted record/allocation storage boundary; product integration pending.
 Date: 2026-09-05 (Europe/Oslo; 2026-09-04 UTC)
 Deciders: Repository maintainer through the issue and reviewed implementation PRs.
 
@@ -70,8 +70,8 @@ they do not copy live provider handles.
 
 The initial storage PR adds schema migration, validated record operations,
 bounded session recovery, and ownership/revision regressions. It performs no
-provider calls and adds no UI consumer. Generation/workflow allocation will be
-one transaction in a subsequent coordinator slice using this same database.
+provider calls and adds no UI consumer. Generation/workflow allocation now shares
+one transaction in this database; provider coordination remains a separate slice.
 The record store is not permission to create, attach, or delete a worker.
 
 Generic creation accepts only dormant records, and generic replacement cannot
@@ -139,10 +139,46 @@ Retention expiry cannot remove a bound workflow or its consumed creation claim.
 Any future retirement operation must explicitly retire the binding in the same
 transaction, after its separate cleanup/recovery contract permits retirement.
 
-This schema prerequisite exposes no allocation read/write API and introduces no
-new workflow node kind, worker creation, adoption, lifetime policy, or UI behavior.
-The future allocator must commit and validate both snapshots with their binding
-in one transaction before the existing creation fence can grant provider creation.
+The schema-only prerequisite introduced no allocation API, new workflow node
+kind, provider call or UI. The atomic allocation API below builds on this boundary.
+
+### Atomic runtime and setup-workflow allocation
+
+Allocate one new generation, one strict single-worker `RemoteWorkspace` workflow,
+and their binding in one immediate transaction. Compare the exact observed
+workspace revision and snapshot; enforce session and retained-workflow recovery
+budgets before committing. Concurrent or stale callers must reload the winner.
+Allocation itself never calls a provider or consumes a creation grant.
+
+Setup authorization has an explicit deadline independent of execution lifetime.
+The store acquires the immediate write transaction before sampling its own clock
+for the creation timestamp and admission budget. A deadline that expires while
+waiting for the write lock is rejected without creating a bound record.
+Neither zero panel intents nor detaching the final local view cancels setup or
+changes worker lifetime. Once allocated, the setup deadline cannot be extended
+through a generic workflow update. Its expiry still permits exact allocation,
+worker, pinned SSH and checkpoint recovery; it does not stop or replace compute.
+
+Generic workflow/record writes cannot create remote nodes independently, change
+bound source/target identity, clear the runtime or copy its ownership. Losing a
+binding cannot reclassify its saved remote workflow as a legacy unbound record.
+Creation grants require the intact allocation to remain provisioning without
+an observed worker or cleanup intent. A later observation or uncertain claim
+outcome requires non-creating reconciliation, not a retry interpreted as a grant.
+The bound workflow also cannot return to a creation-eligible queued/provisioning
+state after leaving it, even if the runtime snapshot is still provisioning.
+Historical close/exit cleanup records remain recoverable and non-creating; they
+are not authority for provider deletion under the corrected product contract.
+
+This slice exposes no allocation retirement/rebinding API. Bound identity stays
+until a later explicit cleanup/recovery transaction can safely retire it.
+Legacy active unbound records remain available for reconciliation, never adopted
+as an allocation or used as permission for a new generation. A claim without a
+binding must also pass the indexed runtime creation denial. An intact allocation
+still requires the complete positive eligibility proof, including after schema
+four migrates its runtime identity into the denial table. Runtime references,
+remote supervision/checkpoint execution, providers and the overview widget remain
+separate integration work; these APIs alone do not prove PC-off development.
 
 ### Durable runtime creation denials
 

@@ -9,7 +9,7 @@ pub(super) fn validate_session_id(session_id: &str) -> Result<(), Error> {
     Ok(())
 }
 
-pub(super) fn validate_key(session_id: &str, workspace_local_id: &str) -> Result<(), Error> {
+pub(in crate::cloud_run::store) fn validate_key(session_id: &str, workspace_local_id: &str) -> Result<(), Error> {
     validate_session_id(session_id)?;
     if !valid_local_id(workspace_local_id) {
         return Err(Error::InvalidWorkspaceId);
