@@ -67,6 +67,26 @@ fn provisioning(mut state: RemoteWorkspaceState) -> RemoteWorkspaceState {
 mod migration;
 mod ownership;
 mod recovery;
+mod transitions;
+
+fn seed_legacy_workspace(store: &CloudWorkflowStore, state: &RemoteWorkspaceState) -> StoredRemoteWorkspace {
+    // Seed an already-persisted legacy snapshot; public writes must not import runtimes.
+    Connection::open(store.path())
+        .expect("raw legacy fixture")
+        .execute(
+            "INSERT INTO remote_workspaces VALUES (?1, ?2, 1, ?3)",
+            params![
+                state.spec.workspace_local_id,
+                OWNER,
+                encode(OWNER, state).expect("legacy snapshot")
+            ],
+        )
+        .expect("seed legacy record");
+    store
+        .load_remote_workspace(OWNER, &state.spec.workspace_local_id)
+        .expect("recover legacy record")
+        .expect("legacy record")
+}
 
 fn seed_workspaces(store: &CloudWorkflowStore, sizes: impl IntoIterator<Item = Option<usize>>) {
     let mut connection = Connection::open(store.path()).expect("raw store");
