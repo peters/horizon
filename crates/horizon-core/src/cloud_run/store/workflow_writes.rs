@@ -16,6 +16,10 @@ impl<'a> PreparedWorkflowInsert<'a> {
         })
     }
 
+    pub(super) fn snapshot_len(&self) -> usize {
+        self.snapshot.len()
+    }
+
     /// The caller must check the current schema in an immediate write transaction.
     /// The returned value is provisional until that caller commits.
     pub(super) fn persist(&self, transaction: &Transaction<'_>) -> Result<StoredWorkflow, CloudStoreError> {

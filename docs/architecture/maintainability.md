@@ -95,6 +95,13 @@ back into large multi-purpose modules.
   encoded snapshot before staging insertion, separately from transaction commit;
   provider/workflow coordination and runtime-state references remain separate
   integration responsibilities.
+- `cloud_run/store/remote_allocations.rs` atomically binds a runtime generation,
+  its single-worker setup workflow and their ownership record. Its `binding.rs`
+  leaf performs bounded cross-record recovery; `guards.rs` prevents generic
+  record/workflow writes and creation claims from bypassing that binding.
+  Recovery preserves expired setup identities without granting new creation.
+  These store operations run off the render thread and neither own remote
+  execution lifetime nor perform provider actions.
 - Shared domain helpers belong here when both core and UI need them.
 - If a UI feature needs to reconstruct runtime state, sync template-backed
   workspace metadata, or format panel/workspace domain labels, prefer adding a

@@ -1,7 +1,7 @@
 use super::{
     ApprovalDecision, ApprovalGate, ArtifactDigest, ArtifactRef, CLOUD_RUN_PROTOCOL_VERSION, CloudJobId,
     CloudJobOutcome, CloudJobState, CloudProgress, CloudProtocolError as Error, CloudWorkflow, GitSource,
-    ProvenanceRecord, WorkflowNode, WorkflowNodeKind,
+    ProvenanceRecord, RetryPolicy, WorkflowNode, WorkflowNodeKind,
 };
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
@@ -92,6 +92,7 @@ fn validate_node(
     node: &WorkflowNode,
     nodes: &HashMap<CloudJobId, &WorkflowNode>,
 ) -> Result<(), Error> {
+    validate_remote_workspace_node(workflow, node)?;
     if node.logical_key.trim().is_empty() || node.label.trim().is_empty() {
         return Err(Error::EmptyNodeIdentity(node.id));
     }
@@ -150,6 +151,24 @@ fn validate_node(
     }
     Ok(())
 }
+fn validate_remote_workspace_node(workflow: &CloudWorkflow, node: &WorkflowNode) -> Result<(), Error> {
+    if node.kind == WorkflowNodeKind::RemoteWorkspace
+        && (workflow.nodes.len() != 1
+            || node.worker.is_none()
+            || node.source.is_none()
+            || node.attempt != 1
+            || node.retry != RetryPolicy::default()
+            || node.supersedes.is_some()
+            || !node.depends_on.is_empty()
+            || node.approval.is_some()
+            || node.release.is_some()
+            || node.environment_lease.is_some())
+    {
+        return Err(Error::InvalidRemoteWorkspaceNode(node.id));
+    }
+    Ok(())
+}
+
 fn validate_retry(node: &WorkflowNode, nodes: &HashMap<CloudJobId, &WorkflowNode>) -> Result<(), Error> {
     let Some(previous_id) = node.supersedes else {
         return ensure(node.attempt == 1, Error::InvalidSupersededAttempt(node.id));

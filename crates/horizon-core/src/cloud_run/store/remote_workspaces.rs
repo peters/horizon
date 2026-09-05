@@ -13,7 +13,8 @@ use super::{
     MAX_SNAPSHOT_BYTES, database::ensure_current_schema,
 };
 use crate::remote_workspace::{RemoteWorkspaceError, RemoteWorkspaceState};
-use validation::{validate_key, validate_replacement, validate_session_id};
+pub(super) use validation::validate_key;
+use validation::{validate_replacement, validate_session_id};
 
 const MAX_RECOVERED_WORKSPACES: usize = 512;
 const RECOVERY_QUERY: &str = "SELECT substr(workspace_local_id, 1, 129), substr(session_id, 1, 37), revision,
@@ -68,6 +69,7 @@ impl CloudWorkflowStore {
         if exists {
             return Err(RemoteWorkspaceStoreError::AlreadyExists);
         }
+        super::remote_allocations::validate_workspace_write(&transaction, session_id, None, state)?;
         ensure_session_budget(&transaction, session_id, &state.spec.workspace_local_id, snapshot.len())?;
         transaction.execute(
             "INSERT INTO remote_workspaces (workspace_local_id, session_id, revision, snapshot)
@@ -130,7 +132,8 @@ impl CloudWorkflowStore {
 
     /// Replace exactly the observed revision and snapshot, never another session's record.
     /// The coordinator remains responsible for lifecycle legality and verified cleanup
-    /// before clearing a runtime. This operation does not allocate a workflow or worker.
+    /// before clearing an unbound runtime. Bound allocations cannot be cleared here.
+    /// This operation does not allocate a workflow or worker.
     /// # Errors
     /// Rejects stale writers, identity/generation drift, checkpoint loss, invalid snapshots,
     /// revision exhaustion, corruption, or storage failures.
@@ -192,6 +195,12 @@ impl<'a> WorkspaceReplacement<'a> {
         if current != *expected {
             return Err(RemoteWorkspaceStoreError::SnapshotConflict);
         }
+        super::remote_allocations::validate_workspace_write(
+            transaction,
+            &expected.session_id,
+            Some(&expected.state),
+            next,
+        )?;
         ensure_session_budget(
             transaction,
             &expected.session_id,
@@ -267,7 +276,7 @@ impl WorkspaceRow {
     }
 }
 
-fn load_owned(
+pub(super) fn load_owned(
     connection: &Connection,
     session_id: &str,
     workspace_local_id: &str,
@@ -407,6 +416,14 @@ pub enum RemoteWorkspaceStoreError {
     ReplacementIdentityMismatch,
     #[error("replacement loses or rewinds a remote generation, cleanup intent, or repository checkpoint")]
     NonMonotonicReplacement,
+    #[error("remote workspace already has a runtime to reconcile")]
+    RuntimeAlreadyActive,
+    #[error("remote workspace exhausted its allocation generation range")]
+    GenerationExhausted,
+    #[error("remote allocation setup retention must end after its valid creation timestamp")]
+    InvalidAllocationRetention,
+    #[error("active remote snapshot has no verified workflow allocation; reconciliation is required")]
+    UnboundRuntime,
 }
 
 #[cfg(test)]
