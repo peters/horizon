@@ -3,15 +3,21 @@ use super::{
     CloudJobId, CloudProvider, CloudWorkflowId, WorkerTarget, interactive_worker::valid_ssh_public_key,
     validation::valid_worker_image,
 };
-use serde::{Deserialize, Deserializer, Serialize, de};
+use serde::{Deserialize, Deserializer, de};
 use std::{collections::BTreeMap, env, fmt};
-use thiserror::Error;
+mod create_request;
 mod http;
 mod interactive;
+mod models;
 #[cfg(test)]
 mod tests;
 
+use create_request::CreatePodRequest;
 pub use interactive::{RunPodHostKeySource, RunPodInteractiveWorkerProvider};
+pub use models::{
+    RunPodCleanup, RunPodEnsure, RunPodError, RunPodLifecycle, RunPodProfile, RunPodSshEndpoint, RunPodWorker,
+    RunPodWorkerStatus,
+};
 
 const WORKFLOW_ENV: &str = "HORIZON_WORKFLOW_ID";
 const JOB_ENV: &str = "HORIZON_JOB_ID";
@@ -46,87 +52,6 @@ impl fmt::Debug for RunPodApiKey {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("RunPodApiKey(<redacted>)")
     }
-}
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RunPodProfile {
-    pub name: String,
-    pub gpu_type_ids: Vec<String>,
-    pub gpu_count: u16,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allowed_cuda_versions: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub data_center_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub ports: Vec<String>,
-    pub volume_gib: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub min_download_mbps: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub min_upload_mbps: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub min_disk_bandwidth_mbps: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub container_registry_auth_id: Option<String>,
-}
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RunPodWorker {
-    pub workflow_id: CloudWorkflowId,
-    pub job_id: CloudJobId,
-    pub pod_id: String,
-    pub name: String,
-    pub image: String,
-    pub terminate_after: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hourly_cost_micros: Option<u64>,
-}
-impl RunPodWorker {
-    /// Validate persisted identity before any provider mutation.
-    /// # Errors
-    pub fn validate(&self) -> Result<(), RunPodError> {
-        let valid = valid_provider_id(&self.pod_id)
-            && self.name == resource_name(self.workflow_id, self.job_id)
-            && valid_immutable_worker_image(&self.image)
-            && time::OffsetDateTime::parse(&self.terminate_after, &time::format_description::well_known::Rfc3339)
-                .is_ok();
-        valid.then_some(()).ok_or(RunPodError::InvalidPersistedWorker)
-    }
-}
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RunPodLifecycle {
-    Provisioning,
-    Running,
-    Exited,
-    Failed,
-    Terminated,
-    Unknown,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RunPodSshEndpoint {
-    pub username: String,
-    pub host: String,
-    pub port: u16,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RunPodWorkerStatus {
-    pub worker: RunPodWorker,
-    pub lifecycle: RunPodLifecycle,
-    pub ssh_username: Option<String>,
-    pub ssh_host: Option<String>,
-    pub ssh_port: Option<u16>,
-}
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum RunPodEnsure {
-    Created(RunPodWorkerStatus),
-    Reused(RunPodWorkerStatus),
-}
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RunPodCleanup {
-    Deleted,
-    AlreadyAbsent,
 }
 /// Durable, cross-controller compare-and-set whose claim survives process exit.
 /// A resource name may return `true` at most once.
@@ -375,143 +300,11 @@ impl RunPodClient {
         }
     }
 }
-#[derive(Debug, Error, Eq, PartialEq)]
-pub enum RunPodError {
-    #[error("RUNPOD_API_KEY is not available")]
-    MissingApiKey,
-    #[error("RunPod API key is invalid")]
-    InvalidApiKey,
-    #[error("RunPod worker target or profile is invalid")]
-    InvalidTarget,
-    #[error("persisted RunPod worker identity is invalid")]
-    InvalidPersistedWorker,
-    #[error("RunPod returned an invalid or mismatched resource identity")]
-    ResourceIdentityMismatch,
-    #[error("RunPod returned {count} resources for deterministic name {name}")]
-    AmbiguousResource { name: String, count: usize },
-    #[error("RunPod creation for {name} was already claimed but no pod became visible")]
-    CreationUnresolved { name: String },
-    #[error("RunPod durable creation fence failed: {reason}")]
-    CreationFenceFailed { reason: String },
-    #[error("RunPod request failed during {operation}")]
-    RequestFailed { operation: &'static str },
-    #[error("RunPod returned HTTP {status} during {operation}")]
-    UnexpectedStatus { operation: &'static str, status: u16 },
-    #[error("RunPod returned a malformed response during {operation}")]
-    InvalidResponse { operation: &'static str },
-    #[error("RunPod has no matching GPU capacity")]
-    CapacityUnavailable,
-    #[error("RunPod pod {pod_id} could not be verified after creation and was deleted")]
-    CreationVerificationFailed { pod_id: String },
-    #[error("RunPod pod {pod_id} could not be verified or deleted after creation")]
-    CreationCleanupFailed { pod_id: String },
-    #[error("RunPod pod {pod_id} deletion could not be verified")]
-    DeletionVerificationFailed { pod_id: String },
-    #[error("RunPod recovered worker lease was outside the requested bound and was deleted")]
-    LeaseDeadlineRejected { worker: Box<RunPodWorker> },
-    #[error("RunPod recovered worker lease was outside the requested bound but cleanup failed")]
-    LeaseRejectionCleanupFailed { worker: Box<RunPodWorker> },
-    #[error("RunPod hourly cost was rejected and cleanup was requested")]
-    HourlyCostRejected {
-        worker: Box<RunPodWorker>,
-        actual: Option<u64>,
-        maximum: u64,
-    },
-    #[error("RunPod hourly cost was rejected but exact-resource cleanup failed")]
-    CostRejectionCleanupFailed { worker: Box<RunPodWorker> },
-}
 trait Transport: Send + Sync {
     fn list_by_name(&self, name: &str) -> Result<Vec<ApiPod>, RunPodError>;
     fn create(&self, request: &CreatePodRequest) -> Result<ApiPod, RunPodError>;
     fn get(&self, pod_id: &str) -> Result<Option<ApiPod>, RunPodError>;
     fn delete(&self, pod_id: &str) -> Result<RunPodCleanup, RunPodError>;
-}
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CreatePodRequest {
-    allowed_cuda_versions: Vec<String>,
-    cloud_type: &'static str,
-    container_disk_in_gb: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    container_registry_auth_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    data_center_id: Option<String>,
-    env: Vec<CreatePodEnv>,
-    gpu_count: u16,
-    #[serde(rename = "gpuTypeIdList")]
-    gpu_type_ids: Vec<String>,
-    image_name: String,
-    #[serde(rename = "minDisk", skip_serializing_if = "Option::is_none")]
-    min_disk_bandwidth_mbps: Option<u32>,
-    #[serde(rename = "minDownload", skip_serializing_if = "Option::is_none")]
-    min_download_mbps: Option<u32>,
-    #[serde(rename = "minUpload", skip_serializing_if = "Option::is_none")]
-    min_upload_mbps: Option<u32>,
-    name: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
-    ports: String,
-    start_ssh: bool,
-    support_public_ip: bool,
-    terminate_after: String,
-    volume_in_gb: u32,
-    volume_mount_path: &'static str,
-}
-#[derive(Clone, Debug, Serialize)]
-struct CreatePodEnv {
-    key: String,
-    value: String,
-}
-impl CreatePodRequest {
-    fn new(
-        workflow_id: CloudWorkflowId,
-        job_id: CloudJobId,
-        target: &WorkerTarget,
-        profile: &RunPodProfile,
-        name: String,
-        ssh_public_key: Option<&str>,
-    ) -> Result<Self, RunPodError> {
-        let seconds = target.lifetime.time_limit_seconds().ok_or(RunPodError::InvalidTarget)?;
-        let terminate_after = termination_deadline(seconds)?;
-        let mut env: Vec<_> = [
-            (WORKFLOW_ENV, workflow_id.to_string()),
-            (JOB_ENV, job_id.to_string()),
-            (PROTOCOL_ENV, super::CLOUD_RUN_PROTOCOL_VERSION.to_string()),
-            (TERMINATE_ENV, terminate_after.clone()),
-        ]
-        .into_iter()
-        .map(|(key, value)| CreatePodEnv {
-            key: key.to_string(),
-            value,
-        })
-        .collect();
-        if let Some(ssh_public_key) = ssh_public_key {
-            env.push(CreatePodEnv {
-                key: SSH_PUBLIC_KEY_ENV.to_string(),
-                value: ssh_public_key.to_string(),
-            });
-        }
-        Ok(Self {
-            allowed_cuda_versions: profile.allowed_cuda_versions.clone(),
-            cloud_type: "SECURE",
-            container_disk_in_gb: target.disk_gib,
-            container_registry_auth_id: profile.container_registry_auth_id.clone(),
-            data_center_id: profile.data_center_id.clone(),
-            env,
-            gpu_count: profile.gpu_count,
-            gpu_type_ids: profile.gpu_type_ids.clone(),
-            image_name: target.image.clone(),
-            min_disk_bandwidth_mbps: profile.min_disk_bandwidth_mbps,
-            min_download_mbps: profile.min_download_mbps,
-            min_upload_mbps: profile.min_upload_mbps,
-            name,
-            ports: profile.ports.join(","),
-            start_ssh: true,
-            support_public_ip: true,
-            terminate_after,
-            volume_in_gb: profile.volume_gib,
-            volume_mount_path: "/workspace",
-        })
-    }
 }
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
