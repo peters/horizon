@@ -74,6 +74,23 @@ provider calls and adds no UI consumer. Generation/workflow allocation will be
 one transaction in a subsequent coordinator slice using this same database.
 The record store is not permission to create, attach, or delete a worker.
 
+Generic creation accepts only dormant records, and generic replacement cannot
+introduce a runtime into a dormant record, including a previously retired legacy
+record. New runtime identity requires the dedicated atomic allocator. Its private
+prepared replacement may stage identity inside the caller's immediate transaction;
+the allocator must commit the matching workflow and ownership binding with it.
+There is no public import shortcut for active runtimes. Already-persisted legacy
+snapshots remain readable and updateable with their original identity.
+Generic replacements cannot advance the specification's generation; that is also
+allocator-owned, and the shared replacement validation retains its allocation path.
+
+Once an existing generation leaves provisioning, a replacement cannot move it
+back to provisioning, including from reconciling or failed with no observed
+worker. This rule also applies to legacy snapshots and survives reopening the
+store. Reconciliation and attachment may still move between non-creating phases;
+ordering among them remains coordinator policy. Local panel intent remains
+independent of the runtime's lifetime.
+
 Each snapshot is limited to 4 MiB, with session recovery capped at 512 records
 and 64 MiB of serialized snapshots. Reads are bounded before materialization;
 creates and replacements enforce the same per-session limits in their write

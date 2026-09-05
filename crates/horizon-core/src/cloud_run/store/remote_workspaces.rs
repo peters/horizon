@@ -46,8 +46,9 @@ impl StoredRemoteWorkspace {
 }
 
 impl CloudWorkflowStore {
-    /// Persist a validated remote aggregate with one immutable owning session.
+    /// Persist a validated dormant aggregate with one immutable owning session.
     /// A logical workspace identity cannot also belong to a copied session.
+    /// Existing legacy runtimes remain readable; new runtime identity requires allocation.
     /// # Errors
     /// Rejects invalid keys/snapshots, existing workspace identities, or storage failures.
     pub fn create_remote_workspace(
@@ -57,6 +58,9 @@ impl CloudWorkflowStore {
     ) -> Result<StoredRemoteWorkspace, RemoteWorkspaceStoreError> {
         validate_key(session_id, &state.spec.workspace_local_id)?;
         let snapshot = encode(session_id, state)?;
+        if state.runtime.is_some() {
+            return Err(RemoteWorkspaceStoreError::RuntimeAllocationRequired);
+        }
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         ensure_current_schema(&transaction)?;
@@ -130,7 +134,8 @@ impl CloudWorkflowStore {
 
     /// Replace exactly the observed revision and snapshot, never another session's record.
     /// The coordinator remains responsible for lifecycle legality and verified cleanup
-    /// before clearing a runtime. This operation does not allocate a workflow or worker.
+    /// before clearing an unbound runtime. This operation cannot introduce a runtime,
+    /// rewind a non-creating observation to provisioning, or allocate a workflow or worker.
     /// # Errors
     /// Rejects stale writers, identity/generation drift, checkpoint loss, invalid snapshots,
     /// revision exhaustion, corruption, or storage failures.
@@ -140,6 +145,9 @@ impl CloudWorkflowStore {
         next: &RemoteWorkspaceState,
     ) -> Result<StoredRemoteWorkspace, RemoteWorkspaceStoreError> {
         let replacement = WorkspaceReplacement::new(expected, next)?;
+        if expected.state.runtime.is_none() && next.runtime.is_some() {
+            return Err(RemoteWorkspaceStoreError::RuntimeAllocationRequired);
+        }
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         ensure_current_schema(&transaction)?;
@@ -170,7 +178,9 @@ impl<'a> WorkspaceReplacement<'a> {
     }
 
     /// The caller must check the current schema in an immediate write transaction.
-    /// The returned value is provisional until that caller commits.
+    /// The returned value is provisional until that caller commits. Unlike generic
+    /// record writes, the allocator may stage a new runtime here; it must commit
+    /// the matching workflow and ownership binding in that same transaction.
     pub(super) fn persist(
         &self,
         transaction: &rusqlite::Transaction<'_>,
@@ -405,8 +415,12 @@ pub enum RemoteWorkspaceStoreError {
     RecoveryLimitExceeded,
     #[error("replacement changes remote workspace or active runtime identity")]
     ReplacementIdentityMismatch,
-    #[error("replacement loses or rewinds a remote generation, cleanup intent, or repository checkpoint")]
+    #[error(
+        "replacement loses or rewinds a remote generation, observed phase, cleanup intent, or repository checkpoint"
+    )]
     NonMonotonicReplacement,
+    #[error("new remote runtime identity requires atomic allocation")]
+    RuntimeAllocationRequired,
 }
 
 #[cfg(test)]

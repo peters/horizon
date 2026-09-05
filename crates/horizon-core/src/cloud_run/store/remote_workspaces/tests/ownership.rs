@@ -7,7 +7,8 @@ fn prepared_writes_share_the_callers_transaction_without_committing() {
     let original = store
         .create_remote_workspace(OWNER, &workspace("workspace"))
         .expect("record");
-    let next = provisioning(original.state().clone());
+    let mut next = original.state().clone();
+    next.spec.working_directory = "src".into();
     let replacement = WorkspaceReplacement::new(&original, &next).expect("prepare");
     let workflow = retained_workflow(CloudProvider::LocalDocker, 1000);
     let prepared_workflow = PreparedWorkflowInsert::new(&workflow).expect("prepare workflow");
@@ -108,7 +109,7 @@ fn persistent_runtime_round_trips_without_expiry_or_new_identity() {
     worker.target = state.spec.target.clone();
     worker.lifetime = InteractiveWorkerLifetime::Persistent;
     state.validate().expect("persistent aggregate");
-    let stored = store.create_remote_workspace(OWNER, &state).expect("persist worker");
+    let stored = seed_legacy_workspace(&store, &state);
     let reopened = CloudWorkflowStore::open_path(store.path()).expect("reopen");
     assert_eq!(
         reopened.load_remote_workspace(OWNER, "workspace").expect("recover"),
@@ -126,12 +127,13 @@ fn concurrent_writers_have_exactly_one_winner_and_preserve_the_winning_intent() 
         .expect("create");
     let barrier = Arc::new(Barrier::new(3));
     let writers: Vec<_> = (0..2)
-        .map(|_| {
+        .map(|index| {
             let store = store.clone();
             let expected = stored.clone();
             let barrier = Arc::clone(&barrier);
             std::thread::spawn(move || {
-                let next = provisioning(expected.state().clone());
+                let mut next = expected.state().clone();
+                next.spec.working_directory = format!("src-{index}");
                 barrier.wait();
                 store.replace_remote_workspace(&expected, &next)
             })
@@ -173,9 +175,7 @@ fn replacements_preserve_identity_runtime_and_checkpoint_watermarks() {
         captured_at_millis: 1000,
         recovery_artifact: Some(ArtifactDigest::parse_sha256("d".repeat(64)).expect("artifact")),
     });
-    let stored = store
-        .create_remote_workspace(OWNER, &state)
-        .expect("create active snapshot");
+    let stored = seed_legacy_workspace(&store, &state);
     let mut changed = state.clone();
     changed.runtime.as_mut().expect("runtime").workflow_id = CloudWorkflowId::new();
     assert!(matches!(
@@ -232,9 +232,10 @@ fn replacements_preserve_identity_runtime_and_checkpoint_watermarks() {
         store.replace_remote_workspace(&dormant, &reused),
         Err(RemoteWorkspaceStoreError::NonMonotonicReplacement)
     ));
-    store
-        .replace_remote_workspace(&dormant, &provisioning(changed))
-        .expect("next generation");
+    assert!(matches!(
+        store.replace_remote_workspace(&dormant, &provisioning(changed)),
+        Err(RemoteWorkspaceStoreError::RuntimeAllocationRequired)
+    ));
 }
 
 #[test]
@@ -247,7 +248,7 @@ fn pending_cleanup_preserves_its_exact_reason_and_request_time() {
         reason: RemoteCleanupReason::Cancelled,
         requested_at_millis: 2000,
     });
-    let stored = store.create_remote_workspace(OWNER, &state).expect("pending cleanup");
+    let stored = seed_legacy_workspace(&store, &state);
     for (reason, requested_at_millis) in [
         (RemoteCleanupReason::LastPanelClosed, 2000),
         (RemoteCleanupReason::Cancelled, 1999),
@@ -278,7 +279,7 @@ fn pending_cleanup_preserves_its_exact_reason_and_request_time() {
     );
 }
 
-fn expired_runtime() -> RemoteWorkspaceState {
+pub(super) fn expired_runtime() -> RemoteWorkspaceState {
     use crate::cloud_run::interactive_worker::{
         InteractiveWorker, InteractiveWorkerIdentity, InteractiveWorkerLease, InteractiveWorkerLifetime,
         InteractiveWorkerSshEndpoint,
@@ -320,9 +321,7 @@ fn public_key(byte: u8) -> String {
 fn expired_exact_worker_handles_and_pinned_endpoints_remain_durable_for_reconciliation() {
     let (_directory, store) = store();
     let mut state = expired_runtime();
-    let stored = store
-        .create_remote_workspace(OWNER, &state)
-        .expect("store expired handle");
+    let stored = seed_legacy_workspace(&store, &state);
     let reopened = CloudWorkflowStore::open_path(store.path()).expect("reopen");
     assert_eq!(
         reopened.load_remote_workspace(OWNER, "workspace").expect("load"),
@@ -353,9 +352,7 @@ fn first_endpoint_can_be_pinned_but_never_replaced_within_the_same_runtime() {
     let runtime = unpinned.runtime.as_mut().expect("runtime");
     runtime.phase = RemoteRuntimePhase::Reconciling;
     runtime.ssh = None;
-    let pending = store
-        .create_remote_workspace(OWNER, &unpinned)
-        .expect("no endpoint yet");
+    let pending = seed_legacy_workspace(&store, &unpinned);
     let pinned = store
         .replace_remote_workspace(&pending, &state)
         .expect("pin the first trusted endpoint");
