@@ -20,7 +20,8 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 const FORCED_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const HOST_EXIT_TIMEOUT: Duration = Duration::from_secs(15);
-const HOST_INITIALIZE: &[u8] = br#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"horizon-browser-job","version":"1"}}}
+// MCP 2026-07-28 removed `initialize`; stdio startup uses the newest handshake version.
+const HOST_INITIALIZE: &[u8] = br#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"horizon-browser-job","version":"1"}}}
 {"jsonrpc":"2.0","method":"notifications/initialized"}
 "#;
 

@@ -579,7 +579,7 @@ fn mcp_subcommand_negotiates_and_publishes_the_browser_contract() {
         "id": 1,
         "method": "initialize",
         "params": {
-            "protocolVersion": "2026-07-28",
+            "protocolVersion": "2025-11-25",
             "capabilities": {},
             "clientInfo": { "name": "browser-cli-test", "version": "1" }
         }
