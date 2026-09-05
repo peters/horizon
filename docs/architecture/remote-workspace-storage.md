@@ -1,6 +1,6 @@
 # ADR-383: Session-owned remote records in the control-plane database
 
-Status: Proposed implementation boundary for issue #383.
+Status: Accepted record-storage boundary; persistent-lifetime integration pending.
 Date: 2026-09-05 (Europe/Oslo; 2026-09-04 UTC)
 Deciders: Repository maintainer through the issue and reviewed implementation PRs.
 
@@ -13,6 +13,30 @@ ownership. Remote cleanup records must also survive removal of a workspace or
 session until exact provider cleanup completes.
 
 ## Decision
+
+### Client references are not worker lifetime
+
+The corrected product contract in [issue #383](https://github.com/peters/horizon/issues/383)
+requires remote development to keep running while Horizon is closed or the PC is
+off. Closing the final local panel, removing a local session/reference, or losing
+a client connection must not create stop/delete intent. Reopening reconnects to
+the existing worker and sessions; it does not allocate a new generation merely
+because the client restarted.
+This is the required integration contract, not behavior implemented by the
+record-storage API alone.
+
+The owning local session below scopes client records and prevents accidental
+copy/adoption. It is not a compute lifetime lease. Remote task supervision,
+repository durability, and checkpointing must not rely on that PC's database or
+event loop remaining available. A dedicated Remote Environments overview will
+expose reconnect and explicit stop/kill or manual cleanup/delete actions.
+
+The image permits an unset expiry for persistent execution and retains a bounded
+watchdog only for explicitly time-limited jobs. Existing provider deadline types,
+profiles, and integration still require the corresponding lifetime correction;
+neither record storage nor the image alone completes persistent cloud workspaces.
+
+### Durable local identity records
 
 Persist the complete validated remote aggregate in the existing private SQLite
 control-plane database. Use a globally unique logical workspace identity and an

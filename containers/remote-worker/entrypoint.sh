@@ -14,30 +14,34 @@ fail_usage() {
 
 umask 077
 
-terminate_after=${HORIZON_TERMINATE_AFTER:-}
-if [ -z "${terminate_after}" ]; then
-    fail_usage "HORIZON_TERMINATE_AFTER must contain a future RFC 3339 timestamp"
-fi
-case "${terminate_after}" in
-    *'
+deadline_epoch=
+lease_seconds=
+if [ "${HORIZON_TERMINATE_AFTER+x}" = x ]; then
+    terminate_after=${HORIZON_TERMINATE_AFTER}
+    if [ -z "${terminate_after}" ]; then
+        fail_usage "HORIZON_TERMINATE_AFTER must contain a future RFC 3339 timestamp when supplied"
+    fi
+    case "${terminate_after}" in
+        *'
 '*)
-        fail_usage "HORIZON_TERMINATE_AFTER must contain exactly one timestamp"
-        ;;
-esac
-if ! printf '%s\n' "${terminate_after}" |
-    grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$'; then
-    fail_usage "HORIZON_TERMINATE_AFTER must contain a valid RFC 3339 timestamp"
-fi
-if ! deadline_epoch=$(date --date="${terminate_after}" +%s 2>/dev/null); then
-    fail_usage "HORIZON_TERMINATE_AFTER must contain a valid RFC 3339 timestamp"
-fi
-now_epoch=$(date +%s)
-lease_seconds=$((deadline_epoch - now_epoch))
-if [ "${lease_seconds}" -le 0 ]; then
-    fail_usage "HORIZON_TERMINATE_AFTER must be in the future"
-fi
-if [ "${lease_seconds}" -gt "${MAX_LEASE_SECONDS}" ]; then
-    fail_usage "HORIZON_TERMINATE_AFTER may be at most 30 days in the future"
+            fail_usage "HORIZON_TERMINATE_AFTER must contain exactly one timestamp"
+            ;;
+    esac
+    if ! printf '%s\n' "${terminate_after}" |
+        grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$'; then
+        fail_usage "HORIZON_TERMINATE_AFTER must contain a valid RFC 3339 timestamp"
+    fi
+    if ! deadline_epoch=$(date --date="${terminate_after}" +%s 2>/dev/null); then
+        fail_usage "HORIZON_TERMINATE_AFTER must contain a valid RFC 3339 timestamp"
+    fi
+    now_epoch=$(date +%s)
+    lease_seconds=$((deadline_epoch - now_epoch))
+    if [ "${lease_seconds}" -le 0 ]; then
+        fail_usage "HORIZON_TERMINATE_AFTER must be in the future"
+    fi
+    if [ "${lease_seconds}" -gt "${MAX_LEASE_SECONDS}" ]; then
+        fail_usage "HORIZON_TERMINATE_AFTER may be at most 30 days in the future"
+    fi
 fi
 
 ssh_public_key=${HORIZON_SSH_PUBLIC_KEY:-}
@@ -120,11 +124,13 @@ if [ ! -s /etc/ssh/ssh_host_ed25519_key ]; then
     exit 1
 fi
 
-now_epoch=$(date +%s)
-lease_seconds=$((deadline_epoch - now_epoch))
-if [ "${lease_seconds}" -le 0 ]; then
-    printf '%s\n' "horizon-worker: lease deadline reached; terminating worker" >&2
-    exit 0
+if [ -n "${deadline_epoch}" ]; then
+    now_epoch=$(date +%s)
+    lease_seconds=$((deadline_epoch - now_epoch))
+    if [ "${lease_seconds}" -le 0 ]; then
+        printf '%s\n' "horizon-worker: lease deadline reached; terminating worker" >&2
+        exit 0
+    fi
 fi
 
 unset \
@@ -144,14 +150,18 @@ unset \
     terminate_after \
     token_bytes
 
-entrypoint_pid=$$
-(
-    sleep "${lease_seconds}"
-    printf '%s\n' "horizon-worker: lease deadline reached; terminating worker" >&2
-    kill -TERM "${entrypoint_pid}" 2>/dev/null || exit 0
-    sleep 10
-    kill -KILL "${entrypoint_pid}" 2>/dev/null || true
-) &
+if [ -n "${lease_seconds}" ]; then
+    entrypoint_pid=$$
+    (
+        sleep "${lease_seconds}"
+        printf '%s\n' "horizon-worker: lease deadline reached; terminating worker" >&2
+        kill -TERM "${entrypoint_pid}" 2>/dev/null || exit 0
+        sleep 10
+        kill -KILL "${entrypoint_pid}" 2>/dev/null || true
+    ) &
+else
+    printf '%s\n' "horizon-worker: no expiry supplied; persistent worker" >&2
+fi
 unset entrypoint_pid lease_seconds
 
 exec /usr/sbin/sshd -D -e

@@ -53,6 +53,7 @@ done
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 smoke_id="horizon-worker-smoke-$(date -u +%Y%m%d%H%M%S)-$$"
+printf 'Task-owned container name prefix: %s\n' "${smoke_id}"
 temp_dir=$(mktemp -d /tmp/horizon-remote-worker-smoke.XXXXXX)
 case "${temp_dir}" in
   /tmp/horizon-remote-worker-smoke.*) ;;
@@ -84,6 +85,9 @@ cleanup() {
   return "${exit_code}"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 deadline_after() {
   docker run --rm --entrypoint /bin/date "${image}" \
@@ -162,6 +166,24 @@ ssh_worker() {
     "${remote_command}"
 }
 
+has_no_ssh_clients() {
+  local processes
+  processes=$(docker exec "$1" ps -eo pid=,stat=,comm=) || fail "could not inspect worker SSH processes"
+  awk '$1 != 1 && $3 ~ /^sshd(-|$)/ && $2 !~ /^Z/ { found = 1 }
+       END { exit found ? 1 : 0 }' <<<"${processes}"
+}
+
+wait_for_ssh_disconnect() {
+  local attempt
+  for attempt in {1..15}; do
+    if has_no_ssh_clients "$1"; then
+      return 0
+    fi
+    sleep 1
+  done
+  fail "an SSH client remained attached to the persistent test worker"
+}
+
 if [[ -z "${image}" ]]; then
   image="${smoke_id}:local"
   worker_image_version="smoke-$(date -u +%Y%m%d%H%M%S)"
@@ -224,11 +246,12 @@ docker run --rm --entrypoint /bin/sh "${image}" -eu -c '
   test ! -e /root/.npmrc
   test -s /etc/ssl/certs/ca-certificates.crt
   for tool in \
-    cargo rustc git git-lfs gh rsync tar tmux ssh sshd \
+    cargo rustc git git-lfs gh rsync tar tmux ssh sshd ps \
     codex claude gemini opencode kilo pi grok
   do
     command -v "${tool}" >/dev/null
   done
+  ps -eo pid=,stat=,comm= >/dev/null
 '
 
 ssh-keygen -q -t ed25519 -N '' -f "${temp_dir}/client"
@@ -256,7 +279,20 @@ expect_usage_failure \
   --env "HORIZON_SSH_PUBLIC_KEY=${unsupported_public_key}" \
   --env "HORIZON_TERMINATE_AFTER=${normal_deadline}"
 expect_usage_failure \
-  missing-lease \
+  empty-lease \
+  --env HORIZON_TERMINATE_AFTER= \
+  --env "HORIZON_SSH_PUBLIC_KEY=${client_public_key}"
+expect_usage_failure \
+  malformed-lease \
+  --env HORIZON_TERMINATE_AFTER=not-a-timestamp \
+  --env "HORIZON_SSH_PUBLIC_KEY=${client_public_key}"
+expect_usage_failure \
+  past-lease \
+  --env HORIZON_TERMINATE_AFTER=2000-01-01T00:00:00Z \
+  --env "HORIZON_SSH_PUBLIC_KEY=${client_public_key}"
+expect_usage_failure \
+  multiline-lease \
+  --env "HORIZON_TERMINATE_AFTER=${normal_deadline}"$'\n'"${normal_deadline}" \
   --env "HORIZON_SSH_PUBLIC_KEY=${client_public_key}"
 expect_usage_failure \
   oversized-lease \
@@ -347,11 +383,19 @@ docker run --detach \
   --label horizon.remote-worker-smoke=true \
   --publish 127.0.0.1::22 \
   --env "HORIZON_SSH_PUBLIC_KEY=${client_public_key}" \
-  --env "HORIZON_TERMINATE_AFTER=${normal_deadline}" \
   "${image}" >/dev/null
 
 worker_a_port=$(wait_for_host_key "${worker_a}" "${temp_dir}/worker-a-known-hosts")
 worker_b_port=$(wait_for_host_key "${worker_b}" "${temp_dir}/worker-b-known-hosts")
+# Before any task starts, PID 1 may have only SSH children, never a watchdog shell.
+persistent_startup_processes=$(docker exec "${worker_b}" ps -eo ppid=,comm=) ||
+  fail "could not inspect persistent worker startup processes"
+awk '$1 == 1 && $2 !~ /^sshd(-|$)/ { found = 1 }
+     END { exit found ? 1 : 0 }' <<<"${persistent_startup_processes}" ||
+  fail "worker without an expiry started a background watchdog"
+worker_b_logs=$(docker logs "${worker_b}" 2>&1)
+grep -qF 'horizon-worker: no expiry supplied; persistent worker' <<<"${worker_b_logs}" ||
+  fail "worker did not report persistent execution mode"
 worker_a_fingerprint=$(
   ssh-keygen -lf "${temp_dir}/worker-a-known-hosts" | awk '{print $2}'
 )
@@ -362,12 +406,40 @@ worker_b_fingerprint=$(
   fail "the two workers reused the same runtime SSH host key"
 
 ssh_worker \
+  "${temp_dir}/client" "${temp_dir}/worker-b-known-hosts" "${worker_b_port}" \
+  'sleep 5' &
+persistent_client_control_pid=$!
+persistent_client_observed=false
+for _ in {1..15}; do
+  if ! has_no_ssh_clients "${worker_b}"; then
+    persistent_client_observed=true
+    break
+  fi
+  sleep 1
+done
+wait "${persistent_client_control_pid}" || fail "positive-control SSH session failed"
+[[ "${persistent_client_observed}" == true ]] || fail "SSH-client detector missed an attached client"
+
+ssh_worker \
   "${temp_dir}/client" \
   "${temp_dir}/worker-b-known-hosts" \
   "${worker_b_port}" \
   'horizon-agent-session env' |
   grep -qx 'HORIZON=1' ||
   fail "horizon-agent-session did not mark the remote environment"
+
+persistent_worker_id=$(docker inspect --format '{{.Id}}' "${worker_b}")
+persistent_session_id=$(ssh_worker \
+  "${temp_dir}/client" "${temp_dir}/worker-b-known-hosts" "${worker_b_port}" \
+  'tmux new-session -d -s horizon-smoke-persistent "while :; do date +%s > /workspace/horizon/smoke-progress.next; mv /workspace/horizon/smoke-progress.next /workspace/horizon/smoke-progress; sleep 1; done";
+   for attempt in 1 2 3 4 5; do test -s /workspace/horizon/smoke-progress && break; sleep 1; done;
+   tmux display-message -p -t horizon-smoke-persistent "#{session_id}:#{pane_pid}"') ||
+  fail "could not start the persistent remote session"
+[[ "${persistent_session_id}" =~ ^\$[0-9]+:[0-9]+$ ]] || fail "persistent session identity is invalid"
+wait_for_ssh_disconnect "${worker_b}"
+persistent_progress_before=$(docker exec "${worker_b}" cat /workspace/horizon/smoke-progress) ||
+  fail "could not observe the disconnected task baseline"
+[[ "${persistent_progress_before}" =~ ^[0-9]+$ ]] || fail "persistent task did not start"
 
 git_config_before=$(docker exec "${worker_a}" sha256sum /root/.gitconfig | awk '{print $1}')
 ssh_worker \
@@ -481,8 +553,52 @@ grep -qF 'horizon-worker: lease deadline reached; terminating worker' \
   <<<"${lease_logs}" ||
   fail "lease watchdog marker was not written"
 
+[[ "$(docker inspect --format '{{.State.Running}}' "${worker_b}")" == true ]] ||
+  fail "worker without an expiry stopped while its clients were disconnected"
+[[ "$(docker inspect --format '{{.Id}}' "${worker_b}")" == "${persistent_worker_id}" ]] ||
+  fail "reconnecting replaced the persistent worker"
+for _ in {1..15}; do
+  has_no_ssh_clients "${worker_b}" || fail "an SSH client was attached during the disconnected window"
+  persistent_progress_disconnected=$(docker exec "${worker_b}" cat /workspace/horizon/smoke-progress) ||
+    fail "could not observe disconnected task progress"
+  [[ "${persistent_progress_disconnected}" =~ ^[0-9]+$ ]] || fail "disconnected task lost its progress"
+  if ((persistent_progress_disconnected > persistent_progress_before)); then
+    break
+  fi
+  sleep 1
+done
+((persistent_progress_disconnected > persistent_progress_before)) ||
+  fail "remote task did not progress before any SSH client reconnected"
+persistent_session_after=$(ssh_worker \
+  "${temp_dir}/client" "${temp_dir}/worker-b-known-hosts" "${worker_b_port}" \
+  'tmux display-message -p -t horizon-smoke-persistent "#{session_id}:#{pane_pid}"') ||
+  fail "could not reconnect to the persistent remote session"
+[[ "${persistent_session_after}" == "${persistent_session_id}" ]] ||
+  fail "reconnecting replaced the running remote session or process"
+persistent_progress_after=$(ssh_worker \
+  "${temp_dir}/client" "${temp_dir}/worker-b-known-hosts" "${worker_b_port}" \
+  'cat /workspace/horizon/smoke-progress') || fail "could not observe progress after reconnect"
+[[ "${persistent_progress_after}" =~ ^[0-9]+$ ]] || fail "persistent task lost its progress"
+((persistent_progress_after >= persistent_progress_disconnected)) || fail "reconnect lost the last observed progress"
+worker_b_logs=$(docker logs "${worker_b}" 2>&1)
+if grep -qF 'lease deadline reached' <<<"${worker_b_logs}"; then
+  fail "worker without an expiry reported a lease termination"
+fi
+docker stop --time 10 "${worker_b}" >/dev/null
+[[ "$(docker inspect --format '{{.State.Running}}' "${worker_b}")" == false ]] ||
+  fail "explicit stop did not stop the selected persistent worker"
+[[ "$(docker inspect --format '{{.Id}}' "${worker_b}")" == "${persistent_worker_id}" ]] ||
+  fail "explicit stop deleted the persistent worker"
+docker cp "${worker_b}:/workspace/horizon/smoke-progress" "${temp_dir}/stopped-progress"
+stopped_progress=$(<"${temp_dir}/stopped-progress")
+[[ "${stopped_progress}" =~ ^[0-9]+$ ]] || fail "explicit stop lost workspace data"
+((stopped_progress >= persistent_progress_after)) || fail "explicit stop lost the last observed progress"
+
 image_id=$(docker image inspect --format '{{.Id}}' "${image}")
 printf 'Remote-worker smoke passed.\n'
+printf 'Persistent task progressed with no SSH clients; same worker/session reconnected; explicit stop retained data.\n'
+printf 'Disconnected progress window: %s seconds (local Docker proof).\n' \
+  "$((persistent_progress_disconnected - persistent_progress_before))"
 printf 'Image: %s (%s)\n' "${image_id}" "${actual_image_version}"
 printf 'Worker A host key: %s\n' "${worker_a_fingerprint}"
 printf 'Worker B host key: %s\n' "${worker_b_fingerprint}"
