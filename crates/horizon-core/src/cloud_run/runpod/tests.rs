@@ -8,6 +8,10 @@ use super::*;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::sync::{Arc, Mutex};
 
+mod persistence;
+mod reconciliation;
+mod snapshots;
+
 const ED25519_BLOB_PREFIX: &[u8] = b"\0\0\0\x0bssh-ed25519\0\0\0\x20";
 
 #[derive(Clone, Default)]
@@ -21,6 +25,9 @@ struct FakeState {
     deleted: Vec<String>,
     inspected: Vec<String>,
     scripted_lists: Vec<Vec<ApiPod>>,
+    scripted_gets: Vec<Result<Option<ApiPod>, RunPodError>>,
+    fail_create_after_insert: bool,
+    reconcile_creation: bool,
 }
 impl FakeTransport {
     fn with_create_response(response: ApiPod) -> Self {
@@ -51,11 +58,25 @@ impl Transport for FakeTransport {
             response.env.insert(entry.key.clone(), entry.value.clone());
         }
         state.pods.push(response.clone());
-        Ok(response)
+        if state.fail_create_after_insert {
+            return Err(RunPodError::RequestFailed {
+                operation: "pod creation",
+            });
+        }
+        let reconcile = state.reconcile_creation;
+        drop(state);
+        if reconcile {
+            http::reconcile_creation(self, request, response.id)
+        } else {
+            Ok(response)
+        }
     }
     fn get(&self, pod_id: &str) -> Result<Option<ApiPod>, RunPodError> {
         let mut state = self.0.lock().expect("state");
         state.inspected.push(pod_id.to_string());
+        if !state.scripted_gets.is_empty() {
+            return state.scripted_gets.remove(0);
+        }
         Ok(state.pods.iter().find(|pod| pod.id == pod_id).cloned())
     }
     fn delete(&self, pod_id: &str) -> Result<RunPodCleanup, RunPodError> {
@@ -233,7 +254,7 @@ fn creation_uses_secure_direct_pull_and_bandwidth_constraints() {
         request
             .env
             .iter()
-            .any(|entry| entry.key == TERMINATE_ENV && entry.value == request.terminate_after)
+            .any(|entry| entry.key == TERMINATE_ENV && Some(entry.value.as_str()) == request.terminate_after.as_deref())
     );
     let json = serde_json::to_value(request).expect("serialize request");
     assert_eq!(json["dataCenterId"], "EUR-NO-1");
@@ -480,7 +501,7 @@ fn interactive_adapter_waits_for_trusted_host_key_and_fails_closed_on_invalid_da
 }
 
 #[test]
-fn unsupported_persistent_requests_and_handles_fail_before_provider_io() {
+fn invalid_persistent_requests_and_inconsistent_handles_fail_before_provider_io() {
     let (workflow_id, job_id) = (CloudWorkflowId::new(), CloudJobId::new());
     let mut request = interactive_request(workflow_id, job_id);
     request.target.lifetime = WorkerLifetime::Persistent;
@@ -490,6 +511,7 @@ fn unsupported_persistent_requests_and_handles_fail_before_provider_io() {
     let provider =
         RunPodInteractiveWorkerProvider::new(RunPodClient::with_transport(transport.clone()), profile(), host_keys);
     assert!(request.is_valid_for(CloudProvider::RunPod));
+    request.target.profile = "wrong-profile".into();
     assert_eq!(provider.ensure_worker(&request), Err(RunPodError::InvalidTarget));
     let worker = InteractiveWorker {
         identity: InteractiveWorkerIdentity {
@@ -500,9 +522,11 @@ fn unsupported_persistent_requests_and_handles_fail_before_provider_io() {
         },
         target: request.target,
         ssh_public_key: request.ssh_public_key,
-        lifetime: InteractiveWorkerLifetime::Persistent,
+        lifetime: InteractiveWorkerLifetime::TimeLimited(InteractiveWorkerLease {
+            terminate_after: termination_deadline(900).expect("temporary observation"),
+        }),
     };
-    assert!(worker.is_valid_for(CloudProvider::RunPod));
+    assert!(!worker.is_valid_for(CloudProvider::RunPod));
     assert_eq!(
         provider.inspect_worker(&worker),
         Err(RunPodError::InvalidPersistedWorker)

@@ -1,6 +1,7 @@
 //! `RunPod` Secure Cloud lifecycle adapter for durable cloud workers.
 use super::{
-    CloudJobId, CloudProvider, CloudWorkflowId, WorkerTarget, interactive_worker::valid_ssh_public_key,
+    CloudJobId, CloudProvider, CloudWorkflowId, WorkerLifetime, WorkerTarget,
+    interactive_worker::{InteractiveWorkerLease, InteractiveWorkerLifetime, valid_ssh_public_key},
     validation::valid_worker_image,
 };
 use serde::{Deserialize, Deserializer, de};
@@ -24,9 +25,10 @@ const JOB_ENV: &str = "HORIZON_JOB_ID";
 const PROTOCOL_ENV: &str = "HORIZON_CLOUD_PROTOCOL_VERSION";
 const SSH_PUBLIC_KEY_ENV: &str = "HORIZON_SSH_PUBLIC_KEY";
 const TERMINATE_ENV: &str = "HORIZON_TERMINATE_AFTER";
+const LIFETIME_ENV: &str = "HORIZON_WORKER_LIFETIME";
+const PERSISTENT_LIFETIME: &str = "persistent";
 const MIN_LEASE_SECONDS: u32 = 300;
 const MAX_LEASE_SECONDS: u32 = 30 * 24 * 60 * 60;
-const LEASE_CLOCK_SKEW_SECONDS: i64 = 120;
 #[derive(Clone)]
 pub struct RunPodApiKey(String);
 impl RunPodApiKey {
@@ -150,7 +152,7 @@ impl RunPodClient {
                 let request =
                     CreatePodRequest::new(workflow_id, job_id, target, profile, name.clone(), ssh_public_key)?;
                 let expected_deadline = request.terminate_after.clone();
-                (self.transport.create(&request)?, true, Some(expected_deadline))
+                (self.create_worker(&request)?, true, expected_deadline)
             }
             [pod] => (pod.clone(), false, None),
             _ => {
@@ -169,6 +171,9 @@ impl RunPodClient {
             ssh_public_key,
         ) {
             Ok(status) => status,
+            Err(_) if created && target.lifetime == WorkerLifetime::Persistent => {
+                return Err(RunPodError::PersistentCreationReconciliationRequired { name, pod_id: pod.id });
+            }
             Err(error) if created => {
                 if self.transport.delete(&pod.id).is_err() {
                     return Err(RunPodError::CreationCleanupFailed { pod_id: pod.id });
@@ -178,10 +183,10 @@ impl RunPodClient {
             Err(error) => return Err(error),
         };
         if !created
-            && !target
+            && !status
+                .worker
                 .lifetime
-                .time_limit_seconds()
-                .is_some_and(|seconds| recovered_deadline_valid(&status.worker.terminate_after, seconds))
+                .is_valid_at(target.lifetime, time::OffsetDateTime::now_utc())
         {
             let worker = Box::new(status.worker);
             return if self.delete_worker(&worker).is_ok() {
@@ -195,6 +200,20 @@ impl RunPodClient {
             RunPodEnsure::Created(status)
         } else {
             RunPodEnsure::Reused(status)
+        })
+    }
+    fn create_worker(&self, request: &CreatePodRequest) -> Result<ApiPod, RunPodError> {
+        self.transport.create(request).map_err(|error| {
+            if request.terminate_after.is_none()
+                && !matches!(error, RunPodError::PersistentCreationReconciliationRequired { .. })
+            {
+                RunPodError::PersistentCreationUnresolved {
+                    name: request.name.clone(),
+                    cause: Box::new(error),
+                }
+            } else {
+                error
+            }
         })
     }
     fn reconcile_by_name(&self, name: &str) -> Result<Vec<ApiPod>, RunPodError> {
@@ -273,6 +292,13 @@ impl RunPodClient {
         };
         match worker.hourly_cost_micros {
             Some(actual) if actual <= maximum => Ok(()),
+            actual if worker.lifetime == InteractiveWorkerLifetime::Persistent => {
+                Err(RunPodError::PersistentWorkerCostRejected {
+                    worker: Box::new(worker.clone()),
+                    actual,
+                    maximum,
+                })
+            }
             actual => self.cleanup_after_cost_rejection(worker, actual, maximum),
         }
     }
@@ -349,7 +375,7 @@ fn validate_target(target: &WorkerTarget, profile: &RunPodProfile) -> Result<(),
         && target
             .lifetime
             .time_limit_seconds()
-            .is_some_and(|seconds| (MIN_LEASE_SECONDS..=MAX_LEASE_SECONDS).contains(&seconds))
+            .is_none_or(|seconds| (MIN_LEASE_SECONDS..=MAX_LEASE_SECONDS).contains(&seconds))
         && target.max_hourly_cost_micros != Some(0)
         && valid_immutable_worker_image(&target.image)
         && safe_text(&profile.name)
@@ -374,12 +400,12 @@ fn status_from_pod(
     expected_deadline: Option<&str>,
     ssh_public_key: Option<&str>,
 ) -> Result<RunPodWorkerStatus, RunPodError> {
-    let terminate_after = pod
-        .env
-        .get(TERMINATE_ENV)
-        .cloned()
-        .ok_or(RunPodError::ResourceIdentityMismatch)?;
-    if expected_deadline.is_some_and(|expected| expected != terminate_after) {
+    let lifetime = observed_lifetime(pod)?;
+    if !lifetime.matches_policy(target.lifetime)
+        || expected_deadline.is_some_and(|expected| {
+            lifetime.as_time_limited().map(|lease| lease.terminate_after.as_str()) != Some(expected)
+        })
+    {
         return Err(RunPodError::ResourceIdentityMismatch);
     }
     let worker = RunPodWorker {
@@ -388,7 +414,7 @@ fn status_from_pod(
         pod_id: pod.id.clone(),
         name: resource_name(workflow_id, job_id),
         image: target.image.clone(),
-        terminate_after,
+        lifetime,
         hourly_cost_micros: pod.cost.filter(|cost| *cost > 0),
     };
     status_from_resource(pod, &worker, ssh_public_key)
@@ -406,7 +432,7 @@ fn status_from_resource(
         && pod.env.get(JOB_ENV) == Some(&worker.job_id.to_string())
         && pod.env.get(PROTOCOL_ENV) == Some(&super::CLOUD_RUN_PROTOCOL_VERSION.to_string());
     let owned = owned
-        && pod.env.get(TERMINATE_ENV) == Some(&worker.terminate_after)
+        && observed_lifetime(pod)? == worker.lifetime
         && ssh_public_key.is_none_or(|key| pod.env.get(SSH_PUBLIC_KEY_ENV).is_some_and(|value| value == key));
     if !owned {
         return Err(RunPodError::ResourceIdentityMismatch);
@@ -435,20 +461,24 @@ fn status_from_resource(
 fn resource_name(workflow_id: CloudWorkflowId, job_id: CloudJobId) -> String {
     format!("horizon-{workflow_id}-{job_id}")
 }
+fn observed_lifetime(pod: &ApiPod) -> Result<InteractiveWorkerLifetime, RunPodError> {
+    match (
+        pod.env.get(LIFETIME_ENV).map(String::as_str),
+        pod.env.get(TERMINATE_ENV),
+    ) {
+        (Some(PERSISTENT_LIFETIME), None) => Ok(InteractiveWorkerLifetime::Persistent),
+        (None, Some(deadline)) => Ok(InteractiveWorkerLifetime::TimeLimited(InteractiveWorkerLease {
+            terminate_after: deadline.clone(),
+        })),
+        _ => Err(RunPodError::ResourceIdentityMismatch),
+    }
+}
 fn termination_deadline(lease_seconds: u32) -> Result<String, RunPodError> {
     time::OffsetDateTime::now_utc()
         .checked_add(time::Duration::seconds(i64::from(lease_seconds)))
         .ok_or(RunPodError::InvalidTarget)?
         .format(&time::format_description::well_known::Rfc3339)
         .map_err(|_| RunPodError::InvalidTarget)
-}
-fn recovered_deadline_valid(value: &str, lease_seconds: u32) -> bool {
-    let Ok(deadline) = time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339) else {
-        return false;
-    };
-    let now = time::OffsetDateTime::now_utc();
-    deadline >= now - time::Duration::seconds(LEASE_CLOCK_SKEW_SECONDS)
-        && deadline <= now + time::Duration::seconds(i64::from(lease_seconds) + LEASE_CLOCK_SKEW_SECONDS)
 }
 fn valid_provider_id(value: &str) -> bool {
     let valid_byte = |byte: u8| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_');

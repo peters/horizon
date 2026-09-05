@@ -2,8 +2,8 @@ use super::super::{
     CloudProvider, WorkerTarget,
     interactive_worker::{
         InteractiveWorker, InteractiveWorkerCleanup, InteractiveWorkerEnsure, InteractiveWorkerIdentity,
-        InteractiveWorkerLease, InteractiveWorkerLifecycle, InteractiveWorkerLifetime, InteractiveWorkerProvider,
-        InteractiveWorkerRequest, InteractiveWorkerSshEndpoint, InteractiveWorkerStatus, valid_ssh_coordinates,
+        InteractiveWorkerLifecycle, InteractiveWorkerProvider, InteractiveWorkerRequest, InteractiveWorkerSshEndpoint,
+        InteractiveWorkerStatus, valid_ssh_coordinates,
     },
 };
 use super::{
@@ -65,9 +65,7 @@ impl RunPodInteractiveWorkerProvider {
                 },
                 target: target.clone(),
                 ssh_public_key: ssh_public_key.to_string(),
-                lifetime: InteractiveWorkerLifetime::TimeLimited(InteractiveWorkerLease {
-                    terminate_after: status.worker.terminate_after,
-                }),
+                lifetime: status.worker.lifetime,
             },
             lifecycle,
             ssh,
@@ -176,17 +174,13 @@ fn runpod_worker(worker: &InteractiveWorker) -> Result<RunPodWorker, RunPodError
     if !worker.is_valid_for(CloudProvider::RunPod) {
         return Err(RunPodError::InvalidPersistedWorker);
     }
-    let lease = worker
-        .lifetime
-        .as_time_limited()
-        .ok_or(RunPodError::InvalidPersistedWorker)?;
     let runpod_worker = RunPodWorker {
         workflow_id: worker.identity.workflow_id,
         job_id: worker.identity.job_id,
         pod_id: worker.identity.resource_id.clone(),
         name: resource_name(worker.identity.workflow_id, worker.identity.job_id),
         image: worker.target.image.clone(),
-        terminate_after: lease.terminate_after.clone(),
+        lifetime: worker.lifetime.clone(),
         hourly_cost_micros: None,
     };
     runpod_worker.validate()?;
