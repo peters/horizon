@@ -1,5 +1,5 @@
 use super::RemoteWorkspaceStoreError as Error;
-use crate::remote_workspace::{RemoteWorkspaceState, valid_local_id};
+use crate::remote_workspace::{RemoteRuntimePhase, RemoteWorkspaceState, valid_local_id};
 
 pub(super) fn validate_session_id(session_id: &str) -> Result<(), Error> {
     let id = uuid::Uuid::parse_str(session_id).map_err(|_| Error::InvalidSessionId)?;
@@ -42,8 +42,9 @@ pub(super) fn validate_replacement(previous: &RemoteWorkspaceState, next: &Remot
         }
     }
     if let (Some(runtime), Some(next_runtime)) = (&previous.runtime, &next.runtime)
-        && runtime.cleanup.is_some()
-        && next_runtime.cleanup != runtime.cleanup
+        && ((runtime.cleanup.is_some() && next_runtime.cleanup != runtime.cleanup)
+            || (runtime.phase != RemoteRuntimePhase::Provisioning
+                && next_runtime.phase == RemoteRuntimePhase::Provisioning))
     {
         return Err(Error::NonMonotonicReplacement);
     }

@@ -59,14 +59,14 @@ impl CloudWorkflowStore {
         expected: &StoredRemoteWorkspace,
         retain_until_millis: i64,
     ) -> Result<StoredRemoteAllocation, Error> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        ensure_current_schema(&transaction)?;
         let now_millis = current_unix_millis()?;
         let PreparedAllocation { next, workflow } =
             prepare_allocation(expected.state(), now_millis, retain_until_millis)?;
         let replacement = WorkspaceReplacement::new(expected, &next)?;
         let prepared_workflow = PreparedWorkflowInsert::new(&workflow)?;
-        let mut connection = self.connection()?;
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        ensure_current_schema(&transaction)?;
         let workspace = replacement.persist(&transaction)?;
         ensure_workflow_budget(&transaction, prepared_workflow.snapshot_len(), now_millis)?;
         let stored_workflow = prepared_workflow.persist(&transaction)?;

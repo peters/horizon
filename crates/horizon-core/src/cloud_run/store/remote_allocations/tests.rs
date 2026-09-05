@@ -1,13 +1,10 @@
 use super::super::{encode_workflow, tests::retained_workflow};
 use super::*;
-use crate::PanelKind;
 use crate::cloud_run::interactive_worker::{
     InteractiveWorker, InteractiveWorkerIdentity, InteractiveWorkerLifetime, InteractiveWorkerSshEndpoint,
 };
 use crate::cloud_run::{ArtifactDigest, CloudProvider, GitCommitSha, GitSource, WorkerLifetime};
-use crate::remote_workspace::{
-    RemoteCleanupIntent, RemoteCleanupReason, RemotePanelBinding, RemoteWorkspaceSpec, RepositoryCheckpoint,
-};
+use crate::remote_workspace::{RemoteCleanupIntent, RemoteCleanupReason, RemoteWorkspaceSpec, RepositoryCheckpoint};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use rusqlite::Connection;
 use std::sync::{Arc, Barrier};
@@ -37,14 +34,7 @@ fn fixture() -> Fixture {
         },
         working_directory: ".".into(),
         generation: 0,
-        panels: vec![RemotePanelBinding {
-            panel_local_id: "panel".into(),
-            kind: PanelKind::Shell,
-            command: None,
-            working_directory: None,
-            task_handoff: None,
-            agent_session_id: None,
-        }],
+        panels: Vec::new(),
     })
     .expect("workspace specification");
     let original = store.create_remote_workspace(OWNER, &state).expect("dormant");
@@ -124,6 +114,8 @@ fn allocation_reopens_one_exact_identity_without_consuming_creation_or_reallocat
     assert_eq!(workflow.updated_at_millis, workflow.created_at_millis);
     assert_eq!(workflow.retain_until_millis, i64::MAX);
     assert_eq!((saved.workspace().revision(), state.spec.generation), (2, 1));
+    assert!(state.spec.panels.is_empty());
+    assert!(runtime.cleanup.is_none());
     assert_eq!(runtime.workflow_id, workflow.id);
     assert_eq!(workflow.nodes.len(), 1);
     assert_eq!(runtime.job_id, workflow.nodes[0].id);
@@ -148,6 +140,10 @@ fn allocation_reopens_one_exact_identity_without_consuming_creation_or_reallocat
         Err(Error::OwnershipMismatch)
     ));
     assert_eq!(fixture.counts(), [1, 1, 0]);
+    assert!(claim(store, &saved).expect("first grant"));
+    let reopened = CloudWorkflowStore::open_path(store.path()).expect("reopen claimed store");
+    assert!(!claim(&reopened, &saved).expect("no second grant"));
+    assert_eq!(fixture.counts(), [1, 1, 1]);
 }
 
 #[test]
@@ -272,7 +268,7 @@ fn generic_writes_cannot_clear_copy_or_reclassify_even_when_the_binding_is_lost(
         copy.runtime.as_mut().expect("runtime").workspace_local_id = "copy".into();
         assert!(matches!(
             store.create_remote_workspace(OTHER_OWNER, &copy),
-            Err(Error::Storage(CloudStoreError::InvalidRemoteAllocation))
+            Err(Error::RuntimeAllocationRequired)
         ));
         let mut next = saved.workflow().workflow().clone();
         next.updated_at_millis += 1;
@@ -344,44 +340,6 @@ fn workflow_identity_and_single_node_shape_are_enforced_but_progress_can_update(
             }
         }
         assert!(next.validate().is_err());
-    }
-}
-
-#[test]
-fn zero_panels_and_detached_intents_do_not_control_lifetime_or_renew_creation() {
-    for lifetime in [WorkerLifetime::Persistent, WorkerLifetime::TimeLimited { seconds: 900 }] {
-        let fixture = fixture();
-        let store = &fixture.store;
-        let mut state = fixture.original.state().clone();
-        state.spec.target.lifetime = lifetime;
-        state.spec.panels.clear();
-        let empty = store
-            .replace_remote_workspace(&fixture.original, &state)
-            .expect("empty intent");
-        let saved = store
-            .allocate_remote_runtime(&empty, i64::MAX)
-            .expect("allocate without panels");
-        assert_eq!(saved.workspace().state().spec.target.lifetime, lifetime);
-        let runtime = saved.workspace().state().runtime.as_ref().expect("runtime");
-        assert!(runtime.cleanup.is_none());
-        assert!(claim(store, &saved).expect("first grant"));
-        let mut attached = saved.workspace().state().clone();
-        attached.spec.panels.clone_from(&fixture.original.state().spec.panels);
-        let with_panel = store
-            .replace_remote_workspace(saved.workspace(), &attached)
-            .expect("attach intent");
-        attached.spec.panels.clear();
-        let detached = store
-            .replace_remote_workspace(&with_panel, &attached)
-            .expect("detach intent");
-        assert_eq!(detached.state().runtime, saved.workspace().state().runtime);
-        let reopened = CloudWorkflowStore::open_path(store.path()).expect("reopen");
-        assert!(!claim(&reopened, &saved).expect("no second grant"));
-        assert!(matches!(
-            reopened.allocate_remote_runtime(&detached, i64::MAX),
-            Err(Error::RuntimeAlreadyActive)
-        ));
-        assert_eq!(fixture.counts(), [1, 1, 1]);
     }
 }
 
@@ -464,7 +422,7 @@ fn expired_setup_keeps_worker_ssh_and_checkpoints_without_renewal_or_new_generat
 fn cleanup_reconciling_and_observed_records_remain_recoverable_without_new_grants() {
     enum Observation {
         Cleanup(RemoteCleanupReason),
-        Reconciling,
+        Phase(RemoteRuntimePhase),
         Worker,
     }
     for observation in [
@@ -472,7 +430,8 @@ fn cleanup_reconciling_and_observed_records_remain_recoverable_without_new_grant
         Observation::Cleanup(RemoteCleanupReason::WorkspaceRemoved),
         Observation::Cleanup(RemoteCleanupReason::ApplicationExit),
         Observation::Cleanup(RemoteCleanupReason::Cancelled),
-        Observation::Reconciling,
+        Observation::Phase(RemoteRuntimePhase::Reconciling),
+        Observation::Phase(RemoteRuntimePhase::Failed),
         Observation::Worker,
     ] {
         let fixture = fixture();
@@ -488,7 +447,7 @@ fn cleanup_reconciling_and_observed_records_remain_recoverable_without_new_grant
                     requested_at_millis: 2000,
                 });
             }
-            Observation::Reconciling => runtime.phase = RemoteRuntimePhase::Reconciling,
+            Observation::Phase(phase) => runtime.phase = phase,
             Observation::Worker => runtime.worker = Some(worker),
         }
         let retained = store
@@ -499,6 +458,43 @@ fn cleanup_reconciling_and_observed_records_remain_recoverable_without_new_grant
             claim(store, &saved),
             Err(CloudStoreError::ClaimTargetNotReady(_))
         ));
+        if state.runtime.as_ref().expect("runtime").phase != RemoteRuntimePhase::Provisioning {
+            state.runtime.as_mut().expect("runtime").phase = RemoteRuntimePhase::Provisioning;
+            assert!(matches!(
+                store.replace_remote_workspace(&retained, &state),
+                Err(Error::NonMonotonicReplacement)
+            ));
+        }
         assert_eq!(fixture.counts(), [1, 1, 0]);
     }
+}
+
+#[test]
+fn a_setup_deadline_that_expires_waiting_for_the_write_lock_never_allocates() {
+    let fixture = fixture();
+    let store = fixture.store.clone();
+    let (ready, locked) = std::sync::mpsc::channel();
+    let blocker = std::thread::spawn(move || {
+        let mut connection = store.connection().expect("blocking connection");
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .expect("hold allocation lock");
+        ready.send(current_unix_millis().expect("clock") + 250).expect("locked");
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        transaction.commit().expect("release lock");
+    });
+    let deadline = locked
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("write lock held");
+    let result = fixture.store.allocate_remote_runtime(&fixture.original, deadline);
+    blocker.join().expect("lock holder");
+    assert!(matches!(result, Err(Error::InvalidAllocationRetention)));
+    assert_eq!(fixture.counts(), [0, 0, 0]);
+    assert_eq!(
+        fixture
+            .store
+            .load_remote_workspace(OWNER, "workspace")
+            .expect("unchanged"),
+        Some(fixture.original)
+    );
 }

@@ -310,7 +310,7 @@ fn well_formed_json_cannot_bypass_aggregate_validation_during_recovery() {
     use serde_json::json;
     let (_directory, store) = store();
     let state = provisioning(workspace("workspace"));
-    store.create_remote_workspace(OWNER, &state).expect("create");
+    seed_legacy_workspace(&store, &state);
     let original = serde_json::to_value(WorkspaceSnapshot {
         session_id: OWNER.into(),
         state,
