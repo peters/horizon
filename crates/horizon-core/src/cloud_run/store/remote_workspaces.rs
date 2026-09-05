@@ -169,7 +169,8 @@ impl<'a> WorkspaceReplacement<'a> {
         })
     }
 
-    /// The caller must validate the schema before composing writes in this transaction.
+    /// The caller must check the current schema in an immediate write transaction.
+    /// The returned value is provisional until that caller commits.
     pub(super) fn persist(
         &self,
         transaction: &rusqlite::Transaction<'_>,

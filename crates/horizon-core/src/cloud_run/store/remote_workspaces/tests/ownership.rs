@@ -1,4 +1,4 @@
-use super::super::super::{encode_workflow, insert_workflow, tests::retained_workflow, workflow_row};
+use super::super::super::{PreparedWorkflowInsert, decode_workflow_row, tests::retained_workflow, workflow_row};
 use super::*;
 
 #[test]
@@ -10,7 +10,7 @@ fn prepared_writes_share_the_callers_transaction_without_committing() {
     let next = provisioning(original.state().clone());
     let replacement = WorkspaceReplacement::new(&original, &next).expect("prepare");
     let workflow = retained_workflow(CloudProvider::LocalDocker, 1000);
-    let snapshot = encode_workflow(&workflow).expect("workflow snapshot");
+    let prepared_workflow = PreparedWorkflowInsert::new(&workflow).expect("prepare workflow");
     let mut connection = store.connection().expect("connection");
     {
         let transaction = connection
@@ -18,12 +18,16 @@ fn prepared_writes_share_the_callers_transaction_without_committing() {
             .expect("transaction");
         ensure_current_schema(&transaction).expect("schema");
         let pending = replacement.persist(&transaction).expect("replace within transaction");
-        let pending_workflow = insert_workflow(&transaction, &workflow, &snapshot).expect("insert within transaction");
+        let pending_workflow = prepared_workflow
+            .persist(&transaction)
+            .expect("insert within transaction");
         assert_eq!(pending_workflow.workflow(), &workflow);
-        assert!(
-            workflow_row(&transaction, &workflow.id.to_string())
-                .expect("pending workflow")
-                .is_some()
+        let row = workflow_row(&transaction, &workflow.id.to_string())
+            .expect("pending workflow")
+            .expect("row");
+        assert_eq!(
+            decode_workflow_row(workflow.id, &row).expect("metadata matches snapshot"),
+            pending_workflow
         );
         assert_eq!(pending.revision(), original.revision() + 1);
         assert_eq!(

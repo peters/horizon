@@ -91,7 +91,8 @@ back into large multi-purpose modules.
   invariants live in its `validation.rs` leaf. These records are independent of
   board snapshots and session-file deletion. Its prepared replacement can
   participate in a caller-owned store transaction without committing it. The
-  workflow store likewise keeps insertion separate from transaction commit;
+  workflow store's `workflow_writes.rs` binds validated workflow metadata to its
+  encoded snapshot before staging insertion, separately from transaction commit;
   provider/workflow coordination and runtime-state references remain separate
   integration responsibilities.
 - Shared domain helpers belong here when both core and UI need them.
