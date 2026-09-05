@@ -122,6 +122,10 @@ fn allocation_reopens_one_exact_identity_without_consuming_creation_or_reallocat
     assert_eq!(workflow.nodes[0].kind, WorkflowNodeKind::RemoteWorkspace);
     assert_eq!(workflow.nodes[0].worker.as_ref(), Some(&state.spec.target));
     assert_eq!(workflow.nodes[0].source.as_ref(), Some(&state.spec.repository));
+    Connection::open(store.path())
+        .expect("schema-three allocation fixture")
+        .execute_batch("DROP TABLE remote_runtime_creation_fences; PRAGMA user_version=3")
+        .expect("downgrade fixture before recovery");
     let reopened = CloudWorkflowStore::open_path(store.path()).expect("reopen");
     assert_eq!(
         reopened.load_remote_allocation(OWNER, "workspace").expect("recover"),

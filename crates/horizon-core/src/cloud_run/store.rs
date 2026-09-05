@@ -523,6 +523,12 @@ pub enum CloudStoreError {
     UnsupportedSchema(i64),
     #[error("remote allocation schema does not match its versioned table and constraint definitions")]
     InvalidAllocationSchema,
+    #[error("remote creation fence schema does not match its versioned definitions")]
+    InvalidCreationFenceSchema,
+    #[error("legacy remote snapshot cannot be validated for creation fencing")]
+    InvalidLegacyRuntimeSnapshot,
+    #[error("saved remote runtime identity cannot authorize a new worker creation")]
+    LegacyRuntimeCreationDenied,
     #[error("cloud workflow {0} already exists")]
     WorkflowExists(CloudWorkflowId),
     #[error("cloud workflow {0} does not exist")]

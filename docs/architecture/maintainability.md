@@ -102,6 +102,10 @@ back into large multi-purpose modules.
   Recovery preserves expired setup identities without granting new creation.
   These store operations run off the render thread and neither own remote
   execution lifetime nor perform provider actions.
+- The remote record store's `creation_fences.rs` leaf owns the schema-four
+  migration of legacy runtime identities into append-only creation denials,
+  exact schema validation, and indexed claim checks. Migration reuses the
+  aggregate decoder and does not confer allocation ownership or provider authority.
 - Shared domain helpers belong here when both core and UI need them.
 - If a UI feature needs to reconstruct runtime state, sync template-backed
   workspace metadata, or format panel/workspace domain labels, prefer adding a

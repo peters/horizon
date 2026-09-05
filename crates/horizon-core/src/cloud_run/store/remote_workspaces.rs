@@ -2,6 +2,7 @@
 //! These record operations do not authorize lifecycle actions or retire cleanup intent.
 //! Operations are synchronous and must run off the render thread.
 
+pub(super) mod creation_fences;
 mod validation;
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};

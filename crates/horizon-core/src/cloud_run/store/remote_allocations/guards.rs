@@ -1,5 +1,6 @@
 //! Keep generic workflow/record APIs from bypassing committed runtime ownership.
 
+use super::super::remote_workspaces::creation_fences;
 use super::super::{decode_workflow_row, validate_claim_target, workflow_row};
 use super::{CloudJobId, CloudStoreError, CloudWorkflow, RemoteRuntimePhase, WorkflowNodeKind, binding};
 use crate::remote_workspace::RemoteWorkspaceState;
@@ -81,7 +82,8 @@ pub(in crate::cloud_run::store) fn validate_creation_claim(
     job_id: CloudJobId,
 ) -> Result<(), CloudStoreError> {
     let Some(row) = binding::load_workflow(connection, &workflow.id.to_string())? else {
-        return validate_unbound_snapshot(workflow);
+        validate_unbound_snapshot(workflow)?;
+        return creation_fences::ensure_unreferenced(connection, workflow.id, job_id);
     };
     let allocation = binding::recover(connection, &row)?;
     let state = allocation.workspace.state();
