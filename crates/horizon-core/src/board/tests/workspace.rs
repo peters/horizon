@@ -453,6 +453,7 @@ fn restored_empty_workspaces_are_removed_during_cleanup() {
         workspaces: vec![
             WorkspaceState {
                 local_id: "empty".to_string(),
+                remote_workspace: None,
                 name: "empty".to_string(),
                 cwd: None,
                 position: Some([0.0, 40.0]),
@@ -462,6 +463,7 @@ fn restored_empty_workspaces_are_removed_during_cleanup() {
             },
             WorkspaceState {
                 local_id: "filled".to_string(),
+                remote_workspace: None,
                 name: "filled".to_string(),
                 cwd: None,
                 position: Some([640.0, 40.0]),
@@ -469,6 +471,7 @@ fn restored_empty_workspaces_are_removed_during_cleanup() {
                 layout: None,
                 panels: vec![PanelState {
                     local_id: "panel".to_string(),
+                    remote_workspace: None,
                     name: "notes".to_string(),
                     name_is_custom: None,
                     kind: PanelKind::Editor,
@@ -506,6 +509,7 @@ fn restored_workspace_layout_is_preserved_after_panel_recreation() {
     let state = RuntimeState {
         workspaces: vec![WorkspaceState {
             local_id: "grid".to_string(),
+            remote_workspace: None,
             name: "grid".to_string(),
             cwd: None,
             position: Some([0.0, 40.0]),
@@ -514,6 +518,7 @@ fn restored_workspace_layout_is_preserved_after_panel_recreation() {
             panels: vec![
                 PanelState {
                     local_id: "panel-a".to_string(),
+                    remote_workspace: None,
                     name: "a".to_string(),
                     name_is_custom: None,
                     kind: PanelKind::Editor,
@@ -534,6 +539,7 @@ fn restored_workspace_layout_is_preserved_after_panel_recreation() {
                 },
                 PanelState {
                     local_id: "panel-b".to_string(),
+                    remote_workspace: None,
                     name: "b".to_string(),
                     name_is_custom: None,
                     kind: PanelKind::Editor,
@@ -570,6 +576,7 @@ fn persisted_ssh_panels_restore_as_disconnected_snapshots() {
     let state = RuntimeState {
         workspaces: vec![WorkspaceState {
             local_id: "remote".to_string(),
+            remote_workspace: None,
             name: "Remote".to_string(),
             cwd: None,
             position: Some([0.0, 40.0]),
@@ -577,6 +584,7 @@ fn persisted_ssh_panels_restore_as_disconnected_snapshots() {
             layout: None,
             panels: vec![PanelState {
                 local_id: "ssh-panel".to_string(),
+                remote_workspace: None,
                 name: "prod".to_string(),
                 name_is_custom: None,
                 kind: PanelKind::Ssh,
@@ -622,6 +630,7 @@ fn runtime_restore_keeps_remaining_panels_when_one_spawn_fails() {
         workspaces: vec![WorkspaceState {
             local_id: "workspace".to_string(),
             name: "Workspace".to_string(),
+            remote_workspace: None,
             cwd: None,
             position: Some([0.0, 40.0]),
             template: None,
@@ -629,6 +638,7 @@ fn runtime_restore_keeps_remaining_panels_when_one_spawn_fails() {
             panels: vec![
                 PanelState {
                     local_id: "notes".to_string(),
+                    remote_workspace: None,
                     name: "Notes".to_string(),
                     name_is_custom: None,
                     kind: PanelKind::Editor,
@@ -649,6 +659,7 @@ fn runtime_restore_keeps_remaining_panels_when_one_spawn_fails() {
                 },
                 PanelState {
                     local_id: "broken-codex".to_string(),
+                    remote_workspace: None,
                     name: "Broken Codex".to_string(),
                     name_is_custom: None,
                     kind: PanelKind::Codex,

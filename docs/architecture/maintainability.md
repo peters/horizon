@@ -53,8 +53,9 @@ back into large multi-purpose modules.
 - `panel.rs` owns panel models and content access; explicit restart logic lives
   in `panel/lifecycle.rs`. `panel/spawn.rs` keeps content selection and command
   resolution, while `panel/spawn/terminal.rs` owns terminal construction,
-  transcript restoration and disconnected/failure snapshots. These boundaries
-  preserve existing behavior and do not introduce remote execution ownership.
+  transcript restoration and disconnected/failure snapshots. Remote client views
+  retain an execution reference independently of visual workspace membership;
+  both creation and restart defer remote attachment without local task fallback.
 - `terminal.rs` should keep the terminal types and shared imports; lifecycle,
   event handling, resize policy, selection logic, and content helpers belong in
   `terminal/` leaf modules.
@@ -74,6 +75,13 @@ back into large multi-purpose modules.
   on read and write serialization boundaries; supported legacy snapshots still
   migrate in memory. Agent binding orchestration, discovery, and external-store
   parsing belong in `runtime_state/` helper modules.
+  Runtime v3 carries opaque owner-session/workspace references through board
+  saves and session copies. Remote-bearing snapshots require complete stable IDs
+  before migration, save or restore; they never repair missing remote identities.
+  A copied reference does not authorize its claimed owner. Future reconciliation
+  must validate the actual resolved session against the exact-owner store.
+  Remote panels are SSH client views; task kinds and remote agent-native resumes
+  remain in `remote_workspace/`, separate from local agent catalog/binding logic.
   Binding validation and assignment live in
   `runtime_state/binding_bootstrap.rs`; provider-specific session-store parsing
   belongs in focused leaves such as `runtime_state/agent_sessions/codex.rs`.

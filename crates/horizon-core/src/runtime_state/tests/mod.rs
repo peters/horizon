@@ -1,4 +1,5 @@
 mod panels;
+mod remote_references;
 mod versioning;
 mod workspaces;
 
