@@ -8,9 +8,11 @@ pub mod local_docker;
 pub mod runpod;
 mod store;
 mod validation;
+mod worker_lifetime;
 pub use store::{
     CloudStoreError, CloudWorkflowStore, RemoteWorkspaceStoreError, StoredRemoteWorkspace, StoredWorkflow,
 };
+pub use worker_lifetime::WorkerLifetime;
 pub const CLOUD_RUN_PROTOCOL_VERSION: u32 = 1;
 macro_rules! uuid_id {
     ($name:ident) => {
@@ -84,13 +86,16 @@ macro_rules! hex_value {
     };
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(
+    try_from = "worker_lifetime::WorkerTargetSnapshot",
+    into = "worker_lifetime::WorkerTargetSnapshot"
+)]
 pub struct WorkerTarget {
     pub provider: CloudProvider,
     pub profile: String,
     pub image: String,
     pub disk_gib: u32,
-    pub lease_seconds: u32,
+    pub lifetime: WorkerLifetime,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_hourly_cost_micros: Option<u64>,
 }
@@ -330,6 +335,8 @@ pub enum CloudProtocolError {
     EmptyNodeIdentity(CloudJobId),
     #[error("node {0} has an invalid worker target")]
     InvalidWorkerTarget(CloudJobId),
+    #[error("worker target requires exactly one valid explicit lifetime policy")]
+    InvalidWorkerLifetime,
     #[error("node {0} has an invalid weight")]
     InvalidWeight(CloudJobId),
     #[error("node {0} has an invalid retry attempt")]

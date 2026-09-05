@@ -1,7 +1,7 @@
 use super::*;
 use crate::cloud_run::{
-    CloudProvider,
-    interactive_worker::{InteractiveWorkerIdentity, InteractiveWorkerLease},
+    CloudProvider, WorkerLifetime,
+    interactive_worker::{InteractiveWorkerIdentity, InteractiveWorkerLease, InteractiveWorkerLifetime},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::json;
@@ -25,7 +25,7 @@ fn spec() -> RemoteWorkspaceSpec {
             profile: "gpu-development".into(),
             image: format!("registry.example/worker@sha256:{}", "a".repeat(64)),
             disk_gib: 20,
-            lease_seconds: 900,
+            lifetime: WorkerLifetime::TimeLimited { seconds: 900 },
             max_hourly_cost_micros: Some(100_000),
         },
         repository: GitSource {
@@ -58,9 +58,9 @@ fn active() -> RemoteWorkspaceState {
         },
         target: spec.target.clone(),
         ssh_public_key: key(),
-        lease: InteractiveWorkerLease {
+        lifetime: InteractiveWorkerLifetime::TimeLimited(InteractiveWorkerLease {
             terminate_after: "2020-01-01T00:00:00Z".into(),
-        },
+        }),
     };
     RemoteWorkspaceState {
         version: REMOTE_WORKSPACE_STATE_VERSION,

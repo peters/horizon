@@ -1,6 +1,8 @@
+use super::super::WorkerLifetime;
 use super::super::interactive_worker::{
     InteractiveWorker, InteractiveWorkerCleanup, InteractiveWorkerEnsure, InteractiveWorkerIdentity,
-    InteractiveWorkerLease, InteractiveWorkerLifecycle, InteractiveWorkerProvider, InteractiveWorkerRequest,
+    InteractiveWorkerLease, InteractiveWorkerLifecycle, InteractiveWorkerLifetime, InteractiveWorkerProvider,
+    InteractiveWorkerRequest,
 };
 use super::*;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -12,6 +14,7 @@ const ED25519_BLOB_PREFIX: &[u8] = b"\0\0\0\x0bssh-ed25519\0\0\0\x20";
 struct FakeTransport(Arc<Mutex<FakeState>>);
 #[derive(Default)]
 struct FakeState {
+    list_calls: usize,
     pods: Vec<ApiPod>,
     create_response: Option<ApiPod>,
     create_requests: Vec<CreatePodRequest>,
@@ -34,6 +37,7 @@ impl FakeTransport {
 impl Transport for FakeTransport {
     fn list_by_name(&self, _name: &str) -> Result<Vec<ApiPod>, RunPodError> {
         let mut state = self.0.lock().expect("state");
+        state.list_calls += 1;
         if !state.scripted_lists.is_empty() {
             return Ok(state.scripted_lists.remove(0));
         }
@@ -69,7 +73,7 @@ fn target() -> WorkerTarget {
             "registry.example/team/nativesdk@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
                 .to_string(),
         disk_gib: 80,
-        lease_seconds: 3_600,
+        lifetime: WorkerLifetime::TimeLimited { seconds: 3_600 },
         max_hourly_cost_micros: Some(750_000),
     }
 }
@@ -101,7 +105,8 @@ fn api_pod(
     target: &WorkerTarget,
     hourly_cost_micros: Option<u64>,
 ) -> ApiPod {
-    let terminate_after = termination_deadline(target.lease_seconds).expect("termination deadline");
+    let terminate_after = termination_deadline(target.lifetime.time_limit_seconds().expect("time-limited fixture"))
+        .expect("termination deadline");
     ApiPod {
         id: "pod_123456".to_string(),
         name: resource_name(workflow_id, job_id),
@@ -475,6 +480,46 @@ fn interactive_adapter_waits_for_trusted_host_key_and_fails_closed_on_invalid_da
 }
 
 #[test]
+fn unsupported_persistent_requests_and_handles_fail_before_provider_io() {
+    let (workflow_id, job_id) = (CloudWorkflowId::new(), CloudJobId::new());
+    let mut request = interactive_request(workflow_id, job_id);
+    request.target.lifetime = WorkerLifetime::Persistent;
+    let transport = FakeTransport::default();
+    let host_keys = FakeHostKeySource::new(None);
+    let host_key_calls = host_keys.calls.clone();
+    let provider =
+        RunPodInteractiveWorkerProvider::new(RunPodClient::with_transport(transport.clone()), profile(), host_keys);
+    assert!(request.is_valid_for(CloudProvider::RunPod));
+    assert_eq!(provider.ensure_worker(&request), Err(RunPodError::InvalidTarget));
+    let worker = InteractiveWorker {
+        identity: InteractiveWorkerIdentity {
+            provider: CloudProvider::RunPod,
+            workflow_id,
+            job_id,
+            resource_id: "pod_123456".to_string(),
+        },
+        target: request.target,
+        ssh_public_key: request.ssh_public_key,
+        lifetime: InteractiveWorkerLifetime::Persistent,
+    };
+    assert!(worker.is_valid_for(CloudProvider::RunPod));
+    assert_eq!(
+        provider.inspect_worker(&worker),
+        Err(RunPodError::InvalidPersistedWorker)
+    );
+    assert_eq!(
+        provider.delete_worker(&worker),
+        Err(RunPodError::InvalidPersistedWorker)
+    );
+    let state = transport.0.lock().expect("state");
+    assert_eq!(state.list_calls, 0);
+    assert!(state.create_requests.is_empty());
+    assert!(state.inspected.is_empty());
+    assert!(state.deleted.is_empty());
+    assert!(host_key_calls.lock().expect("host key calls").is_empty());
+}
+
+#[test]
 fn interactive_adapter_rejects_invalid_handles_before_transport_io() {
     let (workflow_id, job_id) = (CloudWorkflowId::new(), CloudJobId::new());
     let request = interactive_request(workflow_id, job_id);
@@ -500,9 +545,9 @@ fn interactive_adapter_rejects_invalid_handles_before_transport_io() {
         },
         target: request.target,
         ssh_public_key: request.ssh_public_key,
-        lease: InteractiveWorkerLease {
+        lifetime: InteractiveWorkerLifetime::TimeLimited(InteractiveWorkerLease {
             terminate_after: termination_deadline(900).expect("termination deadline"),
-        },
+        }),
     };
 
     assert_eq!(

@@ -252,7 +252,12 @@ impl RunPodClient {
             }
             Err(error) => return Err(error),
         };
-        if !created && !recovered_deadline_valid(&status.worker.terminate_after, target.lease_seconds) {
+        if !created
+            && !target
+                .lifetime
+                .time_limit_seconds()
+                .is_some_and(|seconds| recovered_deadline_valid(&status.worker.terminate_after, seconds))
+        {
             let worker = Box::new(status.worker);
             return if self.delete_worker(&worker).is_ok() {
                 Err(RunPodError::LeaseDeadlineRejected { worker })
@@ -465,7 +470,8 @@ impl CreatePodRequest {
         name: String,
         ssh_public_key: Option<&str>,
     ) -> Result<Self, RunPodError> {
-        let terminate_after = termination_deadline(target.lease_seconds)?;
+        let seconds = target.lifetime.time_limit_seconds().ok_or(RunPodError::InvalidTarget)?;
+        let terminate_after = termination_deadline(seconds)?;
         let mut env: Vec<_> = [
             (WORKFLOW_ENV, workflow_id.to_string()),
             (JOB_ENV, job_id.to_string()),
@@ -547,7 +553,10 @@ fn validate_target(target: &WorkerTarget, profile: &RunPodProfile) -> Result<(),
     let valid = target.provider == CloudProvider::RunPod
         && target.profile == profile.name
         && target.disk_gib > 0
-        && (MIN_LEASE_SECONDS..=MAX_LEASE_SECONDS).contains(&target.lease_seconds)
+        && target
+            .lifetime
+            .time_limit_seconds()
+            .is_some_and(|seconds| (MIN_LEASE_SECONDS..=MAX_LEASE_SECONDS).contains(&seconds))
         && target.max_hourly_cost_micros != Some(0)
         && valid_immutable_worker_image(&target.image)
         && safe_text(&profile.name)

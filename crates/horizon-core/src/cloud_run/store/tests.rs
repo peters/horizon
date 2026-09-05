@@ -5,8 +5,8 @@ use tempfile::TempDir;
 
 use super::*;
 use crate::cloud_run::{
-    CLOUD_RUN_PROTOCOL_VERSION, CloudJobOutcome, CloudJobState, CloudProgress, RetryPolicy, WorkerTarget, WorkflowNode,
-    WorkflowNodeKind,
+    CLOUD_RUN_PROTOCOL_VERSION, CloudJobOutcome, CloudJobState, CloudProgress, RetryPolicy, WorkerLifetime,
+    WorkerTarget, WorkflowNode, WorkflowNodeKind,
 };
 
 fn test_workflow(provider: CloudProvider, timestamp: i64) -> CloudWorkflow {
@@ -36,7 +36,7 @@ fn test_workflow(provider: CloudProvider, timestamp: i64) -> CloudWorkflow {
                 profile: "general".to_string(),
                 image: format!("registry.example/worker@sha256:{}", "a".repeat(64)),
                 disk_gib: 20,
-                lease_seconds: 3_600,
+                lifetime: WorkerLifetime::TimeLimited { seconds: 3_600 },
                 max_hourly_cost_micros: Some(500_000),
             }),
             input_artifact_ids: Vec::new(),
