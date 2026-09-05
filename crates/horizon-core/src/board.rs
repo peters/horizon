@@ -153,6 +153,7 @@ impl Board {
     ///
     /// Returns an error if the runtime state cannot be restored.
     pub fn from_runtime_state_with_transcripts(state: &RuntimeState, transcript_root: Option<&Path>) -> Result<Self> {
+        state.validate_remote_references()?;
         let mut board = Self::new();
 
         for workspace_state in &state.workspaces {

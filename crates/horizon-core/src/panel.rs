@@ -12,7 +12,7 @@ use crate::agents::{AGENT_WORKING_SCAN_ROWS, AgentStatus, is_agent_working_line}
 use crate::editor::{MarkdownEditor, PanelContent};
 use crate::error::Result;
 use crate::git_changes::DiffViewer;
-use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef};
+use crate::runtime_state::{AgentSessionBinding, PanelTemplateRef, RemoteWorkspaceReference};
 use crate::ssh::{SshConnection, SshConnectionStatus};
 use crate::terminal::{AgentNotification, Terminal};
 #[cfg(test)]
@@ -146,6 +146,7 @@ pub struct PanelOptions {
     /// Whether the panel participates in layout, rendering, and input.
     pub visible: bool,
     pub local_id: Option<String>,
+    pub remote_workspace: Option<RemoteWorkspaceReference>,
     pub session_binding: Option<AgentSessionBinding>,
     pub template: Option<PanelTemplateRef>,
     /// Active `browser` config section, so spawn honors `--config` and
@@ -175,6 +176,7 @@ impl Default for PanelOptions {
             size: None,
             visible: true,
             local_id: None,
+            remote_workspace: None,
             session_binding: None,
             template: None,
             browser_config: None,
@@ -188,6 +190,7 @@ impl Default for PanelOptions {
 pub struct Panel {
     pub id: PanelId,
     pub local_id: String,
+    remote_workspace: Option<RemoteWorkspaceReference>,
     pub title: String,
     pub terminal_title: String,
     pub kind: PanelKind,
@@ -236,6 +239,12 @@ pub struct PanelProcessOutput {
 }
 
 impl Panel {
+    /// Execution identity is independent of the panel's visual workspace.
+    #[must_use]
+    pub fn remote_workspace(&self) -> Option<&RemoteWorkspaceReference> {
+        self.remote_workspace.as_ref()
+    }
+
     /// Convenience accessor for the terminal content (if this panel holds one).
     #[must_use]
     pub fn terminal(&self) -> Option<&Terminal> {
@@ -319,6 +328,7 @@ impl Panel {
         Self {
             id,
             local_id: format!("panel-{}", id.0),
+            remote_workspace: None,
             title: kind.display_name().to_string(),
             terminal_title: String::new(),
             kind,
@@ -696,6 +706,7 @@ mod tests {
         Panel {
             id: PanelId(1),
             local_id: "panel-1".to_string(),
+            remote_workspace: None,
             title: title.to_string(),
             terminal_title: terminal_title.to_string(),
             kind: PanelKind::Usage,

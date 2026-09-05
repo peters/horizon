@@ -15,6 +15,7 @@ use crate::config::{Config, WindowConfig};
 use crate::error::{Error, Result};
 use crate::layout::workspace_slot_width;
 use crate::panel::PanelKind;
+use crate::remote_workspace::valid_local_id;
 use crate::terminal::Terminal;
 use crate::view::CanvasViewState;
 
@@ -22,10 +23,10 @@ pub use agent_sessions::{AgentSessionBootstrapCatalog, AgentSessionCatalog, Agen
 pub use claude_live_sessions::{claude_session_transcript_exists, live_claude_session_ids};
 pub use models::{
     AgentSessionBinding, AgentSessionKey, BrowserProfileState, DetachedWorkspaceState, PanelState, PanelTemplateRef,
-    WorkspaceState, WorkspaceTemplateRef,
+    RemoteWorkspaceReference, WorkspaceState, WorkspaceTemplateRef,
 };
 
-const RUNTIME_STATE_VERSION: u32 = 2;
+const RUNTIME_STATE_VERSION: u32 = 3;
 const DEFAULT_ROWS: u16 = 24;
 const DEFAULT_COLS: u16 = 80;
 const MAX_CLAUDE_SESSION_FILES: usize = 64;
@@ -40,7 +41,7 @@ const PI_SESSION_TAIL_BYTES: u64 = 64 * 1024;
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct RuntimeState {
-    #[serde(with = "versioning")]
+    #[serde(default = "legacy_runtime_version", with = "versioning")]
     pub version: u32,
     pub window: Option<WindowConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -101,6 +102,7 @@ impl RuntimeState {
 
         let content = std::fs::read_to_string(path)?;
         let mut state = serde_yaml::from_str::<Self>(&content).map_err(|error| Error::State(error.to_string()))?;
+        state.validate_remote_references()?;
         state.ensure_local_ids();
         state.migrate_canvas_view();
         state.version = RUNTIME_STATE_VERSION;
@@ -113,6 +115,7 @@ impl RuntimeState {
     ///
     /// Returns an error if serialization fails or the state version is unsupported.
     pub fn to_yaml(&self) -> Result<String> {
+        self.validate_remote_references()?;
         serde_yaml::to_string(self).map_err(|error| Error::State(error.to_string()))
     }
 
@@ -135,6 +138,11 @@ impl RuntimeState {
     }
 
     pub fn ensure_local_ids(&mut self) {
+        // Remote-bearing snapshots require complete identities. Never repair away
+        // an invalid binding before the load/save/restore validation boundary.
+        if self.has_remote_references() {
+            return;
+        }
         if self.version == 0 {
             self.version = RUNTIME_STATE_VERSION;
         }
@@ -164,6 +172,52 @@ impl RuntimeState {
                 }
             }
         }
+    }
+
+    fn has_remote_references(&self) -> bool {
+        self.workspaces.iter().any(|workspace| {
+            workspace.remote_workspace.is_some()
+                || workspace.panels.iter().any(|panel| panel.remote_workspace.is_some())
+        })
+    }
+
+    /// Validate client references without provider I/O or ownership adoption.
+    /// # Errors
+    /// Remote-bearing snapshots require version 3, unique stable identities and
+    /// SSH views with no local agent resume or incompatible workspace reference.
+    pub fn validate_remote_references(&self) -> Result<()> {
+        if !self.has_remote_references() {
+            return Ok(());
+        }
+        if self.version != RUNTIME_STATE_VERSION {
+            return Err(Error::State("remote references require runtime state version 3".into()));
+        }
+        let mut workspace_ids = HashSet::new();
+        let mut panel_ids = HashSet::new();
+        for workspace in &self.workspaces {
+            if !valid_local_id(&workspace.local_id) || !workspace_ids.insert(&workspace.local_id) {
+                return Err(Error::State(
+                    "invalid or duplicate remote-view workspace identity".into(),
+                ));
+            }
+            for panel in &workspace.panels {
+                if !valid_local_id(&panel.local_id) || !panel_ids.insert(&panel.local_id) {
+                    return Err(Error::State("invalid or duplicate remote-view panel identity".into()));
+                }
+                if workspace.remote_workspace.is_some() && panel.remote_workspace != workspace.remote_workspace {
+                    return Err(Error::State("remote panel reference differs from its workspace".into()));
+                }
+                if panel.remote_workspace.is_some() {
+                    RemoteWorkspaceReference::validate_client_panel(
+                        &panel.local_id,
+                        panel.kind,
+                        &panel.resume,
+                        panel.session_binding.as_ref(),
+                    )?;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Give browser panels fresh process-artifact identities when a persisted
@@ -222,6 +276,7 @@ impl RuntimeState {
 
                         PanelState {
                             local_id: panel.local_id.clone(),
+                            remote_workspace: panel.remote_workspace().cloned(),
                             name: panel.title.clone(),
                             name_is_custom: Some(panel.name_is_custom()),
                             kind: panel.kind,
@@ -262,6 +317,7 @@ impl RuntimeState {
 
                 WorkspaceState {
                     local_id: workspace.local_id.clone(),
+                    remote_workspace: workspace.remote_workspace.clone(),
                     name: workspace.name.clone(),
                     cwd: workspace.cwd.as_ref().map(|path| path.display().to_string()),
                     position: Some(workspace.position),
@@ -292,6 +348,10 @@ impl RuntimeState {
             browser: crate::browser::BrowserConfig::default(),
         }
     }
+}
+
+fn legacy_runtime_version() -> u32 {
+    0
 }
 
 impl Default for RuntimeState {

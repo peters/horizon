@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::layout::WS_COLLISION_GAP;
 use crate::panel::{DEFAULT_PANEL_SIZE, Panel, PanelId, PanelOptions};
 use crate::runtime_state::WorkspaceState;
@@ -81,6 +81,19 @@ impl Board {
         workspace: WorkspaceId,
         spawn_panel: impl FnOnce(PanelId, WorkspaceId, PanelOptions) -> Result<Panel>,
     ) -> Result<PanelId> {
+        if let Some(reference) = self
+            .workspace(workspace)
+            .and_then(|workspace| workspace.remote_workspace.as_ref())
+        {
+            if opts
+                .remote_workspace
+                .as_ref()
+                .is_some_and(|panel_reference| panel_reference != reference)
+            {
+                return Err(Error::State("remote panel reference differs from its workspace".into()));
+            }
+            opts.remote_workspace = Some(reference.clone());
+        }
         let id = PanelId(self.next_panel_id);
         self.next_panel_id += 1;
         let explicit_position = opts.position.is_some();
@@ -192,7 +205,11 @@ impl Board {
         if let Some(ws_id) = ws_id {
             let is_empty = self.workspaces.iter().any(|ws| ws.id == ws_id && ws.panels.is_empty());
             if is_empty {
-                if !self.retained_empty_workspaces.contains(&ws_id) {
+                if !self.retained_empty_workspaces.contains(&ws_id)
+                    && self
+                        .workspace(ws_id)
+                        .is_none_or(|workspace| workspace.remote_workspace.is_none())
+                {
                     self.workspaces.retain(|ws| ws.id != ws_id);
                     self.attention.retain(|item| item.workspace_id != ws_id);
                     if self.active_workspace == Some(ws_id) {
@@ -244,7 +261,23 @@ impl Board {
             return;
         }
 
-        let Some(target_id) = self.workspaces.iter().find(|ws| ws.id != id).map(|ws| ws.id) else {
+        let Some(target_id) = self
+            .workspaces
+            .iter()
+            .find(|ws| {
+                ws.id != id
+                    && self
+                        .panels
+                        .iter()
+                        .filter(|panel| panel.workspace_id == id)
+                        .all(|panel| {
+                            ws.remote_workspace
+                                .as_ref()
+                                .is_none_or(|reference| panel.remote_workspace() == Some(reference))
+                        })
+            })
+            .map(|ws| ws.id)
+        else {
             return;
         };
 
@@ -269,6 +302,13 @@ impl Board {
             return;
         };
         if source_workspace_id == workspace_id || self.workspace(workspace_id).is_none() {
+            return;
+        }
+        if let Some(reference) = self
+            .workspace(workspace_id)
+            .and_then(|workspace| workspace.remote_workspace.as_ref())
+            && self.panel(panel_id).and_then(Panel::remote_workspace) != Some(reference)
+        {
             return;
         }
 
@@ -337,7 +377,11 @@ impl Board {
         let empty_ids: Vec<_> = self
             .workspaces
             .iter()
-            .filter(|ws| ws.panels.is_empty() && !self.retained_empty_workspaces.contains(&ws.id))
+            .filter(|ws| {
+                ws.panels.is_empty()
+                    && ws.remote_workspace.is_none()
+                    && !self.retained_empty_workspaces.contains(&ws.id)
+            })
             .map(|ws| ws.id)
             .collect();
         for ws_id in empty_ids {
@@ -555,6 +599,7 @@ impl Board {
         let id = self.create_workspace(&workspace_state.name);
         if let Some(workspace) = self.workspace_mut(id) {
             workspace.local_id.clone_from(&workspace_state.local_id);
+            workspace.remote_workspace.clone_from(&workspace_state.remote_workspace);
             workspace.position = workspace_state.position.unwrap_or(workspace.position);
             workspace.cwd = workspace_state.cwd.as_deref().map(Config::expand_tilde);
             workspace.template.clone_from(&workspace_state.template);
