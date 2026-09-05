@@ -114,10 +114,15 @@ fn observed_worker(state: &RemoteWorkspaceState) -> InteractiveWorker {
 fn allocation_reopens_one_exact_identity_without_consuming_creation_or_reallocating() {
     let fixture = fixture();
     let store = &fixture.store;
+    assert_eq!(store.load_remote_allocation(OWNER, "workspace").expect("dormant"), None);
+    let started = current_unix_millis().expect("clock");
     let saved = fixture.allocate();
     let state = saved.workspace().state();
     let runtime = state.runtime.as_ref().expect("runtime");
     let workflow = saved.workflow().workflow();
+    assert!((started..=current_unix_millis().expect("clock")).contains(&workflow.created_at_millis));
+    assert_eq!(workflow.updated_at_millis, workflow.created_at_millis);
+    assert_eq!(workflow.retain_until_millis, i64::MAX);
     assert_eq!((saved.workspace().revision(), state.spec.generation), (2, 1));
     assert_eq!(runtime.workflow_id, workflow.id);
     assert_eq!(workflow.nodes.len(), 1);
@@ -277,6 +282,10 @@ fn generic_writes_cannot_clear_copy_or_reclassify_even_when_the_binding_is_lost(
             Err(CloudStoreError::InvalidRemoteAllocation)
         ));
         if lost_binding {
+            assert!(matches!(
+                store.load_remote_allocation(OWNER, "workspace"),
+                Err(Error::UnboundRuntime)
+            ));
             assert!(matches!(
                 claim(store, &saved),
                 Err(CloudStoreError::InvalidRemoteAllocation)
