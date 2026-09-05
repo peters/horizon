@@ -94,27 +94,9 @@ impl CloudWorkflowStore {
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         ensure_current_schema(&transaction)?;
-        let id = workflow.id.to_string();
-        if workflow_row(&transaction, &id)?.is_some() {
-            return Err(CloudStoreError::WorkflowExists(workflow.id));
-        }
-        transaction.execute(
-            "INSERT INTO cloud_workflows (
-                workflow_id, revision, created_at_millis, updated_at_millis, retain_until_millis, snapshot
-             ) VALUES (?1, 1, ?2, ?3, ?4, ?5)",
-            params![
-                id,
-                workflow.created_at_millis,
-                workflow.updated_at_millis,
-                workflow.retain_until_millis,
-                snapshot
-            ],
-        )?;
+        let stored = insert_workflow(&transaction, workflow, &snapshot)?;
         transaction.commit()?;
-        Ok(StoredWorkflow {
-            workflow: workflow.clone(),
-            revision: 1,
-        })
+        Ok(stored)
     }
 
     /// Load and revalidate one workflow snapshot.
@@ -311,6 +293,34 @@ struct WorkflowRow {
     updated_at_millis: i64,
     retain_until_millis: i64,
     snapshot: Vec<u8>,
+}
+
+// The caller must validate the schema before composing writes in this transaction.
+fn insert_workflow(
+    transaction: &rusqlite::Transaction<'_>,
+    workflow: &CloudWorkflow,
+    snapshot: &[u8],
+) -> Result<StoredWorkflow, CloudStoreError> {
+    let id = workflow.id.to_string();
+    if workflow_row(transaction, &id)?.is_some() {
+        return Err(CloudStoreError::WorkflowExists(workflow.id));
+    }
+    transaction.execute(
+        "INSERT INTO cloud_workflows (
+            workflow_id, revision, created_at_millis, updated_at_millis, retain_until_millis, snapshot
+         ) VALUES (?1, 1, ?2, ?3, ?4, ?5)",
+        params![
+            id,
+            workflow.created_at_millis,
+            workflow.updated_at_millis,
+            workflow.retain_until_millis,
+            snapshot
+        ],
+    )?;
+    Ok(StoredWorkflow {
+        workflow: workflow.clone(),
+        revision: 1,
+    })
 }
 
 impl WorkflowRow {
