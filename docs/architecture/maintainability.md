@@ -95,6 +95,10 @@ back into large multi-purpose modules.
   encoded snapshot before staging insertion, separately from transaction commit;
   provider/workflow coordination and runtime-state references remain separate
   integration responsibilities.
+- The remote record store's `creation_fences.rs` leaf owns the schema-four
+  migration of legacy runtime identities into append-only creation denials,
+  exact schema validation, and indexed claim checks. Migration reuses the
+  aggregate decoder and does not confer allocation ownership or provider authority.
 - Shared domain helpers belong here when both core and UI need them.
 - If a UI feature needs to reconstruct runtime state, sync template-backed
   workspace metadata, or format panel/workspace domain labels, prefer adding a

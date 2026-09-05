@@ -242,6 +242,7 @@ impl CloudWorkflowStore {
             return Err(CloudStoreError::WorkflowExpired(workflow_id));
         }
         validate_claim_target(&workflow.workflow, job_id, target)?;
+        remote_workspaces::creation_fences::ensure_unreferenced(&transaction, workflow_id, job_id)?;
         let provider_name = provider_name(target.provider);
         let job_id_text = job_id.to_string();
         let existing = transaction
@@ -518,6 +519,12 @@ pub enum CloudStoreError {
     UnsupportedSchema(i64),
     #[error("remote allocation schema does not match its versioned table and constraint definitions")]
     InvalidAllocationSchema,
+    #[error("remote creation fence schema does not match its versioned definitions")]
+    InvalidCreationFenceSchema,
+    #[error("legacy remote snapshot cannot be validated for creation fencing")]
+    InvalidLegacyRuntimeSnapshot,
+    #[error("saved remote runtime identity cannot authorize a new worker creation")]
+    LegacyRuntimeCreationDenied,
     #[error("cloud workflow {0} already exists")]
     WorkflowExists(CloudWorkflowId),
     #[error("cloud workflow {0} does not exist")]
