@@ -11,7 +11,7 @@ use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 
 use super::CloudStoreError;
 
-const STORE_SCHEMA_VERSION: i64 = 1;
+const STORE_SCHEMA_VERSION: i64 = 2;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(2);
 const SCHEMA: &str = r"
 CREATE TABLE IF NOT EXISTS cloud_workflows (
@@ -38,6 +38,17 @@ CREATE INDEX IF NOT EXISTS cloud_worker_creation_claims_workflow
     ON cloud_worker_creation_claims(workflow_id, job_id, provider);
 ";
 
+const REMOTE_WORKSPACE_SCHEMA: &str = r"
+CREATE TABLE remote_workspaces (
+    workspace_local_id TEXT PRIMARY KEY NOT NULL,
+    session_id TEXT NOT NULL,
+    revision INTEGER NOT NULL CHECK (revision > 0),
+    snapshot BLOB NOT NULL
+) STRICT;
+CREATE INDEX remote_workspaces_session
+    ON remote_workspaces(session_id, workspace_local_id);
+";
+
 pub(super) fn open_connection(path: &Path) -> Result<Connection, CloudStoreError> {
     let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
         | OpenFlags::SQLITE_OPEN_CREATE
@@ -54,10 +65,17 @@ pub(super) fn initialize_schema(connection: &mut Connection) -> Result<(), Cloud
     connection.pragma_update(None, "journal_mode", "WAL")?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let version = transaction.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))?;
-    if version != 0 && version != STORE_SCHEMA_VERSION {
+    if !(0..=STORE_SCHEMA_VERSION).contains(&version) {
         return Err(CloudStoreError::UnsupportedSchema(version));
     }
     transaction.execute_batch(SCHEMA)?;
+    if version < 2 {
+        transaction.execute_batch(REMOTE_WORKSPACE_SCHEMA)?;
+    }
+    drop(transaction.prepare(
+        "SELECT workspace_local_id, session_id, revision, snapshot
+         FROM remote_workspaces INDEXED BY remote_workspaces_session LIMIT 0",
+    )?);
     transaction.pragma_update(None, "user_version", STORE_SCHEMA_VERSION)?;
     transaction.commit()?;
     Ok(())

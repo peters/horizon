@@ -1,6 +1,9 @@
 //! Durable local control-plane storage for cloud workflow snapshots and creation claims.
 
 mod database;
+mod remote_workspaces;
+
+pub use remote_workspaces::{RemoteWorkspaceStoreError, StoredRemoteWorkspace};
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -17,6 +20,7 @@ use crate::HorizonHome;
 use database::{ensure_current_schema, initialize_schema, prepare_private_store};
 
 const MAX_SNAPSHOT_BYTES: usize = 4 * 1024 * 1024;
+// Materialize one extra byte so an oversized stored blob is distinguishable from a valid maximum-sized snapshot.
 const MAX_MATERIALIZED_SNAPSHOT_BYTES: i64 = 4 * 1024 * 1024 + 1;
 const MAX_RECOVERED_WORKFLOWS: usize = 512;
 const MAX_RECOVERED_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
