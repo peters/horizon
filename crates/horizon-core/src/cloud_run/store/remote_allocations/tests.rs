@@ -1,3 +1,5 @@
+mod hardening;
+
 use super::super::{encode_workflow, tests::retained_workflow};
 use super::*;
 use crate::cloud_run::interactive_worker::{
