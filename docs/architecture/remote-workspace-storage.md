@@ -107,10 +107,11 @@ validate the owned table and index definitions against their exact, versioned
 `sqlite_schema.sql` representation. This includes uniqueness, indexed columns,
 the primary key, positive generation, foreign keys and strict typing; equivalent
 but unexpected definitions are not adopted. Keep these CREATE definitions stable
-until an explicit schema migration replaces them.
-The foreign keys prevent deleting a parent
-snapshot while an allocation binding still references it; there is no implicit
-ownership cascade or provider cleanup.
+until an explicit schema migration replaces them, including parent-table renames.
+A frozen format fixture prevents accidental definition drift; unexpected extra
+indexes or triggers are also rejected. The foreign keys prevent deleting a
+parent snapshot while an allocation binding still references it; there is no
+implicit ownership cascade or provider cleanup.
 
 Generation zero describes a specification that has never allocated a runtime;
 bindings require a positive generation. A future allocation increments the

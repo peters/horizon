@@ -49,17 +49,17 @@ CREATE INDEX remote_workspaces_session
     ON remote_workspaces(session_id, workspace_local_id);
 ";
 
-const REMOTE_ALLOCATION_SCHEMA: &str = r"
-CREATE TABLE remote_runtime_allocations (
+const REMOTE_ALLOCATION_SCHEMA: [&str; 3] = [
+    r"CREATE TABLE remote_runtime_allocations (
     workspace_local_id TEXT PRIMARY KEY NOT NULL REFERENCES remote_workspaces(workspace_local_id),
     session_id TEXT NOT NULL,
     generation INTEGER NOT NULL CHECK (generation > 0),
     workflow_id TEXT NOT NULL REFERENCES cloud_workflows(workflow_id),
     job_id TEXT NOT NULL
-) STRICT;
-CREATE UNIQUE INDEX remote_runtime_allocations_workflow ON remote_runtime_allocations(workflow_id);
-CREATE UNIQUE INDEX remote_runtime_allocations_job ON remote_runtime_allocations(job_id);
-";
+) STRICT",
+    "CREATE UNIQUE INDEX remote_runtime_allocations_workflow ON remote_runtime_allocations(workflow_id)",
+    "CREATE UNIQUE INDEX remote_runtime_allocations_job ON remote_runtime_allocations(job_id)",
+];
 
 pub(super) fn open_connection(path: &Path) -> Result<Connection, CloudStoreError> {
     let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
@@ -85,7 +85,9 @@ pub(super) fn initialize_schema(connection: &mut Connection) -> Result<(), Cloud
         transaction.execute_batch(REMOTE_WORKSPACE_SCHEMA)?;
     }
     if version < 3 {
-        transaction.execute_batch(REMOTE_ALLOCATION_SCHEMA)?;
+        for definition in REMOTE_ALLOCATION_SCHEMA {
+            transaction.execute_batch(definition)?;
+        }
     }
     drop(transaction.prepare(
         "SELECT workspace_local_id, session_id, revision, snapshot
@@ -108,20 +110,14 @@ pub(super) fn ensure_current_schema(connection: &Connection) -> Result<(), Cloud
 fn validate_allocation_schema(connection: &Connection) -> Result<(), CloudStoreError> {
     // These owned CREATE definitions are versioned data; keep their normalized SQL stable.
     // Exact matching includes constraints that column/index-name probes cannot inspect.
-    for definition in REMOTE_ALLOCATION_SCHEMA
-        .split(';')
-        .map(str::trim)
-        .filter(|sql| !sql.is_empty())
-    {
-        let matches: bool = connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM main.sqlite_schema
-             WHERE tbl_name = 'remote_runtime_allocations' AND sql = ?1)",
-            [definition],
-            |row| row.get(0),
-        )?;
-        if !matches {
-            return Err(CloudStoreError::InvalidAllocationSchema);
-        }
+    let matches: bool = connection.query_row(
+        "SELECT COUNT(*) = 3 AND COUNT(CASE WHEN sql IN (?1, ?2, ?3) THEN 1 END) = 3
+         FROM main.sqlite_schema WHERE tbl_name = 'remote_runtime_allocations' AND sql IS NOT NULL",
+        REMOTE_ALLOCATION_SCHEMA,
+        |row| row.get(0),
+    )?;
+    if !matches {
+        return Err(CloudStoreError::InvalidAllocationSchema);
     }
     Ok(())
 }

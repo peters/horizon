@@ -170,6 +170,50 @@ fn partial_or_missing_allocation_schema_fails_without_repairing_or_losing_record
 }
 
 #[test]
+fn schema_three_definitions_match_the_frozen_storage_format() {
+    let frozen = concat!(
+        "CREATE TABLE remote_runtime_allocations (\n",
+        "    workspace_local_id TEXT PRIMARY KEY NOT NULL REFERENCES remote_workspaces(workspace_local_id),\n",
+        "    session_id TEXT NOT NULL,\n",
+        "    generation INTEGER NOT NULL CHECK (generation > 0),\n",
+        "    workflow_id TEXT NOT NULL REFERENCES cloud_workflows(workflow_id),\n",
+        "    job_id TEXT NOT NULL\n",
+        ") STRICT;\n",
+        "CREATE UNIQUE INDEX remote_runtime_allocations_workflow ON remote_runtime_allocations(workflow_id);\n",
+        "CREATE UNIQUE INDEX remote_runtime_allocations_job ON remote_runtime_allocations(job_id)",
+    );
+    assert_eq!(REMOTE_ALLOCATION_SCHEMA.join(";\n"), frozen);
+}
+
+#[test]
+fn unexpected_allocation_objects_reject_open_reads_and_writes_without_record_loss() {
+    for sql in [
+        "CREATE INDEX unexpected_index ON remote_runtime_allocations(session_id)",
+        "CREATE TRIGGER unexpected_trigger AFTER INSERT ON remote_runtime_allocations BEGIN
+         DELETE FROM cloud_workflows; END;",
+    ] {
+        let fixture = fixture();
+        let connection = open_connection(fixture.store.path()).expect("raw store");
+        let before = saved_bytes(&connection);
+        connection.execute_batch(sql).expect("unexpected object");
+        assert!(matches!(
+            CloudWorkflowStore::open_path(fixture.store.path()),
+            Err(CloudStoreError::InvalidAllocationSchema)
+        ));
+        assert!(matches!(
+            fixture.store.load(fixture.workflow.workflow().id),
+            Err(CloudStoreError::InvalidAllocationSchema)
+        ));
+        let workflow = retained_workflow(CloudProvider::LocalDocker, 2000);
+        assert!(matches!(
+            fixture.store.create(&workflow),
+            Err(CloudStoreError::InvalidAllocationSchema)
+        ));
+        assert_eq!(saved_bytes(&connection), before);
+    }
+}
+
+#[test]
 fn malformed_allocation_constraints_are_rejected_without_losing_records() {
     for (original, replacement) in [
         ("TEXT PRIMARY KEY NOT NULL", "TEXT NOT NULL"),
@@ -231,8 +275,9 @@ fn malformed_allocation_constraints_are_rejected_without_losing_records() {
         let fixture = fixture();
         let connection = open_connection(fixture.store.path()).expect("raw store");
         let before = saved_bytes(&connection);
-        let malformed = REMOTE_ALLOCATION_SCHEMA.replace(original, replacement);
-        assert_ne!(malformed, REMOTE_ALLOCATION_SCHEMA);
+        let schema = REMOTE_ALLOCATION_SCHEMA.join(";\n");
+        let malformed = schema.replace(original, replacement);
+        assert_ne!(malformed, schema);
         connection
             .execute_batch("DROP TABLE remote_runtime_allocations")
             .expect("remove empty table");
@@ -243,7 +288,7 @@ fn malformed_allocation_constraints_are_rejected_without_losing_records() {
         );
         assert!(matches!(
             fixture.store.load(fixture.workflow.workflow().id),
-            Err(super::super::CloudStoreError::InvalidAllocationSchema)
+            Err(CloudStoreError::InvalidAllocationSchema)
         ));
         assert_eq!(saved_bytes(&connection), before);
     }
