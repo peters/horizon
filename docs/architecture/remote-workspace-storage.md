@@ -144,6 +144,38 @@ new workflow node kind, worker creation, adoption, lifetime policy, or UI behavi
 The future allocator must commit and validate both snapshots with their binding
 in one transaction before the existing creation fence can grant provider creation.
 
+### Legacy runtime creation denials
+
+Schema 4 adds `remote_runtime_creation_fences`. During the immediate migration
+transaction, stream every existing remote snapshot across all sessions, bounded
+to one 4 MiB snapshot at a time. Reuse the validated aggregate decoder to obtain
+canonical workflow/job UUIDs; do not extract identity using unvalidated JSON or
+infer ownership from old runtime references. Invalid or oversized snapshots roll
+back the entire upgrade, including its new schema objects and version change.
+The one-time migration is linear in the stored records and must run off the
+render thread; it does not impose a new global session/record recovery limit.
+
+Each saved runtime contributes an append-only creation denial, including when
+its ordinary workflow is missing, expired, or has never consumed a claim. The
+denial is not an allocation binding, consumed claim, or ownership grant. Preserve
+all existing snapshot bytes, revisions, and creation claims. Generic record APIs
+cannot introduce another runtime or change an active runtime's identity, so no
+ordinary record write can omit a newly introduced legacy identity from this set.
+Neither runtime retirement nor workflow deletion removes these denials; future
+allocations must use fresh identity. No provider resource is touched.
+
+Generic worker creation checks both workflow and job denials inside its existing
+immediate transaction using two bounded indexed existence queries. Unrelated
+ordinary workflows remain usable. A future atomic allocator may bypass this
+negative legacy fence only through its separately verified, complete current
+allocation binding; absence of a binding can never be sufficient authority.
+Reopening a store or recreating an ordinary workflow with a saved runtime's IDs
+cannot mint a replacement worker. The two identity columns are the physical row
+key, with no implicit rowid that could redirect a replacement. Update/delete
+triggers protect the append-only rows, and exact versioned table/index/trigger
+validation runs on open and every operation. Missing or altered metadata is
+rejected, not repaired or adopted.
+
 ## Options considered
 
 ### Embed the whole aggregate in runtime YAML

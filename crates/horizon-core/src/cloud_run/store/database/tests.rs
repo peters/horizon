@@ -107,7 +107,9 @@ fn schema_two_upgrade_preserves_records_and_claims_without_inventing_allocations
     let fixture = fixture();
     let connection = open_connection(fixture.store.path()).expect("raw store");
     connection
-        .execute_batch("DROP TABLE remote_runtime_allocations; PRAGMA user_version=2;")
+        .execute_batch(
+            "DROP TABLE remote_runtime_creation_fences; DROP TABLE remote_runtime_allocations; PRAGMA user_version=2;",
+        )
         .expect("schema two fixture");
     let before = saved_bytes(&connection);
     let upgraded = CloudWorkflowStore::open_path(fixture.store.path()).expect("upgrade");
@@ -116,7 +118,7 @@ fn schema_two_upgrade_preserves_records_and_claims_without_inventing_allocations
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .expect("version"),
-        3
+        4
     );
     assert_eq!(allocation_count(&connection), 0);
     let workflow = fixture.workflow.workflow();

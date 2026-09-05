@@ -9,9 +9,9 @@ use std::time::Duration;
 
 use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 
-use super::CloudStoreError;
+use super::{CloudStoreError, remote_workspaces::creation_fences};
 
-const STORE_SCHEMA_VERSION: i64 = 3;
+const STORE_SCHEMA_VERSION: i64 = 4;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(2);
 const SCHEMA: &str = r"
 CREATE TABLE IF NOT EXISTS cloud_workflows (
@@ -94,6 +94,10 @@ pub(super) fn initialize_schema(connection: &mut Connection) -> Result<(), Cloud
          FROM remote_workspaces INDEXED BY remote_workspaces_session LIMIT 0",
     )?);
     validate_allocation_schema(&transaction)?;
+    if version < 4 {
+        creation_fences::migrate(&transaction)?;
+    }
+    creation_fences::validate_schema(&transaction)?;
     transaction.pragma_update(None, "user_version", STORE_SCHEMA_VERSION)?;
     transaction.commit()?;
     Ok(())
@@ -104,7 +108,8 @@ pub(super) fn ensure_current_schema(connection: &Connection) -> Result<(), Cloud
     if version != STORE_SCHEMA_VERSION {
         return Err(CloudStoreError::UnsupportedSchema(version));
     }
-    validate_allocation_schema(connection)
+    validate_allocation_schema(connection)?;
+    creation_fences::validate_schema(connection)
 }
 
 fn validate_allocation_schema(connection: &Connection) -> Result<(), CloudStoreError> {
