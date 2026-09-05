@@ -205,7 +205,10 @@ impl RunPodClient {
     fn create_worker(&self, request: &CreatePodRequest) -> Result<ApiPod, RunPodError> {
         self.transport.create(request).map_err(|error| {
             if request.terminate_after.is_none()
-                && !matches!(error, RunPodError::PersistentCreationReconciliationRequired { .. })
+                && !matches!(
+                    error,
+                    RunPodError::CapacityUnavailable | RunPodError::PersistentCreationReconciliationRequired { .. }
+                )
             {
                 RunPodError::PersistentCreationUnresolved {
                     name: request.name.clone(),

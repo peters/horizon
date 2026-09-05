@@ -21,6 +21,7 @@ struct FakeState {
     list_calls: usize,
     pods: Vec<ApiPod>,
     create_response: Option<ApiPod>,
+    create_rejection: Option<RunPodError>,
     create_requests: Vec<CreatePodRequest>,
     deleted: Vec<String>,
     inspected: Vec<String>,
@@ -53,6 +54,9 @@ impl Transport for FakeTransport {
     fn create(&self, request: &CreatePodRequest) -> Result<ApiPod, RunPodError> {
         let mut state = self.0.lock().expect("state");
         state.create_requests.push(request.clone());
+        if let Some(error) = state.create_rejection.take() {
+            return Err(error);
+        }
         let mut response = state.create_response.clone().expect("create response");
         for entry in &request.env {
             response.env.insert(entry.key.clone(), entry.value.clone());

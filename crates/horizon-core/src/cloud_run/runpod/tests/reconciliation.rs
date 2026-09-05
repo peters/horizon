@@ -142,6 +142,42 @@ fn uncertain_persistent_creation_reconciles_without_deletion_or_a_second_durable
 }
 
 #[test]
+fn capacity_and_malformed_response_classification_preserve_the_consumed_creation_fence() {
+    for capacity in [false, true] {
+        let fixture = Fixture::new();
+        let transport = FakeTransport::default();
+        transport.0.lock().expect("state").create_rejection = Some(if capacity {
+            RunPodError::CapacityUnavailable
+        } else {
+            RunPodError::InvalidResponse {
+                operation: "pod creation",
+            }
+        });
+        let original = fixture.provider(transport.clone());
+        let result = original.ensure_worker(&fixture.request);
+        if capacity {
+            assert_eq!(result, Err(RunPodError::CapacityUnavailable));
+        } else {
+            assert!(
+                matches!(result, Err(RunPodError::PersistentCreationUnresolved { name, cause })
+                if name == resource_name(fixture.request.workflow_id, fixture.request.job_id)
+                    && *cause == RunPodError::InvalidResponse { operation: "pod creation" })
+            );
+        }
+        drop(original);
+        let reopened = fixture.provider(transport.clone());
+        assert!(matches!(
+            reopened.ensure_worker(&fixture.request),
+            Err(RunPodError::CreationUnresolved { .. })
+        ));
+        let state = transport.0.lock().expect("state");
+        assert_eq!(state.create_requests.len(), 1);
+        assert!(state.pods.is_empty());
+        assert!(state.deleted.is_empty());
+    }
+}
+
+#[test]
 fn acknowledged_timed_creation_still_cleans_up_after_visibility_exhaustion() {
     let request = interactive_request(CloudWorkflowId::new(), CloudJobId::new());
     let transport =
