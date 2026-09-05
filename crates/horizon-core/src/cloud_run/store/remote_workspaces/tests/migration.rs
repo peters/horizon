@@ -11,7 +11,7 @@ fn schema_one_migration_preserves_workflow_bytes_revisions_and_creation_claims()
         .expect("legacy creation fence");
     let connection = Connection::open(store.path()).expect("raw store");
     connection
-        .execute_batch("DROP TABLE remote_workspaces; PRAGMA user_version = 1;")
+        .execute_batch("DROP TABLE remote_runtime_allocations; DROP TABLE remote_workspaces; PRAGMA user_version = 1;")
         .expect("restore schema-one fixture");
     let workflow_bytes: Vec<u8> = connection
         .query_row("SELECT snapshot FROM cloud_workflows", [], |row| row.get(0))
@@ -42,7 +42,7 @@ fn schema_one_migration_preserves_workflow_bytes_revisions_and_creation_claims()
     let version: i64 = connection
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .expect("schema version");
-    assert_eq!(version, 2);
+    assert_eq!(version, 3);
     let after: Vec<u8> = connection
         .query_row("SELECT snapshot FROM cloud_workflows", [], |row| row.get(0))
         .expect("unchanged legacy bytes");
@@ -103,6 +103,6 @@ fn current_schema_with_missing_remote_table_or_index_fails_at_open() {
         let version: i64 = connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("schema unchanged");
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
     }
 }
