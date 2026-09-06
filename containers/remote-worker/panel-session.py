@@ -13,9 +13,50 @@ import sys
 import tempfile
 import uuid
 
+MAX_REQUEST_BYTES = 512 * 1024
+
 
 class SessionError(Exception):
     """Messages contain no command, filesystem path or subprocess output."""
+
+
+def unique_fields(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise SessionError("structured session request contains duplicate fields")
+        result[key] = value
+    return result
+
+
+def execute_request(service, stream):
+    """One bounded UTF-8 request on stdin; task arguments never enter a shell string."""
+    raw = stream.read(MAX_REQUEST_BYTES + 1)
+    if len(raw) > MAX_REQUEST_BYTES:
+        raise SessionError("structured session request exceeds its limit")
+    try:
+        request = json.loads(raw.decode("utf-8"), object_pairs_hook=unique_fields)
+    except (ValueError, RecursionError) as error:
+        raise SessionError("structured session request is invalid") from error
+    common = {"version", "operation", "runtime", "panel"}
+    if (
+        not isinstance(request, dict)
+        or type(request.get("version")) is not int or request["version"] != 1
+        or not isinstance(request.get("runtime"), str)
+        or not isinstance(request.get("panel"), str)
+    ):
+        raise SessionError("structured session request is invalid")
+    if request.get("operation") == "status" and set(request) == common:
+        return service.status(request["runtime"], request["panel"])
+    if request.get("operation") != "start" or set(request) != common | {"directory", "argv"}:
+        raise SessionError("unsupported structured session request")
+    if (
+        not isinstance(request["directory"], str)
+        or not isinstance(request["argv"], list)
+        or not all(isinstance(argument, str) for argument in request["argv"])
+    ):
+        raise SessionError("structured task intent is invalid")
+    return service.start(request["runtime"], request["panel"], request["directory"], request["argv"])
 
 
 def private_directory(path):
@@ -201,15 +242,20 @@ class PanelSessions:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("start", "status", "attach"))
-    parser.add_argument("runtime")
-    parser.add_argument("panel")
-    parser.add_argument("arguments", nargs=argparse.REMAINDER)
+    operations = parser.add_subparsers(dest="operation", required=True)
+    operations.add_parser("request", help="read one versioned start/status request from stdin")
+    for operation in ("start", "status", "attach"):
+        command = operations.add_parser(operation)
+        command.add_argument("runtime")
+        command.add_argument("panel")
+        command.add_argument("arguments", nargs=argparse.REMAINDER)
     arguments = parser.parse_args()
     service = PanelSessions("/workspace/horizon", "/var/lib/horizon/panels", "/run/horizon/panels",
                             "/etc/horizon/tmux.conf", "/usr/local/bin/horizon-agent-session")
     try:
-        if arguments.operation == "start":
+        if arguments.operation == "request":
+            result = execute_request(service, sys.stdin.buffer)
+        elif arguments.operation == "start":
             if len(arguments.arguments) < 3 or arguments.arguments[1] != "--":
                 raise SessionError("start requires a relative directory, --, and a program")
             result = service.start(arguments.runtime, arguments.panel, arguments.arguments[0], arguments.arguments[2:])

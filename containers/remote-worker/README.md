@@ -143,6 +143,23 @@ escaping that repository are rejected. Arguments are passed directly through
 `horizon-agent-session`, never reconstructed as shell text. Use an explicit shell
 program only when shell evaluation is actually intended.
 
+Controllers can invoke the fixed command `horizon-panel-session request` and
+send one UTF-8 JSON object on stdin, then close stdin. This keeps task arguments
+out of a reconstructed remote shell command. Requests are bounded to 512 KiB,
+require version 1 and reject duplicate/unknown fields or invalid field types.
+For an explicit start:
+
+```json
+{"version":1,"operation":"start","runtime":"c8203298-3169-48d6-84fd-882d8d49a7b4","panel":"terminal_a","directory":".","argv":["/bin/bash"]}
+```
+
+A status request contains only `version`, `operation`, `runtime` and `panel`,
+with `operation` set to `status`. Both return the existing JSON status shape.
+Status never creates a session; repeating start retains the existing one-shot
+intent rules. Interactive attachment still uses the separate `attach` command
+and PTY. Malformed request errors never echo stdin or task content. This protocol
+does not itself provide authenticated transport or authorize a new task.
+
 Before starting anything, the helper durably publishes one private no-overwrite
 marker for the runtime/panel pair. Repeating the same start can only inspect that
 task; a changed launch intent is rejected. Each runtime has a dedicated tmux
@@ -165,7 +182,7 @@ volumes, backup and explicit restart remain separate integration requirements.
 This helper does not yet connect local panels, stop tasks or delete workspaces.
 
 With `bison`, `libevent-dev`, `libncurses-dev`, a C compiler and Make installed, build a
-disposable test binary under a new prefix, then run the fourteen regressions:
+disposable test binary under a new prefix, then run the twenty-one regressions:
 
 ```bash
 test_root=$(mktemp -d /tmp/horizon-panel-tests.XXXXXX)
@@ -175,7 +192,9 @@ PATH="$test_root/tools/bin:$PATH" python3 -B containers/remote-worker/test_panel
 
 Coverage includes repeated PTY disconnects, retained completion, concurrent
 starts, literal semicolon/format arguments, locale-independent status and no
-recreation after server loss. Tests own only their private temporary directories
+recreation after server loss. Structured-request coverage includes literal argv,
+non-creating status, disconnected progress, bounded/invalid input and redaction.
+Tests own only their private temporary directories
 and dedicated sockets. Keep the disposable tool prefix for repeated validation,
 then remove only that exact task-owned prefix when finished.
 
