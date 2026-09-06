@@ -256,7 +256,7 @@ impl HorizonApp {
             self.sync_speech_global_hotkeys();
         }
         if self.template_config.remote != config.remote {
-            self.remote_environments.invalidate_observation();
+            self.remote_environments.invalidate_provider_state();
         }
         self.template_config = config.clone();
         self.shortcuts = resolve_shortcuts(config);

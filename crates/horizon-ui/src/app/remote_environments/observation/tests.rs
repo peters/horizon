@@ -298,6 +298,6 @@ fn config_invalidation_after_empty_board_paint_requests_one_followup_frame() {
     app.apply_runtime_config(&config);
     assert_eq!(requests.load(Ordering::Relaxed), 1);
     assert!(app.remote_environments.observation.last_success.is_none());
-    app.remote_environments.invalidate_observation();
+    app.remote_environments.invalidate_provider_state();
     assert_eq!(requests.load(Ordering::Relaxed), 1, "no passive invalidation loop");
 }

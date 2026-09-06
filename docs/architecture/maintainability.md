@@ -200,6 +200,11 @@ back into large multi-purpose modules.
   returning only overview-safe metadata. It preserves persistent-only admission;
   unsupported profiles and stale selections
   gain no fallback authority; failures may require refreshing retained Stop intent.
+- The overview's `remote_environments/stop.rs` owns only confirmation, single-flight
+  background execution and cached outcome presentation; its `stop/paint.rs` collects
+  explicit actions. Closing invalidates presentation, not an admitted operation.
+  Completion invalidates provider observations and refreshes saved inventory while
+  keeping its target-bound result readable. All mutation remains in core coordination.
 - `cloud_run/runpod.rs` coordinates provider operations and exact ownership
   reconciliation. Its `models.rs` leaf owns profiles, persisted worker identity,
   lifecycle results and typed errors; `create_request.rs` owns serialized

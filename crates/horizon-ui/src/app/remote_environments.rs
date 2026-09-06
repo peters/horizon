@@ -2,6 +2,7 @@
 
 mod observation;
 mod paint;
+mod stop;
 
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
@@ -20,6 +21,8 @@ pub(super) struct RemoteEnvironments {
     pending: Option<PendingLoad>,
     refresh_when_idle: bool,
     observation: observation::ObservationState,
+    stop: stop::StopState,
+    refresh_after_stop: bool,
 }
 
 struct InventoryPage {
@@ -56,6 +59,9 @@ enum InventoryAction {
     Retry,
     Select(usize),
     Observe,
+    RequestStop,
+    ConfirmStop,
+    CancelStop,
 }
 
 struct WakeOnDrop(Context);
@@ -81,6 +87,7 @@ impl RemoteEnvironments {
         self.selected = None;
         self.failure = None;
         self.observation.invalidate();
+        self.stop.invalidate();
         if let Some(pending) = &mut self.pending {
             pending.discard = true;
             self.refresh_when_idle = true;
@@ -93,6 +100,8 @@ impl RemoteEnvironments {
     fn close(&mut self) {
         self.open = false;
         self.observation.invalidate();
+        self.stop.invalidate();
+        self.refresh_after_stop = false;
         self.refresh_when_idle = false;
         if let Some(pending) = &mut self.pending {
             pending.discard = true;
@@ -104,6 +113,7 @@ impl RemoteEnvironments {
             return;
         }
         self.observation.invalidate();
+        self.stop.cancel_confirmation();
         let (tx, rx) = mpsc::sync_channel(1);
         let home = home.clone();
         let requested_cursor = cursor.clone();
@@ -147,6 +157,7 @@ impl RemoteEnvironments {
 
     fn accept_result(&mut self, cursor: Option<String>, result: Result<InventoryPage, LoadError>) {
         self.observation.invalidate();
+        self.stop.cancel_confirmation();
         match result {
             Ok(page) => {
                 let previous = self
@@ -169,12 +180,26 @@ impl RemoteEnvironments {
     }
 
     fn apply(&mut self, action: InventoryAction, home: &HorizonHome, ctx: &Context) {
+        if self.open
+            && self.pending.is_none()
+            && matches!(
+                action,
+                InventoryAction::Refresh | InventoryAction::First | InventoryAction::Next | InventoryAction::Retry
+            )
+        {
+            self.stop.invalidate();
+        }
         match action {
-            InventoryAction::None | InventoryAction::Observe => {}
+            InventoryAction::None
+            | InventoryAction::Observe
+            | InventoryAction::RequestStop
+            | InventoryAction::ConfirmStop => {}
+            InventoryAction::CancelStop => self.stop.cancel_confirmation(),
             InventoryAction::Close => self.close(),
             InventoryAction::Select(index) => {
                 if self.selected != Some(index) && self.page.as_ref().is_some_and(|page| index < page.rows.len()) {
                     self.observation.invalidate();
+                    self.stop.invalidate();
                     self.selected = Some(index);
                 }
             }
@@ -193,8 +218,9 @@ impl RemoteEnvironments {
         }
     }
 
-    pub(super) fn invalidate_observation(&mut self) {
+    pub(super) fn invalidate_provider_state(&mut self) {
         self.observation.invalidate();
+        self.stop.invalidate();
     }
 
     fn start_observation(
@@ -203,7 +229,7 @@ impl RemoteEnvironments {
         config: &horizon_core::remote_provider_config::RemoteProviderConfig,
         ctx: &Context,
     ) {
-        if !self.open || self.pending.is_some() {
+        if !self.open || self.pending.is_some() || self.stop.is_pending() {
             return;
         }
         if let Some(row) = self
@@ -212,6 +238,44 @@ impl RemoteEnvironments {
             .and_then(|page| self.selected.and_then(|index| page.rows.get(index)))
         {
             self.observation.start(home, config, &row.summary, ctx);
+        }
+    }
+
+    fn stop_action(
+        &mut self,
+        action: InventoryAction,
+        home: &HorizonHome,
+        config: &horizon_core::remote_provider_config::RemoteProviderConfig,
+        ctx: &Context,
+    ) {
+        if !self.open || self.pending.is_some() || self.observation.is_pending() {
+            return;
+        }
+        let Some(summary) = self
+            .page
+            .as_ref()
+            .and_then(|page| self.selected.and_then(|index| page.rows.get(index)))
+            .map(|row| row.summary.clone())
+        else {
+            return;
+        };
+        match action {
+            InventoryAction::RequestStop => self.stop.prepare(&summary, config, ctx),
+            InventoryAction::ConfirmStop if self.stop.start(home, config, &summary, ctx) => {
+                self.observation.invalidate();
+            }
+            _ => {}
+        }
+    }
+
+    fn drain_stop(&mut self, home: &HorizonHome, ctx: &Context) {
+        if self.stop.drain_result() {
+            self.observation.invalidate();
+            self.refresh_after_stop = self.open;
+        }
+        if self.refresh_after_stop && self.pending.is_none() {
+            self.refresh_after_stop = false;
+            self.start_load(home, ctx, self.page_cursor.clone());
         }
     }
 }
@@ -237,6 +301,7 @@ impl HorizonApp {
     pub(super) fn render_remote_environments(&mut self, ctx: &Context) -> Option<egui::InputState> {
         self.remote_environments.drain_result();
         self.remote_environments.observation.drain_result();
+        self.remote_environments.drain_stop(self.session_store.home(), ctx);
         if self.remote_environments.refresh_when_idle && self.remote_environments.pending.is_none() {
             self.remote_environments.refresh_when_idle = false;
             self.remote_environments
@@ -248,6 +313,14 @@ impl HorizonApp {
             let action = paint::show(ctx, &self.remote_environments);
             if matches!(action, InventoryAction::Observe) {
                 self.remote_environments.start_observation(
+                    self.session_store.home(),
+                    &self.template_config.remote,
+                    ctx,
+                );
+            }
+            if matches!(action, InventoryAction::RequestStop | InventoryAction::ConfirmStop) {
+                self.remote_environments.stop_action(
+                    action,
                     self.session_store.home(),
                     &self.template_config.remote,
                     ctx,
