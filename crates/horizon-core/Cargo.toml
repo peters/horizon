@@ -37,6 +37,7 @@ atomicwrites.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix.workspace = true
+tempfile.workspace = true
 
 [dev-dependencies]
 horizon-browser = { workspace = true, features = ["test-support"] }

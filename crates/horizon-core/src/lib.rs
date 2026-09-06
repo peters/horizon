@@ -21,6 +21,7 @@ mod opencode_paths;
 mod panel;
 mod remote_hosts;
 pub mod remote_ssh_identity;
+pub mod remote_worker_status;
 pub mod remote_workspace;
 pub mod remote_workspace_recovery;
 pub mod remote_workspace_setup;
