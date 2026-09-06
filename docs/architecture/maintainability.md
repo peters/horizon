@@ -127,6 +127,10 @@ back into large multi-purpose modules.
   Explicit saved shell/command verification reuses those gates and compares
   literal argv plus the effective directory with the worker's retained intent;
   unresolved agent launch/handoff/resume semantics stay fail-closed.
+- `repository_overlay/` owns bounded exact-base metadata for separate index and
+  working-tree changes. Its `paths.rs` applies the lexical transfer exclusion policy.
+  Planning performs no filesystem, Git, provider or transfer I/O; actual capture/apply
+  must independently validate approval, real node/link topology and content hashes.
 - `containers/remote-worker/host-identity.py` owns workspace-retained server-key
   initialization, validation and runtime materialization before SSH starts.
   Its real-key regressions are separate from the retained-volume SSH smoke in
