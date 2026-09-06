@@ -6,6 +6,7 @@ use super::{
         InteractiveWorker, InteractiveWorkerCleanup, InteractiveWorkerEnsure, InteractiveWorkerIdentity,
         InteractiveWorkerLease, InteractiveWorkerLifecycle, InteractiveWorkerLifetime, InteractiveWorkerProvider,
         InteractiveWorkerRequest, InteractiveWorkerSshEndpoint, InteractiveWorkerStatus, valid_ssh_public_key,
+        valid_worker_profile_name,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -46,6 +47,21 @@ pub struct LocalDockerProfile {
     pub docker_host: String,
 }
 
+impl LocalDockerProfile {
+    /// Validate explicit configuration without contacting a daemon or consulting the environment.
+    /// # Errors
+    /// Returns [`LocalDockerError::InvalidTarget`] for malformed profile names and
+    /// [`LocalDockerError::NonLocalDockerHost`] for ambient or remote daemon endpoints.
+    pub fn validate(&self) -> Result<(), LocalDockerError> {
+        if !valid_worker_profile_name(&self.name) {
+            return Err(LocalDockerError::InvalidTarget);
+        }
+        valid_local_docker_host(&self.docker_host)
+            .then_some(())
+            .ok_or(LocalDockerError::NonLocalDockerHost)
+    }
+}
+
 /// Interactive worker provider backed by an explicitly selected local Docker daemon.
 pub struct LocalDockerInteractiveWorkerProvider {
     transport: Box<dyn DockerTransport>,
@@ -59,15 +75,14 @@ impl LocalDockerInteractiveWorkerProvider {
     /// Reconnect callers must use non-creating inspection/reconciliation, never ensure.
     ///
     /// # Errors
-    /// Returns [`LocalDockerError::NonLocalDockerHost`] for ambient or remote daemon endpoints.
+    /// Returns an error for an invalid profile name or a non-local daemon endpoint.
     pub fn new(profile: LocalDockerProfile, creation_store: CloudWorkflowStore) -> Result<Self, LocalDockerError> {
-        valid_local_docker_host(&profile.docker_host)
-            .then(|| Self {
-                transport: Box::new(command::DockerCli::new(&profile.docker_host)),
-                profile,
-                creation_store,
-            })
-            .ok_or(LocalDockerError::NonLocalDockerHost)
+        profile.validate()?;
+        Ok(Self {
+            transport: Box::new(command::DockerCli::new(&profile.docker_host)),
+            profile,
+            creation_store,
+        })
     }
     fn ensure_existing(
         &self,
