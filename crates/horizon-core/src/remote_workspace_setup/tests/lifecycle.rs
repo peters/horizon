@@ -10,6 +10,24 @@ fn retained_key(fixture: &Fixture) -> crate::remote_ssh_identity::RemoteSshIdent
         .expect("key")
 }
 
+fn expire_setup(fixture: &Fixture) {
+    let mut workflow = fixture.reload().workflow().workflow().clone();
+    workflow.created_at_millis = 1000;
+    workflow.updated_at_millis = 1000;
+    workflow.retain_until_millis = 2000;
+    rusqlite::Connection::open(fixture.store.path())
+        .expect("database")
+        .execute(
+            "UPDATE cloud_workflows SET created_at_millis=1000, updated_at_millis=1000, retain_until_millis=2000,
+             snapshot=?1 WHERE workflow_id=?2",
+            rusqlite::params![
+                serde_json::to_vec(&workflow).expect("snapshot"),
+                workflow.id.to_string()
+            ],
+        )
+        .expect("expired fixture");
+}
+
 #[test]
 fn explicit_start_retains_one_allocation_request_and_key_without_claiming_task_readiness() {
     let fixture = Fixture::new();
@@ -347,21 +365,7 @@ fn setup_expiry_never_renews_creation_or_prevents_recovery_of_a_persistent_worke
         } else {
             fixture.allocate();
         }
-        let mut workflow = fixture.reload().workflow().workflow().clone();
-        workflow.created_at_millis = 1000;
-        workflow.updated_at_millis = 1000;
-        workflow.retain_until_millis = 2000;
-        rusqlite::Connection::open(fixture.store.path())
-            .expect("database")
-            .execute(
-                "UPDATE cloud_workflows SET created_at_millis=1000, updated_at_millis=1000, retain_until_millis=2000,
-             snapshot=?1 WHERE workflow_id=?2",
-                rusqlite::params![
-                    serde_json::to_vec(&workflow).expect("snapshot"),
-                    workflow.id.to_string()
-                ],
-            )
-            .expect("expired fixture");
+        expire_setup(&fixture);
         let before = fixture.reload();
         if created {
             let recovered = fixture.retry(&provider).expect("persistent recovery");
@@ -432,4 +436,38 @@ fn stale_workflow_snapshot_is_rejected_before_key_preparation_or_ensure() {
     assert!(!fixture.directory.path().join("home/remote-ssh-identities").exists());
     assert_eq!(provider.calls(), [0; 5]);
     assert_eq!(fixture.counts(), [1, 1, 0]);
+}
+
+#[test]
+fn failed_identity_preparation_rechecks_expiry_without_losing_an_available_setups_error() {
+    for expired in [false, true] {
+        let fixture = Fixture::new();
+        let allocation = fixture.allocate();
+        assert!(setup_available(&fixture.store, &allocation).expect("admitted"));
+        let key = retained_key(&fixture);
+        let bytes = std::fs::read(key.private_key_path()).expect("retained key");
+        let provider = fixture.provider();
+        if expired {
+            expire_setup(&fixture);
+        }
+        let current = fixture.reload();
+        let error = if expired {
+            prepare_identity(&fixture.store, &fixture.identities, &current).expect_err("reservation after expiry")
+        } else {
+            RemoteSshIdentityError::KeyUtilityFailed.into()
+        };
+        let expected = if expired {
+            RemoteWorkspaceRecoveryError::MissingRequest.into()
+        } else {
+            RemoteSshIdentityError::KeyUtilityFailed.into()
+        };
+        assert_eq!(
+            recover_preparation_failure(&fixture.store, &fixture.identities, &provider, &current, error),
+            Err(expected)
+        );
+        assert_eq!(fixture.reload(), current);
+        assert_eq!(std::fs::read(key.private_key_path()).expect("retained key"), bytes);
+        assert_eq!(fixture.counts(), [1, 1, 0]);
+        assert_eq!(provider.calls(), [0; 5]);
+    }
 }

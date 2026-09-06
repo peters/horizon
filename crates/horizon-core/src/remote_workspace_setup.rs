@@ -56,7 +56,10 @@ pub fn retry_remote_workspace_setup<P: InteractiveWorkerProvider + ?Sized>(
     if !setup_available(store, expected)? {
         return recover(store, identities, provider, expected);
     }
-    let allocation = prepare_identity(store, identities, expected)?;
+    let allocation = match prepare_identity(store, identities, expected) {
+        Ok(allocation) => allocation,
+        Err(error) => return recover_preparation_failure(store, identities, provider, expected, error),
+    };
     // Key generation/inspection may take time. Recheck both owned snapshots before ensure.
     if !setup_available(store, &allocation)? {
         return recover(store, identities, provider, &allocation);
@@ -68,6 +71,20 @@ pub fn retry_remote_workspace_setup<P: InteractiveWorkerProvider + ?Sized>(
     store
         .record_remote_worker_recovery(&allocation, Some(observed.status()))
         .map_err(Into::into)
+}
+
+fn recover_preparation_failure<P: InteractiveWorkerProvider + ?Sized>(
+    store: &CloudWorkflowStore,
+    identities: &RemoteSshIdentityStore,
+    provider: &P,
+    expected: &StoredRemoteAllocation,
+    error: RemoteWorkspaceSetupError,
+) -> Result<StoredRemoteAllocation, RemoteWorkspaceSetupError> {
+    if setup_available(store, expected)? {
+        Err(error)
+    } else {
+        recover(store, identities, provider, expected)
+    }
 }
 
 fn setup_available(
