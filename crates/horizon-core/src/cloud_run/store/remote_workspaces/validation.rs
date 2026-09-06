@@ -48,6 +48,15 @@ pub(super) fn validate_replacement(previous: &RemoteWorkspaceState, next: &Remot
     {
         return Err(Error::NonMonotonicReplacement);
     }
+    if let Some(runtime) = &previous.runtime
+        && let Some(requested_at_millis) = runtime.phase.stop_requested_at_millis()
+        && next.runtime.as_ref().is_none_or(|next_runtime| {
+            next_runtime.phase.stop_requested_at_millis() != Some(requested_at_millis)
+                || (matches!(runtime.phase, RemoteRuntimePhase::Stopped { .. }) && next_runtime.phase != runtime.phase)
+        })
+    {
+        return Err(Error::NonMonotonicReplacement);
+    }
     if let (Some(runtime), Some(next_runtime)) = (&previous.runtime, &next.runtime)
         && (runtime.generation != next_runtime.generation
             || runtime.workflow_id != next_runtime.workflow_id
