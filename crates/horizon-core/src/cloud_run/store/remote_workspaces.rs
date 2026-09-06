@@ -3,7 +3,10 @@
 //! Operations are synchronous and must run off the render thread.
 
 pub(super) mod creation_fences;
+mod inventory;
 mod validation;
+
+pub use inventory::RemoteEnvironmentPage;
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};

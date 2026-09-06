@@ -10,8 +10,8 @@ mod store;
 mod validation;
 mod worker_lifetime;
 pub use store::{
-    CloudStoreError, CloudWorkflowStore, RemoteWorkspaceStoreError, StoredRemoteAllocation, StoredRemoteWorkspace,
-    StoredWorkflow,
+    CloudStoreError, CloudWorkflowStore, RemoteEnvironmentPage, RemoteWorkspaceStoreError, StoredRemoteAllocation,
+    StoredRemoteWorkspace, StoredWorkflow,
 };
 pub use worker_lifetime::WorkerLifetime;
 pub const CLOUD_RUN_PROTOCOL_VERSION: u32 = 1;

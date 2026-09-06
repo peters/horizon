@@ -20,6 +20,7 @@ mod managed_install;
 mod opencode_paths;
 mod panel;
 mod remote_hosts;
+pub mod remote_ssh_identity;
 pub mod remote_workspace;
 mod runtime_state;
 pub mod search;

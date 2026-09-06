@@ -28,6 +28,13 @@ jobs:
       - name: Verify retained task sessions
         run: PATH="$RUNNER_TEMP/horizon-panel-tmux/bin:$PATH" python3 -B containers/remote-worker/test_panel_sessions.py -v
 
+  remote-host-identity:
+    name: Remote host identity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 -B containers/remote-worker/test_host_identity.py -v
+
   version-sync:
     name: Version Sync
     runs-on: ubuntu-latest

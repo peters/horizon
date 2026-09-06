@@ -149,6 +149,7 @@ RUN mkdir -p \
 WORKDIR /workspace/horizon
 
 COPY containers/remote-worker/entrypoint.sh /usr/local/bin/horizon-worker-entrypoint
+COPY containers/remote-worker/host-identity.py /usr/local/bin/horizon-worker-host-identity
 COPY containers/remote-worker/session.sh /usr/local/bin/horizon-agent-session
 COPY containers/remote-worker/panel-session.py /usr/local/bin/horizon-panel-session
 COPY containers/remote-worker/tmux.conf /etc/horizon/tmux.conf
@@ -157,6 +158,7 @@ COPY containers/remote-worker/sshd_config /etc/ssh/sshd_config.d/99-horizon-work
 
 RUN chmod 0755 /usr/local/bin/horizon-worker-entrypoint /usr/local/bin/horizon-agent-session \
     /usr/local/bin/horizon-panel-session \
+    /usr/local/bin/horizon-worker-host-identity \
     && chmod 0644 /etc/profile.d/horizon-rust.sh /etc/ssh/sshd_config.d/99-horizon-worker.conf \
     && git lfs install --system \
     && rm -f /etc/ssh/ssh_host_* \
