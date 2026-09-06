@@ -19,6 +19,7 @@ struct FakeState {
     create_calls: usize,
     delete_calls: usize,
     fail_create_after_insert: bool,
+    corrupt_fence_after_create: Option<CloudWorkflowStore>,
     reject_create: bool,
     create_response_id: Option<String>,
     failed_inspections_after_create: usize,
@@ -81,6 +82,15 @@ impl DockerTransport for FakeDocker {
                 port: 49_152,
             }],
         });
+        if let Some(store) = &state.corrupt_fence_after_create {
+            rusqlite::Connection::open(store.path())
+                .expect("database")
+                .execute(
+                    "UPDATE cloud_workflows SET snapshot=?1",
+                    [b"synthetic-private-snapshot".as_slice()],
+                )
+                .expect("post-create fixture failure");
+        }
         if state.fail_create_after_insert {
             return Err(CommandFailed {
                 operation: "container creation",

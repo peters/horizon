@@ -101,6 +101,23 @@ fn a_failed_first_create_keeps_its_grant_and_a_retry_cannot_create() {
 }
 
 #[test]
+fn already_fenced_uncertain_creation_never_turns_a_store_failure_into_worker_cleanup() {
+    let request = request();
+    let fake = FakeDocker::default();
+    fake.state().fail_create_after_insert = true;
+    let provider = provider_for("local", fake.clone(), &request);
+    fake.state().corrupt_fence_after_create = Some(provider.creation_store.clone());
+    let outcome = provider.ensure_worker(&request);
+    {
+        let state = fake.state();
+        assert_eq!((state.create_calls, state.delete_calls), (1, 0));
+        assert!(state.container.is_some());
+    }
+    assert_eq!(claims(&provider.creation_store), 1);
+    assert!(matches!(outcome, Ok(InteractiveWorkerEnsure::Reused(_))));
+}
+
+#[test]
 fn simultaneous_controllers_share_one_durable_creation_grant() {
     let request = lifetime::persistent_request();
     let fake = FakeDocker::default();
@@ -143,14 +160,68 @@ fn simultaneous_controllers_share_one_durable_creation_grant() {
 }
 
 #[test]
-fn observed_disappearance_does_not_fall_through_to_creation_even_with_an_unused_grant() {
+fn observed_disappearance_consumes_the_grant_before_observation_can_fail() {
     let request = lifetime::persistent_request();
     let fake = noncreating::seeded(&request);
     fake.state().disappear_during_key_read = true;
     let provider = provider_for("local", fake.clone(), &request);
     assert_eq!(provider.ensure_worker(&request), Err(ResourceAbsent));
-    assert_eq!(claims(&provider.creation_store), 0);
+    assert_eq!(claims(&provider.creation_store), 1);
+    assert_eq!(provider.ensure_worker(&request), Err(CreationReconciliationRequired));
     noncreating::assert_read_only(&fake);
+}
+
+#[test]
+fn accepting_an_unclaimed_existing_worker_permanently_fences_later_recreation() {
+    let request = lifetime::persistent_request();
+    let fake = noncreating::seeded(&request);
+    let provider = provider_for("local", fake.clone(), &request);
+    assert_eq!(claims(&provider.creation_store), 0);
+    assert!(matches!(
+        provider.ensure_worker(&request),
+        Ok(InteractiveWorkerEnsure::Reused(_))
+    ));
+    let path = provider.creation_store.path().to_path_buf();
+    drop(provider);
+    fake.state().container = None;
+    let reopened = LocalDockerInteractiveWorkerProvider {
+        transport: Box::new(fake.clone()),
+        profile: profile("local", "unix:///var/run/docker.sock"),
+        creation_store: CloudWorkflowStore::open_path(path).expect("reopened fence"),
+    };
+    assert_eq!(reopened.ensure_worker(&request), Err(CreationReconciliationRequired));
+    assert_eq!(claims(&reopened.creation_store), 1);
+    noncreating::assert_read_only(&fake);
+}
+
+#[test]
+fn wrong_existing_identity_or_unavailable_fence_cannot_be_accepted_or_created() {
+    for corrupt_store in [false, true] {
+        let request = lifetime::persistent_request();
+        let fake = noncreating::seeded(&request);
+        let provider = provider_for("local", fake.clone(), &request);
+        let expected = if corrupt_store {
+            rusqlite::Connection::open(provider.creation_store.path())
+                .expect("database")
+                .execute(
+                    "UPDATE cloud_workflows SET snapshot=?1",
+                    [b"synthetic-private-snapshot".as_slice()],
+                )
+                .expect("corrupt fixture");
+            CreationFenceFailed
+        } else {
+            fake.state()
+                .container
+                .as_mut()
+                .expect("fixture")
+                .labels
+                .insert(SSH_KEY_LABEL.into(), ed25519_key(9));
+            ResourceIdentityMismatch
+        };
+        assert_eq!(provider.ensure_worker(&request), Err(expected));
+        assert_eq!(claims(&provider.creation_store), 0);
+        noncreating::assert_read_only(&fake);
+    }
 }
 
 #[test]

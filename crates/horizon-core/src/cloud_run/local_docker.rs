@@ -246,6 +246,10 @@ impl InteractiveWorkerProvider for LocalDockerInteractiveWorkerProvider {
         validate_request(request, &self.profile)?;
         let container_name = container_name(request.workflow_id, request.job_id);
         if let Some(container) = self.transport.inspect(&container_name)? {
+            worker_for_request(&container, request)?;
+            // Fence adoption before observation, but never re-claim during an
+            // already-authorized create's reconciliation or trigger its cleanup.
+            self.claim_creation(request, &container_name)?;
             return self
                 .ensure_existing(request, &container)
                 .map(InteractiveWorkerEnsure::Reused);
