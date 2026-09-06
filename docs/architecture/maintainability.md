@@ -112,6 +112,11 @@ back into large multi-purpose modules.
   admission leaf checks exact snapshots without granting creation authority;
   claimed, observed or expired retries use non-creating recovery. Setup remains
   separate from attachment, task readiness and explicit remote management.
+- `remote_worker_status.rs` gates non-creating panel inspection on exact owned
+  recovery and current lifetime. Its `protocol.rs` leaf owns bounded status-only
+  wire types; `ssh.rs` isolates host pins and client options; `command.rs` owns
+  bounded nonblocking local-child I/O. It neither grants attachment/task startup
+  nor changes the general user-configured SSH API or remote execution lifetime.
 - `containers/remote-worker/host-identity.py` owns workspace-retained server-key
   initialization, validation and runtime materialization before SSH starts.
   Its real-key regressions are separate from the retained-volume SSH smoke in

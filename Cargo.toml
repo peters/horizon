@@ -70,7 +70,7 @@ process-wrap = { version = "10.0.0", default-features = false, features = ["std"
 atomicwrites = "0.4.4"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 libc = "0.2.189"
-rustix = { version = "1.1.4", features = ["process"] }
+rustix = { version = "1.1.4", features = ["fs", "process"] }
 uuid = { version = "1.24.1", features = ["serde", "v4"] }
 git2 = { version = "0.21", default-features = false }
 regex = "1.13.1"
