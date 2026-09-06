@@ -5,6 +5,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::sync::{Arc, Mutex};
 
 mod lifetime;
+mod noncreating;
 
 #[derive(Clone, Default)]
 struct FakeDocker(Arc<Mutex<FakeState>>);

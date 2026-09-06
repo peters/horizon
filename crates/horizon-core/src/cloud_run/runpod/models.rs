@@ -212,6 +212,12 @@ pub enum RunPodError {
     },
     #[error("RunPod hourly cost was rejected but exact-resource cleanup failed")]
     CostRejectionCleanupFailed { worker: Box<RunPodWorker> },
+    #[error("worker recovery hourly cost was rejected; it was not deleted and may remain billable")]
+    WorkerRecoveryCostRejected {
+        worker: Box<RunPodWorker>,
+        actual: Option<u64>,
+        maximum: u64,
+    },
     #[error("persistent worker hourly cost was rejected; it was not deleted and may remain billable")]
     PersistentWorkerCostRejected {
         worker: Box<RunPodWorker>,
