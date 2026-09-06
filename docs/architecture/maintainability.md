@@ -107,6 +107,11 @@ back into large multi-purpose modules.
   `cloud_run/store/remote_allocations/recovery.rs` atomically checks both snapshots
   before retaining exact worker/host identity and marking reconciliation; neither
   absence nor client drop grants creation, restart or remote cleanup.
+- `remote_workspace_setup.rs` sequences explicit allocation, retained private
+  identity, public request reservation and fenced provider ensure. Its store
+  admission leaf checks exact snapshots without granting creation authority;
+  claimed, observed or expired retries use non-creating recovery. Setup remains
+  separate from attachment, task readiness and explicit remote management.
 - `containers/remote-worker/host-identity.py` owns workspace-retained server-key
   initialization, validation and runtime materialization before SSH starts.
   Its real-key regressions are separate from the retained-volume SSH smoke in

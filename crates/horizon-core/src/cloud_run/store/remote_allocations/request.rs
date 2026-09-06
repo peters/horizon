@@ -5,7 +5,7 @@ use super::{CloudWorkflowStore, Error, RemoteRuntimePhase, StoredRemoteAllocatio
 use crate::cloud_run::interactive_worker::InteractiveWorkerRequest;
 use rusqlite::{TransactionBehavior, params};
 
-const CLAIM_LOOKUP: &str = "SELECT EXISTS(SELECT 1 FROM cloud_worker_creation_claims
+pub(super) const CLAIM_LOOKUP: &str = "SELECT EXISTS(SELECT 1 FROM cloud_worker_creation_claims
     INDEXED BY cloud_worker_creation_claims_workflow WHERE workflow_id = ?1)";
 
 impl StoredRemoteAllocation {

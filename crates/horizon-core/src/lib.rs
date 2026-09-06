@@ -23,6 +23,7 @@ mod remote_hosts;
 pub mod remote_ssh_identity;
 pub mod remote_workspace;
 pub mod remote_workspace_recovery;
+pub mod remote_workspace_setup;
 mod runtime_state;
 pub mod search;
 mod session_store;
