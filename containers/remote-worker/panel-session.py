@@ -48,7 +48,7 @@ def execute_request(service, stream):
         raise SessionError("structured session request is invalid")
     if request.get("operation") == "status" and set(request) == common:
         return service.status(request["runtime"], request["panel"])
-    if request.get("operation") != "start" or set(request) != common | {"directory", "argv"}:
+    if request.get("operation") not in ("start", "verify") or set(request) != common | {"directory", "argv"}:
         raise SessionError("unsupported structured session request")
     if (
         not isinstance(request["directory"], str)
@@ -56,7 +56,8 @@ def execute_request(service, stream):
         or not all(isinstance(argument, str) for argument in request["argv"])
     ):
         raise SessionError("structured task intent is invalid")
-    return service.start(request["runtime"], request["panel"], request["directory"], request["argv"])
+    operation = service.verify if request["operation"] == "verify" else service.start
+    return operation(request["runtime"], request["panel"], request["directory"], request["argv"])
 
 
 def private_directory(path):
@@ -172,20 +173,25 @@ class PanelSessions:
             if candidate is not None:
                 candidate.unlink()
 
-    def launch_intent(self, directory, arguments):
+    @staticmethod
+    def intent_digest(directory, arguments):
         if not arguments or len(arguments) > 257 or not arguments[0] or arguments[0].startswith("-"):
             raise SessionError("invalid task command")
         if any("\0" in argument for argument in arguments) or sum(len(item.encode()) for item in arguments) > 65536:
             raise SessionError("task command exceeds its limit")
         requested = Path(directory)
-        if requested.is_absolute() or ".." in requested.parts:
-            raise SessionError("task directory must remain inside the repository")
-        repository = self.repository.resolve(strict=True)
-        working_directory = (repository / requested).resolve(strict=True)
-        if not working_directory.is_dir() or not working_directory.is_relative_to(repository):
+        if "\0" in directory or requested.is_absolute() or ".." in requested.parts:
             raise SessionError("task directory must remain inside the repository")
         payload = json.dumps([str(requested), arguments], ensure_ascii=True).encode()
-        return working_directory, hashlib.sha256(payload).hexdigest()
+        return hashlib.sha256(payload).hexdigest()
+
+    def launch_intent(self, directory, arguments):
+        intent = self.intent_digest(directory, arguments)
+        repository = self.repository.resolve(strict=True)
+        working_directory = (repository / directory).resolve(strict=True)
+        if not working_directory.is_dir() or not working_directory.is_relative_to(repository):
+            raise SessionError("task directory must remain inside the repository")
+        return working_directory, intent
 
     def start(self, runtime, panel, directory, arguments):
         _, name = self.identities(runtime, panel)
@@ -208,6 +214,13 @@ class PanelSessions:
                 )
             else:
                 marker = self.read_marker(runtime, panel)
+        if marker["intent"] != intent:
+            raise SessionError("panel launch intent differs from its retained task")
+        return self.status(runtime, panel)
+
+    def verify(self, runtime, panel, directory, arguments):
+        marker = self.read_marker(runtime, panel)
+        intent = self.intent_digest(directory, arguments)
         if marker["intent"] != intent:
             raise SessionError("panel launch intent differs from its retained task")
         return self.status(runtime, panel)
@@ -243,7 +256,7 @@ class PanelSessions:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     operations = parser.add_subparsers(dest="operation", required=True)
-    operations.add_parser("request", help="read one versioned start/status request from stdin")
+    operations.add_parser("request", help="read one versioned start/status/verify request from stdin")
     for operation in ("start", "status", "attach"):
         command = operations.add_parser(operation)
         command.add_argument("runtime")

@@ -9,6 +9,8 @@ use crate::{
 
 #[path = "tests/command.rs"]
 mod command_tests;
+#[path = "tests/intent.rs"]
+mod intent_tests;
 #[path = "tests/ssh.rs"]
 mod ssh_tests;
 
@@ -16,7 +18,7 @@ const OWNER: &str = "00000000-0000-4000-8000-000000000001";
 const RUNNING: &[u8] = br#"{"state":"running","panel":"terminal","pid":123,"exit_status":null}"#;
 
 struct Fixture {
-    _directory: tempfile::TempDir,
+    directory: tempfile::TempDir,
     store: CloudWorkflowStore,
     recovered: RecoveredRemoteWorkspace,
 }
@@ -85,7 +87,7 @@ impl Fixture {
         let recovered = recover_remote_workspace(&store, &identities, &Provider(status), OWNER, "workspace")
             .expect("noncreating recovery");
         Self {
-            _directory: directory,
+            directory,
             store,
             recovered,
         }
@@ -138,6 +140,7 @@ fn owned_status_is_noncreating_and_leaves_all_snapshots_and_private_identity_unc
         &fixture.store,
         &fixture.recovered,
         "terminal",
+        Inspection::Status,
         |identity, endpoint, input| {
             assert_eq!(
                 identity.public_key(),
@@ -176,15 +179,25 @@ fn unknown_panels_and_stale_ownership_never_cross_the_ssh_boundary() {
     let fixture = Fixture::new();
     for panel in ["absent", "terminal;start", ""] {
         assert_eq!(
-            inspect_with(&fixture.store, &fixture.recovered, panel, |_, _, _| panic!("no SSH")),
+            inspect_with(
+                &fixture.store,
+                &fixture.recovered,
+                panel,
+                Inspection::Status,
+                |_, _, _| panic!("no SSH")
+            ),
             Err(RemotePanelStatusError::UnknownPanel)
         );
     }
     fixture.edit_intent();
     assert_eq!(
-        inspect_with(&fixture.store, &fixture.recovered, "terminal", |_, _, _| panic!(
-            "no SSH"
-        )),
+        inspect_with(
+            &fixture.store,
+            &fixture.recovered,
+            "terminal",
+            Inspection::Status,
+            |_, _, _| panic!("no SSH")
+        ),
         Err(RemotePanelStatusError::StateChanged)
     );
 }
@@ -193,9 +206,13 @@ fn unknown_panels_and_stale_ownership_never_cross_the_ssh_boundary() {
 fn a_nonready_worker_cannot_be_queried_or_started() {
     let fixture = Fixture::with_lifecycle(InteractiveWorkerLifecycle::Stopped);
     assert_eq!(
-        inspect_with(&fixture.store, &fixture.recovered, "terminal", |_, _, _| panic!(
-            "no SSH"
-        )),
+        inspect_with(
+            &fixture.store,
+            &fixture.recovered,
+            "terminal",
+            Inspection::Status,
+            |_, _, _| panic!("no SSH")
+        ),
         Err(RemotePanelStatusError::WorkerUnavailable)
     );
 }
@@ -204,10 +221,16 @@ fn a_nonready_worker_cannot_be_queried_or_started() {
 fn late_status_cannot_hide_newer_management_or_workspace_intent() {
     let fixture = Fixture::new();
     assert_eq!(
-        inspect_with(&fixture.store, &fixture.recovered, "terminal", |_, _, _| {
-            fixture.edit_intent();
-            Ok(RUNNING.to_vec())
-        }),
+        inspect_with(
+            &fixture.store,
+            &fixture.recovered,
+            "terminal",
+            Inspection::Status,
+            |_, _, _| {
+                fixture.edit_intent();
+                Ok(RUNNING.to_vec())
+            }
+        ),
         Err(RemotePanelStatusError::StateChanged)
     );
     assert_eq!(fixture.current().workspace().state().spec.working_directory, "src");

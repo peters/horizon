@@ -160,6 +160,17 @@ intent rules. Interactive attachment still uses the separate `attach` command
 and PTY. Malformed request errors never echo stdin or task content. This protocol
 does not itself provide authenticated transport or authorize a new task.
 
+A `verify` request uses the same fields as `start`, but only compares the supplied
+directory and literal argv with the retained task's launch digest before returning
+its status. It never creates a marker, tmux server, session or replacement task.
+A changed intent is rejected; a missing task stays absent and a completed task
+stays retained. Controllers must use the saved launch intent instead of silently
+attaching a panel identity whose command has since changed. This check alone does
+not verify repository contents, remote durability or permission to attach. Intent
+comparison is independent of current filesystem contents, so renaming or removing
+the original directory does not hide a retained running or completed task. Fresh
+task startup still resolves and confines its working directory to the repository.
+
 Before starting anything, the helper durably publishes one private no-overwrite
 marker for the runtime/panel pair. Repeating the same start can only inspect that
 task; a changed launch intent is rejected. Each runtime has a dedicated tmux
@@ -182,7 +193,7 @@ volumes, backup and explicit restart remain separate integration requirements.
 This helper does not yet connect local panels, stop tasks or delete workspaces.
 
 With `bison`, `libevent-dev`, `libncurses-dev`, a C compiler and Make installed, build a
-disposable test binary under a new prefix, then run the twenty-one regressions:
+disposable test binary under a new prefix, then run the twenty-nine regressions:
 
 ```bash
 test_root=$(mktemp -d /tmp/horizon-panel-tests.XXXXXX)
@@ -194,6 +205,8 @@ Coverage includes repeated PTY disconnects, retained completion, concurrent
 starts, literal semicolon/format arguments, locale-independent status and no
 recreation after server loss. Structured-request coverage includes literal argv,
 non-creating status, disconnected progress, bounded/invalid input and redaction.
+Verification covers changed intent, absent/lost/completed tasks, exact literal
+arguments and unchanged ownership records while disconnected tasks keep running.
 Tests own only their private temporary directories
 and dedicated sockets. Keep the disposable tool prefix for repeated validation,
 then remove only that exact task-owned prefix when finished.
