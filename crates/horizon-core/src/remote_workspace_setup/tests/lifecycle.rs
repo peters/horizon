@@ -45,6 +45,40 @@ fn explicit_start_retains_one_allocation_request_and_key_without_claiming_task_r
 }
 
 #[test]
+fn invalid_setup_retention_is_actionable_without_allocating_or_preparing_keys() {
+    let fixture = Fixture::new();
+    let provider = fixture.provider();
+    assert_eq!(
+        start_remote_workspace(&fixture.store, &fixture.identities, &provider, &fixture.dormant, 0),
+        Err(RemoteWorkspaceSetupError::InvalidAllocationRetention)
+    );
+    assert_eq!(fixture.counts(), [0; 3]);
+    assert_eq!(provider.calls(), [0; 5]);
+    assert!(!fixture.directory.path().join("home/remote-ssh-identities").exists());
+}
+
+#[test]
+fn an_existing_allocation_requires_recovery_instead_of_reporting_storage_failure() {
+    let fixture = Fixture::new();
+    let allocation = fixture.allocate();
+    let provider = fixture.provider();
+    assert_eq!(
+        start_remote_workspace(
+            &fixture.store,
+            &fixture.identities,
+            &provider,
+            allocation.workspace(),
+            i64::MAX
+        ),
+        Err(RemoteWorkspaceSetupError::RuntimeAlreadyActive)
+    );
+    assert_eq!(fixture.reload(), allocation);
+    assert_eq!(fixture.counts(), [1, 1, 0]);
+    assert_eq!(provider.calls(), [0; 5]);
+    assert!(!fixture.directory.path().join("home/remote-ssh-identities").exists());
+}
+
+#[test]
 fn interruptions_before_key_reservation_or_creation_reuse_the_exact_generation() {
     for interruption in 0..3 {
         let fixture = Fixture::new();

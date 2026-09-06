@@ -123,6 +123,10 @@ fn recover<P: InteractiveWorkerProvider + ?Sized>(
 /// Private identity, provider payloads and storage details never appear in setup diagnostics.
 #[derive(Debug, thiserror::Error, Eq, PartialEq)]
 pub enum RemoteWorkspaceSetupError {
+    #[error("remote workspace already has an allocation; recover it or explicitly retry its setup")]
+    RuntimeAlreadyActive,
+    #[error("remote setup authorization must end after its valid creation timestamp")]
+    InvalidAllocationRetention,
     #[error(transparent)]
     Recovery(#[from] RemoteWorkspaceRecoveryError),
     #[error(transparent)]
@@ -133,7 +137,11 @@ pub enum RemoteWorkspaceSetupError {
 
 impl From<RemoteWorkspaceStoreError> for RemoteWorkspaceSetupError {
     fn from(error: RemoteWorkspaceStoreError) -> Self {
-        Self::Recovery(error.into())
+        match error {
+            RemoteWorkspaceStoreError::RuntimeAlreadyActive => Self::RuntimeAlreadyActive,
+            RemoteWorkspaceStoreError::InvalidAllocationRetention => Self::InvalidAllocationRetention,
+            _ => Self::Recovery(error.into()),
+        }
     }
 }
 
