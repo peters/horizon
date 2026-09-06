@@ -3,7 +3,7 @@
 use super::OverlayPlanError as Error;
 use std::path::Path;
 
-const MAX_PATH_BYTES: usize = 4096;
+pub(super) const MAX_PATH_BYTES: usize = 4096;
 
 pub(super) fn validate(path: &str) -> Result<(), Error> {
     if !supported_text(path) || path.split('/').any(|part| !valid_component(part)) {
