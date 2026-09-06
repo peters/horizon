@@ -2,6 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -97,6 +98,87 @@ class PanelSessionTests(unittest.TestCase):
         self.assertEqual(first["pid"], again["pid"])
         self.assertEqual(again["state"], "running")
         self.assertEqual(self.service.tmux(runtime, "list-clients", check=False).stdout, b"")
+
+    def request(self, operation, panel="structured", **intent):
+        return {"version": 1, "operation": operation, "runtime": self.runtimes[0], "panel": panel, **intent}
+
+    def execute(self, request):
+        return MODULE.execute_request(self.service, io.BytesIO(json.dumps(request).encode()))
+
+    def test_structured_start_and_status_reuse_the_same_task_after_disconnect(self):
+        request = self.request("start", directory="nested space", argv=self.tick_command())
+        first = self.execute(request)
+        ticks = self.repository / "nested space" / "ticks"
+        self.wait_for(ticks.exists)
+        self.attach_and_disconnect(self.runtimes[0], "structured")
+        before = len(ticks.read_text().splitlines())
+        self.wait_for(lambda: len(ticks.read_text().splitlines()) > before + 2)
+        self.assertEqual(self.execute(self.request("status"))["pid"], first["pid"])
+        self.assertEqual(self.execute(request)["pid"], first["pid"])
+
+    def test_structured_payload_keeps_literal_argv_and_does_not_persist_task_content(self):
+        literals = ["", "$(touch injected);", "'quoted'", "line\nbreak", "\u00e6\u00f8\u00e5", "\\;", "#{l:..}"]
+        command = self.command("import json,sys; from pathlib import Path; Path('argv').write_text(json.dumps(sys.argv[1:]))") + literals
+        self.execute(self.request("start", directory=".", argv=command))
+        self.wait_for(lambda: (self.repository / "argv").exists() and (self.repository / "argv").read_text() == json.dumps(literals))
+        self.assertEqual(json.loads((self.repository / "argv").read_text()), literals)
+        self.assertFalse((self.repository / "injected").exists())
+        self.assertNotIn("touch injected", self.service.marker_path(self.runtimes[0], "structured").read_text())
+
+    def test_structured_status_never_creates_an_absent_task(self):
+        with self.assertRaises(FileNotFoundError):
+            self.execute(self.request("status"))
+        self.assertFalse(self.service.state.exists())
+        self.assertFalse(self.service.sockets.exists())
+
+    def test_structured_request_rejects_unknown_fields_versions_and_types_before_launch(self):
+        valid = self.request("start", directory=".", argv=self.tick_command())
+        cases = [None, [], {}, {**valid, "version": True}, {**valid, "version": 2},
+                 {**valid, "runtime": 7}, {**valid, "panel": []}, {**valid, "directory": None},
+                 {**valid, "argv": "sh"}, {**valid, "argv": ["sh", None]}, {**valid, "extra": "secret"},
+                 {**valid, "operation": "attach"}, {**valid, "operation": "status"},
+                 {**valid, "argv": []}, {**valid, "argv": ["-invalid"]},
+                 {**valid, "argv": ["sh", "\0"]}, {**valid, "directory": ".."},
+                 {**valid, "runtime": "invalid"}, {**valid, "panel": "panel;other"}]
+        for request in cases:
+            with self.subTest(request=request), self.assertRaises(MODULE.SessionError):
+                self.execute(request)
+        self.assertFalse(self.service.state.exists())
+        self.assertFalse(self.service.sockets.exists())
+
+    def test_structured_request_rejects_malformed_duplicate_and_oversized_input(self):
+        valid = json.dumps(self.request("start", directory=".", argv=self.tick_command())).encode()
+        duplicate = valid[:-1] + b',"version":1}'
+        cases = [b"", b"secret payload", b"\xff", b"[]", b'{} {}',
+                 duplicate, b"[" * 2000 + b"]" * 2000,
+                 b" " * (MODULE.MAX_REQUEST_BYTES + 1)]
+        for raw in cases:
+            with mock.patch.object(self.service, "start") as start, mock.patch.object(self.service, "status") as status:
+                with self.subTest(length=len(raw)), self.assertRaises(MODULE.SessionError) as caught:
+                    MODULE.execute_request(self.service, io.BytesIO(raw))
+                start.assert_not_called()
+                status.assert_not_called()
+            self.assertNotIn("secret payload", str(caught.exception))
+        self.assertFalse(self.service.state.exists())
+
+    def test_structured_input_read_is_bounded(self):
+        stream = mock.Mock()
+        stream.read.return_value = b" " * (MODULE.MAX_REQUEST_BYTES + 1)
+        with self.assertRaises(MODULE.SessionError):
+            MODULE.execute_request(self.service, stream)
+        stream.read.assert_called_once_with(MODULE.MAX_REQUEST_BYTES + 1)
+
+    def test_structured_cli_errors_do_not_echo_stdin_and_legacy_help_remains_available(self):
+        result = MODULE.subprocess.run([sys.executable, str(HERE / "panel-session.py"), "request"],
+                                       input=b"synthetic-private-request", capture_output=True, timeout=3, check=False)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, b"")
+        self.assertNotIn(b"synthetic-private-request", result.stderr)
+        self.assertNotIn(b"Traceback", result.stderr)
+        for operation in ("start", "status", "attach", "request"):
+            result = MODULE.subprocess.run([sys.executable, str(HERE / "panel-session.py"), operation, "--help"],
+                                           capture_output=True, timeout=3, check=False)
+            self.assertEqual(result.returncode, 0)
 
     def test_exited_task_is_retained_and_not_reexecuted_on_start_or_attach(self):
         runtime = self.runtimes[0]
