@@ -31,13 +31,43 @@ pub fn inspect_remote_panel(
     recovered: &RecoveredRemoteWorkspace,
     panel_id: &str,
 ) -> Result<RemotePanelStatus, RemotePanelStatusError> {
+    inspect(store, recovered, panel_id, Inspection::Status)
+}
+
+/// Compare the saved explicit shell/command intent with the retained task before
+/// returning its status. No task, marker or session is created or replaced.
+/// This does not certify repository contents, cost admission or attachment authority.
+/// Calls are synchronous and must run off the render thread.
+/// # Errors
+/// Rejects the same conditions as [`inspect_remote_panel`], plus incomplete or
+/// unsupported launch intent and a worker-side mismatch with its retained task.
+pub fn inspect_remote_panel_intent(
+    store: &CloudWorkflowStore,
+    recovered: &RecoveredRemoteWorkspace,
+    panel_id: &str,
+) -> Result<RemotePanelStatus, RemotePanelStatusError> {
+    inspect(store, recovered, panel_id, Inspection::SavedIntent)
+}
+
+#[derive(Clone, Copy)]
+enum Inspection {
+    Status,
+    SavedIntent,
+}
+
+fn inspect(
+    store: &CloudWorkflowStore,
+    recovered: &RecoveredRemoteWorkspace,
+    panel_id: &str,
+    inspection: Inspection,
+) -> Result<RemotePanelStatus, RemotePanelStatusError> {
     #[cfg(target_os = "linux")]
     {
-        inspect_with(store, recovered, panel_id, ssh::request)
+        inspect_with(store, recovered, panel_id, inspection, ssh::request)
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (store, recovered, panel_id);
+        let _ = (store, recovered, panel_id, inspection);
         Err(RemotePanelStatusError::UnsupportedPlatform)
     }
 }
@@ -47,6 +77,7 @@ fn inspect_with(
     store: &CloudWorkflowStore,
     recovered: &RecoveredRemoteWorkspace,
     panel_id: &str,
+    inspection: Inspection,
     execute: impl FnOnce(
         &crate::remote_ssh_identity::RemoteSshIdentity,
         &crate::cloud_run::interactive_worker::InteractiveWorkerSshEndpoint,
@@ -54,7 +85,12 @@ fn inspect_with(
     ) -> Result<Vec<u8>, RemotePanelStatusError>,
 ) -> Result<RemotePanelStatus, RemotePanelStatusError> {
     let endpoint = validate_current(store, recovered, panel_id)?;
-    let request = protocol::request(recovered.allocation().worker_request()?.job_id, panel_id)?;
+    let allocation = recovered.allocation();
+    let runtime = allocation.worker_request()?.job_id;
+    let request = match inspection {
+        Inspection::Status => protocol::request(runtime, panel_id),
+        Inspection::SavedIntent => protocol::intent_request(runtime, &allocation.workspace().state().spec, panel_id),
+    }?;
     let response = execute(recovered.identity(), endpoint, &request)?;
     let status = protocol::response(&response, panel_id)?;
     validate_current(store, recovered, panel_id)?;
@@ -107,6 +143,8 @@ pub enum RemotePanelStatusError {
     WorkerUnavailable,
     #[error("panel identity is not part of the owned remote workspace")]
     UnknownPanel,
+    #[error("saved panel does not contain a fully supported explicit launch intent")]
+    UnsupportedIntent,
     #[error("owned remote state could not be safely inspected")]
     StorageUnavailable,
     #[error("remote SSH identity or trust path is unsupported")]

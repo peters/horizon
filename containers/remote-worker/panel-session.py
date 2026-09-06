@@ -48,7 +48,7 @@ def execute_request(service, stream):
         raise SessionError("structured session request is invalid")
     if request.get("operation") == "status" and set(request) == common:
         return service.status(request["runtime"], request["panel"])
-    if request.get("operation") != "start" or set(request) != common | {"directory", "argv"}:
+    if request.get("operation") not in ("start", "verify") or set(request) != common | {"directory", "argv"}:
         raise SessionError("unsupported structured session request")
     if (
         not isinstance(request["directory"], str)
@@ -56,7 +56,8 @@ def execute_request(service, stream):
         or not all(isinstance(argument, str) for argument in request["argv"])
     ):
         raise SessionError("structured task intent is invalid")
-    return service.start(request["runtime"], request["panel"], request["directory"], request["argv"])
+    operation = service.verify if request["operation"] == "verify" else service.start
+    return operation(request["runtime"], request["panel"], request["directory"], request["argv"])
 
 
 def private_directory(path):
@@ -212,6 +213,13 @@ class PanelSessions:
             raise SessionError("panel launch intent differs from its retained task")
         return self.status(runtime, panel)
 
+    def verify(self, runtime, panel, directory, arguments):
+        marker = self.read_marker(runtime, panel)
+        _, intent = self.launch_intent(directory, arguments)
+        if marker["intent"] != intent:
+            raise SessionError("panel launch intent differs from its retained task")
+        return self.status(runtime, panel)
+
     def status(self, runtime, panel):
         _, name = self.identities(runtime, panel)
         marker = self.read_marker(runtime, panel)
@@ -243,7 +251,7 @@ class PanelSessions:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     operations = parser.add_subparsers(dest="operation", required=True)
-    operations.add_parser("request", help="read one versioned start/status request from stdin")
+    operations.add_parser("request", help="read one versioned start/status/verify request from stdin")
     for operation in ("start", "status", "attach"):
         command = operations.add_parser(operation)
         command.add_argument("runtime")

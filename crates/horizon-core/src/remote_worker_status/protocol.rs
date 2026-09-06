@@ -1,8 +1,10 @@
 use super::{RemotePanelStatus, RemotePanelStatusError as Error};
-use crate::cloud_run::CloudJobId;
+use crate::{PanelKind, cloud_run::CloudJobId, remote_workspace::RemoteWorkspaceSpec};
 use serde::{Deserialize, Serialize};
 
 pub(super) const RESPONSE_LIMIT: usize = 4096;
+const REQUEST_LIMIT: usize = 512 * 1024;
+const REQUEST_VERSION: u8 = 1;
 
 pub(super) fn request(runtime: CloudJobId, panel: &str) -> Result<Vec<u8>, Error> {
     #[derive(Serialize)]
@@ -12,13 +14,56 @@ pub(super) fn request(runtime: CloudJobId, panel: &str) -> Result<Vec<u8>, Error
         runtime: CloudJobId,
         panel: &'a str,
     }
-    serde_json::to_vec(&Request {
-        version: 1,
+    encode_request(&Request {
+        version: REQUEST_VERSION,
         operation: "status",
         runtime,
         panel,
     })
-    .map_err(|_| Error::QueryFailed)
+}
+
+pub(super) fn intent_request(runtime: CloudJobId, spec: &RemoteWorkspaceSpec, panel: &str) -> Result<Vec<u8>, Error> {
+    #[derive(Serialize)]
+    struct Request<'a> {
+        version: u8,
+        operation: &'static str,
+        runtime: CloudJobId,
+        panel: &'a str,
+        directory: &'a str,
+        argv: Vec<&'a str>,
+    }
+    let binding = spec
+        .panels
+        .iter()
+        .find(|binding| binding.panel_local_id == panel)
+        .ok_or(Error::UnknownPanel)?;
+    if !matches!(binding.kind, PanelKind::Shell | PanelKind::Command)
+        || binding.task_handoff.is_some()
+        || binding.agent_session_id.is_some()
+    {
+        return Err(Error::UnsupportedIntent);
+    }
+    let command = binding.command.as_ref().ok_or(Error::UnsupportedIntent)?;
+    let directory = binding.working_directory.as_deref().unwrap_or(&spec.working_directory);
+    let mut argv = Vec::with_capacity(1 + command.args.len());
+    argv.push(command.program.as_str());
+    argv.extend(command.args.iter().map(String::as_str));
+    encode_request(&Request {
+        version: REQUEST_VERSION,
+        operation: "verify",
+        runtime,
+        panel,
+        directory,
+        argv,
+    })
+}
+
+fn encode_request(request: &impl Serialize) -> Result<Vec<u8>, Error> {
+    let bytes = serde_json::to_vec(request).map_err(|_| Error::QueryFailed)?;
+    if bytes.len() > REQUEST_LIMIT {
+        return Err(Error::UnsupportedIntent);
+    }
+    Ok(bytes)
 }
 
 #[derive(Deserialize)]

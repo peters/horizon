@@ -131,6 +131,84 @@ class PanelSessionTests(unittest.TestCase):
         self.assertFalse(self.service.state.exists())
         self.assertFalse(self.service.sockets.exists())
 
+    def test_structured_verification_retains_exact_task_after_disconnect(self):
+        argv = self.tick_command()
+        first = self.execute(self.request("start", directory="nested space", argv=argv))
+        marker = self.service.marker_path(self.runtimes[0], "structured")
+        original = marker.read_bytes(), marker.stat().st_mtime_ns
+        ticks = self.repository / "nested space" / "ticks"
+        self.wait_for(ticks.exists)
+        self.attach_and_disconnect(self.runtimes[0], "structured")
+        before = len(ticks.read_text().splitlines())
+        with mock.patch.object(self.service, "start") as start, mock.patch.object(self.service, "attach") as attach:
+            verified = self.execute(self.request("verify", directory="nested space", argv=argv))
+            self.assertEqual(verified, first)
+            start.assert_not_called()
+            attach.assert_not_called()
+        self.wait_for(lambda: len(ticks.read_text().splitlines()) > before + 2)
+        self.assertEqual((marker.read_bytes(), marker.stat().st_mtime_ns), original)
+
+    def test_structured_verification_rejects_changed_directory_or_literal_arguments(self):
+        literals = ["", "$(touch injected);", "'quoted'", "line\nbreak", "æøå", "\\;", "#{l:..}"]
+        argv = self.tick_command() + literals
+        first = self.execute(self.request("start", directory=".", argv=argv))
+        marker = self.service.marker_path(self.runtimes[0], "structured")
+        original = marker.read_bytes(), marker.stat().st_mtime_ns
+        self.assertEqual(self.execute(self.request("verify", directory=".", argv=argv)), first)
+        for directory, changed in [("nested space", argv), (".", argv[:-1]), (".", argv + ["extra"]),
+                                   (".", argv[:-1] + ["different"])]:
+            with self.subTest(directory=directory, argument_count=len(changed)):
+                with mock.patch.object(self.service, "start") as start, self.assertRaises(MODULE.SessionError):
+                    self.execute(self.request("verify", directory=directory, argv=changed))
+                start.assert_not_called()
+        self.assertFalse((self.repository / "injected").exists())
+        self.assertEqual(self.execute(self.request("status"))["pid"], first["pid"])
+        self.assertEqual((marker.read_bytes(), marker.stat().st_mtime_ns), original)
+
+    def test_structured_verification_never_creates_an_absent_task(self):
+        with mock.patch.object(self.service, "start") as start, self.assertRaises(FileNotFoundError):
+            self.execute(self.request("verify", directory=".", argv=self.tick_command()))
+        start.assert_not_called()
+        self.assertFalse(self.service.state.exists())
+        self.assertFalse(self.service.sockets.exists())
+
+    def test_structured_verification_retains_completed_task_without_reexecution(self):
+        argv = self.command("from pathlib import Path; Path('runs').open('a').write('once\\n'); raise SystemExit(42)")
+        self.execute(self.request("start", directory=".", argv=argv))
+        def completed():
+            status = self.execute(self.request("status"))
+            return status if status["state"] == "exited" else None
+
+        finished = self.wait_for(completed)
+        for _ in range(2):
+            self.assertEqual(self.execute(self.request("verify", directory=".", argv=argv)), finished)
+        self.assertEqual(finished["exit_status"], 42)
+        self.assertEqual((self.repository / "runs").read_text(), "once\n")
+
+    def test_structured_verification_of_lost_server_never_starts_replacement(self):
+        argv = self.tick_command()
+        self.execute(self.request("start", directory=".", argv=argv))
+        marker = self.service.marker_path(self.runtimes[0], "structured").read_bytes()
+        self.service.tmux(self.runtimes[0], "kill-server")
+        verified = self.execute(self.request("verify", directory=".", argv=argv))
+        self.assertEqual(verified, {"state": "unavailable", "panel": "structured"})
+        self.assertNotEqual(self.service.tmux(self.runtimes[0], "list-sessions", check=False).returncode, 0)
+        self.assertEqual(self.service.marker_path(self.runtimes[0], "structured").read_bytes(), marker)
+
+    def test_structured_verification_rejects_incomplete_or_invalid_intent_before_inspection(self):
+        valid = self.request("verify", directory=".", argv=self.tick_command())
+        cases = [self.request("verify"), {**valid, "argv": "private task"},
+                 {**valid, "directory": None}, {**valid, "unexpected": "private task"}]
+        for request in cases:
+            with mock.patch.object(self.service, "status") as status, mock.patch.object(self.service, "start") as start:
+                with self.assertRaises(MODULE.SessionError) as caught:
+                    self.execute(request)
+                status.assert_not_called()
+                start.assert_not_called()
+                self.assertNotIn("private task", str(caught.exception))
+        self.assertFalse(self.service.state.exists())
+        self.assertFalse(self.service.sockets.exists())
+
     def test_structured_request_rejects_unknown_fields_versions_and_types_before_launch(self):
         valid = self.request("start", directory=".", argv=self.tick_command())
         cases = [None, [], {}, {**valid, "version": True}, {**valid, "version": 2},

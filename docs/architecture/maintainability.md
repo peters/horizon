@@ -117,6 +117,9 @@ back into large multi-purpose modules.
   wire types; `ssh.rs` isolates host pins and client options; `command.rs` owns
   bounded nonblocking local-child I/O. It neither grants attachment/task startup
   nor changes the general user-configured SSH API or remote execution lifetime.
+  Explicit saved shell/command verification reuses those gates and compares
+  literal argv plus the effective directory with the worker's retained intent;
+  unresolved agent launch/handoff/resume semantics stay fail-closed.
 - `containers/remote-worker/host-identity.py` owns workspace-retained server-key
   initialization, validation and runtime materialization before SSH starts.
   Its real-key regressions are separate from the retained-volume SSH smoke in
