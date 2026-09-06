@@ -116,6 +116,12 @@ back into large multi-purpose modules.
   target serialization. `interactive_worker.rs` validates observed lifetime
   against that policy; neither represents the client/creation ownership lease.
   Missing or malformed legacy metadata never selects persistent execution.
+- The local worker adapter's `local_docker/creation.rs` uses the existing durable
+  workflow store to grant at most one creation attempt. A consumed grant permits
+  only non-creating reconciliation; store failure, client drop or resource loss
+  never renews it. Explicit ensure also consumes the grant when accepting an
+  exact existing worker, before observing its connection. Provider construction
+  requires that store explicitly; non-creating inspection never claims a grant.
 - `cloud_run/runpod.rs` coordinates provider operations and exact ownership
   reconciliation. Its `models.rs` leaf owns profiles, persisted worker identity,
   lifecycle results and typed errors; `create_request.rs` owns serialized

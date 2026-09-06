@@ -4,6 +4,7 @@ use LocalDockerError::*;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::sync::{Arc, Mutex};
 
+mod fencing;
 mod lifetime;
 mod noncreating;
 
@@ -11,12 +12,14 @@ mod noncreating;
 struct FakeDocker(Arc<Mutex<FakeState>>);
 #[derive(Default)]
 struct FakeState {
+    creation: Option<fencing::CreationStore>,
     container: Option<DockerContainer>,
     inspect_calls: usize,
     host_key_calls: usize,
     create_calls: usize,
     delete_calls: usize,
     fail_create_after_insert: bool,
+    corrupt_fence_after_create: Option<CloudWorkflowStore>,
     reject_create: bool,
     create_response_id: Option<String>,
     failed_inspections_after_create: usize,
@@ -79,6 +82,15 @@ impl DockerTransport for FakeDocker {
                 port: 49_152,
             }],
         });
+        if let Some(store) = &state.corrupt_fence_after_create {
+            rusqlite::Connection::open(store.path())
+                .expect("database")
+                .execute(
+                    "UPDATE cloud_workflows SET snapshot=?1",
+                    [b"synthetic-private-snapshot".as_slice()],
+                )
+                .expect("post-create fixture failure");
+        }
         if state.fail_create_after_insert {
             return Err(CommandFailed {
                 operation: "container creation",
@@ -124,20 +136,15 @@ pub(super) fn request() -> InteractiveWorkerRequest {
 }
 
 #[test]
-fn disappearance_during_key_discovery_is_absent_or_recreated() {
+fn disappearance_during_key_discovery_never_recreates_a_claimed_worker() {
     let fake = FakeDocker::default();
     let provider = provider("local", fake.clone());
     let request = request();
     let worker = provider.ensure_worker(&request).expect("create").into_status().worker;
     fake.state().disappear_during_key_read = true;
     assert_eq!(provider.inspect_worker(&worker), Ok(None));
-    provider.ensure_worker(&request).expect("recreate");
-    fake.state().disappear_during_key_read = true;
-    assert!(matches!(
-        provider.ensure_worker(&request),
-        Ok(InteractiveWorkerEnsure::Created(_))
-    ));
-    assert_eq!(fake.state().create_calls, 3);
+    assert_eq!(provider.ensure_worker(&request), Err(CreationReconciliationRequired));
+    assert_eq!(fake.state().create_calls, 1);
 }
 fn profile(name: &str, docker_host: &str) -> LocalDockerProfile {
     LocalDockerProfile {
@@ -146,9 +153,23 @@ fn profile(name: &str, docker_host: &str) -> LocalDockerProfile {
     }
 }
 fn provider(name: &str, fake: FakeDocker) -> LocalDockerInteractiveWorkerProvider {
+    provider_for(name, fake, &request())
+}
+fn provider_for(
+    name: &str,
+    fake: FakeDocker,
+    request: &InteractiveWorkerRequest,
+) -> LocalDockerInteractiveWorkerProvider {
+    let creation_store = fake
+        .state()
+        .creation
+        .get_or_insert_with(|| fencing::CreationStore::new(request))
+        .store
+        .clone();
     LocalDockerInteractiveWorkerProvider {
         transport: Box::new(fake),
         profile: profile(name, "unix:///var/run/docker.sock"),
+        creation_store,
     }
 }
 
@@ -226,7 +247,11 @@ fn creates_reuses_inspects_and_deletes_one_exact_worker() {
 
 #[test]
 fn rejects_preflight_and_resource_drift_without_unsafe_io() {
-    let remote = LocalDockerInteractiveWorkerProvider::new(profile("local", "ssh://remote.example/run/docker.sock"));
+    let fixture = fencing::CreationStore::new(&request());
+    let remote = LocalDockerInteractiveWorkerProvider::new(
+        profile("local", "ssh://remote.example/run/docker.sock"),
+        fixture.store.clone(),
+    );
     assert_eq!(remote.err(), Some(NonLocalDockerHost));
     let other = provider("other", FakeDocker::default());
     let fake = FakeDocker::default();
