@@ -131,6 +131,10 @@ back into large multi-purpose modules.
   working-tree changes. Its `paths.rs` applies the lexical transfer exclusion policy.
   Planning performs no filesystem, Git, provider or transfer I/O; actual capture/apply
   must independently validate approval, real node/link topology and content hashes.
+  Its separate `reader/` boundary reads one explicitly selected node under a pinned
+  Linux directory using kernel confinement, byte limits and change checks. It does
+  not enumerate repositories, follow link targets, hash, authorize or transfer data;
+  unsupported platforms fail closed without a weaker filesystem fallback.
 - `containers/remote-worker/host-identity.py` owns workspace-retained server-key
   initialization, validation and runtime materialization before SSH starts.
   Its real-key regressions are separate from the retained-volume SSH smoke in

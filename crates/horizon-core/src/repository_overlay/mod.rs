@@ -3,6 +3,7 @@
 //! Capture/apply must separately verify real filesystem topology, content hashes and approval.
 
 mod paths;
+pub mod reader;
 
 use crate::cloud_run::{ArtifactDigest, GitSource};
 use std::{collections::BTreeMap, fmt};
