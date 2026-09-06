@@ -465,6 +465,8 @@ pub enum RemoteWorkspaceStoreError {
     RuntimeRecoveryUnavailable,
     #[error("remote worker observation does not match the saved request or pinned identity")]
     InvalidWorkerObservation,
+    #[error("remote allocation setup cannot create; non-creating recovery is required")]
+    RuntimeSetupUnavailable,
 }
 
 #[cfg(test)]
