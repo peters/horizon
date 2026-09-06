@@ -112,6 +112,10 @@ back into large multi-purpose modules.
   admission leaf checks exact snapshots without granting creation authority;
   claimed, observed or expired retries use non-creating recovery. Setup remains
   separate from attachment, task readiness and explicit remote management.
+- `remote_environment_observation.rs` produces overview-safe, point-in-time
+  provider observations with exact snapshot checks but no private-key access or
+  saved-state writes. It shares allocation observation validation with recovery;
+  neither absence nor observed readiness grants management or attachment authority.
 - `remote_worker_status.rs` gates non-creating panel inspection on exact owned
   recovery and current lifetime. Its `protocol.rs` leaf owns bounded status-only
   wire types; `ssh.rs` isolates host pins and client options; `command.rs` owns
