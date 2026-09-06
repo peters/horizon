@@ -102,6 +102,11 @@ back into large multi-purpose modules.
   recovery, separately from the pure remote aggregate. Linux filesystem privacy
   and durable publication live in `remote_ssh_identity/linux.rs`; bounded key-utility
   execution lives in `command.rs`. Neither owns provider or remote task lifetime.
+- `remote_workspace_recovery.rs` joins owned allocations, retained client keys and
+  non-creating provider inspection. Its result is not task/attachment authority.
+  `cloud_run/store/remote_allocations/recovery.rs` atomically checks both snapshots
+  before retaining exact worker/host identity and marking reconciliation; neither
+  absence nor client drop grants creation, restart or remote cleanup.
 - `containers/remote-worker/host-identity.py` owns workspace-retained server-key
   initialization, validation and runtime materialization before SSH starts.
   Its real-key regressions are separate from the retained-volume SSH smoke in

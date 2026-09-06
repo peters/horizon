@@ -461,6 +461,10 @@ pub enum RemoteWorkspaceStoreError {
     RuntimeRequestRequired,
     #[error("remote allocation can no longer reserve a new SSH request identity")]
     RuntimeRequestUnavailable,
+    #[error("remote workspace has pending management intent; reconnect cannot change it")]
+    RuntimeRecoveryUnavailable,
+    #[error("remote worker observation does not match the saved request or pinned identity")]
+    InvalidWorkerObservation,
 }
 
 #[cfg(test)]

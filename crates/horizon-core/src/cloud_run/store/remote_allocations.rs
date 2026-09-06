@@ -4,6 +4,7 @@
 
 mod binding;
 mod guards;
+mod recovery;
 mod request;
 
 pub(super) use guards::{
