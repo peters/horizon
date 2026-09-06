@@ -194,6 +194,11 @@ back into large multi-purpose modules.
   reasons remain distinct; saved completion is not current provider status.
   This durable entrypoint admits only persistent execution: timed creation/expiry
   cleanup needs separate coordination before it can promise retained Stop intent.
+- `remote_workspace/stop/configured.rs` admits one explicitly confirmed saved
+  selection through its exact named local provider profile. It reloads the owned
+  record and compares the full summary/revision before durable Stop coordination,
+  returning only overview-safe metadata. Unsupported profiles and stale selections
+  gain no fallback authority; failures may require refreshing retained Stop intent.
 - `cloud_run/runpod.rs` coordinates provider operations and exact ownership
   reconciliation. Its `models.rs` leaf owns profiles, persisted worker identity,
   lifecycle results and typed errors; `create_request.rs` owns serialized

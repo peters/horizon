@@ -1,3 +1,5 @@
+mod configured;
+
 use super::*;
 use crate::{
     HorizonHome,

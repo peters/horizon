@@ -1,5 +1,9 @@
 //! Explicit, durable Stop coordination. Client lifecycle never invokes this operation.
 
+mod configured;
+
+pub use configured::{ConfiguredStopError, stop_configured_remote_environment};
+
 use crate::{
     cloud_run::{
         CloudStoreError, CloudWorkflowStore, RemoteWorkspaceStoreError, StoredRemoteAllocation, StoredRemoteWorkspace,
