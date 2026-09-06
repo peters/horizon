@@ -413,6 +413,7 @@ impl HorizonApp {
             .as_ref()
             .is_some_and(crate::search_overlay::SearchOverlay::input_focused);
         let text_surface_active = self.settings.is_some()
+            || self.remote_environments.is_open()
             || self.command_palette.is_some()
             || search_capturing
             || self.renaming_panel.is_some()
@@ -532,11 +533,15 @@ impl HorizonApp {
                     .any(|(_, binding)| shortcuts::press_and_release_in_events(&input.events, *binding).0)
             });
             if gated_press {
-                let surface = gated_press_surface(
-                    self.settings.is_some(),
-                    self.command_palette.is_some(),
-                    search_capturing,
-                );
+                let surface = if self.remote_environments.is_open() {
+                    "the remote environments overview is open"
+                } else {
+                    gated_press_surface(
+                        self.settings.is_some(),
+                        self.command_palette.is_some(),
+                        search_capturing,
+                    )
+                };
                 events.push(SpeechEvent::Notice(format!("Push-to-talk press ignored: {surface}.")));
             }
         }
@@ -874,3 +879,61 @@ const fn should_release_desktop_target(text_dispatched: bool, active: bool, inse
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(all(test, feature = "speech"))]
+mod remote_environment_tests {
+    use super::*;
+    use crate::app::test_support::{raw_input, test_app};
+    use crate::test_egui::DiscardTextures;
+
+    #[test]
+    fn remote_environment_modal_gates_global_press_but_keeps_held_local_release() {
+        let (_temp, mut app) = test_app();
+        let ctx = Context::default();
+        let workspace = app.board.create_workspace("speech fixture");
+        let panel = app
+            .board
+            .create_panel(
+                horizon_core::PanelOptions {
+                    kind: horizon_core::PanelKind::Editor,
+                    ..Default::default()
+                },
+                workspace,
+            )
+            .expect("editor");
+        app.remote_environments.open(app.session_store.home(), &ctx);
+        let (mut speech, channels) = SpeechSystem::with_test_bindings(&["F1"]);
+        let mut notices = Vec::new();
+        let (engaged, _, _) = apply_global_hotkey_events(
+            &mut speech,
+            [horizon_cursor::HotkeyEvent::Pressed(0)],
+            Some(SpeechSink::Panel(panel)),
+            !app.speech_text_surface_active().0,
+            None,
+            &mut notices,
+        );
+        assert!(engaged.is_none());
+        assert!(!channels.capture_start_requested());
+        speech.start(SpeechSink::Panel(panel), 0);
+        assert!(channels.capture_start_requested());
+        app.speech = Some(speech);
+        app.speech_engaged_profile = Some(0);
+        let mut input = raw_input([900.0, 680.0], None);
+        input.events.push(egui::Event::Key {
+            key: egui::Key::F1,
+            physical_key: Some(egui::Key::F1),
+            pressed: false,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let _ = ctx
+            .run_ui(input, |ui| {
+                let saved = app.render_remote_environments(ui).expect("modal frame");
+                HorizonApp::restore_remote_environment_input(ui, saved);
+            })
+            .discard_textures();
+        assert!(app.speech_engaged_profile.is_none());
+        assert!(app.speech.as_ref().and_then(SpeechSystem::recording_sink).is_none());
+        assert!(app.speech.as_ref().is_some_and(SpeechSystem::is_active));
+    }
+}

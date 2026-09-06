@@ -182,7 +182,7 @@ impl HorizonApp {
                     response
                 }
             }
-            ToolbarAction::Sessions | ToolbarAction::Settings => ui.add(
+            ToolbarAction::Environments | ToolbarAction::Sessions | ToolbarAction::Settings => ui.add(
                 util::chrome_button(action.label())
                     .min_size(Vec2::new(action_button_width(action), ROOT_TOOLBAR_BUTTON_HEIGHT)),
             ),
@@ -218,6 +218,7 @@ impl HorizonApp {
         match action {
             ToolbarAction::QuickNav => self.open_command_palette(),
             ToolbarAction::RemoteHosts => self.toggle_remote_hosts_overlay(ctx),
+            ToolbarAction::Environments => self.remote_environments.open(self.session_store.home(), ctx),
             ToolbarAction::Sessions => self.toggle_session_manager(),
             ToolbarAction::Update => self.open_available_update(),
             ToolbarAction::Settings => self.toggle_settings(),
@@ -232,7 +233,7 @@ fn fps_meter_width() -> f32 {
 fn action_button_width(action: ToolbarAction) -> f32 {
     match action {
         ToolbarAction::QuickNav => 102.0,
-        ToolbarAction::RemoteHosts => 120.0,
+        ToolbarAction::RemoteHosts | ToolbarAction::Environments => 120.0,
         ToolbarAction::Sessions => 94.0,
         ToolbarAction::Update => 84.0,
         ToolbarAction::Settings => 92.0,

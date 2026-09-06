@@ -1,9 +1,12 @@
 //! Durable remote workspace data, independent of providers, persistence I/O, and UI.
 //! Snapshot validation is not permission to attach: fresh provider observation and lease checks remain required.
 
+mod summary;
 #[cfg(test)]
 mod tests;
 mod validation;
+
+pub use summary::RemoteEnvironmentSummary;
 
 pub(crate) use validation::valid_local_id;
 

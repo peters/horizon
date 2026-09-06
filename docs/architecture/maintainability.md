@@ -179,6 +179,10 @@ back into large multi-purpose modules.
     context-menu handling and outcome application in `panels/interaction.rs`
   - `remote_hosts_overlay`: overlay state/input shell with query/filter,
     layout, and row/header paint helpers split into `remote_hosts_overlay/`
+  - `remote_environments`: single-flight saved-inventory loading and modal input
+    ownership, with cached labels and rendering in `remote_environments/paint`.
+    Compact record projection belongs to `horizon-core::remote_workspace::summary`;
+    the overview does not own provider actions or remote execution lifetime.
   - `sidebar`: sidebar rendering and deferred sidebar actions
   - `settings`: settings editor state and save/apply flows
   - `session`: startup bootstrap and session catalog/rebind flows, with startup

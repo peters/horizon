@@ -22,18 +22,20 @@ pub(super) const SIDEBAR_MIN_WIDTH: f32 = 168.0;
 pub(super) enum ToolbarAction {
     QuickNav,
     RemoteHosts,
+    Environments,
     Sessions,
     Update,
     Settings,
 }
 
 impl ToolbarAction {
-    const SECONDARY: [Self; 1] = [Self::RemoteHosts];
+    const SECONDARY: [Self; 2] = [Self::Environments, Self::RemoteHosts];
 
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::QuickNav => "Quick Nav",
             Self::RemoteHosts => "Remote Hosts",
+            Self::Environments => "Environments",
             Self::Sessions => "Sessions",
             Self::Update => "Update",
             Self::Settings => "Settings",
@@ -94,7 +96,8 @@ pub(super) fn root_toolbar_layout(viewport: Rect, show_update: bool) -> RootTool
     );
 
     let states = [
-        (true, 1_usize, true),
+        (true, ToolbarAction::SECONDARY.len(), true),
+        (false, ToolbarAction::SECONDARY.len(), true),
         (false, 1_usize, true),
         (false, 0_usize, true),
         (false, 1_usize, false),
@@ -219,7 +222,7 @@ mod tests {
 
     #[test]
     fn toolbar_keeps_short_tagline_when_search_still_fits() {
-        let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(1024.0, 768.0));
+        let viewport = Rect::from_min_max(Pos2::ZERO, Pos2::new(1280.0, 768.0));
         let layout = root_toolbar_layout(viewport, false);
 
         assert!(layout.show_tagline);
@@ -262,7 +265,10 @@ mod tests {
         let layout = root_toolbar_layout(viewport, false);
 
         assert!(!layout.show_tagline);
-        assert_eq!(layout.overflow_actions, vec![ToolbarAction::RemoteHosts]);
+        assert_eq!(
+            layout.overflow_actions,
+            vec![ToolbarAction::Environments, ToolbarAction::RemoteHosts]
+        );
         assert!(layout.visible_items.contains(&ToolbarItem::FpsMeter));
         assert!(layout.visible_items.contains(&ToolbarItem::OverflowMenu));
         assert!((layout.search_rect.center().y - TOOLBAR_HEIGHT * 0.5).abs() <= f32::EPSILON);
@@ -300,6 +306,34 @@ mod tests {
                 .visible_items
                 .contains(&ToolbarItem::Action(ToolbarAction::Update))
         );
-        assert_eq!(layout.overflow_actions, vec![ToolbarAction::RemoteHosts]);
+        assert_eq!(
+            layout.overflow_actions,
+            vec![ToolbarAction::Environments, ToolbarAction::RemoteHosts]
+        );
+    }
+
+    #[test]
+    fn environments_and_existing_actions_remain_reachable_at_every_width() {
+        for width in [760.0, 800.0, 900.0, 1024.0, 1280.0] {
+            for update in [false, true] {
+                let layout = root_toolbar_layout(Rect::from_min_max(Pos2::ZERO, Pos2::new(width, 768.0)), update);
+                for action in [
+                    ToolbarAction::Environments,
+                    ToolbarAction::RemoteHosts,
+                    ToolbarAction::Sessions,
+                    ToolbarAction::Settings,
+                ] {
+                    let visible = layout
+                        .visible_items
+                        .iter()
+                        .filter(|item| **item == ToolbarItem::Action(action))
+                        .count();
+                    let overflow = layout.overflow_actions.iter().filter(|item| **item == action).count();
+                    assert_eq!(visible + overflow, 1, "{width}, {update}, {action:?}");
+                }
+                assert!(layout.brand_rect.max.x <= layout.search_rect.min.x);
+                assert!(layout.search_rect.max.x <= layout.actions_rect.min.x);
+            }
+        }
     }
 }
