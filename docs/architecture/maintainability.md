@@ -5,6 +5,13 @@ back into large multi-purpose modules.
 
 ## Module Boundaries
 
+### Remote worker image
+
+- `containers/remote-worker/panel-session.py` owns the worker-side one-shot task
+  marker and verified tmux status/attachment contract. Its dedicated `tmux.conf`
+  retains sessions independently of clients. Provider lifecycle, repository
+  transfer, durable backup and local panel integration remain separate concerns.
+
 ### `horizon-browser-protocol`
 
 - Owns the small serialized contract shared by browser engines and clients:
