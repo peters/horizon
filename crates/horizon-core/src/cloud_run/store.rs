@@ -6,7 +6,7 @@ mod remote_workspaces;
 mod workflow_writes;
 
 pub use remote_allocations::StoredRemoteAllocation;
-pub use remote_workspaces::{RemoteWorkspaceStoreError, StoredRemoteWorkspace};
+pub use remote_workspaces::{RemoteEnvironmentPage, RemoteWorkspaceStoreError, StoredRemoteWorkspace};
 use workflow_writes::PreparedWorkflowInsert;
 
 use std::collections::HashMap;

@@ -114,6 +114,15 @@ transaction so accepted writes cannot make recovery exceed its budget.
 All record operations run synchronously off the render thread. This storage
 boundary exposes no automatic retention or record-deletion API.
 
+The Remote Environments inventory reads across every owning session without
+consulting local session files or filtering unattached, failed, or expired records.
+Keyset pages contain at most 16 validated snapshots (64 MiB serialized maximum).
+The continuation probe reads only the identity index, not a seventeenth snapshot.
+Each page is a consistent read; refresh from the beginning to see new identities
+inserted before an earlier cursor. Invalid selected records fail the whole page,
+never masquerading as an empty inventory. Saved records are not fresh provider
+observations, allocation ownership proof, or permission for lifecycle actions.
+
 Once recorded, the exact cleanup reason and request timestamp remain immutable
 while that runtime exists. Later cleanup observations cannot replace the original
 intent or reset its age; only verified runtime disposal can retire it.

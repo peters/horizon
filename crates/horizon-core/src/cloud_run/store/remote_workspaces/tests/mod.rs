@@ -64,6 +64,7 @@ fn provisioning(mut state: RemoteWorkspaceState) -> RemoteWorkspaceState {
     state
 }
 
+mod inventory;
 mod migration;
 mod ownership;
 mod recovery;
