@@ -231,6 +231,8 @@ fn status_protocol_preserves_unknown_completion_and_rejects_wrong_or_unbounded_r
     }
     for bytes in [
         b"synthetic-private-response".as_slice(),
+        br#"{"state":"running","panel":"terminal","pid":123}"#,
+        br#"{"state":"exited","panel":"terminal","pid":123}"#,
         br#"{"state":"running","panel":"other","pid":123}"#,
         br#"{"state":"running","panel":"terminal","pid":0}"#,
         br#"{"state":"running","panel":"terminal","pid":123,"exit_status":0}"#,

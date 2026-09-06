@@ -27,11 +27,13 @@ enum Response {
     Running {
         panel: String,
         pid: u32,
+        #[serde(deserialize_with = "Option::deserialize")]
         exit_status: Option<u8>,
     },
     Exited {
         panel: String,
         pid: u32,
+        #[serde(deserialize_with = "Option::deserialize")]
         exit_status: Option<u8>,
     },
     Unavailable {
