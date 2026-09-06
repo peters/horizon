@@ -98,9 +98,30 @@ wait_ready() {
 }
 
 connect() {
-  ssh -F /dev/null -i "$fixture/client" -o BatchMode=yes -o IdentitiesOnly=yes \
+  python3 -c '
+import subprocess
+import sys
+try:
+    result = subprocess.run(sys.argv[1:], timeout=15, check=False)
+except subprocess.TimeoutExpired:
+    print("Host identity smoke failed: SSH command timed out", file=sys.stderr)
+    raise SystemExit(124)
+raise SystemExit(result.returncode)
+' ssh -F /dev/null -i "$fixture/client" -o BatchMode=yes -o IdentitiesOnly=yes \
     -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$fixture/known-hosts" \
     -o GlobalKnownHostsFile=/dev/null -o ConnectTimeout=2 -p "$port" root@127.0.0.1 "$@"
+}
+
+assert_ssh_rejection() {
+  local description=$1 result=0
+  shift
+  connect "$@" >/dev/null 2>&1 || result=$?
+  case "$result" in
+    1) ;;
+    0) fail "$description unexpectedly succeeded" ;;
+    124) fail "$description did not finish within its deadline" ;;
+    *) fail "$description did not return the expected rejection" ;;
+  esac
 }
 
 runtime=$(python3 -c 'import uuid; print(uuid.uuid4())')
@@ -135,15 +156,11 @@ assert_no_replay() {
     [[ $(panel_state status "$panel") == unavailable ]] || fail 'lost task reported a live or completed process'
     [[ $(panel_state start "$panel") == unavailable ]] || fail 'start replayed a retained task'
     [[ $(panel_state verify "$panel") == unavailable ]] || fail 'verification replayed a retained task'
-    if connect horizon-panel-session attach "$runtime" "$panel" >/dev/null 2>&1; then
-      fail 'attachment accepted a lost task'
-    fi
+    assert_ssh_rejection 'lost-task attachment' horizon-panel-session attach "$runtime" "$panel"
   done
   [[ $(panel_markers) == "$retained_markers" ]] || fail 'task identity records changed'
   [[ $(panel_bytes) == "$retained_bytes" ]] || fail 'task bytes changed without a new task'
-  if connect "tmux -N -S /run/horizon/panels/$runtime.sock list-sessions" >/dev/null 2>&1; then
-    fail 'a new task server was created'
-  fi
+  assert_ssh_rejection 'lost-task server query' "tmux -N -S /run/horizon/panels/$runtime.sock list-sessions"
 }
 
 create_worker "$client_public"
