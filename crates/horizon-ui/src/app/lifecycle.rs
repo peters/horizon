@@ -49,11 +49,13 @@ impl HorizonApp {
     }
 
     #[profiling::function]
-    pub(super) fn process_frame_inputs(&mut self, ctx: &Context) -> bool {
+    pub(super) fn process_frame_inputs(&mut self, ctx: &Context, inventory_captured_input: bool) -> bool {
         self.sync_panel_focus_from_pointer_press(ctx);
         // Speech runs before the fullscreen handler so that Escape cancels an
         // active recording instead of also exiting panel fullscreen.
-        self.handle_speech_input(ctx);
+        if !inventory_captured_input {
+            self.handle_speech_input(ctx);
+        }
         self.handle_fullscreen_toggle(ctx);
         self.handle_shortcuts(ctx);
         self.handle_root_file_drop(ctx);
