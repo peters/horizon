@@ -118,11 +118,7 @@ if [ -n "${github_token_file}" ]; then
     git config --global --add url.https://github.com/.insteadOf ssh://git@github.com/
 fi
 
-ssh-keygen -A >/dev/null
-if [ ! -s /etc/ssh/ssh_host_ed25519_key ]; then
-    printf '%s\n' "failed to generate the runtime SSH host key" >&2
-    exit 1
-fi
+/usr/local/bin/horizon-worker-host-identity
 
 if [ -n "${deadline_epoch}" ]; then
     now_epoch=$(date +%s)

@@ -16,6 +16,13 @@ env:
   RUSTFLAGS: -D warnings
 
 jobs:
+  remote-host-identity:
+    name: Remote host identity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 -B containers/remote-worker/test_host_identity.py -v
+
   version-sync:
     name: Version Sync
     runs-on: ubuntu-latest
