@@ -184,16 +184,20 @@ panes remain available without reexecution. Status reports `running`, `exited`
 or `unavailable`, with an exit status only when tmux has one; an unknown result,
 including some signal terminations, is not reported as success.
 
-Markers live under `/var/lib/horizon/panels` and contain an intent digest, not
-command arguments or credentials. Sockets live under `/run/horizon/panels`.
+Markers live under `/workspace/.horizon-worker/panels` and contain an intent
+digest, not command arguments or credentials. Startup prepares this private root;
+task requests never recreate it if it disappears. Sockets remain under
+`/run/horizon/panels` and are not retained across runtime filesystem replacement.
 These locations rely on the worker's private root-owned directory boundary;
 tasks within one worker share that trust domain. The marker is not a process
-checkpoint: container/server loss cannot preserve a running process, and durable
-volumes, backup and explicit restart remain separate integration requirements.
+checkpoint: container/server loss cannot preserve a running process. With the
+workspace volume retained, both running and completed task identities become
+`unavailable` after server loss; even a repeated start must not execute them again.
+Durable backing storage, backup and explicit recovery remain separate requirements.
 This helper does not yet connect local panels, stop tasks or delete workspaces.
 
 With `bison`, `libevent-dev`, `libncurses-dev`, a C compiler and Make installed, build a
-disposable test binary under a new prefix, then run the twenty-nine regressions:
+disposable test binary under a new prefix, then run the worker regressions:
 
 ```bash
 test_root=$(mktemp -d /tmp/horizon-panel-tests.XXXXXX)
@@ -207,6 +211,8 @@ recreation after server loss. Structured-request coverage includes literal argv,
 non-creating status, disconnected progress, bounded/invalid input and redaction.
 Verification covers changed intent, absent/lost/completed tasks, exact literal
 arguments and unchanged ownership records while disconnected tasks keep running.
+Retention coverage replaces the runtime/socket filesystem and rejects missing,
+linked, insecure or foreign-owned state without replaying old task identities.
 Tests own only their private temporary directories
 and dedicated sockets. Keep the disposable tool prefix for repeated validation,
 then remove only that exact task-owned prefix when finished.
@@ -215,8 +221,9 @@ then remove only that exact task-owned prefix when finished.
 
 `host-identity.py` owns `/workspace/.horizon-worker/ssh.claim` and the private
 `ssh/` directory next to it. The initialization claim is durably recorded before
-key generation. A complete versioned marker is published only after both key
-files are synchronized. Repeated startup validates the original access-key digest,
+key generation. Version 2 readiness also requires the private sibling `panels/`
+directory: it is created and synchronized before readiness is published, together
+with both synchronized key files. Repeated startup validates the original access-key digest,
 marker and real private/public key pair; it does not generate another identity.
 The verified runtime copies remain at `/etc/ssh/ssh_host_ed25519_key{,.pub}` so
 trusted provider host-key inspection keeps its existing path.
@@ -233,6 +240,13 @@ permission to replace an identity. Existing unretained keys are not automaticall
 migrated. Key rotation, old-volume migration and whole-volume loss require a
 separate verified recovery operation. Never resolve a host-key mismatch by
 disabling client verification.
+
+Version 1 storage kept panel records on the runtime filesystem. It is rejected
+without automatic migration, key rotation or record replacement: missing old
+records cannot prove that a task was never started. Version 2 also rejects a
+missing/insecure retained panel root instead of creating an empty replacement.
+Do not edit the version or remove records to force startup. Existing running
+workers are not upgraded or stopped by this source change.
 
 Concurrent starters wait up to 30 seconds for readiness: two ten-second key
 operation budgets plus ten seconds of filesystem synchronization grace. This is
@@ -253,7 +267,8 @@ bash scripts/run-remote-worker-host-identity-smoke.sh --image horizon-remote-wor
 ```
 
 The smoke replaces the container filesystem while retaining its workspace volume,
-checks the same host identity through pinned SSH, and rejects a different access
+checks the same host identity through pinned SSH, retains task records without
+replaying completed or interrupted work, and rejects a different access
 key without modifying the original identity or workspace data. It removes only
 its own containers and volume; it neither publishes an image nor uses cloud resources.
 

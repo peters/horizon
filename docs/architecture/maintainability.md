@@ -11,6 +11,11 @@ back into large multi-purpose modules.
   marker and verified tmux status/attachment contract. Its dedicated `tmux.conf`
   retains sessions independently of clients. Provider lifecycle, repository
   transfer, durable backup and local panel integration remain separate concerns.
+- `host-identity.py` publishes versioned startup readiness for the access-bound SSH
+  identity and private retained panel-state root. Task markers live beside the
+  identity on workspace storage; sockets remain runtime-only. Missing or legacy
+  readiness fails closed, and lost processes are not restarted from their markers.
+  Storage migration, process recovery and checkpointing are separate boundaries.
 
 ### `horizon-browser-protocol`
 

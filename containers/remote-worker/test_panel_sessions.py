@@ -423,6 +423,67 @@ class PanelSessionTests(unittest.TestCase):
         self.service.tmux(runtime, "kill-server")
         self.assertEqual(self.service.start(runtime, "lost", ".", command)["state"], "unavailable")
 
+    def test_retained_markers_prevent_replay_after_runtime_filesystem_replacement(self):
+        runtime = self.runtimes[0]
+        self.service.require_existing_state = True
+        MODULE.private_directory(self.service.state)
+        running = self.tick_command()
+        completed = self.command("from pathlib import Path; Path('runs').open('a').write('once\\n'); raise SystemExit(42)")
+        self.service.start(runtime, "running", ".", running)
+        self.service.start(runtime, "completed", ".", completed)
+        self.wait_for(lambda: (self.repository / "ticks").exists())
+        self.wait_for(lambda: self.service.status(runtime, "completed")["state"] == "exited")
+        markers = {panel: self.service.marker_path(runtime, panel).read_bytes() for panel in ("running", "completed")}
+        self.service.tmux(runtime, "kill-server")
+        self.service = MODULE.PanelSessions(self.repository, self.service.state, self.root / "replacement-sockets",
+                                            HERE / "tmux.conf", "/usr/bin/env", require_existing_state=True)
+        ticks = (self.repository / "ticks").read_bytes()
+        for panel, command in (("running", running), ("completed", completed)):
+            expected = {"state": "unavailable", "panel": panel}
+            self.assertEqual(expected, self.service.status(runtime, panel))
+            self.assertEqual(expected, self.service.start(runtime, panel, ".", command))
+            self.assertEqual(expected, self.service.verify(runtime, panel, ".", command))
+            with self.assertRaises(MODULE.SessionError):
+                self.service.attach(runtime, panel)
+            self.assertEqual(markers[panel], self.service.marker_path(runtime, panel).read_bytes())
+        self.assertEqual("once\n", (self.repository / "runs").read_text())
+        self.assertEqual(ticks, (self.repository / "ticks").read_bytes())
+        self.assertFalse(self.service.sockets.exists())
+
+    def test_required_retained_root_is_never_recreated_by_start(self):
+        self.service.require_existing_state = True
+        for operation in (self.service.start, self.service.verify):
+            with self.assertRaises(FileNotFoundError):
+                operation(self.runtimes[0], "absent", ".", self.tick_command())
+        self.assertFalse(self.service.state.exists())
+        self.assertFalse(self.service.sockets.exists())
+
+    def test_linked_or_insecure_retained_parent_fails_before_task_creation(self):
+        parent = self.root / "retained-parent"
+        MODULE.private_directory(parent)
+        self.service.state = parent / "panels"
+        self.service.require_existing_state = True
+        MODULE.private_directory(self.service.state)
+        parent.chmod(0o755)
+        with self.assertRaises(MODULE.SessionError):
+            self.service.start(self.runtimes[0], "untrusted", ".", self.tick_command())
+        parent.chmod(0o700)
+        retained = self.root / "original-parent"
+        parent.rename(retained)
+        parent.symlink_to(retained)
+        with self.assertRaises(MODULE.SessionError):
+            self.service.start(self.runtimes[0], "untrusted", ".", self.tick_command())
+        self.assertEqual([], list((retained / "panels").iterdir()))
+        self.assertFalse(self.service.sockets.exists())
+
+    def test_foreign_owned_private_state_is_rejected(self):
+        self.service.start(self.runtimes[0], "owned", ".", self.tick_command())
+        before = self.service.marker_path(self.runtimes[0], "owned").read_bytes()
+        with mock.patch.object(MODULE.os, "geteuid", return_value=os.geteuid() + 1):
+            with self.assertRaises(MODULE.SessionError):
+                self.service.status(self.runtimes[0], "owned")
+        self.assertEqual(before, self.service.marker_path(self.runtimes[0], "owned").read_bytes())
+
     def test_unowned_sessions_and_future_or_insecure_markers_fail_closed(self):
         runtime = self.runtimes[0]
         MODULE.private_directory(self.service.sockets)
