@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 mod fencing;
 mod lifetime;
 mod noncreating;
+mod stop;
 
 #[derive(Clone, Default)]
 struct FakeDocker(Arc<Mutex<FakeState>>);
@@ -18,6 +19,8 @@ struct FakeState {
     host_key_calls: usize,
     create_calls: usize,
     delete_calls: usize,
+    stop_calls: usize,
+    stop_behavior: stop::StopBehavior,
     fail_create_after_insert: bool,
     corrupt_fence_after_create: Option<CloudWorkflowStore>,
     reject_create: bool,
@@ -74,6 +77,7 @@ impl DockerTransport for FakeDocker {
             labels: request.labels.clone(),
             environment,
             restart_policy: "no".to_string(),
+            auto_remove: Some(false),
             running: true,
             state: "running".to_string(),
             exit_code: 0,
@@ -112,6 +116,9 @@ impl DockerTransport for FakeDocker {
         state.delete_calls += 1;
         state.container = None;
         Ok(true)
+    }
+    fn stop(&self, resource_id: &str) -> DockerResult<()> {
+        stop::stop_fake(&mut self.state(), resource_id)
     }
 }
 fn ed25519_key(seed: u8) -> String {

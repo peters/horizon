@@ -5,6 +5,7 @@ use thiserror::Error;
 use uuid::Uuid;
 mod artifact_digest;
 pub mod interactive_worker;
+pub mod interactive_worker_stop;
 pub mod local_docker;
 pub mod runpod;
 mod store;

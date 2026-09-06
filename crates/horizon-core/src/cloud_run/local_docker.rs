@@ -17,6 +17,7 @@ use thiserror::Error;
 
 mod command;
 mod creation;
+mod stop;
 #[cfg(test)]
 mod tests;
 
@@ -340,6 +341,14 @@ pub enum LocalDockerError {
     InvalidHostKey,
     #[error("local Docker worker {resource_id} deletion could not be verified")]
     DeletionVerificationFailed { resource_id: String },
+    #[error("local worker Stop requires verified disabled automatic removal")]
+    StopRetentionUnverified,
+    #[error("local worker state does not permit a verified data-retaining Stop")]
+    StopStateUnverified,
+    #[error("local worker disappeared during Stop; data retention could not be verified")]
+    StopResourceLost,
+    #[error("local worker did not remain inactive after Stop")]
+    StopVerificationFailed,
 }
 
 trait DockerTransport: Send + Sync {
@@ -348,6 +357,7 @@ trait DockerTransport: Send + Sync {
     fn create(&self, request: &DockerCreateRequest) -> DockerResult<String>;
     fn read_host_key(&self, resource_id: &str) -> DockerResult<Option<String>>;
     fn delete(&self, resource_id: &str) -> DockerResult<bool>;
+    fn stop(&self, resource_id: &str) -> DockerResult<()>;
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct DockerContainer {
@@ -357,6 +367,7 @@ struct DockerContainer {
     labels: BTreeMap<String, String>,
     environment: Vec<String>,
     restart_policy: String,
+    auto_remove: Option<bool>,
     running: bool,
     state: String,
     exit_code: i64,
