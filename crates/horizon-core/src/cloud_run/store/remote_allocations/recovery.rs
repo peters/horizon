@@ -7,6 +7,27 @@ use crate::cloud_run::interactive_worker::{
 use rusqlite::TransactionBehavior;
 
 impl StoredRemoteAllocation {
+    pub(crate) fn validate_worker_observation(
+        &self,
+        observation: Option<&InteractiveWorkerStatus>,
+    ) -> Result<(), Error> {
+        let request = self.worker_request()?;
+        let runtime = self.workspace.state().runtime.as_ref().ok_or(Error::UnboundRuntime)?;
+        if let Some(status) = observation {
+            validate_observation(status, &request)?;
+            if runtime.worker.as_ref().is_some_and(|worker| worker != &status.worker)
+                || runtime
+                    .ssh
+                    .as_ref()
+                    .zip(status.ssh.as_ref())
+                    .is_some_and(|(saved, observed)| saved != observed)
+            {
+                return Err(Error::InvalidWorkerObservation);
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn recovery_request(&self) -> Result<InteractiveWorkerRequest, Error> {
         let runtime = self.workspace.state().runtime.as_ref().ok_or(Error::UnboundRuntime)?;
         if runtime.cleanup.is_some()
@@ -38,20 +59,11 @@ impl CloudWorkflowStore {
         if current != *expected {
             return Err(Error::SnapshotConflict);
         }
-        let request = current.recovery_request()?;
+        current.recovery_request()?;
+        current.validate_worker_observation(observation)?;
         let mut next = current.workspace.state().clone();
         let runtime = next.runtime.as_mut().ok_or(Error::UnboundRuntime)?;
         if let Some(status) = observation {
-            validate_observation(status, &request)?;
-            if runtime.worker.as_ref().is_some_and(|worker| worker != &status.worker)
-                || runtime
-                    .ssh
-                    .as_ref()
-                    .zip(status.ssh.as_ref())
-                    .is_some_and(|(saved, observed)| saved != observed)
-            {
-                return Err(Error::InvalidWorkerObservation);
-            }
             runtime.worker = Some(status.worker.clone());
             if let Some(ssh) = &status.ssh {
                 runtime.ssh = Some(ssh.clone());

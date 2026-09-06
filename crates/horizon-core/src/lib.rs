@@ -19,6 +19,7 @@ mod local_store;
 mod managed_install;
 mod opencode_paths;
 mod panel;
+pub mod remote_environment_observation;
 mod remote_hosts;
 pub mod remote_ssh_identity;
 pub mod remote_worker_status;
