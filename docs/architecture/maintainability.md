@@ -50,6 +50,9 @@ back into large multi-purpose modules.
 
 - Owns board state, workspace metadata, panel lifecycle, persistence
   projections, and shared layout math.
+- `config.rs` owns configuration loading, validation and aggregate settings.
+  Preset models, panel-option conversion and existing default/migration helpers
+  live in `config/presets.rs`, with stable public re-exports from the parent.
 - `board.rs` should stay orchestration-focused, with board-local submodules for
   attention flows, agent working-status detection, workspace and panel
   membership changes, arrangement/collision logic, geometry queries, and
