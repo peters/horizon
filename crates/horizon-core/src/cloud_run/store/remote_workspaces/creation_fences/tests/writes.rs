@@ -46,6 +46,7 @@ fn fixture() -> Fixture {
         workflow_id: workflow.id,
         job_id: workflow.nodes[0].id,
         phase: RemoteRuntimePhase::Provisioning,
+        ssh_public_key: None,
         worker: None,
         ssh: None,
         cleanup: None,

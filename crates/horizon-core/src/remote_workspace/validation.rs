@@ -2,7 +2,10 @@ use super::{
     REMOTE_WORKSPACE_STATE_VERSION, RemotePanelBinding, RemoteRuntimeGeneration, RemoteRuntimePhase,
     RemoteWorkspaceError as Error, RemoteWorkspaceSpec, RemoteWorkspaceState, RepositoryCheckpoint,
 };
-use crate::{PanelKind, cloud_run::interactive_worker::valid_worker_target};
+use crate::{
+    PanelKind,
+    cloud_run::interactive_worker::{InteractiveWorkerRequest, valid_worker_target},
+};
 use std::collections::HashSet;
 
 const MAX_PANELS: usize = 256;
@@ -127,6 +130,20 @@ impl RemoteRuntimeGeneration {
         }
         if self.generation == 0 || self.generation != spec.generation {
             return Err(Error::InvalidRuntime("generation"));
+        }
+        if let Some(key) = &self.ssh_public_key {
+            let request = InteractiveWorkerRequest {
+                workflow_id: self.workflow_id,
+                job_id: self.job_id,
+                target: spec.target.clone(),
+                ssh_public_key: key.clone(),
+            };
+            if !request.is_valid_for(spec.target.provider)
+                || key.split(' ').count() != 2
+                || self.worker.as_ref().is_some_and(|worker| worker.ssh_public_key != *key)
+            {
+                return Err(Error::InvalidRuntime("SSH request identity"));
+            }
         }
         if let Some(worker) = &self.worker {
             if !worker.has_valid_shape()

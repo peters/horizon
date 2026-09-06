@@ -39,6 +39,7 @@ fn fixture(version: i64) -> Fixture {
         workflow_id: workflow.id,
         job_id: workflow.nodes[0].id,
         phase: RemoteRuntimePhase::Reconciling,
+        ssh_public_key: None,
         worker: None,
         ssh: None,
         cleanup: None,

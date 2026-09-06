@@ -152,6 +152,18 @@ impl CloudWorkflowStore {
         if expected.state.runtime.is_none() && next.runtime.is_some() {
             return Err(RemoteWorkspaceStoreError::RuntimeAllocationRequired);
         }
+        if next
+            .runtime
+            .as_ref()
+            .is_some_and(|runtime| runtime.ssh_public_key.is_some())
+            && expected
+                .state
+                .runtime
+                .as_ref()
+                .is_none_or(|runtime| runtime.ssh_public_key.is_none())
+        {
+            return Err(RemoteWorkspaceStoreError::RuntimeRequestRequired);
+        }
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         ensure_current_schema(&transaction)?;
@@ -442,6 +454,10 @@ pub enum RemoteWorkspaceStoreError {
     InvalidAllocationRetention,
     #[error("active remote snapshot has no verified workflow allocation; reconciliation is required")]
     UnboundRuntime,
+    #[error("remote SSH request identity requires an unclaimed allocation reservation")]
+    RuntimeRequestRequired,
+    #[error("remote allocation can no longer reserve a new SSH request identity")]
+    RuntimeRequestUnavailable,
 }
 
 #[cfg(test)]

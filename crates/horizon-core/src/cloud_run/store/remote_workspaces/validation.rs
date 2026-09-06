@@ -55,6 +55,10 @@ pub(super) fn validate_replacement(previous: &RemoteWorkspaceState, next: &Remot
             || previous.spec.target != next.spec.target
             || previous.spec.repository != next.spec.repository
             || runtime
+                .ssh_public_key
+                .as_ref()
+                .is_some_and(|key| next_runtime.ssh_public_key.as_ref() != Some(key))
+            || runtime
                 .worker
                 .as_ref()
                 .is_some_and(|worker| next_runtime.worker.as_ref() != Some(worker))
