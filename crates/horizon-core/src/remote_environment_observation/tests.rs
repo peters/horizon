@@ -14,6 +14,7 @@ use crate::{
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::sync::Mutex;
 
+mod configured;
 mod guards;
 
 const OWNER: &str = "00000000-0000-4000-8000-000000000001";

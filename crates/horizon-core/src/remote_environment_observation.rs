@@ -1,6 +1,10 @@
 //! Read-only provider observations for the global remote-environment overview.
 //! Synchronous provider/store operations must run off the render thread.
 
+mod configured;
+
+pub use configured::{ConfiguredObservationError, observe_configured_remote_environment};
+
 use crate::{
     cloud_run::{
         CloudWorkflowStore, RemoteWorkspaceStoreError, StoredRemoteAllocation, StoredRemoteWorkspace,
@@ -18,6 +22,17 @@ pub struct RemoteEnvironmentObservation {
     /// `None` means no exact worker was found. Saved identity remains in `saved`.
     /// Absence never authorizes replacement, removal from inventory or cleanup.
     pub worker: Option<ObservedRemoteWorker>,
+}
+
+impl RemoteEnvironmentObservation {
+    /// Absolute UTC timestamp for a cached point-in-time observation label.
+    #[must_use]
+    pub fn observed_at_rfc3339(&self) -> Option<String> {
+        time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(self.observed_at_millis) * 1_000_000)
+            .ok()?
+            .format(&time::format_description::well_known::Rfc3339)
+            .ok()
+    }
 }
 
 /// Overview-safe projection. No task payload, SSH coordinates or key material is retained.

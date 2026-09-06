@@ -47,10 +47,7 @@ impl InventoryRow {
         if let Some(identity) = &summary.worker_identity {
             details.push(("Exact resource ID", identity.resource_id.clone()));
         } else {
-            details.push((
-                "Exact resource ID",
-                "Not recorded; no resource discovery performed".into(),
-            ));
+            details.push(("Exact resource ID", "No resource identity recorded".into()));
         }
         if let Some(checkpoint) = &summary.checkpoint {
             details.push((
@@ -99,8 +96,10 @@ pub(super) fn show(ctx: &Context, state: &RemoteEnvironments) -> InventoryAction
                 });
             });
             ui.label(
-                RichText::new("Saved inventory across all sessions. Live status, uptime and cost are not checked.")
-                    .color(theme::FG_DIM()),
+                RichText::new(
+                    "Saved inventory across all sessions. Provider checks are manual; uptime and cost are not checked.",
+                )
+                .color(theme::FG_DIM()),
             );
             ui.label(
                 RichText::new("Closing this overview does not stop or delete remote work.").color(theme::FG_DIM()),
@@ -193,6 +192,7 @@ fn render_content(ui: &mut egui::Ui, state: &RemoteEnvironments, action: &mut In
         });
     }
     if let Some(row) = state.selected.and_then(|index| page.rows.get(index)) {
+        render_observation(ui, state, action);
         ui.separator();
         ui.strong("Saved environment details");
         ui.label(
@@ -214,6 +214,60 @@ fn render_content(ui: &mut egui::Ui, state: &RemoteEnvironments, action: &mut In
                 }
             });
     }
+}
+
+fn render_observation(ui: &mut egui::Ui, state: &RemoteEnvironments, action: &mut InventoryAction) {
+    let observation = &state.observation;
+    ui.separator();
+    ui.horizontal_wrapped(|ui| {
+        ui.strong("Provider status");
+        let check = ui.add_enabled(
+            state.pending.is_none() && !observation.is_pending(),
+            egui::Button::new("Check provider status"),
+        );
+        #[cfg(test)]
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(egui::Id::new("observation-check-test"), check.rect));
+        if check.clicked() {
+            *action = InventoryAction::Observe;
+        }
+        if observation.is_pending() {
+            ui.label(observation.pending_label());
+        }
+    });
+    if let Some(previous) = &observation.last_success {
+        ui.label(previous.lifecycle);
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Last successful check (UTC):");
+            ui.monospace(&previous.checked_at);
+        });
+        if let Some(resource_id) = &previous.resource_id {
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Observed resource ID:");
+                ui.add(
+                    egui::Label::new(RichText::new(resource_id).monospace())
+                        .wrap()
+                        .selectable(true),
+                );
+            });
+        }
+        ui.label(RichText::new("Point-in-time observation, not continuous monitoring.").color(theme::FG_DIM()));
+    } else if !observation.is_pending() {
+        ui.label("Provider status has not been checked.");
+    }
+    if let Some(error) = &observation.failure {
+        ui.colored_label(theme::PALETTE_YELLOW(), error);
+        if observation.last_success.is_some() {
+            ui.colored_label(
+                theme::PALETTE_YELLOW(),
+                "Latest check failed; the previous observation may be stale.",
+            );
+        }
+    }
+    ui.label(
+        RichText::new("Task, repository and SSH readiness are not checked. No resource or saved state is changed.")
+            .color(theme::FG_DIM()),
+    );
 }
 
 fn phase_label(phase: Option<RemoteRuntimePhase>) -> &'static str {
