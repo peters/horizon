@@ -386,7 +386,7 @@ fn valid_ssh_username(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
-pub(super) fn valid_ssh_public_key(value: &str) -> bool {
+pub(crate) fn valid_ssh_public_key(value: &str) -> bool {
     valid_ed25519_key(value, true)
 }
 
