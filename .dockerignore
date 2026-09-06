@@ -9,7 +9,10 @@ crates/*/**
 !containers/remote-worker/
 containers/remote-worker/**
 !containers/remote-worker/Dockerfile
+!containers/remote-worker/build-tmux.sh
 !containers/remote-worker/entrypoint.sh
 !containers/remote-worker/rust-path.sh
 !containers/remote-worker/session.sh
+!containers/remote-worker/panel-session.py
+!containers/remote-worker/tmux.conf
 !containers/remote-worker/sshd_config

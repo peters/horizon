@@ -16,6 +16,18 @@ env:
   RUSTFLAGS: -D warnings
 
 jobs:
+  remote-panel-sessions:
+    name: Remote panel sessions
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - run: sudo apt-get update && sudo apt-get install -y bison libevent-dev libncurses-dev pkg-config
+      - name: Build the pinned worker multiplexer
+        run: bash containers/remote-worker/build-tmux.sh "$RUNNER_TEMP/horizon-panel-tmux"
+      - name: Verify retained task sessions
+        run: PATH="$RUNNER_TEMP/horizon-panel-tmux/bin:$PATH" python3 -B containers/remote-worker/test_panel_sessions.py -v
+
   version-sync:
     name: Version Sync
     runs-on: ubuntu-latest

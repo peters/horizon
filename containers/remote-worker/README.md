@@ -11,7 +11,11 @@ client PC.
 The image contains the Rust toolchain, Horizon's Linux build dependencies,
 Git/Git LFS, GitHub CLI, rsync, tar, tmux, SSH, CA certificates, and the
 supported coding-agent CLIs. Their versions and both base-image digests are
-pinned in `Dockerfile`.
+pinned in `Dockerfile` and the checksum-verified `build-tmux.sh` helper. The
+worker and its CI tests use tmux 3.7c built without utmp integration; older
+distribution builds can lose child-exit notifications in the upstream
+[utempter race](https://github.com/tmux/tmux/issues/4559). This does not change
+the client machine's tmux installation or existing servers.
 
 ## Build
 
@@ -116,6 +120,61 @@ Docker smoke demonstrates disconnection semantics, not the real cloud PC-off gat
 Password authentication, keyboard-interactive authentication, SSH agent
 forwarding, X11 forwarding, and user-controlled SSH environment files are
 disabled. Root login is public-key-only.
+
+## Retained panel sessions
+
+After repository setup, `horizon-panel-session` provides separate explicit
+start and non-creating reconnect operations. Supply the exact runtime generation
+UUID and stable panel ID (letters, digits, underscores or hyphens, at most 128
+characters). For example, inside the worker:
+
+```bash
+horizon-panel-session start c8203298-3169-48d6-84fd-882d8d49a7b4 terminal_a . -- /bin/bash
+horizon-panel-session status c8203298-3169-48d6-84fd-882d8d49a7b4 terminal_a
+horizon-panel-session attach c8203298-3169-48d6-84fd-882d8d49a7b4 terminal_a
+```
+
+Attach requires a terminal, such as a verified SSH connection with PTY allocation.
+Working directories are relative to `/workspace/horizon`; traversal and symlinks
+escaping that repository are rejected. Arguments are passed directly through
+`horizon-agent-session`, never reconstructed as shell text. Use an explicit shell
+program only when shell evaluation is actually intended.
+
+Before starting anything, the helper durably publishes one private no-overwrite
+marker for the runtime/panel pair. Repeating the same start can only inspect that
+task; a changed launch intent is rejected. Each runtime has a dedicated tmux
+socket, and reconnect verifies a retained instance nonce before attaching. A lost
+start reply or missing server never grants permission to execute a replacement.
+An unavailable result needs an explicit recovery decision; do not remove the
+marker to make a retry work.
+
+Closing the last client does not destroy the server, session or task. Completed
+panes remain available without reexecution. Status reports `running`, `exited`
+or `unavailable`, with an exit status only when tmux has one; an unknown result,
+including some signal terminations, is not reported as success.
+
+Markers live under `/var/lib/horizon/panels` and contain an intent digest, not
+command arguments or credentials. Sockets live under `/run/horizon/panels`.
+These locations rely on the worker's private root-owned directory boundary;
+tasks within one worker share that trust domain. The marker is not a process
+checkpoint: container/server loss cannot preserve a running process, and durable
+volumes, backup and explicit restart remain separate integration requirements.
+This helper does not yet connect local panels, stop tasks or delete workspaces.
+
+With `bison`, `libevent-dev`, `libncurses-dev`, a C compiler and Make installed, build a
+disposable test binary under a new prefix, then run the fourteen regressions:
+
+```bash
+test_root=$(mktemp -d /tmp/horizon-panel-tests.XXXXXX)
+bash containers/remote-worker/build-tmux.sh "$test_root/tools"
+PATH="$test_root/tools/bin:$PATH" python3 -B containers/remote-worker/test_panel_sessions.py -v
+```
+
+Coverage includes repeated PTY disconnects, retained completion, concurrent
+starts, literal semicolon/format arguments, locale-independent status and no
+recreation after server loss. Tests own only their private temporary directories
+and dedicated sockets. Keep the disposable tool prefix for repeated validation,
+then remove only that exact task-owned prefix when finished.
 
 ## Local Docker provider
 

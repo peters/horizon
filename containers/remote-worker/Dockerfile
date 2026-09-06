@@ -2,6 +2,13 @@ ARG WORKER_BASE_IMAGE=rust:1.95-bookworm@sha256:6258907abe69656e41cd992e0b705cdc
 
 FROM node:24-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e AS node-runtime
 
+FROM ${WORKER_BASE_IMAGE} AS tmux-runtime
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends bison libevent-dev libncurses-dev pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+COPY containers/remote-worker/build-tmux.sh /tmp/build-tmux.sh
+RUN bash /tmp/build-tmux.sh /opt/horizon-tmux
+
 FROM ${WORKER_BASE_IMAGE}
 
 ARG WORKER_BASE_IMAGE
@@ -54,6 +61,8 @@ RUN apt-get update \
         git-lfs \
         libasound2-dev \
         libgl-dev \
+        libevent-2.1-7 \
+        libtinfo6 \
         libvulkan-dev \
         libwayland-dev \
         libxcb-render0-dev \
@@ -65,8 +74,9 @@ RUN apt-get update \
         python3 \
         rsync \
         tar \
-        tmux \
     && rm -rf /var/lib/apt/lists/*
+
+COPY --from=tmux-runtime /opt/horizon-tmux/bin/tmux /usr/local/bin/tmux
 
 RUN rustup toolchain install 1.95.0 --profile minimal \
     && rustup component add --toolchain 1.95.0 rustfmt clippy
@@ -140,10 +150,13 @@ WORKDIR /workspace/horizon
 
 COPY containers/remote-worker/entrypoint.sh /usr/local/bin/horizon-worker-entrypoint
 COPY containers/remote-worker/session.sh /usr/local/bin/horizon-agent-session
+COPY containers/remote-worker/panel-session.py /usr/local/bin/horizon-panel-session
+COPY containers/remote-worker/tmux.conf /etc/horizon/tmux.conf
 COPY containers/remote-worker/rust-path.sh /etc/profile.d/horizon-rust.sh
 COPY containers/remote-worker/sshd_config /etc/ssh/sshd_config.d/99-horizon-worker.conf
 
 RUN chmod 0755 /usr/local/bin/horizon-worker-entrypoint /usr/local/bin/horizon-agent-session \
+    /usr/local/bin/horizon-panel-session \
     && chmod 0644 /etc/profile.d/horizon-rust.sh /etc/ssh/sshd_config.d/99-horizon-worker.conf \
     && git lfs install --system \
     && rm -f /etc/ssh/ssh_host_* \
@@ -167,7 +180,8 @@ RUN chmod 0755 /usr/local/bin/horizon-worker-entrypoint /usr/local/bin/horizon-a
         /root/.pi \
         /root/.rustup \
         /root/.ssh \
-    && mkdir -p /run/sshd /workspace/horizon
+    && mkdir -p /run/sshd /workspace/horizon /var/lib/horizon \
+    && chmod 0700 /var/lib/horizon
 
 ARG WORKER_IMAGE_VERSION=0.1.0
 RUN if [ -z "${WORKER_IMAGE_VERSION}" ]; then \

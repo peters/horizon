@@ -246,7 +246,7 @@ docker run --rm --entrypoint /bin/sh "${image}" -eu -c '
   test ! -e /root/.npmrc
   test -s /etc/ssl/certs/ca-certificates.crt
   for tool in \
-    cargo rustc git git-lfs gh rsync tar tmux ssh sshd ps \
+    cargo rustc git git-lfs gh rsync tar tmux ssh sshd ps horizon-panel-session \
     codex claude gemini opencode kilo pi grok
   do
     command -v "${tool}" >/dev/null
@@ -431,11 +431,11 @@ ssh_worker \
 persistent_worker_id=$(docker inspect --format '{{.Id}}' "${worker_b}")
 persistent_session_id=$(ssh_worker \
   "${temp_dir}/client" "${temp_dir}/worker-b-known-hosts" "${worker_b_port}" \
-  'tmux new-session -d -s horizon-smoke-persistent "while :; do date +%s > /workspace/horizon/smoke-progress.next; mv /workspace/horizon/smoke-progress.next /workspace/horizon/smoke-progress; sleep 1; done";
+  'horizon-panel-session start c8203298-3169-48d6-84fd-882d8d49a7b4 smoke . -- /bin/sh -c "while :; do date +%s > /workspace/horizon/smoke-progress.next; mv /workspace/horizon/smoke-progress.next /workspace/horizon/smoke-progress; sleep 1; done" > /workspace/horizon/start-status;
    for attempt in 1 2 3 4 5; do test -s /workspace/horizon/smoke-progress && break; sleep 1; done;
-   tmux display-message -p -t horizon-smoke-persistent "#{session_id}:#{pane_pid}"') ||
+   cat /workspace/horizon/start-status') ||
   fail "could not start the persistent remote session"
-[[ "${persistent_session_id}" =~ ^\$[0-9]+:[0-9]+$ ]] || fail "persistent session identity is invalid"
+[[ "${persistent_session_id}" == *'"state": "running"'* ]] || fail "persistent session did not start"
 wait_for_ssh_disconnect "${worker_b}"
 persistent_progress_before=$(docker exec "${worker_b}" cat /workspace/horizon/smoke-progress) ||
   fail "could not observe the disconnected task baseline"
@@ -571,10 +571,16 @@ done
   fail "remote task did not progress before any SSH client reconnected"
 persistent_session_after=$(ssh_worker \
   "${temp_dir}/client" "${temp_dir}/worker-b-known-hosts" "${worker_b_port}" \
-  'tmux display-message -p -t horizon-smoke-persistent "#{session_id}:#{pane_pid}"') ||
+  'horizon-panel-session status c8203298-3169-48d6-84fd-882d8d49a7b4 smoke') ||
   fail "could not reconnect to the persistent remote session"
 [[ "${persistent_session_after}" == "${persistent_session_id}" ]] ||
   fail "reconnecting replaced the running remote session or process"
+persistent_start_again=$(ssh_worker \
+  "${temp_dir}/client" "${temp_dir}/worker-b-known-hosts" "${worker_b_port}" \
+  'horizon-panel-session start c8203298-3169-48d6-84fd-882d8d49a7b4 smoke . -- /bin/sh -c "while :; do date +%s > /workspace/horizon/smoke-progress.next; mv /workspace/horizon/smoke-progress.next /workspace/horizon/smoke-progress; sleep 1; done"') ||
+  fail "could not verify the one-shot start marker after reconnect"
+[[ "${persistent_start_again}" == "${persistent_session_id}" ]] ||
+  fail "repeated start replaced the retained task"
 persistent_progress_after=$(ssh_worker \
   "${temp_dir}/client" "${temp_dir}/worker-b-known-hosts" "${worker_b_port}" \
   'cat /workspace/horizon/smoke-progress') || fail "could not observe progress after reconnect"
