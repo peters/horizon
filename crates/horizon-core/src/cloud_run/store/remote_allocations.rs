@@ -4,6 +4,7 @@
 
 mod binding;
 mod guards;
+mod request;
 
 pub(super) use guards::{
     ensure_unbound_workflow, validate_creation_claim, validate_workflow_replacement, validate_workspace_write,
@@ -178,6 +179,7 @@ fn prepare_allocation(
         workflow_id,
         job_id,
         phase: RemoteRuntimePhase::Provisioning,
+        ssh_public_key: None,
         worker: None,
         ssh: None,
         cleanup: None,

@@ -138,6 +138,23 @@ The first trusted SSH endpoint may be recorded once while the runtime exists. On
 its host, port, user, and host key cannot be replaced or dropped within that
 runtime generation, even while reconnecting or reconciling.
 
+The optional runtime `ssh_public_key` is a canonical, comment-free public client
+identity, not private key material. The dedicated request reservation compares
+the complete current allocation under an immediate transaction before writing
+it. Initial reservation requires a still-provisioning, unexpired setup with no
+worker, cleanup intent, or consumed creation claim. The claim lookup is indexed
+by its single-worker workflow identity. Generic record replacement cannot install
+the key, and no replacement can change or clear it within the runtime.
+Concurrent callers reload the winning identity; same-key reservation is an
+idempotent read even after setup expiry. It neither consumes nor renews creation
+authority. Missing identity after a create claim must not be guessed or repaired
+with a new key. Request reconstruction uses this reservation, or the exact public
+key already present in a legacy observed worker; it grants no provider authority.
+Legacy snapshots without the field retain their wire representation. Older readers
+reject populated new fields rather than ignoring them. Secure private-key retention
+must precede reservation and remains a separate coordinator integration requirement.
+No private key, provider credential, provider I/O, or automatic cleanup is added.
+
 Domain-valid in-memory state can exceed the storage limits. Callers must persist
 intent successfully before provider side effects and surface storage-capacity
 errors without discarding the last saved runtime or cleanup record.

@@ -70,6 +70,7 @@ fn active() -> RemoteWorkspaceState {
             workflow_id,
             job_id,
             phase: RemoteRuntimePhase::Ready,
+            ssh_public_key: None,
             worker: Some(worker),
             ssh: Some(InteractiveWorkerSshEndpoint {
                 host: "127.0.0.1".into(),

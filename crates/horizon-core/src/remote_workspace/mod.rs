@@ -76,7 +76,7 @@ impl TryFrom<WorkspaceSnapshot> for RemoteWorkspaceState {
     }
 }
 
-/// Desired workspace state survives deletion of its disposable worker.
+/// Desired workspace state survives explicit worker cleanup or verified worker loss.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RemoteWorkspaceSpec {
@@ -138,6 +138,9 @@ pub struct RemoteRuntimeGeneration {
     pub workflow_id: CloudWorkflowId,
     pub job_id: CloudJobId,
     pub phase: RemoteRuntimePhase,
+    /// Public client identity committed before provider creation; never private key material.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_public_key: Option<String>,
     /// Missing until an exact provider identity has been discovered and verified.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worker: Option<InteractiveWorker>,

@@ -57,6 +57,7 @@ fn provisioning(mut state: RemoteWorkspaceState) -> RemoteWorkspaceState {
         workflow_id: CloudWorkflowId::new(),
         job_id: CloudJobId::new(),
         phase: RemoteRuntimePhase::Provisioning,
+        ssh_public_key: None,
         worker: None,
         ssh: None,
         cleanup: None,
