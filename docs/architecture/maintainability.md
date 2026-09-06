@@ -146,6 +146,9 @@ back into large multi-purpose modules.
 - Owns rendering, egui interaction, transient view state, and deferred UI
   actions.
 - `app/mod.rs` orchestrates frame flow only.
+- `app/bootstrap.rs` constructs the initial application state and configures
+  startup-only fonts and install discovery. It does not own per-frame polling,
+  provider actions, or remote execution lifetime.
 - `app/` leaf modules stay focused:
   - `actions/`: overlay/layout math, panel lifecycle helpers, palette/shortcut
     dispatch, picker flows, and canvas interaction helpers
