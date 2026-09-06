@@ -173,20 +173,25 @@ class PanelSessions:
             if candidate is not None:
                 candidate.unlink()
 
-    def launch_intent(self, directory, arguments):
+    @staticmethod
+    def intent_digest(directory, arguments):
         if not arguments or len(arguments) > 257 or not arguments[0] or arguments[0].startswith("-"):
             raise SessionError("invalid task command")
         if any("\0" in argument for argument in arguments) or sum(len(item.encode()) for item in arguments) > 65536:
             raise SessionError("task command exceeds its limit")
         requested = Path(directory)
-        if requested.is_absolute() or ".." in requested.parts:
-            raise SessionError("task directory must remain inside the repository")
-        repository = self.repository.resolve(strict=True)
-        working_directory = (repository / requested).resolve(strict=True)
-        if not working_directory.is_dir() or not working_directory.is_relative_to(repository):
+        if "\0" in directory or requested.is_absolute() or ".." in requested.parts:
             raise SessionError("task directory must remain inside the repository")
         payload = json.dumps([str(requested), arguments], ensure_ascii=True).encode()
-        return working_directory, hashlib.sha256(payload).hexdigest()
+        return hashlib.sha256(payload).hexdigest()
+
+    def launch_intent(self, directory, arguments):
+        intent = self.intent_digest(directory, arguments)
+        repository = self.repository.resolve(strict=True)
+        working_directory = (repository / directory).resolve(strict=True)
+        if not working_directory.is_dir() or not working_directory.is_relative_to(repository):
+            raise SessionError("task directory must remain inside the repository")
+        return working_directory, intent
 
     def start(self, runtime, panel, directory, arguments):
         _, name = self.identities(runtime, panel)
@@ -215,7 +220,7 @@ class PanelSessions:
 
     def verify(self, runtime, panel, directory, arguments):
         marker = self.read_marker(runtime, panel)
-        _, intent = self.launch_intent(directory, arguments)
+        intent = self.intent_digest(directory, arguments)
         if marker["intent"] != intent:
             raise SessionError("panel launch intent differs from its retained task")
         return self.status(runtime, panel)

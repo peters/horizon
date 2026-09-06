@@ -148,6 +148,38 @@ class PanelSessionTests(unittest.TestCase):
         self.wait_for(lambda: len(ticks.read_text().splitlines()) > before + 2)
         self.assertEqual((marker.read_bytes(), marker.stat().st_mtime_ns), original)
 
+    def test_structured_verification_survives_running_task_directory_rename(self):
+        argv = self.tick_command()
+        first = self.execute(self.request("start", directory="nested space", argv=argv))
+        original = self.repository / "nested space"
+        self.wait_for(lambda: (original / "ticks").exists())
+        renamed = self.repository / "renamed"
+        original.rename(renamed)
+        marker = self.service.marker_path(self.runtimes[0], "structured")
+        retained = marker.read_bytes(), marker.stat().st_mtime_ns
+        before = len((renamed / "ticks").read_text().splitlines())
+        self.assertEqual(self.execute(self.request("verify", directory="nested space", argv=argv)), first)
+        self.wait_for(lambda: len((renamed / "ticks").read_text().splitlines()) > before + 2)
+        self.assertEqual((marker.read_bytes(), marker.stat().st_mtime_ns), retained)
+        with self.assertRaises(MODULE.SessionError):
+            self.execute(self.request("verify", directory="renamed", argv=argv))
+        with self.assertRaises(FileNotFoundError):
+            self.execute(self.request("start", panel="new", directory="nested space", argv=argv))
+        self.assertFalse(self.service.marker_path(self.runtimes[0], "new").exists())
+
+    def test_structured_verification_survives_completed_task_repository_removal(self):
+        argv = self.command("raise SystemExit(42)")
+        first = self.execute(self.request("start", directory="nested space", argv=argv))
+        self.wait_for(lambda: self.execute(self.request("status"))["state"] == "exited")
+        (self.repository / "nested space").rmdir()
+        self.repository.rmdir()
+        marker = self.service.marker_path(self.runtimes[0], "structured")
+        retained = marker.read_bytes(), marker.stat().st_mtime_ns
+        self.assertEqual(self.execute(self.request("verify", directory="nested space", argv=argv)),
+                         {"state":"exited", "panel":"structured", "pid":first["pid"], "exit_status":42})
+        self.assertEqual((marker.read_bytes(), marker.stat().st_mtime_ns), retained)
+        self.assertFalse(self.repository.exists())
+
     def test_structured_verification_rejects_changed_directory_or_literal_arguments(self):
         literals = ["", "$(touch injected);", "'quoted'", "line\nbreak", "æøå", "\\;", "#{l:..}"]
         argv = self.tick_command() + literals

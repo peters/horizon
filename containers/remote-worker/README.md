@@ -166,7 +166,10 @@ its status. It never creates a marker, tmux server, session or replacement task.
 A changed intent is rejected; a missing task stays absent and a completed task
 stays retained. Controllers must use the saved launch intent instead of silently
 attaching a panel identity whose command has since changed. This check alone does
-not verify repository contents, remote durability or permission to attach.
+not verify repository contents, remote durability or permission to attach. Intent
+comparison is independent of current filesystem contents, so renaming or removing
+the original directory does not hide a retained running or completed task. Fresh
+task startup still resolves and confines its working directory to the repository.
 
 Before starting anything, the helper durably publishes one private no-overwrite
 marker for the runtime/panel pair. Repeating the same start can only inspect that
@@ -190,7 +193,7 @@ volumes, backup and explicit restart remain separate integration requirements.
 This helper does not yet connect local panels, stop tasks or delete workspaces.
 
 With `bison`, `libevent-dev`, `libncurses-dev`, a C compiler and Make installed, build a
-disposable test binary under a new prefix, then run the twenty-seven regressions:
+disposable test binary under a new prefix, then run the twenty-nine regressions:
 
 ```bash
 test_root=$(mktemp -d /tmp/horizon-panel-tests.XXXXXX)
