@@ -61,6 +61,58 @@ class HostIdentityTests(unittest.TestCase):
         for path in (self.store.claim, self.store.marker, runtime_key):
             self.assertEqual(0o600, path.stat().st_mode & 0o777)
         self.assertEqual(0o700, self.store.directory.stat().st_mode & 0o777)
+        self.assertEqual(0o700, self.store.panels.stat().st_mode & 0o777)
+        self.assertEqual(identity.STATE_VERSION, json.loads(self.store.marker.read_bytes())["version"])
+
+    def test_retained_panel_records_survive_runtime_filesystem_replacement(self):
+        public = self.store.prepare()
+        record = self.store.panels / "synthetic-record"
+        record.write_bytes(b"retained-task-claim\0")
+        record.chmod(0o600)
+        before = self.snapshot()
+        shutil.rmtree(self.runtime)
+        self.runtime.mkdir(mode=0o700)
+        self.assertEqual(public, self.new_store().prepare())
+        self.assertEqual(before, self.snapshot())
+
+    def test_missing_retained_panel_root_is_not_recreated(self):
+        self.store.prepare()
+        self.store.panels.rmdir()
+        before = self.snapshot()
+        self.assert_rejected_without_generation()
+        self.assertFalse(self.store.panels.exists())
+        self.assertEqual(before, self.snapshot())
+
+    def test_legacy_readiness_is_not_automatically_migrated(self):
+        self.store.prepare()
+        marker = json.loads(self.store.marker.read_bytes())
+        self.store.marker.write_bytes(json.dumps({**marker, "version": 1}).encode())
+        self.store.panels.rmdir()
+        before = self.snapshot()
+        self.assert_rejected_without_generation()
+        self.assertFalse(self.store.panels.exists())
+        self.assertEqual(before, self.snapshot())
+
+    def test_insecure_or_linked_panel_root_is_rejected_without_identity_replacement(self):
+        self.store.prepare()
+        before = self.snapshot()
+        self.store.panels.chmod(0o755)
+        self.assert_rejected_without_generation()
+        self.store.panels.chmod(0o700)
+        retained = self.store.panels.with_name("retained-panels")
+        self.store.panels.rename(retained)
+        self.store.panels.symlink_to(retained)
+        self.assert_rejected_without_generation()
+        self.assertEqual(before, self.snapshot())
+
+    def test_preexisting_unclaimed_panel_state_is_not_adopted(self):
+        self.store.parent.mkdir(mode=0o700)
+        self.store.panels.mkdir(mode=0o700)
+        record = self.store.panels / "unclaimed"
+        record.write_bytes(b"must-not-adopt-or-remove")
+        self.assert_rejected_without_generation()
+        self.assertEqual(b"must-not-adopt-or-remove", record.read_bytes())
+        self.assertFalse(self.store.marker.exists())
 
     def test_separate_workspaces_never_share_host_identity(self):
         first = self.store.prepare()
@@ -152,7 +204,7 @@ class HostIdentityTests(unittest.TestCase):
         key = (self.store.directory / identity.KEY_NAME).read_bytes()
         for value in (b"broken", b"[]", b"x" * (identity.LIMIT + 1),
                       b'{"version": 2, ' + self.store.marker.read_bytes()[1:],
-                      json.dumps({**original, "version": 2}).encode(),
+                      json.dumps({**original, "version": identity.STATE_VERSION + 1}).encode(),
                       json.dumps({**original, "version": True}).encode(),
                       json.dumps({**original, "access_digest": "wrong"}).encode(),
                       json.dumps({**original, "extra": 1}).encode()):
@@ -229,6 +281,8 @@ class HostIdentityTests(unittest.TestCase):
             if "-q" in arguments:
                 self.assertTrue(self.store.claim.exists())
                 self.assertIn((self.store.parent, True), observed)
+                self.assertTrue(self.store.panels.is_dir())
+                self.assertIn((self.store.panels, True), observed)
                 self.assertFalse((self.runtime / identity.KEY_NAME).exists())
             return real_keygen(*arguments)
 

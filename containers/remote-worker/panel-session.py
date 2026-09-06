@@ -67,7 +67,8 @@ def private_directory(path):
 
 def check_directory(path):
     metadata = path.lstat()
-    if not stat.S_ISDIR(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) & 0o077:
+    if (not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) & 0o077):
         raise SessionError("session state directory is not private")
 
 
@@ -80,12 +81,17 @@ def sync_directory(path):
 
 
 class PanelSessions:
-    def __init__(self, repository, state, sockets, config, wrapper):
+    def __init__(self, repository, state, sockets, config, wrapper, *, require_existing_state=False):
         self.repository = Path(repository)
         self.state = Path(state)
         self.sockets = Path(sockets)
         self.config = Path(config)
         self.wrapper = str(wrapper)
+        self.require_existing_state = require_existing_state
+
+    def check_state_parent(self):
+        if self.require_existing_state:
+            check_directory(self.state.parent)
 
     def identities(self, runtime, panel):
         try:
@@ -125,12 +131,14 @@ class PanelSessions:
 
     def read_marker(self, runtime, panel):
         path = self.marker_path(runtime, panel)
+        self.check_state_parent()
         check_directory(self.state)
         check_directory(path.parent)
         descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         with os.fdopen(descriptor, "rb") as stream:
             metadata = os.fstat(stream.fileno())
-            if not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) & 0o077:
+            if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid()
+                    or stat.S_IMODE(metadata.st_mode) & 0o077):
                 raise SessionError("session marker is not private")
             raw = stream.read(4097)
         if len(raw) > 4096:
@@ -151,7 +159,11 @@ class PanelSessions:
 
     def publish_marker(self, runtime, panel, marker):
         path = self.marker_path(runtime, panel)
-        private_directory(self.state)
+        self.check_state_parent()
+        if self.require_existing_state:
+            check_directory(self.state)
+        else:
+            private_directory(self.state)
         private_directory(path.parent)
         sync_directory(self.state.parent)
         sync_directory(self.state)
@@ -263,8 +275,9 @@ def main():
         command.add_argument("panel")
         command.add_argument("arguments", nargs=argparse.REMAINDER)
     arguments = parser.parse_args()
-    service = PanelSessions("/workspace/horizon", "/var/lib/horizon/panels", "/run/horizon/panels",
-                            "/etc/horizon/tmux.conf", "/usr/local/bin/horizon-agent-session")
+    service = PanelSessions("/workspace/horizon", "/workspace/.horizon-worker/panels", "/run/horizon/panels",
+                            "/etc/horizon/tmux.conf", "/usr/local/bin/horizon-agent-session",
+                            require_existing_state=True)
     try:
         if arguments.operation == "request":
             result = execute_request(service, sys.stdin.buffer)

@@ -18,6 +18,7 @@ INITIALIZATION_SYNC_GRACE_SECONDS = 10
 # Generation and public-key inspection both finish before the readiness marker.
 WAIT_SECONDS = 2 * KEYGEN_TIMEOUT_SECONDS + INITIALIZATION_SYNC_GRACE_SECONDS
 KEY_NAME = "ssh_host_ed25519_key"
+STATE_VERSION = 2
 ED25519_PREFIX = b"\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20"
 
 
@@ -116,6 +117,7 @@ class HostIdentity:
         self.runtime_directory = Path(runtime_directory)
         self.parent = self.workspace / ".horizon-worker"
         self.directory = self.parent / "ssh"
+        self.panels = self.parent / "panels"
         self.claim = self.parent / "ssh.claim"
         self.marker = self.directory / "ready.json"
 
@@ -151,6 +153,11 @@ class HostIdentity:
         for suffix in ("", ".pub"):
             if os.path.lexists(self.runtime_directory / (KEY_NAME + suffix)):
                 fail()
+        # Readiness also fences a lost task-state root from becoming a clean slate.
+        self.panels.mkdir(mode=0o700)
+        trusted_directory(self.panels, private=True)
+        synchronize(self.panels, directory=True)
+        synchronize(self.parent, directory=True)
         private_path = self.directory / KEY_NAME
         keygen("-q", "-t", "ed25519", "-N", "", "-C", "", "-f", private_path)
         for suffix in ("", ".pub"):
@@ -159,7 +166,7 @@ class HostIdentity:
             read_file(path)
             synchronize(path)
         host_public_key = public_key(keygen("-y", "-P", "", "-f", private_path))
-        marker = {"version": 1, "access_digest": access_digest, "host_public_key": host_public_key}
+        marker = {"version": STATE_VERSION, "access_digest": access_digest, "host_public_key": host_public_key}
         publish(self.marker, json.dumps(marker, sort_keys=True).encode())
 
     def load(self, access_digest):
@@ -176,10 +183,11 @@ class HostIdentity:
         marker = json.loads(encoded, object_pairs_hook=unique_object)
         if (not isinstance(marker, dict)
                 or set(marker) != {"version", "access_digest", "host_public_key"}
-                or type(marker["version"]) is not int or marker["version"] != 1
+                or type(marker["version"]) is not int or marker["version"] != STATE_VERSION
                 or marker["access_digest"] != access_digest
                 or not isinstance(marker["host_public_key"], str)):
             fail()
+        trusted_directory(self.panels, private=True)
         private_path = self.directory / KEY_NAME
         read_file(private_path)
         expected = marker["host_public_key"]
