@@ -1,7 +1,7 @@
 use super::*;
 use crate::cloud_run::CloudJobId;
 
-fn seeded(request: &InteractiveWorkerRequest) -> FakeDocker {
+pub(super) fn seeded(request: &InteractiveWorkerRequest) -> FakeDocker {
     let fake = FakeDocker::default();
     let name = container_name(request.workflow_id, request.job_id);
     fake.create(&DockerCreateRequest::new(request, &name).expect("fixture"))
@@ -10,7 +10,7 @@ fn seeded(request: &InteractiveWorkerRequest) -> FakeDocker {
     fake
 }
 
-fn assert_read_only(fake: &FakeDocker) {
+pub(super) fn assert_read_only(fake: &FakeDocker) {
     let state = fake.state();
     assert_eq!((state.create_calls, state.delete_calls), (0, 0));
 }

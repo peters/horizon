@@ -1,6 +1,6 @@
 use super::*;
 
-fn persistent_request() -> InteractiveWorkerRequest {
+pub(super) fn persistent_request() -> InteractiveWorkerRequest {
     let mut request = request();
     request.target.lifetime = WorkerLifetime::Persistent;
     request
@@ -10,7 +10,7 @@ fn persistent_request() -> InteractiveWorkerRequest {
 fn persistent_worker_is_reused_after_controller_drop_without_an_expiry() {
     let request = persistent_request();
     let fake = FakeDocker::default();
-    let original = provider("local", fake.clone());
+    let original = provider_for("local", fake.clone(), &request);
     let created = original.ensure_worker(&request).expect("create persistent worker");
     assert!(matches!(created, InteractiveWorkerEnsure::Created(_)));
     let status = created.into_status();
@@ -25,7 +25,7 @@ fn persistent_worker_is_reused_after_controller_drop_without_an_expiry() {
     let encoded = serde_json::to_string(&status.worker).expect("persist handle");
     let worker: InteractiveWorker = serde_json::from_str(&encoded).expect("restore handle");
     drop(original);
-    let reopened = provider("local", fake.clone());
+    let reopened = provider_for("local", fake.clone(), &request);
     assert_eq!(reopened.inspect_worker(&worker), Ok(Some(status.clone())));
     assert_eq!(
         reopened.ensure_worker(&request),
@@ -43,7 +43,7 @@ fn persistent_worker_is_reused_after_controller_drop_without_an_expiry() {
 fn a_stopped_or_missing_persistent_worker_is_not_recreated_by_inspection() {
     let request = persistent_request();
     let fake = FakeDocker::default();
-    let provider = provider("local", fake.clone());
+    let provider = provider_for("local", fake.clone(), &request);
     let worker = provider.ensure_worker(&request).expect("create").into_status().worker;
     {
         let mut state = fake.state();
@@ -73,7 +73,7 @@ fn persistent_metadata_drift_never_authorizes_reuse_or_deletion() {
     for drift in 0..6 {
         let request = persistent_request();
         let fake = FakeDocker::default();
-        let provider = provider("local", fake.clone());
+        let provider = provider_for("local", fake.clone(), &request);
         let worker = provider.ensure_worker(&request).expect("create").into_status().worker;
         {
             let mut state = fake.state();
@@ -113,7 +113,7 @@ fn persistent_metadata_drift_never_authorizes_reuse_or_deletion() {
 fn a_timed_worker_is_never_adopted_as_persistent_or_vice_versa() {
     for initial in [request(), persistent_request()] {
         let fake = FakeDocker::default();
-        let provider = provider("local", fake.clone());
+        let provider = provider_for("local", fake.clone(), &initial);
         provider.ensure_worker(&initial).expect("create original policy");
         let mut changed = initial;
         changed.target.lifetime = match changed.target.lifetime {
@@ -130,7 +130,7 @@ fn a_timed_worker_is_never_adopted_as_persistent_or_vice_versa() {
 fn persistent_lost_create_response_recovers_the_same_exact_worker() {
     let fake = FakeDocker::default();
     fake.state().fail_create_after_insert = true;
-    let provider = provider("local", fake.clone());
+    let provider = provider_for("local", fake.clone(), &persistent_request());
     let result = provider
         .ensure_worker(&persistent_request())
         .expect("reconcile creation");
@@ -149,7 +149,7 @@ fn unexpected_image_expiry_retains_the_created_identity_for_manual_inspection() 
     ] {
         let fake = FakeDocker::default();
         fake.state().image_environment.push(entry);
-        let result = provider("local", fake.clone()).ensure_worker(&persistent_request());
+        let result = provider_for("local", fake.clone(), &persistent_request()).ensure_worker(&persistent_request());
         assert_eq!(
             result,
             Err(PersistentLifetimeMetadataConflict {
@@ -200,7 +200,7 @@ fn timed_lifetime_rejects_bare_or_duplicate_expiry_without_deletion() {
 fn a_persistent_create_race_never_deletes_the_recovered_peers_worker() {
     let request = persistent_request();
     let fake = FakeDocker::default();
-    let provider = provider("local", fake.clone());
+    let provider = provider_for("local", fake.clone(), &request);
     let worker = provider
         .ensure_worker(&request)
         .expect("peer creates worker")
@@ -212,14 +212,9 @@ fn a_persistent_create_race_never_deletes_the_recovered_peers_worker() {
         state.reject_create = true;
         state.container.as_mut().expect("peer worker").ssh_bindings[0].host = "0.0.0.0".into();
     }
-    assert_eq!(
-        provider.ensure_worker(&request),
-        Err(PersistentCreationReconciliationRequired {
-            resource_id: worker.identity.resource_id.clone()
-        })
-    );
+    assert_eq!(provider.ensure_worker(&request), Err(InvalidSshEndpoint));
     let state = fake.state();
-    assert_eq!((state.create_calls, state.delete_calls), (2, 0));
+    assert_eq!((state.create_calls, state.delete_calls), (1, 0));
     assert_eq!(
         state.container.as_ref().expect("peer worker retained").id,
         worker.identity.resource_id

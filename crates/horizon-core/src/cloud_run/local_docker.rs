@@ -1,7 +1,7 @@
 //! Local Docker implementation of persistent and time-limited interactive workers.
 
 use super::{
-    CLOUD_RUN_PROTOCOL_VERSION, CloudProvider, WorkerLifetime, WorkerTarget,
+    CLOUD_RUN_PROTOCOL_VERSION, CloudProvider, CloudWorkflowStore, WorkerLifetime, WorkerTarget,
     interactive_worker::{
         InteractiveWorker, InteractiveWorkerCleanup, InteractiveWorkerEnsure, InteractiveWorkerIdentity,
         InteractiveWorkerLease, InteractiveWorkerLifecycle, InteractiveWorkerLifetime, InteractiveWorkerProvider,
@@ -16,6 +16,7 @@ use std::{
 use thiserror::Error;
 
 mod command;
+mod creation;
 #[cfg(test)]
 mod tests;
 
@@ -49,18 +50,22 @@ pub struct LocalDockerProfile {
 pub struct LocalDockerInteractiveWorkerProvider {
     transport: Box<dyn DockerTransport>,
     profile: LocalDockerProfile,
+    creation_store: CloudWorkflowStore,
 }
 
 impl LocalDockerInteractiveWorkerProvider {
     /// Build a provider pinned to an explicit local Unix socket or Windows named pipe.
+    /// Creation requires an existing workflow's durable one-shot grant in this store.
+    /// Reconnect callers must use non-creating inspection/reconciliation, never ensure.
     ///
     /// # Errors
     /// Returns [`LocalDockerError::NonLocalDockerHost`] for ambient or remote daemon endpoints.
-    pub fn new(profile: LocalDockerProfile) -> Result<Self, LocalDockerError> {
+    pub fn new(profile: LocalDockerProfile, creation_store: CloudWorkflowStore) -> Result<Self, LocalDockerError> {
         valid_local_docker_host(&profile.docker_host)
             .then(|| Self {
                 transport: Box::new(command::DockerCli::new(&profile.docker_host)),
                 profile,
+                creation_store,
             })
             .ok_or(LocalDockerError::NonLocalDockerHost)
     }
@@ -241,12 +246,11 @@ impl InteractiveWorkerProvider for LocalDockerInteractiveWorkerProvider {
         validate_request(request, &self.profile)?;
         let container_name = container_name(request.workflow_id, request.job_id);
         if let Some(container) = self.transport.inspect(&container_name)? {
-            match self.ensure_existing(request, &container) {
-                Err(LocalDockerError::ResourceAbsent) => {}
-                result => return result.map(InteractiveWorkerEnsure::Reused),
-            }
+            return self
+                .ensure_existing(request, &container)
+                .map(InteractiveWorkerEnsure::Reused);
         }
-        self.create_worker(request, &container_name)
+        self.create_once(request, &container_name)
     }
     fn inspect_worker(&self, worker: &InteractiveWorker) -> Result<Option<InteractiveWorkerStatus>, Self::Error> {
         self.validate_persisted_worker(worker)?;
@@ -298,6 +302,10 @@ pub enum LocalDockerError {
     InvalidPersistedWorker,
     #[error("local Docker provider requires an explicit local Unix socket or Windows named pipe")]
     NonLocalDockerHost,
+    #[error("local worker creation grant could not be safely read or recorded")]
+    CreationFenceFailed,
+    #[error("local worker creation was already claimed; non-creating reconciliation is required")]
+    CreationReconciliationRequired,
     #[error("required command 'docker' is unavailable")]
     DockerUnavailable,
     #[error("local Docker command exceeds the portable argument limit during {operation}")]
