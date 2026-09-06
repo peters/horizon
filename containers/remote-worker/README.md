@@ -132,8 +132,10 @@ trusted provider host-key inspection keeps its existing path.
 
 This requires a trusted Linux POSIX-permission filesystem. Workspace ancestors
 must have trusted ownership and no unprotected group/world write access. Identity
-directories and files must be owned by the worker user, with modes `0700` and
-`0600`. Symlinks, partial initialization, missing files, corruption, changed access
+directories and files must be owned by the worker user with no group/world
+permission bits. New directories and files use modes `0700` and `0600`;
+existing entries may use other owner-only modes. Symlinks, partial initialization,
+missing files, corruption, changed access
 keys and conflicting runtime keys fail before SSH starts. An interrupted first
 initialization may require explicit recovery; it is never silently retried as
 permission to replace an identity. Existing unretained keys are not automatically
