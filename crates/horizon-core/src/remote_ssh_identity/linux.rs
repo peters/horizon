@@ -3,8 +3,8 @@ use crate::cloud_run::{CloudJobId, CloudWorkflowId, interactive_worker::valid_ss
 use std::{
     fs::{self, File, OpenOptions},
     io,
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt},
-    path::{Path, PathBuf},
+    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
+    path::{Component, Path, PathBuf},
 };
 
 const KEY_FILE_LIMIT: u64 = 4096;
@@ -25,10 +25,13 @@ pub(super) fn prepare(home: &Path, workflow: CloudWorkflowId, job: CloudJobId) -
     let identity = load(&candidate)?;
     private_file(&candidate)?.sync_all().map_err(|_| Error::Storage)?;
     match atomicwrites::move_atomic(&candidate, &destination) {
-        Ok(()) => Ok(RemoteSshIdentity {
-            private_key_path: destination,
-            public_key: identity.public_key,
-        }),
+        Ok(()) => {
+            sync_directory(&directory)?;
+            Ok(RemoteSshIdentity {
+                private_key_path: destination,
+                public_key: identity.public_key,
+            })
+        }
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => retained(&destination, &directory),
         Err(_) => Err(Error::Storage),
     }
@@ -52,8 +55,8 @@ pub(super) fn recover(
 }
 
 fn directory(home: &Path, create: bool) -> Result<PathBuf, Error> {
-    check_directory(home, create, false)?;
-    let root = home.canonicalize().map_err(|_| Error::Storage)?;
+    let root = trusted_home(home)?;
+    check_directory(&root, create, false)?;
     let directory = root.join(STORE_DIRECTORY);
     check_directory(&directory, create, true)?;
     if create {
@@ -62,6 +65,30 @@ fn directory(home: &Path, create: bool) -> Result<PathBuf, Error> {
         sync_directory(&root)?;
     }
     Ok(directory)
+}
+
+fn trusted_home(home: &Path) -> Result<PathBuf, Error> {
+    let absolute = std::path::absolute(home).map_err(|_| Error::Storage)?;
+    if absolute.components().any(|component| component == Component::ParentDir) {
+        return Err(Error::InsecurePath);
+    }
+    let parent = absolute.parent().ok_or(Error::InsecurePath)?;
+    let uid = rustix::process::geteuid().as_raw();
+    let mut ancestor = PathBuf::new();
+    // Walk from the trusted root before creating anything. A sticky ancestor
+    // is safe only because every child below it must also belong to us or root.
+    for component in parent.components() {
+        ancestor.push(component);
+        let metadata = fs::symlink_metadata(&ancestor).map_err(|error| storage_error(&error))?;
+        let mode = metadata.permissions().mode();
+        if !metadata.is_dir()
+            || (metadata.uid() != uid && metadata.uid() != 0)
+            || (mode & 0o022 != 0 && mode & 0o1000 == 0)
+        {
+            return Err(Error::InsecurePath);
+        }
+    }
+    Ok(absolute)
 }
 
 fn check_directory(path: &Path, create: bool, private: bool) -> Result<(), Error> {
@@ -74,7 +101,10 @@ fn check_directory(path: &Path, create: bool, private: bool) -> Result<(), Error
     }
     let metadata = fs::symlink_metadata(path).map_err(|error| storage_error(&error))?;
     let forbidden = if private { 0o077 } else { 0o022 };
-    if !metadata.is_dir() || metadata.permissions().mode() & forbidden != 0 {
+    if !metadata.is_dir()
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.permissions().mode() & forbidden != 0
+    {
         return Err(Error::InsecurePath);
     }
     Ok(())
@@ -128,7 +158,10 @@ fn private_file(path: &Path) -> Result<File, Error> {
             }
         })?;
     let metadata = file.metadata().map_err(|_| Error::Storage)?;
-    if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 {
+    if !metadata.is_file()
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.permissions().mode() & 0o077 != 0
+    {
         return Err(Error::InsecurePath);
     }
     if metadata.len() == 0 || metadata.len() > KEY_FILE_LIMIT {

@@ -11,6 +11,7 @@ mod linux_tests {
 
     fn fixture() -> (tempfile::TempDir, RemoteSshIdentityStore, CloudWorkflowId, CloudJobId) {
         let directory = tempfile::tempdir().expect("private fixture");
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).expect("private fixture mode");
         let store = RemoteSshIdentityStore::new(&HorizonHome::from_root(directory.path().join("home")));
         (directory, store, CloudWorkflowId::new(), CloudJobId::new())
     }
@@ -181,6 +182,67 @@ mod linux_tests {
         assert_eq!(
             linked_store.prepare_new(workflow, job).expect_err("linked home"),
             RemoteSshIdentityError::InsecurePath
+        );
+    }
+
+    #[test]
+    fn writable_parents_and_ancestors_fail_before_creating_an_identity_store() {
+        let (directory, _, workflow, job) = fixture();
+        let parent = directory.path().join("parent");
+        fs::create_dir(&parent).expect("parent");
+        let home = parent.join("home");
+        let store = RemoteSshIdentityStore::new(&HorizonHome::from_root(home.clone()));
+        for unsafe_directory in [&parent, &directory.path().to_path_buf()] {
+            for permissions in [0o770, 0o777] {
+                fs::set_permissions(unsafe_directory, fs::Permissions::from_mode(permissions)).expect("fault");
+                assert_eq!(
+                    store.prepare_new(workflow, job).expect_err("writable ancestor"),
+                    RemoteSshIdentityError::InsecurePath
+                );
+                assert!(!home.exists());
+            }
+            fs::set_permissions(unsafe_directory, fs::Permissions::from_mode(0o700)).expect("restore");
+        }
+        let identity = store.prepare_new(workflow, job).expect("trusted chain");
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o777)).expect("fault after creation");
+        assert_eq!(
+            store
+                .recover(workflow, job, identity.public_key())
+                .expect_err("unsafe recovery"),
+            RemoteSshIdentityError::InsecurePath
+        );
+        assert!(identity.private_key_path().exists());
+    }
+
+    #[test]
+    fn symlinked_or_traversing_ancestors_fail_before_writes() {
+        let (directory, _, workflow, job) = fixture();
+        let target = directory.path().join("target");
+        fs::create_dir(&target).expect("target");
+        let linked = directory.path().join("linked");
+        symlink(&target, &linked).expect("linked ancestor");
+        for home in [linked.join("home"), target.join("..").join("home")] {
+            let store = RemoteSshIdentityStore::new(&HorizonHome::from_root(home));
+            assert_eq!(
+                store.prepare_new(workflow, job).expect_err("untrusted path"),
+                RemoteSshIdentityError::InsecurePath
+            );
+        }
+        assert!(!target.join("home").exists());
+        assert!(!directory.path().join("home").exists());
+    }
+
+    #[test]
+    fn sticky_shared_ancestor_with_owned_children_preserves_identity_privacy() {
+        let (directory, store, workflow, job) = fixture();
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o1777)).expect("sticky ancestor");
+        let identity = store.prepare_new(workflow, job).expect("owned private child");
+        assert_eq!(
+            store
+                .recover(workflow, job, identity.public_key())
+                .expect("recover")
+                .public_key(),
+            identity.public_key()
         );
     }
 

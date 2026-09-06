@@ -33,9 +33,13 @@ coordinator must preserve the remote worker and surface recovery instructions.
 
 ## Private storage boundary
 
-The configured Horizon home must have an existing trusted parent, must not be a
-symlink and must not be writable by other users. The dedicated identity directory
-is owner-only (`0700`); private regular files are owner-only (`0600` when created).
+Every existing ancestor of the configured Horizon home is checked from the root
+before any write. Ancestors must be directories owned by the effective user or
+root, without symlinks or parent traversal. Shared writable ancestors require the
+sticky bit; owned children beneath them cannot be renamed by other users. The
+home itself must belong to the effective user and must not be writable by others.
+The dedicated identity directory and private regular files must also belong to
+that user and be owner-only (`0700` and `0600` when created).
 Keys are unencrypted OpenSSH files protected by filesystem permissions; an
 encrypted vault or OS keychain is not claimed by this implementation.
 Symlinks, non-regular files, broad permissions and oversized/empty files are
@@ -50,8 +54,11 @@ paths, key bytes and subprocess output. Key utility processes are task-owned and
 reaped on completion or error; remote processes are never affected.
 
 The existing public-key validator and atomic file publication dependency are
-reused. No cryptographic format implementation, new dependency, credential upload,
-default configuration or automatic key deletion is introduced. Explicit key
+reused. A Linux-only direct `rustix` dependency provides the safe effective-user-ID
+API without unsafe code; the version already exists in the dependency graph and
+was verified as the latest stable on crates.io. No cryptographic format
+implementation, credential upload, default configuration or automatic key
+deletion is introduced. Explicit key
 retirement must remain separate from ordinary disconnection and cannot precede
 verified remote cleanup and the required user decision.
 
