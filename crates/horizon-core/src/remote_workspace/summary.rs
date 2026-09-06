@@ -2,7 +2,8 @@
 
 use super::{RemoteRuntimePhase, RemoteWorkspaceState, RepositoryCheckpoint};
 use crate::cloud_run::{
-    CloudProvider, StoredRemoteWorkspace, WorkerLifetime, interactive_worker::InteractiveWorkerIdentity,
+    CloudJobId, CloudProvider, CloudWorkflowId, StoredRemoteWorkspace, WorkerLifetime,
+    interactive_worker::InteractiveWorkerIdentity,
 };
 
 /// Safe to retain in an overview without retaining task handoffs, commands or SSH keys.
@@ -18,6 +19,8 @@ pub struct RemoteEnvironmentSummary {
     pub lifetime: WorkerLifetime,
     pub generation: u64,
     pub saved_phase: Option<RemoteRuntimePhase>,
+    pub workflow_id: Option<CloudWorkflowId>,
+    pub job_id: Option<CloudJobId>,
     pub worker_identity: Option<InteractiveWorkerIdentity>,
     pub checkpoint: Option<RepositoryCheckpoint>,
     pub panel_count: usize,
@@ -43,6 +46,8 @@ impl RemoteEnvironmentSummary {
             lifetime: state.spec.target.lifetime,
             generation: state.spec.generation,
             saved_phase: state.runtime.as_ref().map(|runtime| runtime.phase),
+            workflow_id: state.runtime.as_ref().map(|runtime| runtime.workflow_id),
+            job_id: state.runtime.as_ref().map(|runtime| runtime.job_id),
             worker_identity: state
                 .runtime
                 .as_ref()
@@ -105,6 +110,8 @@ mod tests {
         assert_eq!(summary.panel_count, 1);
         assert_eq!(summary.lifetime, WorkerLifetime::Persistent);
         assert!(summary.saved_phase.is_none());
+        assert!(summary.workflow_id.is_none());
+        assert!(summary.job_id.is_none());
         assert!(summary.worker_identity.is_none());
         assert!(!format!("{summary:?}").contains("private-task-marker"));
     }
@@ -126,6 +133,9 @@ mod tests {
         });
         let summary = RemoteEnvironmentSummary::from_state("owner", 7, &state);
         assert_eq!(summary.saved_phase, Some(RemoteRuntimePhase::Reconciling));
+        let runtime = state.runtime.as_ref().expect("runtime");
+        assert_eq!(summary.workflow_id, Some(runtime.workflow_id));
+        assert_eq!(summary.job_id, Some(runtime.job_id));
         assert_eq!(summary.generation, 2);
         assert_eq!(summary.revision, 7);
         assert!(summary.worker_identity.is_none());

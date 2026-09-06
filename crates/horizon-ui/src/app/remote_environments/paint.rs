@@ -38,10 +38,14 @@ impl InventoryRow {
             ("Saved panel intents", summary.panel_count.to_string()),
             ("Execution policy", lifetime),
         ];
+        if let Some(workflow_id) = summary.workflow_id {
+            details.push(("Workflow ID", workflow_id.to_string()));
+        }
+        if let Some(job_id) = summary.job_id {
+            details.push(("Job ID", job_id.to_string()));
+        }
         if let Some(identity) = &summary.worker_identity {
             details.push(("Exact resource ID", identity.resource_id.clone()));
-            details.push(("Workflow ID", identity.workflow_id.to_string()));
-            details.push(("Job ID", identity.job_id.to_string()));
         } else {
             details.push((
                 "Exact resource ID",
