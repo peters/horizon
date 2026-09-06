@@ -135,6 +135,11 @@ back into large multi-purpose modules.
   Linux directory using kernel confinement, byte limits and change checks. It does
   not enumerate repositories, follow link targets, hash, authorize or transfer data;
   unsupported platforms fail closed without a weaker filesystem fallback.
+  Its `bundle/` boundary owns a complete bounded set of SHA-256-verified file
+  payloads and fingerprints exact two-layer metadata. Missing, extra, duplicate
+  or length-inconsistent payloads fail before a bundle is returned. It performs
+  no I/O and grants no capture, export or recovery authority; streaming large
+  overlays, coherent capture and safe materialization remain separate concerns.
 - `containers/remote-worker/host-identity.py` owns workspace-retained server-key
   initialization, validation and runtime materialization before SSH starts.
   Its real-key regressions are separate from the retained-volume SSH smoke in
