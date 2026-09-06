@@ -13,7 +13,10 @@ import tempfile
 import time
 
 LIMIT = 16 * 1024
-WAIT_SECONDS = 2
+KEYGEN_TIMEOUT_SECONDS = 10
+INITIALIZATION_SYNC_GRACE_SECONDS = 10
+# Generation and public-key inspection both finish before the readiness marker.
+WAIT_SECONDS = 2 * KEYGEN_TIMEOUT_SECONDS + INITIALIZATION_SYNC_GRACE_SECONDS
 KEY_NAME = "ssh_host_ed25519_key"
 ED25519_PREFIX = b"\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20"
 
@@ -68,7 +71,7 @@ def public_key(value):
 
 def keygen(*arguments):
     result = subprocess.run(
-        ["/usr/bin/ssh-keygen", *map(str, arguments)], check=False, timeout=10,
+        ["/usr/bin/ssh-keygen", *map(str, arguments)], check=False, timeout=KEYGEN_TIMEOUT_SECONDS,
         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
     )

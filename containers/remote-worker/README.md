@@ -143,6 +143,12 @@ migrated. Key rotation, old-volume migration and whole-volume loss require a
 separate verified recovery operation. Never resolve a host-key mismatch by
 disabling client verification.
 
+Concurrent starters wait up to 30 seconds for readiness: two ten-second key
+operation budgets plus ten seconds of filesystem synchronization grace. This is
+a bounded readiness wait, not a filesystem I/O deadline. A stalled or slower
+initialization fails closed for waiting starters; a later startup can validate
+the completed identity, but a timeout never authorizes replacement.
+
 Back up the complete private `.horizon-worker` directory with the repository;
 protect it as credential-bearing data. Host keys are unencrypted on disk and
 worker tasks share the root-owned trust domain. This is not a per-task sandbox,

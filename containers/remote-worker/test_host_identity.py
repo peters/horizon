@@ -80,6 +80,40 @@ class HostIdentityTests(unittest.TestCase):
         self.assertEqual(1, len(set(results)))
         self.assertEqual(1, len(list(self.store.directory.glob(identity.KEY_NAME))))
 
+    def test_follower_wait_covers_both_key_operations_before_readiness(self):
+        public = self.store.prepare()
+        before = self.snapshot()
+        real_read = identity.read_file
+        marker_attempts = []
+
+        def read_file(path, private=True):
+            if path == self.store.marker:
+                marker_attempts.append(path)
+                if len(marker_attempts) < 3:
+                    raise FileNotFoundError
+            return real_read(path, private)
+
+        elapsed = [0, 0, 2 * identity.KEYGEN_TIMEOUT_SECONDS]
+        with mock.patch.object(identity, "read_file", read_file), \
+                mock.patch.object(identity.time, "monotonic", side_effect=elapsed), \
+                mock.patch.object(identity.time, "sleep") as sleep:
+            self.assertEqual(public, self.new_store().prepare())
+        self.assertEqual(2, sleep.call_count)
+        self.assertEqual(before, self.snapshot())
+
+    def test_exhausted_follower_deadline_does_not_replace_identity(self):
+        self.store.prepare()
+        self.store.marker.unlink()
+        before = self.snapshot()
+        with mock.patch.object(identity.time, "monotonic", side_effect=[0, identity.WAIT_SECONDS]), \
+                mock.patch.object(identity.time, "sleep") as sleep, \
+                mock.patch.object(identity, "keygen") as utility:
+            with self.assertRaises(identity.IdentityError):
+                self.new_store().prepare()
+        utility.assert_not_called()
+        sleep.assert_not_called()
+        self.assertEqual(before, self.snapshot())
+
     def test_different_client_cannot_adopt_retained_volume(self):
         self.store.prepare()
         before = self.snapshot()
