@@ -72,6 +72,7 @@ Persistent example (stop and remove this exact container manually when finished)
 ```bash
 docker run --detach --name horizon-development \
   --publish 127.0.0.1::22 \
+  --mount type=volume,src=horizon-development-data,dst=/workspace \
   --env "HORIZON_SSH_PUBLIC_KEY=$(ssh-keygen -y -f /path/to/ephemeral-worker-key)" \
   --mount type=bind,src=/path/to/github-token,dst=/run/secrets/github-token,readonly \
   --env HORIZON_GITHUB_TOKEN_FILE=/run/secrets/github-token \
@@ -85,10 +86,11 @@ the default product lifetime or a replacement for manual management.
 At startup the entrypoint:
 
 1. validates any supplied expiry, the public key, and optional secret file;
-2. creates a new SSH host identity in the container's writable layer;
-3. installs only the supplied public key for root login;
-4. copies the optional token to a root-only runtime file and configures shared
-   Git authentication once, before SSH accepts concurrent sessions; and
+2. installs only the supplied public key for root login;
+3. copies the optional token to a root-only runtime file and configures shared
+   Git authentication once, before SSH accepts concurrent sessions;
+4. prepares or strictly recovers the workspace-retained Ed25519 host identity
+   and materializes its verified runtime files before SSH starts; and
 5. starts a termination watchdog only when an explicit expiry was supplied.
 
 For explicitly time-limited workers, the in-container watchdog is defense in
@@ -105,17 +107,64 @@ through `horizon-agent-session`, which exposes the Rust toolchain, marks the
 session with `HORIZON=1`, and configures GitHub authentication only when the
 runtime token file exists. tmux provides reconnectable interactive sessions.
 
-This image change does not supply durable volumes, remote backup/checkpointing,
-provider restart recovery, or the Remote Environments overview. A stopped local
-container retains its writable layer until removed, but the example does not
-promise data survival after container deletion or provider loss. The full remote
-workspace must use the separately validated durable-storage design. A container
+The provider or operator must supply retained storage at `/workspace`; the image
+cannot prove that the backing storage is durable. The named volume in the example
+retains that directory across container removal, but not volume deletion or host
+loss. Remote backup/checkpointing, agent-state durability, provider restart
+coordination and the Remote Environments overview remain separate requirements.
+The full remote workspace must use the separately validated storage design. A container
 on the client PC also cannot keep running when that same PC powers off: local
 Docker smoke demonstrates disconnection semantics, not the real cloud PC-off gate.
 
 Password authentication, keyboard-interactive authentication, SSH agent
 forwarding, X11 forwarding, and user-controlled SSH environment files are
 disabled. Root login is public-key-only.
+
+## Retained SSH host identity
+
+`host-identity.py` owns `/workspace/.horizon-worker/ssh.claim` and the private
+`ssh/` directory next to it. The initialization claim is durably recorded before
+key generation. A complete versioned marker is published only after both key
+files are synchronized. Repeated startup validates the original access-key digest,
+marker and real private/public key pair; it does not generate another identity.
+The verified runtime copies remain at `/etc/ssh/ssh_host_ed25519_key{,.pub}` so
+trusted provider host-key inspection keeps its existing path.
+
+This requires a trusted Linux POSIX-permission filesystem. Workspace ancestors
+must have trusted ownership and no unprotected group/world write access. Identity
+directories and files must be owned by the worker user with no group/world
+permission bits. New directories and files use modes `0700` and `0600`;
+existing entries may use other owner-only modes. Symlinks, partial initialization,
+missing files, corruption, changed access
+keys and conflicting runtime keys fail before SSH starts. An interrupted first
+initialization may require explicit recovery; it is never silently retried as
+permission to replace an identity. Existing unretained keys are not automatically
+migrated. Key rotation, old-volume migration and whole-volume loss require a
+separate verified recovery operation. Never resolve a host-key mismatch by
+disabling client verification.
+
+Concurrent starters wait up to 30 seconds for readiness: two ten-second key
+operation budgets plus ten seconds of filesystem synchronization grace. This is
+a bounded readiness wait, not a filesystem I/O deadline. A stalled or slower
+initialization fails closed for waiting starters; a later startup can validate
+the completed identity, but a timeout never authorizes replacement.
+
+Back up the complete private `.horizon-worker` directory with the repository;
+protect it as credential-bearing data. Host keys are unencrypted on disk and
+worker tasks share the root-owned trust domain. This is not a per-task sandbox,
+a backup service, or proof that interrupted processes resumed.
+
+Validate using synthetic fixtures and a task-owned local volume:
+
+```bash
+python3 -B containers/remote-worker/test_host_identity.py -v
+bash scripts/run-remote-worker-host-identity-smoke.sh --image horizon-remote-worker:0.1.0
+```
+
+The smoke replaces the container filesystem while retaining its workspace volume,
+checks the same host identity through pinned SSH, and rejects a different access
+key without modifying the original identity or workspace data. It removes only
+its own containers and volume; it neither publishes an image nor uses cloud resources.
 
 ## Local Docker provider
 

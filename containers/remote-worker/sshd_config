@@ -1,4 +1,5 @@
 PasswordAuthentication no
+HostKey /etc/ssh/ssh_host_ed25519_key
 KbdInteractiveAuthentication no
 ChallengeResponseAuthentication no
 PermitEmptyPasswords no
