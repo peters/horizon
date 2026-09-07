@@ -136,6 +136,23 @@ impl RuntimeTitle {
 #[derive(Clone)]
 struct TerminalEventProxy {
     event_tx: mpsc::Sender<Event>,
+    // Both the grid and event loop retain trust through detached/asynchronous teardown.
+    _ssh_trust: TerminalSshTrust,
+}
+
+#[derive(Clone, Default)]
+struct TerminalSshTrust {
+    #[cfg(target_os = "linux")]
+    _file: Option<Arc<tempfile::NamedTempFile>>,
+}
+
+impl TerminalEventProxy {
+    fn new(event_tx: mpsc::Sender<Event>, ssh_trust: TerminalSshTrust) -> Self {
+        Self {
+            event_tx,
+            _ssh_trust: ssh_trust,
+        }
+    }
 }
 
 impl EventListener for TerminalEventProxy {
@@ -205,7 +222,7 @@ mod tests {
     use super::current_cwd_for_pid;
     use super::{
         AgentNotification, HorizonOscTitle, RuntimeTitle, Terminal, TerminalDimensions, TerminalEventProxy,
-        TerminalSpawnOptions, default_terminal_rgb, find_file_path_at_column, find_url_at_column,
+        TerminalSpawnOptions, TerminalSshTrust, default_terminal_rgb, find_file_path_at_column, find_url_at_column,
         queue_debounced_pty_resize, replay_terminal_bytes, should_debounce_pty_resize,
     };
     use alacritty_terminal::event::Event;
@@ -524,7 +541,7 @@ mod tests {
         Arc::new(FairMutex::new(Term::new(
             config,
             &dimensions,
-            TerminalEventProxy { event_tx },
+            TerminalEventProxy::new(event_tx, TerminalSshTrust::default()),
         )))
     }
 

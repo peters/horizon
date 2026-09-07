@@ -1,7 +1,7 @@
 use super::{
     Arc, AtomicUsize, Cow, Duration, Error, EventLoop, FairMutex, Msg, Ordering, PtyOptions, ReplayRestoreState,
-    Result, Shell, Term, Terminal, TerminalDimensions, TerminalEventProxy, TerminalSpawnOptions, WindowSize,
-    drain_replay_events, mpsc, replay_terminal_bytes, term, tty,
+    Result, Shell, Term, Terminal, TerminalDimensions, TerminalEventProxy, TerminalSpawnOptions, TerminalSshTrust,
+    WindowSize, drain_replay_events, mpsc, replay_terminal_bytes, term, tty,
 };
 
 impl Terminal {
@@ -11,6 +11,18 @@ impl Terminal {
     ///
     /// Returns an error if the PTY or event loop cannot be created.
     pub fn spawn(options: TerminalSpawnOptions) -> Result<Self> {
+        Self::spawn_guarded(options, TerminalSshTrust::default())
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn spawn_with_ssh_trust(
+        options: TerminalSpawnOptions,
+        trust: Arc<tempfile::NamedTempFile>,
+    ) -> Result<Self> {
+        Self::spawn_guarded(options, TerminalSshTrust { _file: Some(trust) })
+    }
+
+    fn spawn_guarded(options: TerminalSpawnOptions, trust: TerminalSshTrust) -> Result<Self> {
         let rows = options.rows.max(1);
         let cols = options.cols.max(2);
         let scrollback_limit = options.scrollback_limit.max(1);
@@ -30,10 +42,8 @@ impl Terminal {
         };
         let replay_bytes = options.replay_bytes;
         let (event_tx, event_rx) = mpsc::channel();
-        let term_proxy = TerminalEventProxy {
-            event_tx: event_tx.clone(),
-        };
-        let event_loop_proxy = TerminalEventProxy { event_tx };
+        let event_loop_proxy = TerminalEventProxy::new(event_tx, trust);
+        let term_proxy = event_loop_proxy.clone();
 
         tty::setup_env();
 

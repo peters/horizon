@@ -139,9 +139,15 @@ back into large multi-purpose modules.
   literal argv plus the effective directory with the worker's retained intent;
   unresolved agent launch/handoff/resume semantics stay fail-closed.
 - `remote_worker_ssh.rs` centralizes crate-private pinned client options and SSH
-  path quoting without granting attachment authority. Status queries retain their
-  fixed noninteractive command, bounded I/O and public errors; the shared leaf does
-  not change general user-configured SSH or start an interactive connection.
+  path quoting without granting attachment authority. Typed query/attach modes
+  share isolation options; each owns private trust material. Status queries retain
+  bounded I/O, while interactive trust follows both terminal event proxies through
+  detached Drop and asynchronous join. General user-configured SSH is unchanged.
+- `remote_panel_attachment.rs` consumes explicit exact-allocation admission, fresh
+  non-creating recovery and saved-intent verification before a pinned local PTY.
+  Its target-bound attempt rechecks snapshots before input-capable handoff; it is
+  not authenticated attachment, saved Ready state or an atomic Stop/attach fence.
+  Board/UI admission and inert restore remain separate from this Linux-only API.
 - `repository_overlay/` owns bounded exact-base metadata for separate index and
   working-tree changes. Its `paths.rs` applies the lexical transfer exclusion policy.
   Planning performs no filesystem, Git, provider or transfer I/O; actual capture/apply

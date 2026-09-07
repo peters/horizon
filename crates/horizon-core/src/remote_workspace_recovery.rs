@@ -62,6 +62,15 @@ pub fn recover_remote_workspace<P: InteractiveWorkerProvider + ?Sized>(
     let allocation = store
         .load_remote_allocation(session_id, workspace_local_id)?
         .ok_or(RemoteWorkspaceRecoveryError::MissingAllocation)?;
+    recover_remote_allocation(store, identities, provider, &allocation)
+}
+
+pub(crate) fn recover_remote_allocation<P: InteractiveWorkerProvider + ?Sized>(
+    store: &CloudWorkflowStore,
+    identities: &RemoteSshIdentityStore,
+    provider: &P,
+    allocation: &StoredRemoteAllocation,
+) -> Result<RecoveredRemoteWorkspace, RemoteWorkspaceRecoveryError> {
     let request = allocation.recovery_request()?;
     if !request.is_valid_for(provider.provider()) {
         return Err(RemoteWorkspaceRecoveryError::ProviderMismatch);
@@ -78,7 +87,7 @@ pub fn recover_remote_workspace<P: InteractiveWorkerProvider + ?Sized>(
         None => provider.reconcile_worker(&request),
     }
     .map_err(|_| RemoteWorkspaceRecoveryError::ProviderUnavailable)?;
-    let allocation = store.record_remote_worker_recovery(&allocation, observation.as_ref())?;
+    let allocation = store.record_remote_worker_recovery(allocation, observation.as_ref())?;
     Ok(RecoveredRemoteWorkspace {
         allocation,
         identity,

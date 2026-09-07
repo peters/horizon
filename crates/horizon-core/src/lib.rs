@@ -21,6 +21,7 @@ mod opencode_paths;
 mod panel;
 pub mod remote_environment_observation;
 mod remote_hosts;
+pub mod remote_panel_attachment;
 pub mod remote_provider_config;
 pub mod remote_ssh_identity;
 #[cfg(target_os = "linux")]
