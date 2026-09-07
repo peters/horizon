@@ -158,6 +158,10 @@ back into large multi-purpose modules.
   global cross-session Open remain separate; admission is not continuous revocation.
   Handoff synchronizes terminal grid and PTY geometry to the current view, not the
   earlier asynchronous request. Its age bound conservatively includes store latency.
+- `remote_panel_attachment/configured.rs` admits only the actual owner session,
+  exact saved selection and explicitly named local provider profile before calling
+  non-creating attachment. It does not infer authority from inventory visibility or
+  copied client references, and has no ambient provider or profile fallback.
 - `repository_overlay/` owns bounded exact-base metadata for separate index and
   working-tree changes. Its `paths.rs` applies the lexical transfer exclusion policy.
   Planning performs no filesystem, Git, provider or transfer I/O; actual capture/apply
