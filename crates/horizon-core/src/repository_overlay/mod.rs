@@ -3,6 +3,7 @@
 //! Capture/apply must separately verify real filesystem topology, content hashes and approval.
 
 pub mod bundle;
+pub mod capture;
 mod paths;
 pub mod reader;
 
