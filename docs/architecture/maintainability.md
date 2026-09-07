@@ -166,6 +166,10 @@ back into large multi-purpose modules.
   exact saved selection and explicitly named local provider profile before calling
   non-creating attachment. It does not infer authority from inventory visibility or
   copied client references, and has no ambient provider or profile fallback.
+- UI `remote_environments/reconnect/` caches view labels on explicit interaction.
+  Its single-flight worker prepares connections off-thread; lifecycle and modal
+  actions invalidate before queued handoff adoption. Pending discarded receivers
+  retain the slot until completion. Same-owner views do not implement global Open.
 - `repository_overlay/` owns bounded exact-base metadata for separate index and
   working-tree changes. Its `paths.rs` applies the lexical transfer exclusion policy.
   Planning performs no filesystem, Git, provider or transfer I/O; actual capture/apply
