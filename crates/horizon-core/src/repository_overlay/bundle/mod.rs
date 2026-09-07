@@ -2,6 +2,7 @@
 
 pub mod codec;
 mod fingerprint;
+pub mod store;
 
 use super::{OverlayContent, RepositoryOverlayPlan, reader::MAX_READ_BYTES};
 use crate::cloud_run::ArtifactDigest;

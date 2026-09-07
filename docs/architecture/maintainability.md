@@ -148,6 +148,10 @@ back into large multi-purpose modules.
   `bundle/codec/` frames portable versioned bytes with bounded, constructor-checked
   metadata decoding, canonical ordering and recomputed payload hashes. It does not
   perform I/O or authorize export, extraction or repository writes.
+  `bundle/store/` explicitly persists immutable digest-named records in a nominated
+  private Linux directory, reusing the reader's pinned inode checks. Anonymous
+  writes, no-replace publication and file/directory synchronization precede success;
+  retrieval revalidates the complete codec and digest. This is not scheduled backup.
 - `containers/remote-worker/host-identity.py` owns workspace-retained server-key
   initialization, validation and runtime materialization before SSH starts.
   Its real-key regressions are separate from the retained-volume SSH smoke in

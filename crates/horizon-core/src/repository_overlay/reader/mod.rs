@@ -2,7 +2,7 @@
 //! Linux confinement is required; unsupported platforms fail without a weaker fallback.
 
 #[cfg(target_os = "linux")]
-mod linux;
+pub(super) mod linux;
 
 use super::{OverlayPlanError, paths};
 use std::{
@@ -37,7 +37,7 @@ impl fmt::Debug for SelectedRepositoryNode {
 /// This does not discover or verify a Git root, enumerate files or authorize export.
 pub struct SelectedRepositoryReader {
     #[cfg(target_os = "linux")]
-    root: linux::Root,
+    pub(super) root: linux::Root,
 }
 
 impl SelectedRepositoryReader {

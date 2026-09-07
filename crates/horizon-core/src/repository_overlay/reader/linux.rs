@@ -10,9 +10,18 @@ use std::{
     path::Path,
 };
 
-pub(super) struct Root(File);
+pub(in crate::repository_overlay) struct Root(File);
+
+pub(in crate::repository_overlay) struct RegularFileRead {
+    pub file: File,
+    pub bytes: Vec<u8>,
+}
 
 impl Root {
+    pub(in crate::repository_overlay) fn handle(&self) -> &File {
+        &self.0
+    }
+
     pub(super) fn open(path: &Path) -> Result<Self, Error> {
         let descriptor = openat2(
             CWD,
@@ -54,6 +63,24 @@ impl Root {
         Ok(content)
     }
 
+    pub(in crate::repository_overlay) fn read_private_file(
+        &self,
+        path: &str,
+        limit: usize,
+    ) -> Result<RegularFileRead, Error> {
+        let node = self.pin(path)?;
+        if !node.metadata.is_file()
+            || node.metadata.uid() != rustix::process::geteuid().as_raw()
+            || node.metadata.mode() & 0o7777 != 0o600
+        {
+            return Err(Error::UnsupportedNode);
+        }
+        let content = node.read_regular(limit)?;
+        node.verify(&node.file.metadata().map_err(|_| Error::ReadFailed)?)?;
+        self.verify_path(path, &node)?;
+        Ok(content)
+    }
+
     fn verify_path(&self, path: &str, node: &PinnedNode) -> Result<(), Error> {
         let current = self.pin(path).map_err(|_| Error::Changed)?;
         node.verify(&current.metadata)
@@ -75,6 +102,13 @@ impl PinnedNode {
     }
 
     fn regular(&self, limit: usize) -> Result<Node, Error> {
+        Ok(Node::File {
+            bytes: self.read_regular(limit)?.bytes,
+            executable: self.metadata.mode() & 0o100 != 0,
+        })
+    }
+
+    fn read_regular(&self, limit: usize) -> Result<RegularFileRead, Error> {
         let declared = usize::try_from(self.metadata.len()).map_err(|_| Error::TooLarge)?;
         if declared > limit {
             return Err(Error::TooLarge);
@@ -89,10 +123,7 @@ impl PinnedNode {
         self.verify(&file.metadata().map_err(|_| Error::ReadFailed)?)?;
         let bytes = read_limited(&mut file, declared, limit)?;
         self.verify(&file.metadata().map_err(|_| Error::ReadFailed)?)?;
-        Ok(Node::File {
-            bytes,
-            executable: self.metadata.mode() & 0o100 != 0,
-        })
+        Ok(RegularFileRead { file, bytes })
     }
 
     fn link(&self, path: &str, limit: usize) -> Result<Node, Error> {
@@ -129,6 +160,7 @@ fn read_limited(reader: impl Read, declared: usize, limit: usize) -> Result<Vec<
 struct Fingerprint {
     device: u64,
     inode: u64,
+    owner: u32,
     bytes: u64,
     mode: u32,
     links: u64,
@@ -140,6 +172,7 @@ fn fingerprint(metadata: &Metadata) -> Fingerprint {
     Fingerprint {
         device: metadata.dev(),
         inode: metadata.ino(),
+        owner: metadata.uid(),
         bytes: metadata.len(),
         mode: metadata.mode(),
         links: metadata.nlink(),
