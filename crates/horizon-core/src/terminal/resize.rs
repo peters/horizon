@@ -20,6 +20,10 @@ impl Terminal {
         self.resize_with_policy(rows, cols, cell_width, cell_height, true);
     }
 
+    pub(crate) fn resize_to_match(&mut self, other: &Self) {
+        self.resize_immediately(other.rows, other.cols, other.cell_width, other.cell_height);
+    }
+
     fn resize_with_policy(&mut self, rows: u16, cols: u16, cell_width: u16, cell_height: u16, immediate: bool) {
         let rows = rows.max(1);
         let cols = cols.max(2);

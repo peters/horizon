@@ -11,10 +11,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod board;
+
 const OWNER: &str = "00000000-0000-4000-8000-000000000001";
 
 struct Fixture {
-    _directory: tempfile::TempDir,
+    directory: tempfile::TempDir,
     store: CloudWorkflowStore,
     identities: RemoteSshIdentityStore,
     provider: Provider,
@@ -90,7 +92,7 @@ impl Fixture {
             .expect("recovery");
         *provider.calls.lock().expect("calls") = 0;
         Self {
-            _directory: directory,
+            directory,
             store,
             identities,
             provider,
