@@ -150,6 +150,9 @@ fn render_controls(ui: &mut egui::Ui, state: &RemoteEnvironments, action: &mut I
             ui.label("Loading saved inventory…");
         }
     });
+    if state.stop.is_pending() {
+        ui.label("An explicitly confirmed Stop is pending. Closing this overview does not cancel it.");
+    }
     if let Some(failure) = &state.failure {
         let message = match failure.error {
             LoadError::OpenStore => "Cannot open the remote inventory store. Check its permissions and format.",
@@ -193,6 +196,13 @@ fn render_content(ui: &mut egui::Ui, state: &RemoteEnvironments, action: &mut In
     }
     if let Some(row) = state.selected.and_then(|index| page.rows.get(index)) {
         render_observation(ui, state, action);
+        super::stop::show(
+            ui,
+            &state.stop,
+            &row.summary,
+            state.pending.is_none() && !state.observation.is_pending(),
+            action,
+        );
         ui.separator();
         ui.strong("Saved environment details");
         ui.label(
@@ -222,7 +232,7 @@ fn render_observation(ui: &mut egui::Ui, state: &RemoteEnvironments, action: &mu
     ui.horizontal_wrapped(|ui| {
         ui.strong("Provider status");
         let check = ui.add_enabled(
-            state.pending.is_none() && !observation.is_pending(),
+            state.pending.is_none() && !observation.is_pending() && !state.stop.is_pending(),
             egui::Button::new("Check provider status"),
         );
         #[cfg(test)]
