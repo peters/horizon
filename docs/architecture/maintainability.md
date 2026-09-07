@@ -149,6 +149,10 @@ back into large multi-purpose modules.
   Its target-bound attempt rechecks snapshots before input-capable handoff; it is
   not authenticated attachment, saved Ready state or an atomic Stop/attach fence.
   Board/UI admission and inert restore remain separate from this Linux-only API.
+- `remote_panel_attachment/configured.rs` admits only the actual owner session,
+  exact saved selection and explicitly named local provider profile before calling
+  non-creating attachment. It does not infer authority from inventory visibility or
+  copied client references, and has no ambient provider or profile fallback.
 - `repository_overlay/` owns bounded exact-base metadata for separate index and
   working-tree changes. Its `paths.rs` applies the lexical transfer exclusion policy.
   Planning performs no filesystem, Git, provider or transfer I/O; actual capture/apply
