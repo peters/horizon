@@ -153,13 +153,15 @@ impl RemoteRuntimeGeneration {
             {
                 return Err(Error::InvalidRuntime("worker identity"));
             }
-        } else if matches!(
-            self.phase,
-            RemoteRuntimePhase::Materializing
-                | RemoteRuntimePhase::Ready
-                | RemoteRuntimePhase::Checkpointing
-                | RemoteRuntimePhase::Deleting
-        ) {
+        } else if self.phase.stop_requested_at_millis().is_some()
+            || matches!(
+                self.phase,
+                RemoteRuntimePhase::Materializing
+                    | RemoteRuntimePhase::Ready
+                    | RemoteRuntimePhase::Checkpointing
+                    | RemoteRuntimePhase::Deleting
+            )
+        {
             return Err(Error::InvalidRuntime("missing worker"));
         }
         if self
@@ -186,6 +188,14 @@ impl RemoteRuntimeGeneration {
             ) && self.cleanup.is_none())
         {
             return Err(Error::InvalidRuntime("cleanup intent"));
+        }
+        if let Some(requested_at_millis) = self.phase.stop_requested_at_millis()
+            && (requested_at_millis < 0
+                || self.cleanup.is_some()
+                || matches!(self.phase, RemoteRuntimePhase::Stopped { observed_at_millis, .. }
+                    if observed_at_millis < requested_at_millis))
+        {
+            return Err(Error::InvalidRuntime("Stop intent"));
         }
         Ok(())
     }

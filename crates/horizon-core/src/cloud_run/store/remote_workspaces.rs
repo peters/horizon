@@ -16,7 +16,7 @@ use super::{
     CloudStoreError, CloudWorkflowStore, MAX_MATERIALIZED_SNAPSHOT_BYTES, MAX_RECOVERED_SNAPSHOT_BYTES,
     MAX_SNAPSHOT_BYTES, database::ensure_current_schema,
 };
-use crate::remote_workspace::{RemoteWorkspaceError, RemoteWorkspaceState};
+use crate::remote_workspace::{RemoteRuntimePhase, RemoteWorkspaceError, RemoteWorkspaceState};
 pub(super) use validation::validate_key;
 use validation::{validate_replacement, validate_session_id};
 
@@ -152,6 +152,12 @@ impl CloudWorkflowStore {
         next: &RemoteWorkspaceState,
     ) -> Result<StoredRemoteWorkspace, RemoteWorkspaceStoreError> {
         let replacement = WorkspaceReplacement::new(expected, next)?;
+        if next.runtime.as_ref().is_some_and(|runtime| {
+            matches!(runtime.phase, RemoteRuntimePhase::Stopped { .. })
+                && expected.state.runtime.as_ref().map(|previous| previous.phase) != Some(runtime.phase)
+        }) {
+            return Err(RemoteWorkspaceStoreError::RuntimeStopConfirmationRequired);
+        }
         if expected.state.runtime.is_none() && next.runtime.is_some() {
             return Err(RemoteWorkspaceStoreError::RuntimeAllocationRequired);
         }
@@ -463,6 +469,8 @@ pub enum RemoteWorkspaceStoreError {
     RuntimeRequestUnavailable,
     #[error("remote workspace has pending management intent; reconnect cannot change it")]
     RuntimeRecoveryUnavailable,
+    #[error("remote Stop completion requires the verified coordinator")]
+    RuntimeStopConfirmationRequired,
     #[error("remote worker observation does not match the saved request or pinned identity")]
     InvalidWorkerObservation,
     #[error("remote allocation setup cannot create; non-creating recovery is required")]

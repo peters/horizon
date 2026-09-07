@@ -1,6 +1,8 @@
-//! Durable remote workspace data, independent of providers, persistence I/O, and UI.
+//! Durable remote workspace data and explicit operation entrypoints.
+//! The data model is independent of provider, persistence I/O, and UI implementations.
 //! Snapshot validation is not permission to attach: fresh provider observation and lease checks remain required.
 
+pub mod stop;
 mod summary;
 #[cfg(test)]
 mod tests;
@@ -155,7 +157,7 @@ pub struct RemoteRuntimeGeneration {
 
 /// Dormant is represented by an absent runtime, never by a retained worker.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum RemoteRuntimePhase {
     Provisioning,
     Reconciling,
@@ -165,6 +167,27 @@ pub enum RemoteRuntimePhase {
     Cancelling,
     Deleting,
     Failed,
+    /// Explicit retained Stop intent, never inferred from a client closing.
+    Stopping {
+        requested_at_millis: i64,
+    },
+    /// A saved point-in-time retention/inactivity observation, not current provider state.
+    Stopped {
+        requested_at_millis: i64,
+        observed_at_millis: i64,
+    },
+}
+
+impl RemoteRuntimePhase {
+    pub(crate) const fn stop_requested_at_millis(self) -> Option<i64> {
+        match self {
+            Self::Stopping { requested_at_millis }
+            | Self::Stopped {
+                requested_at_millis, ..
+            } => Some(requested_at_millis),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
