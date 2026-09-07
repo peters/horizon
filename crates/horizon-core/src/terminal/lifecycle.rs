@@ -15,10 +15,7 @@ impl Terminal {
     }
 
     #[cfg(target_os = "linux")]
-    pub(crate) fn spawn_with_ssh_trust(
-        options: TerminalSpawnOptions,
-        trust: Arc<tempfile::NamedTempFile>,
-    ) -> Result<Self> {
+    pub(crate) fn spawn_with_ssh_trust(options: TerminalSpawnOptions, trust: Arc<std::fs::File>) -> Result<Self> {
         Self::spawn_guarded(options, TerminalSshTrust { _file: Some(trust) })
     }
 

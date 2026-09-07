@@ -143,7 +143,7 @@ struct TerminalEventProxy {
 #[derive(Clone, Default)]
 struct TerminalSshTrust {
     #[cfg(target_os = "linux")]
-    _file: Option<Arc<tempfile::NamedTempFile>>,
+    _file: Option<Arc<std::fs::File>>,
 }
 
 impl TerminalEventProxy {

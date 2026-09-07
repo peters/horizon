@@ -1,11 +1,16 @@
 //! Crate-private pinned SSH command construction, not remote attachment authority.
 
+mod trust;
+
+use trust::KnownHosts;
+pub(crate) use trust::known_hosts;
+
 use crate::{
     Terminal, cloud_run::CloudJobId, cloud_run::interactive_worker::InteractiveWorkerSshEndpoint,
     remote_ssh_identity::RemoteSshIdentity, remote_worker_status::RemotePanelStatusError as Error,
     remote_workspace::valid_local_id, terminal::TerminalSpawnOptions,
 };
-use std::{io::Write, path::Path, process::Command, sync::Arc};
+use std::{path::Path, process::Command, sync::Arc};
 
 pub(crate) const HOST_ALIAS: &str = "horizon-retained-worker";
 
@@ -91,21 +96,10 @@ fn command_for(
     Ok(command)
 }
 
-pub(crate) fn known_hosts(
-    identity: &RemoteSshIdentity,
-    endpoint: &InteractiveWorkerSshEndpoint,
-) -> Result<tempfile::NamedTempFile, Error> {
-    // The recovered key's private parent avoids ambient temporary-directory trust.
-    let parent = identity.private_key_path().parent().ok_or(Error::UnsupportedPath)?;
-    let mut known_hosts = tempfile::NamedTempFile::new_in(parent).map_err(|_| Error::TrustStorage)?;
-    writeln!(known_hosts, "{HOST_ALIAS} {}", endpoint.host_key).map_err(|_| Error::TrustStorage)?;
-    Ok(known_hosts)
-}
-
 /// Private preparation must be consumed by the fresh admission boundary, never persisted.
 pub(crate) struct PreparedAttachment {
     command: Command,
-    known_hosts: tempfile::NamedTempFile,
+    known_hosts: KnownHosts,
 }
 
 impl PreparedAttachment {
@@ -135,7 +129,7 @@ impl PreparedAttachment {
             .ok_or_else(|| crate::Error::State("protected SSH arguments are not supported".into()))?;
         options.env.insert("SSH_ASKPASS_REQUIRE".into(), "never".into());
         options.env.insert("TERM".into(), "xterm-256color".into());
-        Terminal::spawn_with_ssh_trust(options, Arc::new(self.known_hosts))
+        Terminal::spawn_with_ssh_trust(options, Arc::new(self.known_hosts.into_file()))
     }
 }
 
@@ -156,7 +150,7 @@ fn path_option(name: &str, path: &Path) -> Result<String, Error> {
 mod tests {
     use super::*;
     use crate::{HorizonHome, cloud_run::CloudWorkflowId, remote_ssh_identity::RemoteSshIdentityStore};
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
     #[test]
     fn interactive_mode_shares_all_isolation_options_and_owns_unique_private_trust() {
@@ -177,17 +171,16 @@ mod tests {
         let second = PreparedAttachment::new(&identity, &endpoint, runtime, "terminal").expect("second");
         let first_path = first.known_hosts.path().to_path_buf();
         let second_path = second.known_hosts.path().to_path_buf();
+        let first_inode = std::fs::metadata(&first_path).expect("first inode");
+        let second_inode = std::fs::metadata(&second_path).expect("second inode");
         assert_ne!(first_path, second_path);
-        assert_eq!(first_path.parent(), identity.private_key_path().parent());
         assert_eq!(
-            first
-                .known_hosts
-                .as_file()
-                .metadata()
-                .expect("mode")
-                .permissions()
-                .mode()
-                & 0o077,
+            first_path.parent(),
+            Some(Path::new(&format!("/proc/{}/fd", std::process::id())))
+        );
+        assert_eq!(std::fs::metadata(&first_path).expect("anonymous inode").nlink(), 0);
+        assert_eq!(
+            std::fs::metadata(&first_path).expect("mode").permissions().mode() & 0o077,
             0
         );
         assert_eq!(
@@ -223,10 +216,16 @@ mod tests {
             ));
         }
         drop(first);
-        assert!(!first_path.exists());
+        assert!(
+            !std::fs::metadata(&first_path)
+                .is_ok_and(|metadata| { metadata.dev() == first_inode.dev() && metadata.ino() == first_inode.ino() })
+        );
         assert!(second_path.exists());
         drop(second);
-        assert!(!second_path.exists());
+        assert!(
+            !std::fs::metadata(&second_path)
+                .is_ok_and(|metadata| { metadata.dev() == second_inode.dev() && metadata.ino() == second_inode.ino() })
+        );
         assert_eq!(
             std::fs::read_dir(identity.private_key_path().parent().expect("parent"))
                 .expect("directory")
