@@ -192,6 +192,8 @@ back into large multi-purpose modules.
   provider I/O. Generic writes cannot manufacture completion or erase/rewind its request,
   and setup/recovery cannot consume it as normal client activity. Legacy cleanup
   reasons remain distinct; saved completion is not current provider status.
+  This durable entrypoint admits only persistent execution: timed creation/expiry
+  cleanup needs separate coordination before it can promise retained Stop intent.
 - `cloud_run/runpod.rs` coordinates provider operations and exact ownership
   reconciliation. Its `models.rs` leaf owns profiles, persisted worker identity,
   lifecycle results and typed errors; `create_request.rs` owns serialized

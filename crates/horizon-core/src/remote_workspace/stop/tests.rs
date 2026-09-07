@@ -2,10 +2,11 @@ use super::*;
 use crate::{
     HorizonHome,
     cloud_run::{
-        ArtifactDigest, CloudProvider,
+        ArtifactDigest, CloudProvider, WorkerLifetime,
         interactive_worker::{
             InteractiveWorker, InteractiveWorkerCleanup, InteractiveWorkerEnsure, InteractiveWorkerIdentity,
-            InteractiveWorkerLifetime, InteractiveWorkerProvider, InteractiveWorkerRequest, InteractiveWorkerStatus,
+            InteractiveWorkerLease, InteractiveWorkerLifetime, InteractiveWorkerProvider, InteractiveWorkerRequest,
+            InteractiveWorkerStatus,
         },
     },
     remote_environment_observation::observe_remote_environment,
@@ -26,9 +27,13 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::with_lifetime(InteractiveWorkerLifetime::Persistent)
+    }
+
+    fn with_lifetime(lifetime: InteractiveWorkerLifetime) -> Self {
         let directory = tempfile::tempdir().expect("fixture");
         let store = CloudWorkflowStore::open_path(directory.path().join("control/workflows.sqlite3")).expect("store");
-        let state: RemoteWorkspaceState = serde_json::from_value(serde_json::json!({
+        let mut state: RemoteWorkspaceState = serde_json::from_value(serde_json::json!({
             "version":1, "spec":{
                 "workspace_local_id":"workspace", "working_directory":".", "generation":0,
                 "target":{"provider":"local_docker", "profile":"development", "disk_gib":20,
@@ -39,6 +44,9 @@ impl Fixture {
             }
         }))
         .expect("state");
+        if matches!(lifetime, InteractiveWorkerLifetime::TimeLimited(_)) {
+            state.spec.target.lifetime = WorkerLifetime::TimeLimited { seconds: 900 };
+        }
         let dormant = store.create_remote_workspace(OWNER, &state).expect("dormant");
         let allocation = store.allocate_remote_runtime(&dormant, i64::MAX).expect("allocate");
         let mut blob = b"\0\0\0\x0bssh-ed25519\0\0\0\x20".to_vec();
@@ -58,7 +66,7 @@ impl Fixture {
             },
             target: request.target,
             ssh_public_key: request.ssh_public_key,
-            lifetime: InteractiveWorkerLifetime::Persistent,
+            lifetime,
         });
         next.checkpoint = Some(RepositoryCheckpoint {
             workspace_local_id: next.spec.workspace_local_id.clone(),
@@ -214,6 +222,51 @@ fn provider_failure_and_absence_retain_intent_for_explicit_fresh_client_retry() 
         assert_eq!(fixture.current(), completed);
         assert_eq!(retry.counts(), [0, 0, 0, 0, 2]);
         assert_eq!(provider.counts(), [0, 0, 0, 0, 1]);
+    }
+}
+
+#[test]
+fn time_limited_allocations_reject_durable_stop_without_intent_or_provider_changes() {
+    let future = time::OffsetDateTime::now_utc() + time::Duration::seconds(900);
+    for deadline in [future, time::OffsetDateTime::UNIX_EPOCH] {
+        for saved_phase in [
+            None,
+            Some(RemoteRuntimePhase::Stopping { requested_at_millis: 1 }),
+            Some(RemoteRuntimePhase::Stopped {
+                requested_at_millis: 1,
+                observed_at_millis: 1,
+            }),
+        ] {
+            let fixture = Fixture::with_lifetime(InteractiveWorkerLifetime::TimeLimited(InteractiveWorkerLease {
+                terminate_after: deadline
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .expect("valid deadline"),
+            }));
+            if let Some(phase) = saved_phase {
+                fixture
+                    .store
+                    .record_remote_stop_phase(&fixture.current(), phase)
+                    .expect("previously saved timed intent");
+            }
+            let before = fixture.current();
+            assert_eq!(
+                before.workspace().state().spec.target.lifetime,
+                WorkerLifetime::TimeLimited { seconds: 900 }
+            );
+            let worker = before
+                .workspace()
+                .state()
+                .runtime
+                .as_ref()
+                .and_then(|runtime| runtime.worker.as_ref())
+                .expect("retained worker");
+            assert!(worker.is_valid_for(CloudProvider::LocalDocker));
+            assert!(worker.lifetime.as_time_limited().is_some());
+            let provider = Provider::new(Ok(InteractiveWorkerStop::Stopped));
+            assert_eq!(fixture.stop(&provider), Err(Error::UnsupportedLifetime));
+            assert_eq!(provider.counts(), [0; 5]);
+            assert_eq!(fixture.current(), before);
+        }
     }
 }
 

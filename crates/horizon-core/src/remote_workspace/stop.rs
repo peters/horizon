@@ -3,13 +3,15 @@
 use crate::{
     cloud_run::{
         CloudStoreError, CloudWorkflowStore, RemoteWorkspaceStoreError, StoredRemoteAllocation, StoredRemoteWorkspace,
+        WorkerLifetime,
         interactive_worker_stop::{InteractiveWorkerStop, InteractiveWorkerStopProvider},
     },
     remote_workspace::RemoteRuntimePhase,
 };
 
 /// Record explicit Stop intent, stop only the retained worker, then record verified completion.
-/// Requires current owned workspace/workflow snapshots and an already retained exact worker.
+/// Requires current owned workspace/workflow snapshots and an already retained exact persistent worker.
+/// Timed creation/expiry cleanup needs separate coordination before durable Stop can support it.
 /// No private key, allocation, reconciliation, restart, deletion or fallback is attempted.
 /// Provider failures/absence preserve intent and identity for explicit retry by a fresh client.
 /// Stopped is saved point-in-time state, not a checkpoint or proof of current provider state.
@@ -33,6 +35,9 @@ pub fn stop_remote_workspace<P: InteractiveWorkerStopProvider + ?Sized>(
     let worker = runtime.worker.as_ref().ok_or(Error::MissingWorker)?;
     if !worker.is_valid_for(provider.provider()) {
         return Err(Error::ProviderMismatch);
+    }
+    if worker.target.lifetime != WorkerLifetime::Persistent {
+        return Err(Error::UnsupportedLifetime);
     }
     if runtime.cleanup.is_some() {
         return Err(Error::ManagementConflict);
@@ -84,6 +89,8 @@ pub enum RemoteWorkspaceStopError {
     StateChanged,
     #[error("Stop provider does not match the saved worker")]
     ProviderMismatch,
+    #[error("durable workspace Stop requires a persistent execution policy")]
+    UnsupportedLifetime,
     #[error("existing management intent does not permit this Stop request")]
     ManagementConflict,
     #[error("worker Stop could not be verified; saved intent and identity remain retained")]
