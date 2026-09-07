@@ -128,6 +128,8 @@ back into large multi-purpose modules.
   provider observations with exact snapshot checks but no private-key access or
   saved-state writes. It shares allocation observation validation with recovery;
   neither absence nor observed readiness grants management or attachment authority.
+  Its `configured` adapter resolves an explicit named local profile and rejects
+  stale overview summaries before passing the owned snapshot to the observation gate.
 - `remote_worker_status.rs` gates non-creating panel inspection on exact owned
   recovery and current lifetime. Its `protocol.rs` leaf owns bounded status-only
   wire types; `ssh.rs` isolates host pins and client options; `command.rs` owns
@@ -251,6 +253,9 @@ back into large multi-purpose modules.
     layout, and row/header paint helpers split into `remote_hosts_overlay/`
   - `remote_environments`: single-flight saved-inventory loading and modal input
     ownership, with cached labels and rendering in `remote_environments/paint`.
+    `remote_environments/observation` owns single-flight manual provider checks,
+    event-based invalidation and cached point-in-time labels, never provider I/O
+    on the render thread or passive repaint polling.
     Compact record projection belongs to `horizon-core::remote_workspace::summary`;
     the overview does not own provider actions or remote execution lifetime.
   - `sidebar`: sidebar rendering and deferred sidebar actions

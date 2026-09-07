@@ -255,6 +255,9 @@ impl HorizonApp {
             tracing::info!("speech configuration changed; speech system rebuilt");
             self.sync_speech_global_hotkeys();
         }
+        if self.template_config.remote != config.remote {
+            self.remote_environments.invalidate_observation();
+        }
         self.template_config = config.clone();
         self.shortcuts = resolve_shortcuts(config);
         self.action_commands_cache =

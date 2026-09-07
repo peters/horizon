@@ -1,5 +1,6 @@
 //! Lazy, single-flight saved inventory loading for the Remote Environments overview.
 
+mod observation;
 mod paint;
 
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -18,6 +19,7 @@ pub(super) struct RemoteEnvironments {
     failure: Option<LoadFailure>,
     pending: Option<PendingLoad>,
     refresh_when_idle: bool,
+    observation: observation::ObservationState,
 }
 
 struct InventoryPage {
@@ -53,6 +55,7 @@ enum InventoryAction {
     Next,
     Retry,
     Select(usize),
+    Observe,
 }
 
 struct WakeOnDrop(Context);
@@ -77,6 +80,7 @@ impl RemoteEnvironments {
         self.page_cursor = None;
         self.selected = None;
         self.failure = None;
+        self.observation.invalidate();
         if let Some(pending) = &mut self.pending {
             pending.discard = true;
             self.refresh_when_idle = true;
@@ -88,6 +92,7 @@ impl RemoteEnvironments {
 
     fn close(&mut self) {
         self.open = false;
+        self.observation.invalidate();
         self.refresh_when_idle = false;
         if let Some(pending) = &mut self.pending {
             pending.discard = true;
@@ -98,6 +103,7 @@ impl RemoteEnvironments {
         if !self.open || self.pending.is_some() {
             return;
         }
+        self.observation.invalidate();
         let (tx, rx) = mpsc::sync_channel(1);
         let home = home.clone();
         let requested_cursor = cursor.clone();
@@ -140,6 +146,7 @@ impl RemoteEnvironments {
     }
 
     fn accept_result(&mut self, cursor: Option<String>, result: Result<InventoryPage, LoadError>) {
+        self.observation.invalidate();
         match result {
             Ok(page) => {
                 let previous = self
@@ -163,10 +170,11 @@ impl RemoteEnvironments {
 
     fn apply(&mut self, action: InventoryAction, home: &HorizonHome, ctx: &Context) {
         match action {
-            InventoryAction::None => {}
+            InventoryAction::None | InventoryAction::Observe => {}
             InventoryAction::Close => self.close(),
             InventoryAction::Select(index) => {
-                if self.page.as_ref().is_some_and(|page| index < page.rows.len()) {
+                if self.selected != Some(index) && self.page.as_ref().is_some_and(|page| index < page.rows.len()) {
+                    self.observation.invalidate();
                     self.selected = Some(index);
                 }
             }
@@ -182,6 +190,28 @@ impl RemoteEnvironments {
                     self.start_load(home, ctx, failure.cursor.clone());
                 }
             }
+        }
+    }
+
+    pub(super) fn invalidate_observation(&mut self) {
+        self.observation.invalidate();
+    }
+
+    fn start_observation(
+        &mut self,
+        home: &HorizonHome,
+        config: &horizon_core::remote_provider_config::RemoteProviderConfig,
+        ctx: &Context,
+    ) {
+        if !self.open || self.pending.is_some() {
+            return;
+        }
+        if let Some(row) = self
+            .page
+            .as_ref()
+            .and_then(|page| self.selected.and_then(|index| page.rows.get(index)))
+        {
+            self.observation.start(home, config, &row.summary, ctx);
         }
     }
 }
@@ -206,6 +236,7 @@ impl HorizonApp {
     /// including dismissal. Remote inventory completion never requires idle polling.
     pub(super) fn render_remote_environments(&mut self, ctx: &Context) -> Option<egui::InputState> {
         self.remote_environments.drain_result();
+        self.remote_environments.observation.drain_result();
         if self.remote_environments.refresh_when_idle && self.remote_environments.pending.is_none() {
             self.remote_environments.refresh_when_idle = false;
             self.remote_environments
@@ -215,6 +246,13 @@ impl HorizonApp {
         if was_open {
             self.handle_speech_input(ctx);
             let action = paint::show(ctx, &self.remote_environments);
+            if matches!(action, InventoryAction::Observe) {
+                self.remote_environments.start_observation(
+                    self.session_store.home(),
+                    &self.template_config.remote,
+                    ctx,
+                );
+            }
             self.remote_environments.apply(action, self.session_store.home(), ctx);
             let modal_input = ctx.input(Clone::clone);
             self.suppress_root_viewport_interaction(ctx);
