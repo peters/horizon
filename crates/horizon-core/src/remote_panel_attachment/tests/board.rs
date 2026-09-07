@@ -1,6 +1,7 @@
 use super::{Fixture, OWNER, invalidate, local_options, running};
 use crate::{
-    Board, CanvasViewState, PanelId, PanelKind, PanelResume, RemotePanelHandoffError, SshConnectionStatus,
+    Board, CanvasViewState, PanelId, PanelKind, PanelResume, PreparedRemotePanelHandoff, RemotePanelHandoffError,
+    SshConnectionStatus,
     remote_panel_attachment::{RemotePanelAttachError, RemotePanelConnectionAttempt},
     runtime_state::{PanelState, RemoteWorkspaceReference, RuntimeState, WorkspaceState},
 };
@@ -50,6 +51,10 @@ fn attempt(fixture: &Fixture, script: &str) -> RemotePanelConnectionAttempt {
     }
 }
 
+fn handoff(fixture: &Fixture, script: &str) -> PreparedRemotePanelHandoff {
+    PreparedRemotePanelHandoff::prepare(&fixture.store, attempt(fixture, script)).expect("fresh handoff")
+}
+
 fn saved_view(board: &Board) -> String {
     RuntimeState::from_board(
         board,
@@ -83,10 +88,9 @@ fn handoff_preserves_view_and_store_without_promoting_arbitrary_output() {
     let focus = (board.focused, board.active_workspace);
     board
         .adopt_remote_panel_connection(
-            &fixture.store,
             OWNER,
             panel_id,
-            attempt(&fixture, "printf 'unverified-transport-output\\n'; read -r fixture"),
+            handoff(&fixture, "printf 'unverified-transport-output\\n'; read -r fixture"),
         )
         .expect("handoff");
     await_output(&mut board, panel_id, "unverified-transport-output");
@@ -122,8 +126,7 @@ fn copied_references_and_changed_view_identity_do_not_authorize_handoff() {
         }
         let before = fixture.current();
         let original_content = board.panels[0].terminal().expect("placeholder").last_lines_text(24);
-        let result =
-            board.adopt_remote_panel_connection(&fixture.store, current_session, panel_id, attempt(&fixture, "exit 0"));
+        let result = board.adopt_remote_panel_connection(current_session, panel_id, handoff(&fixture, "exit 0"));
         assert_eq!(
             result,
             Err(if fault == 0 {
@@ -146,7 +149,7 @@ fn missing_or_local_panel_cannot_receive_a_remote_connection() {
     let mut board = board(&fixture);
     let before = saved_view(&board);
     assert_eq!(
-        board.adopt_remote_panel_connection(&fixture.store, OWNER, PanelId(u64::MAX), attempt(&fixture, "exit 0")),
+        board.adopt_remote_panel_connection(OWNER, PanelId(u64::MAX), handoff(&fixture, "exit 0")),
         Err(RemotePanelHandoffError::TargetChanged)
     );
     assert_eq!(saved_view(&board), before);
@@ -164,7 +167,7 @@ fn missing_or_local_panel_cannot_receive_a_remote_connection() {
         .expect("local view");
     let before = saved_view(&board);
     assert_eq!(
-        board.adopt_remote_panel_connection(&fixture.store, OWNER, local, attempt(&fixture, "exit 0")),
+        board.adopt_remote_panel_connection(OWNER, local, handoff(&fixture, "exit 0")),
         Err(RemotePanelHandoffError::TargetChanged)
     );
     assert_eq!(saved_view(&board), before);
@@ -180,7 +183,7 @@ fn moved_remote_view_keeps_its_execution_identity_during_handoff() {
     board.assign_panel_to_workspace(panel_id, local_workspace);
     let before = saved_view(&board);
     board
-        .adopt_remote_panel_connection(&fixture.store, OWNER, panel_id, attempt(&fixture, "read -r fixture"))
+        .adopt_remote_panel_connection(OWNER, panel_id, handoff(&fixture, "read -r fixture"))
         .expect("explicit connection to moved remote view");
     assert_eq!(saved_view(&board), before);
     assert_eq!(board.panel_workspace_id(panel_id), Some(local_workspace));
@@ -196,18 +199,15 @@ fn stale_allocation_or_second_attempt_never_replaces_the_target_transport() {
     invalidate(&fixture.store);
     let before = saved_view(&board);
     assert_eq!(
-        board.adopt_remote_panel_connection(&fixture.store, OWNER, panel_id, stale),
-        Err(RemotePanelHandoffError::Attachment(
-            RemotePanelAttachError::StateChanged
-        ))
+        PreparedRemotePanelHandoff::prepare(&fixture.store, stale).expect_err("stale allocation"),
+        RemotePanelHandoffError::Attachment(RemotePanelAttachError::StateChanged)
     );
     assert_eq!(saved_view(&board), before);
     board
         .adopt_remote_panel_connection(
-            &fixture.store,
             OWNER,
             panel_id,
-            attempt(
+            handoff(
                 &fixture,
                 "printf 'first-connection\\n'; read -r fixture; printf 'original-still-live\\n'; read -r fixture",
             ),
@@ -215,7 +215,7 @@ fn stale_allocation_or_second_attempt_never_replaces_the_target_transport() {
         .expect("first handoff");
     await_output(&mut board, panel_id, "first-connection");
     assert_eq!(
-        board.adopt_remote_panel_connection(&fixture.store, OWNER, panel_id, attempt(&fixture, "exit 0")),
+        board.adopt_remote_panel_connection(OWNER, panel_id, handoff(&fixture, "exit 0")),
         Err(RemotePanelHandoffError::AlreadyConnected)
     );
     board
@@ -235,12 +235,7 @@ fn disconnected_transport_accepts_fresh_handoff_but_saved_restore_remains_inert(
     let panel_id = board.panels[0].id;
     let before_store = fixture.current();
     board
-        .adopt_remote_panel_connection(
-            &fixture.store,
-            OWNER,
-            panel_id,
-            attempt(&fixture, "printf 'transport-ended\\n'"),
-        )
+        .adopt_remote_panel_connection(OWNER, panel_id, handoff(&fixture, "printf 'transport-ended\\n'"))
         .expect("first handoff");
     assert!(
         board
@@ -255,10 +250,9 @@ fn disconnected_transport_accepts_fresh_handoff_but_saved_restore_remains_inert(
     );
     board
         .adopt_remote_panel_connection(
-            &fixture.store,
             OWNER,
             panel_id,
-            attempt(&fixture, "printf 'reconnected-view\\n'; read -r fixture"),
+            handoff(&fixture, "printf 'reconnected-view\\n'; read -r fixture"),
         )
         .expect("fresh handoff after local exit");
     await_output(&mut board, panel_id, "reconnected-view");
