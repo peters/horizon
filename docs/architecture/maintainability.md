@@ -143,6 +143,10 @@ back into large multi-purpose modules.
   share isolation options; each owns private trust material. Status queries retain
   bounded I/O, while interactive trust follows both terminal event proxies through
   detached Drop and asynchronous join. General user-configured SSH is unchanged.
+  Its Linux `trust.rs` leaf uses strict anonymous private inodes and an owner-PID
+  descriptor path for both modes, with no named-file fallback. Holding the exact
+  descriptor preserves each pin through local teardown; process exit cannot leave
+  a named trust file, even when normal shutdown bypasses Rust destructors.
 - `remote_panel_attachment.rs` consumes explicit exact-allocation admission, fresh
   read-only identity/worker inspection and saved-intent verification before a pinned
   local PTY. Only explicit recovery commits observations; attachment preserves saved phases.
