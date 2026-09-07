@@ -11,11 +11,12 @@ use crate::{
 /// A saved summary alone is not user authorization: call only after explicit Stop
 /// confirmation, off the render thread. Closing a view or client never invokes this.
 /// Reloads the owned record and rejects any changed selection before recording intent.
+/// Only persistent execution is admitted; timed cleanup retains its separate policy.
 /// No ambient provider, private key, allocation, restart, deletion or fallback is used.
 /// Returns only safe overview metadata; saved completion is not a live observation,
 /// a task checkpoint, or a guarantee of preserved process memory.
 /// # Errors
-/// Rejects unsupported/unconfigured providers, stale or foreign selections, and
+/// Rejects unsupported/unconfigured providers, timed execution, stale or foreign selections, and
 /// unverified Stop outcomes. Provider failures can leave durable Stop intent: refresh
 /// the saved inventory before an explicit retry. Diagnostics redact private payloads.
 pub fn stop_configured_remote_environment(

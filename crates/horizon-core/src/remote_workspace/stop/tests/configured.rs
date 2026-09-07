@@ -79,7 +79,7 @@ fn every_changed_selection_field_is_rejected_before_provider_access() {
     let fixture = Fixture::new();
     let before = fixture.current();
     let original = before.workspace().environment_summary();
-    let mut changed = vec![original.clone(); 11];
+    let mut changed = vec![original.clone(); 12];
     changed[0].revision += 1;
     changed[1].repository = "another/repository".into();
     changed[2].generation += 1;
@@ -91,6 +91,7 @@ fn every_changed_selection_field_is_rejected_before_provider_access() {
     changed[8].worker_identity.as_mut().expect("worker").resource_id = "b".repeat(64);
     changed[9].worker_identity = None;
     changed[10].profile = "another-profile".into();
+    changed[11].lifetime = WorkerLifetime::TimeLimited { seconds: 900 };
     let mut profiles = config();
     profiles.local_docker.push(LocalDockerProfile {
         name: "another-profile".into(),
@@ -114,6 +115,28 @@ fn every_changed_selection_field_is_rejected_before_provider_access() {
         Err(ConfiguredStopError::Stop(Error::StateChanged))
     );
     assert_eq!(fixture.current().workspace(), &updated);
+}
+
+#[test]
+fn timed_allocations_with_a_valid_profile_are_rejected_without_intent() {
+    let future = time::OffsetDateTime::now_utc() + time::Duration::seconds(900);
+    for deadline in [future, time::OffsetDateTime::UNIX_EPOCH] {
+        let fixture = Fixture::with_lifetime(InteractiveWorkerLifetime::TimeLimited(InteractiveWorkerLease {
+            terminate_after: deadline
+                .format(&time::format_description::well_known::Rfc3339)
+                .expect("valid deadline"),
+        }));
+        let before = fixture.current();
+        assert_eq!(
+            before.workspace().environment_summary().lifetime,
+            WorkerLifetime::TimeLimited { seconds: 900 }
+        );
+        assert_eq!(
+            stop(&fixture, &config()),
+            Err(ConfiguredStopError::Stop(Error::UnsupportedLifetime))
+        );
+        assert_eq!(fixture.current(), before);
+    }
 }
 
 #[test]
