@@ -103,26 +103,13 @@ fn foreign_and_ephemeral_clients_are_rejected_before_opening_storage() {
 fn explicit_load_and_reopen_are_inert_persistable_and_revalidate_cached_presence() {
     let temp = tempfile::tempdir().expect("fixture");
     let home = HorizonHome::from_root(temp.path().join("state"));
-    let (store, expected) = seed(&home, OWNER, 2);
+    let (store, expected) = seed(&home, OWNER, 3);
     let original = store.load_remote_workspace(OWNER, "environment").expect("record");
     let scope = scope(&expected);
     let client = client(&home, &scope);
     let ctx = Context::default();
     let mut board = Board::new();
     let mut state = ReopenState::default();
-    state.load(&client, &ctx);
-    settle(&mut state, &client, &mut board, &ctx);
-    assert_eq!(state.catalog.as_ref().expect("catalog").rows.len(), 2);
-    state.reopen(&client, &board, 0, &ctx);
-    settle(&mut state, &client, &mut board, &ctx);
-    assert_eq!(board.panels.len(), 1);
-    assert!(board.panels[0].terminal().expect("inert terminal").child_exited());
-    assert!(state.catalog.as_ref().expect("catalog").rows[0].present);
-    state.reopen(&client, &board, 0, &ctx);
-    assert!(!state.is_pending() && board.panels.len() == 1);
-    let saved = RuntimeState::from_board(&board, WindowConfig::default(), CanvasViewState::default());
-    saved.validate_remote_references().expect("persistable");
-    assert!(!saved.to_yaml().expect("yaml").contains("private-"));
     let unrelated = board.create_workspace("Local");
     board
         .create_panel(
@@ -134,8 +121,45 @@ fn explicit_load_and_reopen_are_inert_persistable_and_revalidate_cached_presence
             unrelated,
         )
         .expect("editor");
+    state.load(&client, &ctx);
+    settle(&mut state, &client, &mut board, &ctx);
+    assert_eq!(state.catalog.as_ref().expect("catalog").rows.len(), 3);
+    assert!(!state.catalog.as_ref().expect("catalog").rows[1].present);
     state.reopen(&client, &board, 1, &ctx);
+    assert!(!state.is_pending() && board.panels.len() == 1);
+    assert_eq!(
+        state.notice.as_deref(),
+        Some(
+            horizon_core::RemoteViewReopenError::ViewAlreadyPresent
+                .to_string()
+                .as_str()
+        )
+    );
+    state.reopen(&client, &board, 0, &ctx);
+    settle(&mut state, &client, &mut board, &ctx);
+    assert_eq!(board.panels.len(), 2);
+    assert!(board.panels[1].terminal().expect("inert terminal").child_exited());
+    assert!(state.catalog.as_ref().expect("catalog").rows[0].present);
+    assert!(!state.catalog.as_ref().expect("catalog").rows[1].present);
+    state.reopen(&client, &board, 0, &ctx);
     assert!(!state.is_pending() && board.panels.len() == 2);
+    let saved = RuntimeState::from_board(&board, WindowConfig::default(), CanvasViewState::default());
+    saved.validate_remote_references().expect("persistable");
+    assert!(!saved.to_yaml().expect("yaml").contains("private-"));
+    board
+        .create_panel(
+            PanelOptions {
+                kind: PanelKind::Editor,
+                local_id: Some("task-2".into()),
+                ..Default::default()
+            },
+            unrelated,
+        )
+        .expect("late conflicting editor");
+    state.reopen(&client, &board, 2, &ctx);
+    assert!(!state.is_pending() && board.panels.len() == 3);
+    state.reopen(&client, &board, 1, &ctx);
+    assert!(!state.is_pending() && board.panels.len() == 3);
     assert_eq!(
         store.load_remote_workspace(OWNER, "environment").expect("record"),
         original

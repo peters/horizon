@@ -90,6 +90,50 @@ fn matching_workspace(board: &mut Board) -> WorkspaceId {
 }
 
 #[test]
+fn catalog_presence_requires_both_saved_identity_and_execution_reference() {
+    let fixture = Fixture::new();
+    let catalog = fixture.catalog();
+    assert!(!catalog.view_is_present(&Board::new(), "alpha"));
+    for (owner, workspace, present) in [
+        (None, "remote-workspace", false),
+        (Some(FOREIGN), "remote-workspace", false),
+        (Some(OWNER), "other-environment", false),
+        (Some(OWNER), "remote-workspace", true),
+    ] {
+        let reference =
+            owner.map(|owner| RemoteWorkspaceReference::new(owner.into(), workspace.into()).expect("reference"));
+        let mut board = Board::from_runtime_state(&RuntimeState {
+            workspaces: vec![crate::WorkspaceState {
+                local_id: "visual".into(),
+                remote_workspace: reference.clone(),
+                panels: vec![crate::PanelState {
+                    local_id: "alpha".into(),
+                    kind: if reference.is_some() {
+                        PanelKind::Ssh
+                    } else {
+                        PanelKind::Editor
+                    },
+                    remote_workspace: reference,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .expect("inert board");
+        assert_eq!(catalog.view_is_present(&board, "alpha"), present);
+        assert!(!catalog.view_is_present(&board, "unknown"));
+        if present {
+            let id = board.panels[0].id;
+            let destination = board.create_workspace("Other placement");
+            board.assign_panel_to_workspace(id, destination);
+            assert!(catalog.view_is_present(&board, "alpha"));
+        }
+    }
+    fixture.assert_unchanged();
+}
+
+#[test]
 fn reopening_is_inert_copy_safe_and_persistable_after_all_views_close() {
     let fixture = Fixture::new();
     let mut board = Board::new();

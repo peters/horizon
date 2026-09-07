@@ -46,6 +46,21 @@ impl RemoteViewCatalog {
     pub fn panel_ids(&self) -> &[String] {
         &self.panels
     }
+
+    /// Whether this saved identity has a local view of the same remote environment.
+    /// Presentation only: a matching view does not grant connection authority or readiness.
+    /// The panel's execution reference is independent of its visual workspace placement.
+    #[must_use]
+    pub fn view_is_present(&self, board: &Board, panel_local_id: &str) -> bool {
+        self.panels.iter().any(|id| id == panel_local_id)
+            && board.panels.iter().any(|panel| {
+                panel.local_id == panel_local_id
+                    && panel.remote_workspace().is_some_and(|reference| {
+                        reference.owner_session_id() == self.expected.owning_session_id
+                            && reference.workspace_local_id() == self.expected.workspace_local_id
+                    })
+            })
+    }
 }
 
 /// An unreserved local insertion proposal. Board changes may invalidate it.

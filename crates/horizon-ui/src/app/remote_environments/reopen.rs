@@ -216,7 +216,7 @@ impl ReopenState {
                         .iter()
                         .map(|id| SavedView {
                             id: id.clone(),
-                            present: board.panel_id_by_local_id(id).is_some(),
+                            present: catalog.view_is_present(board, id),
                         })
                         .collect(),
                     catalog,
@@ -228,7 +228,7 @@ impl ReopenState {
                 Ok(id) => {
                     if let Some(cached) = &mut self.catalog {
                         for row in &mut cached.rows {
-                            row.present = board.panel_id_by_local_id(&row.id).is_some();
+                            row.present = cached.catalog.view_is_present(board, &row.id);
                         }
                     }
                     self.notice =
