@@ -175,6 +175,10 @@ back into large multi-purpose modules.
   Its single-flight worker prepares connections off-thread; lifecycle and modal
   actions invalidate before queued handoff adoption. Pending discarded receivers
   retain the slot until completion. Same-owner views do not implement global Open.
+- UI `remote_environments/reopen/` explicitly loads saved panel identities and
+  prepares inert missing views off-thread. It shares lifecycle invalidation with
+  reconnect; competing actions discard queued results before either handoff drains.
+  Adoption marks reference-only runtime state dirty without starting remote tasks.
 - `repository_overlay/` owns bounded exact-base metadata for separate index and
   working-tree changes. Its `paths.rs` applies the lexical transfer exclusion policy.
   Planning performs no filesystem, Git, provider or transfer I/O; actual capture/apply

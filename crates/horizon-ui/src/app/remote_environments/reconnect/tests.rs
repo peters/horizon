@@ -191,11 +191,14 @@ fn navigation_refresh_stop_and_provider_reload_invalidate_pending_results() {
         InventoryAction::Select(1),
         InventoryAction::Refresh,
         InventoryAction::RequestStop,
+        InventoryAction::ListReopenPanels,
+        InventoryAction::ReopenView(0),
     ] {
         let (_temp, mut app) = test_app();
         let expected = summary("00000000-0000-4000-8000-000000000001");
         app.remote_environments = inventory(&expected);
         let tx = pending(&mut app.remote_environments.reconnect, &expected);
+        tx.send(Err("discarded-result".into())).expect("queued send");
         let ctx = Context::default();
         if matches!(action, InventoryAction::RequestStop) {
             app.remote_environments
@@ -210,7 +213,6 @@ fn navigation_refresh_stop_and_provider_reload_invalidate_pending_results() {
                 .expect("slot")
                 .discard
         );
-        tx.send(Err("discarded-result".into())).expect("send");
         app.remote_reconnect_action(InventoryAction::None, &ctx);
         assert!(app.remote_environments.reconnect.pending.is_none());
         assert!(app.remote_environments.reconnect.notice.is_none());
