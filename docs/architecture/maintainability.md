@@ -203,6 +203,11 @@ back into large multi-purpose modules.
   verified bundle, preserving literal index and working bytes separately. It checks
   exact HEAD, selected index state and root association without filters or writes;
   coherent snapshots, selection/export approval and materialization remain separate.
+  `namespace/` composes exact-base Git leaves with both verified overlay layers into
+  ordered immutable namespaces. Whole-layer topology, effective link resolution
+  and expanded path/logical-byte budgets are checked before returning file references.
+  It does not read regular base payloads, write a checkout or authorize export;
+  the later confined writer must revalidate referenced base bytes independently.
 - `containers/remote-worker/host-identity.py` owns workspace-retained server-key
   initialization, validation and runtime materialization before SSH starts.
   Its real-key regressions are separate from the retained-volume SSH smoke in

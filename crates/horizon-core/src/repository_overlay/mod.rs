@@ -4,6 +4,7 @@
 
 pub mod bundle;
 pub mod capture;
+pub mod namespace;
 mod paths;
 pub mod reader;
 
