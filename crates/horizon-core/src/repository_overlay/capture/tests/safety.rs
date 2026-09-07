@@ -6,6 +6,60 @@ use crate::repository_overlay::{
 use std::{fs, os::unix::fs::symlink};
 
 #[test]
+fn deep_selection_ancestor_lookup_keeps_one_bounded_scratch_buffer() {
+    let paths: Vec<_> = (0..1000).map(|n| format!("{n}/{}file", "a/".repeat(2000))).collect();
+    let selected: Vec<_> = paths.iter().map(String::as_str).collect();
+    let selected = validate_selection(&selected).unwrap();
+    let wanted = selected
+        .iter()
+        .enumerate()
+        .map(|(n, path)| (path.as_bytes(), n))
+        .collect();
+    let mut scratch = Vec::with_capacity(paths::MAX_PATH_BYTES);
+    let capacity = scratch.capacity();
+    for path in &selected {
+        let parent = path.rsplit_once('/').unwrap().0;
+        assert!(linux::has_selected_descendant(&wanted, parent.as_bytes(), &mut scratch));
+        assert!(!linux::has_selected_descendant(&wanted, path.as_bytes(), &mut scratch));
+    }
+    let wanted = [(&b"dir-early"[..], 0), (&b"dir/file"[..], 1), (&b"dir2/file"[..], 2)].into();
+    assert!(linux::has_selected_descendant(&wanted, b"dir", &mut scratch));
+    assert!(!linux::has_selected_descendant(&wanted, b"di", &mut scratch));
+    assert!(!linux::has_selected_descendant(&wanted, b"DIR", &mut scratch));
+    assert!(!linux::has_selected_descendant(
+        &wanted,
+        &vec![b'a'; paths::MAX_PATH_BYTES],
+        &mut scratch
+    ));
+    assert_eq!(scratch.capacity(), capacity);
+}
+
+#[test]
+fn base_tree_walk_loads_each_ancestor_once() {
+    let fixture = Fixture::new();
+    let blob = fixture.repository.blob(b"literal").unwrap();
+    let mut builder = fixture.repository.treebuilder(None).unwrap();
+    builder.insert("file", blob, 0o100_644).unwrap();
+    let mut id = builder.write().unwrap();
+    for _ in 0..2000 {
+        builder.clear().unwrap();
+        builder.insert("a", id, 0o040_000).unwrap();
+        id = builder.write().unwrap();
+    }
+    let mut loads = 0;
+    let path = format!("{}file", "a/".repeat(2000));
+    let node = linux::tree_node(fixture.repository.find_tree(id).unwrap(), &path, |id| {
+        loads += 1;
+        fixture.repository.find_tree(id)
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(loads, 2000);
+    assert_eq!(node.oid, blob);
+    assert_eq!(node.mode, 0o100_644);
+}
+
+#[test]
 fn roots_and_exact_heads_never_fall_back_to_parent_or_unborn_repository() {
     let fixture = Fixture::new();
     fs::create_dir(fixture.root().join("nested")).unwrap();

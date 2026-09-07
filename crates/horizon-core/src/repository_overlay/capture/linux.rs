@@ -7,12 +7,14 @@ use crate::{
     repository_overlay::{
         RepositoryOverlayPlan,
         bundle::RepositoryOverlayBundle,
+        paths::MAX_PATH_BYTES,
         reader::{MAX_READ_BYTES, RepositoryReadError, SelectedRepositoryReader},
     },
 };
-use git2::{ErrorCode, IndexEntryExtendedFlag, ObjectFormat, ObjectType, Oid, Repository, RepositoryOpenFlags, Tree};
+use git2::{IndexEntryExtendedFlag, ObjectFormat, ObjectType, Oid, Repository, RepositoryOpenFlags, Tree};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
+    ops::Bound,
     os::{fd::AsRawFd, unix::fs::MetadataExt},
     path::Path,
 };
@@ -26,7 +28,7 @@ pub(super) fn capture(root: &Path, source: GitSource, selected: &[&str]) -> Resu
     let mut index_changes = Vec::new();
     let mut working_changes = Vec::new();
     for (path, indexed) in selected.iter().zip(&baseline) {
-        let original = tree_node(&tree, path)?;
+        let original = tree_node(tree.clone(), path, |id| state.repository.find_tree(id))?;
         if original != *indexed {
             let node = indexed.map(|node| node.read(&state.repository)).transpose()?;
             index_changes.push(contents.change(path, node)?);
@@ -108,10 +110,7 @@ impl State {
             .enumerate()
             .map(|(position, path)| (path.as_bytes(), position))
             .collect();
-        let ancestors: BTreeSet<_> = selected
-            .iter()
-            .flat_map(|path| parents(path).map(str::as_bytes))
-            .collect();
+        let mut prefix = Vec::with_capacity(MAX_PATH_BYTES);
         let mut found = vec![None; selected.len()];
         // Git's by-path index lookup can fold case. Only literal selected bytes grant access.
         for entry in index.iter() {
@@ -121,7 +120,7 @@ impl State {
             {
                 return Err(Error::UnsupportedIndex);
             }
-            if ancestors.contains(entry.path.as_slice()) {
+            if has_selected_descendant(&wanted, &entry.path, &mut prefix) {
                 return Err(Error::UnsupportedNode);
             }
             if let Some(position) = wanted.get(entry.path.as_slice()) {
@@ -144,27 +143,39 @@ impl State {
     }
 }
 
-fn tree_node(tree: &Tree<'_>, path: &str) -> Result<Option<GitNode>, Error> {
-    for parent in parents(path) {
-        match tree.get_path(Path::new(parent)) {
-            Ok(entry) if entry.kind() == Some(ObjectType::Tree) => {}
-            Ok(_) => return Err(Error::UnsupportedNode),
-            Err(error) if error.code() == ErrorCode::NotFound => {}
-            Err(_) => return Err(Error::GitRead),
-        }
+pub(super) fn has_selected_descendant(wanted: &BTreeMap<&[u8], usize>, path: &[u8], prefix: &mut Vec<u8>) -> bool {
+    if path.len() >= MAX_PATH_BYTES {
+        return false;
     }
-    match tree.get_path(Path::new(path)) {
-        Ok(entry) => {
-            let mode = u32::try_from(entry.filemode_raw()).map_err(|_| Error::UnsupportedNode)?;
-            Ok(Some(GitNode::new(mode, entry.id())?))
-        }
-        Err(error) if error.code() == ErrorCode::NotFound => Ok(None),
-        Err(_) => Err(Error::GitRead),
-    }
+    prefix.clear();
+    prefix.extend_from_slice(path);
+    prefix.push(b'/');
+    wanted
+        .range::<[u8], _>((Bound::Included(prefix.as_slice()), Bound::Unbounded))
+        .next()
+        .is_some_and(|(selected, _)| selected.starts_with(prefix))
 }
 
-fn parents(path: &str) -> impl Iterator<Item = &str> {
-    std::iter::successors(path.rsplit_once('/').map(|(parent, _)| parent), |path| {
-        path.rsplit_once('/').map(|(parent, _)| parent)
-    })
+pub(super) fn tree_node<'repo>(
+    mut tree: Tree<'repo>,
+    path: &str,
+    mut load: impl FnMut(Oid) -> Result<Tree<'repo>, git2::Error>,
+) -> Result<Option<GitNode>, Error> {
+    let mut components = path.split('/').peekable();
+    while let Some(component) = components.next() {
+        let Some(entry) = tree.get_name(component) else {
+            return Ok(None);
+        };
+        let (id, kind, mode) = (entry.id(), entry.kind(), entry.filemode_raw());
+        if components.peek().is_none() {
+            let mode = u32::try_from(mode).map_err(|_| Error::UnsupportedNode)?;
+            return Ok(Some(GitNode::new(mode, id)?));
+        }
+        if kind != Some(ObjectType::Tree) {
+            return Err(Error::UnsupportedNode);
+        }
+        drop(entry);
+        tree = load(id).map_err(|_| Error::GitRead)?;
+    }
+    Err(Error::UnsupportedNode)
 }
