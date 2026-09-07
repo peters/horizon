@@ -11,10 +11,13 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod board;
+mod configured;
+
 const OWNER: &str = "00000000-0000-4000-8000-000000000001";
 
 struct Fixture {
-    _directory: tempfile::TempDir,
+    directory: tempfile::TempDir,
     store: CloudWorkflowStore,
     identities: RemoteSshIdentityStore,
     provider: Provider,
@@ -26,6 +29,10 @@ impl Fixture {
     }
 
     fn with_lifetime(lifetime: WorkerLifetime) -> Self {
+        Self::with_resource_id(lifetime, "synthetic-worker")
+    }
+
+    fn with_resource_id(lifetime: WorkerLifetime, resource_id: &str) -> Self {
         let directory = tempfile::tempdir().expect("fixture");
         std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).expect("private");
         let home = HorizonHome::from_root(directory.path().join("home"));
@@ -68,7 +75,7 @@ impl Fixture {
                         provider: request.target.provider,
                         workflow_id: request.workflow_id,
                         job_id: request.job_id,
-                        resource_id: "synthetic-worker".into(),
+                        resource_id: resource_id.into(),
                     },
                     target: request.target,
                     ssh_public_key: request.ssh_public_key,
@@ -90,7 +97,7 @@ impl Fixture {
             .expect("recovery");
         *provider.calls.lock().expect("calls") = 0;
         Self {
-            _directory: directory,
+            directory,
             store,
             identities,
             provider,

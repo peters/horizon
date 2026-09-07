@@ -153,6 +153,19 @@ back into large multi-purpose modules.
   Its target-bound attempt rechecks snapshots before input-capable handoff; it is
   not authenticated attachment, saved Ready state or an atomic Stop/attach fence.
   Board/UI admission and inert restore remain separate from this Linux-only API.
+- `board/remote.rs` prepares a protected, short-lived local handoff after the final
+  off-thread store fence, then consumes it into one disconnected same-owner view
+  without I/O. The actual client session and current view identity must match;
+  queued admission expires without affecting remote task lifetime. Visual rehoming
+  preserves execution identity. It does not persist transport arguments, promote
+  readiness or enable implicit restore. UI request/config/session invalidation and
+  global cross-session Open remain separate; admission is not continuous revocation.
+  Handoff synchronizes terminal grid and PTY geometry to the current view, not the
+  earlier asynchronous request. Its age bound conservatively includes store latency.
+- `remote_panel_attachment/configured.rs` admits only the actual owner session,
+  exact saved selection and explicitly named local provider profile before calling
+  non-creating attachment. It does not infer authority from inventory visibility or
+  copied client references, and has no ambient provider or profile fallback.
 - `repository_overlay/` owns bounded exact-base metadata for separate index and
   working-tree changes. Its `paths.rs` applies the lexical transfer exclusion policy.
   Planning performs no filesystem, Git, provider or transfer I/O; actual capture/apply

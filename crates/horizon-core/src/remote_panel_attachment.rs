@@ -1,5 +1,11 @@
 //! Explicit, non-creating attachment to one retained panel. Run off the render thread.
 
+mod configured;
+
+pub use configured::{
+    ConfiguredRemotePanelAttachError, ConfiguredRemotePanelAttachRequest, attach_configured_remote_panel,
+};
+
 use crate::{
     Terminal,
     cloud_run::{
