@@ -41,9 +41,7 @@ enum ObservationError {
 impl ObservationError {
     fn message(self) -> String {
         match self {
-            Self::WorkerUnavailable => {
-                "The provider check could not finish; retry when the previous check has settled.".into()
-            }
+            Self::WorkerUnavailable => "The provider check failed to start or finish; you can retry now.".into(),
             Self::StorageUnavailable => {
                 "The saved environment could not be safely read; refresh the saved page before retrying.".into()
             }

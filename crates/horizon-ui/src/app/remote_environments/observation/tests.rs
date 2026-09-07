@@ -112,12 +112,11 @@ fn failed_repeat_and_disconnected_worker_preserve_timestamped_success() {
     );
     drop(pending(&mut state));
     state.drain_result();
-    assert!(
-        state
-            .failure
-            .as_ref()
-            .is_some_and(|error| error.contains("could not finish"))
+    assert_eq!(
+        state.failure.as_deref(),
+        Some("The provider check failed to start or finish; you can retry now.")
     );
+    assert!(!state.is_pending(), "a failed check releases the single-flight slot");
     assert!(state.last_success.is_some());
 }
 
