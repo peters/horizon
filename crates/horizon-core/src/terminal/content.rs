@@ -377,7 +377,7 @@ mod tests {
     use super::{
         append_cell_text, bottom_row_texts, hyperlink_uri_at_viewport_point, wrapped_line_chars_at_viewport_point,
     };
-    use crate::terminal::{TerminalDimensions, TerminalEventProxy, find_url_at_column};
+    use crate::terminal::{TerminalDimensions, TerminalEventProxy, TerminalSshTrust, find_url_at_column};
 
     fn reconstruct_line(cells: &[(usize, Cell)]) -> String {
         let mut line = String::new();
@@ -466,7 +466,11 @@ mod tests {
             ..term::Config::default()
         };
 
-        Term::new(config, &dimensions, TerminalEventProxy { event_tx })
+        Term::new(
+            config,
+            &dimensions,
+            TerminalEventProxy::new(event_tx, TerminalSshTrust::default()),
+        )
     }
 
     #[test]

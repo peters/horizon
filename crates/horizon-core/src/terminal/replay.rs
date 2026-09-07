@@ -50,7 +50,7 @@ mod tests {
 
     use super::drain_replay_events;
     use crate::terminal::support::replay_terminal_bytes;
-    use crate::terminal::{TerminalDimensions, TerminalEventProxy};
+    use crate::terminal::{TerminalDimensions, TerminalEventProxy, TerminalSshTrust};
 
     #[test]
     fn replaying_device_status_queries_emits_side_effect_events() {
@@ -133,7 +133,7 @@ mod tests {
         let term = Arc::new(FairMutex::new(Term::new(
             config,
             &dimensions,
-            TerminalEventProxy { event_tx },
+            TerminalEventProxy::new(event_tx, TerminalSshTrust::default()),
         )));
 
         (term, event_rx)

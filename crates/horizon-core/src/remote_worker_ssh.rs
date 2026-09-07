@@ -1,9 +1,11 @@
 //! Crate-private pinned SSH command construction, not remote attachment authority.
 
 use crate::{
-    cloud_run::interactive_worker::InteractiveWorkerSshEndpoint, remote_worker_status::RemotePanelStatusError as Error,
+    Terminal, cloud_run::CloudJobId, cloud_run::interactive_worker::InteractiveWorkerSshEndpoint,
+    remote_ssh_identity::RemoteSshIdentity, remote_worker_status::RemotePanelStatusError as Error,
+    remote_workspace::valid_local_id, terminal::TerminalSpawnOptions,
 };
-use std::{path::Path, process::Command};
+use std::{io::Write, path::Path, process::Command, sync::Arc};
 
 pub(crate) const HOST_ALIAS: &str = "horizon-retained-worker";
 
@@ -12,11 +14,31 @@ pub(crate) fn prepared_command(
     known_hosts: &Path,
     endpoint: &InteractiveWorkerSshEndpoint,
 ) -> Result<Command, Error> {
+    command_for(identity, known_hosts, endpoint, Operation::Request)
+}
+
+#[derive(Clone, Copy)]
+enum Operation<'a> {
+    Request,
+    Attach { runtime: CloudJobId, panel: &'a str },
+}
+
+fn command_for(
+    identity: &Path,
+    known_hosts: &Path,
+    endpoint: &InteractiveWorkerSshEndpoint,
+    operation: Operation<'_>,
+) -> Result<Command, Error> {
     if !endpoint.is_complete() {
         return Err(Error::WorkerUnavailable);
     }
     let mut command = Command::new("ssh");
-    command.args(["-F", "none", "-S", "none", "-T"]);
+    let terminal_mode = match operation {
+        Operation::Request => "-T",
+        Operation::Attach { panel, .. } if valid_local_id(panel) => "-tt",
+        Operation::Attach { .. } => return Err(Error::UnknownPanel),
+    };
+    command.args(["-F", "none", "-S", "none", terminal_mode]);
     for option in [
         "BatchMode=yes",
         "IdentitiesOnly=yes",
@@ -59,9 +81,62 @@ pub(crate) fn prepared_command(
         "--",
         &endpoint.host,
     ]);
-    command.arg("/usr/local/bin/horizon-panel-session request");
+    command.arg(match operation {
+        Operation::Request => "/usr/local/bin/horizon-panel-session request".into(),
+        Operation::Attach { runtime, panel } => {
+            format!("/usr/local/bin/horizon-panel-session attach -- {runtime} {panel}")
+        }
+    });
     command.env("SSH_ASKPASS_REQUIRE", "never");
     Ok(command)
+}
+
+pub(crate) fn known_hosts(
+    identity: &RemoteSshIdentity,
+    endpoint: &InteractiveWorkerSshEndpoint,
+) -> Result<tempfile::NamedTempFile, Error> {
+    // The recovered key's private parent avoids ambient temporary-directory trust.
+    let parent = identity.private_key_path().parent().ok_or(Error::UnsupportedPath)?;
+    let mut known_hosts = tempfile::NamedTempFile::new_in(parent).map_err(|_| Error::TrustStorage)?;
+    writeln!(known_hosts, "{HOST_ALIAS} {}", endpoint.host_key).map_err(|_| Error::TrustStorage)?;
+    Ok(known_hosts)
+}
+
+/// Private preparation must be consumed by the fresh admission boundary, never persisted.
+pub(crate) struct PreparedAttachment {
+    command: Command,
+    known_hosts: tempfile::NamedTempFile,
+}
+
+impl PreparedAttachment {
+    pub(crate) fn new(
+        identity: &RemoteSshIdentity,
+        endpoint: &InteractiveWorkerSshEndpoint,
+        runtime: CloudJobId,
+        panel: &str,
+    ) -> Result<Self, Error> {
+        let known_hosts = known_hosts(identity, endpoint)?;
+        let command = command_for(
+            identity.private_key_path(),
+            known_hosts.path(),
+            endpoint,
+            Operation::Attach { runtime, panel },
+        )?;
+        Ok(Self { command, known_hosts })
+    }
+
+    pub(crate) fn spawn(self, mut options: TerminalSpawnOptions) -> crate::Result<Terminal> {
+        options.program = "ssh".into();
+        options.args = self
+            .command
+            .get_args()
+            .map(|argument| argument.to_str().map(str::to_owned))
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| crate::Error::State("protected SSH arguments are not supported".into()))?;
+        options.env.insert("SSH_ASKPASS_REQUIRE".into(), "never".into());
+        options.env.insert("TERM".into(), "xterm-256color".into());
+        Terminal::spawn_with_ssh_trust(options, Arc::new(self.known_hosts))
+    }
 }
 
 fn path_option(name: &str, path: &Path) -> Result<String, Error> {
@@ -75,4 +150,88 @@ fn path_option(name: &str, path: &Path) -> Result<String, Error> {
     // SSH applies its own configuration quoting and percent expansion after argv parsing.
     let escaped = path.replace('\\', "\\\\").replace('"', "\\\"").replace('%', "%%");
     Ok(format!("{name}=\"{escaped}\""))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{HorizonHome, cloud_run::CloudWorkflowId, remote_ssh_identity::RemoteSshIdentityStore};
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn interactive_mode_shares_all_isolation_options_and_owns_unique_private_trust() {
+        let directory = tempfile::tempdir().expect("fixture");
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).expect("private");
+        let identities = RemoteSshIdentityStore::new(&HorizonHome::from_root(directory.path().join("home")));
+        let runtime = CloudJobId::new();
+        let identity = identities
+            .prepare_new(CloudWorkflowId::new(), runtime)
+            .expect("identity");
+        let endpoint = InteractiveWorkerSshEndpoint {
+            host: "127.0.0.1".into(),
+            port: 2222,
+            username: "horizon".into(),
+            host_key: identity.public_key().into(),
+        };
+        let first = PreparedAttachment::new(&identity, &endpoint, runtime, "-h").expect("first");
+        let second = PreparedAttachment::new(&identity, &endpoint, runtime, "terminal").expect("second");
+        let first_path = first.known_hosts.path().to_path_buf();
+        let second_path = second.known_hosts.path().to_path_buf();
+        assert_ne!(first_path, second_path);
+        assert_eq!(first_path.parent(), identity.private_key_path().parent());
+        assert_eq!(
+            first
+                .known_hosts
+                .as_file()
+                .metadata()
+                .expect("mode")
+                .permissions()
+                .mode()
+                & 0o077,
+            0
+        );
+        assert_eq!(
+            std::fs::read_to_string(&first_path).expect("pin"),
+            format!("{HOST_ALIAS} {}\n", endpoint.host_key)
+        );
+        let query = prepared_command(identity.private_key_path(), &first_path, &endpoint).expect("query");
+        let mut expected: Vec<_> = query.get_args().map(std::ffi::OsStr::to_os_string).collect();
+        expected[4] = "-tt".into();
+        *expected.last_mut().expect("helper") =
+            format!("/usr/local/bin/horizon-panel-session attach -- {runtime} -h").into();
+        assert_eq!(first.command.get_args().collect::<Vec<_>>(), expected);
+        assert_eq!(
+            first.command.get_envs().collect::<Vec<_>>(),
+            query.get_envs().collect::<Vec<_>>()
+        );
+        let parsed = Command::new("ssh")
+            .arg("-G")
+            .args(first.command.get_args())
+            .output()
+            .expect("SSH parser");
+        assert!(parsed.status.success());
+        assert!(
+            String::from_utf8(parsed.stdout)
+                .expect("config")
+                .lines()
+                .any(|line| line == "requesttty force")
+        );
+        for panel in ["", "../panel", "panel;start", "panel\nstart", "panel with spaces"] {
+            assert!(matches!(
+                PreparedAttachment::new(&identity, &endpoint, runtime, panel),
+                Err(Error::UnknownPanel)
+            ));
+        }
+        drop(first);
+        assert!(!first_path.exists());
+        assert!(second_path.exists());
+        drop(second);
+        assert!(!second_path.exists());
+        assert_eq!(
+            std::fs::read_dir(identity.private_key_path().parent().expect("parent"))
+                .expect("directory")
+                .count(),
+            1
+        );
+    }
 }
