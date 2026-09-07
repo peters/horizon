@@ -431,12 +431,52 @@ fn drift_after_local_start_or_before_consumption_discards_the_attempt() {
     }
 }
 
-fn await_removed(path: &std::path::Path) {
+struct TrustProbe {
+    path: std::path::PathBuf,
+    device: u64,
+    inode: u64,
+}
+
+impl TrustProbe {
+    fn is_retained(&self) -> bool {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(&self.path)
+            .is_ok_and(|metadata| metadata.dev() == self.device && metadata.ino() == self.inode)
+    }
+}
+
+fn await_removed(probe: &TrustProbe) {
     let deadline = Instant::now() + Duration::from_secs(5);
-    while path.exists() && Instant::now() < deadline {
+    while probe.is_retained() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
     }
-    assert!(!path.exists(), "owned trust must be released after local teardown");
+    assert!(
+        !probe.is_retained(),
+        "owned trust must be released after local teardown"
+    );
+}
+
+fn anonymous_trust(directory: &std::path::Path) -> (std::fs::File, TrustProbe) {
+    use rustix::fs::{Mode, OFlags, open};
+    use std::os::{fd::AsRawFd, unix::fs::MetadataExt};
+    let file = std::fs::File::from(
+        open(
+            directory,
+            OFlags::TMPFILE | OFlags::RDWR | OFlags::CLOEXEC,
+            Mode::RUSR | Mode::WUSR,
+        )
+        .expect("anonymous trust"),
+    );
+    let path = format!("/proc/{}/fd/{}", std::process::id(), file.as_raw_fd()).into();
+    let metadata = file.metadata().expect("inode");
+    (
+        file,
+        TrustProbe {
+            path,
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        },
+    )
 }
 
 #[test]
@@ -444,8 +484,7 @@ fn private_trust_survives_immediate_drop_timeout_and_async_join_until_owned_tear
     use std::sync::atomic::{AtomicUsize, Ordering};
     for mode in 0..3 {
         let directory = tempfile::tempdir().expect("fixture");
-        let trust = tempfile::NamedTempFile::new_in(directory.path()).expect("trust");
-        let path = trust.path().to_path_buf();
+        let (trust, path) = anonymous_trust(directory.path());
         let release = directory.path().join("release");
         let mut options =
             local_options("i=0; while [ ! -f \"$1\" ] && [ \"$i\" -lt 200 ]; do i=$((i+1)); sleep 0.01; done");
@@ -462,7 +501,7 @@ fn private_trust_survives_immediate_drop_timeout_and_async_join_until_owned_tear
         }
         drop(terminal);
         if mode != 0 {
-            assert!(path.exists());
+            assert!(path.is_retained());
             assert_eq!(completed.load(Ordering::Relaxed), 0);
             std::fs::write(&release, b"release").expect("release owned child");
         }
@@ -480,17 +519,15 @@ fn private_trust_survives_immediate_drop_timeout_and_async_join_until_owned_tear
 #[test]
 fn failed_startup_and_concurrent_connections_release_only_their_own_trust() {
     let directory = tempfile::tempdir().expect("fixture");
-    let first = tempfile::NamedTempFile::new_in(directory.path()).expect("first");
-    let second = tempfile::NamedTempFile::new_in(directory.path()).expect("second");
-    let first_path = first.path().to_path_buf();
-    let second_path = second.path().to_path_buf();
+    let (first, first_path) = anonymous_trust(directory.path());
+    let (second, second_path) = anonymous_trust(directory.path());
     let second_terminal =
         Terminal::spawn_with_ssh_trust(local_options("read -r fixture"), Arc::new(second)).expect("second");
     let mut options = local_options("exit 0");
     options.program = directory.path().join("nonexistent").to_string_lossy().into_owned();
     assert!(Terminal::spawn_with_ssh_trust(options, Arc::new(first)).is_err());
     await_removed(&first_path);
-    assert!(second_path.exists());
+    assert!(second_path.is_retained());
     drop(second_terminal);
     await_removed(&second_path);
 }
