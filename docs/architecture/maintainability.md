@@ -152,6 +152,10 @@ back into large multi-purpose modules.
   private Linux directory, reusing the reader's pinned inode checks. Anonymous
   writes, no-replace publication and file/directory synchronization precede success;
   retrieval revalidates the complete codec and digest. This is not scheduled backup.
+  `capture/` reads only nominated paths from a pinned Linux Git worktree into a
+  verified bundle, preserving literal index and working bytes separately. It checks
+  exact HEAD, selected index state and root association without filters or writes;
+  coherent snapshots, selection/export approval and materialization remain separate.
 - `containers/remote-worker/host-identity.py` owns workspace-retained server-key
   initialization, validation and runtime materialization before SSH starts.
   Its real-key regressions are separate from the retained-volume SSH smoke in
