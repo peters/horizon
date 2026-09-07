@@ -313,6 +313,7 @@ back into large multi-purpose modules.
     layout, and row/header paint helpers split into `remote_hosts_overlay/`
   - `remote_environments`: single-flight saved-inventory loading and modal input
     ownership, with cached labels and rendering in `remote_environments/paint`.
+    Shell inventory/modal tests live in the colocated `remote_environments/tests`.
     `remote_environments/observation` owns single-flight manual provider checks,
     event-based invalidation and cached point-in-time labels, never provider I/O
     on the render thread or passive repaint polling.
