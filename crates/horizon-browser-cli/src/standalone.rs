@@ -378,7 +378,7 @@ const fn backend_name(backend: BackendKind) -> &'static str {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use std::io::Read as _;
+    use std::os::fd::OwnedFd;
 
     use super::*;
 
@@ -407,25 +407,29 @@ mod tests {
 
     #[test]
     fn initialization_write_failure_reaps_the_child() {
-        let mut child = Command::new("/bin/sh")
-            .args(["-c", "exec 0<&-; printf ready; exec sleep 30"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
+        let (read_end, _write_end) = io::pipe().unwrap_or_else(|error| panic!("create read-only stdin: {error}"));
+        // A pipe's read end rejects writes regardless of when other descriptors close.
+        let stdin = Some(ChildStdin::from(OwnedFd::from(read_end)));
+        let child = Command::new("/bin/sh")
+            .args(["-c", "exec sleep 30"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .spawn()
-            .unwrap_or_else(|error| panic!("start closed-stdin fixture: {error}"));
+            .unwrap_or_else(|error| panic!("start live cleanup fixture: {error}"));
         let child_id = child.id();
-        let mut ready = [0; 5];
-        child
-            .stdout
-            .take()
-            .unwrap_or_else(|| panic!("fixture stdout unavailable"))
-            .read_exact(&mut ready)
-            .unwrap_or_else(|error| panic!("wait for fixture readiness: {error}"));
-        assert_eq!(&ready, b"ready");
-        let stdin = child.stdin.take();
+        let mut host = OwnedHostProcess { child, stdin };
+        assert!(
+            host.child
+                .try_wait()
+                .unwrap_or_else(|error| panic!("inspect live cleanup fixture: {error}"))
+                .is_none()
+        );
 
-        let result = OwnedHostProcess { child, stdin }.initialize();
-        assert!(matches!(result, Err(StandaloneError::Startup(_))));
+        let result = host.initialize();
+        assert!(
+            matches!(result, Err(StandaloneError::Startup(message)) if message.starts_with("could not initialize browser host:"))
+        );
 
         let alive = Command::new("kill")
             .args(["-0", &child_id.to_string()])
