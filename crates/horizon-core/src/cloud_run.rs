@@ -3,6 +3,7 @@ use serde::{Deserialize, Deserializer, Serialize, de};
 use std::{collections::HashSet, fmt};
 use thiserror::Error;
 use uuid::Uuid;
+mod artifact_digest;
 pub mod interactive_worker;
 pub mod local_docker;
 pub mod runpod;

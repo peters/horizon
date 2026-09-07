@@ -2,6 +2,7 @@
 //! Index changes are relative to the base; working-tree changes are relative to that index.
 //! Capture/apply must separately verify real filesystem topology, content hashes and approval.
 
+pub mod bundle;
 mod paths;
 pub mod reader;
 
