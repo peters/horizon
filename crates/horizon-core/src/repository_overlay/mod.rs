@@ -7,6 +7,7 @@ pub mod capture;
 pub mod namespace;
 mod paths;
 pub mod reader;
+pub mod seed;
 
 use crate::cloud_run::{ArtifactDigest, GitSource};
 use std::{collections::BTreeMap, fmt};
