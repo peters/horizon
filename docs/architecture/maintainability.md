@@ -132,12 +132,16 @@ back into large multi-purpose modules.
   stale overview summaries before passing the owned snapshot to the observation gate.
 - `remote_worker_status.rs` gates non-creating panel inspection on exact owned
   recovery and current lifetime. Its `protocol.rs` leaf owns bounded status-only
-  wire types; `ssh.rs` isolates host pins and client options; `command.rs` owns
+  wire types; `ssh.rs` owns the query's private host-pin lifetime; `command.rs` owns
   bounded nonblocking local-child I/O. It neither grants attachment/task startup
   nor changes the general user-configured SSH API or remote execution lifetime.
   Explicit saved shell/command verification reuses those gates and compares
   literal argv plus the effective directory with the worker's retained intent;
   unresolved agent launch/handoff/resume semantics stay fail-closed.
+- `remote_worker_ssh.rs` centralizes crate-private pinned client options and SSH
+  path quoting without granting attachment authority. Status queries retain their
+  fixed noninteractive command, bounded I/O and public errors; the shared leaf does
+  not change general user-configured SSH or start an interactive connection.
 - `repository_overlay/` owns bounded exact-base metadata for separate index and
   working-tree changes. Its `paths.rs` applies the lexical transfer exclusion policy.
   Planning performs no filesystem, Git, provider or transfer I/O; actual capture/apply

@@ -1,4 +1,5 @@
 use super::*;
+use crate::remote_worker_ssh as ssh;
 use std::{
     ffi::OsString,
     os::unix::{ffi::OsStringExt, fs::PermissionsExt},
