@@ -1,5 +1,6 @@
 //! Complete, hash-verified local payloads; not export approval, capture or filesystem safety.
 
+pub mod codec;
 mod fingerprint;
 
 use super::{OverlayContent, RepositoryOverlayPlan, reader::MAX_READ_BYTES};

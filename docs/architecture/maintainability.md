@@ -145,6 +145,9 @@ back into large multi-purpose modules.
   or length-inconsistent payloads fail before a bundle is returned. It performs
   no I/O and grants no capture, export or recovery authority; streaming large
   overlays, coherent capture and safe materialization remain separate concerns.
+  `bundle/codec/` frames portable versioned bytes with bounded, constructor-checked
+  metadata decoding, canonical ordering and recomputed payload hashes. It does not
+  perform I/O or authorize export, extraction or repository writes.
 - `containers/remote-worker/host-identity.py` owns workspace-retained server-key
   initialization, validation and runtime materialization before SSH starts.
   Its real-key regressions are separate from the retained-volume SSH smoke in
