@@ -3,6 +3,7 @@
 mod observation;
 mod paint;
 mod reconnect;
+mod reopen;
 mod stop;
 
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -24,6 +25,7 @@ pub(super) struct RemoteEnvironments {
     observation: observation::ObservationState,
     stop: stop::StopState,
     reconnect: reconnect::ReconnectState,
+    reopen: reopen::ReopenState,
     refresh_after_stop: bool,
 }
 
@@ -66,6 +68,8 @@ enum InventoryAction {
     CancelStop,
     ListReconnectViews,
     Reconnect(horizon_core::PanelId),
+    ListReopenPanels,
+    ReopenView(usize),
 }
 
 struct WakeOnDrop(Context);
@@ -83,6 +87,7 @@ impl RemoteEnvironments {
 
     pub(super) fn invalidate_session_views(&mut self) {
         self.reconnect.invalidate();
+        self.reopen.invalidate();
     }
 
     pub(super) fn open(&mut self, home: &HorizonHome, ctx: &Context) {
@@ -90,7 +95,7 @@ impl RemoteEnvironments {
             return;
         }
         self.open = true;
-        self.reconnect.invalidate();
+        self.invalidate_session_views();
         self.page = None;
         self.page_cursor = None;
         self.selected = None;
@@ -108,7 +113,7 @@ impl RemoteEnvironments {
 
     fn close(&mut self) {
         self.open = false;
-        self.reconnect.invalidate();
+        self.invalidate_session_views();
         self.observation.invalidate();
         self.stop.invalidate();
         self.refresh_after_stop = false;
@@ -122,7 +127,7 @@ impl RemoteEnvironments {
         if !self.open || self.pending.is_some() {
             return;
         }
-        self.reconnect.invalidate();
+        self.invalidate_session_views();
         self.observation.invalidate();
         self.stop.cancel_confirmation();
         let (tx, rx) = mpsc::sync_channel(1);
@@ -167,7 +172,7 @@ impl RemoteEnvironments {
     }
 
     fn accept_result(&mut self, cursor: Option<String>, result: Result<InventoryPage, LoadError>) {
-        self.reconnect.invalidate();
+        self.invalidate_session_views();
         self.observation.invalidate();
         self.stop.cancel_confirmation();
         match result {
@@ -205,14 +210,14 @@ impl RemoteEnvironments {
             InventoryAction::None
             | InventoryAction::Observe
             | InventoryAction::RequestStop
-            | InventoryAction::ConfirmStop
-            | InventoryAction::ListReconnectViews
-            | InventoryAction::Reconnect(_) => {}
+            | InventoryAction::ConfirmStop => {}
+            InventoryAction::ListReconnectViews | InventoryAction::Reconnect(_) => self.reopen.invalidate(),
+            InventoryAction::ListReopenPanels | InventoryAction::ReopenView(_) => self.reconnect.invalidate(),
             InventoryAction::CancelStop => self.stop.cancel_confirmation(),
             InventoryAction::Close => self.close(),
             InventoryAction::Select(index) => {
                 if self.selected != Some(index) && self.page.as_ref().is_some_and(|page| index < page.rows.len()) {
-                    self.reconnect.invalidate();
+                    self.invalidate_session_views();
                     self.observation.invalidate();
                     self.stop.invalidate();
                     self.selected = Some(index);
@@ -234,7 +239,7 @@ impl RemoteEnvironments {
     }
 
     pub(super) fn invalidate_provider_state(&mut self) {
-        self.reconnect.invalidate();
+        self.invalidate_session_views();
         self.observation.invalidate();
         self.stop.invalidate();
     }
@@ -277,11 +282,11 @@ impl RemoteEnvironments {
         };
         match action {
             InventoryAction::RequestStop => {
-                self.reconnect.invalidate();
+                self.invalidate_session_views();
                 self.stop.prepare(&summary, config, ctx);
             }
             InventoryAction::ConfirmStop if self.stop.start(home, config, &summary, ctx) => {
-                self.reconnect.invalidate();
+                self.invalidate_session_views();
                 self.observation.invalidate();
             }
             _ => {}
@@ -348,11 +353,13 @@ impl HorizonApp {
             }
             self.remote_environments.apply(action, self.session_store.home(), ctx);
             self.remote_reconnect_action(action, ctx);
+            self.remote_reopen_action(action, ctx);
             let modal_input = ctx.input(Clone::clone);
             self.suppress_root_viewport_interaction(ctx);
             return Some(modal_input);
         }
         self.remote_reconnect_action(InventoryAction::None, ctx);
+        self.remote_reopen_action(InventoryAction::None, ctx);
         None
     }
 

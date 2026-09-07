@@ -37,6 +37,10 @@ struct ClientContext<'a> {
 }
 
 impl ReconnectState {
+    pub(super) fn is_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+
     pub(super) fn invalidate(&mut self) {
         let changed = self.views.take().is_some()
             | self.notice.take().is_some()
@@ -248,7 +252,12 @@ impl super::HorizonApp {
                 .filter(|session| session.persistent)
                 .map(|session| session.session_id.as_str()),
         };
-        if state.open && state.pending.is_none() && !state.observation.is_pending() && !state.stop.is_pending() {
+        if state.open
+            && state.pending.is_none()
+            && !state.observation.is_pending()
+            && !state.stop.is_pending()
+            && !state.reopen.is_pending()
+        {
             match action {
                 InventoryAction::ListReconnectViews => {
                     state.stop.cancel_confirmation();
