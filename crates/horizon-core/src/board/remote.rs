@@ -24,8 +24,11 @@ pub struct PreparedRemotePanelHandoff {
 
 impl PreparedRemotePanelHandoff {
     /// Recheck the owned allocation and consume its transport off the render thread.
-    /// Adoption rejects handoffs older than one second and closes only that local
+    /// Adoption rejects handoffs more than one second after the final store read
+    /// started, including time spent in that read, and closes only that local
     /// connection. Holding or dropping a handoff never expires, stops or deletes the remote task.
+    /// Slow reads can exhaust the budget before delivery; there is no guaranteed
+    /// one-second delivery window after preparation and no automatic remote cleanup.
     /// Admission is point-in-time, not continuous revocation or an atomic Stop fence.
     /// # Errors
     /// Rejects allocation drift or failed storage reads without touching the view.
@@ -37,6 +40,7 @@ impl PreparedRemotePanelHandoff {
         let owner_session_id = workspace.session_id().into();
         let workspace_local_id = workspace.state().spec.workspace_local_id.clone();
         let panel_local_id = attempt.panel_id().into();
+        // Count fence latency so a slow read or scheduling pause cannot refresh stale admission.
         let admitted_at = Instant::now();
         let terminal = attempt.into_terminal(store)?;
         Ok(Self {
@@ -75,7 +79,7 @@ impl Board {
         &mut self,
         client_session_id: &str,
         panel_id: PanelId,
-        handoff: PreparedRemotePanelHandoff,
+        mut handoff: PreparedRemotePanelHandoff,
     ) -> Result<(), RemotePanelHandoffError> {
         if client_session_id != handoff.owner_session_id {
             return Err(RemotePanelHandoffError::ClientSessionMismatch);
@@ -113,6 +117,7 @@ impl Board {
         if handoff.admitted_at.elapsed() > MAX_HANDOFF_AGE {
             return Err(RemotePanelHandoffError::Expired);
         }
+        handoff.terminal.resize_to_match(old_terminal);
         let panel = self.panel_mut(panel_id).ok_or(RemotePanelHandoffError::TargetChanged)?;
         panel.content = PanelContent::Terminal(handoff.terminal);
         panel.terminal_title.clear();

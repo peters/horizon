@@ -156,6 +156,8 @@ back into large multi-purpose modules.
   preserves execution identity. It does not persist transport arguments, promote
   readiness or enable implicit restore. UI request/config/session invalidation and
   global cross-session Open remain separate; admission is not continuous revocation.
+  Handoff synchronizes terminal grid and PTY geometry to the current view, not the
+  earlier asynchronous request. Its age bound conservatively includes store latency.
 - `repository_overlay/` owns bounded exact-base metadata for separate index and
   working-tree changes. Its `paths.rs` applies the lexical transfer exclusion policy.
   Planning performs no filesystem, Git, provider or transfer I/O; actual capture/apply

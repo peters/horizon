@@ -144,6 +144,32 @@ fn copied_references_and_changed_view_identity_do_not_authorize_handoff() {
 }
 
 #[test]
+fn handoff_uses_current_view_geometry_even_when_resized_during_preparation() {
+    let fixture = Fixture::new();
+    let mut board = board(&fixture);
+    let panel_id = board.panels[0].id;
+    board.panels[0]
+        .terminal_mut()
+        .expect("view")
+        .resize_immediately(31, 99, 10, 18);
+    let prepared = handoff(&fixture, "read -r fixture; stty size; read -r fixture");
+    board.panels[0]
+        .terminal_mut()
+        .expect("view")
+        .resize_immediately(48, 120, 11, 19);
+    let before = saved_view(&board);
+    board
+        .adopt_remote_panel_connection(OWNER, panel_id, prepared)
+        .expect("geometry-preserving handoff");
+    assert_eq!(saved_view(&board), before);
+    let terminal = board.panels[0].terminal().expect("connection");
+    assert_eq!((terminal.rows(), terminal.cols()), (48, 120));
+    terminal.write_input(b"check-current-geometry\n");
+    await_output(&mut board, panel_id, "48 120");
+    board.shutdown_terminal_panels();
+}
+
+#[test]
 fn missing_or_local_panel_cannot_receive_a_remote_connection() {
     let fixture = Fixture::new();
     let mut board = board(&fixture);
