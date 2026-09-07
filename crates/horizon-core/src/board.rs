@@ -2,10 +2,12 @@ mod agent_status;
 mod arrangement;
 mod attention;
 mod geometry;
+mod remote;
 mod shutdown;
 mod workspaces;
 
 pub use arrangement::WorkspaceAlignment;
+pub use remote::{PreparedRemotePanelHandoff, RemotePanelHandoffError};
 use shutdown::FORCED_BROWSER_SHUTDOWN_WAIT;
 pub use shutdown::{ForcedBrowserShutdownStatus, ShutdownProgress};
 
