@@ -144,7 +144,8 @@ back into large multi-purpose modules.
   bounded I/O, while interactive trust follows both terminal event proxies through
   detached Drop and asynchronous join. General user-configured SSH is unchanged.
 - `remote_panel_attachment.rs` consumes explicit exact-allocation admission, fresh
-  non-creating recovery and saved-intent verification before a pinned local PTY.
+  read-only identity/worker inspection and saved-intent verification before a pinned
+  local PTY. Only explicit recovery commits observations; attachment preserves saved phases.
   Its target-bound attempt rechecks snapshots before input-capable handoff; it is
   not authenticated attachment, saved Ready state or an atomic Stop/attach fence.
   Board/UI admission and inert restore remain separate from this Linux-only API.

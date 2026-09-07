@@ -75,7 +75,7 @@ impl std::fmt::Debug for RemotePanelConnectionAttempt {
     }
 }
 
-/// Recover one exact persistent allocation and verify saved shell/command intent,
+/// Inspect one exact persistent allocation and verify saved shell/command intent,
 /// then launch a pinned local SSH PTY that can only attach an existing worker pane.
 /// The caller must explicitly admit the actual session, provider profile and cost
 /// policy; a copied reference or old observation is not permission to call this.
@@ -137,7 +137,8 @@ fn attach_with<P: InteractiveWorkerProvider + ?Sized>(
     if !spec.panels.iter().any(|panel| panel.panel_local_id == request.panel_id) {
         return Err(RemotePanelStatusError::UnknownPanel.into());
     }
-    let recovered = crate::remote_workspace_recovery::recover_remote_allocation(store, identities, provider, expected)?;
+    let recovered = crate::remote_workspace_recovery::inspect_remote_allocation(identities, provider, expected)?;
+    check_current(store, expected)?;
     let observed_status = inspect(store, &recovered, request.panel_id)?;
     if observed_status == RemotePanelStatus::Unavailable {
         return Err(RemotePanelAttachError::TaskUnavailable);

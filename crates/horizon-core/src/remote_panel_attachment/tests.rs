@@ -190,14 +190,25 @@ fn running() -> RemotePanelStatus {
 
 #[test]
 fn fresh_running_and_exited_attempts_preserve_snapshots_and_never_promote_readiness() {
-    for status in [
+    for (status, phase) in [
         running(),
         RemotePanelStatus::Exited {
             pid: 123,
             exit_status: Some(7),
         },
-    ] {
+    ]
+    .into_iter()
+    .flat_map(|status| {
+        [RemoteRuntimePhase::Reconciling, RemoteRuntimePhase::Ready].map(|phase| (status.clone(), phase))
+    }) {
         let fixture = Fixture::new();
+        let original = fixture.current();
+        let mut state = original.workspace().state().clone();
+        state.runtime.as_mut().expect("runtime").phase = phase;
+        fixture
+            .store
+            .replace_remote_workspace(original.workspace(), &state)
+            .expect("phase");
         let before = fixture.current();
         let attempt = attach_with(
             &fixture.store,

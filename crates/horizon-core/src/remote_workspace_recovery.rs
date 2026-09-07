@@ -62,11 +62,13 @@ pub fn recover_remote_workspace<P: InteractiveWorkerProvider + ?Sized>(
     let allocation = store
         .load_remote_allocation(session_id, workspace_local_id)?
         .ok_or(RemoteWorkspaceRecoveryError::MissingAllocation)?;
-    recover_remote_allocation(store, identities, provider, &allocation)
+    let mut recovered = inspect_remote_allocation(identities, provider, &allocation)?;
+    recovered.allocation = store.record_remote_worker_recovery(&allocation, recovered.observation.as_ref())?;
+    Ok(recovered)
 }
 
-pub(crate) fn recover_remote_allocation<P: InteractiveWorkerProvider + ?Sized>(
-    store: &CloudWorkflowStore,
+/// Shared read-only observation; callers retain separate snapshot and commit fences.
+pub(crate) fn inspect_remote_allocation<P: InteractiveWorkerProvider + ?Sized>(
     identities: &RemoteSshIdentityStore,
     provider: &P,
     allocation: &StoredRemoteAllocation,
@@ -87,9 +89,9 @@ pub(crate) fn recover_remote_allocation<P: InteractiveWorkerProvider + ?Sized>(
         None => provider.reconcile_worker(&request),
     }
     .map_err(|_| RemoteWorkspaceRecoveryError::ProviderUnavailable)?;
-    let allocation = store.record_remote_worker_recovery(allocation, observation.as_ref())?;
+    allocation.validate_worker_observation(observation.as_ref())?;
     Ok(RecoveredRemoteWorkspace {
-        allocation,
+        allocation: allocation.clone(),
         identity,
         observation,
     })
