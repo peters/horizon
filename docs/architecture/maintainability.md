@@ -106,6 +106,10 @@ back into large multi-purpose modules.
   panels, exact runtime generation, and repository checkpoint metadata.
   Its validation is pure: provider I/O, runtime-state migration, coordination,
   repository transfer, and UI integration belong in later focused modules.
+- `remote_provider_config.rs` owns explicit non-secret provider profiles, empty
+  defaults, exact lookup and redacted validation. The main configuration delegates
+  to it; local profile construction shares target-name and local-endpoint rules.
+  Configuration loading never selects an ambient daemon or performs provider I/O.
 - `remote_ssh_identity.rs` exposes retained local client-key preparation and strict
   recovery, separately from the pure remote aggregate. Linux filesystem privacy
   and durable publication live in `remote_ssh_identity/linux.rs`; bounded key-utility

@@ -346,10 +346,7 @@ pub trait InteractiveWorkerProvider: Send + Sync {
 
 pub(crate) fn valid_worker_target(target: &WorkerTarget, provider: CloudProvider) -> bool {
     target.provider == provider
-        && !target.profile.trim().is_empty()
-        && target.profile.trim() == target.profile
-        && target.profile.len() <= 191
-        && !target.profile.chars().any(char::is_control)
+        && valid_worker_profile_name(&target.profile)
         && valid_immutable_image(&target.image)
         && target.disk_gib > 0
         && target.lifetime.is_valid()
@@ -358,6 +355,10 @@ pub(crate) fn valid_worker_target(target: &WorkerTarget, provider: CloudProvider
             .time_limit_seconds()
             .is_none_or(|seconds| seconds <= MAX_INTERACTIVE_WORKER_LEASE_SECONDS)
         && target.max_hourly_cost_micros != Some(0)
+}
+
+pub(crate) fn valid_worker_profile_name(name: &str) -> bool {
+    !name.trim().is_empty() && name.trim() == name && name.len() <= 191 && !name.chars().any(char::is_control)
 }
 
 fn valid_immutable_image(value: &str) -> bool {

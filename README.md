@@ -441,6 +441,29 @@ Use key names like `Plus`, `Minus`, `Comma`, `Escape`, and `F11` in YAML instead
 
 Fresh configs already ship the agent, browser, git, markdown, and usage presets above. Existing configs gain missing defaults through migration (Grok, Pi, Browser, and the others) without overwriting presets you renamed.
 
+### Remote provider profiles
+
+Remote provider settings are empty by default. Local Docker profiles require an
+explicit local Unix socket or Windows named pipe; Horizon does not infer a Docker
+context, environment variable or default endpoint. Profile names must be unique
+and match the saved environment's profile exactly, including letter case.
+
+```yaml
+remote:
+  local_docker:
+    - name: development
+      docker_host: unix:///path/to/docker.sock
+    - name: windows
+      docker_host: npipe:////./pipe/docker_engine
+```
+
+Replace the example socket with your explicitly selected local daemon. The new
+block rejects unknown fields and remote TCP/SSH endpoints. Keep credentials out
+of this configuration. Loading or saving profiles does not connect to a provider,
+create a workspace, attach to a task, or stop/delete remote work. Empty settings
+are omitted when saving, so existing files need no migration for this feature.
+Provider-backed overview controls and workspace setup remain separate integration work.
+
 ### Launch flags
 
 | Flag | What it does |
