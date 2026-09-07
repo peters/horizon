@@ -102,7 +102,12 @@ fn confirmation_is_inert_and_exact_selection_and_config_are_required() {
     changed.revision += 1;
     assert!(!state.start(&home, &config(), &changed, &ctx));
     state.prepare(&expected, &config(), &ctx);
+    changed = expected.clone();
+    changed.lifetime = WorkerLifetime::TimeLimited { seconds: 900 };
+    assert!(!state.start(&home, &config(), &changed, &ctx));
+    state.prepare(&expected, &config(), &ctx);
     assert!(!state.start(&home, &RemoteProviderConfig::default(), &expected, &ctx));
+    changed = expected.clone();
     for provider in [CloudProvider::Azure, CloudProvider::RunPod] {
         changed.provider = provider;
         state.prepare(&changed, &config(), &ctx);
@@ -114,6 +119,46 @@ fn confirmation_is_inert_and_exact_selection_and_config_are_required() {
     assert!(state.confirmation.is_none());
     assert!(!state.is_pending());
     assert!(!home.cloud_workflow_store_path().exists());
+}
+
+#[test]
+fn retained_timed_workers_never_offer_or_prepare_stop_in_any_saved_stop_phase() {
+    use crate::app::test_support::raw_input;
+    use crate::test_egui::DiscardTextures;
+    let fixture = tempfile::tempdir().expect("fixture");
+    let home = HorizonHome::from_root(fixture.path().join("unused"));
+    for phase in [
+        RemoteRuntimePhase::Reconciling,
+        RemoteRuntimePhase::Stopping { requested_at_millis: 1 },
+        RemoteRuntimePhase::Stopped {
+            requested_at_millis: 1,
+            observed_at_millis: 2,
+        },
+    ] {
+        let ctx = Context::default();
+        let mut expected = summary();
+        expected.lifetime = WorkerLifetime::TimeLimited { seconds: 900 };
+        expected.saved_phase = Some(phase);
+        assert!(expected.worker_identity.is_some());
+        assert!(!supported(&expected));
+        let mut state = StopState::default();
+        let mut action = InventoryAction::None;
+        let _ = ctx
+            .run_ui(raw_input([1100.0, 780.0], None), |ui| {
+                show(ui, &state, &expected, true, &mut action);
+            })
+            .discard_textures();
+        assert_eq!(
+            ctx.data(|data| data.get_temp::<bool>(egui::Id::new("stop-request-enabled-test"))),
+            Some(false)
+        );
+        assert!(matches!(action, InventoryAction::None));
+        state.prepare(&expected, &config(), &ctx);
+        assert!(state.confirmation.is_none());
+        assert!(!state.start(&home, &config(), &expected, &ctx));
+        assert!(!state.is_pending());
+        assert!(!home.cloud_workflow_store_path().exists());
+    }
 }
 
 #[test]

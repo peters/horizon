@@ -19,16 +19,20 @@ pub(super) fn show(
             egui::Button::new("Stop environment…"),
         );
         #[cfg(test)]
-        ui.ctx()
-            .data_mut(|data| data.insert_temp(egui::Id::new("stop-request-test"), request.rect));
+        ui.ctx().data_mut(|data| {
+            data.insert_temp(egui::Id::new("stop-request-test"), request.rect);
+            data.insert_temp(egui::Id::new("stop-request-enabled-test"), request.enabled());
+        });
         if request.clicked() {
             *action = InventoryAction::RequestStop;
         }
     });
     if !supported(selected) {
         ui.label(
-            RichText::new("Stop requires a retained local-provider worker. Cloud Stop is not supported yet.")
-                .color(theme::FG_DIM()),
+            RichText::new(
+                "Stop requires a retained persistent local-provider worker. Timed and cloud Stop are not supported yet.",
+            )
+            .color(theme::FG_DIM()),
         );
     }
     if let Some(confirmation) = &state.confirmation {

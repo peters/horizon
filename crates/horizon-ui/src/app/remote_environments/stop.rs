@@ -4,7 +4,7 @@ mod paint;
 
 use super::{Context, HorizonHome, InventoryAction, RemoteEnvironmentSummary, WakeOnDrop};
 use horizon_core::{
-    cloud_run::{CloudProvider, CloudWorkflowStore},
+    cloud_run::{CloudProvider, CloudWorkflowStore, WorkerLifetime},
     remote_provider_config::RemoteProviderConfig,
     remote_workspace::{
         RemoteRuntimePhase,
@@ -194,7 +194,9 @@ impl StopNotice {
 }
 
 fn supported(summary: &RemoteEnvironmentSummary) -> bool {
-    summary.provider == CloudProvider::LocalDocker && summary.worker_identity.is_some()
+    summary.provider == CloudProvider::LocalDocker
+        && summary.lifetime == WorkerLifetime::Persistent
+        && summary.worker_identity.is_some()
 }
 
 fn same_target(left: &RemoteEnvironmentSummary, right: &RemoteEnvironmentSummary) -> bool {

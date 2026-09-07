@@ -202,7 +202,8 @@ back into large multi-purpose modules.
   gain no fallback authority; failures may require refreshing retained Stop intent.
 - The overview's `remote_environments/stop.rs` owns only confirmation, single-flight
   background execution and cached outcome presentation; its `stop/paint.rs` collects
-  explicit actions. Closing invalidates presentation, not an admitted operation.
+  explicit actions for retained persistent local workers; timed/cloud Stop stays
+  disabled. Closing invalidates presentation, not an admitted operation.
   Completion invalidates provider observations and refreshes saved inventory while
   keeping its target-bound result readable. All mutation remains in core coordination.
 - `cloud_run/runpod.rs` coordinates provider operations and exact ownership
