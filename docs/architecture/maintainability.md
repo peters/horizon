@@ -166,6 +166,11 @@ back into large multi-purpose modules.
   exact saved selection and explicitly named local provider profile before calling
   non-creating attachment. It does not infer authority from inventory visibility or
   copied client references, and has no ambient provider or profile fallback.
+- `board/remote_views/` separates metadata-only reopen target/persistence checks
+  from off-thread owned-record lookup and inert snapshot preparation. Consuming
+  adoption uses the existing insertion/layout path without starting a process or
+  connecting. Reopening never copies executable intent or grants remote authority;
+  current-client/request invalidation and later fresh reconnect remain mandatory.
 - UI `remote_environments/reconnect/` caches view labels on explicit interaction.
   Its single-flight worker prepares connections off-thread; lifecycle and modal
   actions invalidate before queued handoff adoption. Pending discarded receivers

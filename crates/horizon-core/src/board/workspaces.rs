@@ -75,7 +75,7 @@ impl Board {
         })
     }
 
-    fn create_panel_with(
+    pub(super) fn create_panel_with(
         &mut self,
         mut opts: PanelOptions,
         workspace: WorkspaceId,
