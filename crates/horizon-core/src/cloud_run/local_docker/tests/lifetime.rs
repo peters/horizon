@@ -203,11 +203,19 @@ fn persistent_endpoint_verification_failure_retains_identity_without_claiming_re
             state.fail_create_after_insert = uncertain;
         }
         let provider = provider_for("local", fake.clone(), &request);
+        let error = provider.ensure_worker(&request).expect_err("post-create verification");
         assert_eq!(
-            provider.ensure_worker(&request),
-            Err(PersistentCreationReconciliationRequired {
+            error,
+            PersistentCreationReconciliationRequired {
                 resource_id: "a".repeat(64),
-            })
+            }
+        );
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "persistent local Docker worker {} was retained after post-creation verification failed; reconciliation is required",
+                "a".repeat(64)
+            )
         );
         assert_eq!(provider.reconcile_worker(&request), Err(InvalidSshEndpoint));
         let state = fake.state();

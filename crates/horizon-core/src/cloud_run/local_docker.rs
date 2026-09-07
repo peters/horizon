@@ -341,7 +341,9 @@ pub enum LocalDockerError {
     CreationCleanupFailed { resource_id: String },
     #[error("created local Docker worker {resource_id} has unexpected expiry metadata and requires manual inspection")]
     PersistentLifetimeMetadataConflict { resource_id: String },
-    #[error("persistent local Docker worker {resource_id} requires reconciliation after an uncertain create response")]
+    #[error(
+        "persistent local Docker worker {resource_id} was retained after post-creation verification failed; reconciliation is required"
+    )]
     PersistentCreationReconciliationRequired { resource_id: String },
     #[error("local Docker worker {resource_id} had an out-of-bounds lease and was deleted")]
     LeaseDeadlineRejected { resource_id: String },
