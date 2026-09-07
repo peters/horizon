@@ -196,6 +196,12 @@ fn render_content(ui: &mut egui::Ui, state: &RemoteEnvironments, action: &mut In
     }
     if let Some(row) = state.selected.and_then(|index| page.rows.get(index)) {
         render_observation(ui, state, action);
+        super::reconnect::show(
+            ui,
+            &state.reconnect,
+            state.pending.is_none() && !state.observation.is_pending() && !state.stop.is_pending(),
+            action,
+        );
         super::stop::show(
             ui,
             &state.stop,

@@ -2,6 +2,7 @@
 
 mod observation;
 mod paint;
+mod reconnect;
 mod stop;
 
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -22,6 +23,7 @@ pub(super) struct RemoteEnvironments {
     refresh_when_idle: bool,
     observation: observation::ObservationState,
     stop: stop::StopState,
+    reconnect: reconnect::ReconnectState,
     refresh_after_stop: bool,
 }
 
@@ -62,6 +64,8 @@ enum InventoryAction {
     RequestStop,
     ConfirmStop,
     CancelStop,
+    ListReconnectViews,
+    Reconnect(horizon_core::PanelId),
 }
 
 struct WakeOnDrop(Context);
@@ -77,11 +81,16 @@ impl RemoteEnvironments {
         self.open
     }
 
+    pub(super) fn invalidate_session_views(&mut self) {
+        self.reconnect.invalidate();
+    }
+
     pub(super) fn open(&mut self, home: &HorizonHome, ctx: &Context) {
         if self.open {
             return;
         }
         self.open = true;
+        self.reconnect.invalidate();
         self.page = None;
         self.page_cursor = None;
         self.selected = None;
@@ -99,6 +108,7 @@ impl RemoteEnvironments {
 
     fn close(&mut self) {
         self.open = false;
+        self.reconnect.invalidate();
         self.observation.invalidate();
         self.stop.invalidate();
         self.refresh_after_stop = false;
@@ -112,6 +122,7 @@ impl RemoteEnvironments {
         if !self.open || self.pending.is_some() {
             return;
         }
+        self.reconnect.invalidate();
         self.observation.invalidate();
         self.stop.cancel_confirmation();
         let (tx, rx) = mpsc::sync_channel(1);
@@ -156,6 +167,7 @@ impl RemoteEnvironments {
     }
 
     fn accept_result(&mut self, cursor: Option<String>, result: Result<InventoryPage, LoadError>) {
+        self.reconnect.invalidate();
         self.observation.invalidate();
         self.stop.cancel_confirmation();
         match result {
@@ -193,11 +205,14 @@ impl RemoteEnvironments {
             InventoryAction::None
             | InventoryAction::Observe
             | InventoryAction::RequestStop
-            | InventoryAction::ConfirmStop => {}
+            | InventoryAction::ConfirmStop
+            | InventoryAction::ListReconnectViews
+            | InventoryAction::Reconnect(_) => {}
             InventoryAction::CancelStop => self.stop.cancel_confirmation(),
             InventoryAction::Close => self.close(),
             InventoryAction::Select(index) => {
                 if self.selected != Some(index) && self.page.as_ref().is_some_and(|page| index < page.rows.len()) {
+                    self.reconnect.invalidate();
                     self.observation.invalidate();
                     self.stop.invalidate();
                     self.selected = Some(index);
@@ -219,6 +234,7 @@ impl RemoteEnvironments {
     }
 
     pub(super) fn invalidate_provider_state(&mut self) {
+        self.reconnect.invalidate();
         self.observation.invalidate();
         self.stop.invalidate();
     }
@@ -260,8 +276,12 @@ impl RemoteEnvironments {
             return;
         };
         match action {
-            InventoryAction::RequestStop => self.stop.prepare(&summary, config, ctx),
+            InventoryAction::RequestStop => {
+                self.reconnect.invalidate();
+                self.stop.prepare(&summary, config, ctx);
+            }
             InventoryAction::ConfirmStop if self.stop.start(home, config, &summary, ctx) => {
+                self.reconnect.invalidate();
                 self.observation.invalidate();
             }
             _ => {}
@@ -327,10 +347,12 @@ impl HorizonApp {
                 );
             }
             self.remote_environments.apply(action, self.session_store.home(), ctx);
+            self.remote_reconnect_action(action, ctx);
             let modal_input = ctx.input(Clone::clone);
             self.suppress_root_viewport_interaction(ctx);
             return Some(modal_input);
         }
+        self.remote_reconnect_action(InventoryAction::None, ctx);
         None
     }
 
