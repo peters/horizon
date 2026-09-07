@@ -175,6 +175,9 @@ back into large multi-purpose modules.
   never renews it. Explicit ensure also consumes the grant when accepting an
   exact existing worker, before observing its connection. Provider construction
   requires that store explicitly; non-creating inspection never claims a grant.
+  Persistent post-create verification failures retain the resource and consumed
+  grant for explicit non-creating recovery or management. An in-flight creation
+  response cannot undo another client's retained Stop through failure cleanup.
 - `cloud_run/interactive_worker_stop.rs` is an opt-in Stop contract, separate from
   deletion and client lifetime. The local adapter's `local_docker/stop.rs` verifies
   exact ownership and disabled automatic removal before a bounded stop, then

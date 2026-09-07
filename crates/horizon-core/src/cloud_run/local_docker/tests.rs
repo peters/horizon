@@ -11,6 +11,12 @@ mod stop;
 
 #[derive(Clone, Default)]
 struct FakeDocker(Arc<Mutex<FakeState>>);
+
+enum HostKeyReadFault {
+    Disappear,
+    Stop,
+}
+
 #[derive(Default)]
 struct FakeState {
     creation: Option<fencing::CreationStore>,
@@ -28,7 +34,7 @@ struct FakeState {
     failed_inspections_after_create: usize,
     hidden_inspections_after_create: usize,
     binding_host: Option<String>,
-    disappear_during_key_read: bool,
+    host_key_read_fault: Option<HostKeyReadFault>,
     image_environment: Vec<String>,
 }
 impl FakeDocker {
@@ -105,9 +111,20 @@ impl DockerTransport for FakeDocker {
     fn read_host_key(&self, _resource_id: &str) -> Result<Option<String>, LocalDockerError> {
         let mut state = self.state();
         state.host_key_calls += 1;
-        if std::mem::take(&mut state.disappear_during_key_read) {
-            state.container = None;
-            return Err(ResourceAbsent);
+        match state.host_key_read_fault.take() {
+            Some(HostKeyReadFault::Disappear) => {
+                state.container = None;
+                return Err(ResourceAbsent);
+            }
+            Some(HostKeyReadFault::Stop) => {
+                let container = state.container.as_mut().expect("created worker");
+                container.running = false;
+                container.state = "exited".into();
+                return Err(CommandFailed {
+                    operation: "SSH host-key inspection",
+                });
+            }
+            None => {}
         }
         Ok(Some(format!("{} worker@local", ed25519_key(7))))
     }
@@ -148,7 +165,7 @@ fn disappearance_during_key_discovery_never_recreates_a_claimed_worker() {
     let provider = provider("local", fake.clone());
     let request = request();
     let worker = provider.ensure_worker(&request).expect("create").into_status().worker;
-    fake.state().disappear_during_key_read = true;
+    fake.state().host_key_read_fault = Some(HostKeyReadFault::Disappear);
     assert_eq!(provider.inspect_worker(&worker), Ok(None));
     assert_eq!(provider.ensure_worker(&request), Err(CreationReconciliationRequired));
     assert_eq!(fake.state().create_calls, 1);

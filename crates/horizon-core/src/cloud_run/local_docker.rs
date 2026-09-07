@@ -203,14 +203,11 @@ impl LocalDockerInteractiveWorkerProvider {
         create: &DockerCreateRequest,
         original: LocalDockerError,
     ) -> DockerResult<InteractiveWorkerEnsure> {
+        if create.terminate_after.is_none() {
+            return Err(persistent_reconciliation_error(container, create, original));
+        }
         let resource_id = container.id.clone();
         if !created_container_matches(container, create) {
-            if create.terminate_after.is_none()
-                && created_container_identity_matches(container, create)
-                && !lifetime_matches(container, None)
-            {
-                return Err(LocalDockerError::PersistentLifetimeMetadataConflict { resource_id });
-            }
             return Err(original);
         }
         if self.transport.delete(&resource_id).is_err() || !matches!(self.transport.inspect(&resource_id), Ok(None)) {
