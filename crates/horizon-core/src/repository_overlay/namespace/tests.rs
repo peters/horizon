@@ -458,3 +458,33 @@ fn link_hops_and_expanded_resolution_work_are_bounded() {
         Err(NamespaceError::Limit)
     );
 }
+
+#[test]
+fn large_base_references_use_expanded_logical_budget_not_capture_payload_limit() {
+    let bytes = vec![b'x'; crate::repository_overlay::reader::MAX_READ_BYTES + 1];
+    let length = bytes.len() as u64;
+    let fixture = Fixture::new(&[("large", &bytes, 0o100_755)]);
+    drop(bytes);
+    let before = snapshot(fixture.directory.path());
+    let result = fixture.resolve(vec![], vec![], vec![]).unwrap();
+    for namespace in [result.base(), result.index(), result.working_tree()] {
+        assert_eq!(namespace.logical_bytes(), length);
+        assert!(matches!(namespace.entry("large"), Some(NamespaceEntry::File {
+            source: NamespaceFile::Base { bytes, .. }, executable: true,
+        }) if *bytes == length));
+    }
+    assert_eq!(snapshot(fixture.directory.path()), before);
+    let leaf = result.base().entry("large").unwrap().clone();
+    let count = usize::try_from(MAX_CONTENT_BYTES / length).unwrap();
+    let mut expanded = RepositoryNamespace {
+        entries: (0..=count).map(|n| (format!("file{n}"), leaf.clone())).collect(),
+        ..RepositoryNamespace::default()
+    };
+    assert_eq!(
+        tree::validate(&mut expanded, &mut links::Work::default()),
+        Err(NamespaceError::Limit)
+    );
+    expanded.entries.remove(&format!("file{count}"));
+    tree::validate(&mut expanded, &mut links::Work::default()).unwrap();
+    assert_eq!(expanded.logical_bytes(), length * count as u64);
+}

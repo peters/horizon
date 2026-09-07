@@ -1,5 +1,5 @@
 use super::{Budget, NamespaceEntry, NamespaceError as Error, NamespaceFile, RepositoryNamespace};
-use crate::repository_overlay::{MAX_METADATA_BYTES, paths, reader::MAX_READ_BYTES};
+use crate::repository_overlay::{MAX_METADATA_BYTES, paths};
 use git2::{ObjectFormat, ObjectType, Odb, Oid, Repository};
 use std::collections::BTreeSet;
 
@@ -82,9 +82,6 @@ fn leaf(database: &Odb<'_>, object: Oid, mode: i32) -> Result<NamespaceEntry, Er
     let (bytes, kind) = database.read_header(object).map_err(|_| Error::Object)?;
     if kind != ObjectType::Blob {
         return Err(Error::Object);
-    }
-    if bytes > MAX_READ_BYTES {
-        return Err(Error::Limit);
     }
     if mode == 0o120_000 {
         if bytes > paths::MAX_PATH_BYTES {
