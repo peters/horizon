@@ -171,6 +171,12 @@ back into large multi-purpose modules.
   never renews it. Explicit ensure also consumes the grant when accepting an
   exact existing worker, before observing its connection. Provider construction
   requires that store explicitly; non-creating inspection never claims a grant.
+- `cloud_run/interactive_worker_stop.rs` is an opt-in Stop contract, separate from
+  deletion and client lifetime. The local adapter's `local_docker/stop.rs` verifies
+  exact ownership and disabled automatic removal before a bounded stop, then
+  verifies the same resource is retained and inactive. Lost responses need that
+  independent proof; absence is not retained storage. Durable management intent,
+  checkpointing and user-facing actions remain separate caller responsibilities.
 - `cloud_run/runpod.rs` coordinates provider operations and exact ownership
   reconciliation. Its `models.rs` leaf owns profiles, persisted worker identity,
   lifecycle results and typed errors; `create_request.rs` owns serialized

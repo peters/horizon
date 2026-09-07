@@ -14,6 +14,7 @@ use std::{
 
 const COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const RESPONSE_LIMIT_BYTES: usize = 1024 * 1024;
+const STOP_GRACE_SECONDS: &str = "10";
 
 pub(super) struct DockerCli {
     executable: OsString,
@@ -137,6 +138,17 @@ impl DockerTransport for DockerCli {
             })
         }
     }
+    fn stop(&self, resource_id: &str) -> DockerResult<()> {
+        let args = ["container", "stop", "--timeout", STOP_GRACE_SECONDS, "--", resource_id];
+        let output = self.output(args, "container stop", COMMAND_TIMEOUT)?;
+        output
+            .status
+            .success()
+            .then_some(())
+            .ok_or(LocalDockerError::CommandFailed {
+                operation: "container stop",
+            })
+    }
 }
 
 fn command_fits(command: &Command) -> bool {
@@ -256,6 +268,7 @@ fn parse_inspection(value: &str) -> DockerResult<DockerContainer> {
         labels: record.config.labels.unwrap_or_default(),
         environment: record.config.env.unwrap_or_default(),
         restart_policy: record.host_config.restart_policy.name,
+        auto_remove: record.host_config.auto_remove,
         running: record.state.running,
         state: record.state.status,
         exit_code: record.state.exit_code,
@@ -287,6 +300,7 @@ struct InspectionConfig {
 #[serde(rename_all = "PascalCase")]
 struct InspectionHostConfig {
     restart_policy: InspectionRestartPolicy,
+    auto_remove: Option<bool>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -328,6 +342,19 @@ mod tests {
         assert_eq!(parsed.ssh_bindings.len(), 1);
         assert_eq!(parsed.ssh_bindings[0].host, "127.0.0.1");
         assert_eq!(parsed.ssh_bindings[0].port, 49_152);
+        assert_eq!(parsed.auto_remove, None);
+        for automatic_removal in [false, true] {
+            let mut value: serde_json::Value = serde_json::from_str(value).expect("fixture");
+            value[0]["HostConfig"]["AutoRemove"] = automatic_removal.into();
+            assert_eq!(
+                parse_inspection(&value.to_string()).expect("inspection").auto_remove,
+                Some(automatic_removal)
+            );
+        }
+        let mut malformed: serde_json::Value = serde_json::from_str(value).expect("fixture");
+        malformed[0]["HostConfig"]["AutoRemove"] = "private-malformed-marker".into();
+        let error = parse_inspection(&malformed.to_string()).expect_err("malformed automatic removal");
+        assert!(!error.to_string().contains("private-malformed-marker"));
         assert!(parse_inspection("[]").is_err());
     }
 
