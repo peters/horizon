@@ -26,7 +26,7 @@ fn absent_or_disappearing_recovery_never_creates_a_worker() {
     assert_read_only(&empty);
 
     let fake = seeded(&request);
-    fake.state().disappear_during_key_read = true;
+    fake.state().host_key_read_fault = Some(HostKeyReadFault::Disappear);
     assert_eq!(provider("local", fake.clone()).reconcile_worker(&request), Ok(None));
     assert_eq!(provider("local", fake.clone()).reconcile_worker(&request), Ok(None));
     assert_read_only(&fake);

@@ -203,14 +203,11 @@ impl LocalDockerInteractiveWorkerProvider {
         create: &DockerCreateRequest,
         original: LocalDockerError,
     ) -> DockerResult<InteractiveWorkerEnsure> {
+        if create.terminate_after.is_none() {
+            return Err(persistent_reconciliation_error(container, create, original));
+        }
         let resource_id = container.id.clone();
         if !created_container_matches(container, create) {
-            if create.terminate_after.is_none()
-                && created_container_identity_matches(container, create)
-                && !lifetime_matches(container, None)
-            {
-                return Err(LocalDockerError::PersistentLifetimeMetadataConflict { resource_id });
-            }
             return Err(original);
         }
         if self.transport.delete(&resource_id).is_err() || !matches!(self.transport.inspect(&resource_id), Ok(None)) {
@@ -344,7 +341,9 @@ pub enum LocalDockerError {
     CreationCleanupFailed { resource_id: String },
     #[error("created local Docker worker {resource_id} has unexpected expiry metadata and requires manual inspection")]
     PersistentLifetimeMetadataConflict { resource_id: String },
-    #[error("persistent local Docker worker {resource_id} requires reconciliation after an uncertain create response")]
+    #[error(
+        "persistent local Docker worker {resource_id} was retained after post-creation verification failed; reconciliation is required"
+    )]
     PersistentCreationReconciliationRequired { resource_id: String },
     #[error("local Docker worker {resource_id} had an out-of-bounds lease and was deleted")]
     LeaseDeadlineRejected { resource_id: String },

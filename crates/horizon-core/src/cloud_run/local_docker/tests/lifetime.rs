@@ -141,6 +141,96 @@ fn persistent_lost_create_response_recovers_the_same_exact_worker() {
 }
 
 #[test]
+fn verification_after_concurrent_stop_preserves_only_persistent_workers() {
+    for persistent in [false, true] {
+        for uncertain in [false, true] {
+            let request = if persistent { persistent_request() } else { request() };
+            let fake = FakeDocker::default();
+            {
+                let mut state = fake.state();
+                state.host_key_read_fault = Some(HostKeyReadFault::Stop);
+                state.fail_create_after_insert = uncertain;
+            }
+            let provider = provider_for("local", fake.clone(), &request);
+            let expected = if persistent {
+                PersistentCreationReconciliationRequired {
+                    resource_id: "a".repeat(64),
+                }
+            } else {
+                CommandFailed {
+                    operation: "SSH host-key inspection",
+                }
+            };
+            let outcome = provider.ensure_worker(&request);
+            let retained = {
+                let state = fake.state();
+                assert_eq!((state.create_calls, state.host_key_calls), (1, 1));
+                assert_eq!(state.delete_calls, usize::from(!persistent));
+                state.container.clone()
+            };
+            assert_eq!(outcome, Err(expected));
+            if let Some(container) = retained {
+                assert!(persistent);
+                assert_eq!(container.id, "a".repeat(64));
+                assert!(!container.running);
+                assert_eq!(container.state, "exited");
+                assert_eq!(container.auto_remove, Some(false));
+                let worker = worker_for_request(&container, &request).expect("same retained identity");
+                drop(provider);
+                let reopened = provider_for("local", fake.clone(), &request);
+                let recovered = reopened.ensure_worker(&request).expect("non-creating retry");
+                assert!(matches!(recovered, InteractiveWorkerEnsure::Reused(_)));
+                assert_eq!(recovered.status().worker, worker);
+                assert_eq!(recovered.status().lifecycle, InteractiveWorkerLifecycle::Stopped);
+                assert!(recovered.status().ssh.is_none());
+                let state = fake.state();
+                assert_eq!((state.create_calls, state.delete_calls), (1, 0));
+            } else {
+                assert!(!persistent);
+            }
+        }
+    }
+}
+
+#[test]
+fn persistent_endpoint_verification_failure_retains_identity_without_claiming_readiness() {
+    for uncertain in [false, true] {
+        let request = persistent_request();
+        let fake = FakeDocker::default();
+        {
+            let mut state = fake.state();
+            state.binding_host = Some("0.0.0.0".into());
+            state.fail_create_after_insert = uncertain;
+        }
+        let provider = provider_for("local", fake.clone(), &request);
+        let error = provider.ensure_worker(&request).expect_err("post-create verification");
+        assert_eq!(
+            error,
+            PersistentCreationReconciliationRequired {
+                resource_id: "a".repeat(64),
+            }
+        );
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "persistent local Docker worker {} was retained after post-creation verification failed; reconciliation is required",
+                "a".repeat(64)
+            )
+        );
+        assert_eq!(provider.reconcile_worker(&request), Err(InvalidSshEndpoint));
+        let state = fake.state();
+        assert_eq!(
+            (state.create_calls, state.delete_calls, state.host_key_calls),
+            (1, 0, 0)
+        );
+        assert_eq!(
+            state.container.as_ref().expect("retained for inspection").id,
+            "a".repeat(64)
+        );
+    }
+}
+
+#[test]
 fn unexpected_image_expiry_retains_the_created_identity_for_manual_inspection() {
     for entry in [
         TERMINATE_ENV.to_string(),

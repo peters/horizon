@@ -163,7 +163,7 @@ fn simultaneous_controllers_share_one_durable_creation_grant() {
 fn observed_disappearance_consumes_the_grant_before_observation_can_fail() {
     let request = lifetime::persistent_request();
     let fake = noncreating::seeded(&request);
-    fake.state().disappear_during_key_read = true;
+    fake.state().host_key_read_fault = Some(HostKeyReadFault::Disappear);
     let provider = provider_for("local", fake.clone(), &request);
     assert_eq!(provider.ensure_worker(&request), Err(ResourceAbsent));
     assert_eq!(claims(&provider.creation_store), 1);
