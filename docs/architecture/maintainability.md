@@ -244,6 +244,15 @@ back into large multi-purpose modules.
   Linux `storage.rs` owns the shared, read-only journaled-filesystem qualification
   and bounded kernel-option validation. Publication maps its errors to the existing
   receipt contract; qualification alone does not synchronize, write or grant execution.
+  `retained_setup/` owns one immutable setup claim per existing private retained
+  workspace root. Constructor-checked intent and bounded canonical records are
+  separate from Linux confined storage. Only fresh no-replace publication followed
+  by file/directory synchronization creates a non-cloneable grant. Observation,
+  identical retries and grant Drop never execute, repair, expire or remove a claim.
+  A claim means unknown outcome, not running/completed; trusted stable private
+  ancestry, healthy qualified storage and separately verified remote ownership
+  remain prerequisites. No runner, scratch creation, terminal receipt, recovery or
+  client/cloud integration is provided by this admission boundary.
   `materialize/` composes existing private bundle retrieval, isolated raw-object
   resolution, checkout preparation and explicit publication into one worker-callable
   operation. Its typed result preserves source metadata and every known checkout or

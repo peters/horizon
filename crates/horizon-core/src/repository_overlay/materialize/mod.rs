@@ -133,7 +133,7 @@ pub fn materialize_repository(
     }
 }
 
-fn valid_path(path: &Path) -> bool {
+pub(super) fn valid_path(path: &Path) -> bool {
     path.is_absolute()
         && path
             .to_str()
