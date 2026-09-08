@@ -1,6 +1,8 @@
 //! Unpublished exact-base Git material; never a ready checkout or export authority.
 
 #[cfg(target_os = "linux")]
+pub mod export;
+#[cfg(target_os = "linux")]
 mod import;
 #[cfg(target_os = "linux")]
 mod index;
