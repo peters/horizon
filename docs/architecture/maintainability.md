@@ -259,8 +259,17 @@ back into large multi-purpose modules.
   adopted or cleaned; cancellation, failed synchronization and component failures
   retain every named residue. Execution errors distinguish the consumed boundary
   from original admission and preserve typed materializer receipts. Observation
-  stays unknown; no independent runner, stored terminal receipt, recovery or
-  client/cloud integration is provided by this synchronous boundary.
+  stays unknown; the original synchronous method does not store its result.
+  `retained_setup/outcome/` owns the separate recorded-execution API, redacted
+  historical snapshot and bounded canonical intent-bound result schema. Its Linux
+  storage leaf privately reads or publishes one fixed no-replace result slot with
+  file/parent synchronization and read-back identity verification. Preflight errors
+  never execute; later recording errors retain the complete actual execution result.
+  Read-only completion never adopts the referenced paths, acknowledges its own
+  synchronization or establishes liveness. Missing results remain unknown; nothing
+  permits replay, cleanup or construction of another grant. Private wire types keep
+  deserialization separate from public validated snapshots. This is not independent
+  supervision, transport, cloud recovery or proof of power-loss durability.
   `materialize/` composes existing private bundle retrieval, isolated raw-object
   resolution, checkout preparation and explicit publication into one worker-callable
   operation. Its typed result preserves source metadata and every known checkout or

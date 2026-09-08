@@ -1,4 +1,4 @@
-use super::{SetupClaimError as Error, SetupIntent, SetupObservation, codec};
+use super::{SetupClaimError as Error, SetupCompletion, SetupIntent, SetupObservation, SetupRecordError, codec};
 use crate::repository_overlay::{
     reader::{
         RepositoryReadError, SelectedRepositoryReader,
@@ -15,6 +15,7 @@ use std::{
 };
 
 const CLAIM: &str = "setup-claim.json";
+mod outcome;
 mod scratch;
 pub(super) use scratch::Scratch;
 const CONFINED: ResolveFlags = ResolveFlags::BENEATH
@@ -34,6 +35,22 @@ pub(super) struct Directory {
 }
 
 impl Directory {
+    pub(super) fn completion(&self, intent: &SetupIntent) -> Result<Option<SetupCompletion>, SetupRecordError> {
+        outcome::read(self, intent)
+    }
+
+    pub(super) fn record(&self, intent: &SetupIntent, completion: &SetupCompletion) -> Result<(), SetupRecordError> {
+        self.qualify()?;
+        outcome::record(
+            self,
+            intent,
+            completion,
+            &mut |file, bytes| file.write_all(bytes),
+            &mut File::sync_all,
+            &mut outcome::link,
+        )
+    }
+
     pub(super) fn scratch(&self, intent: &SetupIntent) -> Result<Scratch, super::SetupBoundaryError> {
         self.qualify()?;
         if self.observe(intent)? != SetupObservation::ClaimedUnknown {
