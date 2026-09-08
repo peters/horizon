@@ -2,8 +2,10 @@
 
 mod git;
 mod links;
+mod source;
 mod tree;
 
+use super::seed::{GitObjectInspector, SeedError};
 use super::{MAX_CHANGES, MAX_CONTENT_BYTES, MAX_METADATA_BYTES, OverlayPlanError, bundle::RepositoryOverlayBundle};
 use crate::cloud_run::ArtifactDigest;
 use git2::{Oid, Repository};
@@ -139,11 +141,46 @@ pub fn resolve_namespaces(
     bundle: RepositoryOverlayBundle,
 ) -> Result<ResolvedRepositoryOverlay, NamespaceError> {
     let base_commit = Oid::from_str(bundle.plan().source().commit.as_str()).map_err(|_| NamespaceError::Base)?;
-    let (base_tree, mut original) = git::read(base, base_commit)?;
+    compose(bundle, base_commit, git::read(base, base_commit)?, &|| false)
+}
+
+/// Resolve the exact base through an explicitly authorized raw-object inspector.
+/// Regular blobs remain header-only references; commit, tree and link bytes are
+/// length/type/hash verified within aggregate metadata and expanded namespace bounds.
+/// Read metadata work, including repeated tree expansion, is capped at 8 MiB; a valid
+/// repository can exceed this supported subset. Native source decoding needs its own caps.
+/// Only supported SHA-1 record shapes are accepted; signatures are not authenticated.
+/// The seed importer must still parse the complete commit before preparation succeeds.
+/// No repository metadata configuration, worktree I/O, writes or export authority.
+/// Source calls own their blocking/resource policy. Run off the UI thread; cancellation
+/// is checked between object operations, chunks, tree records and composition phases.
+/// # Errors
+/// Rejects invalid or unsupported metadata, unsafe topology/links, bounded-resource
+/// excess, cancellation and redacted source failures. No ready checkout is returned.
+pub fn resolve_namespaces_from_source(
+    source: &mut impl GitObjectInspector,
+    bundle: RepositoryOverlayBundle,
+    cancelled: impl Fn() -> bool,
+) -> Result<ResolvedRepositoryOverlay, NamespaceError> {
+    let base_commit = Oid::from_str(bundle.plan().source().commit.as_str()).map_err(|_| NamespaceError::Base)?;
+    let original = source::read(source, base_commit, &cancelled)?;
+    compose(bundle, base_commit, original, &cancelled)
+}
+
+fn compose(
+    bundle: RepositoryOverlayBundle,
+    base_commit: Oid,
+    (base_tree, mut original): (Oid, RepositoryNamespace),
+    cancelled: &impl Fn() -> bool,
+) -> Result<ResolvedRepositoryOverlay, NamespaceError> {
+    source::check_cancel(cancelled)?;
     let mut link_work = links::Work::default();
     tree::validate(&mut original, &mut link_work)?;
+    source::check_cancel(cancelled)?;
     let index = tree::apply(&original, bundle.plan().index(), &mut link_work)?;
+    source::check_cancel(cancelled)?;
     let working_tree = tree::apply(&index, bundle.plan().working_tree(), &mut link_work)?;
+    source::check_cancel(cancelled)?;
     Ok(ResolvedRepositoryOverlay {
         bundle,
         base_commit,
@@ -170,6 +207,8 @@ pub enum NamespaceError {
     Limit,
     #[error(transparent)]
     Policy(#[from] OverlayPlanError),
+    #[error(transparent)]
+    Source(#[from] SeedError),
 }
 
 #[derive(Default)]
