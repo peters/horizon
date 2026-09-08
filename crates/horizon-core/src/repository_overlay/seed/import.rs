@@ -142,7 +142,7 @@ pub(super) fn charge(
     Ok(())
 }
 
-fn copy(
+pub(super) fn copy(
     database: &Odb<'_>,
     mut stream: GitObjectStream<'_>,
     id: Oid,
@@ -159,7 +159,10 @@ fn copy(
             Ok(0) => return Err(Error::Object),
             Ok(count) => count,
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-            Err(_) => return Err(Error::Source),
+            Err(_) => {
+                check_cancel(cancelled)?;
+                return Err(Error::Source);
+            }
         };
         writer.write_all(&buffer[..count]).map_err(|_| Error::Storage)?;
         remaining -= count as u64;
@@ -172,7 +175,10 @@ fn copy(
             Ok(0) => break,
             Ok(_) => return Err(Error::Object),
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-            Err(_) => return Err(Error::Source),
+            Err(_) => {
+                check_cancel(cancelled)?;
+                return Err(Error::Source);
+            }
         }
     }
     if writer.finalize().map_err(|_| Error::Storage)? != id {
