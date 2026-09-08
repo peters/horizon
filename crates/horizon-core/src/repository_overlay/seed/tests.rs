@@ -520,3 +520,36 @@ fn transfer_read_errors_are_redacted() {
     assert_eq!(error.reason, SeedError::Source);
     assert!(!format!("{error:?}").contains("private source detail"));
 }
+
+#[test]
+fn read_failures_recheck_cancellation_during_payload_and_final_framing() {
+    struct CountedFailure<'a>(&'a Cell<usize>);
+    impl Read for CountedFailure<'_> {
+        fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+            self.0.set(self.0.get() + 1);
+            FailedRead.read(bytes)
+        }
+    }
+    let fixture = private_fixture();
+    let repository = Repository::init_bare(fixture.path().join("git")).unwrap();
+    let database = repository.odb().unwrap();
+    for bytes in [0, 1] {
+        for expected in [SeedError::Source, SeedError::Cancelled] {
+            let calls = Cell::new(0);
+            let reads = Cell::new(0);
+            let checks = if bytes == 0 { 3 } else { 2 };
+            let stream = GitObjectStream {
+                kind: ObjectType::Blob,
+                bytes,
+                reader: Box::new(CountedFailure(&reads)),
+            };
+            let result = import::copy(&database, stream, Oid::ZERO_SHA1, &|| {
+                calls.set(calls.get() + 1);
+                expected == SeedError::Cancelled && calls.get() >= checks
+            });
+            assert_eq!(result, Err(expected));
+            assert_eq!(calls.get(), checks);
+            assert_eq!(reads.get(), 1, "all four cases must actually reach the failing read");
+        }
+    }
+}
