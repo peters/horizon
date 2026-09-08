@@ -9,6 +9,26 @@ RUN apt-get update \
 COPY containers/remote-worker/build-tmux.sh /tmp/build-tmux.sh
 RUN bash /tmp/build-tmux.sh /opt/horizon-tmux
 
+FROM ${WORKER_BASE_IMAGE} AS repository-builder
+ENV RUSTUP_TOOLCHAIN=1.95.0
+WORKDIR /opt/horizon-repository-build
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+# Only manifests leave this stage alongside the compiled helper. In particular,
+# never copy the widened source context into a final-image layer and delete it later.
+RUN mkdir -p crates/horizon-browser-cli/src crates/horizon-browser-mcp/src \
+        crates/horizon-cursor/src crates/horizon-ui/src /opt/horizon-manifests \
+    && touch crates/horizon-browser-cli/src/lib.rs crates/horizon-browser-cli/src/main.rs \
+        crates/horizon-browser-mcp/src/lib.rs crates/horizon-browser-mcp/src/main.rs \
+        crates/horizon-cursor/src/lib.rs crates/horizon-ui/src/main.rs \
+    && cp Cargo.toml Cargo.lock /opt/horizon-manifests/ \
+    && for manifest in crates/*/Cargo.toml; do \
+        mkdir -p "/opt/horizon-manifests/$(dirname "${manifest}")" \
+        && cp "${manifest}" "/opt/horizon-manifests/${manifest}" || exit 1; \
+    done \
+    && cargo build --locked --release --package horizon-repository \
+    && install -m 0755 target/release/horizon-repository /opt/horizon-repository
+
 FROM ${WORKER_BASE_IMAGE}
 
 ARG WORKER_BASE_IMAGE
@@ -123,8 +143,7 @@ RUN node --version \
     && tmux -V
 
 WORKDIR /opt/horizon-dependency-cache
-COPY Cargo.toml Cargo.lock ./
-COPY crates/ crates/
+COPY --from=repository-builder /opt/horizon-manifests/ ./
 RUN mkdir -p \
         crates/horizon-browser/src \
         crates/horizon-browser-cli/src \
@@ -150,6 +169,7 @@ RUN mkdir -p \
 
 WORKDIR /workspace/horizon
 
+COPY --from=repository-builder /opt/horizon-repository /usr/local/bin/horizon-repository
 COPY containers/remote-worker/entrypoint.sh /usr/local/bin/horizon-worker-entrypoint
 COPY containers/remote-worker/host-identity.py /usr/local/bin/horizon-worker-host-identity
 COPY containers/remote-worker/session.sh /usr/local/bin/horizon-agent-session

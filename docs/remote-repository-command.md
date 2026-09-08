@@ -1,7 +1,9 @@
 # Explicit worker repository materialization
 
-`cargo build -p horizon-repository` builds a headless, one-shot helper. It is not
-automatically installed in worker images or included in Horizon release assets.
+`cargo build -p horizon-repository` builds a headless, one-shot helper. The
+[remote worker image](../containers/remote-worker/README.md#explicit-repository-helper)
+installs it from a separate pinned-toolchain build stage. It is not included in
+Horizon release assets, and existing running workers are not automatically upgraded.
 No default invocation creates anything; the only command is:
 
 ```sh

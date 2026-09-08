@@ -9,7 +9,8 @@ not consequences of closing a panel, exiting Horizon, or powering off the
 client PC.
 
 The image contains the Rust toolchain, Horizon's Linux build dependencies,
-Git/Git LFS, GitHub CLI, rsync, tar, tmux, SSH, CA certificates, and the
+Git/Git LFS, GitHub CLI, rsync, tar, tmux, SSH, CA certificates, the explicit
+`horizon-repository` helper, and the
 supported coding-agent CLIs. Their versions and both base-image digests are
 pinned in `Dockerfile` and the checksum-verified `build-tmux.sh` helper. The
 worker and its CI tests use tmux 3.7c built without utmp integration; older
@@ -45,9 +46,51 @@ Version tags make development builds understandable, but provider profiles must
 use a registry digest after publication. This slice does not publish an image
 or change any provider configuration.
 
-Only workspace manifests and the lockfile enter the dependency-cache build
-stage. Horizon source, local configuration, SSH material, tokens, and registry
-credentials are excluded from the build context and final image.
+The helper is compiled with the pinned Rust toolchain in a separate build stage.
+The context admits workspace manifests, the lockfile, reviewed worker scripts and
+only Rust source under the repository, core, browser and browser-protocol crates.
+Build from a trusted clean checkout: the source allowlist is not a secret scanner.
+Unrelated application source, local configuration, SSH material and credentials
+remain excluded. Only the executable crosses into the final runtime; the existing
+dependency cache receives a manifest-only tree, never Horizon source in any layer.
+
+## Explicit repository helper
+
+The image installs `/usr/local/bin/horizon-repository`. Nothing invokes it during
+startup or starts a task after it finishes. Its only operation is an explicitly
+authorized `horizon-repository materialize` call with bounded JSON on stdin.
+See the [command protocol](../../docs/remote-repository-command.md) for the complete
+request, receipts, exit codes and retained-state rules.
+
+Supply stable, authorized Git objects and an existing verified bundle store,
+plus a separately prepared private scratch parent on retained storage. Publication
+requires Linux journaled ext4 with barriers and readable kernel storage metadata;
+container overlay storage is not sufficient. Unsupported storage fails closed and
+may leave an unpublished checkout. No permission repair, overwrite or cleanup is
+implicit. Missing replies are uncertain outcomes, not permission to retry.
+
+This packaging does not add object transport, worker-retained operation identity,
+client setup, recovery, checkpointing or task admission. Existing workers are not
+upgraded by rebuilding an image. Neither the helper nor a locally retained volume
+proves cloud durability or PC-off operation.
+
+After building, run the synthetic image smoke against an explicit local Docker
+socket and a trusted journaled ext4 fixture parent:
+
+```bash
+python3 -B containers/remote-worker/test_repository_image.py \
+  --docker-host unix:///path/to/docker.sock --image horizon-remote-worker:0.1.0
+python3 -B containers/remote-worker/test_repository_packaging.py \
+  --docker-host unix:///path/to/docker.sock
+```
+
+The first checks large packed objects, raw index/worktree semantics, no-overwrite
+publication, retained data observed by a fresh container and overlay rejection.
+It uses no network or credentials and removes only its owned containers/fixtures.
+The second checks the real Docker context filter with positive source controls and
+excluded synthetic files. Add `--image` and `--expected-binary-sha256` from a separate
+`repository-builder` target to audit every final image layer and executable provenance.
+These tests retain images and fail, rather than claim success, on unsupported storage.
 
 ## Runtime contract
 
