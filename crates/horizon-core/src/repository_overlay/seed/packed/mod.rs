@@ -1,8 +1,8 @@
 //! Bounded raw objects from an explicitly authorized, stable Linux object store.
 
-mod process;
+pub(super) mod process;
 mod protocol;
-mod view;
+pub(super) mod view;
 
 use super::{GitObjectInspector, GitObjectMetadata, GitObjectSource, GitObjectStream, SeedError, SeedFailure, staging};
 use git2::Oid;
@@ -33,7 +33,7 @@ impl Default for PackedSourceLimits {
 }
 
 impl PackedSourceLimits {
-    fn validate(self) -> Result<(), SeedError> {
+    pub(super) fn validate(self) -> Result<(), SeedError> {
         if !(64 * 1024 * 1024..=16 * 1024 * 1024 * 1024).contains(&self.address_space_bytes)
             || !(1..=3600).contains(&self.cpu_seconds)
             || self.object_timeout.is_zero()
@@ -80,7 +80,7 @@ impl<'a> PackedGitObjectSource<'a> {
             .and_then(|()| view::validate(objects, parent, &cancelled));
         preflight.map_err(|reason| SeedFailure { reason, residue: None })?;
         let metadata = staging::reserve(parent, &cancelled).map_err(|reason| SeedFailure { reason, residue: None })?;
-        let result = view::command(&metadata, objects, limits)
+        let result = view::command(&metadata, objects, limits, view::Operation::Inspect)
             .and_then(|command| process::Session::spawn(command, limits.object_timeout, Box::new(cancelled)));
         match result {
             Ok(session) => Ok(Self { session, metadata }),

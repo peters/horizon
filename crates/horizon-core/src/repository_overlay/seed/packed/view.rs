@@ -1,5 +1,6 @@
 use super::{PackedSourceLimits, SeedError as Error, staging};
 use crate::repository_overlay::reader::SelectedRepositoryReader;
+use git2::Oid;
 use std::{
     fmt::Write as _,
     fs::{self, OpenOptions},
@@ -15,7 +16,11 @@ use std::{
 pub(super) const MAX_NODES: usize = 262_144;
 pub(super) const MAX_PATH_BYTES: usize = 16 * 1024 * 1024;
 
-pub(super) fn validate(objects: &Path, parent: &Path, cancelled: &impl Fn() -> bool) -> Result<(), Error> {
+pub(in crate::repository_overlay::seed) fn validate(
+    objects: &Path,
+    parent: &Path,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(), Error> {
     staging::check_cancel(cancelled)?;
     if !objects.is_absolute() {
         return Err(Error::UnsafeParent);
@@ -74,7 +79,18 @@ pub(super) fn validate(objects: &Path, parent: &Path, cancelled: &impl Fn() -> b
     Ok(())
 }
 
-pub(super) fn command(path: &Path, objects: &Path, limits: PackedSourceLimits) -> Result<Command, Error> {
+#[derive(Clone, Copy)]
+pub(in crate::repository_overlay::seed) enum Operation {
+    Inspect,
+    Pack(Oid),
+}
+
+pub(in crate::repository_overlay::seed) fn command(
+    path: &Path,
+    objects: &Path,
+    limits: PackedSourceLimits,
+    operation: Operation,
+) -> Result<Command, Error> {
     for directory in ["objects", "objects/info", "objects/pack", "refs"] {
         fs::create_dir(path.join(directory)).map_err(|_| Error::Storage)?;
     }
@@ -125,8 +141,6 @@ pub(super) fn command(path: &Path, objects: &Path, limits: PackedSourceLimits) -
             "core.deltaBaseCacheLimit=16m",
             "-c",
             "core.bigFileThreshold=1m",
-            "cat-file",
-            "--batch-command",
         ])
         .current_dir(path)
         .env_clear()
@@ -140,5 +154,33 @@ pub(super) fn command(path: &Path, objects: &Path, limits: PackedSourceLimits) -
             ("GIT_TERMINAL_PROMPT", "0"),
         ])
         .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", quoted);
+    match operation {
+        Operation::Inspect => {
+            command.args(["cat-file", "--batch-command"]);
+        }
+        Operation::Pack(commit) => {
+            // The exact original commit is a shallow boundary, not rewritten history.
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(path.join("shallow"))
+                .and_then(|mut file| writeln!(file, "{commit}"))
+                .map_err(|_| Error::Storage)?;
+            command.args([
+                "-c",
+                "pack.useSparse=false",
+                "pack-objects",
+                "--stdout",
+                "--revs",
+                "--no-reuse-delta",
+                "--no-reuse-object",
+                "--window=0",
+                "--depth=0",
+                "--threads=1",
+                "--compression=1",
+            ]);
+        }
+    }
     Ok(command)
 }

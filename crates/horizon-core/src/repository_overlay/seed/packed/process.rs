@@ -9,9 +9,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(super) struct Session<'a> {
+pub(in crate::repository_overlay::seed) struct Session<'a> {
     child: Option<OwnedChild>,
-    input: ChildStdin,
+    input: Option<ChildStdin>,
     output: ChildStdout,
     cancelled: Box<dyn Fn() -> bool + 'a>,
     timeout: Duration,
@@ -19,7 +19,7 @@ pub(super) struct Session<'a> {
 }
 
 impl<'a> Session<'a> {
-    pub(super) fn spawn(
+    pub(in crate::repository_overlay::seed) fn spawn(
         mut command: Command,
         timeout: Duration,
         cancelled: Box<dyn Fn() -> bool + 'a>,
@@ -41,7 +41,7 @@ impl<'a> Session<'a> {
         nonblocking(&output)?;
         Ok(Self {
             child: Some(child),
-            input,
+            input: Some(input),
             output,
             cancelled,
             timeout,
@@ -61,10 +61,13 @@ impl<'a> Session<'a> {
 
     pub(super) fn request(&mut self, command: &str, oid: Oid) -> io::Result<()> {
         let request = format!("{command} {oid}\n");
-        let mut pending = request.as_bytes();
+        self.write_request(request.as_bytes())
+    }
+
+    fn write_request(&mut self, mut pending: &[u8]) -> io::Result<()> {
         while !pending.is_empty() {
             self.check()?;
-            match self.input.write(pending) {
+            match self.input.as_mut().ok_or_else(failed)?.write(pending) {
                 Ok(0) => return Err(failed()),
                 Ok(n) => pending = &pending[n..],
                 Err(e) if retry(&e) => self.pause(),
@@ -72,6 +75,24 @@ impl<'a> Session<'a> {
             }
         }
         Ok(())
+    }
+
+    pub(in crate::repository_overlay::seed) fn begin_pack(&mut self, oid: Oid) -> io::Result<()> {
+        self.deadline = Instant::now() + self.timeout;
+        self.write_request(format!("{oid}\n").as_bytes())?;
+        self.input.take();
+        Ok(())
+    }
+
+    pub(in crate::repository_overlay::seed) fn finish(&mut self) -> io::Result<()> {
+        loop {
+            self.check()?;
+            match self.child.as_mut().ok_or_else(failed)?.0.try_wait()? {
+                Some(status) if status.success() => return Ok(()),
+                Some(_) => return Err(failed()),
+                None => self.pause(),
+            }
+        }
     }
 
     pub(super) fn header(&mut self, oid: Oid) -> io::Result<Header> {
@@ -85,7 +106,7 @@ impl<'a> Session<'a> {
         Err(failed())
     }
 
-    pub(super) fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+    pub(in crate::repository_overlay::seed) fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         loop {
             self.check()?;
             match self.output.read(buffer) {
@@ -132,7 +153,7 @@ impl<'a> Session<'a> {
     }
 
     #[cfg(test)]
-    pub(super) fn id(&self) -> Option<u32> {
+    pub(in crate::repository_overlay::seed) fn id(&self) -> Option<u32> {
         self.child.as_ref().map(|child| child.0.id())
     }
 }

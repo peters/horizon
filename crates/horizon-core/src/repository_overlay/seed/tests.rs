@@ -17,13 +17,13 @@ use std::{
     os::unix::fs::{PermissionsExt, symlink},
 };
 
-struct Fixture {
-    directory: tempfile::TempDir,
-    repository: Repository,
-    commit: Oid,
-    ancestor: Oid,
-    private_blob: Oid,
-    base_blob: Oid,
+pub(super) struct Fixture {
+    pub(super) directory: tempfile::TempDir,
+    pub(super) repository: Repository,
+    pub(super) commit: Oid,
+    pub(super) ancestor: Oid,
+    pub(super) private_blob: Oid,
+    pub(super) base_blob: Oid,
 }
 
 pub(super) fn private_fixture() -> tempfile::TempDir {
@@ -34,7 +34,7 @@ pub(super) fn private_fixture() -> tempfile::TempDir {
 }
 
 impl Fixture {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let directory = private_fixture();
         let repository = Repository::init(directory.path()).unwrap();
         let private_blob = repository.blob(b"unrelated older private data").unwrap();
@@ -60,7 +60,7 @@ impl Fixture {
         }
     }
 
-    fn resolve(
+    pub(super) fn resolve(
         &self,
         changes: Vec<OverlayChange>,
         working: Vec<OverlayChange>,
@@ -76,7 +76,7 @@ impl Fixture {
         resolve_namespaces(&self.repository, bundle).unwrap()
     }
 
-    fn source(&self) -> LooseFixtureSource<'_> {
+    pub(super) fn source(&self) -> LooseFixtureSource<'_> {
         LooseFixtureSource {
             database: self.repository.odb().unwrap(),
             calls: BTreeMap::new(),
@@ -85,7 +85,7 @@ impl Fixture {
 }
 
 // Fixture-only adapter: production does not mistake libgit2 loose streaming for packed support.
-struct LooseFixtureSource<'a> {
+pub(super) struct LooseFixtureSource<'a> {
     database: Odb<'a>,
     calls: BTreeMap<Oid, usize>,
 }

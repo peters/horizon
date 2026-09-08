@@ -227,6 +227,14 @@ back into large multi-purpose modules.
   inherited. Cancellation/failure or an unfinished stream terminates only its owned
   child; private metadata remains explicit. Stable source/ancestry and exclusive
   scratch ownership are prerequisites, not confinement against concurrent mutation.
+  Linux `seed/export/` prepares one bounded standard non-thin base pack from an
+  existing verified seed. It shares the isolated metadata view and owned native
+  process with packed acquisition, but selects an exact synthesized shallow
+  boundary and closes request input before draining/validating producer completion.
+  Framing, chunked file writes and digesting live in its output leaf. Private
+  success/partial artifacts remain explicit; no network, setup start, immutable
+  publication or durability is inferred. Input/output overlap checks cover the
+  entire seed, not only its object store. See [pack preparation](../remote-repository-pack.md).
   `checkout/` prepares the seed and raw working namespace together, using exclusive
   descriptor-relative writes, incremental loose decoding and pinned-file verification.
   Literal links are created last. This private logical checkout retains failures;

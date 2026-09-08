@@ -206,6 +206,7 @@ fn isolated_command_discards_source_configuration_and_missing_promisors() {
         &staging::reserve(parent.path(), &|| false).unwrap(),
         &objects,
         PackedSourceLimits::default(),
+        view::Operation::Inspect,
     )
     .unwrap();
     let environment: std::collections::BTreeMap<_, _> = command.get_envs().collect();

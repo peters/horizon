@@ -5,9 +5,13 @@ impl ArtifactDigest {
     /// Hash already-owned bytes without I/O. This does not authenticate or authorize their source.
     #[must_use]
     pub fn sha256(bytes: &[u8]) -> Self {
+        Self::from_sha256_bytes(Sha256::digest(bytes).into())
+    }
+
+    pub(crate) fn from_sha256_bytes(bytes: [u8; 32]) -> Self {
         const HEX: &[u8; 16] = b"0123456789abcdef";
         let mut encoded = String::with_capacity(64);
-        for byte in Sha256::digest(bytes) {
+        for byte in bytes {
             encoded.push(char::from(HEX[usize::from(byte >> 4)]));
             encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
         }
