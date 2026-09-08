@@ -19,6 +19,10 @@ const CONFINED: ResolveFlags = ResolveFlags::BENEATH
 pub(super) struct Root(File);
 
 impl Root {
+    pub(super) fn handle(&self) -> &File {
+        &self.0
+    }
+
     pub(super) fn open(path: &Path) -> Result<Self, Error> {
         let reader = SelectedRepositoryReader::open(path).map_err(|_| Error::UnsafeNode)?;
         let root = Self(reader.root.handle().try_clone().map_err(|_| Error::Storage)?);
