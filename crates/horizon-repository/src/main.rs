@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod protocol;
+mod setup;
 
 use std::{
     io::{self, Read, Write},
@@ -9,18 +10,22 @@ use std::{
 
 fn main() -> ExitCode {
     let arguments: Vec<_> = std::env::args_os().skip(1).take(2).collect();
-    if arguments.len() != 1 || arguments[0] != "materialize" {
+    let command = arguments.first().and_then(|argument| argument.to_str());
+    if arguments.len() != 1 || !matches!(command, Some("materialize" | "setup" | "setup-status")) {
         let _ = writeln!(
             io::stderr().lock(),
-            "Usage: horizon-repository materialize < request.json"
+            "Usage: horizon-repository materialize|setup|setup-status < request.json"
         );
         return ExitCode::from(2);
     }
-    run(
-        &mut io::stdin().lock(),
-        &mut io::stdout().lock(),
-        &mut io::stderr().lock(),
-    )
+    let mut input = io::stdin().lock();
+    let mut output = io::stdout().lock();
+    let mut diagnostics = io::stderr().lock();
+    match command {
+        Some("setup") => setup::run(setup::Command::Execute, &mut input, &mut output, &mut diagnostics),
+        Some("setup-status") => setup::run(setup::Command::Observe, &mut input, &mut output, &mut diagnostics),
+        _ => run(&mut input, &mut output, &mut diagnostics),
+    }
 }
 
 fn run(input: &mut impl Read, output: &mut impl Write, diagnostics: &mut impl Write) -> ExitCode {
@@ -30,9 +35,23 @@ fn run(input: &mut impl Read, output: &mut impl Write, diagnostics: &mut impl Wr
         Ok(result) => protocol::Response::from_result(result),
         Err(()) => protocol::Response::rejected(),
     };
-    let bytes = serde_json::to_vec(&response)
-        .ok()
-        .filter(|bytes| bytes.len() < protocol::RESPONSE_LIMIT);
+    write_response(
+        &response,
+        response.exit_code(),
+        protocol::RESPONSE_LIMIT,
+        output,
+        diagnostics,
+    )
+}
+
+fn write_response(
+    response: &impl serde::Serialize,
+    exit_code: u8,
+    limit: usize,
+    output: &mut impl Write,
+    diagnostics: &mut impl Write,
+) -> ExitCode {
+    let bytes = serde_json::to_vec(response).ok().filter(|bytes| bytes.len() < limit);
     let written = bytes.is_some_and(|bytes| {
         output
             .write_all(&bytes)
@@ -47,7 +66,7 @@ fn run(input: &mut impl Read, output: &mut impl Write, diagnostics: &mut impl Wr
         );
         return ExitCode::from(3);
     }
-    ExitCode::from(response.exit_code())
+    ExitCode::from(exit_code)
 }
 
 #[cfg(test)]

@@ -275,8 +275,17 @@ back into large multi-purpose modules.
   operation. Its typed result preserves source metadata and every known checkout or
   uncertain destination; no retry or cleanup is implied. `horizon-repository` owns
   only the bounded versioned JSON command boundary and truthful response/exit status.
-  It does not install itself in worker images or create a retained remote job: lost
-  output/termination requires later observation, not automatic replay or task start.
+  Its `setup/` tree separates immutable input validation, one-shot core API
+  orchestration and response projection. Core `admit_materialization` performs
+  bounded read-only input-tree identity separation before fresh admission; existing
+  claims skip that preflight so missing inputs cannot prevent observation. The
+  original claim-only admission API is unchanged. Public core projection accepts only typed
+  execution results, not unchecked deserialized snapshots. Setup/status distinguish
+  fresh recording, historical observation, unknown claims and retained execution
+  when recording fails. Status never creates or replays; the original materialize
+  protocol stays compatible. Image packaging installs the helper, but no command
+  detaches itself or creates independent remote supervision: lost output requires
+  later observation, not automatic replay or task start.
 - `containers/remote-worker/host-identity.py` owns workspace-retained server-key
   initialization, validation and runtime materialization before SSH starts.
   Its real-key regressions are separate from the retained-volume SSH smoke in
