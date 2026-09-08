@@ -33,9 +33,7 @@ pub(super) struct Directory {
 
 impl Directory {
     pub(super) fn open(path: &Path) -> Result<Self, Error> {
-        let reader = SelectedRepositoryReader::open(path)
-            .map_err(|_| Error::UnsafeRoot)?
-            .root;
+        let reader = SelectedRepositoryReader::open(path).map_err(root_error)?.root;
         let directory = File::from(
             openat2(
                 reader.handle(),
@@ -72,7 +70,7 @@ impl Directory {
         {
             return Err(Error::UnsafeRoot);
         }
-        let current = SelectedRepositoryReader::open(&self.path).map_err(|_| Error::UnsafeRoot)?;
+        let current = SelectedRepositoryReader::open(&self.path).map_err(root_error)?;
         let bound = current.root.handle().metadata().map_err(|_| Error::UnsafeRoot)?;
         if (metadata.dev(), metadata.ino()) != (bound.dev(), bound.ino()) {
             return Err(Error::UnsafeRoot);
@@ -88,7 +86,7 @@ impl Directory {
                 Ok(Some(record))
             }
             Err(RepositoryReadError::Missing) => Ok(None),
-            Err(_) => Err(Error::Read),
+            Err(error) => Err(read_error(error)),
         }
     }
 
@@ -179,6 +177,21 @@ fn link(file: &File, directory: &File) -> Result<(), rustix::io::Errno> {
         CLAIM,
         AtFlags::SYMLINK_FOLLOW,
     )
+}
+
+fn root_error(error: RepositoryReadError) -> Error {
+    match error {
+        RepositoryReadError::Unsupported => Error::Unsupported,
+        _ => Error::UnsafeRoot,
+    }
+}
+
+fn read_error(error: RepositoryReadError) -> Error {
+    match error {
+        RepositoryReadError::Unsupported => Error::Unsupported,
+        RepositoryReadError::TooLarge => Error::InvalidRecord,
+        _ => Error::Read,
+    }
 }
 
 fn storage_error(error: rustix::io::Errno) -> Error {

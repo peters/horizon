@@ -237,9 +237,28 @@ fn malformed_and_unsafe_claims_fail_closed_without_repair() {
             _ => fs::create_dir(root.path().join(CLAIM)).unwrap(),
         }
         let directory = directory(root.path());
-        assert!(directory.observe(&expected).is_err());
-        assert!(admit(&directory, &expected).is_err());
+        let error = if kind <= 2 { Error::InvalidRecord } else { Error::Read };
+        assert_eq!(directory.observe(&expected), Err(error));
+        assert!(matches!(admit(&directory, &expected), Err(actual) if actual == error));
         assert!(fs::symlink_metadata(root.path().join(CLAIM)).is_ok());
+    }
+}
+
+#[test]
+fn reader_errors_preserve_unsupported_confinement_and_invalid_records() {
+    assert_eq!(root_error(RepositoryReadError::Unsupported), Error::Unsupported);
+    assert_eq!(read_error(RepositoryReadError::Unsupported), Error::Unsupported);
+    assert_eq!(read_error(RepositoryReadError::TooLarge), Error::InvalidRecord);
+    for error in [
+        RepositoryReadError::InvalidRoot,
+        RepositoryReadError::Missing,
+        RepositoryReadError::UnsafePath,
+        RepositoryReadError::UnsupportedNode,
+        RepositoryReadError::Changed,
+        RepositoryReadError::ReadFailed,
+    ] {
+        assert_eq!(root_error(error), Error::UnsafeRoot);
+        assert_eq!(read_error(error), Error::Read);
     }
 }
 
