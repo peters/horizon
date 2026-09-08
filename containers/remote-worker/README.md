@@ -57,8 +57,8 @@ dependency cache receives a manifest-only tree, never Horizon source in any laye
 ## Explicit repository helper
 
 The image installs `/usr/local/bin/horizon-repository`. Nothing invokes it during
-startup or starts a task after it finishes. Its only operation is an explicitly
-authorized `horizon-repository materialize` call with bounded JSON on stdin.
+startup or starts a task after it finishes. Explicitly authorized `materialize`,
+`setup` and read-only `setup-status` commands accept bounded JSON on stdin.
 See the [command protocol](../../docs/remote-repository-command.md) for the complete
 request, receipts, exit codes and retained-state rules.
 
@@ -69,8 +69,11 @@ container overlay storage is not sufficient. Unsupported storage fails closed an
 may leave an unpublished checkout. No permission repair, overwrite or cleanup is
 implicit. Missing replies are uncertain outcomes, not permission to retry.
 
-This packaging does not add object transport, worker-retained operation identity,
-client setup, recovery, checkpointing or task admission. Existing workers are not
+Retained `setup` uses one immutable claim and a fixed private setup child; repeated
+requests observe rather than replay. Status never creates state or proves liveness.
+The commands are synchronous and do not provide independent setup supervision.
+This packaging does not add object transport, client setup, recovery, checkpointing
+or task admission. Existing workers are not
 upgraded by rebuilding an image. Neither the helper nor a locally retained volume
 proves cloud durability or PC-off operation.
 
@@ -86,6 +89,9 @@ python3 -B containers/remote-worker/test_repository_packaging.py \
 
 The first checks large packed objects, raw index/worktree semantics, no-overwrite
 publication, retained data observed by a fresh container and overlay rejection.
+It also checks retained setup/status, intent conflicts, unknown claims without
+replay, unsafe result preflight and status after output loss. The claim-only case
+is a synthetic state fixture, not proof of surviving an actual interruption.
 It uses no network or credentials and removes only its owned containers/fixtures.
 The second checks the real Docker context filter with positive source controls and
 excluded synthetic files. Add `--image` and `--expected-binary-sha256` from a separate

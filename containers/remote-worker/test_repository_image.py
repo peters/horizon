@@ -57,11 +57,14 @@ class ImageSmoke:
         assert value["Config"]["Labels"]["horizon.repository-image-smoke"] == self.label
         return value
 
-    def command(self, entrypoint, args, data=b"", overlay=False):
-        mounts = ["--mount", f"type=bind,src={self.root / 'source/objects'},dst=/objects,readonly",
-                  "--mount", f"type=bind,src={self.root / 'bundles'},dst=/bundles,readonly"]
+    def command(self, entrypoint, args, data=b"", overlay=False, writable_inputs=False, mount_inputs=True, retained_alias=None):
+        mode = "" if writable_inputs else ",readonly"
+        mounts = ["--mount", f"type=bind,src={self.root / 'source/objects'},dst=/objects{mode}",
+                  "--mount", f"type=bind,src={self.root / 'bundles'},dst=/bundles{mode}"] if mount_inputs else []
         if not overlay:
-            mounts += ["--mount", f"type=bind,src={self.root / 'retained'},dst=/retained"]
+            retained = self.root / "retained" if retained_alias is None else retained_alias
+            assert retained.resolve().is_relative_to(self.root.resolve())
+            mounts += ["--mount", f"type=bind,src={retained},dst=/retained"]
         command = self.docker + ["create", "--pull=never", "--network=none", "--interactive",
                                 "--user", self.user, "--label", f"horizon.repository-image-smoke={self.label}",
                                 "--entrypoint", entrypoint] + mounts + [self.image] + args
@@ -82,6 +85,126 @@ class ImageSmoke:
         receipt = json.loads(output.stdout)
         assert receipt["version"] == 1 and receipt["status"] == status
         return receipt
+
+    def setup(self, command, request, status, code, **options):
+        output = self.command("/usr/local/bin/horizon-repository", [command], encoded(request), **options)
+        assert output.returncode == code, (output.returncode, output.stdout, output.stderr)
+        assert not output.stderr and output.stdout.endswith(b"\n") and len(output.stdout) <= 128 * 1024
+        receipt = json.loads(output.stdout)
+        assert receipt["version"] == 1 and receipt["status"] == status, (receipt["status"], status)
+        return receipt
+
+    def test_setup(self):
+        def private(name):
+            root = self.root / "retained" / name
+            root.mkdir(mode=0o700)
+            return root
+
+        def request(name):
+            value = dict(self.request, workspace_local_id="workspace_1", retained_root="/retained/" + name)
+            del value["scratch_parent"]
+            return value
+
+        def state(root):
+            return snapshot(root), sorted(str(path.relative_to(root)) for path in root.rglob("*"))
+
+        root = private("setup-success")
+        expected = request(root.name)
+        initial = state(root)
+        absent = self.setup("setup-status", expected, "absent", 0, mount_inputs=False)
+        assert absent["recording"] == "not_acknowledged" and absent["execution"] is None
+        assert state(root) == initial
+        receipt = self.setup("setup", expected, "completed", 0)
+        assert receipt["recording"] == "acknowledged" and receipt["reason"] is None
+        execution = receipt["execution"]
+        assert execution["state"] == "published" and execution["base_commit"] == self.base
+        assert execution["bundle_manifest"] == self.manifest
+        assert execution["checkout"] == "/retained/setup-success/setup-data/published"
+        self.verify_checkout(root / "setup-data/published")
+        self.retire_completed()
+        retained = state(root)
+        for command in ("setup-status", "setup"):
+            observed = self.setup(command, expected, "completed", 0, mount_inputs=False)
+            assert observed["recording"] == "observed" and observed["execution"] == execution
+            assert state(root) == retained
+            conflict = self.setup(command, dict(expected, workspace_local_id="workspace_2"), "error", 1)
+            assert "conflicts" in conflict["reason"] and conflict["execution"] is None
+            assert state(root) == retained
+
+        # Synthetic interrupted-claim shape; this is not a real interruption test.
+        unknown = private("setup-unknown")
+        claim = unknown / "setup-claim.json"
+        claim.write_bytes((root / "setup-claim.json").read_bytes())
+        claim.chmod(0o600)
+        before = state(unknown)
+        for command in ("setup-status", "setup"):
+            result = self.setup(command, request(unknown.name), "claimed_unknown", 4)
+            assert result["execution"] is None and result["recording"] == "not_acknowledged"
+            assert state(unknown) == before and not (unknown / "setup-data").exists()
+
+        for command in ("setup-status", "setup"):
+            missing = self.setup(command, request("missing-setup-root"), "error", 1)
+            assert missing["execution"] is None and not (self.root / "retained/missing-setup-root").exists()
+        unsafe = self.root / "retained/setup-symlink"
+        unsafe.symlink_to(root.name)
+        for command in ("setup-status", "setup"):
+            self.setup(command, request(unsafe.name), "error", 1)
+        assert state(root) == retained
+
+        rejected = private("setup-unsafe-result")
+        result_path = rejected / "setup-result.json"
+        result_path.write_bytes(b"corrupt")
+        result_path.chmod(0o600)
+        result = self.setup("setup", request(rejected.name), "recording_unconfirmed", 1)
+        assert result["execution"] is None and result["recording"] == "not_acknowledged"
+        assert result_path.read_bytes() == b"corrupt" and not (rejected / "setup-data").exists()
+        assert (rejected / "setup-claim.json").is_file()
+        self.setup("setup-status", request(rejected.name), "error", 1)
+
+        failed = private("setup-missing-bundle")
+        failed_request = dict(request(failed.name), bundle_manifest="0" * 64)
+        failure = self.setup("setup", failed_request, "completed", 1)
+        assert failure["recording"] == "acknowledged" and failure["execution"]["state"] == "unpublished"
+        before = state(failed)
+        observed = self.setup("setup-status", failed_request, "completed", 1)
+        assert observed["recording"] == "observed" and observed["execution"] == failure["execution"]
+        assert state(failed) == before
+
+        lost = private("setup-output-loss")
+        output_loss = self.command("/usr/bin/python3", ["-c",
+            "import subprocess,sys; "
+            "out=open('/dev/full','wb'); "
+            "r=subprocess.run(['/usr/local/bin/horizon-repository','setup'],"
+            "input=sys.stdin.buffer.read(),stdout=out,stderr=subprocess.PIPE); "
+            "sys.stderr.buffer.write(r.stderr); sys.exit(r.returncode)"], encoded(request(lost.name)))
+        assert output_loss.returncode == 3 and not output_loss.stdout
+        assert b"Could not write a complete response" in output_loss.stderr
+        self.retire_completed()
+        before = state(lost)
+        observed = self.setup("setup-status", request(lost.name), "completed", 0)
+        assert observed["recording"] == "observed" and observed["execution"]["state"] == "published"
+        self.setup("setup", request(lost.name), "completed", 0)
+        assert state(lost) == before
+        self.verify_checkout(lost / "setup-data/published")
+        # Writable synthetic inputs ensure mount permissions cannot mask admission-order bugs.
+        for container_path, host_path in [("/objects", self.root / "source/objects"), ("/bundles", self.root / "bundles")]:
+            host_path.chmod(0o700)
+            nested = host_path / "setup-overlap"
+            nested.mkdir(mode=0o700)
+            for suffix in ("", "/setup-overlap"):
+                before = state(host_path)
+                overlap = dict(expected, retained_root=container_path + suffix)
+                result = self.setup("setup", overlap, "error", 1, writable_inputs=True)
+                assert result["recording"] == "not_acknowledged" and result["execution"] is None
+                assert state(host_path) == before
+                alias_root = host_path if not suffix else nested
+                aliased = dict(expected, retained_root="/retained")
+                self.setup("setup", aliased, "error", 1, writable_inputs=True, retained_alias=alias_root)
+                assert state(host_path) == before
+        print("PASS retained setup commands: non-creating status, real recorded setup and failures, "
+              "fresh-container observation, conflict rejection, synthetic claim-only no replay, "
+              "unsafe/overlapping input preflight, missing-input observation and output-loss retention; "
+              "no independent-launch claim", flush=True)
 
     def retire_completed(self):
         while self.containers:
@@ -196,6 +319,7 @@ class ImageSmoke:
         assert overlay.returncode == 1, (overlay.returncode, overlay.stdout, overlay.stderr)
         rejected = json.loads(overlay.stdout)
         assert rejected["status"] == "unpublished" and "unsupported" in rejected["reason"]
+        self.test_setup()
         assert before == (snapshot(self.root / "source"), snapshot(self.root / "bundles"))
         print("PASS image helper: strict input, packed 65 MiB-plus raw checkout, shallow HEAD/index/LFS/link/modes, "
               "qualified publication, no overwrite, retained unpublished checkout, fresh-container observation, "

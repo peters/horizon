@@ -62,6 +62,24 @@ impl fmt::Debug for SetupGrant {
 }
 
 impl RetainedSetup {
+    /// Admit setup only after read-only input-tree separation checks, unless already claimed.
+    /// Existing matching claims do not require the original source inputs to remain available.
+    /// Trusted stable input topology, ancestry and mounts must remain unchanged through execution.
+    /// # Errors
+    /// Fails closed on unavailable/unsafe/overlapping inputs or bounded traversal exhaustion,
+    /// without writing a fresh claim. Existing admission/uncertainty rules still apply.
+    pub fn admit_materialization(&self, intent: SetupIntent) -> Result<SetupAdmission, SetupInputError> {
+        if self.observe(&intent)? == SetupObservation::ClaimedUnknown {
+            return Ok(SetupAdmission::Existing);
+        }
+        #[cfg(target_os = "linux")]
+        self.directory.check_inputs(&intent)?;
+        #[cfg(not(target_os = "linux"))]
+        return Err(SetupClaimError::Unsupported.into());
+        #[cfg(target_os = "linux")]
+        Ok(self.admit(intent)?)
+    }
+
     /// Open existing private, qualified storage; never create or repair it.
     /// Run off the UI thread; filesystem byte bounds do not bound I/O latency.
     /// # Errors
@@ -111,6 +129,14 @@ impl RetainedSetup {
             Err(SetupClaimError::Unsupported)
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum SetupInputError {
+    #[error(transparent)]
+    Claim(#[from] SetupClaimError),
+    #[error("retained setup inputs could not be verified as bounded, safe and separate from its write root")]
+    Unverified,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]

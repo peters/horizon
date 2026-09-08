@@ -4,7 +4,7 @@
 [remote worker image](../containers/remote-worker/README.md#explicit-repository-helper)
 installs it from a separate pinned-toolchain build stage. It is not included in
 Horizon release assets, and existing running workers are not automatically upgraded.
-No default invocation creates anything; the only command is:
+No default invocation creates anything. The original synchronous command is:
 
 ```sh
 horizon-repository materialize < request.json
@@ -61,5 +61,88 @@ acknowledgement, and no process destructor is guaranteed on abrupt termination.
 
 Dropping any receipt never deletes data. Nothing overwrites existing destinations,
 starts tasks, fetches remotely, schedules checkpoints, retries or cleans residues.
-A later worker-retained operation layer must provide non-creating observation and
-recovery before wiring this helper into client reconnect/setup flows.
+Use the retained setup commands below when one-shot admission and subsequent
+read-only observation are required. Independent supervision, recovery and client
+integration are separate; the original `materialize` command remains unchanged.
+
+## Retained setup commands
+
+```sh
+horizon-repository setup < setup-request.json
+horizon-repository setup-status < setup-request.json
+```
+
+Both accept one strict versioned JSON object followed by EOF, bounded to 128 KiB
+including whitespace. The larger input bound accommodates three supported paths
+with worst-case JSON escaping. Unknown, duplicate, missing and malformed fields
+are rejected. Provide the same complete immutable intent on every observation.
+
+```json
+{
+  "version": 1,
+  "retained_root": "/worker/retained-workspace",
+  "workspace_local_id": "workspace_1",
+  "objects_directory": "/worker/source.git/objects",
+  "bundle_store": "/worker/bundles",
+  "bundle_manifest": "<64 hexadecimal SHA-256 characters>",
+  "destination": "repository"
+}
+```
+
+The retained root must already exist, be privately owned, and satisfy the core
+storage/confinement requirements. Neither command creates or repairs it. Its
+ancestry, mount configuration and authorized source must remain trusted and stable.
+The root and claim must outlive client connections and runtime generations; a retry
+ID or new request does not select another slot. Remote ownership must be established
+separately. Setup materializes under the fixed `setup-data` child; the example
+checkout is `/worker/retained-workspace/setup-data/repository`.
+
+Only `setup` can admit and consume a fresh in-process grant. An existing matching
+claim observes the result instead, even when no result exists. A conflicting intent
+fails without modifying the existing claim. `setup-status` only opens/reads: it
+never creates, synchronizes, adopts, repairs, replays or cleans any retained state.
+
+Before fresh admission, a read-only identity scan rejects a retained write root
+inside either input tree, including aliases; it does not rely on read-only mounts
+or path spelling. Each input scan is confined without symlink/mount traversal and
+bounded to 262,144 nodes, 16 MiB of aggregate relative paths and depth 64. Missing,
+unsafe or excessive inputs fail closed before a claim is written. Existing-claim
+and status observation bypass source validation so saved results remain observable
+when the original inputs are unavailable. These checks still require stable trusted
+topology through execution, not concurrent same-user namespace changes.
+
+Responses are complete JSON plus newline, bounded to 128 KiB. They contain
+`version`, `status`, `recording`, `reason` and `execution`. A non-null `execution`
+contains `state`, `reason`, `source_metadata`, `checkout`, `possible_destination`,
+`base_commit` and `bundle_manifest`, with the historical receipt meanings described
+above. Paths are intentionally returned only to the authorized caller; diagnostics
+remain redacted. A requested destination alias in a failed receipt does not prove
+that publication occurred.
+
+| Command status | Exit | Meaning |
+| --- | --- | --- |
+| `absent` | 0 | Status observed no claim in the qualified root; not authorization to bypass admission. |
+| `claimed_unknown` | 4 | Matching claim, no recorded result; not unstarted, running, successful or safe to replay. |
+| `completed` | 0/1/2 | Receipt exists: published exits 0, rejected exits 2, other execution states exit 1. |
+| `recording_unconfirmed` | 1 | Recording was not acknowledged; retain all state and inspect any known execution. |
+| `error` | 1 | Storage, identity, claim or result could not be safely observed/admitted; never treat as absence. |
+| `rejected` | 2 | Invalid command request, before admission. |
+
+`recording: "acknowledged"` means this invocation freshly recorded and verified its
+execution result on qualified healthy storage. `"observed"` means read-only access
+to a historical record, not this reader's synchronization or current liveness.
+`"not_acknowledged"` provides no recording guarantee. On `recording_unconfirmed`,
+`execution: null` means preflight rejected before execution; otherwise the known
+execution result is preserved even though recording was not acknowledged. In both
+cases admission may already have consumed the one-shot claim.
+
+Exit 3 retains the same output-failure meaning as `materialize`. Output loss never
+rolls back setup, removes its claim, or authorizes replay. A fresh status request
+can read a previously recorded result after the producer exits. Missing/corrupt
+output remains unknown until safely observed. No response establishes current task
+liveness, current checkout contents, cleanup permission, cloud or power-loss proof.
+
+These commands remain synchronous: they do not detach themselves from SSH, launch
+tasks, transfer source, create a supervisor or integrate the client. A worker-owned
+independent launcher must be added before claiming setup survives client loss.
+No invocation implicitly stops/deletes a workspace when a local view closes.

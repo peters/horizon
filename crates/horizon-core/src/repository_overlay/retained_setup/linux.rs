@@ -15,6 +15,7 @@ use std::{
 };
 
 const CLAIM: &str = "setup-claim.json";
+mod inputs;
 mod outcome;
 mod scratch;
 pub(super) use scratch::Scratch;
@@ -35,6 +36,12 @@ pub(super) struct Directory {
 }
 
 impl Directory {
+    pub(super) fn check_inputs(&self, intent: &SetupIntent) -> Result<(), super::SetupInputError> {
+        self.verify()?;
+        inputs::validate(&self.handle, intent)?;
+        Ok(self.verify()?)
+    }
+
     pub(super) fn completion(&self, intent: &SetupIntent) -> Result<Option<SetupCompletion>, SetupRecordError> {
         outcome::read(self, intent)
     }

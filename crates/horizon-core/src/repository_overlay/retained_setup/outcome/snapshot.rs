@@ -71,8 +71,10 @@ impl SetupCompletion {
         self.data.bundle_manifest.as_ref()
     }
 
-    #[cfg(target_os = "linux")]
-    pub(super) fn from_execution(result: &super::SetupMaterializationResult) -> Self {
+    /// Project a typed execution result without observing or changing the filesystem.
+    /// This does not establish recording, synchronization, liveness or replay authority.
+    #[must_use]
+    pub fn from_execution(result: &super::SetupMaterializationResult) -> Self {
         use super::super::SetupExecutionError;
         use crate::repository_overlay::{
             checkout::publication::PublicationFailure, materialize::MaterializationProblem,
@@ -134,7 +136,6 @@ impl SetupCompletion {
 }
 
 impl CompletionData {
-    #[cfg(target_os = "linux")]
     fn repository(&mut self, path: &Path, base: git2::Oid, manifest: &ArtifactDigest) {
         self.checkout = Some(path.to_owned());
         self.base_commit = Some(base.to_string());
