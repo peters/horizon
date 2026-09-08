@@ -75,7 +75,9 @@ impl<'a> PackedGitObjectSource<'a> {
         limits: PackedSourceLimits,
         cancelled: impl Fn() -> bool + 'a,
     ) -> Result<Self, SeedFailure> {
-        let preflight = limits.validate().and_then(|()| view::validate(objects, &cancelled));
+        let preflight = limits
+            .validate()
+            .and_then(|()| view::validate(objects, parent, &cancelled));
         preflight.map_err(|reason| SeedFailure { reason, residue: None })?;
         let metadata = staging::reserve(parent, &cancelled).map_err(|reason| SeedFailure { reason, residue: None })?;
         let result = view::command(&metadata, objects, limits)

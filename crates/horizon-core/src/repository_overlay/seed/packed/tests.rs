@@ -8,7 +8,7 @@ use git2::{ObjectType, Repository};
 use std::{
     cell::Cell,
     fs,
-    io::Read,
+    io::{self, Read},
     os::unix::fs::{PermissionsExt, symlink},
     process::Command,
 };
@@ -38,6 +38,21 @@ fn raw(source: &mut impl GitObjectSource, oid: Oid) -> Vec<u8> {
     bytes
 }
 
+fn validate(objects: &Path, cancelled: impl Fn() -> bool) -> Result<(), SeedError> {
+    let parent = private_fixture();
+    view::validate(objects, parent.path(), &cancelled)
+}
+
+fn packed(parent: &Path, repository: &Repository) -> PackedGitObjectSource<'static> {
+    PackedGitObjectSource::new(
+        parent,
+        &repository.path().join("objects"),
+        PackedSourceLimits::default(),
+        || false,
+    )
+    .unwrap()
+}
+
 #[test]
 fn real_loose_packed_delta_and_seed_consumer_preserve_exact_objects_and_source() {
     let fixture = private_fixture();
@@ -54,13 +69,7 @@ fn real_loose_packed_delta_and_seed_consumer_preserve_exact_objects_and_source()
     );
     let parent = private_fixture();
     {
-        let mut source = PackedGitObjectSource::new(
-            parent.path(),
-            &repository.path().join("objects"),
-            PackedSourceLimits::default(),
-            || false,
-        )
-        .unwrap();
+        let mut source = packed(parent.path(), &repository);
         assert_eq!(raw(&mut source, second), bytes);
     }
     git(&path, &["repack", "-ad", "--window=20", "--depth=20"]);
@@ -73,13 +82,7 @@ fn real_loose_packed_delta_and_seed_consumer_preserve_exact_objects_and_source()
     let listing = git(&path, &["verify-pack", "-v", index.to_str().unwrap()]);
     assert!(listing.lines().any(|line| line.split_whitespace().count() == 7));
     let before = snapshot(&path);
-    let mut source = PackedGitObjectSource::new(
-        parent.path(),
-        &repository.path().join("objects"),
-        PackedSourceLimits::default(),
-        || false,
-    )
-    .unwrap();
+    let mut source = packed(parent.path(), &repository);
     assert_eq!(raw(&mut source, second), bytes);
     let plan = RepositoryOverlayPlan::new(
         GitSource {
@@ -93,14 +96,8 @@ fn real_loose_packed_delta_and_seed_consumer_preserve_exact_objects_and_source()
     .unwrap();
     let resolved = resolve_namespaces(&repository, RepositoryOverlayBundle::new(plan, vec![]).unwrap()).unwrap();
     let seed = super::super::prepare_git_seed(parent.path(), &resolved, &mut source, || false).unwrap();
-    assert_eq!(
-        Repository::open(seed.path())
-            .unwrap()
-            .find_blob(second)
-            .unwrap()
-            .content(),
-        bytes
-    );
+    let seeded = Repository::open(seed.path()).unwrap();
+    assert_eq!(seeded.find_blob(second).unwrap().content(), bytes);
     let metadata = source.metadata_path().to_owned();
     assert!(!format!("{source:?}").contains(metadata.to_str().unwrap()));
     drop(source);
@@ -223,36 +220,44 @@ fn unsafe_alternates_links_special_nodes_ancestry_and_limits_are_rejected() {
                 symlink("actual", &objects).unwrap();
             }
         }
-        assert_eq!(view::validate(&objects, &|| false), Err(SeedError::UnsafeParent));
+        assert_eq!(validate(&objects, || false), Err(SeedError::UnsafeParent));
     }
-    assert!(
+    for limits in [
         PackedSourceLimits {
             cpu_seconds: 0,
             ..PackedSourceLimits::default()
-        }
-        .validate()
-        .is_err()
-    );
-    assert!(
+        },
         PackedSourceLimits {
             address_space_bytes: u64::MAX,
             ..PackedSourceLimits::default()
-        }
-        .validate()
-        .is_err()
-    );
-    assert!(
+        },
         PackedSourceLimits {
             object_timeout: Duration::ZERO,
             ..PackedSourceLimits::default()
-        }
-        .validate()
-        .is_err()
-    );
+        },
+    ] {
+        assert_eq!(limits.validate(), Err(SeedError::Limit));
+    }
     let fixture = private_fixture();
-    assert_eq!(view::validate(fixture.path(), &|| true), Err(SeedError::Cancelled));
+    assert_eq!(validate(fixture.path(), || true), Err(SeedError::Cancelled));
     fs::create_dir_all(fixture.path().join("a/b/c/d")).unwrap();
-    assert_eq!(view::validate(fixture.path(), &|| false), Err(SeedError::Limit));
+    assert_eq!(validate(fixture.path(), || false), Err(SeedError::Limit));
+}
+
+#[test]
+fn scratch_inside_source_is_rejected_before_reservation_without_source_changes() {
+    let fixture = private_fixture();
+    let nested = fixture.path().join("scratch");
+    fs::create_dir(&nested).unwrap();
+    fs::set_permissions(&nested, fs::Permissions::from_mode(0o700)).unwrap();
+    let before = snapshot(fixture.path());
+    for parent in [fixture.path(), nested.as_path()] {
+        let failure =
+            PackedGitObjectSource::new(parent, fixture.path(), PackedSourceLimits::default(), || false).unwrap_err();
+        assert_eq!(failure.reason, SeedError::UnsafeParent);
+        assert!(failure.residue().is_none());
+        assert_eq!(snapshot(fixture.path()), before);
+    }
 }
 
 fn peer(script: &str, timeout: Duration) -> process::Session<'static> {
@@ -337,6 +342,7 @@ fn stalled_owned_child_times_out_and_midstream_cancellation_poisons_source() {
     let process = PathBuf::from(format!("/proc/{}", session.id().unwrap()));
     let started = std::time::Instant::now();
     assert!(session.info(Oid::ZERO_SHA1).is_err());
+    assert_eq!(session.read(&mut [0]).unwrap_err().kind(), io::ErrorKind::TimedOut);
     session.poison();
     assert!(!process.exists());
     assert!(started.elapsed() < Duration::from_secs(2));
@@ -351,9 +357,30 @@ fn stalled_owned_child_times_out_and_midstream_cancellation_poisons_source() {
     let header = session.info(Oid::ZERO_SHA1).unwrap();
     let mut reader = protocol::ObjectReader::new(&mut session, header);
     cancelled.set(true);
-    assert!(reader.read(&mut [0]).is_err());
+    assert_eq!(
+        reader.read(&mut [0]).unwrap_err().kind(),
+        io::ErrorKind::ConnectionAborted
+    );
     drop(reader);
     assert!(session.info(Oid::ZERO_SHA1).is_err());
+    let calls = Cell::new(0);
+    let mut command = Command::new("/bin/sh");
+    command.args(["-c", "read a oid; read again"]).env_clear();
+    let mut session = process::Session::spawn(
+        command,
+        Duration::from_secs(2),
+        Box::new(|| {
+            calls.set(calls.get() + 1);
+            calls.get() >= 3
+        }),
+    )
+    .unwrap();
+    assert_eq!(session.info(Oid::ZERO_SHA1), Err(SeedError::Cancelled));
+    assert_eq!(
+        calls.get(),
+        3,
+        "cancellation must occur inside header I/O, not its entry preflight"
+    );
 }
 
 #[test]
@@ -411,7 +438,7 @@ fn casefold_alternate_alias_is_rejected_when_fixture_capability_is_available() {
     fs::create_dir(fixture.path().join("INFO")).unwrap();
     fs::write(fixture.path().join("INFO/ALTERNATES"), b"/unauthorized\n").unwrap();
     assert!(fixture.path().join("info/alternates").exists());
-    assert_eq!(view::validate(fixture.path(), &|| false), Err(SeedError::UnsafeParent));
+    assert_eq!(validate(fixture.path(), || false), Err(SeedError::UnsafeParent));
 }
 
 #[test]
@@ -421,6 +448,6 @@ fn actual_source_enumeration_charges_node_and_path_limits_before_growth() {
         for number in 0..entries {
             fs::File::create(fixture.path().join(format!("{number:0width$}"))).unwrap();
         }
-        assert_eq!(view::validate(fixture.path(), &|| false), Err(SeedError::Limit));
+        assert_eq!(validate(fixture.path(), || false), Err(SeedError::Limit));
     }
 }

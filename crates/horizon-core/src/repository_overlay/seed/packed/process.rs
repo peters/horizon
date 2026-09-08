@@ -51,12 +51,12 @@ impl<'a> Session<'a> {
 
     pub(super) fn info(&mut self, oid: Oid) -> Result<Header, SeedError> {
         self.deadline = Instant::now() + self.timeout;
-        if (self.cancelled)() {
-            return Err(SeedError::Cancelled);
-        }
         self.request("info", oid)
             .and_then(|()| self.header(oid))
-            .map_err(|_| SeedError::Source)
+            .map_err(|error| match error.kind() {
+                io::ErrorKind::ConnectionAborted => SeedError::Cancelled,
+                _ => SeedError::Source,
+            })
     }
 
     pub(super) fn request(&mut self, command: &str, oid: Oid) -> io::Result<()> {
@@ -108,8 +108,17 @@ impl<'a> Session<'a> {
     }
 
     fn check(&self) -> io::Result<()> {
-        if self.child.is_none() || (self.cancelled)() || Instant::now() >= self.deadline {
+        if (self.cancelled)() {
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "raw object source cancelled",
+            ));
+        }
+        if self.child.is_none() {
             return Err(failed());
+        }
+        if Instant::now() >= self.deadline {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "raw object source timed out"));
         }
         Ok(())
     }

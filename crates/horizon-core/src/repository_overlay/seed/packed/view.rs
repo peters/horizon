@@ -15,12 +15,14 @@ use std::{
 pub(super) const MAX_NODES: usize = 262_144;
 pub(super) const MAX_PATH_BYTES: usize = 16 * 1024 * 1024;
 
-pub(super) fn validate(objects: &Path, cancelled: &impl Fn() -> bool) -> Result<(), Error> {
+pub(super) fn validate(objects: &Path, parent: &Path, cancelled: &impl Fn() -> bool) -> Result<(), Error> {
     staging::check_cancel(cancelled)?;
     if !objects.is_absolute() {
         return Err(Error::UnsafeParent);
     }
     let root = SelectedRepositoryReader::open(objects).map_err(|_| Error::UnsafeParent)?;
+    let scratch = SelectedRepositoryReader::open(parent).map_err(|_| Error::UnsafeParent)?;
+    let scratch = scratch.root.handle().metadata().map_err(|_| Error::UnsafeParent)?;
     // Probe Git's actual lookup, including aliases on casefold filesystems.
     match rustix::fs::openat2(
         root.root.handle(),
@@ -50,6 +52,10 @@ pub(super) fn validate(objects: &Path, cancelled: &impl Fn() -> bool) -> Result<
             return Err(Error::UnsafeParent);
         }
         if metadata.is_dir() {
+            // Compare identities, not spelling: scratch must never modify the source.
+            if metadata.dev() == scratch.dev() && metadata.ino() == scratch.ino() {
+                return Err(Error::UnsafeParent);
+            }
             if relative.components().count() >= 4 {
                 return Err(Error::Limit);
             }
