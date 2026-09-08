@@ -15,6 +15,8 @@ use std::{
 };
 
 const CLAIM: &str = "setup-claim.json";
+mod scratch;
+pub(super) use scratch::Scratch;
 const CONFINED: ResolveFlags = ResolveFlags::BENEATH
     .union(ResolveFlags::NO_SYMLINKS)
     .union(ResolveFlags::NO_MAGICLINKS)
@@ -32,6 +34,14 @@ pub(super) struct Directory {
 }
 
 impl Directory {
+    pub(super) fn scratch(&self, intent: &SetupIntent) -> Result<Scratch, super::SetupBoundaryError> {
+        self.qualify()?;
+        if self.observe(intent)? != SetupObservation::ClaimedUnknown {
+            return Err(super::SetupBoundaryError::InvalidClaim);
+        }
+        scratch::create(self)
+    }
+
     pub(super) fn open(path: &Path) -> Result<Self, Error> {
         let reader = SelectedRepositoryReader::open(path).map_err(root_error)?.root;
         let directory = File::from(
