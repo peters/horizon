@@ -16,6 +16,15 @@ env:
   RUSTFLAGS: -D warnings
 
 jobs:
+  remote-worker-build-context:
+    name: Remote worker build context
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify source allowlist and excluded-file controls
+        run: python3 -B containers/remote-worker/test_repository_packaging.py --docker-host unix:///var/run/docker.sock
+
   remote-panel-sessions:
     name: Remote panel sessions
     runs-on: ubuntu-latest

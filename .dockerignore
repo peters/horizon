@@ -5,6 +5,11 @@
 !crates/*/
 crates/*/**
 !crates/*/Cargo.toml
+!crates/horizon-browser/src/**/*.rs
+!crates/horizon-browser-protocol/src/**/*.rs
+!crates/horizon-core/src/**/*.rs
+!crates/horizon-repository/src/**/*.rs
+crates/*/src/**/*.rs/**
 !containers/
 !containers/remote-worker/
 containers/remote-worker/**
@@ -17,3 +22,5 @@ containers/remote-worker/**
 !containers/remote-worker/panel-session.py
 !containers/remote-worker/tmux.conf
 !containers/remote-worker/sshd_config
+**/.git
+**/.git/**
