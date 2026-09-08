@@ -357,7 +357,7 @@ mod tests {
         let (board, _, detached_panel, detached_workspaces) = board_with_detached_workspace();
 
         // The detached window paints this panel in its own viewport; allowing it
-        // to also go fullscreen in the root window renders one PTY twice a frame.
+        // to also go fullscreen in the root window renders one panel twice a frame.
         assert!(!fullscreen_panel_is_renderable(
             &board,
             &detached_workspaces,
