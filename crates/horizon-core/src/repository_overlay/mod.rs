@@ -10,6 +10,8 @@ pub mod namespace;
 mod paths;
 pub mod reader;
 pub mod seed;
+#[cfg(target_os = "linux")]
+mod storage;
 
 use crate::cloud_run::{ArtifactDigest, GitSource};
 use std::{collections::BTreeMap, fmt};

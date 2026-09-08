@@ -387,28 +387,3 @@ fn rename_error_after_actual_rename_is_uncertain_and_retains_both_names_for_insp
     drop(checkout);
     assert!(!old.exists() && destination.join(".git/HEAD").exists());
 }
-
-#[test]
-fn journal_contract_requires_exact_noncontradictory_bounded_kernel_options() {
-    for mode in ["ordered", "journal"] {
-        assert_eq!(linux::journaled_options(&format!("rw\nbarrier\ndata={mode}\n")), Ok(()));
-    }
-    for tail in [
-        "",
-        "data=writeback\n",
-        "data=ordered",
-        "data=ordered\r\n",
-        "data=ordered\nro\n",
-        "data=ordered\nnobarrier\n",
-        "data=ordered\nbarrier\n",
-        "data=ordered\ndata=journal\n",
-        "\n",
-    ] {
-        assert_eq!(
-            linux::journaled_options(&format!("rw\nbarrier\n{tail}")),
-            Err(PublicationError::Unsupported)
-        );
-    }
-    assert!(linux::journaled_options("rw\ndata=ordered\n").is_err());
-    assert!(linux::journaled_options(&"rw\nbarrier\ndata=ordered\n".repeat(200)).is_err());
-}
