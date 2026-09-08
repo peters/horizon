@@ -10,13 +10,20 @@ use std::{
 fn main() -> ExitCode {
     let arguments: Vec<_> = std::env::args_os().skip(1).take(2).collect();
     if arguments.len() != 1 || arguments[0] != "materialize" {
-        eprintln!("Usage: horizon-repository materialize < request.json");
+        let _ = writeln!(
+            io::stderr().lock(),
+            "Usage: horizon-repository materialize < request.json"
+        );
         return ExitCode::from(2);
     }
-    run(&mut io::stdin().lock(), &mut io::stdout().lock())
+    run(
+        &mut io::stdin().lock(),
+        &mut io::stdout().lock(),
+        &mut io::stderr().lock(),
+    )
 }
 
-fn run(input: &mut impl Read, output: &mut impl Write) -> ExitCode {
+fn run(input: &mut impl Read, output: &mut impl Write, diagnostics: &mut impl Write) -> ExitCode {
     let request = protocol::read_request(input);
     let result = request.as_ref().map(protocol::execute);
     let response = match &result {
@@ -34,7 +41,10 @@ fn run(input: &mut impl Read, output: &mut impl Write) -> ExitCode {
             .is_ok()
     });
     if !written {
-        eprintln!("Could not write a complete response; retain data and inspect before any retry.");
+        let _ = writeln!(
+            diagnostics,
+            "Could not write a complete response; retain data and inspect before any retry."
+        );
         return ExitCode::from(3);
     }
     ExitCode::from(response.exit_code())
@@ -48,7 +58,7 @@ mod tests {
     fn rejection_is_complete_json_and_failed_output_is_distinct() {
         let mut bytes = Vec::new();
         assert_eq!(
-            run(&mut b"private-invalid-input".as_slice(), &mut bytes),
+            run(&mut b"private-invalid-input".as_slice(), &mut bytes, &mut io::sink()),
             ExitCode::from(2)
         );
         assert!(bytes.ends_with(b"\n"));
@@ -58,7 +68,11 @@ mod tests {
         assert!(response["source_metadata"].is_null() && response["checkout"].is_null());
         assert!(!String::from_utf8(bytes).unwrap().contains("private-invalid-input"));
         assert_eq!(
-            run(&mut b"{}".as_slice(), &mut [0_u8; 0].as_mut_slice()),
+            run(
+                &mut b"{}".as_slice(),
+                &mut [0_u8; 0].as_mut_slice(),
+                &mut [0_u8; 0].as_mut_slice()
+            ),
             ExitCode::from(3)
         );
     }

@@ -51,7 +51,8 @@ Ordinary diagnostics omit request contents and paths.
 
 Invalid command-line arguments print static usage on stderr and exit 2, without
 reading stdin. Exit 3 means a complete response could not be written, not that the
-operation was rolled back. Malformed, absent or lost output and abrupt termination
+operation was rolled back. Stderr diagnostics are best-effort; failure to write them
+does not replace the command's exit status. Malformed, absent or lost output and abrupt termination
 are unknown observed outcomes regardless of exit status. Stdin and storage I/O
 have no hard end-to-end deadline. A successful stdout write is not a remote
 acknowledgement, and no process destructor is guaranteed on abrupt termination.
