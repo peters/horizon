@@ -8,9 +8,13 @@ mod execution;
 mod intent;
 #[cfg(target_os = "linux")]
 mod linux;
+mod outcome;
 
 pub use execution::{SetupBoundaryError, SetupExecutionError};
 pub use intent::SetupIntent;
+pub use outcome::{
+    SetupCompletion, SetupCompletionState, SetupMaterializationResult, SetupRecordError, SetupRecordingFailure,
+};
 #[cfg(target_os = "linux")]
 use std::sync::Arc;
 use std::{fmt, path::Path};

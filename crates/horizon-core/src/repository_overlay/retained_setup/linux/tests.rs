@@ -7,7 +7,7 @@ use std::{
     thread,
 };
 
-fn private() -> tempfile::TempDir {
+pub(super) fn private() -> tempfile::TempDir {
     let root = tempfile::tempdir().unwrap();
     fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
     root
@@ -15,7 +15,7 @@ fn private() -> tempfile::TempDir {
 
 // Real confinement, private files, link and synchronization; these state tests
 // bypass only storage qualification and make no power-loss/durability claim.
-fn directory(path: &Path) -> Directory {
+pub(super) fn directory(path: &Path) -> Directory {
     Directory {
         reader: SelectedRepositoryReader::open(path).unwrap().root,
         handle: File::open(path).unwrap(),
