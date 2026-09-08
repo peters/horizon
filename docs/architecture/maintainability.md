@@ -241,6 +241,9 @@ back into large multi-purpose modules.
   deletion or task launch occurs; healthy storage and unchanged, exclusively held
   private ancestry, trusted kernel metadata and stable mounts remain required.
   This is not cloud recovery or power-loss proof.
+  Linux `storage.rs` owns the shared, read-only journaled-filesystem qualification
+  and bounded kernel-option validation. Publication maps its errors to the existing
+  receipt contract; qualification alone does not synchronize, write or grant execution.
   `materialize/` composes existing private bundle retrieval, isolated raw-object
   resolution, checkout preparation and explicit publication into one worker-callable
   operation. Its typed result preserves source metadata and every known checkout or

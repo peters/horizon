@@ -2,18 +2,14 @@ use super::{
     PreparedPrivateCheckout, PublicationError as Error, PublicationFailure, PublishedCheckout, validate_sibling_name,
     walk,
 };
-use crate::repository_overlay::{paths, reader::SelectedRepositoryReader};
-use rustix::fs::{
-    CWD, Mode, OFlags, RenameFlags, ResolveFlags, fstatfs, major, minor, openat2, readlinkat_raw, renameat_with,
-};
+use crate::repository_overlay::{reader::SelectedRepositoryReader, storage};
+use rustix::fs::{Mode, OFlags, RenameFlags, ResolveFlags, openat2, renameat_with};
 use std::{
     fs::{File, Metadata, OpenOptions},
-    io::Read,
     os::{
         fd::AsRawFd,
         unix::fs::{MetadataExt, OpenOptionsExt},
     },
-    path::Path,
 };
 
 const CONFINED: ResolveFlags = ResolveFlags::BENEATH
@@ -164,52 +160,8 @@ fn identity(metadata: &Metadata) -> (u64, u64) {
 }
 
 pub(super) fn supported_storage(parent: &File) -> Result<(), Error> {
-    if fstatfs(parent).map_err(|_| Error::Storage)?.f_type != libc::EXT4_SUPER_MAGIC {
-        return Err(Error::Unsupported);
-    }
-    let device = parent.metadata().map_err(|_| Error::Storage)?.dev();
-    let mut buffer = [0; 4097];
-    let length = readlinkat_raw(
-        CWD,
-        format!("/sys/dev/block/{}:{}", major(device), minor(device)),
-        &mut buffer[..],
-    )
-    .map_err(|_| Error::Unsupported)?;
-    if length == buffer.len() {
-        return Err(Error::Unsupported);
-    }
-    let target = std::str::from_utf8(&buffer[..length]).map_err(|_| Error::Unsupported)?;
-    let name = Path::new(target)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| name.len() <= 255 && paths::validate(name).is_ok())
-        .ok_or(Error::Unsupported)?;
-    let mut options = String::new();
-    File::open(format!("/proc/fs/ext4/{name}/options"))
-        .map_err(|_| Error::Unsupported)?
-        .take(4097)
-        .read_to_string(&mut options)
-        .map_err(|_| Error::Unsupported)?;
-    journaled_options(&options)
-}
-
-pub(super) fn journaled_options(options: &str) -> Result<(), Error> {
-    if options.len() > 4096 || !options.ends_with('\n') {
-        return Err(Error::Unsupported);
-    }
-    let lines: std::collections::BTreeSet<_> = options.split_terminator('\n').collect();
-    if lines.len() != options.split_terminator('\n').count()
-        || lines
-            .iter()
-            .any(|line| line.is_empty() || line.bytes().any(|b| b.is_ascii_control() || b == b' '))
-        || !lines.contains("rw")
-        || !lines.contains("barrier")
-        || lines.contains("ro")
-        || lines.contains("nobarrier")
-        || lines.iter().filter(|line| line.starts_with("data=")).count() != 1
-        || !(lines.contains("data=ordered") || lines.contains("data=journal"))
-    {
-        return Err(Error::Unsupported);
-    }
-    Ok(())
+    storage::qualify(parent).map_err(|error| match error {
+        storage::StorageQualificationError::Unsupported => Error::Unsupported,
+        storage::StorageQualificationError::Storage => Error::Storage,
+    })
 }
