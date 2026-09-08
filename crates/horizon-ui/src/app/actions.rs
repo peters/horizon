@@ -323,12 +323,14 @@ mod tests {
         let mut board = Board::new();
         let attached = board.create_workspace("attached");
         let detached = board.create_workspace("detached");
-        let attached_panel = board
-            .create_panel(PanelOptions::default(), attached)
-            .expect("attached panel");
-        let detached_panel = board
-            .create_panel(PanelOptions::default(), detached)
-            .expect("detached panel");
+        // Renderability depends on board membership, not an interactive PTY.
+        let options = || PanelOptions {
+            kind: PanelKind::Editor,
+            ..PanelOptions::default()
+        };
+        let attached_panel = board.create_panel(options(), attached).expect("attached panel");
+        let detached_panel = board.create_panel(options(), detached).expect("detached panel");
+        assert!(board.panels.iter().all(|panel| panel.terminal().is_none()));
         let detached_local_id = board.workspace(detached).expect("detached workspace").local_id.clone();
 
         let detached_workspaces = BTreeMap::from([(
@@ -355,7 +357,7 @@ mod tests {
         let (board, _, detached_panel, detached_workspaces) = board_with_detached_workspace();
 
         // The detached window paints this panel in its own viewport; allowing it
-        // to also go fullscreen in the root window renders one PTY twice a frame.
+        // to also go fullscreen in the root window renders one panel twice a frame.
         assert!(!fullscreen_panel_is_renderable(
             &board,
             &detached_workspaces,
