@@ -323,12 +323,14 @@ mod tests {
         let mut board = Board::new();
         let attached = board.create_workspace("attached");
         let detached = board.create_workspace("detached");
-        let attached_panel = board
-            .create_panel(PanelOptions::default(), attached)
-            .expect("attached panel");
-        let detached_panel = board
-            .create_panel(PanelOptions::default(), detached)
-            .expect("detached panel");
+        // Renderability depends on board membership, not an interactive PTY.
+        let options = || PanelOptions {
+            kind: PanelKind::Editor,
+            ..PanelOptions::default()
+        };
+        let attached_panel = board.create_panel(options(), attached).expect("attached panel");
+        let detached_panel = board.create_panel(options(), detached).expect("detached panel");
+        assert!(board.panels.iter().all(|panel| panel.terminal().is_none()));
         let detached_local_id = board.workspace(detached).expect("detached workspace").local_id.clone();
 
         let detached_workspaces = BTreeMap::from([(
