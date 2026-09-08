@@ -109,6 +109,7 @@ pub fn publish_sibling_checkout(
             &cancelled,
             &mut |_, file| file.sync_all().map_err(|_| PublicationError::Storage),
             &mut linux::rename,
+            &linux::supported_storage,
         )
     }
     #[cfg(not(target_os = "linux"))]

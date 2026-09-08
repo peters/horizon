@@ -32,8 +32,9 @@ pub(super) fn publish(
     cancelled: &impl Fn() -> bool,
     sync: &mut impl FnMut(SyncPoint, &File) -> Result<(), Error>,
     rename: &mut impl FnMut(&PreparedPrivateCheckout, &str) -> rustix::io::Result<()>,
+    storage: &impl Fn(&File) -> Result<(), Error>,
 ) -> Result<PublishedCheckout, PublicationFailure> {
-    if let Err(reason) = before_rename(&checkout, sibling, cancelled, sync) {
+    if let Err(reason) = before_rename(&checkout, sibling, cancelled, sync, storage) {
         return Err(PublicationFailure::Unpublished { reason, checkout });
     }
     if let Err(error) = rename(&checkout, sibling) {
@@ -66,13 +67,18 @@ fn before_rename(
     sibling: &str,
     cancelled: &impl Fn() -> bool,
     sync: &mut impl FnMut(SyncPoint, &File) -> Result<(), Error>,
+    storage: &impl Fn(&File) -> Result<(), Error>,
 ) -> Result<(), Error> {
     check_cancel(cancelled)?;
-    if sibling.len() > 255 || sibling.contains('/') || paths::validate(sibling).is_err() {
+    if sibling.len() > 255
+        || sibling.contains('/')
+        || paths::validate(sibling).is_err()
+        || checkout.path.file_name() == Some(std::ffi::OsStr::new(sibling))
+    {
         return Err(Error::InvalidName);
     }
     verify_binding(checkout)?;
-    supported_storage(&checkout.parent)?;
+    storage(&checkout.parent)?;
     walk::synchronize(checkout.root.handle(), cancelled, sync)?;
     check_cancel(cancelled)?;
     verify_binding(checkout)
@@ -157,7 +163,7 @@ fn identity(metadata: &Metadata) -> (u64, u64) {
     (metadata.dev(), metadata.ino())
 }
 
-fn supported_storage(parent: &File) -> Result<(), Error> {
+pub(super) fn supported_storage(parent: &File) -> Result<(), Error> {
     if fstatfs(parent).map_err(|_| Error::Storage)?.f_type != libc::EXT4_SUPER_MAGIC {
         return Err(Error::Unsupported);
     }
