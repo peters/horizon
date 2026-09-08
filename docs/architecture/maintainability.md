@@ -212,7 +212,14 @@ back into large multi-purpose modules.
   repository and constructs its detached HEAD, shallow boundary and independent
   staged index. Source adapters own their I/O behavior; private Git pathname writes
   require stable ancestry and exclusive same-user ownership. Failed residues remain
-  explicit. Working files, packed-object acquisition and publication are separate.
+  explicit. Working files and publication are separate. Linux `seed/packed/` owns
+  explicit stable-object-store validation, isolated bare metadata, resource-limited
+  native Git acquisition and strict lazy batch framing. It needs trusted system Git
+  and prlimit executables; native delta allocations remain subject to those ceilings.
+  No source config, recursive alternates, hooks, filters or network transports are
+  inherited. Cancellation/failure or an unfinished stream terminates only its owned
+  child; private metadata remains explicit. Stable source/ancestry and exclusive
+  scratch ownership are prerequisites, not confinement against concurrent mutation.
   `checkout/` prepares the seed and raw working namespace together, using exclusive
   descriptor-relative writes, incremental loose decoding and pinned-file verification.
   Literal links are created last. This private logical checkout retains failures;

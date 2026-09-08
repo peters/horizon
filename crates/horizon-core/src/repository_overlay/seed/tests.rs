@@ -26,7 +26,7 @@ struct Fixture {
     base_blob: Oid,
 }
 
-fn private_fixture() -> tempfile::TempDir {
+pub(super) fn private_fixture() -> tempfile::TempDir {
     tempfile::Builder::new()
         .permissions(fs::Permissions::from_mode(0o700))
         .tempdir()
@@ -118,7 +118,7 @@ fn entry(path: &str, id: Oid, mode: u32) -> IndexEntry {
     }
 }
 
-fn commit(repository: &Repository, files: &[(&str, Oid, u32)], parents: &[Oid]) -> Oid {
+pub(super) fn commit(repository: &Repository, files: &[(&str, Oid, u32)], parents: &[Oid]) -> Oid {
     let mut index = Index::new().unwrap();
     for (path, id, mode) in files {
         index.add(&entry(path, *id, *mode)).unwrap();
@@ -157,7 +157,7 @@ fn file(path: &str, bytes: &[u8], executable: bool) -> (OverlayChange, VerifiedO
     )
 }
 
-fn snapshot(root: &Path) -> BTreeMap<PathBuf, (Vec<u8>, u32)> {
+pub(super) fn snapshot(root: &Path) -> BTreeMap<PathBuf, (Vec<u8>, u32)> {
     let mut files = BTreeMap::new();
     let mut pending = vec![root.to_path_buf()];
     while let Some(path) = pending.pop() {

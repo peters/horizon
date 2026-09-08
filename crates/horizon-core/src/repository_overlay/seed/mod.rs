@@ -5,6 +5,8 @@ mod import;
 #[cfg(target_os = "linux")]
 mod index;
 #[cfg(target_os = "linux")]
+pub mod packed;
+#[cfg(target_os = "linux")]
 mod staging;
 
 use super::namespace::ResolvedRepositoryOverlay;

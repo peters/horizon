@@ -30,7 +30,7 @@ pub(super) fn prepare(
     }
 }
 
-fn reserve(parent: &Path, cancelled: &impl Fn() -> bool) -> Result<std::path::PathBuf, Error> {
+pub(super) fn reserve(parent: &Path, cancelled: &impl Fn() -> bool) -> Result<std::path::PathBuf, Error> {
     check_cancel(cancelled)?;
     if !parent.is_absolute() {
         return Err(Error::UnsafeParent);
