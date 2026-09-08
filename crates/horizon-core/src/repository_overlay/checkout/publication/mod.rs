@@ -7,6 +7,7 @@ mod walk;
 
 use super::PreparedPrivateCheckout;
 use crate::cloud_run::ArtifactDigest;
+use crate::repository_overlay::paths;
 use git2::Oid;
 use std::{
     fmt,
@@ -78,6 +79,14 @@ pub enum PublicationError {
     Storage,
     #[error("checkout publication was cancelled")]
     Cancelled,
+}
+
+pub(crate) fn validate_sibling_name(sibling: &str) -> Result<(), PublicationError> {
+    if sibling.len() > 255 || sibling.contains('/') || paths::validate(sibling).is_err() {
+        Err(PublicationError::InvalidName)
+    } else {
+        Ok(())
+    }
 }
 
 /// Synchronize a prepared tree and rename it to an explicitly named fresh sibling.

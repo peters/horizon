@@ -241,6 +241,13 @@ back into large multi-purpose modules.
   deletion or task launch occurs; healthy storage and unchanged, exclusively held
   private ancestry, trusted kernel metadata and stable mounts remain required.
   This is not cloud recovery or power-loss proof.
+  `materialize/` composes existing private bundle retrieval, isolated raw-object
+  resolution, checkout preparation and explicit publication into one worker-callable
+  operation. Its typed result preserves source metadata and every known checkout or
+  uncertain destination; no retry or cleanup is implied. `horizon-repository` owns
+  only the bounded versioned JSON command boundary and truthful response/exit status.
+  It does not install itself in worker images or create a retained remote job: lost
+  output/termination requires later observation, not automatic replay or task start.
 - `containers/remote-worker/host-identity.py` owns workspace-retained server-key
   initialization, validation and runtime materialization before SSH starts.
   Its real-key regressions are separate from the retained-volume SSH smoke in

@@ -132,6 +132,7 @@ RUN mkdir -p \
         crates/horizon-browser-protocol/src \
         crates/horizon-core/src \
         crates/horizon-cursor/src \
+        crates/horizon-repository/src \
         crates/horizon-ui/src \
     && touch \
         crates/horizon-browser/src/lib.rs \
@@ -142,6 +143,7 @@ RUN mkdir -p \
         crates/horizon-browser-protocol/src/lib.rs \
         crates/horizon-core/src/lib.rs \
         crates/horizon-cursor/src/lib.rs \
+        crates/horizon-repository/src/main.rs \
         crates/horizon-ui/src/main.rs \
     && cargo fetch --locked \
     && rm -rf /opt/horizon-dependency-cache
