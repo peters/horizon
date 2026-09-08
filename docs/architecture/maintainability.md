@@ -213,6 +213,11 @@ back into large multi-purpose modules.
   staged index. Source adapters own their I/O behavior; private Git pathname writes
   require stable ancestry and exclusive same-user ownership. Failed residues remain
   explicit. Working files, packed-object acquisition and publication are separate.
+  `checkout/` prepares the seed and raw working namespace together, using exclusive
+  descriptor-relative writes, incremental loose decoding and pinned-file verification.
+  Literal links are created last. This private logical checkout retains failures;
+  full synchronization, no-replace publication and task authorization remain separate.
+  Its Linux compression dependency avoids whole compressed-object memory mappings.
 - `containers/remote-worker/host-identity.py` owns workspace-retained server-key
   initialization, validation and runtime materialization before SSH starts.
   Its real-key regressions are separate from the retained-volume SSH smoke in

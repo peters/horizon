@@ -37,6 +37,7 @@ regex.workspace = true
 atomicwrites.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
+flate2.workspace = true
 rustix.workspace = true
 tempfile.workspace = true
 
