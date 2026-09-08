@@ -274,7 +274,7 @@ back into large multi-purpose modules.
   resolution, checkout preparation and explicit publication into one worker-callable
   operation. Its typed result preserves source metadata and every known checkout or
   uncertain destination; no retry or cleanup is implied. `horizon-repository` owns
-  only the bounded versioned JSON command boundary and truthful response/exit status.
+  only the bounded versioned command boundaries and truthful response/exit status.
   Its `setup/` tree separates immutable input validation, one-shot core API
   orchestration and response projection. Core `admit_materialization` performs
   bounded read-only input-tree identity separation before fresh admission; existing
@@ -284,6 +284,12 @@ back into large multi-purpose modules.
   fresh recording, historical observation, unknown claims and retained execution
   when recording fails. Status never creates or replays; the original materialize
   protocol stays compatible. These Rust commands remain synchronous.
+  Its separate `receive/` tree validates a bounded framed header and complete
+  canonical overlay bundle before any store access. `receive-overlay` reuses the
+  immutable bundle store; `overlay-status` reads only and never acknowledges new
+  synchronization. Lost output/write acknowledgement retains possible publication
+  without overwrite, cleanup, setup/task start or inferred export permission. Input
+  storage synchronization is not the retained-setup qualifier or cloud durability.
 - `containers/remote-worker/setup-launch.py` owns the separate worker-only bounded
   handoff: it delegates strict input/root observation to `setup-status`, returns
   existing observations without launch, and passes only an absent intent through a

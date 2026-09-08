@@ -76,8 +76,12 @@ The separate `horizon-setup-launch` command can submit setup independently of it
 request channel; it does not turn submission or a claim into proof of liveness.
 See [independent setup submission](../../docs/remote-repository-command.md#independent-setup-submission)
 for its bounded handoff, observation and recording limitations.
-This packaging does not add object transport, client setup, recovery, checkpointing
-or task admission. Existing workers are not
+The same helper can explicitly receive a canonical overlay bundle into an existing
+private bundle store and inspect a lost acknowledgement without writing. See
+[worker overlay receipt](../../docs/remote-overlay-transfer.md) for the framed
+input and storage limits. No local files are captured/exported automatically.
+This packaging does not add Git-object transport, client setup, worker-loss recovery,
+checkpointing or task admission. Existing workers are not
 upgraded by rebuilding an image. Neither the helper nor a locally retained volume
 proves cloud durability or PC-off operation.
 
@@ -119,6 +123,18 @@ gate, verifies the exact repository through a separate status channel, checks no
 claim replay and completed-child reaping, and runs an ungated submission. It binds
 only loopback SSH and removes its own containers, fixture and generated keypair.
 The gate is explicit test instrumentation, not cloud/PC-off or crash-durability proof.
+
+To check framed overlay receipt and fresh-process observation with synthetic data:
+
+```bash
+python3 -B containers/remote-worker/test_overlay_receive_image.py \
+  --docker-host unix:///path/to/docker.sock --image horizon-remote-worker:0.1.0
+```
+
+This covers exact small and 65 MiB-plus multi-file bundles, immutable retries,
+malformed frames, conflicting/unsafe records, missing roots and acknowledgement
+loss. It uses no network or credentials, changes only its private input stores,
+and removes only its own containers/fixtures. It is not cloud/checkpoint proof.
 
 ## Runtime contract
 
