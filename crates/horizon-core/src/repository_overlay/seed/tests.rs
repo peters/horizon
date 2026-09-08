@@ -1,3 +1,4 @@
+use super::super::{MAX_CHANGES, MAX_CONTENT_BYTES, MAX_METADATA_BYTES, bundle::MAX_BUNDLE_BYTES};
 use super::*;
 use crate::{
     cloud_run::{GitCommitSha, GitSource},
@@ -427,16 +428,8 @@ fn cancellation_after_reservation_or_first_stream_chunk_keeps_an_unready_directo
 fn importer_budgets_exact_boundaries_and_rejects_overflow() {
     let mut bytes = 0;
     let mut metadata = 0;
-    assert!(
-        import::charge(
-            0,
-            &mut bytes,
-            &mut metadata,
-            ObjectType::Commit,
-            super::super::MAX_METADATA_BYTES as u64
-        )
-        .is_ok()
-    );
+    let metadata_limit = MAX_METADATA_BYTES as u64;
+    assert!(import::charge(0, &mut bytes, &mut metadata, ObjectType::Commit, metadata_limit).is_ok());
     assert_eq!(
         import::charge(1, &mut bytes, &mut metadata, ObjectType::Tree, 1),
         Err(SeedError::Limit)
@@ -446,9 +439,53 @@ fn importer_budgets_exact_boundaries_and_rejects_overflow() {
         import::charge(0, &mut bytes, &mut metadata, ObjectType::Blob, 1),
         Err(SeedError::Limit)
     );
+    let object_limit = MAX_CHANGES * 2 + 2;
+    assert!(import::charge(object_limit - 1, &mut 0, &mut 0, ObjectType::Blob, 0).is_ok());
     assert_eq!(
-        import::charge(super::super::MAX_CHANGES * 2 + 1, &mut 0, &mut 0, ObjectType::Blob, 0),
+        import::charge(object_limit, &mut 0, &mut 0, ObjectType::Blob, 0),
         Err(SeedError::Limit)
+    );
+    bytes = MAX_CONTENT_BYTES + MAX_BUNDLE_BYTES as u64;
+    metadata = 0;
+    assert!(import::charge(0, &mut bytes, &mut metadata, ObjectType::Blob, metadata_limit * 2).is_ok());
+    assert!(import::charge(1, &mut bytes, &mut metadata, ObjectType::Commit, metadata_limit).is_ok());
+    assert_eq!(
+        import::charge(2, &mut bytes, &mut metadata, ObjectType::Blob, 1),
+        Err(SeedError::Limit)
+    );
+}
+
+#[test]
+fn maximum_base_and_staged_replacement_objects_fit_the_import_budget() {
+    let mut fixture = Fixture::new();
+    let files: Vec<_> = (0..MAX_CHANGES)
+        .map(|n| {
+            (
+                format!("file{n}"),
+                fixture.repository.blob(&n.to_le_bytes()).unwrap(),
+                0o100_644,
+            )
+        })
+        .collect();
+    let entries: Vec<_> = files
+        .iter()
+        .map(|(path, id, mode)| (path.as_str(), *id, *mode))
+        .collect();
+    fixture.commit = commit(&fixture.repository, &entries, &[fixture.commit]);
+    let (changes, blobs): (Vec<_>, Vec<_>) = files
+        .iter()
+        .map(|(path, id, _)| file(path, id.as_bytes(), false))
+        .unzip();
+    let resolved = fixture.resolve(changes, vec![], blobs);
+    let parent = private_fixture();
+    let mut source = fixture.source();
+    let seed = prepare_git_seed(parent.path(), &resolved, &mut source, || false).unwrap();
+    assert_eq!(seed.imported_objects(), MAX_CHANGES * 2 + 2);
+    assert_eq!(source.calls.len(), MAX_CHANGES + 2);
+    assert!(source.calls.values().all(|count| *count == 1));
+    assert_eq!(
+        Repository::open(seed.path()).unwrap().index().unwrap().len(),
+        MAX_CHANGES
     );
 }
 

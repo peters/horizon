@@ -6,8 +6,10 @@ use std::{
     io::{self, Read, Write},
 };
 
-const MAX_OBJECTS: usize = MAX_CHANGES * 2 + 1;
-const MAX_BYTES: u64 = MAX_CONTENT_BYTES + MAX_BUNDLE_BYTES as u64 + MAX_METADATA_BYTES as u64;
+// Base and replacement leaves, plus the base commit and its uncounted root tree.
+const MAX_OBJECTS: usize = MAX_CHANGES * 2 + 2;
+// Base links, staged links and raw Git metadata have independent byte allowances.
+const MAX_BYTES: u64 = MAX_CONTENT_BYTES + MAX_BUNDLE_BYTES as u64 + 3 * MAX_METADATA_BYTES as u64;
 
 pub(super) struct Importer<'a, 'repository, S, C> {
     database: &'a Odb<'repository>,
