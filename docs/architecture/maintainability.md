@@ -251,8 +251,16 @@ back into large multi-purpose modules.
   identical retries and grant Drop never execute, repair, expire or remove a claim.
   A claim means unknown outcome, not running/completed; trusted stable private
   ancestry, healthy qualified storage and separately verified remote ownership
-  remain prerequisites. No runner, scratch creation, terminal receipt, recovery or
-  client/cloud integration is provided by this admission boundary.
+  remain prerequisites. Admission alone never creates scratch or runs setup.
+  `retained_setup/execution.rs` consumes the in-process grant and its immutable
+  intent for one materialization. Linux `scratch.rs` creates one fixed private
+  child without replacement and synchronizes it and its retained parent before
+  handing the held subtree to the existing materializer. Existing nodes are never
+  adopted or cleaned; cancellation, failed synchronization and component failures
+  retain every named residue. Execution errors distinguish the consumed boundary
+  from original admission and preserve typed materializer receipts. Observation
+  stays unknown; no independent runner, stored terminal receipt, recovery or
+  client/cloud integration is provided by this synchronous boundary.
   `materialize/` composes existing private bundle retrieval, isolated raw-object
   resolution, checkout preparation and explicit publication into one worker-callable
   operation. Its typed result preserves source metadata and every known checkout or

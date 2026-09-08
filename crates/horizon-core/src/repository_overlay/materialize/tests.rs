@@ -51,7 +51,7 @@ fn unsupported_platform_has_no_filesystem_effects() {
 }
 
 #[cfg(target_os = "linux")]
-mod supported {
+pub(in crate::repository_overlay) mod supported {
     use super::*;
     use crate::{
         cloud_run::{GitCommitSha, GitSource},
@@ -64,12 +64,12 @@ mod supported {
     use git2::{Oid, Repository, Signature};
     use std::{cell::Cell, fs, os::unix::fs::PermissionsExt};
 
-    struct Fixture {
+    pub(in crate::repository_overlay) struct Fixture {
         source: tempfile::TempDir,
         store: tempfile::TempDir,
         parent: tempfile::TempDir,
         objects: PathBuf,
-        base: Oid,
+        pub(in crate::repository_overlay) base: Oid,
         digest: ArtifactDigest,
     }
 
@@ -81,7 +81,7 @@ mod supported {
     }
 
     impl Fixture {
-        fn new(missing_base: bool) -> Self {
+        pub(in crate::repository_overlay) fn new(missing_base: bool) -> Self {
             let source = private();
             let repository = Repository::init(source.path()).unwrap();
             let blob = repository.blob(b"base\0raw\xff").unwrap();
@@ -129,7 +129,7 @@ mod supported {
             }
         }
 
-        fn request(&self) -> MaterializationRequest<'_> {
+        pub(in crate::repository_overlay) fn request(&self) -> MaterializationRequest<'_> {
             MaterializationRequest {
                 objects_directory: &self.objects,
                 bundle_store: self.store.path(),

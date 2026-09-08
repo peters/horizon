@@ -1,13 +1,15 @@
-//! Worker-owned setup admission, not a runner, retry policy or completion receipt.
+//! Worker-owned setup admission/materialization, not independent task supervision.
 //! The nominated root must be retained independently of runtime/client generations.
 //! Its private ancestry and mount configuration must remain trusted and stable.
 
 #[cfg(any(target_os = "linux", test))]
 mod codec;
+mod execution;
 mod intent;
 #[cfg(target_os = "linux")]
 mod linux;
 
+pub use execution::{SetupBoundaryError, SetupExecutionError};
 pub use intent::SetupIntent;
 #[cfg(target_os = "linux")]
 use std::sync::Arc;
@@ -39,7 +41,7 @@ pub enum SetupAdmission {
 pub struct SetupGrant {
     intent: SetupIntent,
     #[cfg(target_os = "linux")]
-    _directory: Arc<linux::Directory>,
+    directory: Arc<linux::Directory>,
 }
 
 impl SetupGrant {
@@ -95,7 +97,7 @@ impl RetainedSetup {
         return match self.directory.admit(&intent)? {
             linux::Admission::Fresh => Ok(SetupAdmission::Fresh(SetupGrant {
                 intent,
-                _directory: Arc::clone(&self.directory),
+                directory: Arc::clone(&self.directory),
             })),
             linux::Admission::Existing => Ok(SetupAdmission::Existing),
         };
