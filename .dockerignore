@@ -22,3 +22,5 @@ containers/remote-worker/**
 !containers/remote-worker/panel-session.py
 !containers/remote-worker/tmux.conf
 !containers/remote-worker/sshd_config
+**/.git
+**/.git/**

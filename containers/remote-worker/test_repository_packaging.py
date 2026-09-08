@@ -46,6 +46,8 @@ def context_test(docker, root, fixture):
                  "crates/horizon-core/src/fixture.env", "crates/horizon-core/src/private/key.pem",
                  "crates/horizon-core/src/fixture.rs/private.env", "crates/horizon-core/src/fixture.rs/nested/key.pem",
                  "crates/horizon-core/src/fixture.rs/nested/source.rs",
+                 "crates/horizon-core/src/.git/hooks/fixture.rs",
+                 "crates/horizon-browser/src/nested/.git/hooks/fixture.rs",
                  "crates/horizon-ui/src/untracked.rs", "containers/remote-worker/fixture-token"):
         sentinel = context / name
         sentinel.parent.mkdir(parents=True, exist_ok=True)
