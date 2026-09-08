@@ -39,6 +39,21 @@ pub trait GitObjectSource {
     fn open(&mut self, object: Oid) -> Result<GitObjectStream<'_>, SeedError>;
 }
 
+/// Header claims only; consumers must verify payload identity when reading contents.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GitObjectMetadata {
+    pub kind: ObjectType,
+    pub bytes: u64,
+}
+
+/// A source that can inspect objects without opening or abandoning payload streams.
+/// Inspection follows the source's existing resource, cancellation and trust policy.
+pub trait GitObjectInspector: GitObjectSource {
+    /// # Errors
+    /// Return a redacted failure without silently restarting a failed source session.
+    fn inspect(&mut self, object: Oid) -> Result<GitObjectMetadata, SeedError>;
+}
+
 /// Logically verified private Git seed. No working files, publication or durability proof.
 /// The path and its ancestry must remain exclusively controlled until later preparation
 /// and publication. Dropping this receipt never deletes data.

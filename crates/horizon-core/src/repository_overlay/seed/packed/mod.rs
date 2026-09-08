@@ -4,7 +4,7 @@ mod process;
 mod protocol;
 mod view;
 
-use super::{GitObjectSource, GitObjectStream, SeedError, SeedFailure, staging};
+use super::{GitObjectInspector, GitObjectMetadata, GitObjectSource, GitObjectStream, SeedError, SeedFailure, staging};
 use git2::Oid;
 use std::{
     fmt,
@@ -96,17 +96,31 @@ impl<'a> PackedGitObjectSource<'a> {
     pub fn metadata_path(&self) -> &Path {
         &self.metadata
     }
+
+    fn header(&mut self, object: Oid) -> Result<protocol::Header, SeedError> {
+        match self.session.info(object) {
+            Ok(header) => Ok(header),
+            Err(error) => {
+                self.session.poison();
+                Err(error)
+            }
+        }
+    }
+}
+
+impl GitObjectInspector for PackedGitObjectSource<'_> {
+    fn inspect(&mut self, object: Oid) -> Result<GitObjectMetadata, SeedError> {
+        let header = self.header(object)?;
+        Ok(GitObjectMetadata {
+            kind: header.kind,
+            bytes: header.bytes,
+        })
+    }
 }
 
 impl GitObjectSource for PackedGitObjectSource<'_> {
     fn open(&mut self, object: Oid) -> Result<GitObjectStream<'_>, SeedError> {
-        let header = match self.session.info(object) {
-            Ok(header) => header,
-            Err(error) => {
-                self.session.poison();
-                return Err(error);
-            }
-        };
+        let header = self.header(object)?;
         Ok(GitObjectStream {
             kind: header.kind,
             bytes: header.bytes,

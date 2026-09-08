@@ -208,6 +208,13 @@ back into large multi-purpose modules.
   and expanded path/logical-byte budgets are checked before returning file references.
   It does not read regular base payloads, write a checkout or authorize export;
   the later confined writer must revalidate referenced base bytes independently.
+  `namespace/source/` resolves the same immutable result through an explicit raw-object
+  inspector: bounded payload reads, supported SHA-1 commit/tree records and streamed
+  traversal stay separate. Regular base blobs are inspected without payload reads;
+  aggregate metadata work counts repeated expansion. The existing trusted-repository
+  resolver remains available and shares the whole-layer composition path. Header-only
+  inspection is additive to `seed/` object streaming, without abandoning lazy payloads;
+  the packed adapter shares one strict failure/poison path for both operations.
   `seed/` streams verified exact-base objects into an internally fresh private Git
   repository and constructs its detached HEAD, shallow boundary and independent
   staged index. Source adapters own their I/O behavior; private Git pathname writes

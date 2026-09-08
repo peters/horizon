@@ -2,7 +2,9 @@ use super::super::tests::{commit, private_fixture, snapshot};
 use super::*;
 use crate::{
     cloud_run::{GitCommitSha, GitSource},
-    repository_overlay::{RepositoryOverlayPlan, bundle::RepositoryOverlayBundle, namespace::resolve_namespaces},
+    repository_overlay::{
+        RepositoryOverlayPlan, bundle::RepositoryOverlayBundle, namespace::resolve_namespaces_from_source,
+    },
 };
 use git2::{ObjectType, Repository};
 use std::{
@@ -83,6 +85,16 @@ fn real_loose_packed_delta_and_seed_consumer_preserve_exact_objects_and_source()
     assert!(listing.lines().any(|line| line.split_whitespace().count() == 7));
     let before = snapshot(&path);
     let mut source = packed(parent.path(), &repository);
+    for _ in 0..3 {
+        assert_eq!(
+            source.inspect(second).unwrap(),
+            GitObjectMetadata {
+                kind: ObjectType::Blob,
+                bytes: bytes.len() as u64
+            }
+        );
+        assert_eq!(source.inspect(base).unwrap().kind, ObjectType::Commit);
+    }
     assert_eq!(raw(&mut source, second), bytes);
     let plan = RepositoryOverlayPlan::new(
         GitSource {
@@ -94,7 +106,11 @@ fn real_loose_packed_delta_and_seed_consumer_preserve_exact_objects_and_source()
         vec![],
     )
     .unwrap();
-    let resolved = resolve_namespaces(&repository, RepositoryOverlayBundle::new(plan, vec![]).unwrap()).unwrap();
+    let resolved =
+        resolve_namespaces_from_source(&mut source, RepositoryOverlayBundle::new(plan, vec![]).unwrap(), || {
+            false
+        })
+        .unwrap();
     let seed = super::super::prepare_git_seed(parent.path(), &resolved, &mut source, || false).unwrap();
     let seeded = Repository::open(seed.path()).unwrap();
     assert_eq!(seeded.find_blob(second).unwrap().content(), bytes);
@@ -103,6 +119,19 @@ fn real_loose_packed_delta_and_seed_consumer_preserve_exact_objects_and_source()
     drop(source);
     assert!(metadata.join("HEAD").exists());
     assert_eq!(snapshot(&path), before);
+}
+
+#[test]
+fn failed_header_inspection_poisoning_is_not_a_payload_open_or_restart() {
+    let fixture = private_fixture();
+    let repository = Repository::init(fixture.path()).unwrap();
+    let oid = repository.blob(b"known").unwrap();
+    let parent = private_fixture();
+    let mut source = packed(parent.path(), &repository);
+    let missing = Oid::hash_object(ObjectType::Blob, b"absent").unwrap();
+    assert_eq!(source.inspect(missing), Err(SeedError::Source));
+    assert_eq!(source.inspect(oid), Err(SeedError::Source));
+    assert!(matches!(source.open(oid), Err(SeedError::Source)));
 }
 
 #[test]

@@ -1,4 +1,7 @@
 use super::*;
+use crate::repository_overlay::seed::{
+    GitObjectInspector, GitObjectMetadata, GitObjectSource, GitObjectStream, SeedError,
+};
 use crate::{
     cloud_run::{GitCommitSha, GitSource},
     repository_overlay::{OverlayChange, OverlayContent, RepositoryOverlayPlan, bundle::VerifiedOverlayBlob},
@@ -67,7 +70,61 @@ impl Fixture {
         working: Vec<OverlayChange>,
         blobs: Vec<VerifiedOverlayBlob>,
     ) -> Result<ResolvedRepositoryOverlay, NamespaceError> {
-        resolve_namespaces(&self.repository, self.bundle(index, working, blobs))
+        let copied = blobs
+            .iter()
+            .map(|blob| VerifiedOverlayBlob::new(blob.bytes().to_vec()).unwrap())
+            .collect();
+        let streamed = resolve_namespaces_from_source(
+            &mut RepositorySource(&self.repository),
+            self.bundle(index.clone(), working.clone(), copied),
+            || false,
+        );
+        let result = resolve_namespaces(&self.repository, self.bundle(index, working, blobs));
+        match (&result, &streamed) {
+            (Ok(left), Ok(right)) => {
+                assert_eq!(left.base_commit(), right.base_commit());
+                assert_eq!(left.base_tree(), right.base_tree());
+                for (a, b) in [
+                    (left.base(), right.base()),
+                    (left.index(), right.index()),
+                    (left.working_tree(), right.working_tree()),
+                ] {
+                    assert_eq!(a.entries().collect::<Vec<_>>(), b.entries().collect::<Vec<_>>());
+                    assert_eq!(a.logical_bytes(), b.logical_bytes());
+                }
+            }
+            (Err(_), Err(_)) => {}
+            _ => panic!("resolver parity mismatch: {result:?} / {streamed:?}"),
+        }
+        result
+    }
+}
+
+struct RepositorySource<'a>(&'a Repository);
+
+impl GitObjectSource for RepositorySource<'_> {
+    fn open(&mut self, id: Oid) -> Result<GitObjectStream<'_>, SeedError> {
+        let database = self.0.odb().map_err(|_| SeedError::Source)?;
+        let object = database.read(id).map_err(|_| SeedError::Source)?;
+        Ok(GitObjectStream {
+            kind: object.kind(),
+            bytes: object.len() as u64,
+            reader: Box::new(std::io::Cursor::new(object.data().to_vec())),
+        })
+    }
+}
+
+impl GitObjectInspector for RepositorySource<'_> {
+    fn inspect(&mut self, id: Oid) -> Result<GitObjectMetadata, SeedError> {
+        let (bytes, kind) = self
+            .0
+            .odb()
+            .and_then(|odb| odb.read_header(id))
+            .map_err(|_| SeedError::Source)?;
+        Ok(GitObjectMetadata {
+            kind,
+            bytes: bytes as u64,
+        })
     }
 }
 
