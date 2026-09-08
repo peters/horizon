@@ -29,14 +29,18 @@ pub(in super::super) fn snapshot(root: &Path, intent: &SetupIntent, state: State
 #[test]
 fn canonical_states_round_trip_without_disclosing_paths_or_confusing_publication() {
     let root = std::env::temp_dir();
-    let intent = intent();
-    for state in [
-        State::Rejected,
-        State::Unpublished,
-        State::Published,
-        State::PublishedUnsynchronized,
-        State::RenameUnconfirmed,
+    for (state, destination) in [
+        (State::Rejected, "repository"),
+        (State::Unpublished, "repository"),
+        (State::Unpublished, "stage"),
+        (State::Unpublished, "metadata"),
+        (State::Published, "repository"),
+        (State::PublishedUnsynchronized, "repository"),
+        (State::RenameUnconfirmed, "repository"),
+        (State::RenameUnconfirmed, "metadata"),
     ] {
+        let mut intent = intent();
+        intent.destination = destination.into();
         let expected = snapshot(&root, &intent, state);
         let bytes = codec::encode(&root, &intent, &expected).unwrap();
         assert_eq!(codec::decode(&root, &intent, &bytes).unwrap(), expected);
