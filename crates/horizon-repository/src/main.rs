@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod protocol;
+mod receive;
 mod setup;
 
 use std::{
@@ -11,10 +12,15 @@ use std::{
 fn main() -> ExitCode {
     let arguments: Vec<_> = std::env::args_os().skip(1).take(2).collect();
     let command = arguments.first().and_then(|argument| argument.to_str());
-    if arguments.len() != 1 || !matches!(command, Some("materialize" | "setup" | "setup-status")) {
+    if arguments.len() != 1
+        || !matches!(
+            command,
+            Some("materialize" | "setup" | "setup-status" | "receive-overlay" | "overlay-status")
+        )
+    {
         let _ = writeln!(
             io::stderr().lock(),
-            "Usage: horizon-repository materialize|setup|setup-status < request.json"
+            "Usage: horizon-repository materialize|setup|setup-status|receive-overlay|overlay-status < request"
         );
         return ExitCode::from(2);
     }
@@ -24,6 +30,8 @@ fn main() -> ExitCode {
     match command {
         Some("setup") => setup::run(setup::Command::Execute, &mut input, &mut output, &mut diagnostics),
         Some("setup-status") => setup::run(setup::Command::Observe, &mut input, &mut output, &mut diagnostics),
+        Some("receive-overlay") => receive::run(receive::Command::Receive, &mut input, &mut output, &mut diagnostics),
+        Some("overlay-status") => receive::run(receive::Command::Observe, &mut input, &mut output, &mut diagnostics),
         _ => run(&mut input, &mut output, &mut diagnostics),
     }
 }
