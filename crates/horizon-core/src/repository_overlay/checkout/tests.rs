@@ -17,14 +17,14 @@ use std::{
     os::unix::fs::{MetadataExt, PermissionsExt, symlink},
 };
 
-fn private() -> tempfile::TempDir {
+pub(super) fn private() -> tempfile::TempDir {
     tempfile::Builder::new()
         .permissions(fs::Permissions::from_mode(0o700))
         .tempdir()
         .unwrap()
 }
 
-struct Source<'a>(Odb<'a>);
+pub(super) struct Source<'a>(pub(super) Odb<'a>);
 impl GitObjectSource for Source<'_> {
     fn open(&mut self, object: Oid) -> Result<GitObjectStream<'_>, SeedError> {
         // Synthetic fixture only; the production working writer never maps source objects.
@@ -37,7 +37,7 @@ impl GitObjectSource for Source<'_> {
     }
 }
 
-fn fixture(paths: &[(&str, Oid, u32)], repository: &Repository) -> Oid {
+pub(super) fn fixture(paths: &[(&str, Oid, u32)], repository: &Repository) -> Oid {
     let mut index = Index::new().unwrap();
     for (path, id, mode) in paths {
         index
@@ -71,7 +71,7 @@ fn fixture(paths: &[(&str, Oid, u32)], repository: &Repository) -> Oid {
         .unwrap()
 }
 
-fn resolved(
+pub(super) fn resolved(
     repository: &Repository,
     base: Oid,
     index: Vec<OverlayChange>,
@@ -90,7 +90,7 @@ fn resolved(
     .unwrap()
 }
 
-fn file(path: &str, bytes: &[u8], executable: bool) -> (OverlayChange, VerifiedOverlayBlob) {
+pub(super) fn file(path: &str, bytes: &[u8], executable: bool) -> (OverlayChange, VerifiedOverlayBlob) {
     let blob = VerifiedOverlayBlob::new(bytes.to_vec()).unwrap();
     (
         OverlayChange::new(
@@ -106,7 +106,7 @@ fn file(path: &str, bytes: &[u8], executable: bool) -> (OverlayChange, VerifiedO
     )
 }
 
-fn change(path: &str, content: OverlayContent) -> OverlayChange {
+pub(super) fn change(path: &str, content: OverlayContent) -> OverlayChange {
     OverlayChange::new(path.into(), content).unwrap()
 }
 
@@ -359,10 +359,10 @@ fn corrupt_base_identity_and_partial_write_never_succeed() {
     let object_path = seed.path().join(format!(".git/objects/{}/{}", &id[..2], &id[2..]));
     fs::set_permissions(&object_path, fs::Permissions::from_mode(0o600)).unwrap();
     fs::write(object_path, compressed(b"blob 3\0xyz")).unwrap();
-    assert_eq!(
+    assert!(matches!(
         linux::write(seed.path(), &plan, &|| false),
         Err(PrivateCheckoutError::Object)
-    );
+    ));
     assert_eq!(fs::read(seed.path().join("file")).unwrap(), b"xyz");
     let input = parent.path().join("input");
     fs::write(&input, compressed(b"blob 3\0abc")).unwrap();

@@ -8,6 +8,11 @@ mod index;
 mod staging;
 
 use super::namespace::ResolvedRepositoryOverlay;
+#[cfg(target_os = "linux")]
+pub(super) const MAX_OBJECTS: usize = super::MAX_CHANGES * 2 + 2;
+#[cfg(target_os = "linux")]
+pub(super) const MAX_BYTES: u64 =
+    super::MAX_CONTENT_BYTES + super::bundle::MAX_BUNDLE_BYTES as u64 + 3 * super::MAX_METADATA_BYTES as u64;
 use git2::{ObjectType, Oid};
 use std::{
     fmt,

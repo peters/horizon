@@ -1,4 +1,4 @@
-//! Complete private raw checkouts, without publication, durability or task authority.
+//! Private raw checkouts and separately requested publication, without task authority.
 
 #[cfg(target_os = "linux")]
 mod files;
@@ -6,6 +6,7 @@ mod files;
 mod linux;
 #[cfg(target_os = "linux")]
 mod loose;
+pub mod publication;
 
 use super::{
     namespace::ResolvedRepositoryOverlay,
@@ -25,6 +26,10 @@ pub struct PreparedPrivateCheckout {
     path: PathBuf,
     base_commit: Oid,
     manifest_sha256: ArtifactDigest,
+    #[cfg(target_os = "linux")]
+    root: files::Root,
+    #[cfg(target_os = "linux")]
+    parent: std::fs::File,
 }
 
 impl PreparedPrivateCheckout {

@@ -218,6 +218,15 @@ back into large multi-purpose modules.
   Literal links are created last. This private logical checkout retains failures;
   full synchronization, no-replace publication and task authorization remain separate.
   Its Linux compression dependency avoids whole compressed-object memory mappings.
+  `checkout/publication/` consumes a held private checkout identity for explicit
+  no-replace sibling publication on verified journaled ext4 storage. Its bounded
+  no-follow walk synchronizes files and then directories bottom-up; rename transfers
+  the receipt to the destination before final root/parent synchronization. Post-rename
+  failures retain an explicitly published, unsynchronized receipt; uncertain rename
+  errors retain both candidate names for inspection. No rollback,
+  deletion or task launch occurs; healthy storage and unchanged, exclusively held
+  private ancestry, trusted kernel metadata and stable mounts remain required.
+  This is not cloud recovery or power-loss proof.
 - `containers/remote-worker/host-identity.py` owns workspace-retained server-key
   initialization, validation and runtime materialization before SSH starts.
   Its real-key regressions are separate from the retained-volume SSH smoke in

@@ -4,6 +4,7 @@ use super::{
 };
 use crate::repository_overlay::{
     namespace::{NamespaceEntry, NamespaceFile},
+    reader::SelectedRepositoryReader,
     seed::prepare_git_seed,
 };
 use git2::{ObjectType, Oid};
@@ -15,12 +16,16 @@ pub(super) fn prepare(
     source: &mut impl GitObjectSource,
     cancelled: &impl Fn() -> bool,
 ) -> Result<PreparedPrivateCheckout, PrivateCheckoutFailure> {
+    let parent_handle = SelectedRepositoryReader::open(parent)
+        .map_err(|_| Error::UnsafeNode)
+        .and_then(|reader| reader.root.handle().try_clone().map_err(|_| Error::Storage))
+        .map_err(|reason| PrivateCheckoutFailure { reason, residue: None })?;
     let seed = prepare_git_seed(parent, resolved, source, cancelled).map_err(|failure| PrivateCheckoutFailure {
         reason: failure.reason.into(),
         residue: failure.residue().map(Path::to_path_buf),
     })?;
     let path = seed.path();
-    write(path, resolved, cancelled).map_err(|reason| PrivateCheckoutFailure {
+    let root = write(path, resolved, cancelled).map_err(|reason| PrivateCheckoutFailure {
         reason,
         residue: Some(path.to_owned()),
     })?;
@@ -28,6 +33,8 @@ pub(super) fn prepare(
         path: path.to_owned(),
         base_commit: seed.base_commit(),
         manifest_sha256: resolved.bundle().manifest_sha256().clone(),
+        root,
+        parent: parent_handle,
     })
 }
 
@@ -35,7 +42,7 @@ pub(super) fn write(
     path: &Path,
     resolved: &ResolvedRepositoryOverlay,
     cancelled: &impl Fn() -> bool,
-) -> Result<(), Error> {
+) -> Result<Root, Error> {
     check_cancel(cancelled)?;
     let root = Root::open(path)?;
     for directory in directories(resolved.working_tree().entries().map(|(path, _)| path), cancelled)? {
@@ -77,7 +84,8 @@ pub(super) fn write(
         }
     }
     check_cancel(cancelled)?;
-    root.verify(path)
+    root.verify(path)?;
+    Ok(root)
 }
 
 pub(super) fn directories<'a>(
