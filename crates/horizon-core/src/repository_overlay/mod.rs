@@ -5,6 +5,7 @@
 pub mod bundle;
 pub mod capture;
 pub mod checkout;
+pub mod materialize;
 pub mod namespace;
 mod paths;
 pub mod reader;

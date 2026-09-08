@@ -1,4 +1,7 @@
-use super::{PreparedPrivateCheckout, PublicationError as Error, PublicationFailure, PublishedCheckout, walk};
+use super::{
+    PreparedPrivateCheckout, PublicationError as Error, PublicationFailure, PublishedCheckout, validate_sibling_name,
+    walk,
+};
 use crate::repository_overlay::{paths, reader::SelectedRepositoryReader};
 use rustix::fs::{
     CWD, Mode, OFlags, RenameFlags, ResolveFlags, fstatfs, major, minor, openat2, readlinkat_raw, renameat_with,
@@ -70,11 +73,8 @@ fn before_rename(
     storage: &impl Fn(&File) -> Result<(), Error>,
 ) -> Result<(), Error> {
     check_cancel(cancelled)?;
-    if sibling.len() > 255
-        || sibling.contains('/')
-        || paths::validate(sibling).is_err()
-        || checkout.path.file_name() == Some(std::ffi::OsStr::new(sibling))
-    {
+    validate_sibling_name(sibling)?;
+    if checkout.path.file_name() == Some(std::ffi::OsStr::new(sibling)) {
         return Err(Error::InvalidName);
     }
     verify_binding(checkout)?;
