@@ -13,7 +13,7 @@ import tempfile
 
 CRATES = ("horizon-repository", "horizon-core", "horizon-browser", "horizon-browser-protocol")
 WORKER_FILES = {"Dockerfile", "build-tmux.sh", "entrypoint.sh", "host-identity.py", "rust-path.sh",
-                "session.sh", "panel-session.py", "tmux.conf", "sshd_config"}
+                "session.sh", "panel-session.py", "setup-launch.py", "tmux.conf", "sshd_config"}
 
 
 def execute(argv, **kwargs):

@@ -72,6 +72,10 @@ implicit. Missing replies are uncertain outcomes, not permission to retry.
 Retained `setup` uses one immutable claim and a fixed private setup child; repeated
 requests observe rather than replay. Status never creates state or proves liveness.
 The commands are synchronous and do not provide independent setup supervision.
+The separate `horizon-setup-launch` command can submit setup independently of its
+request channel; it does not turn submission or a claim into proof of liveness.
+See [independent setup submission](../../docs/remote-repository-command.md#independent-setup-submission)
+for its bounded handoff, observation and recording limitations.
 This packaging does not add object transport, client setup, recovery, checkpointing
 or task admission. Existing workers are not
 upgraded by rebuilding an image. Neither the helper nor a locally retained volume
@@ -85,6 +89,7 @@ python3 -B containers/remote-worker/test_repository_image.py \
   --docker-host unix:///path/to/docker.sock --image horizon-remote-worker:0.1.0
 python3 -B containers/remote-worker/test_repository_packaging.py \
   --docker-host unix:///path/to/docker.sock
+python3 -B containers/remote-worker/test_setup_launch.py -v
 ```
 
 The first checks large packed objects, raw index/worktree semantics, no-overwrite
@@ -97,6 +102,23 @@ The second checks the real Docker context filter with positive source controls a
 excluded synthetic files. Add `--image` and `--expected-binary-sha256` from a separate
 `repository-builder` target to audit every final image layer and executable provenance.
 These tests retain images and fail, rather than claim success, on unsupported storage.
+
+To exercise independent setup through local SSH with a fresh synthetic client key,
+use local rootless Docker or a root host caller. The SSH worker runs as container
+root and must own the private host-created fixtures; the harness checks this
+precondition without changing ownership:
+
+```bash
+python3 -B containers/remote-worker/test_setup_launch_image.py \
+  --docker-host unix:///path/to/docker.sock --image horizon-remote-worker:0.1.0
+```
+
+This uses the real setup helper with a synthetic Git gate to keep admitted setup
+in progress while its request/output channel disappears. It then releases the
+gate, verifies the exact repository through a separate status channel, checks no
+claim replay and completed-child reaping, and runs an ungated submission. It binds
+only loopback SSH and removes its own containers, fixture and generated keypair.
+The gate is explicit test instrumentation, not cloud/PC-off or crash-durability proof.
 
 ## Runtime contract
 

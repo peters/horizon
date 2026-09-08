@@ -144,5 +144,56 @@ liveness, current checkout contents, cleanup permission, cloud or power-loss pro
 
 These commands remain synchronous: they do not detach themselves from SSH, launch
 tasks, transfer source, create a supervisor or integrate the client. A worker-owned
-independent launcher must be added before claiming setup survives client loss.
+independent launcher is available separately below for submission across client loss.
 No invocation implicitly stops/deletes a workspace when a local view closes.
+
+## Independent setup submission
+
+The Linux worker image also installs a separate explicit launcher:
+
+```sh
+horizon-setup-launch < setup-request.json
+```
+
+It accepts the same complete immutable request as `setup`, bounded to 128 KiB
+and EOF, with no command-line arguments. It first delegates validation and
+qualified read-only observation to `horizon-repository setup-status`. A matching
+existing claim returns that observation without spawning setup. Invalid input,
+unsafe storage, mismatched intent or unavailable observation never means absent.
+
+Only after a verified absent observation does it spawn the fixed `setup` command,
+in a new process session, with a bounded private stdin pipe, no inherited client
+stdio, closed extra descriptors and a minimal environment. The launcher writes no
+request or log files. The detached child performs input separation and one-shot
+admission itself. Racing submitters cannot reconstruct or share its fresh grant.
+The worker's PID 1 must reap completed orphan children; the shipped SSH daemon
+provides that role. No PID is returned as liveness or recovery authority.
+
+The response is bounded JSON plus newline, at most 256 KiB to accommodate a full
+128 KiB observation and envelope. Its fields are `version`, `state`, `observation`:
+
+| State | Exit | Meaning |
+| --- | --- | --- |
+| `observed` | Original observation exit | Contains the unchanged parsed `setup-status` response; no child launched. |
+| `submitted` | 0 | Complete request handoff and EOF; not admission, current execution or completion. |
+| `handoff_unconfirmed` | 1 | Child spawned but complete handoff was not confirmed; retain state and observe. |
+| `rejected` | 2 | Oversized input or read failure before observation/spawn. |
+| `error` | 1 | Observation could not be safely consumed, or child spawn failed. |
+
+Only `observed` has a non-null observation. Exit 3 means the launcher response
+could not be completely written/flushed; it never kills or retries an already
+spawned child. Closing the SSH request channel after handoff does not terminate
+setup. Input, observation and handoff loss must remain unknown until separately
+observed. The 30-second observation and 15-second pipe handoff timeouts are best
+effort; input without EOF and uninterruptible OS I/O have no hard total deadline.
+
+Reconnect by calling `horizon-repository setup-status` with the same intent.
+Its retained result is the recovery surface; detached transient stdout/stderr is
+not an additional durable log. If recording failed, later observation may remain
+unknown/error and cannot reconstruct a transient unrecorded execution receipt.
+Claims and data remain retained, with no automatic cleanup or replay. A successful
+handoff does not strengthen storage guarantees or make failed recording successful.
+
+This provides independent setup submission, not source transfer, remote task/log
+supervision, client/provider integration, restart recovery or cloud/PC-off proof.
+No command implicitly stops/deletes an environment when a local view closes.

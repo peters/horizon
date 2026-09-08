@@ -174,12 +174,14 @@ COPY containers/remote-worker/entrypoint.sh /usr/local/bin/horizon-worker-entryp
 COPY containers/remote-worker/host-identity.py /usr/local/bin/horizon-worker-host-identity
 COPY containers/remote-worker/session.sh /usr/local/bin/horizon-agent-session
 COPY containers/remote-worker/panel-session.py /usr/local/bin/horizon-panel-session
+COPY containers/remote-worker/setup-launch.py /usr/local/bin/horizon-setup-launch
 COPY containers/remote-worker/tmux.conf /etc/horizon/tmux.conf
 COPY containers/remote-worker/rust-path.sh /etc/profile.d/horizon-rust.sh
 COPY containers/remote-worker/sshd_config /etc/ssh/sshd_config.d/99-horizon-worker.conf
 
 RUN chmod 0755 /usr/local/bin/horizon-worker-entrypoint /usr/local/bin/horizon-agent-session \
     /usr/local/bin/horizon-panel-session \
+    /usr/local/bin/horizon-setup-launch \
     /usr/local/bin/horizon-worker-host-identity \
     && chmod 0644 /etc/profile.d/horizon-rust.sh /etc/ssh/sshd_config.d/99-horizon-worker.conf \
     && git lfs install --system \

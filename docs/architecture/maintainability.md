@@ -283,9 +283,16 @@ back into large multi-purpose modules.
   execution results, not unchecked deserialized snapshots. Setup/status distinguish
   fresh recording, historical observation, unknown claims and retained execution
   when recording fails. Status never creates or replays; the original materialize
-  protocol stays compatible. Image packaging installs the helper, but no command
-  detaches itself or creates independent remote supervision: lost output requires
-  later observation, not automatic replay or task start.
+  protocol stays compatible. These Rust commands remain synchronous.
+- `containers/remote-worker/setup-launch.py` owns the separate worker-only bounded
+  handoff: it delegates strict input/root observation to `setup-status`, returns
+  existing observations without launch, and passes only an absent intent through a
+  private pipe to the fixed `setup` child in an independent process session. The
+  child alone admits/consumes the core grant. Submission and handoff uncertainty
+  never prove current liveness, create replay authority or authorize a kill. The
+  launcher writes no request/log files; retained Rust completion remains the
+  recovery surface, not transient child output. Missing recording stays unknown.
+  It does not own task supervision, transport, provider lifetime or client wiring.
 - `containers/remote-worker/host-identity.py` owns workspace-retained server-key
   initialization, validation and runtime materialization before SSH starts.
   Its real-key regressions are separate from the retained-volume SSH smoke in
