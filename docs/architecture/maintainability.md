@@ -208,6 +208,11 @@ back into large multi-purpose modules.
   and expanded path/logical-byte budgets are checked before returning file references.
   It does not read regular base payloads, write a checkout or authorize export;
   the later confined writer must revalidate referenced base bytes independently.
+  `seed/` streams verified exact-base objects into an internally fresh private Git
+  repository and constructs its detached HEAD, shallow boundary and independent
+  staged index. Source adapters own their I/O behavior; private Git pathname writes
+  require stable ancestry and exclusive same-user ownership. Failed residues remain
+  explicit. Working files, packed-object acquisition and publication are separate.
 - `containers/remote-worker/host-identity.py` owns workspace-retained server-key
   initialization, validation and runtime materialization before SSH starts.
   Its real-key regressions are separate from the retained-volume SSH smoke in
