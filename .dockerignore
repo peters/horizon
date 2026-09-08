@@ -20,6 +20,7 @@ containers/remote-worker/**
 !containers/remote-worker/rust-path.sh
 !containers/remote-worker/session.sh
 !containers/remote-worker/panel-session.py
+!containers/remote-worker/setup-launch.py
 !containers/remote-worker/tmux.conf
 !containers/remote-worker/sshd_config
 **/.git
