@@ -311,7 +311,7 @@ fn receive_parents_reserve_space_for_observable_child_candidates() {
         checkout::publication::MAX_SIBLING_NAME_BYTES, materialize::MAX_REQUEST_PATH_BYTES,
     };
     let destination = "x".repeat(MAX_SIBLING_NAME_BYTES);
-    let maximum_parent = MAX_REQUEST_PATH_BYTES - 1 - destination.len();
+    let maximum_parent = request::MAX_RECEIVE_PARENT_BYTES;
     for fill in ["x", "\u{1}"] {
         for length in [maximum_parent, maximum_parent + 1, MAX_REQUEST_PATH_BYTES] {
             let parent = format!("{}{}", fixture_path(), fill.repeat(length - fixture_path().len()));
@@ -326,7 +326,7 @@ fn receive_parents_reserve_space_for_observable_child_candidates() {
             let received = request::read(Command::Receive, &mut bytes.as_slice()).unwrap();
             for child in [destination.as_str(), "repository-seed-abcdef"] {
                 let candidate = received.path.join(child);
-                assert!(candidate.to_str().unwrap().len() <= MAX_REQUEST_PATH_BYTES);
+                assert!(candidate.to_str().unwrap().len() <= request::MAX_PACK_PATH_BYTES);
                 let mut observation = wire(Command::Observe);
                 observation["path"] = json!(candidate);
                 let bytes = encode(Command::Observe, &observation);
@@ -335,6 +335,13 @@ fn receive_parents_reserve_space_for_observable_child_candidates() {
             }
         }
     }
+    let mut observation = wire(Command::Observe);
+    observation["path"] = json!(format!(
+        "{}{}",
+        fixture_path(),
+        "x".repeat(request::MAX_PACK_PATH_BYTES + 1 - fixture_path().len())
+    ));
+    rejected(Command::Observe, &encode(Command::Observe, &observation));
 }
 
 #[cfg(target_os = "linux")]

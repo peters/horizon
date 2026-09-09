@@ -10,7 +10,10 @@ use serde::{Deserialize, Serialize};
 use std::{io::Read, path::PathBuf};
 
 pub(super) const HEADER_LIMIT: usize = (6 * MAX_REQUEST_PATH_BYTES + 4096).next_power_of_two();
-pub(super) const MAX_RECEIVE_PARENT_BYTES: usize = MAX_REQUEST_PATH_BYTES - 1 - MAX_SIBLING_NAME_BYTES;
+// Reserve the Linux terminating NUL and a component-sized budget for fixed inner
+// pack paths: native verification reopens those paths, not only the candidate root.
+pub(super) const MAX_PACK_PATH_BYTES: usize = MAX_REQUEST_PATH_BYTES - 2 - MAX_SIBLING_NAME_BYTES;
+pub(super) const MAX_RECEIVE_PARENT_BYTES: usize = MAX_PACK_PATH_BYTES - 1 - MAX_SIBLING_NAME_BYTES;
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -53,11 +56,14 @@ impl Request {
         if version != VERSION
             || !valid_path(&request.path)
             || request.path.parent().is_none()
-            || (request.destination.is_some()
-                && request
-                    .path
-                    .to_str()
-                    .is_none_or(|path| path.len() > MAX_RECEIVE_PARENT_BYTES))
+            || request.path.to_str().is_none_or(|path| {
+                path.len()
+                    > if request.destination.is_some() {
+                        MAX_RECEIVE_PARENT_BYTES
+                    } else {
+                        MAX_PACK_PATH_BYTES
+                    }
+            })
             || request
                 .destination
                 .as_deref()

@@ -33,10 +33,50 @@ def state(root):
                             for path in [root, *root.rglob('*')]}
 
 
+def pathname_boundaries(smoke, payload, pack):
+    program = '''
+import json,os,shutil,struct,subprocess,sys
+wire=sys.stdin.buffer.read(); size=struct.unpack('<I',wire[:4])[0]
+request=json.loads(wire[4:4+size]); payload=wire[4+size:]
+for length in (3840,3839,3584,3583):
+    root='/retained/path-'+str(length); parent=root; os.mkdir(root,0o700)
+    try:
+        while len(parent)+202<length:
+            parent+='/'+'x'*200; os.mkdir(parent,0o700)
+        parent+='/'+'z'*(length-len(parent)-1); os.mkdir(parent,0o700)
+        request.update(parent=parent,destination='d'*255)
+        header=json.dumps(request).encode()
+        result=subprocess.run(['/usr/local/bin/horizon-repository','receive-pack'],
+            input=struct.pack('<I',len(header))+header+payload,capture_output=True,timeout=30)
+        received=json.loads(result.stdout)
+        assert not result.stderr
+        if length>3583:
+            assert result.returncode==2 and received['status']=='rejected', (length,received['status'])
+            assert not os.listdir(parent)
+        else:
+            assert result.returncode==0 and received['status']=='acknowledged', received
+            observation=dict(version=1,path=received['pack']['path'],pack=request['pack'])
+            result=subprocess.run(['/usr/local/bin/horizon-repository','pack-status'],
+                input=json.dumps(observation).encode(),capture_output=True,timeout=30)
+            observed=json.loads(result.stdout)
+            assert result.returncode==0 and not result.stderr and observed['status']=='observed', observed
+            assert observed['pack']==received['pack'] and os.listdir(parent)==['d'*255]
+    finally:
+        shutil.rmtree(root)
+print('PASS actual filesystem pathname bounds, maximum publication and native recovery')
+'''
+    result = smoke.command('/usr/bin/python3', ['-c', program],
+                           frame({'version': 1, 'pack': pack}, payload), mount_inputs=False)
+    assert result.returncode == 0 and not result.stderr, (result.stdout, result.stderr)
+    print(result.stdout.decode().strip(), flush=True)
+    smoke.retire_completed()
+
+
 def test(smoke):
     smoke.fixture()
     before = snapshot(smoke.root / 'source'), snapshot(smoke.root / 'bundles')
     payload, pack = prepare(smoke, smoke.ancestor, 'small-view')
+    pathname_boundaries(smoke, payload, pack)
 
     def private(name, expected=pack):
         root = smoke.root / 'retained' / name
