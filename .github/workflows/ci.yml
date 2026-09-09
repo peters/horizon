@@ -33,7 +33,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
-      - run: sudo apt-get update && sudo apt-get install -y bison libevent-dev libncurses-dev pkg-config
+      - run: bash scripts/install-ci-ubuntu-dependencies.sh bison libevent-dev libncurses-dev pkg-config
       - name: Build the pinned worker multiplexer
         run: bash containers/remote-worker/build-tmux.sh "$RUNNER_TEMP/horizon-panel-tmux"
       - name: Verify retained task sessions
@@ -73,6 +73,8 @@ jobs:
       - uses: actions/checkout@v7
         with:
           lfs: true
+      - name: Verify Ubuntu dependency installer
+        run: python3 -B scripts/test_install_ci_ubuntu_dependencies.py -v
       - run: ./scripts/check-maintainability.sh
 
   clippy:
@@ -89,7 +91,7 @@ jobs:
       # speech-cuda needs nvcc and speech-vulkan the Vulkan SDK, and their
       # Rust surface is identical to `speech` (they only toggle native
       # backends). cpal needs the ALSA headers on Linux.
-      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      - run: bash scripts/install-ci-ubuntu-dependencies.sh libasound2-dev pkg-config
       - run: cargo clippy --locked --all-targets --features speech,trace-profiling -- -D warnings
 
   clippy-strict:
@@ -104,7 +106,7 @@ jobs:
       - run: rustup component add clippy
       # `--features speech` so the unwrap/expect ban also covers the speech
       # runtime code (needs the ALSA headers to build cpal on Linux).
-      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      - run: bash scripts/install-ci-ubuntu-dependencies.sh libasound2-dev pkg-config
       - run: cargo clippy --locked --workspace --lib --bins --examples --features speech -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
 
   clippy-pedantic:
@@ -117,7 +119,7 @@ jobs:
           lfs: true
       - uses: Swatinem/rust-cache@v2
       - run: rustup component add clippy
-      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      - run: bash scripts/install-ci-ubuntu-dependencies.sh libasound2-dev pkg-config
       - name: Run pedantic audit (non-blocking)
         run: |
           cargo clippy --locked --workspace --all-targets --features speech -- -D warnings -W clippy::pedantic || {
@@ -157,7 +159,7 @@ jobs:
       # linkage (ALSA / CoreAudio) is exercised on each supported target;
       # the no-mic and real-model paths stay env-gated off.
       - if: matrix.os == 'ubuntu-latest'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+        run: bash scripts/install-ci-ubuntu-dependencies.sh libasound2-dev pkg-config
       - run: cargo test --locked --workspace --features speech
 
   windows-smoke:
