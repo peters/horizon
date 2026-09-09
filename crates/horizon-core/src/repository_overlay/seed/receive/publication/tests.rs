@@ -217,6 +217,51 @@ fn cancellation_before_and_after_rename_never_rolls_back_or_replays() {
     }
 }
 
+#[test]
+fn cancellation_after_final_layout_check_prevents_rename() {
+    let parent = private_fixture();
+    let pack = received(parent.path());
+    let before = snapshot(parent.path());
+    let nodes = snapshot(pack.path()).len();
+    let root = fs::metadata(pack.path()).unwrap().ino();
+    let checks_left = Cell::new(None);
+    let renamed = Cell::new(false);
+    let result = linux::publish(
+        pack,
+        "ready",
+        PackReceiveLimits::default(),
+        &|| match checks_left.get() {
+            Some(0) => true,
+            Some(left) => {
+                checks_left.set(Some(left - 1));
+                false
+            }
+            None => false,
+        },
+        &mut |point, file| {
+            sync(point, file)?;
+            if point == SyncPoint::Directory && file.metadata().unwrap().ino() == root {
+                // Finish the last layout check, then cancel before parent verification
+                // returns. There must be a fresh cancellation check before rename.
+                checks_left.set(Some(nodes));
+            }
+            Ok(())
+        },
+        &mut |binding, sibling| {
+            renamed.set(true);
+            linux::rename(binding, sibling)
+        },
+        &|_| Ok(()),
+    );
+    drop(unpublished(
+        result.unwrap_err(),
+        Error::Verification(SeedError::Cancelled),
+    ));
+    assert!(!renamed.get());
+    assert_eq!(checks_left.get(), Some(0));
+    assert_eq!(snapshot(parent.path()), before);
+}
+
 fn unpublished(failure: Failure, expected: Error) -> ReceivedGitPack {
     assert!(!format!("{failure:?} {failure}").contains("/tmp/"));
     let Failure::Unpublished { reason, pack } = failure else {

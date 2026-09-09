@@ -45,6 +45,12 @@ pub(super) fn publish(
         Ok(binding) => binding,
         Err(reason) => return Err(Failure::Unpublished { reason, pack }),
     };
+    if let Err(reason) = staging::check_cancel(cancelled) {
+        return Err(Failure::Unpublished {
+            reason: reason.into(),
+            pack,
+        });
+    }
     if let Err(error) = rename(&binding, sibling) {
         let reason = match error {
             rustix::io::Errno::EXIST | rustix::io::Errno::NOTEMPTY => Error::DestinationExists,
