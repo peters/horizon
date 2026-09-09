@@ -413,7 +413,7 @@ struct ApiSshEndpoint {
     host: String,
     port: u16,
 }
-fn validate_target(target: &WorkerTarget, profile: &RunPodProfile) -> Result<(), RunPodError> {
+pub(crate) fn validate_target(target: &WorkerTarget, profile: &RunPodProfile) -> Result<(), RunPodError> {
     let safe_text = |value: &str| {
         !value.is_empty() && value.len() <= 191 && value.trim() == value && !value.chars().any(char::is_control)
     };
