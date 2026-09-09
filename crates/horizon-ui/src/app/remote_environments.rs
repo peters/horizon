@@ -70,6 +70,7 @@ enum InventoryAction {
     Reconnect(horizon_core::PanelId),
     ListReopenPanels,
     ReopenView(usize),
+    InspectTask(usize),
 }
 
 struct WakeOnDrop(Context);
@@ -212,7 +213,9 @@ impl RemoteEnvironments {
             | InventoryAction::RequestStop
             | InventoryAction::ConfirmStop => {}
             InventoryAction::ListReconnectViews | InventoryAction::Reconnect(_) => self.reopen.invalidate(),
-            InventoryAction::ListReopenPanels | InventoryAction::ReopenView(_) => self.reconnect.invalidate(),
+            InventoryAction::ListReopenPanels | InventoryAction::ReopenView(_) | InventoryAction::InspectTask(_) => {
+                self.reconnect.invalidate();
+            }
             InventoryAction::CancelStop => self.stop.cancel_confirmation(),
             InventoryAction::Close => self.close(),
             InventoryAction::Select(index) => {
@@ -306,7 +309,7 @@ impl RemoteEnvironments {
 }
 
 fn load_page(home: &HorizonHome, cursor: Option<&str>) -> Result<InventoryPage, LoadError> {
-    let store = CloudWorkflowStore::open(home).map_err(|_| LoadError::OpenStore)?;
+    let store = CloudWorkflowStore::open_read_only(home).map_err(|_| LoadError::OpenStore)?;
     let page = store
         .list_remote_environment_page(cursor)
         .map_err(|_| LoadError::ReadPage)?;

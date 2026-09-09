@@ -1,6 +1,13 @@
 //! Bounded, non-creating panel inspection through the retained worker's pinned SSH identity.
 //! Calls are synchronous and must run off the render thread.
 
+mod configured;
+
+pub use configured::{
+    ConfiguredRemotePanelStatusError, ConfiguredRemotePanelStatusRequest, RemotePanelObservation,
+    inspect_configured_remote_panel,
+};
+
 #[cfg(target_os = "linux")]
 mod protocol;
 #[cfg(target_os = "linux")]
