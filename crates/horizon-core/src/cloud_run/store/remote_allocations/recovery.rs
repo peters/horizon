@@ -72,7 +72,11 @@ impl CloudWorkflowStore {
         }
         // Absence never clears saved identity, panel intent, checkpoints, or permits replacement.
         runtime.phase = RemoteRuntimePhase::Reconciling;
+        if runtime.ssh.is_some() {
+            super::setup::consume_first_pin_intent(&transaction, &current)?;
+        }
         if next == *current.workspace.state() {
+            transaction.commit()?;
             return Ok(current);
         }
         let workspace = WorkspaceReplacement::new(&current.workspace, &next)?.persist(&transaction)?;

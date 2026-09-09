@@ -126,7 +126,9 @@ fn allocation_reopens_one_exact_identity_without_consuming_creation_or_reallocat
     assert_eq!(workflow.nodes[0].source.as_ref(), Some(&state.spec.repository));
     Connection::open(store.path())
         .expect("schema-three allocation fixture")
-        .execute_batch("DROP TABLE remote_runtime_creation_fences; PRAGMA user_version=3")
+        .execute_batch(
+            "DROP TABLE remote_first_pin_intents; DROP TABLE remote_runtime_creation_fences; PRAGMA user_version=3",
+        )
         .expect("downgrade fixture before recovery");
     let reopened = CloudWorkflowStore::open_path(store.path()).expect("reopen");
     assert_eq!(
@@ -508,4 +510,465 @@ fn a_setup_deadline_that_expires_waiting_for_the_write_lock_never_allocates() {
             .expect("unchanged"),
         Some(fixture.original)
     );
+}
+
+mod first_pin {
+    use super::*;
+    use crate::cloud_run::interactive_worker::{InteractiveWorkerLifecycle, InteractiveWorkerStatus};
+
+    fn pending() -> (Fixture, StoredRemoteAllocation) {
+        let mut fixture = fixture();
+        let mut state = fixture.original.state().clone();
+        state.spec.target.provider = CloudProvider::RunPod;
+        fixture.original = fixture
+            .store
+            .replace_remote_workspace(&fixture.original, &state)
+            .expect("target");
+        let allocation = fixture.allocate();
+        (fixture, allocation)
+    }
+
+    pub(super) fn reserved() -> (Fixture, StoredRemoteAllocation) {
+        let (fixture, allocation) = pending();
+        let key = observed_worker(allocation.workspace().state()).ssh_public_key;
+        let saved = fixture
+            .store
+            .reserve_remote_worker_request(&allocation, &key)
+            .expect("request");
+        (fixture, saved)
+    }
+
+    pub(super) fn intent_count(store: &CloudWorkflowStore) -> i64 {
+        Connection::open(store.path())
+            .expect("fixture connection")
+            .query_row("SELECT COUNT(*) FROM remote_first_pin_intents", [], |row| row.get(0))
+            .expect("intent count")
+    }
+
+    pub(super) fn status(saved: &StoredRemoteAllocation, ready: bool) -> InteractiveWorkerStatus {
+        let worker = observed_worker(saved.workspace().state());
+        let ssh = ready.then(|| InteractiveWorkerSshEndpoint {
+            host: "127.0.0.1".into(),
+            port: 22,
+            username: "root".into(),
+            host_key: worker.ssh_public_key.clone(),
+        });
+        InteractiveWorkerStatus {
+            worker,
+            ssh,
+            lifecycle: if ready {
+                InteractiveWorkerLifecycle::Ready
+            } else {
+                InteractiveWorkerLifecycle::Provisioning
+            },
+        }
+    }
+
+    fn expire(fixture: &Fixture) -> StoredRemoteAllocation {
+        let mut workflow = fixture.recover().workflow().workflow().clone();
+        workflow.created_at_millis = 1000;
+        workflow.updated_at_millis = 1000;
+        workflow.retain_until_millis = 2000;
+        Connection::open(fixture.store.path())
+            .expect("fixture connection")
+            .execute(
+                "UPDATE cloud_workflows SET created_at_millis=1000, updated_at_millis=1000,
+             retain_until_millis=2000, snapshot=?1 WHERE workflow_id=?2",
+                params![encode_workflow(&workflow).expect("snapshot"), workflow.id.to_string()],
+            )
+            .expect("expired fixture");
+        fixture.recover()
+    }
+
+    #[test]
+    fn first_pin_intent_requires_reserved_identity_and_never_consumes_or_renews_creation() {
+        let (fixture, allocation) = pending();
+        let store = &fixture.store;
+        assert!(matches!(
+            store.record_remote_first_pin_intent(&allocation),
+            Err(Error::RuntimeRequestRequired)
+        ));
+        assert_eq!(intent_count(store), 0);
+        let saved = store
+            .reserve_remote_worker_request(
+                &allocation,
+                &observed_worker(allocation.workspace().state()).ssh_public_key,
+            )
+            .expect("reserve");
+        assert!(matches!(
+            store.record_remote_first_pin_intent(&allocation),
+            Err(Error::SnapshotConflict)
+        ));
+        assert_eq!(store.load_remote_first_pin_request(&saved).expect("unmarked"), None);
+        store.record_remote_first_pin_intent(&saved).expect("explicit intent");
+        store
+            .record_remote_first_pin_intent(&saved)
+            .expect("idempotent pre-claim intent");
+        assert_eq!(
+            store.load_remote_first_pin_request(&saved).expect("positive"),
+            Some(saved.worker_request().expect("request"))
+        );
+        assert_eq!(fixture.recover(), saved);
+        assert_eq!(fixture.counts(), [1, 1, 0]);
+        assert_eq!(intent_count(store), 1);
+        assert!(claim(store, &saved).expect("first claim"));
+        assert!(!claim(store, &saved).expect("one shot"));
+        assert!(matches!(
+            store.record_remote_first_pin_intent(&saved),
+            Err(Error::RuntimeSetupUnavailable)
+        ));
+        assert_eq!(fixture.counts(), [1, 1, 1]);
+        assert_eq!(intent_count(store), 1);
+    }
+
+    #[test]
+    fn first_pin_intent_survives_lost_response_provisioning_and_restart_then_is_consumed() {
+        let (fixture, saved) = reserved();
+        fixture.store.record_remote_first_pin_intent(&saved).expect("intent");
+        assert!(claim(&fixture.store, &saved).expect("claim"));
+        let lost = fixture
+            .store
+            .record_remote_worker_recovery(&saved, None)
+            .expect("lost response");
+        assert!(
+            lost.workspace()
+                .state()
+                .runtime
+                .as_ref()
+                .expect("runtime")
+                .worker
+                .is_none()
+        );
+        let store = CloudWorkflowStore::open_path(fixture.store.path()).expect("restart");
+        assert_eq!(
+            store.load_remote_first_pin_request(&lost).expect("restart intent"),
+            Some(saved.worker_request().expect("request"))
+        );
+        let provisioned = store
+            .record_remote_worker_recovery(&lost, Some(&status(&lost, false)))
+            .expect("provisioning");
+        assert_eq!(intent_count(&store), 1);
+        assert!(
+            store
+                .load_remote_first_pin_request(&provisioned)
+                .expect("pending pin")
+                .is_some()
+        );
+        assert!(matches!(
+            store.record_remote_first_pin_intent(&provisioned),
+            Err(Error::RuntimeSetupUnavailable)
+        ));
+        let pinned = store
+            .record_remote_worker_recovery(&provisioned, Some(&status(&provisioned, true)))
+            .expect("first pin");
+        let runtime = pinned.workspace().state().runtime.as_ref().expect("runtime");
+        assert!(runtime.ssh.is_some());
+        assert_eq!(runtime.phase, RemoteRuntimePhase::Reconciling);
+        assert_eq!(intent_count(&store), 0);
+        assert_eq!(
+            store.load_remote_first_pin_request(&pinned).expect("retained trust"),
+            None
+        );
+        assert!(matches!(
+            store.record_remote_first_pin_intent(&pinned),
+            Err(Error::RuntimeSetupUnavailable)
+        ));
+        assert_eq!(
+            store
+                .record_remote_worker_recovery(&pinned, None)
+                .expect("later absence"),
+            pinned
+        );
+        assert_eq!(fixture.counts(), [1, 1, 1]);
+        assert_eq!(intent_count(&store), 0);
+    }
+
+    #[test]
+    fn first_pin_snapshot_and_intent_roll_back_together_after_real_write_failure() {
+        let (fixture, saved) = reserved();
+        let store = &fixture.store;
+        store.record_remote_first_pin_intent(&saved).expect("intent");
+        let connection = Connection::open(store.path()).expect("fixture connection");
+        connection
+            .execute_batch(
+                "CREATE TRIGGER fail_first_pin BEFORE UPDATE ON remote_workspaces
+            BEGIN SELECT RAISE(ABORT, 'synthetic snapshot failure'); END",
+            )
+            .expect("failure injection");
+        let ready = status(&saved, true);
+        assert!(matches!(
+            store.record_remote_worker_recovery(&saved, Some(&ready)),
+            Err(Error::Database(_))
+        ));
+        assert_eq!(fixture.recover(), saved);
+        assert_eq!(intent_count(store), 1);
+        assert_eq!(fixture.counts(), [1, 1, 0]);
+        connection
+            .execute_batch("DROP TRIGGER fail_first_pin")
+            .expect("remove injection");
+        let pinned = store
+            .record_remote_worker_recovery(&saved, Some(&ready))
+            .expect("retry pin");
+        assert_eq!(intent_count(store), 0);
+        assert!(matches!(
+            store.record_remote_worker_recovery(&saved, Some(&ready)),
+            Err(Error::SnapshotConflict)
+        ));
+        let mut changed_pin = ready;
+        changed_pin.ssh.as_mut().expect("ssh").host = "127.0.0.2".into();
+        assert!(matches!(
+            store.record_remote_worker_recovery(&pinned, Some(&changed_pin)),
+            Err(Error::InvalidWorkerObservation)
+        ));
+        assert_eq!(fixture.recover(), pinned);
+        assert_eq!(intent_count(store), 0);
+    }
+
+    #[test]
+    fn first_pin_intent_refuses_late_setup_but_survives_its_original_setup_deadline() {
+        for retain_intent in [false, true] {
+            let (fixture, saved) = reserved();
+            if retain_intent {
+                fixture
+                    .store
+                    .record_remote_first_pin_intent(&saved)
+                    .expect("initial intent");
+            }
+            let expired = expire(&fixture);
+            assert!(matches!(
+                fixture.store.record_remote_first_pin_intent(&expired),
+                Err(Error::RuntimeSetupUnavailable)
+            ));
+            assert_eq!(
+                fixture
+                    .store
+                    .load_remote_first_pin_request(&expired)
+                    .expect("read-only expiry"),
+                retain_intent.then(|| saved.worker_request().expect("request"))
+            );
+            assert_eq!(fixture.recover(), expired);
+            assert_eq!(intent_count(&fixture.store), i64::from(retain_intent));
+            assert!(matches!(
+                claim(&fixture.store, &expired),
+                Err(CloudStoreError::WorkflowExpired(_))
+            ));
+        }
+        for observed in [false, true] {
+            let (fixture, saved) = reserved();
+            let current = if observed {
+                fixture
+                    .store
+                    .record_remote_worker_recovery(&saved, Some(&status(&saved, false)))
+                    .expect("legacy observation")
+            } else {
+                assert!(claim(&fixture.store, &saved).expect("legacy claim"));
+                saved
+            };
+            assert!(matches!(
+                fixture.store.record_remote_first_pin_intent(&current),
+                Err(Error::RuntimeSetupUnavailable)
+            ));
+            assert_eq!(
+                fixture
+                    .store
+                    .load_remote_first_pin_request(&current)
+                    .expect("no inferred authority"),
+                None
+            );
+            assert_eq!(intent_count(&fixture.store), 0);
+        }
+    }
+
+    #[test]
+    fn first_pin_lookup_matches_both_snapshots_and_does_not_authorize_generic_replacement() {
+        let (fixture, saved) = reserved();
+        let store = &fixture.store;
+        store.record_remote_first_pin_intent(&saved).expect("intent");
+        let mut next = saved.workflow().workflow().clone();
+        next.title = "Updated display title".into();
+        next.updated_at_millis += 1;
+        store.replace(saved.workflow(), &next).expect("workflow-only revision");
+        assert!(matches!(
+            store.load_remote_first_pin_request(&saved),
+            Err(Error::SnapshotConflict)
+        ));
+        assert!(matches!(
+            store.record_remote_first_pin_intent(&saved),
+            Err(Error::SnapshotConflict)
+        ));
+        let current = fixture.recover();
+        assert!(
+            store
+                .load_remote_first_pin_request(&current)
+                .expect("fresh snapshots")
+                .is_some()
+        );
+        for retire in [false, true] {
+            let mut state = current.workspace().state().clone();
+            if retire {
+                state.runtime = None;
+            } else {
+                state.spec.generation += 1;
+                state.runtime.as_mut().expect("runtime").generation += 1;
+            }
+            assert!(store.replace_remote_workspace(current.workspace(), &state).is_err());
+        }
+        assert!(matches!(
+            store.allocate_remote_runtime(current.workspace(), i64::MAX),
+            Err(Error::RuntimeAlreadyActive)
+        ));
+        let (_, foreign) = reserved();
+        assert!(matches!(
+            store.load_remote_first_pin_request(&foreign),
+            Err(Error::SnapshotConflict)
+        ));
+        assert!(matches!(
+            store.record_remote_first_pin_intent(&foreign),
+            Err(Error::SnapshotConflict)
+        ));
+        assert_eq!(fixture.recover(), current);
+        assert_eq!(intent_count(store), 1);
+        assert_eq!(fixture.counts(), [1, 1, 0]);
+    }
+
+    #[test]
+    fn first_pin_lookup_rejects_malformed_matching_rows_and_never_adopts_orphans() {
+        for alteration in [
+            "session_id='22222222-2222-4222-8222-222222222222'",
+            "generation=2",
+            "workflow_id='33333333-3333-4333-8333-333333333333'",
+            "job_id='44444444-4444-4444-8444-444444444444'",
+            "version=2",
+            "request_digest=printf('%064d', 0)",
+            "session_id=printf('%4096s', 'x')",
+        ] {
+            let (fixture, saved) = reserved();
+            fixture.store.record_remote_first_pin_intent(&saved).expect("intent");
+            let connection = Connection::open(fixture.store.path()).expect("fixture connection");
+            connection
+                .execute_batch(&format!(
+                    "PRAGMA ignore_check_constraints=ON; UPDATE remote_first_pin_intents SET {alteration}"
+                ))
+                .expect("corrupt intent");
+            assert!(
+                matches!(
+                    fixture.store.load_remote_first_pin_request(&saved),
+                    Err(Error::Storage(CloudStoreError::InvalidRemoteAllocation))
+                ),
+                "{alteration}"
+            );
+            assert!(
+                matches!(
+                    fixture.store.record_remote_first_pin_intent(&saved),
+                    Err(Error::Storage(CloudStoreError::InvalidRemoteAllocation))
+                ),
+                "{alteration}"
+            );
+            assert_eq!(fixture.recover(), saved);
+            assert_eq!(fixture.counts(), [1, 1, 0]);
+        }
+        let (fixture, saved) = reserved();
+        fixture.store.record_remote_first_pin_intent(&saved).expect("intent");
+        Connection::open(fixture.store.path())
+            .expect("fixture connection")
+            .execute_batch("PRAGMA foreign_keys=OFF; UPDATE remote_first_pin_intents SET workspace_local_id='orphan'")
+            .expect("orphan");
+        assert_eq!(
+            fixture
+                .store
+                .load_remote_first_pin_request(&saved)
+                .expect("orphan ignored"),
+            None
+        );
+        assert!(fixture.store.record_remote_first_pin_intent(&saved).is_err());
+        assert_eq!(intent_count(&fixture.store), 1);
+    }
+
+    #[test]
+    fn first_pin_migration_never_backfills_legacy_allocations_or_changes_snapshots_and_claims() {
+        let (fixture, saved) = reserved();
+        assert!(claim(&fixture.store, &saved).expect("legacy claim"));
+        let snapshots = || {
+            Connection::open(fixture.store.path())
+                .expect("fixture connection")
+                .query_row(
+                    "SELECT (SELECT snapshot FROM remote_workspaces), (SELECT snapshot FROM cloud_workflows)",
+                    [],
+                    |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?)),
+                )
+                .expect("raw snapshots")
+        };
+        let before = snapshots();
+        Connection::open(fixture.store.path())
+            .expect("fixture connection")
+            .execute_batch("DROP TABLE remote_first_pin_intents; PRAGMA user_version=4")
+            .expect("schema-four fixture");
+        assert!(matches!(
+            CloudWorkflowStore::open_read_only_path(fixture.store.path()),
+            Err(CloudStoreError::UnsupportedSchema(4))
+        ));
+        assert!(matches!(
+            fixture.store.load_remote_first_pin_request(&saved),
+            Err(Error::Storage(CloudStoreError::UnsupportedSchema(4)))
+        ));
+        let connection = Connection::open(fixture.store.path()).expect("fixture connection");
+        assert_eq!(
+            connection
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .expect("unchanged version"),
+            4
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_schema WHERE name='remote_first_pin_intents'",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .expect("no read repair"),
+            0
+        );
+        let reopened = CloudWorkflowStore::open_path(fixture.store.path()).expect("explicit migration");
+        assert_eq!(snapshots(), before);
+        assert_eq!(fixture.recover(), saved);
+        assert_eq!(fixture.counts(), [1, 1, 1]);
+        assert_eq!(intent_count(&reopened), 0);
+        assert_eq!(
+            reopened
+                .load_remote_first_pin_request(&saved)
+                .expect("no legacy bootstrap"),
+            None
+        );
+        assert!(!claim(&reopened, &saved).expect("claim preserved"));
+    }
+
+    #[test]
+    fn first_pin_and_creation_race_cannot_publish_a_late_intent() {
+        let (fixture, saved) = reserved();
+        let barrier = Arc::new(Barrier::new(2));
+        let claimant = {
+            let barrier = Arc::clone(&barrier);
+            let store = fixture.store.clone();
+            let saved = saved.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                claim(&store, &saved).expect("claim")
+            })
+        };
+        barrier.wait();
+        let result = fixture.store.record_remote_first_pin_intent(&saved);
+        assert!(claimant.join().expect("claimant"));
+        match result {
+            Ok(()) => assert_eq!(intent_count(&fixture.store), 1),
+            Err(Error::RuntimeSetupUnavailable) => assert_eq!(intent_count(&fixture.store), 0),
+            Err(error) => panic!("unexpected intent result: {error}"),
+        }
+        assert!(matches!(
+            fixture.store.record_remote_first_pin_intent(&saved),
+            Err(Error::RuntimeSetupUnavailable)
+        ));
+        assert!(!claim(&fixture.store, &saved).expect("no repeated grant"));
+        assert_eq!(fixture.recover(), saved);
+        assert_eq!(fixture.counts(), [1, 1, 1]);
+    }
 }

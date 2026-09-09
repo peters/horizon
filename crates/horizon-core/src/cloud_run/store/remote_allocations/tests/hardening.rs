@@ -1,7 +1,101 @@
 use super::super::super::{MAX_RECOVERED_SNAPSHOT_BYTES, MAX_SNAPSHOT_BYTES};
+use super::first_pin::{intent_count, reserved, status};
 use super::*;
 use crate::PanelKind;
 use crate::remote_workspace::RemotePanelBinding;
+
+#[test]
+fn first_pin_intent_rejects_other_providers_management_and_saved_ssh_without_worker() {
+    let fixture = fixture();
+    let allocation = fixture.allocate();
+    let saved = fixture
+        .store
+        .reserve_remote_worker_request(
+            &allocation,
+            &observed_worker(allocation.workspace().state()).ssh_public_key,
+        )
+        .expect("local request");
+    assert!(matches!(
+        fixture.store.record_remote_first_pin_intent(&saved),
+        Err(Error::RuntimeSetupUnavailable)
+    ));
+    assert_eq!(intent_count(&fixture.store), 0);
+    let (fixture, saved) = reserved();
+    fixture.store.record_remote_first_pin_intent(&saved).expect("intent");
+    let mut state = saved.workspace().state().clone();
+    state.runtime.as_mut().expect("runtime").cleanup = Some(RemoteCleanupIntent {
+        reason: RemoteCleanupReason::Cancelled,
+        requested_at_millis: 1000,
+    });
+    fixture
+        .store
+        .replace_remote_workspace(saved.workspace(), &state)
+        .expect("cleanup");
+    let current = fixture.recover();
+    assert!(matches!(
+        fixture.store.record_remote_first_pin_intent(&current),
+        Err(Error::RuntimeSetupUnavailable)
+    ));
+    assert!(matches!(
+        fixture.store.load_remote_first_pin_request(&current),
+        Err(Error::RuntimeRecoveryUnavailable)
+    ));
+    assert_eq!(intent_count(&fixture.store), 1);
+    let (fixture, saved) = reserved();
+    let connection = Connection::open(fixture.store.path()).expect("fixture connection");
+    let bytes: Vec<u8> = connection
+        .query_row("SELECT snapshot FROM remote_workspaces", [], |row| row.get(0))
+        .expect("snapshot");
+    let mut snapshot: serde_json::Value = serde_json::from_slice(&bytes).expect("fixture JSON");
+    snapshot["state"]["runtime"]["ssh"] = serde_json::to_value(status(&saved, true).ssh).expect("endpoint");
+    connection
+        .execute(
+            "UPDATE remote_workspaces SET snapshot=?1",
+            [serde_json::to_vec(&snapshot).expect("corrupt JSON")],
+        )
+        .expect("corrupt fixture");
+    assert!(matches!(
+        fixture.store.record_remote_first_pin_intent(&saved),
+        Err(Error::Storage(CloudStoreError::InvalidRemoteAllocation))
+    ));
+    assert_eq!(intent_count(&fixture.store), 0);
+}
+
+#[test]
+fn first_pin_lookup_refuses_schema_drift_and_missing_storage_without_repair() {
+    for corruption in [
+        "DROP TABLE remote_first_pin_intents",
+        "CREATE INDEX unexpected_first_pin_index ON remote_first_pin_intents(generation)",
+        "ALTER TABLE remote_first_pin_intents ADD COLUMN unexpected INTEGER",
+        "CREATE TRIGGER unexpected_first_pin_trigger AFTER DELETE ON remote_first_pin_intents BEGIN SELECT 1; END",
+    ] {
+        let (fixture, saved) = reserved();
+        fixture.store.record_remote_first_pin_intent(&saved).expect("intent");
+        Connection::open(fixture.store.path())
+            .expect("fixture connection")
+            .execute_batch(corruption)
+            .expect("schema drift");
+        assert!(matches!(
+            fixture.store.load_remote_first_pin_request(&saved),
+            Err(Error::Storage(CloudStoreError::InvalidAllocationSchema))
+        ));
+        assert!(matches!(
+            CloudWorkflowStore::open_path(fixture.store.path()),
+            Err(CloudStoreError::InvalidAllocationSchema)
+        ));
+    }
+    let (fixture, saved) = reserved();
+    fixture.store.record_remote_first_pin_intent(&saved).expect("intent");
+    let parent = fixture.store.path().parent().expect("private parent");
+    let retained = parent.with_file_name("retained-control");
+    std::fs::rename(parent, &retained).expect("retain disappeared fixture database");
+    assert!(fixture.store.load_remote_first_pin_request(&saved).is_err());
+    assert!(!parent.exists());
+    assert!(!fixture.store.path().exists());
+    std::fs::rename(retained, parent).expect("restore fixture");
+    assert_eq!(fixture.recover(), saved);
+    assert_eq!(intent_count(&fixture.store), 1);
+}
 
 #[test]
 fn invalid_setup_retention_and_exhausted_generation_never_allocate() {
@@ -147,7 +241,9 @@ fn active_legacy_unbound_records_stay_recoverable_without_allocation() {
         serde_json::to_vec(&serde_json::json!({"session_id": OWNER, "state": state})).expect("legacy snapshot");
     let connection = Connection::open(store.path()).expect("raw legacy fixture");
     connection
-        .execute_batch("DROP TABLE remote_runtime_creation_fences; PRAGMA user_version=3")
+        .execute_batch(
+            "DROP TABLE remote_first_pin_intents; DROP TABLE remote_runtime_creation_fences; PRAGMA user_version=3",
+        )
         .expect("schema-three fixture before migration");
     connection
         .execute(
@@ -201,7 +297,9 @@ fn migrated_bound_allocations_still_require_their_positive_binding() {
         let saved = fixture.allocate();
         let connection = Connection::open(fixture.store.path()).expect("raw migration fixture");
         connection
-            .execute_batch("DROP TABLE remote_runtime_creation_fences; PRAGMA user_version=3")
+            .execute_batch(
+                "DROP TABLE remote_first_pin_intents; DROP TABLE remote_runtime_creation_fences; PRAGMA user_version=3",
+            )
             .expect("schema-three bound allocation");
         let reopened = CloudWorkflowStore::open_path(fixture.store.path()).expect("migrate bound allocation");
         assert_eq!(creation_denial_count(&connection), 1);

@@ -11,7 +11,7 @@ use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 
 use super::{CloudStoreError, remote_workspaces::creation_fences};
 
-const STORE_SCHEMA_VERSION: i64 = 4;
+const STORE_SCHEMA_VERSION: i64 = 5;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(2);
 const SCHEMA: &str = r"
 CREATE TABLE IF NOT EXISTS cloud_workflows (
@@ -60,6 +60,16 @@ const REMOTE_ALLOCATION_SCHEMA: [&str; 3] = [
     "CREATE UNIQUE INDEX remote_runtime_allocations_workflow ON remote_runtime_allocations(workflow_id)",
     "CREATE UNIQUE INDEX remote_runtime_allocations_job ON remote_runtime_allocations(job_id)",
 ];
+
+const FIRST_PIN_SCHEMA: &str = r"CREATE TABLE remote_first_pin_intents (
+    workspace_local_id TEXT PRIMARY KEY NOT NULL REFERENCES remote_runtime_allocations(workspace_local_id),
+    session_id TEXT NOT NULL,
+    generation INTEGER NOT NULL CHECK (generation > 0),
+    workflow_id TEXT NOT NULL UNIQUE,
+    job_id TEXT NOT NULL UNIQUE,
+    version INTEGER NOT NULL CHECK (version = 1),
+    request_digest TEXT NOT NULL CHECK (length(request_digest) = 64)
+) STRICT, WITHOUT ROWID";
 
 pub(super) fn open_connection(path: &Path) -> Result<Connection, CloudStoreError> {
     let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
@@ -127,6 +137,11 @@ pub(super) fn initialize_schema(connection: &mut Connection) -> Result<(), Cloud
         creation_fences::migrate(&transaction)?;
     }
     creation_fences::validate_schema(&transaction)?;
+    if version < 5 {
+        // Existing allocations never acquire first-use provenance through migration.
+        transaction.execute_batch(FIRST_PIN_SCHEMA)?;
+    }
+    validate_first_pin_schema(&transaction)?;
     transaction.pragma_update(None, "user_version", STORE_SCHEMA_VERSION)?;
     transaction.commit()?;
     Ok(())
@@ -138,7 +153,21 @@ pub(super) fn ensure_current_schema(connection: &Connection) -> Result<(), Cloud
         return Err(CloudStoreError::UnsupportedSchema(version));
     }
     validate_allocation_schema(connection)?;
-    creation_fences::validate_schema(connection)
+    creation_fences::validate_schema(connection)?;
+    validate_first_pin_schema(connection)
+}
+
+fn validate_first_pin_schema(connection: &Connection) -> Result<(), CloudStoreError> {
+    let matches: bool = connection.query_row(
+        "SELECT COUNT(*) = 1 AND COUNT(CASE WHEN sql = ?1 THEN 1 END) = 1
+         FROM main.sqlite_schema WHERE tbl_name = 'remote_first_pin_intents' AND sql IS NOT NULL",
+        [FIRST_PIN_SCHEMA],
+        |row| row.get(0),
+    )?;
+    if !matches {
+        return Err(CloudStoreError::InvalidAllocationSchema);
+    }
+    Ok(())
 }
 
 fn validate_allocation_schema(connection: &Connection) -> Result<(), CloudStoreError> {
