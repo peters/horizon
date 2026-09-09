@@ -6,11 +6,13 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import subprocess
 import sys
 import tempfile
 import time
+import uuid
 
 LIMIT = 16 * 1024
 KEYGEN_TIMEOUT_SECONDS = 10
@@ -20,6 +22,10 @@ WAIT_SECONDS = 2 * KEYGEN_TIMEOUT_SECONDS + INITIALIZATION_SYNC_GRACE_SECONDS
 KEY_NAME = "ssh_host_ed25519_key"
 STATE_VERSION = 2
 ED25519_PREFIX = b"\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20"
+BOOTSTRAP_ENV = "HORIZON_HOST_KEY_BOOTSTRAP_VERSION"
+BOOTSTRAP_VERSION = 1
+BOOTSTRAP_PREFIX = "horizon-worker-host-key "
+BOOTSTRAP_LIMIT = 1024
 
 
 class IdentityError(Exception):
@@ -211,11 +217,44 @@ class HostIdentity:
         synchronize(self.runtime_directory, directory=True)
 
 
+def bootstrap_context(environment):
+    if BOOTSTRAP_ENV not in environment:
+        return None
+    if (environment[BOOTSTRAP_ENV] != str(BOOTSTRAP_VERSION)
+            or environment.get("HORIZON_CLOUD_PROTOCOL_VERSION") != "1"):
+        fail()
+    pod_id = environment.get("RUNPOD_POD_ID", "")
+    if not isinstance(pod_id, str) or re.fullmatch(r"[A-Za-z0-9_-]{1,191}", pod_id) is None:
+        fail()
+    record = {"version": BOOTSTRAP_VERSION, "pod_id": pod_id, "cloud_protocol_version": 1}
+    for field in ("workflow_id", "job_id"):
+        value = environment.get("HORIZON_" + field.upper(), "")
+        if not isinstance(value, str) or len(value) != 36 or str(uuid.UUID(value)) != value:
+            fail()
+        record[field] = value
+    return record
+
+
+def prepare_for_startup(store, environment, output):
+    record = bootstrap_context(environment)
+    host_public_key = store.prepare()
+    if record is not None:
+        digest = hashlib.sha256(public_key(read_file(store.access_key)).encode()).hexdigest()
+        if read_file(store.claim) != digest.encode():
+            fail()
+        record.update(access_digest=digest, host_public_key=host_public_key)
+        line = BOOTSTRAP_PREFIX + json.dumps(record, separators=(",", ":")) + "\n"
+        if len(line.encode()) > BOOTSTRAP_LIMIT or output.write(line) != len(line):
+            fail()
+        output.flush()
+    return host_public_key
+
+
 def main():
     try:
         if len(sys.argv) != 1:
             fail()
-        HostIdentity("/workspace", "/root/.ssh/authorized_keys", "/etc/ssh").prepare()
+        prepare_for_startup(HostIdentity("/workspace", "/root/.ssh/authorized_keys", "/etc/ssh"), os.environ, sys.stdout)
     except (IdentityError, OSError, ValueError, RecursionError, subprocess.SubprocessError):
         print("horizon-worker: retained SSH host identity is unavailable", file=sys.stderr)
         return 64

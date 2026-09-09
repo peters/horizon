@@ -1,7 +1,7 @@
 use super::super::CLOUD_RUN_PROTOCOL_VERSION;
 use super::{
-    CloudJobId, CloudWorkflowId, JOB_ENV, LIFETIME_ENV, PERSISTENT_LIFETIME, PROTOCOL_ENV, RunPodError, RunPodProfile,
-    SSH_PUBLIC_KEY_ENV, TERMINATE_ENV, WORKFLOW_ENV, WorkerTarget, termination_deadline,
+    CloudJobId, CloudWorkflowId, HOST_KEY_BOOTSTRAP_ENV, JOB_ENV, LIFETIME_ENV, PERSISTENT_LIFETIME, PROTOCOL_ENV,
+    RunPodError, RunPodProfile, SSH_PUBLIC_KEY_ENV, TERMINATE_ENV, WORKFLOW_ENV, WorkerTarget, termination_deadline,
 };
 use serde::Serialize;
 
@@ -72,6 +72,10 @@ impl CreatePodRequest {
         })
         .collect();
         if let Some(ssh_public_key) = ssh_public_key {
+            env.push(CreatePodEnv {
+                key: HOST_KEY_BOOTSTRAP_ENV.to_string(),
+                value: super::host_key::VERSION.to_string(),
+            });
             env.push(CreatePodEnv {
                 key: SSH_PUBLIC_KEY_ENV.to_string(),
                 value: ssh_public_key.to_string(),

@@ -406,6 +406,11 @@ back into large multi-purpose modules.
   inactive state after a single Stop action, including a lost response, without
   deletion, restart, SSH, or UI admission. This is not a backup or filesystem
   durability claim; the existing durable Stop coordinator owns saved intent.
+- `cloud_run/runpod/host_key.rs` separates explicit task-free first-pin bootstrap
+  from saved-full-pin reconnect. Its `sample.rs` leaf validates bounded authenticated
+  log samples without claiming current-boot freshness or exhaustive history. The
+  worker emits a versioned public binding only after retained identity preparation;
+  the caller must persist the owned pin before admitting setup or tasks.
 - `cloud_run/store.rs` owns workflow snapshots and creation-claim transactions.
   Its `cloud_run/store/database.rs` leaf owns private-path preparation, connection policy,
   schema initialization, and compatibility checks. Keep database opening separate
