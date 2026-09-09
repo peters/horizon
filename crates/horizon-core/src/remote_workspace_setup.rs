@@ -1,13 +1,18 @@
 //! Explicit initial setup and interrupted-setup retry, separate from client reconnect.
 //! All operations are synchronous and must run off the render thread.
 
+mod runpod;
+pub use runpod::{
+    RunPodWorkspaceSetupError, recover_runpod_workspace, retry_runpod_workspace_setup, start_task_free_runpod_workspace,
+};
+
 use crate::{
     cloud_run::{
         CloudWorkflowStore, RemoteWorkspaceStoreError, StoredRemoteAllocation, StoredRemoteWorkspace,
         interactive_worker::InteractiveWorkerProvider,
     },
     remote_ssh_identity::{RemoteSshIdentityError, RemoteSshIdentityStore},
-    remote_workspace_recovery::{RemoteWorkspaceRecoveryError, recover_remote_workspace},
+    remote_workspace_recovery::{RemoteWorkspaceRecoveryError, inspect_remote_allocation},
 };
 
 /// Allocate once for an explicitly requested new worker, then retain its request before ensure.
@@ -125,16 +130,25 @@ fn recover<P: InteractiveWorkerProvider + ?Sized>(
     provider: &P,
     expected: &StoredRemoteAllocation,
 ) -> Result<StoredRemoteAllocation, RemoteWorkspaceSetupError> {
+    validate_allocation(store, expected)?;
+    let recovered = inspect_remote_allocation(identities, provider, expected)?;
+    store
+        .record_remote_worker_recovery(expected, recovered.observation())
+        .map_err(Into::into)
+}
+
+fn validate_allocation(
+    store: &CloudWorkflowStore,
+    expected: &StoredRemoteAllocation,
+) -> Result<(), RemoteWorkspaceSetupError> {
     let workspace = expected.workspace();
-    recover_remote_workspace(
-        store,
-        identities,
-        provider,
-        workspace.session_id(),
-        &workspace.state().spec.workspace_local_id,
-    )
-    .map(|result| result.allocation().clone())
-    .map_err(Into::into)
+    let current = store
+        .load_remote_allocation(workspace.session_id(), &workspace.state().spec.workspace_local_id)?
+        .ok_or(RemoteWorkspaceRecoveryError::MissingAllocation)?;
+    if current != *expected {
+        return Err(RemoteWorkspaceRecoveryError::StateChanged.into());
+    }
+    Ok(())
 }
 
 /// Private identity, provider payloads and storage details never appear in setup diagnostics.

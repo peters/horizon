@@ -124,6 +124,10 @@ back into large multi-purpose modules.
   admission leaf checks exact snapshots without granting creation authority;
   claimed, observed or expired retries use non-creating recovery. Setup remains
   separate from attachment, task readiness and explicit remote management.
+  Its `runpod` leaf accepts an explicit supplied profile/key and selects trust from
+  positive first-pin intent or a complete retained pin. Selection and non-creating
+  recovery bind the same owned snapshot; an unmarked interrupted start is refused,
+  never inferred as first-bootstrap authority or automatically cleaned up.
 - `remote_environment_observation.rs` produces overview-safe, point-in-time
   provider observations with exact snapshot checks but no private-key access or
   saved-state writes. It shares allocation observation validation with recovery;
