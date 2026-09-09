@@ -81,8 +81,15 @@ pub enum PublicationError {
     Cancelled,
 }
 
-pub(crate) fn validate_sibling_name(sibling: &str) -> Result<(), PublicationError> {
-    if sibling.len() > 255 || sibling.contains('/') || paths::validate(sibling).is_err() {
+/// Maximum UTF-8 bytes in one portable publication destination component.
+pub const MAX_SIBLING_NAME_BYTES: usize = 255;
+
+/// Validate one bounded portable destination component without accessing storage.
+/// # Errors
+/// Rejects unsafe or unsupported names. Success does not prove a fresh destination,
+/// ownership, storage qualification or permission to publish.
+pub fn validate_sibling_name(sibling: &str) -> Result<(), PublicationError> {
+    if sibling.len() > MAX_SIBLING_NAME_BYTES || sibling.contains('/') || paths::validate(sibling).is_err() {
         Err(PublicationError::InvalidName)
     } else {
         Ok(())

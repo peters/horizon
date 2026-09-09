@@ -80,7 +80,11 @@ The same helper can explicitly receive a canonical overlay bundle into an existi
 private bundle store and inspect a lost acknowledgement without writing. See
 [worker overlay receipt](../../docs/remote-overlay-transfer.md) for the framed
 input and storage limits. No local files are captured/exported automatically.
-This packaging does not add Git-object transport, client setup, worker-loss recovery,
+Explicit `receive-pack` and `pack-status` commands stream/publish a supplied exact-base
+pack and reopen a nominated candidate. See [worker pack receipt](../../docs/remote-pack-transfer.md)
+for framing, retained failure states and lost-response rules, plus the dedicated
+`test_pack_receive_image.py` smoke. They do not connect the client transport.
+This packaging does not add authenticated Git-object transport, client setup, worker-loss recovery,
 checkpointing or task admission. Existing workers are not
 upgraded by rebuilding an image. Neither the helper nor a locally retained volume
 proves cloud durability or PC-off operation.

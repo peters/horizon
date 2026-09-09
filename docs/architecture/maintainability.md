@@ -315,6 +315,12 @@ back into large multi-purpose modules.
   synchronization. Lost output/write acknowledgement retains possible publication
   without overwrite, cleanup, setup/task start or inferred export permission. Input
   storage synchronization is not the retained-setup qualifier or cloud durability.
+  Its separate `pack/` tree owns bounded framed request validation, typed response
+  projection and Linux routing to existing pack receipt/publication/observation.
+  Shared core path/name validators expose lexical checks only, not storage authority.
+  Pack payloads stream to core; uncertain receipt, pre/post-rename and unknown-rename
+  failures retain distinct candidates. Status never writes or fabricates missing,
+  readiness or synchronization acknowledgement. See [pack commands](../remote-pack-transfer.md).
 - `containers/remote-worker/setup-launch.py` owns the separate worker-only bounded
   handoff: it delegates strict input/root observation to `setup-status`, returns
   existing observations without launch, and passes only an absent intent through a
