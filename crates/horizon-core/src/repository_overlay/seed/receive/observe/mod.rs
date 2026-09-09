@@ -1,4 +1,4 @@
-mod layout;
+pub(super) mod layout;
 
 use super::{
     ExpectedGitPack, MAX_OBJECTS, PackReceiveLimits, ReceivedGitPack, SeedError, native, output, staging, view,
@@ -77,4 +77,4 @@ pub fn observe_git_base_pack(
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

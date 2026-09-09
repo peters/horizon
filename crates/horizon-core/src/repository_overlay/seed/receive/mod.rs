@@ -2,6 +2,7 @@
 
 mod native;
 mod observe;
+pub mod publication;
 
 pub use observe::observe_git_base_pack;
 
@@ -116,6 +117,16 @@ impl fmt::Debug for ReceivedGitPack {
             .field("encoded_bytes", &self.encoded_bytes)
             .field("objects", &self.objects)
             .finish_non_exhaustive()
+    }
+}
+
+impl<'a> From<&'a ReceivedGitPack> for ExpectedGitPack<'a> {
+    fn from(pack: &'a ReceivedGitPack) -> Self {
+        Self {
+            base_commit: pack.base_commit(),
+            sha256: pack.sha256(),
+            encoded_bytes: pack.encoded_bytes(),
+        }
     }
 }
 
