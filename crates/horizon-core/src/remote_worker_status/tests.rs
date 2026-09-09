@@ -7,6 +7,8 @@ use crate::{
     remote_workspace_recovery::recover_remote_workspace,
 };
 
+mod configured;
+
 #[path = "tests/intent.rs"]
 mod intent_tests;
 #[path = "tests/ssh.rs"]

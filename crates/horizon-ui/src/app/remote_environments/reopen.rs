@@ -1,5 +1,6 @@
-//! Explicit saved-view loading and inert reopening, never remote task startup.
+//! Explicit saved-panel loading, inert reopening and read-only task checks.
 
+mod inspection;
 mod paint;
 
 use super::{Context, HorizonHome, InventoryAction, RemoteEnvironmentSummary, WakeOnDrop};
@@ -26,17 +27,20 @@ struct CachedCatalog {
 struct SavedView {
     id: String,
     present: bool,
+    inspection: inspection::TaskObservation,
 }
 
 struct PendingReopen {
     rx: Receiver<Result<Completion, String>>,
     scope: RequestScope,
     discard: bool,
+    inspection: Option<String>,
 }
 
 enum Completion {
     Catalog(Box<RemoteViewCatalog>),
     View(Box<PreparedRemoteViewReopen>),
+    Inspection(horizon_core::remote_worker_status::RemotePanelObservation),
 }
 
 #[derive(Clone)]
@@ -168,7 +172,7 @@ impl ReopenState {
             .name("remote-view-reopening".into())
             .spawn(move || {
                 let _wake = wake;
-                let result = CloudWorkflowStore::open(&home)
+                let result = CloudWorkflowStore::open_read_only(&home)
                     .map_err(|_| "The saved environment could not be safely read. Refresh and retry.".to_string())
                     .and_then(|store| work(&store));
                 let _ = tx.send(result);
@@ -181,6 +185,7 @@ impl ReopenState {
                     rx,
                     scope,
                     discard: false,
+                    inspection: None,
                 });
             }
             Err(_) => self.notice = Some(worker_failure().into()),
@@ -203,8 +208,13 @@ impl ReopenState {
             tracing::debug!(
                 prepared = matches!(&result, Ok(Completion::View(_))),
                 catalog_loaded = matches!(&result, Ok(Completion::Catalog(_))),
+                task_checked = matches!(&result, Ok(Completion::Inspection(_))),
                 "Discarding a stale remote view reopening result"
             );
+            return None;
+        }
+        if let Some(panel) = pending.inspection {
+            self.accept_inspection(&panel, result);
             return None;
         }
         match result {
@@ -217,6 +227,7 @@ impl ReopenState {
                         .map(|id| SavedView {
                             id: id.clone(),
                             present: catalog.view_is_present(board, id),
+                            inspection: inspection::TaskObservation::default(),
                         })
                         .collect(),
                     catalog,
@@ -238,13 +249,16 @@ impl ReopenState {
                 Err(error) => self.notice = Some(error.to_string()),
             },
             Err(message) => self.notice = Some(message),
+            Ok(Completion::Inspection(_)) => {
+                self.notice = Some("The task result did not match its request. Check the task again.".into());
+            }
         }
         None
     }
 }
 
 fn worker_failure() -> &'static str {
-    "The saved-view worker could not start or finish. Show saved panels to retry."
+    "The saved-panel worker could not start or finish. You can retry now."
 }
 
 pub(super) fn show(ui: &mut egui::Ui, state: &ReopenState, enabled: bool, action: &mut InventoryAction) {
@@ -284,6 +298,10 @@ impl super::HorizonApp {
                 InventoryAction::ReopenView(index) => {
                     state.stop.cancel_confirmation();
                     state.reopen.reopen(&client, &self.board, index, ctx);
+                }
+                InventoryAction::InspectTask(index) => {
+                    state.stop.cancel_confirmation();
+                    state.reopen.inspect_task(&client, index, ctx);
                 }
                 _ => {}
             }

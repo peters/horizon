@@ -2,8 +2,8 @@ use super::{InventoryAction, ReopenState};
 
 pub(super) fn show(ui: &mut egui::Ui, state: &ReopenState, enabled: bool, action: &mut InventoryAction) {
     ui.separator();
-    ui.strong("Reopen closed views");
-    ui.label("Restore local views in their owning session. They stay disconnected; remote tasks are unchanged.");
+    ui.strong("Saved panels");
+    ui.label("Check a retained task or reopen its local view. Reopened views stay disconnected.");
     if ui
         .add_enabled(enabled && !state.is_pending(), egui::Button::new("Show saved panels"))
         .clicked()
@@ -11,8 +11,12 @@ pub(super) fn show(ui: &mut egui::Ui, state: &ReopenState, enabled: bool, action
         *action = InventoryAction::ListReopenPanels;
     }
     if let Some(pending) = &state.pending {
-        ui.label(if pending.discard {
+        ui.label(if pending.discard && pending.inspection.is_some() {
+            "Waiting for the discarded task check to finish…"
+        } else if pending.discard {
             "Waiting for the discarded saved-view request to finish…"
+        } else if pending.inspection.is_some() {
+            "Checking the selected retained task…"
         } else {
             "Preparing saved local views…"
         });
@@ -33,9 +37,21 @@ pub(super) fn show(ui: &mut egui::Ui, state: &ReopenState, enabled: bool, action
                     {
                         *action = InventoryAction::ReopenView(index);
                     }
+                    let check =
+                        ui.add_enabled(enabled && !state.is_pending(), egui::Button::new("Check retained task"));
+                    #[cfg(test)]
+                    ui.ctx().data_mut(|data| {
+                        data.insert_temp(egui::Id::new(("inspect-task-test", index)), check.rect);
+                    });
+                    if check.clicked() {
+                        *action = InventoryAction::InspectTask(index);
+                    }
                 });
+                row.inspection.show(ui);
             });
         }
+        ui.label("Task checks are point-in-time, not monitoring or proof of repository or attachment readiness.");
+        ui.label("Checking does not start, reconnect, stop or delete remote work.");
     }
     if let Some(notice) = &state.notice {
         ui.label(notice);

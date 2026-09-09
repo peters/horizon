@@ -5,6 +5,8 @@ use crate::test_egui::DiscardTextures;
 use horizon_core::{CanvasViewState, PanelKind, PanelOptions, RuntimeState, WindowConfig};
 use std::time::{Duration, Instant};
 
+mod inspection;
+
 const OWNER: &str = "00000000-0000-4000-8000-000000000001";
 const FOREIGN: &str = "00000000-0000-4000-8000-000000000002";
 
@@ -56,6 +58,7 @@ fn pending(
         rx,
         scope: scope.clone(),
         discard: false,
+        inspection: None,
     });
     state.repaint_context = Some(ctx.clone());
     tx

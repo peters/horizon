@@ -145,6 +145,9 @@ back into large multi-purpose modules.
   Explicit saved shell/command verification reuses those gates and compares
   literal argv plus the effective directory with the worker's retained intent;
   unresolved agent launch/handoff/resume semantics stay fail-closed.
+  Its `configured` leaf admits one actual owner's saved panel and exact local
+  profile, reuses non-writing recovery and returns timestamped status only.
+  Missing worker pins are not repaired, and observations never persist recovery.
 - `remote_worker_ssh.rs` centralizes crate-private pinned client options and SSH
   path quoting without granting attachment authority. Typed query/attach modes
   share isolation options; each owns private trust material. Status queries retain
@@ -189,6 +192,9 @@ back into large multi-purpose modules.
   prepares inert missing views off-thread. It shares lifecycle invalidation with
   reconnect; competing actions discard queued results before either handoff drains.
   Adoption marks reference-only runtime state dirty without starting remote tasks.
+  Its `inspection` leaf caches explicit retained-task observations in the same
+  bounded worker slot, including with no local views. Labels are point-in-time;
+  session, selection, config and Stop invalidation also discard late task results.
 - `repository_overlay/` owns bounded exact-base metadata for separate index and
   working-tree changes. Its `paths.rs` applies the lexical transfer exclusion policy.
   Planning performs no filesystem, Git, provider or transfer I/O; actual capture/apply
