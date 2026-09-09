@@ -45,6 +45,32 @@ approval, repository URL ownership or task admission. Existing namespace policy,
 link handling, seed identity and checkout verification remain required. Do not
 treat a received pack as a ready repository or as authority to retry setup.
 
+## Read-only reopening
+
+Use `observe_git_base_pack(existing_root, expected, limits, cancelled)` to verify
+an existing received pack after the original in-memory receipt has been dropped.
+It returns a new `ReceivedGitPack` only after checking the current bytes and layout;
+it does not rely on a cached receipt. Missing or invalid input returns an error,
+never a request to create, repair, receive again or rerun setup.
+
+Observation accepts only the receiver's fixed generated layout. It verifies exact
+HEAD/config/shallow metadata, the pack/index pair and its filename/trailer identity,
+encoded length/EOF/SHA-256, bounded native `index-pack --verify --strict`, and the
+original commit's complete shallow closure. Unknown entries, unsafe links and
+changed bindings are rejected. Held node identities and metadata are checked again
+around native operations. There is no index repair or filesystem synchronization.
+
+The root and both generated views must remain owned `0700` directories; these
+private boundaries protect inner directories whose modes inherit the creation
+umask. Files must remain owned `0600` regular single-link inodes. Stable exclusive
+ancestry and input remain caller preconditions: repeated checks do not create a
+snapshot or confinement against hostile same-user mutation. Ordinary reads may
+update filesystem access times; observation issues no data/permission writes.
+
+The same native/encoded limits and off-UI-thread requirements below apply. A
+successful observation verifies private input, not source approval, immutable
+publication, storage durability, remote task liveness or setup replay authority.
+
 ## Ownership, limits and failure
 
 The caller controls stable, exclusive scratch ancestry and supplies trusted
@@ -75,6 +101,12 @@ truncation/trailing input, checksum corruption, wrong base, extra objects/histor
 unsafe parents, cancellation, short reads and redacted reader errors. Existing
 shared-process/copy tests cover resource limits, stalled children and failed writes.
 
-Worker immutable input publication/observation, pinned transport, source-approval
+Observation tests compare contents, names, permissions and inode/time metadata
+before and after successful reopening, checkout consumption and rejected input.
+They cover corruption, missing/extra entries, unsafe links/modes, identity
+substitution, root rebinding, cancellation and native output/exit/deadline failures,
+including initial/empty bases and large repeated nested objects.
+
+Worker immutable input publication and protocol/status integration, pinned transport, source-approval
 UI and full cloud/PC-off acceptance remain separate. Closing local views must never
 implicitly stop or delete a persistent environment.

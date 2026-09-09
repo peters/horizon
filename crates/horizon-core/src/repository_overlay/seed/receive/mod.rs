@@ -1,6 +1,9 @@
 //! Bounded private pack receipt, independent of source approval and setup admission.
 
 mod native;
+mod observe;
+
+pub use observe::observe_git_base_pack;
 
 use super::{
     MAX_OBJECTS, SeedError, SeedFailure,

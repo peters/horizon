@@ -241,6 +241,10 @@ back into large multi-purpose modules.
   command isolation and framed chunk-copy/digest work remain shared with existing
   packed acquisition/export helpers. A received object directory still requires
   namespace/seed/setup policy checks; no publication or task admission is inferred.
+  Its `observe/` subtree reopens only the fixed generated layout without mutation:
+  a layout leaf pins/checks known nodes and pack identities; orchestration streams
+  encoded verification before shared read-only native index/closure checks. The
+  reader's existing metadata fingerprint is reused for held/named comparisons.
   See [private pack receipt](../remote-repository-pack-receipt.md).
   `checkout/` prepares the seed and raw working namespace together, using exclusive
   descriptor-relative writes, incremental loose decoding and pinned-file verification.

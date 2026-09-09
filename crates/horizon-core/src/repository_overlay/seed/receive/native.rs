@@ -56,6 +56,16 @@ pub(super) fn closure(
     cancelled: &impl Fn() -> bool,
 ) -> Result<(), SeedError> {
     let command = view::command(metadata, objects_directory, limits, view::Operation::Closure(commit))?;
+    enumerate(command, commit, objects, limits, cancelled)
+}
+
+pub(super) fn enumerate(
+    command: Command,
+    commit: Oid,
+    objects: u32,
+    limits: PackedSourceLimits,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(), SeedError> {
     let mut session = Session::spawn(command, limits.object_timeout, Box::new(cancelled))?;
     session
         .begin_commit(commit)
@@ -78,6 +88,19 @@ pub(super) fn closure(
         return Err(SeedError::Object);
     }
     Ok(())
+}
+
+pub(super) fn verify(
+    command: Command,
+    limits: PackedSourceLimits,
+    cancelled: &impl Fn() -> bool,
+) -> Result<(), SeedError> {
+    let mut session = Session::spawn(command, limits.object_timeout, Box::new(cancelled))?;
+    session.begin_without_input();
+    if session.read(&mut [0]).map_err(|error| source_error(error.kind()))? != 0 {
+        return Err(SeedError::Object);
+    }
+    session.finish().map_err(|error| source_error(error.kind()))
 }
 
 fn line(session: &mut Session<'_>) -> Result<Option<[u8; 40]>, SeedError> {
