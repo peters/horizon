@@ -57,6 +57,7 @@ impl StoredWorkflow {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CloudWorkflowStore {
     path: PathBuf,
+    read_only: bool,
 }
 
 impl CloudWorkflowStore {
@@ -77,10 +78,35 @@ impl CloudWorkflowStore {
         let path = path.into();
         let store = Self {
             path: prepare_private_store(&path)?,
+            read_only: false,
         };
         let mut connection = store.connection()?;
         initialize_schema(&mut connection)?;
         Ok(store)
+    }
+
+    /// Open the existing default store without creating, migrating, or repairing it.
+    /// All connections on this handle are read-only, including on clones.
+    /// SQLite may maintain WAL bookkeeping files; committed live updates remain visible.
+    ///
+    /// # Errors
+    /// Fails when the database is missing, unreadable, or has an incompatible schema.
+    pub fn open_read_only(home: &HorizonHome) -> Result<Self, CloudStoreError> {
+        Self::open_read_only_path(home.cloud_workflow_store_path())
+    }
+
+    /// Open an explicit existing path with the same read-only guarantees.
+    ///
+    /// # Errors
+    /// Fails when the database is missing, unreadable, or has an incompatible schema.
+    pub fn open_read_only_path(path: impl Into<PathBuf>) -> Result<Self, CloudStoreError> {
+        let path = std::path::absolute(path.into())?;
+        #[cfg(unix)]
+        let path = database::canonical_store_path(&path)?;
+        let mut connection = database::open_read_connection(&path)?;
+        let transaction = connection.transaction()?;
+        ensure_current_schema(&transaction)?;
+        Ok(Self { path, read_only: true })
     }
 
     #[must_use]
@@ -290,7 +316,11 @@ impl CloudWorkflowStore {
     }
 
     fn connection(&self) -> Result<Connection, CloudStoreError> {
-        database::open_connection(&self.path)
+        if self.read_only {
+            database::open_read_connection(&self.path)
+        } else {
+            database::open_connection(&self.path)
+        }
     }
 }
 
@@ -515,6 +545,8 @@ pub enum CloudStoreError {
     Io(#[from] std::io::Error),
     #[error("cloud workflow store directory must not be accessible by group or other users")]
     InsecureStoreDirectory,
+    #[error("cloud workflow store database must not be accessible by group or other users")]
+    InsecureStoreFile,
     #[error("cloud workflow store path must not be a symbolic link")]
     SymlinkStorePath,
     #[error("cloud workflow store database failed: {0}")]

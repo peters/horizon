@@ -73,6 +73,35 @@ pub(super) fn open_connection(path: &Path) -> Result<Connection, CloudStoreError
     Ok(connection)
 }
 
+pub(super) fn open_read_connection(path: &Path) -> Result<Connection, CloudStoreError> {
+    validate_read_path(path)?;
+    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX | OpenFlags::SQLITE_OPEN_NOFOLLOW;
+    let connection = Connection::open_with_flags(path, flags)?;
+    connection.busy_timeout(BUSY_TIMEOUT)?;
+    Ok(connection)
+}
+
+fn validate_read_path(path: &Path) -> Result<(), CloudStoreError> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() {
+        return Err(CloudStoreError::SymlinkStorePath);
+    }
+    #[cfg(unix)]
+    {
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        if parent.metadata()?.permissions().mode() & 0o077 != 0 {
+            return Err(CloudStoreError::InsecureStoreDirectory);
+        }
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(CloudStoreError::InsecureStoreFile);
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn initialize_schema(connection: &mut Connection) -> Result<(), CloudStoreError> {
     connection.pragma_update(None, "journal_mode", "WAL")?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -127,6 +156,17 @@ fn validate_allocation_schema(connection: &Connection) -> Result<(), CloudStoreE
     Ok(())
 }
 
+#[cfg(unix)]
+pub(super) fn canonical_store_path(path: &Path) -> Result<PathBuf, CloudStoreError> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    Ok(parent
+        .canonicalize()?
+        .join(path.file_name().unwrap_or(path.as_os_str())))
+}
+
 pub(super) fn prepare_private_store(path: &Path) -> Result<PathBuf, CloudStoreError> {
     let parent = path
         .parent()
@@ -143,9 +183,7 @@ pub(super) fn prepare_private_store(path: &Path) -> Result<PathBuf, CloudStoreEr
         }
     }
     #[cfg(unix)]
-    let path = parent
-        .canonicalize()?
-        .join(path.file_name().unwrap_or(path.as_os_str()));
+    let path = canonical_store_path(path)?;
     #[cfg(not(unix))]
     let path = path.to_path_buf();
     #[cfg(not(unix))]

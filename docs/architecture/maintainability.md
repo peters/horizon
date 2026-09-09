@@ -393,6 +393,9 @@ back into large multi-purpose modules.
   Its `cloud_run/store/database.rs` leaf owns private-path preparation, connection policy,
   schema initialization, and compatibility checks. Keep database opening separate
   from domain-specific record operations.
+  Existing-store observers use clone-preserved read-only handles, without private-path
+  creation or migration. Single workspace/allocation getters always use read-only
+  connections; live WAL updates remain visible without granting schema repair.
 - `cloud_run/store/remote_workspaces.rs` owns validated, session-owned remote
   snapshot storage with exact revisions and bounded recovery. Replacement
   invariants live in its `validation.rs` leaf. These records are independent of

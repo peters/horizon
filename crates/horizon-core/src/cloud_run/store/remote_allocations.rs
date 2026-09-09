@@ -17,7 +17,7 @@ use super::{
     CloudStoreError, CloudWorkflowStore, MAX_RECOVERED_WORKFLOWS, PreparedWorkflowInsert,
     RemoteWorkspaceStoreError as Error, StoredRemoteWorkspace, StoredWorkflow, check_recovery_budget,
     current_unix_millis,
-    database::ensure_current_schema,
+    database::{ensure_current_schema, open_read_connection},
     remote_workspaces::{WorkspaceReplacement, load_owned, validate_key},
 };
 use crate::cloud_run::{
@@ -98,6 +98,7 @@ impl CloudWorkflowStore {
     /// Unbound active records fail closed and remain available through the record-store API.
     /// Expired setup workflows remain recoverable without granting new creation.
     /// Recovery does not stop/delete workers, clear intent, or change runtime identity.
+    /// Does not create a missing database or repair its schema.
     /// # Errors
     /// Rejects invalid ownership, unbound active snapshots, corrupt relationships, or storage errors.
     pub fn load_remote_allocation(
@@ -106,7 +107,7 @@ impl CloudWorkflowStore {
         workspace_local_id: &str,
     ) -> Result<Option<StoredRemoteAllocation>, Error> {
         validate_key(session_id, workspace_local_id)?;
-        let mut connection = self.connection()?;
+        let mut connection = open_read_connection(self.path())?;
         let transaction = connection.transaction()?;
         ensure_current_schema(&transaction)?;
         let workspace = load_owned(&transaction, session_id, workspace_local_id)?;

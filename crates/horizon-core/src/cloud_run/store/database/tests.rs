@@ -4,6 +4,8 @@ use crate::cloud_run::{CloudProvider, GitCommitSha, GitSource};
 use crate::remote_workspace::{RemoteWorkspaceSpec, RemoteWorkspaceState};
 use rusqlite::params;
 
+mod reads;
+
 const OWNER: &str = "11111111-1111-4111-8111-111111111111";
 
 struct Fixture {

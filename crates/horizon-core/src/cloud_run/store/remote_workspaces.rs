@@ -14,7 +14,8 @@ use thiserror::Error;
 
 use super::{
     CloudStoreError, CloudWorkflowStore, MAX_MATERIALIZED_SNAPSHOT_BYTES, MAX_RECOVERED_SNAPSHOT_BYTES,
-    MAX_SNAPSHOT_BYTES, database::ensure_current_schema,
+    MAX_SNAPSHOT_BYTES,
+    database::{ensure_current_schema, open_read_connection},
 };
 use crate::remote_workspace::{RemoteRuntimePhase, RemoteWorkspaceError, RemoteWorkspaceState};
 pub(super) use validation::validate_key;
@@ -93,6 +94,7 @@ impl CloudWorkflowStore {
     }
 
     /// Load one record only for its owning session, revalidating all stored data.
+    /// Does not create a missing database or repair its schema.
     /// # Errors
     /// Fails closed on ownership mismatch, corruption, incompatible schema, or storage errors.
     pub fn load_remote_workspace(
@@ -101,7 +103,7 @@ impl CloudWorkflowStore {
         workspace_local_id: &str,
     ) -> Result<Option<StoredRemoteWorkspace>, RemoteWorkspaceStoreError> {
         validate_key(session_id, workspace_local_id)?;
-        let mut connection = self.connection()?;
+        let mut connection = open_read_connection(self.path())?;
         let transaction = connection.transaction()?;
         ensure_current_schema(&transaction)?;
         load_owned(&transaction, session_id, workspace_local_id)
