@@ -300,7 +300,12 @@ fn rendered_check_uses_only_selected_panel_and_completed_or_pending_display_does
         &mut app.board,
         &ctx,
     );
-    assert!(text(&app.remote_environments.reopen, &ctx).contains("no local provider profile exactly matches"));
+    let expected = if cfg!(target_os = "linux") {
+        "no local provider profile exactly matches"
+    } else {
+        "protected remote panel inspection is not yet supported on this platform"
+    };
+    assert!(text(&app.remote_environments.reopen, &ctx).contains(expected));
     let tx = queue(&mut app.remote_environments.reopen, &scope, &ctx);
     for _ in 0..30 {
         let _ = text(&app.remote_environments.reopen, &ctx);
