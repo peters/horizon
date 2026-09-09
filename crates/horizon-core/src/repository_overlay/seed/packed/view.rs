@@ -15,6 +15,12 @@ use std::{
 
 pub(super) const MAX_NODES: usize = 262_144;
 pub(super) const MAX_PATH_BYTES: usize = 16 * 1024 * 1024;
+pub(in crate::repository_overlay::seed) const INITIAL_HEAD: &str = "ref: refs/heads/isolated\n";
+pub(in crate::repository_overlay::seed) const INITIAL_CONFIG: &str =
+    "[core]\nrepositoryformatversion = 0\nbare = true\n";
+pub(in crate::repository_overlay::seed) const INITIAL_DIRECTORIES: [&str; 4] =
+    ["objects", "objects/info", "objects/pack", "refs"];
+const CLOSURE_ARGUMENTS: [&str; 4] = ["rev-list", "--objects", "--no-object-names", "--stdin"];
 
 pub(in crate::repository_overlay::seed) fn validate(
     objects: &Path,
@@ -87,13 +93,10 @@ pub(in crate::repository_overlay::seed) enum Operation {
 }
 
 fn initialize(path: &Path) -> Result<(), Error> {
-    for directory in ["objects", "objects/info", "objects/pack", "refs"] {
+    for directory in INITIAL_DIRECTORIES {
         fs::create_dir(path.join(directory)).map_err(|_| Error::Storage)?;
     }
-    for (name, contents) in [
-        ("HEAD", "ref: refs/heads/isolated\n"),
-        ("config", "[core]\nrepositoryformatversion = 0\nbare = true\n"),
-    ] {
+    for (name, contents) in [("HEAD", INITIAL_HEAD), ("config", INITIAL_CONFIG)] {
         OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -159,7 +162,7 @@ pub(in crate::repository_overlay::seed) fn command(
         }
         Operation::Closure(commit) => {
             shallow(path, commit)?;
-            command.args(["rev-list", "--objects", "--no-object-names", "--stdin"]);
+            command.args(CLOSURE_ARGUMENTS);
         }
     }
     Ok(command)
@@ -173,6 +176,33 @@ pub(in crate::repository_overlay::seed) fn index_command(
 ) -> Result<Command, Error> {
     initialize(path)?;
     shallow(path, commit)?;
+    let mut command = index_process(path, limits, encoded_bytes);
+    command
+        .arg("-o")
+        .arg(path.join("objects/pack/received.idx"))
+        .arg(path.join("objects/pack/received.pack"));
+    Ok(command)
+}
+
+pub(in crate::repository_overlay::seed) fn verify_command(
+    path: &Path,
+    pack: &Path,
+    index: &Path,
+    limits: PackedSourceLimits,
+    encoded_bytes: u64,
+) -> Command {
+    let mut command = index_process(path, limits, encoded_bytes);
+    command.args(["--verify", "-o"]).arg(index).arg(pack);
+    command
+}
+
+pub(in crate::repository_overlay::seed) fn stored_closure_command(path: &Path, limits: PackedSourceLimits) -> Command {
+    let mut command = git_process(path, limits);
+    command.args(CLOSURE_ARGUMENTS);
+    command
+}
+
+fn index_process(path: &Path, limits: PackedSourceLimits, encoded_bytes: u64) -> Command {
     let mut command = git_process(path, limits);
     command
         .args([
@@ -182,11 +212,8 @@ pub(in crate::repository_overlay::seed) fn index_command(
             "--no-rev-index",
             "--object-format=sha1",
         ])
-        .arg(format!("--max-input-size={encoded_bytes}"))
-        .arg("-o")
-        .arg(path.join("objects/pack/received.idx"))
-        .arg(path.join("objects/pack/received.pack"));
-    Ok(command)
+        .arg(format!("--max-input-size={encoded_bytes}"));
+    command
 }
 
 fn git_process(path: &Path, limits: PackedSourceLimits) -> Command {

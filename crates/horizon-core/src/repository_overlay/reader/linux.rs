@@ -94,7 +94,7 @@ struct PinnedNode {
 
 impl PinnedNode {
     fn verify(&self, current: &Metadata) -> Result<(), Error> {
-        if fingerprint(&self.metadata) == fingerprint(current) {
+        if same_metadata(&self.metadata, current) {
             Ok(())
         } else {
             Err(Error::Changed)
@@ -166,6 +166,10 @@ struct Fingerprint {
     links: u64,
     modified: (i64, i64),
     changed: (i64, i64),
+}
+
+pub(in crate::repository_overlay) fn same_metadata(left: &Metadata, right: &Metadata) -> bool {
+    fingerprint(left) == fingerprint(right)
 }
 
 fn fingerprint(metadata: &Metadata) -> Fingerprint {
