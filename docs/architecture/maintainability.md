@@ -219,6 +219,11 @@ back into large multi-purpose modules.
   resolver remains available and shares the whole-layer composition path. Header-only
   inspection is additive to `seed/` object streaming, without abandoning lazy payloads;
   the packed adapter shares one strict failure/poison path for both operations.
+  `recovery/` compares two borrowed exact-source/base snapshots without I/O or a
+  merged result. Index and unstaged changes retain their separate baselines; differing
+  indexes and cross-side leaf/directory conflicts remain explicit. Cached Git blob
+  identities normalize verified overlay bytes without reading base payloads. Both
+  inputs survive errors/cancellation; comparison grants no recovery or durability.
   `seed/` streams verified exact-base objects into an internally fresh private Git
   repository and constructs its detached HEAD, shallow boundary and independent
   staged index. Source adapters own their I/O behavior; private Git pathname writes
