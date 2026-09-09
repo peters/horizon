@@ -130,6 +130,12 @@ back into large multi-purpose modules.
   neither absence nor observed readiness grants management or attachment authority.
   Its `configured` adapter resolves an explicit named local profile and rejects
   stale overview summaries before passing the owned snapshot to the observation gate.
+- `remote_worker_inspection.rs` shares the current owned-worker fence between
+  workspace and genuine saved-panel queries without granting execution authority.
+  `remote_repository_pack.rs` observes an explicitly nominated existing pack via
+  the fixed pinned worker command; its protocol leaf binds bounded paths and exact
+  identity to the saved repository base. It neither uploads nor grants source,
+  publication, synchronization or checkout-readiness authority.
 - `remote_worker_status.rs` gates non-creating panel inspection on exact owned
   recovery and current lifetime. Its `protocol.rs` leaf owns bounded status-only
   wire types; `ssh.rs` owns the query's private host-pin lifetime and retains the

@@ -23,9 +23,18 @@ pub(crate) fn prepared_command(
     command_for(identity, known_hosts, endpoint, Operation::Request)
 }
 
+pub(crate) fn prepared_pack_status(
+    identity: &Path,
+    known_hosts: &Path,
+    endpoint: &InteractiveWorkerSshEndpoint,
+) -> Result<Command, Error> {
+    command_for(identity, known_hosts, endpoint, Operation::PackStatus)
+}
+
 #[derive(Clone, Copy)]
 enum Operation<'a> {
     Request,
+    PackStatus,
     Attach { runtime: CloudJobId, panel: &'a str },
 }
 
@@ -40,7 +49,7 @@ fn command_for(
     }
     let mut command = Command::new("ssh");
     let terminal_mode = match operation {
-        Operation::Request => "-T",
+        Operation::Request | Operation::PackStatus => "-T",
         Operation::Attach { panel, .. } if valid_local_id(panel) => "-tt",
         Operation::Attach { .. } => return Err(Error::UnknownPanel),
     };
@@ -89,6 +98,7 @@ fn command_for(
     ]);
     command.arg(match operation {
         Operation::Request => "/usr/local/bin/horizon-panel-session request".into(),
+        Operation::PackStatus => "/usr/local/bin/horizon-repository pack-status".into(),
         Operation::Attach { runtime, panel } => {
             format!("/usr/local/bin/horizon-panel-session attach -- {runtime} {panel}")
         }
@@ -189,6 +199,14 @@ mod tests {
             format!("{HOST_ALIAS} {}\n", endpoint.host_key)
         );
         let query = prepared_command(identity.private_key_path(), &first_path, &endpoint).expect("query");
+        let pack = prepared_pack_status(identity.private_key_path(), &first_path, &endpoint).expect("pack query");
+        let mut pack_args: Vec<_> = query.get_args().map(std::ffi::OsStr::to_os_string).collect();
+        *pack_args.last_mut().expect("fixed helper") = "/usr/local/bin/horizon-repository pack-status".into();
+        assert_eq!(pack.get_args().collect::<Vec<_>>(), pack_args);
+        assert_eq!(
+            pack.get_envs().collect::<Vec<_>>(),
+            query.get_envs().collect::<Vec<_>>()
+        );
         let mut expected: Vec<_> = query.get_args().map(std::ffi::OsStr::to_os_string).collect();
         expected[4] = "-tt".into();
         *expected.last_mut().expect("helper") =

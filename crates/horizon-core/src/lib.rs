@@ -23,7 +23,10 @@ pub mod remote_environment_observation;
 mod remote_hosts;
 pub mod remote_panel_attachment;
 pub mod remote_provider_config;
+pub mod remote_repository_pack;
 pub mod remote_ssh_identity;
+#[cfg(target_os = "linux")]
+mod remote_worker_inspection;
 #[cfg(target_os = "linux")]
 mod remote_worker_ssh;
 pub mod remote_worker_status;
