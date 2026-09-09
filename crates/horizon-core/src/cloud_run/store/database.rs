@@ -149,11 +149,28 @@ pub(super) fn initialize_schema(connection: &mut Connection) -> Result<(), Cloud
 
 pub(super) fn ensure_current_schema(connection: &Connection) -> Result<(), CloudStoreError> {
     let version = connection.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))?;
-    if version != STORE_SCHEMA_VERSION {
+    let legacy_read = version == 4 && connection.is_readonly(rusqlite::MAIN_DB)?;
+    if version != STORE_SCHEMA_VERSION && !legacy_read {
         return Err(CloudStoreError::UnsupportedSchema(version));
     }
     validate_allocation_schema(connection)?;
     creation_fences::validate_schema(connection)?;
+    if legacy_read {
+        // Existing inventory must remain readable without migration. Partial
+        // first-pin metadata is never treated as compatible legacy storage.
+        let partial: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM main.sqlite_schema
+             WHERE tbl_name = 'remote_first_pin_intents' COLLATE NOCASE
+                OR name = 'remote_first_pin_intents' COLLATE NOCASE)",
+            [],
+            |row| row.get(0),
+        )?;
+        return if partial {
+            Err(CloudStoreError::InvalidAllocationSchema)
+        } else {
+            Ok(())
+        };
+    }
     validate_first_pin_schema(connection)
 }
 

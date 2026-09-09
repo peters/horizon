@@ -282,7 +282,11 @@ attachment or lifetime authority. The first complete saved pin consumes the row
 in the same snapshot CAS transaction; failure rolls both changes back. Saved pins
 always select retained trust, never a fresh bootstrap. Missing/malformed intent
 fails closed, and read-only lookup cannot create or migrate storage. Existing
-forbidden generation retirement/rebinding remains unchanged; future explicit
+schema-4 stores remain readable only through actual read-only connections with
+validated allocation/fence metadata and no partial first-pin objects; first-pin
+lookup returns no intent. Explicit mutable open upgrades them without backfill.
+Write connections still require schema 5. Existing restrictions on generation
+retirement/rebinding remain unchanged; future explicit
 retirement must account for any pending row, never reuse it for a new generation.
 
 ## Options considered

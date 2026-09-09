@@ -64,7 +64,8 @@ impl CloudWorkflowStore {
     /// authority. Claimed/provisioning attempts remain inspectable after restart or
     /// setup expiry; the provider and pin CAS still enforce ownership and lifetime.
     /// `None` requires retained trust or refusal, never a missing-pin bootstrap fallback.
-    /// A saved full pin always returns `None`. No database creation/migration or writes.
+    /// A saved full pin or validated schema-four store returns `None`.
+    /// No database creation/migration or writes.
     /// # Errors
     /// Rejects snapshot drift, management intent, missing requests and corrupt storage.
     pub fn load_remote_first_pin_request(
@@ -76,6 +77,9 @@ impl CloudWorkflowStore {
         ensure_current_schema(&transaction)?;
         let current = exact_allocation(&transaction, expected)?;
         let request = current.recovery_request()?;
+        if transaction.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))? == 4 {
+            return Ok(None);
+        }
         let runtime = current
             .workspace
             .state()

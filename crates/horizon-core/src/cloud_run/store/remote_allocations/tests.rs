@@ -903,14 +903,14 @@ mod first_pin {
             .expect("fixture connection")
             .execute_batch("DROP TABLE remote_first_pin_intents; PRAGMA user_version=4")
             .expect("schema-four fixture");
-        assert!(matches!(
-            CloudWorkflowStore::open_read_only_path(fixture.store.path()),
-            Err(CloudStoreError::UnsupportedSchema(4))
-        ));
-        assert!(matches!(
-            fixture.store.load_remote_first_pin_request(&saved),
-            Err(Error::Storage(CloudStoreError::UnsupportedSchema(4)))
-        ));
+        CloudWorkflowStore::open_read_only_path(fixture.store.path()).expect("compatible read-only open");
+        assert_eq!(
+            fixture
+                .store
+                .load_remote_first_pin_request(&saved)
+                .expect("no legacy intent"),
+            None
+        );
         let connection = Connection::open(fixture.store.path()).expect("fixture connection");
         assert_eq!(
             connection
