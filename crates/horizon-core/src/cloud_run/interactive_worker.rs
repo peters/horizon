@@ -368,7 +368,7 @@ fn valid_immutable_image(value: &str) -> bool {
             .is_some_and(|(_, digest)| digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()))
 }
 
-fn valid_single_token(value: &str, maximum_length: usize) -> bool {
+pub(crate) fn valid_single_token(value: &str, maximum_length: usize) -> bool {
     !value.is_empty()
         && value.len() <= maximum_length
         && !value.starts_with('-')

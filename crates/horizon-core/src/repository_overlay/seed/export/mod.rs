@@ -26,7 +26,7 @@ pub struct PackExportLimits {
 }
 
 impl PackExportLimits {
-    pub const DEFAULT_ENCODED_BYTES: u64 = 256 * 1024 * 1024;
+    pub const DEFAULT_ENCODED_BYTES: u64 = super::DEFAULT_ENCODED_PACK_BYTES;
     pub const MAX_ENCODED_BYTES: u64 = MAX_BYTES * 2;
 
     fn validate(self) -> Result<(), SeedError> {
