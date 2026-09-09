@@ -164,6 +164,10 @@ back into large multi-purpose modules.
   Its shared `query.rs` leaf owns bounded nonblocking local-child I/O, explicit
   caller response ceilings and typed transport failures without owning protocol
   parsing, admission, remote tasks or provider lifetime. Query tests are colocated.
+  The existing success-only query adapter now uses the same streaming engine:
+  known-input queries check actual written bytes, while streaming exchanges retain
+  early/nonzero replies and distinguish source EOF. One bounded read/write per
+  iteration preserves cancellation/deadline checks; only no-progress passes sleep.
 - `remote_panel_attachment.rs` consumes explicit exact-allocation admission, fresh
   read-only identity/worker inspection and saved-intent verification before a pinned
   local PTY. Only explicit recovery commits observations; attachment preserves saved phases.

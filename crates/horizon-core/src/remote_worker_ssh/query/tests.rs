@@ -1,3 +1,5 @@
+mod streaming;
+
 use super::*;
 use std::{
     process::Command,
