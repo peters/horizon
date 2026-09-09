@@ -83,14 +83,10 @@ pub(in crate::repository_overlay::seed) fn validate(
 pub(in crate::repository_overlay::seed) enum Operation {
     Inspect,
     Pack(Oid),
+    Closure(Oid),
 }
 
-pub(in crate::repository_overlay::seed) fn command(
-    path: &Path,
-    objects: &Path,
-    limits: PackedSourceLimits,
-    operation: Operation,
-) -> Result<Command, Error> {
+fn initialize(path: &Path) -> Result<(), Error> {
     for directory in ["objects", "objects/info", "objects/pack", "refs"] {
         fs::create_dir(path.join(directory)).map_err(|_| Error::Storage)?;
     }
@@ -106,6 +102,26 @@ pub(in crate::repository_overlay::seed) fn command(
             .and_then(|mut file| file.write_all(contents.as_bytes()))
             .map_err(|_| Error::Storage)?;
     }
+    Ok(())
+}
+
+fn shallow(path: &Path, commit: Oid) -> Result<(), Error> {
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path.join("shallow"))
+        .and_then(|mut file| writeln!(file, "{commit}"))
+        .map_err(|_| Error::Storage)
+}
+
+pub(in crate::repository_overlay::seed) fn command(
+    path: &Path,
+    objects: &Path,
+    limits: PackedSourceLimits,
+    operation: Operation,
+) -> Result<Command, Error> {
+    initialize(path)?;
     let mut quoted = String::from("\"");
     for &byte in objects.as_os_str().as_bytes() {
         match byte {
@@ -118,6 +134,62 @@ pub(in crate::repository_overlay::seed) fn command(
         }
     }
     quoted.push('"');
+    let mut command = git_process(path, limits);
+    command.env("GIT_ALTERNATE_OBJECT_DIRECTORIES", quoted);
+    match operation {
+        Operation::Inspect => {
+            command.args(["cat-file", "--batch-command"]);
+        }
+        Operation::Pack(commit) => {
+            // The exact original commit is a shallow boundary, not rewritten history.
+            shallow(path, commit)?;
+            command.args([
+                "-c",
+                "pack.useSparse=false",
+                "pack-objects",
+                "--stdout",
+                "--revs",
+                "--no-reuse-delta",
+                "--no-reuse-object",
+                "--window=0",
+                "--depth=0",
+                "--threads=1",
+                "--compression=1",
+            ]);
+        }
+        Operation::Closure(commit) => {
+            shallow(path, commit)?;
+            command.args(["rev-list", "--objects", "--no-object-names", "--stdin"]);
+        }
+    }
+    Ok(command)
+}
+
+pub(in crate::repository_overlay::seed) fn index_command(
+    path: &Path,
+    commit: Oid,
+    limits: PackedSourceLimits,
+    encoded_bytes: u64,
+) -> Result<Command, Error> {
+    initialize(path)?;
+    shallow(path, commit)?;
+    let mut command = git_process(path, limits);
+    command
+        .args([
+            "index-pack",
+            "--strict",
+            "--threads=1",
+            "--no-rev-index",
+            "--object-format=sha1",
+        ])
+        .arg(format!("--max-input-size={encoded_bytes}"))
+        .arg("-o")
+        .arg(path.join("objects/pack/received.idx"))
+        .arg(path.join("objects/pack/received.pack"));
+    Ok(command)
+}
+
+fn git_process(path: &Path, limits: PackedSourceLimits) -> Command {
     let mut command = Command::new("/usr/bin/prlimit");
     command
         .args([
@@ -152,35 +224,6 @@ pub(in crate::repository_overlay::seed) fn command(
             ("GIT_ALLOW_PROTOCOL", ""),
             ("GIT_OPTIONAL_LOCKS", "0"),
             ("GIT_TERMINAL_PROMPT", "0"),
-        ])
-        .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", quoted);
-    match operation {
-        Operation::Inspect => {
-            command.args(["cat-file", "--batch-command"]);
-        }
-        Operation::Pack(commit) => {
-            // The exact original commit is a shallow boundary, not rewritten history.
-            OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(path.join("shallow"))
-                .and_then(|mut file| writeln!(file, "{commit}"))
-                .map_err(|_| Error::Storage)?;
-            command.args([
-                "-c",
-                "pack.useSparse=false",
-                "pack-objects",
-                "--stdout",
-                "--revs",
-                "--no-reuse-delta",
-                "--no-reuse-object",
-                "--window=0",
-                "--depth=0",
-                "--threads=1",
-                "--compression=1",
-            ]);
-        }
-    }
-    Ok(command)
+        ]);
+    command
 }

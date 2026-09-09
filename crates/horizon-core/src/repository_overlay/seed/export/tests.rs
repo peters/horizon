@@ -347,7 +347,7 @@ fn one_shot_session_closes_input_checks_exit_deadline_and_cancellation() {
             &format!("read oid; if read extra; then exit 9; fi; printf done; exit {exit}"),
             Duration::from_secs(2),
         );
-        session.begin_pack(Oid::ZERO_SHA1).unwrap();
+        session.begin_commit(Oid::ZERO_SHA1).unwrap();
         let mut bytes = [0; 10];
         assert_eq!(session.read(&mut bytes).unwrap(), 4);
         assert_eq!(session.read(&mut bytes).unwrap(), 0);
@@ -355,7 +355,7 @@ fn one_shot_session_closes_input_checks_exit_deadline_and_cancellation() {
     }
     let mut stalled = peer("read oid; while :; do :; done", Duration::from_millis(50));
     let stalled_process = PathBuf::from(format!("/proc/{}", stalled.id().unwrap()));
-    stalled.begin_pack(Oid::ZERO_SHA1).unwrap();
+    stalled.begin_commit(Oid::ZERO_SHA1).unwrap();
     assert!(stalled.read(&mut [0]).is_err());
     drop(stalled);
     assert!(!stalled_process.exists());
@@ -364,7 +364,7 @@ fn one_shot_session_closes_input_checks_exit_deadline_and_cancellation() {
     command.args(["-c", "read oid; while :; do :; done"]).env_clear();
     let mut session = Session::spawn(command, Duration::from_secs(2), Box::new(|| cancelled.get())).unwrap();
     let cancelled_process = PathBuf::from(format!("/proc/{}", session.id().unwrap()));
-    session.begin_pack(Oid::ZERO_SHA1).unwrap();
+    session.begin_commit(Oid::ZERO_SHA1).unwrap();
     cancelled.set(true);
     assert_eq!(
         session.read(&mut [0]).unwrap_err().kind(),

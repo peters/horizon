@@ -1,6 +1,6 @@
 //! Explicit local exact-base pack preparation, not remote transfer or publication.
 
-mod output;
+pub(super) mod output;
 
 use super::{
     MAX_BYTES, PreparedGitSeed, SeedError, SeedFailure,
@@ -143,7 +143,7 @@ fn produce(
         .map_err(|_| SeedError::Storage)?;
     let mut session = Session::spawn(command, limits.source.object_timeout, Box::new(cancelled))?;
     session
-        .begin_pack(seed.base_commit())
+        .begin_commit(seed.base_commit())
         .map_err(|error| source_error(error.kind()))?;
     let summary = output::copy(
         &mut |bytes| session.read(bytes),
@@ -161,7 +161,7 @@ fn produce(
     })
 }
 
-fn source_error(error: io::ErrorKind) -> SeedError {
+pub(super) fn source_error(error: io::ErrorKind) -> SeedError {
     if error == io::ErrorKind::ConnectionAborted {
         SeedError::Cancelled
     } else {

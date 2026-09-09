@@ -235,6 +235,13 @@ back into large multi-purpose modules.
   success/partial artifacts remain explicit; no network, setup start, immutable
   publication or durability is inferred. Input/output overlap checks cover the
   entire seed, not only its object store. See [pack preparation](../remote-repository-pack.md).
+  `seed/receive/` verifies expected encoded pack identity before isolated strict
+  indexing and bounded exact-base closure enumeration. Its native leaf handles
+  bounded hash-line responses, private index validation and no-replace relocation;
+  command isolation and framed chunk-copy/digest work remain shared with existing
+  packed acquisition/export helpers. A received object directory still requires
+  namespace/seed/setup policy checks; no publication or task admission is inferred.
+  See [private pack receipt](../remote-repository-pack-receipt.md).
   `checkout/` prepares the seed and raw working namespace together, using exclusive
   descriptor-relative writes, incremental loose decoding and pinned-file verification.
   Literal links are created last. This private logical checkout retains failures;
