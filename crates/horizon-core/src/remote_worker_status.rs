@@ -2,8 +2,6 @@
 //! Calls are synchronous and must run off the render thread.
 
 #[cfg(target_os = "linux")]
-mod command;
-#[cfg(target_os = "linux")]
 mod protocol;
 #[cfg(target_os = "linux")]
 mod ssh;

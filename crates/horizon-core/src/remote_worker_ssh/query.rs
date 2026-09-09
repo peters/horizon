@@ -1,4 +1,5 @@
-use super::{RemotePanelStatusError as Error, protocol::RESPONSE_LIMIT};
+//! Bounded local query-child I/O, independent of a worker protocol or admission.
+
 use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
 use std::{
     io::{self, Read, Write},
@@ -8,7 +9,24 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(super) fn run(mut command: Command, input: &[u8], timeout: Duration) -> Result<Vec<u8>, Error> {
+#[derive(Debug, Eq, PartialEq, thiserror::Error)]
+pub(crate) enum Error {
+    #[error("worker query client is unavailable")]
+    ClientUnavailable,
+    #[error("worker query failed")]
+    QueryFailed,
+    #[error("worker query exceeded its deadline")]
+    Deadline,
+    #[error("worker query output exceeds its size limit")]
+    OutputLimit,
+}
+
+pub(crate) fn run(
+    mut command: Command,
+    input: &[u8],
+    timeout: Duration,
+    response_limit: usize,
+) -> Result<Vec<u8>, Error> {
     let started = Instant::now();
     let child = command
         .stdin(Stdio::piped())
@@ -34,7 +52,7 @@ pub(super) fn run(mut command: Command, input: &[u8], timeout: Duration) -> Resu
             return Err(Error::Deadline);
         }
         write_pending(&mut stdin, &mut pending)?;
-        let finished = read_available(&mut stdout, &mut output)?;
+        let finished = read_available(&mut stdout, &mut output, response_limit)?;
         if let Some(status) = child.0.try_wait().map_err(|_| Error::QueryFailed)? {
             if !status.success() || !pending.is_empty() {
                 return Err(Error::QueryFailed);
@@ -66,16 +84,16 @@ fn write_pending(stdin: &mut Option<ChildStdin>, pending: &mut &[u8]) -> Result<
     Ok(())
 }
 
-fn read_available(stream: &mut impl Read, output: &mut Vec<u8>) -> Result<bool, Error> {
+fn read_available(stream: &mut impl Read, output: &mut Vec<u8>, limit: usize) -> Result<bool, Error> {
     let mut buffer = [0; 1024];
     // One read per pass keeps even a peer's endless output inside the elapsed-time budget.
     match stream.read(&mut buffer) {
         Ok(0) => Ok(true),
-        Ok(count) if output.len() + count <= RESPONSE_LIMIT => {
+        Ok(count) if count <= limit.saturating_sub(output.len()) => {
             output.extend_from_slice(&buffer[..count]);
             Ok(false)
         }
-        Ok(_) => Err(Error::InvalidResponse),
+        Ok(_) => Err(Error::OutputLimit),
         Err(error) if matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted) => Ok(false),
         Err(_) => Err(Error::QueryFailed),
     }
@@ -91,3 +109,6 @@ impl Drop for OwnedChild {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

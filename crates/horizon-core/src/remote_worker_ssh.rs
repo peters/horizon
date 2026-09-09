@@ -1,5 +1,6 @@
 //! Crate-private pinned SSH command construction, not remote attachment authority.
 
+pub(crate) mod query;
 mod trust;
 
 use trust::KnownHosts;

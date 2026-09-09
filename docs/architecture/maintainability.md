@@ -132,9 +132,10 @@ back into large multi-purpose modules.
   stale overview summaries before passing the owned snapshot to the observation gate.
 - `remote_worker_status.rs` gates non-creating panel inspection on exact owned
   recovery and current lifetime. Its `protocol.rs` leaf owns bounded status-only
-  wire types; `ssh.rs` owns the query's private host-pin lifetime; `command.rs` owns
-  bounded nonblocking local-child I/O. It neither grants attachment/task startup
-  nor changes the general user-configured SSH API or remote execution lifetime.
+  wire types; `ssh.rs` owns the query's private host-pin lifetime and retains the
+  panel deadline, response ceiling and public error projection. It neither grants
+  attachment/task startup nor changes the general user-configured SSH API or remote
+  execution lifetime.
   Explicit saved shell/command verification reuses those gates and compares
   literal argv plus the effective directory with the worker's retained intent;
   unresolved agent launch/handoff/resume semantics stay fail-closed.
@@ -147,6 +148,9 @@ back into large multi-purpose modules.
   descriptor path for both modes, with no named-file fallback. Holding the exact
   descriptor preserves each pin through local teardown; process exit cannot leave
   a named trust file, even when normal shutdown bypasses Rust destructors.
+  Its shared `query.rs` leaf owns bounded nonblocking local-child I/O, explicit
+  caller response ceilings and typed transport failures without owning protocol
+  parsing, admission, remote tasks or provider lifetime. Query tests are colocated.
 - `remote_panel_attachment.rs` consumes explicit exact-allocation admission, fresh
   read-only identity/worker inspection and saved-intent verification before a pinned
   local PTY. Only explicit recovery commits observations; attachment preserves saved phases.
