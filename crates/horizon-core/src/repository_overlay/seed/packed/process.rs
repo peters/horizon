@@ -77,11 +77,16 @@ impl<'a> Session<'a> {
         Ok(())
     }
 
-    pub(in crate::repository_overlay::seed) fn begin_pack(&mut self, oid: Oid) -> io::Result<()> {
+    pub(in crate::repository_overlay::seed) fn begin_commit(&mut self, oid: Oid) -> io::Result<()> {
         self.deadline = Instant::now() + self.timeout;
-        self.write_request(format!("{oid}\n").as_bytes())?;
+        self.write_request(format!("{oid}^{{commit}}\n").as_bytes())?;
         self.input.take();
         Ok(())
+    }
+
+    pub(in crate::repository_overlay::seed) fn begin_without_input(&mut self) {
+        self.deadline = Instant::now() + self.timeout;
+        self.input.take();
     }
 
     pub(in crate::repository_overlay::seed) fn finish(&mut self) -> io::Result<()> {

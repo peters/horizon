@@ -2,12 +2,13 @@ use super::{ArtifactDigest, SeedError, source_error};
 use sha2::{Digest, Sha256};
 use std::io::{self, Write};
 
-pub(super) struct Summary {
-    pub(super) bytes: u64,
-    pub(super) sha256: ArtifactDigest,
+pub(in crate::repository_overlay::seed) struct Summary {
+    pub(in crate::repository_overlay::seed) bytes: u64,
+    pub(in crate::repository_overlay::seed) sha256: ArtifactDigest,
+    pub(in crate::repository_overlay::seed) objects: u32,
 }
 
-pub(super) fn copy(
+pub(in crate::repository_overlay::seed) fn copy(
     read: &mut impl FnMut(&mut [u8]) -> io::Result<usize>,
     output: &mut impl Write,
     limit: u64,
@@ -51,5 +52,6 @@ pub(super) fn copy(
     Ok(Summary {
         bytes: total,
         sha256: ArtifactDigest::from_sha256_bytes(hash.finalize().into()),
+        objects: count,
     })
 }

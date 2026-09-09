@@ -78,6 +78,8 @@ private file identity, a 65 MiB-plus raw base blob, bounded output, cancellation
 write failure and exact owned-child cleanup. Pure tests exercise framing and
 limits; they are not independent cryptographic pack-validation tests.
 
+The separate [private pack receiver](remote-repository-pack-receipt.md) performs
+strict decoding and exact-base closure checks before existing setup verification.
 Worker receipt/publication, pinned transport, source-approval UI, repository setup,
 remote checkpoints and cloud/PC-off acceptance remain separate work. Closing local
 views must never implicitly stop or delete a persistent environment.
