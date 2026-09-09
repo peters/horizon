@@ -2,7 +2,7 @@ use super::{Command, VERSION};
 use horizon_core::{
     cloud_run::{ArtifactDigest, GitCommitSha},
     repository_overlay::{
-        checkout::publication::{MAX_SIBLING_NAME_BYTES, validate_sibling_name},
+        checkout::publication::validate_sibling_name,
         materialize::{MAX_REQUEST_PATH_BYTES, valid_path},
     },
 };
@@ -10,10 +10,9 @@ use serde::{Deserialize, Serialize};
 use std::{io::Read, path::PathBuf};
 
 pub(super) const HEADER_LIMIT: usize = (6 * MAX_REQUEST_PATH_BYTES + 4096).next_power_of_two();
-// Reserve the Linux terminating NUL and a component-sized budget for fixed inner
-// pack paths: native verification reopens those paths, not only the candidate root.
-pub(super) const MAX_PACK_PATH_BYTES: usize = MAX_REQUEST_PATH_BYTES - 2 - MAX_SIBLING_NAME_BYTES;
-pub(super) const MAX_RECEIVE_PARENT_BYTES: usize = MAX_PACK_PATH_BYTES - 1 - MAX_SIBLING_NAME_BYTES;
+pub(super) use horizon_core::repository_overlay::seed::{
+    MAX_PACK_PATH_BYTES, MAX_PACK_RECEIVE_PARENT_BYTES as MAX_RECEIVE_PARENT_BYTES,
+};
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]

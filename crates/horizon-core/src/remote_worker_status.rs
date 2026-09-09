@@ -101,33 +101,7 @@ fn validate_current<'a>(
     recovered: &'a RecoveredRemoteWorkspace,
     panel_id: &str,
 ) -> Result<&'a crate::cloud_run::interactive_worker::InteractiveWorkerSshEndpoint, RemotePanelStatusError> {
-    use RemotePanelStatusError as Error;
-    let allocation = recovered.allocation();
-    let workspace = allocation.workspace();
-    let current = store.load_remote_allocation(workspace.session_id(), &workspace.state().spec.workspace_local_id)?;
-    if current.as_ref() != Some(allocation) {
-        return Err(Error::StateChanged);
-    }
-    let request = allocation.recovery_request()?;
-    if !workspace
-        .state()
-        .spec
-        .panels
-        .iter()
-        .any(|panel| panel.panel_local_id == panel_id)
-    {
-        return Err(Error::UnknownPanel);
-    }
-    let runtime = workspace.state().runtime.as_ref().ok_or(Error::WorkerUnavailable)?;
-    let observation = recovered.observation().ok_or(Error::WorkerUnavailable)?;
-    if !observation.is_ready_for(&request, time::OffsetDateTime::now_utc())
-        || recovered.identity().public_key() != request.ssh_public_key
-        || runtime.worker.as_ref() != Some(&observation.worker)
-        || runtime.ssh != observation.ssh
-    {
-        return Err(Error::WorkerUnavailable);
-    }
-    observation.ssh.as_ref().ok_or(Error::WorkerUnavailable)
+    crate::remote_worker_inspection::validate_current(store, recovered, Some(panel_id))
 }
 
 /// No error includes private paths, task data, provider payloads or subprocess output.

@@ -14,8 +14,14 @@ pub mod receive;
 mod staging;
 
 use super::namespace::ResolvedRepositoryOverlay;
+/// Worker pack candidates reserve the native terminator and fixed inner-path headroom.
+pub const MAX_PACK_PATH_BYTES: usize =
+    super::materialize::MAX_REQUEST_PATH_BYTES - 2 - super::checkout::publication::MAX_SIBLING_NAME_BYTES;
+/// Receive parents additionally reserve a separator and a full destination component.
+pub const MAX_PACK_RECEIVE_PARENT_BYTES: usize =
+    MAX_PACK_PATH_BYTES - 1 - super::checkout::publication::MAX_SIBLING_NAME_BYTES;
 #[cfg(target_os = "linux")]
-pub(super) const MAX_OBJECTS: usize = super::MAX_CHANGES * 2 + 2;
+pub(crate) const MAX_OBJECTS: usize = super::MAX_CHANGES * 2 + 2;
 #[cfg(target_os = "linux")]
 pub(super) const MAX_BYTES: u64 =
     super::MAX_CONTENT_BYTES + super::bundle::MAX_BUNDLE_BYTES as u64 + 3 * super::MAX_METADATA_BYTES as u64;
