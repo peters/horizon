@@ -5,6 +5,7 @@ use super::super::{
         InteractiveWorkerLifecycle, InteractiveWorkerProvider, InteractiveWorkerRequest, InteractiveWorkerSshEndpoint,
         InteractiveWorkerStatus, valid_ssh_coordinates,
     },
+    interactive_worker_stop::{InteractiveWorkerStop, InteractiveWorkerStopProvider},
 };
 use super::{
     RunPodCleanup, RunPodClient, RunPodEnsure, RunPodError, RunPodLifecycle, RunPodProfile, RunPodSshEndpoint,
@@ -176,6 +177,15 @@ impl InteractiveWorkerProvider for RunPodInteractiveWorkerProvider {
             RunPodCleanup::Deleted => InteractiveWorkerCleanup::Deleted,
             RunPodCleanup::AlreadyAbsent => InteractiveWorkerCleanup::AlreadyAbsent,
         })
+    }
+}
+
+impl InteractiveWorkerStopProvider for RunPodInteractiveWorkerProvider {
+    fn stop_worker(&self, worker: &InteractiveWorker) -> Result<InteractiveWorkerStop, Self::Error> {
+        let retained = runpod_worker(worker)?;
+        super::validate_target(&worker.target, &self.profile)?;
+        self.client
+            .stop_interactive_worker(&retained, &worker.ssh_public_key, &self.profile)
     }
 }
 

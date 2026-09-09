@@ -105,6 +105,19 @@ impl Transport for RunPodHttp {
             .then_some(Some(pod))
             .ok_or(RunPodError::ResourceIdentityMismatch)
     }
+    fn stop(&self, pod_id: &str) -> Result<(), RunPodError> {
+        let url = format!("{}/action", Self::pod_url(pod_id)?);
+        let response = self
+            .agent
+            .post(url.as_str())
+            .header("Authorization", &self.authorization)
+            .send_json(serde_json::json!({"action": "stop"}))
+            .map_err(|_| RunPodError::RequestFailed { operation: "pod Stop" })?;
+        let pod: ApiPod = decode_json(response, 200, "pod Stop")?;
+        (pod.id == pod_id)
+            .then_some(())
+            .ok_or(RunPodError::ResourceIdentityMismatch)
+    }
     fn delete(&self, pod_id: &str) -> Result<RunPodCleanup, RunPodError> {
         let url = Self::pod_url(pod_id)?;
         let response = self
@@ -186,4 +199,111 @@ where
         .limit(RESPONSE_LIMIT_BYTES)
         .read_json()
         .map_err(|_| RunPodError::InvalidResponse { operation })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        io::Read as _,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+    use ureq::{
+        Body, SendBody,
+        http::{Request, Response},
+        middleware::MiddlewareNext,
+    };
+
+    #[test]
+    fn stop_http_uses_only_exact_fixed_action_and_bounded_redacted_responses() {
+        for (status, body, expected) in [
+            (200, r#"{"id":"pod_stop"}"#.to_string(), Ok(())),
+            (
+                200,
+                r#"{"id":"foreign"}"#.to_string(),
+                Err(RunPodError::ResourceIdentityMismatch),
+            ),
+            (
+                200,
+                "private-malformed-payload".into(),
+                Err(RunPodError::InvalidResponse { operation: "pod Stop" }),
+            ),
+            (
+                200,
+                format!(r#"{{"id":"pod_stop","padding":"{}"}}"#, "x".repeat(2 * 1024 * 1024)),
+                Err(RunPodError::InvalidResponse { operation: "pod Stop" }),
+            ),
+            (
+                403,
+                "private-forbidden-payload".into(),
+                Err(RunPodError::UnexpectedStatus {
+                    operation: "pod Stop",
+                    status: 403,
+                }),
+            ),
+            (
+                204,
+                String::new(),
+                Err(RunPodError::UnexpectedStatus {
+                    operation: "pod Stop",
+                    status: 204,
+                }),
+            ),
+            (
+                302,
+                "private-redirect-payload".into(),
+                Err(RunPodError::UnexpectedStatus {
+                    operation: "pod Stop",
+                    status: 302,
+                }),
+            ),
+        ] {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let count = Arc::clone(&calls);
+            let agent = ureq::Agent::config_builder()
+                .middleware(move |request: Request<SendBody>, _: MiddlewareNext| {
+                    count.fetch_add(1, Ordering::SeqCst);
+                    assert_eq!(request.method(), "POST");
+                    assert_eq!(request.uri(), "https://api.runpod.io/v2/pods/pod_stop/action");
+                    assert_eq!(request.headers()["Authorization"], "Bearer synthetic-credential");
+                    assert_eq!(request.headers()["Content-Type"], "application/json; charset=utf-8");
+                    let mut payload = String::new();
+                    request
+                        .into_body()
+                        .into_reader()
+                        .read_to_string(&mut payload)
+                        .expect("payload");
+                    assert_eq!(
+                        serde_json::from_str::<serde_json::Value>(&payload).expect("request JSON"),
+                        serde_json::json!({"action": "stop"})
+                    );
+                    Ok(Response::builder()
+                        .status(status)
+                        .body(Body::builder().data(body.clone()))
+                        .expect("response"))
+                })
+                .build()
+                .new_agent();
+            let http = RunPodHttp {
+                agent,
+                authorization: "Bearer synthetic-credential".into(),
+            };
+            assert_eq!(http.stop("pod_stop"), expected);
+            for invalid in ["", "../other", "pod_stop/action", "pod_stop?terminate=true"] {
+                assert_eq!(http.stop(invalid), Err(RunPodError::ResourceIdentityMismatch));
+            }
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            if let Err(error) = expected {
+                assert!(!format!("{error:?} {error}").contains("private-"));
+                assert!(!format!("{error:?} {error}").contains("synthetic-credential"));
+            }
+        }
+        let production = RunPodHttp::new(&RunPodApiKey::new("synthetic-credential").expect("key"));
+        assert!(production.agent.config().https_only());
+        assert_eq!(production.agent.config().max_redirects(), 0);
+        assert_eq!(production.agent.config().timeouts().global, Some(REQUEST_TIMEOUT));
+    }
 }

@@ -12,6 +12,7 @@ mod create_request;
 mod http;
 mod interactive;
 mod models;
+mod stop;
 #[cfg(test)]
 mod tests;
 
@@ -381,6 +382,7 @@ trait Transport: Send + Sync {
     fn list_by_name(&self, name: &str) -> Result<Vec<ApiPod>, RunPodError>;
     fn create(&self, request: &CreatePodRequest) -> Result<ApiPod, RunPodError>;
     fn get(&self, pod_id: &str) -> Result<Option<ApiPod>, RunPodError>;
+    fn stop(&self, pod_id: &str) -> Result<(), RunPodError>;
     fn delete(&self, pod_id: &str) -> Result<RunPodCleanup, RunPodError>;
 }
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -394,6 +396,8 @@ struct ApiPod {
     env: BTreeMap<String, String>,
     #[serde(default, deserialize_with = "deserialize_hourly_cost")]
     cost: Option<u64>,
+    #[serde(flatten)]
+    stop: stop::StopMetadata,
 }
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]

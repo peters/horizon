@@ -389,6 +389,11 @@ back into large multi-purpose modules.
   creation-request construction. Public type re-exports remain stable. HTTP
   transport and common interactive-worker adaptation stay in their existing
   `http.rs` and `interactive.rs` leaves.
+- `cloud_run/runpod/stop.rs` adds only explicit, exact-Pod Stop for persistent
+  workers with a verified ordinary `/workspace` volume. It verifies retained
+  inactive state after a single Stop action, including a lost response, without
+  deletion, restart, SSH, or UI admission. This is not a backup or filesystem
+  durability claim; the existing durable Stop coordinator owns saved intent.
 - `cloud_run/store.rs` owns workflow snapshots and creation-claim transactions.
   Its `cloud_run/store/database.rs` leaf owns private-path preparation, connection policy,
   schema initialization, and compatibility checks. Keep database opening separate

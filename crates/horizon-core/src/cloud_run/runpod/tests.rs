@@ -4,6 +4,7 @@ use super::super::interactive_worker::{
     InteractiveWorkerLease, InteractiveWorkerLifecycle, InteractiveWorkerLifetime, InteractiveWorkerProvider,
     InteractiveWorkerRequest,
 };
+use super::stop::StopMetadata;
 use super::*;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::sync::{Arc, Mutex};
@@ -12,6 +13,7 @@ mod noncreating;
 mod persistence;
 mod reconciliation;
 mod snapshots;
+mod stop;
 
 const ED25519_BLOB_PREFIX: &[u8] = b"\0\0\0\x0bssh-ed25519\0\0\0\x20";
 
@@ -25,6 +27,9 @@ struct FakeState {
     create_rejection: Option<RunPodError>,
     create_requests: Vec<CreatePodRequest>,
     deleted: Vec<String>,
+    stopped: Vec<String>,
+    stop_error: Option<RunPodError>,
+    on_stop: Option<Box<dyn Fn() + Send + Sync>>,
     inspected: Vec<String>,
     scripted_lists: Vec<Vec<ApiPod>>,
     scripted_gets: Vec<Result<Option<ApiPod>, RunPodError>>,
@@ -90,6 +95,17 @@ impl Transport for FakeTransport {
         state.pods.retain(|pod| pod.id != pod_id);
         Ok(RunPodCleanup::Deleted)
     }
+    fn stop(&self, pod_id: &str) -> Result<(), RunPodError> {
+        let mut state = self.0.lock().expect("state");
+        if let Some(hook) = &state.on_stop {
+            hook();
+        }
+        state.stopped.push(pod_id.to_string());
+        for pod in state.pods.iter_mut().filter(|pod| pod.id == pod_id) {
+            pod.status = Some("EXITED".into());
+        }
+        state.stop_error.take().map_or(Ok(()), Err)
+    }
 }
 fn target() -> WorkerTarget {
     WorkerTarget {
@@ -149,6 +165,7 @@ fn api_pod(
             (TERMINATE_ENV.to_string(), terminate_after),
         ]),
         cost: hourly_cost_micros,
+        stop: StopMetadata::default(),
     }
 }
 

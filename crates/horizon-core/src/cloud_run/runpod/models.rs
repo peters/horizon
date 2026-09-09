@@ -200,6 +200,16 @@ pub enum RunPodError {
     PersistentCreationReconciliationRequired { name: String, pod_id: String },
     #[error("RunPod pod {pod_id} deletion could not be verified")]
     DeletionVerificationFailed { pod_id: String },
+    #[error("data-retaining RunPod Stop requires a persistent worker")]
+    StopUnsupportedLifetime,
+    #[error("RunPod Stop requires a verified retained /workspace volume")]
+    StopRetentionUnverified,
+    #[error("RunPod lifecycle or Stop capability could not be verified")]
+    StopStateUnverified,
+    #[error("RunPod resource disappeared during Stop; retained data cannot be certified")]
+    StopResourceLost,
+    #[error("RunPod Stop was not verified; retain identity and explicitly reconcile before retrying")]
+    StopVerificationFailed,
     #[error("RunPod recovered worker lease was outside the requested bound and was deleted")]
     LeaseDeadlineRejected { worker: Box<RunPodWorker> },
     #[error("RunPod recovered worker lease was outside the requested bound but cleanup failed")]
