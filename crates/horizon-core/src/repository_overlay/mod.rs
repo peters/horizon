@@ -9,6 +9,7 @@ pub mod materialize;
 pub mod namespace;
 mod paths;
 pub mod reader;
+pub mod recovery;
 pub mod retained_setup;
 pub mod seed;
 #[cfg(target_os = "linux")]
