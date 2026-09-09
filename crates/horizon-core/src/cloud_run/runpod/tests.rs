@@ -119,7 +119,7 @@ fn target() -> WorkerTarget {
         max_hourly_cost_micros: Some(750_000),
     }
 }
-fn profile() -> RunPodProfile {
+pub(super) fn profile() -> RunPodProfile {
     RunPodProfile {
         name: "nativesdk-gpu".to_string(),
         gpu_type_ids: vec!["NVIDIA RTX A4000".to_string(), "NVIDIA RTX A4500".to_string()],
@@ -135,7 +135,7 @@ fn profile() -> RunPodProfile {
     }
 }
 
-fn ed25519_key(byte: u8) -> String {
+pub(super) fn ed25519_key(byte: u8) -> String {
     let mut blob = ED25519_BLOB_PREFIX.to_vec();
     blob.extend([byte; 32]);
     format!("ssh-ed25519 {}", STANDARD.encode(blob))
@@ -169,7 +169,7 @@ fn api_pod(
     }
 }
 
-fn interactive_request(workflow_id: CloudWorkflowId, job_id: CloudJobId) -> InteractiveWorkerRequest {
+pub(super) fn interactive_request(workflow_id: CloudWorkflowId, job_id: CloudJobId) -> InteractiveWorkerRequest {
     InteractiveWorkerRequest {
         workflow_id,
         job_id,
@@ -207,7 +207,13 @@ impl FakeHostKeySource {
 }
 
 impl RunPodHostKeySource for FakeHostKeySource {
-    fn host_key(&self, worker: &RunPodWorker, endpoint: &RunPodSshEndpoint) -> Option<String> {
+    fn host_key(
+        &self,
+        worker: &RunPodWorker,
+        endpoint: &RunPodSshEndpoint,
+        expected_client_key: &str,
+    ) -> Option<String> {
+        assert_eq!(expected_client_key, ed25519_key(41));
         self.calls
             .lock()
             .expect("host key calls")
@@ -421,6 +427,12 @@ fn interactive_adapter_preserves_identity_and_reaches_attested_ready_state() {
 
     let state = observer.0.lock().expect("state");
     assert_eq!(state.create_requests.len(), 1);
+    assert!(
+        state.create_requests[0]
+            .env
+            .iter()
+            .any(|entry| entry.key == HOST_KEY_BOOTSTRAP_ENV && entry.value == "1")
+    );
     assert!(
         state.create_requests[0]
             .env

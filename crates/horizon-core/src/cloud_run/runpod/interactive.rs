@@ -20,15 +20,25 @@ use super::{
 /// attestation source.
 pub trait RunPodHostKeySource: Send + Sync {
     #[must_use]
-    fn host_key(&self, worker: &RunPodWorker, endpoint: &RunPodSshEndpoint) -> Option<String>;
+    fn host_key(
+        &self,
+        worker: &RunPodWorker,
+        endpoint: &RunPodSshEndpoint,
+        expected_client_key: &str,
+    ) -> Option<String>;
 }
 
 impl<F> RunPodHostKeySource for F
 where
-    F: Fn(&RunPodWorker, &RunPodSshEndpoint) -> Option<String> + Send + Sync,
+    F: Fn(&RunPodWorker, &RunPodSshEndpoint, &str) -> Option<String> + Send + Sync,
 {
-    fn host_key(&self, worker: &RunPodWorker, endpoint: &RunPodSshEndpoint) -> Option<String> {
-        self(worker, endpoint)
+    fn host_key(
+        &self,
+        worker: &RunPodWorker,
+        endpoint: &RunPodSshEndpoint,
+        expected_client_key: &str,
+    ) -> Option<String> {
+        self(worker, endpoint, expected_client_key)
     }
 }
 
@@ -55,7 +65,7 @@ impl RunPodInteractiveWorkerProvider {
         target: &WorkerTarget,
         ssh_public_key: &str,
     ) -> InteractiveWorkerStatus {
-        let (lifecycle, ssh) = self.adapt_connection(&status);
+        let (lifecycle, ssh) = self.adapt_connection(&status, ssh_public_key);
         InteractiveWorkerStatus {
             worker: InteractiveWorker {
                 identity: InteractiveWorkerIdentity {
@@ -76,19 +86,21 @@ impl RunPodInteractiveWorkerProvider {
     fn adapt_connection(
         &self,
         status: &RunPodWorkerStatus,
+        expected_client_key: &str,
     ) -> (InteractiveWorkerLifecycle, Option<InteractiveWorkerSshEndpoint>) {
         match status.lifecycle {
             RunPodLifecycle::Provisioning => (InteractiveWorkerLifecycle::Provisioning, None),
             RunPodLifecycle::Exited | RunPodLifecycle::Terminated => (InteractiveWorkerLifecycle::Stopped, None),
             RunPodLifecycle::Failed => (InteractiveWorkerLifecycle::Failed, None),
             RunPodLifecycle::Unknown => (InteractiveWorkerLifecycle::Unknown, None),
-            RunPodLifecycle::Running => self.adapt_running_connection(status),
+            RunPodLifecycle::Running => self.adapt_running_connection(status, expected_client_key),
         }
     }
 
     fn adapt_running_connection(
         &self,
         status: &RunPodWorkerStatus,
+        expected_client_key: &str,
     ) -> (InteractiveWorkerLifecycle, Option<InteractiveWorkerSshEndpoint>) {
         let Some((username, host, port)) = status
             .ssh_username
@@ -107,7 +119,7 @@ impl RunPodInteractiveWorkerProvider {
         if !valid_ssh_coordinates(&endpoint.host, endpoint.port, &endpoint.username) {
             return (InteractiveWorkerLifecycle::Failed, None);
         }
-        let Some(host_key) = self.host_keys.host_key(&status.worker, &endpoint) else {
+        let Some(host_key) = self.host_keys.host_key(&status.worker, &endpoint, expected_client_key) else {
             return (InteractiveWorkerLifecycle::Provisioning, None);
         };
         let endpoint = InteractiveWorkerSshEndpoint {
@@ -189,7 +201,7 @@ impl InteractiveWorkerStopProvider for RunPodInteractiveWorkerProvider {
     }
 }
 
-fn runpod_worker(worker: &InteractiveWorker) -> Result<RunPodWorker, RunPodError> {
+pub(super) fn runpod_worker(worker: &InteractiveWorker) -> Result<RunPodWorker, RunPodError> {
     if !worker.is_valid_for(CloudProvider::RunPod) {
         return Err(RunPodError::InvalidPersistedWorker);
     }

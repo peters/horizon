@@ -9,6 +9,7 @@ use super::{
 use serde::{Deserialize, Deserializer, de};
 use std::{collections::BTreeMap, env, fmt};
 mod create_request;
+mod host_key;
 mod http;
 mod interactive;
 mod models;
@@ -17,6 +18,7 @@ mod stop;
 mod tests;
 
 use create_request::CreatePodRequest;
+pub use host_key::RunPodHostTrust;
 pub use interactive::{RunPodHostKeySource, RunPodInteractiveWorkerProvider};
 pub use models::{
     RunPodCleanup, RunPodEnsure, RunPodError, RunPodLifecycle, RunPodProfile, RunPodSshEndpoint, RunPodWorker,
@@ -27,6 +29,7 @@ const WORKFLOW_ENV: &str = "HORIZON_WORKFLOW_ID";
 const JOB_ENV: &str = "HORIZON_JOB_ID";
 const PROTOCOL_ENV: &str = "HORIZON_CLOUD_PROTOCOL_VERSION";
 const SSH_PUBLIC_KEY_ENV: &str = "HORIZON_SSH_PUBLIC_KEY";
+const HOST_KEY_BOOTSTRAP_ENV: &str = "HORIZON_HOST_KEY_BOOTSTRAP_VERSION";
 const TERMINATE_ENV: &str = "HORIZON_TERMINATE_AFTER";
 const LIFETIME_ENV: &str = "HORIZON_WORKER_LIFETIME";
 const PERSISTENT_LIFETIME: &str = "persistent";

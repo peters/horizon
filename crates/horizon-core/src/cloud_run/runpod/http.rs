@@ -4,7 +4,7 @@ const PODS_URL: &str = "https://api.runpod.io/v2/pods";
 const GRAPHQL_URL: &str = "https://api.runpod.io/graphql";
 const CREATE_MUTATION: &str =
     "mutation CreatePod($input: PodFindAndDeployOnDemandInput!) { podFindAndDeployOnDemand(input: $input) { id } }";
-const RESPONSE_LIMIT_BYTES: u64 = 2 * 1024 * 1024;
+pub(super) const RESPONSE_LIMIT_BYTES: u64 = 2 * 1024 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 pub(super) const PROPAGATION_BACKOFF_MS: [u64; 8] = [0, 250, 500, 1_000, 2_000, 4_000, 8_000, 16_000];
 const CAPACITY_ERROR_MARKERS: [&str; 8] = [
@@ -43,6 +43,48 @@ impl RunPodHttp {
         valid_provider_id(pod_id)
             .then(|| format!("{PODS_URL}/{pod_id}"))
             .ok_or(RunPodError::ResourceIdentityMismatch)
+    }
+
+    pub(super) fn host_key_sample(&self, pod_id: &str) -> Result<Vec<u8>, RunPodError> {
+        let url = format!("{}/logs?source=container&tail=5000", Self::pod_url(pod_id)?);
+        let mut response = self
+            .agent
+            .get(url.as_str())
+            .header("Authorization", &self.authorization)
+            .config()
+            .timeout_global(Some(Duration::from_secs(5)))
+            .build()
+            .call()
+            .map_err(|_| RunPodError::RequestFailed {
+                operation: "host-key bootstrap",
+            })?;
+        if response.status().as_u16() != 200 {
+            return Err(RunPodError::UnexpectedStatus {
+                operation: "host-key bootstrap",
+                status: response.status().as_u16(),
+            });
+        }
+        if response
+            .headers()
+            .get("Content-Type")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(';').next())
+            .map(str::trim)
+            != Some("text/event-stream")
+        {
+            return Err(RunPodError::InvalidResponse {
+                operation: "host-key bootstrap",
+            });
+        }
+        super::host_key::sample::read(response.body_mut().as_reader())
+    }
+
+    #[cfg(test)]
+    pub(super) fn mock(agent: ureq::Agent) -> Self {
+        Self {
+            agent,
+            authorization: "Bearer synthetic-credential".into(),
+        }
     }
 }
 impl Transport for RunPodHttp {

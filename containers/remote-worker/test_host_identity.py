@@ -48,6 +48,68 @@ class HostIdentityTests(unittest.TestCase):
                 (store or self.store).prepare()
             utility.assert_not_called()
 
+    def bootstrap_environment(self):
+        return {identity.BOOTSTRAP_ENV: "1", "HORIZON_CLOUD_PROTOCOL_VERSION": "1", "RUNPOD_POD_ID": "pod_synthetic",
+                "HORIZON_WORKFLOW_ID": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                "HORIZON_JOB_ID": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}
+
+    def test_bootstrap_record_is_emitted_only_after_retained_key_materialization(self):
+        output = io.StringIO()
+        observed = []
+
+        def write(line):
+            observed.append((self.store.marker.exists(), (self.runtime / identity.KEY_NAME).exists()))
+            return output.write(line)
+
+        writer = mock.Mock(write=write, flush=output.flush)
+        public = identity.prepare_for_startup(self.store, self.bootstrap_environment(), writer)
+        self.assertEqual([(True, True)], observed)
+        line = output.getvalue()
+        self.assertLessEqual(len(line.encode()), identity.BOOTSTRAP_LIMIT)
+        self.assertTrue(line.startswith(identity.BOOTSTRAP_PREFIX))
+        record = json.loads(line[len(identity.BOOTSTRAP_PREFIX):])
+        self.assertEqual({**identity.bootstrap_context(self.bootstrap_environment()),
+                          "access_digest": self.store.claim.read_text(), "host_public_key": public}, record)
+        self.assertNotIn("PRIVATE KEY", line)
+        self.assertEqual(public, identity.public_key((self.runtime / (identity.KEY_NAME + ".pub")).read_bytes()))
+        before = self.snapshot()
+        reopened = io.StringIO()
+        self.assertEqual(public, identity.prepare_for_startup(self.new_store(), self.bootstrap_environment(), reopened))
+        self.assertEqual(line, reopened.getvalue())
+        self.assertEqual(before, self.snapshot())
+
+    def test_invalid_explicit_bootstrap_context_fails_before_identity_preparation(self):
+        for field in self.bootstrap_environment():
+            for value in (None, "", "invalid/context", "x" * 192):
+                environment = self.bootstrap_environment()
+                if value is None and field != identity.BOOTSTRAP_ENV:
+                    del environment[field]
+                else:
+                    environment[field] = value
+                with self.subTest(field=field, value=value), mock.patch.object(self.store, "prepare") as prepare:
+                    with self.assertRaises((identity.IdentityError, ValueError)):
+                        identity.prepare_for_startup(self.store, environment, io.StringIO())
+                    prepare.assert_not_called()
+        output = io.StringIO()
+        public = identity.prepare_for_startup(self.store, {"RUNPOD_POD_ID": "unrelated"}, output)
+        self.assertEqual("", output.getvalue())
+        self.assertEqual(public, self.store.prepare())
+
+    def test_failed_preparation_or_bootstrap_output_never_replaces_retained_identity(self):
+        environment = self.bootstrap_environment()
+        output = io.StringIO()
+        with mock.patch.object(self.store, "prepare", side_effect=identity.IdentityError):
+            with self.assertRaises(identity.IdentityError):
+                identity.prepare_for_startup(self.store, environment, output)
+        self.assertEqual("", output.getvalue())
+        self.store.prepare()
+        before = self.snapshot()
+        for writer in (mock.Mock(write=mock.Mock(side_effect=BrokenPipeError)), mock.Mock(write=lambda _: 0),
+                       mock.Mock(write=len, flush=mock.Mock(side_effect=OSError))):
+            with self.assertRaises((identity.IdentityError, OSError)):
+                identity.prepare_for_startup(self.new_store(), environment, writer)
+            self.assertEqual(before, self.snapshot())
+
     def test_same_key_after_reopen_and_loss_of_runtime_filesystem(self):
         public = self.store.prepare()
         before = self.snapshot()
