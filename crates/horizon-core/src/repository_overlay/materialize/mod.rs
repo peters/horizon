@@ -133,7 +133,11 @@ pub fn materialize_repository(
     }
 }
 
-pub(super) fn valid_path(path: &Path) -> bool {
+/// Check the bounded absolute UTF-8 request-path syntax without accessing storage.
+/// This grants no ownership or filesystem-safety guarantee; consumers must verify
+/// their existing ancestry, identity and private-storage contracts separately.
+#[must_use]
+pub fn valid_path(path: &Path) -> bool {
     path.is_absolute()
         && path
             .to_str()

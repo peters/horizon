@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod pack;
 mod protocol;
 mod receive;
 mod setup;
@@ -15,12 +16,20 @@ fn main() -> ExitCode {
     if arguments.len() != 1
         || !matches!(
             command,
-            Some("materialize" | "setup" | "setup-status" | "receive-overlay" | "overlay-status")
+            Some(
+                "materialize"
+                    | "setup"
+                    | "setup-status"
+                    | "receive-overlay"
+                    | "overlay-status"
+                    | "receive-pack"
+                    | "pack-status"
+            )
         )
     {
         let _ = writeln!(
             io::stderr().lock(),
-            "Usage: horizon-repository materialize|setup|setup-status|receive-overlay|overlay-status < request"
+            "Usage: horizon-repository materialize|setup|setup-status|receive-overlay|overlay-status|receive-pack|pack-status < request"
         );
         return ExitCode::from(2);
     }
@@ -32,6 +41,8 @@ fn main() -> ExitCode {
         Some("setup-status") => setup::run(setup::Command::Observe, &mut input, &mut output, &mut diagnostics),
         Some("receive-overlay") => receive::run(receive::Command::Receive, &mut input, &mut output, &mut diagnostics),
         Some("overlay-status") => receive::run(receive::Command::Observe, &mut input, &mut output, &mut diagnostics),
+        Some("receive-pack") => pack::run(pack::Command::Receive, &mut input, &mut output, &mut diagnostics),
+        Some("pack-status") => pack::run(pack::Command::Observe, &mut input, &mut output, &mut diagnostics),
         _ => run(&mut input, &mut output, &mut diagnostics),
     }
 }

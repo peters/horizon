@@ -81,7 +81,11 @@ pub enum PublicationError {
     Cancelled,
 }
 
-pub(crate) fn validate_sibling_name(sibling: &str) -> Result<(), PublicationError> {
+/// Validate one bounded portable destination component without accessing storage.
+/// # Errors
+/// Rejects unsafe or unsupported names. Success does not prove a fresh destination,
+/// ownership, storage qualification or permission to publish.
+pub fn validate_sibling_name(sibling: &str) -> Result<(), PublicationError> {
     if sibling.len() > 255 || sibling.contains('/') || paths::validate(sibling).is_err() {
         Err(PublicationError::InvalidName)
     } else {
