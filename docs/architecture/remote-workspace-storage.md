@@ -268,6 +268,27 @@ triggers protect the append-only rows, and exact versioned table/index/trigger
 validation runs on open and every operation. Missing or altered metadata is
 rejected, not repaired or adopted.
 
+### Explicit first-pin intent
+
+Schema 5 adds private `remote_first_pin_intents` without migrating legacy records
+into positive bootstrap intent. Explicit task-free setup records only a RunPod
+generation with a reserved public request, both exact owned snapshots, no claim,
+worker, saved pin or cleanup, and an unexpired setup deadline. The immediate
+transaction binds owner, generation, workflow/job and a versioned target/key
+digest. Repeated pre-claim calls are idempotent; no snapshot or claim is changed.
+Noncreating exact-allocation lookup keeps this evidence through claimed creation,
+provisioning, restart and setup expiry. It grants no provider creation, task,
+attachment or lifetime authority. The first complete saved pin consumes the row
+in the same snapshot CAS transaction; failure rolls both changes back. Saved pins
+always select retained trust, never a fresh bootstrap. Missing/malformed intent
+fails closed, and read-only lookup cannot create or migrate storage. Existing
+schema-4 stores remain readable only through actual read-only connections with
+validated allocation/fence metadata and no partial first-pin objects; first-pin
+lookup returns no intent. Explicit mutable open upgrades them without backfill.
+Write connections still require schema 5. Existing restrictions on generation
+retirement/rebinding remain unchanged; future explicit
+retirement must account for any pending row, never reuse it for a new generation.
+
 ## Options considered
 
 ### Embed the whole aggregate in runtime YAML

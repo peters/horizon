@@ -110,7 +110,8 @@ fn schema_two_upgrade_preserves_records_and_claims_without_inventing_allocations
     let connection = open_connection(fixture.store.path()).expect("raw store");
     connection
         .execute_batch(
-            "DROP TABLE remote_runtime_creation_fences; DROP TABLE remote_runtime_allocations; PRAGMA user_version=2;",
+            "DROP TABLE remote_first_pin_intents; DROP TABLE remote_runtime_creation_fences;
+             DROP TABLE remote_runtime_allocations; PRAGMA user_version=2;",
         )
         .expect("schema two fixture");
     let before = saved_bytes(&connection);
@@ -120,7 +121,7 @@ fn schema_two_upgrade_preserves_records_and_claims_without_inventing_allocations
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .expect("version"),
-        4
+        5
     );
     assert_eq!(allocation_count(&connection), 0);
     let workflow = fixture.workflow.workflow();
@@ -187,6 +188,24 @@ fn schema_three_definitions_match_the_frozen_storage_format() {
         "CREATE UNIQUE INDEX remote_runtime_allocations_job ON remote_runtime_allocations(job_id)",
     );
     assert_eq!(REMOTE_ALLOCATION_SCHEMA.join(";\n"), frozen);
+}
+
+#[test]
+fn first_pin_schema_five_definition_matches_the_frozen_storage_format() {
+    assert_eq!(
+        FIRST_PIN_SCHEMA,
+        concat!(
+            "CREATE TABLE remote_first_pin_intents (\n",
+            "    workspace_local_id TEXT PRIMARY KEY NOT NULL REFERENCES remote_runtime_allocations(workspace_local_id),\n",
+            "    session_id TEXT NOT NULL,\n",
+            "    generation INTEGER NOT NULL CHECK (generation > 0),\n",
+            "    workflow_id TEXT NOT NULL UNIQUE,\n",
+            "    job_id TEXT NOT NULL UNIQUE,\n",
+            "    version INTEGER NOT NULL CHECK (version = 1),\n",
+            "    request_digest TEXT NOT NULL CHECK (length(request_digest) = 64)\n",
+            ") STRICT, WITHOUT ROWID",
+        )
+    );
 }
 
 #[test]
