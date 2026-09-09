@@ -70,6 +70,7 @@ def test(smoke):
     original = state(root)
     invoke('pack-status', encoded(observation(request)), 'error', 1)
     for invalid in (b'private-input-marker', frame(dict(request, version=2), payload),
+                    frame(dict(request, parent='/' + 'x'*3840), payload),
                     frame(dict(request, destination='../escape'), payload),
                     frame(dict(request, pack=dict(pack, sha256='private-input-marker')), payload)):
         invoke('receive-pack', invalid, 'rejected', 2)

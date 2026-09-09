@@ -305,12 +305,44 @@ fn non_linux_execution_is_explicitly_unsupported_without_reading_the_pack() {
     }
 }
 
+#[test]
+fn receive_parents_reserve_space_for_observable_child_candidates() {
+    use horizon_core::repository_overlay::{
+        checkout::publication::MAX_SIBLING_NAME_BYTES, materialize::MAX_REQUEST_PATH_BYTES,
+    };
+    let destination = "x".repeat(MAX_SIBLING_NAME_BYTES);
+    let maximum_parent = MAX_REQUEST_PATH_BYTES - 1 - destination.len();
+    for fill in ["x", "\u{1}"] {
+        for length in [maximum_parent, maximum_parent + 1, MAX_REQUEST_PATH_BYTES] {
+            let parent = format!("{}{}", fixture_path(), fill.repeat(length - fixture_path().len()));
+            let mut value = wire(Command::Receive);
+            value["parent"] = json!(parent);
+            value["destination"] = json!(destination);
+            let bytes = encode(Command::Receive, &value);
+            if length > maximum_parent {
+                rejected(Command::Receive, &bytes);
+                continue;
+            }
+            let received = request::read(Command::Receive, &mut bytes.as_slice()).unwrap();
+            for child in [destination.as_str(), "repository-seed-abcdef"] {
+                let candidate = received.path.join(child);
+                assert!(candidate.to_str().unwrap().len() <= MAX_REQUEST_PATH_BYTES);
+                let mut observation = wire(Command::Observe);
+                observation["path"] = json!(candidate);
+                let bytes = encode(Command::Observe, &observation);
+                let reopened = request::read(Command::Observe, &mut bytes.as_slice()).unwrap();
+                assert_eq!(reopened.path, candidate);
+            }
+        }
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn maximum_escaped_retained_paths_fit_without_claiming_verified_data() {
-    use horizon_core::repository_overlay::materialize::MAX_REQUEST_PATH_BYTES;
-    let path =
-        std::path::PathBuf::from(format!("/{}", "\u{1}".repeat(MAX_REQUEST_PATH_BYTES - 1))).join("x".repeat(255));
+    use horizon_core::repository_overlay::checkout::publication::MAX_SIBLING_NAME_BYTES;
+    let path = std::path::PathBuf::from(format!("/{}", "\u{1}".repeat(request::MAX_RECEIVE_PARENT_BYTES - 1)))
+        .join("x".repeat(MAX_SIBLING_NAME_BYTES));
     for (name, source, destination) in [
         ("receive_unconfirmed", true, false),
         ("unpublished", true, false),

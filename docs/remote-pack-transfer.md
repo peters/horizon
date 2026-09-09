@@ -35,9 +35,11 @@ lowercase. The core default encoded limit is 256 MiB, with a minimum of 32 bytes
 Existing native decoding, object-count and per-process resource limits also apply.
 The binary does not buffer the complete pack or accept archives/thin packs.
 
-`parent` must be an explicit existing absolute non-root path, at most 4,096 UTF-8
+`parent` must be an explicit existing absolute non-root path, at most 3,840 UTF-8
 bytes, without NUL or parent traversal. `destination` uses the shared portable
-single-component naming policy, at most 255 bytes. Unknown/duplicate fields,
+single-component naming policy, at most 255 bytes. The parent bound reserves a
+separator and full child component so both generated staging and final candidate
+paths fit the 4,096-byte observation bound. Unknown/duplicate fields,
 unsupported versions, malformed identities, paths and headers fail before storage
 access. Core length limits fail before reservation. Payload truncation, trailing
 bytes, digest mismatch or decoding failure can leave unconfirmed private staging.
@@ -56,7 +58,8 @@ For `pack-status`, stdin is ordinary JSON, at most 32,768 bytes plus EOF:
 }
 ```
 
-Only those fields are accepted. `path` follows the same lexical path rules. Status
+Only those fields are accepted. `path` follows the same lexical path rules with
+a 4,096-byte limit on the complete candidate. Status
 revalidates the existing fixed layout, pack bytes and exact-base object closure.
 It does not create, synchronize, repair or distinguish missing from unsafe,
 unreadable or invalid data. Observation is not a new publication acknowledgement.

@@ -2,7 +2,7 @@ use super::{Command, VERSION};
 use horizon_core::{
     cloud_run::{ArtifactDigest, GitCommitSha},
     repository_overlay::{
-        checkout::publication::validate_sibling_name,
+        checkout::publication::{MAX_SIBLING_NAME_BYTES, validate_sibling_name},
         materialize::{MAX_REQUEST_PATH_BYTES, valid_path},
     },
 };
@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::{io::Read, path::PathBuf};
 
 pub(super) const HEADER_LIMIT: usize = (6 * MAX_REQUEST_PATH_BYTES + 4096).next_power_of_two();
+pub(super) const MAX_RECEIVE_PARENT_BYTES: usize = MAX_REQUEST_PATH_BYTES - 1 - MAX_SIBLING_NAME_BYTES;
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -52,6 +53,11 @@ impl Request {
         if version != VERSION
             || !valid_path(&request.path)
             || request.path.parent().is_none()
+            || (request.destination.is_some()
+                && request
+                    .path
+                    .to_str()
+                    .is_none_or(|path| path.len() > MAX_RECEIVE_PARENT_BYTES))
             || request
                 .destination
                 .as_deref()
