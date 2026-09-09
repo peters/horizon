@@ -78,7 +78,7 @@ impl Prepared {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-struct SnapshotNode {
+pub(in super::super) struct SnapshotNode {
     device: u64,
     inode: u64,
     mode: u32,
@@ -89,7 +89,7 @@ struct SnapshotNode {
     contents: Vec<u8>,
 }
 
-fn snapshot(root: &Path) -> BTreeMap<PathBuf, SnapshotNode> {
+pub(in super::super) fn snapshot(root: &Path) -> BTreeMap<PathBuf, SnapshotNode> {
     let mut result = BTreeMap::new();
     let mut pending = vec![root.to_path_buf()];
     while let Some(path) = pending.pop() {

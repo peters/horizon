@@ -107,6 +107,8 @@ They cover corruption, missing/extra entries, unsafe links/modes, identity
 substitution, root rebinding, cancellation and native output/exit/deadline failures,
 including initial/empty bases and large repeated nested objects.
 
-Worker immutable input publication and protocol/status integration, pinned transport, source-approval
-UI and full cloud/PC-off acceptance remain separate. Closing local views must never
+An explicit [qualified sibling publication API](remote-repository-pack-publication.md)
+can synchronize and publish verified input separately; receipt/observation never
+invoke it implicitly. Worker publication/status protocol integration, pinned transport,
+source-approval UI and full cloud/PC-off acceptance remain separate. Closing local views must never
 implicitly stop or delete a persistent environment.

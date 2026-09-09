@@ -23,7 +23,7 @@ struct Node {
     metadata: Metadata,
 }
 
-pub(super) struct Layout {
+pub(in super::super) struct Layout {
     path: PathBuf,
     reader: SelectedRepositoryReader,
     nodes: Vec<Node>,
@@ -35,7 +35,7 @@ pub(super) struct Layout {
 }
 
 impl Layout {
-    pub(super) fn open(
+    pub(in super::super) fn open(
         path: &Path,
         expected: ExpectedGitPack<'_>,
         cancelled: &impl Fn() -> bool,
@@ -114,7 +114,7 @@ impl Layout {
         Ok(result)
     }
 
-    pub(super) fn recheck(&self, cancelled: &impl Fn() -> bool) -> Result<(), Error> {
+    pub(in super::super) fn recheck(&self, cancelled: &impl Fn() -> bool) -> Result<(), Error> {
         let current = SelectedRepositoryReader::open(&self.path).map_err(|_| Error::UnsafeParent)?;
         let first = self.nodes.first().ok_or(Error::Object)?;
         if !same_metadata(
@@ -151,6 +151,42 @@ impl Layout {
                 if actual.len() != expected.len() || actual.iter().any(|name| !expected.contains(&name.as_str())) {
                     return Err(Error::Object);
                 }
+            }
+        }
+        Ok(())
+    }
+
+    pub(in super::super) fn root(&self) -> &File {
+        self.reader.root.handle()
+    }
+
+    pub(in super::super) fn files(&self) -> impl Iterator<Item = &File> {
+        self.nodes
+            .iter()
+            .filter(|node| node.metadata.is_file())
+            .map(|node| &node.handle)
+    }
+
+    pub(in super::super) fn directories(&self) -> impl DoubleEndedIterator<Item = &File> {
+        self.nodes
+            .iter()
+            .filter(|node| node.metadata.is_dir())
+            .map(|node| &node.handle)
+    }
+
+    pub(in super::super) fn matches_relocated(&self, original: &Self) -> Result<(), Error> {
+        if self.nodes.len() != original.nodes.len() {
+            return Err(Error::Object);
+        }
+        for (current, previous) in self.nodes.iter().zip(&original.nodes) {
+            // Rename changes the root's ctime, not its held identity or child inodes.
+            let expected = if current.name.is_empty() {
+                previous.handle.metadata().map_err(|_| Error::Storage)?
+            } else {
+                previous.metadata.clone()
+            };
+            if current.name != previous.name || !same_metadata(&current.metadata, &expected) {
+                return Err(Error::Object);
             }
         }
         Ok(())
@@ -207,7 +243,7 @@ fn bind(reader: &SelectedRepositoryReader, name: &str, directory: bool) -> Resul
     })
 }
 
-fn reopen(handle: &File) -> Result<File, Error> {
+pub(in super::super) fn reopen(handle: &File) -> Result<File, Error> {
     OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)

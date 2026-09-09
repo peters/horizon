@@ -246,6 +246,12 @@ back into large multi-purpose modules.
   encoded verification before shared read-only native index/closure checks. The
   reader's existing metadata fingerprint is reused for held/named comparisons.
   See [private pack receipt](../remote-repository-pack-receipt.md).
+  Its peer `publication/` subtree owns explicit qualified no-replace publication
+  and distinct pre/post/uncertain rename receipts. It reuses the read-only fixed
+  layout's bound handles and fingerprints for synchronization instead of adding
+  another repository walker. Storage qualification and sibling-name policy remain
+  shared; non-root fingerprints survive relocation unchanged. See
+  [pack publication](../remote-repository-pack-publication.md).
   `checkout/` prepares the seed and raw working namespace together, using exclusive
   descriptor-relative writes, incremental loose decoding and pinned-file verification.
   Literal links are created last. This private logical checkout retains failures;
