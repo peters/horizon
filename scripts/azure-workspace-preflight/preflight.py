@@ -12,6 +12,7 @@ import argparse
 import contextlib
 import dataclasses
 import datetime as _dt
+import hashlib
 import json
 import os
 import re
@@ -24,19 +25,14 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 TOOL_VERSION = "0.1.0"
-REPORT_SCHEMA = "horizon.azure-workspace-preflight.report"
-REPORT_SCHEMA_VERSION = 1
+REPORT_SCHEMA, REPORT_SCHEMA_VERSION = "horizon.azure-workspace-preflight.report", 1
 ARM = "https://management.azure.com"
-API_LOCATIONS = "2022-12-01"
-API_ACI = "2026-07-01"
-API_APP = "2025-07-01"
-DEFAULT_TIMEOUT_SECONDS = 150  # az vm list-skus filters client-side and needs about a minute
-MAX_TIMEOUT_SECONDS = 600
+API_LOCATIONS, API_ACI, API_APP = "2022-12-01", "2026-07-01", "2025-07-01"
+DEFAULT_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS = 150, 600  # az vm list-skus filters client-side for about a minute
 OUTPUT_LIMIT_BYTES = 4 * 1024 * 1024
 
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
-REGION_RE = re.compile(r"^[a-z][a-z0-9]{1,63}$")
-VM_SIZE_RE = re.compile(r"^Standard_[A-Za-z0-9_-]{1,40}$")
+REGION_RE, VM_SIZE_RE = re.compile(r"^[a-z][a-z0-9]{1,63}$"), re.compile(r"^Standard_[A-Za-z0-9_-]{1,40}$")
 ERROR_CODE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
 # The only ARM read endpoints az rest may target; the planner and the allowlist share this definition.
 REST_URL_RE = re.compile(re.escape(ARM) + r"/subscriptions/[0-9a-f-]{36}(?:/locations|/providers/Microsoft\."
@@ -234,7 +230,9 @@ def plan_checks(request: Request) -> List[PlannedCheck]:
         checks.append(PlannedCheck(
             "vm_regional_quota", "Compute regional vCPU and family usage versus quota", "required",
             _az(request, "vm", "list-usage", "--location", request.region, *sub),
-            interpret_vm_usage, (*regional, "vm_sku_availability")))
+            lambda payload, o: interpret_usage(payload, [(name, o["vm_sku_availability"].details["vcpus"]) for name in
+                                                        ("cores", o["vm_sku_availability"].details["family"])]),
+            (*regional, "vm_sku_availability")))
     else:
         checks.append(PlannedCheck(
             "container_apps_regional_quota", "Container Apps regional usage versus quota", "required",
@@ -450,11 +448,6 @@ def interpret_vm_sku(payload: Any, request: Request) -> Outcome:
     return Outcome("blocked", "sku_unavailable_in_region", {"listed_skus": len(payload)})
 
 
-def interpret_vm_usage(payload: Any, outcomes: Dict[str, Outcome]) -> Outcome:
-    sku = outcomes["vm_sku_availability"].details
-    return interpret_usage(payload, [("cores", sku["vcpus"]), (sku["family"], sku["vcpus"])])
-
-
 def evaluate(check: PlannedCheck, result: CommandResult, outcomes: Dict[str, Outcome]) -> Outcome:
     if not result.executed or result.launch_failed or result.timed_out or result.oversized or result.exit_code != 0:
         return classify_failure(result)
@@ -462,6 +455,10 @@ def evaluate(check: PlannedCheck, result: CommandResult, outcomes: Dict[str, Out
         return check.interpret(json.loads(result.stdout), outcomes)
     except Exception:  # noqa: BLE001 - any unexpected payload shape fails closed as missing evidence
         return Outcome("unknown", "malformed_response")
+
+
+def subscription_digest(subscription: str) -> str:  # stable, non-identifying binding for downstream tools
+    return hashlib.sha256(f"horizon-preflight:{subscription.lower()}".encode()).hexdigest()[:16]
 
 
 def redact(value: Any, subscription: str) -> Any:
@@ -503,6 +500,7 @@ def run_preflight(request: Request, executor: Optional[Executor]) -> Dict[str, A
         "candidate": {"id": request.candidate, "name": CANDIDATES[request.candidate]["name"],
                       "vm_size": request.vm_size, "cpu_cores": request.cpu_cores, "memory_gb": request.memory_gb},
         "region": request.region, "subscription": "<subscription>", "status": status,
+        "subscription_digest": subscription_digest(request.subscription),
         "checks": [{"id": c.id, "title": c.title, "role": c.role, "operation": " ".join(c.argv[1:]),
                     **dataclasses.asdict(outcomes[c.id])} for c in plan],
         "blockers": [f"{c.id}: {outcomes[c.id].reason}" for c in plan if outcomes[c.id].outcome == "blocked"],

@@ -228,6 +228,8 @@ class InterpretationTests(Harness):
                 self.assertIn(word, gates)
             self.assertNotIn("ready", report["status"])
             self.assertEqual(report["subscription"], "<subscription>")
+            self.assertEqual((report["subscription_digest"], SUB[:8] in report["subscription_digest"]),
+                             (preflight.subscription_digest(SUB), False))
             self.assertEqual(report["schema_version"], preflight.REPORT_SCHEMA_VERSION)
             self.assertIsNotNone(report["observed_at"])
         self.popen.assert_not_called()

@@ -47,7 +47,7 @@ scripts/azure-workspace-spike/run-vm-spike.sh \
 `--preflight-report` is the JSON written by `scripts/azure-workspace-preflight/preflight.py
 --candidate vm --live --report ...` for the same region and VM size; the harness
 refuses to create anything unless that report is a live `vm` report with
-`no_blockers_observed`, and it journals the report path, `observed_at`, tool version
+`no_blockers_observed` whose `subscription_digest` matches `--subscription`, and it journals the report path, `observed_at`, tool version
 and its own git commit in the `start` event. `--dry-run` renders the cloud-init and
 exits without creating anything (the report is then optional). `--keep` leaves the
 sample resource group for manual inspection; delete it yourself. `--sample` accepts

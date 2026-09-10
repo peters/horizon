@@ -65,11 +65,14 @@ for tool in az ssh ssh-keygen ssh-keyscan nc jq curl timeout; do command -v "$to
 # region and size, with no blockers, and carry its provenance into the sample journal.
 if [ "$DRY_RUN" = 0 ] || [ -n "$PREFLIGHT" ]; then
   [ -n "$PREFLIGHT" ] && [ -r "$PREFLIGHT" ] || { echo "--preflight-report must point at a readable preflight JSON report" >&2; exit 3; }
-  PREFLIGHT_FACTS=$(jq -c --arg region "$REGION" --arg size "$VM_SIZE" '
+  # The report carries a stable digest of its subscription instead of the identifier itself.
+  SUB_DIGEST=$(printf 'horizon-preflight:%s' "$SUBSCRIPTION" | sha256sum | cut -c1-16)
+  PREFLIGHT_FACTS=$(jq -c --arg region "$REGION" --arg size "$VM_SIZE" --arg digest "$SUB_DIGEST" '
     if .schema == "horizon.azure-workspace-preflight.report" and .candidate.id == "vm" and .region == $region
        and .candidate.vm_size == $size and .mode == "live" and .status == "no_blockers_observed"
-    then {observed_at, tool_version, status, schema_version} else empty end' "$PREFLIGHT" 2>/dev/null || true)
-  [ -n "$PREFLIGHT_FACTS" ] || { echo "--preflight-report is not a live vm preflight for $REGION/$VM_SIZE with no blockers observed" >&2; exit 3; }
+       and .subscription_digest == $digest
+    then {observed_at, tool_version, status, schema_version, subscription_digest} else empty end' "$PREFLIGHT" 2>/dev/null || true)
+  [ -n "$PREFLIGHT_FACTS" ] || { echo "--preflight-report is not a live vm preflight for this subscription, $REGION and $VM_SIZE with no blockers observed" >&2; exit 3; }
 fi
 
 REGISTRY=${IMAGE%%/*}
@@ -343,9 +346,10 @@ QUALIFIER_REQUEST='{"version":1,"retained_root":"%s","workspace_local_id":"works
 QUALIFIER_OUT=$(ssh_worker "$IP" "set -e; mkdir -p -m 0755 /workspace/spike-input/objects /workspace/spike-input/bundles; mkdir -p -m 0700 /workspace/spike-retained /root/spike-overlay; printf '$QUALIFIER_REQUEST' /workspace/spike-retained | /usr/local/bin/horizon-repository setup-status; echo; echo ---OVERLAY---; printf '$QUALIFIER_REQUEST' /root/spike-overlay | /usr/local/bin/horizon-repository setup-status || true; echo" 2>&1 || true)
 printf '%s\n' "$QUALIFIER_OUT" >"$SAMPLE_DIR/qualifier-output.txt"
 DATA_STATUS=$(printf '%s\n' "$QUALIFIER_OUT" | sed '/---OVERLAY---/,$d' | jq -r '.status // empty' 2>/dev/null | head -1 || true)
-OVERLAY_STATUS=$(printf '%s\n' "$QUALIFIER_OUT" | sed -n '/---OVERLAY---/,$p' | grep -v -- '---' | jq -r '.status // empty' 2>/dev/null | head -1 || true)
+OVERLAY_STATUS=$(printf '%s\n' "$QUALIFIER_OUT" | sed -n '/---OVERLAY---/,$p' | grep -v -- '---' | jq -r '"\(.status // "none"):\(.reason // "")"' 2>/dev/null | head -1 || true)
 QUALIFIED=false; [ "$DATA_STATUS" = absent ] && QUALIFIED=true
-CONTROL_REJECTED=false; case "${OVERLAY_STATUS:-none}" in error|rejected) CONTROL_REJECTED=true ;; esac
+# Only the storage discriminator's own refusal counts; a decoding "rejected" or another error does not.
+CONTROL_REJECTED=false; [ "$OVERLAY_STATUS" = "error:retained setup requires supported journaled storage and confinement" ] && CONTROL_REJECTED=true
 journal storage_evidence "$(jq -cn --argjson mirror $MIRROR --argjson q $QUALIFIED --argjson c $CONTROL_REJECTED --arg ds "${DATA_STATUS:-none}" --arg os "${OVERLAY_STATUS:-none}" --arg opts "$OPTIONS" '{shell_mirror_passes:$mirror,rust_qualifier_status_on_data_disk:$ds,rust_qualifier_status_on_overlay:$os,rust_qualifier_accepts_data_disk:$q,overlay_control_rejected:$c,kernel_options:($opts|split("\n")|map(select(length>0)))}')"
 gate storage_qualifier "$QUALIFIED"
 gate storage_negative_control "$CONTROL_REJECTED"
