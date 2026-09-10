@@ -200,6 +200,7 @@ if [ "$DRY_RUN" = 1 ]; then CLIENT_ID=00000000-0000-0000-0000-000000000000; else
   CLIENT_ID=$(azc identity show --ids "$PULLER_ID" --query clientId -o tsv)
 fi
 
+GUEST_DEADLINE=$(date -u -d @"$(( DEADLINE_EPOCH + 60 ))" +"%Y-%m-%d %H:%M:%S UTC")
 CLOUD_INIT="$SAMPLE_DIR/cloud-init.yaml"
 cat >"$CLOUD_INIT" <<EOF
 #cloud-config
@@ -207,6 +208,36 @@ package_update: true
 packages: [docker.io]
 bootcmd:
   - [ sh, -c, 'printf "{\"event\":\"boot\",\"at\":\"%s\"}\n" "\$(date -u +%FT%T.%3NZ)" >> /var/log/horizon-spike-timing.jsonl' ]
+  # Guest-side lifetime bound, armed on every boot before anything else: at the deadline the VM
+  # deallocates itself through ARM with its own identity (power-only role granted before creation).
+  - |
+    cat > /usr/local/sbin/horizon-spike-deadline.sh <<'SH'
+    #!/bin/sh
+    set -eu
+    T=\$(curl -sf -H Metadata:true "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%3A%2F%2Fmanagement.azure.com%2F&client_id=${CLIENT_ID}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+    I=\$(curl -sf -H Metadata:true "http://169.254.169.254/metadata/instance/compute?api-version=2021-02-01" | python3 -c 'import json,sys; print(json.load(sys.stdin)["resourceId"])')
+    curl -sf -X POST -H "Authorization: Bearer \$T" -H "Content-Length: 0" "https://management.azure.com\$I/deallocate?api-version=2024-03-01"
+    SH
+    chmod 0700 /usr/local/sbin/horizon-spike-deadline.sh
+    cat > /etc/systemd/system/horizon-spike-deadline.service <<'UNIT'
+    [Unit]
+    Description=Horizon spike lifetime bound: deallocate this VM
+    [Service]
+    Type=oneshot
+    ExecStart=/usr/local/sbin/horizon-spike-deadline.sh
+    UNIT
+    cat > /etc/systemd/system/horizon-spike-deadline.timer <<'UNIT'
+    [Unit]
+    Description=Horizon spike lifetime bound
+    [Timer]
+    OnCalendar=${GUEST_DEADLINE}
+    Persistent=true
+    AccuracySec=1s
+    [Install]
+    WantedBy=timers.target
+    UNIT
+    systemctl daemon-reload
+    systemctl enable --now horizon-spike-deadline.timer
 write_files:
   - path: /etc/systemd/system/docker.service.d/horizon-workspace.conf
     permissions: '0644'
@@ -274,6 +305,19 @@ CREATED=1  # cleanup owns the verified-absent group from this point, even if the
 azc group create --name "$RG" --location "$REGION" \
   --tags issue=474 sample="$SAMPLE" run="$RUN_ID" purpose=horizon-azure-vm-spike deadline="$(date -u -d @"$DEADLINE_EPOCH" +%FT%TZ)" >/dev/null
 journal group_created "$(jq -cn --argjson ms $(( $(epoch_ms) - T0 )) '{ms_from_t0:$ms}')"
+# Independent lifetime bound, enforced before any compute exists: the VM's identity may only
+# power VMs inside this sample group (built-in power-only role, assignment lives and dies with
+# the group), and the VM's own early boot arms a timer that deallocates it at the deadline.
+PULLER_PRINCIPAL=$(azc identity show --ids "$PULLER_ID" --query principalId -o tsv)
+GROUP_ID=$(azc group show --name "$RG" --query id -o tsv)
+ROLE_OK=false
+for _ in $(seq 1 6); do
+  if azc role assignment create --assignee-object-id "$PULLER_PRINCIPAL" --assignee-principal-type ServicePrincipal \
+       --role "Desktop Virtualization Power On Off Contributor" --scope "$GROUP_ID" >/dev/null 2>&1; then ROLE_OK=true; break; fi
+  bounded sleep 10 || break
+done
+[ "$ROLE_OK" = true ] || { journal power_role_not_granted '{}'; say "could not grant the power-only role before creation; nothing created"; exit 1; }
+journal power_role_granted "$(jq -cn --arg deadline "$GUEST_DEADLINE" '{role:"Desktop Virtualization Power On Off Contributor",scope:"sample resource group",guest_deadline:$deadline}')"
 
 SOURCE=${ALLOW_SSH_FROM:-}
 if [ -z "$SOURCE" ]; then
@@ -437,6 +481,20 @@ if [ "$START_OK" = true ] && [ "$IP_SAME" = true ] && wait_for $(( RESTART_DEADL
 fi
 T_RESTARTED=$(epoch_ms)
 PHASE_DEADLINE=0
+# Prove the guest-side bound: confirm the timer is armed, fire its service once, expect deallocation.
+SELF_STOP=false TIMER_ARMED=false
+if [ "$KEY_SAME" = true ]; then
+  TIMER_TEXT=$(run_command 'systemctl list-timers horizon-spike-deadline.timer --no-legend; systemctl start horizon-spike-deadline.service; systemctl is-active horizon-spike-deadline.service || systemctl status horizon-spike-deadline.service --no-pager | tail -3' 2>&1 || true)
+  printf '%s\n' "$TIMER_TEXT" >"$SAMPLE_DIR/self-deallocate.txt"
+  grep -q 'horizon-spike-deadline.timer' <<<"$TIMER_TEXT" && TIMER_ARMED=true
+  PHASE_DEADLINE=$(( $(date +%s) + 300 ))
+  vm_deallocated() { azc vm get-instance-view --resource-group "$RG" --name "$VM" --query "instanceView.statuses[?starts_with(code,'PowerState/')].code | [0]" -o tsv 2>/dev/null | grep -qx PowerState/deallocated; }
+  wait_for 300 vm_deallocated && SELF_STOP=true
+  PHASE_DEADLINE=0
+fi
+journal self_deallocate "$(jq -cn --argjson armed $TIMER_ARMED --argjson stopped $SELF_STOP '{timer_armed:$armed,vm_deallocated_by_guest:$stopped}')"
+gate guest_lifetime_bound "$SELF_STOP"
+say "guest-side bound: timer_armed=$TIMER_ARMED vm_deallocated_by_guest=$SELF_STOP"
 if [ "$KEY_SAME" != true ] || [ "$RETAINED_MARKER" != true ] || [ "$MOUNTED" != true ]; then
   say "restart verification failed; capturing guest diagnostics out of band"
   run_command 'systemctl is-system-running; systemctl list-units --failed --no-legend; systemctl status docker --no-pager | head -20; findmnt /mnt/horizon-workspace; docker ps -a; docker logs --tail 20 horizon-worker 2>&1; journalctl -b -u docker --no-pager | tail -20' >"$SAMPLE_DIR/restart-diagnostics.txt" 2>&1 || true
