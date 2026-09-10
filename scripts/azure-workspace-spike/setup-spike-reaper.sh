@@ -102,7 +102,8 @@ say "verifying"
 LINKED=$(azr --method get --url "$BASE/jobSchedules?api-version=$API" --query "length(value[?properties.runbook.name=='$RUNBOOK' && properties.schedule.name=='$SCHEDULE'])" -o tsv)
 SCHED=$(azr --method get --url "$BASE/schedules/$SCHEDULE?api-version=$API" --query "{enabled:properties.isEnabled,next:properties.nextRun,interval:properties.interval,frequency:properties.frequency}")
 printf '%s\n' "$SCHED" | jq -c .
-if [ "$LINKED" != 1 ] || [ "$(jq -r 'if .enabled == true and .frequency == "Minute" and .interval == 15 then "ok" else "bad" end' <<<"$SCHED")" != ok ]; then
+NEXT=$(date -u -d "$(jq -r '.next // empty' <<<"$SCHED")" +%s 2>/dev/null || echo 0)
+if [ "$LINKED" != 1 ] || [ "$(jq -r 'if .enabled == true and .frequency == "Minute" and .interval == 15 then "ok" else "bad" end' <<<"$SCHED")" != ok ] || [ "$NEXT" -le "$(date +%s)" ]; then
   echo "reaper is NOT ready: runbook link count $LINKED, schedule $SCHED" >&2; exit 1
 fi
 say "reaper ready: VMs tagged purpose=horizon-azure-vm-spike with a past deadline tag are deallocated within about 15 minutes"

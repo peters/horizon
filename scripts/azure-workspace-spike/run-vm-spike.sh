@@ -66,6 +66,10 @@ done
 [[ $MAX_MINUTES =~ ^[1-9][0-9]{1,2}$ ]] || { echo "--max-minutes must be 10-999 without leading zeros" >&2; exit 3; }
 [ -n "$JOURNAL_DIR" ] || { echo "--journal-dir is required" >&2; exit 3; }
 [[ $REAPER_RG =~ ^[A-Za-z0-9._-]{1,90}$ ]] && [[ $REAPER_ACCOUNT =~ ^[A-Za-z][A-Za-z0-9-]{4,48}$ ]] || { echo "invalid reaper names" >&2; exit 3; }
+if [ -n "$ALLOW_SSH_FROM" ]; then  # a specific IPv4 network only; never "*", service tags or the whole internet
+  python3 -c 'import ipaddress,sys; n=ipaddress.IPv4Network(sys.argv[1], strict=True); sys.exit(0 if n.prefixlen >= 8 else 1)' "$ALLOW_SSH_FROM" 2>/dev/null \
+    || { echo "--allow-ssh-from must be an IPv4 CIDR with a prefix of at least /8" >&2; exit 3; }
+fi
 for tool in az ssh ssh-keygen ssh-keyscan nc jq curl timeout; do command -v "$tool" >/dev/null || { echo "missing tool: $tool" >&2; exit 3; }; done
 # The read-only preflight must precede paid creation: require its report for this exact candidate,
 # region and size, with no blockers, and carry its provenance into the sample journal.
@@ -79,6 +83,9 @@ if [ "$DRY_RUN" = 0 ] || [ -n "$PREFLIGHT" ]; then
        and .subscription_digest == $digest and .schema_version == 1
     then {observed_at, tool_version, status, schema_version, subscription_digest} else empty end' "$PREFLIGHT" 2>/dev/null || true)
   [ -n "$PREFLIGHT_FACTS" ] || { echo "--preflight-report is not a live vm preflight for this subscription, $REGION and $VM_SIZE with no blockers observed" >&2; exit 3; }
+  # The preflight must be recent: at most 24 hours old and not from the future (5 minutes of skew).
+  PREFLIGHT_AGE=$(( $(date +%s) - $(date -u -d "$(jq -r .observed_at <<<"$PREFLIGHT_FACTS")" +%s 2>/dev/null || echo 0) ))
+  [ "$PREFLIGHT_AGE" -ge -300 ] && [ "$PREFLIGHT_AGE" -le 86400 ] || { echo "--preflight-report is older than 24 hours or timestamped in the future; rerun the live preflight" >&2; exit 3; }
 fi
 
 REGISTRY=${IMAGE%%/*}
@@ -90,7 +97,7 @@ DEADLINE_EPOCH=$(( $(date +%s) + MAX_MINUTES * 60 ))
 RESTART_WAIT_SECONDS=600
 umask 077
 mkdir -p "$JOURNAL_DIR"
-SAMPLE_DIR="$JOURNAL_DIR/sample-${SAMPLE}-${RUN_ID}"
+SAMPLE_DIR="$JOURNAL_DIR/sample-${SAMPLE}-${RUN_ID}-${TOKEN}"
 mkdir "$SAMPLE_DIR"
 JOURNAL="$SAMPLE_DIR/journal.jsonl"
 KEY="$SAMPLE_DIR/client-ed25519"
@@ -216,8 +223,9 @@ bootcmd:
   - [ sh, -c, 'printf "{\"event\":\"boot\",\"at\":\"%s\"}\n" "\$(date -u +%FT%T.%3NZ)" >> /var/log/horizon-spike-timing.jsonl' ]
 write_files:
   # Guest-side lifetime bound: at the deadline the VM deallocates itself through ARM with its own
-  # identity (power-only role granted before creation). Armed as the first runcmd step, before
-  # Docker or the image pull, once systemd is fully up (an early-boot systemctl call deadlocks).
+  # identity (power-only role granted before creation). Armed as the first runcmd step, after the
+  # packages module has installed Docker but before the workspace bootstrap and the image pull,
+  # once systemd is fully up (an early-boot systemctl call deadlocks).
   - path: /usr/local/sbin/horizon-spike-deadline.sh
     permissions: '0700'
     owner: root:root
@@ -313,7 +321,8 @@ journal inventory_before "$(jq -c '{count:length}' "$SAMPLE_DIR/inventory-before
 REAPER_BASE="https://management.azure.com/subscriptions/$SUBSCRIPTION/resourceGroups/$REAPER_RG/providers/Microsoft.Automation/automationAccounts/$REAPER_ACCOUNT"
 REAPER_FACTS=$(azc rest --method get --url "$REAPER_BASE/jobSchedules?api-version=2023-11-01" --query "value[?properties.runbook.name=='horizon-spike-deadline-reaper'] | [0].properties.schedule.name" -o tsv 2>/dev/null || true)
 REAPER_SCHEDULE=$(azc rest --method get --url "$REAPER_BASE/schedules/${REAPER_FACTS:-none}?api-version=2023-11-01" --query "{enabled:properties.isEnabled,next_run:properties.nextRun,interval:properties.interval,frequency:properties.frequency}" 2>/dev/null || echo null)
-[ "$(jq -r 'if .enabled == true and .frequency == "Minute" and .interval == 15 then "ok" else "bad" end' <<<"$REAPER_SCHEDULE")" = ok ] || { journal reaper_missing "$(jq -cn --arg s "$REAPER_SCHEDULE" '{schedule:$s}')"; say "the subscription-side reaper is not present, not enabled or not the 15-minute schedule; run setup-spike-reaper.sh first (nothing created)"; exit 1; }
+REAPER_NEXT=$(date -u -d "$(jq -r '.next_run // empty' <<<"$REAPER_SCHEDULE")" +%s 2>/dev/null || echo 0)
+[ "$(jq -r 'if .enabled == true and .frequency == "Minute" and .interval == 15 then "ok" else "bad" end' <<<"$REAPER_SCHEDULE")" = ok ] && [ "$REAPER_NEXT" -gt "$(date +%s)" ] || { journal reaper_missing "$(jq -cn --arg s "$REAPER_SCHEDULE" '{schedule:$s}')"; say "the subscription-side reaper is not present, not enabled, not the 15-minute schedule or has no future run; run setup-spike-reaper.sh first (nothing created)"; exit 1; }
 REAPER_PRINCIPAL=$(azc rest --method get --url "$REAPER_BASE?api-version=2023-11-01" --query identity.principalId -o tsv 2>/dev/null || true)
 REAPER_ROLES=$(azc role assignment list --assignee "${REAPER_PRINCIPAL:-00000000-0000-0000-0000-000000000000}" --role "Desktop Virtualization Power On Off Contributor" --scope "/subscriptions/$SUBSCRIPTION" --query "length(@)" -o tsv 2>/dev/null || echo 0)
 [ "$REAPER_ROLES" != 0 ] || { journal reaper_role_missing '{}'; say "the reaper identity lacks the subscription-scoped power-only role; rerun setup-spike-reaper.sh (nothing created)"; exit 1; }
@@ -330,7 +339,8 @@ azc group create --name "$RG" --location "$REGION" \
 journal group_created "$(jq -cn --argjson ms $(( $(epoch_ms) - T0 )) '{ms_from_t0:$ms}')"
 # Defense in depth behind the reaper: the VM's identity may only power VMs inside this sample
 # group (built-in power-only role, assignment lives and dies with the group), and the VM's own
-# cloud-init arms a timer that deallocates it at the deadline.
+# cloud-init arms a timer (after package installation, before the workspace bootstrap and image
+# pull) that deallocates it at the deadline.
 PULLER_PRINCIPAL=$(azc identity show --ids "$PULLER_ID" --query principalId -o tsv)
 GROUP_ID=$(azc group show --name "$RG" --query id -o tsv)
 ROLE_OK=false

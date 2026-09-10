@@ -27,8 +27,9 @@ reaper interval plus the deallocate time.
 Two further layers are defense in depth, not the primary bound: the VM's identity
 gets the built-in power-only role `Desktop Virtualization Power On Off Contributor`
 on the sample group before the deployment and the VM's cloud-init arms a systemd
-timer as its first `runcmd` step (before Docker or the pull) that deallocates the VM
-one minute after the deadline, proven per sample by verifying the timer is enabled
+timer as its first `runcmd` step (after the package module has installed Docker,
+before the workspace bootstrap and the image pull) that deallocates the VM one minute
+after the deadline, proven per sample by verifying the timer is enabled
 and active, firing it once and observing `PowerState/deallocated` (gate
 `guest_lifetime_bound`); and the deployment also creates an Azure VM auto-shutdown
 schedule, which depends on the VM and is therefore only a backstop. In every case
@@ -64,13 +65,18 @@ scripts/azure-workspace-spike/run-vm-spike.sh \
   --journal-dir /private/path/spike-journal \
   --preflight-report /private/path/vm-northeurope.json \
   --sample 1 [--region northeurope] [--vm-size Standard_D4s_v3] [--max-minutes 120] \
-  [--allow-ssh-from <cidr>] [--dry-run] [--keep]
+  [--allow-ssh-from <ipv4-cidr>] [--reaper-resource-group <rg>] [--reaper-account <name>] \
+  [--prove-reaper] [--dry-run] [--keep]
 ```
+
+`--allow-ssh-from` must be a specific IPv4 network (prefix `/8` or longer); `*`,
+service tags and the whole internet are rejected before anything is created.
 
 `--preflight-report` is the JSON written by `scripts/azure-workspace-preflight/preflight.py
 --candidate vm --live --report ...` for the same region and VM size; the harness
 refuses to create anything unless that report is a live `vm` report with
-`no_blockers_observed` whose `subscription_digest` matches `--subscription`, and it journals the report path, `observed_at`, tool version
+`no_blockers_observed`, schema version 1, a `subscription_digest` matching
+`--subscription`, and an `observed_at` at most 24 hours old, and it journals the report path, `observed_at`, tool version
 and its own git commit (plus whether the harness directory had uncommitted changes) in
 the `start` event. `--dry-run` renders the cloud-init and
 exits without creating anything (the report is then optional). `--keep` leaves the
@@ -94,9 +100,9 @@ because the deletion gate was skipped. `--sample` accepts
    assigned, a 32 GiB data disk) and the DevTestLab auto-shutdown schedule set one
    minute after the lifetime deadline. The VM is tagged `purpose=horizon-azure-vm-spike`
    and `deadline=<UTC>` in that same call. Before the deployment the power-only role
-   above is granted on the group. The VM's cloud-init first arms the self-deallocate
-   timer, then formats and mounts the data
-   disk as ext4 at `/mnt/horizon-workspace`; installs Docker; exchanges the identity's
+   above is granted on the group. The VM's cloud-init installs Docker (package module),
+   arms the self-deallocate timer as the first `runcmd` step, then formats and mounts
+   the data disk as ext4 at `/mnt/horizon-workspace`; exchanges the identity's
    IMDS token for a registry refresh token and logs in with the documented
    `00000000-0000-0000-0000-000000000000` user; pulls the image by digest; creates and
    starts the worker container with the data disk bound at `/workspace` and the client
@@ -138,7 +144,7 @@ unproven deletion always wins: exit `6` replaces any other code. Every blocking 
 
 ## Journal
 
-Everything lands under `--journal-dir/sample-<n>-<run-id>/` with mode 0700: the
+Everything lands under `--journal-dir/sample-<n>-<run-id>-<token>/` with mode 0700: the
 private client key, `cloud-init.yaml`, `deployment.json`, `deployment-result.json`, `run-command-hostkey.txt`, `qualifier-output.txt`,
 `guest-timing.jsonl` (boot, deadline timer armed, bootstrap, disk, registry login, pull,
 container create and start stamps from inside the VM), `self-deallocate.txt`, `storage-evidence.txt`, heartbeat counts and

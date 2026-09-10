@@ -210,8 +210,9 @@ co-location is not a crash-safe bound; a probe confirmed Azure rejects a schedul
 VM that does not exist yet (`ComputeVmNotFound`). Two defense-in-depth layers were
 added next: a built-in power-only role for the worker identity on the sample group,
 granted before the deployment, and a guest systemd timer armed by cloud-init as its
-first `runcmd` step (54 s after boot in sample 14, before Docker or the pull) that
-deallocates the VM through ARM at the deadline. Neither is a pre-creation bound: the
+first `runcmd` step (54 s after boot in sample 14, after the package module has
+installed Docker but before the workspace bootstrap and the pull) that deallocates
+the VM through ARM at the deadline. Neither is a pre-creation bound: the
 role only authorizes, and the timer depends on cloud-init reaching `runcmd`. Sample 13
 tried to arm that timer from `bootcmd`; the early-boot `systemctl` call deadlocked the
 guest (no endpoint, no run-command response), the run was interrupted by hand and
