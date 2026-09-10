@@ -9,6 +9,7 @@ use super::{
 use serde::{Deserialize, Deserializer, de};
 use std::{collections::BTreeMap, env, fmt};
 mod create_request;
+mod diagnostics;
 mod host_key;
 mod http;
 mod interactive;
