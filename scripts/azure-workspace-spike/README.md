@@ -11,11 +11,17 @@ the group is gone with nothing left under it and no pre-existing resource missin
 under the remaining time and, once it expires, the harness stops measuring, deletes
 the sample and exits 4. Two exceptions extend exposure and must be included when
 calculating the maximum: cleanup has its own fixed 25-minute bound, and `--keep`
-skips deletion entirely. As an independent safety net the deployment that creates
-the VM also creates an Azure VM auto-shutdown schedule one minute after the deadline,
-so compute is deallocated by the platform even if this controller process dies; disks and the
-static IP then persist until the tagged resource group (`horizon-spike-474-*`,
-tag `deadline`) is deleted by hand. It never registers a provider, never publishes
+skips deletion entirely. Compute is additionally bounded without this controller:
+before any compute exists the harness grants the worker identity the built-in
+power-only role `Desktop Virtualization Power On Off Contributor` on the sample
+group (the assignment lives and dies with the group), and the VM's own cloud-init
+arms a systemd timer as its first step, before Docker or the image pull, that
+deallocates the VM through ARM one minute after the deadline. Each sample proves this
+by firing that service once and observing `PowerState/deallocated`. The deployment
+also creates an Azure VM auto-shutdown schedule at the same time as a second stop;
+it is created after the VM, so it is a backstop, not the primary bound. In every
+case disks and the static IP persist until the tagged resource group
+(`horizon-spike-474-*`, tag `deadline`) is deleted by hand. It never registers a provider, never publishes
 an image and touches nothing outside the sample resource group.
 
 ## Prerequisites
@@ -69,8 +75,9 @@ because the deletion gate was skipped. `--sample` accepts
    the caller's egress address only), virtual network, Standard static public IP, NIC,
    the Linux VM (`Canonical:ubuntu-24_04-lts:server`, key-only SSH, the pull identity
    assigned, a 32 GiB data disk) and the DevTestLab auto-shutdown schedule set one
-   minute after the lifetime deadline, so a controller that dies mid-creation cannot
-   leave compute without the platform-side stop. The VM's cloud-init formats and mounts the data
+   minute after the lifetime deadline. Before that deployment the power-only role
+   above is granted on the group. The VM's cloud-init first arms the self-deallocate
+   timer, then formats and mounts the data
    disk as ext4 at `/mnt/horizon-workspace`; installs Docker; exchanges the identity's
    IMDS token for a registry refresh token and logs in with the documented
    `00000000-0000-0000-0000-000000000000` user; pulls the image by digest; creates and
@@ -94,7 +101,9 @@ because the deletion gate was skipped. `--sample` accepts
    the marker, the public IP, that the data disk is mounted in the container, and
    whether the tmux session survived (it does not: the container restarts; that is
    recorded, not hidden). A failed restart is journaled and guest diagnostics are
-   captured out of band; the phase is bounded to 10 minutes.
+   captured out of band; the phase is bounded to 10 minutes. It then fires the
+   guest's self-deallocate service once and requires the VM to reach
+   `PowerState/deallocated` (gate `guest_lifetime_bound`).
 9. Deletes the resource group (`--no-wait` plus `group wait --deleted`), confirms
    absence and evaluates the inventory proof above. Cleanup runs from an `EXIT` trap, so any
    failure after creation still deletes the sample.
@@ -103,7 +112,8 @@ Exit codes: `0` every gate held; `1` a setup or provider failure before the gate
 example `Microsoft.DevTestLab` not registered, so the platform-side stop cannot be
 scheduled; cleanup still runs); `3` usage; `4` lifetime bound reached; `5` the worker
 never published a host key; `6` deletion not proven; `7` a functional gate failed
-(storage qualifier, storage negative control, detach independence, deallocate, retention)
+(storage qualifier, storage negative control, detach independence, deallocate, retention,
+guest lifetime bound)
 with evidence journaled; `130` interrupted (cleanup still runs). Any other status is
 normalized to `1`. Any failure after the active-phase bound expired reports `4`, and an
 unproven deletion always wins: exit `6` replaces any other code. Every blocking `az` and
@@ -113,8 +123,8 @@ unproven deletion always wins: exit `6` replaces any other code. Every blocking 
 
 Everything lands under `--journal-dir/sample-<n>-<run-id>/` with mode 0700: the
 private client key, `cloud-init.yaml`, `deployment.json`, `deployment-result.json`, `run-command-hostkey.txt`, `qualifier-output.txt`,
-`guest-timing.jsonl` (boot, bootstrap, disk, registry login, pull, container create
-and start stamps from inside the VM), `storage-evidence.txt`, heartbeat counts and
+`guest-timing.jsonl` (boot, deadline timer armed, bootstrap, disk, registry login, pull,
+container create and start stamps from inside the VM), `self-deallocate.txt`, `storage-evidence.txt`, heartbeat counts and
 `journal.jsonl` with every controller-side event and millisecond offsets from `T0`
 (the resource-group create call). Journals contain the public IP and subscription
 scoped resource ids; keep them private and quote only redacted summaries.

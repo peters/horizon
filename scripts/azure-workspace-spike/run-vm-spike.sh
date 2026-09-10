@@ -489,10 +489,11 @@ T_RESTARTED=$(epoch_ms)
 PHASE_DEADLINE=0
 # Prove the guest-side bound: confirm the timer is armed, fire its service once, expect deallocation.
 SELF_STOP=false TIMER_ARMED=false
+grep -q '"event":"deadline_timer_armed"' "$SAMPLE_DIR/guest-timing.jsonl" 2>/dev/null && TIMER_ARMED=true  # stamped by runcmd before Docker
 if [ "$KEY_SAME" = true ]; then
-  TIMER_TEXT=$(run_command 'systemctl list-timers horizon-spike-deadline.timer --no-legend; systemctl start horizon-spike-deadline.service; systemctl is-active horizon-spike-deadline.service || systemctl status horizon-spike-deadline.service --no-pager | tail -3' 2>&1 || true)
+  # The deallocation usually preempts the run-command response itself; the power state is the evidence.
+  TIMER_TEXT=$(run_command 'systemctl list-timers horizon-spike-deadline.timer --no-legend; systemctl start --no-block horizon-spike-deadline.service' 2>&1 || true)
   printf '%s\n' "$TIMER_TEXT" >"$SAMPLE_DIR/self-deallocate.txt"
-  grep -q 'horizon-spike-deadline.timer' <<<"$TIMER_TEXT" && TIMER_ARMED=true
   PHASE_DEADLINE=$(( $(date +%s) + 300 ))
   vm_deallocated() { azc vm get-instance-view --resource-group "$RG" --name "$VM" --query "instanceView.statuses[?starts_with(code,'PowerState/')].code | [0]" -o tsv 2>/dev/null | grep -qx PowerState/deallocated; }
   wait_for 300 vm_deallocated && SELF_STOP=true
