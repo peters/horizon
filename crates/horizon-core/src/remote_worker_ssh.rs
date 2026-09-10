@@ -49,12 +49,21 @@ pub(crate) fn prepared_intake(
     )
 }
 
+pub(crate) fn prepared_storage_status(
+    identity: &Path,
+    known_hosts: &Path,
+    endpoint: &InteractiveWorkerSshEndpoint,
+) -> Result<Command, Error> {
+    command_for(identity, known_hosts, endpoint, Operation::StorageStatus)
+}
+
 #[derive(Clone, Copy)]
 enum Operation<'a> {
     Request,
     PackStatus,
     Intake,
     IntakeStatus,
+    StorageStatus,
     Attach { runtime: CloudJobId, panel: &'a str },
 }
 
@@ -69,7 +78,11 @@ fn command_for(
     }
     let mut command = Command::new("ssh");
     let terminal_mode = match operation {
-        Operation::Request | Operation::PackStatus | Operation::Intake | Operation::IntakeStatus => "-T",
+        Operation::Request
+        | Operation::PackStatus
+        | Operation::Intake
+        | Operation::IntakeStatus
+        | Operation::StorageStatus => "-T",
         Operation::Attach { panel, .. } if valid_local_id(panel) => "-tt",
         Operation::Attach { .. } => return Err(Error::UnknownPanel),
     };
@@ -121,6 +134,7 @@ fn command_for(
         Operation::PackStatus => "/usr/local/bin/horizon-repository pack-status".into(),
         Operation::Intake => "/usr/local/bin/horizon-repository intake".into(),
         Operation::IntakeStatus => "/usr/local/bin/horizon-repository intake-status".into(),
+        Operation::StorageStatus => "/usr/local/bin/horizon-repository storage-status".into(),
         Operation::Attach { runtime, panel } => {
             format!("/usr/local/bin/horizon-panel-session attach -- {runtime} {panel}")
         }
@@ -184,6 +198,30 @@ mod tests {
     use super::*;
     use crate::{HorizonHome, cloud_run::CloudWorkflowId, remote_ssh_identity::RemoteSshIdentityStore};
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    #[test]
+    fn storage_status_only_changes_the_fixed_remote_command() {
+        use base64::Engine as _;
+        let mut blob = b"\0\0\0\x0bssh-ed25519\0\0\0\x20".to_vec();
+        blob.extend_from_slice(&[1; 32]);
+        let endpoint = InteractiveWorkerSshEndpoint {
+            host: "127.0.0.1".into(),
+            port: 2222,
+            username: "root".into(),
+            host_key: format!("ssh-ed25519 {}", base64::engine::general_purpose::STANDARD.encode(blob)),
+        };
+        let identity = Path::new("/private/client key");
+        let trust = Path::new("/private/known hosts");
+        let baseline = prepared_command(identity, trust, &endpoint).expect("query");
+        let storage = prepared_storage_status(identity, trust, &endpoint).expect("storage query");
+        let mut expected: Vec<_> = baseline.get_args().map(std::ffi::OsStr::to_os_string).collect();
+        *expected.last_mut().expect("fixed command") = "/usr/local/bin/horizon-repository storage-status".into();
+        assert_eq!(storage.get_args().collect::<Vec<_>>(), expected);
+        assert_eq!(
+            storage.get_envs().collect::<Vec<_>>(),
+            baseline.get_envs().collect::<Vec<_>>()
+        );
+    }
 
     #[test]
     fn interactive_mode_shares_all_isolation_options_and_owns_unique_private_trust() {
