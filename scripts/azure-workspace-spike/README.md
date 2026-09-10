@@ -71,7 +71,10 @@ leaves the sample resource group for manual inspection; delete it yourself.
 
 Exit codes: `0` every gate held; `3` usage; `4` lifetime bound reached; `5` the worker
 never published a host key; `6` deletion not proven; `7` a functional gate failed
-(storage qualifier, detach independence, deallocate, retention) with evidence journaled.
+(storage qualifier, storage negative control, detach independence, deallocate, retention)
+with evidence journaled. An unproven deletion always wins: exit `6` replaces any other code.
+Every blocking `az` call runs under `timeout` with the remaining lifetime bound; cleanup has
+its own fixed 25-minute bound.
 
 ## Journal
 

@@ -114,7 +114,7 @@ IP, VM port 2222 opened only from the operator's egress address, key-only SSH wi
 fresh Ed25519 key per sample, image pulled by digest through the managed identity's
 IMDS token exchanged at the registry (no registry password), host key read out of band
 through ARM-authenticated `az vm run-command` and pinned before the first SSH.
-Bound: 120 minutes per sample; actual 9 to 10 minutes each. Journals are private.
+Bound: 120 minutes per sample; actual 9 to 10 minutes for samples 1, 2, 3, 5 and 6, and 17 minutes for sample 4 because of its failed 10-minute restart wait. Journals are private.
 
 Controller-side timings in seconds. The first four columns are offsets from `T0`
 (the resource-group create call); the last three are self-anchored durations of
@@ -128,6 +128,7 @@ resource-group delete.
 | 3 | 38.4 | 238.7 | 270.8 | 239.3 | 32.1 | 74.2 | 187.8 |
 | 4 (revised harness, see below) | 67.9 | 241.6 | 274.2 | 242.2 | 31.5 | restart gate failed | 183.3 |
 | 5 (revised harness) | 38.8 | 243.0 | 275.6 | 243.7 | 31.5 | 74.3 | 182.9 |
+| 6 (final harness) | 37.6 | 180.8 | 213.5 | 181.5 | 31.9 | 105.9 | 183.1 |
 
 Guest-side stamps, in seconds after `T0` using the VM's own clock (Azure guests
 sync to host time, but treat sub-second differences between the two tables as
@@ -140,6 +141,7 @@ cross-clock noise):
 | 3 | 26.9 | 76.8 | 79.1 | 80.1 | 229.1 | 235.0 |
 | 4 | 33.4 | 101.5 | 103.7 | 104.6 | 221.4 | 237.3 |
 | 5 | 28.7 | 77.1 | 79.3 | 80.2 | 216.2 | 239.6 |
+| 6 | 27.9 | 84.3 | 86.6 | 87.5 | 173.5 | 178.1 |
 
 Sample 1's 42 s between pull and container start did not recur once the harness
 split `docker create` from `docker start` (4 to 6 s and 0.4 s in samples 2 and 3);
@@ -157,7 +159,9 @@ after `az vm start` the worker endpoint never returned within the 10-minute rest
 bound, the sample exited 7 with the retention gate failed, and it was still deleted
 with an unchanged inventory. The root cause was not captured (the harness now records
 guest diagnostics out of band when the restart gate fails); restoring `defaults,nofail`
-while keeping the docker drop-in restarted cleanly in sample 5.
+while keeping the docker drop-in restarted cleanly in sample 5. Sample 6 ran the
+final harness (hosted-review fixes: hard lifetime bound on every CLI call, overlay
+control gated, unproven deletion outranking other exit codes) and passed every gate.
 
 Functional results, identical in every sample unless stated:
 
@@ -181,15 +185,16 @@ Functional results, identical in every sample unless stated:
   inventory was byte-identical to the pre-sample snapshot after every sample.
 - No provider was registered and no Container Apps Job was created.
 
-Cost actually incurred: five VMs for 9 to 17 minutes each plus 32 GiB disks, well
+Cost actually incurred: six VMs for 9 to 17 minutes each plus 32 GiB disks, well
 under the $10 bound; the persistent registry costs about $0.67 per day at Standard.
 
 ### Verdict against the 180-second boundary
 
-**Not met with this configuration.** Across the five samples the slowest verified
+**Not met with this configuration.** Across the six samples the slowest verified
 key-only SSH session came 275.6 s after `T0` (243.7 s excluding the 31 to 32 s
-out-of-band host-key read); even the fastest sample needed 210.7 s. Four of five
-samples also missed the boundary for endpoint-open alone. The measured budget splits
+out-of-band host-key read); even the fastest sample needed 210.7 s. Four of six
+samples also missed the boundary for endpoint-open alone, and the two that met it
+did so by less than two seconds. The measured budget splits
 into roughly 25 to 33 s VM boot, 45 to 70 s Docker installation from apt, 90 to 150 s
 image pull and extraction, and 31 s for `run-command`. Levers that the measurements point to, in order of impact:
 
@@ -204,7 +209,11 @@ image pull and extraction, and 31 s for `run-command`. Levers that the measureme
 
 None of these are approved or implemented; they are the next decision for #474.
 The functional contract (key-only SSH, managed-identity pull, ext4 storage,
-detach independence, Stop with retained data, exact deletion) held in every sample.
+detach independence, Stop with retained data, exact deletion) held in samples 1,
+2, 3, 5 and 6. Sample 4 held every gate up to the restart, then failed the retention
+gate because the worker endpoint never returned, so its retained marker, host key
+and mount were not verified; the harness change responsible was reverted before
+sample 5.
 
 ## Spike checklist status
 

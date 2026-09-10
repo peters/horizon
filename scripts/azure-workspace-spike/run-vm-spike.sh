@@ -72,7 +72,13 @@ KNOWN_HOSTS="$SAMPLE_DIR/known_hosts"
 GATE_FAILURES=()
 CREATED=0 CLEANED=0 DELETE_PROVEN=0
 
-azc() { az "$@" --subscription "$SUBSCRIPTION" --only-show-errors; }
+# Every blocking CLI call runs under the remaining lifetime bound; cleanup gets its own fixed bound.
+azc() {
+  local remaining
+  if [ "$CLEANED" = 1 ]; then remaining=1500; else remaining=$(( DEADLINE_EPOCH - $(date +%s) )); fi
+  if [ "$remaining" -lt 1 ]; then say "lifetime bound reached before: az $1 $2"; return 124; fi
+  timeout -k 15 "$remaining" az "$@" --subscription "$SUBSCRIPTION" --only-show-errors
+}
 now() { date -u +%Y-%m-%dT%H:%M:%S.%3NZ; }
 epoch_ms() { date +%s%3N; }
 journal() { local data=${2:-'{}'}; jq -cn --arg at "$(now)" --arg event "$1" --argjson data "$data" '{at:$at,event:$event,data:$data}' >>"$JOURNAL"; }
@@ -81,7 +87,7 @@ gate() { local name=$1 ok=$2; [ "$ok" = true ] || GATE_FAILURES+=("$name"); }
 deadline_check() { [ "$(date +%s)" -lt "$DEADLINE_EPOCH" ] || { say "lifetime bound reached; forcing cleanup"; exit 4; }; }
 # wait_for <max-seconds> <command...>: poll every 3 s under the lifetime bound; returns 1 on the phase bound.
 wait_for() {
-  local until_epoch=$(( $(date +%s) + $1 )); shift
+  local until_epoch=$(( $(date +%s) + ( $1 > 0 ? $1 : 0 ) )); shift
   until "$@" >/dev/null 2>&1; do
     deadline_check
     [ "$(date +%s)" -lt "$until_epoch" ] || return 1
@@ -123,8 +129,8 @@ finish() {
   local code=$?
   trap - EXIT
   cleanup
-  if [ "$code" = 0 ] && [ "$CREATED" = 1 ] && [ "$KEEP" = 0 ] && [ "$DELETE_PROVEN" = 0 ]; then code=6; fi
   if [ "$code" = 0 ] && [ "${#GATE_FAILURES[@]}" -gt 0 ]; then code=7; fi
+  if [ "$CREATED" = 1 ] && [ "$KEEP" = 0 ] && [ "$DELETE_PROVEN" = 0 ]; then code=6; fi  # an unproven delete outranks every other outcome
   journal end "$(jq -cn --argjson code "$code" --arg gates "${GATE_FAILURES[*]:-}" '{exit_code:$code,failed_gates:($gates|split(" ")|map(select(length>0)))}')"
   say "sample $SAMPLE finished with exit $code${GATE_FAILURES[*]:+ (failed gates: ${GATE_FAILURES[*]})}; journal $JOURNAL"
   exit "$code"
@@ -204,9 +210,9 @@ azc resource list --query "sort([].id)" >"$SAMPLE_DIR/inventory-before.json"
 journal inventory_before "$(jq -c '{count:length}' "$SAMPLE_DIR/inventory-before.json")"
 
 T0=$(epoch_ms)
+CREATED=1  # cleanup owns the uniquely named group from this point, even if the create response is lost
 azc group create --name "$RG" --location "$REGION" \
   --tags issue=474 sample="$SAMPLE" run="$RUN_ID" purpose=horizon-azure-vm-spike deadline="$(date -u -d @"$DEADLINE_EPOCH" +%FT%TZ)" >/dev/null
-CREATED=1
 journal group_created "$(jq -cn --argjson ms $(( $(epoch_ms) - T0 )) '{ms_from_t0:$ms}')"
 
 CREATE_JSON="$SAMPLE_DIR/vm-create.json"
@@ -272,8 +278,10 @@ printf '%s\n' "$QUALIFIER_OUT" >"$SAMPLE_DIR/qualifier-output.txt"
 DATA_STATUS=$(printf '%s\n' "$QUALIFIER_OUT" | sed '/---OVERLAY---/,$d' | jq -r '.status // empty' 2>/dev/null | head -1 || true)
 OVERLAY_STATUS=$(printf '%s\n' "$QUALIFIER_OUT" | sed -n '/---OVERLAY---/,$p' | grep -v -- '---' | jq -r '.status // empty' 2>/dev/null | head -1 || true)
 QUALIFIED=false; [ "$DATA_STATUS" = absent ] && QUALIFIED=true
-journal storage_evidence "$(jq -cn --argjson mirror $MIRROR --argjson q $QUALIFIED --arg ds "${DATA_STATUS:-none}" --arg os "${OVERLAY_STATUS:-none}" --arg opts "$OPTIONS" '{shell_mirror_passes:$mirror,rust_qualifier_status_on_data_disk:$ds,rust_qualifier_status_on_overlay:$os,rust_qualifier_accepts_data_disk:$q,kernel_options:($opts|split("\n")|map(select(length>0)))}')"
+CONTROL_REJECTED=false; case "${OVERLAY_STATUS:-none}" in error|rejected) CONTROL_REJECTED=true ;; esac
+journal storage_evidence "$(jq -cn --argjson mirror $MIRROR --argjson q $QUALIFIED --argjson c $CONTROL_REJECTED --arg ds "${DATA_STATUS:-none}" --arg os "${OVERLAY_STATUS:-none}" --arg opts "$OPTIONS" '{shell_mirror_passes:$mirror,rust_qualifier_status_on_data_disk:$ds,rust_qualifier_status_on_overlay:$os,rust_qualifier_accepts_data_disk:$q,overlay_control_rejected:$c,kernel_options:($opts|split("\n")|map(select(length>0)))}')"
 gate storage_qualifier "$QUALIFIED"
+gate storage_negative_control "$CONTROL_REJECTED"
 say "rust qualifier on data disk: ${DATA_STATUS:-none} (overlay control: ${OVERLAY_STATUS:-none}); shell mirror: $MIRROR"
 
 say "detach independence: start a heartbeat, disconnect, reconnect"
@@ -299,10 +307,11 @@ azc vm start --resource-group "$RG" --name "$VM" >/dev/null
 IP_AFTER=$(azc vm show -d --resource-group "$RG" --name "$VM" --query publicIps -o tsv)
 IP_SAME=false; [ "$IP" = "$IP_AFTER" ] && IP_SAME=true
 KEY_SAME=false SESSION=unknown RETAINED_MARKER=false HEARTBEAT=0 MOUNTED=false
+RESTART_DEADLINE=$(( $(date +%s) + RESTART_WAIT_SECONDS ))
 if wait_for "$RESTART_WAIT_SECONDS" nc -z -w 3 "$IP_AFTER" 2222; then
   SCANNED=$(ssh-keyscan -p 2222 -t ed25519 -T 10 "$IP_AFTER" 2>/dev/null | awk '{print $2" "$3}' | head -1 || true)
   [ "$SCANNED" = "$HOST_KEY" ] && KEY_SAME=true
-  if [ "$KEY_SAME" = true ] && wait_for "$RESTART_WAIT_SECONDS" ssh_worker "$IP_AFTER" true; then
+  if [ "$KEY_SAME" = true ] && wait_for $(( RESTART_DEADLINE - $(date +%s) )) ssh_worker "$IP_AFTER" true; then
     OUT=$(ssh_worker "$IP_AFTER" "cat /workspace/spike-marker 2>/dev/null || echo missing; tmux has-session -t spike 2>/dev/null && echo session-alive || echo session-gone; wc -l < /workspace/spike-heartbeat 2>/dev/null || echo 0; grep -q ' /workspace ' /proc/self/mounts && echo mounted || echo unmounted" 2>/dev/null || printf 'missing\nunknown\n0\nunknown\n')
     [ "$(sed -n 1p <<<"$OUT")" = "$MARKER" ] && RETAINED_MARKER=true
     SESSION=$(sed -n 2p <<<"$OUT"); HEARTBEAT=$(sed -n 3p <<<"$OUT"); [ "$(sed -n 4p <<<"$OUT")" = mounted ] && MOUNTED=true
