@@ -1,6 +1,8 @@
 //! Retained repository intake with a Linux export-approval controller.
 //! Neither worker intake nor controller handoff grants setup or task authority.
 
+pub mod setup;
+
 #[cfg(target_os = "linux")]
 pub mod controller;
 #[cfg(target_os = "linux")]

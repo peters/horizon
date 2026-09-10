@@ -5,6 +5,7 @@ mod pack;
 mod protocol;
 mod receive;
 mod setup;
+mod setup_checkout;
 
 use std::{
     io::{self, Read, Write},
@@ -20,6 +21,8 @@ fn main() -> ExitCode {
             Some(
                 "materialize"
                     | "setup"
+                    | "setup-binding"
+                    | "setup-checkout"
                     | "setup-status"
                     | "receive-overlay"
                     | "overlay-status"
@@ -32,7 +35,7 @@ fn main() -> ExitCode {
     {
         let _ = writeln!(
             io::stderr().lock(),
-            "Usage: horizon-repository materialize|setup|setup-status|receive-overlay|overlay-status|receive-pack|pack-status|intake|intake-status < request"
+            "Usage: horizon-repository materialize|setup|setup-status|setup-binding|setup-checkout|receive-overlay|overlay-status|receive-pack|pack-status|intake|intake-status < request"
         );
         return ExitCode::from(2);
     }
@@ -42,6 +45,18 @@ fn main() -> ExitCode {
     match command {
         Some("setup") => setup::run(setup::Command::Execute, &mut input, &mut output, &mut diagnostics),
         Some("setup-status") => setup::run(setup::Command::Observe, &mut input, &mut output, &mut diagnostics),
+        Some("setup-binding") => setup_checkout::run(
+            setup_checkout::Command::Binding,
+            &mut input,
+            &mut output,
+            &mut diagnostics,
+        ),
+        Some("setup-checkout") => setup_checkout::run(
+            setup_checkout::Command::Inspect,
+            &mut input,
+            &mut output,
+            &mut diagnostics,
+        ),
         Some("receive-overlay") => receive::run(receive::Command::Receive, &mut input, &mut output, &mut diagnostics),
         Some("overlay-status") => receive::run(receive::Command::Observe, &mut input, &mut output, &mut diagnostics),
         Some("receive-pack") => pack::run(pack::Command::Receive, &mut input, &mut output, &mut diagnostics),
