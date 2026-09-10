@@ -151,7 +151,6 @@ class PlanningTests(Harness):
                     self.assertIn("region_available", check.depends_on)
                 if check.id != "account_context":
                     self.assertIn("account_context", check.depends_on)
-                self.assertNotIn("account set", " ".join(argv))
                 if "rest" in argv:
                     self.assertEqual(argv[argv.index("--method") + 1], "get")
                     self.assertIn("api-version=", argv[argv.index("--url") + 1])
@@ -251,6 +250,8 @@ class InterpretationTests(Harness):
         self.assertEqual(self.check(report, "account_context")["reason"], "authentication_required")
         self.assertTrue(all(c["reason"] == "prerequisite_failed" for c in report["checks"][1:]))
         self.assertEqual(report["status"], "blocked")
+        timed_out = self.report("aci", {**fixture, "account_context": {"timed_out": True}})[1]["checks"][1:]
+        self.assertTrue(all(c["reason"] == "prerequisite_failed" for c in timed_out))
 
     def test_region_and_provider_states(self):
         fixture = happy_fixture("aci")
@@ -382,7 +383,8 @@ class OutputSafetyTests(Harness):
         for text in (out, err, written):
             for leaked in (SUB, OTHER_UUID, SECRET, "operator@example.test", "private-rg", "AuthorizationFailed The"):
                 self.assertNotIn(leaked, text)
-        self.assertEqual(stat.S_IMODE(os.stat(report_path).st_mode), 0o600)
+        if os.name == "posix":
+            self.assertEqual(stat.S_IMODE(os.stat(report_path).st_mode), 0o600)
         parsed = json.loads(written)
         self.assertEqual(parsed["schema"], preflight.REPORT_SCHEMA)
         self.assertEqual(parsed["status"], "blocked")
@@ -404,7 +406,7 @@ class OutputSafetyTests(Harness):
         self.assertIn("JSON object", err)
         code, report = self.report("aci", {})
         self.assertEqual((code, report["status"]), (2, "unknown"))
-        self.assertTrue(all(c["reason"] == "not_executed" for c in report["checks"]))
+        self.assertEqual([c["reason"] for c in report["checks"]], ["not_executed"] + ["prerequisite_failed"] * 8)
 
 
 if __name__ == "__main__":

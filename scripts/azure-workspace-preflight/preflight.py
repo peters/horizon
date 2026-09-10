@@ -488,8 +488,7 @@ def run_preflight(request: Request, executor: Optional[Executor]) -> Dict[str, A
     for check in plan:
         if planning:
             outcomes[check.id] = Outcome("planned")
-        elif any(outcomes[dep].outcome == "blocked" for dep in check.depends_on) or (
-                check.id == "vm_regional_quota" and outcomes["vm_sku_availability"].outcome != "observed_ok"):
+        elif any(outcomes[dep].outcome != "observed_ok" for dep in check.depends_on):
             outcomes[check.id] = Outcome("unknown", "prerequisite_failed",
                                          {"depends_on": [d for d in check.depends_on if outcomes[d].outcome != "observed_ok"]})
         else:

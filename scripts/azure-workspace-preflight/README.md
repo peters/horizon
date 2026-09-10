@@ -81,11 +81,12 @@ whole group is killed on expiry, because the packaged `az` is a shell wrapper),
 and there are no retries. Output is read incrementally; as soon as either
 stream exceeds 4 MiB the process group is killed, the retained prefix is not
 interpreted, and the check reports `oversized_output`. A CLI that cannot be
-launched at all reports `launch_failed`. No raw output is ever printed. Checks declare prerequisites: when the account context is
-blocked nothing else runs, when the region is unavailable the regional checks
-are skipped, candidate quota and capability reads wait for the candidate's
-primary provider to be registered, and the VM quota check waits for a resolved
-SKU. Skipped checks report `unknown` with reason `prerequisite_failed`.
+launched at all reports `launch_failed`. No raw output is ever printed.
+Checks declare prerequisites and run only when every prerequisite is
+`observed_ok`: nothing else runs unless the account context resolves, regional
+checks need the region, candidate quota and capability reads need the
+candidate's primary provider registered, and the VM quota check needs a
+resolved SKU. Skipped checks report `unknown` with reason `prerequisite_failed`.
 
 | Check | Operation | Source |
 | --- | --- | --- |
