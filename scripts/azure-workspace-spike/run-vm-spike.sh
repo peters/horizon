@@ -182,7 +182,7 @@ finish() {
   if [ "$code" = 0 ] && [ "${#GATE_FAILURES[@]}" -gt 0 ]; then code=7; fi
   if [ "$code" != 0 ] && [ "$expired" = 1 ]; then code=4; fi  # any failure past the active-phase bound is a bound expiry
   case "$code" in 0|3|4|5|6|7|130) ;; *) code=1 ;; esac
-  if [ "$CREATED" = 1 ] && [ "$KEEP" = 0 ] && [ "$DELETE_PROVEN" = 0 ]; then code=6; fi  # an unproven delete outranks every other outcome
+  if [ "$CREATED" = 1 ] && [ "$DELETE_PROVEN" = 0 ]; then code=6; fi  # an unproven (or --keep skipped) delete outranks every other outcome
   journal end "$(jq -cn --argjson code "$code" --arg gates "${GATE_FAILURES[*]:-}" '{exit_code:$code,failed_gates:($gates|split(" ")|map(select(length>0)))}')"
   say "sample $SAMPLE finished with exit $code${GATE_FAILURES[*]:+ (failed gates: ${GATE_FAILURES[*]})}; journal $JOURNAL"
   exit "$code"

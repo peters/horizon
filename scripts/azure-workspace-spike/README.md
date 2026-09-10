@@ -50,7 +50,8 @@ refuses to create anything unless that report is a live `vm` report with
 `no_blockers_observed` whose `subscription_digest` matches `--subscription`, and it journals the report path, `observed_at`, tool version
 and its own git commit in the `start` event. `--dry-run` renders the cloud-init and
 exits without creating anything (the report is then optional). `--keep` leaves the
-sample resource group for manual inspection; delete it yourself. `--sample` accepts
+sample resource group for manual inspection; delete it yourself, and expect exit `6`
+because the deletion gate was skipped. `--sample` accepts
 1 to 99 and only tags and names the journal.
 
 ## What one sample does

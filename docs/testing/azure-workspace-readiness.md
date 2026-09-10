@@ -222,9 +222,9 @@ under the $10 bound; the persistent registry costs about $0.67 per day at Standa
 
 **Not met with this configuration.** Across the ten samples the slowest verified
 key-only SSH session came 278.0 s after `T0` (246.0 s excluding the 31 to 32 s
-out-of-band host-key read); even the fastest sample needed 203.4 s. Seven of ten
-samples also missed the boundary for endpoint-open alone, and the best endpoint
-time was 170.9 s. The measured budget splits
+out-of-band host-key read); even the fastest sample needed 203.4 s. Eight of ten
+samples also missed the boundary for endpoint-open alone (sample 6 by 0.8 s), and
+the best endpoint time was 170.9 s. The measured budget splits
 into roughly 25 to 33 s VM boot, 45 to 70 s Docker installation from apt, 90 to 150 s
 image pull and extraction, and 31 s for `run-command`. Levers that the measurements point to, in order of impact:
 
