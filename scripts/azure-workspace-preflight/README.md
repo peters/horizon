@@ -27,8 +27,9 @@ Focused tests (no Azure CLI, no credentials, no network):
 python3 -B -m unittest discover -s scripts/azure-workspace-preflight/tests -v
 ```
 
-Offline plan (default mode; zero subprocesses; shows the exact redacted commands
-that a live run would execute):
+Offline plan (default mode; zero subprocesses; shows the redacted arguments of
+every operation a live run would execute, prefixed with `az` regardless of
+`--az-path`):
 
 ```bash
 python3 scripts/azure-workspace-preflight/preflight.py \

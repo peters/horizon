@@ -277,7 +277,7 @@ def fixture_executor(fixture: Dict[str, Any], plan: List[PlannedCheck]) -> Execu
     by_argv = {tuple(check.argv): check.id for check in plan}
 
     def run(argv: List[str], _timeout: int) -> CommandResult:
-        entry = fixture.get(by_argv.get(tuple(argv), ""))
+        entry = fixture.get(by_argv[tuple(argv)]) if tuple(argv) in by_argv else None
         if not isinstance(entry, dict):
             return CommandResult(None, "", "", executed=False)
         stdout = entry.get("stdout", "")
