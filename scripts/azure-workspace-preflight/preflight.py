@@ -161,6 +161,9 @@ def validate_request(args: argparse.Namespace) -> Request:
         raise InputError(f"--timeout-seconds must be between 1 and {MAX_TIMEOUT_SECONDS}")
     az_path = args.az_path or "az"
     if mode == "live":
+        if os.name != "posix":
+            raise InputError("--live needs a POSIX host (Linux, macOS or WSL) for process-group timeouts; "
+                             "use plan or --fixture here")
         resolved = shutil.which(az_path)
         if not resolved:
             raise InputError(f"Azure CLI executable {az_path!r} was not found; install it or pass --az-path")
@@ -246,7 +249,7 @@ def plan_checks(request: Request) -> List[PlannedCheck]:
 
 # --------------------------------------------------------------------------- execution
 def subprocess_executor(argv: List[str], timeout_seconds: int, limit: int = OUTPUT_LIMIT_BYTES) -> CommandResult:
-    """Run argv without a shell in its own process group; kill the whole group on timeout."""
+    """Run argv without a shell in its own POSIX process group; kill the whole group on timeout."""
     env = {key: os.environ[key] for key in ENV_PASSTHROUGH if key in os.environ}
     env.update({"AZURE_CORE_NO_COLOR": "true", "AZURE_CORE_DISABLE_PROGRESS_BAR": "true",
                 "AZURE_EXTENSION_USE_DYNAMIC_INSTALL": "no", "AZURE_CORE_COLLECT_TELEMETRY": "false"})

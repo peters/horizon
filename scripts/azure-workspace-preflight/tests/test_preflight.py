@@ -125,11 +125,13 @@ class OfflineAndInputTests(Harness):
             self.assertNotIn(SUB, err)
         self.popen.assert_not_called()
 
-    def test_live_mode_without_azure_cli_is_rejected_before_execution(self):
+    def test_live_mode_without_azure_cli_or_posix_host_is_rejected_before_execution(self):
         with mock.patch.object(preflight.shutil, "which", return_value=None):
             code, _, err = self.run_main(["--candidate", "aci", *BASE, "--live", "--az-path", "az-missing"])
-        self.assertEqual(code, 3)
-        self.assertIn("not found", err)
+        self.assertEqual((code, "not found" in err), (3, True))
+        with mock.patch.object(preflight.os, "name", "nt"):
+            code, _, err = self.run_main(["--candidate", "aci", *BASE, "--live"])
+        self.assertEqual((code, "POSIX host" in err), (3, True))
         self.popen.assert_not_called()
 
 
@@ -174,6 +176,7 @@ class PlanningTests(Harness):
         self.assertTrue(any("stop" in c.argv for c in preflight.plan_checks(stop_region)))
 
 
+@unittest.skipUnless(os.name == "posix", "the live executor is POSIX-only by design")
 class ExecutorTests(unittest.TestCase):
     """Real subprocess boundary, exercised with the Python interpreter instead of the Azure CLI."""
 
@@ -191,6 +194,7 @@ class ExecutorTests(unittest.TestCase):
         failed = run([sys.executable, "-c", "import sys; sys.stderr.write('ERROR: AADSTS700082 expired'); sys.exit(1)"], 20)
         self.assertEqual((failed.exit_code, preflight.classify_failure(failed).reason), (1, "authentication_required"))
 
+    @unittest.skipUnless(os.path.isdir("/proc"), "grandchild liveness probe reads /proc")
     def test_timeout_kills_the_whole_process_group_including_wrapper_children(self):
         wrapper = ("import subprocess, sys; child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
                    "print(child.pid, flush=True); child.wait()")

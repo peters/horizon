@@ -9,7 +9,10 @@ never reports "ready": the useful outputs are `no_blockers_observed`, `unknown`
 and `blocked`, each with the list of live-qualification gates that remain open.
 
 Requirements: Python 3.9+ standard library only. Live reads additionally need the
-official Azure CLI (`az`) already installed and already logged in by the operator.
+official Azure CLI (`az`) already installed and already logged in by the operator,
+on a POSIX host (Linux, macOS or WSL): `--live` uses POSIX process groups to end a
+timed-out command together with the CLI wrapper's children and is rejected before
+execution on other hosts. Plan and fixture modes run anywhere.
 The tool never runs `az login`, never changes the default subscription or any
 CLI configuration, never installs extensions, and never registers a provider or
 creates, starts, stops, restarts or deletes a resource.
@@ -73,10 +76,11 @@ file could not be written.
 
 Only these documented read-only operations can be emitted. The planner asserts
 the allowlist for every command, arguments are passed as an array without a
-shell in their own process group, each command runs under the timeout (the whole
-group is killed on expiry, because the packaged `az` is a shell wrapper), output
-above 4 MiB per stream is discarded and reported as `oversized_output`, and
-there are no retries. Checks declare prerequisites: when the account context is
+shell in their own POSIX process group, each command runs under the timeout (the
+whole group is killed on expiry, because the packaged `az` is a shell wrapper),
+and there are no retries. Output is read to completion; a stream longer than
+4 MiB is then discarded and the check reports `oversized_output`, so the cap
+bounds what is interpreted and reported, not the child's memory use. Checks declare prerequisites: when the account context is
 blocked nothing else runs, when the region is unavailable the regional checks
 are skipped, and the VM quota check waits for a resolved SKU. Skipped checks
 report `unknown` with reason `prerequisite_failed`.
