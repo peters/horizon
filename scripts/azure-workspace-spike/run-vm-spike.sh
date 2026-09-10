@@ -109,7 +109,9 @@ bounded() {
 }
 # Machine-consumed output is always JSON unless the caller asks for tsv explicitly.
 azc() {
-  case " $* " in *" -o "*|*" --output "*) ;; *) set -- "$@" --output json ;; esac
+  local arg explicit=0
+  for arg in "$@"; do case "$arg" in -o|--output) explicit=1 ;; esac; done
+  [ "$explicit" = 1 ] || set -- "$@" --output json
   bounded az "$@" --subscription "$SUBSCRIPTION" --only-show-errors
 }
 now() { date -u +%Y-%m-%dT%H:%M:%S.%3NZ; }
