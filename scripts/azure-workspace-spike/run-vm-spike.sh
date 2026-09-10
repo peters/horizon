@@ -300,9 +300,11 @@ say "endpoint open in $((T_PORT - T0)) ms"
 
 say "reading worker host key out of band through run-command"
 RC_START=$(epoch_ms)
-RC_TEXT=$(run_command 'cat /mnt/horizon-workspace/.horizon-worker/ssh/*.pub 2>/dev/null; echo ---TIMING---; cat /var/log/horizon-spike-timing.jsonl') || RC_TEXT=""
+RC_OK=true
+RC_TEXT=$(run_command 'cat /mnt/horizon-workspace/.horizon-worker/ssh/*.pub 2>/dev/null; echo ---TIMING---; cat /var/log/horizon-spike-timing.jsonl' 2>&1) || RC_OK=false
 RC_END=$(epoch_ms)
 printf '%s\n' "$RC_TEXT" >"$SAMPLE_DIR/run-command-hostkey.txt"
+[ "$RC_OK" = true ] || { journal run_command_failed "$(jq -cn --argjson ms $((RC_END - RC_START)) '{run_command_ms:$ms}')"; say "run-command failed; see run-command-hostkey.txt"; exit 1; }
 HOST_KEY=$(printf '%s\n' "$RC_TEXT" | grep -m1 '^ssh-ed25519 ' | awk '{print $1" "$2}' || true)
 printf '%s\n' "$RC_TEXT" | sed -n '/---TIMING---/,$p' | grep '^{' >"$SAMPLE_DIR/guest-timing.jsonl" || true
 [ -n "$HOST_KEY" ] || { journal host_key_missing "$(jq -cn --argjson ms $((RC_END - RC_START)) '{run_command_ms:$ms}')"; say "no ed25519 host key published yet; aborting sample"; exit 5; }
