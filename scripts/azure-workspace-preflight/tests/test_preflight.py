@@ -169,7 +169,9 @@ class PlanningTests(Harness):
         for forged in (["az", "container", "create", "--name", "x"], ["az", "provider", "register", "-n", "Microsoft.App"],
                        ["az", "account", "set", "-s", SUB], ["az", "login"], ["az", "extension", "add", "-n", "containerapp"],
                        ["az", "rest", "--method", "delete", "--url", f"{preflight.ARM}/subscriptions/{SUB}/x?api-version=1"],
-                       ["az", "rest", "--method", "get", "--url", "https://evil.example/x?api-version=1"]):
+                       ["az", "rest", "--method", "get", "--url", "https://evil.example/x?api-version=1"],
+                       ["az", "rest", "--url", f"{preflight.ARM}/subscriptions/{SUB}/locations?api-version=2022-12-01"],
+                       ["az", "rest", "--method", "get", "--url", f"{preflight.ARM}/subscriptions/{SUB}/resources?api-version=2021-04-01"]):
             with self.assertRaises(AssertionError, msg=forged):
                 preflight.assert_allowlisted(forged)
         stop_region = self.request("vm", region="stop")

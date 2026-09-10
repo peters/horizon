@@ -39,6 +39,10 @@ UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 REGION_RE = re.compile(r"^[a-z][a-z0-9]{1,63}$")
 VM_SIZE_RE = re.compile(r"^Standard_[A-Za-z0-9_-]{1,40}$")
 ERROR_CODE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
+# The only ARM read endpoints az rest may target; the planner and the allowlist share this definition.
+REST_URL_RE = re.compile(re.escape(ARM) + r"/subscriptions/[0-9a-f-]{36}(?:/locations|/providers/Microsoft\."
+                         r"(?:ContainerInstance/locations/[a-z0-9]+/(?:usages|capabilities)|App/locations/[a-z0-9]+/usages))"
+                         r"\?api-version=\d{4}-\d{2}-\d{2}$")
 
 # Operations the planner may emit. Anything else is a programming error.
 ALLOWED_OPERATIONS = (("account", "show"), ("provider", "show"), ("vm", "list-usage"), ("vm", "list-skus"), ("rest",))
@@ -56,20 +60,15 @@ CANDIDATES: Dict[str, Dict[str, Any]] = {
                        "supporting": _IDENTITY + ["Microsoft.Storage", "Microsoft.OperationalInsights"]},
 }
 # Structured ARM/CLI error codes take precedence over free-text matching.
+_AUTH, _PERM = ("blocked", "authentication_required"), ("blocked", "insufficient_permission")
+_SUB, _UNSUPPORTED = ("blocked", "subscription_not_visible"), ("unknown", "unsupported_query")
 ERROR_CODES = {
-    "AuthorizationFailed": ("blocked", "insufficient_permission"),
-    "InvalidAuthenticationToken": ("blocked", "authentication_required"),
-    "InvalidAuthenticationTokenTenant": ("blocked", "authentication_required"),
-    "ExpiredAuthenticationToken": ("blocked", "authentication_required"),
-    "SubscriptionNotFound": ("blocked", "subscription_not_visible"),
-    "InvalidSubscriptionId": ("blocked", "subscription_not_visible"),
-    "MissingSubscriptionRegistration": ("blocked", "unregistered_provider"),
-    "NoRegisteredProviderFound": ("unknown", "unsupported_query"),
-    "InvalidApiVersionParameter": ("unknown", "unsupported_query"),
-    "InvalidResourceType": ("unknown", "unsupported_query"),
-    "ResourceNotFound": ("unknown", "unsupported_query"),
+    "AuthorizationFailed": _PERM, "InvalidAuthenticationToken": _AUTH, "InvalidAuthenticationTokenTenant": _AUTH,
+    "ExpiredAuthenticationToken": _AUTH, "SubscriptionNotFound": _SUB, "InvalidSubscriptionId": _SUB,
+    "MissingSubscriptionRegistration": ("blocked", "unregistered_provider"), "TooManyRequests": ("unknown", "throttled"),
+    "NoRegisteredProviderFound": _UNSUPPORTED, "InvalidApiVersionParameter": _UNSUPPORTED,
+    "InvalidResourceType": _UNSUPPORTED, "ResourceNotFound": _UNSUPPORTED,
     "LocationNotAvailableForResourceType": ("blocked", "region_unavailable"),
-    "TooManyRequests": ("unknown", "throttled"),
 }
 UNVERIFIED_GATES = [
     "create permission for the candidate resource type (a successful read is not a write grant)",
@@ -188,10 +187,12 @@ def assert_allowlisted(argv: List[str]) -> None:
     if FORBIDDEN_TOKENS.intersection(command):
         raise AssertionError("forbidden lifecycle token in planned command")
     if tokens[0] == "rest":
-        method = tokens[tokens.index("--method") + 1]
-        url = tokens[tokens.index("--url") + 1]
-        if method != "get" or not url.startswith(f"{ARM}/subscriptions/") or "api-version=" not in url:
-            raise AssertionError("az rest must be a pinned GET against the ARM subscription scope")
+        try:
+            rest_ok = tokens[tokens.index("--method") + 1] == "get" and REST_URL_RE.match(tokens[tokens.index("--url") + 1])
+        except (ValueError, IndexError):
+            rest_ok = False
+        if not rest_ok:
+            raise AssertionError("az rest must be a pinned GET against an allowlisted ARM read endpoint")
 
 
 def _rest(request: Request, path: str, api_version: str, query: str) -> List[str]:
@@ -562,15 +563,13 @@ def main(argv: Optional[List[str]] = None, stdout=None, stderr=None) -> int:
         args = build_parser().parse_args(argv)
         subscription = (args.subscription or "").lower()
         request = validate_request(args)
-        executor: Optional[Executor] = None
+        executor: Optional[Executor] = subprocess_executor if request.mode == "live" else None
         if request.mode == "fixture":
             with open(args.fixture, encoding="utf-8") as handle:
                 fixture = json.load(handle)
             if not isinstance(fixture, dict):
                 raise InputError("fixture must be a JSON object keyed by check id")
             executor = fixture_executor(fixture, plan_checks(request))
-        elif request.mode == "live":
-            executor = subprocess_executor
         if args.report and os.path.lexists(args.report):
             raise InputError(f"refusing to overwrite existing report file {args.report!r}")
     except (InputError, OSError, ValueError) as error:
