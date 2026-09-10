@@ -350,10 +350,11 @@ class InterpretationTests(Harness):
         fixture["vm_sku_availability"] = {"exit_code": 0, "stdout": [VM_SKU["stdout"][0]]}
         self.assertEqual(self.check(self.report("vm", fixture, extra)[1], "vm_sku_availability")["reason"],
                          "sku_unavailable_in_region")
-        fixture["vm_sku_availability"] = {"exit_code": 0, "stdout": [{
-            **VM_SKU["stdout"][1], "capabilities": [{"name": "vCPUs", "value": None}]}]}
-        self.assertEqual(self.check(self.report("vm", fixture, extra)[1], "vm_sku_availability")["reason"],
-                         "malformed_response")
+        for bad in (None, "0", "-1", "four", True):
+            fixture["vm_sku_availability"] = {"exit_code": 0, "stdout": [{
+                **VM_SKU["stdout"][1], "capabilities": [{"name": "vCPUs", "value": bad}]}]}
+            self.assertEqual(self.check(self.report("vm", fixture, extra)[1], "vm_sku_availability")["reason"],
+                             "malformed_response", bad)
 
     def test_container_apps_quota_uses_requested_cores(self):
         fixture = happy_fixture("container-apps")

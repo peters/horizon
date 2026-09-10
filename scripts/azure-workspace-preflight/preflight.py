@@ -12,6 +12,7 @@ acceptance; those remain explicit live-qualification gates.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
 import datetime as _dt
 import json
@@ -260,7 +261,8 @@ def subprocess_executor(argv: List[str], timeout_seconds: int, limit: int = OUTP
         stdout, stderr = proc.communicate(timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
         timed_out = True
-        os.killpg(proc.pid, signal.SIGKILL)  # the installed az is a shell wrapper; kill its children too
+        with contextlib.suppress(ProcessLookupError):  # the group may exit between the timeout and the kill
+            os.killpg(proc.pid, signal.SIGKILL)  # the installed az is a shell wrapper; kill its children too
         stdout, stderr = proc.communicate()
     oversized = not timed_out and (len(stdout) > limit or len(stderr) > limit)
     exit_code = None if (timed_out or oversized) else proc.returncode
@@ -428,14 +430,13 @@ def interpret_vm_sku(payload: Any, request: Request) -> Outcome:
                 or str(item.get("name", "")).lower() != str(request.vm_size).lower()):
             continue
         capabilities, restrictions, family = item.get("capabilities"), item.get("restrictions") or [], item.get("family")
-        if not isinstance(capabilities, list) or not isinstance(restrictions, list) or not isinstance(family, str):
+        if not isinstance(capabilities, list) or not isinstance(restrictions, list):
             return Outcome("unknown", "malformed_response")
         caps = {c.get("name"): c.get("value") for c in capabilities if isinstance(c, dict)}
-        try:
-            vcpus = int(caps.get("vCPUs", ""))
-        except (TypeError, ValueError):
+        vcpus = str(caps.get("vCPUs", "")).strip()
+        if not isinstance(family, str) or not vcpus.isdigit() or int(vcpus) == 0:
             return Outcome("unknown", "malformed_response")
-        details: Dict[str, Any] = {"family": family, "vcpus": vcpus, "capacity": "unverified"}
+        details: Dict[str, Any] = {"family": family, "vcpus": int(vcpus), "capacity": "unverified"}
         for restriction in restrictions:
             if isinstance(restriction, dict) and restriction.get("type") == "Location":
                 return Outcome("blocked", "sku_restricted", {**details, "reason_code": restriction.get("reasonCode")})
