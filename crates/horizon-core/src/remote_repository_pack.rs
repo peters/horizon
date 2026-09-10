@@ -149,4 +149,4 @@ pub enum RemotePackInspectionError {
 }
 
 #[cfg(all(test, target_os = "linux"))]
-mod tests;
+pub(crate) mod tests;
