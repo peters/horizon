@@ -313,7 +313,7 @@ journal inventory_before "$(jq -c '{count:length}' "$SAMPLE_DIR/inventory-before
 REAPER_BASE="https://management.azure.com/subscriptions/$SUBSCRIPTION/resourceGroups/$REAPER_RG/providers/Microsoft.Automation/automationAccounts/$REAPER_ACCOUNT"
 REAPER_FACTS=$(azc rest --method get --url "$REAPER_BASE/jobSchedules?api-version=2023-11-01" --query "value[?properties.runbook.name=='horizon-spike-deadline-reaper'] | [0].properties.schedule.name" -o tsv 2>/dev/null || true)
 REAPER_SCHEDULE=$(azc rest --method get --url "$REAPER_BASE/schedules/${REAPER_FACTS:-none}?api-version=2023-11-01" --query "{enabled:properties.isEnabled,next_run:properties.nextRun,interval:properties.interval,frequency:properties.frequency}" 2>/dev/null || echo null)
-[ "$(jq -r '.enabled // false' <<<"$REAPER_SCHEDULE")" = true ] || { journal reaper_missing "$(jq -cn --arg s "$REAPER_SCHEDULE" '{schedule:$s}')"; say "the subscription-side reaper is not present or not enabled; run setup-spike-reaper.sh first (nothing created)"; exit 1; }
+[ "$(jq -r 'if .enabled == true and .frequency == "Minute" and .interval == 15 then "ok" else "bad" end' <<<"$REAPER_SCHEDULE")" = ok ] || { journal reaper_missing "$(jq -cn --arg s "$REAPER_SCHEDULE" '{schedule:$s}')"; say "the subscription-side reaper is not present, not enabled or not the 15-minute schedule; run setup-spike-reaper.sh first (nothing created)"; exit 1; }
 journal reaper_present "$(jq -c --arg acct "$REAPER_ACCOUNT" '. + {account:$acct}' <<<"$REAPER_SCHEDULE")"
 # Read-only provider preflight for the auto-shutdown schedule; registration is a separate approval.
 DEVTESTLAB=$(azc provider show --namespace Microsoft.DevTestLab --query registrationState -o tsv 2>/dev/null || echo unknown)
@@ -518,6 +518,8 @@ if [ "$PROVE_REAPER" = 1 ] && [ "$KEY_SAME" = true ]; then
   journal reaper_proof "$(jq -cn --argjson ok $REAPED --argjson ms $(( $(epoch_ms) - T_REAP )) '{vm_deallocated_by_reaper:$ok,wait_ms:$ms}')"
   gate reaper_bound "$REAPED"
   say "reaper proof: vm_deallocated_by_reaper=$REAPED after $(( ($(epoch_ms) - T_REAP) / 1000 )) s"
+  # Restore the real deadline before restarting so the guest-timer proof below is isolated from the reaper.
+  azc tag update --resource-id "$VM_ID" --operation merge --tags deadline="$DEADLINE_TAG" >/dev/null || true
   if [ "$REAPED" = true ]; then azc vm start --resource-group "$RG" --name "$VM" >/dev/null || true; wait_for 600 ssh_worker "$IP_AFTER" true || true; fi
 fi
 # Prove the guest-side bound: confirm the timer is armed, fire its service once, expect deallocation.

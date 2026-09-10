@@ -44,13 +44,17 @@ azr --method put --url "$BASE?api-version=$API" --body "$(jq -cn --arg loc "$REG
 PRINCIPAL=$(azr --method get --url "$BASE?api-version=$API" --query identity.principalId -o tsv)
 
 say "subscription-scoped power-only role for the reaper identity"
-for attempt in $(seq 1 6); do
-  if az role assignment create --assignee-object-id "$PRINCIPAL" --assignee-principal-type ServicePrincipal \
-       --role "Desktop Virtualization Power On Off Contributor" --scope "/subscriptions/$SUBSCRIPTION" \
-       --subscription "$SUBSCRIPTION" --only-show-errors -o none 2>/dev/null; then break; fi
-  [ "$attempt" -lt 6 ] || { echo "role assignment failed" >&2; exit 1; }
-  sleep 10
-done
+ROLE="Desktop Virtualization Power On Off Contributor"
+if [ "$(az role assignment list --assignee "$PRINCIPAL" --role "$ROLE" --scope "/subscriptions/$SUBSCRIPTION" --subscription "$SUBSCRIPTION" --only-show-errors --query "length(@)" -o tsv 2>/dev/null || echo 0)" != 0 ]; then
+  say "role assignment already present (kept)"
+else
+  for attempt in $(seq 1 6); do
+    if az role assignment create --assignee-object-id "$PRINCIPAL" --assignee-principal-type ServicePrincipal \
+         --role "$ROLE" --scope "/subscriptions/$SUBSCRIPTION" --subscription "$SUBSCRIPTION" --only-show-errors -o none 2>/dev/null; then break; fi
+    [ "$attempt" -lt 6 ] || { echo "role assignment failed" >&2; exit 1; }
+    sleep 10  # the new identity may not have replicated yet
+  done
+fi
 
 RUNBOOK=horizon-spike-deadline-reaper
 say "runbook $RUNBOOK (PowerShell 7.2)"
@@ -74,11 +78,16 @@ Write-Output "reaper done: $acted deallocation request(s)"
 PS1
 )
 azr --method put --url "$BASE/runbooks/$RUNBOOK/draft/content?api-version=$API" --headers "Content-Type=text/powershell" --body "$SCRIPT" >/dev/null
-azr --method post --url "$BASE/runbooks/$RUNBOOK/publish?api-version=$API" >/dev/null 2>&1 || true
-for _ in $(seq 1 12); do
-  [ "$(azr --method get --url "$BASE/runbooks/$RUNBOOK?api-version=$API" --query properties.state -o tsv)" = Published ] && break
+azr --method post --url "$BASE/runbooks/$RUNBOOK/publish?api-version=$API" >/dev/null
+STATE=""
+for _ in $(seq 1 24); do
+  STATE=$(azr --method get --url "$BASE/runbooks/$RUNBOOK?api-version=$API" --query properties.state -o tsv)
+  [ "$STATE" = Published ] && break
   sleep 5
 done
+[ "$STATE" = Published ] || { echo "runbook did not reach Published (state: $STATE)" >&2; exit 1; }
+PUBLISHED=$(azr --method get --url "$BASE/runbooks/$RUNBOOK/content?api-version=$API" 2>/dev/null || true)
+[ "$(printf '%s' "$PUBLISHED" | tr -d '\r')" = "$(printf '%s' "$SCRIPT")" ] || { echo "published runbook content does not match this script" >&2; exit 1; }
 
 SCHEDULE=every-15-minutes
 say "schedule $SCHEDULE and job link"
