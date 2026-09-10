@@ -49,7 +49,7 @@ CANDIDATES: Dict[str, Dict[str, Any]] = {
             "required": ["Microsoft.ContainerInstance"],
             "supporting": _IDENTITY + ["Microsoft.Storage", "Microsoft.Network"]},
     "vm": {"name": "Azure Linux VM with managed disk (revalidated candidate 2026-09-10; acceptance open)",
-           "required": ["Microsoft.Compute", "Microsoft.Network"], "supporting": _IDENTITY + ["Microsoft.DevTestLab"]},
+           "required": ["Microsoft.Compute", "Microsoft.Network"], "supporting": _IDENTITY + ["Microsoft.DevTestLab", "Microsoft.Automation"]},
     "container-apps": {"name": "Azure Container Apps long-running app (not selected 2026-09-10; Jobs excluded)",
                        "required": ["Microsoft.App", "Microsoft.Network"],
                        "supporting": _IDENTITY + ["Microsoft.Storage", "Microsoft.OperationalInsights"]},

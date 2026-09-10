@@ -314,7 +314,10 @@ REAPER_BASE="https://management.azure.com/subscriptions/$SUBSCRIPTION/resourceGr
 REAPER_FACTS=$(azc rest --method get --url "$REAPER_BASE/jobSchedules?api-version=2023-11-01" --query "value[?properties.runbook.name=='horizon-spike-deadline-reaper'] | [0].properties.schedule.name" -o tsv 2>/dev/null || true)
 REAPER_SCHEDULE=$(azc rest --method get --url "$REAPER_BASE/schedules/${REAPER_FACTS:-none}?api-version=2023-11-01" --query "{enabled:properties.isEnabled,next_run:properties.nextRun,interval:properties.interval,frequency:properties.frequency}" 2>/dev/null || echo null)
 [ "$(jq -r 'if .enabled == true and .frequency == "Minute" and .interval == 15 then "ok" else "bad" end' <<<"$REAPER_SCHEDULE")" = ok ] || { journal reaper_missing "$(jq -cn --arg s "$REAPER_SCHEDULE" '{schedule:$s}')"; say "the subscription-side reaper is not present, not enabled or not the 15-minute schedule; run setup-spike-reaper.sh first (nothing created)"; exit 1; }
-journal reaper_present "$(jq -c --arg acct "$REAPER_ACCOUNT" '. + {account:$acct}' <<<"$REAPER_SCHEDULE")"
+REAPER_PRINCIPAL=$(azc rest --method get --url "$REAPER_BASE?api-version=2023-11-01" --query identity.principalId -o tsv 2>/dev/null || true)
+REAPER_ROLES=$(azc role assignment list --assignee "${REAPER_PRINCIPAL:-00000000-0000-0000-0000-000000000000}" --role "Desktop Virtualization Power On Off Contributor" --scope "/subscriptions/$SUBSCRIPTION" --query "length(@)" -o tsv 2>/dev/null || echo 0)
+[ "$REAPER_ROLES" != 0 ] || { journal reaper_role_missing '{}'; say "the reaper identity lacks the subscription-scoped power-only role; rerun setup-spike-reaper.sh (nothing created)"; exit 1; }
+journal reaper_present "$(jq -c --arg acct "$REAPER_ACCOUNT" '. + {account:$acct,power_role_assigned:true}' <<<"$REAPER_SCHEDULE")"
 # Read-only provider preflight for the auto-shutdown schedule; registration is a separate approval.
 DEVTESTLAB=$(azc provider show --namespace Microsoft.DevTestLab --query registrationState -o tsv 2>/dev/null || echo unknown)
 [ "$DEVTESTLAB" = Registered ] || { journal devtestlab_not_registered "$(jq -cn --arg s "$DEVTESTLAB" '{registration_state:$s}')"; say "Microsoft.DevTestLab is $DEVTESTLAB; the platform-side stop cannot be scheduled, so nothing is created"; exit 1; }

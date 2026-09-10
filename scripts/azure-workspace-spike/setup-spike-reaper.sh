@@ -71,8 +71,8 @@ foreach ($vm in Get-AzVM -Status) {
   if ($now -le $deadline) { continue }
   if ($vm.PowerState -eq 'VM deallocated' -or $vm.PowerState -eq 'VM deallocating') { continue }
   Write-Output "deallocating $($vm.ResourceGroupName)/$($vm.Name) (deadline $($deadline.ToString('u')), now $($now.ToString('u')))"
-  Stop-AzVM -ResourceGroupName $vm.ResourceGroupName -Name $vm.Name -Force -NoWait | Out-Null
-  $acted++
+  try { Stop-AzVM -ResourceGroupName $vm.ResourceGroupName -Name $vm.Name -Force -NoWait | Out-Null; $acted++ }
+  catch { Write-Output "failed to deallocate $($vm.ResourceGroupName)/$($vm.Name): $($_.Exception.Message)" }
 }
 Write-Output "reaper done: $acted deallocation request(s)"
 PS1
