@@ -30,6 +30,7 @@ mod remote_worker_inspection;
 #[cfg(target_os = "linux")]
 mod remote_worker_ssh;
 pub mod remote_worker_status;
+pub mod remote_worker_storage;
 pub mod remote_workspace;
 pub mod remote_workspace_recovery;
 pub mod remote_workspace_setup;

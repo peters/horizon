@@ -66,6 +66,17 @@ capacity, successful fsync, healthy hardware, remote durability, backup nor prov
 Stop/Delete retention. Later operations still perform their own admission checks.
 Run inspection off the UI thread; filesystem operations have no hard deadline.
 
+`remote_worker_storage::inspect_remote_worker_storage(store, recovered)` queries
+that same fixed command through an already retained SSH pin. It supports task-free
+workspaces, rechecks both owned allocation snapshots and current worker/lifetime
+before and after I/O, and never persists an observation. The caller still owns
+active-session selection and fresh provider/cost admission. The 15-second pipe
+deadline excludes spawn/reap; response output is limited to 1 KiB. Only matching
+status/exit pairs return a storage status: SSH failure, incomplete input, rejected
+requests and malformed replies are errors, not an observed unavailable root.
+Unsupported client platforms return a separate error without I/O. No root is
+created or repaired, and none of this adds provider discovery or setup authority.
+
 ## Fixed roots and replay barrier
 
 Production uses only the existing `/workspace/.horizon-worker` parent. It must be

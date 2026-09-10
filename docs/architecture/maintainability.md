@@ -145,6 +145,12 @@ back into large multi-purpose modules.
   the fixed pinned worker command; its protocol leaf binds bounded paths and exact
   identity to the saved repository base. It neither uploads nor grants source,
   publication, synchronization or checkout-readiness authority.
+- `remote_worker_storage.rs` reuses the owned-worker fence for read-only fixed-root
+  qualification over pinned SSH, including zero-panel workspaces. Its protocol
+  leaf requires complete request delivery and exact bounded status/exit pairs;
+  valid negative observations are distinct from transport or protocol errors.
+  It reuses the worker's storage status type without initialization, provider
+  selection, persistence or task authority.
 - `remote_worker_status.rs` gates non-creating panel inspection on exact owned
   recovery and current lifetime. Its `protocol.rs` leaf owns bounded status-only
   wire types; `ssh.rs` owns the query's private host-pin lifetime and retains the
