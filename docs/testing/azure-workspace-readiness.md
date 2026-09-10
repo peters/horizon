@@ -184,7 +184,12 @@ run. Because #474 asks for unchanged pre-existing resources and the inventory ca
 attribute a disappearance, the final rule reports such a sample as **unverified**
 (exit 6, `unverified_concurrent_removal_outside_group`) rather than proven, and the
 sample is rerun. Sample 10, run with that final rule, passed every gate with a fully
-proven deletion (`leftover` empty, `removed_outside_group` empty).
+proven deletion (`leftover` empty, `removed_outside_group` empty); it was invoked as
+`--sample 1` because the harness then accepted single digits, so its tags and journal
+directory carry sample number 1 (`sample-1-20260910T174441Z`). Samples 1 to 10 predate
+the `--preflight-report` requirement; the live `vm` preflight for `northeurope` /
+`Standard_D4s_v3` (status `no_blockers_observed`) was run earlier the same day and is
+referenced in the decision above.
 
 Functional results, identical in every sample unless stated:
 

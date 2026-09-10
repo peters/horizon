@@ -39,12 +39,19 @@ scripts/azure-workspace-spike/run-vm-spike.sh \
   --image <registry>.azurecr.io/horizon-remote-worker@sha256:<digest> \
   --puller-identity-id /subscriptions/<subscription-uuid>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<name> \
   --journal-dir /private/path/spike-journal \
+  --preflight-report /private/path/vm-northeurope.json \
   --sample 1 [--region northeurope] [--vm-size Standard_D4s_v3] [--max-minutes 120] \
   [--allow-ssh-from <cidr>] [--dry-run] [--keep]
 ```
 
-`--dry-run` renders the cloud-init and exits without creating anything. `--keep`
-leaves the sample resource group for manual inspection; delete it yourself.
+`--preflight-report` is the JSON written by `scripts/azure-workspace-preflight/preflight.py
+--candidate vm --live --report ...` for the same region and VM size; the harness
+refuses to create anything unless that report is a live `vm` report with
+`no_blockers_observed`, and it journals the report path, `observed_at`, tool version
+and its own git commit in the `start` event. `--dry-run` renders the cloud-init and
+exits without creating anything (the report is then optional). `--keep` leaves the
+sample resource group for manual inspection; delete it yourself. `--sample` accepts
+1 to 99 and only tags and names the journal.
 
 ## What one sample does
 

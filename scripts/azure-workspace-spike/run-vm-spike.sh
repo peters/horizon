@@ -18,6 +18,7 @@ usage() {
   cat <<'EOF'
 usage: run-vm-spike.sh --subscription <uuid> --image <registry/repo@sha256:...> \
          --puller-identity-id <user-assigned-identity-resource-id> --journal-dir <private-dir> \
+         --preflight-report <json from scripts/azure-workspace-preflight --candidate vm --live> \
          [--region northeurope] [--vm-size Standard_D4s_v3] [--sample 1] [--max-minutes 120] \
          [--allow-ssh-from <cidr>] [--keep] [--dry-run]
 
@@ -26,11 +27,11 @@ bounded by --max-minutes; the sample resource group is deleted at the end unless
 EOF
 }
 
-SUBSCRIPTION="" IMAGE="" PULLER_ID="" JOURNAL_DIR="" REGION=northeurope VM_SIZE=Standard_D4s_v3
+SUBSCRIPTION="" IMAGE="" PULLER_ID="" JOURNAL_DIR="" PREFLIGHT="" REGION=northeurope VM_SIZE=Standard_D4s_v3
 SAMPLE=1 MAX_MINUTES=120 ALLOW_SSH_FROM="" KEEP=0 DRY_RUN=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --subscription|--image|--puller-identity-id|--journal-dir|--region|--vm-size|--sample|--max-minutes|--allow-ssh-from)
+    --subscription|--image|--puller-identity-id|--journal-dir|--preflight-report|--region|--vm-size|--sample|--max-minutes|--allow-ssh-from)
       [ $# -ge 2 ] || { echo "$1 requires a value" >&2; usage; exit 3; } ;;
   esac
   case "$1" in
@@ -38,6 +39,7 @@ while [ $# -gt 0 ]; do
     --image) IMAGE=$2; shift 2 ;;
     --puller-identity-id) PULLER_ID=$2; shift 2 ;;
     --journal-dir) JOURNAL_DIR=$2; shift 2 ;;
+    --preflight-report) PREFLIGHT=$2; shift 2 ;;
     --region) REGION=$2; shift 2 ;;
     --vm-size) VM_SIZE=$2; shift 2 ;;
     --sample) SAMPLE=$2; shift 2 ;;
@@ -55,10 +57,20 @@ done
 [[ $PULLER_ID =~ ^/subscriptions/[0-9a-f-]{36}/resource[Gg]roups/[^/]+/providers/Microsoft\.ManagedIdentity/userAssignedIdentities/[A-Za-z0-9_-]+$ ]] || { echo "--puller-identity-id must be a user-assigned identity resource id" >&2; exit 3; }
 [[ $REGION =~ ^[a-z][a-z0-9]{1,63}$ ]] || { echo "--region must be a lowercase region name" >&2; exit 3; }
 [[ $VM_SIZE =~ ^Standard_[A-Za-z0-9_-]+$ ]] || { echo "--vm-size must look like Standard_D4s_v3" >&2; exit 3; }
-[[ $SAMPLE =~ ^[1-9]$ ]] || { echo "--sample must be 1-9" >&2; exit 3; }
+[[ $SAMPLE =~ ^[1-9][0-9]?$ ]] || { echo "--sample must be 1-99 without leading zeros" >&2; exit 3; }
 [[ $MAX_MINUTES =~ ^[1-9][0-9]{1,2}$ ]] || { echo "--max-minutes must be 10-999 without leading zeros" >&2; exit 3; }
 [ -n "$JOURNAL_DIR" ] || { echo "--journal-dir is required" >&2; exit 3; }
 for tool in az ssh ssh-keygen ssh-keyscan nc jq curl timeout; do command -v "$tool" >/dev/null || { echo "missing tool: $tool" >&2; exit 3; }; done
+# The read-only preflight must precede paid creation: require its report for this exact candidate,
+# region and size, with no blockers, and carry its provenance into the sample journal.
+if [ "$DRY_RUN" = 0 ] || [ -n "$PREFLIGHT" ]; then
+  [ -n "$PREFLIGHT" ] && [ -r "$PREFLIGHT" ] || { echo "--preflight-report must point at a readable preflight JSON report" >&2; exit 3; }
+  PREFLIGHT_FACTS=$(jq -c --arg region "$REGION" --arg size "$VM_SIZE" '
+    if .schema == "horizon.azure-workspace-preflight.report" and .candidate.id == "vm" and .region == $region
+       and .candidate.vm_size == $size and .mode == "live" and .status == "no_blockers_observed"
+    then {observed_at, tool_version, status, schema_version} else empty end' "$PREFLIGHT" 2>/dev/null || true)
+  [ -n "$PREFLIGHT_FACTS" ] || { echo "--preflight-report is not a live vm preflight for $REGION/$VM_SIZE with no blockers observed" >&2; exit 3; }
+fi
 
 REGISTRY=${IMAGE%%/*}
 RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)
@@ -172,7 +184,8 @@ finish() {
 }
 
 say "sample $SAMPLE run $RUN_ID journal $SAMPLE_DIR"
-journal start "$(jq -cn --arg region "$REGION" --arg size "$VM_SIZE" --arg image "$IMAGE" --arg rg "$RG" --argjson max "$MAX_MINUTES" '{region:$region,vm_size:$size,image:$image,resource_group:$rg,max_minutes:$max}')"
+HARNESS_COMMIT=$(git -C "$(dirname "$0")" rev-parse HEAD 2>/dev/null || echo unknown)
+journal start "$(jq -cn --arg region "$REGION" --arg size "$VM_SIZE" --arg image "$IMAGE" --arg rg "$RG" --argjson max "$MAX_MINUTES" --arg commit "$HARNESS_COMMIT" --arg pf "${PREFLIGHT:-}" --argjson facts "${PREFLIGHT_FACTS:-null}" '{region:$region,vm_size:$size,image:$image,resource_group:$rg,max_minutes:$max,harness_commit:$commit,preflight_report:$pf,preflight:$facts}')"
 
 ssh-keygen -q -t ed25519 -N "" -C "horizon-spike-474-s${SAMPLE}" -f "$KEY"
 PUBKEY=$(cat "$KEY.pub")
