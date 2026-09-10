@@ -139,20 +139,22 @@ cleanup() {
   fi
   finished=$(epoch_ms)
   azc resource list --query "sort([].id)" >"$SAMPLE_DIR/inventory-after.json" 2>/dev/null || echo 'null' >"$SAMPLE_DIR/inventory-after.json"
-  # Proof: the group is gone and nothing remains under it. Every mutating call in this script
-  # names the sample group, so changes outside it belong to other actors sharing the
-  # subscription; they are journaled for cross-checking against the activity log, not blamed.
+  # Proof (#474: exact absence and unchanged pre-existing resources): nothing remains under the
+  # sample group and no pre-existing resource disappeared. A disappearance outside the group is
+  # most likely another actor in the shared subscription, but the inventory cannot attribute it,
+  # so the proof is reported as unverified and the sample must be rerun. Additions are counted.
   local verdict
   verdict=$(jq -cn --arg rg "/resourceGroups/$RG/" --slurpfile before "$SAMPLE_DIR/inventory-before.json" --slurpfile after "$SAMPLE_DIR/inventory-after.json" \
     '($before[0] // null) as $b | ($after[0] // null) as $a
      | if ($b|type) != "array" or ($a|type) != "array" then {proven:false,reason:"inventory_unavailable"}
        else {leftover:[$a[] | select(ascii_downcase | contains($rg|ascii_downcase))],
-             concurrent_removals_outside_group:($b - $a), concurrent_additions_outside_group:(($a - $b)|length)}
-            | .proven = ((.leftover|length)==0) end')
+             removed_outside_group:($b - $a), added_outside_group:(($a - $b)|length)}
+            | .proven = ((.leftover|length)==0 and (.removed_outside_group|length)==0)
+            | if .proven then . else .reason = (if (.leftover|length)>0 then "resources_left_under_group" else "unverified_concurrent_removal_outside_group" end) end end')
   [ "$(jq -r .proven <<<"$verdict")" = true ] && unchanged=true
   [ "$exists" = false ] && [ "$unchanged" = true ] && DELETE_PROVEN=1
   journal deleted "$(jq -cn --arg exists "$exists" --argjson ms $((finished - started)) --argjson v "$verdict" '{group_exists:$exists,delete_ms:$ms,inventory_proof:$v}')"
-  say "resource group exists=$exists inventory_proof=$(jq -c '{proven,leftover:(.leftover|length),concurrent_removals_outside_group:(.concurrent_removals_outside_group|length),concurrent_additions_outside_group}' <<<"$verdict") delete_ms=$((finished - started))"
+  say "resource group exists=$exists inventory_proof=$(jq -c '{proven,reason,leftover:(.leftover|length),removed_outside_group:(.removed_outside_group|length),added_outside_group}' <<<"$verdict") delete_ms=$((finished - started))"
 }
 finish() {
   local code=$? expired=0
@@ -281,7 +283,7 @@ fi
 NSG=$(azc network nsg list --resource-group "$RG" --query "[0].name" -o tsv)
 SOURCE=${ALLOW_SSH_FROM:-}
 if [ -z "$SOURCE" ]; then
-  EGRESS=$(curl -s --max-time 10 https://ifconfig.me || true)
+  EGRESS=$(bounded curl -s --max-time 10 https://ifconfig.me || true)
   [[ $EGRESS =~ ^[0-9.]+$ ]] || { journal egress_unknown '{}'; say "could not learn the egress address; pass --allow-ssh-from"; exit 1; }
   SOURCE="$EGRESS/32"
 fi
@@ -291,7 +293,7 @@ azc network nsg rule create --resource-group "$RG" --nsg-name "$NSG" --name work
 journal nsg_rule "$(jq -cn --arg src "$SOURCE" '{source:$src,port:2222}')"
 
 say "waiting for worker endpoint on port 2222"
-wait_for $(( DEADLINE_EPOCH - $(date +%s) )) nc -z -w 3 "$IP" 2222 || { journal endpoint_never_opened '{}'; exit 4; }
+wait_for $(( DEADLINE_EPOCH - $(date +%s) )) bounded nc -z -w 3 "$IP" 2222 || { journal endpoint_never_opened '{}'; exit 4; }
 T_PORT=$(epoch_ms)
 journal endpoint_open "$(jq -cn --argjson ms $((T_PORT - T0)) '{ms_from_t0:$ms}')"
 say "endpoint open in $((T_PORT - T0)) ms"
@@ -359,7 +361,7 @@ START_OK=true; azc vm start --resource-group "$RG" --name "$VM" >/dev/null || ST
 IP_AFTER=$(azc vm show -d --resource-group "$RG" --name "$VM" --query publicIps -o tsv 2>/dev/null || echo unknown)
 IP_SAME=false; [ "$IP" = "$IP_AFTER" ] && IP_SAME=true
 KEY_SAME=false SESSION=unknown RETAINED_MARKER=false HEARTBEAT=0 MOUNTED=false
-if [ "$START_OK" = true ] && [ "$IP_SAME" = true ] && wait_for $(( RESTART_DEADLINE - $(date +%s) )) nc -z -w 3 "$IP_AFTER" 2222; then
+if [ "$START_OK" = true ] && [ "$IP_SAME" = true ] && wait_for $(( RESTART_DEADLINE - $(date +%s) )) bounded nc -z -w 3 "$IP_AFTER" 2222; then
   SCANNED=$(bounded ssh-keyscan -p 2222 -t ed25519 -T 10 "$IP_AFTER" 2>/dev/null | awk '{print $2" "$3}' | head -1 || true)
   [ "$SCANNED" = "$HOST_KEY" ] && KEY_SAME=true
   if [ "$KEY_SAME" = true ] && wait_for $(( RESTART_DEADLINE - $(date +%s) )) ssh_worker "$IP_AFTER" true; then
