@@ -1,8 +1,9 @@
 # Combined retained repository intake
 
-`repository_overlay::intake::{receive, observe}` is a worker core API. It does not
-add a shipped CLI, SSH controller, provider operation, setup execution or task.
-Those adapters must separately enforce explicit export approval and full retained
+`repository_overlay::intake::{receive, observe}` is a worker core API, exposed by
+the worker-only `horizon-repository intake` and `intake-status` commands. Neither
+adds an SSH controller, provider operation, setup execution or task. A transport
+caller must separately enforce explicit export approval and full retained
 worker/client ownership. Constructing a request, capturing an overlay, computing a
 digest or successfully recovering a provider allocation is not export approval.
 
@@ -30,6 +31,20 @@ manifest and source before either input is published. The pack ceiling is the sh
 256 MiB default; existing bundle inner/encoded limits and native process ceilings apply.
 Pack copying is chunked. Overlay decoding retains bounded complete-buffer copies,
 not constant total memory. No original source repository is read on the worker.
+
+## Worker command framing
+
+`intake` reads a four-byte little-endian request length in the range 1–32 KiB,
+then that exact JSON header, and delegates the remaining pack/overlay stream to
+the core receiver. A matching existing claim can reply without consuming payload.
+`intake-status` instead accepts only bounded request JSON followed by EOF; it has
+no length prefix or payload. Invalid framing is rejected before storage access.
+
+Both commands emit bounded JSON responses using the shared 128 KiB response limit.
+Exit codes are 0 for acknowledgement/observation, 2 for rejected framing/identity,
+4 for a claimed-unknown result, and 1 for other unsuccessful outcomes. Exit code 3
+means the response could not be written; it does not undo a completed intake.
+Neither command grants export approval or setup/task authority.
 
 ## Fixed roots and replay barrier
 
