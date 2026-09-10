@@ -114,7 +114,7 @@ IP, VM port 2222 opened only from the operator's egress address, key-only SSH wi
 fresh Ed25519 key per sample, image pulled by digest through the managed identity's
 IMDS token exchanged at the registry (no registry password), host key read out of band
 through ARM-authenticated `az vm run-command` and pinned before the first SSH.
-Bound: 120 minutes per sample; actual 8 to 10 minutes for samples 1, 2, 3 and 5 to 10, and 17 minutes for sample 4 because of its failed 10-minute restart wait. Journals are private.
+Bound: 120 minutes per sample; actual 8 to 11 minutes for samples 1, 2, 3 and 5 to 12, and 17 minutes for sample 4 because of its failed 10-minute restart wait. Journals are private.
 
 Controller-side timings in seconds. The first four columns are offsets from `T0`
 (the resource-group create call); the last three are self-anchored durations of
@@ -133,6 +133,8 @@ resource-group delete.
 | 8 (final harness, see below) | 37.5 | 203.1 | 235.8 | 203.8 | 31.9 | 75.3 | 122.4 |
 | 9 (final harness, see below) | 66.5 | 245.4 | 278.0 | 246.0 | 32.5 | 75.0 | 183.0 |
 | 10 (final harness) | 38.1 | 210.6 | 243.7 | 211.2 | 32.4 | 74.4 | 183.4 |
+| 11 (single deployment) | 35.9 | 188.4 | 221.0 | 189.0 | 32.9 | 75.3 | 182.9 |
+| 12 (exact PR head 436fb9ed) | 37.5 | 184.0 | 247.7 | 184.7 | 32.0 | 105.6 | 242.8 |
 
 Guest-side stamps, in seconds after `T0` using the VM's own clock (Azure guests
 sync to host time, but treat sub-second differences between the two tables as
@@ -150,6 +152,8 @@ cross-clock noise):
 | 8 | 25.9 | 85.0 | 87.4 | 88.5 | 195.4 | 200.5 |
 | 9 | 35.4 | 90.0 | 92.3 | 93.1 | 220.8 | 243.3 |
 | 10 | 25.9 | 83.9 | 86.1 | 87.0 | 180.4 | 206.0 |
+| 11 | 27.8 | 84.5 | 86.8 | 87.8 | 176.5 | 183.1 |
+| 12 | 26.2 | 82.4 | 84.7 | 85.6 | 173.9 | 179.7 |
 
 Sample 1's 42 s between pull and container start did not recur once the harness
 split `docker create` from `docker start` (4 to 6 s and 0.4 s in samples 2 and 3);
@@ -187,15 +191,21 @@ sample is rerun. Sample 10, run with that final rule, passed every gate with a f
 proven deletion (`leftover` empty, `removed_outside_group` empty); it was invoked as
 `--sample 1` because the harness then accepted single digits, so its tags and journal
 directory carry sample number 1 (`sample-1-20260910T174441Z`). Samples 1 to 10 predate
-the `--preflight-report` requirement; the live `vm` preflight for `northeurope` /
-`Standard_D4s_v3` (status `no_blockers_observed`) was run earlier the same day and is
-referenced in the decision above.
+the `--preflight-report` requirement. Samples 11 and 12 ran with a digest-bound live
+`vm` preflight report (observed 2026-09-10T18:29:37Z, `no_blockers_observed`) journaled
+in their `start` events, and created the network, VM and DevTestLab auto-shutdown
+schedule in **one server-side deployment** (36 to 37 s) so a controller lost during
+creation cannot leave compute without the platform-side stop. Sample 12's journal
+records harness commit `436fb9ed` with no uncommitted changes, which is the exact head
+this document describes apart from this paragraph; the run-command host-key read took
+63 s in that sample (31 to 32 s in every other), which is why its verified-SSH time is
+higher than its endpoint time suggests.
 
 Functional results, identical in every sample unless stated:
 
 - Storage: `/workspace` is the bound ext4 data disk (`/dev/sdc`); kernel options
   include `rw`, `barrier`, exactly one `data=ordered` and no `ro`/`nobarrier`, so a
-  shell mirror of the Rust qualifier passes. In samples 4 to 10 the **authoritative
+  shell mirror of the Rust qualifier passes. In samples 4 to 12 the **authoritative
   qualifier ran on the worker**: `horizon-repository setup-status` against a fresh
   0700 retained root on the data disk returned `status: absent` (qualified storage,
   no claim), and the same request against a 0700 root on the container's overlay
@@ -210,21 +220,24 @@ Functional results, identical in every sample unless stated:
   survives Stop; in-container sessions do not. Sample 4's failed restart is described
   above.
 - Exact deletion: the resource group was absent after every sample; the subscription
-  inventory was byte-identical to the pre-sample snapshot in samples 1 to 7 and 10;
+  inventory was byte-identical to the pre-sample snapshot in samples 1 to 7 and 10 to 12;
   sample 8 differed only by an unrelated concurrent addition (proof still holds) and
   sample 9 by that resource's later removal by its own lane (proof unverified).
-- No provider was registered and no Container Apps Job was created.
+- No provider was registered and no Container Apps Job was created. From sample 8 on,
+  every VM carried a DevTestLab auto-shutdown schedule one minute after its lifetime
+  deadline as the platform-side stop; from sample 11 on it was created in the same
+  deployment as the VM.
 
-Cost actually incurred: ten VMs for 8 to 17 minutes each plus 32 GiB disks, well
+Cost actually incurred: twelve VMs for 8 to 17 minutes each plus 32 GiB disks, well
 under the $10 bound; the persistent registry costs about $0.67 per day at Standard.
 
 ### Verdict against the 180-second boundary
 
-**Not met with this configuration.** Across the ten samples the slowest verified
-key-only SSH session came 278.0 s after `T0` (246.0 s excluding the 31 to 32 s
-out-of-band host-key read); even the fastest sample needed 203.4 s. Eight of ten
-samples also missed the boundary for endpoint-open alone (sample 6 by 0.8 s), and
-the best endpoint time was 170.9 s. The measured budget splits
+**Not met with this configuration.** Across the twelve samples the slowest verified
+key-only SSH session came 278.0 s after `T0` (246.0 s excluding the out-of-band
+host-key read); even the fastest sample needed 203.4 s. Ten of twelve samples also
+missed the boundary for endpoint-open alone (sample 6 by 0.8 s, sample 12 by 4.0 s),
+and the best endpoint time was 170.9 s. The measured budget splits
 into roughly 25 to 33 s VM boot, 45 to 70 s Docker installation from apt, 90 to 150 s
 image pull and extraction, and 31 s for `run-command`. Levers that the measurements point to, in order of impact:
 
@@ -240,7 +253,7 @@ image pull and extraction, and 31 s for `run-command`. Levers that the measureme
 None of these are approved or implemented; they are the next decision for #474.
 The functional contract (key-only SSH, managed-identity pull, ext4 storage,
 detach independence, Stop with retained data, exact deletion) held in samples 1,
-2, 3, 5 to 8 and 10; sample 9 held every gate except that its deletion proof is
+2, 3, 5 to 8 and 10 to 12; sample 9 held every gate except that its deletion proof is
 unverified because of concurrent activity, as described above. Sample 4 held every gate up to the restart, then failed the retention
 gate because the worker endpoint never returned, so its retained marker, host key
 and mount were not verified; the harness change responsible was reverted before
@@ -261,11 +274,11 @@ Executed on 2026-09-10 unless marked otherwise.
 - [x] Host key verified out of band and pinned before the first connection.
 - [x] Kernel ext4 option lines recorded from the worker; shell mirror passes; the
       authoritative Rust qualifier accepted the data disk and rejected the overlay
-      control (samples 4 to 10).
+      control (samples 4 to 12).
 - [x] Independent execution across a disconnect.
 - [x] Explicit Stop with retained data, endpoint retention recorded.
 - [x] Exact deletion with absence check and inventory proof (group gone, nothing left
-      under it, no pre-existing resource missing). Proven in samples 1 to 8 and 10;
+      under it, no pre-existing resource missing). Proven in samples 1 to 8 and 10 to 12;
       sample 9 is recorded as unverified because another lane deleted its own registry
       during the run.
 - [x] Slowest sample compared with the 180-second boundary: **not met** (278.0 s).
