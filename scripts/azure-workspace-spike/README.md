@@ -13,7 +13,7 @@ never publishes an image and touches nothing outside the sample resource group.
 
 ## Prerequisites
 
-- `az` logged in to the target subscription; `ssh`, `ssh-keygen`, `nc`, `jq`, `curl`.
+- `az` logged in to the target subscription; `ssh`, `ssh-keygen`, `ssh-keyscan`, `nc`, `jq`, `curl`.
 - A worker image published by digest to an Azure Container Registry in the same
   subscription. The image build is documented in
   [`containers/remote-worker/README.md`](../../containers/remote-worker/README.md).
@@ -52,20 +52,31 @@ leaves the sample resource group for manual inspection; delete it yourself.
    ARM-authenticated `az vm run-command` from the retained
    `/workspace/.horizon-worker/ssh` directory, pins it, and verifies key-only SSH with
    `StrictHostKeyChecking=yes`.
-6. Records `/proc/fs/ext4/<device>/options`, the mount line and sysfs path for the
-   worker's `/workspace`, and applies a shell mirror of the Rust qualifier's rules
-   (`rw`, `barrier`, exactly one accepted `data=`, no `ro`/`nobarrier`). The Rust
-   qualifier remains authoritative; the mirror only classifies evidence.
+6. Records `/proc/fs/ext4/<device>/options` and the mount line for the worker's
+   `/workspace`, applies a shell mirror of the qualifier's rules for the journal, and
+   runs the **authoritative** qualifier: `horizon-repository setup-status` against a
+   fresh 0700 retained root on the data disk (expected `status: absent`) and, as a
+   negative control, against a root on the container's overlay filesystem (expected
+   `status: error`). The storage gate passes only on the authoritative result.
 7. Starts a tmux heartbeat, disconnects for 20 s, reconnects and checks progress.
-8. Writes a marker, `az vm deallocate`, `az vm start`, reconnects with the same
-   pinned host key and checks the marker, the public IP and whether the tmux session
-   survived (it does not: the container restarts; that is recorded, not hidden).
-9. Deletes the resource group, waits for absence and compares the inventory.
+8. Writes a marker, `az vm deallocate`, `az vm start`, re-reads the host key with
+   `ssh-keyscan` and compares it with the pinned key before reconnecting, then checks
+   the marker, the public IP, that the data disk is mounted in the container, and
+   whether the tmux session survived (it does not: the container restarts; that is
+   recorded, not hidden). A failed restart is journaled and guest diagnostics are
+   captured out of band; the phase is bounded to 10 minutes.
+9. Deletes the resource group (`--no-wait` plus `group wait --deleted`), confirms
+   absence and compares the inventory. Cleanup runs from an `EXIT` trap, so any
+   failure after creation still deletes the sample.
+
+Exit codes: `0` every gate held; `3` usage; `4` lifetime bound reached; `5` the worker
+never published a host key; `6` deletion not proven; `7` a functional gate failed
+(storage qualifier, detach independence, deallocate, retention) with evidence journaled.
 
 ## Journal
 
 Everything lands under `--journal-dir/sample-<n>-<run-id>/` with mode 0700: the
-private client key, `cloud-init.yaml`, `vm-create.json`, `run-command-hostkey.json`,
+private client key, `cloud-init.yaml`, `vm-create.json`, `run-command-hostkey.txt`, `qualifier-output.txt`,
 `guest-timing.jsonl` (boot, bootstrap, disk, registry login, pull, container create
 and start stamps from inside the VM), `storage-evidence.txt`, heartbeat counts and
 `journal.jsonl` with every controller-side event and millisecond offsets from `T0`

@@ -116,21 +116,30 @@ IMDS token exchanged at the registry (no registry password), host key read out o
 through ARM-authenticated `az vm run-command` and pinned before the first SSH.
 Bound: 120 minutes per sample; actual 9 to 10 minutes each. Journals are private.
 
-Timings in seconds from `T0` (the resource-group create call), controller side:
+Controller-side timings in seconds. The first four columns are offsets from `T0`
+(the resource-group create call); the last three are self-anchored durations of
+the deallocate call, the start call until a verified SSH session, and the
+resource-group delete.
 
-| Sample | Create ack | Endpoint open | SSH verified | SSH verified excl. run-command | Deallocate | Start to SSH | Delete |
+| Sample | Create ack (from T0) | Endpoint open (from T0) | SSH verified (from T0) | SSH verified excl. run-command (from T0) | Deallocate duration | Start to SSH duration | Delete duration |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | 36.4 | 203.3 | 235.4 | 204.0 | 32.1 | 74.7 | 188.5 |
 | 2 | 39.1 | 178.6 | 210.7 | 179.2 | 33.6 | 74.8 | 187.5 |
 | 3 | 38.4 | 238.7 | 270.8 | 239.3 | 32.1 | 74.2 | 187.8 |
+| 4 (revised harness, see below) | 67.9 | 241.6 | 274.2 | 242.2 | 31.5 | restart gate failed | 183.3 |
+| 5 (revised harness) | 38.8 | 243.0 | 275.6 | 243.7 | 31.5 | 74.3 | 182.9 |
 
-Guest-side stamps (seconds from `T0`):
+Guest-side stamps, in seconds after `T0` using the VM's own clock (Azure guests
+sync to host time, but treat sub-second differences between the two tables as
+cross-clock noise):
 
 | Sample | Boot | Docker installed | Data disk ready | Registry login | Image pulled | Container started |
 | --- | --- | --- | --- | --- | --- | --- |
 | 1 | 23.5 | 67.4 | 69.3 | 70.4 | 160.3 | 201.9 |
 | 2 | 25.0 | 73.2 | 75.0 | 76.0 | 169.2 | 174.0 |
 | 3 | 26.9 | 76.8 | 79.1 | 80.1 | 229.1 | 235.0 |
+| 4 | 33.4 | 101.5 | 103.7 | 104.6 | 221.4 | 237.3 |
+| 5 | 28.7 | 77.1 | 79.3 | 80.2 | 216.2 | 239.6 |
 
 Sample 1's 42 s between pull and container start did not recur once the harness
 split `docker create` from `docker start` (4 to 6 s and 0.4 s in samples 2 and 3);
@@ -139,34 +148,50 @@ Standard before sample 2 did not change pull time, and sample 3 pulled 60 s slow
 than the others, so pull time is dominated by image size and VM-side extraction,
 not registry tier.
 
-Functional results, identical in all three samples:
+Samples 4 and 5 ran the harness after the independent review: `EXIT`-trapped
+cleanup, negative results journaled instead of aborting, the host key re-read and
+compared after restart, a docker `RequiresMountsFor` drop-in, and the worker's
+authoritative qualifier executed over SSH. Sample 4's first iteration also removed
+`nofail` from the data-disk fstab entry and added `x-systemd.required-by=docker.service`;
+after `az vm start` the worker endpoint never returned within the 10-minute restart
+bound, the sample exited 7 with the retention gate failed, and it was still deleted
+with an unchanged inventory. The root cause was not captured (the harness now records
+guest diagnostics out of band when the restart gate fails); restoring `defaults,nofail`
+while keeping the docker drop-in restarted cleanly in sample 5.
 
-- Storage: `/workspace` is the bound ext4 data disk (`/dev/sdc`, sysfs path
-  resolvable from inside the container); kernel options include `rw`, `barrier`,
-  exactly one `data=ordered` and no `ro`/`nobarrier`, so a shell mirror of the Rust
-  qualifier passes. **The authoritative Rust qualifier has not been executed on the
-  worker yet**; that remains a gate for the adapter's first real repository setup.
+Functional results, identical in every sample unless stated:
+
+- Storage: `/workspace` is the bound ext4 data disk (`/dev/sdc`); kernel options
+  include `rw`, `barrier`, exactly one `data=ordered` and no `ro`/`nobarrier`, so a
+  shell mirror of the Rust qualifier passes. In samples 4 and 5 the **authoritative
+  qualifier ran on the worker**: `horizon-repository setup-status` against a fresh
+  0700 retained root on the data disk returned `status: absent` (qualified storage,
+  no claim), and the same request against a 0700 root on the container's overlay
+  filesystem returned `status: error` with "retained setup requires supported
+  journaled storage and confinement", so the check discriminates as intended.
 - Detach independence: a tmux heartbeat kept writing while no client was connected.
 - Explicit Stop with retained data: `az vm deallocate` reached
   `PowerState/deallocated`; after `az vm start` the marker file was present, the
-  public IP was unchanged, the pinned host key matched (it lives on the data disk),
-  and the tmux session was gone because the container restarted. Data survives Stop;
-  in-container sessions do not.
+  public IP was unchanged, the host key re-read from the restarted worker equalled
+  the pinned key (it lives on the data disk), the data disk was mounted inside the
+  container, and the tmux session was gone because the container restarted. Data
+  survives Stop; in-container sessions do not. Sample 4's failed restart is described
+  above.
 - Exact deletion: the resource group was absent and the subscription resource
   inventory was byte-identical to the pre-sample snapshot after every sample.
 - No provider was registered and no Container Apps Job was created.
 
-Cost actually incurred: three VMs for about 10 minutes each plus 32 GiB disks, well
+Cost actually incurred: five VMs for 9 to 17 minutes each plus 32 GiB disks, well
 under the $10 bound; the persistent registry costs about $0.67 per day at Standard.
 
 ### Verdict against the 180-second boundary
 
-**Not met with this configuration.** The slowest sample reached a verified key-only
-SSH session 270.8 s after `T0` (239.3 s excluding the 31 s out-of-band host-key read);
-even the fastest sample needed 210.7 s. Two of three samples also missed the boundary
-for endpoint-open alone. The measured budget splits into roughly 25 s VM boot, 45 to
-50 s Docker installation from apt, 90 to 150 s image pull and extraction, and 31 s
-for `run-command`. Levers that the measurements point to, in order of impact:
+**Not met with this configuration.** Across the five samples the slowest verified
+key-only SSH session came 275.6 s after `T0` (243.7 s excluding the 31 to 32 s
+out-of-band host-key read); even the fastest sample needed 210.7 s. Four of five
+samples also missed the boundary for endpoint-open alone. The measured budget splits
+into roughly 25 to 33 s VM boot, 45 to 70 s Docker installation from apt, 90 to 150 s
+image pull and extraction, and 31 s for `run-command`. Levers that the measurements point to, in order of impact:
 
 1. A smaller worker image or a VM image with the worker image pre-pulled (removes
    most of the 90 to 150 s pull).
@@ -194,12 +219,13 @@ Executed on 2026-09-10 unless marked otherwise.
 - [x] User-assigned managed identity with pull-only registry rights.
 - [x] `T0`, create, pull, endpoint, SSH-ready and delete timing per sample.
 - [x] Host key verified out of band and pinned before the first connection.
-- [x] Kernel ext4 option lines recorded from the worker; shell mirror passes.
-      **Not executed:** the Rust qualifier itself on the worker.
+- [x] Kernel ext4 option lines recorded from the worker; shell mirror passes; the
+      authoritative Rust qualifier accepted the data disk and rejected the overlay
+      control (samples 4 and 5).
 - [x] Independent execution across a disconnect.
 - [x] Explicit Stop with retained data, endpoint retention recorded.
 - [x] Exact deletion with absence check and unchanged inventory.
-- [x] Slowest sample compared with the 180-second boundary: **not met** (270.8 s).
+- [x] Slowest sample compared with the 180-second boundary: **not met** (275.6 s).
 - [x] Cost recorded against the bound.
 - [ ] **Not executed:** PC-off task progress over hours, three independent panels on
       one worker, verified-loss recovery, opt-in budget policy, and the adapter's own

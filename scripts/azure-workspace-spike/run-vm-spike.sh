@@ -2,11 +2,15 @@
 # Bounded three-sample Azure Linux VM spike for issue #474.
 #
 # One exact task-owned resource group per sample. Measures create, image pull,
-# endpoint, verified key-only SSH and delete timing; records on-worker ext4 kernel
-# options, detach independence, deallocate/start data retention and exact deletion
-# with an unchanged-inventory proof. Every timestamp is UTC and journaled privately.
-# Nothing here registers a provider, publishes an image or touches resources outside
-# the sample resource group. Run the read-only preflight first.
+# endpoint, verified key-only SSH and delete timing; runs the worker's authoritative
+# storage qualifier; records detach independence, deallocate/start data retention
+# and exact deletion with an unchanged-inventory proof. Every timestamp is UTC and
+# journaled privately. Nothing here registers a provider, publishes an image or
+# touches resources outside the sample resource group. Run the read-only preflight first.
+#
+# Exit codes: 0 every gate held; 3 usage; 4 lifetime bound reached (cleanup attempted);
+# 5 worker never published a host key; 6 deletion not proven; 7 a functional gate failed
+# (evidence journaled, resources deleted).
 set -euo pipefail
 
 usage() {
@@ -16,8 +20,8 @@ usage: run-vm-spike.sh --subscription <uuid> --image <registry/repo@sha256:...> 
          [--region northeurope] [--vm-size Standard_D4s_v3] [--sample 1] [--max-minutes 120] \
          [--allow-ssh-from <cidr>] [--keep] [--dry-run]
 
-Requires: az (logged in), ssh, ssh-keygen, nc, jq, curl. Paid creation is bounded by
---max-minutes; the sample resource group is deleted at the end unless --keep is given.
+Requires: az (logged in), ssh, ssh-keygen, ssh-keyscan, nc, jq, curl. Paid creation is
+bounded by --max-minutes; the sample resource group is deleted at the end unless --keep.
 EOF
 }
 
@@ -49,7 +53,7 @@ done
 [[ $SAMPLE =~ ^[1-9]$ ]] || { echo "--sample must be 1-9" >&2; exit 3; }
 [[ $MAX_MINUTES =~ ^[0-9]{1,3}$ ]] && [ "$MAX_MINUTES" -ge 10 ] || { echo "--max-minutes must be 10-999" >&2; exit 3; }
 [ -n "$JOURNAL_DIR" ] || { echo "--journal-dir is required" >&2; exit 3; }
-for tool in az ssh ssh-keygen nc jq curl; do command -v "$tool" >/dev/null || { echo "missing tool: $tool" >&2; exit 3; }; done
+for tool in az ssh ssh-keygen ssh-keyscan nc jq curl; do command -v "$tool" >/dev/null || { echo "missing tool: $tool" >&2; exit 3; }; done
 
 REGISTRY=${IMAGE%%/*}
 RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)
@@ -57,6 +61,7 @@ TOKEN=$(head -c 3 /dev/urandom | od -An -tx1 | tr -d ' \n')
 RG="horizon-spike-474-s${SAMPLE}-${TOKEN}"
 VM="worker-s${SAMPLE}"
 DEADLINE_EPOCH=$(( $(date +%s) + MAX_MINUTES * 60 ))
+RESTART_WAIT_SECONDS=600
 umask 077
 mkdir -p "$JOURNAL_DIR"
 SAMPLE_DIR="$JOURNAL_DIR/sample-${SAMPLE}-${RUN_ID}"
@@ -64,32 +69,65 @@ mkdir "$SAMPLE_DIR"
 JOURNAL="$SAMPLE_DIR/journal.jsonl"
 KEY="$SAMPLE_DIR/client-ed25519"
 KNOWN_HOSTS="$SAMPLE_DIR/known_hosts"
+GATE_FAILURES=()
+CREATED=0 CLEANED=0 DELETE_PROVEN=0
 
 azc() { az "$@" --subscription "$SUBSCRIPTION" --only-show-errors; }
 now() { date -u +%Y-%m-%dT%H:%M:%S.%3NZ; }
 epoch_ms() { date +%s%3N; }
 journal() { local data=${2:-'{}'}; jq -cn --arg at "$(now)" --arg event "$1" --argjson data "$data" '{at:$at,event:$event,data:$data}' >>"$JOURNAL"; }
 say() { printf '[%s] %s\n' "$(now)" "$*"; }
-deadline_check() { [ "$(date +%s)" -lt "$DEADLINE_EPOCH" ] || { say "lifetime bound reached; forcing cleanup"; cleanup; exit 4; }; }
+gate() { local name=$1 ok=$2; [ "$ok" = true ] || GATE_FAILURES+=("$name"); }
+deadline_check() { [ "$(date +%s)" -lt "$DEADLINE_EPOCH" ] || { say "lifetime bound reached; forcing cleanup"; exit 4; }; }
+# wait_for <max-seconds> <command...>: poll every 3 s under the lifetime bound; returns 1 on the phase bound.
+wait_for() {
+  local until_epoch=$(( $(date +%s) + $1 )); shift
+  until "$@" >/dev/null 2>&1; do
+    deadline_check
+    [ "$(date +%s)" -lt "$until_epoch" ] || return 1
+    sleep 3
+  done
+}
+# run_command <script>: ARM-authenticated shell on the VM; retries while the extension is still installing.
+run_command() {
+  local attempt output
+  for attempt in $(seq 1 12); do
+    if output=$(azc vm run-command invoke --resource-group "$RG" --name "$VM" --command-id RunShellScript --scripts "$1" --query 'value[0].message' -o tsv 2>&1); then
+      printf '%s\n' "$output"; return 0
+    fi
+    grep -qi "in progress\|Conflict\|please wait" <<<"$output" || { printf '%s\n' "$output" >&2; return 1; }
+    say "run-command busy (attempt $attempt); retrying"; sleep 10
+  done
+  return 1
+}
 
 cleanup() {
-  local started finished exists
-  if [ "$KEEP" = 1 ]; then say "--keep given; leaving $RG in place (delete it yourself)"; journal kept '{"resource_group":"'"$RG"'"}'; return; fi
-  if [ "$DRY_RUN" = 1 ]; then return; fi
+  [ "$CLEANED" = 0 ] || return 0
+  CLEANED=1
+  [ "$CREATED" = 1 ] || return 0
+  if [ "$KEEP" = 1 ]; then say "--keep given; leaving $RG in place (delete it yourself)"; journal kept "$(jq -cn --arg rg "$RG" '{resource_group:$rg}')"; return 0; fi
+  local started finished exists=unknown unchanged=false
   started=$(epoch_ms)
   say "deleting resource group $RG"
-  azc group delete --name "$RG" --yes >/dev/null 2>&1 || true
-  for _ in $(seq 1 60); do
+  if azc group delete --name "$RG" --yes --no-wait >/dev/null 2>&1 && azc group wait --name "$RG" --deleted --timeout 1200 >/dev/null 2>&1; then
     exists=$(azc group exists --name "$RG" -o tsv 2>/dev/null || echo unknown)
-    [ "$exists" = false ] && break
-    sleep 10
-  done
+  fi
   finished=$(epoch_ms)
-  azc resource list --query "sort([].id)" >"$SAMPLE_DIR/inventory-after.json"
-  local unchanged=false
+  azc resource list --query "sort([].id)" >"$SAMPLE_DIR/inventory-after.json" 2>/dev/null || echo '"unavailable"' >"$SAMPLE_DIR/inventory-after.json"
   cmp -s "$SAMPLE_DIR/inventory-before.json" "$SAMPLE_DIR/inventory-after.json" && unchanged=true
+  [ "$exists" = false ] && [ "$unchanged" = true ] && DELETE_PROVEN=1
   journal deleted "$(jq -cn --arg exists "$exists" --argjson ms $((finished - started)) --argjson unchanged $unchanged '{group_exists:$exists,delete_ms:$ms,inventory_unchanged:$unchanged}')"
   say "resource group exists=$exists inventory_unchanged=$unchanged delete_ms=$((finished - started))"
+}
+finish() {
+  local code=$?
+  trap - EXIT
+  cleanup
+  if [ "$code" = 0 ] && [ "$CREATED" = 1 ] && [ "$KEEP" = 0 ] && [ "$DELETE_PROVEN" = 0 ]; then code=6; fi
+  if [ "$code" = 0 ] && [ "${#GATE_FAILURES[@]}" -gt 0 ]; then code=7; fi
+  journal end "$(jq -cn --argjson code "$code" --arg gates "${GATE_FAILURES[*]:-}" '{exit_code:$code,failed_gates:($gates|split(" ")|map(select(length>0)))}')"
+  say "sample $SAMPLE finished with exit $code${GATE_FAILURES[*]:+ (failed gates: ${GATE_FAILURES[*]})}; journal $JOURNAL"
+  exit "$code"
 }
 
 say "sample $SAMPLE run $RUN_ID journal $SAMPLE_DIR"
@@ -107,6 +145,12 @@ packages: [docker.io]
 bootcmd:
   - [ sh, -c, 'printf "{\"event\":\"boot\",\"at\":\"%s\"}\n" "\$(date -u +%FT%T.%3NZ)" >> /var/log/horizon-spike-timing.jsonl' ]
 write_files:
+  - path: /etc/systemd/system/docker.service.d/horizon-workspace.conf
+    permissions: '0644'
+    owner: root:root
+    content: |
+      [Unit]
+      RequiresMountsFor=/mnt/horizon-workspace
   - path: /usr/local/sbin/horizon-spike-bootstrap.sh
     permissions: '0700'
     owner: root:root
@@ -115,6 +159,7 @@ write_files:
       set -euo pipefail
       J=/var/log/horizon-spike-timing.jsonl
       stamp() { printf '{"event":"%s","at":"%s"}\n' "\$1" "\$(date -u +%FT%T.%3NZ)" >> "\$J"; }
+      field() { python3 -c 'import json,sys; print(json.load(sys.stdin)[sys.argv[1]])' "\$1"; }
       stamp bootstrap_start
       DISK=/dev/disk/azure/scsi1/lun0
       for _ in \$(seq 1 90); do [ -e "\$DISK" ] && break; sleep 1; done
@@ -123,11 +168,11 @@ write_files:
       mkdir -p /mnt/horizon-workspace
       UUID=\$(blkid -o value -s UUID "\$DISK")
       grep -q "\$UUID" /etc/fstab || echo "UUID=\$UUID /mnt/horizon-workspace ext4 defaults,nofail 0 2" >> /etc/fstab
+      systemctl daemon-reload
       mountpoint -q /mnt/horizon-workspace || mount /mnt/horizon-workspace
       chown root:root /mnt/horizon-workspace && chmod 0755 /mnt/horizon-workspace
       stamp data_disk_ready
       systemctl enable --now docker
-      field() { python3 -c 'import json,sys; print(json.load(sys.stdin)[sys.argv[1]])' "\$1"; }
       AAD=\$(curl -sf -H Metadata:true "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%3A%2F%2Fmanagement.azure.com%2F&client_id=${CLIENT_ID}" | field access_token)
       REFRESH=\$(curl -sf -X POST "https://${REGISTRY}/oauth2/exchange" --data-urlencode grant_type=access_token --data-urlencode service=${REGISTRY} --data-urlencode "access_token=\$AAD" | field refresh_token)
       printf '%s' "\$REFRESH" | docker login ${REGISTRY} -u 00000000-0000-0000-0000-000000000000 --password-stdin >/dev/null
@@ -152,7 +197,8 @@ if [ "$DRY_RUN" = 1 ]; then
   exit 0
 fi
 
-trap 'say "interrupted; cleaning up"; cleanup' INT TERM
+trap finish EXIT
+trap 'exit 130' INT TERM
 
 azc resource list --query "sort([].id)" >"$SAMPLE_DIR/inventory-before.json"
 journal inventory_before "$(jq -c '{count:length}' "$SAMPLE_DIR/inventory-before.json")"
@@ -160,6 +206,7 @@ journal inventory_before "$(jq -c '{count:length}' "$SAMPLE_DIR/inventory-before
 T0=$(epoch_ms)
 azc group create --name "$RG" --location "$REGION" \
   --tags issue=474 sample="$SAMPLE" run="$RUN_ID" purpose=horizon-azure-vm-spike deadline="$(date -u -d @"$DEADLINE_EPOCH" +%FT%TZ)" >/dev/null
+CREATED=1
 journal group_created "$(jq -cn --argjson ms $(( $(epoch_ms) - T0 )) '{ms_from_t0:$ms}')"
 
 CREATE_JSON="$SAMPLE_DIR/vm-create.json"
@@ -171,75 +218,102 @@ azc vm create --resource-group "$RG" --name "$VM" --location "$REGION" --size "$
   --custom-data "$CLOUD_INIT" --tags issue=474 sample="$SAMPLE" run="$RUN_ID" >"$CREATE_JSON"
 T_CREATE=$(epoch_ms)
 IP=$(jq -r .publicIpAddress "$CREATE_JSON")
+[[ $IP =~ ^[0-9.]+$ ]] || { journal vm_create_no_ip '{}'; say "vm create returned no public IP"; exit 1; }
 journal vm_created "$(jq -cn --argjson ms $((T_CREATE - T0)) --arg ip "$IP" '{ms_from_t0:$ms,public_ip:$ip}')"
 say "vm created in $((T_CREATE - T0)) ms"
 
 NSG=$(azc network nsg list --resource-group "$RG" --query "[0].name" -o tsv)
-SOURCE=${ALLOW_SSH_FROM:-$(curl -s --max-time 10 https://ifconfig.me)/32}
+SOURCE=${ALLOW_SSH_FROM:-}
+if [ -z "$SOURCE" ]; then
+  EGRESS=$(curl -s --max-time 10 https://ifconfig.me || true)
+  [[ $EGRESS =~ ^[0-9.]+$ ]] || { journal egress_unknown '{}'; say "could not learn the egress address; pass --allow-ssh-from"; exit 1; }
+  SOURCE="$EGRESS/32"
+fi
 azc network nsg rule create --resource-group "$RG" --nsg-name "$NSG" --name worker-ssh --priority 100 \
   --direction Inbound --access Allow --protocol Tcp --source-address-prefixes "$SOURCE" \
   --destination-port-ranges 2222 >/dev/null
 journal nsg_rule "$(jq -cn --arg src "$SOURCE" '{source:$src,port:2222}')"
 
-say "waiting for worker endpoint on $IP:2222"
-until nc -z -w 3 "$IP" 2222 2>/dev/null; do deadline_check; sleep 3; done
+say "waiting for worker endpoint on port 2222"
+wait_for $(( DEADLINE_EPOCH - $(date +%s) )) nc -z -w 3 "$IP" 2222 || { journal endpoint_never_opened '{}'; exit 4; }
 T_PORT=$(epoch_ms)
 journal endpoint_open "$(jq -cn --argjson ms $((T_PORT - T0)) '{ms_from_t0:$ms}')"
 say "endpoint open in $((T_PORT - T0)) ms"
 
 say "reading worker host key out of band through run-command"
 RC_START=$(epoch_ms)
-RC_JSON="$SAMPLE_DIR/run-command-hostkey.json"
-azc vm run-command invoke --resource-group "$RG" --name "$VM" --command-id RunShellScript \
-  --scripts 'cat /mnt/horizon-workspace/.horizon-worker/ssh/*.pub 2>/dev/null; echo ---TIMING---; cat /var/log/horizon-spike-timing.jsonl' >"$RC_JSON"
+RC_TEXT=$(run_command 'cat /mnt/horizon-workspace/.horizon-worker/ssh/*.pub 2>/dev/null; echo ---TIMING---; cat /var/log/horizon-spike-timing.jsonl') || RC_TEXT=""
 RC_END=$(epoch_ms)
-RC_TEXT=$(jq -r '.value[0].message' "$RC_JSON")
-HOST_KEY=$(printf '%s\n' "$RC_TEXT" | grep -m1 '^ssh-ed25519 ' || true)
+printf '%s\n' "$RC_TEXT" >"$SAMPLE_DIR/run-command-hostkey.txt"
+HOST_KEY=$(printf '%s\n' "$RC_TEXT" | grep -m1 '^ssh-ed25519 ' | awk '{print $1" "$2}' || true)
 printf '%s\n' "$RC_TEXT" | sed -n '/---TIMING---/,$p' | grep '^{' >"$SAMPLE_DIR/guest-timing.jsonl" || true
-[ -n "$HOST_KEY" ] || { journal host_key_missing '{}'; say "no ed25519 host key published yet; aborting sample"; cleanup; exit 5; }
+[ -n "$HOST_KEY" ] || { journal host_key_missing "$(jq -cn --argjson ms $((RC_END - RC_START)) '{run_command_ms:$ms}')"; say "no ed25519 host key published yet; aborting sample"; exit 5; }
 printf '[%s]:2222 %s\n' "$IP" "$HOST_KEY" >"$KNOWN_HOSTS"
 journal host_key_pinned "$(jq -cn --argjson ms $((RC_END - RC_START)) --arg fp "$(ssh-keygen -lf "$KNOWN_HOSTS" | awk '{print $2}')" '{run_command_ms:$ms,fingerprint:$fp}')"
 
-SSH=(ssh -p 2222 -i "$KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$KNOWN_HOSTS" -o PasswordAuthentication=no -o ConnectTimeout=10 -o BatchMode=yes "root@$IP")
-until "${SSH[@]}" true 2>/dev/null; do deadline_check; sleep 3; done
+ssh_worker() { ssh -T -F /dev/null -p 2222 -i "$KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$KNOWN_HOSTS" \
+  -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o ConnectTimeout=10 -o BatchMode=yes "root@$1" "${@:2}"; }
+wait_for $(( DEADLINE_EPOCH - $(date +%s) )) ssh_worker "$IP" true || { journal ssh_never_verified '{}'; exit 4; }
 T_SSH=$(epoch_ms)
 journal ssh_verified "$(jq -cn --argjson ms $((T_SSH - T0)) --argjson excl $((T_SSH - T0 - (RC_END - RC_START))) '{ms_from_t0:$ms,ms_excluding_run_command:$excl}')"
 say "key-only SSH verified in $((T_SSH - T0)) ms (excluding run-command: $((T_SSH - T0 - (RC_END - RC_START))) ms)"
 
-say "collecting on-worker storage evidence"
-"${SSH[@]}" 'set -e; echo "fs_type=$(stat -f -c %T /workspace)"; DEV=$(df --output=source /workspace | tail -1); echo "device=$DEV"; NAME=$(basename "$(readlink -f "$DEV")"); echo "kernel_options_path=/proc/fs/ext4/$NAME/options"; echo "---OPTIONS---"; cat /proc/fs/ext4/$NAME/options; echo "---MOUNT---"; grep " /workspace " /proc/self/mounts; echo "---SYSFS---"; readlink /sys/dev/block/$(stat -c %d /workspace | awk "{printf \"%d:%d\", int(\$1/256), \$1%256}") 2>&1 || true' >"$SAMPLE_DIR/storage-evidence.txt" 2>&1 || true
-OPTIONS=$(sed -n '/---OPTIONS---/,/---MOUNT---/p' "$SAMPLE_DIR/storage-evidence.txt" | grep -v -- '---')
-QUALIFIES=false
-if grep -qx rw <<<"$OPTIONS" && grep -qx barrier <<<"$OPTIONS" && ! grep -qx ro <<<"$OPTIONS" && ! grep -qx nobarrier <<<"$OPTIONS" \
-   && [ "$(grep -c '^data=' <<<"$OPTIONS")" = 1 ] && grep -qxE 'data=(ordered|journal)' <<<"$OPTIONS" && grep -q 'fs_type=ext2/ext3' "$SAMPLE_DIR/storage-evidence.txt"; then QUALIFIES=true; fi
-journal storage_evidence "$(jq -cn --argjson q $QUALIFIES --arg opts "$OPTIONS" '{shell_mirror_of_qualifier_passes:$q,kernel_options:($opts|split("\n"))}')"
-say "ext4 kernel options mirror check: $QUALIFIES (authoritative qualifier is the Rust code, not this script)"
+say "collecting on-worker storage evidence and running the authoritative qualifier"
+ssh_worker "$IP" 'set -e; echo "fs_type=$(stat -f -c %T /workspace)"; DEV=$(df --output=source /workspace | tail -1); echo "device=$DEV"; NAME=$(basename "$(readlink -f "$DEV")"); echo "---OPTIONS---"; cat "/proc/fs/ext4/$NAME/options"; echo "---MOUNT---"; grep " /workspace " /proc/self/mounts' >"$SAMPLE_DIR/storage-evidence.txt" 2>&1 || true
+OPTIONS=$(sed -n '/---OPTIONS---/,/---MOUNT---/p' "$SAMPLE_DIR/storage-evidence.txt" | grep -v -- '---' || true)
+MIRROR=false
+if [ -n "$OPTIONS" ] && grep -qx rw <<<"$OPTIONS" && grep -qx barrier <<<"$OPTIONS" && ! grep -qx ro <<<"$OPTIONS" && ! grep -qx nobarrier <<<"$OPTIONS" \
+   && [ "$(grep -c '^data=' <<<"$OPTIONS")" = 1 ] && grep -qxE 'data=(ordered|journal)' <<<"$OPTIONS" && grep -q 'fs_type=ext2/ext3' "$SAMPLE_DIR/storage-evidence.txt"; then MIRROR=true; fi
+# The image's horizon-repository binary runs storage::qualify read-only on the retained root:
+# "absent" means qualified storage with no claim; an overlay root is the negative control.
+QUALIFIER_REQUEST='{"version":1,"retained_root":"%s","workspace_local_id":"workspace_1","objects_directory":"/workspace/spike-input/objects","bundle_store":"/workspace/spike-input/bundles","bundle_manifest":"0000000000000000000000000000000000000000000000000000000000000000","destination":"repository"}'
+QUALIFIER_OUT=$(ssh_worker "$IP" "set -e; mkdir -p -m 0755 /workspace/spike-input/objects /workspace/spike-input/bundles; mkdir -p -m 0700 /workspace/spike-retained /root/spike-overlay; printf '$QUALIFIER_REQUEST' /workspace/spike-retained | /usr/local/bin/horizon-repository setup-status; echo; echo ---OVERLAY---; printf '$QUALIFIER_REQUEST' /root/spike-overlay | /usr/local/bin/horizon-repository setup-status || true; echo" 2>&1 || true)
+printf '%s\n' "$QUALIFIER_OUT" >"$SAMPLE_DIR/qualifier-output.txt"
+DATA_STATUS=$(printf '%s\n' "$QUALIFIER_OUT" | sed '/---OVERLAY---/,$d' | jq -r '.status // empty' 2>/dev/null | head -1 || true)
+OVERLAY_STATUS=$(printf '%s\n' "$QUALIFIER_OUT" | sed -n '/---OVERLAY---/,$p' | grep -v -- '---' | jq -r '.status // empty' 2>/dev/null | head -1 || true)
+QUALIFIED=false; [ "$DATA_STATUS" = absent ] && QUALIFIED=true
+journal storage_evidence "$(jq -cn --argjson mirror $MIRROR --argjson q $QUALIFIED --arg ds "${DATA_STATUS:-none}" --arg os "${OVERLAY_STATUS:-none}" --arg opts "$OPTIONS" '{shell_mirror_passes:$mirror,rust_qualifier_status_on_data_disk:$ds,rust_qualifier_status_on_overlay:$os,rust_qualifier_accepts_data_disk:$q,kernel_options:($opts|split("\n")|map(select(length>0)))}')"
+gate storage_qualifier "$QUALIFIED"
+say "rust qualifier on data disk: ${DATA_STATUS:-none} (overlay control: ${OVERLAY_STATUS:-none}); shell mirror: $MIRROR"
 
 say "detach independence: start a heartbeat, disconnect, reconnect"
-"${SSH[@]}" 'tmux new-session -d -s spike "while true; do date -u +%FT%TZ >> /workspace/spike-heartbeat; sleep 2; done"; sleep 1; wc -l < /workspace/spike-heartbeat' >"$SAMPLE_DIR/heartbeat-before.txt"
+BEFORE=$(ssh_worker "$IP" 'tmux new-session -d -s spike "while true; do date -u +%FT%TZ >> /workspace/spike-heartbeat; sleep 2; done"; sleep 1; wc -l < /workspace/spike-heartbeat' 2>/dev/null || echo 0)
 sleep 20
-"${SSH[@]}" 'tmux has-session -t spike && wc -l < /workspace/spike-heartbeat' >"$SAMPLE_DIR/heartbeat-after.txt"
-journal detach_independence "$(jq -cn --arg b "$(cat "$SAMPLE_DIR/heartbeat-before.txt")" --arg a "$(cat "$SAMPLE_DIR/heartbeat-after.txt")" '{lines_before:($b|tonumber),lines_after:($a|tonumber),progressed:(($a|tonumber)>($b|tonumber))}')"
+AFTER=$(ssh_worker "$IP" 'tmux has-session -t spike 2>/dev/null && wc -l < /workspace/spike-heartbeat' 2>/dev/null || echo 0)
+PROGRESSED=false; [ "${AFTER:-0}" -gt "${BEFORE:-0}" ] 2>/dev/null && PROGRESSED=true
+journal detach_independence "$(jq -cn --argjson b "${BEFORE:-0}" --argjson a "${AFTER:-0}" --argjson p $PROGRESSED '{lines_before:$b,lines_after:$a,progressed:$p}')"
+gate detach_independence "$PROGRESSED"
 
 say "retention: marker, deallocate, start, verify"
 MARKER="spike-$RUN_ID-$TOKEN"
-"${SSH[@]}" "printf '%s\n' '$MARKER' > /workspace/spike-marker; sync"
+ssh_worker "$IP" "printf '%s\n' '$MARKER' > /workspace/spike-marker; sync" || true
 deadline_check
 T_STOP=$(epoch_ms)
 azc vm deallocate --resource-group "$RG" --name "$VM" >/dev/null
-POWER=$(azc vm get-instance-view --resource-group "$RG" --name "$VM" --query "instanceView.statuses[?starts_with(code,'PowerState/')].code | [0]" -o tsv)
 T_STOPPED=$(epoch_ms)
+POWER=$(azc vm get-instance-view --resource-group "$RG" --name "$VM" --query "instanceView.statuses[?starts_with(code,'PowerState/')].code | [0]" -o tsv)
 journal deallocated "$(jq -cn --argjson ms $((T_STOPPED - T_STOP)) --arg power "$POWER" '{stop_ms:$ms,power_state:$power}')"
+gate deallocated "$([ "$POWER" = PowerState/deallocated ] && echo true || echo false)"
 T_START=$(epoch_ms)
 azc vm start --resource-group "$RG" --name "$VM" >/dev/null
 IP_AFTER=$(azc vm show -d --resource-group "$RG" --name "$VM" --query publicIps -o tsv)
-until nc -z -w 3 "$IP" 2222 2>/dev/null; do deadline_check; sleep 3; done
-until "${SSH[@]}" true 2>/dev/null; do deadline_check; sleep 3; done
+IP_SAME=false; [ "$IP" = "$IP_AFTER" ] && IP_SAME=true
+KEY_SAME=false SESSION=unknown RETAINED_MARKER=false HEARTBEAT=0 MOUNTED=false
+if wait_for "$RESTART_WAIT_SECONDS" nc -z -w 3 "$IP_AFTER" 2222; then
+  SCANNED=$(ssh-keyscan -p 2222 -t ed25519 -T 10 "$IP_AFTER" 2>/dev/null | awk '{print $2" "$3}' | head -1 || true)
+  [ "$SCANNED" = "$HOST_KEY" ] && KEY_SAME=true
+  if [ "$KEY_SAME" = true ] && wait_for "$RESTART_WAIT_SECONDS" ssh_worker "$IP_AFTER" true; then
+    OUT=$(ssh_worker "$IP_AFTER" "cat /workspace/spike-marker 2>/dev/null || echo missing; tmux has-session -t spike 2>/dev/null && echo session-alive || echo session-gone; wc -l < /workspace/spike-heartbeat 2>/dev/null || echo 0; grep -q ' /workspace ' /proc/self/mounts && echo mounted || echo unmounted" 2>/dev/null || printf 'missing\nunknown\n0\nunknown\n')
+    [ "$(sed -n 1p <<<"$OUT")" = "$MARKER" ] && RETAINED_MARKER=true
+    SESSION=$(sed -n 2p <<<"$OUT"); HEARTBEAT=$(sed -n 3p <<<"$OUT"); [ "$(sed -n 4p <<<"$OUT")" = mounted ] && MOUNTED=true
+  fi
+fi
 T_RESTARTED=$(epoch_ms)
-RETAINED=$("${SSH[@]}" "cat /workspace/spike-marker 2>/dev/null; tmux has-session -t spike 2>/dev/null && echo session-alive || echo session-gone; wc -l < /workspace/spike-heartbeat")
-journal restarted "$(jq -cn --argjson ms $((T_RESTARTED - T_START)) --arg ip_same "$([ "$IP" = "$IP_AFTER" ] && echo true || echo false)" --arg out "$RETAINED" --arg marker "$MARKER" '{start_to_ssh_ms:$ms,public_ip_unchanged:($ip_same=="true"),marker_retained:($out|split("\n")[0]==$marker),session_after_restart:($out|split("\n")[1]),heartbeat_lines:($out|split("\n")[2]|tonumber),same_pinned_host_key:true}')"
-say "after deallocate/start: $(tr '\n' ' ' <<<"$RETAINED")"
-
-cleanup
-journal end "$(jq -cn --argjson total $(( $(epoch_ms) - T0 )) '{total_ms:$total}')"
-say "sample $SAMPLE complete; journal at $JOURNAL"
+if [ "$KEY_SAME" != true ] || [ "$RETAINED_MARKER" != true ] || [ "$MOUNTED" != true ]; then
+  say "restart verification failed; capturing guest diagnostics out of band"
+  run_command 'systemctl is-system-running; systemctl list-units --failed --no-legend; systemctl status docker --no-pager | head -20; findmnt /mnt/horizon-workspace; docker ps -a; docker logs --tail 20 horizon-worker 2>&1; journalctl -b -u docker --no-pager | tail -20' >"$SAMPLE_DIR/restart-diagnostics.txt" 2>&1 || true
+fi
+journal restarted "$(jq -cn --argjson ms $((T_RESTARTED - T_START)) --argjson ip $IP_SAME --argjson key $KEY_SAME --argjson marker $RETAINED_MARKER --arg session "$SESSION" --argjson hb "${HEARTBEAT:-0}" --argjson mounted $MOUNTED '{start_to_verified_ms:$ms,public_ip_unchanged:$ip,same_pinned_host_key:$key,marker_retained:$marker,session_after_restart:$session,heartbeat_lines:$hb,data_disk_mounted:$mounted}')"
+gate retention "$([ "$KEY_SAME" = true ] && [ "$RETAINED_MARKER" = true ] && [ "$MOUNTED" = true ] && echo true || echo false)"
+say "after deallocate/start: ip_unchanged=$IP_SAME host_key_same=$KEY_SAME marker_retained=$RETAINED_MARKER mounted=$MOUNTED session=$SESSION"
+journal timings_complete "$(jq -cn --argjson total $(( $(epoch_ms) - T0 )) '{ms_from_t0:$total}')"
