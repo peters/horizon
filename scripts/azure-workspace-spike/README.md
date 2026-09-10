@@ -11,9 +11,9 @@ the group is gone with nothing left under it and no pre-existing resource missin
 under the remaining time and, once it expires, the harness stops measuring, deletes
 the sample and exits 4. Two exceptions extend exposure and must be included when
 calculating the maximum: cleanup has its own fixed 25-minute bound, and `--keep`
-skips deletion entirely. As an independent safety net the harness schedules Azure
-VM auto-shutdown one minute after the deadline right after creation, so compute is
-deallocated by the platform even if this controller process dies; disks and the
+skips deletion entirely. As an independent safety net the deployment that creates
+the VM also creates an Azure VM auto-shutdown schedule one minute after the deadline,
+so compute is deallocated by the platform even if this controller process dies; disks and the
 static IP then persist until the tagged resource group (`horizon-spike-474-*`,
 tag `deadline`) is deleted by hand. It never registers a provider, never publishes
 an image and touches nothing outside the sample resource group.
@@ -48,7 +48,8 @@ scripts/azure-workspace-spike/run-vm-spike.sh \
 --candidate vm --live --report ...` for the same region and VM size; the harness
 refuses to create anything unless that report is a live `vm` report with
 `no_blockers_observed` whose `subscription_digest` matches `--subscription`, and it journals the report path, `observed_at`, tool version
-and its own git commit in the `start` event. `--dry-run` renders the cloud-init and
+and its own git commit (plus whether the harness directory had uncommitted changes) in
+the `start` event. `--dry-run` renders the cloud-init and
 exits without creating anything (the report is then optional). `--keep` leaves the
 sample resource group for manual inspection; delete it yourself, and expect exit `6`
 because the deletion gate was skipped. `--sample` accepts
@@ -63,17 +64,20 @@ because the deletion gate was skipped. `--sample` accepts
    inventory cannot attribute it; the proof is then reported as unverified (exit `6`,
    `inventory_proof.reason`) and the sample must be rerun. Additions elsewhere are counted.
 2. Generates a fresh Ed25519 client key used only for this sample.
-3. Verifies the random group name is absent, creates the resource group, then a Linux VM (`Canonical:ubuntu-24_04-lts:server`,
-   key-only SSH, Standard static public IP, no default NSG rules, the pull identity
-   assigned, a 32 GiB data disk) with cloud-init that: formats and mounts the data
+3. Verifies the random group name is absent, creates the resource group, then submits
+   **one server-side deployment** containing the network security group (port 2222 from
+   the caller's egress address only), virtual network, Standard static public IP, NIC,
+   the Linux VM (`Canonical:ubuntu-24_04-lts:server`, key-only SSH, the pull identity
+   assigned, a 32 GiB data disk) and the DevTestLab auto-shutdown schedule set one
+   minute after the lifetime deadline, so a controller that dies mid-creation cannot
+   leave compute without the platform-side stop. The VM's cloud-init formats and mounts the data
    disk as ext4 at `/mnt/horizon-workspace`; installs Docker; exchanges the identity's
    IMDS token for a registry refresh token and logs in with the documented
    `00000000-0000-0000-0000-000000000000` user; pulls the image by digest; creates and
    starts the worker container with the data disk bound at `/workspace` and the client
    public key in `HORIZON_SSH_PUBLIC_KEY`, publishing container port 22 on VM port 2222.
-   Right after creation it schedules Azure VM auto-shutdown at the lifetime deadline;
-   if that cannot be scheduled the sample is deleted immediately (even with `--keep`).
-4. Opens VM port 2222 only from the caller's egress address (or `--allow-ssh-from`).
+4. (Port 2222 is opened by the deployment's security rule, from the caller's egress
+   address or `--allow-ssh-from`; nothing is opened afterwards.)
 5. Waits for the endpoint, reads the worker's Ed25519 host key **out of band** through
    ARM-authenticated `az vm run-command` from the retained
    `/workspace/.horizon-worker/ssh` directory, pins it, and verifies key-only SSH with
@@ -108,7 +112,7 @@ unproven deletion always wins: exit `6` replaces any other code. Every blocking 
 ## Journal
 
 Everything lands under `--journal-dir/sample-<n>-<run-id>/` with mode 0700: the
-private client key, `cloud-init.yaml`, `vm-create.json`, `run-command-hostkey.txt`, `qualifier-output.txt`,
+private client key, `cloud-init.yaml`, `deployment.json`, `deployment-result.json`, `run-command-hostkey.txt`, `qualifier-output.txt`,
 `guest-timing.jsonl` (boot, bootstrap, disk, registry login, pull, container create
 and start stamps from inside the VM), `storage-evidence.txt`, heartbeat counts and
 `journal.jsonl` with every controller-side event and millisecond offsets from `T0`

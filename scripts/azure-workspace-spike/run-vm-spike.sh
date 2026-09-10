@@ -189,7 +189,8 @@ finish() {
 
 say "sample $SAMPLE run $RUN_ID journal $SAMPLE_DIR"
 HARNESS_COMMIT=$(git -C "$(dirname "$0")" rev-parse HEAD 2>/dev/null || echo unknown)
-journal start "$(jq -cn --arg region "$REGION" --arg size "$VM_SIZE" --arg image "$IMAGE" --arg rg "$RG" --argjson max "$MAX_MINUTES" --arg commit "$HARNESS_COMMIT" --arg pf "${PREFLIGHT:-}" --argjson facts "${PREFLIGHT_FACTS:-null}" '{region:$region,vm_size:$size,image:$image,resource_group:$rg,max_minutes:$max,harness_commit:$commit,preflight_report:$pf,preflight:$facts}')"
+HARNESS_DIRTY=$([ -n "$(git -C "$(dirname "$0")" status --porcelain -- . 2>/dev/null)" ] && echo true || echo false)
+journal start "$(jq -cn --arg region "$REGION" --arg size "$VM_SIZE" --arg image "$IMAGE" --arg rg "$RG" --argjson max "$MAX_MINUTES" --arg commit "$HARNESS_COMMIT" --argjson dirty "$HARNESS_DIRTY" --arg pf "${PREFLIGHT:-}" --argjson facts "${PREFLIGHT_FACTS:-null}" '{region:$region,vm_size:$size,image:$image,resource_group:$rg,max_minutes:$max,harness_commit:$commit,harness_uncommitted_changes:$dirty,preflight_report:$pf,preflight:$facts}')"
 
 ssh-keygen -q -t ed25519 -N "" -C "horizon-spike-474-s${SAMPLE}" -f "$KEY"
 PUBKEY=$(cat "$KEY.pub")
@@ -274,40 +275,84 @@ azc group create --name "$RG" --location "$REGION" \
   --tags issue=474 sample="$SAMPLE" run="$RUN_ID" purpose=horizon-azure-vm-spike deadline="$(date -u -d @"$DEADLINE_EPOCH" +%FT%TZ)" >/dev/null
 journal group_created "$(jq -cn --argjson ms $(( $(epoch_ms) - T0 )) '{ms_from_t0:$ms}')"
 
-CREATE_JSON="$SAMPLE_DIR/vm-create.json"
-azc vm create --resource-group "$RG" --name "$VM" --location "$REGION" --size "$VM_SIZE" \
-  --image Canonical:ubuntu-24_04-lts:server:latest --admin-username azureuser \
-  --authentication-type ssh --ssh-key-values "$KEY.pub" \
-  --public-ip-sku Standard --public-ip-address-allocation static --nsg-rule NONE \
-  --assign-identity "$PULLER_ID" --os-disk-size-gb 30 --data-disk-sizes-gb 32 \
-  --custom-data "$CLOUD_INIT" --tags issue=474 sample="$SAMPLE" run="$RUN_ID" >"$CREATE_JSON"
-T_CREATE=$(epoch_ms)
-IP=$(jq -r .publicIpAddress "$CREATE_JSON")
-[[ $IP =~ ^[0-9.]+$ ]] || { journal vm_create_no_ip '{}'; say "vm create returned no public IP"; exit 1; }
-journal vm_created "$(jq -cn --argjson ms $((T_CREATE - T0)) --arg ip "$IP" '{ms_from_t0:$ms,public_ip:$ip}')"
-say "vm created in $((T_CREATE - T0)) ms"
-# Independent cloud-side stop: Azure deallocates the VM at the lifetime deadline even if this
-# controller dies. Disks and the public IP remain until the tagged group is deleted by hand.
-SHUTDOWN_AT=$(date -u -d @"$(( DEADLINE_EPOCH + 60 ))" +%H%M)
-if azc vm auto-shutdown --resource-group "$RG" --name "$VM" --time "$SHUTDOWN_AT" >/dev/null 2>&1; then
-  journal auto_shutdown_scheduled "$(jq -cn --arg at "$SHUTDOWN_AT" '{utc_hhmm:$at}')"
-else
-  # Without the platform-side bound the sample may not continue and may not be kept.
-  journal auto_shutdown_not_scheduled '{}'; say "fatal: cloud-side auto-shutdown could not be scheduled; deleting the sample"
-  KEEP=0; exit 1
-fi
-
-NSG=$(azc network nsg list --resource-group "$RG" --query "[0].name" -o tsv)
 SOURCE=${ALLOW_SSH_FROM:-}
 if [ -z "$SOURCE" ]; then
   EGRESS=$(bounded curl -s --max-time 10 https://ifconfig.me || true)
   [[ $EGRESS =~ ^[0-9.]+$ ]] || { journal egress_unknown '{}'; say "could not learn the egress address; pass --allow-ssh-from"; exit 1; }
   SOURCE="$EGRESS/32"
 fi
-azc network nsg rule create --resource-group "$RG" --nsg-name "$NSG" --name worker-ssh --priority 100 \
-  --direction Inbound --access Allow --protocol Tcp --source-address-prefixes "$SOURCE" \
-  --destination-port-ranges 2222 >/dev/null
-journal nsg_rule "$(jq -cn --arg src "$SOURCE" '{source:$src,port:2222}')"
+# One server-side deployment creates the network, the VM and the DevTestLab auto-shutdown
+# schedule together, so a controller that dies mid-creation cannot leave compute without the
+# platform-side stop. Azure deallocates the VM at the lifetime deadline even if nothing else runs;
+# disks and the public IP remain until the tagged group is deleted by hand.
+SHUTDOWN_AT=$(date -u -d @"$(( DEADLINE_EPOCH + 60 ))" +%H%M)
+TEMPLATE="$SAMPLE_DIR/deployment.json"
+cat >"$TEMPLATE" <<'EOF'
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "vmName": {"type": "string"}, "vmSize": {"type": "string"}, "adminPublicKey": {"type": "string"},
+    "customData": {"type": "string"}, "identityId": {"type": "string"}, "sourceCidr": {"type": "string"},
+    "shutdownTime": {"type": "string"}, "tags": {"type": "object"},
+    "location": {"type": "string", "defaultValue": "[resourceGroup().location]"}
+  },
+  "variables": {"nic": "[concat(parameters('vmName'), '-nic')]", "pip": "[concat(parameters('vmName'), '-pip')]",
+                "nsg": "[concat(parameters('vmName'), '-nsg')]", "vnet": "[concat(parameters('vmName'), '-vnet')]"},
+  "resources": [
+    {"type": "Microsoft.Network/networkSecurityGroups", "apiVersion": "2023-11-01", "name": "[variables('nsg')]",
+     "location": "[parameters('location')]", "tags": "[parameters('tags')]",
+     "properties": {"securityRules": [{"name": "worker-ssh", "properties": {"priority": 100, "direction": "Inbound",
+       "access": "Allow", "protocol": "Tcp", "sourceAddressPrefix": "[parameters('sourceCidr')]", "sourcePortRange": "*",
+       "destinationAddressPrefix": "*", "destinationPortRange": "2222"}}]}},
+    {"type": "Microsoft.Network/virtualNetworks", "apiVersion": "2023-11-01", "name": "[variables('vnet')]",
+     "location": "[parameters('location')]", "tags": "[parameters('tags')]",
+     "dependsOn": ["[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsg'))]"],
+     "properties": {"addressSpace": {"addressPrefixes": ["10.0.0.0/16"]}, "subnets": [{"name": "workers",
+       "properties": {"addressPrefix": "10.0.0.0/24",
+         "networkSecurityGroup": {"id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsg'))]"}}}]}},
+    {"type": "Microsoft.Network/publicIPAddresses", "apiVersion": "2023-11-01", "name": "[variables('pip')]",
+     "location": "[parameters('location')]", "tags": "[parameters('tags')]", "sku": {"name": "Standard"},
+     "properties": {"publicIPAllocationMethod": "Static", "publicIPAddressVersion": "IPv4"}},
+    {"type": "Microsoft.Network/networkInterfaces", "apiVersion": "2023-11-01", "name": "[variables('nic')]",
+     "location": "[parameters('location')]", "tags": "[parameters('tags')]",
+     "dependsOn": ["[resourceId('Microsoft.Network/virtualNetworks', variables('vnet'))]",
+                   "[resourceId('Microsoft.Network/publicIPAddresses', variables('pip'))]"],
+     "properties": {"ipConfigurations": [{"name": "primary", "properties": {"privateIPAllocationMethod": "Dynamic",
+       "subnet": {"id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnet'), 'workers')]"},
+       "publicIPAddress": {"id": "[resourceId('Microsoft.Network/publicIPAddresses', variables('pip'))]"}}}]}},
+    {"type": "Microsoft.Compute/virtualMachines", "apiVersion": "2024-03-01", "name": "[parameters('vmName')]",
+     "location": "[parameters('location')]", "tags": "[parameters('tags')]",
+     "dependsOn": ["[resourceId('Microsoft.Network/networkInterfaces', variables('nic'))]"],
+     "identity": {"type": "UserAssigned", "userAssignedIdentities": {"[parameters('identityId')]": {}}},
+     "properties": {"hardwareProfile": {"vmSize": "[parameters('vmSize')]"},
+       "storageProfile": {"imageReference": {"publisher": "Canonical", "offer": "ubuntu-24_04-lts", "sku": "server", "version": "latest"},
+         "osDisk": {"createOption": "FromImage", "diskSizeGB": 30, "managedDisk": {"storageAccountType": "Premium_LRS"}},
+         "dataDisks": [{"lun": 0, "createOption": "Empty", "diskSizeGB": 32, "managedDisk": {"storageAccountType": "Premium_LRS"}}]},
+       "osProfile": {"computerName": "[parameters('vmName')]", "adminUsername": "azureuser", "customData": "[parameters('customData')]",
+         "linuxConfiguration": {"disablePasswordAuthentication": true, "ssh": {"publicKeys": [{"path": "/home/azureuser/.ssh/authorized_keys",
+           "keyData": "[parameters('adminPublicKey')]"}]}}},
+       "networkProfile": {"networkInterfaces": [{"id": "[resourceId('Microsoft.Network/networkInterfaces', variables('nic'))]"}]}}},
+    {"type": "Microsoft.DevTestLab/schedules", "apiVersion": "2018-09-15", "name": "[concat('shutdown-computevm-', parameters('vmName'))]",
+     "location": "[parameters('location')]", "tags": "[parameters('tags')]",
+     "dependsOn": ["[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"],
+     "properties": {"status": "Enabled", "taskType": "ComputeVmShutdownTask", "timeZoneId": "UTC",
+       "dailyRecurrence": {"time": "[parameters('shutdownTime')]"}, "notificationSettings": {"status": "Disabled"},
+       "targetResourceId": "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"}}
+  ],
+  "outputs": {"publicIp": {"type": "string", "value": "[reference(variables('pip')).ipAddress]"}}
+}
+EOF
+CREATE_JSON="$SAMPLE_DIR/deployment-result.json"
+TAGS=$(jq -cn --arg s "$SAMPLE" --arg r "$RUN_ID" '{issue:"474",sample:$s,run:$r,purpose:"horizon-azure-vm-spike"}')
+azc deployment group create --resource-group "$RG" --name "worker-s${SAMPLE}" --template-file "$TEMPLATE" \
+  --parameters vmName="$VM" vmSize="$VM_SIZE" adminPublicKey="$PUBKEY" customData="$(base64 -w0 "$CLOUD_INIT")" \
+  identityId="$PULLER_ID" sourceCidr="$SOURCE" shutdownTime="$SHUTDOWN_AT" tags="$TAGS" >"$CREATE_JSON"
+T_CREATE=$(epoch_ms)
+IP=$(jq -r '.properties.outputs.publicIp.value // empty' "$CREATE_JSON")
+[[ $IP =~ ^[0-9.]+$ ]] || { journal vm_create_no_ip '{}'; say "deployment returned no public IP"; exit 1; }
+journal vm_created "$(jq -cn --argjson ms $((T_CREATE - T0)) --arg ip "$IP" --arg at "$SHUTDOWN_AT" --arg src "$SOURCE" '{ms_from_t0:$ms,public_ip:$ip,auto_shutdown_utc_hhmm:$at,ssh_source:$src,deployment:"vm+network+shutdown schedule in one deployment"}')"
+say "deployment complete in $((T_CREATE - T0)) ms (VM, network and auto-shutdown schedule together)"
 
 say "waiting for worker endpoint on port 2222"
 wait_for $(( DEADLINE_EPOCH - $(date +%s) )) bounded nc -z -w 3 "$IP" 2222 || { journal endpoint_never_opened '{}'; exit 4; }
