@@ -151,9 +151,8 @@ cleanup() {
   local started finished exists=unknown unchanged=false
   started=$(epoch_ms)
   say "deleting resource group $RG"
-  if azc group delete --name "$RG" --yes --no-wait >/dev/null 2>&1 && azc group wait --name "$RG" --deleted --timeout 1200 >/dev/null 2>&1; then
-    exists=$(azc group exists --name "$RG" -o tsv 2>/dev/null || echo unknown)
-  fi
+  azc group delete --name "$RG" --yes --no-wait >/dev/null 2>&1 && azc group wait --name "$RG" --deleted --timeout 1200 >/dev/null 2>&1 || true
+  exists=$(azc group exists --name "$RG" -o tsv 2>/dev/null || echo unknown)  # final Azure state decides, not the call statuses
   finished=$(epoch_ms)
   azc resource list --query "sort([].id)" >"$SAMPLE_DIR/inventory-after.json" 2>/dev/null || echo 'null' >"$SAMPLE_DIR/inventory-after.json"
   # Proof (#474: exact absence and unchanged pre-existing resources): nothing remains under the
