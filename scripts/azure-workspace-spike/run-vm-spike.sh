@@ -180,7 +180,7 @@ finish() {
   [ "$(date +%s)" -lt "$DEADLINE_EPOCH" ] || expired=1  # decided before cleanup spends its own bound
   cleanup
   if [ "$code" = 0 ] && [ "${#GATE_FAILURES[@]}" -gt 0 ]; then code=7; fi
-  if [ "$code" != 0 ] && [ "$expired" = 1 ]; then code=4; fi  # any failure past the active-phase bound is a bound expiry
+  if [ "$expired" = 1 ]; then code=4; fi  # crossing the active-phase bound is never a success, whatever else happened
   case "$code" in 0|3|4|5|6|7|130) ;; *) code=1 ;; esac
   if [ "$CREATED" = 1 ] && [ "$DELETE_PROVEN" = 0 ]; then code=6; fi  # an unproven (or --keep skipped) delete outranks every other outcome
   journal end "$(jq -cn --argjson code "$code" --arg gates "${GATE_FAILURES[*]:-}" '{exit_code:$code,failed_gates:($gates|split(" ")|map(select(length>0)))}')"
