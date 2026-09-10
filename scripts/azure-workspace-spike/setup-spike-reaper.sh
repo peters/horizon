@@ -66,7 +66,7 @@ Connect-AzAccount -Identity | Out-Null
 $now = (Get-Date).ToUniversalTime()
 $acted = 0
 foreach ($vm in Get-AzVM -Status) {
-  if ($vm.Tags['purpose'] -ne 'horizon-azure-vm-spike' -or -not $vm.Tags['deadline']) { continue }
+  if ($null -eq $vm.Tags -or $vm.Tags['purpose'] -ne 'horizon-azure-vm-spike' -or -not $vm.Tags['deadline']) { continue }
   try { $deadline = [datetime]::Parse($vm.Tags['deadline'], $null, [System.Globalization.DateTimeStyles]::AdjustToUniversal) } catch { Write-Output "skip $($vm.Name): unparsable deadline"; continue }
   if ($now -le $deadline) { continue }
   if ($vm.PowerState -eq 'VM deallocated' -or $vm.PowerState -eq 'VM deallocating') { continue }
@@ -99,6 +99,10 @@ azr --method put --url "$BASE/jobSchedules/$LINK?api-version=$API" --body "$(jq 
   || say "job schedule already linked (kept)"
 
 say "verifying"
-azr --method get --url "$BASE/jobSchedules?api-version=$API" --query "value[].{runbook:properties.runbook.name,schedule:properties.schedule.name}" -o table
-azr --method get --url "$BASE/schedules/$SCHEDULE?api-version=$API" --query "{enabled:properties.isEnabled,next:properties.nextRun,interval:properties.interval,frequency:properties.frequency}" -o table
+LINKED=$(azr --method get --url "$BASE/jobSchedules?api-version=$API" --query "length(value[?properties.runbook.name=='$RUNBOOK' && properties.schedule.name=='$SCHEDULE'])" -o tsv)
+SCHED=$(azr --method get --url "$BASE/schedules/$SCHEDULE?api-version=$API" --query "{enabled:properties.isEnabled,next:properties.nextRun,interval:properties.interval,frequency:properties.frequency}")
+printf '%s\n' "$SCHED" | jq -c .
+if [ "$LINKED" != 1 ] || [ "$(jq -r 'if .enabled == true and .frequency == "Minute" and .interval == 15 then "ok" else "bad" end' <<<"$SCHED")" != ok ]; then
+  echo "reaper is NOT ready: runbook link count $LINKED, schedule $SCHED" >&2; exit 1
+fi
 say "reaper ready: VMs tagged purpose=horizon-azure-vm-spike with a past deadline tag are deallocated within about 15 minutes"

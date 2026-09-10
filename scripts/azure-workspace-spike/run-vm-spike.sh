@@ -518,8 +518,12 @@ if [ "$PROVE_REAPER" = 1 ] && [ "$KEY_SAME" = true ]; then
   journal reaper_proof "$(jq -cn --argjson ok $REAPED --argjson ms $(( $(epoch_ms) - T_REAP )) '{vm_deallocated_by_reaper:$ok,wait_ms:$ms}')"
   gate reaper_bound "$REAPED"
   say "reaper proof: vm_deallocated_by_reaper=$REAPED after $(( ($(epoch_ms) - T_REAP) / 1000 )) s"
-  # Restore the real deadline before restarting so the guest-timer proof below is isolated from the reaper.
-  azc tag update --resource-id "$VM_ID" --operation merge --tags deadline="$DEADLINE_TAG" >/dev/null || true
+  # Restore the real deadline before restarting so the guest-timer proof below is isolated from the
+  # reaper; if that cannot be confirmed the proof would be ambiguous, so the sample ends here.
+  RESTORED=false
+  for _ in 1 2 3; do azc tag update --resource-id "$VM_ID" --operation merge --tags deadline="$DEADLINE_TAG" >/dev/null 2>&1 && RESTORED=true && break; bounded sleep 5 || break; done
+  [ "$(azc tag list --resource-id "$VM_ID" --query "properties.tags.deadline" -o tsv 2>/dev/null)" = "$DEADLINE_TAG" ] || RESTORED=false
+  [ "$RESTORED" = true ] || { journal deadline_restore_failed '{}'; say "could not restore the deadline tag; ending the sample without the guest proof"; exit 1; }
   if [ "$REAPED" = true ]; then azc vm start --resource-group "$RG" --name "$VM" >/dev/null || true; wait_for 600 ssh_worker "$IP_AFTER" true || true; fi
 fi
 # Prove the guest-side bound: confirm the timer is armed, fire its service once, expect deallocation.
