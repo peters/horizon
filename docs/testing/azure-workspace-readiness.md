@@ -117,7 +117,7 @@ IP, VM port 2222 opened only from the operator's egress address, key-only SSH wi
 fresh Ed25519 key per sample, image pulled by digest through the managed identity's
 IMDS token exchanged at the registry (no registry password), host key read out of band
 through ARM-authenticated `az vm run-command` and pinned before the first SSH.
-Bound: 120 minutes per sample (60 for samples 14 and 15, 90 for samples 16 and 17); actual 8 to 13 minutes for samples 1, 2, 3, 5 to 12, 14, 15 and 17, 17 minutes for sample 4 (failed restart wait), 30 minutes for sample 13 (stalled guest, interrupted by hand) and 26 minutes for sample 16 (includes the 14-minute reaper wait). Journals are private.
+Bound: 120 minutes per sample (60 for samples 14 and 15, 90 for samples 16 to 18); actual 8 to 13 minutes for samples 1, 2, 3, 5 to 12, 14, 15, 17 and 18, 17 minutes for sample 4 (failed restart wait), 30 minutes for sample 13 (stalled guest, interrupted by hand) and 26 minutes for sample 16 (includes the 14-minute reaper wait). Journals are private.
 
 Controller-side timings in seconds. The first four columns are offsets from `T0`
 (the resource-group create call); the last three are self-anchored durations of
@@ -142,7 +142,8 @@ resource-group delete.
 | 14 (guest lifetime bound) | 56.4 | 191.8 | 224.4 | 192.5 | 32.5 | 75.8 | 243.1 |
 | 15 (timer verified before firing) | 38.7 | 194.2 | 226.8 | 194.8 | 32.5 | 75.5 | 243.0 |
 | 16 (reaper proof, `--prove-reaper`) | 52.1 | 189.4 | 222.5 | 190.0 | 32.5 | 74.6 | 212.8 |
-| 17 (exact final harness head fb5ed0a3, `--prove-reaper`) | 40.3 | 186.7 | 219.8 | 187.4 | 32.0 | 75.7 | 243.2 |
+| 17 (harness head fb5ed0a3, `--prove-reaper`) | 40.3 | 186.7 | 219.8 | 187.4 | 32.0 | 75.7 | 243.2 |
+| 18 (exact final harness head b3b3d926, subscription-pinned reaper, `--prove-reaper`) | 39.9 | 189.3 | 222.4 | 189.9 | 32.9 | 74.8 | 182.8 |
 
 Guest-side stamps, in seconds after `T0` using the VM's own clock (Azure guests
 sync to host time, but treat sub-second differences between the two tables as
@@ -166,6 +167,7 @@ cross-clock noise):
 | 15 | 27.3 | 79.4 | 81.6 | 82.4 | 180.5 | 189.4 |
 | 16 | 39.7 | 92.9 | 95.2 | 96.0 | 175.4 | 184.5 |
 | 17 | 27.5 | 86.4 | 89.5 | 94.4 | 174.6 | 183.7 |
+| 18 | 35.1 | 87.1 | 89.4 | 90.3 | 179.9 | 184.9 |
 
 Sample 1's 42 s between pull and container start did not recur once the harness
 split `docker create` from `docker start` (4 to 6 s and 0.4 s in samples 2 and 3);
@@ -238,11 +240,18 @@ expired spike VMs. Sample 16 proved it end to end: after the restart checks the
 harness moved the VM's `deadline` tag two minutes into the past and waited; the
 reaper alone deallocated the VM 866 s later (one 15-minute interval), after which the
 sample restarted the VM, proved the guest timer as well, and deleted the group with a
-proven inventory. Sample 17 repeated the full path on the final harness commit
-`fb5ed0a3` (journaled with no uncommitted changes; every later commit on the branch
-touches only this document): all gates held, the reaper deallocated the VM 56 s after
-the tag change because a scheduled run was imminent, the guest timer was verified and
-fired, and the deletion was proven. Maximum compute exposure after a lost controller is
+proven inventory. Sample 17 repeated the full path on harness commit `fb5ed0a3`: all
+gates held, the reaper deallocated the VM 56 s after the tag change because a
+scheduled run was imminent, the guest timer was verified and fired, and the deletion
+was proven. Hosted review then asked for the reaper to be pinned to the configured
+subscription: the runbook now takes a mandatory `SubscriptionId`, connects and sets
+its Az context to it and asserts the result, the job link supplies it, and the
+harness requires that pinned link (reading links individually, because the list API
+omits parameters and Azure re-cases the key to `SubscriptionID`). Sample 18 ran the
+full path with `--prove-reaper` on the final harness commit `b3b3d926` (journaled with
+no uncommitted changes; every later commit on the branch touches only this document):
+all gates held and the scheduled, subscription-pinned reaper deallocated the VM 103 s
+after the tag change. Maximum compute exposure after a lost controller is
 therefore the deadline plus one reaper interval plus the deallocation time. The run-command host-key read took 63 s in sample 12
 (31 to 32 s in every other sample).
 
@@ -250,7 +259,7 @@ Functional results, identical in every sample unless stated:
 
 - Storage: `/workspace` is the bound ext4 data disk (`/dev/sdc`); kernel options
   include `rw`, `barrier`, exactly one `data=ordered` and no `ro`/`nobarrier`, so a
-  shell mirror of the Rust qualifier passes. In samples 4 to 12 and 14 to 17 the **authoritative
+  shell mirror of the Rust qualifier passes. In samples 4 to 12 and 14 to 18 the **authoritative
   qualifier ran on the worker**: `horizon-repository setup-status` against a fresh
   0700 retained root on the data disk returned `status: absent` (qualified storage,
   no claim), and the same request against a 0700 root on the container's overlay
@@ -265,7 +274,7 @@ Functional results, identical in every sample unless stated:
   survives Stop; in-container sessions do not. Sample 4's failed restart is described
   above.
 - Exact deletion: the resource group was absent after every sample; the subscription
-  inventory was byte-identical to the pre-sample snapshot in samples 1 to 7 and 10 to 17;
+  inventory was byte-identical to the pre-sample snapshot in samples 1 to 7 and 10 to 18;
   sample 8 differed only by an unrelated concurrent addition (proof still holds) and
   sample 9 by that resource's later removal by its own lane (proof unverified).
 - No provider was registered and no Container Apps Job was created. From sample 8 on,
@@ -275,15 +284,15 @@ Functional results, identical in every sample unless stated:
   by firing it; from sample 16 on the subscription-side reaper is the primary,
   pre-existing bound and the others are defense in depth.
 
-Cost actually incurred: seventeen VMs for 8 to 30 minutes each plus 32 GiB disks, well
+Cost actually incurred: eighteen VMs for 8 to 30 minutes each plus 32 GiB disks, well
 under the $10 bound; the persistent registry costs about $0.67 per day at Standard.
 
 ### Verdict against the 180-second boundary
 
-**Not met with this configuration.** Across the sixteen samples that reached an
+**Not met with this configuration.** Across the seventeen samples that reached an
 endpoint, the slowest verified key-only SSH session came 278.0 s after `T0` (246.0 s
 excluding the out-of-band host-key read); even the fastest sample needed 203.4 s.
-Fourteen of sixteen also missed the boundary for endpoint-open alone (sample 6 by
+Fifteen of seventeen also missed the boundary for endpoint-open alone (sample 6 by
 0.8 s, sample 12 by 4.0 s), and the best endpoint time was 170.9 s. The measured budget splits
 into roughly 25 to 33 s VM boot, 45 to 70 s Docker installation from apt, 90 to 150 s
 image pull and extraction, and 31 s for `run-command`. Levers that the measurements point to, in order of impact:
@@ -300,7 +309,7 @@ image pull and extraction, and 31 s for `run-command`. Levers that the measureme
 None of these are approved or implemented; they are the next decision for #474.
 The functional contract (key-only SSH, managed-identity pull, ext4 storage,
 detach independence, Stop with retained data, exact deletion) held in samples 1,
-2, 3, 5 to 8, 10 to 12 and 14 to 17; sample 9 held every gate except that its deletion proof
+2, 3, 5 to 8, 10 to 12 and 14 to 18; sample 9 held every gate except that its deletion proof
 is unverified because of concurrent activity, and sample 13 never reached its gates,
 as described above. Sample 4 held every gate up to the restart, then failed the retention
 gate because the worker endpoint never returned, so its retained marker, host key
@@ -322,11 +331,11 @@ Executed on 2026-09-10 unless marked otherwise.
 - [x] Host key verified out of band and pinned before the first connection.
 - [x] Kernel ext4 option lines recorded from the worker; shell mirror passes; the
       authoritative Rust qualifier accepted the data disk and rejected the overlay
-      control (samples 4 to 12 and 14 to 17).
+      control (samples 4 to 12 and 14 to 18).
 - [x] Independent execution across a disconnect.
 - [x] Explicit Stop with retained data, endpoint retention recorded.
 - [x] Exact deletion with absence check and inventory proof (group gone, nothing left
-      under it, no pre-existing resource missing). Proven in samples 1 to 8 and 10 to 17;
+      under it, no pre-existing resource missing). Proven in samples 1 to 8 and 10 to 18;
       sample 9 is recorded as unverified because another lane deleted its own registry
       during the run.
 - [x] Slowest sample compared with the 180-second boundary: **not met** (278.0 s).
