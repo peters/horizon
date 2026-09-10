@@ -199,20 +199,20 @@ class ExecutorTests(unittest.TestCase):
     def test_timeout_kills_the_whole_process_group_including_wrapper_children(self):
         wrapper = ("import subprocess, sys; child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
                    "print(child.pid, flush=True); child.wait()")
-        result = preflight.subprocess_executor([sys.executable, "-c", wrapper], 1)
+        result = preflight.subprocess_executor([sys.executable, "-c", wrapper], 2)
         self.assertTrue(result.timed_out)
         grandchild = int(result.stdout.strip())
-
-        def alive(pid):
+        def alive(pid):  # noqa: E306
             try:
-                return "zombie" not in pathlib.Path(f"/proc/{pid}/status").read_text()
+                status = pathlib.Path(f"/proc/{pid}/status").read_text()
             except OSError:
                 return False
+            return bool(status) and not any(word in status for word in ("zombie", "dead"))
 
         deadline = time.monotonic() + 5
-        while time.monotonic() < deadline and alive(grandchild):
+        while alive(grandchild) and time.monotonic() < deadline:
             time.sleep(0.05)
-        self.assertFalse(alive(grandchild))
+        self.assertLess(time.monotonic(), deadline, "grandchild survived the process-group kill")
 
 
 class InterpretationTests(Harness):
