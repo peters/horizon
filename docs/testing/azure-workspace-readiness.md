@@ -99,8 +99,11 @@ disk bound at `/workspace`. Reasons recorded at decision time:
 
 Supporting infrastructure created under the same decision (persistent, outside any
 sample resource group): resource group `horizon-worker-registry` in `northeurope`
-with a Standard-SKU container registry (admin user disabled) and the user-assigned
-identity `horizon-worker-puller` holding `AcrPull` only. The worker image built from
+with a Standard-SKU container registry (admin user disabled), the user-assigned
+identity `horizon-worker-puller` holding `AcrPull` only, and the Automation account
+`horizon-spike-reaper` whose system identity holds the built-in power-only role
+`Desktop Virtualization Power On Off Contributor` at subscription scope and runs the
+spike reaper every 15 minutes (Basic tier; about 100 short jobs per day). The worker image built from
 commit `22674061` was pushed as `horizon-remote-worker:0.1.0-22674061` with digest
 `sha256:20cc03ef2530336b7374cc35412c8583b1422726c630ec6e6cd1450d690a74f6`
 (1.66 GB uncompressed, 31 layers). No automated publication workflow exists yet.
@@ -114,7 +117,7 @@ IP, VM port 2222 opened only from the operator's egress address, key-only SSH wi
 fresh Ed25519 key per sample, image pulled by digest through the managed identity's
 IMDS token exchanged at the registry (no registry password), host key read out of band
 through ARM-authenticated `az vm run-command` and pinned before the first SSH.
-Bound: 120 minutes per sample (60 for samples 14 and 15); actual 8 to 12 minutes for samples 1, 2, 3, 5 to 12, 14 and 15, 17 minutes for sample 4 (failed restart wait) and 30 minutes for sample 13 (stalled guest, interrupted by hand). Journals are private.
+Bound: 120 minutes per sample (60 for samples 14 and 15, 90 for sample 16); actual 8 to 12 minutes for samples 1, 2, 3, 5 to 12, 14 and 15, 17 minutes for sample 4 (failed restart wait), 30 minutes for sample 13 (stalled guest, interrupted by hand) and 26 minutes for sample 16 (includes the 14-minute reaper wait). Journals are private.
 
 Controller-side timings in seconds. The first four columns are offsets from `T0`
 (the resource-group create call); the last three are self-anchored durations of
@@ -138,6 +141,7 @@ resource-group delete.
 | 13 (early-boot timer, interrupted) | 40.0 | never | never | never | not reached | not reached | 243.4 |
 | 14 (guest lifetime bound) | 56.4 | 191.8 | 224.4 | 192.5 | 32.5 | 75.8 | 243.1 |
 | 15 (timer verified before firing) | 38.7 | 194.2 | 226.8 | 194.8 | 32.5 | 75.5 | 243.0 |
+| 16 (reaper proof, `--prove-reaper`) | 52.1 | 189.4 | 222.5 | 190.0 | 32.5 | 74.6 | 212.8 |
 
 Guest-side stamps, in seconds after `T0` using the VM's own clock (Azure guests
 sync to host time, but treat sub-second differences between the two tables as
@@ -159,6 +163,7 @@ cross-clock noise):
 | 12 | 26.2 | 82.4 | 84.7 | 85.6 | 173.9 | 179.7 |
 | 14 | 25.9 | 79.2 | 81.5 | 82.4 | 175.0 | 191.2 |
 | 15 | 27.3 | 79.4 | 81.6 | 82.4 | 180.5 | 189.4 |
+| 16 | 39.7 | 92.9 | 95.2 | 96.0 | 175.4 | 184.5 |
 
 Sample 1's 42 s between pull and container start did not recur once the harness
 split `docker create` from `docker start` (4 to 6 s and 0.4 s in samples 2 and 3);
@@ -202,25 +207,43 @@ in their `start` events, and created the network, VM and DevTestLab auto-shutdow
 schedule in one server-side deployment (36 to 37 s). Hosted review then pointed out
 that ARM deployments are not transactional and the schedule depends on the VM, so
 co-location is not a crash-safe bound; a probe confirmed Azure rejects a schedule for a
-VM that does not exist yet (`ComputeVmNotFound`). The bound now enforced **before any
-compute exists** is a built-in power-only role for the worker identity on the sample
-group plus a guest systemd timer, armed by cloud-init as its first step (54 s after
-boot in sample 14, before Docker or the pull), that deallocates the VM through ARM at
-the deadline. Sample 13 tried to arm that timer from `bootcmd`; the early-boot
-`systemctl` call deadlocked the guest (no endpoint, no run-command response), the run
-was interrupted and deleted cleanly with a proven inventory (exit 130, 17 minutes).
+VM that does not exist yet (`ComputeVmNotFound`). Two defense-in-depth layers were
+added next: a built-in power-only role for the worker identity on the sample group,
+granted before the deployment, and a guest systemd timer armed by cloud-init as its
+first `runcmd` step (54 s after boot in sample 14, before Docker or the pull) that
+deallocates the VM through ARM at the deadline. Neither is a pre-creation bound: the
+role only authorizes, and the timer depends on cloud-init reaching `runcmd`. Sample 13
+tried to arm that timer from `bootcmd`; the early-boot `systemctl` call deadlocked the
+guest (no endpoint, no run-command response), the run was interrupted by hand and
+deleted cleanly with a proven inventory (exit 130, 30 minutes).
 Sample 14 armed the timer from the first `runcmd` step and passed every gate,
 including the new one: firing the guest service once took the VM to
 `PowerState/deallocated`. Sample 15 additionally verified through run-command that the
 timer unit was `enabled` and `active` (waiting) before the service was fired, which
-the gate now requires together with the observed deallocation. The run-command host-key read took 63 s in sample 12
+the gate now requires together with the observed deallocation.
+
+The bound that genuinely exists **before any spike compute** is the subscription-side
+reaper created once by `scripts/azure-workspace-spike/setup-spike-reaper.sh`: an Azure
+Automation runbook (`horizon-spike-deadline-reaper` in account `horizon-spike-reaper`,
+resource group `horizon-worker-registry`) that runs every 15 minutes with a
+power-only system identity and deallocates every VM tagged
+`purpose=horizon-azure-vm-spike` whose `deadline` tag has passed. Each spike VM
+carries both tags in the same create call, the harness refuses to create anything
+unless that schedule is present and enabled, and a manual job run on 2026-09-10
+completed with `reaper done: 0 deallocation request(s)` on a subscription with no
+expired spike VMs. Sample 16 proved it end to end: after the restart checks the
+harness moved the VM's `deadline` tag two minutes into the past and waited; the
+reaper alone deallocated the VM 866 s later (one 15-minute interval), after which the
+sample restarted the VM, proved the guest timer as well, and deleted the group with a
+proven inventory. Maximum compute exposure after a lost controller is therefore the
+deadline plus one reaper interval plus the deallocation time. The run-command host-key read took 63 s in sample 12
 (31 to 32 s in every other sample).
 
 Functional results, identical in every sample unless stated:
 
 - Storage: `/workspace` is the bound ext4 data disk (`/dev/sdc`); kernel options
   include `rw`, `barrier`, exactly one `data=ordered` and no `ro`/`nobarrier`, so a
-  shell mirror of the Rust qualifier passes. In samples 4 to 12, 14 and 15 the **authoritative
+  shell mirror of the Rust qualifier passes. In samples 4 to 12 and 14 to 16 the **authoritative
   qualifier ran on the worker**: `horizon-repository setup-status` against a fresh
   0700 retained root on the data disk returned `status: absent` (qualified storage,
   no claim), and the same request against a 0700 root on the container's overlay
@@ -235,24 +258,25 @@ Functional results, identical in every sample unless stated:
   survives Stop; in-container sessions do not. Sample 4's failed restart is described
   above.
 - Exact deletion: the resource group was absent after every sample; the subscription
-  inventory was byte-identical to the pre-sample snapshot in samples 1 to 7 and 10 to 15;
+  inventory was byte-identical to the pre-sample snapshot in samples 1 to 7 and 10 to 16;
   sample 8 differed only by an unrelated concurrent addition (proof still holds) and
   sample 9 by that resource's later removal by its own lane (proof unverified).
 - No provider was registered and no Container Apps Job was created. From sample 8 on,
   every VM carried a DevTestLab auto-shutdown schedule one minute after its lifetime
   deadline; from sample 11 on it was created in the same deployment as the VM; from
-  sample 14 on the primary bound is the pre-creation power-only role plus the guest
-  self-deallocate timer, proven by firing it.
+  sample 14 on the guest self-deallocate timer (with the power-only role) was proven
+  by firing it; from sample 16 on the subscription-side reaper is the primary,
+  pre-existing bound and the others are defense in depth.
 
-Cost actually incurred: fifteen VMs for 8 to 30 minutes each plus 32 GiB disks, well
+Cost actually incurred: sixteen VMs for 8 to 30 minutes each plus 32 GiB disks, well
 under the $10 bound; the persistent registry costs about $0.67 per day at Standard.
 
 ### Verdict against the 180-second boundary
 
-**Not met with this configuration.** Across the fourteen samples that reached an
+**Not met with this configuration.** Across the fifteen samples that reached an
 endpoint, the slowest verified key-only SSH session came 278.0 s after `T0` (246.0 s
 excluding the out-of-band host-key read); even the fastest sample needed 203.4 s.
-Twelve of fourteen also missed the boundary for endpoint-open alone (sample 6 by
+Thirteen of fifteen also missed the boundary for endpoint-open alone (sample 6 by
 0.8 s, sample 12 by 4.0 s), and the best endpoint time was 170.9 s. The measured budget splits
 into roughly 25 to 33 s VM boot, 45 to 70 s Docker installation from apt, 90 to 150 s
 image pull and extraction, and 31 s for `run-command`. Levers that the measurements point to, in order of impact:
@@ -269,7 +293,7 @@ image pull and extraction, and 31 s for `run-command`. Levers that the measureme
 None of these are approved or implemented; they are the next decision for #474.
 The functional contract (key-only SSH, managed-identity pull, ext4 storage,
 detach independence, Stop with retained data, exact deletion) held in samples 1,
-2, 3, 5 to 8, 10 to 12, 14 and 15; sample 9 held every gate except that its deletion proof
+2, 3, 5 to 8, 10 to 12 and 14 to 16; sample 9 held every gate except that its deletion proof
 is unverified because of concurrent activity, and sample 13 never reached its gates,
 as described above. Sample 4 held every gate up to the restart, then failed the retention
 gate because the worker endpoint never returned, so its retained marker, host key
@@ -291,11 +315,11 @@ Executed on 2026-09-10 unless marked otherwise.
 - [x] Host key verified out of band and pinned before the first connection.
 - [x] Kernel ext4 option lines recorded from the worker; shell mirror passes; the
       authoritative Rust qualifier accepted the data disk and rejected the overlay
-      control (samples 4 to 12, 14 and 15).
+      control (samples 4 to 12 and 14 to 16).
 - [x] Independent execution across a disconnect.
 - [x] Explicit Stop with retained data, endpoint retention recorded.
 - [x] Exact deletion with absence check and inventory proof (group gone, nothing left
-      under it, no pre-existing resource missing). Proven in samples 1 to 8 and 10 to 15;
+      under it, no pre-existing resource missing). Proven in samples 1 to 8 and 10 to 16;
       sample 9 is recorded as unverified because another lane deleted its own registry
       during the run.
 - [x] Slowest sample compared with the 180-second boundary: **not met** (278.0 s).

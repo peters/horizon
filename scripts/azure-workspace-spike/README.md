@@ -11,16 +11,28 @@ the group is gone with nothing left under it and no pre-existing resource missin
 under the remaining time and, once it expires, the harness stops measuring, deletes
 the sample and exits 4. Two exceptions extend exposure and must be included when
 calculating the maximum: cleanup has its own fixed 25-minute bound, and `--keep`
-skips deletion entirely. Compute is additionally bounded without this controller:
-before any compute exists the harness grants the worker identity the built-in
-power-only role `Desktop Virtualization Power On Off Contributor` on the sample
-group (the assignment lives and dies with the group), and the VM's own cloud-init
-arms a systemd timer as its first step, before Docker or the image pull, that
-deallocates the VM through ARM one minute after the deadline. Each sample proves this
-by firing that service once and observing `PowerState/deallocated`. The deployment
-also creates an Azure VM auto-shutdown schedule at the same time as a second stop;
-it is created after the VM, so it is a backstop, not the primary bound. In every
-case disks and the static IP persist until the tagged resource group
+skips deletion entirely. Compute is bounded independently of this controller by a
+mechanism that exists **before** any spike VM does: the subscription-side reaper
+created once by [`setup-spike-reaper.sh`](setup-spike-reaper.sh), an Azure Automation
+runbook running every 15 minutes with a power-only identity that deallocates every
+VM tagged `purpose=horizon-azure-vm-spike` whose `deadline` tag (UTC) has passed.
+Every spike VM carries both tags in the same create call, so a VM cannot exist
+without them, and the harness refuses to create anything unless the reaper's
+schedule is present and enabled (journaled as `reaper_present`). `--prove-reaper`
+moves a sample's deadline tag into the past after the restart checks and requires
+the reaper alone to deallocate the VM within 25 minutes (gate `reaper_bound`).
+Maximum compute exposure after a lost controller is therefore the deadline plus one
+reaper interval plus the deallocate time.
+
+Two further layers are defense in depth, not the primary bound: the VM's identity
+gets the built-in power-only role `Desktop Virtualization Power On Off Contributor`
+on the sample group before the deployment and the VM's cloud-init arms a systemd
+timer as its first `runcmd` step (before Docker or the pull) that deallocates the VM
+one minute after the deadline, proven per sample by verifying the timer is enabled
+and active, firing it once and observing `PowerState/deallocated` (gate
+`guest_lifetime_bound`); and the deployment also creates an Azure VM auto-shutdown
+schedule, which depends on the VM and is therefore only a backstop. In every case
+disks and the static IP persist until the tagged resource group
 (`horizon-spike-474-*`, tag `deadline`) is deleted by hand. It never registers a provider, never publishes
 an image and touches nothing outside the sample resource group.
 
@@ -29,8 +41,13 @@ an image and touches nothing outside the sample resource group.
 - A GNU/Linux controller (the harness uses GNU `timeout`, `date -d` and millisecond
   `%N` timestamps; stock macOS tools do not provide them).
 - `az` logged in to the target subscription; `ssh`, `ssh-keygen`, `ssh-keyscan`, `nc`, `jq`, `curl`, `timeout`.
+- The subscription-side reaper, created once with
+  `scripts/azure-workspace-spike/setup-spike-reaper.sh --subscription <uuid>` (Automation
+  account `horizon-spike-reaper` in `horizon-worker-registry` by default; override with
+  `--reaper-resource-group` and `--reaper-account`). It needs `Microsoft.Automation`
+  registered and rights to assign the power-only role at subscription scope.
 - `Microsoft.DevTestLab` registered in the subscription (read-only check; the harness never
-  registers providers), because the platform-side auto-shutdown is a DevTestLab schedule.
+  registers providers), because the backstop auto-shutdown is a DevTestLab schedule.
 - A worker image published by digest to an Azure Container Registry in the same
   subscription. The image build is documented in
   [`containers/remote-worker/README.md`](../../containers/remote-worker/README.md).
@@ -75,7 +92,8 @@ because the deletion gate was skipped. `--sample` accepts
    the caller's egress address only), virtual network, Standard static public IP, NIC,
    the Linux VM (`Canonical:ubuntu-24_04-lts:server`, key-only SSH, the pull identity
    assigned, a 32 GiB data disk) and the DevTestLab auto-shutdown schedule set one
-   minute after the lifetime deadline. Before that deployment the power-only role
+   minute after the lifetime deadline. The VM is tagged `purpose=horizon-azure-vm-spike`
+   and `deadline=<UTC>` in that same call. Before the deployment the power-only role
    above is granted on the group. The VM's cloud-init first arms the self-deallocate
    timer, then formats and mounts the data
    disk as ext4 at `/mnt/horizon-workspace`; installs Docker; exchanges the identity's
@@ -109,11 +127,10 @@ because the deletion gate was skipped. `--sample` accepts
    failure after creation still deletes the sample.
 
 Exit codes: `0` every gate held; `1` a setup or provider failure before the gates (for
-example `Microsoft.DevTestLab` not registered, so the platform-side stop cannot be
-scheduled; cleanup still runs); `3` usage; `4` lifetime bound reached; `5` the worker
+example the reaper missing or `Microsoft.DevTestLab` not registered; cleanup still runs); `3` usage; `4` lifetime bound reached; `5` the worker
 never published a host key; `6` deletion not proven; `7` a functional gate failed
 (storage qualifier, storage negative control, detach independence, deallocate, retention,
-guest lifetime bound)
+guest lifetime bound, and reaper bound when `--prove-reaper` is given)
 with evidence journaled; `130` interrupted (cleanup still runs). Any other status is
 normalized to `1`. Any failure after the active-phase bound expired reports `4`, and an
 unproven deletion always wins: exit `6` replaces any other code. Every blocking `az` and
