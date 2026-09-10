@@ -20,7 +20,8 @@ usage: run-vm-spike.sh --subscription <uuid> --image <registry/repo@sha256:...> 
          --puller-identity-id <user-assigned-identity-resource-id> --journal-dir <private-dir> \
          --preflight-report <json from scripts/azure-workspace-preflight --candidate vm --live> \
          [--region northeurope] [--vm-size Standard_D4s_v3] [--sample 1] [--max-minutes 120] \
-         [--allow-ssh-from <cidr>] [--keep] [--dry-run]
+         [--allow-ssh-from <cidr>] [--reaper-resource-group horizon-worker-registry] \
+         [--reaper-account horizon-spike-reaper] [--prove-reaper] [--keep] [--dry-run]
 
 Requires: az (logged in), ssh, ssh-keygen, ssh-keyscan, nc, jq, curl. Paid creation is
 bounded by --max-minutes; the sample resource group is deleted at the end unless --keep.
@@ -28,10 +29,11 @@ EOF
 }
 
 SUBSCRIPTION="" IMAGE="" PULLER_ID="" JOURNAL_DIR="" PREFLIGHT="" REGION=northeurope VM_SIZE=Standard_D4s_v3
-SAMPLE=1 MAX_MINUTES=120 ALLOW_SSH_FROM="" KEEP=0 DRY_RUN=0
+SAMPLE=1 MAX_MINUTES=120 ALLOW_SSH_FROM="" KEEP=0 DRY_RUN=0 PROVE_REAPER=0
+REAPER_RG=horizon-worker-registry REAPER_ACCOUNT=horizon-spike-reaper
 while [ $# -gt 0 ]; do
   case "$1" in
-    --subscription|--image|--puller-identity-id|--journal-dir|--preflight-report|--region|--vm-size|--sample|--max-minutes|--allow-ssh-from)
+    --subscription|--image|--puller-identity-id|--journal-dir|--preflight-report|--region|--vm-size|--sample|--max-minutes|--allow-ssh-from|--reaper-resource-group|--reaper-account)
       [ $# -ge 2 ] || { echo "$1 requires a value" >&2; usage; exit 3; } ;;
   esac
   case "$1" in
@@ -45,6 +47,9 @@ while [ $# -gt 0 ]; do
     --sample) SAMPLE=$2; shift 2 ;;
     --max-minutes) MAX_MINUTES=$2; shift 2 ;;
     --allow-ssh-from) ALLOW_SSH_FROM=$2; shift 2 ;;
+    --reaper-resource-group) REAPER_RG=$2; shift 2 ;;
+    --reaper-account) REAPER_ACCOUNT=$2; shift 2 ;;
+    --prove-reaper) PROVE_REAPER=1; shift ;;
     --keep) KEEP=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -60,6 +65,7 @@ done
 [[ $SAMPLE =~ ^[1-9][0-9]?$ ]] || { echo "--sample must be 1-99 without leading zeros" >&2; exit 3; }
 [[ $MAX_MINUTES =~ ^[1-9][0-9]{1,2}$ ]] || { echo "--max-minutes must be 10-999 without leading zeros" >&2; exit 3; }
 [ -n "$JOURNAL_DIR" ] || { echo "--journal-dir is required" >&2; exit 3; }
+[[ $REAPER_RG =~ ^[A-Za-z0-9._-]{1,90}$ ]] && [[ $REAPER_ACCOUNT =~ ^[A-Za-z][A-Za-z0-9-]{4,48}$ ]] || { echo "invalid reaper names" >&2; exit 3; }
 for tool in az ssh ssh-keygen ssh-keyscan nc jq curl timeout; do command -v "$tool" >/dev/null || { echo "missing tool: $tool" >&2; exit 3; }; done
 # The read-only preflight must precede paid creation: require its report for this exact candidate,
 # region and size, with no blockers, and carry its provenance into the sample journal.
@@ -301,6 +307,14 @@ fi
 azc resource list --query "sort([].id)" >"$SAMPLE_DIR/inventory-before.json"
 journal inventory_before "$(jq -c '{count:length}' "$SAMPLE_DIR/inventory-before.json")"
 
+# Subscription-side lifetime bound that already exists before any compute: the reaper runbook
+# (scripts/azure-workspace-spike/setup-spike-reaper.sh) deallocates every VM tagged
+# purpose=horizon-azure-vm-spike whose deadline tag has passed. Read-only check, journaled.
+REAPER_BASE="https://management.azure.com/subscriptions/$SUBSCRIPTION/resourceGroups/$REAPER_RG/providers/Microsoft.Automation/automationAccounts/$REAPER_ACCOUNT"
+REAPER_FACTS=$(azc rest --method get --url "$REAPER_BASE/jobSchedules?api-version=2023-11-01" --query "value[?properties.runbook.name=='horizon-spike-deadline-reaper'] | [0].properties.schedule.name" -o tsv 2>/dev/null || true)
+REAPER_SCHEDULE=$(azc rest --method get --url "$REAPER_BASE/schedules/${REAPER_FACTS:-none}?api-version=2023-11-01" --query "{enabled:properties.isEnabled,next_run:properties.nextRun,interval:properties.interval,frequency:properties.frequency}" 2>/dev/null || echo null)
+[ "$(jq -r '.enabled // false' <<<"$REAPER_SCHEDULE")" = true ] || { journal reaper_missing "$(jq -cn --arg s "$REAPER_SCHEDULE" '{schedule:$s}')"; say "the subscription-side reaper is not present or not enabled; run setup-spike-reaper.sh first (nothing created)"; exit 1; }
+journal reaper_present "$(jq -c --arg acct "$REAPER_ACCOUNT" '. + {account:$acct}' <<<"$REAPER_SCHEDULE")"
 # Read-only provider preflight for the auto-shutdown schedule; registration is a separate approval.
 DEVTESTLAB=$(azc provider show --namespace Microsoft.DevTestLab --query registrationState -o tsv 2>/dev/null || echo unknown)
 [ "$DEVTESTLAB" = Registered ] || { journal devtestlab_not_registered "$(jq -cn --arg s "$DEVTESTLAB" '{registration_state:$s}')"; say "Microsoft.DevTestLab is $DEVTESTLAB; the platform-side stop cannot be scheduled, so nothing is created"; exit 1; }
@@ -311,9 +325,9 @@ CREATED=1  # cleanup owns the verified-absent group from this point, even if the
 azc group create --name "$RG" --location "$REGION" \
   --tags issue=474 sample="$SAMPLE" run="$RUN_ID" purpose=horizon-azure-vm-spike deadline="$(date -u -d @"$DEADLINE_EPOCH" +%FT%TZ)" >/dev/null
 journal group_created "$(jq -cn --argjson ms $(( $(epoch_ms) - T0 )) '{ms_from_t0:$ms}')"
-# Independent lifetime bound, enforced before any compute exists: the VM's identity may only
-# power VMs inside this sample group (built-in power-only role, assignment lives and dies with
-# the group), and the VM's own early boot arms a timer that deallocates it at the deadline.
+# Defense in depth behind the reaper: the VM's identity may only power VMs inside this sample
+# group (built-in power-only role, assignment lives and dies with the group), and the VM's own
+# cloud-init arms a timer that deallocates it at the deadline.
 PULLER_PRINCIPAL=$(azc identity show --ids "$PULLER_ID" --query principalId -o tsv)
 GROUP_ID=$(azc group show --name "$RG" --query id -o tsv)
 ROLE_OK=false
@@ -331,10 +345,10 @@ if [ -z "$SOURCE" ]; then
   [[ $EGRESS =~ ^[0-9.]+$ ]] || { journal egress_unknown '{}'; say "could not learn the egress address; pass --allow-ssh-from"; exit 1; }
   SOURCE="$EGRESS/32"
 fi
-# One server-side deployment creates the network, the VM and the DevTestLab auto-shutdown
-# schedule together, so a controller that dies mid-creation cannot leave compute without the
-# platform-side stop. Azure deallocates the VM at the lifetime deadline even if nothing else runs;
-# disks and the public IP remain until the tagged group is deleted by hand.
+# One server-side deployment creates the network, the VM (tagged with its deadline, so the reaper
+# can act on it from the moment it exists) and a DevTestLab auto-shutdown schedule as a further
+# backstop. Deployments are not transactional and the schedule depends on the VM, so the schedule
+# is not the primary bound. Disks and the public IP remain until the tagged group is deleted.
 SHUTDOWN_AT=$(date -u -d @"$(( DEADLINE_EPOCH + 60 ))" +%H%M)
 TEMPLATE="$SAMPLE_DIR/deployment.json"
 cat >"$TEMPLATE" <<'EOF'
@@ -394,7 +408,8 @@ cat >"$TEMPLATE" <<'EOF'
 }
 EOF
 CREATE_JSON="$SAMPLE_DIR/deployment-result.json"
-TAGS=$(jq -cn --arg s "$SAMPLE" --arg r "$RUN_ID" '{issue:"474",sample:$s,run:$r,purpose:"horizon-azure-vm-spike"}')
+DEADLINE_TAG=$(date -u -d @"$DEADLINE_EPOCH" +%FT%TZ)
+TAGS=$(jq -cn --arg s "$SAMPLE" --arg r "$RUN_ID" --arg d "$DEADLINE_TAG" '{issue:"474",sample:$s,run:$r,purpose:"horizon-azure-vm-spike",deadline:$d}')
 azc deployment group create --resource-group "$RG" --name "worker-s${SAMPLE}" --template-file "$TEMPLATE" \
   --parameters vmName="$VM" vmSize="$VM_SIZE" adminPublicKey="$PUBKEY" customData="$(base64 -w0 "$CLOUD_INIT")" \
   identityId="$PULLER_ID" sourceCidr="$SOURCE" shutdownTime="$SHUTDOWN_AT" tags="$TAGS" >"$CREATE_JSON"
@@ -487,6 +502,24 @@ if [ "$START_OK" = true ] && [ "$IP_SAME" = true ] && wait_for $(( RESTART_DEADL
 fi
 T_RESTARTED=$(epoch_ms)
 PHASE_DEADLINE=0
+if [ "$KEY_SAME" != true ] || [ "$RETAINED_MARKER" != true ] || [ "$MOUNTED" != true ]; then
+  say "restart verification failed; capturing guest diagnostics out of band"
+  run_command 'systemctl is-system-running; systemctl list-units --failed --no-legend; systemctl status docker --no-pager | head -20; findmnt /mnt/horizon-workspace; docker ps -a; docker logs --tail 20 horizon-worker 2>&1; journalctl -b -u docker --no-pager | tail -20' >"$SAMPLE_DIR/restart-diagnostics.txt" 2>&1 || true
+fi
+# Optional proof of the subscription-side reaper alone: move this VM's deadline tag into the past
+# and wait for the reaper (every 15 minutes) to deallocate it; the guest timer keeps its later time.
+if [ "$PROVE_REAPER" = 1 ] && [ "$KEY_SAME" = true ]; then
+  VM_ID=$(azc vm show --resource-group "$RG" --name "$VM" --query id -o tsv)
+  azc tag update --resource-id "$VM_ID" --operation merge --tags deadline="$(date -u -d '-2 minutes' +%FT%TZ)" >/dev/null
+  T_REAP=$(epoch_ms); PHASE_DEADLINE=$(( $(date +%s) + 1500 ))
+  vm_deallocated() { azc vm get-instance-view --resource-group "$RG" --name "$VM" --query "instanceView.statuses[?starts_with(code,'PowerState/')].code | [0]" -o tsv 2>/dev/null | grep -qx PowerState/deallocated; }
+  REAPED=false; wait_for 1500 vm_deallocated && REAPED=true
+  PHASE_DEADLINE=0
+  journal reaper_proof "$(jq -cn --argjson ok $REAPED --argjson ms $(( $(epoch_ms) - T_REAP )) '{vm_deallocated_by_reaper:$ok,wait_ms:$ms}')"
+  gate reaper_bound "$REAPED"
+  say "reaper proof: vm_deallocated_by_reaper=$REAPED after $(( ($(epoch_ms) - T_REAP) / 1000 )) s"
+  if [ "$REAPED" = true ]; then azc vm start --resource-group "$RG" --name "$VM" >/dev/null || true; wait_for 600 ssh_worker "$IP_AFTER" true || true; fi
+fi
 # Prove the guest-side bound: confirm the timer is armed, fire its service once, expect deallocation.
 SELF_STOP=false TIMER_ARMED=false
 if [ "$KEY_SAME" = true ]; then
@@ -504,10 +537,6 @@ fi
 journal self_deallocate "$(jq -cn --argjson armed $TIMER_ARMED --argjson stopped $SELF_STOP '{timer_armed:$armed,vm_deallocated_by_guest:$stopped}')"
 gate guest_lifetime_bound "$([ "$TIMER_ARMED" = true ] && [ "$SELF_STOP" = true ] && echo true || echo false)"
 say "guest-side bound: timer_armed=$TIMER_ARMED vm_deallocated_by_guest=$SELF_STOP"
-if [ "$KEY_SAME" != true ] || [ "$RETAINED_MARKER" != true ] || [ "$MOUNTED" != true ]; then
-  say "restart verification failed; capturing guest diagnostics out of band"
-  run_command 'systemctl is-system-running; systemctl list-units --failed --no-legend; systemctl status docker --no-pager | head -20; findmnt /mnt/horizon-workspace; docker ps -a; docker logs --tail 20 horizon-worker 2>&1; journalctl -b -u docker --no-pager | tail -20' >"$SAMPLE_DIR/restart-diagnostics.txt" 2>&1 || true
-fi
 journal restarted "$(jq -cn --argjson ms $((T_RESTARTED - T_START)) --argjson started $START_OK --argjson ip $IP_SAME --argjson key $KEY_SAME --argjson marker $RETAINED_MARKER --arg session "$SESSION" --argjson hb "${HEARTBEAT:-0}" --argjson mounted $MOUNTED '{start_to_verified_ms:$ms,start_call_succeeded:$started,public_ip_unchanged:$ip,same_pinned_host_key:$key,marker_retained:$marker,session_after_restart:$session,heartbeat_lines:$hb,data_disk_mounted:$mounted}')"
 gate retention "$([ "$KEY_SAME" = true ] && [ "$RETAINED_MARKER" = true ] && [ "$MOUNTED" = true ] && echo true || echo false)"
 say "after deallocate/start: ip_unchanged=$IP_SAME host_key_same=$KEY_SAME marker_retained=$RETAINED_MARKER mounted=$MOUNTED session=$SESSION"

@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# One-time, idempotent setup of the subscription-side lifetime reaper for the Azure VM spike.
+#
+# An Azure Automation runbook runs every 15 minutes with the account's system identity and
+# deallocates every VM tagged purpose=horizon-azure-vm-spike whose deadline tag (RFC 3339 UTC)
+# has passed. It exists before any spike VM does, and a spike VM cannot exist without those tags
+# (they are part of the same create call), so compute is bounded even if the controller that
+# created it never runs again. It touches nothing untagged and never deletes anything.
+#
+# Requires: az logged in with rights to create an Automation account and a subscription-scoped
+# role assignment (the built-in power-only role "Desktop Virtualization Power On Off Contributor").
+set -euo pipefail
+
+usage() { echo "usage: setup-spike-reaper.sh --subscription <uuid> [--region northeurope] [--resource-group horizon-worker-registry] [--account horizon-spike-reaper]" >&2; }
+SUBSCRIPTION="" REGION=northeurope RG=horizon-worker-registry ACCOUNT=horizon-spike-reaper
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --subscription|--region|--resource-group|--account) [ $# -ge 2 ] || { usage; exit 3; } ;;
+  esac
+  case "$1" in
+    --subscription) SUBSCRIPTION=$2; shift 2 ;;
+    --region) REGION=$2; shift 2 ;;
+    --resource-group) RG=$2; shift 2 ;;
+    --account) ACCOUNT=$2; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) usage; exit 3 ;;
+  esac
+done
+[[ $SUBSCRIPTION =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || { usage; exit 3; }
+[[ $REGION =~ ^[a-z][a-z0-9]{1,63}$ ]] && [[ $RG =~ ^[A-Za-z0-9._-]{1,90}$ ]] && [[ $ACCOUNT =~ ^[A-Za-z][A-Za-z0-9-]{4,48}$ ]] || { usage; exit 3; }
+for tool in az jq python3; do command -v "$tool" >/dev/null || { echo "missing tool: $tool" >&2; exit 3; }; done
+
+ARM=https://management.azure.com
+BASE="$ARM/subscriptions/$SUBSCRIPTION/resourceGroups/$RG/providers/Microsoft.Automation/automationAccounts/$ACCOUNT"
+API=2023-11-01
+azr() { az rest --subscription "$SUBSCRIPTION" --only-show-errors "$@"; }
+say() { printf '[%s] %s\n' "$(date -u +%FT%TZ)" "$*"; }
+
+az group show --name "$RG" --subscription "$SUBSCRIPTION" --only-show-errors -o none 2>/dev/null \
+  || az group create --name "$RG" --location "$REGION" --tags purpose=horizon-worker-images issue=474 --subscription "$SUBSCRIPTION" --only-show-errors -o none
+
+say "automation account $ACCOUNT (system identity, Basic)"
+azr --method put --url "$BASE?api-version=$API" --body "$(jq -cn --arg loc "$REGION" '{location:$loc,identity:{type:"SystemAssigned"},tags:{purpose:"horizon-azure-vm-spike-reaper",issue:"474"},properties:{sku:{name:"Basic"},publicNetworkAccess:true}}')" >/dev/null
+PRINCIPAL=$(azr --method get --url "$BASE?api-version=$API" --query identity.principalId -o tsv)
+
+say "subscription-scoped power-only role for the reaper identity"
+for attempt in $(seq 1 6); do
+  if az role assignment create --assignee-object-id "$PRINCIPAL" --assignee-principal-type ServicePrincipal \
+       --role "Desktop Virtualization Power On Off Contributor" --scope "/subscriptions/$SUBSCRIPTION" \
+       --subscription "$SUBSCRIPTION" --only-show-errors -o none 2>/dev/null; then break; fi
+  [ "$attempt" -lt 6 ] || { echo "role assignment failed" >&2; exit 1; }
+  sleep 10
+done
+
+RUNBOOK=horizon-spike-deadline-reaper
+say "runbook $RUNBOOK (PowerShell 7.2)"
+azr --method put --url "$BASE/runbooks/$RUNBOOK?api-version=$API" --body "$(jq -cn --arg loc "$REGION" '{location:$loc,properties:{runbookType:"PowerShell72",logProgress:false,logVerbose:false,description:"Deallocate horizon-azure-vm-spike VMs whose deadline tag has passed."}}')" >/dev/null
+SCRIPT=$(cat <<'PS1'
+$ErrorActionPreference = 'Stop'
+Disable-AzContextAutosave -Scope Process | Out-Null
+Connect-AzAccount -Identity | Out-Null
+$now = (Get-Date).ToUniversalTime()
+$acted = 0
+foreach ($vm in Get-AzVM -Status) {
+  if ($vm.Tags['purpose'] -ne 'horizon-azure-vm-spike' -or -not $vm.Tags['deadline']) { continue }
+  try { $deadline = [datetime]::Parse($vm.Tags['deadline'], $null, [System.Globalization.DateTimeStyles]::AdjustToUniversal) } catch { Write-Output "skip $($vm.Name): unparsable deadline"; continue }
+  if ($now -le $deadline) { continue }
+  if ($vm.PowerState -eq 'VM deallocated' -or $vm.PowerState -eq 'VM deallocating') { continue }
+  Write-Output "deallocating $($vm.ResourceGroupName)/$($vm.Name) (deadline $($deadline.ToString('u')), now $($now.ToString('u')))"
+  Stop-AzVM -ResourceGroupName $vm.ResourceGroupName -Name $vm.Name -Force -NoWait | Out-Null
+  $acted++
+}
+Write-Output "reaper done: $acted deallocation request(s)"
+PS1
+)
+azr --method put --url "$BASE/runbooks/$RUNBOOK/draft/content?api-version=$API" --headers "Content-Type=text/powershell" --body "$SCRIPT" >/dev/null
+azr --method post --url "$BASE/runbooks/$RUNBOOK/publish?api-version=$API" >/dev/null 2>&1 || true
+for _ in $(seq 1 12); do
+  [ "$(azr --method get --url "$BASE/runbooks/$RUNBOOK?api-version=$API" --query properties.state -o tsv)" = Published ] && break
+  sleep 5
+done
+
+SCHEDULE=every-15-minutes
+say "schedule $SCHEDULE and job link"
+START=$(python3 -c 'import datetime as d; t=d.datetime.now(d.timezone.utc)+d.timedelta(minutes=7); print(t.replace(second=0,microsecond=0).strftime("%Y-%m-%dT%H:%M:%S+00:00"))')
+azr --method put --url "$BASE/schedules/$SCHEDULE?api-version=$API" --body "$(jq -cn --arg start "$START" '{name:"every-15-minutes",properties:{startTime:$start,frequency:"Minute",interval:15,timeZone:"UTC"}}')" >/dev/null 2>&1 \
+  || say "schedule already exists (kept)"
+LINK=$(python3 -c 'import uuid; print(uuid.uuid5(uuid.NAMESPACE_URL, "horizon-spike-deadline-reaper/every-15-minutes"))')
+azr --method put --url "$BASE/jobSchedules/$LINK?api-version=$API" --body "$(jq -cn --arg rb "$RUNBOOK" --arg sc "$SCHEDULE" '{properties:{runbook:{name:$rb},schedule:{name:$sc}}}')" >/dev/null 2>&1 \
+  || say "job schedule already linked (kept)"
+
+say "verifying"
+azr --method get --url "$BASE/jobSchedules?api-version=$API" --query "value[].{runbook:properties.runbook.name,schedule:properties.schedule.name}" -o table
+azr --method get --url "$BASE/schedules/$SCHEDULE?api-version=$API" --query "{enabled:properties.isEnabled,next:properties.nextRun,interval:properties.interval,frequency:properties.frequency}" -o table
+say "reaper ready: VMs tagged purpose=horizon-azure-vm-spike with a past deadline tag are deallocated within about 15 minutes"
