@@ -87,9 +87,9 @@ remaining_seconds() {
 }
 bounded() {
   local remaining rc; remaining=$(remaining_seconds)
-  if [ "$remaining" -lt 1 ]; then say "bound reached before: $1 $2 $3"; return 124; fi
+  if [ "$remaining" -lt 1 ]; then say "bound reached before: ${*:1:3}"; return 124; fi
   timeout -k 15 "$remaining" "$@" && return 0 || rc=$?
-  [ "$rc" != 124 ] || say "bound reached during: $1 $2 $3"
+  [ "$rc" != 124 ] || say "bound reached during: ${*:1:3}"
   return "$rc"
 }
 # Machine-consumed output is always JSON unless the caller asks for tsv explicitly.
@@ -109,7 +109,7 @@ wait_for() {
   until "$@" >/dev/null 2>&1; do
     deadline_check
     [ "$(date +%s)" -lt "$until_epoch" ] || return 1
-    sleep 3
+    bounded sleep 3 || return 1
   done
 }
 # run_command <script>: ARM-authenticated shell on the VM; retries while the extension is still installing.
@@ -120,7 +120,7 @@ run_command() {
       printf '%s\n' "$output"; return 0
     fi
     grep -qi "in progress\|Conflict\|please wait" <<<"$output" || { printf '%s\n' "$output" >&2; return 1; }
-    say "run-command busy (attempt $attempt); retrying"; sleep 10
+    say "run-command busy (attempt $attempt); retrying"; bounded sleep 10 || return 1
   done
   return 1
 }
@@ -157,6 +157,7 @@ cleanup() {
 finish() {
   local code=$? expired=0
   trap - EXIT
+  trap '' INT TERM  # a second interrupt must not cut the cleanup attempt short
   [ "$(date +%s)" -lt "$DEADLINE_EPOCH" ] || expired=1  # decided before cleanup spends its own bound
   cleanup
   if [ "$code" = 0 ] && [ "${#GATE_FAILURES[@]}" -gt 0 ]; then code=7; fi
@@ -335,7 +336,7 @@ say "rust qualifier on data disk: ${DATA_STATUS:-none} (overlay control: ${OVERL
 
 say "detach independence: start a heartbeat, disconnect, reconnect"
 BEFORE=$(ssh_worker "$IP" 'tmux new-session -d -s spike "while true; do date -u +%FT%TZ >> /workspace/spike-heartbeat; sleep 2; done"; sleep 1; wc -l < /workspace/spike-heartbeat' 2>/dev/null || echo 0)
-sleep 20
+bounded sleep 20 || true
 AFTER=$(ssh_worker "$IP" 'tmux has-session -t spike 2>/dev/null && wc -l < /workspace/spike-heartbeat' 2>/dev/null || echo 0)
 PROGRESSED=false; [ "${AFTER:-0}" -gt "${BEFORE:-0}" ] 2>/dev/null && PROGRESSED=true
 journal detach_independence "$(jq -cn --argjson b "${BEFORE:-0}" --argjson a "${AFTER:-0}" --argjson p $PROGRESSED '{lines_before:$b,lines_after:$a,progressed:$p}')"
@@ -359,7 +360,7 @@ IP_AFTER=$(azc vm show -d --resource-group "$RG" --name "$VM" --query publicIps 
 IP_SAME=false; [ "$IP" = "$IP_AFTER" ] && IP_SAME=true
 KEY_SAME=false SESSION=unknown RETAINED_MARKER=false HEARTBEAT=0 MOUNTED=false
 if [ "$START_OK" = true ] && [ "$IP_SAME" = true ] && wait_for $(( RESTART_DEADLINE - $(date +%s) )) nc -z -w 3 "$IP_AFTER" 2222; then
-  SCANNED=$(ssh-keyscan -p 2222 -t ed25519 -T 10 "$IP_AFTER" 2>/dev/null | awk '{print $2" "$3}' | head -1 || true)
+  SCANNED=$(bounded ssh-keyscan -p 2222 -t ed25519 -T 10 "$IP_AFTER" 2>/dev/null | awk '{print $2" "$3}' | head -1 || true)
   [ "$SCANNED" = "$HOST_KEY" ] && KEY_SAME=true
   if [ "$KEY_SAME" = true ] && wait_for $(( RESTART_DEADLINE - $(date +%s) )) ssh_worker "$IP_AFTER" true; then
     OUT=$(ssh_worker "$IP_AFTER" "cat /workspace/spike-marker 2>/dev/null || echo missing; tmux has-session -t spike 2>/dev/null && echo session-alive || echo session-gone; wc -l < /workspace/spike-heartbeat 2>/dev/null || echo 0; grep -q ' /workspace ' /proc/self/mounts && echo mounted || echo unmounted" 2>/dev/null || printf 'missing\nunknown\n0\nunknown\n')

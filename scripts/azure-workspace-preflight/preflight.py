@@ -49,12 +49,12 @@ FORBIDDEN_TOKENS = frozenset({"create", "delete", "start", "stop", "restart", "r
                               "set", "extension", "configure", "deployment", "update", "exec", "attach", "run-command"})
 _IDENTITY = ["Microsoft.ContainerRegistry", "Microsoft.ManagedIdentity"]
 CANDIDATES: Dict[str, Dict[str, Any]] = {
-    "aci": {"name": "Azure Container Instances container group (candidate, not selected)",
+    "aci": {"name": "Azure Container Instances container group (not selected 2026-09-10)",
             "required": ["Microsoft.ContainerInstance"],
             "supporting": _IDENTITY + ["Microsoft.Storage", "Microsoft.Network"]},
-    "vm": {"name": "Azure Linux virtual machine with managed disk (candidate, not selected)",
+    "vm": {"name": "Azure Linux VM with managed disk (revalidated candidate 2026-09-10; acceptance open)",
            "required": ["Microsoft.Compute", "Microsoft.Network"], "supporting": _IDENTITY + ["Microsoft.DevTestLab"]},
-    "container-apps": {"name": "Azure Container Apps long-running app (candidate, not selected; Jobs excluded)",
+    "container-apps": {"name": "Azure Container Apps long-running app (not selected 2026-09-10; Jobs excluded)",
                        "required": ["Microsoft.App", "Microsoft.Network"],
                        "supporting": _IDENTITY + ["Microsoft.Storage", "Microsoft.OperationalInsights"]},
 }
