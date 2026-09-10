@@ -29,6 +29,10 @@ SUBSCRIPTION="" IMAGE="" PULLER_ID="" JOURNAL_DIR="" REGION=northeurope VM_SIZE=
 SAMPLE=1 MAX_MINUTES=120 ALLOW_SSH_FROM="" KEEP=0 DRY_RUN=0
 while [ $# -gt 0 ]; do
   case "$1" in
+    --subscription|--image|--puller-identity-id|--journal-dir|--region|--vm-size|--sample|--max-minutes|--allow-ssh-from)
+      [ $# -ge 2 ] || { echo "$1 requires a value" >&2; usage; exit 3; } ;;
+  esac
+  case "$1" in
     --subscription) SUBSCRIPTION=$2; shift 2 ;;
     --image) IMAGE=$2; shift 2 ;;
     --puller-identity-id) PULLER_ID=$2; shift 2 ;;
@@ -70,15 +74,18 @@ JOURNAL="$SAMPLE_DIR/journal.jsonl"
 KEY="$SAMPLE_DIR/client-ed25519"
 KNOWN_HOSTS="$SAMPLE_DIR/known_hosts"
 GATE_FAILURES=()
-CREATED=0 CLEANED=0 DELETE_PROVEN=0
+CREATED=0 CLEANED=0 DELETE_PROVEN=0 CLEANUP_DEADLINE=0
 
-# Every blocking CLI call runs under the remaining lifetime bound; cleanup gets its own fixed bound.
-azc() {
-  local remaining
-  if [ "$CLEANED" = 1 ]; then remaining=1500; else remaining=$(( DEADLINE_EPOCH - $(date +%s) )); fi
-  if [ "$remaining" -lt 1 ]; then say "lifetime bound reached before: az $1 $2"; return 124; fi
-  timeout -k 15 "$remaining" az "$@" --subscription "$SUBSCRIPTION" --only-show-errors
+# Every blocking call runs under the remaining lifetime bound; cleanup shares one fixed 25-minute deadline.
+remaining_seconds() {
+  if [ "$CLEANED" = 1 ]; then echo $(( CLEANUP_DEADLINE - $(date +%s) )); else echo $(( DEADLINE_EPOCH - $(date +%s) )); fi
 }
+bounded() {
+  local remaining; remaining=$(remaining_seconds)
+  if [ "$remaining" -lt 1 ]; then say "bound reached before: $1 $2 $3"; return 124; fi
+  timeout -k 15 "$remaining" "$@"
+}
+azc() { bounded az "$@" --subscription "$SUBSCRIPTION" --only-show-errors; }
 now() { date -u +%Y-%m-%dT%H:%M:%S.%3NZ; }
 epoch_ms() { date +%s%3N; }
 journal() { local data=${2:-'{}'}; jq -cn --arg at "$(now)" --arg event "$1" --argjson data "$data" '{at:$at,event:$event,data:$data}' >>"$JOURNAL"; }
@@ -110,6 +117,7 @@ run_command() {
 cleanup() {
   [ "$CLEANED" = 0 ] || return 0
   CLEANED=1
+  CLEANUP_DEADLINE=$(( $(date +%s) + 1500 ))
   [ "$CREATED" = 1 ] || return 0
   if [ "$KEEP" = 1 ]; then say "--keep given; leaving $RG in place (delete it yourself)"; journal kept "$(jq -cn --arg rg "$RG" '{resource_group:$rg}')"; return 0; fi
   local started finished exists=unknown unchanged=false
@@ -209,8 +217,10 @@ trap 'exit 130' INT TERM
 azc resource list --query "sort([].id)" >"$SAMPLE_DIR/inventory-before.json"
 journal inventory_before "$(jq -c '{count:length}' "$SAMPLE_DIR/inventory-before.json")"
 
+EXISTS=$(azc group exists --name "$RG" -o tsv 2>/dev/null || echo unknown)
+[ "$EXISTS" = false ] || { journal group_name_not_free "$(jq -cn --arg e "$EXISTS" '{group_exists:$e}')"; say "refusing to claim $RG (exists=$EXISTS)"; exit 1; }
 T0=$(epoch_ms)
-CREATED=1  # cleanup owns the uniquely named group from this point, even if the create response is lost
+CREATED=1  # cleanup owns the verified-absent group from this point, even if the create response is lost
 azc group create --name "$RG" --location "$REGION" \
   --tags issue=474 sample="$SAMPLE" run="$RUN_ID" purpose=horizon-azure-vm-spike deadline="$(date -u -d @"$DEADLINE_EPOCH" +%FT%TZ)" >/dev/null
 journal group_created "$(jq -cn --argjson ms $(( $(epoch_ms) - T0 )) '{ms_from_t0:$ms}')"
@@ -257,7 +267,7 @@ printf '%s\n' "$RC_TEXT" | sed -n '/---TIMING---/,$p' | grep '^{' >"$SAMPLE_DIR/
 printf '[%s]:2222 %s\n' "$IP" "$HOST_KEY" >"$KNOWN_HOSTS"
 journal host_key_pinned "$(jq -cn --argjson ms $((RC_END - RC_START)) --arg fp "$(ssh-keygen -lf "$KNOWN_HOSTS" | awk '{print $2}')" '{run_command_ms:$ms,fingerprint:$fp}')"
 
-ssh_worker() { ssh -T -F /dev/null -p 2222 -i "$KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$KNOWN_HOSTS" \
+ssh_worker() { bounded ssh -T -F /dev/null -p 2222 -i "$KEY" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$KNOWN_HOSTS" \
   -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o ConnectTimeout=10 -o BatchMode=yes "root@$1" "${@:2}"; }
 wait_for $(( DEADLINE_EPOCH - $(date +%s) )) ssh_worker "$IP" true || { journal ssh_never_verified '{}'; exit 4; }
 T_SSH=$(epoch_ms)

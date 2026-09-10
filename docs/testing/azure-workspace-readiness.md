@@ -167,7 +167,7 @@ Functional results, identical in every sample unless stated:
 
 - Storage: `/workspace` is the bound ext4 data disk (`/dev/sdc`); kernel options
   include `rw`, `barrier`, exactly one `data=ordered` and no `ro`/`nobarrier`, so a
-  shell mirror of the Rust qualifier passes. In samples 4 and 5 the **authoritative
+  shell mirror of the Rust qualifier passes. In samples 4, 5 and 6 the **authoritative
   qualifier ran on the worker**: `horizon-repository setup-status` against a fresh
   0700 retained root on the data disk returned `status: absent` (qualified storage,
   no claim), and the same request against a 0700 root on the container's overlay
@@ -230,7 +230,7 @@ Executed on 2026-09-10 unless marked otherwise.
 - [x] Host key verified out of band and pinned before the first connection.
 - [x] Kernel ext4 option lines recorded from the worker; shell mirror passes; the
       authoritative Rust qualifier accepted the data disk and rejected the overlay
-      control (samples 4 and 5).
+      control (samples 4, 5 and 6).
 - [x] Independent execution across a disconnect.
 - [x] Explicit Stop with retained data, endpoint retention recorded.
 - [x] Exact deletion with absence check and unchanged inventory.
