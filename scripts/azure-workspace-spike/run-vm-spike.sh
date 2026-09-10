@@ -55,7 +55,7 @@ done
 [[ $REGION =~ ^[a-z][a-z0-9]{1,63}$ ]] || { echo "--region must be a lowercase region name" >&2; exit 3; }
 [[ $VM_SIZE =~ ^Standard_[A-Za-z0-9_-]+$ ]] || { echo "--vm-size must look like Standard_D4s_v3" >&2; exit 3; }
 [[ $SAMPLE =~ ^[1-9]$ ]] || { echo "--sample must be 1-9" >&2; exit 3; }
-[[ $MAX_MINUTES =~ ^[0-9]{1,3}$ ]] && [ "$MAX_MINUTES" -ge 10 ] || { echo "--max-minutes must be 10-999" >&2; exit 3; }
+[[ $MAX_MINUTES =~ ^[1-9][0-9]{1,2}$ ]] || { echo "--max-minutes must be 10-999 without leading zeros" >&2; exit 3; }
 [ -n "$JOURNAL_DIR" ] || { echo "--journal-dir is required" >&2; exit 3; }
 for tool in az ssh ssh-keygen ssh-keyscan nc jq curl; do command -v "$tool" >/dev/null || { echo "missing tool: $tool" >&2; exit 3; }; done
 
@@ -81,11 +81,17 @@ remaining_seconds() {
   if [ "$CLEANED" = 1 ]; then echo $(( CLEANUP_DEADLINE - $(date +%s) )); else echo $(( DEADLINE_EPOCH - $(date +%s) )); fi
 }
 bounded() {
-  local remaining; remaining=$(remaining_seconds)
+  local remaining rc; remaining=$(remaining_seconds)
   if [ "$remaining" -lt 1 ]; then say "bound reached before: $1 $2 $3"; return 124; fi
-  timeout -k 15 "$remaining" "$@"
+  timeout -k 15 "$remaining" "$@" && return 0 || rc=$?
+  [ "$rc" != 124 ] || say "bound reached during: $1 $2 $3"
+  return "$rc"
 }
-azc() { bounded az "$@" --subscription "$SUBSCRIPTION" --only-show-errors; }
+# Machine-consumed output is always JSON unless the caller asks for tsv explicitly.
+azc() {
+  case " $* " in *" -o "*|*" --output "*) ;; *) set -- "$@" --output json ;; esac
+  bounded az "$@" --subscription "$SUBSCRIPTION" --only-show-errors
+}
 now() { date -u +%Y-%m-%dT%H:%M:%S.%3NZ; }
 epoch_ms() { date +%s%3N; }
 journal() { local data=${2:-'{}'}; jq -cn --arg at "$(now)" --arg event "$1" --argjson data "$data" '{at:$at,event:$event,data:$data}' >>"$JOURNAL"; }
@@ -138,6 +144,7 @@ finish() {
   trap - EXIT
   cleanup
   if [ "$code" = 0 ] && [ "${#GATE_FAILURES[@]}" -gt 0 ]; then code=7; fi
+  if [ "$code" != 0 ] && [ "$(date +%s)" -ge "$DEADLINE_EPOCH" ]; then code=4; fi  # any failure past the bound is a bound expiry
   if [ "$CREATED" = 1 ] && [ "$KEEP" = 0 ] && [ "$DELETE_PROVEN" = 0 ]; then code=6; fi  # an unproven delete outranks every other outcome
   journal end "$(jq -cn --argjson code "$code" --arg gates "${GATE_FAILURES[*]:-}" '{exit_code:$code,failed_gates:($gates|split(" ")|map(select(length>0)))}')"
   say "sample $SAMPLE finished with exit $code${GATE_FAILURES[*]:+ (failed gates: ${GATE_FAILURES[*]})}; journal $JOURNAL"
@@ -307,18 +314,18 @@ MARKER="spike-$RUN_ID-$TOKEN"
 ssh_worker "$IP" "printf '%s\n' '$MARKER' > /workspace/spike-marker; sync" || true
 deadline_check
 T_STOP=$(epoch_ms)
-azc vm deallocate --resource-group "$RG" --name "$VM" >/dev/null
+STOP_OK=true; azc vm deallocate --resource-group "$RG" --name "$VM" >/dev/null || STOP_OK=false
 T_STOPPED=$(epoch_ms)
-POWER=$(azc vm get-instance-view --resource-group "$RG" --name "$VM" --query "instanceView.statuses[?starts_with(code,'PowerState/')].code | [0]" -o tsv)
-journal deallocated "$(jq -cn --argjson ms $((T_STOPPED - T_STOP)) --arg power "$POWER" '{stop_ms:$ms,power_state:$power}')"
-gate deallocated "$([ "$POWER" = PowerState/deallocated ] && echo true || echo false)"
+POWER=$(azc vm get-instance-view --resource-group "$RG" --name "$VM" --query "instanceView.statuses[?starts_with(code,'PowerState/')].code | [0]" -o tsv 2>/dev/null || echo unknown)
+journal deallocated "$(jq -cn --argjson ms $((T_STOPPED - T_STOP)) --argjson ok $STOP_OK --arg power "$POWER" '{stop_ms:$ms,call_succeeded:$ok,power_state:$power}')"
+gate deallocated "$([ "$STOP_OK" = true ] && [ "$POWER" = PowerState/deallocated ] && echo true || echo false)"
 T_START=$(epoch_ms)
-azc vm start --resource-group "$RG" --name "$VM" >/dev/null
-IP_AFTER=$(azc vm show -d --resource-group "$RG" --name "$VM" --query publicIps -o tsv)
+START_OK=true; azc vm start --resource-group "$RG" --name "$VM" >/dev/null || START_OK=false
+IP_AFTER=$(azc vm show -d --resource-group "$RG" --name "$VM" --query publicIps -o tsv 2>/dev/null || echo unknown)
 IP_SAME=false; [ "$IP" = "$IP_AFTER" ] && IP_SAME=true
 KEY_SAME=false SESSION=unknown RETAINED_MARKER=false HEARTBEAT=0 MOUNTED=false
 RESTART_DEADLINE=$(( $(date +%s) + RESTART_WAIT_SECONDS ))
-if wait_for "$RESTART_WAIT_SECONDS" nc -z -w 3 "$IP_AFTER" 2222; then
+if [ "$START_OK" = true ] && [ "$IP_SAME" = true ] && wait_for "$RESTART_WAIT_SECONDS" nc -z -w 3 "$IP_AFTER" 2222; then
   SCANNED=$(ssh-keyscan -p 2222 -t ed25519 -T 10 "$IP_AFTER" 2>/dev/null | awk '{print $2" "$3}' | head -1 || true)
   [ "$SCANNED" = "$HOST_KEY" ] && KEY_SAME=true
   if [ "$KEY_SAME" = true ] && wait_for $(( RESTART_DEADLINE - $(date +%s) )) ssh_worker "$IP_AFTER" true; then
@@ -332,7 +339,7 @@ if [ "$KEY_SAME" != true ] || [ "$RETAINED_MARKER" != true ] || [ "$MOUNTED" != 
   say "restart verification failed; capturing guest diagnostics out of band"
   run_command 'systemctl is-system-running; systemctl list-units --failed --no-legend; systemctl status docker --no-pager | head -20; findmnt /mnt/horizon-workspace; docker ps -a; docker logs --tail 20 horizon-worker 2>&1; journalctl -b -u docker --no-pager | tail -20' >"$SAMPLE_DIR/restart-diagnostics.txt" 2>&1 || true
 fi
-journal restarted "$(jq -cn --argjson ms $((T_RESTARTED - T_START)) --argjson ip $IP_SAME --argjson key $KEY_SAME --argjson marker $RETAINED_MARKER --arg session "$SESSION" --argjson hb "${HEARTBEAT:-0}" --argjson mounted $MOUNTED '{start_to_verified_ms:$ms,public_ip_unchanged:$ip,same_pinned_host_key:$key,marker_retained:$marker,session_after_restart:$session,heartbeat_lines:$hb,data_disk_mounted:$mounted}')"
+journal restarted "$(jq -cn --argjson ms $((T_RESTARTED - T_START)) --argjson started $START_OK --argjson ip $IP_SAME --argjson key $KEY_SAME --argjson marker $RETAINED_MARKER --arg session "$SESSION" --argjson hb "${HEARTBEAT:-0}" --argjson mounted $MOUNTED '{start_to_verified_ms:$ms,start_call_succeeded:$started,public_ip_unchanged:$ip,same_pinned_host_key:$key,marker_retained:$marker,session_after_restart:$session,heartbeat_lines:$hb,data_disk_mounted:$mounted}')"
 gate retention "$([ "$KEY_SAME" = true ] && [ "$RETAINED_MARKER" = true ] && [ "$MOUNTED" = true ] && echo true || echo false)"
 say "after deallocate/start: ip_unchanged=$IP_SAME host_key_same=$KEY_SAME marker_retained=$RETAINED_MARKER mounted=$MOUNTED session=$SESSION"
 journal timings_complete "$(jq -cn --argjson total $(( $(epoch_ms) - T0 )) '{ms_from_t0:$total}')"

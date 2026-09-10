@@ -13,6 +13,8 @@ never publishes an image and touches nothing outside the sample resource group.
 
 ## Prerequisites
 
+- A GNU/Linux controller (the harness uses GNU `timeout`, `date -d` and millisecond
+  `%N` timestamps; stock macOS tools do not provide them).
 - `az` logged in to the target subscription; `ssh`, `ssh-keygen`, `ssh-keyscan`, `nc`, `jq`, `curl`.
 - A worker image published by digest to an Azure Container Registry in the same
   subscription. The image build is documented in
