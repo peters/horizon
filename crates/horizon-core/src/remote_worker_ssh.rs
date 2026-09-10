@@ -31,10 +31,30 @@ pub(crate) fn prepared_pack_status(
     command_for(identity, known_hosts, endpoint, Operation::PackStatus)
 }
 
+pub(crate) fn prepared_intake(
+    identity: &Path,
+    known_hosts: &Path,
+    endpoint: &InteractiveWorkerSshEndpoint,
+    observe: bool,
+) -> Result<Command, Error> {
+    command_for(
+        identity,
+        known_hosts,
+        endpoint,
+        if observe {
+            Operation::IntakeStatus
+        } else {
+            Operation::Intake
+        },
+    )
+}
+
 #[derive(Clone, Copy)]
 enum Operation<'a> {
     Request,
     PackStatus,
+    Intake,
+    IntakeStatus,
     Attach { runtime: CloudJobId, panel: &'a str },
 }
 
@@ -49,7 +69,7 @@ fn command_for(
     }
     let mut command = Command::new("ssh");
     let terminal_mode = match operation {
-        Operation::Request | Operation::PackStatus => "-T",
+        Operation::Request | Operation::PackStatus | Operation::Intake | Operation::IntakeStatus => "-T",
         Operation::Attach { panel, .. } if valid_local_id(panel) => "-tt",
         Operation::Attach { .. } => return Err(Error::UnknownPanel),
     };
@@ -99,6 +119,8 @@ fn command_for(
     command.arg(match operation {
         Operation::Request => "/usr/local/bin/horizon-panel-session request".into(),
         Operation::PackStatus => "/usr/local/bin/horizon-repository pack-status".into(),
+        Operation::Intake => "/usr/local/bin/horizon-repository intake".into(),
+        Operation::IntakeStatus => "/usr/local/bin/horizon-repository intake-status".into(),
         Operation::Attach { runtime, panel } => {
             format!("/usr/local/bin/horizon-panel-session attach -- {runtime} {panel}")
         }
@@ -207,6 +229,16 @@ mod tests {
             pack.get_envs().collect::<Vec<_>>(),
             query.get_envs().collect::<Vec<_>>()
         );
+        for (observe, operation) in [(false, "intake"), (true, "intake-status")] {
+            let intake = prepared_intake(identity.private_key_path(), &first_path, &endpoint, observe).expect("intake");
+            *pack_args.last_mut().expect("fixed intake") =
+                format!("/usr/local/bin/horizon-repository {operation}").into();
+            assert_eq!(intake.get_args().collect::<Vec<_>>(), pack_args);
+            assert_eq!(
+                intake.get_envs().collect::<Vec<_>>(),
+                query.get_envs().collect::<Vec<_>>()
+            );
+        }
         let mut expected: Vec<_> = query.get_args().map(std::ffi::OsStr::to_os_string).collect();
         expected[4] = "-tt".into();
         *expected.last_mut().expect("helper") =

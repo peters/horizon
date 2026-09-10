@@ -1,11 +1,10 @@
 # Combined retained repository intake
 
-`repository_overlay::intake::{receive, observe}` is a worker core API, exposed by
-the worker-only `horizon-repository intake` and `intake-status` commands. Neither
-adds an SSH controller, provider operation, setup execution or task. A transport
-caller must separately enforce explicit export approval and full retained
-worker/client ownership. Constructing a request, capturing an overlay, computing a
-digest or successfully recovering a provider allocation is not export approval.
+`repository_overlay::intake::{receive, observe}` is the worker core API. The
+repository binary supplies its framing commands, and the Linux `intake::controller`
+module supplies explicit export approval and pinned handoff. These do not create a
+provider allocation, execute setup or start a task. Constructing a request, capturing
+an overlay, computing a digest or recovering an allocation is not export approval.
 
 The caller approves the **complete** exact base closure, including raw commit
 metadata and files that overlays will delete, and both index/worktree layers of
@@ -21,7 +20,7 @@ is the existing complete bundle manifest, not a second encoding or wire digest.
 Canonical request JSON is capped at 32 KiB and its SHA-256 identifies the claim.
 Unknown/duplicate fields, malformed IDs, zero generation/commit and excessive
 lengths are rejected before storage access. Worker-supplied labels do not themselves
-authenticate provider ownership; a future pinned controller must establish that.
+authenticate provider ownership; the pinned controller checks the retained allocation.
 
 The core receiver consumes exactly the declared pack bytes, then exactly the declared
 canonical overlay bytes, then EOF. Its bounded pack reader exposes local EOF without
@@ -91,3 +90,31 @@ partial/conflicting claims, concurrent claim writers, existing-child refusal,
 directory replacement, cancellation, exact payload framing and qualified observation.
 The qualified positive unit test reports an explicit skip when capability is absent;
 delivery additionally requires a real qualified positive smoke of this exact API.
+
+## Pinned controller
+
+`RepositoryIntakeProposal::new` binds a prepared pack and existing bundle to the
+complete retained allocation and source without filesystem, provider or SSH access.
+Retain its canonical `request()` before calling `approve_export` after a positive
+caller export decision. Approval covers the entire base closure and both overlay
+layers; the consumed approval type is not a human signature or persisted permission.
+
+`send_approved_repository_intake` validates current ownership before and after
+handoff, including workspaces with no attached panels. It hashes and rewinds one
+held no-follow regular pack file, checks its private parent/file identity, and streams
+from that same handle. The caller must keep its bytes and ancestry exclusively
+stable: post-transfer detection cannot retract bytes already disclosed. Run this
+off the UI thread. The ten-minute pipe budget does not bound blocking local reads,
+process spawning or reaping.
+
+The controller invokes the fixed [worker commands](#worker-command-framing) using
+the retained SSH identity and pin, never an interactive trust prompt. The selected
+worker binary must contain these commands; an older local runtime image alone is
+not evidence that they are deployed.
+
+`observe_repository_intake` uses the saved request without approval, local source
+or pack reads, initialization, automatic resend or cleanup. Decode checks response
+identity, fixed paths, state/progress combinations and process status. A validated
+response can still describe uncertainty rather than acknowledgement. Failures keep
+the request and any already-validated response for observation; neither cancellation
+nor lost acknowledgement grants another upload, setup or task.

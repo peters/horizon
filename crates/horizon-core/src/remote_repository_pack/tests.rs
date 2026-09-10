@@ -52,14 +52,14 @@ impl Expected {
     }
 }
 
-struct Fixture {
-    _directory: tempfile::TempDir,
-    store: CloudWorkflowStore,
-    recovered: RecoveredRemoteWorkspace,
+pub(crate) struct Fixture {
+    pub(crate) directory: tempfile::TempDir,
+    pub(crate) store: CloudWorkflowStore,
+    pub(crate) recovered: RecoveredRemoteWorkspace,
 }
 
 impl Fixture {
-    fn new(lifecycle: Option<InteractiveWorkerLifecycle>) -> Self {
+    pub(crate) fn new(lifecycle: Option<InteractiveWorkerLifecycle>) -> Self {
         use std::os::unix::fs::PermissionsExt;
         let directory = tempfile::tempdir().expect("fixture");
         std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).expect("private");
@@ -110,13 +110,13 @@ impl Fixture {
         let recovered = recover_remote_workspace(&store, &identities, &Provider(status), OWNER, "workspace")
             .expect("fixture recovery");
         Self {
-            _directory: directory,
+            directory,
             store,
             recovered,
         }
     }
 
-    fn current(&self) -> StoredRemoteAllocation {
+    pub(crate) fn current(&self) -> StoredRemoteAllocation {
         self.store
             .load_remote_allocation(OWNER, "workspace")
             .expect("load")
@@ -143,7 +143,7 @@ impl Fixture {
         )
     }
 
-    fn edit(&self, stop: bool) {
+    pub(crate) fn edit(&self, stop: bool) {
         let current = self.current();
         if stop {
             self.store

@@ -285,11 +285,11 @@ back into large multi-purpose modules.
   noncreating observation. Its pure request/response shell keeps strict identities;
   the Linux leaf owns the create-new claim, held directory bindings and component
   orchestration. Existing claims never consume payload or grant another receiver.
-  See [combined core intake](../remote-repository-intake.md); controller and
-  setup/task authority remain separate. The worker CLI's `intake` leaf bounds a
-  little-endian request-length prefix, then delegates payload consumption to that
-  API. `intake-status` accepts only a bounded request and EOF; neither command
-  starts setup or tasks.
+  Its Linux `controller` owns explicit approval and retained-owner/pin validation;
+  `controller/input` owns held local pack verification. The repository binary's
+  `intake` leaf handles bounded command framing, not export approval or task setup.
+  See [combined intake](../remote-repository-intake.md); setup/task authority remains
+  separate from both worker receipt and controller handoff.
   `checkout/` prepares the seed and raw working namespace together, using exclusive
   descriptor-relative writes, incremental loose decoding and pinned-file verification.
   Literal links are created last. This private logical checkout retains failures;

@@ -1,5 +1,8 @@
-//! Explicit retained repository intake, never export approval, setup or task authority.
+//! Retained repository intake with a Linux export-approval controller.
+//! Neither worker intake nor controller handoff grants setup or task authority.
 
+#[cfg(target_os = "linux")]
+pub mod controller;
 #[cfg(target_os = "linux")]
 mod linux;
 
@@ -83,7 +86,7 @@ impl fmt::Debug for IntakeRequest {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IntakeState {
     Acknowledged,
@@ -95,7 +98,7 @@ pub enum IntakeState {
     Unsupported,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PackState {
     Acknowledged,
@@ -106,7 +109,7 @@ pub enum PackState {
     RenameUnconfirmed,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BundleState {
     Acknowledged,
@@ -114,30 +117,41 @@ pub enum BundleState {
     WriteUnconfirmed,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IntakeRoots {
     pub packs: PathBuf,
     pub bundles: PathBuf,
     pub setup: PathBuf,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackProgress {
     pub state: PackState,
+    #[serde(deserialize_with = "Option::deserialize")]
     pub source: Option<PathBuf>,
+    #[serde(deserialize_with = "Option::deserialize")]
     pub destination: Option<PathBuf>,
+    #[serde(deserialize_with = "Option::deserialize")]
     pub objects: Option<u32>,
 }
 
 /// Known progress survives failure. These paths are historical candidates, not cleanup grants.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IntakeResponse {
     pub version: u8,
     pub state: IntakeState,
+    #[serde(deserialize_with = "Option::deserialize")]
     pub intent_sha256: Option<ArtifactDigest>,
+    #[serde(deserialize_with = "Option::deserialize")]
     pub roots: Option<IntakeRoots>,
+    #[serde(deserialize_with = "Option::deserialize")]
     pub pack: Option<PackProgress>,
+    #[serde(deserialize_with = "Option::deserialize")]
     pub bundle: Option<BundleState>,
+    #[serde(deserialize_with = "Option::deserialize")]
     pub reason: Option<IntakeError>,
 }
 
@@ -179,7 +193,7 @@ impl fmt::Debug for IntakeResponse {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, thiserror::Error)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, thiserror::Error)]
 #[serde(rename_all = "snake_case")]
 pub enum IntakeError {
     #[error("invalid repository intake identity or framing")]
