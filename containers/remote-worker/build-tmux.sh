@@ -31,4 +31,5 @@ make -j2
 mkdir -m 0755 -- "${tmux_prefix}"
 mkdir -m 0755 -- "${tmux_prefix}/bin"
 install -m 0755 tmux "${tmux_prefix}/bin/tmux"
+install -D -m 0644 COPYING "${tmux_prefix}/share/licenses/tmux/COPYING"
 test "$("${tmux_prefix}/bin/tmux" -V)" = "tmux ${tmux_version}"
