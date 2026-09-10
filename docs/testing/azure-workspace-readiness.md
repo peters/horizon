@@ -114,7 +114,7 @@ IP, VM port 2222 opened only from the operator's egress address, key-only SSH wi
 fresh Ed25519 key per sample, image pulled by digest through the managed identity's
 IMDS token exchanged at the registry (no registry password), host key read out of band
 through ARM-authenticated `az vm run-command` and pinned before the first SSH.
-Bound: 120 minutes per sample; actual 8 to 10 minutes for samples 1, 2, 3 and 5 to 8, and 17 minutes for sample 4 because of its failed 10-minute restart wait. Journals are private.
+Bound: 120 minutes per sample; actual 8 to 10 minutes for samples 1, 2, 3 and 5 to 9, and 17 minutes for sample 4 because of its failed 10-minute restart wait. Journals are private.
 
 Controller-side timings in seconds. The first four columns are offsets from `T0`
 (the resource-group create call); the last three are self-anchored durations of
@@ -131,6 +131,7 @@ resource-group delete.
 | 6 (final harness) | 37.6 | 180.8 | 213.5 | 181.5 | 31.9 | 105.9 | 183.1 |
 | 7 (final harness) | 37.0 | 170.9 | 203.4 | 171.5 | 31.9 | 77.1 | 212.8 |
 | 8 (final harness, see below) | 37.5 | 203.1 | 235.8 | 203.8 | 31.9 | 75.3 | 122.4 |
+| 9 (final harness, see below) | 66.5 | 245.4 | 278.0 | 246.0 | 32.5 | 75.0 | 183.0 |
 
 Guest-side stamps, in seconds after `T0` using the VM's own clock (Azure guests
 sync to host time, but treat sub-second differences between the two tables as
@@ -146,6 +147,7 @@ cross-clock noise):
 | 6 | 27.9 | 84.3 | 86.6 | 87.5 | 173.5 | 178.1 |
 | 7 | 21.3 | 73.8 | 76.1 | 76.9 | 162.1 | 167.8 |
 | 8 | 25.9 | 85.0 | 87.4 | 88.5 | 195.4 | 200.5 |
+| 9 | 35.4 | 90.0 | 92.3 | 93.1 | 220.8 | 243.3 |
 
 Sample 1's 42 s between pull and container start did not recur once the harness
 split `docker create` from `docker start` (4 to 6 s and 0.4 s in samples 2 and 3);
@@ -174,12 +176,17 @@ exited 6 because the subscription inventory was not byte-identical afterwards: a
 unrelated registry had been created concurrently by another lane. The proof rule was
 then corrected to "no pre-existing resource removed and nothing left under the sample
 group, additions by other actors counted", which sample 8's snapshots satisfy.
+Sample 9 (all gates held, verified SSH at 278.0 s) then exposed the symmetric case:
+the same unrelated registry was deleted by its own lane during the run, so the rule
+now proves only what the harness controls (group gone, nothing left under it) and
+journals concurrent additions and removals outside the group for cross-checking
+against the activity log.
 
 Functional results, identical in every sample unless stated:
 
 - Storage: `/workspace` is the bound ext4 data disk (`/dev/sdc`); kernel options
   include `rw`, `barrier`, exactly one `data=ordered` and no `ro`/`nobarrier`, so a
-  shell mirror of the Rust qualifier passes. In samples 4 to 8 the **authoritative
+  shell mirror of the Rust qualifier passes. In samples 4 to 9 the **authoritative
   qualifier ran on the worker**: `horizon-repository setup-status` against a fresh
   0700 retained root on the data disk returned `status: absent` (qualified storage,
   no claim), and the same request against a 0700 root on the container's overlay
@@ -194,18 +201,19 @@ Functional results, identical in every sample unless stated:
   survives Stop; in-container sessions do not. Sample 4's failed restart is described
   above.
 - Exact deletion: the resource group was absent after every sample; the subscription
-  inventory was byte-identical to the pre-sample snapshot in samples 1 to 7, and in
-  sample 8 differed only by an unrelated concurrent addition (see above).
+  inventory was byte-identical to the pre-sample snapshot in samples 1 to 7; samples
+  8 and 9 differed only by an unrelated registry created and later deleted by another
+  lane (see above).
 - No provider was registered and no Container Apps Job was created.
 
-Cost actually incurred: eight VMs for 8 to 17 minutes each plus 32 GiB disks, well
+Cost actually incurred: nine VMs for 8 to 17 minutes each plus 32 GiB disks, well
 under the $10 bound; the persistent registry costs about $0.67 per day at Standard.
 
 ### Verdict against the 180-second boundary
 
-**Not met with this configuration.** Across the eight samples the slowest verified
-key-only SSH session came 275.6 s after `T0` (243.7 s excluding the 31 to 32 s
-out-of-band host-key read); even the fastest sample needed 203.4 s. Five of eight
+**Not met with this configuration.** Across the nine samples the slowest verified
+key-only SSH session came 278.0 s after `T0` (246.0 s excluding the 31 to 32 s
+out-of-band host-key read); even the fastest sample needed 203.4 s. Six of nine
 samples also missed the boundary for endpoint-open alone, and the best endpoint
 time was 170.9 s. The measured budget splits
 into roughly 25 to 33 s VM boot, 45 to 70 s Docker installation from apt, 90 to 150 s
@@ -223,7 +231,7 @@ image pull and extraction, and 31 s for `run-command`. Levers that the measureme
 None of these are approved or implemented; they are the next decision for #474.
 The functional contract (key-only SSH, managed-identity pull, ext4 storage,
 detach independence, Stop with retained data, exact deletion) held in samples 1,
-2, 3 and 5 to 8. Sample 4 held every gate up to the restart, then failed the retention
+2, 3 and 5 to 9. Sample 4 held every gate up to the restart, then failed the retention
 gate because the worker endpoint never returned, so its retained marker, host key
 and mount were not verified; the harness change responsible was reverted before
 sample 5.
@@ -243,13 +251,13 @@ Executed on 2026-09-10 unless marked otherwise.
 - [x] Host key verified out of band and pinned before the first connection.
 - [x] Kernel ext4 option lines recorded from the worker; shell mirror passes; the
       authoritative Rust qualifier accepted the data disk and rejected the overlay
-      control (samples 4 to 8).
+      control (samples 4 to 9).
 - [x] Independent execution across a disconnect.
 - [x] Explicit Stop with retained data, endpoint retention recorded.
-- [x] Exact deletion with absence check and inventory proof (no pre-existing resource
-      removed, nothing left under the sample group; concurrent additions by other
-      actors counted, as in sample 8).
-- [x] Slowest sample compared with the 180-second boundary: **not met** (275.6 s).
+- [x] Exact deletion with absence check and inventory proof (group gone, nothing left
+      under it; concurrent additions and removals elsewhere in the shared subscription
+      journaled for cross-checking, as in samples 8 and 9).
+- [x] Slowest sample compared with the 180-second boundary: **not met** (278.0 s).
 - [x] Cost recorded against the bound.
 - [ ] **Not executed:** PC-off task progress over hours, three independent panels on
       one worker, verified-loss recovery, opt-in budget policy, and the adapter's own

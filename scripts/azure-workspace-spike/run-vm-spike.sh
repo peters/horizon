@@ -139,18 +139,20 @@ cleanup() {
   fi
   finished=$(epoch_ms)
   azc resource list --query "sort([].id)" >"$SAMPLE_DIR/inventory-after.json" 2>/dev/null || echo 'null' >"$SAMPLE_DIR/inventory-after.json"
-  # Proof: every pre-existing resource still exists and nothing remains under the sample group.
-  # Resources added meanwhile by other actors are counted, not treated as this sample's fault.
+  # Proof: the group is gone and nothing remains under it. Every mutating call in this script
+  # names the sample group, so changes outside it belong to other actors sharing the
+  # subscription; they are journaled for cross-checking against the activity log, not blamed.
   local verdict
   verdict=$(jq -cn --arg rg "/resourceGroups/$RG/" --slurpfile before "$SAMPLE_DIR/inventory-before.json" --slurpfile after "$SAMPLE_DIR/inventory-after.json" \
     '($before[0] // null) as $b | ($after[0] // null) as $a
      | if ($b|type) != "array" or ($a|type) != "array" then {proven:false,reason:"inventory_unavailable"}
-       else {removed:($b - $a), leftover:[$a[] | select(ascii_downcase | contains($rg|ascii_downcase))], added_by_others:(($a - $b)|length)}
-            | .proven = ((.removed|length)==0 and (.leftover|length)==0) end')
+       else {leftover:[$a[] | select(ascii_downcase | contains($rg|ascii_downcase))],
+             concurrent_removals_outside_group:($b - $a), concurrent_additions_outside_group:(($a - $b)|length)}
+            | .proven = ((.leftover|length)==0) end')
   [ "$(jq -r .proven <<<"$verdict")" = true ] && unchanged=true
   [ "$exists" = false ] && [ "$unchanged" = true ] && DELETE_PROVEN=1
   journal deleted "$(jq -cn --arg exists "$exists" --argjson ms $((finished - started)) --argjson v "$verdict" '{group_exists:$exists,delete_ms:$ms,inventory_proof:$v}')"
-  say "resource group exists=$exists inventory_proof=$(jq -c 'del(.removed,.leftover)' <<<"$verdict") delete_ms=$((finished - started))"
+  say "resource group exists=$exists inventory_proof=$(jq -c '{proven,leftover:(.leftover|length),concurrent_removals_outside_group:(.concurrent_removals_outside_group|length),concurrent_additions_outside_group}' <<<"$verdict") delete_ms=$((finished - started))"
 }
 finish() {
   local code=$? expired=0

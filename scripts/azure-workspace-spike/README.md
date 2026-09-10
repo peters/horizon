@@ -4,7 +4,8 @@ Bounded, journaled, self-cleaning spike harness for the Azure CPU lane of
 [#474](https://github.com/peters/horizon/issues/474). It creates **one exact
 task-owned resource group per sample**, measures the timings #474 asks for, checks
 the on-worker storage and retention behaviour, deletes the sample and proves that
-no pre-existing resource disappeared and nothing remains under the sample group. Run
+the group is gone with nothing left under it, journaling any concurrent changes
+made elsewhere in the shared subscription for cross-checking. Run
 [`scripts/azure-workspace-preflight`](../azure-workspace-preflight/README.md) first.
 
 `--max-minutes` (default 120) bounds the **active phase**: every blocking call runs
@@ -49,8 +50,10 @@ leaves the sample resource group for manual inspection; delete it yourself.
 ## What one sample does
 
 1. Snapshots the subscription resource inventory (`az resource list`), used at the end to
-   prove that no pre-existing resource disappeared and nothing remains under the sample
-   group; resources added meanwhile by other actors are counted, not blamed on the sample.
+   prove that nothing remains under the sample group. Every mutating call in the harness
+   names the sample group, so additions or removals elsewhere during the run belong to
+   other actors sharing the subscription; they are journaled (`inventory_proof`) for
+   cross-checking against the subscription activity log, not blamed on the sample.
 2. Generates a fresh Ed25519 client key used only for this sample.
 3. Verifies the random group name is absent, creates the resource group, then a Linux VM (`Canonical:ubuntu-24_04-lts:server`,
    key-only SSH, Standard static public IP, no default NSG rules, the pull identity
