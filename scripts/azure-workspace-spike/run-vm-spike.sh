@@ -70,7 +70,7 @@ if [ "$DRY_RUN" = 0 ] || [ -n "$PREFLIGHT" ]; then
   PREFLIGHT_FACTS=$(jq -c --arg region "$REGION" --arg size "$VM_SIZE" --arg digest "$SUB_DIGEST" '
     if .schema == "horizon.azure-workspace-preflight.report" and .candidate.id == "vm" and .region == $region
        and .candidate.vm_size == $size and .mode == "live" and .status == "no_blockers_observed"
-       and .subscription_digest == $digest
+       and .subscription_digest == $digest and .schema_version == 1
     then {observed_at, tool_version, status, schema_version, subscription_digest} else empty end' "$PREFLIGHT" 2>/dev/null || true)
   [ -n "$PREFLIGHT_FACTS" ] || { echo "--preflight-report is not a live vm preflight for this subscription, $REGION and $VM_SIZE with no blockers observed" >&2; exit 3; }
 fi
@@ -489,18 +489,20 @@ T_RESTARTED=$(epoch_ms)
 PHASE_DEADLINE=0
 # Prove the guest-side bound: confirm the timer is armed, fire its service once, expect deallocation.
 SELF_STOP=false TIMER_ARMED=false
-grep -q '"event":"deadline_timer_armed"' "$SAMPLE_DIR/guest-timing.jsonl" 2>/dev/null && TIMER_ARMED=true  # stamped by runcmd before Docker
 if [ "$KEY_SAME" = true ]; then
-  # The deallocation usually preempts the run-command response itself; the power state is the evidence.
-  TIMER_TEXT=$(run_command 'systemctl list-timers horizon-spike-deadline.timer --no-legend; systemctl start --no-block horizon-spike-deadline.service' 2>&1 || true)
+  # First prove the automatic timer is enabled and waiting, then fire its service by hand; the
+  # deallocation usually preempts the run-command response itself, so the power state is the evidence.
+  TIMER_TEXT=$(run_command 'systemctl is-enabled horizon-spike-deadline.timer; systemctl is-active horizon-spike-deadline.timer; systemctl list-timers horizon-spike-deadline.timer --no-legend' 2>&1 || true)
   printf '%s\n' "$TIMER_TEXT" >"$SAMPLE_DIR/self-deallocate.txt"
+  grep -qx enabled <<<"$TIMER_TEXT" && grep -qx active <<<"$TIMER_TEXT" && TIMER_ARMED=true
+  run_command 'systemctl start --no-block horizon-spike-deadline.service' >>"$SAMPLE_DIR/self-deallocate.txt" 2>&1 || true
   PHASE_DEADLINE=$(( $(date +%s) + 300 ))
   vm_deallocated() { azc vm get-instance-view --resource-group "$RG" --name "$VM" --query "instanceView.statuses[?starts_with(code,'PowerState/')].code | [0]" -o tsv 2>/dev/null | grep -qx PowerState/deallocated; }
   wait_for 300 vm_deallocated && SELF_STOP=true
   PHASE_DEADLINE=0
 fi
 journal self_deallocate "$(jq -cn --argjson armed $TIMER_ARMED --argjson stopped $SELF_STOP '{timer_armed:$armed,vm_deallocated_by_guest:$stopped}')"
-gate guest_lifetime_bound "$SELF_STOP"
+gate guest_lifetime_bound "$([ "$TIMER_ARMED" = true ] && [ "$SELF_STOP" = true ] && echo true || echo false)"
 say "guest-side bound: timer_armed=$TIMER_ARMED vm_deallocated_by_guest=$SELF_STOP"
 if [ "$KEY_SAME" != true ] || [ "$RETAINED_MARKER" != true ] || [ "$MOUNTED" != true ]; then
   say "restart verification failed; capturing guest diagnostics out of band"

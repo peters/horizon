@@ -3,6 +3,7 @@
 Every test uses synthetic fixtures or an injected executor. Nothing here invokes
 the Azure CLI, needs credentials or inspects the operator's account.
 """
+import hashlib
 import io
 import json
 import os
@@ -90,8 +91,7 @@ class Harness(unittest.TestCase):
         self.assertEqual(err, "")
         return code, json.loads(out)
 
-    def check(self, report, check_id):
-        return next(c for c in report["checks"] if c["id"] == check_id)
+    def check(self, report, check_id): return next(c for c in report["checks"] if c["id"] == check_id)  # noqa: E704
 
 
 class OfflineAndInputTests(Harness):
@@ -229,7 +229,7 @@ class InterpretationTests(Harness):
             self.assertNotIn("ready", report["status"])
             self.assertEqual(report["subscription"], "<subscription>")
             self.assertEqual((report["subscription_digest"], SUB[:8] in report["subscription_digest"]),
-                             (preflight.subscription_digest(SUB), False))
+                             (hashlib.sha256(f"horizon-preflight:{SUB}".encode()).hexdigest()[:16], False))
             self.assertEqual(report["schema_version"], preflight.REPORT_SCHEMA_VERSION)
             self.assertIsNotNone(report["observed_at"])
         self.popen.assert_not_called()
