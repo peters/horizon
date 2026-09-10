@@ -32,6 +32,7 @@ RUN mkdir -p crates/horizon-browser-cli/src crates/horizon-browser-mcp/src \
 FROM ${WORKER_BASE_IMAGE}
 
 ARG WORKER_BASE_IMAGE
+ARG WORKER_AGENT_TOOLS=full
 ARG CODEX_VERSION=0.153.2
 ARG CLAUDE_VERSION=2.1.260
 ARG GEMINI_VERSION=0.58.0
@@ -48,6 +49,11 @@ ENV RUSTUP_HOME=/usr/local/rustup
 ENV RUSTUP_TOOLCHAIN=1.95.0
 ENV PATH="/usr/local/cargo/bin:${PATH}"
 
+RUN case "${WORKER_AGENT_TOOLS}" in \
+        full|shell) ;; \
+        *) echo "WORKER_AGENT_TOOLS must be full or shell" >&2; exit 64 ;; \
+    esac
+
 RUN case "${WORKER_BASE_IMAGE}" in \
         *@sha256:*) base_digest="${WORKER_BASE_IMAGE##*@sha256:}" ;; \
         *) echo "WORKER_BASE_IMAGE must be pinned by sha256 digest" >&2; exit 64 ;; \
@@ -63,12 +69,14 @@ RUN case "${WORKER_BASE_IMAGE}" in \
 COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
 COPY --from=node-runtime /usr/local/include/node/ /usr/local/include/node/
 COPY --from=node-runtime /usr/local/lib/node_modules/ /usr/local/lib/node_modules/
+COPY --from=node-runtime /usr/local/LICENSE /usr/local/share/licenses/node/LICENSE
 
 RUN ln -sfn node /usr/local/bin/nodejs \
     && ln -sfn ../lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack \
     && ln -sfn ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -sfn ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 
+# Do not retain installation-generated SSH keys in an earlier image layer.
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
         build-essential \
@@ -94,16 +102,20 @@ RUN apt-get update \
         python3 \
         rsync \
         tar \
+    && rm -f /etc/ssh/ssh_host_* \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=tmux-runtime /opt/horizon-tmux/bin/tmux /usr/local/bin/tmux
+COPY --from=tmux-runtime /opt/horizon-tmux/share/licenses/tmux/COPYING /usr/local/share/licenses/tmux/COPYING
+COPY LICENSE /usr/local/share/licenses/horizon/LICENSE
 
 RUN rustup toolchain install 1.95.0 --profile minimal \
     && rustup component add --toolchain 1.95.0 rustfmt clippy
 
 # Keep this explicit: npm must fail if a new dependency adds an unreviewed
 # lifecycle script instead of silently skipping or running it.
-RUN npm install --global --no-audit --no-fund --strict-allow-scripts \
+RUN if [ "${WORKER_AGENT_TOOLS}" = full ]; then \
+    npm install --global --no-audit --no-fund --strict-allow-scripts \
         --allow-scripts="@anthropic-ai/claude-code,@kilocode/cli,opencode-ai,@github/keytar,node-pty,@google/genai,protobufjs" \
         "@openai/codex@${CODEX_VERSION}" \
         "@anthropic-ai/claude-code@${CLAUDE_VERSION}" \
@@ -111,9 +123,11 @@ RUN npm install --global --no-audit --no-fund --strict-allow-scripts \
         "opencode-ai@${OPENCODE_VERSION}" \
         "@kilocode/cli@${KILO_VERSION}" \
         "@earendil-works/pi-coding-agent@${PI_VERSION}" \
-    && npm cache clean --force
+    && npm cache clean --force; \
+    fi
 
-RUN case "${TARGETARCH}" in \
+RUN if [ "${WORKER_AGENT_TOOLS}" = full ]; then \
+    case "${TARGETARCH}" in \
         amd64) grok_arch=x86_64; grok_sha256="${GROK_AMD64_SHA256}" ;; \
         arm64) grok_arch=aarch64; grok_sha256="${GROK_ARM64_SHA256}" ;; \
         *) echo "Unsupported Grok target architecture: ${TARGETARCH}" >&2; exit 64 ;; \
@@ -122,17 +136,11 @@ RUN case "${TARGETARCH}" in \
         "https://x.ai/cli/grok-${GROK_VERSION}-linux-${grok_arch}" \
         --output /usr/local/bin/grok \
     && printf '%s  %s\n' "${grok_sha256}" /usr/local/bin/grok | sha256sum --check --strict - \
-    && chmod 0755 /usr/local/bin/grok
+    && chmod 0755 /usr/local/bin/grok; \
+    fi
 
 RUN node --version \
     && npm --version \
-    && codex --version \
-    && claude --version \
-    && gemini --version \
-    && opencode --version \
-    && kilo --version \
-    && pi --version \
-    && grok --version \
     && rustc --version \
     && cargo --version \
     && git --version \
@@ -141,6 +149,16 @@ RUN node --version \
     && rsync --version \
     && tar --version \
     && tmux -V
+
+RUN if [ "${WORKER_AGENT_TOOLS}" = full ]; then \
+    codex --version \
+    && claude --version \
+    && gemini --version \
+    && opencode --version \
+    && kilo --version \
+    && pi --version \
+    && grok --version; \
+    fi
 
 WORKDIR /opt/horizon-dependency-cache
 COPY --from=repository-builder /opt/horizon-manifests/ ./
@@ -215,7 +233,8 @@ RUN if [ -z "${WORKER_IMAGE_VERSION}" ]; then \
     fi
 LABEL org.opencontainers.image.title="Horizon remote worker" \
       org.opencontainers.image.description="Provider-neutral interactive coding worker for Horizon" \
-      org.opencontainers.image.version="${WORKER_IMAGE_VERSION}"
+      org.opencontainers.image.version="${WORKER_IMAGE_VERSION}" \
+      io.horizon.worker.agent-tools="${WORKER_AGENT_TOOLS}"
 ENV HORIZON_WORKER_IMAGE_VERSION=${WORKER_IMAGE_VERSION}
 
 EXPOSE 22

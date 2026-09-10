@@ -1,6 +1,7 @@
 **
 !Cargo.toml
 !Cargo.lock
+!LICENSE
 !crates/
 !crates/*/
 crates/*/**

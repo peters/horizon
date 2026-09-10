@@ -46,9 +46,34 @@ Version tags make development builds understandable, but provider profiles must
 use a registry digest after publication. This slice does not publish an image
 or change any provider configuration.
 
+### Shell-only flavor
+
+`WORKER_AGENT_TOOLS` accepts exactly `full` (the unchanged default) or `shell`.
+The shell flavor omits all bundled coding-agent CLIs, including Grok, while
+retaining Rust, Node/npm, Git/Git LFS, SSH, tmux and the repository, setup and panel
+helpers. It supports explicit Linux/Shell work; it does not install an agent at
+startup or make other panel types available.
+
+```bash
+docker build --file containers/remote-worker/Dockerfile \
+  --build-arg WORKER_AGENT_TOOLS=shell \
+  --build-arg WORKER_IMAGE_VERSION=0.1.0-shell \
+  --tag horizon-remote-worker:0.1.0-shell .
+```
+
+The `io.horizon.worker.agent-tools` image label records the selected flavor.
+Both flavors include Horizon's MIT notice, the pinned tmux source's `COPYING`
+and the pinned Node image's aggregate `LICENSE` under `/usr/local/share/licenses/`.
+SSH host keys generated during package
+installation are removed in that same image layer; runtime retained host-identity
+preparation is unchanged. Omitting agents is not a license, security or public
+redistribution clearance: dependencies, notices and final layers still need
+review. Publication and provider allocation remain separate explicit actions.
+
 The helper is compiled with the pinned Rust toolchain in a separate build stage.
-The context admits workspace manifests, the lockfile, reviewed worker scripts and
-only Rust source under the repository, core, browser and browser-protocol crates.
+The context admits workspace manifests, the lockfile, Horizon's license, reviewed
+worker scripts and only Rust source under the repository, core, browser and
+browser-protocol crates.
 Build from a trusted clean checkout: the source allowlist is not a secret scanner.
 Unrelated application source, local configuration, SSH material and credentials
 remain excluded. Only the executable crosses into the final runtime; the existing
@@ -107,8 +132,19 @@ replay, unsafe result preflight and status after output loss. The claim-only cas
 is a synthetic state fixture, not proof of surviving an actual interruption.
 It uses no network or credentials and removes only its owned containers/fixtures.
 The second checks the real Docker context filter with positive source controls and
-excluded synthetic files. Add `--image` and `--expected-binary-sha256` from a separate
-`repository-builder` target to audit every final image layer and executable provenance.
+excluded synthetic files, plus shell-only flavor selection with mocked tools.
+Use `--static-only` without `--docker-host` to run only those no-Docker checks.
+To audit every final image layer, pass `--image`, `--expected-agent-tools full|shell`,
+`--expected-binary-sha256` from a separate `repository-builder` target,
+`--expected-tmux-notice-sha256` from `COPYING` in the checksum-verified tmux source,
+and `--expected-node-notice-sha256` from `/usr/local/LICENSE` in the pinned
+`node-runtime` target. The Node aggregate notice is bounded to 1 MiB; the Horizon
+and tmux notices remain bounded to 16 KiB each.
+That audit verifies the flavor label, exact notices and helper provenance, rejects
+SSH host-key files in any layer, and checks known agent executable/package paths:
+absent in shell (including symlink entries and whiteouts), present in full.
+It is not a general secret scanner or a complete dependency-license audit;
+separate runtime checks still verify the final installed filesystem and tools.
 These tests retain images and fail, rather than claim success, on unsupported storage.
 
 To exercise independent setup through local SSH with a fresh synthetic client key,
