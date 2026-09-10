@@ -246,7 +246,9 @@ Executed on 2026-09-10 unless marked otherwise.
       control (samples 4 to 8).
 - [x] Independent execution across a disconnect.
 - [x] Explicit Stop with retained data, endpoint retention recorded.
-- [x] Exact deletion with absence check and unchanged inventory.
+- [x] Exact deletion with absence check and inventory proof (no pre-existing resource
+      removed, nothing left under the sample group; concurrent additions by other
+      actors counted, as in sample 8).
 - [x] Slowest sample compared with the 180-second boundary: **not met** (275.6 s).
 - [x] Cost recorded against the bound.
 - [ ] **Not executed:** PC-off task progress over hours, three independent panels on

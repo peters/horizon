@@ -261,7 +261,9 @@ SHUTDOWN_AT=$(date -u -d @"$(( DEADLINE_EPOCH + 60 ))" +%H%M)
 if azc vm auto-shutdown --resource-group "$RG" --name "$VM" --time "$SHUTDOWN_AT" >/dev/null 2>&1; then
   journal auto_shutdown_scheduled "$(jq -cn --arg at "$SHUTDOWN_AT" '{utc_hhmm:$at}')"
 else
-  journal auto_shutdown_not_scheduled '{}'; say "warning: cloud-side auto-shutdown could not be scheduled"
+  # Without the platform-side bound the sample may not continue and may not be kept.
+  journal auto_shutdown_not_scheduled '{}'; say "fatal: cloud-side auto-shutdown could not be scheduled; deleting the sample"
+  KEEP=0; exit 1
 fi
 
 NSG=$(azc network nsg list --resource-group "$RG" --query "[0].name" -o tsv)

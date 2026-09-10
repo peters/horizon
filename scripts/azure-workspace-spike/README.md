@@ -3,8 +3,8 @@
 Bounded, journaled, self-cleaning spike harness for the Azure CPU lane of
 [#474](https://github.com/peters/horizon/issues/474). It creates **one exact
 task-owned resource group per sample**, measures the timings #474 asks for, checks
-the on-worker storage and retention behaviour, deletes the sample and proves the
-subscription inventory is unchanged. Run
+the on-worker storage and retention behaviour, deletes the sample and proves that
+no pre-existing resource disappeared and nothing remains under the sample group. Run
 [`scripts/azure-workspace-preflight`](../azure-workspace-preflight/README.md) first.
 
 `--max-minutes` (default 120) bounds the **active phase**: every blocking call runs
@@ -58,7 +58,8 @@ leaves the sample resource group for manual inspection; delete it yourself.
    `00000000-0000-0000-0000-000000000000` user; pulls the image by digest; creates and
    starts the worker container with the data disk bound at `/workspace` and the client
    public key in `HORIZON_SSH_PUBLIC_KEY`, publishing container port 22 on VM port 2222.
-   Right after creation it schedules Azure VM auto-shutdown at the lifetime deadline.
+   Right after creation it schedules Azure VM auto-shutdown at the lifetime deadline;
+   if that cannot be scheduled the sample is deleted immediately (even with `--keep`).
 4. Opens VM port 2222 only from the caller's egress address (or `--allow-ssh-from`).
 5. Waits for the endpoint, reads the worker's Ed25519 host key **out of band** through
    ARM-authenticated `az vm run-command` from the retained
