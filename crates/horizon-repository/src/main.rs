@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod intake;
 mod pack;
 mod protocol;
 mod receive;
@@ -24,12 +25,14 @@ fn main() -> ExitCode {
                     | "overlay-status"
                     | "receive-pack"
                     | "pack-status"
+                    | "intake"
+                    | "intake-status"
             )
         )
     {
         let _ = writeln!(
             io::stderr().lock(),
-            "Usage: horizon-repository materialize|setup|setup-status|receive-overlay|overlay-status|receive-pack|pack-status < request"
+            "Usage: horizon-repository materialize|setup|setup-status|receive-overlay|overlay-status|receive-pack|pack-status|intake|intake-status < request"
         );
         return ExitCode::from(2);
     }
@@ -43,6 +46,8 @@ fn main() -> ExitCode {
         Some("overlay-status") => receive::run(receive::Command::Observe, &mut input, &mut output, &mut diagnostics),
         Some("receive-pack") => pack::run(pack::Command::Receive, &mut input, &mut output, &mut diagnostics),
         Some("pack-status") => pack::run(pack::Command::Observe, &mut input, &mut output, &mut diagnostics),
+        Some("intake") => intake::run(false, &mut input, &mut output, &mut diagnostics),
+        Some("intake-status") => intake::run(true, &mut input, &mut output, &mut diagnostics),
         _ => run(&mut input, &mut output, &mut diagnostics),
     }
 }
