@@ -32,7 +32,7 @@ class PanelSessionTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix="hps-", dir="/tmp")
         self.root = Path(self.temporary.name)
         self.repository = self.root / "repo"
-        self.repository.mkdir()
+        self.repository.mkdir(mode=0o700)
         (self.repository / "nested space").mkdir()
         self.runtimes = [str(uuid.uuid4()), str(uuid.uuid4())]
         self.service = MODULE.PanelSessions(self.repository, self.root / "state", self.root / "sockets",
@@ -494,7 +494,7 @@ class PanelSessionTests(unittest.TestCase):
         self.service.start(runtime, "owned", ".", self.tick_command())
         path = self.service.marker_path(runtime, "owned")
         original = path.read_text()
-        for version in (2, True):
+        for version in (2, 3, True):
             marker = json.loads(original)
             marker["version"] = version
             path.write_text(json.dumps(marker))
@@ -504,6 +504,174 @@ class PanelSessionTests(unittest.TestCase):
         path.chmod(0o644)
         with self.assertRaises(MODULE.SessionError):
             self.service.status(runtime, "owned")
+
+    def prepared_request(self, panel="prepared", directory=".", argv=None):
+        selection = {"version": 1, "destination": "published", "intake": {
+            "version": 1, "workspace_local_id": "fixture-workspace", "workflow_id": self.runtimes[1],
+            "job_id": self.runtimes[0], "runtime_generation": 1, "worker_resource_id": "fixture-worker",
+            "client_key_sha256": "a" * 64,
+            "source": {"repository": "fixture/repository", "commit": "a" * 40, "branch": None},
+            "pack": {"sha256": "b" * 64, "encoded_bytes": 32},
+            "overlay": {"sha256": "c" * 64, "encoded_bytes": 1}}}
+        return self.request("start-prepared", panel, directory=directory, argv=argv or self.tick_command(), repository=selection)
+
+    def prepared_helper(self, operation, selection):
+        # This seam tests panel admission, not Rust canonicalization or full setup.
+        same = selection == self.prepared_request()["repository"]
+        root = None
+        if operation == "setup-checkout":
+            info = self.repository.stat()
+            root = {"path": str(self.repository), "device": info.st_dev, "inode": info.st_ino}
+        self.assertIn(operation, ("setup-binding", "setup-checkout"))
+        return {"version": 1, "binding_sha256": ("a" if same else "b") * 64,
+                "runtime": selection["intake"]["job_id"], "root": root, "reason": None}
+
+    def test_prepared_panels_share_evolving_commits_index_and_working_tree(self):
+        environment = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null"}
+        def git(*arguments):
+            return MODULE.subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", *arguments],
+                cwd=self.repository, env=environment, capture_output=True, timeout=5, check=True).stdout
+        git("init", "--template=", "-q")
+        content = self.repository / "tracked"
+        content.write_text("base")
+        git("add", "tracked")
+        git("commit", "-qm", "fixture")
+        old_head = git("rev-parse", "HEAD")
+        with mock.patch.object(MODULE, "repository_selection", side_effect=self.prepared_helper):
+            first = self.execute(self.prepared_request("first"))
+            self.wait_for(lambda: (self.repository / "ticks").exists())
+            content.write_text("new commit")
+            git("commit", "-qam", "development")
+            self.assertNotEqual(git("rev-parse", "HEAD"), old_head)
+            content.write_text("staged")
+            git("add", "tracked")
+            content.write_text("working")
+            second = self.execute(self.prepared_request("second", argv=self.command(
+                "from pathlib import Path; import time; Path('seen').write_text(Path('tracked').read_text()); time.sleep(30)")))
+            self.wait_for(lambda: (self.repository / "seen").exists())
+            self.assertEqual((self.repository / "seen").read_text(), "working")
+            self.assertEqual(git("show", ":tracked"), b"staged")
+            self.assertNotEqual(first["pid"], second["pid"])
+            self.assertEqual(self.service.status(self.runtimes[0], "first")["pid"], first["pid"])
+            markers = [self.service.read_marker(self.runtimes[0], panel) for panel in ("first", "second")]
+            self.assertEqual([marker["repository"] for marker in markers], ["a" * 64] * 2)
+
+    def test_prepared_retained_task_survives_repository_removal_without_inspection(self):
+        request = self.prepared_request(directory="nested space", argv=self.command("raise SystemExit(42)"))
+        with mock.patch.object(MODULE, "repository_selection", side_effect=self.prepared_helper) as helper:
+            first = self.execute(request)
+            self.wait_for(lambda: self.service.status(self.runtimes[0], "prepared")["state"] == "exited")
+            marker = self.service.marker_path(self.runtimes[0], "prepared")
+            before = marker.read_bytes(), marker.stat().st_mtime_ns
+            (self.repository / "nested space").rmdir()
+            self.repository.rmdir()
+            helper.reset_mock()
+            self.assertEqual(self.execute(request)["pid"], first["pid"])
+            self.assertEqual(self.service.verify(self.runtimes[0], "prepared", "nested space", request["argv"])["exit_status"], 42)
+            self.attach_and_disconnect(self.runtimes[0], "prepared")
+            self.assertEqual([call.args[0] for call in helper.call_args_list], ["setup-binding"])
+            self.assertEqual((marker.read_bytes(), marker.stat().st_mtime_ns), before)
+
+    def test_prepared_binding_and_legacy_marker_mismatches_never_launch(self):
+        request = self.prepared_request()
+        with mock.patch.object(MODULE, "repository_selection", side_effect=self.prepared_helper) as helper:
+            self.execute(request)
+            request["repository"]["destination"] = "different"
+            with self.assertRaises(MODULE.SessionError):
+                self.execute(request)
+            with self.assertRaises(MODULE.SessionError):
+                self.service.start(self.runtimes[0], "prepared", ".", request["argv"])
+            self.service.start(self.runtimes[0], "legacy", ".", request["argv"])
+            helper.reset_mock()
+            with self.assertRaises(MODULE.SessionError):
+                self.execute(self.prepared_request("legacy"))
+            self.assertEqual([call.args[0] for call in helper.call_args_list], ["setup-binding"])
+            self.assertEqual(len(self.service.tmux(self.runtimes[0], "list-sessions").stdout.splitlines()), 2)
+
+    def test_prepared_uncertain_claim_and_server_loss_never_replay(self):
+        request = self.prepared_request()
+        with mock.patch.object(MODULE, "repository_selection", side_effect=self.prepared_helper) as helper:
+            # Simulate interruption after the same irreversible marker publication.
+            intent = self.service.intent_digest(".", request["argv"])
+            self.service.publish_marker(self.runtimes[0], "prepared", {"version": 2, "runtime": self.runtimes[0],
+                "panel": "prepared", "nonce": uuid.uuid4().hex, "intent": intent, "repository": "a" * 64})
+            self.assertEqual(self.execute(request)["state"], "unavailable")
+            self.assertFalse((self.repository / "ticks").exists())
+            running = self.prepared_request("running")
+            self.execute(running)
+            self.wait_for(lambda: (self.repository / "ticks").exists())
+            self.service.tmux(self.runtimes[0], "kill-server")
+            helper.reset_mock()
+            before = (self.repository / "ticks").read_bytes()
+            self.assertEqual(self.execute(running)["state"], "unavailable")
+            self.assertEqual((self.repository / "ticks").read_bytes(), before)
+            self.assertEqual([call.args[0] for call in helper.call_args_list], ["setup-binding"])
+
+    def test_prepared_lost_start_response_retains_the_one_actual_task(self):
+        request = self.prepared_request()
+        with mock.patch.object(MODULE, "repository_selection", side_effect=self.prepared_helper) as helper:
+            with mock.patch.object(self.service, "status", side_effect=MODULE.SessionError("lost response")), self.assertRaises(MODULE.SessionError):
+                self.execute(request)
+            self.wait_for(lambda: (self.repository / "ticks").exists())
+            first = self.service.status(self.runtimes[0], "prepared")
+            helper.reset_mock()
+            self.assertEqual(self.execute(request)["pid"], first["pid"])
+            self.assertEqual([call.args[0] for call in helper.call_args_list], ["setup-binding"])
+
+    def test_prepared_concurrent_starts_claim_once(self):
+        command = self.command("from pathlib import Path; import time; Path('runs').open('a').write('once\\n'); time.sleep(30)")
+        request = self.prepared_request(argv=command)
+        with mock.patch.object(MODULE, "repository_selection", side_effect=self.prepared_helper):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                results = list(executor.map(lambda _: self.execute(request), range(2)))
+        self.wait_for(lambda: (self.repository / "runs").exists() and (self.repository / "runs").read_text() == "once\n")
+        self.assertTrue(all(result["state"] in ("running", "unavailable") for result in results))
+        self.assertEqual(len(self.service.tmux(self.runtimes[0], "list-sessions").stdout.splitlines()), 1)
+
+    def test_prepared_failure_identity_drift_and_escape_have_no_marker(self):
+        outside = self.root / "outside"
+        outside.mkdir()
+        (self.repository / "escape").symlink_to(outside)
+        for fault in ("failure", "runtime", "binding", "inode", "mode", "escape"):
+            request = self.prepared_request(directory="escape" if fault == "escape" else ".")
+            def helper(operation, selection):
+                response = self.prepared_helper(operation, selection)
+                if operation == "setup-checkout":
+                    if fault == "failure":
+                        raise MODULE.SessionError("unconfirmed setup")
+                    if fault in ("runtime", "binding"):
+                        response["runtime" if fault == "runtime" else "binding_sha256"] = "different"
+                    if fault == "inode":
+                        response["root"]["inode"] += 1
+                    if fault == "mode":
+                        self.repository.chmod(0o755)
+                return response
+            try:
+                with mock.patch.object(MODULE, "repository_selection", side_effect=helper), self.assertRaises(MODULE.SessionError):
+                    self.execute(request)
+                self.assertFalse(self.service.state.exists())
+                self.assertFalse(self.service.sockets.exists())
+            finally:
+                self.repository.chmod(0o700)
+
+    def test_fixed_repository_helper_uses_literal_bounded_commands_and_rejects_bad_responses(self):
+        selected = self.prepared_request()["repository"]
+        reply = self.prepared_helper("setup-binding", selected)
+        completed = MODULE.subprocess.CompletedProcess([], 0, json.dumps(reply).encode() + b"\n", b"")
+        with mock.patch.object(MODULE.subprocess, "run", return_value=completed) as run:
+            self.assertEqual(MODULE.repository_selection("setup-binding", selected), reply)
+            self.assertEqual(run.call_args.args[0], ["/usr/local/bin/horizon-repository", "setup-binding"])
+            self.assertEqual(run.call_args.kwargs["env"], {"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
+            self.assertEqual(json.loads(run.call_args.kwargs["input"]), selected)
+            for status, stdout, stderr in [(1, completed.stdout, b""), (0, completed.stdout, b"error"),
+                    (0, b"x" * (16 * 1024 + 1), b""), (0, b"{}\n", b"")]:
+                run.return_value = MODULE.subprocess.CompletedProcess([], status, stdout, stderr)
+                with self.assertRaises(MODULE.SessionError):
+                    MODULE.repository_selection("setup-binding", selected)
+            run.reset_mock()
+            with self.assertRaises(MODULE.SessionError):
+                MODULE.repository_selection("setup", selected)
+            run.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -7,6 +7,11 @@ back into large multi-purpose modules.
 
 ### Remote worker image
 
+- Prepared task admission keeps immutable intake/setup selection and read-only
+  checkout inspection in `repository_overlay::intake::setup`. The fixed
+  `setup-binding` and `setup-checkout` helpers never materialize or start tasks.
+  The panel helper reuses its single claim/nonce path, binds prepared markers to
+  that selection, and observes matching retained tasks without checkout reads.
 - `containers/remote-worker/panel-session.py` owns the worker-side one-shot task
   marker and verified tmux status/attachment contract. Its dedicated `tmux.conf`
   retains sessions independently of clients. Provider lifecycle, repository

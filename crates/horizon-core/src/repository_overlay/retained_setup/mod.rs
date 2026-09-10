@@ -157,5 +157,17 @@ pub enum SetupClaimError {
     Storage,
 }
 
+#[cfg(all(test, target_os = "linux"))]
+pub(in crate::repository_overlay) fn completion_fixture(
+    root: &Path,
+    intent: &SetupIntent,
+    state: SetupCompletionState,
+) -> (Vec<u8>, Vec<u8>) {
+    (
+        codec::encode(intent).unwrap(),
+        outcome::codec::encode(root, intent, &outcome::tests::snapshot(root, intent, state)).unwrap(),
+    )
+}
+
 #[cfg(test)]
 mod tests;

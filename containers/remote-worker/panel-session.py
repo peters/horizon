@@ -48,7 +48,9 @@ def execute_request(service, stream):
         raise SessionError("structured session request is invalid")
     if request.get("operation") == "status" and set(request) == common:
         return service.status(request["runtime"], request["panel"])
-    if request.get("operation") not in ("start", "verify") or set(request) != common | {"directory", "argv"}:
+    prepared = request.get("operation") == "start-prepared"
+    expected = common | {"directory", "argv"} | ({"repository"} if prepared else set())
+    if request.get("operation") not in ("start", "verify", "start-prepared") or set(request) != expected:
         raise SessionError("unsupported structured session request")
     if (
         not isinstance(request["directory"], str)
@@ -56,8 +58,33 @@ def execute_request(service, stream):
         or not all(isinstance(argument, str) for argument in request["argv"])
     ):
         raise SessionError("structured task intent is invalid")
+    if prepared:
+        return service.start_prepared(request["runtime"], request["panel"], request["directory"],
+                                      request["argv"], request["repository"])
     operation = service.verify if request["operation"] == "verify" else service.start
     return operation(request["runtime"], request["panel"], request["directory"], request["argv"])
+
+
+def repository_selection(operation, selection):
+    """Only the fixed trusted core helper canonicalizes and inspects this selection."""
+    if operation not in ("setup-binding", "setup-checkout"):
+        raise SessionError("unsupported repository inspection")
+    encoded = json.dumps(selection, ensure_ascii=False).encode()
+    if len(encoded) > 34 * 1024:
+        raise SessionError("prepared repository selection exceeds its limit")
+    result = subprocess.run(["/usr/local/bin/horizon-repository", operation], input=encoded,
+                            capture_output=True, timeout=120, check=False, close_fds=True,
+                            cwd="/", env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
+    if result.returncode or result.stderr or len(result.stdout) > 16 * 1024 or not result.stdout.endswith(b"\n"):
+        raise SessionError("prepared repository inspection did not complete")
+    value = json.loads(result.stdout, object_pairs_hook=unique_fields)
+    if (not isinstance(value, dict) or set(value) != {"version", "binding_sha256", "runtime", "root", "reason"}
+            or type(value["version"]) is not int or value["version"] != 1 or value["reason"] is not None
+            or not isinstance(value["runtime"], str) or not isinstance(value["binding_sha256"], str)
+            or not re.fullmatch(r"[0-9a-f]{64}", value["binding_sha256"])
+            or operation == "setup-binding" and value["root"] is not None):
+        raise SessionError("prepared repository inspection is invalid")
+    return value
 
 
 def private_directory(path):
@@ -143,16 +170,20 @@ class PanelSessions:
             raw = stream.read(4097)
         if len(raw) > 4096:
             raise SessionError("session marker exceeds its limit")
-        marker = json.loads(raw)
+        marker = json.loads(raw, object_pairs_hook=unique_fields)
         expected = {"version", "runtime", "panel", "nonce", "intent"}
+        if isinstance(marker, dict) and marker.get("version") == 2:
+            expected.add("repository")
         if (
             not isinstance(marker, dict) or set(marker) != expected
-            or type(marker["version"]) is not int or marker["version"] != 1
+            or type(marker["version"]) is not int or marker["version"] not in (1, 2)
             or marker["runtime"] != runtime or marker["panel"] != panel
             or not isinstance(marker["nonce"], str)
             or not re.fullmatch(r"[0-9a-f]{32}", marker["nonce"])
             or not isinstance(marker["intent"], str)
             or not re.fullmatch(r"[0-9a-f]{64}", marker["intent"])
+            or marker["version"] == 2 and (not isinstance(marker["repository"], str)
+                                            or not re.fullmatch(r"[0-9a-f]{64}", marker["repository"]))
         ):
             raise SessionError("session marker identity is invalid")
         return marker
@@ -206,8 +237,54 @@ class PanelSessions:
         return working_directory, intent
 
     def start(self, runtime, panel, directory, arguments):
-        _, name = self.identities(runtime, panel)
+        self.identities(runtime, panel)
         working_directory, intent = self.launch_intent(directory, arguments)
+        return self._start_at(runtime, panel, working_directory, arguments, intent)
+
+    def start_prepared(self, runtime, panel, directory, arguments, selection):
+        self.identities(runtime, panel)
+        intent = self.intent_digest(directory, arguments)
+        binding = repository_selection("setup-binding", selection)
+        if binding["runtime"] != runtime:
+            raise SessionError("prepared repository runtime does not match the task")
+        try:
+            marker = self.read_marker(runtime, panel)
+        except FileNotFoundError:
+            marker = None
+        if marker is not None:
+            self.match_intent(marker, intent, binding["binding_sha256"])
+            return self.status(runtime, panel)
+        inspected = repository_selection("setup-checkout", selection)
+        root = inspected["root"]
+        if (inspected["runtime"] != runtime or inspected["binding_sha256"] != binding["binding_sha256"]
+                or not isinstance(root, dict) or set(root) != {"path", "device", "inode"}
+                or not isinstance(root["path"], str) or not Path(root["path"]).is_absolute()
+                or any(type(root[key]) is not int or root[key] < 0 for key in ("device", "inode"))):
+            raise SessionError("prepared repository root is invalid")
+        repository = Path(root["path"])
+        descriptor = os.open(repository, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            held = os.fstat(descriptor)
+            if (held.st_uid != os.geteuid() or stat.S_IMODE(held.st_mode) != 0o700 or held.st_nlink == 0
+                    or (held.st_dev, held.st_ino) != (root["device"], root["inode"])):
+                raise SessionError("prepared repository root changed")
+            working_directory = (repository / directory).resolve(strict=True)
+            if not working_directory.is_dir() or not working_directory.is_relative_to(repository):
+                raise SessionError("task directory must remain inside the repository")
+            named = repository.lstat()
+            if (named.st_dev, named.st_ino) != (held.st_dev, held.st_ino):
+                raise SessionError("prepared repository root changed")
+            return self._start_at(runtime, panel, working_directory, arguments, intent, binding["binding_sha256"])
+        finally:
+            os.close(descriptor)
+
+    @staticmethod
+    def match_intent(marker, intent, repository):
+        if marker["intent"] != intent or marker.get("repository") != repository:
+            raise SessionError("panel launch intent differs from its retained task")
+
+    def _start_at(self, runtime, panel, working_directory, arguments, intent, repository=None):
+        _, name = self.identities(runtime, panel)
         try:
             marker = self.read_marker(runtime, panel)
         except FileNotFoundError:
@@ -215,7 +292,10 @@ class PanelSessions:
         if marker is None:
             if self.tmux(runtime, "has-session", "-t", f"={name}", check=False).returncode == 0:
                 raise SessionError("an unowned session already uses this panel identity")
-            marker = {"version": 1, "runtime": runtime, "panel": panel, "nonce": uuid.uuid4().hex, "intent": intent}
+            marker = {"version": 2 if repository else 1, "runtime": runtime, "panel": panel,
+                      "nonce": uuid.uuid4().hex, "intent": intent}
+            if repository is not None:
+                marker["repository"] = repository
             if self.publish_marker(runtime, panel, marker):
                 private_directory(self.sockets)
                 # The wrapper plus program always supplies multiple arguments to tmux,
@@ -226,8 +306,7 @@ class PanelSessions:
                 )
             else:
                 marker = self.read_marker(runtime, panel)
-        if marker["intent"] != intent:
-            raise SessionError("panel launch intent differs from its retained task")
+        self.match_intent(marker, intent, repository)
         return self.status(runtime, panel)
 
     def verify(self, runtime, panel, directory, arguments):
