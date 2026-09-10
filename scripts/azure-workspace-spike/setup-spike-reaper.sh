@@ -77,12 +77,30 @@ say "schedule $SCHEDULE and job link"
 START=$(python3 -c 'import datetime as d; t=d.datetime.now(d.timezone.utc)+d.timedelta(minutes=7); print(t.replace(second=0,microsecond=0).strftime("%Y-%m-%dT%H:%M:%S+00:00"))')
 azr --method put --url "$BASE/schedules/$SCHEDULE?api-version=$API" --body "$(jq -cn --arg start "$START" '{name:"every-15-minutes",properties:{startTime:$start,frequency:"Minute",interval:15,timeZone:"UTC"}}')" >/dev/null 2>&1 \
   || say "schedule already exists (kept)"
-LINK=$(python3 -c 'import uuid; print(uuid.uuid5(uuid.NAMESPACE_URL, "horizon-spike-deadline-reaper/every-15-minutes"))')
-azr --method put --url "$BASE/jobSchedules/$LINK?api-version=$API" --body "$(jq -cn --arg rb "$RUNBOOK" --arg sc "$SCHEDULE" '{properties:{runbook:{name:$rb},schedule:{name:$sc}}}')" >/dev/null 2>&1 \
-  || say "job schedule already linked (kept)"
+# The job link pins the subscription the runbook scans. The list endpoint omits parameters, so each
+# link is read individually; a link with a different or missing subscription is replaced.
+pinned_link_count() {
+  local count=0 id
+  for id in $(azr --method get --url "$BASE/jobSchedules?api-version=$API" --query "value[?properties.runbook.name=='$RUNBOOK' && properties.schedule.name=='$SCHEDULE'].properties.jobScheduleId" -o tsv 2>/dev/null); do
+    # Azure returns parameter keys with its own casing (SubscriptionID), so compare case-insensitively.
+    if [ "$(azr --method get --url "$BASE/jobSchedules/$id?api-version=$API" 2>/dev/null | jq -r '(.properties.parameters // {}) | to_entries | map(select(.key | ascii_downcase == "subscriptionid")) | .[0].value // empty | ascii_downcase')" = "$SUBSCRIPTION" ]; then
+      count=$((count + 1))
+    else
+      say "replacing job link $id (subscription not pinned to this one)" >&2
+      azr --method delete --url "$BASE/jobSchedules/$id?api-version=$API" >/dev/null 2>&1 || true
+    fi
+  done
+  echo "$count"
+}
+if [ "$(pinned_link_count)" = 0 ]; then
+  sleep 5
+  azr --method put --url "$BASE/jobSchedules/$(python3 -c 'import uuid; print(uuid.uuid4())')?api-version=$API" --body "$(jq -cn --arg rb "$RUNBOOK" --arg sc "$SCHEDULE" --arg sub "$SUBSCRIPTION" '{properties:{runbook:{name:$rb},schedule:{name:$sc},parameters:{SubscriptionId:$sub}}}')" >/dev/null
+else
+  say "job schedule already linked with this subscription (kept)"
+fi
 
 say "verifying"
-LINKED=$(azr --method get --url "$BASE/jobSchedules?api-version=$API" --query "length(value[?properties.runbook.name=='$RUNBOOK' && properties.schedule.name=='$SCHEDULE'])" -o tsv)
+LINKED=$(pinned_link_count)
 SCHED=$(azr --method get --url "$BASE/schedules/$SCHEDULE?api-version=$API" --query "{enabled:properties.isEnabled,next:properties.nextRun,interval:properties.interval,frequency:properties.frequency}")
 printf '%s\n' "$SCHED" | jq -c .
 NEXT=$(date -u -d "$(jq -r '.next // empty' <<<"$SCHED")" +%s 2>/dev/null || echo 0)

@@ -1,6 +1,10 @@
+param([Parameter(Mandatory = $true)][string]$SubscriptionId)
 $ErrorActionPreference = 'Stop'
+if ($SubscriptionId -notmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') { throw "SubscriptionId must be a UUID" }
 Disable-AzContextAutosave -Scope Process | Out-Null
-Connect-AzAccount -Identity | Out-Null
+Connect-AzAccount -Identity -Subscription $SubscriptionId | Out-Null
+$context = Set-AzContext -Subscription $SubscriptionId
+if ($context.Subscription.Id -ne $SubscriptionId) { throw "Az context is $($context.Subscription.Id), expected $SubscriptionId" }
 $now = (Get-Date).ToUniversalTime()
 $acted = 0
 foreach ($vm in Get-AzVM -Status) {

@@ -320,7 +320,11 @@ journal inventory_before "$(jq -c '{count:length}' "$SAMPLE_DIR/inventory-before
 # (scripts/azure-workspace-spike/setup-spike-reaper.sh) deallocates every VM tagged
 # purpose=horizon-azure-vm-spike whose deadline tag has passed. Read-only check, journaled.
 REAPER_BASE="https://management.azure.com/subscriptions/$SUBSCRIPTION/resourceGroups/$REAPER_RG/providers/Microsoft.Automation/automationAccounts/$REAPER_ACCOUNT"
-REAPER_FACTS=$(azc rest --method get --url "$REAPER_BASE/jobSchedules?api-version=2023-11-01" --query "value[?properties.runbook.name=='horizon-spike-deadline-reaper'] | [0].properties.schedule.name" -o tsv 2>/dev/null || true)
+REAPER_FACTS=""
+for link_id in $(azc rest --method get --url "$REAPER_BASE/jobSchedules?api-version=2023-11-01" --query "value[?properties.runbook.name=='horizon-spike-deadline-reaper'].properties.jobScheduleId" -o tsv 2>/dev/null); do
+  LINK_JSON=$(azc rest --method get --url "$REAPER_BASE/jobSchedules/$link_id?api-version=2023-11-01" 2>/dev/null || echo null)  # the list omits parameters
+  [ "$(jq -r '(.properties.parameters // {}) | to_entries | map(select(.key | ascii_downcase == "subscriptionid")) | .[0].value // empty | ascii_downcase' <<<"$LINK_JSON")" = "$SUBSCRIPTION" ] && REAPER_FACTS=$(jq -r '.properties.schedule.name' <<<"$LINK_JSON") && break
+done
 REAPER_SCHEDULE=$(azc rest --method get --url "$REAPER_BASE/schedules/${REAPER_FACTS:-none}?api-version=2023-11-01" --query "{enabled:properties.isEnabled,next_run:properties.nextRun,interval:properties.interval,frequency:properties.frequency}" 2>/dev/null || echo null)
 REAPER_NEXT=$(date -u -d "$(jq -r '.next_run // empty' <<<"$REAPER_SCHEDULE")" +%s 2>/dev/null || echo 0)
 [ "$(jq -r 'if .enabled == true and .frequency == "Minute" and .interval == 15 then "ok" else "bad" end' <<<"$REAPER_SCHEDULE")" = ok ] && [ "$REAPER_NEXT" -gt "$(date +%s)" ] || { journal reaper_missing "$(jq -cn --arg s "$REAPER_SCHEDULE" '{schedule:$s}')"; say "the subscription-side reaper is not present, not enabled, not the 15-minute schedule or has no future run; run setup-spike-reaper.sh first (nothing created)"; exit 1; }
