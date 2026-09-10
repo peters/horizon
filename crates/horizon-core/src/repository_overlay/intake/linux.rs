@@ -32,6 +32,26 @@ const CONFINED: ResolveFlags = ResolveFlags::BENEATH
     .union(ResolveFlags::NO_MAGICLINKS)
     .union(ResolveFlags::NO_XDEV);
 
+pub(super) fn inspect_storage() -> super::storage_status::WorkerStorageStatus {
+    inspect_storage_with(Path::new(super::WORKER_ROOT), &qualify)
+}
+
+fn inspect_storage_with(
+    path: &Path,
+    storage: &impl Fn(&File) -> Result<(), IntakeError>,
+) -> super::storage_status::WorkerStorageStatus {
+    use super::storage_status::WorkerStorageStatus;
+    let result = Boundary::open(path, storage).and_then(|boundary| {
+        // A newly opened boundary holds no claim or children: verify only the root.
+        boundary.verify(&[])
+    });
+    match result {
+        Ok(()) => WorkerStorageStatus::Qualified,
+        Err(IntakeError::Unsupported) => WorkerStorageStatus::Unsupported,
+        Err(_) => WorkerStorageStatus::Unavailable,
+    }
+}
+
 pub(super) fn execute(
     parent: &Path,
     request: &IntakeRequest,
@@ -430,3 +450,6 @@ fn check(cancelled: &dyn Fn() -> bool) -> Result<(), IntakeError> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod storage_tests;

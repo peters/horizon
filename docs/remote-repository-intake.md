@@ -45,6 +45,27 @@ Exit codes are 0 for acknowledgement/observation, 2 for rejected framing/identit
 means the response could not be written; it does not undo a completed intake.
 Neither command grants export approval or setup/task authority.
 
+## Read-only worker storage status
+
+`horizon-repository storage-status` accepts only `{"version":1}` followed by EOF,
+with a 1 KiB request limit. It emits `{"version":1,"status":"qualified"}` when
+the existing fixed `/workspace/.horizon-worker` root passes the same private-root,
+confinement and filesystem checks used by intake, including a named-root recheck.
+It neither reads intake/setup records nor creates, repairs or synchronizes files.
+An absent intake claim is irrelevant; an absent or unsafe worker root is not qualified.
+
+Statuses are `qualified` (exit 0), `unsupported` or `unavailable` (exit 1), and
+`rejected` for malformed input (exit 2). A failed response write/flush exits 3.
+Responses are bounded to 1 KiB and contain no paths, kernel details or credentials.
+Unsupported platforms never open storage. The public core entry point is
+`intake::storage_status::inspect_worker_storage`; it has no path override.
+
+Qualification is only a point-in-time observation under the existing trusted-kernel,
+stable-ancestry and mount premises. It grants no operation and proves neither free
+capacity, successful fsync, healthy hardware, remote durability, backup nor provider
+Stop/Delete retention. Later operations still perform their own admission checks.
+Run inspection off the UI thread; filesystem operations have no hard deadline.
+
 ## Fixed roots and replay barrier
 
 Production uses only the existing `/workspace/.horizon-worker` parent. It must be
