@@ -91,7 +91,8 @@ class Harness(unittest.TestCase):
         self.assertEqual(err, "")
         return code, json.loads(out)
 
-    def check(self, report, check_id): return next(c for c in report["checks"] if c["id"] == check_id)  # noqa: E704
+    def check(self, report, check_id):
+        return next(c for c in report["checks"] if c["id"] == check_id)
 
 
 class OfflineAndInputTests(Harness):
@@ -174,9 +175,7 @@ class PlanningTests(Harness):
 
 
 @unittest.skipUnless(os.name == "posix", "the live executor is POSIX-only by design")
-class ExecutorTests(unittest.TestCase):
-    """Real subprocess boundary, exercised with the Python interpreter instead of the Azure CLI."""
-
+class ExecutorTests(unittest.TestCase):  # real subprocess boundary, driven with the Python interpreter, not az
     def test_arguments_pass_without_shell_expansion_and_time_and_output_are_bounded(self):
         run = preflight.subprocess_executor
         literal = run([sys.executable, "-c", "import sys; print(sys.argv[1])", "$HOME `id` ; touch x"], 20)

@@ -59,7 +59,8 @@ done
 
 [[ $SUBSCRIPTION =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || { echo "--subscription must be a UUID" >&2; exit 3; }
 [[ $IMAGE =~ ^[a-z0-9.-]+\.azurecr\.io/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$ ]] || { echo "--image must be an ACR digest reference" >&2; exit 3; }
-[[ $PULLER_ID =~ ^/subscriptions/[0-9a-f-]{36}/resource[Gg]roups/[^/]+/providers/Microsoft\.ManagedIdentity/userAssignedIdentities/[A-Za-z0-9_-]+$ ]] || { echo "--puller-identity-id must be a user-assigned identity resource id" >&2; exit 3; }
+[[ $PULLER_ID =~ ^/subscriptions/([0-9a-f-]{36})/resource[Gg]roups/[^/]+/providers/Microsoft\.ManagedIdentity/userAssignedIdentities/[A-Za-z0-9_-]+$ ]] || { echo "--puller-identity-id must be a user-assigned identity resource id" >&2; exit 3; }
+[ "${BASH_REMATCH[1],,}" = "$SUBSCRIPTION" ] || { echo "--puller-identity-id must belong to --subscription" >&2; exit 3; }
 [[ $REGION =~ ^[a-z][a-z0-9]{1,63}$ ]] || { echo "--region must be a lowercase region name" >&2; exit 3; }
 [[ $VM_SIZE =~ ^Standard_[A-Za-z0-9_-]+$ ]] || { echo "--vm-size must look like Standard_D4s_v3" >&2; exit 3; }
 [[ $SAMPLE =~ ^[1-9][0-9]?$ ]] || { echo "--sample must be 1-99 without leading zeros" >&2; exit 3; }
