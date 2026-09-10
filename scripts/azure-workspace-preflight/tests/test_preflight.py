@@ -41,7 +41,6 @@ def usage(*entries):
 
 LOCATIONS = {"exit_code": 0, "stdout": [{"name": "westeurope", "type": "Region", "regionType": "Physical"},
                                         {"name": REGION, "type": "Region", "regionType": "Physical"}]}
-NON_REGIONAL = ("account_context", "region_available")
 ACI_CAPS = {"exit_code": 0, "stdout": [
     {"osType": "Windows", "ipAddressType": "Public", "gpu": "None", "capabilities": {"maxCpu": 4, "maxMemoryInGB": 14}},
     {"osType": "Linux", "ipAddressType": "Public", "gpu": "None", "capabilities": {"maxCpu": 4, "maxMemoryInGB": 16}}]}
@@ -111,12 +110,10 @@ class OfflineAndInputTests(Harness):
             ["--candidate", "aci", "--subscription", SUB, "--region", "North Europe", "--live"],
             ["--candidate", "vm", *BASE, "--live"],
             ["--candidate", "aci", *BASE, "--vm-size", "Standard_D4s_v3"],
-            ["--candidate", "aci", *BASE, "--cpu-cores", "0"],
+            ["--candidate", "aci", *BASE, "--cpu-cores", "0"], ["--candidate", "aci", *BASE, "--fixture", ""],
             ["--candidate", "aci", *BASE, "--timeout-seconds", "9999", "--live"],
             ["--candidate", "aci", *BASE, "--live", "--fixture", "/nonexistent.json"],
-            ["--candidate", "aci", *BASE, "--fixture", ""],
-            ["--candidate", "aci", *BASE, "--cpu-cores", "abc"],
-            ["--candidate", "aks", *BASE],
+            ["--candidate", "aci", *BASE, "--cpu-cores", "abc"], ["--candidate", "aks", *BASE],
         ]
         for args in cases:
             code, out, err = self.run_main(args)
@@ -150,7 +147,7 @@ class PlanningTests(Harness):
                     self.assertEqual(argv[argv.index("--subscription") + 1], SUB, check.id)
                 else:
                     self.assertTrue(any(a.startswith(f"{preflight.ARM}/subscriptions/{SUB}/") for a in argv), check.id)
-                if check.id not in NON_REGIONAL and not check.id.startswith("provider_"):
+                if check.id not in ("account_context", "region_available") and not check.id.startswith("provider_"):
                     self.assertTrue(any(REGION in a for a in argv), check.id)
                     self.assertIn("region_available", check.depends_on)
                 if check.id != "account_context":
@@ -189,10 +186,12 @@ class ExecutorTests(unittest.TestCase):
         slow = run([sys.executable, "-c", "import time; time.sleep(30)"], 1)
         self.assertTrue(slow.timed_out)
         self.assertEqual(preflight.classify_failure(slow).reason, "timeout")
-        big = run([sys.executable, "-c", "print('x' * 200000)"], 20, limit=4096)
-        self.assertTrue(big.oversized)
-        self.assertLessEqual(len(big.stdout), 4096)
+        big = run([sys.executable, "-c", "import sys; sys.stdout.write('x' * 8192); sys.stdout.flush(); import time; "
+                   "time.sleep(30)"], 20, limit=4096)
+        self.assertEqual((big.oversized, big.exit_code, len(big.stdout) <= 4096), (True, None, True))
         self.assertEqual(preflight.classify_failure(big).reason, "oversized_output")
+        launch = run([os.path.join(tempfile.gettempdir(), "horizon-preflight-missing-az-binary")], 5)
+        self.assertEqual((launch.launch_failed, preflight.classify_failure(launch).reason), (True, "launch_failed"))
         failed = run([sys.executable, "-c", "import sys; sys.stderr.write('ERROR: AADSTS700082 expired'); sys.exit(1)"], 20)
         self.assertEqual((failed.exit_code, preflight.classify_failure(failed).reason), (1, "authentication_required"))
 
@@ -331,6 +330,9 @@ class InterpretationTests(Harness):
         fixture["aci_regional_capabilities"] = ACI_CAPS
         check = self.check(self.report("aci", fixture, ["--cpu-cores", "8"])[1], "aci_regional_capabilities")
         self.assertEqual(check["reason"], "request_exceeds_regional_maximum")
+        small = {**ACI_CAPS["stdout"][1], "capabilities": {"maxCpu": 1, "maxMemoryInGB": 1}}
+        fixture["aci_regional_capabilities"] = {"exit_code": 0, "stdout": [small, ACI_CAPS["stdout"][1]]}
+        self.assertEqual(self.check(self.report("aci", fixture)[1], "aci_regional_capabilities")["outcome"], "observed_ok")
 
     def test_vm_sku_drives_family_quota_and_restrictions(self):
         extra = ["--vm-size", "Standard_D4s_v3"]

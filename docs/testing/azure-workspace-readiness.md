@@ -26,10 +26,11 @@ registry passwords; and the worker's repository storage must pass the existing
 on-worker qualifier before any repository publication.
 
 The qualifier in `crates/horizon-core/src/repository_overlay/storage.rs` accepts
-only an ext4 filesystem whose kernel-reported mount options are exactly `rw`,
-`barrier` and one `data=ordered` or `data=journal` entry, read from
-`/proc/fs/ext4/<device>/options` through trusted sysfs metadata. This is an
-**on-worker qualification gate**. An Azure disk SKU, an SMB or NFS share, an
+only an ext4 filesystem whose kernel-reported options, read from
+`/proc/fs/ext4/<device>/options` through trusted sysfs metadata, contain `rw`,
+`barrier` and exactly one `data=` entry that is `data=ordered` or `data=journal`,
+with no `ro` or `nobarrier` line; other non-contradictory options are permitted.
+This is an **on-worker qualification gate**. An Azure disk SKU, an SMB or NFS share, an
 `emptyDir` volume or any "persistent" marketing claim does not satisfy it, and the
 qualifier must not be relaxed or duplicated to make a candidate pass.
 

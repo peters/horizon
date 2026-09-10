@@ -78,10 +78,10 @@ Only these documented read-only operations can be emitted. The planner asserts
 the allowlist for every command, arguments are passed as an array without a
 shell in their own POSIX process group, each command runs under the timeout (the
 whole group is killed on expiry, because the packaged `az` is a shell wrapper),
-and there are no retries. Output is read to completion; when a stream exceeds
-4 MiB the check reports `oversized_output` without interpreting it, and only the
-first 4 MiB is retained internally. The cap bounds what is interpreted and
-reported, not the child's memory use, and no raw output is ever printed. Checks declare prerequisites: when the account context is
+and there are no retries. Output is read incrementally; as soon as either
+stream exceeds 4 MiB the process group is killed, the retained prefix is not
+interpreted, and the check reports `oversized_output`. A CLI that cannot be
+launched at all reports `launch_failed`. No raw output is ever printed. Checks declare prerequisites: when the account context is
 blocked nothing else runs, when the region is unavailable the regional checks
 are skipped, and the VM quota check waits for a resolved SKU. Skipped checks
 report `unknown` with reason `prerequisite_failed`.
@@ -135,7 +135,7 @@ Reason codes: `authentication_required`, `subscription_not_visible`,
 `unregistered_provider`, `registration_in_progress`, `region_unavailable`,
 `quota_exhausted`, `quota_entry_missing`, `sku_unavailable_in_region`,
 `sku_restricted`, `no_linux_public_capability`,
-`request_exceeds_regional_maximum`, `prerequisite_failed`, `throttled`,
+`request_exceeds_regional_maximum`, `prerequisite_failed`, `throttled`, `launch_failed`,
 `unsupported_query`, `malformed_response`, `contradictory_response`, `timeout`,
 `oversized_output`, `command_failed`, `not_executed`.
 

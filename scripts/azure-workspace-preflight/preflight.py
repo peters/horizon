@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
 """Read-only Azure readiness preflight for persistent CPU workspace candidates (#474).
 
-Plans a fixed allowlist of documented read-only Azure CLI operations, executes
-them without a shell under bounded time and output limits, and interprets the
-responses into a redacted, versioned report. Nothing here logs in, registers a
-provider, changes CLI defaults, or creates, starts, stops or deletes a resource.
-A successful read never claims create permission, capacity, SSH readiness,
-image pull success, storage qualification, the 180-second target or PC-off
-acceptance; those remain explicit live-qualification gates.
+Plans a fixed allowlist of documented read-only Azure CLI operations, runs them without a
+shell under bounded time and output, and interprets the responses into a redacted report.
+Nothing here logs in, registers a provider, changes CLI defaults or touches resource
+lifecycle, and a successful read never claims readiness; see UNVERIFIED_GATES.
 """
 from __future__ import annotations
 
@@ -18,10 +15,12 @@ import datetime as _dt
 import json
 import os
 import re
+import selectors
 import shutil
 import signal
 import subprocess
 import sys
+import time
 from typing import Any, Callable, Dict, List, Optional
 
 TOOL_VERSION = "0.1.0"
@@ -75,8 +74,7 @@ UNVERIFIED_GATES = [
     "actual regional capacity at creation time (quota headroom is not capacity)",
     "direct key-only SSH reachability and host-key pinning on a real worker",
     "compact worker image pull through a user-assigned managed identity without registry passwords",
-    "on-worker repository storage qualification: healthy journaled ext4 with the exact kernel options "
-    "required by the Rust qualifier (an Azure disk SKU, SMB/NFS share or durable volume does not prove it)",
+    "on-worker storage qualification: healthy journaled ext4 accepted by the Rust qualifier, not a disk SKU or share",
     "measured create, pull, endpoint, SSH-ready and delete timing against the 180-second boundary",
     "independent sessions continuing while Horizon is closed and the PC is off",
     "explicit Stop with retained data, restart/replacement behavior and exact deletion proof",
@@ -87,7 +85,7 @@ ENV_PASSTHROUGH = ("PATH", "HOME", "AZURE_CONFIG_DIR", "LANG", "LC_ALL", "TMPDIR
 
 
 class InputError(ValueError):
-    """Rejected before any Azure command is planned or executed."""
+    """Rejected before any Azure command is planned or executed."""  # exit code 3
 
 
 @dataclasses.dataclass(frozen=True)
@@ -121,6 +119,7 @@ class CommandResult:
     timed_out: bool = False
     oversized: bool = False
     executed: bool = True
+    launch_failed: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -133,7 +132,6 @@ class Outcome:
 Executor = Callable[[List[str], int], CommandResult]
 
 
-# --------------------------------------------------------------------------- inputs
 def validate_request(args: argparse.Namespace) -> Request:
     candidate = args.candidate
     subscription = (args.subscription or "").strip().lower()
@@ -147,10 +145,8 @@ def validate_request(args: argparse.Namespace) -> Request:
     if args.fixture is not None and not args.fixture:
         raise InputError("--fixture requires a path")
     mode = "live" if args.live else ("fixture" if args.fixture is not None else "plan")
-    if not 1 <= args.cpu_cores <= 31:
-        raise InputError("--cpu-cores must be between 1 and 31")
-    if not 1 <= args.memory_gb <= 240:
-        raise InputError("--memory-gb must be between 1 and 240")
+    if not (1 <= args.cpu_cores <= 31 and 1 <= args.memory_gb <= 240):
+        raise InputError("--cpu-cores must be between 1 and 31 and --memory-gb between 1 and 240")
     vm_size = args.vm_size
     if candidate == "vm":
         if not vm_size or not VM_SIZE_RE.match(vm_size):
@@ -172,7 +168,6 @@ def validate_request(args: argparse.Namespace) -> Request:
                    args.timeout_seconds, az_path)
 
 
-# --------------------------------------------------------------------------- planning
 def _az(request: Request, *tokens: str) -> List[str]:
     argv = [request.az_path, *tokens, "--output", "json", "--only-show-errors"]
     assert_allowlisted(argv)
@@ -249,26 +244,34 @@ def plan_checks(request: Request) -> List[PlannedCheck]:
     return checks
 
 
-# --------------------------------------------------------------------------- execution
 def subprocess_executor(argv: List[str], timeout_seconds: int, limit: int = OUTPUT_LIMIT_BYTES) -> CommandResult:
-    """Run argv without a shell in its own POSIX process group; kill the whole group on timeout."""
+    """Run argv without a shell in its own POSIX process group; kill the group on timeout or once a stream passes limit."""
     env = {key: os.environ[key] for key in ENV_PASSTHROUGH if key in os.environ}
     env.update({"AZURE_CORE_NO_COLOR": "true", "AZURE_CORE_DISABLE_PROGRESS_BAR": "true",
                 "AZURE_EXTENSION_USE_DYNAMIC_INSTALL": "no", "AZURE_CORE_COLLECT_TELEMETRY": "false"})
-    proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            env=env, shell=False, start_new_session=True)
-    timed_out = False
     try:
-        stdout, stderr = proc.communicate(timeout=timeout_seconds)
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        with contextlib.suppress(ProcessLookupError):  # the group may exit between the timeout and the kill
+        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                env=env, shell=False, start_new_session=True)
+    except OSError:
+        return CommandResult(None, "", "", launch_failed=True)
+    buffers = {proc.stdout.fileno(): bytearray(), proc.stderr.fileno(): bytearray()}
+    deadline, timed_out, oversized = time.monotonic() + timeout_seconds, False, False
+    with selectors.DefaultSelector() as selector:
+        for fd in buffers:
+            selector.register(fd, selectors.EVENT_READ)
+        while selector.get_map() and not (timed_out or oversized):
+            ready = selector.select(timeout=max(0.0, deadline - time.monotonic()))
+            timed_out = not ready and time.monotonic() >= deadline
+            for key, _ in ready:
+                chunk = os.read(key.fd, 65536)
+                buffers[key.fd].extend(chunk) if chunk else selector.unregister(key.fd)
+                oversized = oversized or len(buffers[key.fd]) > limit
+    if timed_out or oversized:
+        with contextlib.suppress(ProcessLookupError):  # the group may exit between the check and the kill
             os.killpg(proc.pid, signal.SIGKILL)  # the installed az is a shell wrapper; kill its children too
-        stdout, stderr = proc.communicate()
-    oversized = not timed_out and (len(stdout) > limit or len(stderr) > limit)
-    exit_code = None if (timed_out or oversized) else proc.returncode
-    return CommandResult(exit_code, stdout[:limit].decode("utf-8", "replace"), stderr[:limit].decode("utf-8", "replace"),
-                         timed_out=timed_out, oversized=oversized)
+    proc.communicate()  # reap; after a kill the remaining pipe contents are bounded and discarded
+    stdout, stderr = (bytes(buffers[fd][:limit]).decode("utf-8", "replace") for fd in buffers)
+    return CommandResult(None if (timed_out or oversized) else proc.returncode, stdout, stderr, timed_out, oversized)
 
 
 def fixture_executor(fixture: Dict[str, Any], plan: List[PlannedCheck]) -> Executor:
@@ -279,21 +282,17 @@ def fixture_executor(fixture: Dict[str, Any], plan: List[PlannedCheck]) -> Execu
         if not isinstance(entry, dict):
             return CommandResult(None, "", "", executed=False)
         stdout = entry.get("stdout", "")
-        if not isinstance(stdout, str):
-            stdout = json.dumps(stdout)
+        stdout = stdout if isinstance(stdout, str) else json.dumps(stdout)
         return CommandResult(entry.get("exit_code", 0), stdout, str(entry.get("stderr", "")),
                              timed_out=bool(entry.get("timed_out")), oversized=bool(entry.get("oversized")))
 
     return run
 
 
-# --------------------------------------------------------------------------- interpretation
 _FAILURE_PATTERNS = [
     ("blocked", "authentication_required", r"az login|AADSTS|Interactive authentication|Not logged in"),
-    ("blocked", "subscription_not_visible", r"doesn't exist in cloud"),
-    ("blocked", "insufficient_permission", r"Forbidden"),
-    ("unknown", "unsupported_query", r"unrecognized arguments|Command not found|not a valid value|NotFound"),
-]
+    ("blocked", "subscription_not_visible", r"doesn't exist in cloud"), ("blocked", "insufficient_permission", r"Forbidden"),
+    ("unknown", "unsupported_query", r"unrecognized arguments|Command not found|not a valid value|NotFound")]
 
 
 def _error_code(stderr: str) -> Optional[str]:
@@ -310,6 +309,8 @@ def classify_failure(result: CommandResult) -> Outcome:
         return Outcome("unknown", "timeout")
     if result.oversized:
         return Outcome("unknown", "oversized_output")
+    if result.launch_failed:
+        return Outcome("unknown", "launch_failed")
     code = _error_code(result.stderr)
     details = {"error_code": code}
     if code in ERROR_CODES:
@@ -406,6 +407,7 @@ def interpret_provider(payload: Any, namespace: str) -> Outcome:
 def interpret_aci_capabilities(payload: Any, request: Request) -> Outcome:
     if not isinstance(payload, list):
         return Outcome("unknown", "malformed_response")
+    details: Dict[str, Any] = {"linux_public_entries": 0, "capacity": "unverified"}
     for item in payload:
         if not isinstance(item, dict):
             return Outcome("unknown", "malformed_response")
@@ -416,11 +418,11 @@ def interpret_aci_capabilities(payload: Any, request: Request) -> Outcome:
         max_cpu, max_mem = _number(caps.get("maxCpu")), _number(caps.get("maxMemoryInGB"))
         if max_cpu is None or max_mem is None:
             return Outcome("unknown", "malformed_response")
-        details = {"max_cpu": max_cpu, "max_memory_gb": max_mem, "capacity": "unverified"}
-        if max_cpu < request.cpu_cores or max_mem < request.memory_gb:
-            return Outcome("blocked", "request_exceeds_regional_maximum", details)
-        return Outcome("observed_ok", None, details)
-    return Outcome("blocked", "no_linux_public_capability", {"entries": len(payload)})
+        details["linux_public_entries"] += 1
+        if max_cpu >= request.cpu_cores and max_mem >= request.memory_gb:
+            return Outcome("observed_ok", None, {**details, "max_cpu": max_cpu, "max_memory_gb": max_mem})
+    reason = "request_exceeds_regional_maximum" if details["linux_public_entries"] else "no_linux_public_capability"
+    return Outcome("blocked", reason, details)
 
 
 def interpret_vm_sku(payload: Any, request: Request) -> Outcome:
@@ -449,13 +451,12 @@ def interpret_vm_sku(payload: Any, request: Request) -> Outcome:
 
 
 def interpret_vm_usage(payload: Any, outcomes: Dict[str, Outcome]) -> Outcome:
-    sku = outcomes["vm_sku_availability"]
-    vcpus = float(sku.details["vcpus"])
-    return interpret_usage(payload, [("cores", vcpus), (sku.details["family"], vcpus)])
+    sku = outcomes["vm_sku_availability"].details
+    return interpret_usage(payload, [("cores", sku["vcpus"]), (sku["family"], sku["vcpus"])])
 
 
 def evaluate(check: PlannedCheck, result: CommandResult, outcomes: Dict[str, Outcome]) -> Outcome:
-    if not result.executed or result.timed_out or result.oversized or result.exit_code != 0:
+    if not result.executed or result.launch_failed or result.timed_out or result.oversized or result.exit_code != 0:
         return classify_failure(result)
     try:
         return check.interpret(json.loads(result.stdout), outcomes)
@@ -463,7 +464,6 @@ def evaluate(check: PlannedCheck, result: CommandResult, outcomes: Dict[str, Out
         return Outcome("unknown", "malformed_response")
 
 
-# --------------------------------------------------------------------------- report
 def redact(value: Any, subscription: str) -> Any:
     if isinstance(value, dict):
         return {redact(k, subscription): redact(v, subscription) for k, v in value.items()}
@@ -522,21 +522,19 @@ def render_text(report: Dict[str, Any]) -> str:
         lines.append(f"  [{check['outcome']}] {check['id']}: {check['title']}{reason}")
         if report["mode"] == "plan":
             lines.append(f"      az {check['operation']}")
-    lines.append("blockers: " + (", ".join(report["blockers"]) or "none observed"))
-    lines.append("still unverified (live qualification gates):")
-    lines.extend(f"  - {gate}" for gate in report["unverified_gates"])
-    lines.append(report["claims"])
+    lines += ["blockers: " + (", ".join(report["blockers"]) or "none observed"),
+              "still unverified (live qualification gates):", *(f"  - {g}" for g in report["unverified_gates"]),
+              report["claims"]]
     return "\n".join(lines)
 
 
 def write_report(path: str, report: Dict[str, Any]) -> None:
     with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as handle:
-        json.dump(report, handle, indent=2, sort_keys=True)
-        handle.write("\n")
+        handle.write(json.dumps(report, indent=2, sort_keys=True) + "\n")
 
 
 class _Parser(argparse.ArgumentParser):
-    def error(self, message: str) -> None:  # type: ignore[override]
+    def error(self, message: str) -> None:  # type: ignore[override]  # exit 3 instead of argparse's 2
         raise InputError(message)
 
 
