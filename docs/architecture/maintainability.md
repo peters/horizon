@@ -281,6 +281,12 @@ back into large multi-purpose modules.
   another repository walker. Storage qualification and sibling-name policy remain
   shared; non-root fingerprints survive relocation unchanged. See
   [pack publication](../remote-repository-pack-publication.md).
+  `intake/` combines fixed retained-root initialization with pack/bundle receipt and
+  noncreating observation. Its pure request/response shell keeps strict identities;
+  the Linux leaf owns the create-new claim, held directory bindings and component
+  orchestration. Existing claims never consume payload or grant another receiver.
+  See [combined core intake](../remote-repository-intake.md); CLI/controller and
+  setup/task authority remain separate.
   `checkout/` prepares the seed and raw working namespace together, using exclusive
   descriptor-relative writes, incremental loose decoding and pinned-file verification.
   Literal links are created last. This private logical checkout retains failures;

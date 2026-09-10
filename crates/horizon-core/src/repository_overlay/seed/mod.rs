@@ -14,6 +14,7 @@ pub mod receive;
 mod staging;
 
 use super::namespace::ResolvedRepositoryOverlay;
+pub(crate) const DEFAULT_ENCODED_PACK_BYTES: u64 = 256 * 1024 * 1024;
 /// Worker pack candidates reserve the native terminator and fixed inner-path headroom.
 pub const MAX_PACK_PATH_BYTES: usize =
     super::materialize::MAX_REQUEST_PATH_BYTES - 2 - super::checkout::publication::MAX_SIBLING_NAME_BYTES;
