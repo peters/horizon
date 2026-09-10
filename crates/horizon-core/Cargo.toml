@@ -30,7 +30,7 @@ alacritty_terminal.workspace = true
 rusqlite.workspace = true
 libc.workspace = true
 uuid.workspace = true
-comrak = { version = "0.54", default-features = false }
+comrak = { version = "0.55", default-features = false }
 git2.workspace = true
 sha2.workspace = true
 regex.workspace = true
