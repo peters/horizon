@@ -208,37 +208,40 @@ package_update: true
 packages: [docker.io]
 bootcmd:
   - [ sh, -c, 'printf "{\"event\":\"boot\",\"at\":\"%s\"}\n" "\$(date -u +%FT%T.%3NZ)" >> /var/log/horizon-spike-timing.jsonl' ]
-  # Guest-side lifetime bound, armed on every boot before anything else: at the deadline the VM
-  # deallocates itself through ARM with its own identity (power-only role granted before creation).
-  - |
-    cat > /usr/local/sbin/horizon-spike-deadline.sh <<'SH'
-    #!/bin/sh
-    set -eu
-    T=\$(curl -sf -H Metadata:true "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%3A%2F%2Fmanagement.azure.com%2F&client_id=${CLIENT_ID}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
-    I=\$(curl -sf -H Metadata:true "http://169.254.169.254/metadata/instance/compute?api-version=2021-02-01" | python3 -c 'import json,sys; print(json.load(sys.stdin)["resourceId"])')
-    curl -sf -X POST -H "Authorization: Bearer \$T" -H "Content-Length: 0" "https://management.azure.com\$I/deallocate?api-version=2024-03-01"
-    SH
-    chmod 0700 /usr/local/sbin/horizon-spike-deadline.sh
-    cat > /etc/systemd/system/horizon-spike-deadline.service <<'UNIT'
-    [Unit]
-    Description=Horizon spike lifetime bound: deallocate this VM
-    [Service]
-    Type=oneshot
-    ExecStart=/usr/local/sbin/horizon-spike-deadline.sh
-    UNIT
-    cat > /etc/systemd/system/horizon-spike-deadline.timer <<'UNIT'
-    [Unit]
-    Description=Horizon spike lifetime bound
-    [Timer]
-    OnCalendar=${GUEST_DEADLINE}
-    Persistent=true
-    AccuracySec=1s
-    [Install]
-    WantedBy=timers.target
-    UNIT
-    systemctl daemon-reload
-    systemctl enable --now horizon-spike-deadline.timer
 write_files:
+  # Guest-side lifetime bound: at the deadline the VM deallocates itself through ARM with its own
+  # identity (power-only role granted before creation). Armed as the first runcmd step, before
+  # Docker or the image pull, once systemd is fully up (an early-boot systemctl call deadlocks).
+  - path: /usr/local/sbin/horizon-spike-deadline.sh
+    permissions: '0700'
+    owner: root:root
+    content: |
+      #!/bin/sh
+      set -eu
+      T=\$(curl -sf -H Metadata:true "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%3A%2F%2Fmanagement.azure.com%2F&client_id=${CLIENT_ID}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+      I=\$(curl -sf -H Metadata:true "http://169.254.169.254/metadata/instance/compute?api-version=2021-02-01" | python3 -c 'import json,sys; print(json.load(sys.stdin)["resourceId"])')
+      curl -sf -X POST -H "Authorization: Bearer \$T" -H "Content-Length: 0" "https://management.azure.com\$I/deallocate?api-version=2024-03-01"
+  - path: /etc/systemd/system/horizon-spike-deadline.service
+    permissions: '0644'
+    owner: root:root
+    content: |
+      [Unit]
+      Description=Horizon spike lifetime bound: deallocate this VM
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/horizon-spike-deadline.sh
+  - path: /etc/systemd/system/horizon-spike-deadline.timer
+    permissions: '0644'
+    owner: root:root
+    content: |
+      [Unit]
+      Description=Horizon spike lifetime bound
+      [Timer]
+      OnCalendar=${GUEST_DEADLINE}
+      Persistent=true
+      AccuracySec=1s
+      [Install]
+      WantedBy=timers.target
   - path: /etc/systemd/system/docker.service.d/horizon-workspace.conf
     permissions: '0644'
     owner: root:root
@@ -282,6 +285,9 @@ write_files:
       stamp container_started
       docker logout ${REGISTRY} >/dev/null 2>&1 || true
 runcmd:
+  - [ systemctl, daemon-reload ]
+  - [ systemctl, enable, --now, horizon-spike-deadline.timer ]
+  - [ sh, -c, 'printf "{\"event\":\"deadline_timer_armed\",\"at\":\"%s\"}\n" "\$(date -u +%FT%T.%3NZ)" >> /var/log/horizon-spike-timing.jsonl' ]
   - [ bash, /usr/local/sbin/horizon-spike-bootstrap.sh ]
 EOF
 
