@@ -133,18 +133,27 @@ cleanup() {
     exists=$(azc group exists --name "$RG" -o tsv 2>/dev/null || echo unknown)
   fi
   finished=$(epoch_ms)
-  azc resource list --query "sort([].id)" >"$SAMPLE_DIR/inventory-after.json" 2>/dev/null || echo '"unavailable"' >"$SAMPLE_DIR/inventory-after.json"
-  cmp -s "$SAMPLE_DIR/inventory-before.json" "$SAMPLE_DIR/inventory-after.json" && unchanged=true
+  azc resource list --query "sort([].id)" >"$SAMPLE_DIR/inventory-after.json" 2>/dev/null || echo 'null' >"$SAMPLE_DIR/inventory-after.json"
+  # Proof: every pre-existing resource still exists and nothing remains under the sample group.
+  # Resources added meanwhile by other actors are counted, not treated as this sample's fault.
+  local verdict
+  verdict=$(jq -cn --arg rg "/resourceGroups/$RG/" --slurpfile before "$SAMPLE_DIR/inventory-before.json" --slurpfile after "$SAMPLE_DIR/inventory-after.json" \
+    '($before[0] // null) as $b | ($after[0] // null) as $a
+     | if ($b|type) != "array" or ($a|type) != "array" then {proven:false,reason:"inventory_unavailable"}
+       else {removed:($b - $a), leftover:[$a[] | select(ascii_downcase | contains($rg|ascii_downcase))], added_by_others:(($a - $b)|length)}
+            | .proven = ((.removed|length)==0 and (.leftover|length)==0) end')
+  [ "$(jq -r .proven <<<"$verdict")" = true ] && unchanged=true
   [ "$exists" = false ] && [ "$unchanged" = true ] && DELETE_PROVEN=1
-  journal deleted "$(jq -cn --arg exists "$exists" --argjson ms $((finished - started)) --argjson unchanged $unchanged '{group_exists:$exists,delete_ms:$ms,inventory_unchanged:$unchanged}')"
-  say "resource group exists=$exists inventory_unchanged=$unchanged delete_ms=$((finished - started))"
+  journal deleted "$(jq -cn --arg exists "$exists" --argjson ms $((finished - started)) --argjson v "$verdict" '{group_exists:$exists,delete_ms:$ms,inventory_proof:$v}')"
+  say "resource group exists=$exists inventory_proof=$(jq -c 'del(.removed,.leftover)' <<<"$verdict") delete_ms=$((finished - started))"
 }
 finish() {
-  local code=$?
+  local code=$? expired=0
   trap - EXIT
+  [ "$(date +%s)" -lt "$DEADLINE_EPOCH" ] || expired=1  # decided before cleanup spends its own bound
   cleanup
   if [ "$code" = 0 ] && [ "${#GATE_FAILURES[@]}" -gt 0 ]; then code=7; fi
-  if [ "$code" != 0 ] && [ "$(date +%s)" -ge "$DEADLINE_EPOCH" ]; then code=4; fi  # any failure past the bound is a bound expiry
+  if [ "$code" != 0 ] && [ "$expired" = 1 ]; then code=4; fi  # any failure past the active-phase bound is a bound expiry
   if [ "$CREATED" = 1 ] && [ "$KEEP" = 0 ] && [ "$DELETE_PROVEN" = 0 ]; then code=6; fi  # an unproven delete outranks every other outcome
   journal end "$(jq -cn --argjson code "$code" --arg gates "${GATE_FAILURES[*]:-}" '{exit_code:$code,failed_gates:($gates|split(" ")|map(select(length>0)))}')"
   say "sample $SAMPLE finished with exit $code${GATE_FAILURES[*]:+ (failed gates: ${GATE_FAILURES[*]})}; journal $JOURNAL"
@@ -156,7 +165,11 @@ journal start "$(jq -cn --arg region "$REGION" --arg size "$VM_SIZE" --arg image
 
 ssh-keygen -q -t ed25519 -N "" -C "horizon-spike-474-s${SAMPLE}" -f "$KEY"
 PUBKEY=$(cat "$KEY.pub")
-CLIENT_ID=$(azc identity show --ids "$PULLER_ID" --query clientId -o tsv)
+if [ "$DRY_RUN" = 1 ]; then CLIENT_ID=00000000-0000-0000-0000-000000000000; else
+  trap finish EXIT
+  trap 'exit 130' INT TERM
+  CLIENT_ID=$(azc identity show --ids "$PULLER_ID" --query clientId -o tsv)
+fi
 
 CLOUD_INIT="$SAMPLE_DIR/cloud-init.yaml"
 cat >"$CLOUD_INIT" <<EOF
@@ -218,9 +231,7 @@ if [ "$DRY_RUN" = 1 ]; then
   exit 0
 fi
 
-trap finish EXIT
-trap 'exit 130' INT TERM
-
+# finish() already covers every bounded call; nothing paid exists until CREATED=1.
 azc resource list --query "sort([].id)" >"$SAMPLE_DIR/inventory-before.json"
 journal inventory_before "$(jq -c '{count:length}' "$SAMPLE_DIR/inventory-before.json")"
 
@@ -244,6 +255,14 @@ IP=$(jq -r .publicIpAddress "$CREATE_JSON")
 [[ $IP =~ ^[0-9.]+$ ]] || { journal vm_create_no_ip '{}'; say "vm create returned no public IP"; exit 1; }
 journal vm_created "$(jq -cn --argjson ms $((T_CREATE - T0)) --arg ip "$IP" '{ms_from_t0:$ms,public_ip:$ip}')"
 say "vm created in $((T_CREATE - T0)) ms"
+# Independent cloud-side stop: Azure deallocates the VM at the lifetime deadline even if this
+# controller dies. Disks and the public IP remain until the tagged group is deleted by hand.
+SHUTDOWN_AT=$(date -u -d @"$(( DEADLINE_EPOCH + 60 ))" +%H%M)
+if azc vm auto-shutdown --resource-group "$RG" --name "$VM" --time "$SHUTDOWN_AT" >/dev/null 2>&1; then
+  journal auto_shutdown_scheduled "$(jq -cn --arg at "$SHUTDOWN_AT" '{utc_hhmm:$at}')"
+else
+  journal auto_shutdown_not_scheduled '{}'; say "warning: cloud-side auto-shutdown could not be scheduled"
+fi
 
 NSG=$(azc network nsg list --resource-group "$RG" --query "[0].name" -o tsv)
 SOURCE=${ALLOW_SSH_FROM:-}

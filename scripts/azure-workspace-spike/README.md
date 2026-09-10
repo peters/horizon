@@ -7,9 +7,16 @@ the on-worker storage and retention behaviour, deletes the sample and proves the
 subscription inventory is unchanged. Run
 [`scripts/azure-workspace-preflight`](../azure-workspace-preflight/README.md) first.
 
-Paid creation is bounded by `--max-minutes` (default 120); when the bound is
-reached the harness deletes the sample and exits 4. It never registers a provider,
-never publishes an image and touches nothing outside the sample resource group.
+`--max-minutes` (default 120) bounds the **active phase**: every blocking call runs
+under the remaining time and, once it expires, the harness stops measuring, deletes
+the sample and exits 4. Two exceptions extend exposure and must be included when
+calculating the maximum: cleanup has its own fixed 25-minute bound, and `--keep`
+skips deletion entirely. As an independent safety net the harness schedules Azure
+VM auto-shutdown one minute after the deadline right after creation, so compute is
+deallocated by the platform even if this controller process dies; disks and the
+static IP then persist until the tagged resource group (`horizon-spike-474-*`,
+tag `deadline`) is deleted by hand. It never registers a provider, never publishes
+an image and touches nothing outside the sample resource group.
 
 ## Prerequisites
 
@@ -39,9 +46,11 @@ leaves the sample resource group for manual inspection; delete it yourself.
 
 ## What one sample does
 
-1. Snapshots the subscription resource inventory (`az resource list`).
+1. Snapshots the subscription resource inventory (`az resource list`), used at the end to
+   prove that no pre-existing resource disappeared and nothing remains under the sample
+   group; resources added meanwhile by other actors are counted, not blamed on the sample.
 2. Generates a fresh Ed25519 client key used only for this sample.
-3. Creates the resource group, then a Linux VM (`Canonical:ubuntu-24_04-lts:server`,
+3. Verifies the random group name is absent, creates the resource group, then a Linux VM (`Canonical:ubuntu-24_04-lts:server`,
    key-only SSH, Standard static public IP, no default NSG rules, the pull identity
    assigned, a 32 GiB data disk) with cloud-init that: formats and mounts the data
    disk as ext4 at `/mnt/horizon-workspace`; installs Docker; exchanges the identity's
@@ -49,6 +58,7 @@ leaves the sample resource group for manual inspection; delete it yourself.
    `00000000-0000-0000-0000-000000000000` user; pulls the image by digest; creates and
    starts the worker container with the data disk bound at `/workspace` and the client
    public key in `HORIZON_SSH_PUBLIC_KEY`, publishing container port 22 on VM port 2222.
+   Right after creation it schedules Azure VM auto-shutdown at the lifetime deadline.
 4. Opens VM port 2222 only from the caller's egress address (or `--allow-ssh-from`).
 5. Waits for the endpoint, reads the worker's Ed25519 host key **out of band** through
    ARM-authenticated `az vm run-command` from the retained
@@ -68,15 +78,15 @@ leaves the sample resource group for manual inspection; delete it yourself.
    recorded, not hidden). A failed restart is journaled and guest diagnostics are
    captured out of band; the phase is bounded to 10 minutes.
 9. Deletes the resource group (`--no-wait` plus `group wait --deleted`), confirms
-   absence and compares the inventory. Cleanup runs from an `EXIT` trap, so any
+   absence and evaluates the inventory proof above. Cleanup runs from an `EXIT` trap, so any
    failure after creation still deletes the sample.
 
 Exit codes: `0` every gate held; `3` usage; `4` lifetime bound reached; `5` the worker
 never published a host key; `6` deletion not proven; `7` a functional gate failed
 (storage qualifier, storage negative control, detach independence, deallocate, retention)
-with evidence journaled. An unproven deletion always wins: exit `6` replaces any other code.
-Every blocking `az` call runs under `timeout` with the remaining lifetime bound; cleanup has
-its own fixed 25-minute bound.
+with evidence journaled. Any failure after the active-phase bound expired reports `4`, and
+an unproven deletion always wins: exit `6` replaces any other code. Every blocking `az` and
+`ssh` call runs under `timeout` with the remaining bound.
 
 ## Journal
 
