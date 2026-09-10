@@ -326,7 +326,12 @@ REAPER_NEXT=$(date -u -d "$(jq -r '.next_run // empty' <<<"$REAPER_SCHEDULE")" +
 REAPER_PRINCIPAL=$(azc rest --method get --url "$REAPER_BASE?api-version=2023-11-01" --query identity.principalId -o tsv 2>/dev/null || true)
 REAPER_ROLES=$(azc role assignment list --assignee "${REAPER_PRINCIPAL:-00000000-0000-0000-0000-000000000000}" --role "Desktop Virtualization Power On Off Contributor" --scope "/subscriptions/$SUBSCRIPTION" --query "length(@)" -o tsv 2>/dev/null || echo 0)
 [ "$REAPER_ROLES" != 0 ] || { journal reaper_role_missing '{}'; say "the reaper identity lacks the subscription-scoped power-only role; rerun setup-spike-reaper.sh (nothing created)"; exit 1; }
-journal reaper_present "$(jq -c --arg acct "$REAPER_ACCOUNT" '. + {account:$acct,power_role_assigned:true}' <<<"$REAPER_SCHEDULE")"
+# The published runbook must be exactly the reviewed reaper-runbook.ps1 next to this script.
+EXPECTED_SHA=$(sha256sum "$(dirname "$0")/reaper-runbook.ps1" | cut -c1-64)
+PUBLISHED_SHA=$( { azc rest --method get --url "$REAPER_BASE/runbooks/horizon-spike-deadline-reaper/content?api-version=2023-11-01" 2>/dev/null || true; } | tr -d '\r' | sha256sum | cut -c1-64)
+REAPER_STATE=$(azc rest --method get --url "$REAPER_BASE/runbooks/horizon-spike-deadline-reaper?api-version=2023-11-01" --query properties.state -o tsv 2>/dev/null || echo unknown)
+[ "$REAPER_STATE" = Published ] && [ "$PUBLISHED_SHA" = "$EXPECTED_SHA" ] || { journal reaper_content_mismatch "$(jq -cn --arg st "$REAPER_STATE" --arg e "$EXPECTED_SHA" --arg p "$PUBLISHED_SHA" '{state:$st,expected_sha256:$e,published_sha256:$p}')"; say "the published reaper runbook is not the reviewed content (state $REAPER_STATE); rerun setup-spike-reaper.sh (nothing created)"; exit 1; }
+journal reaper_present "$(jq -c --arg acct "$REAPER_ACCOUNT" --arg sha "$EXPECTED_SHA" '. + {account:$acct,power_role_assigned:true,runbook_sha256:$sha}' <<<"$REAPER_SCHEDULE")"
 # Read-only provider preflight for the auto-shutdown schedule; registration is a separate approval.
 DEVTESTLAB=$(azc provider show --namespace Microsoft.DevTestLab --query registrationState -o tsv 2>/dev/null || echo unknown)
 [ "$DEVTESTLAB" = Registered ] || { journal devtestlab_not_registered "$(jq -cn --arg s "$DEVTESTLAB" '{registration_state:$s}')"; say "Microsoft.DevTestLab is $DEVTESTLAB; the platform-side stop cannot be scheduled, so nothing is created"; exit 1; }

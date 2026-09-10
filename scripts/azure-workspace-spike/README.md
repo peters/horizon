@@ -18,7 +18,10 @@ runbook running every 15 minutes with a power-only identity that deallocates eve
 VM tagged `purpose=horizon-azure-vm-spike` whose `deadline` tag (UTC) has passed.
 Every spike VM carries both tags in the same create call, so a VM cannot exist
 without them, and the harness refuses to create anything unless the reaper's
-schedule is present and enabled (journaled as `reaper_present`). `--prove-reaper`
+15-minute schedule is enabled with a future run, its identity holds the power-only
+role, and the published runbook is byte-identical to
+[`reaper-runbook.ps1`](reaper-runbook.ps1) (journaled as `reaper_present` with the
+content hash). `--prove-reaper`
 moves a sample's deadline tag into the past after the restart checks and requires
 the reaper alone to deallocate the VM within 25 minutes (gate `reaper_bound`).
 Maximum compute exposure after a lost controller is therefore the deadline plus one
