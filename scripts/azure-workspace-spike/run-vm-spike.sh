@@ -8,9 +8,10 @@
 # journaled privately. Nothing here registers a provider, publishes an image or
 # touches resources outside the sample resource group. Run the read-only preflight first.
 #
-# Exit codes: 0 every gate held; 3 usage; 4 lifetime bound reached (cleanup attempted);
-# 5 worker never published a host key; 6 deletion not proven; 7 a functional gate failed
-# (evidence journaled, resources deleted).
+# Exit codes: 0 every gate held; 1 setup or provider failure before the gates (cleanup attempted);
+# 3 usage; 4 lifetime bound reached (cleanup attempted); 5 worker never published a host key;
+# 6 deletion not proven; 7 a functional gate failed (evidence journaled, resources deleted);
+# 130 interrupted (cleanup attempted). Any other status is normalized to 1.
 set -euo pipefail
 
 usage() {
@@ -57,7 +58,7 @@ done
 [[ $SAMPLE =~ ^[1-9]$ ]] || { echo "--sample must be 1-9" >&2; exit 3; }
 [[ $MAX_MINUTES =~ ^[1-9][0-9]{1,2}$ ]] || { echo "--max-minutes must be 10-999 without leading zeros" >&2; exit 3; }
 [ -n "$JOURNAL_DIR" ] || { echo "--journal-dir is required" >&2; exit 3; }
-for tool in az ssh ssh-keygen ssh-keyscan nc jq curl; do command -v "$tool" >/dev/null || { echo "missing tool: $tool" >&2; exit 3; }; done
+for tool in az ssh ssh-keygen ssh-keyscan nc jq curl timeout; do command -v "$tool" >/dev/null || { echo "missing tool: $tool" >&2; exit 3; }; done
 
 REGISTRY=${IMAGE%%/*}
 RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)
@@ -74,11 +75,15 @@ JOURNAL="$SAMPLE_DIR/journal.jsonl"
 KEY="$SAMPLE_DIR/client-ed25519"
 KNOWN_HOSTS="$SAMPLE_DIR/known_hosts"
 GATE_FAILURES=()
-CREATED=0 CLEANED=0 DELETE_PROVEN=0 CLEANUP_DEADLINE=0
+CREATED=0 CLEANED=0 DELETE_PROVEN=0 CLEANUP_DEADLINE=0 PHASE_DEADLINE=0
 
 # Every blocking call runs under the remaining lifetime bound; cleanup shares one fixed 25-minute deadline.
 remaining_seconds() {
-  if [ "$CLEANED" = 1 ]; then echo $(( CLEANUP_DEADLINE - $(date +%s) )); else echo $(( DEADLINE_EPOCH - $(date +%s) )); fi
+  local now limit; now=$(date +%s)
+  if [ "$CLEANED" = 1 ]; then echo $(( CLEANUP_DEADLINE - now )); return; fi
+  limit=$DEADLINE_EPOCH
+  [ "$PHASE_DEADLINE" -gt 0 ] && [ "$PHASE_DEADLINE" -lt "$limit" ] && limit=$PHASE_DEADLINE
+  echo $(( limit - now ))
 }
 bounded() {
   local remaining rc; remaining=$(remaining_seconds)
@@ -154,6 +159,7 @@ finish() {
   cleanup
   if [ "$code" = 0 ] && [ "${#GATE_FAILURES[@]}" -gt 0 ]; then code=7; fi
   if [ "$code" != 0 ] && [ "$expired" = 1 ]; then code=4; fi  # any failure past the active-phase bound is a bound expiry
+  case "$code" in 0|3|4|5|6|7|130) ;; *) code=1 ;; esac
   if [ "$CREATED" = 1 ] && [ "$KEEP" = 0 ] && [ "$DELETE_PROVEN" = 0 ]; then code=6; fi  # an unproven delete outranks every other outcome
   journal end "$(jq -cn --argjson code "$code" --arg gates "${GATE_FAILURES[*]:-}" '{exit_code:$code,failed_gates:($gates|split(" ")|map(select(length>0)))}')"
   say "sample $SAMPLE finished with exit $code${GATE_FAILURES[*]:+ (failed gates: ${GATE_FAILURES[*]})}; journal $JOURNAL"
@@ -235,6 +241,9 @@ fi
 azc resource list --query "sort([].id)" >"$SAMPLE_DIR/inventory-before.json"
 journal inventory_before "$(jq -c '{count:length}' "$SAMPLE_DIR/inventory-before.json")"
 
+# Read-only provider preflight for the auto-shutdown schedule; registration is a separate approval.
+DEVTESTLAB=$(azc provider show --namespace Microsoft.DevTestLab --query registrationState -o tsv 2>/dev/null || echo unknown)
+[ "$DEVTESTLAB" = Registered ] || { journal devtestlab_not_registered "$(jq -cn --arg s "$DEVTESTLAB" '{registration_state:$s}')"; say "Microsoft.DevTestLab is $DEVTESTLAB; the platform-side stop cannot be scheduled, so nothing is created"; exit 1; }
 EXISTS=$(azc group exists --name "$RG" -o tsv 2>/dev/null || echo unknown)
 [ "$EXISTS" = false ] || { journal group_name_not_free "$(jq -cn --arg e "$EXISTS" '{group_exists:$e}')"; say "refusing to claim $RG (exists=$EXISTS)"; exit 1; }
 T0=$(epoch_ms)
@@ -341,12 +350,13 @@ POWER=$(azc vm get-instance-view --resource-group "$RG" --name "$VM" --query "in
 journal deallocated "$(jq -cn --argjson ms $((T_STOPPED - T_STOP)) --argjson ok $STOP_OK --arg power "$POWER" '{stop_ms:$ms,call_succeeded:$ok,power_state:$power}')"
 gate deallocated "$([ "$STOP_OK" = true ] && [ "$POWER" = PowerState/deallocated ] && echo true || echo false)"
 T_START=$(epoch_ms)
+# The whole restart phase (start call, lookup, both polls, evidence) shares one 10-minute bound.
+RESTART_DEADLINE=$(( $(date +%s) + RESTART_WAIT_SECONDS )); PHASE_DEADLINE=$RESTART_DEADLINE
 START_OK=true; azc vm start --resource-group "$RG" --name "$VM" >/dev/null || START_OK=false
 IP_AFTER=$(azc vm show -d --resource-group "$RG" --name "$VM" --query publicIps -o tsv 2>/dev/null || echo unknown)
 IP_SAME=false; [ "$IP" = "$IP_AFTER" ] && IP_SAME=true
 KEY_SAME=false SESSION=unknown RETAINED_MARKER=false HEARTBEAT=0 MOUNTED=false
-RESTART_DEADLINE=$(( $(date +%s) + RESTART_WAIT_SECONDS ))
-if [ "$START_OK" = true ] && [ "$IP_SAME" = true ] && wait_for "$RESTART_WAIT_SECONDS" nc -z -w 3 "$IP_AFTER" 2222; then
+if [ "$START_OK" = true ] && [ "$IP_SAME" = true ] && wait_for $(( RESTART_DEADLINE - $(date +%s) )) nc -z -w 3 "$IP_AFTER" 2222; then
   SCANNED=$(ssh-keyscan -p 2222 -t ed25519 -T 10 "$IP_AFTER" 2>/dev/null | awk '{print $2" "$3}' | head -1 || true)
   [ "$SCANNED" = "$HOST_KEY" ] && KEY_SAME=true
   if [ "$KEY_SAME" = true ] && wait_for $(( RESTART_DEADLINE - $(date +%s) )) ssh_worker "$IP_AFTER" true; then
@@ -356,6 +366,7 @@ if [ "$START_OK" = true ] && [ "$IP_SAME" = true ] && wait_for "$RESTART_WAIT_SE
   fi
 fi
 T_RESTARTED=$(epoch_ms)
+PHASE_DEADLINE=0
 if [ "$KEY_SAME" != true ] || [ "$RETAINED_MARKER" != true ] || [ "$MOUNTED" != true ]; then
   say "restart verification failed; capturing guest diagnostics out of band"
   run_command 'systemctl is-system-running; systemctl list-units --failed --no-legend; systemctl status docker --no-pager | head -20; findmnt /mnt/horizon-workspace; docker ps -a; docker logs --tail 20 horizon-worker 2>&1; journalctl -b -u docker --no-pager | tail -20' >"$SAMPLE_DIR/restart-diagnostics.txt" 2>&1 || true

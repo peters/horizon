@@ -22,7 +22,9 @@ an image and touches nothing outside the sample resource group.
 
 - A GNU/Linux controller (the harness uses GNU `timeout`, `date -d` and millisecond
   `%N` timestamps; stock macOS tools do not provide them).
-- `az` logged in to the target subscription; `ssh`, `ssh-keygen`, `ssh-keyscan`, `nc`, `jq`, `curl`.
+- `az` logged in to the target subscription; `ssh`, `ssh-keygen`, `ssh-keyscan`, `nc`, `jq`, `curl`, `timeout`.
+- `Microsoft.DevTestLab` registered in the subscription (read-only check; the harness never
+  registers providers), because the platform-side auto-shutdown is a DevTestLab schedule.
 - A worker image published by digest to an Azure Container Registry in the same
   subscription. The image build is documented in
   [`containers/remote-worker/README.md`](../../containers/remote-worker/README.md).
@@ -82,11 +84,14 @@ leaves the sample resource group for manual inspection; delete it yourself.
    absence and evaluates the inventory proof above. Cleanup runs from an `EXIT` trap, so any
    failure after creation still deletes the sample.
 
-Exit codes: `0` every gate held; `3` usage; `4` lifetime bound reached; `5` the worker
+Exit codes: `0` every gate held; `1` a setup or provider failure before the gates (for
+example `Microsoft.DevTestLab` not registered, so the platform-side stop cannot be
+scheduled; cleanup still runs); `3` usage; `4` lifetime bound reached; `5` the worker
 never published a host key; `6` deletion not proven; `7` a functional gate failed
 (storage qualifier, storage negative control, detach independence, deallocate, retention)
-with evidence journaled. Any failure after the active-phase bound expired reports `4`, and
-an unproven deletion always wins: exit `6` replaces any other code. Every blocking `az` and
+with evidence journaled; `130` interrupted (cleanup still runs). Any other status is
+normalized to `1`. Any failure after the active-phase bound expired reports `4`, and an
+unproven deletion always wins: exit `6` replaces any other code. Every blocking `az` and
 `ssh` call runs under `timeout` with the remaining bound.
 
 ## Journal

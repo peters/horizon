@@ -109,8 +109,10 @@ Provider namespaces per candidate: `aci` requires `Microsoft.ContainerInstance`;
 `vm` requires `Microsoft.Compute` and `Microsoft.Network`; `container-apps`
 requires `Microsoft.App` and `Microsoft.Network`. `Microsoft.ContainerRegistry`
 and `Microsoft.ManagedIdentity` are checked for every candidate because image
-access must go through a managed identity, and `Microsoft.Storage` or
-`Microsoft.OperationalInsights` where the candidate's documented setup needs them.
+access must go through a managed identity, `Microsoft.DevTestLab` for `vm` because
+the spike's platform-side auto-shutdown is a DevTestLab schedule, and
+`Microsoft.Storage` or `Microsoft.OperationalInsights` where the candidate's
+documented setup needs them.
 An unregistered provider is reported as a blocker; registering it is a separate
 approval, not something this tool does.
 
