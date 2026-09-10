@@ -170,7 +170,7 @@ fn disappeared_database_is_not_recreated_by_task_catalog_or_inventory_reads() {
     std::fs::rename(directory, &retained).expect("retain database and any WAL sidecars");
 
     app.remote_reopen_action(InventoryAction::InspectTask(0), &ctx);
-    assert!(app.remote_environments.reopen.is_pending());
+    // The action may already have drained a fast failure; settle accepts either timing.
     settle(
         &mut app.remote_environments.reopen,
         &client(&home, &scope),

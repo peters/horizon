@@ -6,6 +6,7 @@ mod protocol;
 mod receive;
 mod setup;
 mod setup_checkout;
+mod storage_status;
 
 use std::{
     io::{self, Read, Write},
@@ -30,12 +31,13 @@ fn main() -> ExitCode {
                     | "pack-status"
                     | "intake"
                     | "intake-status"
+                    | "storage-status"
             )
         )
     {
         let _ = writeln!(
             io::stderr().lock(),
-            "Usage: horizon-repository materialize|setup|setup-status|setup-binding|setup-checkout|receive-overlay|overlay-status|receive-pack|pack-status|intake|intake-status < request"
+            "Usage: horizon-repository materialize|setup|setup-status|setup-binding|setup-checkout|receive-overlay|overlay-status|receive-pack|pack-status|intake|intake-status|storage-status < request"
         );
         return ExitCode::from(2);
     }
@@ -63,6 +65,7 @@ fn main() -> ExitCode {
         Some("pack-status") => pack::run(pack::Command::Observe, &mut input, &mut output, &mut diagnostics),
         Some("intake") => intake::run(false, &mut input, &mut output, &mut diagnostics),
         Some("intake-status") => intake::run(true, &mut input, &mut output, &mut diagnostics),
+        Some("storage-status") => storage_status::run(&mut input, &mut output, &mut diagnostics),
         _ => run(&mut input, &mut output, &mut diagnostics),
     }
 }

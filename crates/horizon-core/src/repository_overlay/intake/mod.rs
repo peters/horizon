@@ -2,6 +2,7 @@
 //! Neither worker intake nor controller handoff grants setup or task authority.
 
 pub mod setup;
+pub mod storage_status;
 
 #[cfg(target_os = "linux")]
 pub mod controller;
@@ -20,6 +21,9 @@ use std::{fmt, io::Read, path::PathBuf};
 pub const REQUEST_LIMIT: usize = 32 * 1024;
 pub const RESPONSE_LIMIT: usize = 128 * 1024;
 pub const PACK_LIMIT: u64 = super::seed::DEFAULT_ENCODED_PACK_BYTES;
+
+#[cfg(target_os = "linux")]
+const WORKER_ROOT: &str = "/workspace/.horizon-worker";
 
 /// Bounded immutable recovery identity. Constructing/deserializing it grants no writes.
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -233,12 +237,7 @@ fn execute(request: &IntakeRequest, input: Option<&mut dyn Read>, cancelled: &dy
     }
     #[cfg(target_os = "linux")]
     {
-        linux::execute(
-            std::path::Path::new("/workspace/.horizon-worker"),
-            request,
-            input,
-            cancelled,
-        )
+        linux::execute(std::path::Path::new(WORKER_ROOT), request, input, cancelled)
     }
     #[cfg(not(target_os = "linux"))]
     {
