@@ -30,8 +30,8 @@ ARM = "https://management.azure.com"
 API_LOCATIONS = "2022-12-01"
 API_ACI = "2026-07-01"
 API_APP = "2025-07-01"
-DEFAULT_TIMEOUT_SECONDS = 60
-MAX_TIMEOUT_SECONDS = 300
+DEFAULT_TIMEOUT_SECONDS = 150  # az vm list-skus filters client-side and needs about a minute
+MAX_TIMEOUT_SECONDS = 600
 OUTPUT_LIMIT_BYTES = 4 * 1024 * 1024
 
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -71,7 +71,7 @@ ERROR_CODES = {
 }
 UNVERIFIED_GATES = [
     "create permission for the candidate resource type (a successful read is not a write grant)",
-    "actual regional capacity at creation time (quota headroom is not capacity)",
+    "actual regional capacity at creation time (quota headroom is not capacity; Container Apps core quota is per environment)",
     "direct key-only SSH reachability and host-key pinning on a real worker",
     "compact worker image pull through a user-assigned managed identity without registry passwords",
     "on-worker storage qualification: healthy journaled ext4 accepted by the Rust qualifier, not a disk SKU or share",
@@ -214,7 +214,7 @@ def plan_checks(request: Request) -> List[PlannedCheck]:
             _az(request, "provider", "show", "--namespace", namespace, *sub,
                 "--query", "{namespace:namespace,registrationState:registrationState}"),
             lambda payload, _, ns=namespace: interpret_provider(payload, ns), (account,)))
-    loc, regional = f"/locations/{request.region}", (account, region)
+    loc, regional = f"/locations/{request.region}", (account, region, f"provider_{spec['required'][0].split('.', 1)[1].lower()}")
     if request.candidate == "aci":
         checks.append(PlannedCheck(
             "aci_regional_quota", "Container Instances regional usage versus quota", "required",
@@ -239,8 +239,7 @@ def plan_checks(request: Request) -> List[PlannedCheck]:
         checks.append(PlannedCheck(
             "container_apps_regional_quota", "Container Apps regional usage versus quota", "required",
             _rest(request, f"/providers/Microsoft.App{loc}/usages", API_APP, "value"),
-            lambda payload, _: interpret_usage(payload, [("ManagedEnvironmentCount", 1),
-                                                         ("ManagedEnvironmentCores", request.cpu_cores)]), regional))
+            lambda payload, _: interpret_usage(payload, [("ManagedEnvironmentCount", 1)]), regional))
     return checks
 
 
@@ -322,7 +321,8 @@ def classify_failure(result: CommandResult) -> Outcome:
 
 
 def _number(value: Any) -> Optional[float]:
-    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+    numeric = isinstance(value, (int, float)) and not isinstance(value, bool)  # az vm list-usage emits numeric strings
+    return float(value) if numeric or (isinstance(value, str) and re.fullmatch(r"-?\d+(?:\.\d+)?", value)) else None
 
 
 def _usage_entries(payload: Any) -> Optional[Dict[str, Dict[str, float]]]:

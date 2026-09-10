@@ -64,8 +64,7 @@ def happy_fixture(candidate):
         fixture.update(vm_sku_availability=VM_SKU,
                        vm_regional_quota=usage(("cores", 4, 10), ("standardDSv3Family", 0, 8)))
     else:
-        fixture["container_apps_regional_quota"] = usage(("ManagedEnvironmentCount", 1, 10),
-                                                         ("ManagedEnvironmentCores", 2, 20))
+        fixture["container_apps_regional_quota"] = usage(("ManagedEnvironmentCount", 1, 10), ("SandboxCores", 0, 200))
     return fixture
 
 
@@ -111,7 +110,7 @@ class OfflineAndInputTests(Harness):
             ["--candidate", "vm", *BASE, "--live"],
             ["--candidate", "aci", *BASE, "--vm-size", "Standard_D4s_v3"],
             ["--candidate", "aci", *BASE, "--cpu-cores", "0"], ["--candidate", "aci", *BASE, "--fixture", ""],
-            ["--candidate", "aci", *BASE, "--timeout-seconds", "9999", "--live"],
+            ["--candidate", "aci", *BASE, "--timeout-seconds", "99999", "--live"],
             ["--candidate", "aci", *BASE, "--live", "--fixture", "/nonexistent.json"],
             ["--candidate", "aci", *BASE, "--cpu-cores", "abc"], ["--candidate", "aks", *BASE],
         ]
@@ -282,14 +281,14 @@ class InterpretationTests(Harness):
     def test_quota_sufficient_exhausted_missing_unknown_and_contradictory(self):
         cores = ("StandardCores", 10, 100)
         cases = [
-            (usage(("ContainerGroups", 3, 100), cores), "observed_ok", None),
+            (usage(("ContainerGroups", "3", "100"), cores), "observed_ok", None),
             (usage(("ContainerGroups", 100, 100), cores), "blocked", "quota_exhausted"),
             (usage(("ContainerGroups", 3, 100), ("StandardCores", 99, 100)), "blocked", "quota_exhausted"),
             (usage(("ContainerGroups", 0, -1), cores), "observed_ok", None),
             (usage(cores), "unknown", "quota_entry_missing"),
             (usage(("ContainerGroups", 101, 100), cores), "unknown", "contradictory_response"),
             (usage(("ContainerGroups", 101, 100), ("StandardCores", 100, 100)), "blocked", "quota_exhausted"),
-            ({"exit_code": 0, "stdout": [{"name": {"value": "ContainerGroups"}, "currentValue": "3", "limit": 100}]},
+            ({"exit_code": 0, "stdout": [{"name": {"value": "ContainerGroups"}, "currentValue": "3x", "limit": True}]},
              "unknown", "malformed_response"),
             ({"exit_code": 0, "stdout": "not json {"}, "unknown", "malformed_response"),
             ({"exit_code": 0, "stdout": [{"name": "ContainerGroups", "currentValue": 3, "limit": 100}]}, "unknown",
@@ -360,13 +359,14 @@ class InterpretationTests(Harness):
             self.assertEqual(self.check(self.report("vm", fixture, extra)[1], "vm_sku_availability")["reason"],
                              "malformed_response", bad)
 
-    def test_container_apps_quota_uses_requested_cores(self):
+    def test_container_apps_quota_checks_environment_count_only(self):
         fixture = happy_fixture("container-apps")
-        fixture["container_apps_regional_quota"] = usage(("ManagedEnvironmentCount", 1, 10),
-                                                         ("ManagedEnvironmentCores", 19, 20))
+        fixture["container_apps_regional_quota"] = usage(("ManagedEnvironmentCount", 10, 10), ("SandboxCores", 0, 200))
         report = self.report("container-apps", fixture)[1]
         self.assertEqual(self.check(report, "container_apps_regional_quota")["reason"], "quota_exhausted")
-        self.assertEqual(self.report("container-apps", fixture, ["--cpu-cores", "1"])[0], 0)
+        fixture["provider_app"] = {"exit_code": 0, "stdout": {"namespace": "Microsoft.App", "registrationState": "NotRegistered"}}
+        self.assertEqual(self.check(self.report("container-apps", fixture)[1], "container_apps_regional_quota")["reason"],
+                         "prerequisite_failed")
 
 
 class OutputSafetyTests(Harness):

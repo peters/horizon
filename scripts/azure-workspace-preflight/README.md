@@ -66,7 +66,7 @@ Options:
 | `--live` / `--fixture PATH` | Live reads or synthetic responses. Mutually exclusive; default is plan mode. |
 | `--report PATH` | Write the JSON report to a new private file (mode 0600). Existing files are refused. |
 | `--json` | Print the JSON report instead of the text summary. |
-| `--timeout-seconds`, `--az-path` | Per-command bound (default 60, max 300) and CLI executable. |
+| `--timeout-seconds`, `--az-path` | Per-command bound (default 150, max 600; `az vm list-skus` filters client-side and needs about a minute) and CLI executable. |
 
 Exit codes: `0` planned or no blockers observed, `1` blocked, `2` unknown,
 `3` rejected input including argument-parser errors (nothing executed), `4` report
@@ -83,8 +83,9 @@ stream exceeds 4 MiB the process group is killed, the retained prefix is not
 interpreted, and the check reports `oversized_output`. A CLI that cannot be
 launched at all reports `launch_failed`. No raw output is ever printed. Checks declare prerequisites: when the account context is
 blocked nothing else runs, when the region is unavailable the regional checks
-are skipped, and the VM quota check waits for a resolved SKU. Skipped checks
-report `unknown` with reason `prerequisite_failed`.
+are skipped, candidate quota and capability reads wait for the candidate's
+primary provider to be registered, and the VM quota check waits for a resolved
+SKU. Skipped checks report `unknown` with reason `prerequisite_failed`.
 
 | Check | Operation | Source |
 | --- | --- | --- |
@@ -145,9 +146,10 @@ response (for example `AuthorizationFailed`, `MissingSubscriptionRegistration`,
 The report records the code, never the message.
 
 Quota checks compare `limit - currentValue` against the requested worker size:
-`ContainerGroups` and `StandardCores` for `aci`, `ManagedEnvironmentCount` and
-`ManagedEnvironmentCores` for `container-apps`, and Compute `cores` plus the SKU
-family for `vm`. A negative limit is treated as unlimited. Every quota and SKU
+`ContainerGroups` and `StandardCores` for `aci`, `ManagedEnvironmentCount` for
+`container-apps` (the subscription-scoped usage list observed live does not carry
+a core entry; Container Apps core quota is per managed environment and stays an
+unverified gate), and Compute `cores` plus the SKU family for `vm`. A negative limit is treated as unlimited. Every quota and SKU
 detail carries `"capacity": "unverified"` because quota headroom is not regional
 capacity. For `vm`, the SKU response supplies the family name and vCPU count used
 for the family quota lookup; when the SKU read does not succeed, the quota check
@@ -176,8 +178,7 @@ same way.
   advertised durable volume satisfies that by description; only an on-worker
   check can. This tool cannot and does not evaluate it.
 - Regional quota entry names come from the documented responses (`ContainerGroups`,
-  `ManagedEnvironmentCount`, `ManagedEnvironmentCores`, Compute `cores` and the
-  SKU family). The Container Instances cores entry is expected as `StandardCores`,
+  `ManagedEnvironmentCount`, Compute `cores` and the SKU family). The Container Instances cores entry is expected as `StandardCores`,
   which the official sample response does not show; if a live response names it
   differently the check reports `quota_entry_missing` and the requirement list
   needs updating. A missing entry never passes.
