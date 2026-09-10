@@ -145,15 +145,19 @@ impl InteractiveWorkerProvider for RunPodInteractiveWorkerProvider {
 
     fn ensure_worker(&self, request: &InteractiveWorkerRequest) -> Result<InteractiveWorkerEnsure, Self::Error> {
         if !request.is_valid_for(self.provider()) {
+            super::diagnostics::ensure_failed(&RunPodError::InvalidTarget);
             return Err(RunPodError::InvalidTarget);
         }
-        let ensured = self.client.ensure_interactive_worker(
-            request.workflow_id,
-            request.job_id,
-            &request.target,
-            &self.profile,
-            &request.ssh_public_key,
-        )?;
+        let ensured = self
+            .client
+            .ensure_interactive_worker(
+                request.workflow_id,
+                request.job_id,
+                &request.target,
+                &self.profile,
+                &request.ssh_public_key,
+            )
+            .inspect_err(super::diagnostics::ensure_failed)?;
         Ok(match ensured {
             RunPodEnsure::Created(status) => {
                 InteractiveWorkerEnsure::Created(self.adapt_status(status, &request.target, &request.ssh_public_key))
