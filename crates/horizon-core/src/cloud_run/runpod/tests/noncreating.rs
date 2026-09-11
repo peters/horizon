@@ -4,13 +4,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 fn read_only_provider(transport: FakeTransport) -> (RunPodInteractiveWorkerProvider, Arc<AtomicUsize>) {
     let claims = Arc::new(AtomicUsize::new(0));
     let calls = claims.clone();
-    let client = RunPodClient {
-        transport: Box::new(transport),
-        creation_fence: Box::new(move |_, _, _: &WorkerTarget, _: &str| {
-            calls.fetch_add(1, Ordering::SeqCst);
-            Ok(true)
-        }),
-    };
+    let client = RunPodClient::with_transport_and_fence(transport, move |_, _, _: &WorkerTarget, _: &str| {
+        calls.fetch_add(1, Ordering::SeqCst);
+        Ok(true)
+    });
     (
         RunPodInteractiveWorkerProvider::new(client, profile(), FakeHostKeySource::new(Some(ed25519_key(73)))),
         claims,

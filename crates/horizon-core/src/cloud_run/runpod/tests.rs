@@ -318,18 +318,16 @@ fn retries_reuse_one_exact_worker_and_reject_ambiguity() {
     let transport = FakeTransport::with_create_response(api_pod(workflow_id, job_id, &target, Some(420_000)));
     let observer = transport.clone();
     let expected_target = target.clone();
-    let client = RunPodClient {
-        transport: Box::new(transport),
-        creation_fence: Box::new(
-            move |actual_workflow, actual_job, actual_target: &WorkerTarget, name: &str| {
-                assert_eq!(actual_workflow, workflow_id);
-                assert_eq!(actual_job, job_id);
-                assert_eq!(actual_target, &expected_target);
-                assert_eq!(name, resource_name(workflow_id, job_id));
-                Ok(false)
-            },
-        ),
-    };
+    let client = RunPodClient::with_transport_and_fence(
+        transport,
+        move |actual_workflow, actual_job, actual_target: &WorkerTarget, name: &str| {
+            assert_eq!(actual_workflow, workflow_id);
+            assert_eq!(actual_job, job_id);
+            assert_eq!(actual_target, &expected_target);
+            assert_eq!(name, resource_name(workflow_id, job_id));
+            Ok(false)
+        },
+    );
     assert!(matches!(
         client.ensure_worker(workflow_id, job_id, &target, &profile()),
         Err(RunPodError::CreationUnresolved { .. })
