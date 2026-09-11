@@ -131,7 +131,8 @@ def api_target(arguments):
 
 def run_gh(arguments):
     environment = gh_environment(os.environ)
-    if arguments in (['--version'], ['version']) or arguments[:1] == ['help'] or '--help' in arguments:
+    if (arguments in (['--version'], ['version']) or arguments[:1] == ['help']
+            or any(flag in arguments for flag in ('--help', '-h'))):
         os.execve(GH, [GH, *arguments], environment)
     require(environment.get('GH_HOST', 'github.com') == 'github.com')
     # Explicit GH_HOST also filters inferred Git remotes, preventing a different

@@ -180,7 +180,8 @@ class CredentialsTests(unittest.TestCase):
         with patch.dict(C.os.environ, {}, clear=True), patch.object(C.os, 'execve') as execute:
             # execve does not return in production; emulate that control flow.
             execute.side_effect = SystemExit(0)
-            for args in (['--version'], ['version'], ['help'], ['repo', 'view', '--help']):
+            for args in (['--version'], ['version'], ['help'], ['-h'], ['repo', 'view', '-h'],
+                         ['repo', 'view', '--help']):
                 with self.assertRaises(SystemExit):
                     C.run_gh(args)
                 self.assertNotIn('GH_TOKEN', execute.call_args.args[2])
@@ -230,6 +231,13 @@ class CredentialsTests(unittest.TestCase):
         smoke = (HERE.parents[1] / 'scripts/run-remote-worker-smoke.sh').read_text()
         self.assertIn('slow-identity,dst=/usr/local/bin/horizon-worker-host-identity,readonly', smoke)
         self.assertNotIn('slow-gh', smoke)
+
+    def test_tokenless_startup_installs_helper_outside_token_gate(self):
+        entrypoint = (HERE / 'entrypoint.sh').read_text()
+        before_identity = entrypoint.split('\n/usr/local/bin/horizon-worker-host-identity', 1)[0]
+        unconditional = before_identity.rsplit('\nfi\n', 1)[1]
+        self.assertIn("git config --global --replace-all credential.https://github.com.helper ''", unconditional)
+        self.assertIn('git config --global --add credential.https://github.com.helper /usr/local/bin/horizon-github-credential', unconditional)
 
     def test_real_git_fill_concurrent_no_config_or_secret_storage(self):
         helper = self.root / 'helper.py'

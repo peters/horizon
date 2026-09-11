@@ -387,6 +387,29 @@ docker run --detach \
 
 worker_a_port=$(wait_for_host_key "${worker_a}" "${temp_dir}/worker-a-known-hosts")
 worker_b_port=$(wait_for_host_key "${worker_b}" "${temp_dir}/worker-b-known-hosts")
+docker exec "${worker_b}" python3 -c '
+import os, pathlib, subprocess, tempfile
+assert not pathlib.Path("/run/horizon/github-token").exists()
+before = pathlib.Path("/root/.gitconfig").read_bytes()
+with tempfile.TemporaryDirectory(prefix="horizon-tokenless-credentials-") as temporary:
+    root = pathlib.Path(temporary)
+    marker, fallback = root / "fallback-called", root / "fallback"
+    fallback.write_text("#!/usr/bin/python3\nfrom pathlib import Path\n"
+        + "Path(" + repr(str(marker)) + ").write_text(\"called\")\n"
+        + "print(\"username=fallback\\npassword=fallback\\n\")\n")
+    fallback.chmod(0o700)
+    result = subprocess.run(["git", "-c", "credential.https://github.com.helper=" + str(fallback),
+        "credential", "fill"], input=b"protocol=https\nhost=github.com\n\n",
+        env=dict(os.environ, GIT_ASKPASS=str(fallback), GIT_TERMINAL_PROMPT="0"),
+        capture_output=True, timeout=10, check=False)
+    assert result.returncode != 0 and not result.stdout
+    assert b"told us to quit" in result.stderr and not marker.exists()
+assert pathlib.Path("/root/.gitconfig").read_bytes() == before
+assert not pathlib.Path("/run/horizon/github-token").exists()
+for arguments in (["gh", "-h"], ["gh", "repo", "view", "-h"]):
+    subprocess.run(arguments, capture_output=True, timeout=10, check=True)
+print("PASS tokenless installed helper stops Git fallback and prompts; short help remains available")
+'
 # Before any task starts, PID 1 may have only SSH children, never a watchdog shell.
 persistent_startup_processes=$(docker exec "${worker_b}" ps -eo ppid=,comm=) ||
   fail "could not inspect persistent worker startup processes"
