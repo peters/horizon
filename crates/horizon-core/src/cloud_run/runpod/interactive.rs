@@ -8,8 +8,9 @@ use super::super::{
     interactive_worker_stop::{InteractiveWorkerStop, InteractiveWorkerStopProvider},
 };
 use super::{
-    RunPodCleanup, RunPodClient, RunPodEnsure, RunPodError, RunPodLifecycle, RunPodProfile, RunPodSshEndpoint,
-    RunPodWorker, RunPodWorkerStatus, resource_name,
+    RunPodCleanup, RunPodClient, RunPodEnsure, RunPodError, RunPodHostTrust, RunPodLifecycle,
+    RunPodNetworkVolumeExpectation, RunPodProfile, RunPodSshEndpoint, RunPodWorker, RunPodWorkerStatus,
+    network_attachment::NetworkBinding, resource_name,
 };
 
 /// Trusted source for the runtime SSH host key of one exact worker.
@@ -50,6 +51,25 @@ pub struct RunPodInteractiveWorkerProvider {
 }
 
 impl RunPodInteractiveWorkerProvider {
+    /// Bind one caller-authorized selection to the complete persistent request.
+    /// The caller must retain this selection before creation and reuse it on recovery.
+    /// This does not prove volume ownership, exclusivity, contents or durability,
+    /// and grants no volume mutation or network-volume Stop support.
+    /// # Errors
+    /// Rejects invalid or conflicting requests, profiles and prior bindings before I/O.
+    pub fn new_with_network_volume(
+        mut client: RunPodClient,
+        profile: RunPodProfile,
+        mut trust: RunPodHostTrust,
+        expected: &InteractiveWorkerRequest,
+        selection: &RunPodNetworkVolumeExpectation,
+    ) -> Result<Self, RunPodError> {
+        let binding = NetworkBinding::new(expected, selection, &profile)?;
+        client.bind_network(&binding)?;
+        trust.bind_network(&binding)?;
+        Ok(Self::new(client, profile, trust))
+    }
+
     #[must_use]
     pub fn new(client: RunPodClient, profile: RunPodProfile, host_keys: impl RunPodHostKeySource + 'static) -> Self {
         Self {
@@ -169,6 +189,7 @@ impl InteractiveWorkerProvider for RunPodInteractiveWorkerProvider {
     }
 
     fn inspect_worker(&self, worker: &InteractiveWorker) -> Result<Option<InteractiveWorkerStatus>, Self::Error> {
+        self.client.check_network_worker(worker)?;
         let target = worker.target.clone();
         let ssh_public_key = worker.ssh_public_key.clone();
         let worker = runpod_worker(worker)?;
@@ -187,6 +208,7 @@ impl InteractiveWorkerProvider for RunPodInteractiveWorkerProvider {
     }
 
     fn delete_worker(&self, worker: &InteractiveWorker) -> Result<InteractiveWorkerCleanup, Self::Error> {
+        self.client.check_network_worker(worker)?;
         let ssh_public_key = worker.ssh_public_key.clone();
         let worker = runpod_worker(worker)?;
         Ok(match self.client.delete_interactive_worker(&worker, &ssh_public_key)? {
@@ -198,6 +220,10 @@ impl InteractiveWorkerProvider for RunPodInteractiveWorkerProvider {
 
 impl InteractiveWorkerStopProvider for RunPodInteractiveWorkerProvider {
     fn stop_worker(&self, worker: &InteractiveWorker) -> Result<InteractiveWorkerStop, Self::Error> {
+        self.client.check_network_worker(worker)?;
+        if self.client.network_binding.is_some() {
+            return Err(RunPodError::StopRetentionUnverified);
+        }
         let retained = runpod_worker(worker)?;
         super::validate_target(&worker.target, &self.profile)?;
         self.client

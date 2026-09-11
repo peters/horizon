@@ -429,6 +429,13 @@ back into large multi-purpose modules.
   creation-request construction. Public type re-exports remain stable. HTTP
   transport and common interactive-worker adaptation stay in their existing
   `http.rs` and `interactive.rs` leaves.
+- `cloud_run/runpod/network_attachment.rs` binds one complete interactive request
+  and caller-selected HPS volume to the client and host trust. Fresh volume
+  metadata precedes the creation claim; exact v2 Pod attachment checks precede
+  readiness and both first-pin observations. Ordinary clients reject network
+  adoption. This leaf grants no storage ownership, exclusivity, contents trust,
+  volume mutation or network-volume Stop, and does not wire setup admission.
+  Its colocated tests retain the ordinary lifecycle regression boundary.
 - `cloud_run/runpod/stop.rs` adds only explicit, exact-Pod Stop for persistent
   workers with a verified ordinary `/workspace` volume. It verifies retained
   inactive state after a single Stop action, including a lost response, without

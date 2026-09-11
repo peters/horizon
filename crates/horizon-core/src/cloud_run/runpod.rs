@@ -14,6 +14,7 @@ mod host_key;
 mod http;
 mod interactive;
 mod models;
+mod network_attachment;
 mod network_volume;
 mod stop;
 #[cfg(test)]
@@ -108,6 +109,7 @@ impl RunPodCreationFence for super::CloudWorkflowStore {
 pub struct RunPodClient {
     transport: Box<dyn Transport>,
     creation_fence: Box<dyn RunPodCreationFence>,
+    network_binding: Option<network_attachment::NetworkBinding>,
 }
 impl RunPodClient {
     /// Build a production client pinned to `RunPod`'s HTTPS control planes.
@@ -115,6 +117,7 @@ impl RunPodClient {
         Self {
             transport: Box::new(http::RunPodHttp::new(api_key)),
             creation_fence: Box::new(creation_fence),
+            network_binding: None,
         }
     }
     /// Create a worker once, or adopt the single exact resource from an interrupted attempt.
@@ -149,17 +152,20 @@ impl RunPodClient {
         ssh_public_key: Option<&str>,
     ) -> Result<RunPodEnsure, RunPodError> {
         validate_target(target, profile)?;
+        self.check_network_request(workflow_id, job_id, target, ssh_public_key)?;
         if ssh_public_key.is_some_and(|key| !valid_ssh_public_key(key)) {
             return Err(RunPodError::InvalidTarget);
         }
         let name = resource_name(workflow_id, job_id);
         let matches = self.reconcile_by_name(&name)?;
+        self.verify_selected_volume()?;
         let may_create = !matches.is_empty() || self.creation_fence.claim_once(workflow_id, job_id, target, &name)?;
         let (pod, created, expected_deadline) = match matches.as_slice() {
             [] if !may_create => return Err(RunPodError::CreationUnresolved { name }),
             [] => {
-                let request =
+                let mut request =
                     CreatePodRequest::new(workflow_id, job_id, target, profile, name.clone(), ssh_public_key)?;
+                self.apply_network_selection(&mut request);
                 let expected_deadline = request.terminate_after.clone();
                 (self.create_worker(&request)?, true, expected_deadline)
             }
@@ -171,6 +177,7 @@ impl RunPodClient {
                 });
             }
         };
+        let pod = self.fresh_attachment(pod)?;
         let status = match status_from_pod(
             &pod,
             workflow_id,
@@ -237,6 +244,13 @@ impl RunPodClient {
             return Err(RunPodError::InvalidTarget);
         }
         validate_target(&request.target, profile)?;
+        self.check_network_request(
+            request.workflow_id,
+            request.job_id,
+            &request.target,
+            Some(&request.ssh_public_key),
+        )?;
+        self.verify_selected_volume()?;
         let name = resource_name(request.workflow_id, request.job_id);
         let matches = self.reconcile_by_name(&name)?;
         let pod = match matches.as_slice() {
@@ -255,6 +269,7 @@ impl RunPodClient {
         if current.id != pod.id {
             return Err(RunPodError::ResourceIdentityMismatch);
         }
+        self.verify_attachment(&current)?;
         let status = status_from_pod(
             &current,
             request.workflow_id,
@@ -297,10 +312,14 @@ impl RunPodClient {
     /// Inspect an exact persisted worker, returning `None` after provider deletion.
     /// # Errors
     pub fn inspect_worker(&self, worker: &RunPodWorker) -> Result<Option<RunPodWorkerStatus>, RunPodError> {
+        self.require_unbound()?;
         worker.validate()?;
         self.transport
             .get(&worker.pod_id)?
-            .map(|pod| status_from_resource(&pod, worker, None))
+            .map(|pod| {
+                self.verify_attachment(&pod)
+                    .and_then(|()| status_from_resource(&pod, worker, None))
+            })
             .transpose()
     }
 
@@ -313,19 +332,25 @@ impl RunPodClient {
         if !valid_ssh_public_key(ssh_public_key) {
             return Err(RunPodError::InvalidPersistedWorker);
         }
+        self.verify_selected_volume()?;
         self.transport
             .get(&worker.pod_id)?
-            .map(|pod| status_from_resource(&pod, worker, Some(ssh_public_key)))
+            .map(|pod| {
+                self.verify_attachment(&pod)
+                    .and_then(|()| status_from_resource(&pod, worker, Some(ssh_public_key)))
+            })
             .transpose()
     }
     /// Delete only the exact resource proven to belong to the persisted workflow and job.
     /// # Errors
     pub fn delete_worker(&self, worker: &RunPodWorker) -> Result<RunPodCleanup, RunPodError> {
+        self.require_unbound()?;
         worker.validate()?;
         let Some(pod) = self.transport.get(&worker.pod_id)? else {
             return Ok(RunPodCleanup::AlreadyAbsent);
         };
         status_from_resource(&pod, worker, None)?;
+        self.verify_attachment(&pod)?;
         self.transport.delete(&worker.pod_id)
     }
 
@@ -338,10 +363,12 @@ impl RunPodClient {
         if !valid_ssh_public_key(ssh_public_key) {
             return Err(RunPodError::InvalidPersistedWorker);
         }
+        self.verify_selected_volume()?;
         let Some(pod) = self.transport.get(&worker.pod_id)? else {
             return Ok(RunPodCleanup::AlreadyAbsent);
         };
         status_from_resource(&pod, worker, Some(ssh_public_key))?;
+        self.verify_attachment(&pod)?;
         self.transport.delete(&worker.pod_id)
     }
     fn enforce_cost_limit(&self, worker: &RunPodWorker, maximum: Option<u64>) -> Result<(), RunPodError> {
@@ -389,6 +416,7 @@ impl RunPodClient {
         Self {
             transport: Box::new(transport),
             creation_fence: Box::new(creation_fence),
+            network_binding: None,
         }
     }
 }
