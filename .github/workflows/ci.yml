@@ -23,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Verify detached setup handoff contract
-        run: python3 -B containers/remote-worker/test_setup_launch.py -v
+        run: python3 -B -m unittest discover -s containers/remote-worker -p 'test*setup_launch.py' -v
       - name: Verify on-demand GitHub credentials
         run: python3 -B containers/remote-worker/test_github_credentials.py -v
       - name: Verify explicit worker token installation

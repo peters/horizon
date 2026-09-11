@@ -128,6 +128,14 @@ The separate `horizon-setup-launch` command can submit setup independently of it
 request channel; it does not turn submission or a claim into proof of liveness.
 See [independent setup submission](../../docs/remote-repository-command.md#independent-setup-submission)
 for its bounded handoff, observation and recording limitations.
+For ordinary remote Git, `horizon-setup-launch --git` delegates strict observation
+to `horizon-repository git-status` and hands an absent request to `git-prepare`
+in an independent process session. The 16 KiB request is passed only through
+stdin. Submission is not completion: inspect `git-status` afterward. Existing
+claims, errors and completed checkouts never authorize another Git run. A lost
+reply does not cancel the worker child, reset the checkout or grant replay.
+This mode requires an image containing the Git commands; it does not install a
+PAT, start a task, add LFS/submodule support or prove cloud durability.
 The same helper can explicitly receive a canonical overlay bundle into an existing
 private bundle store and inspect a lost acknowledgement without writing. See
 [worker overlay receipt](../../docs/remote-overlay-transfer.md) for the framed
