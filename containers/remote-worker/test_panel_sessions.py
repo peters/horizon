@@ -673,6 +673,128 @@ class PanelSessionTests(unittest.TestCase):
                 MODULE.repository_selection("setup", selected)
             run.assert_not_called()
 
+    def git_request(self, panel="git", directory="nested", argv=None):
+        checkout = self.repository / "repository"
+        if not checkout.exists():
+            checkout.mkdir(mode=0o700)
+            (checkout / "nested").mkdir()
+        selection = {"version": 1, "workspace_local_id": "fixture", "runtime_id": self.runtimes[0],
+                     "source": {"repository": "fixture/repository", "commit": "a" * 40, "branch": "work/one"},
+                     "work_branch": "work/one"}
+        return self.request("start-git", panel, directory=directory, argv=argv or self.tick_command(), repository=selection)
+
+    def git_helper(self, operation, selection):
+        self.assertIn(operation, ("git-binding", "git-checkout"))
+        digest = MODULE.hashlib.sha256(json.dumps(selection, sort_keys=True).encode()).hexdigest()
+        root = None
+        if operation == "git-checkout":
+            checkout = self.repository / "repository"
+            info = checkout.stat()
+            root = {"path": str(checkout), "device": info.st_dev, "inode": info.st_ino}
+        return {"version": 1, "binding_sha256": digest, "runtime": selection["runtime_id"], "root": root, "reason": None}
+
+    def test_git_task_retains_progress_dirty_cwd_and_identity_after_disconnect(self):
+        request = self.git_request()
+        checkout = self.repository / "repository"
+        dirty = checkout / "uncommitted"
+        dirty.write_text("keep these bytes")
+        with mock.patch.object(MODULE, "repository_selection", side_effect=self.git_helper) as helper:
+            first = self.execute(request)
+            ticks = checkout / "nested" / "ticks"
+            self.wait_for(ticks.exists)
+            self.attach_and_disconnect(self.runtimes[0], "git")
+            before = ticks.stat().st_size
+            self.wait_for(lambda: ticks.stat().st_size > before)
+            marker = self.service.marker_path(self.runtimes[0], "git")
+            recorded = marker.read_bytes(), marker.stat().st_mtime_ns
+            helper.reset_mock()
+            self.assertEqual(self.execute(request)["pid"], first["pid"])
+            self.assertEqual([call.args[0] for call in helper.call_args_list], ["git-binding"])
+            self.assertEqual((marker.read_bytes(), marker.stat().st_mtime_ns), recorded)
+            self.assertEqual(dirty.read_text(), "keep these bytes")
+
+    def test_git_concurrent_start_and_lost_reply_never_duplicate_tasks(self):
+        request = self.git_request(argv=self.command("from pathlib import Path; import time; Path('runs').open('a').write('once\\n'); time.sleep(30)"))
+        with mock.patch.object(MODULE, "repository_selection", side_effect=self.git_helper):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                results = list(executor.map(lambda _: self.execute(request), range(2)))
+            runs = self.repository / "repository/nested/runs"
+            self.wait_for(lambda: runs.exists() and runs.read_text() == "once\n")
+            self.assertTrue(all(result["state"] in ("running", "unavailable") for result in results))
+            self.assertEqual(len(self.service.tmux(self.runtimes[0], "list-sessions").stdout.splitlines()), 1)
+            lost = self.git_request("lost")
+            with mock.patch.object(self.service, "status", side_effect=MODULE.SessionError("lost response")), self.assertRaises(MODULE.SessionError):
+                self.execute(lost)
+            current = self.service.status(self.runtimes[0], "lost")
+            self.assertEqual(self.execute(lost)["pid"], current["pid"])
+
+    def test_git_exited_or_uncertain_task_does_not_need_current_checkout(self):
+        request = self.git_request(argv=self.command("raise SystemExit(42)"))
+        with mock.patch.object(MODULE, "repository_selection", side_effect=self.git_helper) as helper:
+            first = self.execute(request)
+            self.wait_for(lambda: self.service.status(self.runtimes[0], "git")["state"] == "exited")
+            (self.repository / "repository/nested").rmdir()
+            (self.repository / "repository").rmdir()
+            helper.reset_mock()
+            self.assertEqual(self.execute(request), {"state":"exited", "panel":"git", "pid":first["pid"], "exit_status":42})
+            self.assertEqual([call.args[0] for call in helper.call_args_list], ["git-binding"])
+            self.assertFalse((self.repository / "repository").exists())
+            self.service.tmux(self.runtimes[0], "kill-server")
+            self.assertEqual(self.execute(request)["state"], "unavailable")
+            self.assertFalse((self.repository / "repository").exists())
+
+    def test_git_selection_or_launch_intent_cannot_reuse_existing_marker(self):
+        request = self.git_request()
+        with mock.patch.object(MODULE, "repository_selection", side_effect=self.git_helper):
+            first = self.execute(request)
+            for field in ("repository", "commit", "branch", "work_branch", "workspace_local_id", "directory", "argv"):
+                changed = json.loads(json.dumps(request))
+                if field in ("repository", "commit", "branch"):
+                    changed["repository"]["source"][field] += "different"
+                elif field in ("work_branch", "workspace_local_id"):
+                    changed["repository"][field] += "different"
+                elif field == "argv":
+                    changed[field] += ["different"]
+                else:
+                    changed[field] = "."
+                with self.subTest(field=field), self.assertRaises(MODULE.SessionError):
+                    self.execute(changed)
+            with self.assertRaises(MODULE.SessionError):
+                self.service.start(self.runtimes[0], "git", "repository/nested", request["argv"])
+            self.assertEqual(self.service.status(self.runtimes[0], "git")["pid"], first["pid"])
+
+    def test_git_unconfirmed_replaced_unsafe_and_escaping_checkout_refuses_before_claim(self):
+        request = self.git_request()
+        checkout = self.repository / "repository"
+        outside = self.root / "outside"
+        outside.mkdir()
+        (checkout / "escape").symlink_to(outside)
+        for fault in ("partial", "runtime", "binding", "inode", "mode", "path", "escape"):
+            selected = json.loads(json.dumps(request))
+            if fault == "escape":
+                selected["directory"] = "escape"
+            def helper(operation, selection):
+                response = self.git_helper(operation, selection)
+                if operation == "git-checkout":
+                    if fault == "partial":
+                        raise MODULE.SessionError("unconfirmed Git")
+                    if fault in ("runtime", "binding"):
+                        response["runtime" if fault == "runtime" else "binding_sha256"] = "different"
+                    if fault == "inode":
+                        response["root"]["inode"] += 1
+                    if fault == "mode":
+                        checkout.chmod(0o755)
+                    if fault == "path":
+                        response["root"]["path"] = str(outside)
+                return response
+            try:
+                with mock.patch.object(MODULE, "repository_selection", side_effect=helper), self.assertRaises(MODULE.SessionError):
+                    self.execute(selected)
+                self.assertFalse(self.service.state.exists())
+                self.assertFalse(self.service.sockets.exists())
+            finally:
+                checkout.chmod(0o700)
+
 
 if __name__ == "__main__":
     unittest.main()

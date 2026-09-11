@@ -48,9 +48,9 @@ def execute_request(service, stream):
         raise SessionError("structured session request is invalid")
     if request.get("operation") == "status" and set(request) == common:
         return service.status(request["runtime"], request["panel"])
-    prepared = request.get("operation") == "start-prepared"
+    prepared = request.get("operation") in ("start-prepared", "start-git")
     expected = common | {"directory", "argv"} | ({"repository"} if prepared else set())
-    if request.get("operation") not in ("start", "verify", "start-prepared") or set(request) != expected:
+    if request.get("operation") not in ("start", "verify", "start-prepared", "start-git") or set(request) != expected:
         raise SessionError("unsupported structured session request")
     if (
         not isinstance(request["directory"], str)
@@ -60,14 +60,14 @@ def execute_request(service, stream):
         raise SessionError("structured task intent is invalid")
     if prepared:
         return service.start_prepared(request["runtime"], request["panel"], request["directory"],
-                                      request["argv"], request["repository"])
+                                      request["argv"], request["repository"], git=request["operation"] == "start-git")
     operation = service.verify if request["operation"] == "verify" else service.start
     return operation(request["runtime"], request["panel"], request["directory"], request["argv"])
 
 
 def repository_selection(operation, selection):
     """Only the fixed trusted core helper canonicalizes and inspects this selection."""
-    if operation not in ("setup-binding", "setup-checkout"):
+    if operation not in ("setup-binding", "setup-checkout", "git-binding", "git-checkout"):
         raise SessionError("unsupported repository inspection")
     encoded = json.dumps(selection, ensure_ascii=False).encode()
     if len(encoded) > 34 * 1024:
@@ -82,7 +82,7 @@ def repository_selection(operation, selection):
             or type(value["version"]) is not int or value["version"] != 1 or value["reason"] is not None
             or not isinstance(value["runtime"], str) or not isinstance(value["binding_sha256"], str)
             or not re.fullmatch(r"[0-9a-f]{64}", value["binding_sha256"])
-            or operation == "setup-binding" and value["root"] is not None):
+            or operation.endswith("-binding") and value["root"] is not None):
         raise SessionError("prepared repository inspection is invalid")
     return value
 
@@ -241,10 +241,11 @@ class PanelSessions:
         working_directory, intent = self.launch_intent(directory, arguments)
         return self._start_at(runtime, panel, working_directory, arguments, intent)
 
-    def start_prepared(self, runtime, panel, directory, arguments, selection):
+    def start_prepared(self, runtime, panel, directory, arguments, selection, *, git=False):
         self.identities(runtime, panel)
         intent = self.intent_digest(directory, arguments)
-        binding = repository_selection("setup-binding", selection)
+        prefix = "git" if git else "setup"
+        binding = repository_selection(f"{prefix}-binding", selection)
         if binding["runtime"] != runtime:
             raise SessionError("prepared repository runtime does not match the task")
         try:
@@ -254,7 +255,7 @@ class PanelSessions:
         if marker is not None:
             self.match_intent(marker, intent, binding["binding_sha256"])
             return self.status(runtime, panel)
-        inspected = repository_selection("setup-checkout", selection)
+        inspected = repository_selection(f"{prefix}-checkout", selection)
         root = inspected["root"]
         if (inspected["runtime"] != runtime or inspected["binding_sha256"] != binding["binding_sha256"]
                 or not isinstance(root, dict) or set(root) != {"path", "device", "inode"}
@@ -262,6 +263,8 @@ class PanelSessions:
                 or any(type(root[key]) is not int or root[key] < 0 for key in ("device", "inode"))):
             raise SessionError("prepared repository root is invalid")
         repository = Path(root["path"])
+        if git and repository != self.repository / "repository":
+            raise SessionError("Git checkout path does not match the worker repository")
         descriptor = os.open(repository, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
             held = os.fstat(descriptor)

@@ -35,6 +35,94 @@ fn roots() -> tempfile::TempDir {
     root
 }
 
+#[test]
+fn task_binding_is_canonical_and_includes_every_preparation_field() {
+    let original = request();
+    let binding = original.binding().unwrap();
+    assert_eq!(
+        Request::decode(&original.encode().unwrap()).unwrap().binding().unwrap(),
+        binding
+    );
+    for field in [
+        "workspace",
+        "runtime",
+        "repository",
+        "commit",
+        "source_branch",
+        "work_branch",
+    ] {
+        let mut changed = original.clone();
+        match field {
+            "workspace" => changed.workspace_local_id = "another-workspace".into(),
+            "runtime" => changed.runtime_id = uuid::Uuid::new_v4(),
+            "repository" => changed.source.repository = "fixture/another".into(),
+            "commit" => changed.source.commit = crate::cloud_run::GitCommitSha::parse("b".repeat(40)).unwrap(),
+            "source_branch" => changed.source.branch = Some("another".into()),
+            _ => changed.work_branch = "work/another".into(),
+        }
+        assert_ne!(changed.binding().unwrap(), binding, "{field}");
+    }
+    let mut invalid = original;
+    invalid.work_branch = "HEAD".into();
+    assert_eq!(invalid.binding(), Err(Error::Invalid));
+    assert_eq!(invalid.inspect_checkout(), Err(Error::Invalid));
+}
+
+#[test]
+fn task_checkout_requires_exact_completion_without_git_or_dirty_file_changes() {
+    let root = roots();
+    let request = request();
+    assert_eq!(linux::inspect_checkout(root.path(), &request), Err(Error::Conflict));
+    assert!(!root.path().join(".horizon-worker/git-workspace").exists());
+    let mut git = Fake::new();
+    assert_eq!(execute(root.path(), &request, false, &mut git).state, State::Complete);
+    let checkout = root.path().join("horizon/repository");
+    fs::write(checkout.join("dirty"), b"uncommitted task bytes").unwrap();
+    let before = git.calls;
+    let location = linux::inspect_checkout(root.path(), &request).unwrap();
+    let meta = checkout.metadata().unwrap();
+    assert_eq!(
+        (location.path, location.device, location.inode),
+        (super::CHECKOUT, meta.dev(), meta.ino())
+    );
+    assert_eq!(git.calls, before);
+    assert_eq!(fs::read(checkout.join("dirty")).unwrap(), b"uncommitted task bytes");
+    let mut other = request.clone();
+    other.work_branch = "different".into();
+    assert_eq!(linux::inspect_checkout(root.path(), &other), Err(Error::Conflict));
+    fs::rename(&checkout, root.path().join("horizon/retained")).unwrap();
+    fs::create_dir(&checkout).unwrap();
+    fs::set_permissions(&checkout, fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(linux::inspect_checkout(root.path(), &request), Err(Error::Conflict));
+    fs::remove_dir(&checkout).unwrap();
+    symlink(root.path().join("horizon/retained"), &checkout).unwrap();
+    assert_eq!(linux::inspect_checkout(root.path(), &request), Err(Error::UnsafeRoot));
+}
+
+#[test]
+fn task_checkout_rejects_partial_corrupt_and_insecure_records() {
+    for fault in ["partial", "completion", "claim", "mode", "ancestry"] {
+        let root = roots();
+        let request = request();
+        let mut git = Fake::new();
+        assert_eq!(execute(root.path(), &request, false, &mut git).state, State::Complete);
+        let slot = root.path().join(".horizon-worker/git-workspace");
+        match fault {
+            "partial" => fs::remove_file(slot.join("complete.json")).unwrap(),
+            "completion" => fs::write(slot.join("complete.json"), b"{}").unwrap(),
+            "claim" => fs::write(slot.join("claim.json"), b"{}").unwrap(),
+            "mode" => fs::set_permissions(
+                root.path().join("horizon/repository"),
+                fs::Permissions::from_mode(0o755),
+            )
+            .unwrap(),
+            _ => fs::set_permissions(root.path(), fs::Permissions::from_mode(0o777)).unwrap(),
+        }
+        assert!(linux::inspect_checkout(root.path(), &request).is_err(), "{fault}");
+        assert!(slot.exists());
+    }
+}
+
 struct Fake {
     calls: usize,
     fail: Option<usize>,

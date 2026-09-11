@@ -1,7 +1,10 @@
-//! Bounded, non-creating panel inspection through the retained worker's pinned SSH identity.
+//! Pinned panel inspection and an explicitly separate Git-bound Shell start API.
 //! Calls are synchronous and must run off the render thread.
 
 mod configured;
+mod git_start;
+
+pub use git_start::{RemoteGitTaskStartError, start_remote_git_shell};
 
 pub use configured::{
     ConfiguredRemotePanelStatusError, ConfiguredRemotePanelStatusRequest, RemotePanelObservation,
