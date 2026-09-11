@@ -215,9 +215,9 @@ def unexpected(*args, **kwargs):
     raise AssertionError('response-only probe must not observe or launch a worker')
 launcher.observe = launcher.handoff = unexpected
 if mode == 'submitted':
-    launcher.execute = lambda stream: ('submitted', None, 0)
+    launcher.execute = lambda stream, git=False: ('submitted', None, 0)
 elif mode == 'error':
-    def failure(stream):
+    def failure(stream, git=False):
         raise launcher.LaunchError('static failure')
     launcher.execute = failure
 sys.exit(launcher.main())
@@ -250,6 +250,13 @@ sys.exit(launcher.main())
         diagnostics = self.probe('exec 2>/dev/full', 'error')
         self.assertEqual((diagnostics.returncode, diagnostics.stderr), (1, b''))
         self.assertEqual(json.loads(diagnostics.stdout)['state'], 'error')
+
+    def test_git_entrypoint_preserves_closed_stream_and_lost_output_behavior(self):
+        closed = self.probe('exec 0<&-', 'unchanged', '--git')
+        self.assertEqual((closed.returncode, closed.stderr), (2, b''))
+        self.assertEqual(json.loads(closed.stdout)['state'], 'rejected')
+        lost = self.probe('exec 1>/dev/full', 'submitted', '--git')
+        self.assertEqual((lost.returncode, lost.stdout, lost.stderr), (3, b'', b''))
 
 
 if __name__ == '__main__':

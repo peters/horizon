@@ -385,6 +385,11 @@ back into large multi-purpose modules.
   launcher writes no request/log files; retained Rust completion remains the
   recovery surface, not transient child output. Missing recording stays unknown.
   It does not own task supervision, transport, provider lifetime or client wiring.
+  Its explicit `--git` mode reuses that detached handoff for ordinary Git:
+  `git-status` owns strict request/root admission and `git-prepare` owns the
+  exclusive retained claim. Git responses have their own bounded validator;
+  overlay grants and storage qualification are not involved. No implicit retry
+  or clone cancellation follows from client-channel loss.
 - `containers/remote-worker/host-identity.py` owns workspace-retained server-key
   initialization, validation and runtime materialization before SSH starts.
   Its real-key regressions are separate from the retained-volume SSH smoke in
