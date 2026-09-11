@@ -60,13 +60,21 @@ pub(crate) struct Fixture {
 
 impl Fixture {
     pub(crate) fn new(lifecycle: Option<InteractiveWorkerLifecycle>) -> Self {
+        Self::with_worker(lifecycle, crate::cloud_run::WorkerLifetime::Persistent, true)
+    }
+
+    pub(crate) fn with_worker(
+        lifecycle: Option<InteractiveWorkerLifecycle>,
+        lifetime: crate::cloud_run::WorkerLifetime,
+        pinned: bool,
+    ) -> Self {
         use std::os::unix::fs::PermissionsExt;
         let directory = tempfile::tempdir().expect("fixture");
         std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).expect("private");
         let home = HorizonHome::from_root(directory.path().join("home"));
         let store = CloudWorkflowStore::open(&home).expect("store");
         let identities = RemoteSshIdentityStore::new(&home);
-        let state: RemoteWorkspaceState = serde_json::from_value(serde_json::json!({
+        let mut state: RemoteWorkspaceState = serde_json::from_value(serde_json::json!({
             "version": 1,
             "spec": {
                 "workspace_local_id": "workspace", "working_directory": ".", "generation": 0, "panels": [],
@@ -77,6 +85,7 @@ impl Fixture {
             }
         }))
         .expect("state");
+        state.spec.target.lifetime = lifetime;
         let dormant = store.create_remote_workspace(OWNER, &state).expect("workspace");
         let allocation = store.allocate_remote_runtime(&dormant, i64::MAX).expect("allocation");
         let runtime = allocation.workspace().state().runtime.as_ref().expect("runtime");
@@ -97,10 +106,20 @@ impl Fixture {
                 },
                 target: request.target,
                 ssh_public_key: request.ssh_public_key,
-                lifetime: InteractiveWorkerLifetime::Persistent,
+                lifetime: match lifetime {
+                    crate::cloud_run::WorkerLifetime::Persistent => InteractiveWorkerLifetime::Persistent,
+                    crate::cloud_run::WorkerLifetime::TimeLimited { seconds } => {
+                        InteractiveWorkerLifetime::TimeLimited(InteractiveWorkerLease {
+                            terminate_after: (time::OffsetDateTime::now_utc()
+                                + time::Duration::seconds(i64::from(seconds)))
+                            .format(&time::format_description::well_known::Rfc3339)
+                            .expect("expiry"),
+                        })
+                    }
+                },
             },
             lifecycle,
-            ssh: Some(InteractiveWorkerSshEndpoint {
+            ssh: pinned.then(|| InteractiveWorkerSshEndpoint {
                 host: "127.0.0.1".into(),
                 port: 2222,
                 username: "horizon".into(),
