@@ -287,3 +287,25 @@ fn ensure_never_deploys_into_a_group_changed_right_after_creation() {
     assert_eq!(deleting.status().lifecycle, Lifecycle::Deleting);
     assert!(t.plane.mutations().is_empty());
 }
+
+#[test]
+fn production_client_is_bound_to_the_profile_before_any_request() {
+    use crate::cloud_run::azure::AzureAccessToken;
+    let credential = || AzureAccessToken::new("synthetic-token-value", std::time::Duration::from_secs(600));
+    let never = |_: CloudWorkflowId, _: CloudJobId, _: &WorkerTarget, _: &str| Ok(false);
+    let client = AzureClient::new(profile(), credential, never).expect("client");
+    let s = Scenario::new();
+    let mut foreign = s.persisted();
+    foreign.identity.provider = CloudProvider::RunPod;
+    assert_eq!(
+        client.inspect_worker(&foreign),
+        Err(AzureError::InvalidPersistedWorker),
+        "shape checks run before the network is touched"
+    );
+    let mut invalid = profile();
+    invalid.subscription_id = "not-a-subscription".into();
+    assert!(matches!(
+        AzureClient::new(invalid, credential, never),
+        Err(AzureError::InvalidProfile)
+    ));
+}

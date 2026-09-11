@@ -2,8 +2,8 @@
 //! behind a durable fence, recover and inspect without creating, delete exactly the
 //! owned resource group; readiness attestation and Stop live in `running`.
 use super::{
-    AzureDeploymentPlan, AzureError, AzureGroupInfo, AzureLifecycle, AzureManagementTransport, AzureProfile,
-    AzureVmView, AzureWorker, WORKER_VM_NAME,
+    AzureArmHttp, AzureCredentialSource, AzureDeploymentPlan, AzureError, AzureGroupInfo, AzureLifecycle,
+    AzureManagementTransport, AzureProfile, AzureVmView, AzureWorker, WORKER_VM_NAME,
     deployment::{DEPLOYMENT_NAME, identity_tags, worker_tags},
     resource_group_name,
 };
@@ -15,7 +15,7 @@ use crate::cloud_run::{
         InteractiveWorkerStatus,
     },
 };
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 mod running;
 pub use running::{AzureHostKeySource, AzureRunCommandHostKeys};
@@ -50,6 +50,21 @@ where
         resource_group: &str,
     ) -> Result<bool, AzureError> {
         self(workflow_id, job_id, target, resource_group)
+    }
+}
+
+/// The workflow store is the production fence: one durable claim per job, shared by
+/// every controller that opens the same store.
+impl AzureCreationFence for crate::cloud_run::CloudWorkflowStore {
+    fn claim_once(
+        &self,
+        workflow_id: CloudWorkflowId,
+        job_id: CloudJobId,
+        target: &WorkerTarget,
+        resource_group: &str,
+    ) -> Result<bool, AzureError> {
+        self.claim_worker_creation(workflow_id, job_id, target, resource_group)
+            .map_err(|_| AzureError::CreationFenceFailed)
     }
 }
 
@@ -92,8 +107,23 @@ struct Observation {
 }
 
 impl AzureClient {
-    /// Client over any management transport; the HTTPS production constructor arrives
-    /// with the configuration wiring that first needs it.
+    /// Production client: HTTPS-only requests to Azure Resource Manager under the
+    /// profile's subscription, one authenticated transport shared by the management
+    /// calls and the run-command host-key source, and the given durable fence.
+    /// # Errors
+    /// Rejects an invalid profile.
+    pub fn new(
+        profile: AzureProfile,
+        credential: impl AzureCredentialSource + 'static,
+        fence: impl AzureCreationFence + 'static,
+    ) -> Result<Self, AzureError> {
+        profile.validate()?;
+        let transport = Arc::new(AzureArmHttp::new(profile.subscription_id.clone(), credential)?);
+        let host_keys = AzureRunCommandHostKeys::new(transport.clone());
+        Self::with_transport(profile, transport, fence, host_keys)
+    }
+
+    /// Client over any management transport and host-key source.
     /// # Errors
     /// Rejects an invalid profile.
     pub fn with_transport(

@@ -549,6 +549,35 @@ fn runpod_fence_uses_the_durable_workflow_claim() {
 }
 
 #[test]
+fn azure_fence_uses_the_durable_workflow_claim() {
+    use super::super::azure::{AzureCreationFence, AzureError};
+    let temp = TempDir::new().expect("temp dir");
+    let store = store(&temp);
+    let workflow = retained_workflow(CloudProvider::Azure, 30_000);
+    let job_id = workflow.nodes[0].id;
+    let target = worker_target(&workflow);
+    store.create(&workflow).expect("create workflow");
+    let group = super::super::azure::resource_group_name(workflow.id, job_id);
+    assert!(AzureCreationFence::claim_once(&store, workflow.id, job_id, target, &group).expect("first claim"));
+    assert!(!AzureCreationFence::claim_once(&store, workflow.id, job_id, target, &group).expect("repeated claim"));
+    let other_job = CloudJobId::new();
+    assert_eq!(
+        AzureCreationFence::claim_once(&store, workflow.id, other_job, target, &group),
+        Err(AzureError::CreationFenceFailed),
+        "a job outside the workflow never claims"
+    );
+    let connection = Connection::open(store.path()).expect("open raw store");
+    connection
+        .pragma_update(None, "user_version", 7)
+        .expect("set unsupported schema");
+    drop(connection);
+    assert_eq!(
+        AzureCreationFence::claim_once(&store, workflow.id, job_id, target, &group),
+        Err(AzureError::CreationFenceFailed)
+    );
+}
+
+#[test]
 fn invalid_snapshots_and_future_schema_fail_closed() {
     let temp = TempDir::new().expect("temp dir");
     let store = store(&temp);
