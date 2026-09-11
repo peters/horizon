@@ -72,6 +72,18 @@ pub trait AzureCredentialSource: Send + Sync {
     /// # Errors
     /// Returns a redacted error when no usable token can be obtained.
     fn token(&self) -> Result<AzureAccessToken, AzureError>;
+
+    /// A token obtained within `budget`, for callers polling under an absolute
+    /// deadline. The default serves sources that answer at once (a cached or synthetic
+    /// token); a source that may block, as the CLI does on a refresh, must bound its
+    /// own waiting by the budget and answer [`AzureError::CredentialUnavailable`] once
+    /// it is spent.
+    /// # Errors
+    /// Returns a redacted error when no usable token can be obtained in time.
+    fn token_within(&self, budget: Duration) -> Result<AzureAccessToken, AzureError> {
+        let _ = budget;
+        self.token()
+    }
 }
 
 impl<F> AzureCredentialSource for F
@@ -124,9 +136,10 @@ impl AzureCliCredential {
         self
     }
 
-    fn fetch(&self) -> Result<AzureAccessToken, AzureError> {
+    /// Run the CLI once, ending the whole tree if it is not done by `deadline`.
+    fn fetch(&self, deadline: Instant) -> Result<AzureAccessToken, AzureError> {
         let unavailable = |reason| AzureError::CredentialUnavailable { reason };
-        let started = Instant::now();
+        let left = || deadline.saturating_duration_since(Instant::now());
         let mut command = Command::new(&self.executable);
         command
             .args([
@@ -150,42 +163,106 @@ impl AzureCliCredential {
             command.process_group(0);
         }
         let mut child = OwnedChild(spawn_tree(command).map_err(|_| unavailable("Azure CLI could not be started"))?);
-        let stdout = child.take_stdout().ok_or(unavailable("Azure CLI produced no output"))?;
+        // From here on every exit hands the tree to the detached reaper: no path after
+        // the spawn waits on process teardown from the caller's thread.
+        let Some(stdout) = child.take_stdout() else {
+            reap(child, None);
+            return Err(unavailable("Azure CLI produced no output"));
+        };
         let (sender, receiver) = mpsc::sync_channel(1);
         let limit = self.output_limit as u64 + 1;
-        std::thread::Builder::new()
+        let reader = std::thread::Builder::new()
             .name("azure-cli-output".into())
             .spawn(move || {
                 let mut output = Vec::new();
                 let result = stdout.take(limit).read_to_end(&mut output).map(|_| output);
                 let _ = sender.send(result);
-            })
-            .map_err(|_| unavailable("Azure CLI output could not be read"))?;
+            });
+        if reader.is_err() {
+            reap(child, Some(receiver));
+            return Err(unavailable("Azure CLI output could not be read"));
+        }
         let status = loop {
-            if let Some(status) = child
-                .0
-                .try_wait()
-                .map_err(|_| unavailable("Azure CLI could not be waited on"))?
-            {
-                break status;
+            // Deadline first: a process that finished while the last sleep crossed it
+            // is still late, and the sleep itself never overshoots the bound.
+            let left = left();
+            if left.is_zero() {
+                return Err(abandon(child, receiver));
             }
-            if started.elapsed() >= self.timeout {
-                return Err(abandon(child, &receiver));
+            match child.0.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => std::thread::sleep(Duration::from_millis(20).min(left)),
+                Err(_) => {
+                    reap(child, Some(receiver));
+                    return Err(unavailable("Azure CLI could not be waited on"));
+                }
             }
-            std::thread::sleep(Duration::from_millis(20));
         };
         // A descendant that inherited stdout can outlive the leader; the same bound applies.
-        let output = match receiver.recv_timeout(self.timeout.saturating_sub(started.elapsed())) {
+        let output = match receiver.recv_timeout(left()) {
             Ok(Ok(output)) => output,
             Ok(Err(_)) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                reap(child, None);
                 return Err(unavailable("Azure CLI output could not be read"));
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => return Err(abandon(child, &receiver)),
+            Err(mpsc::RecvTimeoutError::Timeout) => return Err(abandon(child, receiver)),
         };
+        // The leader has exited and its output is in hand; ending the rest of the
+        // tree is bookkeeping that must not sit on the caller's deadline either.
+        reap(child, None);
         if !status.success() || output.len() > self.output_limit {
             return Err(unavailable("Azure CLI did not return a token"));
         }
-        parse_cli_token(&output)
+        let token = parse_cli_token(&output)?;
+        // Output that arrived right at the bound is still late for the caller.
+        if Instant::now() > deadline {
+            return Err(unavailable("Azure CLI timed out"));
+        }
+        Ok(token)
+    }
+}
+
+impl AzureCliCredential {
+    /// Serve from the cache or refresh, with the cache lock wait and the CLI run both
+    /// bounded by `budget` (a refresh in another thread holds the lock for its whole run).
+    fn token_bounded(&self, budget: Duration) -> Result<AzureAccessToken, AzureError> {
+        let exceeded = || AzureError::CredentialUnavailable {
+            reason: "Azure CLI refresh in progress exceeded the caller's budget",
+        };
+        // The public budget is clamped to the credential's own timeout before it gets
+        // here, so this cannot overflow; a redacted error, never a panic, if it ever did.
+        let Some(deadline) = Instant::now().checked_add(budget) else {
+            return Err(AzureError::CredentialUnavailable {
+                reason: "token budget is out of range",
+            });
+        };
+        let mut cached = loop {
+            match self.cached.try_lock() {
+                Ok(guard) => break guard,
+                Err(std::sync::TryLockError::Poisoned(poisoned)) => break poisoned.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    let left = deadline.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        return Err(exceeded());
+                    }
+                    std::thread::sleep(Duration::from_millis(10).min(left));
+                }
+            }
+        };
+        // The lock may have been won only after the budget ran out (a refresh that
+        // finished late): a late answer is not an answer, cached or not, and no refresh
+        // starts past the deadline. Abandoning a run is detached, so an in-budget run
+        // may use everything that is left.
+        if Instant::now() >= deadline {
+            return Err(exceeded());
+        }
+        if let Some(token) = cached.as_ref().filter(|token| !token.needs_refresh()) {
+            return Ok(token.clone());
+        }
+        // The same absolute deadline governs the run, so nothing is re-measured.
+        let token = self.fetch(deadline)?;
+        *cached = Some(token.clone());
+        Ok(token)
     }
 }
 
@@ -195,9 +272,13 @@ impl AzureCredentialSource for AzureCliCredential {
         if let Some(token) = cached.as_ref().filter(|token| !token.needs_refresh()) {
             return Ok(token.clone());
         }
-        let token = self.fetch()?;
+        let token = self.fetch(Instant::now() + self.timeout)?;
         *cached = Some(token.clone());
         Ok(token)
+    }
+
+    fn token_within(&self, budget: Duration) -> Result<AzureAccessToken, AzureError> {
+        self.token_bounded(budget.min(self.timeout))
     }
 }
 
@@ -211,11 +292,26 @@ impl fmt::Debug for AzureCliCredential {
     }
 }
 
-/// End the tree, then let the reader thread finish: killing every member closes the
-/// pipe writers, so the reader returns on its own within the grace period.
-fn abandon(child: OwnedChild, receiver: &mpsc::Receiver<std::io::Result<Vec<u8>>>) -> AzureError {
-    drop(child);
-    let _ = receiver.recv_timeout(READER_GRACE);
+/// End a CLI tree off the caller's thread: the kill, the wait and (when a reader is
+/// still attached) the reader grace run on a detached thread, so the caller's deadline
+/// never waits on process teardown. Killing every member closes the pipe writers, so
+/// the reader returns on its own within the grace period. If no thread can be
+/// spawned, the closure is dropped here together with the child, whose drop ends the
+/// tree synchronously: slower, never leaked.
+fn reap(child: OwnedChild, receiver: Option<mpsc::Receiver<std::io::Result<Vec<u8>>>>) {
+    let reaper = std::thread::Builder::new().name("azure-cli-reaper".into());
+    let spawned = reaper.spawn(move || {
+        drop(child);
+        if let Some(receiver) = receiver {
+            let _ = receiver.recv_timeout(READER_GRACE);
+        }
+    });
+    drop(spawned);
+}
+
+/// Give up on a tree that exceeded its bound without waiting for it to die.
+fn abandon(child: OwnedChild, receiver: mpsc::Receiver<std::io::Result<Vec<u8>>>) -> AzureError {
+    reap(child, Some(receiver));
     AzureError::CredentialUnavailable {
         reason: "Azure CLI timed out",
     }

@@ -237,6 +237,12 @@ impl AzureArmHttp {
         self.credential.token().map(|token| token.authorization_header())
     }
 
+    fn authorization_within(&self, budget: Duration) -> Result<String, AzureError> {
+        self.credential
+            .token_within(budget)
+            .map(|token| token.authorization_header())
+    }
+
     fn get_json(&self, url: &str, operation: &'static str) -> Result<Option<serde_json::Value>, AzureError> {
         self.get_json_within(url, operation, REQUEST_TIMEOUT)
     }
@@ -257,9 +263,9 @@ impl AzureArmHttp {
     }
 
     /// The raw GET behind [`Self::get_json_within`], for callers that read headers.
-    /// Obtaining the token (which may refresh through the Azure CLI) counts against the
-    /// budget too: the HTTP exchange gets only what that step left, and none at all once
-    /// the budget is spent.
+    /// Obtaining the token counts against the budget: the credential itself is asked to
+    /// answer within it (a CLI refresh is bounded by it), the HTTP exchange gets only
+    /// what that step left, and none at all once the budget is spent.
     pub(super) fn get_within(
         &self,
         url: &str,
@@ -267,7 +273,7 @@ impl AzureArmHttp {
         budget: Duration,
     ) -> Result<ureq::http::Response<ureq::Body>, AzureError> {
         let started = std::time::Instant::now();
-        let authorization = self.authorization()?;
+        let authorization = self.authorization_within(budget)?;
         let budget = budget.saturating_sub(started.elapsed());
         if budget.is_zero() {
             return Err(AzureError::OperationTimedOut { operation });

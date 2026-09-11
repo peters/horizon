@@ -771,6 +771,50 @@ fn run_command_output_is_taken_only_from_a_clean_success() {
 }
 
 #[test]
+fn budgeted_lookups_ask_the_credential_for_a_token_within_the_same_budget() {
+    struct Recording(Arc<Mutex<Vec<Option<Duration>>>>);
+    impl super::super::AzureCredentialSource for Recording {
+        fn token(&self) -> Result<AzureAccessToken, AzureError> {
+            self.0.lock().expect("budgets").push(None);
+            AzureAccessToken::new("synthetic-token-value", Duration::from_secs(3_600))
+        }
+        fn token_within(&self, budget: Duration) -> Result<AzureAccessToken, AzureError> {
+            self.0.lock().expect("budgets").push(Some(budget));
+            AzureAccessToken::new("synthetic-token-value", Duration::from_secs(3_600))
+        }
+    }
+    let budgets = Arc::new(Mutex::new(Vec::new()));
+    let agent = ureq::Agent::config_builder()
+        .middleware(|_: Request<SendBody>, _: MiddlewareNext| {
+            Ok(Response::builder()
+                .status(404)
+                .body(Body::builder().data(String::new()))
+                .expect("response"))
+        })
+        .build()
+        .new_agent();
+    let transport = AzureArmHttp::with_agent(agent, SUB, Recording(Arc::clone(&budgets))).expect("transport");
+    assert_eq!(
+        transport.get_vm_within(GROUP, "worker", Duration::from_secs(7)),
+        Ok(None)
+    );
+    assert_eq!(
+        transport.get_resource_group_within(GROUP, Duration::from_secs(9)),
+        Ok(None)
+    );
+    assert_eq!(transport.get_vm(GROUP, "worker"), Ok(None));
+    assert_eq!(
+        *budgets.lock().expect("budgets"),
+        [
+            Some(Duration::from_secs(7)),
+            Some(Duration::from_secs(9)),
+            Some(REQUEST_TIMEOUT)
+        ],
+        "every lookup, budgeted or not, bounds the token step"
+    );
+}
+
+#[test]
 fn a_slow_credential_refresh_consumes_the_poll_budget_before_any_request() {
     let calls = Arc::new(AtomicUsize::new(0));
     let count = Arc::clone(&calls);
