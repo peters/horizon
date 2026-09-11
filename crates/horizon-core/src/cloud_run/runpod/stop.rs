@@ -1,4 +1,4 @@
-//! Exact-Pod Stop with ordinary volume retention, separate from termination.
+//! Exact-Pod Stop with verified volume retention, separate from termination.
 //! Provider metadata proves only point-in-time retained/inactive state, not a backup,
 //! successful task exit, preserved process memory, or qualified filesystem durability.
 
@@ -48,8 +48,14 @@ struct PersistentMount {
 }
 
 struct RetainedState {
-    mount: PersistentMount,
+    mount: RetainedMount,
     stopped: bool,
+}
+
+#[derive(Eq, PartialEq)]
+enum RetainedMount {
+    Ordinary(PersistentMount),
+    SelectedNetwork,
 }
 
 impl RunPodClient {
@@ -61,9 +67,6 @@ impl RunPodClient {
         ssh_public_key: &str,
         profile: &RunPodProfile,
     ) -> Result<InteractiveWorkerStop, RunPodError> {
-        if self.network_binding.is_some() {
-            return Err(RunPodError::StopRetentionUnverified);
-        }
         worker.validate()?;
         if worker.lifetime != InteractiveWorkerLifetime::Persistent {
             return Err(RunPodError::StopUnsupportedLifetime);
@@ -71,13 +74,13 @@ impl RunPodClient {
         if !valid_ssh_public_key(ssh_public_key) {
             return Err(RunPodError::InvalidPersistedWorker);
         }
-        if profile.volume_gib == 0 {
+        if self.network_binding.is_none() && profile.volume_gib == 0 {
             return Err(RunPodError::StopRetentionUnverified);
         }
         let Some(before) = self.transport.get(&worker.pod_id)? else {
             return Ok(InteractiveWorkerStop::AlreadyAbsent);
         };
-        let before = retained_state(&before, worker, ssh_public_key, profile)?;
+        let before = self.retained_state(&before, worker, ssh_public_key, profile)?;
         if before.stopped {
             return Ok(InteractiveWorkerStop::Stopped);
         }
@@ -86,7 +89,7 @@ impl RunPodClient {
             .transport
             .get(&worker.pod_id)?
             .ok_or(RunPodError::StopResourceLost)?;
-        let after = retained_state(&after, worker, ssh_public_key, profile)?;
+        let after = self.retained_state(&after, worker, ssh_public_key, profile)?;
         if before.mount != after.mount {
             return Err(RunPodError::StopRetentionUnverified);
         }
@@ -96,40 +99,43 @@ impl RunPodClient {
         stopping?;
         Err(RunPodError::StopVerificationFailed)
     }
-}
-
-fn retained_state(
-    pod: &ApiPod,
-    worker: &RunPodWorker,
-    ssh_public_key: &str,
-    profile: &RunPodProfile,
-) -> Result<RetainedState, RunPodError> {
-    let status = status_from_resource(pod, worker, Some(ssh_public_key))?;
-    let metadata = &pod.stop;
-    let mounts: Mounts =
-        serde_json::from_value(metadata.mounts.clone()).map_err(|_| RunPodError::StopRetentionUnverified)?;
-    if metadata.cloud != "SECURE"
-        || !metadata.cluster.is_null()
-        || mounts.persistent.path != "/workspace"
-        || mounts.persistent.size < profile.volume_gib
-    {
-        return Err(RunPodError::StopRetentionUnverified);
-    }
-    let stopped = match status.lifecycle {
-        RunPodLifecycle::Exited if metadata.runtime.is_null() => true,
-        RunPodLifecycle::Provisioning | RunPodLifecycle::Running
-            if metadata.locked == false
-                && metadata
-                    .actions
-                    .as_array()
-                    .is_some_and(|actions| actions.iter().any(|value| value == "stop")) =>
-        {
-            false
+    fn retained_state(
+        &self,
+        pod: &ApiPod,
+        worker: &RunPodWorker,
+        ssh_public_key: &str,
+        profile: &RunPodProfile,
+    ) -> Result<RetainedState, RunPodError> {
+        let status = status_from_resource(pod, worker, Some(ssh_public_key))?;
+        let metadata = &pod.stop;
+        if metadata.cloud != "SECURE" || !metadata.cluster.is_null() {
+            return Err(RunPodError::StopRetentionUnverified);
         }
-        _ => return Err(RunPodError::StopStateUnverified),
-    };
-    Ok(RetainedState {
-        mount: mounts.persistent,
-        stopped,
-    })
+        let mount = if self.network_binding.is_some() {
+            self.verify_selected_volume()?;
+            self.verify_attachment(pod)?;
+            RetainedMount::SelectedNetwork
+        } else {
+            let mounts: Mounts =
+                serde_json::from_value(metadata.mounts.clone()).map_err(|_| RunPodError::StopRetentionUnverified)?;
+            if mounts.persistent.path != "/workspace" || mounts.persistent.size < profile.volume_gib {
+                return Err(RunPodError::StopRetentionUnverified);
+            }
+            RetainedMount::Ordinary(mounts.persistent)
+        };
+        let stopped = match status.lifecycle {
+            RunPodLifecycle::Exited if metadata.runtime.is_null() => true,
+            RunPodLifecycle::Provisioning | RunPodLifecycle::Running
+                if metadata.locked == false
+                    && metadata
+                        .actions
+                        .as_array()
+                        .is_some_and(|actions| actions.iter().any(|value| value == "stop")) =>
+            {
+                false
+            }
+            _ => return Err(RunPodError::StopStateUnverified),
+        };
+        Ok(RetainedState { mount, stopped })
+    }
 }

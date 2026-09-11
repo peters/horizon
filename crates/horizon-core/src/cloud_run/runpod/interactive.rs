@@ -54,7 +54,7 @@ impl RunPodInteractiveWorkerProvider {
     /// Bind one caller-authorized selection to the complete persistent request.
     /// The caller must retain this selection before creation and reuse it on recovery.
     /// This does not prove volume ownership, exclusivity, contents or durability,
-    /// and grants no volume mutation or network-volume Stop support.
+    /// and grants no volume mutation. Explicit Stop verifies retained attachment separately.
     /// # Errors
     /// Rejects invalid or conflicting requests, profiles and prior bindings before I/O.
     pub fn new_with_network_volume(
@@ -221,9 +221,6 @@ impl InteractiveWorkerProvider for RunPodInteractiveWorkerProvider {
 impl InteractiveWorkerStopProvider for RunPodInteractiveWorkerProvider {
     fn stop_worker(&self, worker: &InteractiveWorker) -> Result<InteractiveWorkerStop, Self::Error> {
         self.client.check_network_worker(worker)?;
-        if self.client.network_binding.is_some() {
-            return Err(RunPodError::StopRetentionUnverified);
-        }
         let retained = runpod_worker(worker)?;
         super::validate_target(&worker.target, &self.profile)?;
         self.client

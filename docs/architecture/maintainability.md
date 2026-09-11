@@ -434,13 +434,17 @@ back into large multi-purpose modules.
   metadata precedes the creation claim; exact v2 Pod attachment checks precede
   readiness and both first-pin observations. Ordinary clients reject network
   adoption. This leaf grants no storage ownership, exclusivity, contents trust,
-  volume mutation or network-volume Stop, and does not wire setup admission.
+  volume mutation or implicit Stop authority. Setup persists the selection before
+  identity preparation and reloads it on retry/recovery.
   Its colocated tests retain the ordinary lifecycle regression boundary.
 - `cloud_run/runpod/stop.rs` adds only explicit, exact-Pod Stop for persistent
-  workers with a verified ordinary `/workspace` volume. It verifies retained
-  inactive state after a single Stop action, including a lost response, without
-  deletion, restart, SSH, or UI admission. This is not a backup or filesystem
-  durability claim; the existing durable Stop coordinator owns saved intent.
+  workers with a verified ordinary or request-bound HPS `/workspace` volume.
+  Selected-volume Stop checks fresh volume metadata and exact Pod attachment
+  before and after one action, including a lost response, without deletion,
+  restart, SSH, or UI admission. Provider observations do not prove a backup,
+  filesystem durability or process survival; the existing durable Stop coordinator
+  owns saved intent. Colocated network attachment Stop tests cover identity drift
+  and uncertain results independently of the ordinary retention regression suite.
 - `cloud_run/runpod/host_key.rs` separates explicit task-free first-pin bootstrap
   from saved-full-pin reconnect. Its `sample.rs` leaf validates bounded authenticated
   log samples without claiming current-boot freshness or exhaustive history. The

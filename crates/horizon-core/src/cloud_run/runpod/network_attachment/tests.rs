@@ -13,6 +13,7 @@ use crate::cloud_run::interactive_worker::{
 };
 use crate::cloud_run::interactive_worker_stop::InteractiveWorkerStopProvider;
 use serde_json::{Value, json};
+use std::collections::VecDeque;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
@@ -30,6 +31,10 @@ struct State {
     lose_create: bool,
     fresh: Option<ApiPod>,
     deleted: Vec<String>,
+    scripted_gets: VecDeque<Result<Option<ApiPod>, RunPodError>>,
+    scripted_volumes: VecDeque<Result<Option<Value>, RunPodError>>,
+    stop_error: Option<RunPodError>,
+    on_stop: Option<Box<dyn Fn() + Send>>,
 }
 
 impl Transport for FakeTransport {
@@ -37,10 +42,11 @@ impl Transport for FakeTransport {
         assert_eq!(id, "volume_exact");
         let mut state = self.0.lock().expect("state");
         state.calls.push("volume");
-        Ok(state
-            .volume
-            .clone()
-            .map(|value| serde_json::from_value(value).expect("volume")))
+        let volume = state
+            .scripted_volumes
+            .pop_front()
+            .unwrap_or_else(|| Ok(state.volume.clone()))?;
+        Ok(volume.map(|value| serde_json::from_value(value).expect("volume")))
     }
     fn list_by_name(&self, _: &str) -> Result<Vec<ApiPod>, RunPodError> {
         let mut state = self.0.lock().expect("state");
@@ -65,10 +71,22 @@ impl Transport for FakeTransport {
         assert_eq!(id, "pod_exact");
         let mut state = self.0.lock().expect("state");
         state.calls.push("get");
+        if let Some(scripted) = state.scripted_gets.pop_front() {
+            return scripted;
+        }
         Ok(state.fresh.clone().or_else(|| state.pods.first().cloned()))
     }
-    fn stop(&self, _: &str) -> Result<(), RunPodError> {
-        panic!("network Stop is unsupported")
+    fn stop(&self, id: &str) -> Result<(), RunPodError> {
+        assert_eq!(id, "pod_exact");
+        let mut state = self.0.lock().expect("state");
+        state.calls.push("stop");
+        if let Some(hook) = &state.on_stop {
+            hook();
+        }
+        if let Some(pod) = state.pods.first_mut() {
+            pod.status = Some("EXITED".into());
+        }
+        state.stop_error.take().map_or(Ok(()), Err)
     }
     fn delete(&self, id: &str) -> Result<RunPodCleanup, RunPodError> {
         let mut state = self.0.lock().expect("state");
@@ -88,7 +106,9 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let mut request = interactive_request(CloudWorkflowId::new(), CloudJobId::new());
+        Self::from_request(interactive_request(CloudWorkflowId::new(), CloudJobId::new()))
+    }
+    fn from_request(mut request: InteractiveWorkerRequest) -> Self {
         request.target.lifetime = WorkerLifetime::Persistent;
         let selection = RunPodNetworkVolumeExpectation {
             volume_id: "volume_exact".into(),
@@ -123,6 +143,10 @@ impl Fixture {
                 lose_create: false,
                 fresh: None,
                 deleted: Vec::new(),
+                scripted_gets: VecDeque::new(),
+                scripted_volumes: VecDeque::new(),
+                stop_error: None,
+                on_stop: None,
             }))),
         }
     }
@@ -259,10 +283,6 @@ fn complete_request_and_original_worker_guards_precede_every_io_path() {
         assert!(provider.delete_worker(&worker).is_err());
         assert!(provider.stop_worker(&worker).is_err());
     }
-    assert_eq!(
-        provider.stop_worker(&fixture.worker()),
-        Err(RunPodError::StopRetentionUnverified)
-    );
     let mut client = fixture.client();
     client
         .bind_network(&NetworkBinding::new(&fixture.request, &fixture.selection, &profile()).expect("binding"))
@@ -439,3 +459,5 @@ fn fresh_exact_pod_and_ordinary_rejection_cannot_be_bypassed() {
     );
     assert_eq!(fixture.transport.0.lock().expect("state").deleted, ["pod_exact"]);
 }
+
+mod stop;
