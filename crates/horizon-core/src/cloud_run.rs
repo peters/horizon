@@ -4,6 +4,7 @@ use std::{collections::HashSet, fmt};
 use thiserror::Error;
 use uuid::Uuid;
 mod artifact_digest;
+pub mod azure;
 pub mod interactive_worker;
 pub mod interactive_worker_stop;
 pub mod local_docker;

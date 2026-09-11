@@ -36,6 +36,9 @@ sha2.workspace = true
 regex.workspace = true
 atomicwrites.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+process-wrap.workspace = true
+
 [target.'cfg(target_os = "linux")'.dependencies]
 flate2.workspace = true
 rustix.workspace = true
