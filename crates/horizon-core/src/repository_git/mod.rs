@@ -25,6 +25,32 @@ pub struct GitPreparation {
 }
 
 impl GitPreparation {
+    /// Canonical task binding, independent of current checkout contents or existence.
+    /// # Errors
+    /// Rejects invalid preparation identities before any filesystem access.
+    pub fn binding(&self) -> Result<crate::cloud_run::ArtifactDigest, GitPreparationError> {
+        let mut bytes = b"horizon-ordinary-git-task-v1\0".to_vec();
+        bytes.extend(self.encode()?);
+        Ok(crate::cloud_run::ArtifactDigest::sha256(&bytes))
+    }
+
+    /// Inspect the completed checkout identity without Git, writes or task startup.
+    /// Requires stable trusted worker ownership; callers must hold and recheck the
+    /// returned directory identity before use. Dirty files are deliberately retained.
+    /// # Errors
+    /// Rejects incomplete/conflicting preparation, unsafe ancestry and replaced roots.
+    pub fn inspect_checkout(&self) -> Result<GitCheckoutLocation, GitPreparationError> {
+        self.encode()?;
+        #[cfg(target_os = "linux")]
+        {
+            linux::inspect_checkout(std::path::Path::new("/workspace"), self)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Err(GitPreparationError::Unsupported)
+        }
+    }
+
     /// Decode bounded strict JSON before touching the worker.
     /// # Errors
     /// Rejects malformed identities, source, branches, unknown fields and trailing data.
@@ -58,6 +84,14 @@ impl GitPreparation {
             .filter(|bytes| bytes.len() <= REQUEST_LIMIT)
             .ok_or(GitPreparationError::Invalid)
     }
+}
+
+/// Fixed worker checkout plus inode identity, not a caller-supplied path.
+#[derive(Debug, Eq, PartialEq, Serialize)]
+pub struct GitCheckoutLocation {
+    pub path: &'static str,
+    pub device: u64,
+    pub inode: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]

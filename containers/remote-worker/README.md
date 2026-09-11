@@ -6,8 +6,8 @@
 `1`, `workspace_local_id`, non-nil UUID `runtime_id`, `source` (GitHub `owner/repo`,
 exact 40-character `commit`, optional `branch`), and explicit `work_branch`.
 It fetches the exact commit over HTTPS, not the moving source branch, into the
-fresh fixed `/workspace/horizon/repository` checkout. Existing panel tasks can
-select relative directory `repository`; preparation does not start a task.
+fresh fixed `/workspace/horizon/repository` checkout. Preparation does not start
+a task; use the Git-bound start operation below for ordinary Git task admission.
 Authentication uses only the protected runtime token through the installed Git
 credential helper. No credentials belong in the request, URL or Git config.
 
@@ -371,6 +371,30 @@ Status never creates a session; repeating start retains the existing one-shot
 intent rules. Interactive attachment still uses the separate `attach` command
 and PTY. Malformed request errors never echo stdin or task content. This protocol
 does not itself provide authenticated transport or authorize a new task.
+
+For ordinary Git, use `operation: "start-git"` with the same fields plus
+`repository`, containing the exact `GitPreparation` request used at preparation.
+Here `directory` is relative to `/workspace/horizon/repository`, not its parent.
+The worker calls bounded, read-only `git-binding` and `git-checkout` projections:
+the first canonicalizes the request without requiring current files; the second
+requires its matching completion record and returns the fixed checkout's device
+and inode. A new task holds and checks that identity, private mode and confined
+cwd before claiming the existing one-shot task marker. No Git operation runs.
+
+An existing matching Git-bound task is only observed, including after completion
+or checkout removal; dirty files and new commits are not reset. Conflicting,
+partial or uncertain identities never authorize replacement or replay. A plain
+task cannot be adopted by Git start. These checks require stable trusted worker
+ownership; they are not a sandbox against another task with the same worker UID.
+
+The Linux `remote_worker_status::start_remote_git_shell` controller API derives
+the repository, runtime, saved work branch, Shell command and cwd from the exact
+saved allocation. It requires an existing owned worker, retained SSH identity/pin,
+noncreating provider inspection and current lease. The request travels only over
+fixed pinned SSH with a 15-second stdin budget capped by the remaining lease.
+Only a strict matching response confirms status; output loss or post-send state
+drift is unknown and must not trigger automatic retry. No provider creation, PAT
+delivery, push/PR, Stop/Delete or UI behavior is included.
 
 A `verify` request uses the same fields as `start`, but only compares the supplied
 directory and literal argv with the retained task's launch digest before returning

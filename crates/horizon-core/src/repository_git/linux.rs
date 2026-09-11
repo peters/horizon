@@ -185,6 +185,32 @@ struct Completion {
     inode: u64,
 }
 
+pub(super) fn inspect_checkout(parent: &Path, request: &GitPreparation) -> Result<super::GitCheckoutLocation, Error> {
+    let bytes = request.encode()?;
+    let parent = Directory::open_mode(parent, false)?;
+    let worker = Directory::open_mode(&parent.path.join(".horizon-worker"), true)?;
+    let tasks = Directory::open_mode(&parent.path.join("horizon"), true)?;
+    let slot = worker.child("git-workspace", false)?.ok_or(Error::Conflict)?;
+    if slot.read("claim.json")?.as_deref() != Some(&bytes) {
+        return Err(Error::Conflict);
+    }
+    let completion: Completion =
+        serde_json::from_slice(&slot.read("complete.json")?.ok_or(Error::Conflict)?).map_err(|_| Error::Conflict)?;
+    let checkout = tasks.child("repository", false)?.ok_or(Error::Conflict)?;
+    let meta = checkout.handle.metadata().map_err(|_| Error::UnsafeRoot)?;
+    if completion.request != *request || (completion.device, completion.inode) != (meta.dev(), meta.ino()) {
+        return Err(Error::Conflict);
+    }
+    for directory in [&parent, &worker, &tasks, &slot, &checkout] {
+        directory.verify()?;
+    }
+    Ok(super::GitCheckoutLocation {
+        path: CHECKOUT,
+        device: meta.dev(),
+        inode: meta.ino(),
+    })
+}
+
 pub(super) fn execute(
     parent: &Path,
     request: &GitPreparation,

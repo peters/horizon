@@ -583,9 +583,17 @@ modules.
 observation API. Its `linux` leaf confines the separate one-shot claim and fixed
 task-accessible checkout, while `git` owns sanitized bounded Git subprocesses.
 The repository CLI only frames bounded requests and responses. This prerequisite
-does not use the retained overlay setup qualifier, change task admission, or
+does not use the retained overlay setup qualifier or
 support LFS/submodules yet; unsupported repositories retain state without a
 completion receipt. Observation never mutates user commits or worktree changes.
+
+Ordinary Git task admission uses `repository_git` canonical binding and read-only
+checkout identity projections, framed in the existing CLI Git leaf. The worker's
+`start-git` shares prepared-task marker and held-directory checks without invoking
+overlay setup or Git. `remote_worker_status::git_start` owns the separate explicit
+saved-Shell mutation, provider/pin admission and lease-bounded transport; existing
+inspection functions never call it. A matching retained marker is observed before
+current checkout inspection, preserving completed/dirty tasks without replay.
 
 Use these checks during implementation and review:
 
