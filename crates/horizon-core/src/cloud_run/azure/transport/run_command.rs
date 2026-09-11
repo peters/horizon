@@ -11,6 +11,10 @@ const RUN_COMMAND_BACKOFF_MS: [u64; 9] = [500, 1_000, 2_000, 4_000, 8_000, 15_00
 const RUN_COMMAND_BOUND: Duration = Duration::from_secs(120);
 /// Longest single wait a `Retry-After` header may ask for.
 const RETRY_AFTER_CAP: Duration = Duration::from_secs(60);
+/// Longest operation URL followed. ARM signs its async-operation URLs with a
+/// certificate carried in the query string (`c=`), which alone runs to about 3 KB, so
+/// the live URL is well over 3 KB; 8 KB leaves room without accepting arbitrary sizes.
+const OPERATION_URL_LIMIT: usize = 8_192;
 
 /// The only scripts the adapter ever executes inside a worker; there is no way to pass
 /// arbitrary text to the run-command channel.
@@ -83,7 +87,8 @@ impl AzureArmHttp {
     /// Only an operation URL under this subscription on the management endpoint is
     /// polled, and only one whose path cannot be normalised out of it: every segment
     /// after the subscription is a plain token (no dot segments, no percent-encoding, no
-    /// backslashes or other separators) and the query carries only the API version shape.
+    /// backslashes or other separators) and the query carries only the shape ARM uses
+    /// (the API version plus its signature parameters, all base64url or plain tokens).
     fn owns_operation_url(&self, url: &str) -> bool {
         let prefix = format!("{MANAGEMENT_ENDPOINT}/subscriptions/{}/", self.subscription_id);
         let Some(rest) = url.strip_prefix(&prefix) else {
@@ -98,7 +103,7 @@ impl AzureArmHttp {
                     .bytes()
                     .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
         };
-        url.len() <= 2_048
+        url.len() <= OPERATION_URL_LIMIT
             && path.split('/').all(plain_segment)
             && query
                 .bytes()
