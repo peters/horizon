@@ -347,7 +347,7 @@ pub trait InteractiveWorkerProvider: Send + Sync {
 pub(crate) fn valid_worker_target(target: &WorkerTarget, provider: CloudProvider) -> bool {
     target.provider == provider
         && valid_worker_profile_name(&target.profile)
-        && valid_immutable_image(&target.image)
+        && super::validation::valid_immutable_worker_image(&target.image)
         && target.disk_gib > 0
         && target.lifetime.is_valid()
         && target
@@ -359,13 +359,6 @@ pub(crate) fn valid_worker_target(target: &WorkerTarget, provider: CloudProvider
 
 pub(crate) fn valid_worker_profile_name(name: &str) -> bool {
     !name.trim().is_empty() && name.trim() == name && name.len() <= 191 && !name.chars().any(char::is_control)
-}
-
-fn valid_immutable_image(value: &str) -> bool {
-    super::validation::valid_worker_image(value)
-        && value
-            .rsplit_once("@sha256:")
-            .is_some_and(|(_, digest)| digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()))
 }
 
 pub(crate) fn valid_single_token(value: &str, maximum_length: usize) -> bool {

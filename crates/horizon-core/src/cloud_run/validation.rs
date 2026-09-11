@@ -315,6 +315,13 @@ pub(super) fn valid_worker_image(value: &str) -> bool {
     let registry = !explicit || Url::parse(&format!("https://{value}")).is_ok_and(usable);
     OCI_REF.as_ref().is_some_and(|pattern| pattern.is_match(value)) && digest && registry
 }
+/// A worker image reference pinned to a full `sha256` digest.
+pub(super) fn valid_immutable_worker_image(value: &str) -> bool {
+    valid_worker_image(value)
+        && value
+            .rsplit_once("@sha256:")
+            .is_some_and(|(_, digest)| ArtifactDigest::parse_sha256(digest).is_ok())
+}
 impl GitSource {
     /// Validate the credential-free repository identity and optional branch.
     /// # Errors

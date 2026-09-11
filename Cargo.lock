@@ -1990,6 +1990,7 @@ dependencies = [
  "git2",
  "horizon-browser",
  "libc",
+ "process-wrap",
  "profiling",
  "regex",
  "rusqlite",

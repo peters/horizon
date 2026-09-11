@@ -4,7 +4,7 @@ use super::{
     interactive_worker::{
         InteractiveWorkerLease, InteractiveWorkerLifetime, InteractiveWorkerRequest, valid_ssh_public_key,
     },
-    validation::valid_worker_image,
+    validation::valid_immutable_worker_image,
 };
 use serde::{Deserialize, Deserializer, de};
 use std::{collections::BTreeMap, env, fmt};
@@ -542,12 +542,6 @@ fn termination_deadline(lease_seconds: u32) -> Result<String, RunPodError> {
 fn valid_provider_id(value: &str) -> bool {
     let valid_byte = |byte: u8| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_');
     !value.is_empty() && value.len() <= 191 && value.bytes().all(valid_byte)
-}
-fn valid_immutable_worker_image(value: &str) -> bool {
-    valid_worker_image(value)
-        && value
-            .rsplit_once("@sha256:")
-            .is_some_and(|(_, digest)| digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()))
 }
 fn deserialize_hourly_cost<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
 where
