@@ -35,6 +35,7 @@ pub mod remote_worker_storage;
 pub mod remote_workspace;
 pub mod remote_workspace_recovery;
 pub mod remote_workspace_setup;
+pub mod repository_git;
 pub mod repository_overlay;
 mod runtime_state;
 pub mod search;

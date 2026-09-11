@@ -565,6 +565,14 @@ modules.
 
 ## Review Heuristics
 
+`repository_git` owns the worker-only ordinary Git preparation identity and
+observation API. Its `linux` leaf confines the separate one-shot claim and fixed
+task-accessible checkout, while `git` owns sanitized bounded Git subprocesses.
+The repository CLI only frames bounded requests and responses. This prerequisite
+does not use the retained overlay setup qualifier, change task admission, or
+support LFS/submodules yet; unsupported repositories retain state without a
+completion receipt. Observation never mutates user commits or worktree changes.
+
 Use these checks during implementation and review:
 
 - Does this file have one reason to change?

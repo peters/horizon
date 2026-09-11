@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod git;
 mod intake;
 mod pack;
 mod protocol;
@@ -32,12 +33,14 @@ fn main() -> ExitCode {
                     | "intake"
                     | "intake-status"
                     | "storage-status"
+                    | "git-prepare"
+                    | "git-status"
             )
         )
     {
         let _ = writeln!(
             io::stderr().lock(),
-            "Usage: horizon-repository materialize|setup|setup-status|setup-binding|setup-checkout|receive-overlay|overlay-status|receive-pack|pack-status|intake|intake-status|storage-status < request"
+            "Usage: horizon-repository materialize|setup|setup-status|setup-binding|setup-checkout|receive-overlay|overlay-status|receive-pack|pack-status|intake|intake-status|storage-status|git-prepare|git-status < request"
         );
         return ExitCode::from(2);
     }
@@ -45,6 +48,8 @@ fn main() -> ExitCode {
     let mut output = io::stdout().lock();
     let mut diagnostics = io::stderr().lock();
     match command {
+        Some("git-prepare") => git::run(false, &mut input, &mut output, &mut diagnostics),
+        Some("git-status") => git::run(true, &mut input, &mut output, &mut diagnostics),
         Some("setup") => setup::run(setup::Command::Execute, &mut input, &mut output, &mut diagnostics),
         Some("setup-status") => setup::run(setup::Command::Observe, &mut input, &mut output, &mut diagnostics),
         Some("setup-binding") => setup_checkout::run(
