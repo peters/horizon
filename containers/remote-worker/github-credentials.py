@@ -2,6 +2,7 @@
 """Consume the worker's protected runtime token without persisting credentials."""
 
 import os
+import json
 from pathlib import Path
 import re
 import stat
@@ -60,9 +61,59 @@ def read_token():
         os.close(directory)
     # Fine-grained and classic PATs use this alphabet. Permit one file-ending LF,
     # never whitespace/control characters that could inject credential fields.
+    return decode_token(raw)
+
+
+def decode_token(raw):
+    require(1 <= len(raw) <= MAX_TOKEN)
     value = raw.removesuffix(b'\n')
     require(re.fullmatch(rb'[A-Za-z0-9_]+', value) is not None)
     return value.decode('ascii')
+
+
+def install_token(stream):
+    """Explicit first installation after pinned SSH admission; never rotation."""
+    raw = stream.read(MAX_TOKEN + 1)
+    token = decode_token(raw)
+    retained = read_token()
+    if retained is not None:
+        require(retained == token)
+        return 'present'
+    directory = os.open(RUNTIME, DIRECTORY_FLAGS)
+    try:
+        parent = os.fstat(directory)
+        require(parent.st_uid == os.geteuid() and stat.S_IMODE(parent.st_mode) == 0o700)
+        require(identity(os.stat(RUNTIME, follow_symlinks=False)) == identity(parent))
+        # This fixed candidate is also the exclusive install claim. Interrupted
+        # writes remain private and block replay; boot clears only runtime secrets.
+        descriptor = os.open('github-token.pending', os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                             | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=directory)
+        try:
+            candidate = os.fstat(descriptor)
+            require(stat.S_ISREG(candidate.st_mode) and candidate.st_uid == os.geteuid()
+                    and stat.S_IMODE(candidate.st_mode) == 0o600 and candidate.st_nlink == 1)
+            remaining = memoryview(token.encode('ascii'))
+            while remaining:
+                written = os.write(descriptor, remaining)
+                require(written > 0)
+                remaining = remaining[written:]
+            os.fsync(descriptor)
+            require(identity(os.stat('github-token.pending', dir_fd=directory, follow_symlinks=False))
+                    == identity(os.fstat(descriptor)))
+            require(identity(os.stat(RUNTIME, follow_symlinks=False)) == identity(os.fstat(directory)))
+            # link is an atomic, no-overwrite publication. Until the private
+            # candidate is unlinked, readers reject the transient second link.
+            os.link('github-token.pending', 'github-token', src_dir_fd=directory,
+                    dst_dir_fd=directory, follow_symlinks=False)
+            os.unlink('github-token.pending', dir_fd=directory)
+            os.fsync(directory)
+        finally:
+            os.close(descriptor)
+        require(identity(os.stat(RUNTIME, follow_symlinks=False)) == identity(os.fstat(directory)))
+        require(read_token() == token)
+        return 'installed'
+    finally:
+        os.close(directory)
 
 
 def credential_request(stream):
@@ -152,6 +203,10 @@ def main(arguments):
     try:
         if Path(sys.argv[0]).name == 'gh':
             run_gh(arguments)
+            return 0
+        if arguments == ['install']:
+            status = install_token(sys.stdin.buffer)
+            print(json.dumps({'version': 1, 'status': status}))
             return 0
         if len(arguments) == 1:
             return git_credential(arguments[0], sys.stdin.buffer, sys.stdout)

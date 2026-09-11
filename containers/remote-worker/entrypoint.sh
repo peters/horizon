@@ -80,7 +80,7 @@ fi
 install -m 0600 "${authorized_key_candidate}" /root/.ssh/authorized_keys
 rm -f "${authorized_key_candidate}"
 
-rm -f /run/horizon/github-token
+rm -f /run/horizon/github-token /run/horizon/github-token.pending
 github_token_file=${HORIZON_GITHUB_TOKEN_FILE:-}
 token_bytes=0
 if [ -n "${github_token_file}" ]; then

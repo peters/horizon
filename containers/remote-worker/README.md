@@ -191,7 +191,7 @@ configuration error, not an instruction to run forever. Existing providers that
 supply deadlines retain their bounded behavior; provider API/profile support for
 persistent lifetime is a separate integration step.
 
-The optional GitHub token must be mounted as the exact read-only file
+At startup, the optional GitHub token must be mounted as the exact read-only file
 `/run/secrets/github-token`, with `HORIZON_GITHUB_TOKEN_FILE` set to that path.
 Writable mounts, other paths, symlinks, and direct `HORIZON_GITHUB_TOKEN`
 injection are rejected. The standard `GITHUB_TOKEN` and `GH_TOKEN` environment
@@ -254,10 +254,38 @@ Supply a fine-grained PAT restricted to the required repositories and permission
 creation, rotation and provider delivery of that token remain separate work.
 Retained repository setup remains offline and does not acquire credentials.
 
+For providers without a secret-file mount, the worker also exposes an explicit
+`/usr/local/bin/horizon-github-credential install` command. A controller must first
+admit the exact owned worker and authenticate its retained SSH host pin, then send
+only the PAT on that command's stdin over the pinned connection. Never put the
+token in a command argument, environment variable or provider descriptor. This
+worker-side primitive does not implement controller admission or provider/UI wiring.
+
+Input is bounded to 16 KiB, with at most one trailing newline. Installation requires
+the existing private `/run/horizon` directory; it never creates or repairs that
+directory. A successful reply is JSON with `version: 1` and `status: installed`.
+Re-supplying the exact existing token returns `status: present` without writing.
+A different or unsafe existing token, concurrent installation, invalid input or an
+interrupted private candidate fails without replacing the credential. Errors and
+receipts contain no token or token hash. A failed/missing reply is uncertain, not
+permission to remove files, rotate credentials or restart the worker.
+A delayed concurrent loser may leave its private candidate after another installer
+publishes; this does not replace the winning token. Directory changes during the
+final verification can also produce an uncertain reply despite publication.
+
+The token and exclusive `.pending` candidate remain runtime-only, outside retained
+workspace data. Startup clears both before applying any explicitly mounted token;
+after a provider restart, the controller must explicitly supply a token again.
+No periodic client renewal is required while the worker keeps running. The command
+does not start Git or tasks, contact GitHub, validate PAT permissions or stop any
+existing work. Root inside the worker can intentionally read the credential; this
+is not isolation from authorized root tasks.
+
 Run the credential regressions without network or real credentials:
 
 ```bash
 python3 -B containers/remote-worker/test_github_credentials.py -v
+python3 -B containers/remote-worker/test_github_token_install.py -v
 ```
 
 The provider or operator must supply retained storage at `/workspace`; the image
