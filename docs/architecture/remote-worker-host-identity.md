@@ -90,6 +90,14 @@ separate ext4-only repository importer contract. Actual worker bootstrap,
 Stop/restart persistence, provider-volume ownership and unchanged client pin
 still require exact-source integration and live verification.
 
+The RunPod client can read one exact network-volume ID and require the expected
+data center, allocated size and `HIGH_PERFORMANCE` tier from the
+[v2 metadata response](https://docs.runpod.io/api-reference-v2/network-volumes/get-a-network-volume).
+This point-in-time observation neither creates nor attaches storage and does not
+establish ownership, exclusive access, mount safety or a durable identity binding.
+Those remain separate prerequisites for provisioning, Stop and recovery; editing
+a named profile must not silently replace a retained volume.
+
 Remaining actions: integrate provider-retained volumes and remote backups;
 preserve task/agent state and session markers; implement explicit Stop/recovery;
 complete exact-head cloud acceptance without touching unrelated resources.

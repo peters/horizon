@@ -1,5 +1,6 @@
 use super::{ApiPod, CreatePodRequest, RunPodApiKey, RunPodCleanup, RunPodError, Transport, valid_provider_id};
 use std::{thread, time::Duration};
+mod network_volume;
 const PODS_URL: &str = "https://api.runpod.io/v2/pods";
 const GRAPHQL_URL: &str = "https://api.runpod.io/graphql";
 const CREATE_MUTATION: &str =
@@ -88,6 +89,9 @@ impl RunPodHttp {
     }
 }
 impl Transport for RunPodHttp {
+    fn network_volume(&self, volume_id: &str) -> Result<Option<super::network_volume::ApiNetworkVolume>, RunPodError> {
+        self.get_network_volume(volume_id)
+    }
     fn list_by_name(&self, name: &str) -> Result<Vec<ApiPod>, RunPodError> {
         let response = self
             .agent

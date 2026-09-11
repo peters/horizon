@@ -49,6 +49,9 @@ impl FakeTransport {
     }
 }
 impl Transport for FakeTransport {
+    fn network_volume(&self, _: &str) -> Result<Option<network_volume::ApiNetworkVolume>, RunPodError> {
+        panic!("existing Pod operations must not inspect network volumes")
+    }
     fn list_by_name(&self, _name: &str) -> Result<Vec<ApiPod>, RunPodError> {
         let mut state = self.0.lock().expect("state");
         state.list_calls += 1;

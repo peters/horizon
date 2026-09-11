@@ -14,6 +14,7 @@ mod host_key;
 mod http;
 mod interactive;
 mod models;
+mod network_volume;
 mod stop;
 #[cfg(test)]
 mod tests;
@@ -25,6 +26,7 @@ pub use models::{
     RunPodCleanup, RunPodEnsure, RunPodError, RunPodLifecycle, RunPodProfile, RunPodSshEndpoint, RunPodWorker,
     RunPodWorkerStatus,
 };
+pub use network_volume::{RunPodNetworkVolume, RunPodNetworkVolumeExpectation};
 
 const WORKFLOW_ENV: &str = "HORIZON_WORKFLOW_ID";
 const JOB_ENV: &str = "HORIZON_JOB_ID";
@@ -383,6 +385,7 @@ impl RunPodClient {
     }
 }
 trait Transport: Send + Sync {
+    fn network_volume(&self, volume_id: &str) -> Result<Option<network_volume::ApiNetworkVolume>, RunPodError>;
     fn list_by_name(&self, name: &str) -> Result<Vec<ApiPod>, RunPodError>;
     fn create(&self, request: &CreatePodRequest) -> Result<ApiPod, RunPodError>;
     fn get(&self, pod_id: &str) -> Result<Option<ApiPod>, RunPodError>;

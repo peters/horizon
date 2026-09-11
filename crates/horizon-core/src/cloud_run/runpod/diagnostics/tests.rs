@@ -298,6 +298,12 @@ fn provider_ensure_emits_once_without_changing_the_error_or_issuing_cleanup() {
 
     struct RejectedCreate(Arc<AtomicUsize>);
     impl Transport for RejectedCreate {
+        fn network_volume(
+            &self,
+            _: &str,
+        ) -> Result<Option<super::super::network_volume::ApiNetworkVolume>, RunPodError> {
+            panic!("unexpected network volume inspection")
+        }
         fn list_by_name(&self, _: &str) -> Result<Vec<ApiPod>, RunPodError> {
             Ok(Vec::new())
         }
@@ -342,6 +348,12 @@ fn invalid_requests_emit_once_without_any_provider_operation() {
 
     struct NoProviderCalls;
     impl Transport for NoProviderCalls {
+        fn network_volume(
+            &self,
+            _: &str,
+        ) -> Result<Option<super::super::network_volume::ApiNetworkVolume>, RunPodError> {
+            panic!("unexpected network volume inspection")
+        }
         fn list_by_name(&self, _: &str) -> Result<Vec<ApiPod>, RunPodError> {
             panic!("unexpected lookup")
         }
