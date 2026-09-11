@@ -157,6 +157,15 @@ back into large multi-purpose modules.
   only exact installer success replies. Post-send drift is unknown, never a
   reason for automatic retry, credential replacement or worker/task mutation.
   The borrowed secret is redacted and is not persisted or discovered implicitly.
+- `remote_git_setup.rs` admits explicit ordinary Git submission and read-only
+  receipt inspection on an existing owned, pinned worker. The saved repository,
+  exact runtime and explicitly matching saved branch bind its fixed stdin frame;
+  a separate source/work-branch model and PR base selection remain future work.
+  Its protocol leaf distinguishes detached handoff, observed original preparation
+  and unknown outcomes, not current checkout cleanliness or task readiness.
+  Its transport leaf caps each write by the remaining lease and retains valid
+  negative replies without granting replay. No allocation, PAT installation,
+  task start, storage writes or implicit recovery occur. Linux clients first.
 - `remote_worker_status.rs` gates non-creating panel inspection on exact owned
   recovery and current lifetime. Its `protocol.rs` leaf owns bounded status-only
   wire types; `ssh.rs` owns the query's private host-pin lifetime and retains the

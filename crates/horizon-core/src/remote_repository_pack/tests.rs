@@ -68,6 +68,15 @@ impl Fixture {
         lifetime: crate::cloud_run::WorkerLifetime,
         pinned: bool,
     ) -> Self {
+        Self::with_repository(lifecycle, lifetime, pinned, None)
+    }
+
+    pub(crate) fn with_repository(
+        lifecycle: Option<InteractiveWorkerLifecycle>,
+        lifetime: crate::cloud_run::WorkerLifetime,
+        pinned: bool,
+        branch: Option<&str>,
+    ) -> Self {
         use std::os::unix::fs::PermissionsExt;
         let directory = tempfile::tempdir().expect("fixture");
         std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).expect("private");
@@ -86,6 +95,7 @@ impl Fixture {
         }))
         .expect("state");
         state.spec.target.lifetime = lifetime;
+        state.spec.repository.branch = branch.map(str::to_owned);
         let dormant = store.create_remote_workspace(OWNER, &state).expect("workspace");
         let allocation = store.allocate_remote_runtime(&dormant, i64::MAX).expect("allocation");
         let runtime = allocation.workspace().state().runtime.as_ref().expect("runtime");

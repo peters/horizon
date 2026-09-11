@@ -73,6 +73,7 @@ enum Operation<'a> {
     IntakeStatus,
     StorageStatus,
     GithubInstall,
+    GitSetup { observe: bool },
     Attach { runtime: CloudJobId, panel: &'a str },
 }
 
@@ -92,7 +93,8 @@ fn command_for(
         | Operation::Intake
         | Operation::IntakeStatus
         | Operation::StorageStatus
-        | Operation::GithubInstall => "-T",
+        | Operation::GithubInstall
+        | Operation::GitSetup { .. } => "-T",
         Operation::Attach { panel, .. } if valid_local_id(panel) => "-tt",
         Operation::Attach { .. } => return Err(Error::UnknownPanel),
     };
@@ -146,12 +148,23 @@ fn command_for(
         Operation::IntakeStatus => "/usr/local/bin/horizon-repository intake-status".into(),
         Operation::StorageStatus => "/usr/local/bin/horizon-repository storage-status".into(),
         Operation::GithubInstall => "/usr/local/bin/horizon-github-credential install".into(),
+        Operation::GitSetup { observe: true } => "/usr/local/bin/horizon-repository git-status".into(),
+        Operation::GitSetup { observe: false } => "/usr/local/bin/horizon-setup-launch --git".into(),
         Operation::Attach { runtime, panel } => {
             format!("/usr/local/bin/horizon-panel-session attach -- {runtime} {panel}")
         }
     });
     command.env("SSH_ASKPASS_REQUIRE", "never");
     Ok(command)
+}
+
+pub(crate) fn prepared_git_setup(
+    identity: &Path,
+    known_hosts: &Path,
+    endpoint: &InteractiveWorkerSshEndpoint,
+    observe: bool,
+) -> Result<Command, Error> {
+    command_for(identity, known_hosts, endpoint, Operation::GitSetup { observe })
 }
 
 /// Private preparation must be consumed by the fresh admission boundary, never persisted.
