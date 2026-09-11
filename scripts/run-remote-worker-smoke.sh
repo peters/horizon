@@ -259,7 +259,7 @@ ssh-keygen -q -t ed25519 -N '' -f "${temp_dir}/wrong-client"
 ssh-keygen -q -t rsa -b 2048 -N '' -f "${temp_dir}/unsupported-client"
 client_public_key=$(<"${temp_dir}/client.pub")
 unsupported_public_key=$(<"${temp_dir}/unsupported-client.pub")
-fake_token="ghp_horizon_worker_smoke_${smoke_id}_not_real"
+fake_token="ghp_horizon_worker_smoke_${smoke_id//-/_}_not_real"
 printf '%s' "${fake_token}" >"${temp_dir}/github-token"
 chmod 0600 "${temp_dir}/github-token"
 head -c 16385 /dev/zero | tr '\0' x >"${temp_dir}/oversized-token"
@@ -332,8 +332,8 @@ expect_usage_failure \
   --mount "type=bind,src=${temp_dir}/github-token,dst=/run/secrets/github-token" \
   --env HORIZON_GITHUB_TOKEN_FILE=/run/secrets/github-token
 
-printf '%s\n' '#!/bin/sh' 'sleep 7' 'exit 0' >"${temp_dir}/slow-gh"
-chmod 0755 "${temp_dir}/slow-gh"
+printf '%s\n' '#!/bin/sh' 'sleep 7' 'exit 0' >"${temp_dir}/slow-identity"
+chmod 0755 "${temp_dir}/slow-identity"
 startup_expiry_worker="${smoke_id}-startup-expiry"
 record_container "${startup_expiry_worker}"
 docker run --detach \
@@ -343,7 +343,7 @@ docker run --detach \
   --env "HORIZON_TERMINATE_AFTER=$(deadline_after 5)" \
   --mount "type=bind,src=${temp_dir}/github-token,dst=/run/secrets/github-token,readonly" \
   --env HORIZON_GITHUB_TOKEN_FILE=/run/secrets/github-token \
-  --mount "type=bind,src=${temp_dir}/slow-gh,dst=/usr/bin/gh,readonly" \
+  --mount "type=bind,src=${temp_dir}/slow-identity,dst=/usr/local/bin/horizon-worker-host-identity,readonly" \
   "${image}" >/dev/null
 startup_expired=false
 for _ in {1..20}; do
@@ -465,6 +465,25 @@ set -e
 git_config_after=$(docker exec "${worker_a}" sha256sum /root/.gitconfig | awk '{print $1}')
 [[ "${git_config_after}" == "${git_config_before}" ]] ||
   fail "token-backed agent sessions changed shared Git configuration"
+docker exec "${worker_a}" python3 -c '
+import os, pathlib, subprocess
+token = pathlib.Path("/run/horizon/github-token").read_bytes().rstrip(b"\n")
+result = subprocess.run(["git", "credential", "fill"],
+    input=b"protocol=https\nhost=github.com\n\n", capture_output=True,
+    env=dict(os.environ, GIT_TERMINAL_PROMPT="0"), timeout=10, check=True)
+assert b"password=" + token + b"\n" in result.stdout and not result.stderr
+for _ in range(2):
+    result = subprocess.run(["gh", "auth", "token", "--hostname", "github.com"],
+        capture_output=True, timeout=10, check=True)
+    assert result.stdout.strip() == token and not result.stderr
+result = subprocess.run(["horizon-agent-session", "/usr/bin/env"],
+    capture_output=True, timeout=10, check=True)
+assert token not in result.stdout and token not in result.stderr
+assert not any(line.startswith((b"GH_TOKEN=", b"GITHUB_TOKEN=")) for line in result.stdout.splitlines())
+assert not pathlib.Path("/root/.git-credentials").exists()
+assert not pathlib.Path("/root/.config/gh/hosts.yml").exists()
+print("PASS installed Git/gh file credentials and token-free task environment")
+'
 git_rewrites=$(
   docker exec "${worker_a}" \
     git config --global --get-all url.https://github.com/.insteadOf

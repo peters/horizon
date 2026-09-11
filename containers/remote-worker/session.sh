@@ -8,12 +8,9 @@ fi
 
 export PATH="/usr/local/cargo/bin:${PATH}"
 
-if [ -f /run/horizon/github-token ]; then
-    GITHUB_TOKEN=$(cat /run/horizon/github-token)
-    export GITHUB_TOKEN
-    GH_TOKEN=${GITHUB_TOKEN}
-    export GH_TOKEN
-fi
+# Only the Git credential helper and gh child consume the protected token.
+# Ordinary shells, agents and their unrelated children must not inherit it.
+unset GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN HORIZON_GITHUB_TOKEN
 
 export HORIZON=1
 exec "$@"
