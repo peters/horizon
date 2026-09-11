@@ -131,7 +131,7 @@ def api_target(arguments):
 
 def run_gh(arguments):
     environment = gh_environment(os.environ)
-    if arguments == ['--version'] or arguments[:1] == ['help'] or '--help' in arguments:
+    if arguments in (['--version'], ['version']) or arguments[:1] == ['help'] or '--help' in arguments:
         os.execve(GH, [GH, *arguments], environment)
     require(environment.get('GH_HOST', 'github.com') == 'github.com')
     # Explicit GH_HOST also filters inferred Git remotes, preventing a different
@@ -157,6 +157,9 @@ def main(arguments):
         raise CredentialError()
     except (OSError, ValueError, CredentialError):
         print('horizon-worker: GitHub credential unavailable or request rejected', file=sys.stderr)
+        if Path(sys.argv[0]).name != 'gh' and arguments == ['get']:
+            sys.stdout.write('quit=true\n\n')
+            return 0
         return 1
 
 

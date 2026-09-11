@@ -180,7 +180,7 @@ class CredentialsTests(unittest.TestCase):
         with patch.dict(C.os.environ, {}, clear=True), patch.object(C.os, 'execve') as execute:
             # execve does not return in production; emulate that control flow.
             execute.side_effect = SystemExit(0)
-            for args in (['--version'], ['help'], ['repo', 'view', '--help']):
+            for args in (['--version'], ['version'], ['help'], ['repo', 'view', '--help']):
                 with self.assertRaises(SystemExit):
                     C.run_gh(args)
                 self.assertNotIn('GH_TOKEN', execute.call_args.args[2])
@@ -256,6 +256,47 @@ class CredentialsTests(unittest.TestCase):
         self.assertEqual(before, set(self.root.iterdir()))
         self.assertFalse((self.root / '.gitconfig').exists())
         self.assertFalse((self.root / '.git-credentials').exists())
+
+    def test_failed_get_stops_real_git_before_later_helper_or_prompt(self):
+        helper = self.root / 'helper.py'
+        source = (HERE / 'github-credentials.py').read_text()
+        helper.write_text(source.replace("RUNTIME = Path('/run/horizon')", 'RUNTIME = Path(' + repr(str(self.runtime)) + ')'))
+        marker, later = self.root / 'fallback-called', self.root / 'fallback'
+        later.write_text('#!/usr/bin/python3\nfrom pathlib import Path\n'
+                         + 'Path(' + repr(str(marker)) + ').write_text("called")\n'
+                         + 'print("username=fallback\\npassword=fallback\\n")\n')
+        later.chmod(0o700)
+        environment = {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C', 'HOME': str(self.root),
+                       'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_CONFIG_NOSYSTEM': '1',
+                       'GIT_ASKPASS': str(later), 'GIT_TERMINAL_PROMPT': '0'}
+        command = ['/usr/bin/git', '-c', 'credential.helper=', '-c',
+                   'credential.helper=/usr/bin/python3 -I ' + str(helper), '-c',
+                   'credential.helper=' + str(later), 'credential', 'fill']
+        request = b'protocol=https\nhost=github.com\n\n'
+        for value, mode in ((TOKEN, 0o644), ('malformed private sentinel', 0o600)):
+            self.token.write_text(value)
+            self.token.chmod(mode)
+            result = subprocess.run(command, input=request, env=environment,
+                                    capture_output=True, timeout=5, check=False)
+            self.assertNotEqual(0, result.returncode)
+            self.assertEqual(b'', result.stdout)
+            self.assertIn(b'GitHub credential unavailable or request rejected', result.stderr)
+            self.assertNotIn(value.encode(), result.stderr)
+            self.assertFalse(marker.exists())
+            direct = subprocess.run(['/usr/bin/python3', '-I', str(helper), 'get'],
+                input=request, env=environment, capture_output=True, timeout=5, check=False)
+            self.assertEqual(0, direct.returncode)
+            self.assertEqual(b'quit=true\n\n', direct.stdout)
+            self.assertEqual(b'horizon-worker: GitHub credential unavailable or request rejected\n', direct.stderr)
+
+    def test_wrapper_credential_failure_remains_nonzero(self):
+        self.token.write_text('malformed private sentinel')
+        diagnostics, output = io.StringIO(), io.StringIO()
+        with patch.dict(C.os.environ, {}, clear=True), patch.object(C.sys, 'argv', ['gh']), \
+                patch.object(C.sys, 'stdout', output), patch.object(C.sys, 'stderr', diagnostics):
+            self.assertEqual(1, C.main(['api', 'user']))
+        self.assertEqual('', output.getvalue())
+        self.assertEqual('horizon-worker: GitHub credential unavailable or request rejected\n', diagnostics.getvalue())
 
 
 if __name__ == '__main__':
