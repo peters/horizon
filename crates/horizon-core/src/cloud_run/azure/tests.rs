@@ -3,11 +3,13 @@ use super::{
     valid_identity_id, valid_location, valid_registry_login_server, valid_vm_size,
 };
 use crate::cloud_run::{CloudProvider, WorkerLifetime, WorkerTarget};
+mod transport;
 use std::time::Duration;
 
-const SUB: &str = "0f0e0d0c-0b0a-4908-8706-050403020100";
-const OTHER_SUB: &str = "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d";
-const IMAGE: &str =
+pub(super) const SUB: &str = "0f0e0d0c-0b0a-4908-8706-050403020100";
+pub(super) const OTHER_SUB: &str = "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d";
+pub(super) const GROUP: &str = "horizon-ws-sample";
+pub(super) const IMAGE: &str =
     "example.azurecr.io/horizon-remote-worker@sha256:20cc03ef2530336b7374cc35412c8583b1422726c630ec6e6cd1450d690a74f6";
 
 fn profile() -> AzureProfile {
