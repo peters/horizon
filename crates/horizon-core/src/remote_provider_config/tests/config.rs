@@ -10,6 +10,21 @@ const EXPLICIT_PROFILES: &str = "remote:
 ";
 
 #[test]
+fn runpod_round_trips_through_full_config_without_secrets_or_default_selection() {
+    let mut configured = Config::default();
+    configured.remote.runpod.push(runpod_profile("retained"));
+    let yaml = configured.to_yaml().expect("serialize");
+    assert!(!yaml.contains("RUNPOD_API_KEY"));
+    assert!(!yaml.contains("api_key:"));
+    let restored = Config::from_yaml(&yaml).expect("full config");
+    assert_eq!(restored.remote, configured.remote);
+    assert!(restored.remote.local_docker.is_empty());
+    assert!(!restored.remote.is_empty());
+    configured.remote.runpod[0].name = " invalid".into();
+    assert!(configured.validate().is_err());
+}
+
+#[test]
 fn old_and_default_configurations_remain_empty_without_a_migration() {
     for configuration in [
         Config::default(),

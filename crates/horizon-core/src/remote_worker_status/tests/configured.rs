@@ -9,6 +9,7 @@ fn config() -> RemoteProviderConfig {
             name: "development".into(),
             docker_host: "unix:///unused-task-check/socket".into(),
         }],
+        ..Default::default()
     }
 }
 

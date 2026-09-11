@@ -83,6 +83,47 @@ fn pending(
 }
 
 #[test]
+fn runpod_existing_views_use_same_owner_admission_and_discard_changed_profile_results() {
+    let owner = "00000000-0000-4000-8000-000000000001";
+    let mut expected = summary(owner);
+    expected.provider = CloudProvider::RunPod;
+    let mut board = Board::from_runtime_state(&runtime(owner)).expect("inert saved views");
+    for panel in &mut board.panels {
+        assert!(panel.wait_for_shutdown(std::time::Duration::from_secs(2)));
+        panel.process_output();
+    }
+    let listed = views::list(&board, Some(&expected), Some(owner)).expect("RunPod saved views");
+    assert_eq!(listed.len(), 3);
+    assert!(views::list(&board, Some(&expected), Some("foreign-owner")).is_err());
+    let temp = tempfile::tempdir().expect("fixture");
+    let home = HorizonHome::from_root(temp.path().join("unused"));
+    let mut state = ReconnectState::default();
+    let tx = pending(&mut state, &expected);
+    let mut config = RemoteProviderConfig::default();
+    config.runpod.push(
+        serde_json::from_value(serde_json::json!({
+            "name":"development", "gpu_type_ids":["synthetic-gpu"], "gpu_count":1,
+            "ports":["22/tcp"], "volume_gib":0
+        }))
+        .expect("non-secret profile"),
+    );
+    state.pending.as_mut().expect("pending").config = config.clone();
+    config.runpod[0].data_center_id = Some("EU-RO-1".into());
+    let client = ClientContext {
+        home: &home,
+        config: &config,
+        selected: Some(&expected),
+        owner: Some(owner),
+    };
+    tx.send(Err("stale RunPod result".into())).expect("completion");
+    assert_eq!(state.drain(&client, &mut board, &Context::default()), None);
+    assert!(state.pending.is_none());
+    assert!(state.notice.is_none());
+    assert_eq!(board.panels.len(), 3);
+    assert!(!home.cloud_workflow_store_path().exists());
+}
+
+#[test]
 fn cached_list_requires_actual_owner_and_revalidates_current_target_before_io() {
     let owner = "00000000-0000-4000-8000-000000000001";
     let expected = summary(owner);

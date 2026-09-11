@@ -7,6 +7,65 @@ use crate::cloud_run::{
 
 mod config;
 
+fn runpod_profile(name: &str) -> RunPodProfile {
+    serde_json::from_value(serde_json::json!({
+        "name": name, "gpu_type_ids": ["synthetic-gpu"], "gpu_count": 1,
+        "ports": ["22/tcp"], "volume_gib": 0, "data_center_id": "EU-RO-1"
+    }))
+    .expect("synthetic placement")
+}
+
+#[test]
+fn runpod_profiles_are_explicit_case_sensitive_and_provider_scoped() {
+    let mut configured = config(vec![profile("saved", "unix:///unused.sock")]);
+    configured.runpod.push(runpod_profile("saved"));
+    assert_eq!(configured.validate(), Ok(()));
+    assert_eq!(configured.runpod_profile("saved"), Ok(&configured.runpod[0]));
+    for name in ["Saved", " saved", "", "RUNPOD_API_KEY"] {
+        assert_eq!(
+            configured.runpod_profile(name),
+            Err(RemoteProviderConfigError::UnconfiguredRunPodProfile)
+        );
+    }
+    let yaml = serde_yaml::to_string(&configured).expect("serialize");
+    assert_eq!(
+        serde_yaml::from_str::<RemoteProviderConfig>(&yaml).expect("round trip"),
+        configured
+    );
+    configured.runpod.push(runpod_profile("saved"));
+    assert_eq!(
+        configured.validate(),
+        Err(RemoteProviderConfigError::DuplicateRunPodProfile { index: 1 })
+    );
+}
+
+#[test]
+fn runpod_names_and_malformed_fields_fail_without_value_leakage() {
+    for name in [
+        String::new(),
+        " private-marker".into(),
+        "private-marker\0".into(),
+        "a".repeat(192),
+    ] {
+        let configured = RemoteProviderConfig {
+            runpod: vec![runpod_profile(&name)],
+            ..Default::default()
+        };
+        let error = configured.validate().expect_err("invalid name");
+        assert_eq!(error, RemoteProviderConfigError::InvalidRunPodProfile { index: 0 });
+        assert!(!format!("{error:?} {error}").contains("private-marker"));
+    }
+    for field in ["api_key", "token", "unknown"] {
+        let mut value = serde_json::to_value(runpod_profile("saved")).expect("serialize");
+        value[field] = serde_json::json!("private-marker");
+        let error = serde_json::from_value::<RemoteProviderConfig>(serde_json::json!({"runpod": [value]}))
+            .expect_err("unknown profile field");
+        assert!(!format!("{error:?} {error}").contains("private-marker"));
+    }
+    let error = serde_yaml::from_str::<RemoteProviderConfig>("runpod: [private-marker]").expect_err("shape");
+    assert!(!error.to_string().contains("private-marker"));
+}
+
 fn profile(name: &str, docker_host: &str) -> LocalDockerProfile {
     LocalDockerProfile {
         name: name.into(),
@@ -15,7 +74,10 @@ fn profile(name: &str, docker_host: &str) -> LocalDockerProfile {
 }
 
 fn config(profiles: Vec<LocalDockerProfile>) -> RemoteProviderConfig {
-    RemoteProviderConfig { local_docker: profiles }
+    RemoteProviderConfig {
+        local_docker: profiles,
+        ..Default::default()
+    }
 }
 
 #[test]

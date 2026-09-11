@@ -10,6 +10,7 @@ fn config() -> RemoteProviderConfig {
             name: "development".into(),
             docker_host: "unix:///nonexistent-observation-fixture/docker.sock".into(),
         }],
+        ..Default::default()
     }
 }
 
