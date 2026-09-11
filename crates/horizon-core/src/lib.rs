@@ -20,6 +20,7 @@ mod managed_install;
 mod opencode_paths;
 mod panel;
 pub mod remote_environment_observation;
+pub mod remote_git_setup;
 pub mod remote_github_credential;
 mod remote_hosts;
 pub mod remote_panel_attachment;
