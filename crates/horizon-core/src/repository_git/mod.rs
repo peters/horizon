@@ -43,6 +43,7 @@ impl GitPreparation {
         if self.source.repository.len() > 512
             || self.source.branch.as_ref().is_some_and(|branch| branch.len() > 1024)
             || self.work_branch.len() > 1024
+            || self.work_branch == "HEAD"
             || self.version != 1
             || !valid_local_id(&self.workspace_local_id)
             || self.runtime_id.is_nil()

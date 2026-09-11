@@ -88,7 +88,7 @@ fn strict_request_framing_identity_and_branch() {
         value.as_object_mut().unwrap().remove(field);
         assert!(Request::decode(&serde_json::to_vec(&value).unwrap()).is_err());
     }
-    for branch in ["-bad", "a..b", "a.lock", "x\ny", "", "refs/../bad"] {
+    for branch in ["-bad", "a..b", "a.lock", "x\ny", "", "refs/../bad", "HEAD"] {
         let mut changed = original.clone();
         changed.work_branch = branch.into();
         assert!(changed.encode().is_err());
@@ -96,6 +96,32 @@ fn strict_request_framing_identity_and_branch() {
     let mut changed = original;
     changed.source.repository = "https://private@elsewhere/repo".into();
     assert!(changed.encode().is_err());
+}
+
+#[test]
+fn reserved_head_is_rejected_before_worker_state_or_git() {
+    let root = roots();
+    let mut request = request();
+    request.work_branch = "HEAD".into();
+    assert_eq!(
+        Request::decode(&serde_json::to_vec(&request).unwrap()),
+        Err(Error::Invalid)
+    );
+    let response = super::prepare(&request, || panic!("invalid request must not enter preparation"));
+    assert_eq!(
+        (response.state, response.reason, response.exit_code()),
+        (State::Error, Some(Error::Invalid), 2)
+    );
+    let mut git = Fake::new();
+    let response = execute(root.path(), &request, false, &mut git);
+    assert_eq!((response.state, response.reason), (State::Error, Some(Error::Invalid)));
+    assert_eq!(git.calls, 0);
+    for directory in [".horizon-worker", "horizon"] {
+        assert!(fs::read_dir(root.path().join(directory)).unwrap().next().is_none());
+    }
+    request.work_branch = "work/explicit".into();
+    request.source.branch = Some("HEAD".into());
+    assert!(request.encode().is_ok());
 }
 
 #[test]
