@@ -44,11 +44,11 @@ fn recovery_maps_every_observed_state_without_creating() {
     ];
     for (deployment, vm_state, lifecycle, label) in cases {
         s.plane.script(Some(owned(&s)), deployment, vec![vm_state]);
-        assert_eq!(s.reconcile().lifecycle, lifecycle, "{label}");
+        assert_eq!(s.reconcile(Some(host_key())).lifecycle, lifecycle, "{label}");
         assert!(s.plane.mutations().is_empty(), "{label}");
     }
     s.plane.script(None, None, vec![None]);
-    assert_eq!(s.client(false).reconcile_worker(&s.request), Ok(None));
+    assert_eq!(s.client(false, None).reconcile_worker(&s.request), Ok(None));
 }
 #[test]
 fn recovery_treats_unusable_addresses_as_unknown() {
@@ -69,7 +69,7 @@ fn recovery_treats_unusable_addresses_as_unknown() {
             Some(deployment("Succeeded", address)),
             vec![Some(vm("running", &s.tags))],
         );
-        assert_eq!(s.reconcile().lifecycle, Lifecycle::Unknown, "{address}");
+        assert_eq!(s.reconcile(None).lifecycle, Lifecycle::Unknown, "{address}");
         assert!(s.plane.mutations().is_empty(), "{address}");
     }
 }
@@ -81,7 +81,7 @@ fn foreign_or_tampered_resources_are_rejected_before_any_mutation() {
     other_client.insert(TAG_CLIENT_KEY_DIGEST.into(), "0".repeat(64));
     s.plane
         .script(Some(group_info(&s.group, other_client, "Succeeded")), None, vec![None]);
-    let client = s.client(true);
+    let client = s.client(true, None);
     let worker = s.persisted();
     assert_eq!(client.ensure_worker(&s.request), Err(MISMATCH));
     assert_eq!(client.reconcile_worker(&s.request), Err(MISMATCH));
@@ -126,14 +126,20 @@ fn foreign_or_tampered_resources_are_rejected_before_any_mutation() {
 #[test]
 fn placement_and_subscription_policy_apply_to_request_paths_only() {
     let s = Scenario::new();
-    let client = s.client(false);
+    let client = s.client(false, None);
     let worker = s.persisted();
     let mut other_subscription = profile();
     other_subscription.subscription_id = OTHER_SUB.into();
     other_subscription.image_pull_identity_id = profile().image_pull_identity_id.replace(SUB, OTHER_SUB);
     let never = |_: CloudWorkflowId, _: CloudJobId, _: &WorkerTarget, _: &str| Ok(false);
     assert!(
-        AzureClient::with_transport(other_subscription, s.plane.clone(), never).is_err(),
+        AzureClient::with_transport(
+            other_subscription,
+            s.plane.clone(),
+            never,
+            |_: &AzureWorker, _: &str, _: &str| None
+        )
+        .is_err(),
         "transport bound to the profile's subscription"
     );
     let mut relocated = owned(&s);
@@ -188,8 +194,9 @@ fn placement_and_subscription_policy_apply_to_request_paths_only() {
     renamed.target.profile = "cpu-north-b".into();
     let mut other_profile = profile();
     other_profile.name = "cpu-north-b".into();
+    let no_keys = |_: &AzureWorker, _: &str, _: &str| None;
     let never = |_: CloudWorkflowId, _: CloudJobId, _: &WorkerTarget, _: &str| Ok(false);
-    let other = AzureClient::with_transport(other_profile, s.plane.clone(), never).expect("client");
+    let other = AzureClient::with_transport(other_profile, s.plane.clone(), never, no_keys).expect("client");
     assert_eq!(
         other.inspect_worker(&renamed),
         Err(MISMATCH),
@@ -202,7 +209,7 @@ fn placement_and_subscription_policy_apply_to_request_paths_only() {
 fn inspect_and_delete_act_only_on_the_exact_owned_group() {
     let s = Scenario::new();
     let worker = s.persisted();
-    let client = s.client(false);
+    let client = s.client(false, None);
     assert_eq!(client.inspect_worker(&worker), Ok(None));
     assert_eq!(
         client.delete_worker(&worker),
