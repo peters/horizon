@@ -3,7 +3,8 @@
 
 mod runpod;
 pub use runpod::{
-    RunPodWorkspaceSetupError, recover_runpod_workspace, retry_runpod_workspace_setup, start_task_free_runpod_workspace,
+    RunPodWorkspaceSetupError, recover_runpod_workspace, retry_runpod_workspace_setup,
+    start_task_free_runpod_workspace, start_task_free_runpod_workspace_with_network_volume,
 };
 
 use crate::{

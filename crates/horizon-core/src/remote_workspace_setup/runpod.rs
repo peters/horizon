@@ -6,9 +6,11 @@ use super::{
     StoredRemoteWorkspace, prepare_identity, recover, retry_remote_workspace_setup, validate_allocation,
 };
 use crate::cloud_run::{
-    WorkerTarget,
+    WorkerLifetime, WorkerTarget,
+    interactive_worker::InteractiveWorkerRequest,
     runpod::{
-        RunPodApiKey, RunPodClient, RunPodHostTrust, RunPodInteractiveWorkerProvider, RunPodProfile, validate_target,
+        RunPodApiKey, RunPodClient, RunPodHostTrust, RunPodInteractiveWorkerProvider, RunPodNetworkVolumeExpectation,
+        RunPodProfile, validate_target,
     },
 };
 
@@ -36,7 +38,48 @@ pub fn start_task_free_runpod_workspace(
         profile,
         expected,
         retain_until_millis,
-        |trust| provider(store, api_key, profile, trust),
+        |trust, request, selection| provider(store, api_key, profile, trust, request, selection),
+    )
+}
+
+/// Start one task-free persistent generation with a caller-authorized HPS selection.
+/// Selection is saved before any client identity, first-pin intent or creation claim.
+/// It proves neither volume ownership nor exclusivity, contents trust or durability.
+/// Failures retain the allocation and any saved intent; retry/recovery never replace
+/// a selection or repair an interrupted pre-intent start. No volume mutation occurs.
+/// Run synchronously off the render thread.
+/// # Errors
+/// Rejects invalid profiles/selections, stale ownership and identity/intent/provider
+/// failures. A selection-recording failure may leave an unmarked allocation.
+pub fn start_task_free_runpod_workspace_with_network_volume(
+    store: &CloudWorkflowStore,
+    identities: &RemoteSshIdentityStore,
+    api_key: &RunPodApiKey,
+    profile: &RunPodProfile,
+    expected: &StoredRemoteWorkspace,
+    retain_until_millis: i64,
+    selection: &RunPodNetworkVolumeExpectation,
+) -> Result<StoredRemoteAllocation, RunPodWorkspaceSetupError> {
+    validate_profile(&expected.state().spec.target, profile)?;
+    selection
+        .validate()
+        .map_err(|_| RunPodWorkspaceSetupError::InvalidNetworkVolumeSelection)?;
+    if expected.state().spec.target.lifetime != WorkerLifetime::Persistent
+        || profile
+            .data_center_id
+            .as_ref()
+            .is_some_and(|id| id != &selection.data_center_id)
+    {
+        return Err(RunPodWorkspaceSetupError::NetworkVolumeBindingRejected);
+    }
+    let allocation = allocate_start(store, expected, retain_until_millis, Some(selection))?;
+    finish_start(
+        store,
+        identities,
+        api_key,
+        profile,
+        &allocation,
+        |trust, request, selection| provider(store, api_key, profile, trust, request, selection),
     )
 }
 
@@ -44,6 +87,7 @@ pub fn start_task_free_runpod_workspace(
 /// Never prepares a replacement key or records new intent. Claimed, observed or
 /// expired setup uses non-creating recovery. Success remains Reconciling, not ready.
 /// Supplied profile validation does not detect historical edits under the same name.
+/// Any saved volume selection is loaded unchanged; absence preserves ordinary setup.
 /// Run synchronously off the render thread; the supplied store owns explicit writes.
 /// # Errors
 /// Rejects invalid profiles, missing trust/keys, management intent and snapshot drift.
@@ -61,7 +105,7 @@ pub fn retry_runpod_workspace_setup(
         profile,
         expected,
         Operation::Retry,
-        |trust| provider(store, api_key, profile, trust),
+        |trust, request, selection| provider(store, api_key, profile, trust, request, selection),
     )
 }
 
@@ -86,7 +130,7 @@ pub fn recover_runpod_workspace(
         profile,
         expected,
         Operation::Recover,
-        |trust| provider(store, api_key, profile, trust),
+        |trust, request, selection| provider(store, api_key, profile, trust, request, selection),
     )
 }
 
@@ -106,9 +150,18 @@ fn provider(
     api_key: &RunPodApiKey,
     profile: &RunPodProfile,
     trust: TrustSelection,
-) -> RunPodInteractiveWorkerProvider {
+    request: &InteractiveWorkerRequest,
+    selection: Option<&RunPodNetworkVolumeExpectation>,
+) -> Result<RunPodInteractiveWorkerProvider, RunPodWorkspaceSetupError> {
     let (TrustSelection::Initial(trust) | TrustSelection::Retained(trust)) = trust;
-    RunPodInteractiveWorkerProvider::new(RunPodClient::new(api_key, store.clone()), profile.clone(), trust)
+    let client = RunPodClient::new(api_key, store.clone());
+    match selection {
+        Some(selection) => {
+            RunPodInteractiveWorkerProvider::new_with_network_volume(client, profile.clone(), trust, request, selection)
+                .map_err(|_| RunPodWorkspaceSetupError::NetworkVolumeBindingRejected)
+        }
+        None => Ok(RunPodInteractiveWorkerProvider::new(client, profile.clone(), trust)),
+    }
 }
 
 fn validate_profile(target: &WorkerTarget, profile: &RunPodProfile) -> Result<(), RunPodWorkspaceSetupError> {
@@ -125,11 +178,43 @@ fn start_with<P: InteractiveWorkerProvider>(
     profile: &RunPodProfile,
     expected: &StoredRemoteWorkspace,
     retain_until_millis: i64,
-    factory: impl FnOnce(TrustSelection) -> P,
+    factory: impl FnOnce(
+        TrustSelection,
+        &InteractiveWorkerRequest,
+        Option<&RunPodNetworkVolumeExpectation>,
+    ) -> Result<P, RunPodWorkspaceSetupError>,
 ) -> Result<StoredRemoteAllocation, RunPodWorkspaceSetupError> {
     validate_profile(&expected.state().spec.target, profile)?;
+    let allocation = allocate_start(store, expected, retain_until_millis, None)?;
+    finish_start(store, identities, api_key, profile, &allocation, factory)
+}
+
+fn allocate_start(
+    store: &CloudWorkflowStore,
+    expected: &StoredRemoteWorkspace,
+    retain_until_millis: i64,
+    selection: Option<&RunPodNetworkVolumeExpectation>,
+) -> Result<StoredRemoteAllocation, RunPodWorkspaceSetupError> {
     let allocation = store.allocate_remote_runtime(expected, retain_until_millis)?;
-    let allocation = prepare_identity(store, identities, &allocation)?;
+    if let Some(selection) = selection {
+        store.record_remote_network_volume_selection(&allocation, selection)?;
+    }
+    Ok(allocation)
+}
+
+fn finish_start<P: InteractiveWorkerProvider>(
+    store: &CloudWorkflowStore,
+    identities: &RemoteSshIdentityStore,
+    api_key: &RunPodApiKey,
+    profile: &RunPodProfile,
+    expected: &StoredRemoteAllocation,
+    factory: impl FnOnce(
+        TrustSelection,
+        &InteractiveWorkerRequest,
+        Option<&RunPodNetworkVolumeExpectation>,
+    ) -> Result<P, RunPodWorkspaceSetupError>,
+) -> Result<StoredRemoteAllocation, RunPodWorkspaceSetupError> {
+    let allocation = prepare_identity(store, identities, expected)?;
     store.record_remote_first_pin_intent(&allocation)?;
     dispatch(
         store,
@@ -149,11 +234,16 @@ fn dispatch<P: InteractiveWorkerProvider>(
     profile: &RunPodProfile,
     expected: &StoredRemoteAllocation,
     operation: Operation,
-    factory: impl FnOnce(TrustSelection) -> P,
+    factory: impl FnOnce(
+        TrustSelection,
+        &InteractiveWorkerRequest,
+        Option<&RunPodNetworkVolumeExpectation>,
+    ) -> Result<P, RunPodWorkspaceSetupError>,
 ) -> Result<StoredRemoteAllocation, RunPodWorkspaceSetupError> {
     validate_profile(&expected.workspace().state().spec.target, profile)?;
     validate_allocation(store, expected)?;
     let request = expected.recovery_request()?;
+    let selection = store.load_remote_network_volume_selection(expected)?;
     let runtime = expected
         .workspace()
         .state()
@@ -178,7 +268,7 @@ fn dispatch<P: InteractiveWorkerProvider>(
         )
     };
     identities.recover(request.workflow_id, request.job_id, &request.ssh_public_key)?;
-    let provider = factory(trust);
+    let provider = factory(trust, &request, selection.as_ref())?;
     match operation {
         Operation::Retry => retry_remote_workspace_setup(store, identities, &provider, expected),
         Operation::Recover => recover(store, identities, &provider, expected),
@@ -193,6 +283,10 @@ pub enum RunPodWorkspaceSetupError {
     InvalidProfile,
     #[error("explicit first-pin setup intent is unavailable; missing trust cannot authorize bootstrap")]
     FirstPinIntentUnavailable,
+    #[error("supplied network volume selection is invalid")]
+    InvalidNetworkVolumeSelection,
+    #[error("saved network volume selection cannot bind the supplied worker request and profile")]
+    NetworkVolumeBindingRejected,
     #[error(transparent)]
     Setup(#[from] RemoteWorkspaceSetupError),
 }
@@ -200,6 +294,7 @@ pub enum RunPodWorkspaceSetupError {
 impl From<RemoteWorkspaceStoreError> for RunPodWorkspaceSetupError {
     fn from(error: RemoteWorkspaceStoreError) -> Self {
         match error {
+            RemoteWorkspaceStoreError::InvalidNetworkVolumeSelection => Self::InvalidNetworkVolumeSelection,
             RemoteWorkspaceStoreError::RuntimeSetupUnavailable => Self::FirstPinIntentUnavailable,
             _ => Self::Setup(error.into()),
         }

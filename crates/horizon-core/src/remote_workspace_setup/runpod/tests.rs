@@ -16,6 +16,8 @@ mod admission;
 #[cfg(target_os = "linux")]
 mod lifecycle;
 #[cfg(target_os = "linux")]
+mod network_volume;
+#[cfg(target_os = "linux")]
 mod races;
 
 const OWNER: &str = "00000000-0000-4000-8000-000000000001";
@@ -88,6 +90,23 @@ fn public_apis_refuse_unsupported_platform_before_identity_or_provider_work() {
     assert_eq!(
         start_task_free_runpod_workspace(&f.store, &f.identities, &f.key, &f.profile, &f.dormant, i64::MAX),
         Err(error)
+    );
+    assert_eq!(f.counts(), [0; 4]);
+    assert_eq!(
+        start_task_free_runpod_workspace_with_network_volume(
+            &f.store,
+            &f.identities,
+            &f.key,
+            &f.profile,
+            &f.dormant,
+            i64::MAX,
+            &RunPodNetworkVolumeExpectation {
+                volume_id: "volume".into(),
+                data_center_id: "DC".into(),
+                minimum_size_gb: 10
+            }
+        ),
+        Err(RemoteSshIdentityError::UnsupportedPlatform.into())
     );
     assert_eq!(f.counts(), [0; 4]);
     let allocation = f
@@ -184,7 +203,18 @@ impl Fixture {
             dormant,
             ..
         } = self;
-        start_with(store, identities, key, profile, dormant, retention, factory)
+        start_with(
+            store,
+            identities,
+            key,
+            profile,
+            dormant,
+            retention,
+            |trust, _, selection| {
+                assert!(selection.is_none(), "ordinary fixture has no saved selection");
+                Ok(factory(trust))
+            },
+        )
     }
 
     fn run(&self, operation: Operation) -> Result<StoredRemoteAllocation, RunPodWorkspaceSetupError> {
@@ -236,6 +266,32 @@ impl Fixture {
     fn status(&self) -> InteractiveWorkerStatus {
         status(&self.allocation().worker_request().expect("request"), false)
     }
+}
+
+// Keep ordinary lifecycle fixtures focused on trust mode; network tests exercise
+// the request/selection-aware fallible factory directly.
+#[cfg(target_os = "linux")]
+fn dispatch(
+    store: &CloudWorkflowStore,
+    identities: &RemoteSshIdentityStore,
+    key: &RunPodApiKey,
+    profile: &RunPodProfile,
+    expected: &StoredRemoteAllocation,
+    operation: Operation,
+    factory: impl FnOnce(TrustSelection) -> Provider,
+) -> Result<StoredRemoteAllocation, RunPodWorkspaceSetupError> {
+    super::dispatch(
+        store,
+        identities,
+        key,
+        profile,
+        expected,
+        operation,
+        |trust, _, selection| {
+            assert!(selection.is_none(), "ordinary fixture has no saved selection");
+            Ok(factory(trust))
+        },
+    )
 }
 
 #[cfg(target_os = "linux")]
