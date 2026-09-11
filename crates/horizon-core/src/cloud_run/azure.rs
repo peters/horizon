@@ -1,17 +1,23 @@
-//! Azure Linux VM worker foundations for #474: operator profile, lifecycle mapping,
-//! credential source, typed errors and the bounded Resource Manager transport. The
-//! worker identity and the provider are separate slices; nothing is wired into
-//! configuration or UI.
-use super::{CloudProvider, WorkerTarget, interactive_worker::valid_worker_target};
+//! Azure Linux VM worker foundations for #474: operator profile, exact worker
+//! identity, lifecycle mapping, credential source, typed errors, the bounded Resource
+//! Manager transport and the deployment plan. The provider is a separate slice;
+//! nothing is wired into configuration or UI.
+use super::{
+    CloudJobId, CloudProvider, CloudWorkflowId, WorkerTarget,
+    interactive_worker::{InteractiveWorkerLifetime, valid_worker_target},
+    validation::valid_immutable_worker_image,
+};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use thiserror::Error;
 mod credential;
+pub mod deployment;
 #[cfg(test)]
 mod tests;
 mod transport;
 
 pub use credential::{AzureAccessToken, AzureCliCredential, AzureCredentialSource};
+pub use deployment::AzureDeploymentPlan;
 pub use transport::{
     AzureArmHttp, AzureDeploymentState, AzureGroupInfo, AzureLongRunningState, AzureManagementTransport, AzureVmView,
 };
@@ -24,6 +30,8 @@ pub const DEPLOYMENT_API_VERSION: &str = "2022-09-01";
 pub const COMPUTE_API_VERSION: &str = "2024-03-01";
 pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 pub(crate) const RESPONSE_LIMIT_BYTES: u64 = 2 * 1024 * 1024;
+/// Every worker lives in its own resource group named from its exact identity.
+pub const RESOURCE_GROUP_PREFIX: &str = "horizon-ws-";
 /// Constant VM name inside a worker's resource group; the group carries the identity.
 pub const WORKER_VM_NAME: &str = "worker";
 
@@ -38,7 +46,7 @@ pub struct AzureProfile {
     pub subscription_id: String,
     /// Lowercase region name such as `northeurope`.
     pub location: String,
-    /// Exact VM size such as `Standard_D4s_v3`.
+    /// Exact VM size from [`SUPPORTED_VM_SIZES`], such as `Standard_D4s_v3`.
     pub vm_size: String,
     /// Resource ID of the user-assigned identity that may pull the worker image. It must
     /// live in `subscription_id`: workers never borrow identities across subscriptions.
@@ -47,6 +55,36 @@ pub struct AzureProfile {
     pub declared_hourly_cost_micros: u64,
     /// Registry login server the image must belong to, such as `example.azurecr.io`.
     pub registry_login_server: String,
+    /// Managed-disk SKU for the OS and data disks; every allowlisted size supports both.
+    #[serde(default)]
+    pub disk_sku: AzureDiskSku,
+}
+
+/// Managed-disk SKUs the adapter offers; the wire names are Azure's own.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub enum AzureDiskSku {
+    #[default]
+    #[serde(rename = "StandardSSD_LRS")]
+    StandardSsdLrs,
+    #[serde(rename = "Premium_LRS")]
+    PremiumLrs,
+}
+
+impl AzureDiskSku {
+    /// Both offered SKUs are supported by every allowlisted size; kept as a hook for
+    /// SKUs whose support varies (for example zone-redundant disks).
+    #[must_use]
+    pub const fn is_supported(self) -> bool {
+        matches!(self, Self::StandardSsdLrs | Self::PremiumLrs)
+    }
+
+    #[must_use]
+    pub const fn as_azure_name(self) -> &'static str {
+        match self {
+            Self::StandardSsdLrs => "StandardSSD_LRS",
+            Self::PremiumLrs => "Premium_LRS",
+        }
+    }
 }
 
 impl AzureProfile {
@@ -59,7 +97,8 @@ impl AzureProfile {
             && valid_vm_size(&self.vm_size)
             && valid_identity_id(&self.image_pull_identity_id, &self.subscription_id)
             && self.declared_hourly_cost_micros > 0
-            && valid_registry_login_server(&self.registry_login_server);
+            && valid_registry_login_server(&self.registry_login_server)
+            && self.disk_sku.is_supported();
         valid.then_some(()).ok_or(AzureError::InvalidProfile)
     }
 
@@ -84,6 +123,72 @@ impl AzureProfile {
             }),
             _ => Ok(()),
         }
+    }
+}
+
+/// Deterministic, identity-derived resource group name for one worker.
+#[must_use]
+pub fn resource_group_name(workflow_id: CloudWorkflowId, job_id: CloudJobId) -> String {
+    format!("{RESOURCE_GROUP_PREFIX}{workflow_id}-{job_id}")
+}
+
+/// Exact identity of one Azure worker: the resource group is the unit of ownership and
+/// deletion, and its ARM resource ID is the provider handle. Decoding runs `validate`.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "AzureWorkerSnapshot")]
+pub struct AzureWorker {
+    pub workflow_id: CloudWorkflowId,
+    pub job_id: CloudJobId,
+    pub subscription_id: String,
+    pub resource_group: String,
+    /// Group-level ARM resource ID, taken from Azure's creation response and never
+    /// constructed from a name; the VM inside is always [`WORKER_VM_NAME`].
+    pub group_id: String,
+    pub image: String,
+    pub lifetime: InteractiveWorkerLifetime,
+}
+
+impl AzureWorker {
+    /// Validate a handle before any provider call. Only the persistent lifetime is
+    /// accepted, matching the deployment plan; a well-formed lease is still refused.
+    /// # Errors
+    pub fn validate(&self) -> Result<(), AzureError> {
+        let valid = valid_subscription_id(&self.subscription_id)
+            && self.resource_group == resource_group_name(self.workflow_id, self.job_id)
+            && valid_resource_group_id(&self.group_id, &self.subscription_id, &self.resource_group)
+            && valid_immutable_worker_image(&self.image)
+            && self.lifetime == InteractiveWorkerLifetime::Persistent;
+        valid.then_some(()).ok_or(AzureError::InvalidPersistedWorker)
+    }
+}
+
+/// Wire shape of [`AzureWorker`]; decoding runs [`AzureWorker::validate`].
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AzureWorkerSnapshot {
+    workflow_id: CloudWorkflowId,
+    job_id: CloudJobId,
+    subscription_id: String,
+    resource_group: String,
+    group_id: String,
+    image: String,
+    lifetime: InteractiveWorkerLifetime,
+}
+
+impl TryFrom<AzureWorkerSnapshot> for AzureWorker {
+    type Error = AzureError;
+
+    fn try_from(value: AzureWorkerSnapshot) -> Result<Self, Self::Error> {
+        let worker = Self {
+            workflow_id: value.workflow_id,
+            job_id: value.job_id,
+            subscription_id: value.subscription_id,
+            resource_group: value.resource_group,
+            group_id: value.group_id,
+            image: value.image,
+            lifetime: value.lifetime,
+        };
+        worker.validate().map(|()| worker)
     }
 }
 
@@ -130,6 +235,10 @@ pub enum AzureError {
     InvalidTarget,
     #[error("declared hourly cost {declared} exceeds the target limit {maximum}")]
     DeclaredCostExceedsLimit { declared: u64, maximum: u64 },
+    #[error("persisted Azure worker identity is invalid")]
+    InvalidPersistedWorker,
+    #[error("Azure workers support only the persistent lifetime policy")]
+    UnsupportedLifetime,
     #[error("Azure credential is unavailable: {reason}")]
     CredentialUnavailable { reason: &'static str },
     #[error("Azure request failed during {operation}")]
@@ -168,14 +277,43 @@ pub(crate) fn valid_location(value: &str) -> bool {
 }
 
 /// Exact size names, including constrained-vCPU sizes such as `Standard_E4-2s_v3`.
+/// Exact VM sizes the adapter accepts: x64, Hyper-V generation 2 and premium-storage
+/// capable general-purpose, memory-optimised, compute-optimised and burstable sizes.
+/// Matched by equality, so no nonexistent family, version or vCPU combination can
+/// reach a paid call. `Standard_D4s_v3` is the live-validated candidate; extend the
+/// table only after a live check of the new size.
+pub const SUPPORTED_VM_SIZES: &[&str] = &[
+    "Standard_D2s_v3",
+    "Standard_D4s_v3",
+    "Standard_D8s_v3",
+    "Standard_D16s_v3",
+    "Standard_D2s_v5",
+    "Standard_D4s_v5",
+    "Standard_D8s_v5",
+    "Standard_D16s_v5",
+    "Standard_D2as_v5",
+    "Standard_D4as_v5",
+    "Standard_D8as_v5",
+    "Standard_D16as_v5",
+    "Standard_E2s_v5",
+    "Standard_E4s_v5",
+    "Standard_E8s_v5",
+    "Standard_E16s_v5",
+    "Standard_E4-2s_v5",
+    "Standard_E8-4s_v5",
+    "Standard_E16-8s_v5",
+    "Standard_F2s_v2",
+    "Standard_F4s_v2",
+    "Standard_F8s_v2",
+    "Standard_F16s_v2",
+    "Standard_B2s",
+    "Standard_B2ms",
+    "Standard_B4ms",
+    "Standard_B8ms",
+];
+
 pub(crate) fn valid_vm_size(value: &str) -> bool {
-    value.len() <= 48
-        && value.strip_prefix("Standard_").is_some_and(|rest| {
-            !rest.is_empty()
-                && rest
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
-        })
+    SUPPORTED_VM_SIZES.contains(&value)
 }
 
 fn valid_profile_name(value: &str) -> bool {

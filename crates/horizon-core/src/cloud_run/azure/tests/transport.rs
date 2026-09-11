@@ -148,6 +148,7 @@ fn resource_group_reads_are_typed_bounded_and_identity_checked() {
         [("horizon-job-id".to_string(), "j".to_string())].into(),
         "non-string tags are dropped"
     );
+    assert_eq!(info.id, format!("/subscriptions/{SUB}/resourceGroups/{GROUP}"));
     assert_eq!(
         transport.get_resource_group(GROUP),
         Err(AzureError::ResourceIdentityMismatch),
@@ -225,6 +226,11 @@ fn resource_group_writes_send_exact_bodies_and_map_long_running_states() {
         .create_resource_group(GROUP, "northeurope", &tags)
         .expect("created");
     assert_eq!((info.name.as_str(), info.tags), (GROUP, tags.clone()));
+    assert_eq!(
+        info.id,
+        format!("/subscriptions/{SUB}/resourceGroups/{GROUP}"),
+        "the returned id is retained verbatim"
+    );
     assert_eq!(
         transport.delete_resource_group(GROUP),
         Ok(AzureLongRunningState::Accepted)
