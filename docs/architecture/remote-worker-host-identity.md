@@ -35,7 +35,10 @@ fixed-root preparation, not permission repair or volume adoption. It requires a
 safe parent and a real mount boundary, holds a no-follow directory descriptor,
 and rechecks path/inode/owner/mount identity and effective mode around chmod,
 directory synchronization and a second emptiness check before creating identity
-state. Already trusted storage is unchanged; nonempty unsafe storage is refused.
+state. Already trusted mounted storage is unchanged; nonempty unsafe storage is
+refused. Every provider-bootstrap request also validates the real mount and
+root/path identity for already protected storage; an image-local directory is
+not a retained volume. Non-provider startup behavior is unchanged.
 The image starts in `/` and leaves `/workspace` empty. Only after retained
 identity validation does the entrypoint create and enter `/workspace/horizon`.
 Using that repository directory as the image working directory would let the

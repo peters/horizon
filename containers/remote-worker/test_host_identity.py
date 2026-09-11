@@ -379,7 +379,8 @@ class HostIdentityTests(unittest.TestCase):
         def fstat(descriptor):
             info = actual_fstat(descriptor)
             return SimpleNamespace(st_dev=info.st_dev, st_ino=info.st_ino,
-                                   st_uid=0, st_gid=info.st_gid, st_mode=info.st_mode)
+                                   st_uid=0, st_gid=info.st_gid, st_mode=info.st_mode,
+                                   st_size=info.st_size)
 
         def trusted(path, private=False):
             with mock.patch.object(identity.os, "geteuid", return_value=uid):
@@ -443,6 +444,47 @@ class HostIdentityTests(unittest.TestCase):
                 chmod.assert_not_called()
             self.assertEqual(b"synthetic", path.read_bytes())
             path.unlink()
+
+    def test_provider_bootstrap_rejects_trusted_nonmount_before_key_generation(self):
+        for mode in (0o700, 0o755):
+            with self.subTest(mode=mode), self.fresh_mount(), \
+                    mock.patch.object(identity, "mount_id", return_value=1), \
+                    mock.patch.object(self.store, "prepare", side_effect=AssertionError(
+                        "identity preparation must not run without a mount")) as prepare, \
+                    mock.patch.object(identity, "keygen") as keygen:
+                self.workspace.chmod(mode)
+                output = io.StringIO()
+                with self.assertRaises(identity.IdentityError):
+                    identity.prepare_for_startup(self.store, self.bootstrap_environment(), output)
+                keygen.assert_not_called()
+                prepare.assert_not_called()
+                self.assertEqual("", output.getvalue())
+                self.assertFalse(self.store.parent.exists())
+                self.assertEqual(mode, self.workspace.stat().st_mode & 0o777)
+
+    def test_provider_bootstrap_preserves_trusted_mounted_identity_bytes(self):
+        public = self.store.prepare()
+        before = self.snapshot()
+        for mode in (0o700, 0o755):
+            with self.subTest(mode=mode), self.fresh_mount(), \
+                    mock.patch.object(identity.os, "fchmod") as chmod:
+                self.workspace.chmod(mode)
+                output = io.StringIO()
+                self.assertEqual(public, identity.prepare_for_startup(
+                    self.store, self.bootstrap_environment(), output))
+                chmod.assert_not_called()
+                self.assertEqual(before, self.snapshot())
+                self.assertEqual(mode, self.workspace.stat().st_mode & 0o777)
+                self.assertTrue(output.getvalue().startswith(identity.BOOTSTRAP_PREFIX))
+
+    def test_nonprovider_startup_does_not_require_a_mount(self):
+        with mock.patch.object(identity, "WORKSPACE", self.workspace), \
+                mock.patch.object(identity, "prepare_fresh_workspace") as prepare:
+            output = io.StringIO()
+            identity.prepare_for_startup(self.store, {}, output)
+            prepare.assert_not_called()
+            self.assertEqual("", output.getvalue())
+            self.assertTrue(self.store.marker.is_file())
 
     def test_noop_chmod_and_sync_failure_refuse_without_creating_state(self):
         with self.fresh_mount(), mock.patch.object(identity.os, "fchmod"):

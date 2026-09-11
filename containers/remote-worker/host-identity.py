@@ -68,11 +68,6 @@ def workspace_identity(descriptor):
 
 
 def prepare_fresh_workspace():
-    try:
-        trusted_directory(WORKSPACE)
-        return
-    except IdentityError:
-        pass
     # Provider ownership/exclusive attachment is a caller precondition, not
     # established by bootstrap metadata or by an empty directory observation.
     if os.geteuid() != 0:
@@ -102,6 +97,16 @@ def prepare_fresh_workspace():
                     fail()
             finally:
                 os.close(visible)
+
+        mode = stat.S_IMODE(os.fstat(descriptor).st_mode)
+        verify(mode)
+        try:
+            trusted_directory(WORKSPACE)
+        except IdentityError:
+            pass
+        else:
+            verify(mode)
+            return
 
         verify(0o777)
         with os.scandir(descriptor) as entries:
