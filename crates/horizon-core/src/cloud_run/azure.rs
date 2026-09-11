@@ -1,17 +1,31 @@
 //! Azure Linux VM worker foundations for #474: operator profile, lifecycle mapping,
-//! credential source and typed errors. The worker identity, the Resource Manager
-//! transport and the provider are separate slices; nothing is wired into config or UI.
+//! credential source, typed errors and the bounded Resource Manager transport. The
+//! worker identity and the provider are separate slices; nothing is wired into
+//! configuration or UI.
 use super::{CloudProvider, WorkerTarget, interactive_worker::valid_worker_target};
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use thiserror::Error;
 mod credential;
 #[cfg(test)]
 mod tests;
+mod transport;
 
 pub use credential::{AzureAccessToken, AzureCliCredential, AzureCredentialSource};
+pub use transport::{
+    AzureArmHttp, AzureDeploymentState, AzureGroupInfo, AzureLongRunningState, AzureManagementTransport, AzureVmView,
+};
 
 /// Public Azure Resource Manager endpoint; tokens are requested for this audience only.
 pub const MANAGEMENT_ENDPOINT: &str = "https://management.azure.com";
+/// Explicit ARM API versions; the transport never lets Azure pick a version.
+pub const RESOURCE_GROUP_API_VERSION: &str = "2022-09-01";
+pub const DEPLOYMENT_API_VERSION: &str = "2022-09-01";
+pub const COMPUTE_API_VERSION: &str = "2024-03-01";
+pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const RESPONSE_LIMIT_BYTES: u64 = 2 * 1024 * 1024;
+/// Constant VM name inside a worker's resource group; the group carries the identity.
+pub const WORKER_VM_NAME: &str = "worker";
 
 /// Operator-declared placement for Azure CPU workers. Prices are declared, not
 /// discovered: ARM does not return an hourly rate for a VM, so the cost limit in a
@@ -118,10 +132,19 @@ pub enum AzureError {
     DeclaredCostExceedsLimit { declared: u64, maximum: u64 },
     #[error("Azure credential is unavailable: {reason}")]
     CredentialUnavailable { reason: &'static str },
+    #[error("Azure request failed during {operation}")]
+    RequestFailed { operation: &'static str },
+    #[error("Azure returned HTTP {status} during {operation}")]
+    UnexpectedStatus { operation: &'static str, status: u16 },
+    #[error("Azure returned a malformed response during {operation}")]
+    InvalidResponse { operation: &'static str },
+    #[error("Azure returned an invalid or mismatched resource identity")]
+    ResourceIdentityMismatch,
 }
 
 /// Parsed `/subscriptions/{sub}/resourceGroups/{rg}/providers/{provider}/{kind}/{name}`.
 struct ResourceIdParts<'a> {
+    group: &'a str,
     provider: &'a str,
     kind: &'a str,
     name: &'a str,
@@ -189,6 +212,36 @@ pub(crate) fn valid_identity_id(value: &str, subscription_id: &str) -> bool {
     })
 }
 
+/// `/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Compute/virtualMachines/{name}`
+/// for exactly the requested subscription, group and VM name.
+pub(crate) fn valid_vm_resource_id(value: &str, subscription_id: &str, resource_group: &str, name: &str) -> bool {
+    resource_id_parts(value, subscription_id).is_some_and(|parts| {
+        parts.group.eq_ignore_ascii_case(resource_group)
+            && parts.provider.eq_ignore_ascii_case("Microsoft.Compute")
+            && parts.kind.eq_ignore_ascii_case("virtualMachines")
+            && parts.name == name
+    })
+}
+
+/// `/subscriptions/{sub}/resourceGroups/{rg}` for exactly the requested subscription and group.
+pub(crate) fn valid_resource_group_id(value: &str, subscription_id: &str, resource_group: &str) -> bool {
+    if value.len() > 512 || value.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return false;
+    }
+    let mut parts = value.strip_prefix('/').unwrap_or_default().split('/');
+    parts.next() == Some("subscriptions")
+        && parts
+            .next()
+            .is_some_and(|sub| sub.eq_ignore_ascii_case(subscription_id))
+        && parts
+            .next()
+            .is_some_and(|segment| segment.eq_ignore_ascii_case("resourceGroups"))
+        && parts
+            .next()
+            .is_some_and(|group| group.eq_ignore_ascii_case(resource_group))
+        && parts.next().is_none()
+}
+
 /// Subscription and group segments compare case-insensitively, as ARM does.
 fn resource_id_parts<'a>(value: &'a str, subscription_id: &str) -> Option<ResourceIdParts<'a>> {
     if value.len() > 512 || value.chars().any(|c| c.is_control() || c.is_whitespace()) {
@@ -197,15 +250,17 @@ fn resource_id_parts<'a>(value: &'a str, subscription_id: &str) -> Option<Resour
     let mut parts = value.strip_prefix('/')?.split('/');
     (parts.next()? == "subscriptions" && parts.next()?.eq_ignore_ascii_case(subscription_id)).then_some(())?;
     parts.next()?.eq_ignore_ascii_case("resourceGroups").then_some(())?;
-    parts.next().filter(|group| valid_resource_group_name(group))?;
+    let group = parts.next().filter(|group| valid_resource_group_name(group))?;
     (parts.next()? == "providers").then_some(())?;
     let provider = parts.next()?;
     let kind = parts.next()?;
     let name = parts.next().filter(|name| valid_resource_name(name))?;
-    parts
-        .next()
-        .is_none()
-        .then_some(ResourceIdParts { provider, kind, name })
+    parts.next().is_none().then_some(ResourceIdParts {
+        group,
+        provider,
+        kind,
+        name,
+    })
 }
 
 /// `<registry>.azurecr.io` where the registry name is 5 to 50 lowercase alphanumerics.
