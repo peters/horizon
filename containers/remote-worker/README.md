@@ -218,8 +218,8 @@ At startup the entrypoint:
 
 1. validates any supplied expiry, the public key, and optional secret file;
 2. installs only the supplied public key for root login;
-3. copies the optional token to a root-only runtime file and configures shared
-   Git authentication once, before SSH accepts concurrent sessions;
+3. copies the optional token to a root-only runtime file and configures a
+   token-free Git credential helper once, without contacting GitHub;
 4. prepares or strictly recovers the workspace-retained Ed25519 host identity
    and materializes its verified runtime files before SSH starts; and
 5. starts a termination watchdog only when an explicit expiry was supplied.
@@ -234,9 +234,31 @@ running; losing the client reference neither revokes access nor stops compute.
 
 `/workspace/horizon` starts empty. The controller checks out the requested
 repository and task after host-key verification. Remote commands should run
-through `horizon-agent-session`, which exposes the Rust toolchain, marks the
-session with `HORIZON=1`, and configures GitHub authentication only when the
-runtime token file exists. tmux provides reconnectable interactive sessions.
+through `horizon-agent-session`, which exposes the Rust toolchain and marks the
+session with `HORIZON=1`. It does not export a token into shells or agents.
+tmux provides reconnectable interactive sessions.
+
+Ordinary HTTPS Git requests for exactly `github.com` use the protected runtime
+token file through `horizon-github-credential`. Other hosts/protocols receive no
+credentials; store/erase requests never modify the file. The installed `gh`
+wrapper reads that same file and supplies `GH_TOKEN` only to the packaged CLI
+process, not its parent session. It does not run login or persist the token in
+Git/CLI configuration. It rejects foreign `GH_HOST` and API host overrides;
+other commands retain the packaged CLI's host-scoped authentication behavior.
+It does not use an ambient CLI login. Worker root can already read the file:
+this limits ambient token inheritance, not intentional credential retrieval or
+the packaged CLI's development-host aliases. Missing, malformed or insecure credentials fail the
+GitHub operation, not the worker; expiration and repository permissions are
+reported by GitHub normally. Help/version remain usable without a token.
+Supply a fine-grained PAT restricted to the required repositories and permissions;
+creation, rotation and provider delivery of that token remain separate work.
+Retained repository setup remains offline and does not acquire credentials.
+
+Run the credential regressions without network or real credentials:
+
+```bash
+python3 -B containers/remote-worker/test_github_credentials.py -v
+```
 
 The provider or operator must supply retained storage at `/workspace`; the image
 cannot prove that the backing storage is durable. The named volume in the example

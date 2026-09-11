@@ -109,14 +109,12 @@ if [ -n "${github_token_file}" ]; then
     fi
     install -m 0600 "${github_token_file}" /run/horizon/github-token
 
-    GITHUB_TOKEN=$(cat /run/horizon/github-token)
-    export GITHUB_TOKEN
-    GH_TOKEN=${GITHUB_TOKEN}
-    export GH_TOKEN
-    gh auth setup-git
     git config --global --replace-all url.https://github.com/.insteadOf git@github.com:
     git config --global --add url.https://github.com/.insteadOf ssh://git@github.com/
 fi
+
+git config --global --replace-all credential.https://github.com.helper ''
+git config --global --add credential.https://github.com.helper /usr/local/bin/horizon-github-credential
 
 /usr/local/bin/horizon-worker-host-identity
 
