@@ -1,5 +1,32 @@
 # Horizon remote worker image
 
+## Ordinary Git preparation (worker-only prerequisite)
+
+`horizon-repository git-prepare` reads one strict JSON request on stdin: version
+`1`, `workspace_local_id`, non-nil UUID `runtime_id`, `source` (GitHub `owner/repo`,
+exact 40-character `commit`, optional `branch`), and explicit `work_branch`.
+It fetches the exact commit over HTTPS, not the moving source branch, into the
+fresh fixed `/workspace/horizon/repository` checkout. Existing panel tasks can
+select relative directory `repository`; preparation does not start a task.
+Authentication uses only the protected runtime token through the installed Git
+credential helper. No credentials belong in the request, URL or Git config.
+
+This prerequisite explicitly rejects submodules, LFS configuration/pointers and
+active Git filters as `unsupported_repository`; recursive Git/LFS support remains
+pending. It neither uploads a local overlay nor requires overlay/ext4 qualification.
+The worker's existing private roots and trusted stable ancestry are prerequisites.
+Preparation has a 300-second child-I/O budget and bounded metadata output; slow
+or large repositories can fail conservatively. Filesystem/spawn/reap latency is
+not a hard wall-clock bound, and this is not an allocation or disk-quota manager.
+
+An exclusive `.horizon-worker/git-workspace` slot prevents concurrent/replayed
+preparation. Interrupted/failed attempts retain all claims and partial data.
+`git-status` and repeated `git-prepare` only inspect the exact original claim and
+inode-bound completion receipt; they never fetch, reset, clean or overwrite.
+`complete` attests the original preparation, **not** current HEAD/cleanliness,
+storage durability, task authorization or provider ownership. A lost reply or
+`claimed_unknown` result is not permission to rerun or delete anything.
+
 This directory defines the provider-neutral image contract for one interactive
 Horizon coding worker. The image is intentionally separate from provider
 lifecycle code: a provider prepares compute and starts this image with runtime
