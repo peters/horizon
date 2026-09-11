@@ -109,15 +109,20 @@ Provider namespaces per candidate: `aci` requires `Microsoft.ContainerInstance`;
 `vm` requires `Microsoft.Compute` and `Microsoft.Network`; `container-apps`
 requires `Microsoft.App` and `Microsoft.Network`. `Microsoft.ContainerRegistry`
 and `Microsoft.ManagedIdentity` are checked for every candidate because image
-access must go through a managed identity, and `Microsoft.Storage` or
-`Microsoft.OperationalInsights` where the candidate's documented setup needs them.
+access must go through a managed identity, `Microsoft.DevTestLab` and `Microsoft.Automation` for `vm` because
+the spike's lifetime bounds are an Automation reaper and a DevTestLab schedule, and
+`Microsoft.Storage` or `Microsoft.OperationalInsights` where the candidate's
+documented setup needs them.
 An unregistered provider is reported as a blocker; registering it is a separate
 approval, not something this tool does.
 
 ## Report
 
 The JSON report is versioned (`schema_version` 1) and contains `observed_at`,
-`candidate`, `region`, the redacted `subscription`, one entry per check with
+`candidate`, `region`, the redacted `subscription`, a `subscription_digest` (the
+first 16 hex characters of SHA-256 over `horizon-preflight:<subscription-uuid>`,
+so a downstream tool such as the spike harness can bind a report to the
+subscription it was asked about without the identifier itself), one entry per check with
 `role` (`required` or `supporting`), `outcome`, `reason` and safe `details`, the
 `blockers` list, `unverified_gates` and an overall `status`. The overall status
 folds every check the same way (`blocked` beats `unknown` beats

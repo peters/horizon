@@ -3,6 +3,7 @@
 Every test uses synthetic fixtures or an injected executor. Nothing here invokes
 the Azure CLI, needs credentials or inspects the operator's account.
 """
+import hashlib
 import io
 import json
 import os
@@ -174,9 +175,7 @@ class PlanningTests(Harness):
 
 
 @unittest.skipUnless(os.name == "posix", "the live executor is POSIX-only by design")
-class ExecutorTests(unittest.TestCase):
-    """Real subprocess boundary, exercised with the Python interpreter instead of the Azure CLI."""
-
+class ExecutorTests(unittest.TestCase):  # real subprocess boundary, driven with the Python interpreter, not az
     def test_arguments_pass_without_shell_expansion_and_time_and_output_are_bounded(self):
         run = preflight.subprocess_executor
         literal = run([sys.executable, "-c", "import sys; print(sys.argv[1])", "$HOME `id` ; touch x"], 20)
@@ -228,6 +227,8 @@ class InterpretationTests(Harness):
                 self.assertIn(word, gates)
             self.assertNotIn("ready", report["status"])
             self.assertEqual(report["subscription"], "<subscription>")
+            self.assertEqual((report["subscription_digest"], SUB[:8] in report["subscription_digest"]),
+                             (hashlib.sha256(f"horizon-preflight:{SUB}".encode()).hexdigest()[:16], False))
             self.assertEqual(report["schema_version"], preflight.REPORT_SCHEMA_VERSION)
             self.assertIsNotNone(report["observed_at"])
         self.popen.assert_not_called()
