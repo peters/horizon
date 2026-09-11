@@ -463,6 +463,8 @@ pub enum RemoteWorkspaceStoreError {
     GenerationExhausted,
     #[error("remote allocation setup retention must end after its valid creation timestamp")]
     InvalidAllocationRetention,
+    #[error("invalid remote network volume selection")]
+    InvalidNetworkVolumeSelection,
     #[error("active remote snapshot has no verified workflow allocation; reconciliation is required")]
     UnboundRuntime,
     #[error("remote SSH request identity requires an unclaimed allocation reservation")]

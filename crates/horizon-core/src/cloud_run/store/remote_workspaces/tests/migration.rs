@@ -199,6 +199,7 @@ fn invalid_selection_and_mutation_or_corrupt_rows_fail_without_repair() {
             .store
             .record_remote_network_volume_selection(&fixture.saved, &chosen)
             .expect_err("invalid");
+        assert!(matches!(error, Error::InvalidNetworkVolumeSelection));
         assert!(!error.to_string().contains(PRIVATE));
         assert_eq!(fixture.count(), 0);
     }
@@ -245,18 +246,16 @@ fn invalid_selection_and_mutation_or_corrupt_rows_fail_without_repair() {
         .expect("corruption fixture");
         raw.execute_batch(sql).expect("corrupt");
         raw.execute_batch(&trigger).expect("restore exact schema");
-        assert!(
+        assert!(matches!(
+            fixture.store.load_remote_network_volume_selection(&fixture.saved),
+            Err(Error::Storage(CloudStoreError::InvalidRemoteAllocation))
+        ));
+        assert!(matches!(
             fixture
                 .store
-                .load_remote_network_volume_selection(&fixture.saved)
-                .is_err()
-        );
-        assert!(
-            fixture
-                .store
-                .record_remote_network_volume_selection(&fixture.saved, &selection())
-                .is_err()
-        );
+                .record_remote_network_volume_selection(&fixture.saved, &selection()),
+            Err(Error::Storage(CloudStoreError::InvalidRemoteAllocation))
+        ));
         assert_eq!(fixture.count(), 1);
     }
 }
