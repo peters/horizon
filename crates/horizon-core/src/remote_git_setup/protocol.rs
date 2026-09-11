@@ -105,7 +105,9 @@ pub(super) fn response(bytes: &[u8], code: Option<i32>, observe: bool) -> Result
         (LaunchState::HandoffUnconfirmed, None, 1) => Ok(Submission::Unknown),
         (LaunchState::Rejected, None, 2) => Err(Error::Rejected),
         (LaunchState::Error, None, 1) => Err(Error::Unavailable),
-        (LaunchState::Observed, Some(observation), code) => observation.checked(code).map(Submission::Observed),
+        (LaunchState::Observed, Some(observation), code) if observation.state != State::Absent => {
+            observation.checked(code).map(Submission::Observed)
+        }
         _ => Err(Error::OutcomeUnknown),
     }
 }

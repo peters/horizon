@@ -40,7 +40,11 @@ fn all_observation_exit_pairs_and_degraded_completion_are_strict() {
                     "{state} {reason:?} {code}"
                 );
                 let wrapped = json!({"version": 1, "state": "observed", "observation": value});
-                assert_eq!(decode(&wrapped, code, false).is_ok(), valid && code == expected);
+                assert_eq!(
+                    decode(&wrapped, code, false).is_ok(),
+                    state != "absent" && valid && code == expected,
+                    "wrapped {state} {reason:?} {code}"
+                );
             }
         }
     }
