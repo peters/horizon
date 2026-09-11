@@ -2,6 +2,7 @@
 
 import base64
 import concurrent.futures
+from contextlib import contextmanager
 import importlib.util
 import io
 import json
@@ -9,6 +10,7 @@ import os
 from pathlib import Path
 import shutil
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -52,6 +54,19 @@ class HostIdentityTests(unittest.TestCase):
         return {identity.BOOTSTRAP_ENV: "1", "HORIZON_CLOUD_PROTOCOL_VERSION": "1", "RUNPOD_POD_ID": "pod_synthetic",
                 "HORIZON_WORKFLOW_ID": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
                 "HORIZON_JOB_ID": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}
+
+    def test_image_does_not_populate_workspace_before_identity_validation(self):
+        directory = Path(__file__).parent
+        dockerfile = (directory / "Dockerfile").read_text()
+        entrypoint = (directory / "entrypoint.sh").read_text()
+        self.assertEqual("WORKDIR /", [line for line in dockerfile.splitlines()
+                                      if line.startswith("WORKDIR ")][-1])
+        self.assertNotIn("/workspace/horizon", dockerfile)
+        prepare = entrypoint.index("\n/usr/local/bin/horizon-worker-host-identity\n")
+        create = entrypoint.index("\nmkdir -p /workspace/horizon\n")
+        enter = entrypoint.index("\ncd /workspace/horizon\n")
+        self.assertLess(prepare, create)
+        self.assertLess(create, enter)
 
     def test_bootstrap_record_is_emitted_only_after_retained_key_materialization(self):
         output = io.StringIO()
@@ -352,6 +367,199 @@ class HostIdentityTests(unittest.TestCase):
             self.store.prepare()
         self.assertTrue(self.store.marker.exists())
         self.assertIn((self.store.directory, True), observed)
+
+
+    @contextmanager
+    def fresh_mount(self):
+        # Only authority/mount topology are simulated; chmod, fsync, directory
+        # enumeration and path replacement operate on disposable real files.
+        self.workspace.chmod(0o777)
+        actual_fstat, actual_trusted, uid = os.fstat, identity.trusted_directory, os.geteuid()
+
+        def fstat(descriptor):
+            info = actual_fstat(descriptor)
+            return SimpleNamespace(st_dev=info.st_dev, st_ino=info.st_ino,
+                                   st_uid=0, st_gid=info.st_gid, st_mode=info.st_mode,
+                                   st_size=info.st_size)
+
+        def trusted(path, private=False):
+            with mock.patch.object(identity.os, "geteuid", return_value=uid):
+                actual_trusted(path, private)
+
+        def mount(descriptor):
+            return 2 if os.readlink(f"/proc/self/fd/{descriptor}") == str(self.workspace) else 1
+
+        with mock.patch.object(identity, "WORKSPACE", self.workspace), \
+                mock.patch.object(identity.os, "geteuid", return_value=0), \
+                mock.patch.object(identity.os, "fstat", side_effect=fstat), \
+                mock.patch.object(identity, "trusted_directory", side_effect=trusted), \
+                mock.patch.object(identity, "mount_id", side_effect=mount):
+            yield
+
+    def test_fresh_mount_is_private_and_synced_before_identity_preparation(self):
+        actual_sync, observed = os.fsync, []
+
+        def sync(descriptor):
+            self.assertEqual(0o700, self.workspace.stat().st_mode & 0o777)
+            self.assertEqual([], list(self.workspace.iterdir()))
+            observed.append("synced")
+            actual_sync(descriptor)
+
+        def prepare():
+            self.assertEqual(["synced"], observed)
+            raise identity.IdentityError()
+
+        with self.fresh_mount(), mock.patch.object(identity.os, "fsync", side_effect=sync), \
+                mock.patch.object(self.store, "prepare", side_effect=prepare) as start:
+            with self.assertRaises(identity.IdentityError):
+                identity.prepare_for_startup(self.store, self.bootstrap_environment(), io.StringIO())
+            start.assert_called_once()
+        self.assertFalse(self.store.parent.exists())
+
+    def test_missing_or_invalid_bootstrap_never_prepares_unsafe_mount(self):
+        with self.fresh_mount(), mock.patch.object(identity.os, "fchmod") as chmod:
+            for environment in ({}, {identity.BOOTSTRAP_ENV: "invalid"}):
+                with self.assertRaises(identity.IdentityError):
+                    identity.prepare_for_startup(self.store, environment, io.StringIO())
+            chmod.assert_not_called()
+        self.assertFalse(self.store.parent.exists())
+
+    def test_existing_protected_mount_and_nonworkspace_store_are_unchanged(self):
+        with self.fresh_mount(), mock.patch.object(identity.os, "fchmod") as chmod:
+            self.workspace.chmod(0o700)
+            (self.workspace / "retained").write_bytes(b"synthetic")
+            identity.prepare_fresh_workspace()
+            chmod.assert_not_called()
+        with mock.patch.object(identity, "prepare_fresh_workspace") as prepare:
+            identity.prepare_for_startup(self.store, self.bootstrap_environment(), io.StringIO())
+            prepare.assert_not_called()
+
+    def test_nonempty_unsafe_mount_never_repairs_or_deletes_entries(self):
+        for filename in ("retained", ".hidden"):
+            path = self.workspace / filename
+            path.write_bytes(b"synthetic")
+            with self.fresh_mount(), mock.patch.object(identity.os, "fchmod") as chmod:
+                with self.assertRaises(identity.IdentityError):
+                    identity.prepare_fresh_workspace()
+                chmod.assert_not_called()
+            self.assertEqual(b"synthetic", path.read_bytes())
+            path.unlink()
+
+    def test_provider_bootstrap_rejects_trusted_nonmount_before_key_generation(self):
+        for mode in (0o700, 0o755):
+            with self.subTest(mode=mode), self.fresh_mount(), \
+                    mock.patch.object(identity, "mount_id", return_value=1), \
+                    mock.patch.object(self.store, "prepare", side_effect=AssertionError(
+                        "identity preparation must not run without a mount")) as prepare, \
+                    mock.patch.object(identity, "keygen") as keygen:
+                self.workspace.chmod(mode)
+                output = io.StringIO()
+                with self.assertRaises(identity.IdentityError):
+                    identity.prepare_for_startup(self.store, self.bootstrap_environment(), output)
+                keygen.assert_not_called()
+                prepare.assert_not_called()
+                self.assertEqual("", output.getvalue())
+                self.assertFalse(self.store.parent.exists())
+                self.assertEqual(mode, self.workspace.stat().st_mode & 0o777)
+
+    def test_provider_bootstrap_preserves_trusted_mounted_identity_bytes(self):
+        public = self.store.prepare()
+        before = self.snapshot()
+        for mode in (0o700, 0o755):
+            with self.subTest(mode=mode), self.fresh_mount(), \
+                    mock.patch.object(identity.os, "fchmod") as chmod:
+                self.workspace.chmod(mode)
+                output = io.StringIO()
+                self.assertEqual(public, identity.prepare_for_startup(
+                    self.store, self.bootstrap_environment(), output))
+                chmod.assert_not_called()
+                self.assertEqual(before, self.snapshot())
+                self.assertEqual(mode, self.workspace.stat().st_mode & 0o777)
+                self.assertTrue(output.getvalue().startswith(identity.BOOTSTRAP_PREFIX))
+
+    def test_nonprovider_startup_does_not_require_a_mount(self):
+        with mock.patch.object(identity, "WORKSPACE", self.workspace), \
+                mock.patch.object(identity, "prepare_fresh_workspace") as prepare:
+            output = io.StringIO()
+            identity.prepare_for_startup(self.store, {}, output)
+            prepare.assert_not_called()
+            self.assertEqual("", output.getvalue())
+            self.assertTrue(self.store.marker.is_file())
+
+    def test_noop_chmod_and_sync_failure_refuse_without_creating_state(self):
+        with self.fresh_mount(), mock.patch.object(identity.os, "fchmod"):
+            with self.assertRaises(identity.IdentityError):
+                identity.prepare_fresh_workspace()
+        with self.fresh_mount(), mock.patch.object(identity.os, "fsync", side_effect=OSError):
+            with self.assertRaises(OSError):
+                identity.prepare_fresh_workspace()
+        self.assertEqual([], list(self.workspace.iterdir()))
+
+    def test_mount_id_parser_is_bounded_and_unambiguous(self):
+        with mock.patch("builtins.open", return_value=io.BytesIO(b"mnt_id:\t123\n")):
+            self.assertEqual(123, identity.mount_id(1))
+        for value in (b"", b"mnt_id: x\n", b"mnt_id: 1\nmnt_id: 2\n", b"x" * 4097):
+            with mock.patch("builtins.open", return_value=io.BytesIO(value)):
+                with self.assertRaises(identity.IdentityError):
+                    identity.mount_id(1)
+
+    def test_post_chmod_mode_or_mount_change_is_rejected(self):
+        actual_chmod = os.fchmod
+        with self.fresh_mount(), mock.patch.object(identity.os, "fchmod",
+                side_effect=lambda descriptor, mode: actual_chmod(descriptor, 0o755)):
+            with self.assertRaises(identity.IdentityError):
+                identity.prepare_fresh_workspace()
+        with self.fresh_mount():
+            mount = identity.mount_id.side_effect
+            def changed_mount(descriptor):
+                value = mount(descriptor)
+                return 3 if value == 2 and self.workspace.stat().st_mode & 0o777 == 0o700 else value
+            with mock.patch.object(identity, "mount_id", side_effect=changed_mount):
+                with self.assertRaises(identity.IdentityError):
+                    identity.prepare_fresh_workspace()
+        self.assertFalse(self.store.parent.exists())
+
+    def test_insertion_or_path_replacement_after_chmod_refuses_without_cleanup(self):
+        actual_chmod = os.fchmod
+        for replace in (False, True):
+            def race(descriptor, mode):
+                actual_chmod(descriptor, mode)
+                if replace:
+                    self.workspace.rename(self.root / "original")
+                    self.workspace.mkdir(mode=0o700)
+                else:
+                    (self.workspace / ".concurrent").write_bytes(b"synthetic")
+            with self.fresh_mount(), mock.patch.object(identity.os, "fchmod", side_effect=race):
+                with self.assertRaises(identity.IdentityError):
+                    identity.prepare_fresh_workspace()
+            if not replace:
+                self.assertEqual(b"synthetic", (self.workspace / ".concurrent").read_bytes())
+                (self.workspace / ".concurrent").unlink()
+            else:
+                self.assertTrue((self.root / "original").is_dir())
+        self.assertFalse(self.store.parent.exists())
+
+    def test_wrong_owner_nonmount_unsafe_parent_and_symlink_refuse(self):
+        with self.fresh_mount():
+            for target, value in (("geteuid", 1), ("fstat", SimpleNamespace(
+                    st_dev=1, st_ino=1, st_uid=1, st_gid=1, st_mode=0o40777))):
+                with mock.patch.object(identity.os, target, return_value=value), \
+                        mock.patch.object(identity.os, "fchmod") as chmod:
+                    with self.assertRaises(identity.IdentityError):
+                        identity.prepare_fresh_workspace()
+                    chmod.assert_not_called()
+            with mock.patch.object(identity, "mount_id", return_value=1):
+                with self.assertRaises(identity.IdentityError):
+                    identity.prepare_fresh_workspace()
+            self.root.chmod(0o777)
+            with self.assertRaises(identity.IdentityError):
+                identity.prepare_fresh_workspace()
+            self.root.chmod(0o700)
+            self.workspace.rmdir()
+            self.workspace.symlink_to(self.runtime, target_is_directory=True)
+            with self.assertRaises((identity.IdentityError, OSError)):
+                identity.prepare_fresh_workspace()
+        self.assertEqual([], list(self.runtime.iterdir()))
 
 
 if __name__ == "__main__":

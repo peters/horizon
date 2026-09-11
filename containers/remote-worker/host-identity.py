@@ -26,6 +26,8 @@ BOOTSTRAP_ENV = "HORIZON_HOST_KEY_BOOTSTRAP_VERSION"
 BOOTSTRAP_VERSION = 1
 BOOTSTRAP_PREFIX = "horizon-worker-host-key "
 BOOTSTRAP_LIMIT = 1024
+WORKSPACE = Path("/workspace")
+DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK
 
 
 class IdentityError(Exception):
@@ -48,6 +50,78 @@ def trusted_directory(path, private=False):
     info = path.lstat()
     if private and (info.st_uid != os.geteuid() or info.st_mode & 0o077):
         fail()
+
+
+def mount_id(descriptor):
+    with open(f"/proc/self/fdinfo/{descriptor}", "rb") as stream:
+        value = stream.read(4097)
+    identifiers = [line[7:].strip() for line in value.splitlines() if line.startswith(b"mnt_id:")]
+    if len(value) > 4096 or len(identifiers) != 1 or not identifiers[0].isdigit():
+        fail()
+    return int(identifiers[0])
+
+
+def workspace_identity(descriptor):
+    info = os.fstat(descriptor)
+    return (info.st_dev, info.st_ino, info.st_uid, info.st_gid,
+            stat.S_IFMT(info.st_mode), mount_id(descriptor))
+
+
+def prepare_fresh_workspace():
+    # Provider ownership/exclusive attachment is a caller precondition, not
+    # established by bootstrap metadata or by an empty directory observation.
+    if os.geteuid() != 0:
+        fail()
+    trusted_directory(WORKSPACE.parent)
+    descriptor = os.open(WORKSPACE, DIRECTORY_FLAGS)
+    try:
+        original = workspace_identity(descriptor)
+        parent = os.open(WORKSPACE.parent, DIRECTORY_FLAGS)
+        try:
+            parent_info = os.fstat(parent)
+            if (parent_info.st_uid != 0 or parent_info.st_mode & 0o022
+                    or original[-1] == mount_id(parent)):
+                fail()
+        finally:
+            os.close(parent)
+
+        def verify(mode):
+            current = os.fstat(descriptor)
+            if (current.st_uid != 0 or stat.S_IMODE(current.st_mode) != mode
+                    or workspace_identity(descriptor) != original):
+                fail()
+            visible = os.open(WORKSPACE, DIRECTORY_FLAGS)
+            try:
+                if (workspace_identity(visible) != original
+                        or stat.S_IMODE(os.fstat(visible).st_mode) != mode):
+                    fail()
+            finally:
+                os.close(visible)
+
+        mode = stat.S_IMODE(os.fstat(descriptor).st_mode)
+        verify(mode)
+        try:
+            trusted_directory(WORKSPACE)
+        except IdentityError:
+            pass
+        else:
+            verify(mode)
+            return
+
+        verify(0o777)
+        with os.scandir(descriptor) as entries:
+            if next(entries, None) is not None:
+                fail()
+        verify(0o777)
+        os.fchmod(descriptor, 0o700)
+        verify(0o700)
+        os.fsync(descriptor)
+        with os.scandir(descriptor) as entries:
+            if next(entries, None) is not None:
+                fail()
+        verify(0o700)
+    finally:
+        os.close(descriptor)
 
 
 def read_file(path, private=True):
@@ -237,6 +311,8 @@ def bootstrap_context(environment):
 
 def prepare_for_startup(store, environment, output):
     record = bootstrap_context(environment)
+    if record is not None and store.workspace == WORKSPACE:
+        prepare_fresh_workspace()
     host_public_key = store.prepare()
     if record is not None:
         digest = hashlib.sha256(public_key(read_file(store.access_key)).encode()).hexdigest()

@@ -118,6 +118,10 @@ git config --global --add credential.https://github.com.helper /usr/local/bin/ho
 
 /usr/local/bin/horizon-worker-host-identity
 
+# Keep a newly attached mount empty until storage and retained identity pass.
+mkdir -p /workspace/horizon
+cd /workspace/horizon
+
 if [ -n "${deadline_epoch}" ]; then
     now_epoch=$(date +%s)
     lease_seconds=$((deadline_epoch - now_epoch))

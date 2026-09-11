@@ -29,6 +29,31 @@ The provider/coordinator must still verify those identities. A missing entire
 volume cannot be distinguished from a fresh volume by this helper; recovery must
 not silently accept a new server key in that case.
 
+For a validated provider-bootstrap request, first initialization may restrict an
+empty, root-owned `/workspace` mount from exactly `0777` to `0700`. This is
+fixed-root preparation, not permission repair or volume adoption. It requires a
+safe parent and a real mount boundary, holds a no-follow directory descriptor,
+and rechecks path/inode/owner/mount identity and effective mode around chmod,
+directory synchronization and a second emptiness check before creating identity
+state. Already trusted mounted storage is unchanged; nonempty unsafe storage is
+refused. Every provider-bootstrap request also validates the real mount and
+root/path identity for already protected storage; an image-local directory is
+not a retained volume. Non-provider startup behavior is unchanged.
+The image starts in `/` and leaves `/workspace` empty. Only after retained
+identity validation does the entrypoint create and enter `/workspace/horizon`.
+Using that repository directory as the image working directory would let the
+container runtime populate a fresh mount before the emptiness check.
+A chmod that silently does nothing is refused. If chmod succeeds but a concurrent
+entry or identity change is detected, startup fails without deleting that entry
+or attempting a rollback/repair.
+
+The provider must establish fresh-volume ownership and exclusive attachment
+before requesting this operation; valid bootstrap environment fields and an empty
+directory do not prove either. The helper cannot exclude another authorized
+mount writer or make chmod and emptiness checks crash-atomic. A crash after chmod
+can leave a restricted mount without an identity claim; existing provider identity
+and client pin checks remain necessary on recovery, including whole-volume loss.
+
 ## Alternatives and trade-offs
 
 - Container-only keys are simple but fail verified reconnect when the runtime
@@ -52,6 +77,18 @@ state and path permissions. A local SSH smoke destroys only its task-owned
 container filesystem while keeping its named volume and verifies the same host
 identity and repository data. This does not prove live cloud restart, persistence
 of agent/session state, volume-loss recovery or PC-off development.
+
+A disposable September 2026 High-Performance network-volume probe observed NFSv4:
+root chmod changed `0777` to `0700`, synthetic directories/files retained
+`0700`/`0600`, and an unprivileged child was denied listing, reading, creating and
+renaming within the protected root. Synthetic file/directory fsync, hard-link
+publication and rename/readback succeeded. This is one measured candidate, not a
+provider-wide guarantee or a durability certification. Separate sampled Pod and
+Standard network volumes exposed FUSE with ineffective permission changes and
+must remain rejected. The NFSv4 observation does not satisfy or change the
+separate ext4-only repository importer contract. Actual worker bootstrap,
+Stop/restart persistence, provider-volume ownership and unchanged client pin
+still require exact-source integration and live verification.
 
 Remaining actions: integrate provider-retained volumes and remote backups;
 preserve task/agent state and session markers; implement explicit Stop/recovery;
