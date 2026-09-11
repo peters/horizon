@@ -13,7 +13,7 @@ impl CloudWorkflowStore {
     /// This is inert, non-secret intent: it neither verifies provider storage nor
     /// establishes ownership, exclusivity, attachment or provisioning authority.
     /// It does not bump the allocation revision or consume/renew a creation grant.
-    /// Existing setup/provider APIs do not yet consume this selection.
+    /// Explicit task-free setup and its retry/recovery bind the provider to this selection.
     /// No retirement or next-generation rebinding is exposed for this workspace,
     /// matching the existing allocation and first-pin boundaries.
     ///

@@ -17,7 +17,7 @@ pub struct RunPodNetworkVolumeExpectation {
 }
 
 impl RunPodNetworkVolumeExpectation {
-    pub(super) fn validate(&self) -> Result<(), RunPodError> {
+    pub(crate) fn validate(&self) -> Result<(), RunPodError> {
         if !valid_provider_id(&self.volume_id)
             || !valid_provider_id(&self.data_center_id)
             || !(MIN_VOLUME_GB..=MAX_VOLUME_GB).contains(&self.minimum_size_gb)
