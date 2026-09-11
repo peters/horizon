@@ -185,7 +185,7 @@ RUN mkdir -p \
     && cargo fetch --locked \
     && rm -rf /opt/horizon-dependency-cache
 
-WORKDIR /workspace/horizon
+WORKDIR /
 
 COPY --from=repository-builder /opt/horizon-repository /usr/local/bin/horizon-repository
 COPY containers/remote-worker/entrypoint.sh /usr/local/bin/horizon-worker-entrypoint
@@ -224,7 +224,7 @@ RUN chmod 0755 /usr/local/bin/horizon-worker-entrypoint /usr/local/bin/horizon-a
         /root/.pi \
         /root/.rustup \
         /root/.ssh \
-    && mkdir -p /run/sshd /workspace/horizon /var/lib/horizon \
+    && mkdir -p /run/sshd /workspace /var/lib/horizon \
     && chmod 0700 /var/lib/horizon
 
 ARG WORKER_IMAGE_VERSION=0.1.0

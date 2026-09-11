@@ -233,7 +233,8 @@ if grep -Eq '(github_pat_|ghp_|rpa_)' <<<"${image_history}"; then
 fi
 
 docker run --rm --entrypoint /bin/sh "${image}" -eu -c '
-  test -z "$(find /workspace/horizon -mindepth 1 -print -quit)"
+  test "$(pwd)" = /
+  test -z "$(find /workspace -mindepth 1 -print -quit)"
   test ! -e /opt/horizon-dependency-cache
   test -z "$(find /etc/ssh -maxdepth 1 -name "ssh_host_*" -print -quit)"
   test ! -e /root/.ssh
