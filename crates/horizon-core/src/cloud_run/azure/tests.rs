@@ -1,18 +1,33 @@
 use super::{
-    AzureAccessToken, AzureCliCredential, AzureError, AzureLifecycle, AzureProfile, credential::parse_cli_token,
-    valid_identity_id, valid_location, valid_registry_login_server, valid_vm_size,
+    AzureAccessToken, AzureCliCredential, AzureDiskSku, AzureError, AzureLifecycle, AzureProfile,
+    credential::parse_cli_token, valid_identity_id, valid_location, valid_registry_login_server, valid_vm_size,
 };
 use crate::cloud_run::{CloudProvider, WorkerLifetime, WorkerTarget};
+mod deployment;
+mod identity;
 mod transport;
 use std::time::Duration;
 
 pub(super) const SUB: &str = "0f0e0d0c-0b0a-4908-8706-050403020100";
 pub(super) const OTHER_SUB: &str = "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d";
 pub(super) const GROUP: &str = "horizon-ws-sample";
+const ED25519_BLOB_PREFIX: &[u8] = b"\0\0\0\x0bssh-ed25519\0\0\0\x20";
+
+/// A structurally valid Ed25519 public key whose 32 key bytes are all `byte`.
+pub(super) fn ed25519_key(byte: u8, comment: &str) -> String {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    let blob = [ED25519_BLOB_PREFIX, &[byte; 32]].concat();
+    let comment = if comment.is_empty() {
+        String::new()
+    } else {
+        format!(" {comment}")
+    };
+    format!("ssh-ed25519 {}{comment}", STANDARD.encode(blob))
+}
 pub(super) const IMAGE: &str =
     "example.azurecr.io/horizon-remote-worker@sha256:20cc03ef2530336b7374cc35412c8583b1422726c630ec6e6cd1450d690a74f6";
 
-fn profile() -> AzureProfile {
+pub(super) fn profile() -> AzureProfile {
     AzureProfile {
         name: "cpu-north".into(),
         subscription_id: SUB.into(),
@@ -23,10 +38,11 @@ fn profile() -> AzureProfile {
         ),
         declared_hourly_cost_micros: 200_000,
         registry_login_server: "example.azurecr.io".into(),
+        disk_sku: AzureDiskSku::PremiumLrs,
     }
 }
 
-fn target() -> WorkerTarget {
+pub(super) fn target() -> WorkerTarget {
     WorkerTarget {
         provider: CloudProvider::Azure,
         profile: "cpu-north".into(),
@@ -128,23 +144,6 @@ fn validators_follow_azure_naming_rules() {
     ] {
         assert!(!valid_identity_id(&bad, SUB), "{label}");
     }
-    for size in [
-        "Standard_D4s_v3",
-        "Standard_E4-2s_v3",
-        "Standard_M8-2ms",
-        "Standard_B1ls",
-    ] {
-        assert!(valid_vm_size(size), "{size}");
-    }
-    for size in [
-        "Standard_",
-        "Basic_A1",
-        "Standard_D4s v3",
-        "standard_d4s_v3",
-        &format!("Standard_{}", "x".repeat(40)),
-    ] {
-        assert!(!valid_vm_size(size), "{size}");
-    }
     for location in ["northeurope", "eastus2", "swedencentral"] {
         assert!(valid_location(location), "{location}");
     }
@@ -164,10 +163,50 @@ fn validators_follow_azure_naming_rules() {
         "abcd.azurecr.io",
         "example.azurecr.cn",
         "azurecr.io",
-        "docker.io",
     ] {
         assert!(!valid_registry_login_server(server), "{server}");
     }
+}
+
+#[test]
+fn vm_sizes_come_from_the_validated_allowlist() {
+    use super::SUPPORTED_VM_SIZES;
+    assert!(
+        SUPPORTED_VM_SIZES.contains(&"Standard_D4s_v3"),
+        "the live-validated candidate"
+    );
+    for size in SUPPORTED_VM_SIZES {
+        assert!(valid_vm_size(size), "{size}");
+        assert!(size.starts_with("Standard_") && !size.contains('p'), "{size}: x64 only");
+    }
+    for size in [
+        "Standard_D4_v3",
+        "Standard_A2_v2",
+        "Standard_DS3_v2",
+        "Standard_D4ps_v5",
+        "Standard_B96s",
+        "Standard_D0s_v3",
+        "Standard_D999s_v3",
+        "Standard_E4-8s_v5",
+        "Standard_D4s_v2",
+        "Standard_d4s_v3",
+        "Standard_D4s_v3 ",
+        "Standard_",
+        "Basic_A1",
+        "",
+    ] {
+        assert!(!valid_vm_size(size), "{size}");
+    }
+    let mut standard_disks = profile();
+    standard_disks.disk_sku = AzureDiskSku::StandardSsdLrs;
+    assert_eq!(standard_disks.validate(), Ok(()));
+    let decoded: AzureProfile = serde_json::from_str(
+        &serde_json::to_string(&profile())
+            .expect("encode")
+            .replace(",\"disk_sku\":\"Premium_LRS\"", ""),
+    )
+    .expect("decode");
+    assert_eq!(decoded.disk_sku, AzureDiskSku::StandardSsdLrs, "the default SKU");
 }
 
 #[test]

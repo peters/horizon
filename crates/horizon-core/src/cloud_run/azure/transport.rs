@@ -11,6 +11,9 @@ use std::collections::BTreeMap;
 /// Resource group as observed from ARM.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct AzureGroupInfo {
+    /// Group-level ARM resource ID as returned, verified against the requested
+    /// subscription and group; the provider persists exactly this value.
+    pub id: String,
     pub name: String,
     pub location: String,
     pub provisioning_state: String,
@@ -274,6 +277,7 @@ fn group_info(
         return Err(AzureError::ResourceIdentityMismatch);
     }
     Ok(AzureGroupInfo {
+        id,
         name,
         location: text(value, "/location").unwrap_or_default(),
         provisioning_state: text(value, "/properties/provisioningState").unwrap_or_default(),
