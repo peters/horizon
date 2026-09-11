@@ -57,6 +57,14 @@ pub(crate) fn prepared_storage_status(
     command_for(identity, known_hosts, endpoint, Operation::StorageStatus)
 }
 
+pub(crate) fn prepared_github_install(
+    identity: &Path,
+    known_hosts: &Path,
+    endpoint: &InteractiveWorkerSshEndpoint,
+) -> Result<Command, Error> {
+    command_for(identity, known_hosts, endpoint, Operation::GithubInstall)
+}
+
 #[derive(Clone, Copy)]
 enum Operation<'a> {
     Request,
@@ -64,6 +72,7 @@ enum Operation<'a> {
     Intake,
     IntakeStatus,
     StorageStatus,
+    GithubInstall,
     Attach { runtime: CloudJobId, panel: &'a str },
 }
 
@@ -82,7 +91,8 @@ fn command_for(
         | Operation::PackStatus
         | Operation::Intake
         | Operation::IntakeStatus
-        | Operation::StorageStatus => "-T",
+        | Operation::StorageStatus
+        | Operation::GithubInstall => "-T",
         Operation::Attach { panel, .. } if valid_local_id(panel) => "-tt",
         Operation::Attach { .. } => return Err(Error::UnknownPanel),
     };
@@ -135,6 +145,7 @@ fn command_for(
         Operation::Intake => "/usr/local/bin/horizon-repository intake".into(),
         Operation::IntakeStatus => "/usr/local/bin/horizon-repository intake-status".into(),
         Operation::StorageStatus => "/usr/local/bin/horizon-repository storage-status".into(),
+        Operation::GithubInstall => "/usr/local/bin/horizon-github-credential install".into(),
         Operation::Attach { runtime, panel } => {
             format!("/usr/local/bin/horizon-panel-session attach -- {runtime} {panel}")
         }

@@ -151,6 +151,12 @@ back into large multi-purpose modules.
   valid negative observations are distinct from transport or protocol errors.
   It reuses the worker's storage status type without initialization, provider
   selection, persistence or task authority.
+- `remote_github_credential.rs` owns explicit first-PAT delivery admission after
+  non-creating provider inspection and retained host-pin checks. Its transport
+  leaf reuses the fixed SSH command and bounded stdin-only exchange, accepting
+  only exact installer success replies. Post-send drift is unknown, never a
+  reason for automatic retry, credential replacement or worker/task mutation.
+  The borrowed secret is redacted and is not persisted or discovered implicitly.
 - `remote_worker_status.rs` gates non-creating panel inspection on exact owned
   recovery and current lifetime. Its `protocol.rs` leaf owns bounded status-only
   wire types; `ssh.rs` owns the query's private host-pin lifetime and retains the
