@@ -19,9 +19,10 @@ mod transport;
 
 pub use credential::{AzureAccessToken, AzureCliCredential, AzureCredentialSource};
 pub use deployment::AzureDeploymentPlan;
-pub use provider::{AzureClient, AzureCreationFence};
+pub use provider::{AzureClient, AzureCreationFence, AzureHostKeySource, AzureRunCommandHostKeys, SSH_USERNAME};
 pub use transport::{
-    AzureArmHttp, AzureDeploymentState, AzureGroupInfo, AzureLongRunningState, AzureManagementTransport, AzureVmView,
+    AzureArmHttp, AzureDeploymentState, AzureGroupInfo, AzureLongRunningState, AzureManagementTransport,
+    AzureRunCommand, AzureVmView,
 };
 
 /// Public Azure Resource Manager endpoint; tokens are requested for this audience only.
@@ -251,6 +252,8 @@ pub enum AzureError {
     InvalidResponse { operation: &'static str },
     #[error("Azure returned an invalid or mismatched resource identity")]
     ResourceIdentityMismatch,
+    #[error("Azure operation {operation} did not reach a terminal state within the bound")]
+    OperationTimedOut { operation: &'static str },
     #[error("durable creation claim could not be read or recorded")]
     CreationFenceFailed,
     #[error("the worker's VM size or location no longer matches the profile")]

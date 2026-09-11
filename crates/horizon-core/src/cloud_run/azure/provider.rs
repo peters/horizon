@@ -1,7 +1,6 @@
 //! The Azure provider behind the common interactive-worker contract: create once
-//! behind a durable fence, recover and inspect without creating, and delete exactly
-//! the owned resource group. SSH readiness (host-key attestation) and explicit Stop
-//! are the next slice.
+//! behind a durable fence, recover and inspect without creating, delete exactly the
+//! owned resource group; readiness attestation and Stop live in `running`.
 use super::{
     AzureDeploymentPlan, AzureError, AzureGroupInfo, AzureLifecycle, AzureManagementTransport, AzureProfile,
     AzureVmView, AzureWorker, WORKER_VM_NAME,
@@ -18,6 +17,11 @@ use crate::cloud_run::{
 };
 use std::collections::BTreeMap;
 
+mod running;
+pub use running::{AzureHostKeySource, AzureRunCommandHostKeys};
+
+/// The worker image accepts the client key for `root` only.
+pub const SSH_USERNAME: &str = "root";
 /// Durable, cross-controller compare-and-set whose claim survives process exit. A
 /// resource group name may return `true` at most once. The workflow store implements
 /// it where the production client is assembled.
@@ -54,6 +58,7 @@ pub struct AzureClient {
     profile: AzureProfile,
     transport: Box<dyn AzureManagementTransport>,
     fence: Box<dyn AzureCreationFence>,
+    host_keys: Box<dyn AzureHostKeySource>,
 }
 
 /// Whether an observation must also match the current profile's VM size and location.
@@ -82,6 +87,8 @@ struct Observation {
     lifecycle: AzureLifecycle,
     /// Neither a deployment nor a VM exists yet: the only state repair may act on.
     bare: bool,
+    host: Option<String>,
+    vm: Option<AzureVmView>,
 }
 
 impl AzureClient {
@@ -93,6 +100,7 @@ impl AzureClient {
         profile: AzureProfile,
         transport: impl AzureManagementTransport + 'static,
         fence: impl AzureCreationFence + 'static,
+        host_keys: impl AzureHostKeySource + 'static,
     ) -> Result<Self, AzureError> {
         profile.validate()?;
         // A transport for another subscription would create in the wrong place and then
@@ -104,6 +112,7 @@ impl AzureClient {
             profile,
             transport: Box::new(transport),
             fence: Box::new(fence),
+            host_keys: Box::new(host_keys),
         })
     }
 
@@ -179,6 +188,8 @@ impl AzureClient {
                     worker,
                     lifecycle: AzureLifecycle::Deleting,
                     bare: false,
+                    host: None,
+                    vm: None,
                 }));
         }
         // The group's region is immutable; a profile moved to another region under the
@@ -254,6 +265,8 @@ impl AzureClient {
             worker,
             lifecycle,
             bare,
+            host,
+            vm,
         }))
     }
 
@@ -271,14 +284,25 @@ impl AzureClient {
         })
     }
 
-    /// Common status for an observation. `Ready` requires a pinned host key, which the
-    /// readiness slice supplies; until then a running worker is reported `Provisioning`.
-    fn status(observation: Observation, target: &WorkerTarget, ssh_public_key: &str) -> InteractiveWorkerStatus {
+    fn status(
+        &self,
+        observation: Observation,
+        target: &WorkerTarget,
+        ssh_public_key: &str,
+        placement: Placement,
+    ) -> Result<InteractiveWorkerStatus, AzureError> {
         let worker = AzureWorker {
             image: target.image.clone(),
             ..observation.worker
         };
+        let ssh = match (observation.lifecycle, observation.host.as_deref()) {
+            (AzureLifecycle::Running, Some(host)) => {
+                self.attested_endpoint(&worker, host, target, ssh_public_key, placement)?
+            }
+            _ => None,
+        };
         let lifecycle = match observation.lifecycle {
+            AzureLifecycle::Running if ssh.is_some() => InteractiveWorkerLifecycle::Ready,
             AzureLifecycle::Running | AzureLifecycle::Transitioning => InteractiveWorkerLifecycle::Provisioning,
             AzureLifecycle::Deallocated => InteractiveWorkerLifecycle::Stopped,
             AzureLifecycle::Failed => InteractiveWorkerLifecycle::Failed,
@@ -286,7 +310,7 @@ impl AzureClient {
             // Guest halted but compute still billed: not a retained stop, not ready.
             AzureLifecycle::StoppedAllocated | AzureLifecycle::Unknown => InteractiveWorkerLifecycle::Unknown,
         };
-        InteractiveWorkerStatus {
+        Ok(InteractiveWorkerStatus {
             worker: InteractiveWorker {
                 identity: InteractiveWorkerIdentity {
                     provider: CloudProvider::Azure,
@@ -299,8 +323,8 @@ impl AzureClient {
                 lifetime: InteractiveWorkerLifetime::Persistent,
             },
             lifecycle,
-            ssh: None,
-        }
+            ssh,
+        })
     }
 
     /// Create the group behind the durable fence. ARM is consulted again right before
@@ -389,7 +413,12 @@ impl InteractiveWorkerProvider for AzureClient {
         let observation = self
             .observe(worker, &group, &expected, repair, Placement::Enforce)?
             .ok_or(AzureError::CreationUnresolved)?;
-        let status = Self::status(observation, &request.target, &request.ssh_public_key);
+        let status = self.status(
+            observation,
+            &request.target,
+            &request.ssh_public_key,
+            Placement::Enforce,
+        )?;
         Ok(if origin == Origin::Created {
             InteractiveWorkerEnsure::Created(status)
         } else {
@@ -408,7 +437,16 @@ impl InteractiveWorkerProvider for AzureClient {
         };
         let worker = self.worker_for(request.workflow_id, request.job_id, &group, &request.target.image);
         let observation = self.observe(worker, &group, &expected, None, Placement::Enforce)?;
-        Ok(observation.map(|observation| Self::status(observation, &request.target, &request.ssh_public_key)))
+        observation
+            .map(|observation| {
+                self.status(
+                    observation,
+                    &request.target,
+                    &request.ssh_public_key,
+                    Placement::Enforce,
+                )
+            })
+            .transpose()
     }
 
     fn inspect_worker(&self, worker: &InteractiveWorker) -> Result<Option<InteractiveWorkerStatus>, Self::Error> {
@@ -416,7 +454,9 @@ impl InteractiveWorkerProvider for AzureClient {
             return Ok(None);
         };
         let observation = self.observe(handle, &group, &expected, None, Placement::Ignore)?;
-        Ok(observation.map(|observation| Self::status(observation, &worker.target, &worker.ssh_public_key)))
+        observation
+            .map(|observation| self.status(observation, &worker.target, &worker.ssh_public_key, Placement::Ignore))
+            .transpose()
     }
 
     /// `Deleted` means ARM accepted (202) or completed the deletion of exactly the owned

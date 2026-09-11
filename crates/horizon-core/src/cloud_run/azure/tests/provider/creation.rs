@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn ensure_creates_once_behind_the_fence_and_then_reuses() {
     let s = Scenario::new();
-    let created = s.client(true).ensure_worker(&s.request).expect("created");
+    let created = s.client(true, None).ensure_worker(&s.request).expect("created");
     let InteractiveWorkerEnsure::Created(status) = &created else {
         panic!("first ensure creates: {created:?}");
     };
@@ -44,7 +44,7 @@ fn ensure_creates_once_behind_the_fence_and_then_reuses() {
     assert_eq!(&calls[put + 1..], [lookup], "a final re-read follows the submission");
     assert_eq!(s.plane.mutations().len(), 2, "one creation, one submission");
     s.plane.lock().calls.clear();
-    let reused = s.client(false).ensure_worker(&s.request).expect("reused");
+    let reused = s.client(false, None).ensure_worker(&s.request).expect("reused");
     assert!(matches!(reused, InteractiveWorkerEnsure::Reused(_)));
     assert_eq!(
         reused.status().lifecycle,
@@ -59,7 +59,7 @@ fn ensure_repairs_only_a_group_it_owns_and_never_one_being_deleted() {
     // A claim lost to a crash before the group appeared: a second look at ARM, then unresolved.
     let s = Scenario::new();
     assert_eq!(
-        s.client(false).ensure_worker(&s.request),
+        s.client(false, None).ensure_worker(&s.request),
         Err(AzureError::CreationUnresolved)
     );
     assert_eq!(
@@ -68,7 +68,7 @@ fn ensure_repairs_only_a_group_it_owns_and_never_one_being_deleted() {
     );
     // A claim lost after the group appeared is adopted through the same tag proof.
     s.plane.script(Some(owned(&s)), None, vec![None]);
-    let adopted = s.client(true).ensure_worker(&s.request).expect("adopted");
+    let adopted = s.client(true, None).ensure_worker(&s.request).expect("adopted");
     assert!(matches!(adopted, InteractiveWorkerEnsure::Reused(_)));
     assert!(
         matches!(s.plane.mutations().as_slice(), [Call::PutDeployment(..)]),
@@ -79,7 +79,10 @@ fn ensure_repairs_only_a_group_it_owns_and_never_one_being_deleted() {
     raced.plane.lock().deployment = Some(deployment("Succeeded", "203.0.113.9"));
     raced.plane.lock().vm_states = vec![Some(vm("running", &raced.tags))];
     raced.plane.lock().appear_on_second_lookup = Some(owned(&raced));
-    let observed = raced.client(false).ensure_worker(&raced.request).expect("observed");
+    let observed = raced
+        .client(false, None)
+        .ensure_worker(&raced.request)
+        .expect("observed");
     assert!(matches!(observed, InteractiveWorkerEnsure::Reused(_)), "{observed:?}");
     assert_eq!(observed.status().lifecycle, Lifecycle::Provisioning);
     assert!(
@@ -91,7 +94,10 @@ fn ensure_repairs_only_a_group_it_owns_and_never_one_being_deleted() {
     granted.plane.lock().deployment = Some(deployment("Succeeded", "203.0.113.9"));
     granted.plane.lock().vm_states = vec![Some(vm("running", &granted.tags))];
     granted.plane.lock().appear_on_second_lookup = Some(owned(&granted));
-    let adopted = granted.client(true).ensure_worker(&granted.request).expect("adopted");
+    let adopted = granted
+        .client(true, None)
+        .ensure_worker(&granted.request)
+        .expect("adopted");
     assert!(matches!(adopted, InteractiveWorkerEnsure::Reused(_)), "{adopted:?}");
     assert!(
         granted.plane.mutations().is_empty(),
@@ -106,12 +112,15 @@ fn ensure_repairs_only_a_group_it_owns_and_never_one_being_deleted() {
         tags: other_tags,
         ..owned(&foreign)
     });
-    assert_eq!(foreign.client(true).ensure_worker(&foreign.request), Err(MISMATCH));
+    assert_eq!(
+        foreign.client(true, None).ensure_worker(&foreign.request),
+        Err(MISMATCH)
+    );
     assert!(foreign.plane.mutations().is_empty());
     // A throttled submission keeps the owned group; the next ensure repairs it.
     let t = Scenario::new();
     t.plane.lock().fail_deployment = true;
-    let error = t.client(true).ensure_worker(&t.request).expect_err("submission");
+    let error = t.client(true, None).ensure_worker(&t.request).expect_err("submission");
     assert!(
         matches!(&error, AzureError::CreationIncomplete { cause } if matches!(**cause, AzureError::UnexpectedStatus { status: 429, .. }))
     );
@@ -121,7 +130,7 @@ fn ensure_repairs_only_a_group_it_owns_and_never_one_being_deleted() {
     );
     t.plane.lock().fail_deployment = false;
     t.plane.lock().calls.clear();
-    let repaired = t.client(false).ensure_worker(&t.request).expect("repaired");
+    let repaired = t.client(false, None).ensure_worker(&t.request).expect("repaired");
     assert!(matches!(repaired, InteractiveWorkerEnsure::Reused(_)));
     assert!(matches!(t.plane.mutations().as_slice(), [Call::PutDeployment(..)]));
 }
@@ -135,7 +144,10 @@ fn ensure_never_deploys_into_a_group_that_changed_under_it() {
         provisioning_state: "Deleting".into(),
         ..owned(&racing)
     });
-    let observed = racing.client(false).ensure_worker(&racing.request).expect("observed");
+    let observed = racing
+        .client(false, None)
+        .ensure_worker(&racing.request)
+        .expect("observed");
     assert_eq!(observed.status().lifecycle, Lifecycle::Deleting);
     assert!(
         racing.plane.mutations().is_empty(),
@@ -148,7 +160,7 @@ fn ensure_never_deploys_into_a_group_that_changed_under_it() {
         tags: foreign_tags,
         ..owned(&racing)
     });
-    assert_eq!(racing.client(false).ensure_worker(&racing.request), Err(MISMATCH));
+    assert_eq!(racing.client(false, None).ensure_worker(&racing.request), Err(MISMATCH));
     assert!(
         racing.plane.mutations().is_empty(),
         "no submission into a retagged group"
@@ -158,7 +170,7 @@ fn ensure_never_deploys_into_a_group_that_changed_under_it() {
     appeared.plane.lock().group = Some(owned(&appeared));
     appeared.plane.lock().deployment_on_second_read = Some(deployment("Running", ""));
     let observed = appeared
-        .client(false)
+        .client(false, None)
         .ensure_worker(&appeared.request)
         .expect("observed");
     assert_eq!(observed.status().lifecycle, Lifecycle::Provisioning);
@@ -171,14 +183,20 @@ fn ensure_never_deploys_into_a_group_that_changed_under_it() {
         vec![Some(vm("running", &vanished.tags))],
     );
     vanished.plane.lock().vanish_after_first_lookup = true;
-    assert_eq!(vanished.client(false).reconcile_worker(&vanished.request), Ok(None));
-    vanished.plane.script(Some(owned(&vanished)), None, vec![None]);
-    vanished.plane.lock().vanish_after_first_lookup = true;
-    assert_eq!(vanished.client(false).inspect_worker(&vanished.persisted()), Ok(None));
+    assert_eq!(
+        vanished.client(false, None).reconcile_worker(&vanished.request),
+        Ok(None)
+    );
     vanished.plane.script(Some(owned(&vanished)), None, vec![None]);
     vanished.plane.lock().vanish_after_first_lookup = true;
     assert_eq!(
-        vanished.client(false).ensure_worker(&vanished.request),
+        vanished.client(false, None).inspect_worker(&vanished.persisted()),
+        Ok(None)
+    );
+    vanished.plane.script(Some(owned(&vanished)), None, vec![None]);
+    vanished.plane.lock().vanish_after_first_lookup = true;
+    assert_eq!(
+        vanished.client(false, None).ensure_worker(&vanished.request),
         Err(AzureError::CreationUnresolved),
         "a lost worker during ensure is not an absence"
     );
@@ -190,7 +208,7 @@ fn ensure_never_deploys_into_a_group_that_changed_under_it() {
     foreign_vm.tags.insert(TAG_JOB.into(), CloudJobId::new().to_string());
     vm_appeared.plane.lock().vm_states = vec![None, Some(foreign_vm)];
     assert_eq!(
-        vm_appeared.client(false).ensure_worker(&vm_appeared.request),
+        vm_appeared.client(false, None).ensure_worker(&vm_appeared.request),
         Err(MISMATCH)
     );
     assert!(
@@ -208,7 +226,7 @@ fn ensure_never_deploys_into_a_group_that_changed_under_it() {
         provisioning_state: "Deleting".into(),
         ..owned(&failed_then_deleting)
     });
-    assert_eq!(failed_then_deleting.reconcile().lifecycle, Lifecycle::Deleting);
+    assert_eq!(failed_then_deleting.reconcile(None).lifecycle, Lifecycle::Deleting);
 }
 
 #[test]
@@ -222,7 +240,7 @@ fn ensure_never_deploys_into_a_group_changed_right_after_creation() {
     retagged.plane.script(Some(deleting), None, vec![None]);
     retagged.plane.lock().group_after_first_lookup = Some(foreign);
     assert_eq!(
-        retagged.client(false).reconcile_worker(&retagged.request),
+        retagged.client(false, None).reconcile_worker(&retagged.request),
         Err(MISMATCH)
     );
     // A group retagged or deleting right after creation is never deployed into either.
@@ -233,7 +251,7 @@ fn ensure_never_deploys_into_a_group_changed_right_after_creation() {
         tags: other_tags,
         ..owned(&stolen)
     });
-    assert_eq!(stolen.client(true).ensure_worker(&stolen.request), Err(MISMATCH));
+    assert_eq!(stolen.client(true, None).ensure_worker(&stolen.request), Err(MISMATCH));
     assert!(
         !stolen
             .plane
@@ -245,14 +263,17 @@ fn ensure_never_deploys_into_a_group_changed_right_after_creation() {
     let sync_failed = Scenario::new();
     sync_failed.plane.lock().submitted_state = Some("Failed");
     let failed = sync_failed
-        .client(true)
+        .client(true, None)
         .ensure_worker(&sync_failed.request)
         .expect("created");
     assert!(matches!(failed, InteractiveWorkerEnsure::Created(_)));
     assert_eq!(failed.status().lifecycle, Lifecycle::Failed);
     let sync_ok = Scenario::new();
     sync_ok.plane.lock().submitted_state = Some("Succeeded");
-    let created = sync_ok.client(true).ensure_worker(&sync_ok.request).expect("created");
+    let created = sync_ok
+        .client(true, None)
+        .ensure_worker(&sync_ok.request)
+        .expect("created");
     assert_eq!(
         created.status().lifecycle,
         Lifecycle::Provisioning,
@@ -262,7 +283,7 @@ fn ensure_never_deploys_into_a_group_changed_right_after_creation() {
     let t = sync_failed;
     t.plane
         .script(Some(group_info(&t.group, t.tags.clone(), "Deleting")), None, vec![None]);
-    let deleting = t.client(false).ensure_worker(&t.request).expect("observed");
+    let deleting = t.client(false, None).ensure_worker(&t.request).expect("observed");
     assert_eq!(deleting.status().lifecycle, Lifecycle::Deleting);
     assert!(t.plane.mutations().is_empty());
 }

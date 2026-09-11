@@ -1,7 +1,8 @@
 use super::super::{
     AzureAccessToken, AzureArmHttp, AzureCliCredential, AzureDeploymentState, AzureError, AzureLongRunningState,
-    AzureManagementTransport, REQUEST_TIMEOUT, valid_vm_resource_id,
+    AzureManagementTransport, AzureRunCommand, REQUEST_TIMEOUT, valid_vm_resource_id,
 };
+use super::OTHER_SUB as FOREIGN_SUB;
 use super::{GROUP, OTHER_SUB, SUB};
 use std::{
     collections::BTreeMap,
@@ -24,6 +25,7 @@ struct Expectation {
     status: u16,
     body: String,
     request_body: Option<serde_json::Value>,
+    header: Option<(&'static str, String)>,
 }
 
 fn expect(
@@ -39,7 +41,13 @@ fn expect(
         status,
         body: body.to_string(),
         request_body,
+        header: None,
     }
+}
+
+fn with_header(mut expectation: Expectation, name: &'static str, value: String) -> Expectation {
+    expectation.header = Some((name, value));
+    expectation
 }
 
 fn http(expectations: Vec<Expectation>) -> (AzureArmHttp, Arc<AtomicUsize>) {
@@ -66,10 +74,11 @@ fn http(expectations: Vec<Expectation>) -> (AzureArmHttp, Arc<AtomicUsize>) {
                 ),
                 None => assert!(payload.is_empty(), "unexpected body on call {index}"),
             }
-            Ok(Response::builder()
-                .status(expectation.status)
-                .body(Body::builder().data(expectation.body))
-                .expect("response"))
+            let mut response = Response::builder().status(expectation.status);
+            if let Some((name, value)) = expectation.header {
+                response = response.header(name, value);
+            }
+            Ok(response.body(Body::builder().data(expectation.body)).expect("response"))
         })
         .build()
         .new_agent();
@@ -523,4 +532,296 @@ fn credential_failures_stop_before_any_request_and_production_agent_is_pinned() 
     assert_eq!(production.config().max_redirects(), 0);
     assert_eq!(production.config().timeouts().global, Some(REQUEST_TIMEOUT));
     assert!(!production.config().http_status_as_error());
+}
+
+fn run_command_body() -> serde_json::Value {
+    serde_json::json!({"commandId": "RunShellScript", "script": [AzureRunCommand::HostKey.script()]})
+}
+
+fn operation_url() -> String {
+    format!(
+        "https://management.azure.com/subscriptions/{SUB}/providers/Microsoft.Compute/locations/northeurope/operations/op-1?api-version=2024-03-01"
+    )
+}
+
+#[test]
+fn deallocate_uses_the_exact_path_and_maps_long_running_states() {
+    let (transport, _) = http(vec![
+        expect("POST", vm_url("/deallocate"), 202, "", None),
+        expect("POST", vm_url("/deallocate"), 200, "", None),
+        expect("POST", vm_url("/deallocate"), 409, "private-conflict", None),
+        expect("POST", vm_url("/deallocate"), 404, "", None),
+    ]);
+    assert_eq!(
+        transport.deallocate_vm(GROUP, "worker"),
+        Ok(Some(AzureLongRunningState::Accepted))
+    );
+    assert_eq!(
+        transport.deallocate_vm(GROUP, "worker"),
+        Ok(Some(AzureLongRunningState::Completed))
+    );
+    let conflict = transport.deallocate_vm(GROUP, "worker");
+    assert_eq!(
+        conflict,
+        Err(AzureError::UnexpectedStatus {
+            operation: "virtual machine deallocation",
+            status: 409
+        })
+    );
+    assert!(!format!("{conflict:?}").contains("private-"));
+    assert_eq!(transport.deallocate_vm(GROUP, "worker"), Ok(None), "absent VM");
+    for (group, name) in [("bad/group", "worker"), (GROUP, ""), (GROUP, "name with space")] {
+        assert_eq!(
+            transport.deallocate_vm(group, name),
+            Err(AzureError::ResourceIdentityMismatch)
+        );
+        assert_eq!(
+            transport.run_command(group, name, AzureRunCommand::HostKey),
+            Err(AzureError::ResourceIdentityMismatch)
+        );
+    }
+}
+
+#[test]
+fn run_command_polls_only_owned_operations_and_extracts_stdout() {
+    let operation = operation_url();
+    let done = r#"{"status":"Succeeded","properties":{"output":{"value":[{"code":"ProvisioningState/succeeded","message":"Enable succeeded: \n[stdout]\nssh-ed25519 AAAAC3 host\n\n[stderr]\n"}]}}}"#;
+    let (transport, _) = http(vec![
+        with_header(
+            expect("POST", vm_url("/runCommand"), 202, "", Some(run_command_body())),
+            "azure-asyncoperation",
+            operation.clone(),
+        ),
+        expect("GET", operation.clone(), 200, r#"{"status":"InProgress"}"#, None),
+        with_header(
+            expect("GET", operation.clone(), 429, "throttled", None),
+            "retry-after",
+            "2".into(),
+        ),
+        expect("GET", operation.clone(), 200, done, None),
+        expect(
+            "POST",
+            vm_url("/runCommand"),
+            200,
+            r#"{"value":[{"code":"ProvisioningState/succeeded","message":"[stdout]\nsync output\n[stderr]\n"}]}"#,
+            Some(run_command_body()),
+        ),
+        expect("POST", vm_url("/runCommand"), 404, "", Some(run_command_body())),
+        with_header(
+            expect("POST", vm_url("/runCommand"), 202, "", Some(run_command_body())),
+            "azure-asyncoperation",
+            format!("https://management.azure.com/subscriptions/{FOREIGN_SUB}/operations/op-2"),
+        ),
+        with_header(
+            expect("POST", vm_url("/runCommand"), 202, "", Some(run_command_body())),
+            "location",
+            operation.clone(),
+        ),
+        with_header(
+            expect("POST", vm_url("/runCommand"), 202, "", Some(run_command_body())),
+            "azure-asyncoperation",
+            operation.clone(),
+        ),
+        expect(
+            "GET",
+            operation,
+            200,
+            r#"{"status":"Failed","error":{"message":"private-detail"}}"#,
+            None,
+        ),
+    ]);
+    let run = || transport.run_command(GROUP, "worker", AzureRunCommand::HostKey);
+    assert_eq!(
+        run(),
+        Ok(Some("ssh-ed25519 AAAAC3 host".into())),
+        "a throttled poll with Retry-After is waited out, not failed"
+    );
+    assert_eq!(run(), Ok(Some("sync output".into())));
+    assert_eq!(run(), Ok(None), "absent VM");
+    let foreign = run();
+    assert_eq!(
+        foreign,
+        Err(AzureError::InvalidResponse {
+            operation: "virtual machine run command"
+        }),
+        "a poll URL outside this subscription is never followed"
+    );
+    assert_eq!(
+        run(),
+        Err(AzureError::InvalidResponse {
+            operation: "virtual machine run command"
+        }),
+        "a Location-only answer uses a different protocol and is refused"
+    );
+    let failed = run();
+    assert_eq!(
+        failed,
+        Err(AzureError::RequestFailed {
+            operation: "virtual machine run command"
+        })
+    );
+    assert!(!format!("{failed:?}").contains("private-"));
+}
+
+#[test]
+fn run_command_refuses_operation_urls_that_could_escape_the_subscription() {
+    let escapes = [
+        format!("https://management.azure.com/subscriptions/{SUB}/../../subscriptions/{FOREIGN_SUB}/operations/op"),
+        format!("https://management.azure.com/subscriptions/{SUB}/%2e%2e/{FOREIGN_SUB}/operations/op"),
+        format!("https://management.azure.com/subscriptions/{SUB}/operations\\..\\{FOREIGN_SUB}/op"),
+        format!("https://management.azure.com/subscriptions/{SUB}//operations/op"),
+        format!(
+            "https://management.azure.com/subscriptions/{SUB}/operations/op?api-version=2024-03-01&x=/../{FOREIGN_SUB}"
+        ),
+        format!("https://management.azure.com/subscriptions/{SUB}/operations/op#frag"),
+        format!("https://management.azure.com/subscriptions/{SUB}/operations/op@evil.example/x"),
+        format!("HTTPS://management.azure.com/subscriptions/{SUB}/operations/op"),
+    ];
+    let (transport, calls) = http(
+        escapes
+            .iter()
+            .map(|poll| {
+                with_header(
+                    expect("POST", vm_url("/runCommand"), 202, "", Some(run_command_body())),
+                    "azure-asyncoperation",
+                    poll.clone(),
+                )
+            })
+            .collect(),
+    );
+    for poll in &escapes {
+        assert_eq!(
+            transport.run_command(GROUP, "worker", AzureRunCommand::HostKey),
+            Err(AzureError::InvalidResponse {
+                operation: "virtual machine run command"
+            }),
+            "{poll}"
+        );
+    }
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        escapes.len(),
+        "no escape candidate was ever polled"
+    );
+}
+
+#[test]
+fn run_command_output_is_taken_only_from_a_clean_success() {
+    let cases: [(&str, Result<Option<String>, AzureError>); 8] = [
+        (
+            r#"{"value":[{"code":"ProvisioningState/succeeded","message":"Enable succeeded: \n[stdout]\nssh-ed25519 AAAAC3 host"}]}"#,
+            Err(AzureError::InvalidResponse {
+                operation: "virtual machine run command",
+            }),
+        ),
+        (
+            r#"{"value":[{"code":"ComponentStatus/StdOut/succeeded","message":"ssh-ed25519 AAAAC3 host\n"},{"code":"ComponentStatus/StdErr/succeeded","message":""}]}"#,
+            Ok(Some("ssh-ed25519 AAAAC3 host".into())),
+        ),
+        (
+            r#"{"value":[{"code":"ProvisioningState/succeeded","message":"[stdout]\nok\n[stderr]\ncat: no such file"}]}"#,
+            Err(AzureError::RequestFailed {
+                operation: "virtual machine run command",
+            }),
+        ),
+        (
+            r#"{"value":[{"code":"ComponentStatus/StdOut/succeeded","message":"ok"},{"code":"ComponentStatus/StdErr/succeeded","message":"warning"}]}"#,
+            Err(AzureError::RequestFailed {
+                operation: "virtual machine run command",
+            }),
+        ),
+        (
+            r#"{"value":[{"code":"ComponentStatus/StdOut/succeeded","message":"ok"},{"code":"ProvisioningState/failed","message":"boom"}]}"#,
+            Err(AzureError::RequestFailed {
+                operation: "virtual machine run command",
+            }),
+        ),
+        (
+            r#"{"value":[{"code":"ProvisioningState/succeeded","message":"[stdout]\none\n[stderr]\n"},{"code":"ComponentStatus/StdOut/succeeded","message":"two"}]}"#,
+            Err(AzureError::InvalidResponse {
+                operation: "virtual machine run command",
+            }),
+        ),
+        (
+            r#"{"value":[{"code":"ComponentStatus/StdErr/succeeded","message":""}]}"#,
+            Err(AzureError::InvalidResponse {
+                operation: "virtual machine run command",
+            }),
+        ),
+        (
+            r#"{"value":[{"code":"Something/Else/succeeded","message":"ok"}]}"#,
+            Err(AzureError::InvalidResponse {
+                operation: "virtual machine run command",
+            }),
+        ),
+    ];
+    let (transport, _) = http(
+        cases
+            .iter()
+            .map(|(body, _)| expect("POST", vm_url("/runCommand"), 200, body, Some(run_command_body())))
+            .collect(),
+    );
+    for (body, expected) in &cases {
+        assert_eq!(
+            &transport.run_command(GROUP, "worker", AzureRunCommand::HostKey),
+            expected,
+            "{body}"
+        );
+    }
+}
+
+#[test]
+fn a_slow_credential_refresh_consumes_the_poll_budget_before_any_request() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&calls);
+    let agent = ureq::Agent::config_builder()
+        .middleware(move |_: Request<SendBody>, _: MiddlewareNext| {
+            count.fetch_add(1, Ordering::SeqCst);
+            panic!("no request may be issued once the budget is spent");
+        })
+        .build()
+        .new_agent();
+    let slow = || {
+        std::thread::sleep(Duration::from_millis(30));
+        AzureAccessToken::new("synthetic-token-value", Duration::from_secs(3_600))
+    };
+    let transport = AzureArmHttp::with_agent(agent, SUB, slow).expect("transport");
+    assert_eq!(
+        transport.get_vm_within(GROUP, "worker", Duration::from_millis(10)),
+        Err(AzureError::OperationTimedOut {
+            operation: "virtual machine lookup"
+        })
+    );
+    assert_eq!(
+        transport.get_resource_group_within(GROUP, Duration::from_millis(10)),
+        Err(AzureError::OperationTimedOut {
+            operation: "resource group lookup"
+        })
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn run_command_polling_is_bounded() {
+    let operation = operation_url();
+    let (transport, calls) = http(
+        std::iter::once(with_header(
+            expect("POST", vm_url("/runCommand"), 202, "", Some(run_command_body())),
+            "azure-asyncoperation",
+            operation.clone(),
+        ))
+        .chain((0..9).map(|_| expect("GET", operation.clone(), 200, r#"{"status":"InProgress"}"#, None)))
+        .collect(),
+    );
+    assert_eq!(
+        transport.run_command(GROUP, "worker", AzureRunCommand::HostKey),
+        Err(AzureError::OperationTimedOut {
+            operation: "virtual machine run command"
+        })
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        10,
+        "one submission plus nine bounded polls"
+    );
 }

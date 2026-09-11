@@ -1,7 +1,7 @@
 pub(super) use super::super::{
     AzureClient, AzureDeploymentState, AzureError, AzureGroupInfo, AzureLongRunningState, AzureManagementTransport,
-    AzureVmView,
-    deployment::{DEPLOYMENT_NAME, TAG_CLIENT_KEY_DIGEST, TAG_JOB, worker_tags},
+    AzureRunCommand, AzureVmView, AzureWorker, SSH_USERNAME,
+    deployment::{DEPLOYMENT_NAME, SSH_PORT, TAG_CLIENT_KEY_DIGEST, TAG_JOB, worker_tags},
     resource_group_name,
 };
 pub(super) use super::{OTHER_SUB, SUB, ed25519_key, profile, target};
@@ -16,6 +16,7 @@ pub(super) use crate::cloud_run::{
 pub(super) use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 /// Every management call the provider makes, in order, with its arguments.
@@ -27,6 +28,14 @@ pub(super) enum Call {
     PutDeployment(String, String, serde_json::Value),
     GetDeployment(String),
     GetVm(String),
+    Deallocate(String),
+    Run(String, AzureRunCommand),
+}
+
+/// What a concurrent actor did to the group while the provider was waiting.
+pub(super) enum GroupChange {
+    Replaced(AzureGroupInfo),
+    Deleted,
 }
 
 #[derive(Default)]
@@ -43,6 +52,11 @@ pub(super) struct Plane {
     pub(super) deployment_on_second_read: Option<AzureDeploymentState>,
     pub(super) vanish_after_first_lookup: bool,
     pub(super) delete_status: Option<u16>,
+    pub(super) deallocate: Option<Result<Option<AzureLongRunningState>, AzureError>>,
+    pub(super) run_output: Option<String>,
+    /// Replaces the group once the deallocation was posted, as a concurrent retag or
+    /// deletion during the wait would.
+    pub(super) group_after_deallocate: Option<GroupChange>,
     pub(super) calls: Vec<Call>,
 }
 
@@ -169,6 +183,43 @@ impl AzureManagementTransport for Fake {
             plane.vm_states.first().cloned().flatten()
         })
     }
+
+    fn get_resource_group_within(&self, name: &str, budget: Duration) -> Result<Option<AzureGroupInfo>, AzureError> {
+        assert!(
+            !budget.is_zero() && budget <= Duration::from_secs(300),
+            "a poll carries what is left of the stop bound: {budget:?}"
+        );
+        self.get_resource_group(name)
+    }
+
+    fn get_vm_within(&self, group: &str, name: &str, budget: Duration) -> Result<Option<AzureVmView>, AzureError> {
+        assert!(
+            !budget.is_zero() && budget <= Duration::from_secs(300),
+            "a poll carries what is left of the stop bound: {budget:?}"
+        );
+        self.get_vm(group, name)
+    }
+
+    fn deallocate_vm(&self, group: &str, _name: &str) -> Result<Option<AzureLongRunningState>, AzureError> {
+        let mut plane = self.lock();
+        plane.calls.push(Call::Deallocate(group.into()));
+        if let Some(change) = plane.group_after_deallocate.take() {
+            plane.group = match change {
+                GroupChange::Replaced(group) => Some(group),
+                GroupChange::Deleted => None,
+            };
+        }
+        plane
+            .deallocate
+            .clone()
+            .unwrap_or(Ok(Some(AzureLongRunningState::Accepted)))
+    }
+
+    fn run_command(&self, group: &str, _name: &str, command: AzureRunCommand) -> Result<Option<String>, AzureError> {
+        let mut plane = self.lock();
+        plane.calls.push(Call::Run(group.into(), command));
+        Ok(plane.run_output.clone())
+    }
 }
 
 pub(super) fn group_info(name: &str, tags: BTreeMap<String, String>, state: &str) -> AzureGroupInfo {
@@ -226,8 +277,9 @@ impl Scenario {
         }
     }
 
-    /// A client whose fence answers `claim` for exactly this request.
-    pub(super) fn client(&self, claim: bool) -> AzureClient {
+    /// A client whose fence answers `claim` and whose host-key source answers `host_key`
+    /// only when asked about this exact worker and client key.
+    pub(super) fn client(&self, claim: bool, host_key: Option<String>) -> AzureClient {
         let (expected, group) = (self.persisted(), self.group.clone());
         let fence = move |w: CloudWorkflowId, j: CloudJobId, t: &WorkerTarget, g: &str| {
             assert_eq!(
@@ -241,7 +293,15 @@ impl Scenario {
             );
             Ok(claim)
         };
-        AzureClient::with_transport(profile(), self.plane.clone(), fence).expect("client")
+        let (expected, group) = (self.persisted(), self.group.clone());
+        let keys = move |worker: &AzureWorker, _: &str, key: &str| {
+            assert_eq!(
+                (worker.resource_group.as_str(), key),
+                (group.as_str(), expected.ssh_public_key.as_str())
+            );
+            host_key.clone()
+        };
+        AzureClient::with_transport(profile(), self.plane.clone(), fence, keys).expect("client")
     }
 
     pub(super) fn persisted(&self) -> InteractiveWorker {
@@ -258,12 +318,16 @@ impl Scenario {
         }
     }
 
-    pub(super) fn reconcile(&self) -> InteractiveWorkerStatus {
-        self.client(false)
+    pub(super) fn reconcile(&self, host_key: Option<String>) -> InteractiveWorkerStatus {
+        self.client(false, host_key)
             .reconcile_worker(&self.request)
             .expect("reconcile")
             .expect("present")
     }
+}
+
+pub(super) fn host_key() -> String {
+    ed25519_key(9, "")
 }
 
 pub(super) fn owned(s: &Scenario) -> AzureGroupInfo {
@@ -274,3 +338,4 @@ pub(super) const MISMATCH: AzureError = AzureError::ResourceIdentityMismatch;
 
 mod creation;
 mod observation;
+mod running;

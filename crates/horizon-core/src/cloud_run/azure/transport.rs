@@ -6,7 +6,11 @@ use super::{
     REQUEST_TIMEOUT, RESOURCE_GROUP_API_VERSION, RESPONSE_LIMIT_BYTES, valid_resource_group_name,
     valid_subscription_id,
 };
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Duration};
+
+mod run_command;
+
+pub use run_command::AzureRunCommand;
 
 /// Resource group as observed from ARM.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -59,6 +63,10 @@ pub trait AzureManagementTransport: Send + Sync {
     fn subscription_id(&self) -> &str;
     /// # Errors
     fn get_resource_group(&self, name: &str) -> Result<Option<AzureGroupInfo>, AzureError>;
+    /// [`Self::get_resource_group`] for a poll under an absolute deadline: the whole
+    /// request must finish within `budget`, which is never zero.
+    /// # Errors
+    fn get_resource_group_within(&self, name: &str, budget: Duration) -> Result<Option<AzureGroupInfo>, AzureError>;
     /// # Errors
     fn create_resource_group(
         &self,
@@ -80,6 +88,75 @@ pub trait AzureManagementTransport: Send + Sync {
     fn get_deployment(&self, group: &str, name: &str) -> Result<Option<AzureDeploymentState>, AzureError>;
     /// # Errors
     fn get_vm(&self, group: &str, name: &str) -> Result<Option<AzureVmView>, AzureError>;
+    /// [`Self::get_vm`] for a poll under an absolute deadline: the whole request must
+    /// finish within `budget`, which is never zero.
+    /// # Errors
+    fn get_vm_within(&self, group: &str, name: &str, budget: Duration) -> Result<Option<AzureVmView>, AzureError>;
+    /// Release the VM's compute while retaining its disks (`PowerState/deallocated`);
+    /// `None` when the VM is absent.
+    /// # Errors
+    fn deallocate_vm(&self, group: &str, name: &str) -> Result<Option<AzureLongRunningState>, AzureError>;
+    /// Run one of the closed set of commands inside the VM through the ARM run-command
+    /// channel and return its standard output, or `None` when the VM is absent.
+    /// # Errors
+    fn run_command(&self, group: &str, name: &str, command: AzureRunCommand) -> Result<Option<String>, AzureError>;
+}
+
+impl<T: AzureManagementTransport + ?Sized> AzureManagementTransport for std::sync::Arc<T> {
+    fn subscription_id(&self) -> &str {
+        (**self).subscription_id()
+    }
+
+    fn get_resource_group(&self, name: &str) -> Result<Option<AzureGroupInfo>, AzureError> {
+        (**self).get_resource_group(name)
+    }
+
+    fn get_resource_group_within(&self, name: &str, budget: Duration) -> Result<Option<AzureGroupInfo>, AzureError> {
+        (**self).get_resource_group_within(name, budget)
+    }
+
+    fn create_resource_group(
+        &self,
+        name: &str,
+        location: &str,
+        tags: &BTreeMap<String, String>,
+    ) -> Result<AzureGroupInfo, AzureError> {
+        (**self).create_resource_group(name, location, tags)
+    }
+
+    fn delete_resource_group(&self, name: &str) -> Result<AzureLongRunningState, AzureError> {
+        (**self).delete_resource_group(name)
+    }
+
+    fn put_deployment(
+        &self,
+        group: &str,
+        name: &str,
+        template: &serde_json::Value,
+        parameters: &serde_json::Value,
+    ) -> Result<AzureDeploymentState, AzureError> {
+        (**self).put_deployment(group, name, template, parameters)
+    }
+
+    fn get_deployment(&self, group: &str, name: &str) -> Result<Option<AzureDeploymentState>, AzureError> {
+        (**self).get_deployment(group, name)
+    }
+
+    fn get_vm(&self, group: &str, name: &str) -> Result<Option<AzureVmView>, AzureError> {
+        (**self).get_vm(group, name)
+    }
+
+    fn get_vm_within(&self, group: &str, name: &str, budget: Duration) -> Result<Option<AzureVmView>, AzureError> {
+        (**self).get_vm_within(group, name, budget)
+    }
+
+    fn deallocate_vm(&self, group: &str, name: &str) -> Result<Option<AzureLongRunningState>, AzureError> {
+        (**self).deallocate_vm(group, name)
+    }
+
+    fn run_command(&self, group: &str, name: &str, command: AzureRunCommand) -> Result<Option<String>, AzureError> {
+        (**self).run_command(group, name, command)
+    }
 }
 
 /// HTTPS transport pinned to the public Azure Resource Manager endpoint.
@@ -161,17 +238,48 @@ impl AzureArmHttp {
     }
 
     fn get_json(&self, url: &str, operation: &'static str) -> Result<Option<serde_json::Value>, AzureError> {
-        let authorization = self.authorization()?;
-        let response = self
-            .agent
-            .get(url)
-            .header("Authorization", &authorization)
-            .call()
-            .map_err(|_| AzureError::RequestFailed { operation })?;
+        self.get_json_within(url, operation, REQUEST_TIMEOUT)
+    }
+
+    /// A GET whose whole exchange is capped at `budget` (never above the request
+    /// timeout), so a poll loop can hand each request only what is left of its bound.
+    pub(super) fn get_json_within(
+        &self,
+        url: &str,
+        operation: &'static str,
+        budget: Duration,
+    ) -> Result<Option<serde_json::Value>, AzureError> {
+        let response = self.get_within(url, operation, budget)?;
         if response.status().as_u16() == 404 {
             return Ok(None);
         }
         decode_json(response, &[200], operation).map(Some)
+    }
+
+    /// The raw GET behind [`Self::get_json_within`], for callers that read headers.
+    /// Obtaining the token (which may refresh through the Azure CLI) counts against the
+    /// budget too: the HTTP exchange gets only what that step left, and none at all once
+    /// the budget is spent.
+    pub(super) fn get_within(
+        &self,
+        url: &str,
+        operation: &'static str,
+        budget: Duration,
+    ) -> Result<ureq::http::Response<ureq::Body>, AzureError> {
+        let started = std::time::Instant::now();
+        let authorization = self.authorization()?;
+        let budget = budget.saturating_sub(started.elapsed());
+        if budget.is_zero() {
+            return Err(AzureError::OperationTimedOut { operation });
+        }
+        self.agent
+            .get(url)
+            .config()
+            .timeout_global(Some(budget.min(REQUEST_TIMEOUT)))
+            .build()
+            .header("Authorization", &authorization)
+            .call()
+            .map_err(|_| AzureError::RequestFailed { operation })
     }
 
     /// Send a mutating request. Long-running operations answer with a status and an
@@ -269,6 +377,12 @@ fn decode_json(
         .map_err(|_| AzureError::InvalidResponse { operation })
 }
 
+/// Time left before an absolute deadline, or `None` once it has passed.
+pub(super) fn remaining(deadline: std::time::Instant) -> Option<Duration> {
+    let left = deadline.saturating_duration_since(std::time::Instant::now());
+    (!left.is_zero()).then_some(left)
+}
+
 fn long_running(status: u16) -> AzureLongRunningState {
     if status == 202 {
         AzureLongRunningState::Accepted
@@ -342,8 +456,12 @@ impl AzureManagementTransport for AzureArmHttp {
     }
 
     fn get_resource_group(&self, name: &str) -> Result<Option<AzureGroupInfo>, AzureError> {
+        self.get_resource_group_within(name, REQUEST_TIMEOUT)
+    }
+
+    fn get_resource_group_within(&self, name: &str, budget: Duration) -> Result<Option<AzureGroupInfo>, AzureError> {
         let operation = "resource group lookup";
-        self.get_json(&self.group_url(name, RESOURCE_GROUP_API_VERSION)?, operation)?
+        self.get_json_within(&self.group_url(name, RESOURCE_GROUP_API_VERSION)?, operation, budget)?
             .map(|value| group_info(&value, &self.subscription_id, name, operation))
             .transpose()
     }
@@ -426,6 +544,10 @@ impl AzureManagementTransport for AzureArmHttp {
     }
 
     fn get_vm(&self, group: &str, name: &str) -> Result<Option<AzureVmView>, AzureError> {
+        self.get_vm_within(group, name, REQUEST_TIMEOUT)
+    }
+
+    fn get_vm_within(&self, group: &str, name: &str, budget: Duration) -> Result<Option<AzureVmView>, AzureError> {
         let operation = "virtual machine lookup";
         let url = self.resource_url(
             group,
@@ -434,7 +556,7 @@ impl AzureManagementTransport for AzureArmHttp {
             COMPUTE_API_VERSION,
             "",
         )?;
-        let Some(value) = self.get_json(&format!("{url}&$expand=instanceView"), operation)? else {
+        let Some(value) = self.get_json_within(&format!("{url}&$expand=instanceView"), operation, budget)? else {
             return Ok(None);
         };
         let id = text(&value, "/id").ok_or(AzureError::InvalidResponse { operation })?;
@@ -460,5 +582,25 @@ impl AzureManagementTransport for AzureArmHttp {
             power_state,
             tags: tags(&value),
         }))
+    }
+
+    fn deallocate_vm(&self, group: &str, name: &str) -> Result<Option<AzureLongRunningState>, AzureError> {
+        let operation = "virtual machine deallocation";
+        let url = self.resource_url(
+            group,
+            "Microsoft.Compute/virtualMachines",
+            name,
+            COMPUTE_API_VERSION,
+            "/deallocate",
+        )?;
+        match self.send_json("POST", &url, None, &[200, 202], false, operation) {
+            Ok((status, _)) => Ok(Some(long_running(status))),
+            Err(AzureError::UnexpectedStatus { status: 404, .. }) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn run_command(&self, group: &str, name: &str, command: AzureRunCommand) -> Result<Option<String>, AzureError> {
+        self.submit_run_command(group, name, command)
     }
 }
