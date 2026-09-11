@@ -664,6 +664,32 @@ fn run_command_polls_only_owned_operations_and_extracts_stdout() {
 }
 
 #[test]
+fn run_command_follows_arm_signed_operation_urls() {
+    // Live ARM answers with a signed status URL: a `c=` certificate parameter of about
+    // 3 KB plus `p`, `t`, `s` and `h` tokens, all base64url. The adapter's earlier 2 KB
+    // cap refused it, which kept a healthy worker in Provisioning forever.
+    let certificate: String = std::iter::repeat_n("MIIHlTCCBn2gAwIBAgIRAKGW41M2RjI0CVOmoqSB-m4_", 72).collect();
+    let operation = format!(
+        "https://management.azure.com/subscriptions/{SUB}/providers/Microsoft.Compute/locations/northeurope/operations/7bfb09fc-d6d3-4e6a-893f-a5d7501ed7e0?p=628ba44e-30c2-4d77-8ae4-98243359e7d1&api-version=2024-03-01&t=639247605279933261&c={certificate}&s=bddvIFxYRvg_1lwZBp8TNWzEd77WEAYqY8alVRoFCieUG17fuQCEe-Tut&h=X-yOGgLsaSE9H9QW_nVQonYY3eX6gk3VysBsfVEleZA"
+    );
+    assert!(operation.len() > 3_000, "realistic length: {}", operation.len());
+    let done = r#"{"status":"Succeeded","properties":{"output":{"value":[{"code":"ProvisioningState/succeeded","message":"Enable succeeded: \n[stdout]\nssh-ed25519 AAAAC3 host\n\n[stderr]\n"}]}}}"#;
+    let (transport, calls) = http(vec![
+        with_header(
+            expect("POST", vm_url("/runCommand"), 202, "", Some(run_command_body())),
+            "azure-asyncoperation",
+            operation.clone(),
+        ),
+        expect("GET", operation.clone(), 200, done, None),
+    ]);
+    assert_eq!(
+        transport.run_command(GROUP, "worker", AzureRunCommand::HostKey),
+        Ok(Some("ssh-ed25519 AAAAC3 host".into()))
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
 fn run_command_refuses_operation_urls_that_could_escape_the_subscription() {
     let escapes = [
         format!("https://management.azure.com/subscriptions/{SUB}/../../subscriptions/{FOREIGN_SUB}/operations/op"),
