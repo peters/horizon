@@ -45,10 +45,10 @@ impl Fixture {
 
     fn provider(&self, transport: FakeTransport) -> RunPodInteractiveWorkerProvider {
         RunPodInteractiveWorkerProvider::new(
-            RunPodClient {
-                transport: Box::new(transport),
-                creation_fence: Box::new(CloudWorkflowStore::open_path(self.store.path()).expect("reopen fence")),
-            },
+            RunPodClient::with_transport_and_fence(
+                transport,
+                CloudWorkflowStore::open_path(self.store.path()).expect("reopen fence"),
+            ),
             profile(),
             FakeHostKeySource::new(Some(ed25519_key(73))),
         )

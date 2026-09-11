@@ -378,9 +378,17 @@ impl RunPodClient {
     }
     #[cfg(test)]
     fn with_transport(transport: impl Transport + 'static) -> Self {
+        Self::with_transport_and_fence(transport, |_, _, _: &WorkerTarget, _: &str| Ok(true))
+    }
+
+    #[cfg(test)]
+    fn with_transport_and_fence(
+        transport: impl Transport + 'static,
+        creation_fence: impl RunPodCreationFence + 'static,
+    ) -> Self {
         Self {
             transport: Box::new(transport),
-            creation_fence: Box::new(|_, _, _: &WorkerTarget, _: &str| Ok(true)),
+            creation_fence: Box::new(creation_fence),
         }
     }
 }
