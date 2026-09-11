@@ -51,7 +51,8 @@ pub enum RemoteCredentialInstallation {
 /// delivery. No keys, allocations, tasks, descriptors or saved state are created.
 /// Existing credentials are never replaced; reconnect never calls this implicitly.
 ///
-/// Run off the render thread. The 15-second pipe deadline excludes spawn/reap.
+/// Run off the render thread. Stdin admission is capped to 15 seconds or the
+/// remaining worker lease, including spawn elapsed time. Spawn/reap may still block.
 /// Admission is point-in-time, not an atomic Stop fence or continuous revocation.
 /// Failure after transport starts can leave the token installed or a private pending
 /// file; do not automatically retry, rotate, repair, restart or terminate anything.
@@ -130,13 +131,7 @@ fn validate_delivery<'a>(
     recovered: &'a crate::remote_workspace_recovery::RecoveredRemoteWorkspace,
 ) -> Result<&'a crate::cloud_run::interactive_worker::InteractiveWorkerSshEndpoint, RemoteCredentialDeliveryError> {
     let endpoint = crate::remote_worker_inspection::validate_current(store, recovered, None)?;
-    if let Some(lease) = recovered
-        .observation()
-        .and_then(|status| status.worker.lifetime.as_time_limited())
-    {
-        let deadline =
-            time::OffsetDateTime::parse(&lease.terminate_after, &time::format_description::well_known::Rfc3339)
-                .map_err(|_| RemoteCredentialDeliveryError::ExpiredWorker)?;
+    if let Some(deadline) = lease_deadline(recovered)? {
         // Observation tolerates provider clock skew; secret release must not use
         // that tolerance to extend the worker's explicitly recorded deadline.
         if deadline <= time::OffsetDateTime::now_utc() {
@@ -144,6 +139,20 @@ fn validate_delivery<'a>(
         }
     }
     Ok(endpoint)
+}
+
+#[cfg(target_os = "linux")]
+fn lease_deadline(
+    recovered: &crate::remote_workspace_recovery::RecoveredRemoteWorkspace,
+) -> Result<Option<time::OffsetDateTime>, RemoteCredentialDeliveryError> {
+    recovered
+        .observation()
+        .and_then(|status| status.worker.lifetime.as_time_limited())
+        .map(|lease| {
+            time::OffsetDateTime::parse(&lease.terminate_after, &time::format_description::well_known::Rfc3339)
+                .map_err(|_| RemoteCredentialDeliveryError::ExpiredWorker)
+        })
+        .transpose()
 }
 
 /// Diagnostics never contain the token, remote output, command or private paths.

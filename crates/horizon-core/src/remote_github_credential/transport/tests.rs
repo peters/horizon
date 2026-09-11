@@ -86,3 +86,92 @@ fn fixed_command_preserves_pinned_ssh_isolation_and_carries_no_token_metadata() 
     );
     assert!(!format!("{command:?}").contains("synthetic_PAT_123"));
 }
+
+#[test]
+fn lease_caps_the_transport_but_persistent_workers_keep_fifteen_seconds() {
+    let now = time::OffsetDateTime::UNIX_EPOCH;
+    let normal = Duration::from_secs(15);
+    assert_eq!(lease_timeout(normal, None, now), Ok(normal));
+    assert_eq!(
+        lease_timeout(normal, Some(now + time::Duration::seconds(60)), now),
+        Ok(normal)
+    );
+    assert_eq!(
+        lease_timeout(normal, Some(now + time::Duration::milliseconds(250)), now),
+        Ok(Duration::from_millis(250))
+    );
+    for expired in [now, now - time::Duration::seconds(1)] {
+        assert_eq!(lease_timeout(normal, Some(expired), now), Err(Error::ExpiredWorker));
+    }
+}
+
+#[test]
+fn known_input_requires_every_byte_and_success_even_with_a_valid_reply() {
+    use std::os::unix::process::ExitStatusExt;
+    for complete in [false, true] {
+        for written in [0, 12, 13, 14] {
+            for status in [0, 1] {
+                let result = query::Exchange {
+                    input: if complete {
+                        query::InputProgress::Complete(written)
+                    } else {
+                        query::InputProgress::Incomplete(written)
+                    },
+                    status: std::process::ExitStatus::from_raw(status << 8),
+                    output: br#"{"version":1,"status":"installed"}"#.to_vec(),
+                };
+                assert_eq!(known_response(&result, 13).is_ok(), written == 13 && status == 0);
+            }
+        }
+    }
+}
+
+#[test]
+fn expiry_after_spawn_prevents_the_first_stdin_write() {
+    use std::cell::Cell;
+    let now = time::OffsetDateTime::UNIX_EPOCH;
+    let deadline = now + time::Duration::seconds(1);
+    let samples = Cell::new(0);
+    let result = exchange_before(
+        shell("cat >/dev/null; printf '%s' '{\"version\":1,\"status\":\"installed\"}'"),
+        &RepositoryPat::new("synthetic_PAT_123").expect("synthetic"),
+        Duration::from_secs(15),
+        Some(deadline),
+        || {
+            let sample = samples.get() + 1;
+            samples.set(sample);
+            // Construction and pre-spawn admission see a valid lease; the
+            // first post-spawn admission sees expiry, without scheduling sleeps.
+            if sample < 3 { now } else { deadline }
+        },
+    );
+    assert_eq!(samples.get(), 3);
+    assert_eq!(result, Err(Error::DeliveryUnknown));
+}
+
+#[test]
+fn admission_is_rechecked_immediately_before_first_write_and_on_later_writes() {
+    use std::cell::Cell;
+    let now = time::OffsetDateTime::UNIX_EPOCH;
+    let deadline = now + time::Duration::seconds(1);
+    // Sample 5 is immediately before the first write: initial clock, pre-spawn,
+    // loop admission, after token read, pre-write. A later sample exercises the
+    // next admission while a child that never reads keeps the pipe backpressured.
+    for expiry_sample in [5, 7] {
+        let samples = Cell::new(0);
+        let token = "s".repeat(16_384);
+        let result = exchange_before(
+            shell("exec sleep 5"),
+            &RepositoryPat::new(&token).expect("synthetic"),
+            Duration::from_secs(15),
+            Some(deadline),
+            || {
+                let sample = samples.get() + 1;
+                samples.set(sample);
+                if sample < expiry_sample { now } else { deadline }
+            },
+        );
+        assert_eq!(samples.get(), expiry_sample);
+        assert_eq!(result, Err(Error::DeliveryUnknown));
+    }
+}
