@@ -37,6 +37,7 @@ fn config() -> RemoteProviderConfig {
             name: "development".into(),
             docker_host: "unix:///unused-stop-fixture/docker.sock".into(),
         }],
+        ..Default::default()
     }
 }
 
