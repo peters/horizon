@@ -9,7 +9,10 @@ use super::{AzureError, AzureProfile, COMPUTE_API_VERSION, WORKER_VM_NAME, resou
 /// Network and disk resource API versions used inside the template.
 const NETWORK_API_VERSION: &str = "2023-11-01";
 const DISK_API_VERSION: &str = "2023-10-02";
-use crate::cloud_run::{CLOUD_RUN_PROTOCOL_VERSION, WorkerLifetime, interactive_worker::InteractiveWorkerRequest};
+use crate::cloud_run::{
+    CLOUD_RUN_PROTOCOL_VERSION, CloudJobId, CloudWorkflowId, WorkerLifetime, WorkerTarget,
+    interactive_worker::InteractiveWorkerRequest,
+};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use sha2::{Digest as _, Sha256};
 use std::collections::BTreeMap;
@@ -27,6 +30,12 @@ pub const TAG_PROTOCOL: &str = "horizon-cloud-protocol-version";
 pub const TAG_LIFETIME: &str = "horizon-worker-lifetime";
 pub const TAG_IMAGE_DIGEST: &str = "horizon-worker-image-digest";
 pub const TAG_CLIENT_KEY_DIGEST: &str = "horizon-client-key-sha256";
+pub const TAG_DISK_GIB: &str = "horizon-worker-disk-gib";
+/// SHA-256 of the profile name: tag-safe regardless of the characters a name contains.
+pub const TAG_PROFILE: &str = "horizon-worker-profile-sha256";
+/// SHA-256 of the complete image reference (registry, repository and digest), so two
+/// repositories sharing one manifest digest never pass as the same worker.
+pub const TAG_IMAGE_REF_DIGEST: &str = "horizon-worker-image-ref-sha256";
 const LIFETIME_PERSISTENT: &str = "persistent";
 const ADMIN_USERNAME: &str = "azureuser";
 const OS_DISK_GIB: u32 = 30;
@@ -84,23 +93,42 @@ impl AzureDeploymentPlan {
 }
 
 /// Identity tags: exact workflow and job, protocol version, lifetime policy, image
-/// digest and the SHA-256 of the client key, so ownership is provable without
-/// reading the guest.
+/// digest, the SHA-256 of the client key, the data disk size, the profile name and the
+/// SHA-256 of the full image reference, so ownership and the complete target are
+/// provable without reading the guest.
 #[must_use]
 pub fn worker_tags(request: &InteractiveWorkerRequest) -> BTreeMap<String, String> {
-    let digest = request
-        .target
+    identity_tags(
+        request.workflow_id,
+        request.job_id,
+        &request.target,
+        &request.ssh_public_key,
+    )
+}
+
+/// The same tags computed from a persisted handle's parts, for ownership checks.
+#[must_use]
+pub fn identity_tags(
+    workflow_id: CloudWorkflowId,
+    job_id: CloudJobId,
+    target: &WorkerTarget,
+    ssh_public_key: &str,
+) -> BTreeMap<String, String> {
+    let digest = target
         .image
         .rsplit_once("@sha256:")
         .map(|(_, digest)| digest)
         .unwrap_or_default();
     [
-        (TAG_WORKFLOW, request.workflow_id.to_string()),
-        (TAG_JOB, request.job_id.to_string()),
+        (TAG_WORKFLOW, workflow_id.to_string()),
+        (TAG_JOB, job_id.to_string()),
         (TAG_PROTOCOL, CLOUD_RUN_PROTOCOL_VERSION.to_string()),
         (TAG_LIFETIME, LIFETIME_PERSISTENT.to_string()),
         (TAG_IMAGE_DIGEST, digest.to_string()),
-        (TAG_CLIENT_KEY_DIGEST, client_key_digest(&request.ssh_public_key)),
+        (TAG_CLIENT_KEY_DIGEST, client_key_digest(ssh_public_key)),
+        (TAG_DISK_GIB, target.disk_gib.to_string()),
+        (TAG_PROFILE, sha256_hex(&target.profile)),
+        (TAG_IMAGE_REF_DIGEST, sha256_hex(&target.image)),
     ]
     .into_iter()
     .map(|(key, value)| (key.to_string(), value))
@@ -110,7 +138,11 @@ pub fn worker_tags(request: &InteractiveWorkerRequest) -> BTreeMap<String, Strin
 /// Lowercase hex SHA-256 of the exact client public key string.
 #[must_use]
 pub fn client_key_digest(ssh_public_key: &str) -> String {
-    Sha256::digest(ssh_public_key.as_bytes())
+    sha256_hex(ssh_public_key)
+}
+
+fn sha256_hex(value: &str) -> String {
+    Sha256::digest(value.as_bytes())
         .iter()
         .fold(String::with_capacity(64), |mut hex, byte| {
             use std::fmt::Write as _;

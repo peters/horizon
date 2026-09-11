@@ -55,6 +55,8 @@ pub enum AzureLongRunningState {
 
 /// Narrow set of management operations the adapter is allowed to perform.
 pub trait AzureManagementTransport: Send + Sync {
+    /// The single subscription every request of this transport addresses.
+    fn subscription_id(&self) -> &str;
     /// # Errors
     fn get_resource_group(&self, name: &str) -> Result<Option<AzureGroupInfo>, AzureError>;
     /// # Errors
@@ -224,8 +226,30 @@ impl AzureArmHttp {
         if !decode_body {
             return Ok((status, serde_json::Value::Null));
         }
+        // An asynchronous acceptance may carry no body at all; the caller treats Null as
+        // accepted. A body that is present must still be well-formed JSON within bounds.
+        if status == 202 {
+            return decode_json_or_empty(response, operation).map(|value| (status, value));
+        }
         decode_json(response, accepted, operation).map(|value| (status, value))
     }
+}
+
+/// Bounded read of a 202 body: empty is `Null`, anything else must parse as JSON.
+fn decode_json_or_empty(
+    mut response: ureq::http::Response<ureq::Body>,
+    operation: &'static str,
+) -> Result<serde_json::Value, AzureError> {
+    let text = response
+        .body_mut()
+        .with_config()
+        .limit(RESPONSE_LIMIT_BYTES)
+        .read_to_string()
+        .map_err(|_| AzureError::InvalidResponse { operation })?;
+    if text.trim().is_empty() {
+        return Ok(serde_json::Value::Null);
+    }
+    serde_json::from_str(&text).map_err(|_| AzureError::InvalidResponse { operation })
 }
 
 fn decode_json(
@@ -243,6 +267,14 @@ fn decode_json(
         .limit(RESPONSE_LIMIT_BYTES)
         .read_json()
         .map_err(|_| AzureError::InvalidResponse { operation })
+}
+
+fn long_running(status: u16) -> AzureLongRunningState {
+    if status == 202 {
+        AzureLongRunningState::Accepted
+    } else {
+        AzureLongRunningState::Completed
+    }
 }
 
 fn text(value: &serde_json::Value, pointer: &str) -> Option<String> {
@@ -305,6 +337,10 @@ fn deployment_state(value: &serde_json::Value, operation: &'static str) -> Resul
 }
 
 impl AzureManagementTransport for AzureArmHttp {
+    fn subscription_id(&self) -> &str {
+        &self.subscription_id
+    }
+
     fn get_resource_group(&self, name: &str) -> Result<Option<AzureGroupInfo>, AzureError> {
         let operation = "resource group lookup";
         self.get_json(&self.group_url(name, RESOURCE_GROUP_API_VERSION)?, operation)?
@@ -344,11 +380,7 @@ impl AzureManagementTransport for AzureArmHttp {
             false,
             operation,
         )?;
-        Ok(if status == 202 {
-            AzureLongRunningState::Accepted
-        } else {
-            AzureLongRunningState::Completed
-        })
+        Ok(long_running(status))
     }
 
     fn put_deployment(
@@ -367,7 +399,15 @@ impl AzureManagementTransport for AzureArmHttp {
             "",
         )?;
         let body = serde_json::json!({ "properties": { "mode": "Incremental", "template": template, "parameters": parameters } });
-        let (_, value) = self.send_json("PUT", &url, Some(&body), &[200, 201], true, operation)?;
+        let (status, value) = self.send_json("PUT", &url, Some(&body), &[200, 201, 202], true, operation)?;
+        // An asynchronous acceptance is an acceptance whatever its body carries; the
+        // deployment shape is parsed only when the body has it.
+        if status == 202 && value.pointer("/properties/provisioningState").is_none() {
+            return Ok(AzureDeploymentState {
+                provisioning_state: "Accepted".into(),
+                outputs: BTreeMap::new(),
+            });
+        }
         deployment_state(&value, operation)
     }
 

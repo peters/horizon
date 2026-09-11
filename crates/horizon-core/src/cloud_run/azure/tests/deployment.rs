@@ -1,8 +1,8 @@
 use super::super::{
     AzureDeploymentPlan, AzureError, RESOURCE_GROUP_PREFIX,
     deployment::{
-        SSH_PORT, TAG_CLIENT_KEY_DIGEST, TAG_IMAGE_DIGEST, TAG_JOB, TAG_LIFETIME, TAG_PROTOCOL, TAG_WORKFLOW,
-        client_key_digest, worker_tags,
+        SSH_PORT, TAG_CLIENT_KEY_DIGEST, TAG_DISK_GIB, TAG_IMAGE_DIGEST, TAG_IMAGE_REF_DIGEST, TAG_JOB, TAG_LIFETIME,
+        TAG_PROFILE, TAG_PROTOCOL, TAG_WORKFLOW, client_key_digest, worker_tags,
     },
 };
 use super::{IMAGE, ed25519_key, profile, target};
@@ -68,7 +68,29 @@ fn plan_derives_identity_parameters_and_tags_from_validated_inputs() {
         client_key_digest("abc"),
         "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
     );
-    assert_eq!(plan.tags.len(), 6);
+    assert_eq!(plan.tags[TAG_DISK_GIB], "32");
+    assert_eq!(
+        plan.tags[TAG_PROFILE],
+        client_key_digest("cpu-north"),
+        "profile name hashed, tag-safe"
+    );
+    assert_eq!(
+        plan.tags[TAG_IMAGE_REF_DIGEST],
+        client_key_digest(IMAGE),
+        "sha256 of the full reference"
+    );
+    let mut other_repository = request.clone();
+    other_repository.target.image = IMAGE.replace("horizon-remote-worker", "other-worker");
+    assert_ne!(
+        worker_tags(&other_repository)[TAG_IMAGE_REF_DIGEST],
+        plan.tags[TAG_IMAGE_REF_DIGEST]
+    );
+    assert_eq!(
+        worker_tags(&other_repository)[TAG_IMAGE_DIGEST],
+        plan.tags[TAG_IMAGE_DIGEST],
+        "same manifest digest"
+    );
+    assert_eq!(plan.tags.len(), 9);
     assert!(
         plan.tags
             .values()

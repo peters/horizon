@@ -5,6 +5,7 @@ use super::{
 use crate::cloud_run::{CloudProvider, WorkerLifetime, WorkerTarget};
 mod deployment;
 mod identity;
+mod provider;
 mod transport;
 use std::time::Duration;
 
@@ -360,7 +361,16 @@ fn cli_credential_invokes_the_executable_without_a_shell_and_enforces_its_bounds
         format!("sleep 30 &\necho $! > '{}'\nexit 0\n", orphan_pid.display()),
     );
     let credential = AzureCliCredential::with_executable(good, SUB).expect("credential");
-    let first = credential.token().expect("token");
+    // Another test thread may fork while the script file is still open for writing, which
+    // makes the first exec fail with "text file busy"; that window closes within milliseconds.
+    let first = (0..20)
+        .find_map(|_| {
+            credential.token().ok().or_else(|| {
+                std::thread::sleep(Duration::from_millis(25));
+                None
+            })
+        })
+        .expect("token");
     let second = credential.token().expect("cached token");
     assert_eq!(first.authorization_header(), second.authorization_header());
     assert_eq!(first.authorization_header(), "Bearer synthetic-token-value");
