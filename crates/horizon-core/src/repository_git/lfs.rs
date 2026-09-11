@@ -156,6 +156,7 @@ fn replace_pointer(directory: &Path, pointer: &Pointer, bytes: &[u8]) -> Result<
     std::io::Seek::rewind(&mut file).map_err(|_| Error::Storage)?;
     file.set_len(0)
         .and_then(|()| file.write_all(bytes))
+        .and_then(|()| file.sync_all())
         .map_err(|_| Error::Storage)?;
     Ok(())
 }
@@ -169,11 +170,14 @@ pub(super) fn hydrate(
     cancelled: &dyn Fn() -> bool,
     verify: &dyn Fn() -> Result<(), Error>,
 ) -> Result<(), Error> {
+    verify()?;
     let pointers = plan(directory, attributes, matches, request.source.commit.as_str())?;
+    verify()?;
     if pointers.is_empty() {
         return Ok(());
     }
     let version = git.run(directory, &["lfs", "version"], &[], false, cancelled)?;
+    verify()?;
     let version = std::str::from_utf8(&version).map_err(|_| Error::Git)?;
     let minor = version
         .strip_prefix("git-lfs/3.")
@@ -182,7 +186,6 @@ pub(super) fn hydrate(
     if minor.is_none_or(|minor| minor < 3) {
         return Err(Error::UnsupportedRepository);
     }
-    verify()?;
     block_logs(directory)?;
     for pointer in &pointers {
         verify()?;

@@ -268,3 +268,72 @@ fn live_child_deadline_preserves_pointer_and_never_creates_completion() {
     assert_eq!(fs::read(root.path().join(&pointer.path)).unwrap(), pointer.encoded);
     assert!(!root.path().join("complete.json").exists());
 }
+
+#[test]
+fn hydration_verifies_before_and_after_planning_and_version_probe() {
+    struct Probe(usize);
+    impl Commands for Probe {
+        fn run(
+            &mut self,
+            _directory: &Path,
+            args: &[&str],
+            _input: &[u8],
+            _allow_missing: bool,
+            _cancelled: &dyn Fn() -> bool,
+        ) -> Result<Vec<u8>, Error> {
+            assert_eq!(args, ["lfs", "version"]);
+            self.0 += 1;
+            Ok(b"git-lfs/3.3.0".to_vec())
+        }
+    }
+    let request = GitPreparation::decode(
+        &serde_json::to_vec(&serde_json::json!({"version":1,"workspace_local_id":"lfs-verification",
+            "runtime_id":uuid::Uuid::new_v4(),"source":{"repository":"fixture/repository",
+            "commit":"a".repeat(40),"branch":"main"},"work_branch":"work/proof"}))
+        .unwrap(),
+    )
+    .unwrap();
+    for reject_at in 1..=3 {
+        let root = repository();
+        let pointer = pointer(b"synthetic");
+        fs::write(root.path().join(&pointer.path), &pointer.encoded).unwrap();
+        let checks = std::cell::Cell::new(0);
+        let mut probe = Probe(0);
+        assert_eq!(
+            hydrate(
+                &mut probe,
+                root.path(),
+                &request,
+                b"asset.bin\0filter\0lfs\0",
+                b"",
+                &|| false,
+                &|| {
+                    checks.set(checks.get() + 1);
+                    if checks.get() == reject_at {
+                        Err(Error::UnsafeRoot)
+                    } else {
+                        Ok(())
+                    }
+                }
+            ),
+            Err(Error::UnsafeRoot)
+        );
+        assert_eq!(probe.0, usize::from(reject_at == 3));
+        assert!(!root.path().join(".git/lfs").exists());
+        assert_eq!(fs::read(root.path().join(&pointer.path)).unwrap(), pointer.encoded);
+    }
+    let mut probe = Probe(0);
+    assert_eq!(
+        hydrate(
+            &mut probe,
+            Path::new("/nonexistent-lfs-proof"),
+            &request,
+            b"",
+            b"",
+            &|| false,
+            &|| Err(Error::UnsafeRoot)
+        ),
+        Err(Error::UnsafeRoot)
+    );
+    assert_eq!(probe.0, 0);
+}
