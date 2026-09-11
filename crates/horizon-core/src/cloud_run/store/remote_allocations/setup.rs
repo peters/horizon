@@ -1,5 +1,7 @@
 //! Setup admission is a point-in-time check, never a provider creation grant.
 
+mod network_volume;
+
 use super::super::{
     CloudStoreError, current_unix_millis,
     database::{ensure_current_schema, open_read_connection},

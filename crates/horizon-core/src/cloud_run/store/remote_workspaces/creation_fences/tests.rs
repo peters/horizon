@@ -54,7 +54,7 @@ fn fixture(version: i64) -> Fixture {
         )
         .expect("legacy record");
     connection
-        .execute_batch("DROP TABLE remote_first_pin_intents; DROP TABLE remote_runtime_creation_fences;")
+        .execute_batch("DROP TABLE remote_network_volume_selections; DROP TABLE remote_first_pin_intents; DROP TABLE remote_runtime_creation_fences;")
         .expect("legacy fence schema");
     if version == 2 {
         connection

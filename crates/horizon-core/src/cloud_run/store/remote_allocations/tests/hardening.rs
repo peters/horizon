@@ -10,7 +10,9 @@ fn first_pin_schema_four_inventory_and_clones_remain_noncreating() {
     assert!(claim(&fixture.store, &saved).expect("legacy claim"));
     let connection = Connection::open(fixture.store.path()).expect("fixture connection");
     connection
-        .execute_batch("DROP TABLE remote_first_pin_intents; PRAGMA user_version=4")
+        .execute_batch(
+            "DROP TABLE remote_network_volume_selections; DROP TABLE remote_first_pin_intents; PRAGMA user_version=4",
+        )
         .expect("legacy schema");
     let before: (Vec<u8>, Vec<u8>, i64) = connection
         .query_row(
@@ -89,9 +91,9 @@ fn first_pin_schema_four_inventory_and_clones_remain_noncreating() {
 #[test]
 fn first_pin_schema_four_refuses_partial_objects_and_query_only_writers() {
     for corruption in [
-        "",
-        "DROP TABLE remote_first_pin_intents; DROP INDEX remote_runtime_allocations_workflow",
-        "DROP TABLE remote_first_pin_intents; DROP TABLE remote_runtime_creation_fences",
+        "DROP TABLE remote_network_volume_selections",
+        "DROP TABLE remote_network_volume_selections; DROP TABLE remote_first_pin_intents; DROP INDEX remote_runtime_allocations_workflow",
+        "DROP TABLE remote_network_volume_selections; DROP TABLE remote_first_pin_intents; DROP TABLE remote_runtime_creation_fences",
     ] {
         let (fixture, saved) = reserved();
         let connection = Connection::open(fixture.store.path()).expect("fixture connection");
@@ -111,7 +113,7 @@ fn first_pin_schema_four_refuses_partial_objects_and_query_only_writers() {
     let (fixture, _) = reserved();
     let connection = Connection::open(fixture.store.path()).expect("fixture connection");
     connection
-        .execute_batch("DROP TABLE remote_first_pin_intents; PRAGMA user_version=4; PRAGMA query_only=ON")
+        .execute_batch("DROP TABLE remote_network_volume_selections; DROP TABLE remote_first_pin_intents; PRAGMA user_version=4; PRAGMA query_only=ON")
         .expect("query-only writer");
     assert!(
         !connection
@@ -362,7 +364,7 @@ fn active_legacy_unbound_records_stay_recoverable_without_allocation() {
     let connection = Connection::open(store.path()).expect("raw legacy fixture");
     connection
         .execute_batch(
-            "DROP TABLE remote_first_pin_intents; DROP TABLE remote_runtime_creation_fences; PRAGMA user_version=3",
+            "DROP TABLE remote_network_volume_selections; DROP TABLE remote_first_pin_intents; DROP TABLE remote_runtime_creation_fences; PRAGMA user_version=3",
         )
         .expect("schema-three fixture before migration");
     connection
@@ -418,7 +420,7 @@ fn migrated_bound_allocations_still_require_their_positive_binding() {
         let connection = Connection::open(fixture.store.path()).expect("raw migration fixture");
         connection
             .execute_batch(
-                "DROP TABLE remote_first_pin_intents; DROP TABLE remote_runtime_creation_fences; PRAGMA user_version=3",
+                "DROP TABLE remote_network_volume_selections; DROP TABLE remote_first_pin_intents; DROP TABLE remote_runtime_creation_fences; PRAGMA user_version=3",
             )
             .expect("schema-three bound allocation");
         let reopened = CloudWorkflowStore::open_path(fixture.store.path()).expect("migrate bound allocation");

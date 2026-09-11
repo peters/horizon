@@ -11,7 +11,7 @@ use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 
 use super::{CloudStoreError, remote_workspaces::creation_fences};
 
-const STORE_SCHEMA_VERSION: i64 = 5;
+const STORE_SCHEMA_VERSION: i64 = 6;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(2);
 const SCHEMA: &str = r"
 CREATE TABLE IF NOT EXISTS cloud_workflows (
@@ -70,6 +70,24 @@ const FIRST_PIN_SCHEMA: &str = r"CREATE TABLE remote_first_pin_intents (
     version INTEGER NOT NULL CHECK (version = 1),
     request_digest TEXT NOT NULL CHECK (length(request_digest) = 64)
 ) STRICT, WITHOUT ROWID";
+
+// Version-one selection rows are immutable intent, not provider ownership records.
+const NETWORK_VOLUME_SCHEMA: [&str; 3] = [
+    r"CREATE TABLE remote_network_volume_selections (
+    workspace_local_id TEXT PRIMARY KEY NOT NULL REFERENCES remote_runtime_allocations(workspace_local_id),
+    session_id TEXT NOT NULL CHECK (length(session_id) = 36),
+    generation INTEGER NOT NULL CHECK (generation > 0),
+    workflow_id TEXT NOT NULL UNIQUE CHECK (length(workflow_id) = 36),
+    job_id TEXT NOT NULL UNIQUE CHECK (length(job_id) = 36),
+    version INTEGER NOT NULL CHECK (version = 1),
+    volume_id TEXT NOT NULL CHECK (length(volume_id) BETWEEN 1 AND 191),
+    data_center_id TEXT NOT NULL CHECK (length(data_center_id) BETWEEN 1 AND 191),
+    minimum_size_gb INTEGER NOT NULL CHECK (minimum_size_gb BETWEEN 10 AND 4096),
+    storage_type TEXT NOT NULL CHECK (storage_type = 'HIGH_PERFORMANCE')
+) STRICT, WITHOUT ROWID",
+    "CREATE TRIGGER remote_network_volume_selections_no_update BEFORE UPDATE ON remote_network_volume_selections BEGIN SELECT RAISE(ABORT, 'network volume selections are immutable'); END",
+    "CREATE TRIGGER remote_network_volume_selections_no_delete BEFORE DELETE ON remote_network_volume_selections BEGIN SELECT RAISE(ABORT, 'network volume selections are immutable'); END",
+];
 
 pub(super) fn open_connection(path: &Path) -> Result<Connection, CloudStoreError> {
     let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
@@ -142,6 +160,13 @@ pub(super) fn initialize_schema(connection: &mut Connection) -> Result<(), Cloud
         transaction.execute_batch(FIRST_PIN_SCHEMA)?;
     }
     validate_first_pin_schema(&transaction)?;
+    if version < 6 {
+        // Never infer a selection from legacy allocations, targets or profile names.
+        for definition in NETWORK_VOLUME_SCHEMA {
+            transaction.execute_batch(definition)?;
+        }
+    }
+    validate_network_volume_schema(&transaction)?;
     transaction.pragma_update(None, "user_version", STORE_SCHEMA_VERSION)?;
     transaction.commit()?;
     Ok(())
@@ -149,13 +174,25 @@ pub(super) fn initialize_schema(connection: &mut Connection) -> Result<(), Cloud
 
 pub(super) fn ensure_current_schema(connection: &Connection) -> Result<(), CloudStoreError> {
     let version = connection.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))?;
-    let legacy_read = version == 4 && connection.is_readonly(rusqlite::MAIN_DB)?;
+    let legacy_read = matches!(version, 4 | 5) && connection.is_readonly(rusqlite::MAIN_DB)?;
     if version != STORE_SCHEMA_VERSION && !legacy_read {
         return Err(CloudStoreError::UnsupportedSchema(version));
     }
     validate_allocation_schema(connection)?;
     creation_fences::validate_schema(connection)?;
     if legacy_read {
+        let partial: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM main.sqlite_schema
+             WHERE tbl_name = 'remote_network_volume_selections' COLLATE NOCASE
+                OR name LIKE 'remote_network_volume_selections%')",
+            [],
+            |row| row.get(0),
+        )?;
+        if partial {
+            return Err(CloudStoreError::InvalidAllocationSchema);
+        }
+    }
+    if version == 4 {
         // Existing inventory must remain readable without migration. Partial
         // first-pin metadata is never treated as compatible legacy storage.
         let partial: bool = connection.query_row(
@@ -171,7 +208,24 @@ pub(super) fn ensure_current_schema(connection: &Connection) -> Result<(), Cloud
             Ok(())
         };
     }
-    validate_first_pin_schema(connection)
+    validate_first_pin_schema(connection)?;
+    if version == STORE_SCHEMA_VERSION {
+        validate_network_volume_schema(connection)?;
+    }
+    Ok(())
+}
+
+fn validate_network_volume_schema(connection: &Connection) -> Result<(), CloudStoreError> {
+    let matches: bool = connection.query_row(
+        "SELECT COUNT(*) = 3 AND COUNT(CASE WHEN sql IN (?1, ?2, ?3) THEN 1 END) = 3
+         FROM main.sqlite_schema WHERE tbl_name = 'remote_network_volume_selections' AND sql IS NOT NULL",
+        NETWORK_VOLUME_SCHEMA,
+        |row| row.get(0),
+    )?;
+    if !matches {
+        return Err(CloudStoreError::InvalidAllocationSchema);
+    }
+    Ok(())
 }
 
 fn validate_first_pin_schema(connection: &Connection) -> Result<(), CloudStoreError> {

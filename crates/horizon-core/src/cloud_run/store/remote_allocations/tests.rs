@@ -127,7 +127,7 @@ fn allocation_reopens_one_exact_identity_without_consuming_creation_or_reallocat
     Connection::open(store.path())
         .expect("schema-three allocation fixture")
         .execute_batch(
-            "DROP TABLE remote_first_pin_intents; DROP TABLE remote_runtime_creation_fences; PRAGMA user_version=3",
+            "DROP TABLE remote_network_volume_selections; DROP TABLE remote_first_pin_intents; DROP TABLE remote_runtime_creation_fences; PRAGMA user_version=3",
         )
         .expect("downgrade fixture before recovery");
     let reopened = CloudWorkflowStore::open_path(store.path()).expect("reopen");
@@ -901,7 +901,7 @@ mod first_pin {
         let before = snapshots();
         Connection::open(fixture.store.path())
             .expect("fixture connection")
-            .execute_batch("DROP TABLE remote_first_pin_intents; PRAGMA user_version=4")
+            .execute_batch("DROP TABLE remote_network_volume_selections; DROP TABLE remote_first_pin_intents; PRAGMA user_version=4")
             .expect("schema-four fixture");
         CloudWorkflowStore::open_read_only_path(fixture.store.path()).expect("compatible read-only open");
         assert_eq!(
