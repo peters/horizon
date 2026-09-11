@@ -283,7 +283,34 @@ fn deployments_are_submitted_incrementally_and_read_back_with_string_outputs() {
             None,
         ),
         expect("GET", url.clone(), 404, "", None),
-        expect("GET", url, 200, r#"{"properties":{}}"#, None),
+        expect("GET", url.clone(), 200, r#"{"properties":{}}"#, None),
+        expect(
+            "PUT",
+            url.clone(),
+            202,
+            "",
+            Some(
+                serde_json::json!({"properties":{"mode":"Incremental","template":{"resources":[]},"parameters":{"vmName":{"value":"worker"}}}}),
+            ),
+        ),
+        expect(
+            "PUT",
+            url.clone(),
+            202,
+            r#"{"status":"InProgress"}"#,
+            Some(
+                serde_json::json!({"properties":{"mode":"Incremental","template":{"resources":[]},"parameters":{"vmName":{"value":"worker"}}}}),
+            ),
+        ),
+        expect(
+            "PUT",
+            url,
+            202,
+            "private-garbage",
+            Some(
+                serde_json::json!({"properties":{"mode":"Incremental","template":{"resources":[]},"parameters":{"vmName":{"value":"worker"}}}}),
+            ),
+        ),
     ]);
     let accepted = transport
         .put_deployment(GROUP, "worker", &template, &parameters)
@@ -309,7 +336,36 @@ fn deployments_are_submitted_incrementally_and_read_back_with_string_outputs() {
             operation: "deployment lookup"
         })
     );
-    assert_eq!(calls.load(Ordering::SeqCst), 4);
+    let accepted = transport
+        .put_deployment(GROUP, "worker", &template, &parameters)
+        .expect("asynchronous acceptance");
+    assert_eq!(
+        (accepted.provisioning_state.as_str(), accepted.outputs.len()),
+        ("Accepted", 0),
+        "a bodiless 202 is accepted"
+    );
+    let envelope = transport
+        .put_deployment(GROUP, "worker", &template, &parameters)
+        .expect("async envelope");
+    assert_eq!(
+        envelope.provisioning_state, "Accepted",
+        "a 202 without the deployment shape is still accepted"
+    );
+    let garbage = transport.put_deployment(GROUP, "worker", &template, &parameters);
+    assert_eq!(
+        garbage,
+        Err(AzureError::InvalidResponse {
+            operation: "deployment submission"
+        }),
+        "a malformed 202 body is not accepted"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 7);
+}
+
+#[test]
+fn deployment_operations_reject_invalid_segments_before_any_request() {
+    let (transport, calls) = http(vec![]);
+    let (template, parameters) = (serde_json::json!({}), serde_json::json!({}));
     for (group, name) in [
         ("bad/group", "worker"),
         (GROUP, "worker/../other"),
@@ -327,7 +383,7 @@ fn deployments_are_submitted_incrementally_and_read_back_with_string_outputs() {
     }
     assert_eq!(
         calls.load(Ordering::SeqCst),
-        4,
+        0,
         "invalid segments never reach the network"
     );
 }

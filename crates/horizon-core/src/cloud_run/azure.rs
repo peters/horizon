@@ -1,7 +1,7 @@
-//! Azure Linux VM worker foundations for #474: operator profile, exact worker
-//! identity, lifecycle mapping, credential source, typed errors, the bounded Resource
-//! Manager transport and the deployment plan. The provider is a separate slice;
-//! nothing is wired into configuration or UI.
+//! Azure Linux VM worker adapter for #474: operator profile, exact worker identity,
+//! lifecycle mapping, credential source, typed errors, the bounded Resource Manager
+//! transport, the deployment plan and the provider. Nothing is wired into
+//! configuration or UI yet.
 use super::{
     CloudJobId, CloudProvider, CloudWorkflowId, WorkerTarget,
     interactive_worker::{InteractiveWorkerLifetime, valid_worker_target},
@@ -12,12 +12,14 @@ use std::time::Duration;
 use thiserror::Error;
 mod credential;
 pub mod deployment;
+mod provider;
 #[cfg(test)]
 mod tests;
 mod transport;
 
 pub use credential::{AzureAccessToken, AzureCliCredential, AzureCredentialSource};
 pub use deployment::AzureDeploymentPlan;
+pub use provider::{AzureClient, AzureCreationFence};
 pub use transport::{
     AzureArmHttp, AzureDeploymentState, AzureGroupInfo, AzureLongRunningState, AzureManagementTransport, AzureVmView,
 };
@@ -249,6 +251,21 @@ pub enum AzureError {
     InvalidResponse { operation: &'static str },
     #[error("Azure returned an invalid or mismatched resource identity")]
     ResourceIdentityMismatch,
+    #[error("durable creation claim could not be read or recorded")]
+    CreationFenceFailed,
+    #[error("the worker's VM size or location no longer matches the profile")]
+    PlacementMismatch,
+    #[error(
+        "the worker resource group could not be resolved during ensure (claim held elsewhere, or the group vanished); retry ensure"
+    )]
+    CreationUnresolved,
+    #[error("worker resource group exists but its deployment submission is unconfirmed; retry ensure")]
+    CreationIncomplete {
+        #[source]
+        cause: Box<AzureError>,
+    },
+    #[error("worker stop did not reach a verified retained inactive state")]
+    StopUnverified,
 }
 
 /// Parsed `/subscriptions/{sub}/resourceGroups/{rg}/providers/{provider}/{kind}/{name}`.
