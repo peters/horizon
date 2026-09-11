@@ -71,6 +71,7 @@ impl Fixture {
             RunPodHostTrust {
                 expected: self.request.clone(),
                 mode: Mode::InitialTaskFree(http),
+                network_binding: None,
             },
             calls,
         )
@@ -267,6 +268,58 @@ fn malformed_mismatched_and_conflicting_records_never_select_a_key() {
         );
         assert!(!error.to_string().contains(&line));
     }
+}
+
+#[test]
+fn selected_attachment_must_match_both_observations_around_first_pin_logs() {
+    use super::super::{RunPodNetworkVolumeExpectation, network_attachment::NetworkBinding};
+    let fixture = Fixture::new();
+    let selection = RunPodNetworkVolumeExpectation {
+        volume_id: "volume_exact".into(),
+        data_center_id: "EUR-NO-1".into(),
+        minimum_size_gb: 10,
+    };
+    let binding = NetworkBinding::new(&fixture.request, &selection, &profile()).expect("binding");
+    let mut pod = fixture.pod();
+    pod["mounts"] = json!({"network": [{"volumeId": "volume_exact", "path": "/workspace"}]});
+    pod["cloud"] = json!("SECURE");
+    pod["dataCenterId"] = json!("EUR-NO-1");
+    let responses = || {
+        vec![
+            (200, "application/json", pod.to_string()),
+            (200, "text/event-stream", record_event(&fixture.record())),
+            (200, "application/json", pod.to_string()),
+        ]
+    };
+    let (mut source, calls) = fixture.source(responses());
+    source.bind_network(&binding).expect("bind");
+    assert_eq!(fixture.key(&source), Some(ed25519_key(73)));
+    assert_eq!(calls.lock().expect("calls").len(), 3);
+    for index in [0, 2] {
+        for pointer in [
+            "/mounts",
+            "/mounts/network/0/volumeId",
+            "/mounts/network/0/path",
+            "/cloud",
+            "/dataCenterId",
+        ] {
+            let mut changed = pod.clone();
+            *changed.pointer_mut(pointer).expect("field") = json!("changed");
+            let mut replies = responses();
+            replies[index].2 = changed.to_string();
+            let (mut source, calls) = fixture.source(replies);
+            source.bind_network(&binding).expect("bind");
+            assert_eq!(fixture.key(&source), None, "{pointer} at read {index}");
+            assert_eq!(calls.lock().expect("calls").len(), index + 1);
+        }
+    }
+    let (source, calls) = fixture.source(responses());
+    assert_eq!(
+        fixture.key(&source),
+        None,
+        "ordinary trust must not adopt network storage"
+    );
+    assert_eq!(calls.lock().expect("calls").len(), 1);
 }
 
 #[test]

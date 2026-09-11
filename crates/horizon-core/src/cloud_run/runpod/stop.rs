@@ -20,6 +20,18 @@ pub(super) struct StopMetadata {
     cloud: Value,
     cluster: Value,
     runtime: Value,
+    #[serde(rename = "dataCenterId")]
+    data_center_id: Value,
+}
+
+impl StopMetadata {
+    pub(super) fn mounts(&self) -> &Value {
+        &self.mounts
+    }
+
+    pub(super) fn is_secure_data_center(&self, expected: &str) -> bool {
+        self.cloud == "SECURE" && self.data_center_id.as_str() == Some(expected)
+    }
 }
 
 #[derive(Deserialize)]
@@ -49,6 +61,9 @@ impl RunPodClient {
         ssh_public_key: &str,
         profile: &RunPodProfile,
     ) -> Result<InteractiveWorkerStop, RunPodError> {
+        if self.network_binding.is_some() {
+            return Err(RunPodError::StopRetentionUnverified);
+        }
         worker.validate()?;
         if worker.lifetime != InteractiveWorkerLifetime::Persistent {
             return Err(RunPodError::StopUnsupportedLifetime);

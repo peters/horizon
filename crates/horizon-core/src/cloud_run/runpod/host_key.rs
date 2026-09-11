@@ -2,8 +2,11 @@
 
 use super::{
     ApiPod, CloudProvider, HOST_KEY_BOOTSTRAP_ENV, InteractiveWorkerRequest, RunPodApiKey, RunPodError,
-    RunPodHostKeySource, RunPodLifecycle, RunPodSshEndpoint, RunPodWorker, Transport, http::RunPodHttp,
-    interactive::runpod_worker, status_from_resource,
+    RunPodHostKeySource, RunPodLifecycle, RunPodSshEndpoint, RunPodWorker, Transport,
+    http::RunPodHttp,
+    interactive::runpod_worker,
+    network_attachment::{self, NetworkBinding},
+    status_from_resource,
 };
 use crate::cloud_run::{
     ArtifactDigest,
@@ -20,6 +23,7 @@ mod tests;
 pub struct RunPodHostTrust {
     expected: InteractiveWorkerRequest,
     mode: Mode,
+    network_binding: Option<NetworkBinding>,
 }
 
 enum Mode {
@@ -48,6 +52,7 @@ impl RunPodHostTrust {
         Ok(Self {
             expected: expected.clone(),
             mode: Mode::InitialTaskFree(RunPodHttp::new(api_key)),
+            network_binding: None,
         })
     }
 
@@ -73,11 +78,22 @@ impl RunPodHostTrust {
                 lifetime: retained.lifetime,
                 ssh: ssh.clone(),
             },
+            network_binding: None,
         })
     }
 
+    pub(super) fn bind_network(&mut self, binding: &NetworkBinding) -> Result<(), RunPodError> {
+        if self.expected != binding.request || self.network_binding.as_ref().is_some_and(|current| current != binding) {
+            return Err(RunPodError::InvalidTarget);
+        }
+        self.network_binding = Some(binding.clone());
+        Ok(())
+    }
+
     fn observed(&self, pod: &ApiPod, worker: &RunPodWorker, endpoint: &RunPodSshEndpoint) -> bool {
-        pod.env.get(HOST_KEY_BOOTSTRAP_ENV) == Some(&VERSION.to_string())
+        network_attachment::verify_attachment(pod, self.network_binding.as_ref().map(|binding| &binding.selection))
+            .is_ok()
+            && pod.env.get(HOST_KEY_BOOTSTRAP_ENV) == Some(&VERSION.to_string())
             && status_from_resource(pod, worker, Some(&self.expected.ssh_public_key)).is_ok_and(|status| {
                 status.lifecycle == RunPodLifecycle::Running
                     && status.ssh_username.as_ref() == Some(&endpoint.username)

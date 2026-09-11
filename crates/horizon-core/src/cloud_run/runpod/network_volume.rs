@@ -16,6 +16,18 @@ pub struct RunPodNetworkVolumeExpectation {
     pub minimum_size_gb: u32,
 }
 
+impl RunPodNetworkVolumeExpectation {
+    pub(super) fn validate(&self) -> Result<(), RunPodError> {
+        if !valid_provider_id(&self.volume_id)
+            || !valid_provider_id(&self.data_center_id)
+            || !(MIN_VOLUME_GB..=MAX_VOLUME_GB).contains(&self.minimum_size_gb)
+        {
+            return Err(RunPodError::InvalidTarget);
+        }
+        Ok(())
+    }
+}
+
 /// Point-in-time metadata for a matching High-Performance network volume.
 ///
 /// This is not proof of ownership, exclusivity, mount permissions, filesystem
@@ -51,12 +63,7 @@ impl RunPodClient {
         &self,
         expected: &RunPodNetworkVolumeExpectation,
     ) -> Result<Option<RunPodNetworkVolume>, RunPodError> {
-        if !valid_provider_id(&expected.volume_id)
-            || !valid_provider_id(&expected.data_center_id)
-            || !(MIN_VOLUME_GB..=MAX_VOLUME_GB).contains(&expected.minimum_size_gb)
-        {
-            return Err(RunPodError::InvalidTarget);
-        }
+        expected.validate()?;
         let Some(volume) = self.transport.network_volume(&expected.volume_id)? else {
             return Ok(None);
         };

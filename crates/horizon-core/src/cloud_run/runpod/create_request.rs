@@ -27,6 +27,8 @@ pub(super) struct CreatePodRequest {
     #[serde(rename = "minUpload", skip_serializing_if = "Option::is_none")]
     pub(super) min_upload_mbps: Option<u32>,
     pub(super) name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) network_volume_id: Option<String>,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub(super) ports: String,
     pub(super) start_ssh: bool,
@@ -95,6 +97,7 @@ impl CreatePodRequest {
             min_download_mbps: profile.min_download_mbps,
             min_upload_mbps: profile.min_upload_mbps,
             name,
+            network_volume_id: None,
             ports: profile.ports.join(","),
             start_ssh: true,
             support_public_ip: true,
