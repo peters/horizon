@@ -4,6 +4,8 @@
 #[cfg(target_os = "linux")]
 mod git;
 #[cfg(target_os = "linux")]
+mod lfs;
+#[cfg(target_os = "linux")]
 mod linux;
 
 use crate::{cloud_run::GitSource, remote_workspace::valid_local_id};
