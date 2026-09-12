@@ -71,7 +71,7 @@ def outside(ids: List[str], groups: List[str]) -> List[str]:
                   if not any(prefix in identifier.casefold() for prefix in prefixes))
 
 
-def owned_now(az: Az, record: Dict[str, Any], manifest: Dict[str, Any], timeout: int = CLI_STEP_SECONDS) -> Optional[bool]:
+def owned_now(az: Az, record: Dict[str, Any], manifest: Dict[str, Any], timeout: float = CLI_STEP_SECONDS) -> Optional[bool]:
     """Immediately before a delete: is the group still the exact resource that was
     journaled at creation (same ARM ID, identical tag set) and bound to this run? None
     when it cannot be read; an absent, recreated or retagged group is not ours, and a
@@ -119,8 +119,9 @@ def phase_cleanup(az: Az, manifest: Dict[str, Any], before: List[str], created: 
     resource inventory recorded before the run, not from group names alone."""
     deadline = time.monotonic() + bound_seconds
 
-    def budget() -> int:
-        return max(1, min(CLI_STEP_SECONDS, int(deadline - time.monotonic())))
+    def budget() -> float:
+        """What is left of the bound for one call, never rounded up past it."""
+        return min(float(CLI_STEP_SECONDS), deadline - time.monotonic())
 
     targets = cleanup_targets(manifest, before, created)
     recorded = resource_ids(resources_before)
@@ -133,11 +134,16 @@ def phase_cleanup(az: Az, manifest: Dict[str, Any], before: List[str], created: 
     deleting = []
     for record in targets["delete"]:
         group = record["name"]
-        if time.monotonic() >= deadline:
+        if budget() < 1:
             findings.append(f"cleanup bound reached before {group} was re-attested; not deleted")
             continue
         # A same-named group recreated or retagged since the journal entry is not ours.
         owned = owned_now(az, record, manifest, timeout=budget())
+        # Re-checked right before the mutation: an ownership read that exhausted the bound
+        # never turns into a delete issued past it.
+        if owned and budget() < 1:
+            findings.append(f"cleanup bound reached before {group} could be deleted; not deleted")
+            continue
         if owned is None:
             findings.append(f"refusing to delete {group}: ownership could not be read")
         elif not owned:
@@ -160,7 +166,7 @@ def phase_cleanup(az: Az, manifest: Dict[str, Any], before: List[str], created: 
         # answer) is unknown and never counts as absence.
         unresolved = {}
         for group in targets["delete"]:
-            exists = az.run(["group", "exists", "-n", group], timeout=budget()) if time.monotonic() < deadline else None
+            exists = az.run(["group", "exists", "-n", group], timeout=budget()) if budget() >= 1 else None
             if exists is True:
                 unresolved[group] = "present"
             elif exists is not False:
@@ -174,12 +180,12 @@ def phase_cleanup(az: Az, manifest: Dict[str, Any], before: List[str], created: 
     # Untouched peers: every resource that existed before the run outside the deleted
     # groups must still exist, and nothing outside them may have appeared or gone. A
     # group recreated under its old name shows up as changed resource IDs inside it.
-    inventory = resource_ids(az.run(["resource", "list"], timeout=budget())) if time.monotonic() < deadline else None
+    inventory = resource_ids(az.run(["resource", "list"], timeout=budget())) if budget() >= 1 else None
     if inventory is None:
         findings.append("final resource inventory unreadable: unchanged pre-existing resources not proven")
     elif outside(inventory, deleting) != outside(recorded, deleting):
         findings.append("resources outside the deleted groups changed during the run")
-    groups_now = az.run(["group", "list"], timeout=budget()) if time.monotonic() < deadline else None
+    groups_now = az.run(["group", "list"], timeout=budget()) if budget() >= 1 else None
     names = group_list([group.get("name") for group in groups_now]
                        if isinstance(groups_now, list) and all(isinstance(group, dict) for group in groups_now) else None)
     if names is None:

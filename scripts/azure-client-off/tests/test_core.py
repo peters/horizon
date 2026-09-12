@@ -506,9 +506,14 @@ class CleanupVerificationTests(unittest.TestCase):
             az, budgets = self.plane(m, created, present_after=(m["worker_group"],), resources_after=[{"id": peer}],
                                      groups_after=["horizon-worker-registry"])
             started = time.monotonic()
-            result = client_off.phase_cleanup(az, m, ["horizon-worker-registry"], created, before_resources, bound_seconds=1)
-            self.assertLess(time.monotonic() - started, 5)
+            result = client_off.phase_cleanup(az, m, ["horizon-worker-registry"], created, before_resources, bound_seconds=3)
+            self.assertLess(time.monotonic() - started, 6)
             self.assertTrue(any("absence not proven" in f for f in result["findings"]), result)
+            self.assertTrue(all(0 < b <= client_off.CLI_STEP_SECONDS for b in budgets), "fractional budgets, never rounded up")
+            # With no budget at all, nothing is read and nothing is deleted.
+            az, budgets = self.plane(m, created, resources_after=[{"id": peer}], groups_after=["horizon-worker-registry"])
+            result = client_off.phase_cleanup(az, m, ["horizon-worker-registry"], created, before_resources, bound_seconds=0)
+            self.assertEqual((result["deleted"], budgets), ([], []))
         self.assertEqual(client_off.CLEANUP_MARGIN_MINUTES,
                          client_off.RETURN_MARGIN_MINUTES + client_off.CLEANUP_BOUND_SECONDS // 60,
                          "the manifest reserves the return phase plus the whole cleanup bound")

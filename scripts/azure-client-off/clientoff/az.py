@@ -23,16 +23,18 @@ class Az:
         """Seconds left until the phase deadline, or None when no deadline is set."""
         return None if self.deadline is None else self.deadline - time.monotonic()
 
-    def run(self, args: List[str], mutating: bool = False, timeout: int = CLI_STEP_SECONDS) -> Optional[Any]:
+    def run(self, args: List[str], mutating: bool = False, timeout: float = CLI_STEP_SECONDS) -> Optional[Any]:
         command = ["az", *args, "--subscription", self.subscription, "-o", "json"]
         self.journal.append({"at": utc_now().isoformat(), "mutating": mutating, "args": args})
         if self.dry_run and mutating:
             return None
+        if timeout < 1:
+            return None  # no budget left for this call: it is not made
         left = self.left()
         if left is not None:
             if left < 1:
                 return None  # past the phase deadline: nothing more is asked of ARM
-            timeout = max(1, min(timeout, int(left)))
+            timeout = min(timeout, left)
         try:
             completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
         except (subprocess.TimeoutExpired, OSError):
@@ -79,12 +81,15 @@ class Az:
         matched whole and literally, so nothing else in the file is touched."""
         encoded = base64.b64encode(line.rstrip("\n").encode("ascii")).decode("ascii")
         keys = "/root/.ssh/authorized_keys"
-        # grep exits 1 when no line remains (still a success here) and 2 on an error, in
-        # which case the original file is left exactly as it was; the filtered file
-        # replaces it atomically, so no interruption can leave a truncated key file.
+        # The filtered copy goes to a unique same-directory temporary created by mktemp
+        # (never a predictable path a planted symlink could redirect); grep exits 1 when
+        # no line remains (still a success here) and 2 on an error, in which case the
+        # temporary is removed and the original file is left exactly as it was; the
+        # rename replaces the file atomically.
         script = (f"docker exec {WORKER_CONTAINER} sh -c 'umask 077 && k=$(echo {encoded} | base64 -d) && "
-                  f"grep -vxF \"$k\" {keys} > {keys}.tmp; rc=$?; [ $rc -le 1 ] || {{ rm -f {keys}.tmp; exit $rc; }}; "
-                  f"mv -f {keys}.tmp {keys}'")
+                  f"t=$(mktemp /root/.ssh/.authorized_keys.XXXXXX) && "
+                  f"{{ grep -vxF \"$k\" {keys} > \"$t\"; rc=$?; [ $rc -le 1 ] || {{ rm -f \"$t\"; exit $rc; }}; }} && "
+                  f"mv -f \"$t\" {keys}'")
         return self.run(["vm", "run-command", "invoke", "-g", group, "-n", name, "--command-id", "RunShellScript",
                          "--scripts", script], mutating=True, timeout=RUN_COMMAND_SECONDS)
 

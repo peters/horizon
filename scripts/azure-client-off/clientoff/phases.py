@@ -8,7 +8,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from .az import Az
 from .manifest import (AFTER_OFF_MINUTES, CLI_STEP_SECONDS, CLIENT_VM_NAME, INSTANCE_ID_RE, OFF_SETUP_MINUTES,
-                       RETURN_RESERVE_MINUTES,
+                       RETURN_RESERVE_MINUTES, required_minutes,
                        RUN_ID_RE, SAMPLE_SECONDS, client_tags, image_ref_digest, parse_utc, routable, same_group, same_id,
                        utc_now)
 from .observer import (OBSERVATION_MIN_SECONDS, OBSERVATION_SECONDS, derived_public_key, observer_authorized_line,
@@ -375,9 +375,11 @@ def phase_install_observer(az: Az, manifest: Dict[str, Any], worker: Dict[str, A
     problems = validate_worker(worker)
     if problems:
         return {"passed": False, "findings": problems}
-    # Bound to the manifest deadline minus what must still follow: the off interval,
-    # the return phase and the cleanup window.
-    problem = arm_phase_deadline(az, manifest, int(manifest["off_minutes"]) + AFTER_OFF_MINUTES)
+    # Bound to the manifest deadline minus everything the off phase needs after this
+    # one (its own setup, the interval, the return and the cleanup window), so the
+    # install can never consume the off phase's allowance; its own setup fits in the
+    # run-command bound the manifest reserves for it.
+    problem = arm_phase_deadline(az, manifest, required_minutes(manifest, "off"))
     if problem:
         return {"passed": False, "installed": False, "findings": [f"{problem}; nothing installed"]}
     try:
@@ -394,10 +396,17 @@ def phase_install_observer(az: Az, manifest: Dict[str, Any], worker: Dict[str, A
         return {"passed": False, "installed": False, "findings": [f"{problem}; nothing installed"]}
     # The public half must be the observer private key's: otherwise a foreign key would
     # be appended to B before the probe could notice.
-    if derived_public_key(worker["observer_key_path"]) != public_key:
+    if derived_public_key(worker["observer_key_path"], observation_budget(az)) != public_key:
         return {"passed": False, "installed": False, "findings": ["the public key is not the observer private key's; nothing installed"]}
-    before = reader(worker["host"], worker["port"], worker["host_key"], worker["observer_key_path"], directory)
+    if observation_budget(az) < OBSERVATION_MIN_SECONDS:
+        return {"passed": False, "installed": False, "findings": ["phase deadline too near for the observer probe; nothing installed"]}
+    before = reader(worker["host"], worker["port"], worker["host_key"], worker["observer_key_path"], directory,
+                    observation_budget(az))
     if before.get("channel") == "answered":
+        if not observed_paths_match(before, worker):
+            return {"passed": False, "installed": False,
+                    "findings": ["B already accepts this key with a forced reader for other paths: a stale or foreign "
+                                 "observer line; remove it before installing"]}
         return {"passed": True, "installed": False, "findings": ["observer key already answers through the forced reader"]}
     if before.get("channel") != "refused":
         # Neither an answer nor an explicit refusal: whether the key is present is not
@@ -418,8 +427,9 @@ def phase_install_observer(az: Az, manifest: Dict[str, Any], worker: Dict[str, A
         # A retry after an unproven append would stack a second line, so the state is
         # reported as it is proven, never as "nothing changed".
         _, problem = attest_worker(az, manifest, worker)
-        after = reader(worker["host"], worker["port"], worker["host_key"], worker["observer_key_path"], directory)
-        if problem is None and after.get("channel") == "answered":
+        after = reader(worker["host"], worker["port"], worker["host_key"], worker["observer_key_path"], directory,
+                       observation_budget(az))
+        if problem is None and after.get("channel") == "answered" and observed_paths_match(after, worker):
             return {"passed": True, "installed": True, "progress": after.get("progress"), "checkpoint": after.get("checkpoint"),
                     "findings": ["run-command lost its answer, but the exact B's forced reader answers: the key is installed"]}
         return {"passed": False, "installed": "unknown",
@@ -428,10 +438,12 @@ def phase_install_observer(az: Az, manifest: Dict[str, Any], worker: Dict[str, A
     _, problem = attest_worker(az, manifest, worker)
     if problem:
         return {"passed": False, "installed": True, "findings": [f"{problem} after the append; do not use this key as observer C"]}
-    after = reader(worker["host"], worker["port"], worker["host_key"], worker["observer_key_path"], directory)
-    if after.get("channel") != "answered":
+    after = reader(worker["host"], worker["port"], worker["host_key"], worker["observer_key_path"], directory,
+                   observation_budget(az))
+    if after.get("channel") != "answered" or not observed_paths_match(after, worker):
         return {"passed": False, "installed": True,
-                "findings": ["the forced reader did not answer after the append; do not use this key as observer C"]}
+                "findings": ["the forced reader did not answer for the descriptor's paths after the append; do not use "
+                             "this key as observer C"]}
     # The key is installed whatever the file holds right now; an unreadable counter is
     # the off phase's finding, not this one's.
     return {"passed": True, "installed": True, "progress": after.get("progress"), "checkpoint": after.get("checkpoint")}
@@ -454,7 +466,7 @@ def phase_remove_observer(az: Az, manifest: Dict[str, Any], worker: Dict[str, An
         return {"passed": False, "findings": [f"observer key line: {error}"]}
     # Only the observer's own line may be removed: a foreign public key would name
     # somebody else's line.
-    if derived_public_key(worker["observer_key_path"]) != public_key:
+    if derived_public_key(worker["observer_key_path"], observation_budget(az)) != public_key:
         return {"passed": False, "removed": False, "findings": ["the public key is not the observer private key's; nothing removed"]}
     _, problem = attest_worker(az, manifest, worker)
     if problem:
@@ -471,7 +483,8 @@ def phase_remove_observer(az: Az, manifest: Dict[str, Any], worker: Dict[str, An
     _, problem = attest_worker(az, manifest, worker)
     if problem:
         return {"passed": False, "removed": "unknown", "findings": [f"{problem} after the removal; removal unproven"]}
-    after = reader(worker["host"], worker["port"], worker["host_key"], worker["observer_key_path"], directory)
+    after = reader(worker["host"], worker["port"], worker["host_key"], worker["observer_key_path"], directory,
+                   observation_budget(az))
     if after.get("channel") == "refused":
         return {"passed": True, "removed": True, "findings": []}
     if after.get("channel") == "answered":

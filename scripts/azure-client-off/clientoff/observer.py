@@ -125,14 +125,16 @@ def observer_authorized_line(public_key: str, progress_path: str, checkpoint_pat
     return f'restrict,command="{command}" {public_key.strip()}'
 
 
-def derived_public_key(private_key_path: str) -> Optional[str]:
+def derived_public_key(private_key_path: str, budget_seconds: float = 30) -> Optional[str]:
     """The public half of an Ed25519 private key, derived with `ssh-keygen -y` under a
-    bound; None when it cannot be derived."""
+    bound; None when it cannot be derived (or no budget is left to derive it)."""
+    if budget_seconds < 1:
+        return None
     try:
         # No stdin and an empty passphrase: a protected key fails here instead of
         # prompting, and could never serve the BatchMode observer sessions anyway.
         completed = subprocess.run(["ssh-keygen", "-y", "-P", "", "-f", private_key_path], capture_output=True, text=True,
-                                   timeout=30, check=False, stdin=subprocess.DEVNULL)
+                                   timeout=min(30, budget_seconds), check=False, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.TimeoutExpired):
         return None
     if completed.returncode != 0:
@@ -181,7 +183,9 @@ def read_observations(host: str, port: int, host_key: str, key_path: str, direct
     try:
         with tempfile.NamedTemporaryFile("w", dir=directory, prefix="observer_known_hosts.", suffix=".tmp",
                                          delete=False, encoding="utf-8") as handle:
-            handle.write(f"[{host}]:{port} {host_key}\n")
+            # OpenSSH looks a default-port host up by its bare address; the bracketed
+            # form is for any other port.
+            handle.write((f"{host} {host_key}\n" if port == 22 else f"[{host}]:{port} {host_key}\n"))
             known_hosts = handle.name
     except OSError:
         return nothing
