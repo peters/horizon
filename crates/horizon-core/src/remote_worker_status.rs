@@ -4,6 +4,10 @@
 mod configured;
 mod git_start;
 
+pub use git_start::configured::{
+    ConfiguredRemoteGitStartError, PreparedRemoteGitStart, prepare_configured_remote_git_start,
+    start_configured_remote_git_shell,
+};
 pub use git_start::{RemoteGitTaskStartError, start_remote_git_shell};
 
 pub use configured::{

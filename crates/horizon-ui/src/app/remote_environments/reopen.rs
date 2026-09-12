@@ -1,7 +1,8 @@
-//! Explicit saved-panel loading, inert reopening and read-only task checks.
+//! Explicit saved-panel loading, inert views and separately confirmed task execution.
 
 mod inspection;
 mod paint;
+mod start;
 
 use super::{Context, HorizonHome, InventoryAction, RemoteEnvironmentSummary, WakeOnDrop};
 use horizon_core::{
@@ -16,6 +17,8 @@ pub(super) struct ReopenState {
     pending: Option<PendingReopen>,
     notice: Option<String>,
     repaint_context: Option<Context>,
+    start: start::StartState,
+    start_outcome_unknown: bool,
 }
 
 struct CachedCatalog {
@@ -35,12 +38,15 @@ struct PendingReopen {
     scope: RequestScope,
     discard: bool,
     inspection: Option<String>,
+    start: Option<start::PendingStart>,
 }
 
 enum Completion {
     Catalog(Box<RemoteViewCatalog>),
     View(Box<PreparedRemoteViewReopen>),
     Inspection(horizon_core::remote_worker_status::RemotePanelObservation),
+    StartPreview(Box<horizon_core::remote_worker_status::PreparedRemoteGitStart>),
+    Started(horizon_core::remote_worker_status::RemotePanelStatus),
 }
 
 #[derive(Clone)]
@@ -86,6 +92,7 @@ impl ReopenState {
     }
 
     pub(super) fn invalidate(&mut self) {
+        self.start = start::StartState::default();
         let changed = self.catalog.take().is_some()
             | self.notice.take().is_some()
             | self.pending.as_ref().is_some_and(|pending| !pending.discard);
@@ -107,6 +114,7 @@ impl ReopenState {
         if self.is_pending() {
             return;
         }
+        self.start = start::StartState::default();
         let scope = match RequestScope::current(client) {
             Ok(scope) => scope,
             Err(message) => {
@@ -186,6 +194,7 @@ impl ReopenState {
                     scope,
                     discard: false,
                     inspection: None,
+                    start: None,
                 });
             }
             Err(_) => self.notice = Some(worker_failure().into()),
@@ -201,10 +210,20 @@ impl ReopenState {
                 self.pending = Some(pending);
                 return None;
             }
-            Err(TryRecvError::Disconnected) => Err(worker_failure().into()),
+            Err(TryRecvError::Disconnected) => {
+                Err(if matches!(&pending.start, Some(start::PendingStart::Execute(_))) {
+                    "The start worker ended without a response. The remote outcome is unknown. No retry was scheduled."
+                } else {
+                    worker_failure()
+                }
+                .into())
+            }
         };
         ctx.request_repaint();
         if pending.discard || !pending.scope.matches(client) {
+            if matches!(&pending.start, Some(start::PendingStart::Execute(_))) {
+                self.start_outcome_unknown = true;
+            }
             tracing::debug!(
                 prepared = matches!(&result, Ok(Completion::View(_))),
                 catalog_loaded = matches!(&result, Ok(Completion::Catalog(_))),
@@ -215,6 +234,10 @@ impl ReopenState {
         }
         if let Some(panel) = pending.inspection {
             self.accept_inspection(&panel, result);
+            return None;
+        }
+        if let Some(start) = pending.start {
+            self.accept_start(start, pending.scope, result);
             return None;
         }
         match result {
@@ -249,7 +272,7 @@ impl ReopenState {
                 Err(error) => self.notice = Some(error.to_string()),
             },
             Err(message) => self.notice = Some(message),
-            Ok(Completion::Inspection(_)) => {
+            Ok(Completion::Inspection(_) | Completion::StartPreview(_) | Completion::Started(_)) => {
                 self.notice = Some("The task result did not match its request. Check the task again.".into());
             }
         }
@@ -297,11 +320,25 @@ impl super::HorizonApp {
                 }
                 InventoryAction::ReopenView(index) => {
                     state.stop.cancel_confirmation();
+                    state.reopen.start.cancel();
                     state.reopen.reopen(&client, &self.board, index, ctx);
                 }
                 InventoryAction::InspectTask(index) => {
                     state.stop.cancel_confirmation();
+                    state.reopen.start.cancel();
                     state.reopen.inspect_task(&client, index, ctx);
+                }
+                InventoryAction::PrepareTaskStart(index) => {
+                    state.stop.cancel_confirmation();
+                    state.reopen.prepare_start(&client, index, ctx);
+                }
+                InventoryAction::ConfirmTaskStart => {
+                    state.stop.cancel_confirmation();
+                    state.reopen.confirm_start(&client, ctx);
+                }
+                InventoryAction::CancelTaskStart => {
+                    state.reopen.start.cancel();
+                    ctx.request_repaint();
                 }
                 _ => {}
             }

@@ -71,6 +71,9 @@ enum InventoryAction {
     ListReopenPanels,
     ReopenView(usize),
     InspectTask(usize),
+    PrepareTaskStart(usize),
+    ConfirmTaskStart,
+    CancelTaskStart,
 }
 
 struct WakeOnDrop(Context);
@@ -213,7 +216,12 @@ impl RemoteEnvironments {
             | InventoryAction::RequestStop
             | InventoryAction::ConfirmStop => {}
             InventoryAction::ListReconnectViews | InventoryAction::Reconnect(_) => self.reopen.invalidate(),
-            InventoryAction::ListReopenPanels | InventoryAction::ReopenView(_) | InventoryAction::InspectTask(_) => {
+            InventoryAction::ListReopenPanels
+            | InventoryAction::ReopenView(_)
+            | InventoryAction::InspectTask(_)
+            | InventoryAction::PrepareTaskStart(_)
+            | InventoryAction::ConfirmTaskStart
+            | InventoryAction::CancelTaskStart => {
                 self.reconnect.invalidate();
             }
             InventoryAction::CancelStop => self.stop.cancel_confirmation(),

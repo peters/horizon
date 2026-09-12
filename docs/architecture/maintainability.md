@@ -229,6 +229,10 @@ back into large multi-purpose modules.
   Its `inspection` leaf caches explicit retained-task observations in the same
   bounded worker slot, including with no local views. Labels are point-in-time;
   session, selection, config and Stop invalidation also discard late task results.
+  Its `start` leaf separately previews and confirms saved Shell execution in that
+  same single-flight slot. It never attaches a view or provisions a checkout.
+  Late dispatched starts retain an unattributed unknown-outcome warning rather
+  than reporting stale success or scheduling a retry.
 - `repository_overlay/` owns bounded exact-base metadata for separate index and
   working-tree changes. Its `paths.rs` applies the lexical transfer exclusion policy.
   Planning performs no filesystem, Git, provider or transfer I/O; actual capture/apply
@@ -596,6 +600,11 @@ overlay setup or Git. `remote_worker_status::git_start` owns the separate explic
 saved-Shell mutation, provider/pin admission and lease-bounded transport; existing
 inspection functions never call it. A matching retained marker is observed before
 current checkout inspection, preserving completed/dirty tasks without replay.
+Its `configured` child prepares an opaque saved-command confirmation without
+credentials or I/O outside the local store. Explicit execution consumes that
+snapshot, rechecks the complete allocation/configuration/storage selection and
+uses only the existing pinned start path. Post-dispatch drift is an unknown
+outcome, not authority to retry. Inert view catalogs never carry executable intent.
 
 Use these checks during implementation and review:
 

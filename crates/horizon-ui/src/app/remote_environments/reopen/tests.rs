@@ -6,6 +6,8 @@ use horizon_core::{CanvasViewState, PanelKind, PanelOptions, RuntimeState, Windo
 use std::time::{Duration, Instant};
 
 mod inspection;
+#[cfg(target_os = "linux")]
+mod start;
 
 const OWNER: &str = "00000000-0000-4000-8000-000000000001";
 const FOREIGN: &str = "00000000-0000-4000-8000-000000000002";
@@ -59,6 +61,7 @@ fn pending(
         scope: scope.clone(),
         discard: false,
         inspection: None,
+        start: None,
     });
     state.repaint_context = Some(ctx.clone());
     tx

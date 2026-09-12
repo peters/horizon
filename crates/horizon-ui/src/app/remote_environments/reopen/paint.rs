@@ -3,6 +3,9 @@ use super::{InventoryAction, ReopenState};
 pub(super) fn show(ui: &mut egui::Ui, state: &ReopenState, enabled: bool, action: &mut InventoryAction) {
     ui.separator();
     ui.strong("Saved panels");
+    if state.start_outcome_unknown {
+        ui.label("An earlier start request lost its selection or session context. Its outcome is unknown. Return to that environment and check its retained task; no retry was scheduled.");
+    }
     ui.label("Check a retained task or reopen its local view. Reopened views stay disconnected.");
     if ui
         .add_enabled(enabled && !state.is_pending(), egui::Button::new("Show saved panels"))
@@ -15,6 +18,8 @@ pub(super) fn show(ui: &mut egui::Ui, state: &ReopenState, enabled: bool, action
             "Waiting for the discarded task check to finish…"
         } else if pending.discard {
             "Waiting for the discarded saved-view request to finish…"
+        } else if let Some(start) = &pending.start {
+            start.label()
         } else if pending.inspection.is_some() {
             "Checking the selected retained task…"
         } else {
@@ -46,8 +51,20 @@ pub(super) fn show(ui: &mut egui::Ui, state: &ReopenState, enabled: bool, action
                     if check.clicked() {
                         *action = InventoryAction::InspectTask(index);
                     }
+                    let start = ui.add_enabled(
+                        enabled && !state.is_pending(),
+                        egui::Button::new("Start saved Shell task…"),
+                    );
+                    #[cfg(test)]
+                    ui.ctx().data_mut(|data| {
+                        data.insert_temp(egui::Id::new(("start-task-request", index)), start.rect);
+                    });
+                    if start.clicked() {
+                        *action = InventoryAction::PrepareTaskStart(index);
+                    }
                 });
                 row.inspection.show(ui);
+                state.start.show(ui, &row.id, enabled && !state.is_pending(), action);
             });
         }
         ui.label("Task checks are point-in-time, not monitoring or proof of repository or attachment readiness.");
