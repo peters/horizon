@@ -57,7 +57,8 @@ minutes), the off-phase setup at its bounds (eleven bounded ARM reads
 for the client, worker and identity-bracketed state attestations, the observer
 probe, and the deallocation with its poll, which share one 10-minute bound; about
 29 minutes), the off interval and everything that must still follow it: the return
-phase's own setup and the cleanup window (about 37 minutes); `off` and `install-observer-key`: their share of the
+phase's own setup and the cleanup window (about 42 minutes: 22 for the return at its
+bounds and the 20-minute cleanup bound); `off` and `install-observer-key`: their share of the
 same sum; `return`: its own setup at its bounds (seven bounded reads and the start
 with its poll, about 22 minutes) plus the cleanup window it must leave intact), so the
 reaper can never reach a group mid-run; the phases arm their runtime deadline from

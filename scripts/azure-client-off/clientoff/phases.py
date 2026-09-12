@@ -488,8 +488,14 @@ def phase_remove_observer(az: Az, manifest: Dict[str, Any], worker: Dict[str, An
     _, problem = attest_worker(az, manifest, worker)
     if problem:
         return {"passed": False, "removed": "unknown", "findings": [f"{problem} after the removal; removal unproven"]}
+    # The refusal counts only when B's identity is the same before and after the probe:
+    # a refusal from a replacement proves nothing about the baseline B.
+    before_probe = az.vm_identity(manifest["worker_group"], worker["vm_name"])
     after = reader(worker["host"], worker["port"], worker["host_key"], worker["observer_key_path"], directory,
                    observation_budget(az))
+    if not same_worker(before_probe, az.vm_identity(manifest["worker_group"], worker["vm_name"])):
+        return {"passed": False, "removed": "unknown",
+                "findings": ["worker B changed identity around the refusal probe; removal unproven"]}
     if after.get("channel") == "refused":
         return {"passed": True, "removed": True, "findings": []}
     if after.get("channel") == "answered":

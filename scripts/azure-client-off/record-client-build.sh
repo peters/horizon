@@ -37,10 +37,14 @@ esac
 clean() { [ -z "$(git status --porcelain --ignored | grep -v -E '^!! target/$')" ]; }
 clean || fail "the checkout is not clean (modified, untracked or ignored files besides target/); a frozen candidate is one commit"
 sha=$(git rev-parse HEAD)
-# Built for the client VM's platform explicitly, whatever the controller runs.
-CARGO_TARGET_DIR=$target_dir cargo build --release -p horizon-ui --bin horizon --target x86_64-unknown-linux-gnu
+# Built for the client VM's platform explicitly, whatever the controller runs. The
+# previous artifact is removed first, so the bytes hashed below can only have been
+# produced by this invocation (a stale or tampered executable that Cargo considered
+# fresh would otherwise be recorded against HEAD).
 binary=$target_dir/x86_64-unknown-linux-gnu/release/horizon
-[ -f "$binary" ] || fail "the build produced no binary at $binary"
+rm -f "$binary"
+CARGO_TARGET_DIR=$target_dir cargo build --release -p horizon-ui --bin horizon --target x86_64-unknown-linux-gnu
+[ -f "$binary" ] && [ ! -L "$binary" ] || fail "the build produced no regular binary at $binary"
 # The tree must still be the same commit after the build.
 [ "$(git rev-parse HEAD)" = "$sha" ] && clean || fail "the checkout changed during the build"
 # Client VM A is Ubuntu x86-64: only an ELF64 x86-64 binary can run there.

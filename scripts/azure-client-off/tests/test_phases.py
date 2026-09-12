@@ -878,6 +878,29 @@ class OffPhaseTests(unittest.TestCase):
                                                       reader=lambda *args: {"progress": None, "checkpoint": None, "channel": "refused"})
         self.assertFalse(result["passed"])
         self.assertEqual(self.mutations(calls), [], "a replaced worker is never touched")
+        # A refusal from a B that changed identity during the probe proves nothing.
+        m, az, calls = self.plane()
+        worker, _ = self.descriptors(m)
+        az.remove_container_authorized_key = lambda group, name, line: {}
+        original = az.run
+        state = {"probed": False}
+
+        def flipping(args, mutating=False, timeout=0):
+            answer = original(args, mutating, timeout)
+            if args[:2] == ["vm", "show"] and m["worker_group"] in args and state["probed"]:
+                answer = dict(answer, vmId=A_INSTANCE)
+            return answer
+
+        def refusing(*args):
+            state["probed"] = True
+            return {"progress": None, "checkpoint": None, "channel": "refused"}
+
+        az.run = flipping
+        with tempfile.TemporaryDirectory() as directory:
+            private, public, _ = self.observer_pair(directory)
+            result = client_off.phase_remove_observer(az, m, dict(worker, observer_key_path=private), public, directory,
+                                                      reader=refusing)
+        self.assertEqual((result["passed"], result["removed"]), (False, "unknown"), result)
         m, az, calls = self.plane()
         worker, _ = self.descriptors(m)
         with tempfile.TemporaryDirectory() as directory:
