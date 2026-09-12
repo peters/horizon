@@ -1,15 +1,12 @@
 use super::super::*;
-use super::{OWNER, pending};
+use super::{OTHER_OWNER, OWNER, pending, respond};
 use crate::test_egui::DiscardTextures;
 
-fn scope(home: &HorizonHome) -> Scope {
+pub(super) fn scope(home: &HorizonHome) -> Scope {
     Scope {
         home: home.root().to_path_buf(),
         owner: OWNER.into(),
-        config: serde_json::from_value(serde_json::json!({"local_docker":[{
-            "name":"local", "docker_host":"unix:///synthetic/must-not-connect.sock"
-        }]}))
-        .expect("synthetic profile"),
+        config: form::tests::config(),
     }
 }
 
@@ -29,15 +26,12 @@ fn old_attempt_response_cannot_be_accepted_for_a_new_attempt() {
         ..Default::default()
     };
     let sender = pending(&mut state, &scope, Some(second.clone()));
-    assert!(
-        sender
-            .send(Ok(Completion::Submitted(Box::new(
-                api::ConfiguredWorkspaceSetupAttempt {
-                    locator: first.clone(),
-                    result: Err(api::ConfiguredWorkspaceSetupError::InvalidRequest),
-                }
-            ))))
-            .is_ok()
+    respond(
+        &sender,
+        Completion::Submitted(Box::new(api::ConfiguredWorkspaceSetupAttempt {
+            locator: first.clone(),
+            result: Err(api::ConfiguredWorkspaceSetupError::InvalidRequest),
+        })),
     );
     state.sync(Some((&home, OWNER, &scope.config)));
     assert!(state.unknown && state.pending.is_none());
@@ -116,7 +110,7 @@ fn settled_history_preserves_inventory_and_check_rejects_wrong_home_or_owner() {
     state.notice = Some("Earlier result".into());
     assert!(!state.is_active());
     let other = HorizonHome::from_root(std::path::PathBuf::from("/synthetic-other"));
-    for (current, owner) in [(&other, OWNER), (&home, "00000000-0000-4000-8000-000000000002")] {
+    for (current, owner) in [(&other, OWNER), (&home, OTHER_OWNER)] {
         state.action(
             Action::CheckAttempt(0),
             current,
@@ -147,7 +141,7 @@ fn settled_history_preserves_inventory_and_check_rejects_wrong_home_or_owner() {
     );
 }
 
-fn settle(state: &mut SetupState, scope: &Scope) {
+pub(super) fn settle(state: &mut SetupState, scope: &Scope) {
     let home = HorizonHome::from_root(scope.home.clone());
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while state.pending.is_some() && std::time::Instant::now() < deadline {
@@ -190,13 +184,7 @@ fn consent_is_required_and_one_confirmation_is_consumed_once() {
     let home = HorizonHome::from_root(temp.path().join("original"));
     let other = HorizonHome::from_root(temp.path().join("refused-before-writes"));
     let scope = scope(&home);
-    let prepared = api::preview_configured_remote_workspace(
-        &home,
-        &scope.config,
-        OWNER,
-        form::tests::populated(false).draft(i64::MAX).expect("draft"),
-    )
-    .expect("inert preview");
+    let prepared = super::linux::prepared(&home, &scope, false);
     let original = prepared.locator().clone();
     let mut state = SetupState {
         scope: Some(scope.clone()),

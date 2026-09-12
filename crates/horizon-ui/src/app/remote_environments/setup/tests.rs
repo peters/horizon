@@ -1,6 +1,11 @@
 use super::*;
 
 const OWNER: &str = "00000000-0000-4000-8000-000000000001";
+const OTHER_OWNER: &str = "00000000-0000-4000-8000-000000000002";
+
+fn respond(sender: &mpsc::SyncSender<Result<Completion, String>>, completion: Completion) {
+    assert!(sender.send(Ok(completion)).is_ok());
+}
 
 fn pending(
     state: &mut SetupState,
@@ -40,7 +45,7 @@ fn entry_action_requires_persistent_linux_owner_and_invalidates_on_session_chang
     app.remote_environments.open = true;
     app.template_config.remote = form::tests::config();
     app.active_session = Some(crate::app::ActiveSession {
-        session_id: "00000000-0000-4000-8000-000000000001".into(),
+        session_id: OWNER.into(),
         lease: None,
         last_lease_refresh: None,
         persistent: false,
@@ -50,7 +55,7 @@ fn entry_action_requires_persistent_linux_owner_and_invalidates_on_session_chang
     app.active_session.as_mut().expect("session").persistent = true;
     app.remote_workspace_setup_action(InventoryAction::WorkspaceSetup(Action::New), &ctx);
     assert_eq!(app.remote_environments.setup.is_active(), cfg!(target_os = "linux"));
-    app.active_session.as_mut().expect("session").session_id = "00000000-0000-4000-8000-000000000002".into();
+    app.active_session.as_mut().expect("session").session_id = OTHER_OWNER.into();
     app.remote_workspace_setup_action(InventoryAction::None, &ctx);
     assert!(!app.remote_environments.setup.is_active());
     let (_sender, rx) = mpsc::sync_channel(1);
@@ -72,11 +77,7 @@ mod linux {
     fn fixture(cloud: bool) -> (tempfile::TempDir, HorizonHome, Scope, SetupState) {
         let temp = tempfile::tempdir().expect("fixture");
         let home = HorizonHome::from_root(temp.path().join("must-not-be-created"));
-        let scope = Scope {
-            home: home.root().to_path_buf(),
-            owner: OWNER.into(),
-            config: form::tests::config(),
-        };
+        let scope = super::recovery::scope(&home);
         let state = SetupState {
             form: Some(form::tests::populated(cloud)),
             scope: Some(scope.clone()),
@@ -84,7 +85,7 @@ mod linux {
         };
         (temp, home, scope, state)
     }
-    fn prepared(home: &HorizonHome, scope: &Scope, cloud: bool) -> PreparedRemoteWorkspaceSetup {
+    pub(super) fn prepared(home: &HorizonHome, scope: &Scope, cloud: bool) -> PreparedRemoteWorkspaceSetup {
         api::preview_configured_remote_workspace(
             home,
             &scope.config,
@@ -121,11 +122,7 @@ mod linux {
             let retained_scope = state.scope.clone();
             state.action(Action::New, &home, OWNER, &scope.config, &ctx);
             assert!(state.scope == retained_scope && state.pending.is_some());
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-            while state.pending.is_some() && std::time::Instant::now() < deadline {
-                state.sync(Some((&home, OWNER, &scope.config)));
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
+            super::recovery::settle(&mut state, &scope);
             assert!(state.pending.is_none() && state.review.is_some(), "{:?}", state.notice);
             assert!(!home.root().exists());
             state.action(Action::Edit, &home, OWNER, &scope.config, &ctx);
@@ -146,14 +143,11 @@ mod linux {
             match mode {
                 0 => state.action(Action::Cancel, &home, OWNER, &scope.config, &Context::default()),
                 1 => config.local_docker[0].docker_host = "unix:///changed.sock".into(),
-                2 => owner = "00000000-0000-4000-8000-000000000002",
+                2 => owner = OTHER_OWNER,
                 3 => current_home = &other_home,
                 _ => state.invalidate(),
             }
-            assert!(
-                tx.send(Ok(Completion::Preview(Box::new(prepared(&home, &scope, false)))))
-                    .is_ok()
-            );
+            respond(&tx, Completion::Preview(Box::new(prepared(&home, &scope, false))));
             state.sync(Some((current_home, owner, &config)));
             assert!(state.review.is_none() && !state.is_active());
             state.sync(Some((&home, OWNER, &scope.config)));
@@ -181,10 +175,7 @@ mod linux {
             assert!(form.contains("Nothing has been created") && form.contains("Review request"));
             assert!(!form.contains("Create task-free worker") && !form.contains("I trust this"));
             let tx = pending(&mut state, &scope, None);
-            assert!(
-                tx.send(Ok(Completion::Preview(Box::new(prepared(&home, &scope, cloud)))))
-                    .is_ok()
-            );
+            respond(&tx, Completion::Preview(Box::new(prepared(&home, &scope, cloud))));
             state.sync(Some((&home, OWNER, &scope.config)));
             let text = render(&mut state, [900.0, 1600.0]);
             for required in [
@@ -200,6 +191,22 @@ mod linux {
             }
             if cloud {
                 assert!(text.contains("synthetic-volume") && text.contains("459 US cents/hour"));
+                for required in [
+                    "12.8",
+                    "CUDA allowlist",
+                    "synthetic-dc",
+                    "overridden by HPS",
+                    "8080/http",
+                    "37 GB",
+                    "unused with HPS",
+                    "123",
+                    "234",
+                    "345",
+                    "minDisk (raw)",
+                    "synthetic-registration",
+                ] {
+                    assert!(text.contains(required), "missing RunPod value {required}");
+                }
             }
             for forbidden in ["Check this setup", "Authorize creation", "Connect"] {
                 assert!(!text.contains(forbidden), "unexpected {forbidden}");
@@ -218,10 +225,7 @@ mod linux {
         };
         let tx = pending(&mut inventory.setup, &scope, None);
         inventory.close();
-        assert!(
-            tx.send(Ok(Completion::Preview(Box::new(prepared(&home, &scope, false)))))
-                .is_ok()
-        );
+        respond(&tx, Completion::Preview(Box::new(prepared(&home, &scope, false))));
         inventory.setup.sync(None);
         assert!(!inventory.open && !inventory.setup.is_active() && !home.root().exists());
     }
@@ -280,11 +284,7 @@ mod linux {
             state.action(
                 Action::Confirm,
                 if mode == 0 { &other } else { &home },
-                if mode == 1 {
-                    "00000000-0000-4000-8000-000000000002"
-                } else {
-                    OWNER
-                },
+                if mode == 1 { OTHER_OWNER } else { OWNER },
                 &config,
                 &Context::default(),
             );
@@ -324,15 +324,12 @@ mod linux {
                         ..Default::default()
                     };
                     let sender = pending(&mut state, &scope, Some(locator.clone()));
-                    assert!(
-                        sender
-                            .send(Ok(Completion::Submitted(Box::new(
-                                api::ConfiguredWorkspaceSetupAttempt {
-                                    locator: locator.clone(),
-                                    result: error.map_or_else(|| Ok(allocation.clone()), Err),
-                                }
-                            ))))
-                            .is_ok()
+                    respond(
+                        &sender,
+                        Completion::Submitted(Box::new(api::ConfiguredWorkspaceSetupAttempt {
+                            locator: locator.clone(),
+                            result: error.map_or_else(|| Ok(allocation.clone()), Err),
+                        })),
                     );
                     if discard {
                         state.invalidate();
@@ -384,7 +381,7 @@ mod linux {
         };
         let sender = pending(&mut state, &scope, Some(attempt.locator.clone()));
         state.invalidate();
-        assert!(sender.send(Ok(Completion::Submitted(Box::new(attempt)))).is_ok());
+        respond(&sender, Completion::Submitted(Box::new(attempt)));
         state.sync(None);
         assert!(!state.unknown && state.pending.is_none() && !home.root().exists());
     }

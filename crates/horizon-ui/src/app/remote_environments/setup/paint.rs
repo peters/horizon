@@ -30,19 +30,7 @@ impl Review {
             }
             horizon_core::cloud_run::CloudProvider::RunPod => {
                 if let Ok(profile) = config.runpod_profile(&spec.target.profile) {
-                    fields.push((
-                        "GPU choices / count",
-                        format!("{:?} / {}", profile.gpu_type_ids, profile.gpu_count),
-                    ));
-                    fields.push((
-                        "Registry pull registration",
-                        if profile.container_registry_auth_id.is_some() {
-                            "configured"
-                        } else {
-                            "absent"
-                        }
-                        .into(),
-                    ));
+                    fields.extend(runpod_fields(profile));
                 }
             }
             horizon_core::cloud_run::CloudProvider::Azure => {}
@@ -70,6 +58,36 @@ impl Review {
         }
         Self { prepared, fields }
     }
+}
+
+fn runpod_fields(profile: &horizon_core::cloud_run::runpod::RunPodProfile) -> [(&'static str, String); 9] {
+    [
+        (
+            "GPU choices / count",
+            format!("{:?} / {}", profile.gpu_type_ids, profile.gpu_count),
+        ),
+        (
+            "CUDA allowlist ([] = unrestricted)",
+            format!("{:?}", profile.allowed_cuda_versions),
+        ),
+        (
+            "Profile data center (overridden by HPS)",
+            optional(profile.data_center_id.as_deref()),
+        ),
+        ("Ports", format!("{:?}", profile.ports)),
+        ("Profile volume (unused with HPS)", format!("{} GB", profile.volume_gib)),
+        (
+            "Registry pull registration",
+            optional(profile.container_registry_auth_id.as_deref()),
+        ),
+        ("Minimum download (Mbps)", optional(profile.min_download_mbps)),
+        ("Minimum upload (Mbps)", optional(profile.min_upload_mbps)),
+        ("minDisk (raw)", optional(profile.min_disk_bandwidth_mbps)),
+    ]
+}
+
+fn optional(value: Option<impl ToString>) -> String {
+    value.map_or_else(|| "Not set".into(), |value| value.to_string())
 }
 
 impl SetupState {
@@ -163,23 +181,18 @@ impl SetupState {
         }
     }
     pub(in super::super) fn new_button(&self, ui: &mut egui::Ui, action: &mut InventoryAction) {
-        if ui
-            .add_enabled(
-                self.available && !self.is_active(),
-                egui::Button::new("New remote workspace"),
-            )
-            .clicked()
-        {
-            *action = InventoryAction::WorkspaceSetup(Action::New);
-        }
-        if ui
-            .add_enabled(
-                self.available && !self.is_active() && self.selected.is_some(),
-                egui::Button::new("Check selected setup"),
-            )
-            .clicked()
-        {
-            *action = InventoryAction::WorkspaceSetup(Action::CheckSelected);
+        let available = self.available && !self.is_active();
+        for (label, operation, enabled) in [
+            ("New remote workspace", Action::New, available),
+            (
+                "Check selected setup",
+                Action::CheckSelected,
+                available && self.selected.is_some(),
+            ),
+        ] {
+            if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
+                *action = InventoryAction::WorkspaceSetup(operation);
+            }
         }
         if !self.available {
             ui.label("Setup needs an open persistent Linux session and no pending remote action.");

@@ -212,7 +212,9 @@ pub(super) mod tests {
     pub(in super::super) fn config() -> RemoteProviderConfig {
         serde_json::from_value(serde_json::json!({
             "local_docker":[{"name":"local","docker_host":"unix:///synthetic/docker.sock"}],
-            "runpod":[{"name":"gpu","gpu_type_ids":["synthetic"],"gpu_count":1,"ports":["22/tcp"],"volume_gib":10}]
+            "runpod":[{"name":"gpu","gpu_type_ids":["synthetic"],"gpu_count":1,"ports":["22/tcp","8080/http"],"volume_gib":37,
+                "allowed_cuda_versions":["12.8"],"data_center_id":"synthetic-dc","min_download_mbps":123,
+                "min_upload_mbps":234,"min_disk_bandwidth_mbps":345,"container_registry_auth_id":"synthetic-registration"}]
         }))
         .expect("profiles")
     }
