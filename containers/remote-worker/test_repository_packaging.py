@@ -14,7 +14,8 @@ import tempfile
 
 CRATES = ("horizon-repository", "horizon-core", "horizon-browser", "horizon-browser-protocol")
 WORKER_FILES = {"Dockerfile", "build-tmux.sh", "entrypoint.sh", "host-identity.py", "rust-path.sh",
-                "session.sh", "github-credentials.py", "panel-session.py", "setup-launch.py", "tmux.conf", "sshd_config"}
+                "session.sh", "github-credentials.py", "panel-session.py", "setup-launch.py", "byte-capture.py",
+                "byte_capture_store.py", "tmux.conf", "sshd_config"}
 AGENT_PATHS = tuple("usr/local/bin/" + tool for tool in
                     ("codex", "claude", "gemini", "opencode", "kilo", "pi", "grok")) + tuple(
     "usr/local/lib/node_modules/" + package for package in

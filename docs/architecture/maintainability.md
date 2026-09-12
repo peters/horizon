@@ -11,6 +11,12 @@ back into large multi-purpose modules.
   the explicit named layout owns permanent digest slots in a focused Linux leaf.
   Neither layout discovers data, transfers it, schedules capture or certifies
   provider durability. See [named publication](named-bundle-publication.md).
+- Explicit worker byte capture keeps request validation and existing core
+  capture/bundle reuse in `horizon-repository::capture`; `byte-capture.py` owns
+  the detached bounded-attempt loop and `byte_capture_store.py` owns private
+  records. No provider lifecycle or automatic enrollment is implied. See
+  [worker byte capture](worker-byte-capture.md) for the non-atomic protection
+  boundary and retained-volume attestation.
 - Prepared task admission keeps immutable intake/setup selection and read-only
   checkout inspection in `repository_overlay::intake::setup`. The fixed
   `setup-binding` and `setup-checkout` helpers never materialize or start tasks.
