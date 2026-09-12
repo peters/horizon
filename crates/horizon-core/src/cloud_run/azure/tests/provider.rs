@@ -16,8 +16,46 @@ pub(super) use crate::cloud_run::{
 pub(super) use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
+
+/// Simulated time: sleeps advance it instantly and are recorded, and the plane can
+/// charge every bounded request against it, so the waits' deadline arithmetic runs
+/// exactly as in production without a real second passing.
+#[derive(Clone)]
+pub(super) struct FakeClock(Arc<Mutex<(Instant, Vec<Duration>)>>);
+
+impl Default for FakeClock {
+    fn default() -> Self {
+        Self(Arc::new(Mutex::new((Instant::now(), Vec::new()))))
+    }
+}
+
+impl FakeClock {
+    pub(super) fn advance(&self, by: Duration) {
+        self.0.lock().expect("clock").0 += by;
+    }
+
+    pub(super) fn sleeps(&self) -> Vec<Duration> {
+        self.0.lock().expect("clock").1.clone()
+    }
+
+    pub(super) fn instant(&self) -> Instant {
+        self.0.lock().expect("clock").0
+    }
+}
+
+impl super::super::provider::AzureClock for FakeClock {
+    fn now(&self) -> Instant {
+        self.0.lock().expect("clock").0
+    }
+
+    fn sleep(&self, duration: Duration) {
+        let mut clock = self.0.lock().expect("clock");
+        clock.0 += duration;
+        clock.1.push(duration);
+    }
+}
 
 /// Every management call the provider makes, in order, with its arguments.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -62,6 +100,9 @@ pub(super) struct Plane {
     /// Replaces the group once the start was posted, as a concurrent retag or deletion
     /// during the wait would.
     pub(super) group_after_start: Option<GroupChange>,
+    /// How long every bounded lookup takes on the scenario's clock.
+    pub(super) request_takes: Duration,
+    pub(super) clock: Option<FakeClock>,
     pub(super) calls: Vec<Call>,
 }
 
@@ -82,6 +123,20 @@ impl Fake {
             .into_iter()
             .filter(|call| !matches!(call, Call::GetGroup(_) | Call::GetDeployment(_) | Call::GetVm(_)))
             .collect()
+    }
+
+    /// A bounded request: it must carry what is left of the bound, and it costs the
+    /// scenario's request time on the clock (never more than its own budget, as a
+    /// bounded request would be cut off there).
+    fn charge(&self, budget: Duration) {
+        assert!(
+            !budget.is_zero() && budget <= Duration::from_secs(300),
+            "a poll carries what is left of the bound: {budget:?}"
+        );
+        let plane = self.lock();
+        if let Some(clock) = &plane.clock {
+            clock.advance(plane.request_takes.min(budget));
+        }
     }
 
     pub(super) fn script(
@@ -190,18 +245,12 @@ impl AzureManagementTransport for Fake {
     }
 
     fn get_resource_group_within(&self, name: &str, budget: Duration) -> Result<Option<AzureGroupInfo>, AzureError> {
-        assert!(
-            !budget.is_zero() && budget <= Duration::from_secs(300),
-            "a poll carries what is left of the stop bound: {budget:?}"
-        );
+        self.charge(budget);
         self.get_resource_group(name)
     }
 
     fn get_vm_within(&self, group: &str, name: &str, budget: Duration) -> Result<Option<AzureVmView>, AzureError> {
-        assert!(
-            !budget.is_zero() && budget <= Duration::from_secs(300),
-            "a poll carries what is left of the stop bound: {budget:?}"
-        );
+        self.charge(budget);
         self.get_vm(group, name)
     }
 
@@ -273,6 +322,7 @@ pub(super) fn deployment(state: &str, host: &str) -> AzureDeploymentState {
 }
 
 pub(super) struct Scenario {
+    pub(super) clock: FakeClock,
     pub(super) request: InteractiveWorkerRequest,
     pub(super) group: String,
     pub(super) group_id: String,
@@ -289,11 +339,15 @@ impl Scenario {
             ssh_public_key: ed25519_key(7, "client"),
         };
         let group = resource_group_name(request.workflow_id, request.job_id);
+        let clock = FakeClock::default();
+        let plane = Fake::default();
+        plane.lock().clock = Some(clock.clone());
         Self {
+            clock,
             group_id: format!("/subscriptions/{SUB}/resourceGroups/{group}"),
             group,
             tags: worker_tags(&request),
-            plane: Fake::default(),
+            plane,
             request,
         }
     }
@@ -322,7 +376,9 @@ impl Scenario {
             );
             host_key.clone()
         };
-        AzureClient::with_transport(profile(), self.plane.clone(), fence, keys).expect("client")
+        AzureClient::with_transport(profile(), self.plane.clone(), fence, keys)
+            .expect("client")
+            .on_clock(self.clock.clone())
     }
 
     pub(super) fn persisted(&self) -> InteractiveWorker {
@@ -362,3 +418,4 @@ mod instance;
 mod observation;
 mod running;
 mod start;
+mod wait;

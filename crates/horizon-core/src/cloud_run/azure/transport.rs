@@ -397,7 +397,12 @@ fn decode_json(
 
 /// Time left before an absolute deadline, or `None` once it has passed.
 pub(super) fn remaining(deadline: std::time::Instant) -> Option<Duration> {
-    let left = deadline.saturating_duration_since(std::time::Instant::now());
+    remaining_at(std::time::Instant::now(), deadline)
+}
+
+/// What is left of `deadline` at `now`, or nothing once it has passed.
+pub(super) fn remaining_at(now: std::time::Instant, deadline: std::time::Instant) -> Option<Duration> {
+    let left = deadline.saturating_duration_since(now);
     (!left.is_zero()).then_some(left)
 }
 

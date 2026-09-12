@@ -4,7 +4,7 @@
 use super::super::{
     AzureError, AzureLifecycle, AzureManagementTransport, AzureRunCommand, AzureVmView, AzureWorker, WORKER_VM_NAME,
     deployment::{SSH_PORT, identity_tags},
-    transport::remaining,
+    transport::remaining_at,
 };
 use super::{AzureClient, Observation, Placement, SSH_USERNAME, vm_lifecycle};
 use crate::cloud_run::{
@@ -13,7 +13,7 @@ use crate::cloud_run::{
     interactive_worker_start::{InteractiveWorkerStart, InteractiveWorkerStartProvider},
     interactive_worker_stop::{InteractiveWorkerStop, InteractiveWorkerStopProvider},
 };
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Polling schedule for a power transition (deallocation or start) to be observed after
 /// Azure accepted it; D-series transitions commonly take one to three minutes. The last
@@ -25,10 +25,6 @@ const POWER_BOUND: Duration = Duration::from_secs(300);
 /// final observation happens this close to the deadline, which is as near as a bounded
 /// request allows (an ARM lookup normally answers in well under a second).
 const FINAL_POLL_RESERVE: Duration = Duration::from_secs(5);
-/// Polls a test may observe before the wait is treated as exhausted (tests skip the
-/// sleeps, so the absolute bound alone would spin for its whole length).
-#[cfg(test)]
-const TEST_POLLS: usize = 14;
 /// The non-billed state the worker must hold after a stop.
 const RETAINED: AzureLifecycle = AzureLifecycle::Deallocated;
 
@@ -205,15 +201,13 @@ impl AzureClient {
         target: AzureLifecycle,
     ) -> Result<Option<AzureVmView>, AzureError> {
         let group = &current.worker.resource_group;
-        let deadline = Instant::now() + POWER_BOUND;
+        let deadline = self.clock.now() + POWER_BOUND;
         let last = POWER_BACKOFF_MS[POWER_BACKOFF_MS.len() - 1];
         let schedule = POWER_BACKOFF_MS.into_iter().chain(std::iter::repeat(last));
-        #[cfg(test)]
-        let schedule = schedule.take(TEST_POLLS);
         for delay_ms in schedule {
             // Only the absolute deadline ends the wait; a transition that completes late
             // in the bound is still observed.
-            let Some(left) = remaining(deadline) else {
+            let Some(left) = remaining_at(self.clock.now(), deadline) else {
                 break;
             };
             // Never sleep into the deadline: the sleep stops a small reserve short of
@@ -221,10 +215,8 @@ impl AzureClient {
             // deadline, is the last one, so a transition that completes at the very end
             // of the bound is still observed without busy-polling.
             let sleep_for = Duration::from_millis(delay_ms).min(left.saturating_sub(FINAL_POLL_RESERVE));
-            if !cfg!(test) && !sleep_for.is_zero() {
-                std::thread::sleep(sleep_for);
-            }
-            let Some(budget) = remaining(deadline) else {
+            self.clock.sleep(sleep_for);
+            let Some(budget) = remaining_at(self.clock.now(), deadline) else {
                 break;
             };
             let final_poll = budget <= FINAL_POLL_RESERVE;
@@ -240,7 +232,7 @@ impl AzureClient {
             if live.provisioning_state == "Deleting" {
                 break;
             }
-            let Some(budget) = remaining(deadline) else {
+            let Some(budget) = remaining_at(self.clock.now(), deadline) else {
                 break;
             };
             let Some(vm) = self.transport.get_vm_within(group, WORKER_VM_NAME, budget)? else {

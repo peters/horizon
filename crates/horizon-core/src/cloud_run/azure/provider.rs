@@ -15,7 +15,7 @@ use crate::cloud_run::{
         InteractiveWorkerStatus,
     },
 };
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 mod running;
 pub use running::{AzureHostKeySource, AzureRunCommandHostKeys};
@@ -74,6 +74,28 @@ pub struct AzureClient {
     transport: Box<dyn AzureManagementTransport>,
     fence: Box<dyn AzureCreationFence>,
     host_keys: Box<dyn AzureHostKeySource>,
+    clock: Box<dyn AzureClock>,
+}
+
+/// The clock the provider's bounded waits run on: production sleeps for real, tests
+/// advance a fake so the exact deadline arithmetic runs without waiting.
+pub(super) trait AzureClock: Send + Sync {
+    fn now(&self) -> std::time::Instant;
+    fn sleep(&self, duration: Duration);
+}
+
+struct SystemClock;
+
+impl AzureClock for SystemClock {
+    fn now(&self) -> std::time::Instant {
+        std::time::Instant::now()
+    }
+
+    fn sleep(&self, duration: Duration) {
+        if !duration.is_zero() {
+            std::thread::sleep(duration);
+        }
+    }
 }
 
 /// Whether an observation must also match the current profile's VM size and location.
@@ -143,7 +165,16 @@ impl AzureClient {
             transport: Box::new(transport),
             fence: Box::new(fence),
             host_keys: Box::new(host_keys),
+            clock: Box::new(SystemClock),
         })
+    }
+
+    /// The same client on a test clock; the waits keep their production schedule and
+    /// bound, only time itself is simulated.
+    #[cfg(test)]
+    pub(super) fn on_clock(mut self, clock: impl AzureClock + 'static) -> Self {
+        self.clock = Box::new(clock);
+        self
     }
 
     /// The persisted handle, shape-checked before any I/O. Cost and placement policy are
