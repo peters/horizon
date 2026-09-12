@@ -4,7 +4,7 @@ mod paint;
 
 use super::{Context, HorizonHome, InventoryAction, RemoteEnvironmentSummary, WakeOnDrop};
 use horizon_core::{
-    cloud_run::CloudWorkflowStore,
+    cloud_run::{CloudProvider, CloudWorkflowStore},
     remote_git_setup::{self as git, ConfiguredRemoteGitSetupRequest, PreparedRemoteGitSetup, RemoteGitCredentialMode},
     remote_github_credential::RepositoryPat,
     remote_provider_config::RemoteProviderConfig,
@@ -58,6 +58,10 @@ enum Completion {
     Preview(Box<PreparedRemoteGitSetup>),
     Submitted(git::ConfiguredRemoteGitSubmission),
     Observed(git::RemoteGitObservation),
+}
+
+pub(super) fn supported(provider: CloudProvider) -> bool {
+    cfg!(target_os = "linux") && matches!(provider, CloudProvider::LocalDocker | CloudProvider::RunPod)
 }
 
 impl RepositoryState {
@@ -157,7 +161,7 @@ impl RepositoryState {
         }
     }
     fn action(&mut self, action: InventoryAction, home: &HorizonHome, ctx: &Context, scope: Scope) {
-        if self.is_pending() {
+        if self.is_pending() || !supported(scope.expected.provider) {
             return;
         }
         match action {

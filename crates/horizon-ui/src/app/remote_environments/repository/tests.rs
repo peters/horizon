@@ -160,3 +160,55 @@ fn password_widget_clears_plaintext_undo_and_masks_output() {
     }
     token.clear();
 }
+
+#[test]
+fn unsupported_repository_actions_never_dispatch() {
+    let ctx = Context::default();
+    let temp = tempfile::tempdir().expect("fixture");
+    let home = HorizonHome::from_root(temp.path().join("never-opened"));
+    for provider in [CloudProvider::LocalDocker, CloudProvider::RunPod, CloudProvider::Azure] {
+        assert_eq!(
+            supported(provider),
+            cfg!(target_os = "linux") && provider != CloudProvider::Azure
+        );
+        if supported(provider) {
+            continue;
+        }
+        let mut scope = scope();
+        scope.expected.provider = provider;
+        for action in [
+            InventoryAction::PrepareRepository,
+            InventoryAction::ConfirmRepository,
+            InventoryAction::InspectRepository,
+        ] {
+            let mut state = RepositoryState::default();
+            state.action(action, &home, &ctx, scope.clone());
+            assert!(!state.is_pending() && state.notice.is_none());
+        }
+    }
+    assert!(!home.cloud_workflow_store_path().exists());
+}
+
+#[test]
+fn start_actions_clear_repository_pat_without_forgetting_pending_mutation() {
+    for action in [
+        InventoryAction::PrepareTaskStart(0),
+        InventoryAction::ConfirmTaskStart,
+        InventoryAction::CancelTaskStart,
+    ] {
+        let mut view = super::super::RemoteEnvironments::default();
+        view.repository.token = "synthetic_repository_pat".into();
+        view.repository.consent = true;
+        let tx = pending(&mut view.repository, &scope(), true);
+        view.apply(
+            action,
+            &HorizonHome::from_root("/never-opened".into()),
+            &Context::default(),
+        );
+        assert!(view.repository.token.is_empty() && !view.repository.consent);
+        assert!(view.repository.is_pending());
+        drop(tx);
+        view.repository.drain(None);
+        assert!(view.repository.unknown && !view.repository.is_pending());
+    }
+}

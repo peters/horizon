@@ -200,7 +200,9 @@ fn render_content(ui: &mut egui::Ui, state: &mut RemoteEnvironments, action: &mu
         super::repository::show(
             ui,
             &mut state.repository,
-            idle && !state.reopen.is_pending() && !state.reconnect.is_pending(),
+            idle && !state.reopen.is_pending()
+                && !state.reconnect.is_pending()
+                && super::repository::supported(row.summary.provider),
             action,
         );
         let views_enabled = idle && !state.repository.is_pending();
