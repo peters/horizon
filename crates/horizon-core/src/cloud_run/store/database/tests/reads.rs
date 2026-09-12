@@ -243,3 +243,219 @@ fn read_only_open_and_single_record_reads_reject_symlink_database() {
     assert!(fixture.store.load_remote_allocation(OWNER, "workspace").is_err());
     assert_eq!(std::fs::read(retained).expect("preserved database"), before);
 }
+
+#[cfg(unix)]
+mod existing {
+    use super::*;
+
+    #[derive(Debug, PartialEq)]
+    struct DatabaseState {
+        bytes: Vec<u8>,
+        version: i64,
+        journal_mode: String,
+        rows: SavedRows,
+    }
+
+    fn state(fixture: &Fixture) -> DatabaseState {
+        let connection = open_read_connection(fixture.store.path()).expect("inspect only");
+        DatabaseState {
+            bytes: std::fs::read(fixture.store.path()).expect("database bytes"),
+            version: connection
+                .pragma_query_value(None, "user_version", |row| row.get(0))
+                .expect("version"),
+            journal_mode: connection
+                .pragma_query_value(None, "journal_mode", |row| row.get(0))
+                .expect("journal"),
+            rows: saved_bytes(&connection),
+        }
+    }
+
+    #[test]
+    fn legacy_and_future_schemas_are_refused_without_migration_or_journal_changes() {
+        for version in [4, 5, 6, STORE_SCHEMA_VERSION + 1] {
+            let fixture = fixture();
+            let writer = CloudWorkflowStore::open_existing_without_migration_path(fixture.store.path())
+                .expect("current handle before schema drift");
+            let connection = open_connection(fixture.store.path()).expect("fixture writer");
+            if version < 7 {
+                connection
+                    .execute_batch("DROP TABLE remote_provider_bindings")
+                    .expect("legacy binding");
+            }
+            if version < 6 {
+                connection
+                    .execute_batch("DROP TABLE remote_network_volume_selections")
+                    .expect("legacy selection");
+            }
+            if version < 5 {
+                connection
+                    .execute_batch("DROP TABLE remote_first_pin_intents")
+                    .expect("legacy first pin");
+            }
+            connection
+                .pragma_update(None, "user_version", version)
+                .expect("schema fixture");
+            connection
+                .pragma_update(None, "journal_mode", "DELETE")
+                .expect("non-WAL fixture");
+            drop(connection);
+            let before = state(&fixture);
+            if version < STORE_SCHEMA_VERSION {
+                CloudWorkflowStore::open_read_only_path(fixture.store.path()).expect("genuine compatible legacy");
+            }
+            assert!(matches!(
+                CloudWorkflowStore::open_existing_without_migration_path(fixture.store.path()),
+                Err(CloudStoreError::UnsupportedSchema(actual)) if actual == version
+            ));
+            let mut next = fixture.workflow.workflow().clone();
+            next.updated_at_millis += 1;
+            assert!(
+                matches!(writer.replace(&fixture.workflow, &next), Err(CloudStoreError::UnsupportedSchema(actual)) if actual == version)
+            );
+            assert_eq!(state(&fixture), before);
+        }
+    }
+
+    #[test]
+    fn current_schema_open_preserves_storage_and_cloned_writers_use_exact_cas() {
+        for journal in ["delete", "wal"] {
+            let fixture = fixture();
+            let connection = open_connection(fixture.store.path()).expect("fixture writer");
+            connection
+                .pragma_update(None, "journal_mode", journal)
+                .expect("journal fixture");
+            drop(connection);
+            let before = state(&fixture);
+            let writer = CloudWorkflowStore::open_existing_without_migration_path(fixture.store.path())
+                .expect("current existing writer");
+            let writer = writer.clone();
+            assert_eq!(
+                writer.load(fixture.workflow.workflow().id).expect("read"),
+                Some(fixture.workflow.clone())
+            );
+            assert_eq!(state(&fixture), before);
+            let mut next = fixture.workflow.workflow().clone();
+            next.updated_at_millis += 1;
+            let updated = writer.replace(&fixture.workflow, &next).expect("verified exact CAS");
+            assert_eq!(updated.revision(), fixture.workflow.revision() + 1);
+            assert_eq!(updated.workflow(), &next);
+            assert_eq!(writer.load(next.id).expect("saved CAS"), Some(updated));
+            assert!(matches!(
+                writer.replace(&fixture.workflow, &next),
+                Err(CloudStoreError::RevisionConflict { .. })
+            ));
+            let after = state(&fixture);
+            assert_eq!(after.version, before.version);
+            assert_eq!(after.journal_mode, journal);
+            assert_eq!(after.rows.workspace, before.rows.workspace);
+            assert_eq!(after.rows.claims, before.rows.claims);
+        }
+    }
+
+    #[test]
+    fn missing_corrupt_and_nonregular_paths_are_not_created_or_repaired() {
+        let directory = tempfile::tempdir().expect("private directory");
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("private fixture parent");
+        let home = crate::HorizonHome::from_root(directory.path().join("absent"));
+        assert!(CloudWorkflowStore::open_existing_without_migration(&home).is_err());
+        assert!(!home.root().exists());
+        let path = directory.path().join("database");
+        assert!(CloudWorkflowStore::open_existing_without_migration_path(&path).is_err());
+        assert!(!path.exists());
+        std::fs::create_dir(&path).expect("nonregular fixture");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).expect("private directory");
+        assert!(matches!(
+            CloudWorkflowStore::open_existing_without_migration_path(&path),
+            Err(CloudStoreError::ExistingStoreChanged)
+        ));
+        assert!(path.is_dir());
+        let empty = directory.path().join("empty.sqlite3");
+        std::fs::write(&empty, b"").expect("empty fixture");
+        std::fs::set_permissions(&empty, std::fs::Permissions::from_mode(0o600)).expect("private empty fixture");
+        assert!(matches!(
+            CloudWorkflowStore::open_existing_without_migration_path(&empty),
+            Err(CloudStoreError::UnsupportedSchema(0))
+        ));
+        assert_eq!(std::fs::metadata(empty).expect("unchanged empty file").len(), 0);
+        let corrupt = directory.path().join("corrupt.sqlite3");
+        std::fs::write(&corrupt, b"not a database").expect("corrupt fixture");
+        std::fs::set_permissions(&corrupt, std::fs::Permissions::from_mode(0o600)).expect("private corruption");
+        assert!(CloudWorkflowStore::open_existing_without_migration_path(&corrupt).is_err());
+        assert_eq!(std::fs::read(corrupt).expect("preserved corruption"), b"not a database");
+        let fixture = fixture();
+        let connection = open_connection(fixture.store.path()).expect("fixture writer");
+        connection
+            .execute_batch("DROP INDEX remote_runtime_allocations_job")
+            .expect("schema corruption");
+        drop(connection);
+        let before = state(&fixture);
+        assert!(matches!(
+            CloudWorkflowStore::open_existing_without_migration_path(fixture.store.path()),
+            Err(CloudStoreError::InvalidAllocationSchema)
+        ));
+        assert_eq!(state(&fixture), before);
+    }
+
+    #[test]
+    fn existing_clones_reject_disappearance_replacement_and_symlinks_without_recreation() {
+        for replacement in ["absent", "copy", "symlink"] {
+            let fixture = fixture();
+            let path = fixture.store.path();
+            let writer = CloudWorkflowStore::open_existing_without_migration_path(path).expect("existing writer");
+            let writer = writer.clone();
+            let retained = path.with_file_name("retained.sqlite3");
+            std::fs::rename(path, &retained).expect("retain original");
+            let before = std::fs::read(&retained).expect("retained bytes");
+            match replacement {
+                "copy" => {
+                    std::fs::copy(&retained, path).expect("same-byte replacement");
+                }
+                "symlink" => std::os::unix::fs::symlink(&retained, path).expect("symlink replacement"),
+                _ => {}
+            }
+            let mut next = fixture.workflow.workflow().clone();
+            next.updated_at_millis += 1;
+            assert!(writer.replace(&fixture.workflow, &next).is_err());
+            assert_eq!(std::fs::read(&retained).expect("unchanged original"), before);
+            if replacement == "absent" {
+                assert!(!path.exists());
+            } else {
+                assert_eq!(std::fs::read(path).expect("unchanged replacement"), before);
+            }
+        }
+    }
+
+    #[test]
+    fn exposed_file_or_parent_is_refused_without_permission_repair() {
+        for parent in [false, true] {
+            let fixture = fixture();
+            let writer =
+                CloudWorkflowStore::open_existing_without_migration_path(fixture.store.path()).expect("writer");
+            let before = std::fs::read(fixture.store.path()).expect("original");
+            let changed = if parent {
+                fixture.store.path().parent().expect("parent")
+            } else {
+                fixture.store.path()
+            };
+            let mode = if parent { 0o755 } else { 0o644 };
+            std::fs::set_permissions(changed, std::fs::Permissions::from_mode(mode)).expect("exposed fixture");
+            assert!(CloudWorkflowStore::open_existing_without_migration_path(fixture.store.path()).is_err());
+            assert!(writer.connection().is_err());
+            assert_eq!(changed.metadata().expect("metadata").permissions().mode() & 0o777, mode);
+            assert_eq!(std::fs::read(fixture.store.path()).expect("unchanged bytes"), before);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+#[test]
+fn existing_writer_is_explicitly_unsupported_without_creating_storage() {
+    let directory = tempfile::tempdir().expect("private directory");
+    let home = crate::HorizonHome::from_root(directory.path().join("absent"));
+    assert!(matches!(
+        CloudWorkflowStore::open_existing_without_migration(&home),
+        Err(CloudStoreError::ExistingStoreUnsupported)
+    ));
+    assert!(!home.root().exists());
+}

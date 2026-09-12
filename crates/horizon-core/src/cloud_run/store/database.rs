@@ -3,7 +3,7 @@
 #[cfg(unix)]
 use std::fs::OpenOptions;
 #[cfg(unix)]
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -108,14 +108,79 @@ const PROVIDER_BINDING_SCHEMA: [&str; 4] = [
 ];
 
 pub(super) fn open_connection(path: &Path) -> Result<Connection, CloudStoreError> {
-    let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
-        | OpenFlags::SQLITE_OPEN_CREATE
-        | OpenFlags::SQLITE_OPEN_NO_MUTEX
-        | OpenFlags::SQLITE_OPEN_NOFOLLOW;
+    open_write_connection(path, true)
+}
+
+fn open_write_connection(path: &Path, create: bool) -> Result<Connection, CloudStoreError> {
+    let mut flags =
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX | OpenFlags::SQLITE_OPEN_NOFOLLOW;
+    if create {
+        flags |= OpenFlags::SQLITE_OPEN_CREATE;
+    }
     let connection = Connection::open_with_flags(path, flags)?;
     connection.busy_timeout(BUSY_TIMEOUT)?;
     connection.pragma_update(None, "foreign_keys", "ON")?;
     connection.pragma_update(None, "synchronous", "FULL")?;
+    Ok(connection)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ExistingStoreIdentity {
+    #[cfg(unix)]
+    device: u64,
+    #[cfg(unix)]
+    inode: u64,
+}
+
+impl ExistingStoreIdentity {
+    pub(super) fn capture(path: &Path) -> Result<Self, CloudStoreError> {
+        #[cfg(unix)]
+        {
+            let metadata = validate_read_path(path)?;
+            if !metadata.file_type().is_file() {
+                return Err(CloudStoreError::ExistingStoreChanged);
+            }
+            Ok(Self {
+                device: metadata.dev(),
+                inode: metadata.ino(),
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = path;
+            Err(CloudStoreError::ExistingStoreUnsupported)
+        }
+    }
+
+    fn validate(self, path: &Path) -> Result<(), CloudStoreError> {
+        if Self::capture(path)? != self {
+            return Err(CloudStoreError::ExistingStoreChanged);
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn open_existing_connection(
+    path: &Path,
+    identity: ExistingStoreIdentity,
+) -> Result<Connection, CloudStoreError> {
+    identity.validate(path)?;
+    // Refuse legacy or corrupt storage before even opening a writable connection.
+    let mut reader = open_read_connection(path)?;
+    let transaction = reader.transaction()?;
+    let version = transaction.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))?;
+    if version != STORE_SCHEMA_VERSION {
+        return Err(CloudStoreError::UnsupportedSchema(version));
+    }
+    ensure_current_schema(&transaction)?;
+    drop(transaction);
+    drop(reader);
+    identity.validate(path)?;
+    let mut connection = open_write_connection(path, false)?;
+    let transaction = connection.transaction()?;
+    ensure_current_schema(&transaction)?;
+    drop(transaction);
+    identity.validate(path)?;
     Ok(connection)
 }
 
@@ -127,7 +192,7 @@ pub(super) fn open_read_connection(path: &Path) -> Result<Connection, CloudStore
     Ok(connection)
 }
 
-fn validate_read_path(path: &Path) -> Result<(), CloudStoreError> {
+fn validate_read_path(path: &Path) -> Result<std::fs::Metadata, CloudStoreError> {
     let metadata = std::fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() {
         return Err(CloudStoreError::SymlinkStorePath);
@@ -145,7 +210,7 @@ fn validate_read_path(path: &Path) -> Result<(), CloudStoreError> {
             return Err(CloudStoreError::InsecureStoreFile);
         }
     }
-    Ok(())
+    Ok(metadata)
 }
 
 pub(super) fn initialize_schema(connection: &mut Connection) -> Result<(), CloudStoreError> {

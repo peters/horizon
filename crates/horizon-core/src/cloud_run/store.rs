@@ -57,7 +57,14 @@ impl StoredWorkflow {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CloudWorkflowStore {
     path: PathBuf,
-    read_only: bool,
+    access: StoreAccess,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StoreAccess {
+    ReadWrite,
+    ReadOnly,
+    Existing(database::ExistingStoreIdentity),
 }
 
 impl CloudWorkflowStore {
@@ -78,7 +85,7 @@ impl CloudWorkflowStore {
         let path = path.into();
         let store = Self {
             path: prepare_private_store(&path)?,
-            read_only: false,
+            access: StoreAccess::ReadWrite,
         };
         let mut connection = store.connection()?;
         initialize_schema(&mut connection)?;
@@ -106,7 +113,41 @@ impl CloudWorkflowStore {
         let mut connection = database::open_read_connection(&path)?;
         let transaction = connection.transaction()?;
         ensure_current_schema(&transaction)?;
-        Ok(Self { path, read_only: true })
+        Ok(Self {
+            path,
+            access: StoreAccess::ReadOnly,
+        })
+    }
+
+    /// Open an existing current-schema store for explicit updates without creating,
+    /// migrating, repairing permissions, or changing its journal mode. Clones retain
+    /// these opening restrictions; normal domain writes still require their own admission.
+    /// Unix device/inode checks reject detected replacement before writable connections.
+    /// This assumes a stable trusted directory, not protection against concurrent same-user
+    /// path swaps. SQLite may maintain WAL bookkeeping files.
+    ///
+    /// # Errors
+    /// Rejects non-Unix platforms, missing/insecure/nonregular files, incompatible schemas,
+    /// detected file replacement and storage failures.
+    pub fn open_existing_without_migration(home: &HorizonHome) -> Result<Self, CloudStoreError> {
+        Self::open_existing_without_migration_path(home.cloud_workflow_store_path())
+    }
+
+    /// Open an explicit existing path with the same no-creation/no-migration restrictions.
+    ///
+    /// # Errors
+    /// Returns the same admission and platform errors as [`Self::open_existing_without_migration`].
+    pub fn open_existing_without_migration_path(path: impl Into<PathBuf>) -> Result<Self, CloudStoreError> {
+        let path = std::path::absolute(path.into())?;
+        #[cfg(unix)]
+        let path = database::canonical_store_path(&path)?;
+        let identity = database::ExistingStoreIdentity::capture(&path)?;
+        let store = Self {
+            path,
+            access: StoreAccess::Existing(identity),
+        };
+        drop(store.connection()?);
+        Ok(store)
     }
 
     #[must_use]
@@ -316,10 +357,10 @@ impl CloudWorkflowStore {
     }
 
     fn connection(&self) -> Result<Connection, CloudStoreError> {
-        if self.read_only {
-            database::open_read_connection(&self.path)
-        } else {
-            database::open_connection(&self.path)
+        match self.access {
+            StoreAccess::ReadWrite => database::open_connection(&self.path),
+            StoreAccess::ReadOnly => database::open_read_connection(&self.path),
+            StoreAccess::Existing(identity) => database::open_existing_connection(&self.path, identity),
         }
     }
 }
@@ -549,6 +590,10 @@ pub enum CloudStoreError {
     InsecureStoreFile,
     #[error("cloud workflow store path must not be a symbolic link")]
     SymlinkStorePath,
+    #[error("existing-only cloud workflow store updates are unsupported on this platform")]
+    ExistingStoreUnsupported,
+    #[error("existing cloud workflow store is not the validated regular file")]
+    ExistingStoreChanged,
     #[error("cloud workflow store database failed: {0}")]
     Database(#[from] rusqlite::Error),
     #[error("cloud workflow store schema {0} is not supported by this binary")]
