@@ -4,6 +4,7 @@ use crate::cloud_run::{CloudProvider, GitCommitSha, GitSource};
 use crate::remote_workspace::{RemoteWorkspaceSpec, RemoteWorkspaceState};
 use rusqlite::params;
 
+mod provider_bindings;
 mod reads;
 
 const OWNER: &str = "11111111-1111-4111-8111-111111111111";
@@ -110,7 +111,7 @@ fn schema_two_upgrade_preserves_records_and_claims_without_inventing_allocations
     let connection = open_connection(fixture.store.path()).expect("raw store");
     connection
         .execute_batch(
-            "DROP TABLE remote_network_volume_selections; DROP TABLE remote_first_pin_intents; DROP TABLE remote_runtime_creation_fences;
+            "DROP TABLE remote_provider_bindings; DROP TABLE remote_network_volume_selections; DROP TABLE remote_first_pin_intents; DROP TABLE remote_runtime_creation_fences;
              DROP TABLE remote_runtime_allocations; PRAGMA user_version=2;",
         )
         .expect("schema two fixture");
@@ -121,7 +122,7 @@ fn schema_two_upgrade_preserves_records_and_claims_without_inventing_allocations
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .expect("version"),
-        6
+        7
     );
     assert_eq!(allocation_count(&connection), 0);
     let workflow = fixture.workflow.workflow();

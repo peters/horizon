@@ -492,6 +492,9 @@ back into large multi-purpose modules.
   Its `cloud_run/store/database.rs` leaf owns private-path preparation, connection policy,
   schema initialization, and compatibility checks. Keep database opening separate
   from domain-specific record operations.
+  Schema seven reserves immutable provider-binding metadata without backfilling
+  legacy allocations; valid schema-four/five/six inventory stays read-only.
+  See [retained provider selection](remote-provider-bindings.md) for the staged API boundary.
   Existing-store observers use clone-preserved read-only handles, without private-path
   creation or migration. Single workspace/allocation getters always use read-only
   connections; live WAL updates remain visible without granting schema repair.
