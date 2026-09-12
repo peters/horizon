@@ -5,6 +5,7 @@ use crate::{
     cloud_run::{
         CloudProvider, CloudWorkflowStore, GitSource, RemoteWorkspaceStoreError, StoredRemoteAllocation,
         StoredRemoteWorkspace, WorkerLifetime, WorkerTarget,
+        azure::AzureProfile,
         local_docker::LocalDockerInteractiveWorkerProvider,
         runpod::{RunPodApiKey, RunPodHostTrust, RunPodNetworkVolumeExpectation, validate_target},
     },
@@ -14,6 +15,8 @@ use crate::{
 };
 use ConfiguredWorkspaceSetupError as Error;
 use std::path::PathBuf;
+
+mod azure;
 
 /// Non-secret caller input. No defaults select an image, profile, branch, command or storage.
 pub struct RemoteWorkspaceSetupDraft {
@@ -88,6 +91,14 @@ impl PreparedRemoteWorkspaceSetup {
     pub fn retain_until_millis(&self) -> i64 {
         self.retain_until_millis
     }
+    /// Complete non-secret Azure placement, price and pull-identity configuration to
+    /// display alongside the exact target before requesting persistent billing consent.
+    #[must_use]
+    pub fn azure_profile(&self) -> Option<&AzureProfile> {
+        (self.state.spec.target.provider == CloudProvider::Azure)
+            .then(|| self.config.azure_profile(&self.state.spec.target.profile).ok())
+            .flatten()
+    }
 }
 
 /// Positive authorization for the exact displayed image and, for `RunPod`, volume.
@@ -101,6 +112,12 @@ pub enum RemoteWorkspaceSetupConsent {
     RunPodHps {
         image: String,
         volume: RunPodNetworkVolumeExpectation,
+    },
+    /// Approve the complete displayed profile and immutable image, including the
+    /// managed pull identity and declared price (not a provider quote or spending cap).
+    Azure {
+        image: String,
+        profile: AzureProfile,
     },
 }
 
@@ -197,7 +214,7 @@ pub fn submit_configured_remote_workspace(
                 prepared.network_volume.as_ref().ok_or(Error::ConsentMismatch)?,
             )
             .map_err(|_| Error::SetupUnconfirmed),
-            CloudProvider::Azure => Err(Error::UnsupportedProvider),
+            CloudProvider::Azure => azure::start(store, &identities, config, saved, prepared.retain_until_millis),
         }
     });
     drop(consent);
@@ -230,6 +247,9 @@ fn submit_with(
                 && *image == target.image
                 && prepared.network_volume.as_ref() == Some(volume)
         }
+        RemoteWorkspaceSetupConsent::Azure { image, profile } => {
+            *image == target.image && prepared.azure_profile() == Some(profile) && prepared.network_volume.is_none()
+        }
     };
     if !authorized {
         return Err(Error::ConsentMismatch);
@@ -253,14 +273,15 @@ fn submit_with(
     if spec != prepared.state.spec || allocation.workspace().session_id() != owner {
         return Err(Error::SetupUnconfirmed);
     }
-    check_result(&store, &allocation, prepared.network_volume.as_ref())?;
+    check_result(&store, config, &allocation, prepared.network_volume.as_ref()).map_err(|_| Error::SetupUnconfirmed)?;
     Ok(allocation)
 }
 
 /// Manually recover only the original saved setup. No key/intent repair, allocation,
 /// ensure, creation, renewal or cleanup is allowed. A dormant or interrupted pre-intent
 /// setup is reported locally. Eligible recovery may persist a pin/observation.
-/// Current profile validation cannot attest historical edits under the same name.
+/// Azure requires its immutable saved profile binding; older unbound allocations are
+/// never backfilled. Other providers' current profiles do not attest historical edits.
 /// Run off-thread; caller discards results on current session/config/selection drift.
 /// # Errors
 /// Rejects foreign homes/owners, invalid bindings, missing storage and recovery failures.
@@ -288,7 +309,7 @@ pub fn check_configured_remote_workspace_setup(
                 allocation,
             )
             .map_err(|_| Error::SetupUnconfirmed),
-            CloudProvider::Azure => Err(Error::UnsupportedProvider),
+            CloudProvider::Azure => azure::recover(store, &identities, config, allocation),
         }
     })
 }
@@ -331,6 +352,9 @@ fn check_saved_with(
     if allocation.workspace() != &saved {
         return Err(Error::ContextChanged);
     }
+    if !azure::binding_matches(store, config, &allocation)? {
+        return Ok(ConfiguredWorkspaceSetupObservation::Interrupted(saved));
+    }
     let selection = store
         .load_remote_network_volume_selection(&allocation)
         .map_err(storage)?;
@@ -366,16 +390,20 @@ fn check_saved_with(
     if result.workspace().session_id() != saved.session_id() || result.workspace().state().spec != saved.state().spec {
         return Err(Error::SetupUnconfirmed);
     }
-    check_result(&writable, &result, selection.as_ref())?;
+    check_result(&writable, config, &result, selection.as_ref())?;
     Ok(ConfiguredWorkspaceSetupObservation::Observed(result))
 }
 
 fn check_result(
     store: &CloudWorkflowStore,
+    config: &RemoteProviderConfig,
     result: &StoredRemoteAllocation,
     selection: Option<&RunPodNetworkVolumeExpectation>,
 ) -> Result<(), Error> {
     super::validate_allocation(store, result).map_err(|_| Error::SetupUnconfirmed)?;
+    if !azure::binding_matches(store, config, result)? {
+        return Err(Error::SetupUnconfirmed);
+    }
     if store
         .load_remote_network_volume_selection(result)
         .map_err(storage)?
@@ -406,7 +434,9 @@ fn validate_profile(config: &RemoteProviderConfig, target: &WorkerTarget) -> Res
                 return Err(Error::InvalidRequest);
             }
         }
-        CloudProvider::Azure => return Err(Error::UnsupportedProvider),
+        CloudProvider::Azure => {
+            azure::profile(config, target)?;
+        }
     }
     Ok(())
 }
@@ -418,7 +448,7 @@ fn validate_selection(
 ) -> Result<(), Error> {
     validate_profile(config, target)?;
     match (target.provider, selection) {
-        (CloudProvider::LocalDocker, None) => Ok(()),
+        (CloudProvider::LocalDocker | CloudProvider::Azure, None) => Ok(()),
         (CloudProvider::RunPod, Some(volume)) => {
             volume.validate().map_err(|_| Error::InvalidRequest)?;
             let profile = config
