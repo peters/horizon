@@ -18,3 +18,7 @@ crates/horizon-ui/publish-assets/
 .idea/caches/
 
 profiling-output/
+
+# Python bytecode caches from the script test suites
+__pycache__/
+*.pyc
