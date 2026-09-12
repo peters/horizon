@@ -33,11 +33,21 @@ six network-volume metadata remains validated on legacy reads.
   original profile is unavailable. It reuses the existing ownership boundary and
   avoids duplicating orchestration or introducing a new provider framework.
 
+## Immutable record/load API
+
+`RemoteCpuProfileBinding` freezes all eight approved CPU-profile fields under an
+explicit version-one domain and byte encoding; changing a field requires a
+deliberate digest-version decision. The store records it only for an exact,
+unclaimed allocation before key reservation or first-pin intent. Exact repeats
+and read-only loads remain available after setup expiry or management intent;
+neither rewrites snapshots nor consumes a creation grant. Readers validate
+bounded row contents and workspace/workflow/job collisions, not only the schema.
+The future caller must record before preparing a private key; database state
+alone cannot prove that a key file does not exist. No configured consumer is
+enabled by these APIs.
+
 ## Follow-up implementation
 
-- Add bounded, exact-allocation record/load operations and a frozen version-one
-  profile digest representation. First recording must precede key preparation
-  and provider dispatch; no late backfill or replacement is permitted.
 - Wire configured preview/consent/setup/check to this binding and the shared
   complete Azure deployment-target validator. Reject current-profile mismatch
   before credential acquisition or provider requests.

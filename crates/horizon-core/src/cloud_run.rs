@@ -14,8 +14,8 @@ mod store;
 mod validation;
 mod worker_lifetime;
 pub use store::{
-    CloudStoreError, CloudWorkflowStore, RemoteEnvironmentPage, RemoteWorkspaceStoreError, StoredRemoteAllocation,
-    StoredRemoteWorkspace, StoredWorkflow,
+    CloudStoreError, CloudWorkflowStore, RemoteCpuProfileBinding, RemoteEnvironmentPage, RemoteWorkspaceStoreError,
+    StoredRemoteAllocation, StoredRemoteWorkspace, StoredWorkflow,
 };
 pub use worker_lifetime::WorkerLifetime;
 pub const CLOUD_RUN_PROTOCOL_VERSION: u32 = 1;
