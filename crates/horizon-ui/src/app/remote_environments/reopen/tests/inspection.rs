@@ -322,3 +322,81 @@ fn rendered_check_uses_only_selected_panel_and_completed_or_pending_display_does
     assert!(!ctx.has_requested_repaint(), "completed task check must not poll");
     assert!(app.board.panels.is_empty());
 }
+
+#[test]
+fn runpod_task_check_uses_existing_action_without_opening_a_view_or_polling() {
+    let (_temp, mut app, store, mut scope) = app_fixture();
+    let saved = store
+        .load_remote_workspace(&scope.owner, "environment")
+        .expect("read")
+        .expect("record");
+    let mut state = saved.state().clone();
+    assert!(state.runtime.is_none(), "seed provider before allocation or trust");
+    state.spec.target.provider = horizon_core::cloud_run::CloudProvider::RunPod;
+    scope.expected = store
+        .replace_remote_workspace(&saved, &state)
+        .expect("dormant RunPod fixture")
+        .environment_summary();
+    app.remote_environments.page.as_mut().expect("page").rows[0] = InventoryRow::new(scope.expected.clone());
+    let ctx = Context::default();
+    app.remote_environments.reopen = loaded(&store, &scope, &ctx);
+    app.runtime_dirty_since = None;
+    let before = std::fs::read(store.path()).expect("database bytes");
+    assert!(text(&app.remote_environments.reopen, &ctx).contains("Check retained task"));
+    app.remote_reopen_action(InventoryAction::InspectTask(0), &ctx);
+    let home = app.session_store.home().clone();
+    settle(
+        &mut app.remote_environments.reopen,
+        &client(&home, &scope),
+        &mut app.board,
+        &ctx,
+    );
+    let expected = if cfg!(target_os = "linux") {
+        "no RunPod profile exactly matches"
+    } else {
+        "protected remote panel inspection is not yet supported on this platform"
+    };
+    assert!(text(&app.remote_environments.reopen, &ctx).contains(expected));
+    for _ in 0..30 {
+        let _ = text(&app.remote_environments.reopen, &ctx);
+    }
+    assert!(!ctx.has_requested_repaint() && !app.remote_environments.reopen.is_pending());
+    assert!(app.board.panels.is_empty() && app.board.workspaces.is_empty() && app.runtime_dirty_since.is_none());
+    assert_eq!(std::fs::read(store.path()).expect("database bytes"), before);
+}
+
+#[test]
+fn runpod_profile_changes_discard_queued_task_observations() {
+    let (_temp, app, store, mut scope) = app_fixture();
+    let saved = store
+        .load_remote_workspace(&scope.owner, "environment")
+        .expect("read")
+        .expect("record");
+    let mut state = saved.state().clone();
+    state.spec.target.provider = horizon_core::cloud_run::CloudProvider::RunPod;
+    scope.expected = store
+        .replace_remote_workspace(&saved, &state)
+        .expect("dormant RunPod")
+        .environment_summary();
+    scope.config.runpod.push(
+        serde_json::from_value(serde_json::json!({
+            "name":"development", "gpu_type_ids":["synthetic-gpu"], "gpu_count":1,
+            "ports":["22/tcp"], "volume_gib":0
+        }))
+        .expect("profile"),
+    );
+    let ctx = Context::default();
+    let mut reopen = loaded(&store, &scope, &ctx);
+    let tx = queue(&mut reopen, &scope, &ctx);
+    scope.config.runpod[0].data_center_id = Some("EU-RO-1".into());
+    tx.send(Ok(observation(RemotePanelStatus::Running { pid: 42 })))
+        .expect("late result");
+    let mut board = Board::new();
+    reopen.drain(&client(app.session_store.home(), &scope), &mut board, &ctx);
+    assert!(!reopen.is_pending() && reopen.notice.is_none());
+    assert!(!text(&reopen, &ctx).contains("Running at check"));
+    reopen.inspect_task(&client(app.session_store.home(), &scope), 0, &ctx);
+    assert!(reopen.catalog.is_none() && !reopen.is_pending());
+    assert!(text(&reopen, &ctx).contains("The session or saved selection changed"));
+    assert!(board.panels.is_empty() && board.workspaces.is_empty());
+}

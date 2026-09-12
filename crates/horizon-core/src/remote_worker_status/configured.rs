@@ -36,7 +36,7 @@ impl RemotePanelObservation {
     }
 }
 
-/// Check one owned saved task through its explicit local provider and retained SSH pin.
+/// Check one owned saved task through its explicit local or `RunPod` provider and retained SSH pin.
 /// All storage, retained-key, provider and SSH work must run off the render thread.
 /// Requires an already recorded worker and host pin; never repairs missing identity.
 /// No key creation, recovery persistence, task startup, local view, attachment,
@@ -54,6 +54,23 @@ pub fn inspect_configured_remote_panel(
 ) -> Result<RemotePanelObservation, ConfiguredRemotePanelStatusError> {
     #[cfg(target_os = "linux")]
     {
+        if request.expected.provider == crate::cloud_run::CloudProvider::RunPod {
+            return runpod_with(
+                store,
+                identities,
+                config,
+                request,
+                || {
+                    crate::cloud_run::runpod::RunPodApiKey::from_env()
+                        .map_err(|_| ConfiguredRemotePanelStatusError::RunPodCredentialUnavailable)
+                },
+                |provider, allocation| {
+                    let recovered =
+                        crate::remote_workspace_recovery::inspect_remote_allocation(identities, provider, allocation)?;
+                    Ok(super::inspect_remote_panel(store, &recovered, request.panel_id)?)
+                },
+            );
+        }
         inspect_with(
             store,
             identities,
@@ -127,13 +144,120 @@ pub(super) fn inspect_with<P: crate::cloud_run::interactive_worker::InteractiveW
     let provider = provider(profile)?;
     let recovered = crate::remote_workspace_recovery::inspect_remote_allocation(identities, &provider, &allocation)?;
     let status = inspect(store, &recovered, request.panel_id)?;
+    observation(request.panel_id, status)
+}
+
+#[cfg(target_os = "linux")]
+fn observation(
+    panel_id: &str,
+    status: RemotePanelStatus,
+) -> Result<RemotePanelObservation, ConfiguredRemotePanelStatusError> {
     let observed_at_millis = i64::try_from(time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000)
         .map_err(|_| RemotePanelStatusError::InvalidResponse)?;
     Ok(RemotePanelObservation {
-        panel_id: request.panel_id.into(),
+        panel_id: panel_id.into(),
         status,
         observed_at_millis,
     })
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn runpod_with(
+    store: &CloudWorkflowStore,
+    identities: &RemoteSshIdentityStore,
+    config: &RemoteProviderConfig,
+    request: ConfiguredRemotePanelStatusRequest<'_>,
+    credential: impl FnOnce() -> Result<crate::cloud_run::runpod::RunPodApiKey, ConfiguredRemotePanelStatusError>,
+    inspect: impl FnOnce(
+        &crate::cloud_run::runpod::RunPodInteractiveWorkerProvider,
+        &crate::cloud_run::StoredRemoteAllocation,
+    ) -> Result<RemotePanelStatus, ConfiguredRemotePanelStatusError>,
+) -> Result<RemotePanelObservation, ConfiguredRemotePanelStatusError> {
+    use crate::cloud_run::{
+        CloudProvider, WorkerLifetime,
+        runpod::{RunPodClient, RunPodHostTrust, RunPodInteractiveWorkerProvider, validate_target},
+    };
+    if request.client_session_id != request.expected.owning_session_id {
+        return Err(ConfiguredRemotePanelStatusError::ClientSessionMismatch);
+    }
+    if request.expected.provider != CloudProvider::RunPod {
+        return Err(ConfiguredRemotePanelStatusError::UnsupportedProvider);
+    }
+    let profile = config.runpod_profile(&request.expected.profile)?;
+    let allocation = store
+        .load_remote_allocation(request.client_session_id, &request.expected.workspace_local_id)
+        .map_err(RemoteWorkspaceRecoveryError::from)?
+        .ok_or(RemoteWorkspaceRecoveryError::MissingAllocation)?;
+    if allocation.workspace().environment_summary() != *request.expected {
+        return Err(RemoteWorkspaceRecoveryError::StateChanged.into());
+    }
+    let expected = allocation
+        .recovery_request()
+        .map_err(RemoteWorkspaceRecoveryError::from)?;
+    if expected.target.lifetime != WorkerLifetime::Persistent {
+        return Err(ConfiguredRemotePanelStatusError::InvalidRunPodBinding);
+    }
+    validate_target(&expected.target, profile).map_err(|_| ConfiguredRemotePanelStatusError::InvalidRunPodBinding)?;
+    let state = allocation.workspace().state();
+    if !state
+        .spec
+        .panels
+        .iter()
+        .any(|panel| panel.panel_local_id == request.panel_id)
+    {
+        return Err(RemotePanelStatusError::UnknownPanel.into());
+    }
+    let (worker, ssh) = state
+        .runtime
+        .as_ref()
+        .and_then(|runtime| runtime.worker.as_ref().zip(runtime.ssh.as_ref()))
+        .ok_or(RemotePanelStatusError::WorkerUnavailable)?;
+    let trust =
+        RunPodHostTrust::retained(worker, ssh).map_err(|_| ConfiguredRemotePanelStatusError::InvalidRunPodBinding)?;
+    identities
+        .recover(expected.workflow_id, expected.job_id, &expected.ssh_public_key)
+        .map_err(RemoteWorkspaceRecoveryError::from)?;
+    let selection = store
+        .load_remote_network_volume_selection(&allocation)
+        .map_err(RemoteWorkspaceRecoveryError::from)?;
+    if selection.as_ref().is_some_and(|selection| {
+        profile
+            .data_center_id
+            .as_ref()
+            .is_some_and(|id| id != &selection.data_center_id)
+    }) {
+        return Err(ConfiguredRemotePanelStatusError::InvalidRunPodBinding);
+    }
+    let key = credential()?;
+    let client = RunPodClient::new(&key, store.clone());
+    let provider = match &selection {
+        Some(selection) => RunPodInteractiveWorkerProvider::new_with_network_volume(
+            client,
+            profile.clone(),
+            trust,
+            &expected,
+            selection,
+        )
+        .map_err(|_| ConfiguredRemotePanelStatusError::InvalidRunPodBinding)?,
+        None => RunPodInteractiveWorkerProvider::new(client, profile.clone(), trust),
+    };
+    let check_current = || {
+        // This read transaction fences the complete allocation and separate immutable selection.
+        if store
+            .load_remote_network_volume_selection(&allocation)
+            .map_err(RemoteWorkspaceRecoveryError::from)?
+            != selection
+        {
+            return Err(ConfiguredRemotePanelStatusError::from(
+                RemoteWorkspaceRecoveryError::StateChanged,
+            ));
+        }
+        Ok(())
+    };
+    check_current()?;
+    let status = inspect(&provider, &allocation)?;
+    check_current()?;
+    observation(request.panel_id, status)
 }
 
 /// Diagnostics contain no provider output, task payload, SSH coordinates or private paths.
@@ -143,6 +267,10 @@ pub enum ConfiguredRemotePanelStatusError {
     UnsupportedProvider,
     #[error("the active client session does not own the selected environment")]
     ClientSessionMismatch,
+    #[error("RunPod task inspection requires a valid RUNPOD_API_KEY supplied to the controller")]
+    RunPodCredentialUnavailable,
+    #[error("the configured RunPod profile or retained worker and storage binding is invalid")]
+    InvalidRunPodBinding,
     #[error(transparent)]
     Configuration(#[from] RemoteProviderConfigError),
     #[error(transparent)]
