@@ -42,17 +42,32 @@ unclaimed allocation before key reservation or first-pin intent. Exact repeats
 and read-only loads remain available after setup expiry or management intent;
 neither rewrites snapshots nor consumes a creation grant. Readers validate
 bounded row contents and workspace/workflow/job collisions, not only the schema.
-The future caller must record before preparing a private key; database state
-alone cannot prove that a key file does not exist. No configured consumer is
-enabled by these APIs.
+The caller must record before preparing a private key; database state alone
+cannot prove that a key file does not exist.
+
+## Configured Azure setup
+
+The configured setup preview exposes the complete non-secret Azure profile;
+consent binds that exact profile and immutable image before saving. Its Azure
+leaf allocates through the existing store, records the immutable binding, then
+assembles the lazy CLI credential/provider with that same store's creation fence.
+The shared setup coordinator alone prepares/reserves the key and dispatches
+ensure. No second allocator, key implementation or creation fence is introduced.
+
+Manual Check requires the original binding and an unchanged complete profile
+before key or provider access, including when no worker handle was returned.
+Missing provenance remains interrupted, never backfilled. Existing recovery
+inspects or reconciles without ensure; it can retain observations and attest a
+host key through the provider's fixed guest command. Errors preserve the original
+locator and do not authorize another create, task, attachment or cleanup.
+Synthetic tests exercise this ordering; no live Azure acceptance is claimed.
 
 ## Follow-up implementation
 
-- Wire configured preview/consent/setup/check to this binding and the shared
-  complete Azure deployment-target validator. Reject current-profile mismatch
-  before credential acquisition or provider requests.
-- Prove no-handle lost-response recovery, profile/subscription drift, competing
-  controllers, missing metadata, retained SSH pins and unchanged dirty data.
+- Expose the configured API through explicit UI confirmation, without enabling
+  unsupported attachment, repository or task actions.
+- Prove live no-handle recovery, competing controllers, retained SSH pins and
+  unchanged dirty data on the exact integrated candidate.
 
 The digest is a consistency binding, not a signature or provider attestation.
 Direct malicious rewriting of the private database is not prevented by SQLite

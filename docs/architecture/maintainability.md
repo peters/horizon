@@ -140,6 +140,9 @@ back into large multi-purpose modules.
   consumes exact image/storage consent and saves one immutable identity before
   task-free allocation. Errors retain recovery coordinates; manual checks distinguish
   dormant and interrupted records and recover only the same allocation snapshot.
+  Its `configured/azure` leaf binds the complete approved CPU profile before key
+  preparation, reuses shared setup/fence logic and refuses profile drift before
+  non-creating recovery. Credential construction is lazy; preview has no I/O.
   This leaf does not prepare Git, deliver repository credentials, start tasks or
   attest caller-supplied image/storage trust. UI confirmation remains a separate layer.
 - `remote_environment_observation.rs` produces overview-safe, point-in-time

@@ -185,6 +185,7 @@ mod linux {
                 f.preview(cloud).locator().workspace_local_id
             );
             assert!(prepared.state.runtime.is_none());
+            assert!(prepared.azure_profile().is_none());
         }
         assert!(!f.home.root().exists());
     }
