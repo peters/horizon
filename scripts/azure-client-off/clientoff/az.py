@@ -1,11 +1,11 @@
 """Bounded `az` calls without a shell; every mutation names the exact resource."""
 from __future__ import annotations
 
-import base64
 import json
 import subprocess
+import time
 from typing import Any, Dict, List, Optional
-from .manifest import CLI_STEP_SECONDS, PUBLIC_IP_NAME, RUN_COMMAND_SECONDS, TAG_IMAGE_REF, WORKER_CONTAINER, utc_now
+from .manifest import CLI_STEP_SECONDS, PUBLIC_IP_NAME, TAG_IMAGE_REF, utc_now
 
 
 class Az:
@@ -13,12 +13,25 @@ class Az:
 
     def __init__(self, subscription: str, dry_run: bool = False) -> None:
         self.subscription, self.dry_run, self.journal = subscription, dry_run, []
+        # An absolute phase deadline (monotonic seconds) once a phase sets one: every
+        # call is cut off at it and none starts past it, so no read, probe, mutation or
+        # poll can outlive the window the manifest reserved for the phase.
+        self.deadline: Optional[float] = None
+
+    def left(self) -> Optional[float]:
+        """Seconds left until the phase deadline, or None when no deadline is set."""
+        return None if self.deadline is None else self.deadline - time.monotonic()
 
     def run(self, args: List[str], mutating: bool = False, timeout: int = CLI_STEP_SECONDS) -> Optional[Any]:
         command = ["az", *args, "--subscription", self.subscription, "-o", "json"]
         self.journal.append({"at": utc_now().isoformat(), "mutating": mutating, "args": args})
         if self.dry_run and mutating:
             return None
+        left = self.left()
+        if left is not None:
+            if left < 1:
+                return None  # past the phase deadline: nothing more is asked of ARM
+            timeout = max(1, min(timeout, int(left)))
         try:
             completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
         except (subprocess.TimeoutExpired, OSError):
@@ -31,8 +44,8 @@ class Az:
         except json.JSONDecodeError:
             return None
 
-    def power_state(self, group: str, name: str) -> Optional[str]:
-        view = self.run(["vm", "get-instance-view", "-g", group, "-n", name])
+    def power_state(self, group: str, name: str, timeout: int = CLI_STEP_SECONDS) -> Optional[str]:
+        view = self.run(["vm", "get-instance-view", "-g", group, "-n", name], timeout=timeout)
         if not isinstance(view, dict):
             return None
         instance_view = view.get("instanceView")
@@ -49,15 +62,6 @@ class Az:
             if code.startswith("PowerState/"):
                 codes.append(code)
         return codes[0] if len(codes) == 1 else None
-
-    def append_container_authorized_key(self, group: str, name: str, line: str) -> Optional[Any]:
-        """Append one `authorized_keys` line inside the worker container through the ARM
-        run-command channel; the line travels base64-encoded so no quoting layer can alter it."""
-        encoded = base64.b64encode((line.rstrip("\n") + "\n").encode("ascii")).decode("ascii")
-        script = (f"docker exec {WORKER_CONTAINER} sh -c 'umask 077 && mkdir -p /root/.ssh && "
-                  f"echo {encoded} | base64 -d >> /root/.ssh/authorized_keys'")
-        return self.run(["vm", "run-command", "invoke", "-g", group, "-n", name, "--command-id", "RunShellScript",
-                         "--scripts", script], mutating=True, timeout=RUN_COMMAND_SECONDS)
 
     def vm_identity(self, group: str, name: str) -> Dict[str, Optional[str]]:
         vm = self.run(["vm", "show", "-g", group, "-n", name])
