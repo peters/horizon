@@ -317,6 +317,71 @@ mod existing {
     }
 
     #[test]
+    fn base_schema_drift_is_refused_before_existing_open_or_cloned_writes() {
+        let changed_constraint = format!(
+            "DROP TABLE cloud_workflows; {}",
+            SCHEMA.replace("CHECK (revision > 0)", "CHECK (revision >= 0)")
+        );
+        for sql in [
+            "DROP INDEX remote_workspaces_session",
+            "DROP INDEX cloud_workflows_retention",
+            "DROP INDEX cloud_worker_creation_claims_workflow",
+            "DROP TABLE cloud_workflows",
+            "DROP TABLE cloud_worker_creation_claims",
+            "DROP TABLE remote_workspaces",
+            "DROP INDEX cloud_workflows_retention; CREATE INDEX cloud_workflows_retention ON cloud_workflows(updated_at_millis)",
+            "ALTER TABLE cloud_workflows RENAME COLUMN snapshot TO altered_snapshot",
+            "ALTER TABLE cloud_worker_creation_claims RENAME COLUMN resource_name TO altered_resource_name",
+            "ALTER TABLE remote_workspaces RENAME COLUMN snapshot TO altered_snapshot",
+            &changed_constraint,
+            "CREATE TRIGGER unexpected_base_write AFTER UPDATE ON ClOuD_WoRkFlOwS BEGIN DELETE FROM remote_workspaces; END",
+            "CREATE TRIGGER unexpected_base_write AFTER DELETE ON cloud_worker_creation_claims BEGIN DELETE FROM remote_workspaces; END",
+            "CREATE TRIGGER unexpected_base_write AFTER UPDATE ON remote_workspaces BEGIN DELETE FROM cloud_workflows; END",
+        ] {
+            let fixture = fixture();
+            let path = fixture.store.path();
+            let writer = CloudWorkflowStore::open_existing_without_migration_path(path)
+                .expect("current handle before drift")
+                .clone();
+            let connection = open_connection(path).expect("fixture writer");
+            connection
+                .pragma_update(None, "journal_mode", "DELETE")
+                .expect("committed byte comparison");
+            connection
+                .pragma_update(None, "foreign_keys", "OFF")
+                .expect("allow incomplete synthetic schema");
+            connection.execute_batch(sql).expect("base schema drift");
+            drop(connection);
+            let inspect = || {
+                let connection = open_read_connection(path).expect("inspect without admission");
+                let version: i64 = connection
+                    .pragma_query_value(None, "user_version", |row| row.get(0))
+                    .expect("version");
+                let journal: String = connection
+                    .pragma_query_value(None, "journal_mode", |row| row.get(0))
+                    .expect("journal");
+                (std::fs::read(path).expect("all committed bytes"), version, journal)
+            };
+            let before = inspect();
+            assert_eq!(before.1, STORE_SCHEMA_VERSION);
+            assert_eq!(before.2, "delete");
+            let admitted = CloudWorkflowStore::open_existing_without_migration_path(path);
+            assert_eq!(inspect(), before, "opening changed storage: {sql}");
+            assert!(
+                matches!(admitted, Err(CloudStoreError::InvalidAllocationSchema)),
+                "opener admitted schema drift: {sql}: {admitted:?}"
+            );
+            let mut next = fixture.workflow.workflow().clone();
+            next.updated_at_millis += 1;
+            assert!(matches!(
+                writer.replace(&fixture.workflow, &next),
+                Err(CloudStoreError::InvalidAllocationSchema)
+            ));
+            assert_eq!(inspect(), before, "cloned writer changed storage: {sql}");
+        }
+    }
+
+    #[test]
     fn current_schema_open_preserves_storage_and_cloned_writers_use_exact_cas() {
         for journal in ["delete", "wal"] {
             let fixture = fixture();
@@ -324,6 +389,12 @@ mod existing {
             connection
                 .pragma_update(None, "journal_mode", journal)
                 .expect("journal fixture");
+            connection
+                .execute(
+                    "CREATE INDEX unrelated_workflow_index ON cloud_workflows(updated_at_millis)",
+                    [],
+                )
+                .expect("unrelated index remains supported");
             drop(connection);
             let before = state(&fixture);
             let writer = CloudWorkflowStore::open_existing_without_migration_path(fixture.store.path())

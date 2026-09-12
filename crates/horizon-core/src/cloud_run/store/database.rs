@@ -168,20 +168,50 @@ pub(super) fn open_existing_connection(
     // Refuse legacy or corrupt storage before even opening a writable connection.
     let mut reader = open_read_connection(path)?;
     let transaction = reader.transaction()?;
-    let version = transaction.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))?;
-    if version != STORE_SCHEMA_VERSION {
-        return Err(CloudStoreError::UnsupportedSchema(version));
-    }
-    ensure_current_schema(&transaction)?;
+    validate_existing_schema(&transaction)?;
     drop(transaction);
     drop(reader);
     identity.validate(path)?;
     let mut connection = open_write_connection(path, false)?;
     let transaction = connection.transaction()?;
-    ensure_current_schema(&transaction)?;
+    validate_existing_schema(&transaction)?;
     drop(transaction);
     identity.validate(path)?;
     Ok(connection)
+}
+
+fn validate_existing_schema(connection: &Connection) -> Result<(), CloudStoreError> {
+    let version = connection.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))?;
+    if version != STORE_SCHEMA_VERSION {
+        return Err(CloudStoreError::UnsupportedSchema(version));
+    }
+    ensure_current_schema(connection)?;
+    for definition in SCHEMA.split(';').chain(REMOTE_WORKSPACE_SCHEMA.split(';')) {
+        let definition = definition.trim();
+        if definition.is_empty() {
+            continue;
+        }
+        // SQLite omits this initialization-only clause from retained CREATE definitions.
+        let definition = definition.replace(" IF NOT EXISTS", "");
+        let matches: bool = connection.query_row(
+            "SELECT COUNT(*) = 1 FROM main.sqlite_schema WHERE sql = ?1",
+            [definition],
+            |row| row.get(0),
+        )?;
+        if !matches {
+            return Err(CloudStoreError::InvalidAllocationSchema);
+        }
+    }
+    let triggers: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM main.sqlite_schema WHERE type = 'trigger'
+         AND tbl_name COLLATE NOCASE IN ('cloud_workflows', 'cloud_worker_creation_claims', 'remote_workspaces'))",
+        [],
+        |row| row.get(0),
+    )?;
+    if triggers {
+        return Err(CloudStoreError::InvalidAllocationSchema);
+    }
+    Ok(())
 }
 
 pub(super) fn open_read_connection(path: &Path) -> Result<Connection, CloudStoreError> {
