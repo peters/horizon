@@ -35,11 +35,9 @@ fn old_attempt_response_cannot_be_accepted_for_a_new_attempt() {
     );
     state.sync(Some((&home, OWNER, &scope.config)));
     assert!(state.unknown && state.pending.is_none());
-    assert!(
-        state
-            .notice
-            .as_deref()
-            .is_some_and(|text| text.contains("did not match"))
+    assert_eq!(
+        state.notice.as_deref(),
+        Some("Setup response did not match. Retain the original coordinates.")
     );
     assert!(state.attempts == vec![first, second]);
     assert!(!home.root().exists());
@@ -107,25 +105,24 @@ fn settled_history_preserves_inventory_and_check_rejects_wrong_home_or_owner() {
     let state = &mut app.remote_environments.setup;
     state.attempts.push(original.clone());
     state.unknown = true;
-    state.notice = Some("Earlier result".into());
     assert!(!state.is_active());
     let other = HorizonHome::from_root(std::path::PathBuf::from("/synthetic-other"));
+    let config = RemoteProviderConfig::default();
+    let ctx = Context::default();
     for (current, owner) in [(&other, OWNER), (&home, OTHER_OWNER)] {
-        state.action(
-            Action::CheckAttempt(0),
-            current,
-            owner,
-            &RemoteProviderConfig::default(),
-            &Context::default(),
-        );
+        state.notice = Some("Earlier result".into());
+        state.action(Action::CheckAttempt(0), current, owner, &config, &ctx);
         assert!(state.pending.is_none() && state.attempts == vec![original.clone()] && state.unknown);
+        assert_eq!(
+            state.notice.as_deref(),
+            Some("Open the original home and owning session to check this setup.")
+        );
     }
     assert!(app.remote_environments.setup_idle());
     app.remote_environments.page = Some(super::super::super::InventoryPage {
         rows: vec![],
         next_cursor: None,
     });
-    let ctx = Context::default();
     let mut frame = || {
         ctx.run_ui(crate::app::test_support::raw_input([1000.0, 900.0], None), |ui| {
             super::super::super::paint::show(ui.ctx(), &mut app.remote_environments);
@@ -135,10 +132,9 @@ fn settled_history_preserves_inventory_and_check_rejects_wrong_home_or_owner() {
     frame();
     let output = frame();
     let painted = format!("{:?}", output.shapes);
-    assert!(
-        painted.contains("Refresh saved page") && painted.contains("No saved"),
-        "{painted}"
-    );
+    for required in ["Refresh saved page", "No saved", "original home"] {
+        assert!(painted.contains(required), "{painted}");
+    }
 }
 
 pub(super) fn settle(state: &mut SetupState, scope: &Scope) {

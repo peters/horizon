@@ -8,6 +8,7 @@ use horizon_core::{
     remote_workspace::RemotePanelCommand,
     remote_workspace_setup::RemoteWorkspaceSetupDraft,
 };
+pub(super) const DISK_LABEL: &str = "Requested disk (GiB; not enforced by Local Docker)";
 
 struct ProfileChoice {
     provider: CloudProvider,
@@ -82,7 +83,7 @@ impl Form {
             .show(ui, |ui| {
                 for (label, value) in [
                     ("Digest-pinned image", &mut self.image),
-                    ("Container disk (GiB)", &mut self.disk_gib),
+                    (DISK_LABEL, &mut self.disk_gib),
                     ("GitHub owner/repository", &mut self.repository),
                     ("Exact commit SHA", &mut self.commit),
                     ("Dedicated work branch", &mut self.branch),

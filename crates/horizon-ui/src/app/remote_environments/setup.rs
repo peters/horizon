@@ -248,6 +248,8 @@ impl SetupState {
             }) {
                 self.invalidate();
                 self.launch(scope, Work::Check(locator), ctx);
+            } else {
+                self.notice = Some("Open the original home and owning session to check this setup.".into());
             }
             return;
         }

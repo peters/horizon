@@ -172,12 +172,12 @@ mod linux {
             let (_temp, home, scope, mut state) = fixture(cloud);
             let form = render(&mut state, [390.0, 1000.0]);
             assert!(form.contains("Nothing has been created") && form.contains("Review request"));
+            assert!(form.contains("not enforced by Local Docker"));
             assert!(!form.contains("Create task-free worker") && !form.contains("I trust this"));
-            let tx = pending(&mut state, &scope, None);
-            respond(&tx, Completion::Preview(Box::new(prepared(&home, &scope, cloud))));
-            state.sync(Some((&home, OWNER, &scope.config)));
+            state.review = Some(paint::Review::new(prepared(&home, &scope, cloud), &scope.config));
             let text = render(&mut state, [900.0, 1600.0]);
             assert!(text.contains("may interrupt local setup"));
+            assert!(text.contains("not enforced by Local Docker") && text.contains("20 GiB"));
             for required in [
                 "Nothing has been created",
                 "example/project",

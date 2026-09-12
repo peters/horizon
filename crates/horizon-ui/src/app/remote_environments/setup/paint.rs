@@ -16,7 +16,7 @@ impl Review {
                 format!("{:?} / {}", spec.target.provider, spec.target.profile),
             ),
             ("Image", spec.target.image.clone()),
-            ("Container disk", format!("{} GiB", spec.target.disk_gib)),
+            (super::form::DISK_LABEL, format!("{} GiB", spec.target.disk_gib)),
             ("Repository", spec.repository.repository.clone()),
             ("Exact commit", spec.repository.commit.as_str().into()),
             ("Work branch", spec.repository.branch.clone().unwrap_or_default()),
