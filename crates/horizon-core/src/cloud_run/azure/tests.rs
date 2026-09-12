@@ -431,3 +431,76 @@ fn cli_credential_invokes_the_executable_without_a_shell_and_enforces_its_bounds
         unavailable("Azure CLI could not be started")
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn cli_credential_bounds_a_budgeted_token_by_the_caller_not_by_its_own_timeout() {
+    use super::AzureCredentialSource as _;
+    use std::os::unix::fs::PermissionsExt as _;
+    let directory = tempfile::tempdir().expect("temp dir");
+    // One slow fake CLI per phase, each with its own start marker, so a phase can
+    // only ever be satisfied by its own child.
+    let slow = |name: &str| {
+        let script = directory.path().join(name);
+        let marker = directory.path().join(format!("{name}.started"));
+        std::fs::write(&script, format!("#!/bin/sh\n: > '{}'\nsleep 30\n", marker.display())).expect("script");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+        let credential = AzureCliCredential::with_executable(script, SUB)
+            .expect("credential")
+            .with_bounds(Duration::from_secs(5), 64 * 1024);
+        (std::sync::Arc::new(credential), marker)
+    };
+    let unavailable = |reason| AzureError::CredentialUnavailable { reason };
+    // The caller's budget ends the CLI run long before the credential's own timeout,
+    // and the timeout teardown is detached, so the call returns at the budget.
+    let (credential, _) = slow("fake-az-slow-budget");
+    let budget = Duration::from_millis(300);
+    let started = std::time::Instant::now();
+    assert_eq!(
+        credential.token_within(budget).expect_err("budget"),
+        unavailable("Azure CLI timed out")
+    );
+    assert!(
+        started.elapsed() < budget + Duration::from_millis(250),
+        "the call returns at the budget without waiting for the tree: {:?}",
+        started.elapsed()
+    );
+    // A refresh already running in another thread holds the cache lock; a budgeted
+    // caller waits at most its budget for it instead of the refresh's whole run.
+    let (credential, marker) = slow("fake-az-slow-contended");
+    // The fake CLI touches the marker once it runs, which happens under the lock.
+    // Another test thread may fork while the script is still open for writing, which
+    // makes an exec fail with "text file busy"; such an attempt ends at once without
+    // a marker and is simply retried.
+    let refresh = (0..5)
+        .find_map(|_| {
+            let refreshing = std::sync::Arc::clone(&credential);
+            let refresh = std::thread::spawn(move || refreshing.token_within(Duration::from_secs(4)));
+            let until = std::time::Instant::now() + Duration::from_secs(3);
+            while !marker.exists() {
+                if refresh.is_finished() {
+                    assert_eq!(
+                        refresh.join().expect("refresh thread").expect_err("early exit"),
+                        unavailable("Azure CLI could not be started")
+                    );
+                    return None;
+                }
+                assert!(std::time::Instant::now() < until, "the refresh never started");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Some(refresh)
+        })
+        .expect("a refresh that started");
+    let started = std::time::Instant::now();
+    assert_eq!(
+        credential
+            .token_within(Duration::from_millis(200))
+            .expect_err("lock wait"),
+        unavailable("Azure CLI refresh in progress exceeded the caller's budget")
+    );
+    assert!(started.elapsed() < Duration::from_millis(450));
+    assert_eq!(
+        refresh.join().expect("refresh thread").expect_err("refresh"),
+        unavailable("Azure CLI timed out")
+    );
+}
