@@ -23,6 +23,8 @@ containers/remote-worker/**
 !containers/remote-worker/github-credentials.py
 !containers/remote-worker/panel-session.py
 !containers/remote-worker/setup-launch.py
+!containers/remote-worker/byte-capture.py
+!containers/remote-worker/byte_capture_store.py
 !containers/remote-worker/tmux.conf
 !containers/remote-worker/sshd_config
 **/.git

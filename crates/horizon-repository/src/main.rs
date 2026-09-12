@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod capture;
 mod git;
 mod intake;
 mod pack;
@@ -22,6 +23,8 @@ fn main() -> ExitCode {
             command,
             Some(
                 "materialize"
+                    | "capture-plan"
+                    | "capture-once"
                     | "setup"
                     | "setup-binding"
                     | "setup-checkout"
@@ -50,6 +53,8 @@ fn main() -> ExitCode {
     let mut output = io::stdout().lock();
     let mut diagnostics = io::stderr().lock();
     match command {
+        Some("capture-plan") => capture::run(true, &mut input, &mut output, &mut diagnostics),
+        Some("capture-once") => capture::run(false, &mut input, &mut output, &mut diagnostics),
         Some("git-binding") => git::inspect(false, &mut input, &mut output, &mut diagnostics),
         Some("git-checkout") => git::inspect(true, &mut input, &mut output, &mut diagnostics),
         Some("git-prepare") => git::run(false, &mut input, &mut output, &mut diagnostics),
