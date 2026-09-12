@@ -366,6 +366,21 @@ def phase_off(az: Az, manifest: Dict[str, Any], worker: Dict[str, Any], client: 
                             expected_identity, client_tags(manifest))
 
 
+def probe_worker(az: Az, manifest: Dict[str, Any], worker: Dict[str, Any], directory: str,
+                 reader: Callable[..., Dict[str, Any]]) -> Dict[str, Any]:
+    """One observer probe of B bracketed by two identity reads: the answer counts only
+    when B's identity (ARM IDs, instance, image tag, endpoint) is the same before and
+    after it and B is attested after it, so an answer from a replaced or repointed VM is
+    reported as unavailable, never trusted."""
+    before = az.vm_identity(manifest["worker_group"], worker["vm_name"])
+    answer = reader(worker["host"], worker["port"], worker["host_key"], worker["observer_key_path"], directory,
+                    observation_budget(az))
+    _, problem = attest_worker(az, manifest, worker)
+    if problem or not same_worker(before, az.vm_identity(manifest["worker_group"], worker["vm_name"])):
+        return {"progress": None, "checkpoint": None, "channel": "unavailable", "paths": None}
+    return answer
+
+
 def phase_install_observer(az: Az, manifest: Dict[str, Any], worker: Dict[str, Any], public_key_path: str,
                            directory: str, reader: Optional[Callable[..., Dict[str, Optional[int]]]] = None) -> Dict[str, Any]:
     """Install the observer key on B as a restricted, forced-command key through the
@@ -400,8 +415,7 @@ def phase_install_observer(az: Az, manifest: Dict[str, Any], worker: Dict[str, A
         return {"passed": False, "installed": False, "findings": ["the public key is not the observer private key's; nothing installed"]}
     if observation_budget(az) < OBSERVATION_MIN_SECONDS:
         return {"passed": False, "installed": False, "findings": ["phase deadline too near for the observer probe; nothing installed"]}
-    before = reader(worker["host"], worker["port"], worker["host_key"], worker["observer_key_path"], directory,
-                    observation_budget(az))
+    before = probe_worker(az, manifest, worker, directory, reader)
     if before.get("channel") == "answered":
         if not observed_paths_match(before, worker):
             return {"passed": False, "installed": False,
@@ -431,20 +445,14 @@ def phase_install_observer(az: Az, manifest: Dict[str, Any], worker: Dict[str, A
         # The append may have run before its answer was lost: the reader is the truth.
         # A retry after an unproven append would stack a second line, so the state is
         # reported as it is proven, never as "nothing changed".
-        _, problem = attest_worker(az, manifest, worker)
-        after = reader(worker["host"], worker["port"], worker["host_key"], worker["observer_key_path"], directory,
-                       observation_budget(az))
-        if problem is None and after.get("channel") == "answered" and observed_paths_match(after, worker):
+        after = probe_worker(az, manifest, worker, directory, reader)
+        if after.get("channel") == "answered" and observed_paths_match(after, worker):
             return {"passed": True, "installed": True, "progress": after.get("progress"), "checkpoint": after.get("checkpoint"),
                     "findings": ["run-command lost its answer, but the exact B's forced reader answers: the key is installed"]}
         return {"passed": False, "installed": "unknown",
                 "findings": ["run-command did not confirm the append and the forced reader does not answer; inspect "
                              "/root/.ssh/authorized_keys on B before retrying, a retry could append a second line"]}
-    _, problem = attest_worker(az, manifest, worker)
-    if problem:
-        return {"passed": False, "installed": True, "findings": [f"{problem} after the append; do not use this key as observer C"]}
-    after = reader(worker["host"], worker["port"], worker["host_key"], worker["observer_key_path"], directory,
-                   observation_budget(az))
+    after = probe_worker(az, manifest, worker, directory, reader)
     if after.get("channel") != "answered" or not observed_paths_match(after, worker):
         return {"passed": False, "installed": True,
                 "findings": ["the forced reader did not answer for the descriptor's paths after the append; do not use "
@@ -488,14 +496,9 @@ def phase_remove_observer(az: Az, manifest: Dict[str, Any], worker: Dict[str, An
     _, problem = attest_worker(az, manifest, worker)
     if problem:
         return {"passed": False, "removed": "unknown", "findings": [f"{problem} after the removal; removal unproven"]}
-    # The refusal counts only when B's identity is the same before and after the probe:
-    # a refusal from a replacement proves nothing about the baseline B.
-    before_probe = az.vm_identity(manifest["worker_group"], worker["vm_name"])
-    after = reader(worker["host"], worker["port"], worker["host_key"], worker["observer_key_path"], directory,
-                   observation_budget(az))
-    if not same_worker(before_probe, az.vm_identity(manifest["worker_group"], worker["vm_name"])):
-        return {"passed": False, "removed": "unknown",
-                "findings": ["worker B changed identity around the refusal probe; removal unproven"]}
+    # The refusal counts only when B's identity is the same before and after the probe
+    # and B is attested after it: a refusal from a replacement proves nothing.
+    after = probe_worker(az, manifest, worker, directory, reader)
     if after.get("channel") == "refused":
         return {"passed": True, "removed": True, "findings": []}
     if after.get("channel") == "answered":

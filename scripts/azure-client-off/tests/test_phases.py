@@ -737,6 +737,41 @@ class OffPhaseTests(unittest.TestCase):
         self.assertTrue(result["dry_run"] and not result["installed"] and not result["passed"], result)
         self.assertEqual([c[1][:3] for c in calls if c[0] == "mutate"], [("vm", "run-command", "invoke")], "journaled, not issued")
 
+    def test_every_install_probe_is_bracketed_by_worker_identity_reads(self):
+        # B's instance flips once the probe has run: the "already installed" answer, the
+        # lost-answer recovery and the post-append proof all fall back to unproven.
+        answered = {"progress": 2, "checkpoint": None, "channel": "answered",
+                    "paths": {"progress": "/workspace/live/progress", "checkpoint": None}}
+        refused = {"progress": None, "checkpoint": None, "channel": "refused", "paths": None}
+        # (answers, append result, flip after which probe, expected passed/installed)
+        cases = ((iter([answered]), {}, 1, (False, "unknown")),          # "already installed" from a replaced B
+                 (iter([refused, answered]), None, 2, (False, "unknown")),  # lost answer settled from a replaced B
+                 (iter([refused, answered]), {}, 2, (False, True)))         # post-append proof from a replaced B
+        for answers, append_result, flip_after, expected in cases:
+            with self.subTest(expected=expected):
+                m, az, calls = self.plane()
+                worker, _ = self.descriptors(m)
+                az.append_container_authorized_key = lambda group, name, line, result=append_result: result
+                original = az.run
+                state = {"probed": 0}
+
+                def flipping(args, mutating=False, timeout=0, original=original, state=state, m=m, flip_after=flip_after):
+                    answer = original(args, mutating, timeout)
+                    if args[:2] == ["vm", "show"] and m["worker_group"] in args and state["probed"] >= flip_after:
+                        answer = dict(answer, vmId=A_INSTANCE)
+                    return answer
+
+                def reader(*args, answers=answers, state=state):
+                    state["probed"] += 1
+                    return next(answers)
+
+                az.run = flipping
+                with tempfile.TemporaryDirectory() as directory:
+                    private, public, _ = self.observer_pair(directory)
+                    result = client_off.phase_install_observer(az, m, dict(worker, observer_key_path=private), public, directory,
+                                                               reader=reader)
+                self.assertEqual((result["passed"], result["installed"]), expected, result)
+
     def test_install_refuses_a_public_key_that_is_not_the_observer_private_keys(self):
         m, az, calls = self.plane()
         worker, _ = self.descriptors(m)
