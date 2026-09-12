@@ -11,7 +11,7 @@ use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 
 use super::{CloudStoreError, remote_workspaces::creation_fences};
 
-const STORE_SCHEMA_VERSION: i64 = 6;
+const STORE_SCHEMA_VERSION: i64 = 7;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(2);
 const SCHEMA: &str = r"
 CREATE TABLE IF NOT EXISTS cloud_workflows (
@@ -87,6 +87,24 @@ const NETWORK_VOLUME_SCHEMA: [&str; 3] = [
 ) STRICT, WITHOUT ROWID",
     "CREATE TRIGGER remote_network_volume_selections_no_update BEFORE UPDATE ON remote_network_volume_selections BEGIN SELECT RAISE(ABORT, 'network volume selections are immutable'); END",
     "CREATE TRIGGER remote_network_volume_selections_no_delete BEFORE DELETE ON remote_network_volume_selections BEGIN SELECT RAISE(ABORT, 'network volume selections are immutable'); END",
+];
+
+// Frozen version-one identity binding, not provider observation or creation authority.
+const PROVIDER_BINDING_SCHEMA: [&str; 4] = [
+    r"CREATE TABLE remote_provider_bindings (
+    workspace_local_id TEXT PRIMARY KEY NOT NULL REFERENCES remote_runtime_allocations(workspace_local_id),
+    session_id TEXT NOT NULL CHECK (length(session_id) = 36),
+    generation INTEGER NOT NULL CHECK (generation > 0),
+    workflow_id TEXT NOT NULL UNIQUE CHECK (length(workflow_id) = 36),
+    job_id TEXT NOT NULL UNIQUE CHECK (length(job_id) = 36),
+    version INTEGER NOT NULL CHECK (version = 1),
+    provider TEXT NOT NULL CHECK (provider = 'azure'),
+    subscription_id TEXT NOT NULL CHECK (length(subscription_id) = 36),
+    profile_digest TEXT NOT NULL CHECK (length(CAST(profile_digest AS BLOB)) = 64 AND length(profile_digest) = 64 AND profile_digest NOT GLOB '*[^0-9a-f]*')
+) STRICT, WITHOUT ROWID",
+    "CREATE TRIGGER remote_provider_bindings_no_replace BEFORE INSERT ON remote_provider_bindings WHEN EXISTS(SELECT 1 FROM remote_provider_bindings WHERE workspace_local_id = NEW.workspace_local_id OR workflow_id = NEW.workflow_id OR job_id = NEW.job_id) BEGIN SELECT RAISE(ABORT, 'provider binding already exists'); END",
+    "CREATE TRIGGER remote_provider_bindings_no_update BEFORE UPDATE ON remote_provider_bindings BEGIN SELECT RAISE(ABORT, 'provider bindings are immutable'); END",
+    "CREATE TRIGGER remote_provider_bindings_no_delete BEFORE DELETE ON remote_provider_bindings BEGIN SELECT RAISE(ABORT, 'provider bindings are immutable'); END",
 ];
 
 pub(super) fn open_connection(path: &Path) -> Result<Connection, CloudStoreError> {
@@ -167,6 +185,14 @@ pub(super) fn initialize_schema(connection: &mut Connection) -> Result<(), Cloud
         }
     }
     validate_network_volume_schema(&transaction)?;
+    if version < 7 {
+        // Legacy profile names never imply an approved subscription or placement.
+        validate_no_provider_binding_schema(&transaction)?;
+        for definition in PROVIDER_BINDING_SCHEMA {
+            transaction.execute_batch(definition)?;
+        }
+    }
+    validate_provider_binding_schema(&transaction)?;
     transaction.pragma_update(None, "user_version", STORE_SCHEMA_VERSION)?;
     transaction.commit()?;
     Ok(())
@@ -174,13 +200,18 @@ pub(super) fn initialize_schema(connection: &mut Connection) -> Result<(), Cloud
 
 pub(super) fn ensure_current_schema(connection: &Connection) -> Result<(), CloudStoreError> {
     let version = connection.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))?;
-    let legacy_read = matches!(version, 4 | 5) && connection.is_readonly(rusqlite::MAIN_DB)?;
+    let legacy_read = matches!(version, 4..=6) && connection.is_readonly(rusqlite::MAIN_DB)?;
     if version != STORE_SCHEMA_VERSION && !legacy_read {
         return Err(CloudStoreError::UnsupportedSchema(version));
     }
     validate_allocation_schema(connection)?;
     creation_fences::validate_schema(connection)?;
-    if legacy_read {
+    if version < 7 {
+        validate_no_provider_binding_schema(connection)?;
+    } else {
+        validate_provider_binding_schema(connection)?;
+    }
+    if version < 6 {
         let partial: bool = connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM main.sqlite_schema
              WHERE tbl_name = 'remote_network_volume_selections' COLLATE NOCASE
@@ -209,8 +240,36 @@ pub(super) fn ensure_current_schema(connection: &Connection) -> Result<(), Cloud
         };
     }
     validate_first_pin_schema(connection)?;
-    if version == STORE_SCHEMA_VERSION {
+    if version >= 6 {
         validate_network_volume_schema(connection)?;
+    }
+    Ok(())
+}
+
+fn validate_no_provider_binding_schema(connection: &Connection) -> Result<(), CloudStoreError> {
+    let partial: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM main.sqlite_schema
+         WHERE tbl_name = 'remote_provider_bindings' COLLATE NOCASE
+            OR name LIKE 'remote_provider_bindings%')",
+        [],
+        |row| row.get(0),
+    )?;
+    if partial {
+        return Err(CloudStoreError::InvalidAllocationSchema);
+    }
+    Ok(())
+}
+
+fn validate_provider_binding_schema(connection: &Connection) -> Result<(), CloudStoreError> {
+    let matches: bool = connection.query_row(
+        "SELECT COUNT(*) = 4 AND COUNT(CASE WHEN sql IN (?1, ?2, ?3, ?4) THEN 1 END) = 4
+         FROM main.sqlite_schema WHERE (tbl_name = 'remote_provider_bindings' COLLATE NOCASE
+             OR name LIKE 'remote_provider_bindings%') AND sql IS NOT NULL",
+        PROVIDER_BINDING_SCHEMA,
+        |row| row.get(0),
+    )?;
+    if !matches {
+        return Err(CloudStoreError::InvalidAllocationSchema);
     }
     Ok(())
 }

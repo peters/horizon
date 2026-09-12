@@ -11,7 +11,7 @@ fn schema_one_migration_preserves_workflow_bytes_revisions_and_creation_claims()
         .expect("legacy creation fence");
     let connection = Connection::open(store.path()).expect("raw store");
     connection
-        .execute_batch("DROP TABLE remote_network_volume_selections; DROP TABLE remote_first_pin_intents; DROP TABLE remote_runtime_creation_fences; DROP TABLE remote_runtime_allocations; DROP TABLE remote_workspaces; PRAGMA user_version = 1;")
+        .execute_batch("DROP TABLE remote_provider_bindings; DROP TABLE remote_network_volume_selections; DROP TABLE remote_first_pin_intents; DROP TABLE remote_runtime_creation_fences; DROP TABLE remote_runtime_allocations; DROP TABLE remote_workspaces; PRAGMA user_version = 1;")
         .expect("restore schema-one fixture");
     let workflow_bytes: Vec<u8> = connection
         .query_row("SELECT snapshot FROM cloud_workflows", [], |row| row.get(0))
@@ -42,7 +42,7 @@ fn schema_one_migration_preserves_workflow_bytes_revisions_and_creation_claims()
     let version: i64 = connection
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .expect("schema version");
-    assert_eq!(version, 6);
+    assert_eq!(version, 7);
     let after: Vec<u8> = connection
         .query_row("SELECT snapshot FROM cloud_workflows", [], |row| row.get(0))
         .expect("unchanged legacy bytes");
@@ -103,7 +103,7 @@ fn current_schema_with_missing_remote_table_or_index_fails_at_open() {
         let version: i64 = connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .expect("schema unchanged");
-        assert_eq!(version, 6);
+        assert_eq!(version, 7);
     }
 }
 
@@ -262,15 +262,26 @@ fn invalid_selection_and_mutation_or_corrupt_rows_fail_without_repair() {
 
 #[test]
 fn legacy_inventory_is_read_only_and_migration_never_backfills_a_selection() {
-    for version in [4, 5] {
+    for version in [4, 5, 6] {
         let fixture = SelectionFixture::new();
         let saved = fixture.reserve();
-        if version == 5 {
+        let expected_selection = (version == 6).then(selection);
+        if let Some(selection) = &expected_selection {
+            fixture
+                .store
+                .record_remote_network_volume_selection(&saved, selection)
+                .expect("existing HPS selection");
+        }
+        if version >= 5 {
             fixture.store.record_remote_first_pin_intent(&saved).expect("first pin");
         }
         let raw = fixture.raw();
-        raw.execute_batch("DROP TABLE remote_network_volume_selections")
+        raw.execute_batch("DROP TABLE remote_provider_bindings")
             .expect("legacy schema");
+        if version < 6 {
+            raw.execute_batch("DROP TABLE remote_network_volume_selections")
+                .expect("v5");
+        }
         if version == 4 {
             raw.execute_batch("DROP TABLE remote_first_pin_intents").expect("v4");
         }
@@ -281,7 +292,7 @@ fn legacy_inventory_is_read_only_and_migration_never_backfills_a_selection() {
             reader
                 .load_remote_network_volume_selection(&saved)
                 .expect("legacy selection"),
-            None
+            expected_selection
         );
         assert_eq!(
             reader.list_remote_environment_page(None).expect("inventory").records,
@@ -292,7 +303,7 @@ fn legacy_inventory_is_read_only_and_migration_never_backfills_a_selection() {
                 .load_remote_first_pin_request(&saved)
                 .expect("first pin")
                 .is_some(),
-            version == 5
+            version >= 5
         );
         assert_eq!(
             raw.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
@@ -305,24 +316,39 @@ fn legacy_inventory_is_read_only_and_migration_never_backfills_a_selection() {
             upgraded
                 .load_remote_network_volume_selection(&saved)
                 .expect("unselected"),
-            None
+            expected_selection
         );
-        assert_eq!(fixture.count(), 0);
+        assert_eq!(fixture.count(), i64::from(version == 6));
+        assert_eq!(
+            upgraded
+                .load_remote_first_pin_request(&saved)
+                .expect("preserved pin intent")
+                .is_some(),
+            version >= 5
+        );
+        let provider_bindings: i64 = raw
+            .query_row("SELECT COUNT(*) FROM remote_provider_bindings", [], |row| row.get(0))
+            .expect("no provider backfill");
+        assert_eq!(provider_bindings, 0);
         assert_eq!(fixture.snapshots(), before);
         assert_eq!(
             raw.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .expect("version"),
-            6
+            7
         );
     }
 }
 
 #[test]
 fn partial_or_missing_schema_and_missing_database_never_trigger_repair_on_reads() {
-    for version in [4, 5, 6] {
+    for version in [4, 5, 6, 7] {
         let fixture = SelectionFixture::new();
         let raw = fixture.raw();
-        if version == 6 {
+        if version < 7 {
+            raw.execute_batch("DROP TABLE remote_provider_bindings")
+                .expect("legacy schema");
+        }
+        if version >= 6 {
             raw.execute_batch("DROP TRIGGER remote_network_volume_selections_no_delete")
                 .expect("partial");
         }
