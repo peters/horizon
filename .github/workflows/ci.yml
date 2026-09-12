@@ -31,6 +31,17 @@ jobs:
       - name: Verify source allowlist and excluded-file controls
         run: python3 -B containers/remote-worker/test_repository_packaging.py --docker-host unix:///var/run/docker.sock
 
+  azure-harness-tests:
+    name: Azure harness tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify workspace preflight decisions
+        run: python3 -B -m unittest discover -s scripts/azure-workspace-preflight/tests -v
+      - name: Verify client-off harness decisions
+        run: python3 -B -m unittest discover -s scripts/azure-client-off/tests -v
+
   remote-panel-sessions:
     name: Remote panel sessions
     runs-on: ubuntu-latest

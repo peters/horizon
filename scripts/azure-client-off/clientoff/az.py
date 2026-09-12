@@ -21,7 +21,8 @@ class Az:
             return None
         try:
             completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
-        except subprocess.TimeoutExpired:
+        except (subprocess.TimeoutExpired, OSError):
+            # A missing or unexecutable `az` is an unreadable answer, like a timeout.
             return None
         if completed.returncode != 0 or not completed.stdout.strip():
             return None
@@ -38,11 +39,16 @@ class Az:
         statuses = instance_view.get("statuses") if isinstance(instance_view, dict) else None
         if not isinstance(statuses, list):
             return None
+        # Every entry must be well formed and exactly one may carry a power state: a
+        # view naming two states, or one that cannot be read, is no state at all.
+        codes = []
         for status in statuses:
             code = status.get("code") if isinstance(status, dict) else None
-            if isinstance(code, str) and code.startswith("PowerState/"):
-                return code
-        return None
+            if not isinstance(code, str):
+                return None
+            if code.startswith("PowerState/"):
+                codes.append(code)
+        return codes[0] if len(codes) == 1 else None
 
     def append_container_authorized_key(self, group: str, name: str, line: str) -> Optional[Any]:
         """Append one `authorized_keys` line inside the worker container through the ARM

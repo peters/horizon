@@ -59,6 +59,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     journal.add_argument("--created", required=True, help="JSON array file to append to (created if absent)")
     cleanup = sub.add_parser("cleanup", help="delete exactly the groups this run created")
     cleanup.add_argument("--groups-before", required=True, help="JSON list of group names recorded before the run")
+    cleanup.add_argument("--run-id", required=True,
+                         help="this run's identity as drawn by provision-client.sh (client.json `run_id`, also in its log)")
     cleanup.add_argument("--created", required=True,
                          help="creation journal: JSON array of {name, id, tags} records written at creation "
                               "(provision-client.sh for A, journal-group for B)")
@@ -124,7 +126,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         result = {"passed": False, "deleted": [],
                   "findings": [f"groups-before or created unreadable: {type(error).__name__}; nothing deleted"]}
     else:
-        result = phase_cleanup(az, manifest, before, created)
+        result = phase_cleanup(az, manifest, before, created, args.run_id)
     result["az_calls"] = az.journal
     print(json.dumps(result, indent=2))
     return 0 if result.get("passed") else 1

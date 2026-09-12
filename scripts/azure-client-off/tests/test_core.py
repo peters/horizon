@@ -6,7 +6,8 @@ import datetime as dt
 import unittest
 import unittest.mock as mock
 
-from harness_fixtures import A_INSTANCE, B_INSTANCE, IMAGE, NOW, RUN_ID, client_off, manifest, record, samples
+from harness_fixtures import (A_INSTANCE, ADAPTER_TAGS, B_INSTANCE, IMAGE, JOB_ID, NOW, RUN_ID, WORKFLOW_ID, client_off,
+                              manifest, record, samples)
 
 class ManifestTests(unittest.TestCase):
     def test_complete_manifest_is_runnable(self):
@@ -270,57 +271,88 @@ class OfflineVerdictTests(unittest.TestCase):
 class CleanupTests(unittest.TestCase):
     def test_only_groups_created_by_this_run_are_deleted(self):
         m = manifest()
-        adapter = {"horizon-workflow-id": "4c5d6e7f-8a9b-4c0d-8e1f-2a3b4c5d6e7f", "horizon-job-id": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"}
-        created = [record(m["client_group"], lane="azure-client-off", run_id=RUN_ID), record(m["worker_group"], **adapter)]
-        both = client_off.cleanup_targets(m, before=["horizon-worker-registry"], created=created)
+        created = [record(m["client_group"], lane="azure-client-off", run_id=RUN_ID), record(m["worker_group"], **ADAPTER_TAGS)]
+        both = client_off.cleanup_targets(m, before=["horizon-worker-registry"], created=created, run_id=RUN_ID)
         self.assertEqual([r["name"] for r in both["delete"]], [m["client_group"], m["worker_group"]])
         self.assertEqual(both["refused"], [])
-        pre_existing = client_off.cleanup_targets(m, before=[m["worker_group"]], created=created)
+        pre_existing = client_off.cleanup_targets(m, before=[m["worker_group"]], created=created, run_id=RUN_ID)
         self.assertEqual([r["name"] for r in pre_existing["delete"]], [m["client_group"]])
         self.assertEqual(pre_existing["refused"], [m["worker_group"]], "a pre-existing group is never deleted")
-        cased = client_off.cleanup_targets(m, before=[m["worker_group"].upper()], created=created)
+        cased = client_off.cleanup_targets(m, before=[m["worker_group"].upper()], created=created, run_id=RUN_ID)
         self.assertEqual(cased["refused"], [m["worker_group"]], "group names compare case-insensitively")
-        unjournaled = client_off.cleanup_targets(m, before=[], created=created[:1])
+        unjournaled = client_off.cleanup_targets(m, before=[], created=created[:1], run_id=RUN_ID)
         self.assertEqual(unjournaled["refused"], [m["worker_group"]], "a stale manifest name is not a creation record")
-        # ARM group IDs are name-based: without a per-run value in the journaled tags a
-        # same-name recreation is indistinguishable, so such a record deletes nothing.
-        for anonymous in (record(m["worker_group"]), record(m["worker_group"], lane="azure-client-off"),
-                          record(m["worker_group"], **{"horizon-workflow-id": adapter["horizon-workflow-id"]}),
-                          record(m["worker_group"], run_id="short")):
-            with self.subTest(tags=anonymous["tags"]):
-                refused = client_off.cleanup_targets(m, before=[], created=[created[0], anonymous])
+        # ARM group IDs are name-based and every reproducible tag can be restored, so a
+        # record authorizes a delete only when its tags are bound to this run: A's group
+        # carries exactly this run's value, B's group carries the identities its own
+        # name is derived from. Anything else deletes nothing and is never even read.
+        foreign = {"horizon-workflow-id": JOB_ID, "horizon-job-id": WORKFLOW_ID}
+        for stranger in (record(m["worker_group"]), record(m["worker_group"], lane="azure-client-off"),
+                         record(m["worker_group"], **{"horizon-workflow-id": WORKFLOW_ID}), record(m["worker_group"], **foreign),
+                         record(m["worker_group"], run_id=RUN_ID), record(m["worker_group"], run_id="short")):
+            with self.subTest(tags=stranger["tags"]):
+                refused = client_off.cleanup_targets(m, before=[], created=[created[0], stranger], run_id=RUN_ID)
                 self.assertEqual(refused["refused"], [m["worker_group"]])
-                self.assertFalse(client_off.owned_now(None, anonymous), "never even read, let alone deleted")
+                self.assertFalse(client_off.owned_now(None, stranger, m, RUN_ID), "never even read, let alone deleted")
+        for other_run in ("f" * 32, "", "short"):
+            with self.subTest(run_id=other_run):
+                refused = client_off.cleanup_targets(m, before=[], created=created, run_id=other_run)
+                self.assertEqual(refused["refused"], [m["client_group"]], "A's group belongs to the run that drew its value")
         for malformed in ("horizon-client-475-a", {"horizon-client-475-a": True}, [1], ["bad/group"], None,
                           [m["client_group"]], [{"name": m["client_group"]}], [{"name": m["client_group"], "id": "", "tags": {}}],
                           [{"name": m["client_group"], "id": "/g", "tags": {"a": 1}}]):
             with self.subTest(malformed=malformed):
-                refused = client_off.cleanup_targets(m, before=[], created=malformed)
+                refused = client_off.cleanup_targets(m, before=[], created=malformed, run_id=RUN_ID)
                 self.assertEqual(refused["delete"], [], "a malformed journal authorizes nothing")
                 self.assertTrue(refused.get("malformed"))
 
     def test_ownership_before_delete_requires_the_same_id_and_identical_tags(self):
-        journaled = record("horizon-client-475-a", lane="azure-client-off", client_sha="x", run_id=RUN_ID)
+        m = manifest()
+        journaled = record(m["client_group"], lane="azure-client-off", client_sha="x", run_id=RUN_ID)
         answers = {}
 
         class FakeAz:
             def run(self, args, mutating=False, timeout=0):
                 return answers.get("show")
 
+        owned = lambda rec=journaled: client_off.owned_now(FakeAz(), rec, m, RUN_ID)  # noqa: E731
         answers["show"] = {"id": journaled["id"].upper(), "name": journaled["name"], "tags": dict(journaled["tags"])}
-        self.assertTrue(client_off.owned_now(FakeAz(), journaled), "ARM IDs compare case-insensitively")
+        self.assertTrue(owned(), "ARM IDs compare case-insensitively")
         answers["show"] = {"id": "/subscriptions/s/resourceGroups/other", "name": journaled["name"], "tags": dict(journaled["tags"])}
-        self.assertFalse(client_off.owned_now(FakeAz(), journaled), "a recreated group has a new ID")
+        self.assertFalse(owned(), "a recreated group has a new ID")
         answers["show"] = {"id": journaled["id"], "name": journaled["name"], "tags": {"lane": "azure-client-off"}}
-        self.assertFalse(client_off.owned_now(FakeAz(), journaled), "a retagged group is not ours")
+        self.assertFalse(owned(), "a retagged group is not ours")
         answers["show"] = {"id": journaled["id"], "name": journaled["name"], "tags": dict(journaled["tags"], run_id="f" * 32)}
-        self.assertFalse(client_off.owned_now(FakeAz(), journaled), "a recreation under another run value is not ours")
+        self.assertFalse(owned(), "a recreation under another run value is not ours")
         answers["show"] = {"id": journaled["id"], "name": journaled["name"], "tags": []}
-        self.assertIsNone(client_off.owned_now(FakeAz(), journaled), "a malformed tag map is unknown")
+        self.assertIsNone(owned(), "a malformed tag map is unknown")
         duplicate = client_off.journal_records([journaled, dict(journaled, id="/other")])
         self.assertIsNone(duplicate, "conflicting records for one name make the journal untrustworthy")
         answers["show"] = None
-        self.assertIsNone(client_off.owned_now(FakeAz(), journaled), "unreadable is unknown, not absence")
+        self.assertIsNone(owned(), "unreadable is unknown, not absence")
+
+    def test_dry_run_cleanup_walks_the_same_authorization_and_journals_the_delete(self):
+        m = manifest()
+        created = [record(m["client_group"], lane="azure-client-off", run_id=RUN_ID), record(m["worker_group"], **ADAPTER_TAGS)]
+        az = client_off.Az("0f0e0d0c-0b0a-4908-8706-050403020100", dry_run=True)
+        shown = {rec["name"]: {"id": rec["id"], "name": rec["name"], "tags": dict(rec["tags"])} for rec in created}
+        # B was retagged since it was journaled: a dry run must say so, not list it.
+        shown[m["worker_group"]]["tags"] = {}
+
+        def fake_run(args, mutating=False, timeout=0):
+            az.journal.append({"mutating": mutating, "args": args})
+            if mutating:
+                return None
+            return shown.get(args[args.index("-n") + 1]) if args[:2] == ["group", "show"] else None
+
+        with mock.patch.object(az, "run", side_effect=fake_run):
+            result = client_off.phase_cleanup(az, m, [], created, RUN_ID)
+        self.assertTrue(result["dry_run"])
+        self.assertEqual(result["would_delete"], [m["client_group"]])
+        self.assertTrue(any("retagged" in finding for finding in result["findings"]), result)
+        proposed = [entry["args"] for entry in az.journal if entry["mutating"]]
+        self.assertEqual(len(proposed), 1)
+        self.assertIn(created[0]["id"], proposed[0][-1], "the intended delete names the journaled ARM ID")
 
 
 class AzTests(unittest.TestCase):
@@ -328,12 +360,20 @@ class AzTests(unittest.TestCase):
         az = client_off.Az("0f0e0d0c-0b0a-4908-8706-050403020100")
         for view in ({"instanceView": None}, {"instanceView": []}, {"instanceView": {"statuses": None}},
                      {"instanceView": {"statuses": [None, "PowerState/running"]}},
-                     {"instanceView": {"statuses": [{"code": 7}]}}, {"instanceView": {"statuses": {}}}, [], None):
+                     {"instanceView": {"statuses": [{"code": 7}]}}, {"instanceView": {"statuses": {}}}, [], None,
+                     {"instanceView": {"statuses": [{"code": "PowerState/deallocated"}, {"code": "PowerState/running"}]}},
+                     {"instanceView": {"statuses": [{"code": "PowerState/running"}, {"level": "Info"}]}}):
             with self.subTest(view=view), mock.patch.object(az, "run", return_value=view):
                 self.assertIsNone(az.power_state("g", "client"))
         with mock.patch.object(az, "run", return_value={"instanceView": {"statuses": [{"code": "PowerState/running"}]}}):
             self.assertEqual(az.power_state("g", "client"), "PowerState/running")
 
+
+    def test_a_missing_or_failing_az_is_an_unreadable_answer(self):
+        az = client_off.Az("0f0e0d0c-0b0a-4908-8706-050403020100")
+        for error in (FileNotFoundError("az"), PermissionError("az"), OSError("exec")):
+            with self.subTest(error=error), mock.patch.object(client_off.subprocess, "run", side_effect=error):
+                self.assertIsNone(az.run(["group", "exists", "-n", "g"]))
 
     def test_dry_run_journals_but_never_issues_a_mutation(self):
         az = client_off.Az("0f0e0d0c-0b0a-4908-8706-050403020100", dry_run=True)

@@ -27,6 +27,9 @@ IMAGE = "x.azurecr.io/horizon-remote-worker@sha256:" + "a" * 64
 B_INSTANCE = "3f2c9a1e-5d4b-4c6a-8e7f-0a1b2c3d4e5f"
 A_INSTANCE = "9b8a7c6d-1e2f-4a3b-9c8d-7e6f5a4b3c2d"
 RUN_ID = "0123456789abcdef0123456789abcdef"
+WORKFLOW_ID = "4c5d6e7f-8a9b-4c0d-8e1f-2a3b4c5d6e7f"
+JOB_ID = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+ADAPTER_TAGS = {"horizon-workflow-id": WORKFLOW_ID, "horizon-job-id": JOB_ID}
 
 
 def manifest(**overrides):
@@ -37,7 +40,7 @@ def manifest(**overrides):
         "client_vm_size": "Standard_B2s",
         "client_sha": "77d48a81" + "0" * 32,
         "client_binary_sha256": "b" * 64,
-        "worker_group": "horizon-ws-b",
+        "worker_group": f"horizon-ws-{WORKFLOW_ID}-{JOB_ID}",
         "worker_image": IMAGE,
         "hourly_cost_micros": 120_000,
         "budget_micros": 2_000_000,
