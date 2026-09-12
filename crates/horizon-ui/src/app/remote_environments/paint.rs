@@ -160,7 +160,7 @@ fn render_controls(ui: &mut egui::Ui, state: &RemoteEnvironments, action: &mut I
         }
     });
     if state.stop.is_pending() {
-        ui.label("An explicitly confirmed Stop is pending. Closing this overview does not cancel it.");
+        ui.label(state.stop.pending_label());
     }
     if let Some(failure) = &state.failure {
         let message = match failure.error {

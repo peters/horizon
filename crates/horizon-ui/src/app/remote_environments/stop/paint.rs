@@ -1,6 +1,8 @@
 //! Selected-environment Stop controls; painting grants no provider authority.
 
-use super::{Confirmation, InventoryAction, RemoteEnvironmentSummary, StopState, same_target, supported};
+use super::{
+    Confirmation, InventoryAction, RemoteEnvironmentSummary, StopState, check_supported, same_target, supported,
+};
 use crate::theme;
 use egui::RichText;
 
@@ -26,6 +28,18 @@ pub(super) fn show(
         if request.clicked() {
             *action = InventoryAction::RequestStop;
         }
+        let check = ui.add_enabled(
+            idle && !state.is_pending() && check_supported(selected),
+            egui::Button::new("Check saved Stop"),
+        );
+        #[cfg(test)]
+        ui.ctx().data_mut(|data| {
+            data.insert_temp(egui::Id::new("stop-check-test"), check.rect);
+            data.insert_temp(egui::Id::new("stop-check-enabled-test"), check.enabled());
+        });
+        if check.clicked() {
+            *action = InventoryAction::CheckStop;
+        }
     });
     if !supported(selected) {
         ui.label(
@@ -35,13 +49,21 @@ pub(super) fn show(
             .color(theme::FG_DIM()),
         );
     }
+    if check_supported(selected) {
+        ui.label("Checks the existing RunPod Stop intent without sending Stop again. Verified completion may update its saved record; no private SSH key is needed.");
+        ui.label("A retained worker/public pin and matching profile/storage are required. This is not task, filesystem, billing or live SSH proof.");
+    }
     if let Some(confirmation) = &state.confirmation {
         confirm(ui, confirmation, idle && !state.is_pending(), action);
     }
     if let Some(notice) = &state.notice
         && same_target(&notice.expected, selected)
     {
-        ui.label("Last explicit Stop result:");
+        ui.label(if notice.checked {
+            "Last saved Stop check:"
+        } else {
+            "Last explicit Stop result:"
+        });
         ui.colored_label(
             if notice.succeeded {
                 theme::FG()
@@ -50,7 +72,9 @@ pub(super) fn show(
             },
             &notice.message,
         );
-        if !notice.succeeded {
+        if notice.checked {
+            ui.label("Checks are manual point-in-time observations. Opening or closing this view never repeats them.");
+        } else if !notice.succeeded {
             ui.label("Saved intent and identity may remain. Refresh the saved page before explicitly retrying.");
         }
     }

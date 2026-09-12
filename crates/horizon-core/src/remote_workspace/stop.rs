@@ -1,9 +1,13 @@
 //! Explicit, durable Stop coordination. Client lifecycle never invokes this operation.
 
 mod configured;
+mod configured_confirmation;
 mod confirmation;
 
 pub use configured::{ConfiguredStopError, stop_configured_remote_environment};
+pub use configured_confirmation::{
+    ConfiguredStopConfirmation, ConfiguredStopConfirmationError, confirm_configured_remote_environment_stop,
+};
 pub use confirmation::{RemoteWorkspaceStopConfirmation, confirm_remote_workspace_stop};
 
 use crate::{

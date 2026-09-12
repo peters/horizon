@@ -69,6 +69,7 @@ enum InventoryAction {
     Observe,
     RequestStop,
     ConfirmStop,
+    CheckStop,
     CancelStop,
     ListReconnectViews,
     Reconnect(horizon_core::PanelId),
@@ -241,6 +242,7 @@ impl RemoteEnvironments {
             | InventoryAction::InspectRepository
             | InventoryAction::Observe
             | InventoryAction::RequestStop
+            | InventoryAction::CheckStop
             | InventoryAction::ConfirmStop => {}
             InventoryAction::ListReconnectViews | InventoryAction::Reconnect(_) => self.reopen.invalidate(),
             InventoryAction::ListReopenPanels
@@ -327,6 +329,10 @@ impl RemoteEnvironments {
                 self.invalidate_session_views();
                 self.observation.invalidate();
             }
+            InventoryAction::CheckStop if self.stop.check(home, config, &summary, ctx) => {
+                self.invalidate_session_views();
+                self.observation.invalidate();
+            }
             _ => {}
         }
     }
@@ -399,7 +405,10 @@ impl HorizonApp {
                     ctx,
                 );
             }
-            if matches!(action, InventoryAction::RequestStop | InventoryAction::ConfirmStop) {
+            if matches!(
+                action,
+                InventoryAction::RequestStop | InventoryAction::ConfirmStop | InventoryAction::CheckStop
+            ) {
                 self.remote_environments.stop_action(
                     action,
                     self.session_store.home(),

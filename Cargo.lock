@@ -2045,6 +2045,7 @@ dependencies = [
  "horizon-core",
  "horizon-cursor",
  "profiling",
+ "rusqlite",
  "serde_json",
  "serde_yaml",
  "surge-core",
