@@ -1,7 +1,8 @@
 //! Explicit non-secret provider configuration, independent of provider I/O and UI.
 
 use crate::cloud_run::{
-    interactive_worker::valid_worker_profile_name, local_docker::LocalDockerProfile, runpod::RunPodProfile,
+    azure::AzureProfile, interactive_worker::valid_worker_profile_name, local_docker::LocalDockerProfile,
+    runpod::RunPodProfile,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -14,6 +15,9 @@ pub struct RemoteProviderConfig {
     /// Non-secret placement only. The controller reads `RUNPOD_API_KEY` only on an explicit connection.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub runpod: Vec<RunPodProfile>,
+    /// Non-secret placement only. Loading profiles never invokes the subscription-pinned CLI credential.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub azure: Vec<AzureProfile>,
 }
 
 impl<'de> Deserialize<'de> for RemoteProviderConfig {
@@ -25,6 +29,8 @@ impl<'de> Deserialize<'de> for RemoteProviderConfig {
             local_docker: Vec<LocalDockerProfile>,
             #[serde(default)]
             runpod: Vec<RunPodProfile>,
+            #[serde(default)]
+            azure: Vec<AzureProfile>,
         }
 
         // Parser errors can contain malformed values, even in a non-secret configuration block.
@@ -32,6 +38,7 @@ impl<'de> Deserialize<'de> for RemoteProviderConfig {
             .map(|fields| Self {
                 local_docker: fields.local_docker,
                 runpod: fields.runpod,
+                azure: fields.azure,
             })
             .map_err(|_| serde::de::Error::custom("invalid remote provider configuration"))
     }
@@ -40,7 +47,7 @@ impl<'de> Deserialize<'de> for RemoteProviderConfig {
 impl RemoteProviderConfig {
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.local_docker.is_empty() && self.runpod.is_empty()
+        self.local_docker.is_empty() && self.runpod.is_empty() && self.azure.is_empty()
     }
 
     /// Validate explicit names and local endpoints without provider or credential access.
@@ -64,6 +71,15 @@ impl RemoteProviderConfig {
             }
             if !names.insert(profile.name.as_str()) {
                 return Err(RemoteProviderConfigError::DuplicateRunPodProfile { index });
+            }
+        }
+        names.clear();
+        for (index, profile) in self.azure.iter().enumerate() {
+            profile
+                .validate()
+                .map_err(|_| RemoteProviderConfigError::InvalidAzureProfile { index })?;
+            if !names.insert(profile.name.as_str()) {
+                return Err(RemoteProviderConfigError::DuplicateAzureProfile { index });
             }
         }
         Ok(())
@@ -91,6 +107,18 @@ impl RemoteProviderConfig {
             .find(|profile| profile.name == name)
             .ok_or(RemoteProviderConfigError::UnconfiguredRunPodProfile)
     }
+
+    /// Resolve an exact explicit CPU profile without reading credentials or calling the provider.
+    /// Target, image and cost authorization remain the adapter's separate responsibility.
+    /// # Errors
+    /// Rejects invalid configuration, duplicate names and absent profiles without echoing values.
+    pub fn azure_profile(&self, name: &str) -> Result<&AzureProfile, RemoteProviderConfigError> {
+        self.validate()?;
+        self.azure
+            .iter()
+            .find(|profile| profile.name == name)
+            .ok_or(RemoteProviderConfigError::UnconfiguredAzureProfile)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -107,6 +135,12 @@ pub enum RemoteProviderConfigError {
     DuplicateRunPodProfile { index: usize },
     #[error("no RunPod profile exactly matches this saved environment")]
     UnconfiguredRunPodProfile,
+    #[error("remote.azure[{index}] requires valid explicit placement, identity, registry and declared cost")]
+    InvalidAzureProfile { index: usize },
+    #[error("remote.azure[{index}] repeats an earlier profile name")]
+    DuplicateAzureProfile { index: usize },
+    #[error("no CPU provider profile exactly matches this saved environment")]
+    UnconfiguredAzureProfile,
 }
 
 #[cfg(test)]

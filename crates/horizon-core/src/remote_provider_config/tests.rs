@@ -5,6 +5,7 @@ use crate::cloud_run::{
     local_docker::{LocalDockerError, LocalDockerInteractiveWorkerProvider},
 };
 
+mod azure;
 mod config;
 
 fn runpod_profile(name: &str) -> RunPodProfile {
