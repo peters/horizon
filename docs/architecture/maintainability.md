@@ -449,6 +449,11 @@ back into large multi-purpose modules.
   reasons remain distinct; saved completion is not current provider status.
   This durable entrypoint admits only persistent execution: timed creation/expiry
   cleanup needs separate coordination before it can promise retained Stop intent.
+- `remote_workspace/stop/confirmation.rs` completes only existing Stop intent,
+  using the separate provider-read-only observer and exact allocation/selection fences.
+  RunPod reuses retained-state checks without Stop, SSH or host-key lookup. Only
+  verified retention permits local completion; pending/absence preserve saved state.
+  The saved public pin is shape-checked, not live-attested; configured/UI actions are separate.
 - `remote_workspace/stop/configured.rs` admits one explicitly confirmed saved
   selection through its exact named local provider profile. It reloads the owned
   record and compares the full summary/revision before durable Stop coordination,

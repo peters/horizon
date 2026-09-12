@@ -9,6 +9,8 @@ use crate::{
 };
 use serde_json::{Value, json};
 
+mod confirmation;
+
 struct Fixture {
     worker: InteractiveWorker,
     transport: FakeTransport,

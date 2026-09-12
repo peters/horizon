@@ -5,7 +5,10 @@ use super::super::{
         InteractiveWorkerLifecycle, InteractiveWorkerProvider, InteractiveWorkerRequest, InteractiveWorkerSshEndpoint,
         InteractiveWorkerStatus, valid_ssh_coordinates,
     },
-    interactive_worker_stop::{InteractiveWorkerStop, InteractiveWorkerStopProvider},
+    interactive_worker_stop::{
+        InteractiveWorkerStop, InteractiveWorkerStopExpectation, InteractiveWorkerStopObservation,
+        InteractiveWorkerStopObserver, InteractiveWorkerStopProvider,
+    },
 };
 use super::{
     RunPodCleanup, RunPodClient, RunPodEnsure, RunPodError, RunPodHostTrust, RunPodLifecycle,
@@ -225,6 +228,25 @@ impl InteractiveWorkerStopProvider for RunPodInteractiveWorkerProvider {
         super::validate_target(&worker.target, &self.profile)?;
         self.client
             .stop_interactive_worker(&retained, &worker.ssh_public_key, &self.profile)
+    }
+}
+
+impl InteractiveWorkerStopObserver for RunPodInteractiveWorkerProvider {
+    fn observe_worker_stop(
+        &self,
+        expected: InteractiveWorkerStopExpectation<'_>,
+    ) -> Result<InteractiveWorkerStopObservation, Self::Error> {
+        self.client.check_network_worker(expected.worker)?;
+        let retained = runpod_worker(expected.worker)?;
+        super::validate_target(&expected.worker.target, &self.profile)?;
+        if !expected.ssh.is_complete() {
+            return Err(RunPodError::InvalidPersistedWorker);
+        }
+        if self.client.network_binding.as_ref().map(|binding| &binding.selection) != expected.network_volume {
+            return Err(RunPodError::InvalidTarget);
+        }
+        self.client
+            .observe_interactive_worker_stop(&retained, &expected.worker.ssh_public_key, &self.profile)
     }
 }
 

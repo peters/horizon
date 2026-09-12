@@ -1,8 +1,10 @@
 //! Explicit, durable Stop coordination. Client lifecycle never invokes this operation.
 
 mod configured;
+mod confirmation;
 
 pub use configured::{ConfiguredStopError, stop_configured_remote_environment};
+pub use confirmation::{RemoteWorkspaceStopConfirmation, confirm_remote_workspace_stop};
 
 use crate::{
     cloud_run::{
@@ -89,6 +91,10 @@ pub enum RemoteWorkspaceStopError {
     MissingAllocation,
     #[error("saved environment has no exact retained worker to stop")]
     MissingWorker,
+    #[error("saved environment has no existing Stop intent to confirm")]
+    MissingStopIntent,
+    #[error("Stop observation requires an already retained complete SSH pin")]
+    MissingTrust,
     #[error("saved environment changed; refresh before explicitly retrying Stop")]
     StateChanged,
     #[error("Stop provider does not match the saved worker")]
