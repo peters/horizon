@@ -28,7 +28,10 @@ the same file run in every matrix without Azure.
    the spike harness does.
 3. **Ready only with an attested host key.** `reconcile_worker` reports `Ready`
    only when the run-command channel returns the host key the container's SSH
-   server serves and the group, VM and address re-prove unchanged.
+   server serves and the group, VM and address re-prove unchanged. The VM re-proof
+   covers the identity tags and the instance identity (`vmId`): a VM deleted and
+   recreated under the same name and tags while the key was read, or during a stop
+   or start wait, is an identity error, never this worker.
 4. **The key is the one on the wire.** A pinned SSH session (no operator
    configuration read, `StrictHostKeyChecking=yes`, the global known-hosts file
    disabled, a `known_hosts` holding only the attested key, the generated client key)

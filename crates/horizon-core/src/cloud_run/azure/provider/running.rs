@@ -2,7 +2,7 @@
 //! control plane rather than trusting whatever answers on the network address, and stop
 //! it by deallocating the VM with retained disks.
 use super::super::{
-    AzureError, AzureLifecycle, AzureManagementTransport, AzureRunCommand, AzureWorker, WORKER_VM_NAME,
+    AzureError, AzureLifecycle, AzureManagementTransport, AzureRunCommand, AzureVmView, AzureWorker, WORKER_VM_NAME,
     deployment::{SSH_PORT, identity_tags},
     transport::remaining,
 };
@@ -88,6 +88,16 @@ impl AzureHostKeySource for AzureRunCommandHostKeys {
     }
 }
 
+/// Whether `live` is the same VM instance as `baseline`: an instance identity observed
+/// once must be observed again, so a VM deleted and recreated under the same name and
+/// tags, while a wait or a key read was in flight, is never mistaken for this worker.
+pub(super) fn same_instance(baseline: Option<&AzureVmView>, live: Option<&AzureVmView>) -> bool {
+    match baseline.and_then(|vm| vm.instance_id.as_deref()) {
+        Some(pinned) => live.and_then(|vm| vm.instance_id.as_deref()) == Some(pinned),
+        None => true,
+    }
+}
+
 impl AzureClient {
     /// The SSH endpoint, only with a host key attested for this exact worker. Reading
     /// the key can take a while, so the key is paired with the address only if the
@@ -97,6 +107,7 @@ impl AzureClient {
     pub(super) fn attested_endpoint(
         &self,
         worker: &AzureWorker,
+        instance: Option<&AzureVmView>,
         host: &str,
         target: &WorkerTarget,
         ssh_public_key: &str,
@@ -113,6 +124,9 @@ impl AzureClient {
             return Err(AzureError::ResourceIdentityMismatch);
         }
         let fresh = self.observe(worker.clone(), &group, &expected, None, placement)?;
+        if !same_instance(instance, fresh.as_ref().and_then(|fresh| fresh.vm.as_ref())) {
+            return Err(AzureError::ResourceIdentityMismatch);
+        }
         let unchanged = fresh
             .is_some_and(|fresh| fresh.lifecycle == AzureLifecycle::Running && fresh.host.as_deref() == Some(host));
         Ok(unchanged
@@ -180,15 +194,16 @@ impl AzureClient {
     /// Wait for the exact worker's VM to reach `target`, under an absolute deadline that
     /// covers the sleeps with each request handed only what is left of it. The wait spans
     /// minutes, so every poll re-proves the group (identity tags, recorded ID, not
-    /// deleting) and the VM (identity tags): a recreated or retagged worker at the same
-    /// path is an identity error, never this worker's transition. `None` means the
+    /// deleting) and the VM (identity tags and instance identity): a recreated or
+    /// retagged worker at the same path is an identity error, never this worker's
+    /// transition. `None` means the
     /// transition was not verified within the bound (vanished, failed, deleting, or late).
     fn await_power(
         &self,
         current: &Observation,
         expected: &std::collections::BTreeMap<String, String>,
         target: AzureLifecycle,
-    ) -> Result<Option<crate::cloud_run::azure::AzureVmView>, AzureError> {
+    ) -> Result<Option<AzureVmView>, AzureError> {
         let group = &current.worker.resource_group;
         let deadline = Instant::now() + POWER_BOUND;
         let last = POWER_BACKOFF_MS[POWER_BACKOFF_MS.len() - 1];
@@ -231,7 +246,9 @@ impl AzureClient {
             let Some(vm) = self.transport.get_vm_within(group, WORKER_VM_NAME, budget)? else {
                 break;
             };
-            if expected.iter().any(|(key, value)| vm.tags.get(key) != Some(value)) {
+            if expected.iter().any(|(key, value)| vm.tags.get(key) != Some(value))
+                || !same_instance(current.vm.as_ref(), Some(&vm))
+            {
                 return Err(AzureError::ResourceIdentityMismatch);
             }
             match vm_lifecycle(&vm) {
@@ -306,6 +323,9 @@ impl InteractiveWorkerStartProvider for AzureClient {
         let Some(fresh) = self.observe(handle, &live, &expected, None, Placement::Ignore)? else {
             return Err(AzureError::StartUnverified);
         };
+        if !same_instance(current.vm.as_ref(), fresh.vm.as_ref()) {
+            return Err(AzureError::ResourceIdentityMismatch);
+        }
         // Only a worker whose VM is physically running is a started worker; anything
         // else observed after the wait (a failure, a deletion begun meanwhile, a new
         // transition, an unreadable power state) stays unverified. A running VM without
