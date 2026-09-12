@@ -6,7 +6,7 @@ use horizon_core::repository_overlay::{
         RepositoryOverlayBundle, codec,
         store::{BundleStoreError, RepositoryBundleStore},
     },
-    capture::{GitCaptureError, capture_selected},
+    capture::{GitCaptureError, capture_selected, capture_selected_revision},
     reader::RepositoryReadError,
 };
 use horizon_core::{
@@ -35,7 +35,10 @@ struct Enrollment {
 
 impl Enrollment {
     fn binding(&self) -> Result<ArtifactDigest, Reason> {
-        if self.version != 1 || !self.retained_volume_attested || self.selected.is_empty() || self.selected.len() > 128
+        if !matches!(self.version, 1 | 2)
+            || !self.retained_volume_attested
+            || self.selected.is_empty()
+            || self.selected.len() > 128
         {
             return Err(Reason::Invalid);
         }
@@ -149,6 +152,12 @@ fn execute(request: &Request, binding: &ArtifactDigest, plan: bool, response: &m
     let preparation = &request.enrollment.preparation;
     let before = preparation.inspect_checkout().map_err(|_| Reason::Identity)?;
     if plan {
+        if request.enrollment.version == 2 {
+            capture_enrollment(&request.enrollment, std::path::Path::new(before.path))?;
+            if preparation.inspect_checkout().map_err(|_| Reason::Identity)? != before {
+                return Err(Reason::Identity);
+            }
+        }
         return Ok(());
     }
     let root = std::path::PathBuf::from("/workspace/.horizon-worker/byte-captures")
@@ -161,13 +170,7 @@ fn execute(request: &Request, binding: &ArtifactDigest, plan: bool, response: &m
     if destination.dev() != before.device {
         return Err(Reason::Identity);
     }
-    let selected: Vec<_> = request.enrollment.selected.iter().map(String::as_str).collect();
-    let bundle = capture_selected(std::path::Path::new(before.path), preparation.source.clone(), &selected).map_err(
-        |error| match error {
-            GitCaptureError::Changed | GitCaptureError::Read(RepositoryReadError::Changed) => Reason::Changed,
-            _ => Reason::Capture,
-        },
-    )?;
+    let bundle = capture_enrollment(&request.enrollment, std::path::Path::new(before.path))?;
     if preparation.inspect_checkout().map_err(|_| Reason::Identity)? != before {
         return Err(Reason::Identity);
     }
@@ -193,6 +196,26 @@ fn execute(request: &Request, binding: &ArtifactDigest, plan: bool, response: &m
     response.record_sha256 = Some(record_sha256);
     response.record_bytes = Some(length);
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn capture_enrollment(enrollment: &Enrollment, checkout: &std::path::Path) -> Result<RepositoryOverlayBundle, Reason> {
+    let preparation = &enrollment.preparation;
+    let selected: Vec<_> = enrollment.selected.iter().map(String::as_str).collect();
+    let captured = if enrollment.version == 2 {
+        capture_selected_revision(
+            checkout,
+            preparation.source.clone(),
+            &preparation.work_branch,
+            &selected,
+        )
+    } else {
+        capture_selected(checkout, preparation.source.clone(), &selected)
+    };
+    captured.map_err(|error| match error {
+        GitCaptureError::Changed | GitCaptureError::Read(RepositoryReadError::Changed) => Reason::Changed,
+        _ => Reason::Capture,
+    })
 }
 
 #[cfg(target_os = "linux")]

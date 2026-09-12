@@ -17,6 +17,10 @@ back into large multi-purpose modules.
   records. No provider lifecycle or automatic enrollment is implied. See
   [worker byte capture](worker-byte-capture.md) for the non-atomic protection
   boundary and retained-volume attestation.
+- `repository_overlay::capture::revision` adds explicit complete selected layers
+  at an observed work-branch commit, reusing pinned readers and bundle limits.
+  Enrollment version 2 opts in; the fixed-base delta API and version 1 remain
+  unchanged. This leaf does not export Git history or advance a checkpoint.
 - Prepared task admission keeps immutable intake/setup selection and read-only
   checkout inspection in `repository_overlay::intake::setup`. The fixed
   `setup-binding` and `setup-checkout` helpers never materialize or start tasks.

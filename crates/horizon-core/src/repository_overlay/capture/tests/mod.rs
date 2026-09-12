@@ -1,6 +1,8 @@
 use super::*;
 
 #[cfg(target_os = "linux")]
+mod revision;
+#[cfg(target_os = "linux")]
 mod safety;
 #[cfg(target_os = "linux")]
 mod semantics;
@@ -60,11 +62,36 @@ fn metadata_budget_and_diagnostics_are_bounded_and_redacted() {
     }
 }
 
+#[test]
+fn revision_source_branch_and_selection_are_validated_before_repository_access() {
+    let missing = Path::new("/not-an-enrolled-repository");
+    for branch in ["", "HEAD", "refs/heads/../other", "work:other"] {
+        assert!(matches!(
+            capture_selected_revision(missing, source(), branch, &["file"]),
+            Err(GitCaptureError::Policy(_))
+        ));
+    }
+    let mut invalid = source();
+    invalid.repository = "https://private@example.invalid/repo".into();
+    assert_eq!(
+        capture_selected_revision(missing, invalid, "work/capture", &["file"]),
+        Err(OverlayPlanError::InvalidSource.into())
+    );
+    assert_eq!(
+        capture_selected_revision(missing, source(), "work/capture", &["same", "same"]),
+        Err(OverlayPlanError::DuplicatePath.into())
+    );
+}
+
 #[cfg(not(target_os = "linux"))]
 #[test]
 fn unsupported_platform_has_no_fallback() {
     assert_eq!(
         capture_selected(Path::new("/selected"), source(), &["file"]),
+        Err(GitCaptureError::Unsupported)
+    );
+    assert_eq!(
+        capture_selected_revision(Path::new("/selected"), source(), "work/capture", &["file"]),
         Err(GitCaptureError::Unsupported)
     );
 }

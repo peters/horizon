@@ -4,6 +4,8 @@
 mod content;
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "linux")]
+mod revision;
 
 use super::{
     MAX_CHANGES, MAX_METADATA_BYTES, OverlayPlanError,
@@ -40,6 +42,42 @@ pub fn capture_selected(
     #[cfg(not(target_os = "linux"))]
     {
         let _ = (root, source, selection);
+        Err(GitCaptureError::Unsupported)
+    }
+}
+
+/// Capture complete literal index/worktree states for the explicit selection at
+/// the current commit of exactly `work_branch`. Unlike [`capture_selected`],
+/// unchanged selected bytes and absent nodes are included in both layers.
+/// The returned source binds the observed commit and branch; the supplied source
+/// identifies the enrolled repository, not a requirement to stay at its old commit.
+/// Only selected payloads are exported; current commit/tree metadata is read for
+/// admission. No history export, filters, remote URL reads or network I/O occurs.
+/// This is not a full repository checkpoint or an atomic multi-file snapshot.
+/// The same platform, ownership, payload and filesystem-latency limits apply.
+/// # Errors
+/// Rejects invalid selections/source/branch, detached or unborn HEAD, unsafe nodes,
+/// unsupported index semantics and detected root/index/branch/HEAD changes.
+pub fn capture_selected_revision(
+    root: &Path,
+    mut source: GitSource,
+    work_branch: &str,
+    selected: &[&str],
+) -> Result<RepositoryOverlayBundle, GitCaptureError> {
+    source.validate().map_err(|_| OverlayPlanError::InvalidSource)?;
+    source.branch = Some(work_branch.to_owned());
+    source.validate().map_err(|_| OverlayPlanError::InvalidSource)?;
+    if work_branch == "HEAD" || work_branch.len() > 1024 {
+        return Err(OverlayPlanError::InvalidSource.into());
+    }
+    let selection = validate_selection(selected)?;
+    #[cfg(target_os = "linux")]
+    {
+        revision::capture(root, source, work_branch, &selection)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (root, source, work_branch, selection);
         Err(GitCaptureError::Unsupported)
     }
 }
