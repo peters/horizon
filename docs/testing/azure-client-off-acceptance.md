@@ -50,8 +50,10 @@ the binary digest, a digest image reference, positive price and budget (the exam
 values above are a `Standard_B2s` list price and a two-currency-unit budget; replace
 them with the current price and your bound), a deadline within 24 hours carrying an
 explicit UTC offset and, for the phases that rent or keep compute alive, far enough
-ahead to outlast them (`validate`: the 30-minute provisioning bound, the 10-minute
-observer install bound, the off-phase setup at its bounds (eleven bounded ARM reads
+ahead to outlast them (`validate`: the 30-minute provisioning bound, the observer
+install at its bounds (eight bounded reads, key derivation and probe before the
+10-minute run-command bound, four reads and a probe to reconcile after it; about 27
+minutes), the off-phase setup at its bounds (eleven bounded ARM reads
 for the client, worker and identity-bracketed state attestations, the observer
 probe, and the deallocation with its poll, which share one 10-minute bound; about
 29 minutes), the off interval and everything that must still follow it: the return
@@ -141,7 +143,12 @@ credentials and identifiers stay private.
    harness instead appends one `authorized_keys` line of the form
    `restrict,command="<reader>" ssh-ed25519 ...` inside the worker container through
    the ARM run-command channel, after the same identity, image-tag and running gates
-   the off phase applies. `restrict` disables pty, port, agent and X11 forwarding and
+   the off phase applies. The install reserves the whole off phase after itself, hands
+   every probe what is left of its bound, appends only while the run-command bound
+   and its reconciliation still fit, and edits `authorized_keys` through an editor
+   that opens `/root/.ssh` and the file relative to a verified directory descriptor
+   with `O_NOFOLLOW`, so no planted symlink can redirect a root write. `restrict`
+   disables pty, port, agent and X11 forwarding and
    user rc; the forced reader (its source and arguments travel base64-encoded, so no
    quoting layer can alter them) opens the two paths component by component with
    `O_NOFOLLOW` below `/workspace`, returns a capped prefix of regular files only and
