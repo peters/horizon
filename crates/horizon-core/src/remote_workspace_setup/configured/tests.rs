@@ -50,6 +50,7 @@ mod linux {
                     min_disk_bandwidth_mbps: None,
                     container_registry_auth_id: None,
                 }],
+                ..Default::default()
             };
             Self {
                 directory,

@@ -115,6 +115,9 @@ back into large multi-purpose modules.
   defaults, exact lookup and redacted validation. The main configuration delegates
   to it; local profile construction shares target-name and local-endpoint rules.
   Configuration loading never selects an ambient daemon or performs provider I/O.
+  CPU profile configuration reuses the Azure adapter's pure placement validation;
+  serialization and exact lookup never acquire credentials or construct a client.
+  A saved profile is not UI/dispatcher support or authorization to allocate a worker.
 - `remote_ssh_identity.rs` exposes retained local client-key preparation and strict
   recovery, separately from the pure remote aggregate. Linux filesystem privacy
   and durable publication live in `remote_ssh_identity/linux.rs`; bounded key-utility
