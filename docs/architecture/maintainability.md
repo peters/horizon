@@ -149,6 +149,10 @@ back into large multi-purpose modules.
   non-creating recovery. Credential construction is lazy; preview has no I/O.
   This leaf does not prepare Git, deliver repository credentials, start tasks or
   attest caller-supplied image/storage trust. UI confirmation remains a separate layer.
+  The overview's `setup` UI leaf binds transient Local Docker/RunPod requests to
+  the actual home/session/config, caches exact confirmation values and consumes
+  consent once. Manual noncreating Check retains original attempt coordinates;
+  settled history never blocks inventory, repository Prepare or saved Shell Start.
 - `remote_environment_observation.rs` produces overview-safe, point-in-time
   provider observations with exact snapshot checks but no private-key access or
   saved-state writes. It shares allocation observation validation with recovery;

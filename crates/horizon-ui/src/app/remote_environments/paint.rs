@@ -106,17 +106,26 @@ pub(super) fn show(ctx: &Context, state: &mut RemoteEnvironments) -> InventoryAc
             );
             ui.separator();
             render_controls(ui, state, &mut action);
-            let content_height = if state.page.as_ref().is_some_and(|page| !page.rows.is_empty()) {
-                (viewport.height() - 96.0 - ui.min_rect().height()).max(80.0)
-            } else {
-                80.0
-            };
+            state.setup.new_button(ui, &mut action);
+            let content_height =
+                if state.setup.has_content() || state.page.as_ref().is_some_and(|page| !page.rows.is_empty()) {
+                    (viewport.height() - 96.0 - ui.min_rect().height()).max(80.0)
+                } else {
+                    80.0
+                };
             egui::ScrollArea::vertical()
                 .id_salt("remote-environments-content")
                 .max_height(content_height)
                 .min_scrolled_height(content_height)
                 .auto_shrink([false, false])
-                .show(ui, |ui| render_content(ui, state, &mut action));
+                .show(ui, |ui| {
+                    state.setup.history(ui, &mut action);
+                    if state.setup.is_active() {
+                        state.setup.show(ui, &mut action);
+                    } else {
+                        render_content(ui, state, &mut action);
+                    }
+                });
         });
     if modal.should_close() {
         InventoryAction::Close
@@ -126,7 +135,7 @@ pub(super) fn show(ctx: &Context, state: &mut RemoteEnvironments) -> InventoryAc
 }
 
 fn render_controls(ui: &mut egui::Ui, state: &RemoteEnvironments, action: &mut InventoryAction) {
-    let idle = state.pending.is_none();
+    let idle = state.pending.is_none() && !state.setup.is_active();
     ui.horizontal(|ui| {
         if ui.add_enabled(idle, egui::Button::new("Refresh saved page")).clicked() {
             *action = InventoryAction::Refresh;
@@ -146,7 +155,7 @@ fn render_controls(ui: &mut egui::Ui, state: &RemoteEnvironments, action: &mut I
         {
             *action = InventoryAction::Next;
         }
-        if !idle {
+        if state.pending.is_some() {
             ui.label("Loading saved inventory…");
         }
     });
