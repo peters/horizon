@@ -308,3 +308,88 @@ fn plan_rejects_unsupported_lifetimes_and_targets_before_any_io() {
         Err(AzureError::InvalidProfile)
     );
 }
+
+type Mutation = Box<dyn Fn(&mut InteractiveWorkerRequest)>;
+
+#[test]
+fn target_validation_is_complete_single_sourced_and_shared_with_the_constructor() {
+    let ok = request("");
+    assert_eq!(AzureDeploymentPlan::validate_target(&profile(), &ok.target), Ok(()));
+    // Boundaries: the disk maximum and the accepted image bytes.
+    let mut edge = request("");
+    edge.target.disk_gib = 4_095;
+    assert_eq!(AzureDeploymentPlan::validate_target(&profile(), &edge.target), Ok(()));
+    assert!(AzureDeploymentPlan::new(&profile(), &edge).is_ok());
+    let mut over = request("");
+    over.target.disk_gib = 4_096;
+    assert_eq!(
+        AzureDeploymentPlan::validate_target(&profile(), &over.target),
+        Err(AzureError::InvalidTarget)
+    );
+    let mut zero = request("");
+    zero.target.disk_gib = 0;
+    assert_eq!(
+        AzureDeploymentPlan::validate_target(&profile(), &zero.target),
+        Err(AzureError::InvalidTarget)
+    );
+    // Every target-only refusal the constructor makes is made by the helper first, with
+    // the same error, and every helper acceptance is accepted by the constructor: one
+    // contract, no second copy.
+    let cases: Vec<(&str, Mutation)> = vec![
+        (
+            "time-limited lifetime",
+            Box::new(|r| r.target.lifetime = WorkerLifetime::TimeLimited { seconds: 600 }),
+        ),
+        (
+            "other registry",
+            Box::new(|r| r.target.image = IMAGE.replace("example.azurecr.io", "other.azurecr.io")),
+        ),
+        (
+            "mutable tag",
+            Box::new(|r| r.target.image = "example.azurecr.io/horizon-remote-worker:latest".into()),
+        ),
+        (
+            "shell text in image",
+            Box::new(|r| r.target.image = format!("{IMAGE};id")),
+        ),
+        ("space in image", Box::new(|r| r.target.image = format!("{IMAGE} x"))),
+        (
+            "other profile name",
+            Box::new(|r| r.target.profile = "cpu-south".into()),
+        ),
+        (
+            "cost limit below declared",
+            Box::new(|r| r.target.max_hourly_cost_micros = Some(1)),
+        ),
+        (
+            "zero cost limit",
+            Box::new(|r| r.target.max_hourly_cost_micros = Some(0)),
+        ),
+        ("disk over maximum", Box::new(|r| r.target.disk_gib = 4_096)),
+    ];
+    for (label, mutate) in cases {
+        let mut request = request("");
+        mutate(&mut request);
+        let helper = AzureDeploymentPlan::validate_target(&profile(), &request.target);
+        let constructor = AzureDeploymentPlan::new(&profile(), &request).map(|_| ());
+        assert!(helper.is_err(), "{label}: helper accepts");
+        assert_eq!(helper, constructor, "{label}: helper and constructor disagree");
+    }
+    // What the helper cannot see is still refused by the constructor: the client key.
+    let mut bad_key = request("");
+    bad_key.ssh_public_key = "ssh-rsa AAAA".into();
+    assert_eq!(
+        AzureDeploymentPlan::validate_target(&profile(), &bad_key.target),
+        Ok(())
+    );
+    assert_eq!(
+        AzureDeploymentPlan::new(&profile(), &bad_key),
+        Err(AzureError::InvalidTarget)
+    );
+    let mut bad_profile = profile();
+    bad_profile.location = "North Europe".into();
+    assert_eq!(
+        AzureDeploymentPlan::validate_target(&bad_profile, &request("").target),
+        Err(AzureError::InvalidProfile)
+    );
+}
