@@ -1,5 +1,8 @@
 //! Explicit saved-repository confirmation; credentials are never part of a preview.
 
+#[cfg(target_os = "linux")]
+mod azure;
+
 use super::{RemoteGitObservation, RemoteGitSetupError, RemoteGitSubmission};
 use crate::{
     cloud_run::{CloudWorkflowStore, StoredRemoteAllocation, runpod::RunPodNetworkVolumeExpectation},
@@ -207,7 +210,12 @@ fn prepare(
                 return Err(InvalidBinding);
             }
         }
-        CloudProvider::Azure => return Err(ConfiguredRemoteGitSetupError::UnsupportedProvider),
+        CloudProvider::Azure => {
+            if selection.is_some() {
+                return Err(InvalidBinding);
+            }
+            azure::profile(store, config, &allocation)?;
+        }
     }
     Ok(PreparedRemoteGitSetup {
         allocation,
@@ -325,6 +333,10 @@ fn dispatch(
         .recover(saved.workflow_id, saved.job_id, &saved.ssh_public_key)
         .map_err(RemoteWorkspaceRecoveryError::from)?;
     let check = || check_snapshot(store, config, request, prepared);
+    if saved.target.provider == CloudProvider::Azure {
+        let provider = azure::client(store, &prepared.config, &prepared.allocation)?;
+        return perform(store, identities, &provider, check, prepared, token, inspect);
+    }
     if saved.target.provider == CloudProvider::LocalDocker {
         let profile = prepared.config.local_docker_profile(&saved.target.profile)?;
         let provider =
@@ -358,7 +370,7 @@ fn dispatch(
 pub enum ConfiguredRemoteGitSetupError {
     #[error("the active client session does not own the selected environment")]
     ClientSessionMismatch,
-    #[error("repository preparation supports configured Local Docker and RunPod workers")]
+    #[error("repository preparation requires a supported configured worker")]
     UnsupportedProvider,
     #[error("repository preparation requires a persistent worker, explicit saved branch and retained trust")]
     InvalidBinding,

@@ -82,7 +82,11 @@ impl Failure {
 }
 
 pub(super) fn supported(provider: CloudProvider) -> bool {
-    cfg!(target_os = "linux") && matches!(provider, CloudProvider::LocalDocker | CloudProvider::RunPod)
+    cfg!(target_os = "linux")
+        && matches!(
+            provider,
+            CloudProvider::LocalDocker | CloudProvider::RunPod | CloudProvider::Azure
+        )
 }
 
 impl RepositoryState {
