@@ -211,6 +211,7 @@ impl RemoteEnvironments {
         if !matches!(
             action,
             InventoryAction::None
+                | InventoryAction::Select(_)
                 | InventoryAction::PrepareRepository
                 | InventoryAction::ConfirmRepository
                 | InventoryAction::CancelRepository

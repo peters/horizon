@@ -1,7 +1,8 @@
+use super::super::{InventoryPage, RemoteEnvironments, paint::InventoryRow};
 use super::*;
 use crate::{app::test_support::raw_input, test_egui::DiscardTextures};
 use horizon_core::cloud_run::{CloudProvider, WorkerLifetime};
-use horizon_core::remote_github_credential::RemoteCredentialInstallation::{Installed, Present};
+use horizon_core::remote_github_credential::RemoteCredentialInstallation::{self, Installed, Present};
 
 fn scope() -> Scope {
     Scope {
@@ -38,6 +39,12 @@ fn pending(state: &mut RepositoryState, scope: &Scope, mutating: bool) -> mpsc::
 fn current(scope: &Scope) -> Current<'_> {
     (&scope.expected, &scope.config, &scope.owner)
 }
+fn submitted(credential: Option<RemoteCredentialInstallation>) -> Completion {
+    Completion::Submitted(git::ConfiguredRemoteGitSubmission {
+        credential,
+        submission: git::RemoteGitSubmission::Submitted,
+    })
+}
 
 #[test]
 fn cancel_and_context_invalidation_clear_transient_pat() {
@@ -52,34 +59,6 @@ fn cancel_and_context_invalidation_clear_transient_pat() {
     state.consent = true;
     state.invalidate();
     assert!(state.token.is_empty() && !state.consent);
-}
-
-#[test]
-fn single_flight_and_late_mutation_result_never_replay() {
-    let scope = scope();
-    let ctx = Context::default();
-    let mut state = RepositoryState::default();
-    let tx = pending(&mut state, &scope, true);
-    state.action(
-        InventoryAction::InspectRepository,
-        &HorizonHome::from_root("/not-opened".into()),
-        &ctx,
-        scope.clone(),
-    );
-    assert!(state.is_pending());
-    state.invalidate();
-    assert!(
-        tx.send(Ok(Completion::Submitted(git::ConfiguredRemoteGitSubmission {
-            credential: None,
-            submission: git::RemoteGitSubmission::Submitted,
-        })))
-        .is_ok()
-    );
-    state.drain(Some(current(&scope)));
-    assert!(state.unknown && state.notice.is_none() && !state.is_pending());
-    state.invalidate();
-    state.drain(Some(current(&scope)));
-    assert!(state.unknown && !state.is_pending());
 }
 
 #[test]
@@ -98,39 +77,64 @@ fn changed_selection_or_lost_reply_preserves_unattributed_unknown() {
 }
 
 #[test]
+fn single_flight_selection_and_late_mutation_results_never_replay() {
+    let home = HorizonHome::from_root("/never-opened".into());
+    let ctx = Context::default();
+    for index in [None, Some(0), Some(2), Some(1)] {
+        let scope = scope();
+        let mut other = scope.expected.clone();
+        other.workspace_local_id = "other".into();
+        let mut view = RemoteEnvironments {
+            selected: Some(0),
+            page: Some(InventoryPage {
+                rows: [scope.expected.clone(), other]
+                    .into_iter()
+                    .map(InventoryRow::new)
+                    .collect(),
+                next_cursor: None,
+            }),
+            ..Default::default()
+        };
+        let tx = pending(&mut view.repository, &scope, true);
+        view.repository
+            .action(InventoryAction::InspectRepository, &home, &ctx, scope.clone());
+        assert!(view.repository.is_pending());
+        match index {
+            Some(index) => view.apply(InventoryAction::Select(index), &home, &ctx),
+            None => view.repository.invalidate(),
+        }
+        assert_eq!(view.selected, Some(usize::from(index == Some(1))));
+        assert!(tx.send(Ok(submitted(None))).is_ok());
+        view.repository.drain(Some(current(&scope)));
+        let discarded = index.is_none() || index == Some(1);
+        assert_eq!(view.repository.unknown, discarded);
+        assert_eq!(view.repository.notice.is_none(), discarded);
+        assert!(!view.repository.is_pending());
+        view.repository.invalidate();
+        view.repository.drain(Some(current(&scope)));
+        assert_eq!(view.repository.unknown, discarded);
+        assert!(!view.repository.is_pending());
+    }
+}
+
+#[test]
 fn detached_submission_is_not_completed_and_degraded_receipt_is_not_ready() {
     let mut state = RepositoryState::default();
     let scope = scope();
-    let tx = pending(&mut state, &scope, true);
-    assert!(
-        tx.send(Ok(Completion::Submitted(git::ConfiguredRemoteGitSubmission {
-            credential: None,
-            submission: git::RemoteGitSubmission::Submitted,
-        })))
-        .is_ok()
-    );
-    state.drain(Some(current(&scope)));
-    assert!(state.notice.as_deref().unwrap().contains("not yet known"));
-    assert!(!state.is_pending());
     for (credential, text) in [
-        (Installed, "Credential installed"),
-        (Present, "already present and unchanged"),
+        (None, ""),
+        (Some(Installed), "Credential installed"),
+        (Some(Present), "already present and unchanged"),
     ] {
         let tx = pending(&mut state, &scope, true);
-        assert!(
-            tx.send(Ok(Completion::Submitted(git::ConfiguredRemoteGitSubmission {
-                credential: Some(credential),
-                submission: git::RemoteGitSubmission::Submitted,
-            })))
-            .is_ok()
-        );
+        assert!(tx.send(Ok(submitted(credential))).is_ok());
         state.drain(Some(current(&scope)));
         let notice = state.notice.as_deref().unwrap();
-        assert!(
-            notice.contains(text)
-                && notice.contains("permissions are not verified")
-                && notice.contains("not yet known")
-        );
+        assert!(notice.contains(text) && notice.contains("not yet known"));
+        assert!(!state.is_pending());
+        if credential.is_some() {
+            assert!(notice.contains("permissions are not verified"));
+        }
     }
     let mut observation = git::RemoteGitObservation {
         state: git::RemoteGitState::Complete,
