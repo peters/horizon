@@ -8,6 +8,7 @@ use crate::{
 };
 
 mod configured;
+mod runpod;
 
 #[path = "tests/intent.rs"]
 mod intent_tests;
@@ -29,6 +30,14 @@ impl Fixture {
     }
 
     fn with_lifecycle(lifecycle: InteractiveWorkerLifecycle) -> Self {
+        Self::with_provider(lifecycle, CloudProvider::LocalDocker, None)
+    }
+
+    fn with_provider(
+        lifecycle: InteractiveWorkerLifecycle,
+        provider: CloudProvider,
+        selection: Option<&crate::cloud_run::runpod::RunPodNetworkVolumeExpectation>,
+    ) -> Self {
         use std::os::unix::fs::PermissionsExt;
         let directory = tempfile::tempdir().expect("fixture");
         std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).expect("private fixture");
@@ -39,7 +48,7 @@ impl Fixture {
             "version": 1,
             "spec": {
                 "workspace_local_id": "workspace", "working_directory": ".", "generation": 0, "panels": [],
-                "target": { "provider": "local_docker", "profile": "development",
+                "target": { "provider": provider, "profile": "development",
                     "image": format!("example/worker@sha256:{}", "a".repeat(64)),
                     "disk_gib": 20, "lifetime": "persistent" },
                 "repository": { "repository": "example/project", "commit": "b".repeat(40) }
@@ -56,6 +65,11 @@ impl Fixture {
         });
         let dormant = store.create_remote_workspace(OWNER, &state).expect("workspace");
         let allocation = store.allocate_remote_runtime(&dormant, i64::MAX).expect("allocation");
+        if let Some(selection) = selection {
+            store
+                .record_remote_network_volume_selection(&allocation, selection)
+                .expect("selection before identity or claim");
+        }
         let runtime = allocation.workspace().state().runtime.as_ref().expect("runtime");
         let identity = identities
             .prepare_new(runtime.workflow_id, runtime.job_id)
