@@ -1,6 +1,6 @@
 # Worker-owned versioned byte capture
 
-This opt-in Linux worker operation protects an explicitly selected set of dirty
+This opt-in Linux worker operation protects an explicitly selected set of
 Git paths on an explicitly attested retained volume. It is **not an atomic or
 application-consistent snapshot, an independent backup, or a full repository/task
 checkpoint**. It does not advance `RepositoryCheckpoint` or authorize Delete.
@@ -74,9 +74,26 @@ enrollment still requires `capture-plan` validation before its exclusive claim.
   newly created child. These bounds do not promise hard process teardown or
   bounded filesystem latency for an uninterruptible storage operation.
 
-The initial exact commit remains the capture base. A later commit/HEAD change
-fails visibly and retains previous captures; automatic re-enrollment, Git
-history protection, submodule recursion, agent/task resumption, write freezing,
+Enrollment **version 1** keeps the initial exact commit as its capture base. A
+later commit/HEAD change fails visibly and retains previous captures.
+
+Opt in to **version 2** in a new enrollment to keep selected bytes protected
+across ordinary commits on the exact enrolled `work_branch`. Each version-2
+bundle contains the complete literal index and working-tree state of **every
+selected path**, including unchanged committed bytes and explicit absent nodes.
+Its manifest binds the observed current commit and work branch. This is not an
+export of other tracked files, Git history or all objects reachable from HEAD.
+LFS pointers and hydrated selected bytes remain literal; no filter is invoked.
+A new enrollment validates this bounded read-only capture before claiming a
+slot. During capture, detected branch/HEAD/selected-index movement, including
+newly unsupported index states after valid admission, is retryable `changed`.
+Ordinary edits to unselected index entries are outside this detection guarantee.
+A wrong, detached or unborn branch or unsupported index at admission is a terminal refusal. The next
+attempt can observe a later commit on the enrolled branch without re-enrollment.
+Version 2 has a distinct canonical binding; existing version-1 enrollments,
+receipts and retry/observation behavior are not migrated or reinterpreted.
+
+Automatic re-enrollment, Git history protection, submodule recursion, agent/task resumption, write freezing,
 verified-loss replacement and destructive-Delete gates are separate outcomes.
 Versioned literal captures can mix file times. Even retained storage is not
 protection against deleting that storage or every provider failure mode.
@@ -92,6 +109,10 @@ path is not modified. The fixture constructs synthetic initial Git receipts
 start/status/cancel and capture code. It proves controller process exit, two
 versions within the observed target interval, staged/unstaged/untracked/removal
 bytes, readback into fresh scratch paths, unchanged prior versions, and visible
-failure after HEAD drift. No credentials, provider resources or image upload
+failure after HEAD drift for version 1. The version-2 lane then proves refusal
+before claiming on a wrong branch, continued capture across a normal commit,
+retained committed selected bytes followed by new dirty bytes, two observed
+intervals within 30 seconds, earlier readback and no relaunch on repeated Start.
+No credentials, provider resources or image upload
 are involved. Exact-head runtime results are still required; preparing this
 recipe does not claim they passed.

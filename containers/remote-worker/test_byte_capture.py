@@ -489,7 +489,85 @@ def inside_proof():
                     else:
                         original.unlink()
                 retained.rename(original)
-        print(json.dumps({'proof': 'controller exited; two verified byte versions', 'observed_interval_millis': interval}))
+    finally:
+        call('cancel', binding)
+        deadline = time.monotonic() + 20
+        while call('status', binding).get('recorded_state') not in ('cancelled', 'error'):
+            store.require(time.monotonic() < deadline)
+            time.sleep(.1)
+    revision_intervals = revision_proof(checkout, preparation, git, call, command)
+    print(json.dumps({'proof': 'controller exited; two verified byte versions',
+        'observed_interval_millis': interval, 'revision_intervals_millis': revision_intervals}))
+
+
+def revision_proof(checkout, preparation, git, call, command):
+    """Actual v2 service survives normal commits; v1 proof above remains unchanged."""
+    enrollment = {'version': 2, 'preparation': preparation,
+        'selected': ['selected.txt', 'untracked.txt', 'deleted.txt'], 'retained_volume_attested': True}
+    captures = Path(capture.BASE) / 'byte-captures'
+    before_slots = set(captures.iterdir())
+    git('checkout', '-b', 'work/other')
+    refused = subprocess.run(command + ['start'], input=store.encode(enrollment),
+        capture_output=True, env=capture.ENV, timeout=20)
+    store.require(refused.returncode == 1 and not refused.stdout and set(captures.iterdir()) == before_slots)
+    git('checkout', preparation['work_branch'])
+    started = call('start', data=store.encode(enrollment))
+    binding = started['binding']
+    store.require(started['state'] == 'submitted' and captures / binding not in before_slots)
+    def read(value):
+        slot = store.open_slot(capture.BASE, binding)
+        bundles = slot.child('bundles')
+        try:
+            success = value['last_success']
+            bundles.verified_record(success)
+            return literal_bundle(bundles.record(success['manifest']), success['manifest'])
+        finally:
+            bundles.close()
+            slot.close()
+    def wait(commit, payload):
+        deadline = time.monotonic() + 35
+        while time.monotonic() < deadline:
+            value = call('status', binding)
+            store.require(value['state'] not in ('error', 'cancelled'))
+            if value.get('last_success'):
+                plan, blobs = read(value)
+                working = {entry['path']: entry for entry in plan['working_tree']}
+                if plan['commit'] == commit and blobs[working['selected.txt']['sha256']] == payload:
+                    store.require(plan['branch'] == preparation['work_branch']
+                        and set(working) == set(enrollment['selected'])
+                        and working['deleted.txt']['kind'] == 'remove')
+                    return value
+            time.sleep(.1)
+        raise store.CaptureError('revision proof deadline')
+    try:
+        first = wait(git('rev-parse', 'HEAD'), b'second working bytes\n')
+        (checkout / 'selected.txt').write_bytes(b'new committed selected bytes\n')
+        git('add', 'selected.txt')
+        git('commit', '-m', 'synthetic ordinary remote commit')
+        commit = git('rev-parse', 'HEAD')
+        committed = wait(commit, b'new committed selected bytes\n')
+        plan, blobs = read(committed)
+        index = {entry['path']: entry for entry in plan['index']}
+        store.require(set(index) == set(enrollment['selected'])
+            and blobs[index['selected.txt']['sha256']] == b'new committed selected bytes\n'
+            and index['untracked.txt']['kind'] == 'remove')
+        (checkout / 'selected.txt').write_bytes(b'dirty after commit\n')
+        dirty = wait(commit, b'dirty after commit\n')
+        for previous, following in ((first, committed), (committed, dirty)):
+            store.require(previous['last_success']['manifest'] != following['last_success']['manifest'])
+            read(previous)  # Both earlier byte versions still verify after the later publication.
+        intervals = [b['last_success']['verified_at_millis'] - a['last_success']['verified_at_millis']
+                     for a, b in ((first, committed), (committed, dirty))]
+        store.require(all(0 < value <= 30_000 for value in intervals))
+        lock = captures / binding / 'lock'
+        identity = store.identity(lock.stat())
+        enrollment['selected'].reverse()
+        repeated = call('start', data=store.encode(enrollment))
+        store.require(repeated['binding'] == binding and repeated['state'] != 'submitted'
+            and repeated['started_at_millis'] == first['started_at_millis']
+            and store.identity(lock.stat()) == identity
+            and set(captures.iterdir()) == before_slots | {captures / binding})
+        return intervals
     finally:
         call('cancel', binding)
         deadline = time.monotonic() + 20
@@ -518,6 +596,9 @@ class ActualCli(unittest.TestCase):
             result = subprocess.run(arguments, capture_output=True, env=capture.ENV, timeout=90, umask=0o077)
             self.assertEqual(result.returncode, 0, result.stderr.decode(errors='replace'))
             self.assertIn(b'two verified byte versions', result.stdout)
+            proof = store.decode(result.stdout)
+            self.assertEqual(len(proof['revision_intervals_millis']), 2)
+            self.assertTrue(all(0 < value <= 30_000 for value in proof['revision_intervals_millis']))
 
 
 if __name__ == '__main__':

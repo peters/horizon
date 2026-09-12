@@ -51,6 +51,27 @@ fn reordered_selection_keeps_identity_but_changed_paths_do_not() {
 }
 
 #[test]
+fn revision_mode_is_opt_in_with_distinct_canonical_identity_and_unchanged_v1_bytes() {
+    let mut request = enrollment();
+    let original = request.binding().unwrap();
+    let mut legacy = b"horizon-retained-byte-capture-v1\0".to_vec();
+    legacy.extend(serde_json::to_vec(&request).unwrap());
+    assert_eq!(original, ArtifactDigest::sha256(&legacy));
+    request.version = 2;
+    let revision = request.binding().unwrap();
+    assert_ne!(revision, original);
+    request.selected.push("second.txt".into());
+    let selected = request.binding().unwrap();
+    request.selected.reverse();
+    assert_eq!(request.binding().unwrap(), selected);
+    assert_ne!(selected, revision);
+    for version in [0, 3, 255] {
+        request.version = version;
+        assert!(request.binding().is_err());
+    }
+}
+
+#[test]
 fn rejection_is_bounded_redacted_and_never_acknowledges_capture() {
     for operation in [Operation::Binding, Operation::Plan, Operation::Once] {
         for bytes in [
@@ -100,6 +121,29 @@ fn pure_binding_needs_no_checkout_and_never_acknowledges_capture() {
     );
     let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(value["binding"], expected.as_str());
+    for field in ["manifest", "record_sha256", "record_bytes", "reason"] {
+        assert!(value[field].is_null());
+    }
+}
+
+#[test]
+fn revision_binding_command_preserves_no_filesystem_or_capture_acknowledgement() {
+    let mut enrollment = enrollment();
+    enrollment.version = 2;
+    let binding = enrollment.binding().unwrap();
+    let input = serde_json::to_vec(&serde_json::json!({"enrollment": enrollment, "available_bytes": 0})).unwrap();
+    let mut output = Vec::new();
+    assert_eq!(
+        run(
+            Operation::Binding,
+            &mut input.as_slice(),
+            &mut output,
+            &mut std::io::sink()
+        ),
+        ExitCode::SUCCESS
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["binding"], binding.as_str());
     for field in ["manifest", "record_sha256", "record_bytes", "reason"] {
         assert!(value[field].is_null());
     }

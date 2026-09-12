@@ -52,13 +52,24 @@ pub(super) fn capture(root: &Path, source: GitSource, selected: &[&str]) -> Resu
 }
 
 pub(super) struct State {
-    reader: SelectedRepositoryReader,
-    repository: Repository,
-    base: Oid,
+    pub(super) reader: SelectedRepositoryReader,
+    pub(super) repository: Repository,
+    pub(super) base: Oid,
 }
 
 impl State {
     pub(super) fn open(root: &Path, source: &GitSource) -> Result<Self, Error> {
+        let state = Self::open_with(root, |_| {
+            Oid::from_str(source.commit.as_str()).map_err(|_| Error::BaseMismatch)
+        })?;
+        state.verify_head()?;
+        Ok(state)
+    }
+
+    pub(super) fn open_with(
+        root: &Path,
+        select_base: impl FnOnce(&Repository) -> Result<Oid, Error>,
+    ) -> Result<Self, Error> {
         let reader = SelectedRepositoryReader::open(root)?;
         let pinned = format!("/proc/self/fd/{}", reader.root.handle().as_raw_fd());
         let repository = Repository::open_ext(&pinned, RepositoryOpenFlags::NO_SEARCH, &[] as &[&str])
@@ -66,14 +77,13 @@ impl State {
         if repository.is_bare() || repository.object_format() != ObjectFormat::Sha1 {
             return Err(Error::Repository);
         }
-        let base = Oid::from_str(source.commit.as_str()).map_err(|_| Error::BaseMismatch)?;
+        let base = select_base(&repository)?;
         let state = Self {
             reader,
             repository,
             base,
         };
         state.verify_root()?;
-        state.verify_head()?;
         Ok(state)
     }
 
