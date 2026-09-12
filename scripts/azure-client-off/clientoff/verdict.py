@@ -2,16 +2,18 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
-from .manifest import (ACTUAL_GAP_ALLOWANCE_SECONDS, INSTANCE_ID_RE, SAMPLE_JITTER_SECONDS, SAMPLE_SECONDS, image_ref_digest,
-                       parse_utc, routable, same_id)
+from .manifest import (ACTUAL_GAP_ALLOWANCE_SECONDS, INSTANCE_ID_RE, SAMPLE_JITTER_SECONDS, SAMPLE_SECONDS, client_ids,
+                       client_tags, image_ref_digest, parse_utc, routable, same_id)
 
 
 def evaluate_samples(samples: List[Dict[str, Any]], off_minutes: int, lease_seconds: int,
                      expected_image_ref: Optional[str] = None,
-                     expected_identity: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                     expected_identity: Optional[Dict[str, Any]] = None,
+                     expected_client_tags: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """Pure verdict over observer samples taken while A was meant to be off.
 
-    Each sample: {"at": ISO instant, "a_power": str|None, "a_attested": bool, "b_group_id": str|None,
+    Each sample: {"at": ISO instant, "a_power": str|None, "a_group_id", "a_vm_id", "a_instance_id": str|None,
+    "a_tags", "a_group_tags": the tag maps ARM showed on A's VM and group, "b_group_id": str|None,
     "b_vm_id": str|None, "b_instance_id": str|None (the VM's vmId, which a same-name
     recreation does not keep), "b_host": str|None, "b_image_ref": str|None (the worker's
     image-reference tag), "b_power": str|None, "progress": int|None, "checkpoint":
@@ -24,7 +26,8 @@ def evaluate_samples(samples: List[Dict[str, Any]], off_minutes: int, lease_seco
     findings: List[str] = []
     if len(samples) < 2:
         return {"passed": False, "findings": ["fewer than two samples"], "samples": len(samples)}
-    text_fields = ("a_power", "a_instance_id", "b_group_id", "b_vm_id", "b_instance_id", "b_host", "b_image_ref", "b_power")
+    text_fields = ("a_power", "a_group_id", "a_vm_id", "a_instance_id", "b_group_id", "b_vm_id", "b_instance_id", "b_host",
+                   "b_image_ref", "b_power")
     if any(not isinstance(sample, dict) or any(sample.get(field) is not None and not isinstance(sample.get(field), str)
                                                 for field in text_fields) for sample in samples):
         return {"passed": False, "findings": ["a sample has a field of the wrong shape"], "samples": len(samples)}
@@ -34,7 +37,8 @@ def evaluate_samples(samples: List[Dict[str, Any]], off_minutes: int, lease_seco
         return {"passed": False, "findings": ["a sample has a missing or invalid timestamp"], "samples": len(samples)}
     if expected_identity is not None:
         first = samples[0]
-        mismatched = [field for field in ("b_group_id", "b_vm_id", "b_instance_id", "b_host", "a_instance_id")
+        mismatched = [field for field in ("b_group_id", "b_vm_id", "b_instance_id", "b_host", "a_group_id", "a_vm_id",
+                                          "a_instance_id")
                       if field in expected_identity and not same_id(first.get(field), expected_identity.get(field))]
         if mismatched:
             findings.append(f"first sample does not match the worker recorded at baseline: {mismatched}")
@@ -76,13 +80,24 @@ def evaluate_samples(samples: List[Dict[str, Any]], off_minutes: int, lease_seco
     not_off = [index for index, sample in enumerate(samples) if sample.get("a_power") != "PowerState/deallocated"]
     if not_off:
         findings.append(f"client A not deallocated in {len(not_off)} samples (first at index {not_off[0]})")
-    # Each sample carries the outcome of a full attestation of A (IDs, instance identity,
-    # complete tag set on group and VM) taken with its power state; anything but an
-    # explicit success means the VM that was off is not known to be the provisioned A.
-    unattested = [index for index, sample in enumerate(samples) if sample.get("a_attested") is not True]
-    if unattested:
-        findings.append(f"client A not attested as the provisioned resource in {len(unattested)} samples "
-                        f"(first at index {unattested[0]})")
+    # Each sample carries the evidence of a full attestation of A taken with its power
+    # state: the ARM group and VM IDs, the instance identity and the tag maps ARM showed
+    # on the VM and the group. The verdict re-derives the attestation from that evidence
+    # against the identity recorded before the stop and the manifest's tag set; a VM
+    # retagged or replaced during the interval is a finding, never a pass.
+    if expected_client_tags is not None:
+        unattested = [index for index, sample in enumerate(samples)
+                      if sample.get("a_tags") != expected_client_tags or sample.get("a_group_tags") != expected_client_tags]
+        if unattested:
+            findings.append(f"client A did not carry exactly this run's tags in {len(unattested)} samples "
+                            f"(first at index {unattested[0]})")
+    if expected_identity is not None:
+        strayed = [index for index, sample in enumerate(samples)
+                   if any(field in expected_identity and not same_id(sample.get(field), expected_identity[field])
+                          for field in ("a_group_id", "a_vm_id", "a_instance_id"))]
+        if strayed:
+            findings.append(f"client A was not the resource recorded before the stop in {len(strayed)} samples "
+                            f"(first at index {strayed[0]})")
     def identity(sample: Dict[str, Any], field: str) -> Optional[str]:
         value = sample.get(field)
         return value.casefold() if isinstance(value, str) and value.strip() else None
@@ -91,9 +106,10 @@ def evaluate_samples(samples: List[Dict[str, Any]], off_minutes: int, lease_seco
                   for sample in samples}
     if len(identities) != 1 or any(None in pair for pair in identities):
         findings.append("worker B identity changed or was unreadable during the interval")
-    a_identities = {identity(sample, "a_instance_id") for sample in samples}
-    if len(a_identities) != 1 or None in a_identities:
-        findings.append("client A instance identity changed or was unreadable during the interval")
+    a_identities = {(identity(sample, "a_group_id"), identity(sample, "a_vm_id"), identity(sample, "a_instance_id"))
+                    for sample in samples}
+    if len(a_identities) != 1 or any(None in triple for triple in a_identities):
+        findings.append("client A identity changed or was unreadable during the interval")
     b_states = {sample.get("b_power") for sample in samples}
     if b_states != {"PowerState/running"}:
         findings.append(f"worker B power states during the interval: {sorted(str(s) for s in b_states)}")
@@ -145,6 +161,11 @@ def baseline_problems(baseline: Any, manifest: Dict[str, Any]) -> List[str]:
         problems.append("baseline instance identity is not a VM instance identity")
     if not routable(baseline.get("b_host")):
         problems.append("baseline address is not a public IP address")
+    ids = client_ids(manifest)
+    if not same_id(baseline.get("a_group_id"), ids["a_group_id"]) or not same_id(baseline.get("a_vm_id"), ids["a_vm_id"]):
+        problems.append("baseline client IDs are not the manifest client group and VM under the manifest subscription")
+    if not isinstance(baseline.get("a_instance_id"), str) or not INSTANCE_ID_RE.fullmatch(baseline["a_instance_id"]):
+        problems.append("baseline client instance identity is not a VM instance identity")
     return problems
 
 
@@ -165,4 +186,4 @@ def verdict_from_records(records: List[Any], manifest: Dict[str, Any]) -> Dict[s
     if header.get("observed_image_ref") != image_ref_digest(manifest["worker_image"]):
         return {"passed": False, "findings": ["baseline observation did not carry the manifest image's reference tag"]}
     return evaluate_samples(samples, manifest["off_minutes"], manifest["lease_seconds"], manifest["worker_image"],
-                            header["baseline"])
+                            header["baseline"], client_tags(manifest))

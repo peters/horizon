@@ -159,3 +159,17 @@ def routable(address: Any) -> bool:
 def same_id(left: Any, right: Any) -> bool:
     """ARM resource IDs compare case-insensitively; addresses compare exactly."""
     return isinstance(left, str) and isinstance(right, str) and left.casefold() == right.casefold()
+
+
+def client_tags(manifest: Dict[str, Any]) -> Dict[str, str]:
+    """The complete tag set provisioning writes on A's group and VM: the frozen
+    artifact's digest and the run identity the manifest (and A's group name) carry."""
+    return {"issue": "475", "lane": "azure-client-off", "purpose": "horizon-azure-vm-spike",
+            "deadline": str(manifest["cleanup_deadline_utc"]), "client_sha": str(manifest["client_sha"]),
+            "client_binary_sha256": str(manifest["client_binary_sha256"]), "run_id": str(manifest["run_id"])}
+
+
+def client_ids(manifest: Dict[str, Any]) -> Dict[str, str]:
+    """A's ARM group and VM ID paths as the manifest determines them."""
+    group = f"/subscriptions/{manifest['subscription_id']}/resourceGroups/{manifest['client_group']}"
+    return {"a_group_id": group, "a_vm_id": f"{group}/providers/Microsoft.Compute/virtualMachines/client"}

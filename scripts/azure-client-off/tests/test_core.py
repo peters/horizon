@@ -6,8 +6,8 @@ import datetime as dt
 import unittest
 import unittest.mock as mock
 
-from harness_fixtures import (A_INSTANCE, ADAPTER_TAGS, B_GROUP_ID, B_INSTANCE, B_VM_ID, IMAGE, JOB_ID, NOW, RUN_ID,
-                              WORKFLOW_ID, client_off, manifest, record, samples)
+from harness_fixtures import (A_GROUP_ID, A_INSTANCE, A_VM_ID, ADAPTER_TAGS, B_GROUP_ID, B_INSTANCE, B_VM_ID, IMAGE, JOB_ID, NOW,
+                              RUN_ID, WORKFLOW_ID, client_off, client_tags, manifest, record, samples)
 
 class ManifestTests(unittest.TestCase):
     def test_complete_manifest_is_runnable(self):
@@ -252,7 +252,7 @@ class SampleIdentityTests(unittest.TestCase):
 
     def test_first_sample_must_be_the_baseline_worker(self):
         expected = {"b_group_id": B_GROUP_ID.upper(), "b_vm_id": B_VM_ID, "b_instance_id": B_INSTANCE, "b_host": "52.174.10.5",
-                    "a_instance_id": A_INSTANCE}
+                    "a_group_id": A_GROUP_ID, "a_vm_id": A_VM_ID, "a_instance_id": A_INSTANCE}
         rows = samples(49)
         self.assertTrue(client_off.evaluate_samples(rows, 12, 600, IMAGE, expected)["passed"], "IDs compare case-insensitively")
         other = dict(expected, b_vm_id="/g/b/other")
@@ -261,18 +261,20 @@ class SampleIdentityTests(unittest.TestCase):
         other_client = dict(expected, a_instance_id=B_INSTANCE)
         verdict = client_off.evaluate_samples(rows, 12, 600, IMAGE, other_client)
         self.assertTrue(any("baseline" in finding for finding in verdict["findings"]), "the VM that was off must be A")
-        for value in (False, None, "true", 1):
-            rows = samples(49)
-            rows[20]["a_attested"] = value
-            verdict = client_off.evaluate_samples(rows, 12, 600, IMAGE, expected)
-            self.assertTrue(any("not attested" in finding for finding in verdict["findings"]), f"{value!r}: {verdict}")
+        for field in ("a_tags", "a_group_tags"):
+            for value in (None, {}, dict(client_tags(), purpose="other"), "tags"):
+                rows = samples(49)
+                rows[20][field] = value
+                verdict = client_off.evaluate_samples(rows, 12, 600, IMAGE, expected, client_tags())
+                self.assertTrue(any("this run's tags" in finding for finding in verdict["findings"]), f"{field}={value!r}: {verdict}")
         rows = samples(49)
-        del rows[20]["a_attested"]
-        self.assertFalse(client_off.evaluate_samples(rows, 12, 600, IMAGE, expected)["passed"], "a missing attestation is a miss")
+        del rows[20]["a_tags"]
+        self.assertFalse(client_off.evaluate_samples(rows, 12, 600, IMAGE, expected, client_tags())["passed"],
+                         "a missing tag map is a miss")
         rows = samples(49)
         rows[20]["a_instance_id"] = B_INSTANCE
         verdict = client_off.evaluate_samples(rows, 12, 600, IMAGE, expected)
-        self.assertTrue(any("client A instance identity" in finding for finding in verdict["findings"]), verdict)
+        self.assertTrue(any("client A identity changed" in finding for finding in verdict["findings"]), verdict)
 
     def test_malformed_sample_shapes_fail_closed(self):
         rows = samples(49)
@@ -288,7 +290,8 @@ class SampleIdentityTests(unittest.TestCase):
 class OfflineVerdictTests(unittest.TestCase):
     def test_journal_needs_the_baseline_header_and_the_same_image(self):
         m = manifest()
-        header = {"baseline": {"b_group_id": B_GROUP_ID, "b_vm_id": B_VM_ID, "b_instance_id": B_INSTANCE, "b_host": "52.174.10.5"},
+        header = {"baseline": {"b_group_id": B_GROUP_ID, "b_vm_id": B_VM_ID, "b_instance_id": B_INSTANCE, "b_host": "52.174.10.5",
+                               "a_group_id": A_GROUP_ID, "a_vm_id": A_VM_ID, "a_instance_id": A_INSTANCE},
                   "worker_image": IMAGE,
                   "observed_image_ref": client_off.image_ref_digest(IMAGE)}
         self.assertTrue(client_off.verdict_from_records([header, *samples(49)], m)["passed"])
@@ -296,14 +299,35 @@ class OfflineVerdictTests(unittest.TestCase):
         # consistently the samples repeat it, is no evidence.
         for field, value in (("b_group_id", "/g/b"), ("b_group_id", B_GROUP_ID.replace(m["subscription_id"], "0" * 36)),
                              ("b_vm_id", "/g/b/vm"), ("b_vm_id", B_VM_ID.replace("/worker", "/other")),
-                             ("b_instance_id", "stable-but-not-a-vmid"), ("b_host", "10.0.0.5")):
+                             ("b_instance_id", "stable-but-not-a-vmid"), ("b_host", "10.0.0.5"),
+                             ("a_group_id", "/g/client"), ("a_vm_id", A_VM_ID.replace("/client", "/other")),
+                             ("a_instance_id", "stable-but-not-a-vmid")):
             with self.subTest(field=field, value=value):
                 fake = dict(header, baseline=dict(header["baseline"], **{field: value}))
                 rows = samples(49, identity=(fake["baseline"]["b_group_id"], fake["baseline"]["b_vm_id"]),
                                instance=fake["baseline"]["b_instance_id"], host=fake["baseline"]["b_host"])
+                for row in rows:
+                    row.update({k: fake["baseline"][k] for k in ("a_group_id", "a_vm_id", "a_instance_id")})
                 verdict = client_off.verdict_from_records([fake, *rows], m)
                 self.assertFalse(verdict["passed"])
                 self.assertTrue(any(finding.startswith("baseline:") for finding in verdict["findings"]), verdict)
+        for missing in ("a_instance_id", "a_vm_id"):
+            with self.subTest(missing=missing):
+                partial = dict(header, baseline={k: v for k, v in header["baseline"].items() if k != missing})
+                self.assertFalse(client_off.verdict_from_records([partial, *samples(49)], m)["passed"],
+                                 "a header that does not identify A never passes")
+        # The samples' attestation evidence is re-derived offline: a retagged A fails.
+        retagged = samples(49)
+        retagged[30]["a_tags"] = dict(client_tags(), run_id="f" * 32)
+        verdict = client_off.verdict_from_records([header, *retagged], m)
+        self.assertTrue(any("exactly this run's tags" in f for f in verdict["findings"]), verdict)
+        retagged = samples(49)
+        retagged[30]["a_group_tags"] = {}
+        self.assertFalse(client_off.verdict_from_records([header, *retagged], m)["passed"])
+        strayed = samples(49)
+        strayed[30]["a_vm_id"] = A_VM_ID.replace("/client", "/other")
+        verdict = client_off.verdict_from_records([header, *strayed], m)
+        self.assertTrue(any("recorded before the stop" in f for f in verdict["findings"]), verdict)
         other_observed = dict(header, observed_image_ref="c" * 64)
         self.assertFalse(client_off.verdict_from_records([other_observed, *samples(49)], m)["passed"], "observed tag must match")
         self.assertFalse(client_off.verdict_from_records(samples(49), m)["passed"], "no header")

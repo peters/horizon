@@ -33,6 +33,12 @@ ADAPTER_TAGS = {"horizon-workflow-id": WORKFLOW_ID, "horizon-job-id": JOB_ID}
 SUBSCRIPTION = "0f0e0d0c-0b0a-4908-8706-050403020100"
 B_GROUP_ID = f"/subscriptions/{SUBSCRIPTION}/resourceGroups/horizon-ws-{WORKFLOW_ID}-{JOB_ID}"
 B_VM_ID = f"{B_GROUP_ID}/providers/Microsoft.Compute/virtualMachines/worker"
+A_GROUP_ID = f"/subscriptions/{SUBSCRIPTION}/resourceGroups/horizon-client-{RUN_ID}"
+A_VM_ID = f"{A_GROUP_ID}/providers/Microsoft.Compute/virtualMachines/client"
+
+
+def client_tags():
+    return client_off.client_tags(manifest())
 
 
 def manifest(**overrides):
@@ -58,7 +64,7 @@ def manifest(**overrides):
 
 def samples(count, *, start=NOW, step=15, a_power="PowerState/deallocated", progress=None, checkpoint=None,
             b_power="PowerState/running", identity=None, host="52.174.10.5", image=IMAGE, slot=15,
-            instance=B_INSTANCE):
+            instance=B_INSTANCE, a_tags=None):
     identity = identity or (B_GROUP_ID, B_VM_ID)
     rows = []
     for index in range(count):
@@ -66,8 +72,11 @@ def samples(count, *, start=NOW, step=15, a_power="PowerState/deallocated", prog
             "scheduled_at": (start + dt.timedelta(seconds=slot * index)).isoformat(),
             "at": (start + dt.timedelta(seconds=step * index)).isoformat(),
             "a_power": a_power,
+            "a_group_id": A_GROUP_ID,
+            "a_vm_id": A_VM_ID,
             "a_instance_id": A_INSTANCE,
-            "a_attested": True,
+            "a_tags": dict(a_tags) if a_tags is not None else client_tags(),
+            "a_group_tags": dict(a_tags) if a_tags is not None else client_tags(),
             "b_group_id": identity[0],
             "b_vm_id": identity[1],
             "b_instance_id": instance,
