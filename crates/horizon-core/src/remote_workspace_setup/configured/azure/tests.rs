@@ -355,6 +355,66 @@ fn binding_precedes_factory_and_key_and_successful_setup_never_replays() {
 }
 
 #[test]
+fn post_start_binding_drift_is_uncertain_and_never_replays_creation() {
+    let f = Fixture::new();
+    let prepared = f.preview();
+    let locator = prepared.locator().clone();
+    let backend = Backend::new(&f, &prepared, false);
+    let result = submit_with(&f.home, &f.config, OWNER, &prepared, &f.consent(), |store, saved| {
+        let allocation = start_with(store, &f.identities(), f.profile(), saved, i64::MAX, |_, _| {
+            Ok(backend.clone())
+        })?;
+        assert_eq!(backend.counts(), [1, 1, 0, 0]);
+        // Corrupt only this fresh synthetic row after successful provider dispatch,
+        // restoring the exact immutable trigger before any public store read.
+        let raw = rusqlite::Connection::open(store.path()).expect("synthetic database");
+        let trigger: String = raw
+            .query_row(
+                "SELECT sql FROM sqlite_schema WHERE name='remote_provider_bindings_no_update'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("original trigger");
+        raw.execute_batch("DROP TRIGGER remote_provider_bindings_no_update")
+            .expect("admit synthetic drift");
+        assert_eq!(
+            raw.execute(
+                "UPDATE remote_provider_bindings SET profile_digest=?1",
+                ["0".repeat(64)]
+            )
+            .expect("valid different digest"),
+            1
+        );
+        raw.execute_batch(&trigger).expect("restore immutable schema");
+        assert_eq!(
+            binding_matches(store, &f.config, &allocation),
+            Err(Error::ContextChanged)
+        );
+        Ok(allocation)
+    });
+    assert_eq!(result, Err(Error::SetupUnconfirmed));
+    assert!(prepared.locator() == &locator);
+    let retained = f.load(&prepared);
+    assert!(
+        retained
+            .workspace()
+            .state()
+            .runtime
+            .as_ref()
+            .expect("runtime")
+            .worker
+            .is_some()
+    );
+    assert_eq!(f.start(&prepared, backend.clone()), Err(Error::SaveConflict));
+    assert!(matches!(
+        f.check(&prepared, &f.config, backend.clone()),
+        Err(Error::ContextChanged)
+    ));
+    assert_eq!(f.load(&prepared), retained);
+    assert_eq!(backend.counts(), [1, 1, 0, 0]);
+}
+
+#[test]
 fn lost_creation_response_recovers_exact_no_handle_without_ensure() {
     let f = Fixture::new();
     let prepared = f.preview();

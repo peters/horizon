@@ -273,7 +273,7 @@ fn submit_with(
     if spec != prepared.state.spec || allocation.workspace().session_id() != owner {
         return Err(Error::SetupUnconfirmed);
     }
-    check_result(&store, config, &allocation, prepared.network_volume.as_ref())?;
+    check_result(&store, config, &allocation, prepared.network_volume.as_ref()).map_err(|_| Error::SetupUnconfirmed)?;
     Ok(allocation)
 }
 
