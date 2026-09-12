@@ -418,7 +418,9 @@ class ActualCli(unittest.TestCase):
         info = binary.stat()
         self.assertTrue(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid() and not info.st_mode & 0o022)
         with tempfile.TemporaryDirectory(prefix='horizon-byte-capture-native-') as temporary:
-            arguments = ['/usr/bin/bwrap', '--unshare-all', '--new-session', '--die-with-parent', '--ro-bind', '/', '/',
+            arguments = ['/usr/bin/bwrap', '--unshare-all', '--new-session', '--die-with-parent', '--tmpfs', '/',
+                '--ro-bind', '/usr', '/usr', '--symlink', 'usr/bin', '/bin', '--symlink', 'usr/lib', '/lib',
+                '--symlink', 'usr/lib64', '/lib64', '--symlink', 'usr/sbin', '/sbin',
                 '--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp', '--tmpfs', '/home', '--tmpfs', '/root',
                 '--tmpfs', '/run', '--tmpfs', '/etc', '--tmpfs', '/usr/local/bin',
                 '--bind', temporary, '/workspace', '--ro-bind', str(binary), '/usr/local/bin/horizon-repository',
