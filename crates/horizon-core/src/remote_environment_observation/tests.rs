@@ -16,6 +16,8 @@ use std::sync::Mutex;
 
 mod configured;
 mod guards;
+#[cfg(target_os = "linux")]
+mod runpod;
 
 const OWNER: &str = "00000000-0000-4000-8000-000000000001";
 type Error = RemoteEnvironmentObservationError;
@@ -37,6 +39,10 @@ impl Fixture {
     }
 
     fn with_request(lifetime: WorkerLifetime, reserve: bool) -> Self {
+        Self::with_provider(lifetime, reserve, CloudProvider::LocalDocker, false)
+    }
+
+    fn with_provider(lifetime: WorkerLifetime, reserve: bool, provider: CloudProvider, network: bool) -> Self {
         let directory = tempfile::tempdir().expect("fixture");
         let store = CloudWorkflowStore::open_path(directory.path().join("control/store.sqlite3")).expect("store");
         let mut state: RemoteWorkspaceState = serde_json::from_value(serde_json::json!({
@@ -51,8 +57,21 @@ impl Fixture {
         }))
         .expect("state");
         state.spec.target.lifetime = lifetime;
+        state.spec.target.provider = provider;
         let dormant = store.create_remote_workspace(OWNER, &state).expect("workspace");
         let allocation = store.allocate_remote_runtime(&dormant, i64::MAX).expect("allocation");
+        if network {
+            store
+                .record_remote_network_volume_selection(
+                    &allocation,
+                    &crate::cloud_run::runpod::RunPodNetworkVolumeExpectation {
+                        volume_id: "synthetic-volume".into(),
+                        data_center_id: "synthetic-dc".into(),
+                        minimum_size_gb: 10,
+                    },
+                )
+                .expect("selection");
+        }
         if reserve {
             // Synthetic public identity only: overview observation must not open a private key.
             store
@@ -85,7 +104,7 @@ impl Fixture {
         InteractiveWorkerStatus {
             worker: InteractiveWorker {
                 identity: InteractiveWorkerIdentity {
-                    provider: CloudProvider::LocalDocker,
+                    provider: request.target.provider,
                     workflow_id: request.workflow_id,
                     job_id: request.job_id,
                     resource_id: "synthetic-worker".into(),

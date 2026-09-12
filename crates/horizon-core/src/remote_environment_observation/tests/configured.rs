@@ -82,13 +82,21 @@ fn unsupported_provider_and_unreserved_allocation_fail_closed() {
         Err(ConfiguredObservationError::Observation(Error::MissingRequest))
     );
     let mut expected = fixture.reload().workspace().environment_summary();
-    for provider in [CloudProvider::Azure, CloudProvider::RunPod] {
-        expected.provider = provider;
-        assert_eq!(
-            observe_configured_remote_environment(&fixture.store, &RemoteProviderConfig::default(), &expected),
-            Err(ConfiguredObservationError::UnsupportedProvider)
-        );
-    }
+    expected.provider = CloudProvider::Azure;
+    assert_eq!(
+        observe_configured_remote_environment(&fixture.store, &RemoteProviderConfig::default(), &expected),
+        Err(ConfiguredObservationError::UnsupportedProvider)
+    );
+    expected.provider = CloudProvider::RunPod;
+    let expected_error = if cfg!(target_os = "linux") {
+        ConfiguredObservationError::Configuration(RemoteProviderConfigError::UnconfiguredRunPodProfile)
+    } else {
+        ConfiguredObservationError::UnsupportedProvider
+    };
+    assert_eq!(
+        observe_configured_remote_environment(&fixture.store, &RemoteProviderConfig::default(), &expected),
+        Err(expected_error)
+    );
 }
 
 #[test]

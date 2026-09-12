@@ -27,6 +27,22 @@ fn summary() -> RemoteEnvironmentSummary {
     }
 }
 
+#[test]
+fn provider_check_does_not_create_missing_storage() {
+    let fixture = tempfile::tempdir().expect("fixture");
+    let root = fixture.path().join("missing-home");
+    let home = HorizonHome::from_root(root.clone());
+    for provider in [CloudProvider::LocalDocker, CloudProvider::RunPod] {
+        let mut expected = summary();
+        expected.provider = provider;
+        assert!(matches!(
+            check(&home, &RemoteProviderConfig::default(), &expected),
+            Err(ObservationError::StorageUnavailable)
+        ));
+        assert!(!root.exists(), "an observation must not create its store");
+    }
+}
+
 fn result() -> RemoteEnvironmentObservation {
     RemoteEnvironmentObservation {
         saved: summary(),
