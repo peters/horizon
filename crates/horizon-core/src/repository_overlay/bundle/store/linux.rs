@@ -1,4 +1,5 @@
 use super::{ArtifactDigest, BundleStoreError as Error, codec};
+mod named;
 use crate::repository_overlay::reader::{
     RepositoryReadError, SelectedRepositoryReader,
     linux::{RegularFileRead, Root},
@@ -18,7 +19,8 @@ const CONFINED: ResolveFlags = ResolveFlags::BENEATH
 
 pub(super) struct Directory {
     reader: Root,
-    directory: File,
+    handle: File,
+    named: bool,
 }
 
 impl Directory {
@@ -34,13 +36,23 @@ impl Directory {
             )
             .map_err(storage_error)?,
         );
-        let result = Self { reader, directory };
+        let result = Self {
+            reader,
+            handle: directory,
+            named: false,
+        };
         result.verify()?;
         Ok(result)
     }
 
+    pub(super) fn open_named(path: &Path) -> Result<Self, Error> {
+        let mut directory = Self::open(path)?;
+        directory.named = true;
+        Ok(directory)
+    }
+
     fn verify(&self) -> Result<(), Error> {
-        let metadata = self.directory.metadata().map_err(|_| Error::UnsafeDirectory)?;
+        let metadata = self.handle.metadata().map_err(|_| Error::UnsafeDirectory)?;
         if !metadata.is_dir()
             || metadata.uid() != rustix::process::geteuid().as_raw()
             || metadata.mode() & 0o7777 != 0o700
@@ -52,6 +64,9 @@ impl Directory {
     }
 
     pub(super) fn read(&self, digest: &ArtifactDigest) -> Result<Option<RegularFileRead>, Error> {
+        if self.named {
+            return named::read(self, digest);
+        }
         self.verify()?;
         match self
             .reader
@@ -64,6 +79,9 @@ impl Directory {
     }
 
     pub(super) fn put(&self, digest: &ArtifactDigest, bytes: &[u8]) -> Result<(), Error> {
+        if self.named {
+            return named::put(self, digest, bytes);
+        }
         self.put_with_sync(digest, bytes, File::sync_all)
     }
 
@@ -84,13 +102,13 @@ impl Directory {
         match linkat(
             CWD,
             format!("/proc/self/fd/{}", file.as_raw_fd()),
-            &self.directory,
+            &self.handle,
             name(digest),
             AtFlags::SYMLINK_FOLLOW,
         ) {
             Ok(()) => {
                 sync(&file).map_err(|_| Error::WriteFailed)?;
-                sync(&self.directory).map_err(|_| Error::WriteFailed)
+                sync(&self.handle).map_err(|_| Error::WriteFailed)
             }
             Err(rustix::io::Errno::EXIST) => {
                 let record = self.read(digest)?.ok_or(Error::Missing)?;
@@ -104,7 +122,7 @@ impl Directory {
         self.verify()?;
         let file = File::from(
             openat2(
-                &self.directory,
+                &self.handle,
                 ".",
                 OFlags::TMPFILE | OFlags::RDWR | OFlags::CLOEXEC,
                 Mode::RUSR | Mode::WUSR,
@@ -133,7 +151,7 @@ impl Directory {
             return Err(Error::Conflict);
         }
         sync(&record.file).map_err(|_| Error::WriteFailed)?;
-        sync(&self.directory).map_err(|_| Error::WriteFailed)
+        sync(&self.handle).map_err(|_| Error::WriteFailed)
     }
 }
 

@@ -7,6 +7,10 @@ back into large multi-purpose modules.
 
 ### Remote worker image
 
+- `repository_overlay::bundle::store` keeps anonymous publication as its default;
+  the explicit named layout owns permanent digest slots in a focused Linux leaf.
+  Neither layout discovers data, transfers it, schedules capture or certifies
+  provider durability. See [named publication](named-bundle-publication.md).
 - Prepared task admission keeps immutable intake/setup selection and read-only
   checkout inspection in `repository_overlay::intake::setup`. The fixed
   `setup-binding` and `setup-checkout` helpers never materialize or start tasks.

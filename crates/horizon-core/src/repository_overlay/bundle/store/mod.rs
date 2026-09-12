@@ -9,13 +9,35 @@ use std::{fmt, path::Path};
 
 /// Immutable digest-named records in an explicitly selected, existing private directory.
 /// The caller owns storage selection, authorization, capacity and retention policy.
-/// No overwrite, deletion, directory creation, inventory or permission repair is exposed.
+/// No overwrite, deletion, root creation, inventory or permission repair is exposed.
 pub struct RepositoryBundleStore {
     #[cfg(target_os = "linux")]
     directory: linux::Directory,
 }
 
 impl RepositoryBundleStore {
+    /// Select the explicit Linux named-publication layout in an existing private root.
+    /// Each digest owns a permanently claimed directory containing `record.hzov`.
+    /// Named exclusive creation and rename replace the anonymous-file requirement;
+    /// no automatic fallback or migration from the flat layout occurs. Filesystem
+    /// synchronization support is still required, not provider durability attestation.
+    /// An incomplete claim is retained and cannot be resumed or overwritten.
+    /// # Errors
+    /// Rejects unsupported platforms and inaccessible/unsafe/non-private roots.
+    pub fn open_named(root: &Path) -> Result<Self, BundleStoreError> {
+        #[cfg(target_os = "linux")]
+        {
+            Ok(Self {
+                directory: linux::Directory::open_named(root)?,
+            })
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = root;
+            Err(BundleStoreError::Unsupported)
+        }
+    }
+
     /// Pin an owned `0700` directory without following symlinked ancestors.
     /// Linux confinement and anonymous-file publication support are required for writes.
     /// # Errors
@@ -37,8 +59,10 @@ impl RepositoryBundleStore {
     /// Synchronize and atomically publish complete bytes, never replacing an existing record.
     /// Identical retries verify and synchronize the existing file and directory again.
     /// A failure can leave a complete published record; retry explicitly with the same bundle.
-    /// Run off the UI thread: bounded buffers do not bound filesystem latency. Encoding plus
-    /// a retry comparison can hold two encoding buffers alongside the caller's bundle.
+    /// In the named layout, an incomplete permanent claim remains a conflict; only
+    /// a fully published identical record can be verified and synchronized again.
+    /// Run off the UI thread: bounded buffers do not bound filesystem latency.
+    /// Verification can hold multiple bounded encoding copies alongside the caller's bundle.
     /// # Errors
     /// Rejects unsupported storage, unsafe/conflicting existing records or synchronization failure.
     pub fn put(&self, bundle: &RepositoryOverlayBundle) -> Result<ArtifactDigest, BundleStoreError> {
@@ -57,6 +81,8 @@ impl RepositoryBundleStore {
 
     /// Read one private bounded record and revalidate its encoding, payloads and exact digest.
     /// Does not establish a signature, coherent capture, storage replication or apply authority.
+    /// In the named layout, only a missing digest directory is missing; an existing
+    /// incomplete claim is a conflict, not permission to resume publication.
     /// Run off the UI thread; decoding owns a separate bounded payload copy.
     /// # Errors
     /// Rejects missing, unsafe, oversized, corrupt or wrongly named records without modifying them.
