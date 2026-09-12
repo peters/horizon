@@ -170,6 +170,69 @@ fn moving_head_index_or_symbolic_branch_during_attempt_is_retryable_changed() {
 }
 
 #[test]
+fn unsupported_index_movement_is_retryable_only_after_valid_admission() {
+    for movement in ["skip", "intent", "gitlink"] {
+        let fixture = Fixture::new();
+        fixture.stage("file", b"before", 0o100_644);
+        let branch = branch(&fixture);
+        let state = linux::State::open_with(fixture.root(), |repo| {
+            super::super::revision::branch_head(repo, &branch)
+        })
+        .unwrap();
+        let baseline = state.selected_index(&["file"]).unwrap();
+        let mut index = fixture.repository.index().unwrap();
+        let mut entry = index.get_path(Path::new("file"), 0).unwrap();
+        let initial_error = if movement == "gitlink" {
+            entry.mode = 0o160_000;
+            entry.id = state.base;
+            GitCaptureError::UnsupportedNode
+        } else {
+            entry.flags_extended = if movement == "skip" {
+                git2::IndexEntryExtendedFlag::SKIP_WORKTREE.bits()
+            } else {
+                git2::IndexEntryExtendedFlag::INTENT_TO_ADD.bits()
+            };
+            GitCaptureError::UnsupportedIndex
+        };
+        index.add(&entry).unwrap();
+        index.write().unwrap();
+        assert_eq!(
+            super::super::revision::verify(&state, &branch, &["file"], &baseline),
+            Err(GitCaptureError::Changed),
+            "{movement}"
+        );
+        assert_eq!(
+            capture_selected_revision(fixture.root(), fixture.source(), &branch, &["file"]),
+            Err(initial_error),
+            "{movement}"
+        );
+    }
+}
+
+#[test]
+fn ordinary_unselected_index_movement_does_not_expand_selected_capture() {
+    let fixture = Fixture::new();
+    fixture.stage("file", b"selected", 0o100_644);
+    fixture.write("file", b"selected");
+    let branch = branch(&fixture);
+    let before = capture_selected_revision(fixture.root(), fixture.source(), &branch, &["file"]).unwrap();
+    let state = linux::State::open_with(fixture.root(), |repo| {
+        super::super::revision::branch_head(repo, &branch)
+    })
+    .unwrap();
+    let baseline = state.selected_index(&["file"]).unwrap();
+    fixture.stage("unselected", b"unselected private bytes", 0o100_644);
+    assert_eq!(
+        super::super::revision::verify(&state, &branch, &["file"], &baseline),
+        Ok(())
+    );
+    assert_eq!(
+        capture_selected_revision(fixture.root(), fixture.source(), &branch, &["file"]),
+        Ok(before)
+    );
+}
+
+#[test]
 fn exclusions_removed_gitlink_ancestry_and_oversize_files_still_fail_closed() {
     let fixture = Fixture::new();
     let branch = branch(&fixture);

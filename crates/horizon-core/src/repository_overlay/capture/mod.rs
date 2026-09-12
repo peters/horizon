@@ -57,7 +57,8 @@ pub fn capture_selected(
 /// The same platform, ownership, payload and filesystem-latency limits apply.
 /// # Errors
 /// Rejects invalid selections/source/branch, detached or unborn HEAD, unsafe nodes,
-/// unsupported index semantics and detected root/index/branch/HEAD changes.
+/// unsupported index semantics and detected root/selected-index/branch/HEAD changes.
+/// Ordinary changes to unselected index entries are outside this capture's guarantee.
 pub fn capture_selected_revision(
     root: &Path,
     mut source: GitSource,

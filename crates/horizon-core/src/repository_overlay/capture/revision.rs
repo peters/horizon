@@ -53,7 +53,7 @@ pub(super) fn verify(
     baseline: &[Option<GitNode>],
 ) -> Result<(), Error> {
     state.verify(selected, baseline).map_err(|error| match error {
-        Error::BaseMismatch => Error::Changed,
+        Error::BaseMismatch | Error::UnsupportedIndex | Error::UnsupportedNode => Error::Changed,
         error => error,
     })?;
     if branch_head(&state.repository, branch).map_err(|_| Error::Changed)? != state.base {

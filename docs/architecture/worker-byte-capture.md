@@ -85,8 +85,10 @@ Its manifest binds the observed current commit and work branch. This is not an
 export of other tracked files, Git history or all objects reachable from HEAD.
 LFS pointers and hydrated selected bytes remain literal; no filter is invoked.
 A new enrollment validates this bounded read-only capture before claiming a
-slot. During capture, detected branch/HEAD/index movement is retryable `changed`;
-a wrong, detached or unborn branch at admission is a terminal refusal. The next
+slot. During capture, detected branch/HEAD/selected-index movement, including
+newly unsupported index states after valid admission, is retryable `changed`.
+Ordinary edits to unselected index entries are outside this detection guarantee.
+A wrong, detached or unborn branch or unsupported index at admission is a terminal refusal. The next
 attempt can observe a later commit on the enrolled branch without re-enrollment.
 Version 2 has a distinct canonical binding; existing version-1 enrollments,
 receipts and retry/observation behavior are not migrated or reinterpreted.
