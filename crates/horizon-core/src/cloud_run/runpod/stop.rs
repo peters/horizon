@@ -6,7 +6,7 @@ use super::{
     ApiPod, InteractiveWorkerLifetime, RunPodClient, RunPodError, RunPodLifecycle, RunPodProfile, RunPodWorker,
     status_from_resource, valid_ssh_public_key,
 };
-use crate::cloud_run::interactive_worker_stop::InteractiveWorkerStop;
+use crate::cloud_run::interactive_worker_stop::{InteractiveWorkerStop, InteractiveWorkerStopObservation};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -67,16 +67,7 @@ impl RunPodClient {
         ssh_public_key: &str,
         profile: &RunPodProfile,
     ) -> Result<InteractiveWorkerStop, RunPodError> {
-        worker.validate()?;
-        if worker.lifetime != InteractiveWorkerLifetime::Persistent {
-            return Err(RunPodError::StopUnsupportedLifetime);
-        }
-        if !valid_ssh_public_key(ssh_public_key) {
-            return Err(RunPodError::InvalidPersistedWorker);
-        }
-        if self.network_binding.is_none() && profile.volume_gib == 0 {
-            return Err(RunPodError::StopRetentionUnverified);
-        }
+        self.validate_stop_request(worker, ssh_public_key, profile)?;
         let Some(before) = self.transport.get(&worker.pod_id)? else {
             return Ok(InteractiveWorkerStop::AlreadyAbsent);
         };
@@ -99,6 +90,44 @@ impl RunPodClient {
         stopping?;
         Err(RunPodError::StopVerificationFailed)
     }
+
+    pub(super) fn observe_interactive_worker_stop(
+        &self,
+        worker: &RunPodWorker,
+        ssh_public_key: &str,
+        profile: &RunPodProfile,
+    ) -> Result<InteractiveWorkerStopObservation, RunPodError> {
+        self.validate_stop_request(worker, ssh_public_key, profile)?;
+        let Some(pod) = self.transport.get(&worker.pod_id)? else {
+            return Ok(InteractiveWorkerStopObservation::Absent);
+        };
+        let retained = self.retained_state(&pod, worker, ssh_public_key, profile)?;
+        Ok(if retained.stopped {
+            InteractiveWorkerStopObservation::RetainedStopped
+        } else {
+            InteractiveWorkerStopObservation::Pending
+        })
+    }
+
+    fn validate_stop_request(
+        &self,
+        worker: &RunPodWorker,
+        ssh_public_key: &str,
+        profile: &RunPodProfile,
+    ) -> Result<(), RunPodError> {
+        worker.validate()?;
+        if worker.lifetime != InteractiveWorkerLifetime::Persistent {
+            return Err(RunPodError::StopUnsupportedLifetime);
+        }
+        if !valid_ssh_public_key(ssh_public_key) {
+            return Err(RunPodError::InvalidPersistedWorker);
+        }
+        if self.network_binding.is_none() && profile.volume_gib == 0 {
+            return Err(RunPodError::StopRetentionUnverified);
+        }
+        Ok(())
+    }
+
     fn retained_state(
         &self,
         pod: &ApiPod,

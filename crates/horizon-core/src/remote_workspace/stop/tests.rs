@@ -1,4 +1,5 @@
 mod configured;
+mod confirmation;
 
 use super::*;
 use crate::{
