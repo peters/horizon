@@ -594,10 +594,17 @@ observation API. Its `linux` leaf confines the separate one-shot claim and fixed
 task-accessible checkout, while `git` owns sanitized bounded Git subprocesses.
 The `lfs` leaf admits standard bounded pointers, hydrates them through the packaged
 client with per-child file limits, and verifies the fresh checkout/index before completion.
-The repository CLI only frames bounded requests and responses. This prerequisite
-does not use the retained overlay setup qualifier or
-support submodules/custom LFS configuration; unsupported repositories retain state without a
-completion receipt. Observation never mutates user commits or worktree changes.
+The `submodules` leaf admits committed metadata and GitHub-only URLs, then hydrates
+exact gitlink commits in confined, initially empty directories with detached child HEADs.
+It does not delegate recursion, update strategies or configuration to `.gitmodules`.
+Root and children share one 300-second Git command deadline and cumulative LFS budget
+(1,024 paths, 64 MiB per object, 512 MiB payload); recursion is capped at depth four
+and 32 children with 1 MiB aggregate planning metadata. These are not an aggregate
+quota on Git packfiles or filesystem usage. Custom LFS configuration/filters and
+unsupported submodule metadata fail without a completion receipt. The CLI only
+frames existing requests/responses; this does not use the retained overlay qualifier.
+Observation never mutates user commits or worktree changes, and old failed claims
+are never upgraded or replayed by newly supported preparation behavior.
 
 Ordinary Git task admission uses `repository_git` canonical binding and read-only
 checkout identity projections, framed in the existing CLI Git leaf. The worker's

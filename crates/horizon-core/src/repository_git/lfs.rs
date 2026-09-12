@@ -17,6 +17,37 @@ const MAX_TOTAL: usize = 512 * 1024 * 1024;
 const MAX_PATHS: usize = 1024;
 const PREFIX: &str = "version https://git-lfs.github.com/spec/v1\n";
 
+/// One admission budget for the superproject and every nested checkout.
+#[derive(Default)]
+pub(super) struct Budget {
+    paths: usize,
+    bytes: usize,
+}
+
+impl Budget {
+    fn reserve(&mut self, pointers: &[Pointer]) -> Result<(), Error> {
+        let paths = self
+            .paths
+            .checked_add(pointers.len())
+            .ok_or(Error::UnsupportedRepository)?;
+        let bytes = pointers.iter().try_fold(self.bytes, |sum, pointer| {
+            sum.checked_add(pointer.size).ok_or(Error::UnsupportedRepository)
+        })?;
+        if paths > MAX_PATHS || bytes > MAX_TOTAL {
+            return Err(Error::UnsupportedRepository);
+        }
+        self.paths = paths;
+        self.bytes = bytes;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct Selection<'a> {
+    pub attributes: &'a [u8],
+    pub matches: &'a [u8],
+}
+
 pub(super) struct Pointer {
     pub path: String,
     pub encoded: Vec<u8>,
@@ -165,14 +196,20 @@ pub(super) fn hydrate(
     git: &mut impl Commands,
     directory: &Path,
     request: &GitPreparation,
-    attributes: &[u8],
-    matches: &[u8],
+    selection: Selection<'_>,
+    budget: &mut Budget,
     cancelled: &dyn Fn() -> bool,
     verify: &dyn Fn() -> Result<(), Error>,
 ) -> Result<(), Error> {
     verify()?;
-    let pointers = plan(directory, attributes, matches, request.source.commit.as_str())?;
+    let pointers = plan(
+        directory,
+        selection.attributes,
+        selection.matches,
+        request.source.commit.as_str(),
+    )?;
     verify()?;
+    budget.reserve(&pointers)?;
     if pointers.is_empty() {
         return Ok(());
     }

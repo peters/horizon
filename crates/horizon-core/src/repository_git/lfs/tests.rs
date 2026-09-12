@@ -304,8 +304,11 @@ fn hydration_verifies_before_and_after_planning_and_version_probe() {
                 &mut probe,
                 root.path(),
                 &request,
-                b"asset.bin\0filter\0lfs\0",
-                b"",
+                Selection {
+                    attributes: b"asset.bin\0filter\0lfs\0",
+                    matches: b""
+                },
+                &mut Budget::default(),
                 &|| false,
                 &|| {
                     checks.set(checks.get() + 1);
@@ -328,12 +331,34 @@ fn hydration_verifies_before_and_after_planning_and_version_probe() {
             &mut probe,
             Path::new("/nonexistent-lfs-proof"),
             &request,
-            b"",
-            b"",
+            Selection {
+                attributes: b"",
+                matches: b""
+            },
+            &mut Budget::default(),
             &|| false,
             &|| Err(Error::UnsafeRoot)
         ),
         Err(Error::UnsafeRoot)
     );
     assert_eq!(probe.0, 0);
+}
+
+#[test]
+fn root_and_children_share_one_lfs_byte_and_path_budget() {
+    let mut budget = Budget::default();
+    let mut large = pointer(b"x");
+    large.size = MAX_OBJECT;
+    for _ in 0..MAX_TOTAL / MAX_OBJECT {
+        budget.reserve(std::slice::from_ref(&large)).unwrap();
+    }
+    assert_eq!(budget.reserve(&[pointer(b"x")]), Err(Error::UnsupportedRepository));
+    assert_eq!((budget.paths, budget.bytes), (MAX_TOTAL / MAX_OBJECT, MAX_TOTAL));
+    let mut budget = Budget::default();
+    let zero = pointer(b"");
+    for _ in 0..MAX_PATHS {
+        budget.reserve(std::slice::from_ref(&zero)).unwrap();
+    }
+    assert_eq!(budget.reserve(&[zero]), Err(Error::UnsupportedRepository));
+    assert_eq!((budget.paths, budget.bytes), (MAX_PATHS, 0));
 }
