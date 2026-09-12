@@ -827,6 +827,22 @@ class OffPhaseTests(unittest.TestCase):
             os.symlink(f"{root}/real_keys", keys)
             self.assertEqual(run("append").returncode, 2)
             self.assertEqual(pathlib.Path(f"{root}/real_keys").read_text(encoding="utf-8").count("\n"), 1, "the target was not written")
+            # A hard link or a FIFO at the key path is refused as well; the other file is untouched.
+            os.unlink(keys)
+            os.link(f"{root}/real_keys", keys)
+            self.assertEqual(run("append").returncode, 3)
+            self.assertEqual(pathlib.Path(f"{root}/real_keys").read_text(encoding="utf-8").count("\n"), 1)
+            os.unlink(keys)
+            os.mkfifo(keys)
+            self.assertEqual(run("append").returncode, 3, "a FIFO never blocks the editor")
+            os.unlink(keys)
+            # Appending to a missing file creates it; a long line is written in full.
+            long_line = line + " " + "x" * 50_000
+            long_encoded = base64.b64encode(long_line.encode("ascii")).decode("ascii")
+            self.assertEqual(subprocess.run([sys.executable, "-", "append", long_encoded], input=program, text=True,
+                                            capture_output=True, check=False).returncode, 0)
+            self.assertEqual(keys.read_text(encoding="utf-8"), long_line + "\n")
+            self.assertEqual(oct(keys.stat().st_mode)[-3:], "600")
 
     def test_remove_observer_key_is_reconciled_by_the_reader(self):
         for answers, passed, removed in (([{"progress": None, "checkpoint": None, "channel": "refused"}], True, True),
