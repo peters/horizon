@@ -54,6 +54,7 @@ struct Pending {
     creation_locator: Option<RemoteWorkspaceSetupLocator>,
     discard: bool,
     started: std::time::Instant,
+    decision_seconds: u64,
 }
 enum Work {
     Preview(Box<api::RemoteWorkspaceSetupDraft>),
@@ -64,6 +65,21 @@ enum Completion {
     Preview(Box<PreparedRemoteWorkspaceSetup>),
     Submitted(Box<api::ConfiguredWorkspaceSetupAttempt>),
     Checked(Box<api::ConfiguredWorkspaceSetupObservation>),
+}
+
+fn confirmation(prepared: &PreparedRemoteWorkspaceSetup) -> api::RemoteWorkspaceSetupConsent {
+    let image = prepared.spec().target.image.clone();
+    match (prepared.azure_profile(), prepared.network_volume()) {
+        (Some(profile), None) => api::RemoteWorkspaceSetupConsent::Azure {
+            image,
+            profile: profile.clone(),
+        },
+        (_, Some(volume)) => api::RemoteWorkspaceSetupConsent::RunPodHps {
+            image,
+            volume: volume.clone(),
+        },
+        (None, None) => api::RemoteWorkspaceSetupConsent::LocalDocker { image },
+    }
 }
 
 impl SetupState {
@@ -158,6 +174,10 @@ impl SetupState {
         }
     }
     fn launch(&mut self, scope: Scope, work: Work, ctx: &Context) {
+        let decision_seconds = match &work {
+            Work::Submit(prepared, _) if prepared.azure_profile().is_some() => 300,
+            _ => 180,
+        };
         let creation_locator = match &work {
             Work::Submit(prepared, _) => Some(prepared.locator().clone()),
             _ => None,
@@ -204,6 +224,7 @@ impl SetupState {
                     creation_locator,
                     discard: false,
                     started: std::time::Instant::now(),
+                    decision_seconds,
                 });
             }
             Err(_) => self.notice = Some("Setup operation could not start. No retry was scheduled.".into()),
@@ -266,14 +287,7 @@ impl SetupState {
             Action::Confirm if self.consent => {
                 let Some(review) = self.review.take() else { return };
                 let prepared = review.prepared;
-                let image = prepared.spec().target.image.clone();
-                let consent = match prepared.network_volume() {
-                    Some(volume) => api::RemoteWorkspaceSetupConsent::RunPodHps {
-                        image,
-                        volume: volume.clone(),
-                    },
-                    None => api::RemoteWorkspaceSetupConsent::LocalDocker { image },
-                };
+                let consent = confirmation(&prepared);
                 self.attempts.push(prepared.locator().clone());
                 self.invalidate();
                 Work::Submit(Box::new(prepared), consent)
@@ -343,6 +357,7 @@ impl super::HorizonApp {
                             row.summary.provider,
                             horizon_core::cloud_run::CloudProvider::LocalDocker
                                 | horizon_core::cloud_run::CloudProvider::RunPod
+                                | horizon_core::cloud_run::CloudProvider::Azure
                         )
                 })
                 .map(|row| (home, owner, row.summary.workspace_local_id.as_str()))

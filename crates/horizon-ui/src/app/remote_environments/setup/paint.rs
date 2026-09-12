@@ -16,7 +16,14 @@ impl Review {
                 format!("{:?} / {}", spec.target.provider, spec.target.profile),
             ),
             ("Image", spec.target.image.clone()),
-            (super::form::DISK_LABEL, format!("{} GiB", spec.target.disk_gib)),
+            (
+                if prepared.azure_profile().is_some() {
+                    "Data disk"
+                } else {
+                    super::form::DISK_LABEL
+                },
+                format!("{} GiB", spec.target.disk_gib),
+            ),
             ("Repository", spec.repository.repository.clone()),
             ("Exact commit", spec.repository.commit.as_str().into()),
             ("Work branch", spec.repository.branch.clone().unwrap_or_default()),
@@ -33,7 +40,11 @@ impl Review {
                     fields.extend(runpod_fields(profile));
                 }
             }
-            horizon_core::cloud_run::CloudProvider::Azure => {}
+            horizon_core::cloud_run::CloudProvider::Azure => {
+                if let Some(profile) = prepared.azure_profile() {
+                    fields.extend(azure_fields(profile));
+                }
+            }
         }
         for panel in &spec.panels {
             if let Some(command) = &panel.command {
@@ -54,7 +65,16 @@ impl Review {
             fields.push(("Minimum volume size", format!("{} GB", volume.minimum_size_gb)));
         }
         if let Some(micros) = spec.target.max_hourly_cost_micros {
-            fields.push(("Compute ceiling", format!("{} US cents/hour", micros / 10_000)));
+            fields.push((
+                "Compute ceiling",
+                if prepared.azure_profile().is_some() {
+                    format!("{micros} billing-currency micro-units/hour")
+                } else {
+                    format!("{} US cents/hour", micros / 10_000)
+                },
+            ));
+        } else if prepared.azure_profile().is_some() {
+            fields.push(("Compute ceiling", "Not set".into()));
         }
         Self { prepared, fields }
     }
@@ -88,6 +108,32 @@ fn runpod_fields(profile: &horizon_core::cloud_run::runpod::RunPodProfile) -> [(
 
 fn optional(value: Option<impl ToString>) -> String {
     value.map_or_else(|| "Not set".into(), |value| value.to_string())
+}
+
+fn azure_fields(profile: &horizon_core::cloud_run::azure::AzureProfile) -> [(&'static str, String); 8] {
+    let horizon_core::cloud_run::azure::AzureProfile {
+        name,
+        subscription_id,
+        location,
+        vm_size,
+        image_pull_identity_id,
+        declared_hourly_cost_micros,
+        registry_login_server,
+        disk_sku,
+    } = profile;
+    [
+        ("Azure profile", name.clone()),
+        ("Subscription", subscription_id.clone()),
+        ("Region", location.clone()),
+        ("CPU VM size", vm_size.clone()),
+        ("Managed image-pull identity", image_pull_identity_id.clone()),
+        (
+            "Declared compute price",
+            format!("{declared_hourly_cost_micros} billing-currency micro-units/hour"),
+        ),
+        ("Registry", registry_login_server.clone()),
+        ("Managed-disk SKU", disk_sku.as_azure_name().into()),
+    ]
 }
 
 impl SetupState {
@@ -130,7 +176,7 @@ impl SetupState {
         if let Some(pending) = &self.pending {
             let elapsed = pending.started.elapsed().as_secs();
             ui.label(format!("Waiting for the explicit setup operation ({elapsed} seconds)…"));
-            if elapsed >= 180 {
+            if elapsed >= pending.decision_seconds {
                 ui.label("Still waiting. You may close this view and later inspect the original saved workspace.");
             } else if elapsed >= 90 {
                 ui.label("Setup is taking longer than expected. Do not submit another creation; the original request may still be running.");
@@ -160,7 +206,15 @@ impl SetupState {
                 review.prepared.retain_until_millis()
             ));
             ui.label("Setup sends no repository token, prepares no checkout, starts no task and attaches no view. Use separate Prepare and Start actions afterward.");
-            ui.checkbox(&mut self.consent, "I trust this entrypoint-only image and displayed storage contents, authorize their use and continuing billing, and permit no tasks before the first host pin.");
+            if review.prepared.azure_profile().is_some() {
+                ui.label("The declared price is not a live quote or a total spending cap. Its currency comes from your configured billing assumptions, not USD conversion. Managed disks and other charges are additional.");
+                ui.label("Creation binds this complete profile before key or provider access. Later Check refuses changed or missing saved bindings; it never repairs or creates a worker.");
+            }
+            ui.checkbox(&mut self.consent, if review.prepared.azure_profile().is_some() {
+                "I approve the complete displayed Azure profile, managed pull identity, immutable entrypoint-only image and declared price; authorize continuing billing; and permit no tasks before the first host pin."
+            } else {
+                "I trust this entrypoint-only image and displayed storage contents, authorize their use and continuing billing, and permit no tasks before the first host pin."
+            });
             if ui
                 .add_enabled(self.consent, egui::Button::new("Create task-free worker"))
                 .clicked()

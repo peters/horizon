@@ -30,6 +30,7 @@ pub(super) struct Form {
     argv_json: String,
     panel_directory: String,
     hourly_cents: String,
+    azure_hourly_micros: String,
     volume_id: String,
     data_center_id: String,
     minimum_size_gb: String,
@@ -42,15 +43,16 @@ impl Form {
             .iter()
             .map(|p| (CloudProvider::LocalDocker, &p.name))
             .chain(config.runpod.iter().map(|p| (CloudProvider::RunPod, &p.name)))
+            .chain(config.azure.iter().map(|p| (CloudProvider::Azure, &p.name)))
             .map(|(provider, name)| ProfileChoice {
                 provider,
                 name: name.clone(),
                 label: format!(
                     "{} / {name}",
-                    if provider == CloudProvider::LocalDocker {
-                        "Local Docker"
-                    } else {
-                        "RunPod"
+                    match provider {
+                        CloudProvider::LocalDocker => "Local Docker",
+                        CloudProvider::RunPod => "RunPod",
+                        CloudProvider::Azure => "Azure CPU",
                     }
                 ),
             })
@@ -74,16 +76,21 @@ impl Form {
                 }
             });
         if self.choices.is_empty() {
-            ui.label("Configure a Local Docker or RunPod profile before setup.");
+            ui.label("Configure a Local Docker, RunPod or Azure CPU profile before setup.");
         }
         ui.label("Nothing has been created yet. Review these values before authorizing setup.");
         ui.strong("Worker and repository");
+        let disk_label = if self.selected_provider() == Some(CloudProvider::Azure) {
+            "Data disk (GiB)"
+        } else {
+            DISK_LABEL
+        };
         egui::Grid::new("new-remote-inputs")
             .num_columns(if stacked { 1 } else { 2 })
             .show(ui, |ui| {
                 for (label, value) in [
                     ("Digest-pinned image", &mut self.image),
-                    (DISK_LABEL, &mut self.disk_gib),
+                    (disk_label, &mut self.disk_gib),
                     ("GitHub owner/repository", &mut self.repository),
                     ("Exact commit SHA", &mut self.commit),
                     ("Dedicated work branch", &mut self.branch),
@@ -96,6 +103,12 @@ impl Form {
                 }
             });
         ui.label("Directories are repository-relative. Arguments are not shell-split; use [] for no arguments.");
+        if self.selected_provider() == Some(CloudProvider::Azure) {
+            ui.strong("Azure CPU cost limit");
+            ui.label("Optional compute ceiling in whole billing-currency micro-units/hour (1,000,000 = one currency unit). This is not a USD conversion or a live price quote.");
+            ui.add(egui::TextEdit::singleline(&mut self.azure_hourly_micros).char_limit(20));
+            ui.label("Leave empty for no compute ceiling. The configured declared price and full profile are shown at Review; managed disks and other charges are additional.");
+        }
         if self
             .selected
             .and_then(|i| self.choices.get(i))
@@ -123,7 +136,7 @@ impl Form {
             .selected
             .and_then(|i| self.choices.get(i))
             .ok_or("Choose a configured provider profile.")?;
-        let disk_gib = positive(&self.disk_gib).ok_or("Enter a positive whole-number container disk size.")?;
+        let disk_gib = positive(&self.disk_gib).ok_or("Enter a positive whole-number disk size.")?;
         let commit = GitCommitSha::parse(&self.commit).map_err(|_| "Enter an exact 40-character commit SHA.")?;
         if [
             &self.image,
@@ -160,7 +173,15 @@ impl Form {
                 }),
             )
         } else {
-            (None, None)
+            let ceiling =
+                if profile.provider == CloudProvider::Azure && !self.azure_hourly_micros.is_empty() {
+                    Some(positive(&self.azure_hourly_micros).ok_or(
+                        "Enter a positive whole-number billing-currency micro-unit ceiling, or leave it empty.",
+                    )?)
+                } else {
+                    None
+                };
+            (ceiling, None)
         };
         Ok(RemoteWorkspaceSetupDraft {
             target: WorkerTarget {
@@ -185,6 +206,10 @@ impl Form {
             retain_until_millis,
             network_volume,
         })
+    }
+
+    fn selected_provider(&self) -> Option<CloudProvider> {
+        self.selected.and_then(|i| self.choices.get(i)).map(|p| p.provider)
     }
 }
 
@@ -215,7 +240,11 @@ pub(super) mod tests {
             "local_docker":[{"name":"local","docker_host":"unix:///synthetic/docker.sock"}],
             "runpod":[{"name":"gpu","gpu_type_ids":["synthetic"],"gpu_count":1,"ports":["22/tcp","8080/http"],"volume_gib":37,
                 "allowed_cuda_versions":["12.8"],"data_center_id":"synthetic-dc","min_download_mbps":123,
-                "min_upload_mbps":234,"min_disk_bandwidth_mbps":345,"container_registry_auth_id":"synthetic-registration"}]
+                "min_upload_mbps":234,"min_disk_bandwidth_mbps":345,"container_registry_auth_id":"synthetic-registration"}],
+            "azure":[{"name":"cpu","subscription_id":"11111111-1111-4111-8111-111111111111",
+                "location":"northeurope","vm_size":"Standard_D4s_v3",
+                "image_pull_identity_id":"/subscriptions/11111111-1111-4111-8111-111111111111/resourceGroups/synthetic/providers/Microsoft.ManagedIdentity/userAssignedIdentities/pull",
+                "declared_hourly_cost_micros":123_456,"registry_login_server":"synthetic.azurecr.io","disk_sku":"StandardSSD_LRS"}]
         }))
         .expect("profiles")
     }
@@ -240,6 +269,41 @@ pub(super) mod tests {
         form.selected = Some(usize::from(cloud));
         form.hourly_cents = "459".into();
         form
+    }
+
+    pub(in super::super) fn azure() -> Form {
+        Form {
+            selected: Some(2),
+            image: format!("synthetic.azurecr.io/worker@sha256:{}", "a".repeat(64)),
+            ..form()
+        }
+    }
+
+    #[test]
+    fn azure_choice_and_optional_ceiling_are_explicit_without_currency_conversion() {
+        let mut form = azure();
+        let draft = form.draft(123).expect("Azure draft");
+        assert_eq!(draft.target.provider, CloudProvider::Azure);
+        assert!(draft.target.max_hourly_cost_micros.is_none() && draft.network_volume.is_none());
+        for invalid in ["0", "-1", "1.5", "18446744073709551616"] {
+            form.azure_hourly_micros = invalid.into();
+            assert!(form.draft(123).is_err());
+        }
+        form.azure_hourly_micros = "234567".into();
+        form.hourly_cents = "999".into();
+        assert_eq!(
+            form.draft(123).expect("ceiling").target.max_hourly_cost_micros,
+            Some(234_567)
+        );
+        form.selected = Some(0);
+        assert!(form.draft(123).expect("local").target.max_hourly_cost_micros.is_none());
+        form.selected = Some(1);
+        assert_eq!(
+            form.draft(123).expect("RunPod").target.max_hourly_cost_micros,
+            Some(9_990_000)
+        );
+        let unselected = Form::new(&config());
+        assert!(unselected.selected.is_none() && unselected.image.is_empty() && unselected.program.is_empty());
     }
 
     #[test]

@@ -19,6 +19,7 @@ fn pending(
         creation_locator: locator,
         discard: false,
         started: std::time::Instant::now(),
+        decision_seconds: 180,
     });
     sender
 }
@@ -111,6 +112,78 @@ mod linux {
             .collect::<Vec<_>>()
             .join("\n")
     }
+    #[test]
+    fn azure_preview_discloses_frozen_profile_and_consent_without_io() {
+        let (_temp, home, scope, mut state) = fixture(false);
+        state.form = Some(form::tests::azure());
+        let ctx = Context::default();
+        state.action(Action::Review, &home, OWNER, &scope.config, &ctx);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while state.pending.is_some() && std::time::Instant::now() < deadline {
+            state.sync(Some((&home, OWNER, &scope.config)));
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let review = state.review.as_ref().expect("Azure review");
+        match confirmation(&review.prepared) {
+            api::RemoteWorkspaceSetupConsent::Azure { image, profile } => {
+                assert_eq!(&profile, &scope.config.azure[0]);
+                assert_eq!(image, review.prepared.spec().target.image);
+            }
+            _ => panic!("Azure-specific complete consent"),
+        }
+        let text = render(&mut state, [900.0, 2600.0]);
+        for value in [
+            "Azure profile",
+            "cpu",
+            "11111111-1111-4111-8111-111111111111",
+            "northeurope",
+            "Standard_D4s_v3",
+            "userAssignedIdentities/pull",
+            "123456 billing-currency",
+            "synthetic.azurecr.io",
+            "StandardSSD_LRS",
+            "Not set",
+            "complete displayed Azure profile",
+        ] {
+            assert!(text.contains(value), "missing {value}");
+        }
+        assert!(!text.contains("US cents/hour") && !state.consent && !home.root().exists());
+        state.action(Action::Cancel, &home, OWNER, &scope.config, &ctx);
+        assert!(!state.is_active() && !home.root().exists());
+    }
+
+    #[test]
+    fn azure_profile_drift_invalidates_review_and_refuses_confirmation_before_dispatch() {
+        for field in 0..8 {
+            let (_temp, home, scope, mut state) = fixture(false);
+            let prepared = api::preview_configured_remote_workspace(
+                &home,
+                &scope.config,
+                OWNER,
+                form::tests::azure().draft(i64::MAX).expect("draft"),
+            )
+            .expect("preview");
+            state.review = Some(paint::Review::new(prepared, &scope.config));
+            state.consent = true;
+            let mut changed = scope.config.clone();
+            let profile = &mut changed.azure[0];
+            match field {
+                0 => profile.name.push('2'),
+                1 => profile.subscription_id = "22222222-2222-4222-8222-222222222222".into(),
+                2 => profile.location = "westeurope".into(),
+                3 => profile.vm_size = "Standard_D8s_v3".into(),
+                4 => profile.image_pull_identity_id.push('2'),
+                5 => profile.declared_hourly_cost_micros += 1,
+                6 => profile.registry_login_server = "other.azurecr.io".into(),
+                _ => profile.disk_sku = horizon_core::cloud_run::azure::AzureDiskSku::PremiumLrs,
+            }
+            state.action(Action::Confirm, &home, OWNER, &changed, &Context::default());
+            assert!(state.pending.is_none() && state.attempts.is_empty());
+            state.sync(Some((&home, OWNER, &changed)));
+            assert!(state.review.is_none() && !state.consent && !state.is_active() && !home.root().exists());
+        }
+    }
+
     #[test]
     fn actual_preview_worker_is_single_flight_and_never_creates_home() {
         for cloud in [false, true] {
