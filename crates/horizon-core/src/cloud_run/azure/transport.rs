@@ -43,6 +43,9 @@ impl AzureDeploymentState {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct AzureVmView {
     pub id: String,
+    /// ARM's immutable per-instance identifier (`properties.vmId`). The resource ID is a
+    /// path and survives a delete-and-recreate under the same name; this does not.
+    pub instance_id: Option<String>,
     pub name: String,
     pub location: String,
     pub vm_size: String,
@@ -406,6 +409,15 @@ fn long_running(status: u16) -> AzureLongRunningState {
     }
 }
 
+/// `vmId` is a lowercase UUID; anything else is not an instance identity worth pinning.
+fn valid_instance_id(id: &str) -> bool {
+    id.len() == 36
+        && id.bytes().enumerate().all(|(index, byte)| match index {
+            8 | 13 | 18 | 23 => byte == b'-',
+            _ => byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase(),
+        })
+}
+
 fn text(value: &serde_json::Value, pointer: &str) -> Option<String> {
     value
         .pointer(pointer)
@@ -590,6 +602,7 @@ impl AzureManagementTransport for AzureArmHttp {
             .find(|code| code.starts_with("PowerState/"));
         Ok(Some(AzureVmView {
             id,
+            instance_id: text(&value, "/properties/vmId").filter(|id| valid_instance_id(id)),
             name: observed_name,
             location: text(&value, "/location").unwrap_or_default(),
             vm_size: text(&value, "/properties/hardwareProfile/vmSize").unwrap_or_default(),

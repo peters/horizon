@@ -1,7 +1,7 @@
 pub(super) use super::super::{
     AzureClient, AzureDeploymentState, AzureError, AzureGroupInfo, AzureLongRunningState, AzureManagementTransport,
     AzureRunCommand, AzureVmView, AzureWorker, SSH_USERNAME,
-    deployment::{DEPLOYMENT_NAME, SSH_PORT, TAG_CLIENT_KEY_DIGEST, TAG_JOB, worker_tags},
+    deployment::{DEPLOYMENT_NAME, SSH_PORT, TAG_CLIENT_KEY_DIGEST, TAG_IMAGE_REF_DIGEST, TAG_JOB, worker_tags},
     resource_group_name,
 };
 pub(super) use super::{OTHER_SUB, SUB, ed25519_key, profile, target};
@@ -249,9 +249,13 @@ pub(super) fn group_info(name: &str, tags: BTreeMap<String, String>, state: &str
     }
 }
 
+/// The instance identity every scripted VM carries unless a test replaces the instance.
+pub(super) const INSTANCE: &str = "3f2c9a1e-5d4b-4c6a-8e7f-0a1b2c3d4e5f";
+
 pub(super) fn vm(power: &str, tags: &BTreeMap<String, String>) -> AzureVmView {
     AzureVmView {
         id: format!("/subscriptions/{SUB}/resourceGroups/g/providers/Microsoft.Compute/virtualMachines/worker"),
+        instance_id: Some(INSTANCE.into()),
         name: "worker".into(),
         location: "northeurope".into(),
         vm_size: "Standard_D4s_v3".into(),
@@ -354,6 +358,7 @@ pub(super) fn owned(s: &Scenario) -> AzureGroupInfo {
 pub(super) const MISMATCH: AzureError = AzureError::ResourceIdentityMismatch;
 
 mod creation;
+mod instance;
 mod observation;
 mod running;
 mod start;

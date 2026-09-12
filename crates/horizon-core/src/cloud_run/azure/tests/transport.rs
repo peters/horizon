@@ -107,10 +107,53 @@ fn vm_url(suffix: &str) -> String {
     )
 }
 
+const VM_INSTANCE: &str = "3f2c9a1e-5d4b-4c6a-8e7f-0a1b2c3d4e5f";
+
 fn vm_body(power: &str, name: &str, group: &str) -> String {
+    vm_body_with_instance(power, name, group, &format!(r#""vmId":"{VM_INSTANCE}","#))
+}
+
+fn vm_body_with_instance(power: &str, name: &str, group: &str, instance: &str) -> String {
     format!(
-        r#"{{"id":"/subscriptions/{SUB}/resourceGroups/{group}/providers/Microsoft.Compute/virtualMachines/worker","name":"{name}","location":"northeurope","tags":{{"horizon-job-id":"j"}},"properties":{{"provisioningState":"Succeeded","hardwareProfile":{{"vmSize":"Standard_D4s_v3"}},"instanceView":{{"statuses":[{{"code":"ProvisioningState/succeeded"}},{{"code":"PowerState/{power}"}}]}}}}}}"#
+        r#"{{"id":"/subscriptions/{SUB}/resourceGroups/{group}/providers/Microsoft.Compute/virtualMachines/worker","name":"{name}","location":"northeurope","tags":{{"horizon-job-id":"j"}},"properties":{{{instance}"provisioningState":"Succeeded","hardwareProfile":{{"vmSize":"Standard_D4s_v3"}},"instanceView":{{"statuses":[{{"code":"ProvisioningState/succeeded"}},{{"code":"PowerState/{power}"}}]}}}}}}"#
     )
+}
+
+#[test]
+fn virtual_machine_views_carry_only_a_well_formed_instance_identity() {
+    let expanded = format!("{}&$expand=instanceView", vm_url(""));
+    let malformed = [
+        "",
+        r#""vmId":"3F2C9A1E-5D4B-4C6A-8E7F-0A1B2C3D4E5F","#,
+        r#""vmId":"3f2c9a1e5d4b4c6a8e7f0a1b2c3d4e5f","#,
+        r#""vmId":"3f2c9a1e-5d4b-4c6a-8e7f-0a1b2c3d4e5f ","#,
+        r#""vmId":7,"#,
+        r#""vmId":"../3f2c9a1e-5d4b-4c6a-8e7f-0a1b2c3d4e5f","#,
+    ];
+    let mut expected = vec![expect(
+        "GET",
+        expanded.clone(),
+        200,
+        &vm_body("running", "worker", GROUP),
+        None,
+    )];
+    expected.extend(malformed.iter().map(|instance| {
+        expect(
+            "GET",
+            expanded.clone(),
+            200,
+            &vm_body_with_instance("running", "worker", GROUP, instance),
+            None,
+        )
+    }));
+    let (transport, calls) = http(expected);
+    let vm = transport.get_vm(GROUP, "worker").expect("vm").expect("present");
+    assert_eq!(vm.instance_id.as_deref(), Some(VM_INSTANCE));
+    for instance in malformed {
+        let vm = transport.get_vm(GROUP, "worker").expect("vm").expect("present");
+        assert_eq!(vm.instance_id, None, "{instance:?} is not an instance identity");
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 1 + malformed.len());
 }
 
 #[test]

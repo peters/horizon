@@ -326,9 +326,14 @@ impl AzureClient {
             ..observation.worker
         };
         let ssh = match (observation.lifecycle, observation.host.as_deref()) {
-            (AzureLifecycle::Running, Some(host)) => {
-                self.attested_endpoint(&worker, host, target, ssh_public_key, placement)?
-            }
+            (AzureLifecycle::Running, Some(host)) => self.attested_endpoint(
+                &worker,
+                observation.vm.as_ref(),
+                host,
+                target,
+                ssh_public_key,
+                placement,
+            )?,
             _ => None,
         };
         let lifecycle = match observation.lifecycle {
