@@ -6,6 +6,7 @@ use uuid::Uuid;
 mod artifact_digest;
 pub mod azure;
 pub mod interactive_worker;
+pub mod interactive_worker_start;
 pub mod interactive_worker_stop;
 pub mod local_docker;
 pub mod runpod;

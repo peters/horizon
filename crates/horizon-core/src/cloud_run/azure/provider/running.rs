@@ -6,21 +6,31 @@ use super::super::{
     deployment::{SSH_PORT, identity_tags},
     transport::remaining,
 };
-use super::{AzureClient, Placement, SSH_USERNAME, vm_lifecycle};
+use super::{AzureClient, Observation, Placement, SSH_USERNAME, vm_lifecycle};
 use crate::cloud_run::{
     WorkerTarget,
     interactive_worker::{InteractiveWorker, InteractiveWorkerSshEndpoint, valid_ssh_public_key},
+    interactive_worker_start::{InteractiveWorkerStart, InteractiveWorkerStartProvider},
     interactive_worker_stop::{InteractiveWorkerStop, InteractiveWorkerStopProvider},
 };
 use std::time::{Duration, Instant};
 
-/// Polling schedule for a deallocation to be observed after Azure accepted it;
-/// D-series deallocations commonly take one to three minutes.
-const STOP_BACKOFF_MS: [u64; 14] = [
-    0, 1_000, 2_000, 4_000, 8_000, 15_000, 30_000, 30_000, 30_000, 30_000, 30_000, 30_000, 30_000, 30_000,
-];
+/// Polling schedule for a power transition (deallocation or start) to be observed after
+/// Azure accepted it; D-series transitions commonly take one to three minutes. The last
+/// step repeats until the absolute bound ends the wait.
+const POWER_BACKOFF_MS: [u64; 7] = [0, 1_000, 2_000, 4_000, 8_000, 15_000, 30_000];
 /// Absolute bound on that wait, sleeps and requests included.
-const STOP_BOUND: Duration = Duration::from_secs(300);
+const POWER_BOUND: Duration = Duration::from_secs(300);
+/// Budget kept back from the last sleep so one more poll fits before the deadline: the
+/// final observation happens this close to the deadline, which is as near as a bounded
+/// request allows (an ARM lookup normally answers in well under a second).
+const FINAL_POLL_RESERVE: Duration = Duration::from_secs(5);
+/// Polls a test may observe before the wait is treated as exhausted (tests skip the
+/// sleeps, so the absolute bound alone would spin for its whole length).
+#[cfg(test)]
+const TEST_POLLS: usize = 14;
+/// The non-billed state the worker must hold after a stop.
+const RETAINED: AzureLifecycle = AzureLifecycle::Deallocated;
 
 /// Trusted source for the runtime SSH host key of one exact worker; `None` keeps a
 /// running worker in `Provisioning`. Implementations must obtain the key through a
@@ -159,24 +169,51 @@ impl InteractiveWorkerStopProvider for AzureClient {
                 Err(error) => return Err(error),
             }
         }
-        let group = current.worker.resource_group.clone();
-        // An absolute deadline covers the sleeps, and each request is handed only what
-        // is left of it, so the wait cannot stretch past the bound on slow requests.
-        let deadline = Instant::now() + STOP_BOUND;
-        for delay_ms in STOP_BACKOFF_MS {
+        match self.await_power(&current, &expected, RETAINED)? {
+            Some(_) => Ok(InteractiveWorkerStop::Stopped),
+            None => Err(AzureError::StopUnverified),
+        }
+    }
+}
+
+impl AzureClient {
+    /// Wait for the exact worker's VM to reach `target`, under an absolute deadline that
+    /// covers the sleeps with each request handed only what is left of it. The wait spans
+    /// minutes, so every poll re-proves the group (identity tags, recorded ID, not
+    /// deleting) and the VM (identity tags): a recreated or retagged worker at the same
+    /// path is an identity error, never this worker's transition. `None` means the
+    /// transition was not verified within the bound (vanished, failed, deleting, or late).
+    fn await_power(
+        &self,
+        current: &Observation,
+        expected: &std::collections::BTreeMap<String, String>,
+        target: AzureLifecycle,
+    ) -> Result<Option<crate::cloud_run::azure::AzureVmView>, AzureError> {
+        let group = &current.worker.resource_group;
+        let deadline = Instant::now() + POWER_BOUND;
+        let last = POWER_BACKOFF_MS[POWER_BACKOFF_MS.len() - 1];
+        let schedule = POWER_BACKOFF_MS.into_iter().chain(std::iter::repeat(last));
+        #[cfg(test)]
+        let schedule = schedule.take(TEST_POLLS);
+        for delay_ms in schedule {
+            // Only the absolute deadline ends the wait; a transition that completes late
+            // in the bound is still observed.
             let Some(left) = remaining(deadline) else {
                 break;
             };
-            if !cfg!(test) && delay_ms > 0 {
-                std::thread::sleep(Duration::from_millis(delay_ms).min(left));
+            // Never sleep into the deadline: the sleep stops a small reserve short of
+            // it, and the poll made inside that reserve, a few seconds before the
+            // deadline, is the last one, so a transition that completes at the very end
+            // of the bound is still observed without busy-polling.
+            let sleep_for = Duration::from_millis(delay_ms).min(left.saturating_sub(FINAL_POLL_RESERVE));
+            if !cfg!(test) && !sleep_for.is_zero() {
+                std::thread::sleep(sleep_for);
             }
-            // The wait spans minutes: every poll re-proves the group and the VM through
-            // the same identity checks, so a recreated or retagged worker at the same
-            // path is never reported as this one being stopped.
             let Some(budget) = remaining(deadline) else {
                 break;
             };
-            let Some(live) = self.transport.get_resource_group_within(&group, budget)? else {
+            let final_poll = budget <= FINAL_POLL_RESERVE;
+            let Some(live) = self.transport.get_resource_group_within(group, budget)? else {
                 break;
             };
             if expected.iter().any(|(key, value)| live.tags.get(key) != Some(value))
@@ -184,25 +221,108 @@ impl InteractiveWorkerStopProvider for AzureClient {
             {
                 return Err(AzureError::ResourceIdentityMismatch);
             }
-            // Disks and address are going away with the group: not a retained stop.
+            // Disks and address are going away with the group: no state is retained.
             if live.provisioning_state == "Deleting" {
                 break;
             }
             let Some(budget) = remaining(deadline) else {
                 break;
             };
-            let Some(vm) = self.transport.get_vm_within(&group, WORKER_VM_NAME, budget)? else {
+            let Some(vm) = self.transport.get_vm_within(group, WORKER_VM_NAME, budget)? else {
                 break;
             };
             if expected.iter().any(|(key, value)| vm.tags.get(key) != Some(value)) {
                 return Err(AzureError::ResourceIdentityMismatch);
             }
             match vm_lifecycle(&vm) {
-                AzureLifecycle::Deallocated => return Ok(InteractiveWorkerStop::Stopped),
+                lifecycle if lifecycle == target => return Ok(Some(vm)),
                 AzureLifecycle::Failed | AzureLifecycle::Deleting => break,
+                _ if final_poll => break,
                 _ => {}
             }
         }
-        Err(AzureError::StopUnverified)
+        Ok(None)
+    }
+}
+
+impl InteractiveWorkerStartProvider for AzureClient {
+    /// Start the VM's compute again after an explicit stop: the retained disks and the
+    /// static address come back under the same identity. A running worker is never
+    /// re-posted; a VM already starting is only awaited. Once running, the same worker
+    /// is observed again through the readiness path, so `Started` carries `Ready` only
+    /// with a freshly attested host key and `Provisioning` otherwise.
+    fn start_worker(&self, worker: &InteractiveWorker) -> Result<InteractiveWorkerStart, Self::Error> {
+        let Some((handle, group, expected)) = self.owned_handle(worker)? else {
+            return Ok(InteractiveWorkerStart::AlreadyAbsent);
+        };
+        let Some(current) = self.observe(handle.clone(), &group, &expected, None, Placement::Ignore)? else {
+            return Err(AzureError::StartUnverified);
+        };
+        let Some(vm) = current.vm.as_ref() else {
+            return Err(AzureError::StartUnverified);
+        };
+        // A worker whose group is being deleted or whose deployment failed is not a
+        // stopped worker, whatever its leftover VM reports: nothing is started.
+        if matches!(current.lifecycle, AzureLifecycle::Deleting | AzureLifecycle::Failed) {
+            return Err(AzureError::StartUnverified);
+        }
+        let starting = vm.power_state.as_deref() == Some("PowerState/starting");
+        match vm_lifecycle(vm) {
+            AzureLifecycle::Running => {
+                let status = self.status(current, &worker.target, &worker.ssh_public_key, Placement::Ignore)?;
+                return Ok(InteractiveWorkerStart::AlreadyRunning(status));
+            }
+            AzureLifecycle::Deallocated | AzureLifecycle::StoppedAllocated => {}
+            AzureLifecycle::Transitioning if starting => {}
+            AzureLifecycle::Transitioning
+            | AzureLifecycle::Failed
+            | AzureLifecycle::Deleting
+            | AzureLifecycle::Unknown => return Err(AzureError::StartUnverified),
+        }
+        if !starting {
+            match self.transport.start_vm(&current.worker.resource_group, WORKER_VM_NAME) {
+                // Compute answers 409 while a start is already in flight.
+                Ok(Some(_)) | Err(AzureError::UnexpectedStatus { status: 409, .. }) => {}
+                // Vanished between the observation and the POST: nothing to start, and
+                // never something to allocate.
+                Ok(None) => return Err(AzureError::StartUnverified),
+                Err(error) => return Err(error),
+            }
+        }
+        if self
+            .await_power(&current, &expected, AzureLifecycle::Running)?
+            .is_none()
+        {
+            return Err(AzureError::StartUnverified);
+        }
+        // Running is not ready: the same worker goes through the full observation and
+        // attestation path before anything is claimed about it.
+        let Some(live) = self.owned_group(&handle.resource_group, &expected)? else {
+            return Err(AzureError::StartUnverified);
+        };
+        if !live.id.eq_ignore_ascii_case(&handle.group_id) {
+            return Err(AzureError::ResourceIdentityMismatch);
+        }
+        let Some(fresh) = self.observe(handle, &live, &expected, None, Placement::Ignore)? else {
+            return Err(AzureError::StartUnverified);
+        };
+        // Only a worker whose VM is physically running is a started worker; anything
+        // else observed after the wait (a failure, a deletion begun meanwhile, a new
+        // transition, an unreadable power state) stays unverified. A running VM without
+        // a usable address is observed as Unknown; it is started, just not reachable, and
+        // is reported as Provisioning rather than Ready.
+        let running_vm = fresh
+            .vm
+            .as_ref()
+            .is_some_and(|vm| vm_lifecycle(vm) == AzureLifecycle::Running);
+        if !running_vm || !matches!(fresh.lifecycle, AzureLifecycle::Running | AzureLifecycle::Unknown) {
+            return Err(AzureError::StartUnverified);
+        }
+        let fresh = Observation {
+            lifecycle: AzureLifecycle::Running,
+            ..fresh
+        };
+        let status = self.status(fresh, &worker.target, &worker.ssh_public_key, Placement::Ignore)?;
+        Ok(InteractiveWorkerStart::Started(status))
     }
 }
