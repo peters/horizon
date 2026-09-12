@@ -50,6 +50,20 @@ impl RemoteSshIdentityStore {
         }
     }
 
+    /// Read-only path checks before another store writes beneath this home.
+    /// A missing home is allowed only below existing trusted ancestors. This does
+    /// not bind an inode or protect against same-user concurrent path replacement.
+    pub(crate) fn validate_home(&self) -> Result<(), RemoteSshIdentityError> {
+        #[cfg(target_os = "linux")]
+        {
+            linux::validate_home(&self.home)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Err(RemoteSshIdentityError::UnsupportedPlatform)
+        }
+    }
+
     /// Retain a candidate for a new, unclaimed allocation before reserving its public key.
     /// Reuses an interrupted candidate for these exact IDs; never overwrites a key.
     /// This operation must not be used to recover an already reserved/claimed allocation.

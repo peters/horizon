@@ -12,7 +12,7 @@ mod linux {
     use crate::cloud_run::{GitCommitSha, local_docker::LocalDockerProfile, runpod::RunPodProfile};
     use std::{
         cell::Cell,
-        os::unix::fs::PermissionsExt,
+        os::unix::fs::{DirBuilderExt, PermissionsExt, symlink},
         sync::{
             Arc, Barrier,
             atomic::{AtomicUsize, Ordering},
@@ -263,6 +263,132 @@ mod linux {
             }
             assert!(!f.home.root().exists());
             assert!(!other_home.root().exists());
+        }
+    }
+
+    fn retargeted_submit(relative: Option<&str>) {
+        let f = Fixture::new();
+        let destinations = [f.directory.path().join("first"), f.directory.path().join("second")];
+        for destination in &destinations {
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(destination)
+                .expect("target");
+        }
+        let link = f.directory.path().join("selected");
+        symlink(&destinations[0], &link).expect("initial selection");
+        let home = HorizonHome::from_root(relative.map_or_else(|| link.clone(), |relative| link.join(relative)));
+        let prepared = preview_configured_remote_workspace(&home, &f.config, OWNER, Fixture::draft(false))
+            .expect("filesystem-free preview");
+        let locator = prepared.locator().clone();
+        let approval = consent(&prepared);
+        std::fs::remove_file(&link).expect("remove owned link");
+        symlink(&destinations[1], &link).expect("retarget owned link");
+        let attempt = submit_configured_remote_workspace(&home, &f.config, OWNER, prepared, approval);
+        assert!(attempt.locator == locator);
+        for destination in &destinations {
+            let destination = HorizonHome::from_root(destination.join(relative.unwrap_or_default()));
+            assert!(!destination.root().join("remote-ssh-identities").exists());
+            assert!(
+                !destination.cloud_workflow_store_path().exists(),
+                "no wrong-home database"
+            );
+            assert!(!destination.root().join("cloud-run").exists());
+        }
+        assert!(matches!(attempt.result, Err(Error::StorageUnavailable)));
+    }
+
+    #[test]
+    fn public_submit_refuses_retargeted_home_before_writing() {
+        for relative in [None, Some(""), Some(".")] {
+            retargeted_submit(relative);
+        }
+    }
+
+    #[test]
+    fn public_submit_refuses_retargeted_ancestor_before_writing() {
+        retargeted_submit(Some("home"));
+    }
+
+    #[test]
+    fn recovery_refuses_a_linked_home_before_adopting_a_saved_record() {
+        let f = Fixture::new();
+        let prepared = f.preview(false);
+        f.submit(&prepared).expect("saved allocation");
+        let link = f.directory.path().join("selected");
+        symlink(f.home.root(), &link).expect("linked home");
+        let home = HorizonHome::from_root(link);
+        let locator = RemoteWorkspaceSetupLocator::new(&home, OWNER, &prepared.locator.workspace_local_id)
+            .expect("lexical locator");
+        let before = std::fs::read(f.home.cloud_workflow_store_path()).expect("saved bytes");
+        assert!(matches!(
+            check_configured_remote_workspace_setup(&home, &f.config, OWNER, &locator),
+            Err(Error::StorageUnavailable)
+        ));
+        assert_eq!(
+            std::fs::read(f.home.cloud_workflow_store_path()).expect("unchanged"),
+            before
+        );
+    }
+
+    #[test]
+    fn recovery_rechecks_home_before_opening_a_writable_store() {
+        let f = Fixture::new();
+        let prepared = f.preview(false);
+        let allocation = reserve(&f.store(), &f.submit(&prepared).expect("allocation"));
+        let link = f.directory.path().join("selected");
+        symlink(f.home.root(), &link).expect("initial home");
+        let home = HorizonHome::from_root(link.clone());
+        let observed = CloudWorkflowStore::open_read_only(&home).expect("original read-only store");
+        let other = HorizonHome::from_root(f.directory.path().join("other"));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(other.root())
+            .expect("other");
+        std::fs::remove_file(&link).expect("remove owned link");
+        symlink(other.root(), &link).expect("retarget owned link");
+        let result = check_saved_with(&home, &f.config, &observed, allocation.workspace().clone(), |_, _| {
+            panic!("no recovery")
+        });
+        assert!(
+            !other.cloud_workflow_store_path().exists(),
+            "no redirected recovery store"
+        );
+        assert!(!other.root().join("cloud-run").exists());
+        assert!(matches!(result, Err(Error::StorageUnavailable)));
+        assert_eq!(
+            observed
+                .load_remote_allocation(OWNER, &prepared.locator.workspace_local_id)
+                .expect("load"),
+            Some(allocation)
+        );
+    }
+
+    #[test]
+    fn untrusted_home_components_refuse_before_storage_or_dispatch() {
+        for mode in 0..5 {
+            let mut f = Fixture::new();
+            match mode {
+                0 => {
+                    std::fs::create_dir(f.home.root()).expect("home");
+                    std::fs::set_permissions(f.home.root(), std::fs::Permissions::from_mode(0o770)).expect("mode");
+                }
+                1 => std::fs::set_permissions(f.directory.path(), std::fs::Permissions::from_mode(0o770))
+                    .expect("untrusted parent"),
+                2 => std::fs::write(f.home.root(), b"not a directory").expect("file"),
+                3 => f.home = HorizonHome::from_root(f.directory.path().join("missing-parent/home")),
+                _ => {
+                    std::fs::create_dir(f.directory.path().join("parent")).expect("parent");
+                    f.home = HorizonHome::from_root(f.directory.path().join("parent/../home"));
+                }
+            }
+            let prepared = f.preview(false);
+            let result = submit_with(&f.home, &f.config, OWNER, &prepared, &consent(&prepared), |_, _| {
+                panic!("no dispatch")
+            });
+            assert!(matches!(result, Err(Error::StorageUnavailable)));
+            assert!(!f.home.cloud_workflow_store_path().exists());
+            assert!(!f.home.root().join("remote-ssh-identities").exists());
         }
     }
 

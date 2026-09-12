@@ -28,6 +28,8 @@ pub struct RemoteWorkspaceSetupDraft {
 }
 
 /// Recovery coordinates, not authority. Preserve before dispatch and after every failure.
+/// The filesystem-free preview binds a lexical home, not a directory inode. Storage
+/// access rejects symlinked/untrusted homes; same-user path replacement is not fenced.
 #[derive(Clone, Eq, PartialEq)]
 pub struct RemoteWorkspaceSetupLocator {
     home: PathBuf,
@@ -234,6 +236,7 @@ fn submit_with(
     }
     validate_selection(config, target, prepared.network_volume.as_ref())?;
     valid_expiry(prepared.retain_until_millis)?;
+    validate_home(home)?;
     let store = CloudWorkflowStore::open(home).map_err(|_| Error::StorageUnavailable)?;
     let saved = store
         .create_remote_workspace(owner, &prepared.state)
@@ -299,6 +302,7 @@ fn check_with(
 ) -> Result<ConfiguredWorkspaceSetupObservation, Error> {
     platform()?;
     locator.check(home, owner)?;
+    validate_home(home)?;
     let store = CloudWorkflowStore::open_read_only(home).map_err(|_| Error::StorageUnavailable)?;
     let Some(saved) = store
         .load_remote_workspace(owner, &locator.workspace_local_id)
@@ -355,6 +359,7 @@ fn check_saved_with(
     }
     validate_selection(config, &saved.state().spec.target, selection.as_ref())?;
     // Only an existing, validated eligible allocation reaches the writable recovery store.
+    validate_home(home)?;
     let writable = CloudWorkflowStore::open(home).map_err(|_| Error::StorageUnavailable)?;
     super::validate_allocation(&writable, &allocation).map_err(|_| Error::ContextChanged)?;
     let result = recover(&writable, &allocation)?;
@@ -430,6 +435,12 @@ fn validate_selection(
         }
         _ => Err(Error::InvalidRequest),
     }
+}
+
+fn validate_home(home: &HorizonHome) -> Result<(), Error> {
+    RemoteSshIdentityStore::new(home)
+        .validate_home()
+        .map_err(|_| Error::StorageUnavailable)
 }
 
 fn local_provider(

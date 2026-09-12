@@ -54,6 +54,15 @@ pub(super) fn recover(
     Ok(identity)
 }
 
+pub(super) fn validate_home(home: &Path) -> Result<(), Error> {
+    // A trailing separator or `.` must not make symlink_metadata follow the final link.
+    let root = trusted_home(&home.components().collect::<PathBuf>())?;
+    match check_directory(&root, false, false) {
+        Ok(()) | Err(Error::Missing) => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
 fn directory(home: &Path, create: bool) -> Result<PathBuf, Error> {
     let root = trusted_home(home)?;
     check_directory(&root, create, false)?;
