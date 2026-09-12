@@ -250,7 +250,7 @@ fn validate_no_provider_binding_schema(connection: &Connection) -> Result<(), Cl
     let partial: bool = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM main.sqlite_schema
          WHERE tbl_name = 'remote_provider_bindings' COLLATE NOCASE
-            OR name LIKE 'remote_provider_bindings%')",
+            OR name LIKE 'remote!_provider!_bindings%' ESCAPE '!')",
         [],
         |row| row.get(0),
     )?;
@@ -264,7 +264,7 @@ fn validate_provider_binding_schema(connection: &Connection) -> Result<(), Cloud
     let matches: bool = connection.query_row(
         "SELECT COUNT(*) = 4 AND COUNT(CASE WHEN sql IN (?1, ?2, ?3, ?4) THEN 1 END) = 4
          FROM main.sqlite_schema WHERE (tbl_name = 'remote_provider_bindings' COLLATE NOCASE
-             OR name LIKE 'remote_provider_bindings%') AND sql IS NOT NULL",
+             OR name LIKE 'remote!_provider!_bindings%' ESCAPE '!') AND sql IS NOT NULL",
         PROVIDER_BINDING_SCHEMA,
         |row| row.get(0),
     )?;

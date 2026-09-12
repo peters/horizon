@@ -122,6 +122,7 @@ fn malformed_provider_schema_fails_without_repair_or_snapshot_changes() {
         "DROP TRIGGER remote_provider_bindings_no_delete",
         "CREATE INDEX unexpected_provider_index ON remote_provider_bindings(subscription_id)",
         "CREATE INDEX remote_provider_bindings_orphan ON cloud_workflows(created_at_millis)",
+        "CREATE INDEX REMOTE_PROVIDER_BINDINGS_orphan ON cloud_workflows(created_at_millis)",
         "ALTER TABLE remote_provider_bindings ADD COLUMN unexpected TEXT",
     ] {
         let (fixture, allocation) = allocated();
@@ -185,6 +186,59 @@ fn legacy_partial_provider_objects_do_not_gain_a_binding_or_schema_upgrade() {
                 .expect("unchanged"),
             version
         );
+    }
+}
+
+#[test]
+fn unrelated_similarly_named_objects_remain_readable_and_upgradeable() {
+    for version in 4..=7 {
+        let (fixture, allocation) = allocated();
+        let connection = open_connection(fixture.store.path()).expect("raw store");
+        if version < 7 {
+            connection
+                .execute_batch("DROP TABLE remote_provider_bindings")
+                .expect("v6");
+        }
+        if version < 6 {
+            connection
+                .execute_batch("DROP TABLE remote_network_volume_selections")
+                .expect("v5");
+        }
+        if version == 4 {
+            connection
+                .execute_batch("DROP TABLE remote_first_pin_intents")
+                .expect("v4");
+        }
+        connection
+            .pragma_update(None, "user_version", version)
+            .expect("fixture version");
+        connection
+            .execute_batch(
+                "CREATE INDEX remoteXprovider_bindings_extra ON cloud_workflows(created_at_millis);
+             CREATE INDEX remote_providerYbindings_extra ON cloud_workflows(created_at_millis)",
+            )
+            .expect("unrelated indexes");
+        let before = saved_bytes(&connection);
+        let reader =
+            CloudWorkflowStore::open_read_only_path(fixture.store.path()).expect("unrelated namespace is readable");
+        assert_eq!(
+            reader.load_remote_allocation(OWNER, "workspace").expect("allocation"),
+            Some(allocation.clone())
+        );
+        assert_eq!(
+            connection
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .expect("version"),
+            version
+        );
+        let upgraded =
+            CloudWorkflowStore::open_path(fixture.store.path()).expect("unrelated namespace permits upgrade");
+        assert_eq!(
+            upgraded.load_remote_allocation(OWNER, "workspace").expect("allocation"),
+            Some(allocation)
+        );
+        assert_eq!(saved_bytes(&connection), before);
+        assert_eq!(binding_count(&connection), 0);
     }
 }
 
