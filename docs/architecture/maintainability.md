@@ -510,6 +510,11 @@ back into large multi-purpose modules.
   Existing-store observers use clone-preserved read-only handles, without private-path
   creation or migration. Single workspace/allocation getters always use read-only
   connections; live WAL updates remain visible without granting schema repair.
+  Explicit existing-only writers refuse creation, migration, permission repair and
+  journal-mode changes; every writable connection requires the current schema.
+  Unix device/inode checks reject detected replacement under a stable trusted directory;
+  they do not protect against concurrent same-user path swaps. This new mode refuses
+  non-Unix platforms; existing constructors and domain-specific CAS admission are unchanged.
 - `cloud_run/store/remote_workspaces.rs` owns validated, session-owned remote
   snapshot storage with exact revisions and bounded recovery. Replacement
   invariants live in its `validation.rs` leaf. These records are independent of
