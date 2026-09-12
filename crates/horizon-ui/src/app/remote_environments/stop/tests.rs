@@ -602,4 +602,86 @@ mod checks {
         );
         assert_eq!(std::fs::read(store.path()).expect("retained"), before);
     }
+
+    #[derive(Eq, PartialEq)]
+    struct StoreSnapshot {
+        bytes: Vec<u8>,
+        version: i64,
+        journal: String,
+    }
+
+    fn store_snapshot(path: &std::path::Path) -> StoreSnapshot {
+        let reader = rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .expect("read-only fixture snapshot");
+        StoreSnapshot {
+            bytes: std::fs::read(path).expect("committed bytes"),
+            version: reader
+                .pragma_query_value(None, "user_version", |row| row.get(0))
+                .expect("version"),
+            journal: reader
+                .pragma_query_value(None, "journal_mode", |row| row.get(0))
+                .expect("journal mode"),
+        }
+    }
+
+    #[test]
+    fn check_refuses_legacy_and_drifted_store_without_schema_or_journal_writes() {
+        let fixture = tempfile::tempdir().expect("fixture");
+        for (name, sql) in [
+            (
+                "legacy-six",
+                "DROP TABLE remote_provider_bindings; PRAGMA user_version = 6;",
+            ),
+            ("missing-index", "DROP INDEX remote_workspaces_session;"),
+            (
+                "unexpected-trigger",
+                "CREATE TRIGGER unexpected_workflow_update AFTER UPDATE ON cloud_workflows
+                 BEGIN DELETE FROM remote_workspaces; END;",
+            ),
+        ] {
+            let home = HorizonHome::from_root(fixture.path().join(name));
+            let store = CloudWorkflowStore::open(&home).expect("owned fixture");
+            let connection = rusqlite::Connection::open(store.path()).expect("fixture writer");
+            connection.execute_batch(sql).expect("synthetic schema change");
+            connection
+                .pragma_update(None, "journal_mode", "DELETE")
+                .expect("committed fixture");
+            drop(connection);
+            CloudWorkflowStore::open_read_only(&home).expect("existing reader admits this fixture");
+            let before = store_snapshot(store.path());
+            let result = execute_check(&home, &config(), &check_summary());
+            let after = store_snapshot(store.path());
+            assert!(
+                before == after,
+                "{name}: {result:?}; version {} -> {}; journal {} -> {}; bytes equal: {}",
+                before.version,
+                after.version,
+                before.journal,
+                after.journal,
+                before.bytes == after.bytes
+            );
+            assert!(
+                matches!(result, Err(StopError::StorageUnavailable)),
+                "{name}: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn current_store_check_reaches_configured_admission_without_storage_changes() {
+        let fixture = tempfile::tempdir().expect("fixture");
+        let home = HorizonHome::from_root(fixture.path().join("current"));
+        let store = CloudWorkflowStore::open(&home).expect("owned current store");
+        let connection = rusqlite::Connection::open(store.path()).expect("fixture writer");
+        connection
+            .pragma_update(None, "journal_mode", "DELETE")
+            .expect("committed fixture");
+        drop(connection);
+        let before = store_snapshot(store.path());
+        assert!(matches!(
+            execute_check(&home, &config(), &check_summary()),
+            Err(StopError::Check(ConfiguredStopConfirmationError::Configuration(_)))
+        ));
+        assert!(store_snapshot(store.path()) == before);
+    }
 }

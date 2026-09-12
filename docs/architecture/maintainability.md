@@ -476,7 +476,9 @@ back into large multi-purpose modules.
   explicit actions for retained persistent local workers; timed/cloud Stop stays
   disabled. A separate Check saved Stop action observes existing RunPod intent in
   the same single-flight slot, without replay or private SSH identity. Closing
-  invalidates presentation, not an admitted operation.
+  invalidates presentation, not an admitted operation. Its completion writer uses
+  existing-only, non-migrating store admission; legacy or corrupt storage is refused
+  before configured-provider admission.
   Completion invalidates provider observations and refreshes saved inventory while
   keeping its target-bound result readable. All mutation remains in core coordination.
 - `cloud_run/runpod.rs` coordinates provider operations and exact ownership

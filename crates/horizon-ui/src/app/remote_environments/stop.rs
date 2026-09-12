@@ -387,9 +387,8 @@ fn execute_check(
     if !check_supported(expected) {
         return Err(StopError::Check(ConfiguredStopConfirmationError::UnsupportedProvider));
     }
-    // A check must not initialize an absent/corrupt store. Completion intentionally needs a writer.
-    let reader = CloudWorkflowStore::open_read_only(home).map_err(|_| StopError::StorageUnavailable)?;
-    let store = CloudWorkflowStore::open_path(reader.path()).map_err(|_| StopError::StorageUnavailable)?;
+    // Completion needs a writer, but checking must not initialize or migrate storage.
+    let store = CloudWorkflowStore::open_existing_without_migration(home).map_err(|_| StopError::StorageUnavailable)?;
     confirm_configured_remote_environment_stop(&store, config, expected).map_err(StopError::Check)
 }
 

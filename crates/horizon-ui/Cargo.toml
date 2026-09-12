@@ -46,3 +46,6 @@ tokio.workspace = true
 surge-core.workspace = true
 transcribe-cpp = { workspace = true, optional = true }
 cpal = { workspace = true, optional = true }
+
+[dev-dependencies]
+rusqlite.workspace = true
