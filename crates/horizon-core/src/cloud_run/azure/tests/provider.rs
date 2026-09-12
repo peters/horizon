@@ -103,6 +103,8 @@ pub(super) struct Plane {
     /// How long every bounded lookup takes on the scenario's clock.
     pub(super) request_takes: Duration,
     pub(super) clock: Option<FakeClock>,
+    /// Every budget a bounded lookup was handed, in order.
+    pub(super) budgets: Vec<Duration>,
     pub(super) calls: Vec<Call>,
 }
 
@@ -133,10 +135,15 @@ impl Fake {
             !budget.is_zero() && budget <= Duration::from_secs(300),
             "a poll carries what is left of the bound: {budget:?}"
         );
-        let plane = self.lock();
+        let mut plane = self.lock();
+        plane.budgets.push(budget);
         if let Some(clock) = &plane.clock {
             clock.advance(plane.request_takes.min(budget));
         }
+    }
+
+    pub(super) fn budgets(&self) -> Vec<Duration> {
+        self.lock().budgets.clone()
     }
 
     pub(super) fn script(
@@ -150,6 +157,7 @@ impl Fake {
         plane.deployment = deployment;
         plane.vm_states = vm_states;
         plane.calls.clear();
+        plane.budgets.clear();
     }
 }
 

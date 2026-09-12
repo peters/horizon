@@ -119,6 +119,40 @@ fn slow_requests_spend_the_bound_and_never_get_a_budget_past_the_deadline() {
         .filter(|call| matches!(call, Call::GetVm(_)))
         .count();
     assert_eq!(vm_polls, 2, "the observation and the one poll that fit in the bound");
+    // Each bounded lookup was handed exactly what was left: the group lookup at 0 s,
+    // the VM lookup at 100 s, the group lookup at 201 s; nothing after 300 s.
+    assert_eq!(s.plane.budgets(), secs(&[300, 200, 99]));
+}
+
+#[test]
+fn every_poll_is_handed_exactly_what_is_left_of_the_bound() {
+    let s = Scenario::new();
+    let worker = s.persisted();
+    let client = s.client(false, Some(host_key()));
+    s.plane.lock().request_takes = Duration::from_millis(500);
+    s.plane.script(
+        Some(owned(&s)),
+        Some(deployment("Succeeded", "203.0.113.9")),
+        states(40, "starting", &s),
+    );
+    assert_eq!(client.start_worker(&worker), Err(AzureError::StartUnverified));
+    // Two lookups per poll, each half a second: the budgets walk down from the bound by
+    // the sleeps and the request times alone, and the wait never asks past the bound.
+    let mut expected = Vec::new();
+    let mut left = BOUND;
+    for sleep in s.clock.sleeps() {
+        left = left.saturating_sub(sleep);
+        expected.push(left);
+        left = left.saturating_sub(Duration::from_millis(500));
+        expected.push(left);
+        left = left.saturating_sub(Duration::from_millis(500));
+    }
+    assert_eq!(s.plane.budgets(), expected);
+    assert!(expected.iter().all(|budget| !budget.is_zero() && *budget <= BOUND));
+    assert!(
+        *expected.last().expect("polls") <= RESERVE,
+        "the last poll runs inside the reserve"
+    );
 }
 
 #[test]
