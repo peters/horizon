@@ -171,7 +171,7 @@ fn pending_warnings_have_explicit_ninety_and_one_eighty_second_boundaries() {
             (90..180).contains(&elapsed)
         );
         assert_eq!(painted.contains("Still waiting."), elapsed >= 180);
-        assert!(painted.contains("does not cancel creation"));
+        assert!(painted.contains("may interrupt local setup"));
         assert!(matches!(action, InventoryAction::None) && state.pending.is_some() && state.attempts.is_empty());
         let _ = output.discard_textures();
     }

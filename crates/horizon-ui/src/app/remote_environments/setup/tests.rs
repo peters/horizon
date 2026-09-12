@@ -101,8 +101,7 @@ mod linux {
         })
     }
     fn render(state: &mut SetupState, size: [f32; 2]) -> String {
-        let ctx = Context::default();
-        let output = ctx
+        let output = Context::default()
             .run_ui(raw_input(size, None), |ui| {
                 egui::CentralPanel::default().show(ui, |ui| state.show(ui, &mut InventoryAction::None));
             })
@@ -178,6 +177,7 @@ mod linux {
             respond(&tx, Completion::Preview(Box::new(prepared(&home, &scope, cloud))));
             state.sync(Some((&home, OWNER, &scope.config)));
             let text = render(&mut state, [900.0, 1600.0]);
+            assert!(text.contains("may interrupt local setup"));
             for required in [
                 "Nothing has been created",
                 "example/project",

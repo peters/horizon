@@ -126,10 +126,10 @@ impl SetupState {
     }
     pub(in super::super) fn show(&mut self, ui: &mut egui::Ui, action: &mut InventoryAction) {
         ui.strong("New remote workspace");
+        ui.label("Closing the overview only detaches this view. Exiting Horizon may interrupt local setup; an existing attempt may still bill. Check the original saved workspace; do not resubmit.");
         if let Some(pending) = &self.pending {
             let elapsed = pending.started.elapsed().as_secs();
             ui.label(format!("Waiting for the explicit setup operation ({elapsed} seconds)…"));
-            ui.label("Closing detaches this view; it does not cancel creation, stop a worker or cap billing.");
             if elapsed >= 180 {
                 ui.label("Still waiting. You may close this view and later inspect the original saved workspace.");
             } else if elapsed >= 90 {
@@ -156,7 +156,7 @@ impl SetupState {
                 ui.label("HPS identity is not ownership, exclusivity or durability proof. Storage charges are additional; the compute ceiling is not a total spending cap.");
             }
             ui.label(format!(
-                "Setup admission expires at Unix ms {}. A persistent worker keeps running after closing Horizon.",
+                "Setup admission expires at Unix ms {}. A created persistent worker keeps running after closing Horizon.",
                 review.prepared.retain_until_millis()
             ));
             ui.label("Setup sends no repository token, prepares no checkout, starts no task and attaches no view. Use separate Prepare and Start actions afterward.");
