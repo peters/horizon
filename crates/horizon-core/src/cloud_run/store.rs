@@ -5,7 +5,7 @@ mod remote_allocations;
 mod remote_workspaces;
 mod workflow_writes;
 
-pub use remote_allocations::StoredRemoteAllocation;
+pub use remote_allocations::{RemoteCpuProfileBinding, StoredRemoteAllocation};
 pub use remote_workspaces::{RemoteEnvironmentPage, RemoteWorkspaceStoreError, StoredRemoteWorkspace};
 use workflow_writes::PreparedWorkflowInsert;
 

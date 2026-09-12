@@ -9,6 +9,8 @@ mod request;
 mod setup;
 mod stop;
 
+pub use setup::RemoteCpuProfileBinding;
+
 pub(super) use guards::{
     ensure_unbound_workflow, validate_creation_claim, validate_workflow_replacement, validate_workspace_write,
 };

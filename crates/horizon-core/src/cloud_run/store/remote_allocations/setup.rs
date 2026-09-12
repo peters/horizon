@@ -1,6 +1,9 @@
 //! Setup admission is a point-in-time check, never a provider creation grant.
 
 mod network_volume;
+mod provider_binding;
+
+pub use provider_binding::RemoteCpuProfileBinding;
 
 use super::super::{
     CloudStoreError, current_unix_millis,
