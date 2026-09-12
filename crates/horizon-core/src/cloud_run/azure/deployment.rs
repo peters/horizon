@@ -60,14 +60,9 @@ impl AzureDeploymentPlan {
     /// time-limited Azure worker needs a provider-side power bound that this adapter
     /// does not provide yet, so it is refused rather than silently made persistent.
     pub fn new(profile: &AzureProfile, request: &InteractiveWorkerRequest) -> Result<Self, AzureError> {
-        profile.validate_target(&request.target)?;
-        if !request.is_valid_for(crate::cloud_run::CloudProvider::Azure) || !shell_safe(&request.target.image) {
-            return Err(AzureError::InvalidTarget);
-        }
-        if request.target.lifetime != WorkerLifetime::Persistent {
-            return Err(AzureError::UnsupportedLifetime);
-        }
-        if request.target.disk_gib > MAX_DATA_DISK_GIB {
+        Self::validate_target(profile, &request.target)?;
+        // Beyond the target: the request's own shape and the client key.
+        if !request.is_valid_for(crate::cloud_run::CloudProvider::Azure) {
             return Err(AzureError::InvalidTarget);
         }
         let tags = worker_tags(request);
@@ -89,6 +84,29 @@ impl AzureDeploymentPlan {
             template: template(),
             parameters,
         })
+    }
+}
+
+impl AzureDeploymentPlan {
+    /// The complete target-only contract a deployment applies, for a caller that must
+    /// refuse a target before saving intent, reading credentials or allocating and has
+    /// no request or client key yet: the profile fit (provider, profile name, image on
+    /// the declared registry, cost limit, provider-neutral target shape), a persistent
+    /// lifetime, a data disk within the single-sourced maximum, and an image reference
+    /// made only of bytes that can never reach a shell line. [`Self::new`] applies
+    /// exactly this and then the request and key checks; there is no second copy.
+    /// # Errors
+    /// [`AzureError::InvalidProfile`], [`AzureError::InvalidTarget`],
+    /// [`AzureError::DeclaredCostExceedsLimit`] or [`AzureError::UnsupportedLifetime`].
+    pub fn validate_target(profile: &AzureProfile, target: &WorkerTarget) -> Result<(), AzureError> {
+        profile.validate_target(target)?;
+        if target.lifetime != WorkerLifetime::Persistent {
+            return Err(AzureError::UnsupportedLifetime);
+        }
+        if target.disk_gib > MAX_DATA_DISK_GIB || !shell_safe(&target.image) {
+            return Err(AzureError::InvalidTarget);
+        }
+        Ok(())
     }
 }
 
