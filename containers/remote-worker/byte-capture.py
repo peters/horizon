@@ -220,7 +220,8 @@ def status(binding):
                 bundles.close()
         observed = now()
         value['observed_at_millis'] = observed
-        value['stale'] = success is None or observed < success['verified_at_millis'] or observed - success['verified_at_millis'] > STALE_SECONDS * 1000
+        reference = success['verified_at_millis'] if success is not None else value['started_at_millis']
+        value['stale'] = reference is None or observed < reference or observed - reference > STALE_SECONDS * 1000
         # The stored word "running" is not a fresh process-liveness observation.
         value['recorded_state'] = value['state']
         if value['stale'] and value['state'] in ('running', 'degraded'):

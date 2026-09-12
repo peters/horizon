@@ -262,6 +262,28 @@ class PrivateFixture(unittest.TestCase):
         with self.assertRaises(store.CaptureError):
             capture.status(BINDING)
 
+    def test_status_freshness_uses_start_until_verified_success(self):
+        state = self.run_service([self.observation(b'content'), store.CaptureError('failure')])
+        state['interval_seconds'] = capture.INTERVAL
+        success = state['last_success']
+        started = success['verified_at_millis'] - 100_000
+        for reference in ('started', 'verified', 'missing'):
+            state['started_at_millis'] = None if reference == 'missing' else started
+            state['last_success'] = success if reference == 'verified' else None
+            state['generation'] = 1 if reference == 'verified' else 0
+            timestamp = success['verified_at_millis'] if reference == 'verified' else started
+            for recorded in ('running', 'degraded', 'error', 'cancelled'):
+                state['state'] = recorded
+                self.slot.write('status.json', state, True)
+                for age in (-1, 0, 29_999, 30_000, 30_001):
+                    with self.subTest(reference=reference, recorded=recorded, age=age), patch.object(capture, 'now', return_value=timestamp + age):
+                        observed = capture.status(BINDING)
+                        stale = reference == 'missing' or age < 0 or age > 30_000
+                        self.assertEqual(observed['stale'], stale)
+                        self.assertEqual(observed['recorded_state'], recorded)
+                        self.assertEqual(observed['state'], 'stale' if stale and recorded in ('running', 'degraded') else recorded)
+                        self.assertEqual(observed['last_success'], state['last_success'])
+
     def test_actual_child_exit_race_false_green_output_and_deadline(self):
         helper = self.root / 'helper'
         response = {'version': 1, 'binding': BINDING, 'manifest': None,
