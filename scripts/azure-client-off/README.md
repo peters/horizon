@@ -1,32 +1,43 @@
 # Azure client-off harness
 
-Tooling for the Azure client-off acceptance of #474 / #475: client VM A runs the
-exact Horizon client, a separate worker B keeps a task running, and observer C (this
-controller) proves that B keeps working while A is deallocated and that A
-reconnects afterwards without a new create or a replay.
-
-This slice ships the core; the mutation phases (off, observer install, return) and
-the provisioning scripts follow in the next slice together with the runbook.
+Harness for the Azure lane of the disposable-client test (#475) under #474. See
+`docs/testing/azure-client-off-acceptance.md` for the runbook, manifest and
+labelling rules.
 
 - `clientoff/`: the harness modules. `manifest.py` (schema, constants, the deadline
   arithmetic that keeps the reaper away from a live run), `verdict.py` (pure
-  evaluation of recorded observer samples: cadence, A deallocated throughout, B's
-  identity, image tag and endpoint constant, counter advancing, checkpoints judged
-  apart), `az.py` (bounded `az` calls without a shell; every mutation names the exact
-  resource and `--dry-run` journals instead of issuing) and `cleanup.py` (deletion
-  of exactly the groups this run journaled, re-proven owned immediately before the
-  delete, and only when their tags bind them to this run: A's group is named
-  `horizon-client-<run_id>` and carries the manifest's `run_id`, B's group is the
-  adapter's `horizon-ws-<workflow>-<job>` and carries those identities). ARM offers
-  no conditional delete for resource groups, so this rests on names no other run can
-  reuse rather than on a compare-and-delete.
-- `client_off.py`: the command line: `validate`, `journal-group`, `cleanup`,
-  `verdict`, driven by a frozen manifest that carries a `run_id` drawn when it was
-  frozen (`head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n'`).
+  evaluation of recorded observer samples; the offline verdict also checks that the
+  journal's baseline names an Azure worker in the manifest's group), `az.py` (bounded
+  `az` calls without a shell; every mutation names the exact resource and `--dry-run`
+  journals instead of issuing), `observer.py` (worker descriptor gates and the pinned,
+  channel-aware read; the forced reader and its authorized_keys line join it in the
+  next slice), `phases.py`
+  (attestation of the exact A and B from ARM, off, return; the observer-key install
+  and removal join it in the next slice) and
+  `cleanup.py` (deletion of exactly the journaled groups, re-proven owned immediately
+  before the delete and only when name and tags bind them to this run: A's group is
+  `horizon-client-<run_id>` carrying the manifest's `run_id`, B's group is the
+  adapter's `horizon-ws-<workflow>-<job>` carrying those identities; ARM offers no
+  conditional delete for resource groups, so this rests on names no other run can
+  reuse rather than on a compare-and-delete).
+- `client_off.py`: the command line: `validate`, `journal-group`, `off`, `return`,
+  `cleanup`, `verdict` (the observer-key lifecycle, `observer-key-line`,
+  `install-observer-key` and `remove-observer-key`, lands in the next slice),
+  driven by a frozen manifest that carries a `run_id` drawn when it was frozen
+  (`head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n'`); `--dry-run` never issues
+  a mutating call and returns the journaled plan instead of waiting for a state it
+  never caused.
 - The tests run in CI (`Azure harness tests` job) next to the workspace preflight
   suite.
+- `record-client-build.sh` (next slice): builds the client from a fully clean checkout
+  and records HEAD with the digest of the binary it produced, the provenance the
+  provisioning step verifies.
+- `provision-client.sh` (a following slice): creates client VM A in the manifest's
+  run-named group with the reaper tags and the run identity, and copies the exact
+  Horizon build after checking its provenance.
 - `tests/`: deterministic coverage of the manifest gates, the verdict logic, the
-  cleanup authorization and the `az` client, run with
-  `python3 -B -m unittest discover -s scripts/azure-client-off/tests -v`.
+  cleanup authorization, the `az` client, the observer channel and the mutation
+  phases, run with `python3 -B -m unittest discover -s scripts/azure-client-off/tests -v`
+  and in CI (`Azure harness tests` job).
 
 No `az login`, provider registration or extension install happens anywhere here.

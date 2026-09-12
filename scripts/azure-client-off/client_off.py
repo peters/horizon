@@ -13,10 +13,6 @@ Observer C's only reach into B is a pinned SSH session with a key that sshd rest
 is installed through the ARM run-command channel and accepted only once the forced
 reader answers a session that asked for another command.
 
-This slice ships the core: the manifest gate, the pure verdict over a recorded journal,
-the creation journal and cleanup authorization. The mutation phases (off, observer
-install, return) and the provisioning scripts follow in the next slice.
-
 Nothing here logs in, registers a provider or installs an extension. Every `az` call is
 an argument list without a shell, bounded in time. The observer never renews a lease,
 reconnects a terminal, checkpoints or replays a task. Counter progress is recorded as
@@ -36,6 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from clientoff.az import Az  # noqa: E402
 from clientoff.cleanup import identity_record, journal_records, phase_cleanup  # noqa: E402
 from clientoff.manifest import TOOL_VERSION, validate_manifest  # noqa: E402
+from clientoff.phases import phase_off, phase_return  # noqa: E402
 from clientoff.verdict import verdict_from_records  # noqa: E402
 
 def load_json(path: str) -> Any:
@@ -57,6 +54,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     journal = sub.add_parser("journal-group", help="append a group's ARM identity and tags to the creation journal")
     journal.add_argument("--group", required=True)
     journal.add_argument("--created", required=True, help="JSON array file to append to (created if absent)")
+    off = sub.add_parser("off", help="deallocate A only and observe B for the declared interval")
+    off.add_argument("--client", required=True, help="provision-client.sh output JSON (exact A identity)")
+    off.add_argument("--worker", required=True,
+                     help="JSON with vm_name, port, host_key, observer_key_path (the restricted key), progress_path, "
+                          "optional checkpoint_path, and the baseline identity group_id, vm_id, host")
+    ret = sub.add_parser("return", help="start A only and require running")
+    ret.add_argument("--client", required=True, help="provision-client.sh output JSON (exact A identity)")
     cleanup = sub.add_parser("cleanup", help="delete exactly the groups this run created")
     cleanup.add_argument("--groups-before", required=True, help="JSON list of group names recorded before the run")
     cleanup.add_argument("--created", required=True,
@@ -72,7 +76,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(json.dumps({"runnable": False, "problems": [f"manifest unreadable: {type(error).__name__}"]}, indent=2))
         return 2
     # Only the phases that rent or keep compute alive need a future deadline.
-    problems = validate_manifest(manifest, renting=args.command in ("validate", "off", "return"), phase=args.command)
+    # Phases that rent, keep compute alive or mutate a live VM need a deadline that
+    # outlasts them; verdict and cleanup also run after it.
+    problems = validate_manifest(manifest, renting=args.command in ("validate", "off", "install-observer-key", "return"),
+                                 phase=args.command)
     if problems:
         print(json.dumps({"runnable": False, "problems": problems}, indent=2))
         return 2
@@ -115,16 +122,24 @@ def main(argv: Optional[List[str]] = None) -> int:
         os.replace(temporary, args.created)
         print(json.dumps({"passed": True, "journaled": record}, indent=2))
         return 0
-    try:
-        with open(args.groups_before, encoding="utf-8") as handle:
-            before = json.load(handle)
-        with open(args.created, encoding="utf-8") as handle:
-            created = json.load(handle)
-    except (OSError, json.JSONDecodeError) as error:
-        result = {"passed": False, "deleted": [],
-                  "findings": [f"groups-before or created unreadable: {type(error).__name__}; nothing deleted"]}
+    if args.command in ("off", "return"):
+        client = load_json(args.client)
+    if args.command == "off":
+        worker = load_json(args.worker)
+        result = phase_off(az, manifest, worker, client, args.journal)
+    elif args.command == "return":
+        result = phase_return(az, manifest, client)
     else:
-        result = phase_cleanup(az, manifest, before, created)
+        try:
+            with open(args.groups_before, encoding="utf-8") as handle:
+                before = json.load(handle)
+            with open(args.created, encoding="utf-8") as handle:
+                created = json.load(handle)
+        except (OSError, json.JSONDecodeError) as error:
+            result = {"passed": False, "deleted": [],
+                      "findings": [f"groups-before or created unreadable: {type(error).__name__}; nothing deleted"]}
+        else:
+            result = phase_cleanup(az, manifest, before, created)
     result["az_calls"] = az.journal
     print(json.dumps(result, indent=2))
     return 0 if result.get("passed") else 1

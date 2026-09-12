@@ -39,7 +39,17 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(client_off.required_minutes(manifest(), "validate"),
                          client_off.PROVISION_MINUTES + client_off.required_minutes(manifest(), "install-observer-key"),
                          "renting is approved only when provisioning and then the install can both run to their bounds")
-        self.assertEqual(client_off.validate_manifest(manifest(cleanup_deadline_utc=soon), NOW, phase="return"), [])
+        later = (NOW + dt.timedelta(minutes=client_off.required_minutes(manifest(), "return"))).isoformat()
+        self.assertTrue(client_off.validate_manifest(manifest(cleanup_deadline_utc=soon), NOW, phase="return"),
+                        "the return needs its setup and keeps the whole cleanup window")
+        self.assertEqual(client_off.validate_manifest(manifest(cleanup_deadline_utc=later), NOW, phase="return"), [])
+        self.assertEqual(client_off.required_minutes(manifest(), "return"),
+                         client_off.RETURN_SETUP_MINUTES + client_off.CLEANUP_MARGIN_MINUTES - client_off.RETURN_MARGIN_MINUTES)
+        self.assertGreaterEqual(client_off.OFF_SETUP_MINUTES, (11 * client_off.CLI_STEP_SECONDS + 30 + 600) // 60,
+                                "eleven bounded reads, the probe and the shared deallocate bound")
+        self.assertEqual(client_off.required_minutes(manifest(), "off"),
+                         client_off.OFF_SETUP_MINUTES + manifest()["off_minutes"] + client_off.required_minutes(manifest(), "return"),
+                         "A is deallocated only when the whole return phase can still follow")
         self.assertEqual(client_off.validate_manifest(manifest(cleanup_deadline_utc=soon), NOW, renting=False), [])
         enough = (NOW + dt.timedelta(minutes=client_off.required_minutes(manifest(), "validate"))).isoformat()
         self.assertEqual(client_off.validate_manifest(manifest(cleanup_deadline_utc=enough), NOW), [])

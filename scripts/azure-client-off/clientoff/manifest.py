@@ -71,14 +71,35 @@ CLEANUP_MARGIN_MINUTES = 30
 RETURN_MARGIN_MINUTES = 15
 
 
+# Work the off phase does before its sampling interval starts, at its bounds: eleven
+# bounded ARM reads (the client attestation, the worker attestation with its identity
+# and power reads, and the identity-bracketed client state read), the observer probe,
+# and the deallocation with its poll, which share one 600-second bound; plus slack.
+OFF_SETUP_MINUTES = (11 * CLI_STEP_SECONDS + 30 + 600) // 60 + 2
+# Work the return phase does before A is verified running, at its bounds: seven
+# bounded ARM reads (the client attestation and the identity-bracketed state read) and
+# the start with its poll, which share one 600-second bound; plus slack.
+RETURN_SETUP_MINUTES = (7 * CLI_STEP_SECONDS + 600) // 60 + 2
+# What the return phase must leave untouched after itself: the cleanup window.
+RETURN_RESERVE_MINUTES = CLEANUP_MARGIN_MINUTES - RETURN_MARGIN_MINUTES
+# What must remain after the off interval: the whole return phase (its setup at its
+# bounds) and the cleanup window it leaves; the off phase may deallocate A only when
+# the return can still complete.
+AFTER_OFF_MINUTES = RETURN_SETUP_MINUTES + RETURN_RESERVE_MINUTES
+
+
 def required_minutes(manifest: Dict[str, Any], phase: str) -> int:
-    """How many minutes past `now` the deadline must lie for `phase` to start."""
+    """How many minutes past `now` the deadline must lie for `phase` to start. The
+    phases arm their runtime deadline from these same numbers, so a manifest that
+    validates can always run its phase to the end of the declared work."""
     off = manifest.get("off_minutes") if type(manifest.get("off_minutes")) is int else MIN_OFF_MINUTES  # noqa: E721
     install = RUN_COMMAND_SECONDS // 60
-    return {"validate": PROVISION_MINUTES + install + off + CLEANUP_MARGIN_MINUTES, "off": off + CLEANUP_MARGIN_MINUTES,
+    return {"validate": PROVISION_MINUTES + install + OFF_SETUP_MINUTES + off + AFTER_OFF_MINUTES,
+            "off": OFF_SETUP_MINUTES + off + AFTER_OFF_MINUTES,
             # The install may spend its whole run-command bound before the off interval starts.
-            "install-observer-key": install + off + CLEANUP_MARGIN_MINUTES,
-            "return": RETURN_MARGIN_MINUTES}.get(phase, 0)
+            "install-observer-key": install + OFF_SETUP_MINUTES + off + AFTER_OFF_MINUTES,
+            # The return needs its own setup and keeps the cleanup window intact after it.
+            "return": RETURN_SETUP_MINUTES + RETURN_RESERVE_MINUTES}.get(phase, 0)
 
 
 def validate_manifest(manifest: Dict[str, Any], now: Optional[_dt.datetime] = None, renting: bool = True,
