@@ -67,8 +67,13 @@ def same_group(left: Any, right: Any) -> bool:
 # under a 30-minute bound, the off interval is declared, and return plus cleanup need
 # a margin. A deadline that the reaper could reach mid-run is not runnable.
 PROVISION_MINUTES = 30
-CLEANUP_MARGIN_MINUTES = 30
+# The whole cleanup phase (ownership re-reads, deletes, absence polls, inventory) runs
+# under one absolute bound; the margin a manifest must reserve after the off interval
+# is the return phase plus that bound, so the reaper deadline can never fall inside
+# either.
+CLEANUP_BOUND_SECONDS = 1_200
 RETURN_MARGIN_MINUTES = 15
+CLEANUP_MARGIN_MINUTES = RETURN_MARGIN_MINUTES + CLEANUP_BOUND_SECONDS // 60
 
 
 # Work the off phase does before its sampling interval starts, at its bounds: eleven

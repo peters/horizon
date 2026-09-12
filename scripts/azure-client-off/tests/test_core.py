@@ -3,6 +3,7 @@ authorization and the bounded `az` client. No Azure, no network."""
 from __future__ import annotations
 
 import datetime as dt
+import time
 import unittest
 import unittest.mock as mock
 
@@ -442,13 +443,75 @@ class CleanupTests(unittest.TestCase):
             return shown.get(args[args.index("-n") + 1]) if args[:2] == ["group", "show"] else None
 
         with mock.patch.object(az, "run", side_effect=fake_run):
-            result = client_off.phase_cleanup(az, m, [], created)
+            result = client_off.phase_cleanup(az, m, [], created, resources_before=[])
         self.assertTrue(result["dry_run"])
         self.assertEqual(result["would_delete"], [m["client_group"]])
         self.assertTrue(any("retagged" in finding for finding in result["findings"]), result)
         proposed = [entry["args"] for entry in az.journal if entry["mutating"]]
         self.assertEqual(len(proposed), 1)
         self.assertIn(created[0]["id"], proposed[0][-1], "the intended delete names the journaled ARM ID")
+
+
+class CleanupVerificationTests(unittest.TestCase):
+    """Absence and untouched peers are proven under one bound from a recorded inventory."""
+
+    def plane(self, m, created, *, present_after=(), resources_after=None, groups_after=None):
+        shown = {rec["name"]: {"id": rec["id"], "name": rec["name"], "tags": dict(rec["tags"])} for rec in created}
+        az = client_off.Az("0f0e0d0c-0b0a-4908-8706-050403020100")
+        budgets = []
+
+        def run(args, mutating=False, timeout=0):
+            budgets.append(timeout)
+            az.journal.append({"mutating": mutating, "args": args})
+            if mutating:
+                return {}
+            if args[:2] == ["group", "show"]:
+                return shown.get(args[args.index("-n") + 1])
+            if args[:2] == ["group", "exists"]:
+                return args[args.index("-n") + 1] in present_after
+            if args[:2] == ["resource", "list"]:
+                return resources_after
+            if args[:2] == ["group", "list"]:
+                return [{"name": name} for name in (groups_after or [])]
+            return None
+
+        az.run = run
+        return az, budgets
+
+    def test_peers_are_compared_as_resources_and_the_phase_keeps_its_bound(self):
+        m = manifest()
+        created = [record(m["client_group"], lane="azure-client-off", run_id=RUN_ID), record(m["worker_group"], **ADAPTER_TAGS)]
+        peer = "/subscriptions/s/resourceGroups/horizon-worker-registry/providers/Microsoft.ContainerRegistry/registries/r"
+        inside = f"/subscriptions/s/resourceGroups/{m['client_group']}/providers/Microsoft.Compute/virtualMachines/client"
+        before_resources = [peer, inside]
+        with mock.patch.object(client_off.time, "sleep", lambda seconds: None):
+            az, budgets = self.plane(m, created, resources_after=[{"id": peer.upper()}], groups_after=["horizon-worker-registry"])
+            result = client_off.phase_cleanup(az, m, ["horizon-worker-registry"], created, before_resources)
+            self.assertTrue(result["passed"], result)
+            self.assertTrue(all(1 <= b <= client_off.CLI_STEP_SECONDS for b in budgets), budgets)
+            # A peer resource that vanished, or one that appeared, is a finding even though
+            # the group names still match.
+            for after in ([], [{"id": peer}, {"id": peer + "2"}]):
+                az, _ = self.plane(m, created, resources_after=after, groups_after=["horizon-worker-registry"])
+                result = client_off.phase_cleanup(az, m, ["horizon-worker-registry"], created, before_resources)
+                self.assertTrue(any("resources outside the deleted groups changed" in f for f in result["findings"]), result)
+            az, _ = self.plane(m, created, resources_after=None, groups_after=["horizon-worker-registry"])
+            result = client_off.phase_cleanup(az, m, ["horizon-worker-registry"], created, before_resources)
+            self.assertTrue(any("inventory unreadable" in f for f in result["findings"]), result)
+            for malformed in (None, "ids", ["not-an-arm-id"], [{"name": "x"}]):
+                az, _ = self.plane(m, created, resources_after=[{"id": peer}])
+                result = client_off.phase_cleanup(az, m, [], created, malformed)
+                self.assertEqual(result["deleted"], [], f"{malformed!r}: a malformed inventory authorizes nothing")
+            # A group still present at the bound: the phase ends at the bound, not later.
+            az, budgets = self.plane(m, created, present_after=(m["worker_group"],), resources_after=[{"id": peer}],
+                                     groups_after=["horizon-worker-registry"])
+            started = time.monotonic()
+            result = client_off.phase_cleanup(az, m, ["horizon-worker-registry"], created, before_resources, bound_seconds=1)
+            self.assertLess(time.monotonic() - started, 5)
+            self.assertTrue(any("absence not proven" in f for f in result["findings"]), result)
+        self.assertEqual(client_off.CLEANUP_MARGIN_MINUTES,
+                         client_off.RETURN_MARGIN_MINUTES + client_off.CLEANUP_BOUND_SECONDS // 60,
+                         "the manifest reserves the return phase plus the whole cleanup bound")
 
 
 class AzTests(unittest.TestCase):

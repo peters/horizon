@@ -11,7 +11,8 @@ from .manifest import (AFTER_OFF_MINUTES, CLI_STEP_SECONDS, CLIENT_VM_NAME, INST
                        RETURN_RESERVE_MINUTES,
                        RUN_ID_RE, SAMPLE_SECONDS, client_tags, image_ref_digest, parse_utc, routable, same_group, same_id,
                        utc_now)
-from .observer import OBSERVATION_MIN_SECONDS, OBSERVATION_SECONDS, read_observations, validate_worker
+from .observer import (OBSERVATION_MIN_SECONDS, OBSERVATION_SECONDS, derived_public_key, observer_authorized_line,
+                       read_observations, validate_worker)
 from .verdict import evaluate_samples
 
 
@@ -53,6 +54,15 @@ def arm_phase_deadline(az: Az, manifest: Dict[str, Any], reserve_minutes: int) -
     return None
 
 
+def observed_paths_match(observed: Dict[str, Any], worker: Dict[str, Any]) -> bool:
+    """The forced reader echoes the paths it was installed for; they must be exactly the
+    descriptor's, so a stale or foreign observer line can never supply another task's
+    counter as this worker's."""
+    paths = observed.get("paths")
+    return isinstance(paths, dict) and paths.get("progress") == worker["progress_path"] \
+        and paths.get("checkpoint") == worker.get("checkpoint_path")
+
+
 def observation_budget(az: Az) -> float:
     """What an observation may take now: its own bound, or less when the phase deadline
     is nearer; below the observation minimum the caller must not start one."""
@@ -88,6 +98,22 @@ def observe_client(az: Az, manifest: Dict[str, Any], client: Dict[str, Any],
     return evidence, None
 
 
+def same_evidence(before: Dict[str, Any], after: Dict[str, Any]) -> bool:
+    """Two reads of A describe the same resource when their ARM IDs agree (ARM may
+    change the casing of a path between reads), the instance identity is identical and
+    the tag maps are exactly equal."""
+    return (same_id(before.get("a_group_id"), after.get("a_group_id")) and same_id(before.get("a_vm_id"), after.get("a_vm_id"))
+            and before.get("a_instance_id") == after.get("a_instance_id") and before.get("a_tags") == after.get("a_tags")
+            and before.get("a_group_tags") == after.get("a_group_tags"))
+
+
+def same_worker(before: Dict[str, Optional[str]], after: Dict[str, Optional[str]]) -> bool:
+    """Two identity reads of B describe the same worker when the ARM IDs agree
+    case-insensitively and the instance identity, image tag and endpoint are exact."""
+    return (same_id(before.get("b_group_id"), after.get("b_group_id")) and same_id(before.get("b_vm_id"), after.get("b_vm_id"))
+            and all(before.get(key) == after.get(key) for key in ("b_instance_id", "b_image_ref", "b_host")))
+
+
 def bound_client_state(az: Az, manifest: Dict[str, Any], client: Dict[str, Any],
                        timeout: int = CLI_STEP_SECONDS) -> Tuple[Dict[str, Any], Optional[str], Optional[str]]:
     """A's power state bound to one attested identity: the identity is attested before
@@ -101,7 +127,7 @@ def bound_client_state(az: Az, manifest: Dict[str, Any], client: Dict[str, Any],
     after, problem_after = observe_client(az, manifest, client, timeout)
     if problem_after:
         return before, None, problem_after
-    if before != after:
+    if not same_evidence(before, after):
         return before, None, "client A changed identity around the state read"
     return before, state, None
 
@@ -211,6 +237,9 @@ def phase_off(az: Az, manifest: Dict[str, Any], worker: Dict[str, Any], client: 
     if probe.get("channel") != "answered" or probe.get("progress") is None:
         return {"passed": False, "findings": ["observer key is not a working restricted read channel on B, or the counter "
                                               "is not readable yet; nothing stopped"]}
+    if not observed_paths_match(probe, worker):
+        return {"passed": False, "findings": ["the forced reader on B names other paths than the worker descriptor: a stale or "
+                                              "foreign observer line; nothing stopped"]}
     # The client must actually be on, and must still be the exact A in the same read
     # that precedes the mutation: ARM offers no conditional power operation, so the
     # attestation is repeated immediately before the call and on every poll after it,
@@ -295,7 +324,8 @@ def phase_off(az: Az, manifest: Dict[str, Any], worker: Dict[str, Any], client: 
         # tag, endpoint) is the same before and after them; a replacement or repointed
         # endpoint in between leaves an unattested sample, never a stale identity next to
         # a replacement's state.
-        if az.vm_identity(manifest["worker_group"], worker["vm_name"]) != identity or observed.get("channel") != "answered":
+        if (not same_worker(identity, az.vm_identity(manifest["worker_group"], worker["vm_name"]))
+                or observed.get("channel") != "answered" or not observed_paths_match(observed, worker)):
             # A replaced B, or a channel that is not the restricted reader any more
             # (refused, unavailable, or answering with a pty granted), leaves an
             # unreadable sample: its state and reading are never evidence.
@@ -334,6 +364,121 @@ def phase_off(az: Az, manifest: Dict[str, Any], worker: Dict[str, Any], client: 
         time.sleep(max(0.0, next_slot - time.monotonic()))
     return evaluate_samples(samples, manifest["off_minutes"], manifest["lease_seconds"], manifest["worker_image"],
                             expected_identity, client_tags(manifest))
+
+
+def phase_install_observer(az: Az, manifest: Dict[str, Any], worker: Dict[str, Any], public_key_path: str,
+                           directory: str, reader: Optional[Callable[..., Dict[str, Optional[int]]]] = None) -> Dict[str, Any]:
+    """Install the observer key on B as a restricted, forced-command key through the
+    control plane, before anything is switched off. The key is accepted only once the
+    forced reader answers a session that asked for a different command."""
+    reader = reader or read_observations
+    problems = validate_worker(worker)
+    if problems:
+        return {"passed": False, "findings": problems}
+    # Bound to the manifest deadline minus what must still follow: the off interval,
+    # the return phase and the cleanup window.
+    problem = arm_phase_deadline(az, manifest, int(manifest["off_minutes"]) + AFTER_OFF_MINUTES)
+    if problem:
+        return {"passed": False, "installed": False, "findings": [f"{problem}; nothing installed"]}
+    try:
+        with open(public_key_path, encoding="utf-8") as handle:
+            public_key = " ".join(handle.read().strip().split("\n")[0].split()[:2])
+        line = observer_authorized_line(public_key, worker["progress_path"], worker.get("checkpoint_path"))
+    except (OSError, ValueError, IndexError) as error:
+        return {"passed": False, "findings": [f"observer key line: {error}"]}
+    # The same identity, image and running gates as the off phase, read from ARM now,
+    # before anything is concluded or appended: a stale descriptor never reaches, or
+    # reports on, another VM.
+    _, problem = attest_worker(az, manifest, worker)
+    if problem:
+        return {"passed": False, "installed": False, "findings": [f"{problem}; nothing installed"]}
+    # The public half must be the observer private key's: otherwise a foreign key would
+    # be appended to B before the probe could notice.
+    if derived_public_key(worker["observer_key_path"]) != public_key:
+        return {"passed": False, "installed": False, "findings": ["the public key is not the observer private key's; nothing installed"]}
+    before = reader(worker["host"], worker["port"], worker["host_key"], worker["observer_key_path"], directory)
+    if before.get("channel") == "answered":
+        return {"passed": True, "installed": False, "findings": ["observer key already answers through the forced reader"]}
+    if before.get("channel") != "refused":
+        # Neither an answer nor an explicit refusal: whether the key is present is not
+        # known, and an append on top of an unknown state could stack a second line.
+        return {"passed": False, "installed": "unknown",
+                "findings": ["B neither refused nor answered the observer key before the install; nothing appended"]}
+    # Re-attested in the same breath as the mutation (run-command has no identity
+    # precondition), and again afterwards so the key is known to sit on the exact B.
+    _, problem = attest_worker(az, manifest, worker)
+    if problem:
+        return {"passed": False, "installed": False, "findings": [f"{problem}; nothing installed"]}
+    if az.dry_run:
+        az.append_container_authorized_key(manifest["worker_group"], worker["vm_name"], line)
+        return {"passed": False, "dry_run": True, "installed": False,
+                "findings": ["dry run: the restricted observer line would be appended on B now"], "plan": az.journal}
+    if az.append_container_authorized_key(manifest["worker_group"], worker["vm_name"], line) is None:
+        # The append may have run before its answer was lost: the reader is the truth.
+        # A retry after an unproven append would stack a second line, so the state is
+        # reported as it is proven, never as "nothing changed".
+        _, problem = attest_worker(az, manifest, worker)
+        after = reader(worker["host"], worker["port"], worker["host_key"], worker["observer_key_path"], directory)
+        if problem is None and after.get("channel") == "answered":
+            return {"passed": True, "installed": True, "progress": after.get("progress"), "checkpoint": after.get("checkpoint"),
+                    "findings": ["run-command lost its answer, but the exact B's forced reader answers: the key is installed"]}
+        return {"passed": False, "installed": "unknown",
+                "findings": ["run-command did not confirm the append and the forced reader does not answer; inspect "
+                             "/root/.ssh/authorized_keys on B before retrying, a retry could append a second line"]}
+    _, problem = attest_worker(az, manifest, worker)
+    if problem:
+        return {"passed": False, "installed": True, "findings": [f"{problem} after the append; do not use this key as observer C"]}
+    after = reader(worker["host"], worker["port"], worker["host_key"], worker["observer_key_path"], directory)
+    if after.get("channel") != "answered":
+        return {"passed": False, "installed": True,
+                "findings": ["the forced reader did not answer after the append; do not use this key as observer C"]}
+    # The key is installed whatever the file holds right now; an unreadable counter is
+    # the off phase's finding, not this one's.
+    return {"passed": True, "installed": True, "progress": after.get("progress"), "checkpoint": after.get("checkpoint")}
+
+
+def phase_remove_observer(az: Az, manifest: Dict[str, Any], worker: Dict[str, Any], public_key_path: str,
+                          directory: str, reader: Optional[Callable[..., Dict[str, Optional[int]]]] = None) -> Dict[str, Any]:
+    """Remove the observer key from B once the acceptance is over: the run's private key
+    must not keep a reading channel into a worker that outlives the run. Removal is
+    reconciled: it passes only once the forced reader no longer answers."""
+    reader = reader or read_observations
+    problems = validate_worker(worker)
+    if problems:
+        return {"passed": False, "findings": problems}
+    try:
+        with open(public_key_path, encoding="utf-8") as handle:
+            public_key = " ".join(handle.read().strip().split("\n")[0].split()[:2])
+        line = observer_authorized_line(public_key, worker["progress_path"], worker.get("checkpoint_path"))
+    except (OSError, ValueError, IndexError) as error:
+        return {"passed": False, "findings": [f"observer key line: {error}"]}
+    # Only the observer's own line may be removed: a foreign public key would name
+    # somebody else's line.
+    if derived_public_key(worker["observer_key_path"]) != public_key:
+        return {"passed": False, "removed": False, "findings": ["the public key is not the observer private key's; nothing removed"]}
+    _, problem = attest_worker(az, manifest, worker)
+    if problem:
+        return {"passed": False, "removed": False, "findings": [f"{problem}; nothing removed"]}
+    if az.dry_run:
+        az.remove_container_authorized_key(manifest["worker_group"], worker["vm_name"], line)
+        return {"passed": False, "dry_run": True, "removed": False,
+                "findings": ["dry run: the observer line would be removed from B now"], "plan": az.journal}
+    az.remove_container_authorized_key(manifest["worker_group"], worker["vm_name"], line)
+    # Whatever the run-command answered, the server is the truth: the key is gone only
+    # when the exact B explicitly refuses it under the pinned host key. An answer means
+    # it is still authorized; anything else (transport, timeout, a reader that answers
+    # with nothing) proves nothing and the removal stays unproven.
+    _, problem = attest_worker(az, manifest, worker)
+    if problem:
+        return {"passed": False, "removed": "unknown", "findings": [f"{problem} after the removal; removal unproven"]}
+    after = reader(worker["host"], worker["port"], worker["host_key"], worker["observer_key_path"], directory)
+    if after.get("channel") == "refused":
+        return {"passed": True, "removed": True, "findings": []}
+    if after.get("channel") == "answered":
+        return {"passed": False, "removed": False,
+                "findings": ["B still accepts the observer key after the removal; it is still authorized"]}
+    return {"passed": False, "removed": "unknown",
+            "findings": ["B neither refused nor answered the observer key after the removal; removal unproven, retry"]}
 
 
 def phase_return(az: Az, manifest: Dict[str, Any], client: Dict[str, Any]) -> Dict[str, Any]:

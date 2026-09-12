@@ -1,11 +1,12 @@
 """Bounded `az` calls without a shell; every mutation names the exact resource."""
 from __future__ import annotations
 
+import base64
 import json
 import subprocess
 import time
 from typing import Any, Dict, List, Optional
-from .manifest import CLI_STEP_SECONDS, PUBLIC_IP_NAME, TAG_IMAGE_REF, utc_now
+from .manifest import CLI_STEP_SECONDS, PUBLIC_IP_NAME, RUN_COMMAND_SECONDS, TAG_IMAGE_REF, WORKER_CONTAINER, utc_now
 
 
 class Az:
@@ -62,6 +63,30 @@ class Az:
             if code.startswith("PowerState/"):
                 codes.append(code)
         return codes[0] if len(codes) == 1 else None
+
+    def append_container_authorized_key(self, group: str, name: str, line: str) -> Optional[Any]:
+        """Append one `authorized_keys` line inside the worker container through the ARM
+        run-command channel; the line travels base64-encoded so no quoting layer can alter it."""
+        encoded = base64.b64encode((line.rstrip("\n") + "\n").encode("ascii")).decode("ascii")
+        script = (f"docker exec {WORKER_CONTAINER} sh -c 'umask 077 && mkdir -p /root/.ssh && "
+                  f"echo {encoded} | base64 -d >> /root/.ssh/authorized_keys'")
+        return self.run(["vm", "run-command", "invoke", "-g", group, "-n", name, "--command-id", "RunShellScript",
+                         "--scripts", script], mutating=True, timeout=RUN_COMMAND_SECONDS)
+
+    def remove_container_authorized_key(self, group: str, name: str, line: str) -> Optional[Any]:
+        """Remove every `authorized_keys` line equal to `line` inside the worker container
+        through the ARM run-command channel; the line travels base64-encoded and is
+        matched whole and literally, so nothing else in the file is touched."""
+        encoded = base64.b64encode(line.rstrip("\n").encode("ascii")).decode("ascii")
+        keys = "/root/.ssh/authorized_keys"
+        # grep exits 1 when no line remains (still a success here) and 2 on an error, in
+        # which case the original file is left exactly as it was; the filtered file
+        # replaces it atomically, so no interruption can leave a truncated key file.
+        script = (f"docker exec {WORKER_CONTAINER} sh -c 'umask 077 && k=$(echo {encoded} | base64 -d) && "
+                  f"grep -vxF \"$k\" {keys} > {keys}.tmp; rc=$?; [ $rc -le 1 ] || {{ rm -f {keys}.tmp; exit $rc; }}; "
+                  f"mv -f {keys}.tmp {keys}'")
+        return self.run(["vm", "run-command", "invoke", "-g", group, "-n", name, "--command-id", "RunShellScript",
+                         "--scripts", script], mutating=True, timeout=RUN_COMMAND_SECONDS)
 
     def vm_identity(self, group: str, name: str) -> Dict[str, Optional[str]]:
         vm = self.run(["vm", "show", "-g", group, "-n", name])

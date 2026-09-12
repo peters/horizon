@@ -1,6 +1,7 @@
 """Observer C's only reach into worker B: the descriptor gates, the forced reader installed behind a restricted key, and the pinned read."""
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -50,6 +51,96 @@ def validate_worker(worker: Any) -> List[str]:
     return problems
 
 
+READER_SOURCE = """import json, os, stat, sys
+paths = json.loads(sys.argv[1])
+root = sys.argv[2]
+limit = int(sys.argv[3])
+
+
+def read(path):
+    if path is None:
+        return None
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        parts = path[len(root):].strip("/").split("/")
+        for index, part in enumerate(parts):
+            last = index == len(parts) - 1
+            # Non-blocking on the last component: a FIFO planted at the path would
+            # otherwise block the open before the type check; a regular file is unaffected.
+            flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NOCTTY | (os.O_NONBLOCK if last else os.O_DIRECTORY)
+            next_fd = os.open(part, flags, dir_fd=fd)
+            os.close(fd)
+            fd = next_fd
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            return None
+        data = os.read(fd, limit + 1)
+        if len(data) > limit:
+            return None
+        return data.decode("ascii", "replace"), (info.st_dev, info.st_ino)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
+answers = {name: read(path) for name, path in paths.items()}
+progress, checkpoint = answers.get("progress"), answers.get("checkpoint")
+# A checkpoint file that is the counter file under another name (a hard link) is
+# counter progress, never checkpoint proof.
+if progress and checkpoint and progress[1] == checkpoint[1]:
+    checkpoint = None
+sys.stdout.write(json.dumps({"progress": progress[0] if progress else None,
+                             "checkpoint": checkpoint[0] if checkpoint else None,
+                             "paths": paths}))
+"""
+
+
+def reader_command(progress_path: str, checkpoint_path: Optional[str], root: str = "/workspace") -> str:
+    """The forced command for the observer key on B: a python reader that opens each
+    path component with `O_NOFOLLOW` below `root`, reads a capped prefix of regular
+    files only and prints one JSON object. Source and arguments travel base64-encoded,
+    so the command holds no quotes and sshd/shell quoting cannot alter it; whatever
+    command the client sends is ignored by sshd because of the forced command.
+    """
+    for path in (progress_path, checkpoint_path):
+        if path is not None and (not path.startswith(root + "/") or any(part in (".", "..") for part in path.split("/"))):
+            raise ValueError(f"observer paths must lie below {root}")
+    paths = json.dumps({"progress": progress_path, "checkpoint": checkpoint_path})
+    source = base64.b64encode(READER_SOURCE.encode("ascii")).decode("ascii")
+    argument = base64.b64encode(paths.encode("ascii")).decode("ascii")
+    return (f"python3 -c \"$(echo {source} | base64 -d)\" \"$(echo {argument} | base64 -d)\" "
+            f"{root} {PROGRESS_READ_LIMIT}")
+
+
+def observer_authorized_line(public_key: str, progress_path: str, checkpoint_path: Optional[str]) -> str:
+    """The `authorized_keys` line that makes the observer key a read-only channel:
+    `restrict` (no pty, port/agent/X11 forwarding or user rc) plus the forced reader.
+    Double quotes inside the command are escaped the one way sshd dequotes them."""
+    if not HOST_KEY_RE.fullmatch(public_key.strip()) or not PROGRESS_PATH_RE.fullmatch(progress_path):
+        raise ValueError("observer key must be one Ed25519 line and the path must lie under /workspace")
+    if checkpoint_path is not None and (not PROGRESS_PATH_RE.fullmatch(checkpoint_path) or checkpoint_path == progress_path):
+        raise ValueError("checkpoint path must be a separate plain path under /workspace")
+    command = reader_command(progress_path, checkpoint_path).replace('"', '\\"')
+    return f'restrict,command="{command}" {public_key.strip()}'
+
+
+def derived_public_key(private_key_path: str) -> Optional[str]:
+    """The public half of an Ed25519 private key, derived with `ssh-keygen -y` under a
+    bound; None when it cannot be derived."""
+    try:
+        # No stdin and an empty passphrase: a protected key fails here instead of
+        # prompting, and could never serve the BatchMode observer sessions anyway.
+        completed = subprocess.run(["ssh-keygen", "-y", "-P", "", "-f", private_key_path], capture_output=True, text=True,
+                                   timeout=30, check=False, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    key = " ".join(completed.stdout.strip().split("\n")[0].split()[:2])
+    return key if HOST_KEY_RE.fullmatch(key) else None
+
+
 def parse_counter(text: Any) -> Optional[int]:
     """Exactly one non-negative decimal integer, or nothing."""
     if not isinstance(text, str) or not re.fullmatch(r"\s*[0-9]{1,18}\s*", text):
@@ -81,7 +172,7 @@ def read_observations(host: str, port: int, host_key: str, key_path: str, direct
     precisely so that their refusal proves the option set, not merely the forced
     command.
     """
-    nothing: Dict[str, Any] = {"progress": None, "checkpoint": None, "channel": "unavailable"}
+    nothing: Dict[str, Any] = {"progress": None, "checkpoint": None, "channel": "unavailable", "paths": None}
     if not HOST_KEY_RE.fullmatch(host_key) or not routable(host) or budget_seconds < OBSERVATION_MIN_SECONDS:
         return nothing
     budget_seconds = min(float(OBSERVATION_SECONDS), budget_seconds)
@@ -104,7 +195,7 @@ def read_observations(host: str, port: int, host_key: str, key_path: str, direct
 
 
 def _observe(host: str, port: int, key_path: str, known_hosts: str, budget_seconds: float) -> Dict[str, Any]:
-    nothing: Dict[str, Any] = {"progress": None, "checkpoint": None, "channel": "unavailable"}
+    nothing: Dict[str, Any] = {"progress": None, "checkpoint": None, "channel": "unavailable", "paths": None}
     # A command is sent on purpose: with the restricted key the server must ignore it,
     # which the JSON answer (and never this command's output) proves on every sample.
     # `-tt` forces a pty request: under `restrict` sshd denies it ("PTY allocation
@@ -160,7 +251,8 @@ def _observe(host: str, port: int, key_path: str, known_hosts: str, budget_secon
         answer = json.loads(output.decode("ascii").replace("\r", ""))
     except (UnicodeDecodeError, json.JSONDecodeError):
         return nothing
-    if not isinstance(answer, dict) or set(answer) != {"progress", "checkpoint"}:
+    if not isinstance(answer, dict) or set(answer) != {"progress", "checkpoint", "paths"} \
+            or not isinstance(answer["paths"], dict) or set(answer["paths"]) != {"progress", "checkpoint"}:
         return nothing  # the forced reader did not answer: the key is not restricted as required
     # `restrict` denies both the pty and the port forward; sshd offers no way to read
     # an authorized_keys option set from the client, so the denied capabilities are the
@@ -168,4 +260,4 @@ def _observe(host: str, port: int, key_path: str, known_hosts: str, budget_secon
     restricted = "PTY allocation request failed" in diagnostics and "remote port forwarding failed" in diagnostics
     channel = "answered" if restricted else "unrestricted"
     return {"progress": parse_counter(answer.get("progress")), "checkpoint": parse_counter(answer.get("checkpoint")),
-            "channel": channel}
+            "channel": channel, "paths": answer["paths"]}

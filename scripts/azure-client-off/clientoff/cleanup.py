@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, List, Optional
 from .az import Az
-from .manifest import ARM, GROUP_RE, RUN_ID_RE, UUID_RE, same_id
+from .manifest import ARM, CLEANUP_BOUND_SECONDS, CLI_STEP_SECONDS, GROUP_RE, RUN_ID_RE, UUID_RE, same_id
 
 
 def group_list(value: Any) -> Optional[List[str]]:
@@ -50,14 +50,35 @@ def run_bound(record: Dict[str, Any], manifest: Dict[str, Any]) -> bool:
     return False
 
 
-def owned_now(az: Az, record: Dict[str, Any], manifest: Dict[str, Any]) -> Optional[bool]:
+def resource_ids(value: Any) -> Optional[List[str]]:
+    """A recorded or live resource inventory: a JSON array of ARM resource IDs (or of
+    objects carrying `id`), or None when malformed."""
+    if not isinstance(value, list):
+        return None
+    ids = []
+    for item in value:
+        item = item.get("id") if isinstance(item, dict) else item
+        if not isinstance(item, str) or not item.casefold().startswith("/subscriptions/"):
+            return None
+        ids.append(item)
+    return ids
+
+
+def outside(ids: List[str], groups: List[str]) -> List[str]:
+    """The resource IDs that do not live in any of `groups` (case-insensitively)."""
+    prefixes = [f"/resourcegroups/{group.casefold()}/" for group in groups]
+    return sorted(identifier.casefold() for identifier in ids
+                  if not any(prefix in identifier.casefold() for prefix in prefixes))
+
+
+def owned_now(az: Az, record: Dict[str, Any], manifest: Dict[str, Any], timeout: int = CLI_STEP_SECONDS) -> Optional[bool]:
     """Immediately before a delete: is the group still the exact resource that was
     journaled at creation (same ARM ID, identical tag set) and bound to this run? None
     when it cannot be read; an absent, recreated or retagged group is not ours, and a
     record not bound to this run never authorizes a delete, nor even a read."""
     if not run_bound(record, manifest):
         return False
-    shown = az.run(["group", "show", "-n", record["name"]])
+    shown = az.run(["group", "show", "-n", record["name"]], timeout=timeout)
     if not isinstance(shown, dict) or not isinstance(shown.get("tags"), dict):
         return None
     return same_id(shown.get("id"), record["id"]) and shown["tags"] == record["tags"]
@@ -88,21 +109,35 @@ def cleanup_targets(manifest: Dict[str, Any], before: Any, created: Any) -> Dict
     return {"delete": [records[group.casefold()] for group in wanted if group not in refused], "refused": refused}
 
 
-def phase_cleanup(az: Az, manifest: Dict[str, Any], before: List[str], created: List[str]) -> Dict[str, Any]:
+def phase_cleanup(az: Az, manifest: Dict[str, Any], before: List[str], created: List[str],
+                  resources_before: Any = None, bound_seconds: int = CLEANUP_BOUND_SECONDS) -> Dict[str, Any]:
     """Delete only the exact groups this run created; verify absence and untouched peers.
-    A dry run walks the same authorization (the reads happen, the delete is journaled
-    and suppressed by `Az.run`) and stops before waiting for an absence it never caused."""
+    The whole phase runs under one absolute bound: every ARM call is handed what is
+    left of it and no poll sleeps across it. A dry run walks the same authorization
+    (the reads happen, the delete is journaled and suppressed by `Az.run`) and stops
+    before waiting for an absence it never caused. Untouched peers are proven from a
+    resource inventory recorded before the run, not from group names alone."""
+    deadline = time.monotonic() + bound_seconds
+
+    def budget() -> int:
+        return max(1, min(CLI_STEP_SECONDS, int(deadline - time.monotonic())))
+
     targets = cleanup_targets(manifest, before, created)
-    if targets.get("malformed"):
+    recorded = resource_ids(resources_before)
+    if targets.get("malformed") or recorded is None:
         return {"passed": False, "deleted": [],
-                "findings": ["groups-before is not a JSON array of names or created is not a JSON array of identity records"]}
+                "findings": ["groups-before is not a JSON array of names, created is not a JSON array of identity records, "
+                             "or resources-before is not a JSON array of ARM resource IDs"]}
     findings = [f"refusing to delete {group}: pre-existing, not journaled as created by this run, or journaled "
                 "without this run's identity in its tags" for group in targets["refused"]]
     deleting = []
     for record in targets["delete"]:
         group = record["name"]
+        if time.monotonic() >= deadline:
+            findings.append(f"cleanup bound reached before {group} was re-attested; not deleted")
+            continue
         # A same-named group recreated or retagged since the journal entry is not ours.
-        owned = owned_now(az, record, manifest)
+        owned = owned_now(az, record, manifest, timeout=budget())
         if owned is None:
             findings.append(f"refusing to delete {group}: ownership could not be read")
         elif not owned:
@@ -114,32 +149,41 @@ def phase_cleanup(az: Az, manifest: Dict[str, Any], before: List[str], created: 
             # so the guarantee rests on the name: unique to this run, so nothing else can
             # legitimately stand at this path in the window between the re-read and the
             # delete reaching ARM.
-            az.run(["rest", "--method", "delete", "--url", f"{ARM}{record['id']}?api-version=2022-09-01"], mutating=True)
+            az.run(["rest", "--method", "delete", "--url", f"{ARM}{record['id']}?api-version=2022-09-01"], mutating=True,
+                   timeout=budget())
     targets["delete"] = deleting
     if az.dry_run:
         return {"passed": False, "dry_run": True, "findings": findings, "deleted": [], "would_delete": deleting}
-    deadline = time.monotonic() + 1_500
     unresolved: Dict[str, str] = {}
-    while time.monotonic() < deadline:
+    while True:
         # False is proven absence; True is presence; None (timeout, CLI error, malformed
         # answer) is unknown and never counts as absence.
         unresolved = {}
         for group in targets["delete"]:
-            exists = az.run(["group", "exists", "-n", group])
+            exists = az.run(["group", "exists", "-n", group], timeout=budget()) if time.monotonic() < deadline else None
             if exists is True:
                 unresolved[group] = "present"
             elif exists is not False:
                 unresolved[group] = "unknown"
-        if not unresolved:
+        left = deadline - time.monotonic()
+        if not unresolved or left <= 0:
             break
-        time.sleep(15)
+        time.sleep(min(15.0, left))
     for group, state in sorted(unresolved.items()):
         findings.append(f"group {group} {state} at the bound: absence not proven")
-    inventory = az.run(["group", "list"])
-    names = group_list([group.get("name") for group in inventory]
-                       if isinstance(inventory, list) and all(isinstance(group, dict) for group in inventory) else None)
+    # Untouched peers: every resource that existed before the run outside the deleted
+    # groups must still exist, and nothing outside them may have appeared or gone. A
+    # group recreated under its old name shows up as changed resource IDs inside it.
+    inventory = resource_ids(az.run(["resource", "list"], timeout=budget())) if time.monotonic() < deadline else None
+    if inventory is None:
+        findings.append("final resource inventory unreadable: unchanged pre-existing resources not proven")
+    elif outside(inventory, deleting) != outside(recorded, deleting):
+        findings.append("resources outside the deleted groups changed during the run")
+    groups_now = az.run(["group", "list"], timeout=budget()) if time.monotonic() < deadline else None
+    names = group_list([group.get("name") for group in groups_now]
+                       if isinstance(groups_now, list) and all(isinstance(group, dict) for group in groups_now) else None)
     if names is None:
-        findings.append("final resource-group inventory unreadable: unchanged pre-existing resources not proven")
+        findings.append("final resource-group inventory unreadable: unchanged pre-existing groups not proven")
     elif sorted(name.casefold() for name in names) != sorted(name.casefold() for name in before):
         findings.append("pre-existing resource groups changed during the run")
     return {"passed": not findings, "findings": findings, "deleted": targets["delete"]}
