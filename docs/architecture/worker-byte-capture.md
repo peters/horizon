@@ -30,7 +30,7 @@ no client heartbeat, mandatory product lifetime or provider lifecycle action.
 Neither image entrypoint nor workspace setup automatically enrolls a capture.
 `status <binding>` reads only; `cancel <binding>` records cancellation without
 replaying capture, deleting data or stopping tasks. A repeated `start` observes
-an existing enrollment and does not restart a cancelled, failed or uncertain
+an existing enrollment regardless of selected-path order and does not restart a cancelled, failed or uncertain
 service. A consumed enrollment with no status is `claimed_unknown`, not success.
 
 ## Publication and limits

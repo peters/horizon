@@ -311,6 +311,9 @@ def literal_bundle(raw, manifest):
 
 def inside_proof():
     """Synthetic initial Git receipts only; actual capture/start/status code is unmodified."""
+    usage = subprocess.run([capture.HELPER], capture_output=True, env=capture.ENV, timeout=5)
+    store.require(usage.returncode == 2 and not usage.stdout
+                  and b'capture-plan' in usage.stderr and b'capture-once' in usage.stderr)
     root = Path('/workspace')
     for directory in ('horizon', '.horizon-worker', 'horizon/repository', '.horizon-worker/git-workspace'):
         (root / directory).mkdir(mode=0o700)
@@ -391,6 +394,15 @@ def inside_proof():
             slot.close()
         repeat = call('start', data=store.encode(enrollment))
         store.require(repeat['binding'] == binding and repeat['state'] != 'submitted')
+        captures = root / '.horizon-worker/byte-captures'
+        lock = captures / binding / 'lock'
+        lock_identity = store.identity(lock.stat())
+        enrollment['selected'].reverse()
+        reordered = call('start', data=store.encode(enrollment))
+        store.require(reordered['binding'] == binding and reordered['state'] != 'submitted'
+                      and reordered['started_at_millis'] == first['started_at_millis']
+                      and list(captures.iterdir()) == [captures / binding]
+                      and store.identity(lock.stat()) == lock_identity)
         git('commit', '-m', 'synthetic changed baseline')
         deadline = time.monotonic() + 25
         while True:

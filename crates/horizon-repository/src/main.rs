@@ -45,7 +45,7 @@ fn main() -> ExitCode {
     {
         let _ = writeln!(
             io::stderr().lock(),
-            "Usage: horizon-repository materialize|setup|setup-status|setup-binding|setup-checkout|receive-overlay|overlay-status|receive-pack|pack-status|intake|intake-status|storage-status|git-prepare|git-status|git-binding|git-checkout < request"
+            "Usage: horizon-repository materialize|capture-plan|capture-once|setup|setup-status|setup-binding|setup-checkout|receive-overlay|overlay-status|receive-pack|pack-status|intake|intake-status|storage-status|git-prepare|git-status|git-binding|git-checkout < request"
         );
         return ExitCode::from(2);
     }

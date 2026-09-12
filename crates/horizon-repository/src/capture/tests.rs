@@ -38,6 +38,19 @@ fn binding_is_explicit_and_rejects_excluded_or_ambiguous_selection() {
 }
 
 #[test]
+fn reordered_selection_keeps_identity_but_changed_paths_do_not() {
+    let mut request = enrollment();
+    request.selected = vec!["z.txt".into(), "a.txt".into(), "source.txt".into()];
+    let original = request.binding().unwrap();
+    request.selected.reverse();
+    assert_eq!(request.binding().unwrap(), original);
+    request.selected.sort();
+    assert_eq!(request.binding().unwrap(), original);
+    request.selected[0] = "changed.txt".into();
+    assert_ne!(request.binding().unwrap(), original);
+}
+
+#[test]
 fn rejection_is_bounded_redacted_and_never_acknowledges_capture() {
     for plan in [false, true] {
         for bytes in [

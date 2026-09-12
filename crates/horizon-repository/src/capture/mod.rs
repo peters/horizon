@@ -24,7 +24,7 @@ use std::{
 const REQUEST_LIMIT: u64 = 128 * 1024;
 const CAPACITY: u64 = 1024 * 1024 * 1024;
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Enrollment {
     version: u8,
@@ -47,8 +47,10 @@ impl Enrollment {
                 return Err(Reason::Invalid);
             }
         }
+        let mut canonical = self.clone();
+        canonical.selected.sort_unstable();
         let mut bytes = b"horizon-retained-byte-capture-v1\0".to_vec();
-        bytes.extend(serde_json::to_vec(self).map_err(|_| Reason::Invalid)?);
+        bytes.extend(serde_json::to_vec(&canonical).map_err(|_| Reason::Invalid)?);
         Ok(ArtifactDigest::sha256(&bytes))
     }
 }
