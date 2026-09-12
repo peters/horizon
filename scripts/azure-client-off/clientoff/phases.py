@@ -8,7 +8,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from .az import Az
 from .manifest import (AFTER_OFF_MINUTES, CLI_STEP_SECONDS, CLIENT_VM_NAME, INSTANCE_ID_RE, OFF_SETUP_MINUTES,
-                       RETURN_RESERVE_MINUTES, required_minutes,
+                       INSTALL_RECONCILE_SECONDS, RETURN_RESERVE_MINUTES, RUN_COMMAND_SECONDS, required_minutes,
                        RUN_ID_RE, SAMPLE_SECONDS, client_tags, image_ref_digest, parse_utc, routable, same_group, same_id,
                        utc_now)
 from .observer import (OBSERVATION_MIN_SECONDS, OBSERVATION_SECONDS, derived_public_key, observer_authorized_line,
@@ -422,6 +422,11 @@ def phase_install_observer(az: Az, manifest: Dict[str, Any], worker: Dict[str, A
         az.append_container_authorized_key(manifest["worker_group"], worker["vm_name"], line)
         return {"passed": False, "dry_run": True, "installed": False,
                 "findings": ["dry run: the restricted observer line would be appended on B now"], "plan": az.journal}
+    # Right before the mutation, with the remaining budget as it is now: the run-command
+    # bound and the reconciliation after it must both fit, or nothing is appended.
+    if az.left() is not None and az.left() < RUN_COMMAND_SECONDS + INSTALL_RECONCILE_SECONDS:
+        return {"passed": False, "installed": False,
+                "findings": ["the append and its reconciliation no longer fit before the phase deadline; nothing installed"]}
     if az.append_container_authorized_key(manifest["worker_group"], worker["vm_name"], line) is None:
         # The append may have run before its answer was lost: the reader is the truth.
         # A retry after an unproven append would stack a second line, so the state is

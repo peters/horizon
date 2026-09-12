@@ -9,6 +9,7 @@ import json
 import os
 import pathlib
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -671,6 +672,8 @@ class OffPhaseTests(unittest.TestCase):
         m, az, calls = self.plane()
         worker, _ = self.descriptors(m)
         answers = iter([{"progress": None, "checkpoint": None, "channel": "refused"}, {"progress": 3, "checkpoint": None, "channel": "answered", "paths": {"progress": "/workspace/live/progress", "checkpoint": None}}])
+        az.edit_container_authorized_keys = lambda group, name, line, action: client_off.Az.edit_container_authorized_keys(
+            az, group, name, line, action)
         az.append_container_authorized_key = lambda group, name, line: client_off.Az.append_container_authorized_key(
             az, group, name, line)
         with tempfile.TemporaryDirectory() as directory:
@@ -683,10 +686,12 @@ class OffPhaseTests(unittest.TestCase):
         self.assertIn(m["worker_group"], invoke[0])
         script = invoke[0][invoke[0].index("--scripts") + 1]
         self.assertIn("docker exec horizon-worker", script)
-        self.assertIn(">> /root/.ssh/authorized_keys", script)
-        encoded = script.split("echo ")[1].split(" |")[0]
-        line = base64.b64decode(encoded).decode("ascii")
-        self.assertEqual(line, client_off.observer_authorized_line(public_key, worker["progress_path"], None) + "\n")
+        self.assertIn("python3 - append ", script, "the editor runs in the container, relative to a verified /root/.ssh")
+        line = base64.b64decode(script.rsplit(" ", 1)[1].rstrip("'")).decode("ascii")
+        self.assertEqual(line, client_off.observer_authorized_line(public_key, worker["progress_path"], None))
+        program = base64.b64decode(script.split("echo ")[1].split(" |")[0]).decode("ascii")
+        self.assertIn("O_NOFOLLOW", program)
+        self.assertIn("dir_fd=ssh", program)
         # The worker is attested immediately before the append and again after it.
         mutation_index = next(i for i, c in enumerate(calls) if c[0] == "mutate")
         shows = [i for i, c in enumerate(calls) if c[0] == "read" and c[1][:2] == ("vm", "show") and m["worker_group"] in c[1]]
@@ -721,6 +726,8 @@ class OffPhaseTests(unittest.TestCase):
         m, az, calls = self.plane()
         worker, _ = self.descriptors(m)
         az.dry_run = True
+        az.edit_container_authorized_keys = lambda group, name, line, action: client_off.Az.edit_container_authorized_keys(
+            az, group, name, line, action)
         az.append_container_authorized_key = lambda group, name, line: client_off.Az.append_container_authorized_key(
             az, group, name, line)
         with tempfile.TemporaryDirectory() as directory:
@@ -793,6 +800,34 @@ class OffPhaseTests(unittest.TestCase):
         public_key = " ".join(private.with_suffix(".pub").read_text(encoding="utf-8").split()[:2])
         return str(private), str(private.with_suffix(".pub")), public_key
 
+    def test_the_key_editor_appends_and_removes_relative_to_a_verified_directory(self):
+        line = client_off.observer_authorized_line("ssh-ed25519 " + "A" * 68, "/workspace/live/progress", None)
+        encoded = base64.b64encode(line.encode("ascii")).decode("ascii")
+        with tempfile.TemporaryDirectory() as root:
+            os.makedirs(f"{root}/.ssh", mode=0o700)
+            program = client_off.AUTHORIZED_KEYS_EDITOR.replace('os.open("/root", flags)', f'os.open("{root}", flags)')
+            keys = pathlib.Path(root) / ".ssh" / "authorized_keys"
+            keys.write_text("ssh-ed25519 " + "B" * 68 + " client\n", encoding="utf-8")
+
+            def run(action):
+                return subprocess.run([sys.executable, "-", action, encoded], input=program, text=True, capture_output=True, check=False)
+
+            self.assertEqual(run("append").returncode, 0)
+            self.assertEqual(keys.read_text(encoding="utf-8").splitlines()[1], line)
+            self.assertEqual(run("remove").returncode, 0)
+            self.assertEqual(keys.read_text(encoding="utf-8"), "ssh-ed25519 " + "B" * 68 + " client\n", "only the observer line went")
+            self.assertEqual(sorted(os.listdir(f"{root}/.ssh")), ["authorized_keys"], "no temporary left behind")
+            # A symlinked .ssh, or a symlinked key file, is never followed.
+            os.rename(f"{root}/.ssh", f"{root}/elsewhere")
+            os.symlink(f"{root}/elsewhere", f"{root}/.ssh")
+            self.assertEqual(run("append").returncode, 2)
+            os.unlink(f"{root}/.ssh")
+            os.rename(f"{root}/elsewhere", f"{root}/.ssh")
+            os.rename(keys, f"{root}/real_keys")
+            os.symlink(f"{root}/real_keys", keys)
+            self.assertEqual(run("append").returncode, 2)
+            self.assertEqual(pathlib.Path(f"{root}/real_keys").read_text(encoding="utf-8").count("\n"), 1, "the target was not written")
+
     def test_remove_observer_key_is_reconciled_by_the_reader(self):
         for answers, passed, removed in (([{"progress": None, "checkpoint": None, "channel": "refused"}], True, True),
                                          ([{"progress": 4, "checkpoint": None, "channel": "answered", "paths": {"progress": "/workspace/live/progress", "checkpoint": None}}], False, False),
@@ -801,6 +836,8 @@ class OffPhaseTests(unittest.TestCase):
             with self.subTest(channel=answers[0]["channel"]):
                 m, az, calls = self.plane()
                 worker, _ = self.descriptors(m)
+                az.edit_container_authorized_keys = lambda group, name, line, action: client_off.Az.edit_container_authorized_keys(
+                    az, group, name, line, action)
                 az.remove_container_authorized_key = lambda group, name, line: client_off.Az.remove_container_authorized_key(
                     az, group, name, line)
                 replies = iter(answers)
@@ -812,11 +849,11 @@ class OffPhaseTests(unittest.TestCase):
                 invoke = [c[1] for c in calls if c[0] == "mutate"]
                 self.assertEqual([c[:3] for c in invoke], [("vm", "run-command", "invoke")])
                 script = invoke[0][invoke[0].index("--scripts") + 1]
-                self.assertIn("grep -vxF", script)
-                self.assertIn("[ $rc -le 1 ] ||", script, "a grep error leaves the file untouched")
-                encoded = script.split("echo ")[1].split(" |")[0]
-                self.assertEqual(base64.b64decode(encoded).decode("ascii"),
+                self.assertIn("python3 - remove ", script)
+                self.assertEqual(base64.b64decode(script.rsplit(" ", 1)[1].rstrip("'")).decode("ascii"),
                                  client_off.observer_authorized_line(public_key, worker["progress_path"], None))
+                program = base64.b64decode(script.split("echo ")[1].split(" |")[0]).decode("ascii")
+                self.assertIn("os.replace(name, \"authorized_keys\", src_dir_fd=ssh, dst_dir_fd=ssh)", program)
         m, az, calls = self.plane(b_vm_id="/g/b/other")
         worker, _ = self.descriptors(m)
         with tempfile.TemporaryDirectory() as directory:

@@ -34,9 +34,11 @@ class ManifestTests(unittest.TestCase):
         soon = (NOW + dt.timedelta(minutes=20)).isoformat()
         self.assertTrue(any("at least" in p for p in client_off.validate_manifest(manifest(cleanup_deadline_utc=soon), NOW)))
         self.assertTrue(client_off.validate_manifest(manifest(cleanup_deadline_utc=soon), NOW, phase="off"))
+        install = (client_off.INSTALL_SETUP_MINUTES + client_off.RUN_COMMAND_SECONDS // 60
+                   + client_off.INSTALL_RECONCILE_SECONDS // 60 + 1)
         self.assertEqual(client_off.required_minutes(manifest(), "install-observer-key"),
-                         client_off.required_minutes(manifest(), "off") + client_off.RUN_COMMAND_SECONDS // 60,
-                         "the install may spend its whole run-command bound first")
+                         client_off.required_minutes(manifest(), "off") + install,
+                         "the install: its setup, the run-command bound and its reconciliation, then the whole off phase")
         self.assertEqual(client_off.required_minutes(manifest(), "validate"),
                          client_off.PROVISION_MINUTES + client_off.required_minutes(manifest(), "install-observer-key"),
                          "renting is approved only when provisioning and then the install can both run to their bounds")

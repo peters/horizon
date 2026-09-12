@@ -9,6 +9,48 @@ from typing import Any, Dict, List, Optional
 from .manifest import CLI_STEP_SECONDS, PUBLIC_IP_NAME, RUN_COMMAND_SECONDS, TAG_IMAGE_REF, WORKER_CONTAINER, utc_now
 
 
+AUTHORIZED_KEYS_EDITOR = """import base64, os, stat, sys, tempfile
+action, line = sys.argv[1], base64.b64decode(sys.argv[2]).decode("ascii")
+flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+os.umask(0o077)
+try:
+    root = os.open("/root", flags)
+    try:
+        os.mkdir(".ssh", 0o700, dir_fd=root)
+    except FileExistsError:
+        pass
+    ssh = os.open(".ssh", flags, dir_fd=root)
+    os.close(root)
+    if action == "append":
+        fd = os.open("authorized_keys", os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=ssh)
+        try:
+            os.write(fd, (line + "\\n").encode("ascii"))
+        finally:
+            os.close(fd)
+    else:
+        try:
+            fd = os.open("authorized_keys", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=ssh)
+        except FileNotFoundError:
+            sys.exit(0)
+        with os.fdopen(fd, "rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                sys.exit(3)
+            kept = [entry for entry in handle.read().split(b"\\n") if entry != line.encode("ascii")]
+        name = ".authorized_keys." + base64.b16encode(os.urandom(6)).decode("ascii")
+        tmp = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=ssh)
+        try:
+            os.write(tmp, b"\\n".join(kept))
+            os.fsync(tmp)
+        finally:
+            os.close(tmp)
+        os.replace(name, "authorized_keys", src_dir_fd=ssh, dst_dir_fd=ssh)
+    os.close(ssh)
+except OSError as error:
+    sys.stderr.write("authorized_keys editor: %s\\n" % error)
+    sys.exit(2)
+"""
+
+
 class Az:
     """Bounded `az` calls without a shell; every mutation names the exact resource."""
 
@@ -66,32 +108,26 @@ class Az:
                 codes.append(code)
         return codes[0] if len(codes) == 1 else None
 
-    def append_container_authorized_key(self, group: str, name: str, line: str) -> Optional[Any]:
-        """Append one `authorized_keys` line inside the worker container through the ARM
-        run-command channel; the line travels base64-encoded so no quoting layer can alter it."""
-        encoded = base64.b64encode((line.rstrip("\n") + "\n").encode("ascii")).decode("ascii")
-        script = (f"docker exec {WORKER_CONTAINER} sh -c 'umask 077 && mkdir -p /root/.ssh && "
-                  f"echo {encoded} | base64 -d >> /root/.ssh/authorized_keys'")
+    def edit_container_authorized_keys(self, group: str, name: str, line: str, action: str) -> Optional[Any]:
+        """Append or remove exactly one `authorized_keys` line inside the worker container
+        through the ARM run-command channel. The editor runs as python3 in the container,
+        opens `/root/.ssh` with `O_DIRECTORY|O_NOFOLLOW` and the key file (and its
+        temporary) relative to that directory descriptor with `O_NOFOLLOW`, so a planted
+        symlink at either path can never redirect a root write; a removal filters into a
+        temporary created next to the file and renames it over the original atomically.
+        Program and line travel base64-encoded so no quoting layer can alter them."""
+        encoded_program = base64.b64encode(AUTHORIZED_KEYS_EDITOR.encode("ascii")).decode("ascii")
+        encoded_line = base64.b64encode(line.rstrip("\n").encode("ascii")).decode("ascii")
+        script = (f"docker exec {WORKER_CONTAINER} sh -c 'echo {encoded_program} | base64 -d | "
+                  f"python3 - {action} {encoded_line}'")
         return self.run(["vm", "run-command", "invoke", "-g", group, "-n", name, "--command-id", "RunShellScript",
                          "--scripts", script], mutating=True, timeout=RUN_COMMAND_SECONDS)
 
+    def append_container_authorized_key(self, group: str, name: str, line: str) -> Optional[Any]:
+        return self.edit_container_authorized_keys(group, name, line, "append")
+
     def remove_container_authorized_key(self, group: str, name: str, line: str) -> Optional[Any]:
-        """Remove every `authorized_keys` line equal to `line` inside the worker container
-        through the ARM run-command channel; the line travels base64-encoded and is
-        matched whole and literally, so nothing else in the file is touched."""
-        encoded = base64.b64encode(line.rstrip("\n").encode("ascii")).decode("ascii")
-        keys = "/root/.ssh/authorized_keys"
-        # The filtered copy goes to a unique same-directory temporary created by mktemp
-        # (never a predictable path a planted symlink could redirect); grep exits 1 when
-        # no line remains (still a success here) and 2 on an error, in which case the
-        # temporary is removed and the original file is left exactly as it was; the
-        # rename replaces the file atomically.
-        script = (f"docker exec {WORKER_CONTAINER} sh -c 'umask 077 && k=$(echo {encoded} | base64 -d) && "
-                  f"t=$(mktemp /root/.ssh/.authorized_keys.XXXXXX) && "
-                  f"{{ grep -vxF \"$k\" {keys} > \"$t\"; rc=$?; [ $rc -le 1 ] || {{ rm -f \"$t\"; exit $rc; }}; }} && "
-                  f"mv -f \"$t\" {keys}'")
-        return self.run(["vm", "run-command", "invoke", "-g", group, "-n", name, "--command-id", "RunShellScript",
-                         "--scripts", script], mutating=True, timeout=RUN_COMMAND_SECONDS)
+        return self.edit_container_authorized_keys(group, name, line, "remove")
 
     def vm_identity(self, group: str, name: str) -> Dict[str, Optional[str]]:
         vm = self.run(["vm", "show", "-g", group, "-n", name])
