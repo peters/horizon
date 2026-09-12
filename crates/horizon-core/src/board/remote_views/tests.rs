@@ -90,6 +90,78 @@ fn matching_workspace(board: &mut Board) -> WorkspaceId {
 }
 
 #[test]
+fn catalog_caches_only_static_shell_start_eligibility() {
+    let mut fixture = Fixture::new();
+    let mut state = fixture.record.state().clone();
+    let mut shell = state.spec.panels[0].clone();
+    shell.kind = PanelKind::Shell;
+    shell.task_handoff = None;
+    shell.agent_session_id = Some("private-agent-marker".into());
+    assert!(!saved_shell_start_eligible(&shell));
+    shell.agent_session_id = None;
+    state.spec.panels = [
+        "shell",
+        "command",
+        "agent",
+        "missing-command",
+        "handoff",
+        "agent-session",
+    ]
+    .into_iter()
+    .map(|id| {
+        let mut panel = shell.clone();
+        panel.panel_local_id = id.into();
+        match id {
+            "command" => panel.kind = PanelKind::Command,
+            "agent" => panel.kind = PanelKind::Claude,
+            "missing-command" => panel.command = None,
+            "handoff" => panel.task_handoff = Some("private-task-marker".into()),
+            "agent-session" => {
+                panel.kind = PanelKind::Claude;
+                panel.agent_session_id = Some("private-agent-marker".into());
+            }
+            _ => {}
+        }
+        panel
+    })
+    .collect();
+    fixture.record = fixture
+        .store
+        .replace_remote_workspace(&fixture.record, &state)
+        .expect("bindings");
+    let catalog = fixture.catalog();
+    assert_eq!(catalog.panel_ids().len(), 6);
+    assert_eq!(catalog.shell_start_eligible, [true, false, false, false, false, false]);
+    for id in catalog.panel_ids() {
+        assert_eq!(catalog.saved_shell_start_eligible(id), id == "shell");
+        assert!(!id.contains("private-"));
+    }
+    assert!(!catalog.saved_shell_start_eligible("unknown"));
+    fixture.assert_unchanged();
+
+    let summary = fixture.record.environment_summary();
+    state.spec.panels[0].command = None;
+    fixture.record = fixture
+        .store
+        .replace_remote_workspace(&fixture.record, &state)
+        .expect("change");
+    assert!(
+        catalog.saved_shell_start_eligible("shell"),
+        "cached hint is not live authority"
+    );
+    assert!(!fixture.catalog().saved_shell_start_eligible("shell"));
+    assert!(matches!(
+        RemoteViewCatalog::load(&fixture.store, OWNER, &summary),
+        Err(RemoteViewReopenError::StateChanged)
+    ));
+    assert!(matches!(
+        RemoteViewCatalog::load(&fixture.store, FOREIGN, &fixture.record.environment_summary()),
+        Err(RemoteViewReopenError::ClientSessionMismatch)
+    ));
+    fixture.assert_unchanged();
+}
+
+#[test]
 fn catalog_presence_requires_both_saved_identity_and_execution_reference() {
     let fixture = Fixture::new();
     let catalog = fixture.catalog();

@@ -6,16 +6,18 @@ use super::Board;
 use crate::{
     Panel, PanelId, PanelKind, PanelOptions, RemoteWorkspaceReference, SshConnectionStatus,
     cloud_run::{CloudWorkflowStore, StoredRemoteWorkspace},
-    remote_workspace::RemoteEnvironmentSummary,
+    remote_workspace::{RemoteEnvironmentSummary, RemotePanelBinding},
 };
 use std::time::Duration;
 use target::ViewTarget;
 
-/// Bounded saved panel identities without commands, task context or credentials.
-/// Loading this catalog does not observe a provider or certify that tasks exist.
+/// Bounded saved panel identities and static eligibility hints, without commands,
+/// task context or credentials. Loading neither observes a provider nor certifies
+/// task existence, live readiness or execution authority.
 pub struct RemoteViewCatalog {
     expected: RemoteEnvironmentSummary,
     panels: Vec<String>,
+    shell_start_eligible: Vec<bool>,
 }
 
 impl RemoteViewCatalog {
@@ -30,21 +32,35 @@ impl RemoteViewCatalog {
         expected: &RemoteEnvironmentSummary,
     ) -> Result<Self, RemoteViewReopenError> {
         let record = load_current(store, client_session_id, expected)?;
+        let (panels, shell_start_eligible) = record
+            .state()
+            .spec
+            .panels
+            .iter()
+            .map(|panel| (panel.panel_local_id.clone(), saved_shell_start_eligible(panel)))
+            .unzip();
         Ok(Self {
             expected: expected.clone(),
-            panels: record
-                .state()
-                .spec
-                .panels
-                .iter()
-                .map(|panel| panel.panel_local_id.clone())
-                .collect(),
+            panels,
+            shell_start_eligible,
         })
     }
 
     #[must_use]
     pub fn panel_ids(&self) -> &[String] {
         &self.panels
+    }
+
+    /// Static saved binding shape only: Shell with a command and no task handoff
+    /// or agent session. Unknown identities are ineligible. This cached hint does
+    /// not validate command contents, Git readiness, ownership at execution time
+    /// or worker availability; starting still requires fresh explicit admission.
+    #[must_use]
+    pub fn saved_shell_start_eligible(&self, panel_local_id: &str) -> bool {
+        self.panels
+            .iter()
+            .zip(&self.shell_start_eligible)
+            .any(|(id, eligible)| id == panel_local_id && *eligible)
     }
 
     /// Whether this saved identity has a local view of the same remote environment.
@@ -61,6 +77,13 @@ impl RemoteViewCatalog {
                     })
             })
     }
+}
+
+fn saved_shell_start_eligible(panel: &RemotePanelBinding) -> bool {
+    panel.kind == PanelKind::Shell
+        && panel.command.is_some()
+        && panel.task_handoff.is_none()
+        && panel.agent_session_id.is_none()
 }
 
 /// An unreserved local insertion proposal. Board changes may invalidate it.
