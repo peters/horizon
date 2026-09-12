@@ -75,7 +75,7 @@ impl Form {
         if self.choices.is_empty() {
             ui.label("Configure a Local Docker or RunPod profile before setup.");
         }
-        ui.label("Request preview only. Nothing has been created or executed.");
+        ui.label("Nothing has been created yet. Review these values before authorizing setup.");
         ui.strong("Worker and repository");
         egui::Grid::new("new-remote-inputs")
             .num_columns(if stacked { 1 } else { 2 })

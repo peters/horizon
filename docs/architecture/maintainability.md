@@ -142,9 +142,10 @@ back into large multi-purpose modules.
   dormant and interrupted records and recover only the same allocation snapshot.
   This leaf does not prepare Git, deliver repository credentials, start tasks or
   attest caller-supplied image/storage trust. UI confirmation remains a separate layer.
-  The overview's `request_preview` UI leaf edits a transient Local Docker/RunPod
-  request and calls only the nonmutating core preview off-thread. Its form and
-  cached disclosure renderer contain no submission, recovery or credential path.
+  The overview's `setup` UI leaf binds transient Local Docker/RunPod requests to
+  the actual home/session/config, caches exact confirmation values and consumes
+  consent once. Manual noncreating Check retains original attempt coordinates;
+  settled history never blocks inventory, repository Prepare or saved Shell Start.
 - `remote_environment_observation.rs` produces overview-safe, point-in-time
   provider observations with exact snapshot checks but no private-key access or
   saved-state writes. It shares allocation observation validation with recovery;

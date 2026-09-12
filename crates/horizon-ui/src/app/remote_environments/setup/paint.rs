@@ -1,9 +1,9 @@
 //! Existing-theme controls and cached exact-value disclosure, never operational readiness.
-use super::{Action, InventoryAction, PreparedRemoteWorkspaceSetup, PreviewState};
+use super::{Action, InventoryAction, PreparedRemoteWorkspaceSetup, SetupState};
 use crate::theme;
 
 pub(super) struct Review {
-    prepared: PreparedRemoteWorkspaceSetup,
+    pub(super) prepared: PreparedRemoteWorkspaceSetup,
     fields: Vec<(&'static str, String)>,
 }
 impl Review {
@@ -72,17 +72,58 @@ impl Review {
     }
 }
 
-impl PreviewState {
+impl SetupState {
+    pub(in super::super) fn history(&self, ui: &mut egui::Ui, action: &mut InventoryAction) {
+        if self.unknown {
+            ui.label("An earlier creation has an uncertain outcome and may still be billing. Check its original coordinates; no retry or cleanup was scheduled.");
+        }
+        if !self.attempts.is_empty() {
+            egui::ScrollArea::vertical()
+                .id_salt("setup-attempts")
+                .max_height(120.0)
+                .show(ui, |ui| {
+                    for (index, locator) in self.attempts.iter().enumerate() {
+                        ui.push_id(index, |ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.monospace(&locator.workspace_local_id);
+                                ui.monospace(&locator.owning_session_id);
+                                if ui
+                                    .add_enabled(
+                                        self.available && !self.is_active(),
+                                        egui::Button::new("Check this setup"),
+                                    )
+                                    .clicked()
+                                {
+                                    *action = InventoryAction::WorkspaceSetup(Action::CheckAttempt(index));
+                                }
+                            })
+                        });
+                    }
+                });
+            ui.label("Check uses the original home and owning session. Saved requests also remain in inventory.");
+        }
+        if let Some(notice) = &self.notice {
+            ui.colored_label(theme::PALETTE_YELLOW(), notice);
+        }
+    }
     pub(in super::super) fn show(&mut self, ui: &mut egui::Ui, action: &mut InventoryAction) {
-        ui.strong("New remote workspace — request preview only");
-        ui.label(
-            "Nothing has been created. This form does not save a workspace, read credentials or contact a provider.",
-        );
-        if self.pending.is_some() {
-            ui.label("Reviewing local request values…");
-        } else if let Some(review) = &self.review {
+        ui.strong("New remote workspace");
+        if let Some(pending) = &self.pending {
+            let elapsed = pending.started.elapsed().as_secs();
+            ui.label(format!("Waiting for the explicit setup operation ({elapsed} seconds)…"));
+            ui.label("Closing detaches this view; it does not cancel creation, stop a worker or cap billing.");
+            if elapsed >= 180 {
+                ui.label("Still waiting. You may close this view and later inspect the original saved workspace.");
+            } else if elapsed >= 90 {
+                ui.label("Setup is taking longer than expected. Do not submit another creation; the original request may still be running.");
+            }
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
+            return;
+        }
+        ui.label("Nothing has been created for this request yet. Review local values before authorizing setup.");
+        if let Some(review) = &self.review {
             ui.strong("Review request");
-            ui.label("Local validation passed. Provider availability, image access, Git access and storage contents have not been checked.");
+            ui.label("Provider availability, image access, Git access and storage contents have not been checked.");
             for (label, value) in &review.fields {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(*label);
@@ -96,21 +137,29 @@ impl PreviewState {
             if review.prepared.network_volume().is_some() {
                 ui.label("HPS identity is not ownership, exclusivity or durability proof. Storage charges are additional; the compute ceiling is not a total spending cap.");
             }
-            ui.label("A persistent worker would continue running after closing Horizon. No creation or billing is authorized by this review.");
+            ui.label(format!(
+                "Setup admission expires at Unix ms {}. A persistent worker keeps running after closing Horizon.",
+                review.prepared.retain_until_millis()
+            ));
+            ui.label("Setup sends no repository token, prepares no checkout, starts no task and attaches no view. Use separate Prepare and Start actions afterward.");
+            ui.checkbox(&mut self.consent, "I trust this entrypoint-only image and displayed storage contents, authorize their use and continuing billing, and permit no tasks before the first host pin.");
+            if ui
+                .add_enabled(self.consent, egui::Button::new("Create task-free worker"))
+                .clicked()
+            {
+                *action = InventoryAction::WorkspaceSetup(Action::Confirm);
+            }
             if ui.button("Edit request").clicked() {
-                *action = InventoryAction::RequestPreview(Action::Edit);
+                *action = InventoryAction::WorkspaceSetup(Action::Edit);
             }
         } else if let Some(form) = &mut self.form {
             form.show(ui);
             if ui.button("Review request").clicked() {
-                *action = InventoryAction::RequestPreview(Action::Review);
+                *action = InventoryAction::WorkspaceSetup(Action::Review);
             }
         }
-        if let Some(notice) = &self.notice {
-            ui.colored_label(theme::PALETTE_YELLOW(), notice);
-        }
         if ui.button("Cancel").clicked() {
-            *action = InventoryAction::RequestPreview(Action::Cancel);
+            *action = InventoryAction::WorkspaceSetup(Action::Cancel);
         }
     }
     pub(in super::super) fn new_button(&self, ui: &mut egui::Ui, action: &mut InventoryAction) {
@@ -121,10 +170,19 @@ impl PreviewState {
             )
             .clicked()
         {
-            *action = InventoryAction::RequestPreview(Action::New);
+            *action = InventoryAction::WorkspaceSetup(Action::New);
+        }
+        if ui
+            .add_enabled(
+                self.available && !self.is_active() && self.selected.is_some(),
+                egui::Button::new("Check selected setup"),
+            )
+            .clicked()
+        {
+            *action = InventoryAction::WorkspaceSetup(Action::CheckSelected);
         }
         if !self.available {
-            ui.label("Request preview needs an open persistent Linux session and no pending remote action.");
+            ui.label("Setup needs an open persistent Linux session and no pending remote action.");
         }
     }
 }
