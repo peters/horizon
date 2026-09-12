@@ -532,8 +532,8 @@ def revision_proof(checkout, preparation, git, call, command):
             if value.get('last_success'):
                 plan, blobs = read(value)
                 working = {entry['path']: entry for entry in plan['working_tree']}
-                if plan['source']['commit'] == commit and blobs[working['selected.txt']['sha256']] == payload:
-                    store.require(plan['source']['branch'] == preparation['work_branch']
+                if plan['commit'] == commit and blobs[working['selected.txt']['sha256']] == payload:
+                    store.require(plan['branch'] == preparation['work_branch']
                         and set(working) == set(enrollment['selected'])
                         and working['deleted.txt']['kind'] == 'remove')
                     return value
