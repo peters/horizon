@@ -1,7 +1,8 @@
 //! Selected-environment Stop controls; painting grants no provider authority.
 
 use super::{
-    Confirmation, InventoryAction, RemoteEnvironmentSummary, StopState, check_supported, same_target, supported,
+    CloudProvider, Confirmation, InventoryAction, RemoteEnvironmentSummary, StopState, check_supported, same_target,
+    supported,
 };
 use crate::theme;
 use egui::RichText;
@@ -44,7 +45,7 @@ pub(super) fn show(
     if !supported(selected) {
         ui.label(
             RichText::new(
-                "Stop requires a retained persistent local-provider worker. Timed and cloud Stop are not supported yet.",
+                "Stop requires a retained persistent supported worker. Existing RunPod Stop intent can only be checked; timed workers and other cloud providers are not supported.",
             )
             .color(theme::FG_DIM()),
         );
@@ -75,7 +76,11 @@ pub(super) fn show(
         if notice.checked {
             ui.label("Checks are manual point-in-time observations. Opening or closing this view never repeats them.");
         } else if !notice.succeeded {
-            ui.label("Saved intent and identity may remain. Refresh the saved page before explicitly retrying.");
+            ui.label(if selected.provider == CloudProvider::RunPod {
+                "Refresh the saved page. If Stop intent exists, use Check saved Stop; do not send another Stop request."
+            } else {
+                "Saved intent and identity may remain. Refresh the saved page before explicitly retrying."
+            });
         }
     }
 }
@@ -108,7 +113,12 @@ fn confirm(ui: &mut egui::Ui, confirmation: &Confirmation, enabled: bool, action
         theme::PALETTE_YELLOW(),
         "Stops every process in this worker. Unsaved process memory is lost.",
     );
-    ui.label("Retains this local container and its files. No checkpoint or backup is created. This does not delete the environment.");
+    if selected.provider == CloudProvider::RunPod {
+        ui.label("Requires the exact saved HPS attachment and public pin; no private SSH key is needed. Stop verifies retained provider metadata, not filesystem durability or a backup. No volume deletion is requested; storage may still be billed.");
+        ui.label("This sends one Stop request. After uncertainty, refresh and use Check saved Stop, never resend. Closing this overview does not cancel Stop; exiting Horizon may interrupt local coordination.");
+    } else {
+        ui.label("Retains this local container and its files. No checkpoint or backup is created. This does not delete the environment.");
+    }
     ui.horizontal_wrapped(|ui| {
         let cancel = ui.button("Cancel");
         let confirm = ui.add_enabled(

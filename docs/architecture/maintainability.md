@@ -478,6 +478,12 @@ back into large multi-purpose modules.
   checks through the exact saved request, pin, named profile and HPS selection before
   lazy credential lookup. It calls the same confirmation coordinator, not Stop or
   setup recovery. Only verified completion changes local state; absence is not retention.
+- `remote_workspace/stop/configured_runpod.rs` shares retained request/profile/public-pin
+  admission with confirmation and admits first Stop only with a saved HPS selection.
+  Existing Stop intent refuses mutation before credential lookup; uncertainty hands off
+  to Check, never another Stop. The internal coordinator consumes the exact admitted
+  allocation, so workflow drift cannot be adopted between validation and the intent CAS.
+  No private identity, host-key lookup, storage discovery or creation is authorized.
 - `remote_workspace/stop/configured.rs` admits one explicitly confirmed saved
   selection through its exact named local provider profile. It reloads the owned
   record and compares the full summary/revision before durable Stop coordination,
@@ -486,8 +492,10 @@ back into large multi-purpose modules.
   gain no fallback authority; failures may require refreshing retained Stop intent.
 - The overview's `remote_environments/stop.rs` owns only confirmation, single-flight
   background execution and cached outcome presentation; its `stop/paint.rs` collects
-  explicit actions for retained persistent local workers; timed/cloud Stop stays
-  disabled. A separate Check saved Stop action observes existing RunPod intent in
+  explicit actions for retained persistent local and Linux RunPod workers; timed and
+  other cloud Stop stays disabled. RunPod confirmation discloses process-memory loss,
+  metadata-only retention proof and possible continuing storage cost. Its first-Stop
+  callback uses existing-only, non-migrating storage. A separate Check saved Stop action observes existing RunPod intent in
   the same single-flight slot, without replay or private SSH identity. Closing
   invalidates presentation, not an admitted operation. Its completion writer uses
   existing-only, non-migrating store admission; legacy or corrupt storage is refused
