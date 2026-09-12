@@ -28,6 +28,8 @@ jobs:
         run: python3 -B containers/remote-worker/test_github_credentials.py -v
       - name: Verify explicit worker token installation
         run: python3 -B containers/remote-worker/test_github_token_install.py -v
+      - name: Verify worker byte-capture guards
+        run: python3 -B -W error containers/remote-worker/test_byte_capture.py -v
       - name: Verify source allowlist and excluded-file controls
         run: python3 -B containers/remote-worker/test_repository_packaging.py --docker-host unix:///var/run/docker.sock
 
