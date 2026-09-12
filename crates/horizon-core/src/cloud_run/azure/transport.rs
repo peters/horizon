@@ -8,6 +8,7 @@ use super::{
 };
 use std::{collections::BTreeMap, time::Duration};
 
+mod power;
 mod run_command;
 
 pub use run_command::AzureRunCommand;
@@ -96,6 +97,10 @@ pub trait AzureManagementTransport: Send + Sync {
     /// `None` when the VM is absent.
     /// # Errors
     fn deallocate_vm(&self, group: &str, name: &str) -> Result<Option<AzureLongRunningState>, AzureError>;
+    /// Start a deallocated or guest-stopped VM's compute (`PowerState/running`); `None`
+    /// when the VM is absent.
+    /// # Errors
+    fn start_vm(&self, group: &str, name: &str) -> Result<Option<AzureLongRunningState>, AzureError>;
     /// Run one of the closed set of commands inside the VM through the ARM run-command
     /// channel and return its standard output, or `None` when the VM is absent.
     /// # Errors
@@ -152,6 +157,10 @@ impl<T: AzureManagementTransport + ?Sized> AzureManagementTransport for std::syn
 
     fn deallocate_vm(&self, group: &str, name: &str) -> Result<Option<AzureLongRunningState>, AzureError> {
         (**self).deallocate_vm(group, name)
+    }
+
+    fn start_vm(&self, group: &str, name: &str) -> Result<Option<AzureLongRunningState>, AzureError> {
+        (**self).start_vm(group, name)
     }
 
     fn run_command(&self, group: &str, name: &str, command: AzureRunCommand) -> Result<Option<String>, AzureError> {
@@ -591,19 +600,11 @@ impl AzureManagementTransport for AzureArmHttp {
     }
 
     fn deallocate_vm(&self, group: &str, name: &str) -> Result<Option<AzureLongRunningState>, AzureError> {
-        let operation = "virtual machine deallocation";
-        let url = self.resource_url(
-            group,
-            "Microsoft.Compute/virtualMachines",
-            name,
-            COMPUTE_API_VERSION,
-            "/deallocate",
-        )?;
-        match self.send_json("POST", &url, None, &[200, 202], false, operation) {
-            Ok((status, _)) => Ok(Some(long_running(status))),
-            Err(AzureError::UnexpectedStatus { status: 404, .. }) => Ok(None),
-            Err(error) => Err(error),
-        }
+        self.power_operation(group, name, "/deallocate", "virtual machine deallocation")
+    }
+
+    fn start_vm(&self, group: &str, name: &str) -> Result<Option<AzureLongRunningState>, AzureError> {
+        self.power_operation(group, name, "/start", "virtual machine start")
     }
 
     fn run_command(&self, group: &str, name: &str, command: AzureRunCommand) -> Result<Option<String>, AzureError> {

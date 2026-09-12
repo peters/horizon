@@ -3,8 +3,9 @@
 //! Ignored by default and driven entirely by environment variables, so the ordinary
 //! test matrix never touches Azure. It creates exactly one task-owned resource group,
 //! proves readiness with the attested host key by opening a pinned SSH session,
-//! stops the worker, verifies the retained state, deletes the group and proves it is
-//! gone. Every step is timed and written as one JSON line per event to stdout.
+//! stops the worker, verifies the retained state, starts its compute again and
+//! reattaches through the same pinned key to the retained data, stops it again,
+//! deletes the group and proves it is gone. Every step is timed and written as one JSON line per event to stdout.
 //!
 //! Required: `HORIZON_AZURE_LIVE_SUBSCRIPTION`, `HORIZON_AZURE_LIVE_IMAGE` (digest
 //! reference on the registry), `HORIZON_AZURE_LIVE_PULL_IDENTITY` (resource ID),
@@ -43,8 +44,9 @@ use horizon_core::cloud_run::{
     },
     interactive_worker::{
         InteractiveWorker, InteractiveWorkerCleanup, InteractiveWorkerEnsure, InteractiveWorkerLifecycle as Lifecycle,
-        InteractiveWorkerProvider, InteractiveWorkerRequest, InteractiveWorkerStatus,
+        InteractiveWorkerProvider, InteractiveWorkerRequest, InteractiveWorkerSshEndpoint, InteractiveWorkerStatus,
     },
+    interactive_worker_start::{InteractiveWorkerStart, InteractiveWorkerStartProvider},
     interactive_worker_stop::{InteractiveWorkerStop, InteractiveWorkerStopProvider},
 };
 use std::{
@@ -723,7 +725,7 @@ impl Live {
     }
 
     /// Ready only with an attested host key, then that key on the wire.
-    fn ready_and_prove_ssh(&self, persisted: &InteractiveWorker) {
+    fn ready_and_prove_ssh(&self, persisted: &InteractiveWorker) -> InteractiveWorkerSshEndpoint {
         let ready: InteractiveWorkerStatus = wait_for(READY_BOUND, || {
             let status = self.client.reconcile_worker(&self.request)?.expect("worker present");
             Ok(match status.lifecycle {
@@ -755,6 +757,66 @@ impl Live {
             .expect("present");
         assert_eq!(inspected.lifecycle, Lifecycle::Ready);
         self.run.event("inspected", "ready from the persisted handle");
+        endpoint.clone()
+    }
+
+    /// Explicit compute start after the stop: the same worker comes back under the same
+    /// address and host key, with the marker still on the retained disk; a second start
+    /// finds it running and posts nothing.
+    fn start_and_reattach(&self, persisted: &InteractiveWorker, before: &InteractiveWorkerSshEndpoint) {
+        let started_at = Instant::now();
+        let started = self.client.start_worker(persisted).expect("start");
+        let InteractiveWorkerStart::Started(status) = &started else {
+            panic!("a stopped worker is started: {started:?}");
+        };
+        self.run.event(
+            "started",
+            &format!(
+                "running again in {:.0}s, observed {:?}",
+                started_at.elapsed().as_secs_f64(),
+                status.lifecycle
+            ),
+        );
+        let ready: InteractiveWorkerStatus = wait_for(READY_BOUND, || {
+            let status = self.client.inspect_worker(persisted)?.expect("worker present");
+            Ok(match status.lifecycle {
+                Lifecycle::Ready => Some(status),
+                Lifecycle::Provisioning => None,
+                other => panic!("unexpected lifecycle while waiting for ready after start: {other:?}"),
+            })
+        })
+        .expect("ready after start");
+        let endpoint = ready.ssh.as_ref().expect("endpoint");
+        assert_eq!(
+            (endpoint.host.as_str(), endpoint.port, endpoint.host_key.as_str()),
+            (before.host.as_str(), before.port, before.host_key.as_str()),
+            "same address and the same attested host key as before the stop"
+        );
+        self.run.event(
+            "ready_after_start",
+            &format!(
+                "same endpoint and host key, {:.0}s after the start call",
+                started_at.elapsed().as_secs_f64()
+            ),
+        );
+        let seen = ssh_proof(
+            endpoint,
+            &self.private_key,
+            self.directory.path(),
+            "cat /workspace/.horizon-live-marker && id -un",
+        );
+        assert_eq!(
+            seen, "live-marker\nroot",
+            "the marker written before the stop is still there"
+        );
+        self.run
+            .event("reattached", "pinned reattach with the retained marker on /workspace");
+        let again = self.client.start_worker(persisted).expect("start again");
+        assert!(matches!(again, InteractiveWorkerStart::AlreadyRunning(_)), "{again:?}");
+        self.run.event(
+            "start_idempotent",
+            "a second start finds the worker running and posts nothing",
+        );
     }
 
     /// Explicit stop: retained and verified; nothing afterwards creates.
@@ -836,7 +898,9 @@ impl Live {
 fn live_worker_create_ready_stop_delete() {
     let live = setup();
     let persisted = live.create();
-    live.ready_and_prove_ssh(&persisted);
+    let endpoint = live.ready_and_prove_ssh(&persisted);
+    live.stop(&persisted);
+    live.start_and_reattach(&persisted, &endpoint);
     live.stop(&persisted);
     if keep() {
         live.cleanup.borrow_mut().armed = false;
@@ -845,6 +909,8 @@ fn live_worker_create_ready_stop_delete() {
         return;
     }
     live.delete(&persisted);
-    live.run
-        .event("done", "create, ready, pinned ssh, stop, delete all proven");
+    live.run.event(
+        "done",
+        "create, ready, pinned ssh, stop, start, pinned reattach with retained data, stop, delete all proven",
+    );
 }

@@ -269,6 +269,8 @@ pub enum AzureError {
     },
     #[error("worker stop did not reach a verified retained inactive state")]
     StopUnverified,
+    #[error("worker start did not reach a verified running state for the same worker")]
+    StartUnverified,
 }
 
 /// Parsed `/subscriptions/{sub}/resourceGroups/{rg}/providers/{provider}/{kind}/{name}`.

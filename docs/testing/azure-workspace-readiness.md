@@ -22,9 +22,20 @@ From #383 and #474: remote execution and durable data are independent of the
 client PC; closing panels, exiting Horizon or losing connectivity only detaches;
 reconnect is non-creating; Stop preserves promised durable data; Delete is a
 separate explicit action; the measured create, pull, endpoint and SSH-ready path
-must fit the 180-second boundary; image access uses a managed identity without
+must fit the readiness target; image access uses a managed identity without
 registry passwords; and the worker's repository storage must pass the existing
 on-worker qualifier before any repository publication.
+
+**Current Azure startup target: 300 seconds** (five minutes), approved by the
+maintainer on 2026-09-12 and recorded on #474, replacing the 180-second target the
+spike below was measured against. The measurement is unchanged: one clock from the
+first create call through provisioning, image pull and verified SSH readiness, never
+reset between stages. The spike verdict below is kept as written against its original
+180-second target; the live adapter record in
+`azure-workspace-live-acceptance.md` compares its runs with both. Exceeding the
+target must surface an honest delayed or unknown state and explicit choices, never an
+implicit deletion, replacement or duplicate creation; the 90-second progress warning
+stays.
 
 The qualifier in `crates/horizon-core/src/repository_overlay/storage.rs` accepts
 only an ext4 filesystem whose kernel-reported options, read from
@@ -287,9 +298,11 @@ Functional results, identical in every sample unless stated:
 Cost actually incurred: eighteen VMs for 8 to 30 minutes each plus 32 GiB disks, well
 under the $10 bound; the persistent registry costs about $0.67 per day at Standard.
 
-### Verdict against the 180-second boundary
+### Verdict against the 180-second boundary (the target at the time of the spike)
 
-**Not met with this configuration.** Across the seventeen samples that reached an
+**Not met with this configuration.** (Against the 300-second target approved on
+2026-09-12, every one of the seventeen samples that reached an endpoint would have
+fit: slowest 278.0 s. The original verdict is kept as measured.) Across the seventeen samples that reached an
 endpoint, the slowest verified key-only SSH session came 278.0 s after `T0` (246.0 s
 excluding the out-of-band host-key read); even the fastest sample needed 203.4 s.
 Fifteen of seventeen also missed the boundary for endpoint-open alone (sample 6 by

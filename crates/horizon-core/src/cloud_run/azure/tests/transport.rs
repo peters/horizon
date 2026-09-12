@@ -545,6 +545,34 @@ fn operation_url() -> String {
 }
 
 #[test]
+fn start_uses_the_exact_path_and_maps_long_running_states() {
+    let (transport, _) = http(vec![
+        expect("POST", vm_url("/start"), 202, "", None),
+        expect("POST", vm_url("/start"), 200, "", None),
+        expect("POST", vm_url("/start"), 409, "private-conflict", None),
+        expect("POST", vm_url("/start"), 404, "", None),
+    ]);
+    assert_eq!(
+        transport.start_vm(GROUP, "worker"),
+        Ok(Some(AzureLongRunningState::Accepted))
+    );
+    assert_eq!(
+        transport.start_vm(GROUP, "worker"),
+        Ok(Some(AzureLongRunningState::Completed))
+    );
+    let conflict = transport.start_vm(GROUP, "worker");
+    assert_eq!(
+        conflict,
+        Err(AzureError::UnexpectedStatus {
+            operation: "virtual machine start",
+            status: 409
+        })
+    );
+    assert!(!format!("{conflict:?}").contains("private-"));
+    assert_eq!(transport.start_vm(GROUP, "worker"), Ok(None), "absent VM");
+}
+
+#[test]
 fn deallocate_uses_the_exact_path_and_maps_long_running_states() {
     let (transport, _) = http(vec![
         expect("POST", vm_url("/deallocate"), 202, "", None),
@@ -573,6 +601,10 @@ fn deallocate_uses_the_exact_path_and_maps_long_running_states() {
     for (group, name) in [("bad/group", "worker"), (GROUP, ""), (GROUP, "name with space")] {
         assert_eq!(
             transport.deallocate_vm(group, name),
+            Err(AzureError::ResourceIdentityMismatch)
+        );
+        assert_eq!(
+            transport.start_vm(group, name),
             Err(AzureError::ResourceIdentityMismatch)
         );
         assert_eq!(

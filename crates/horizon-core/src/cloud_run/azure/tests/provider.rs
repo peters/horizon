@@ -29,6 +29,7 @@ pub(super) enum Call {
     GetDeployment(String),
     GetVm(String),
     Deallocate(String),
+    Start(String),
     Run(String, AzureRunCommand),
 }
 
@@ -53,10 +54,14 @@ pub(super) struct Plane {
     pub(super) vanish_after_first_lookup: bool,
     pub(super) delete_status: Option<u16>,
     pub(super) deallocate: Option<Result<Option<AzureLongRunningState>, AzureError>>,
+    pub(super) start: Option<Result<Option<AzureLongRunningState>, AzureError>>,
     pub(super) run_output: Option<String>,
     /// Replaces the group once the deallocation was posted, as a concurrent retag or
     /// deletion during the wait would.
     pub(super) group_after_deallocate: Option<GroupChange>,
+    /// Replaces the group once the start was posted, as a concurrent retag or deletion
+    /// during the wait would.
+    pub(super) group_after_start: Option<GroupChange>,
     pub(super) calls: Vec<Call>,
 }
 
@@ -200,6 +205,18 @@ impl AzureManagementTransport for Fake {
         self.get_vm(group, name)
     }
 
+    fn start_vm(&self, group: &str, _name: &str) -> Result<Option<AzureLongRunningState>, AzureError> {
+        let mut plane = self.lock();
+        plane.calls.push(Call::Start(group.into()));
+        if let Some(change) = plane.group_after_start.take() {
+            plane.group = match change {
+                GroupChange::Replaced(group) => Some(group),
+                GroupChange::Deleted => None,
+            };
+        }
+        plane.start.clone().unwrap_or(Ok(Some(AzureLongRunningState::Accepted)))
+    }
+
     fn deallocate_vm(&self, group: &str, _name: &str) -> Result<Option<AzureLongRunningState>, AzureError> {
         let mut plane = self.lock();
         plane.calls.push(Call::Deallocate(group.into()));
@@ -339,3 +356,4 @@ pub(super) const MISMATCH: AzureError = AzureError::ResourceIdentityMismatch;
 mod creation;
 mod observation;
 mod running;
+mod start;

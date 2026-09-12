@@ -171,17 +171,52 @@ deletes; disarmed or kept guards do nothing).
 
 The thirteen passing runs give
 258 s, 186 s, 246 s, 262 s, 214 s, 257 s, 290 s, 251 s, 228 s, 271 s, 230 s, 234 s
-and 265 s: the spread is Azure's (image pull and VM start), and all sit above the
-180-second boundary that is still awaiting a decision on #474. Deletion of the group
+and 265 s: the spread is Azure's (image pull and VM start). All sat above the
+180-second target that applied when they were recorded, and all fit the 300-second
+Azure startup target approved on 2026-09-12 (see `azure-workspace-readiness.md`);
+they are evidence, not a guarantee for future runs. Deletion of the group
 took 185 s, 247 s, 245 s, 246 s, 185 s, 184 s, 125 s, 245 s, 245 s, 248 s, 246 s,
 247 s and 246 s; Stop 32 s, 17 s, 32 s, 31 s, 17 s, 16 s, 32 s, 16 s, 16 s, 32 s,
 16 s, 32 s and 32 s.
 
+## Stop, explicit compute start, pinned reattach (run 16, 2026-09-12)
+
+With the optional compute-start capability (`InteractiveWorkerStartProvider`,
+implemented by the Azure client) the driver adds a phase between the first stop and
+the delete: `start_worker`, wait for `Ready` through the persisted handle, a pinned
+SSH session with the same host key reading the marker written before the stop, a
+second `start_worker` that must find the worker running, then a second stop. Run 16
+passed end to end, same fixture and settings as above:
+
+| Step | Seconds after the driver started | Note |
+| --- | --- | --- |
+| ready with attested host key | 260.4 | |
+| pinned SSH, marker written | 261.0 | |
+| stop verified | 309.7 | 32 s |
+| `start_worker` returned `Started` | 390.9 | running again 80 s after the call, already observed `Ready` |
+| `Ready` through the persisted handle after start | 409.0 | same address, port and attested host key as before the stop |
+| pinned reattach read the marker | 409.8 | data on the retained disk survived the stop |
+| second `start_worker` returned `AlreadyRunning` | 427.8 | nothing posted |
+| second stop verified | 459.4 | 32 s |
+| deleted and gone | 705.3 | 245 s |
+
+Run 17, with the wait polling until its absolute deadline instead of a finite
+schedule, repeated the sequence: ready at 291.4 s, stop 32 s, `Started` 80 s after
+the call, `Ready` with the same endpoint 97 s after it, marker read, second start
+`AlreadyRunning`, second stop 32 s, gone in 247 s.
+
+What this proves: an explicit, authorized start of the exact worker brings back the
+same identity (address and host key) and the retained data, is idempotent on a
+running worker, and never allocates. What it does not prove: anything about
+processes that were running before the stop, which do not survive a deallocation;
+and nothing here is the saved Shell task Start, which is a separate operation.
+
 ## What this run does not prove
 
-- Resuming a stopped worker. The shared interactive-worker contract has no start
-  operation yet, so PC-off resume is not exercised; the adapter reports the
-  retained `Stopped` state and would need a start operation to bring it back.
+- Resuming in-memory work after a stop: compute start brings back the disk and the
+  SSH identity (proven in run 16), not the processes that ran before the stop.
+- Closing Horizon or powering off its controller while a worker runs: that must leave
+  the worker running and is a separate live step that involves neither Stop nor start.
 - Repository handoff on the worker (depends on the PAT setup owned in #470).
 - Three panels on one worker and multi-day retention.
 - Bounded compute in the first seconds after creation (see item 2 above) and an
