@@ -51,6 +51,10 @@ fn unsupported_platform_never_creates_files_or_falls_back() {
         RepositoryBundleStore::open(fixture.path()),
         Err(BundleStoreError::Unsupported)
     ));
+    assert!(matches!(
+        RepositoryBundleStore::open_named(fixture.path()),
+        Err(BundleStoreError::Unsupported)
+    ));
     let store = RepositoryBundleStore {};
     let value = bundle(b"local bytes");
     assert_eq!(store.put(&value), Err(BundleStoreError::Unsupported));
@@ -99,6 +103,59 @@ mod supported {
             .expect("private file")
             .write_all(bytes)
             .expect("fixture bytes");
+    }
+
+    #[test]
+    fn explicit_named_layout_round_trips_without_selecting_the_flat_layout() {
+        let fixture = private_fixture();
+        let named = RepositoryBundleStore::open_named(fixture.path()).expect("named store");
+        let flat = RepositoryBundleStore::open(fixture.path()).expect("unchanged flat store");
+        for payload in [b"working\0\xff".as_slice(), b"other bytes"] {
+            let value = bundle(payload);
+            let digest = named.put(&value).expect("named publication");
+            let path = fixture.path().join(digest.as_str()).join("record.hzov");
+            let before = fs::metadata(&path).expect("record identity");
+            assert_eq!(before.nlink(), 1);
+            assert_eq!(before.mode() & 0o7777, 0o600);
+            assert_eq!(named.get(&digest).expect("verified readback"), value);
+            assert_eq!(flat.get(&digest), Err(BundleStoreError::Missing));
+            let reopened = RepositoryBundleStore::open_named(fixture.path()).expect("reopen");
+            assert_eq!(reopened.put(&value).expect("idempotent resync"), digest);
+            let after = fs::metadata(&path).expect("same identity");
+            assert_eq!(
+                (before.ino(), before.mtime(), before.mtime_nsec()),
+                (after.ino(), after.mtime(), after.mtime_nsec())
+            );
+            fs::OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .expect("fixture corruption")
+                .write_all(b"invalid")
+                .expect("corrupt bytes");
+            assert!(reopened.get(&digest).is_err());
+            assert_eq!(reopened.put(&value), Err(BundleStoreError::Conflict));
+        }
+    }
+
+    #[test]
+    fn named_layout_keeps_the_opened_root_when_its_path_is_replaced() {
+        let fixture = private_fixture();
+        let selected = fixture.path().join("selected");
+        let retained = fixture.path().join("retained");
+        private_directory(&selected);
+        let store = RepositoryBundleStore::open_named(&selected).expect("pinned root");
+        fs::rename(&selected, &retained).expect("retain original");
+        private_directory(&selected);
+        let value = bundle(b"pinned bytes");
+        let digest = store.put(&value).expect("publish to held root");
+        assert_eq!(fs::read_dir(&selected).expect("replacement").count(), 0);
+        assert_eq!(
+            RepositoryBundleStore::open_named(&retained)
+                .expect("original")
+                .get(&digest)
+                .expect("read"),
+            value
+        );
     }
 
     #[test]
