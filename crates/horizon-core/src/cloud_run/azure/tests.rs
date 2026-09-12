@@ -455,15 +455,28 @@ fn cli_credential_bounds_a_budgeted_token_by_the_caller_not_by_its_own_timeout()
     // and the timeout teardown is detached, so the call returns at the budget.
     let (credential, _) = slow("fake-az-slow-budget");
     let budget = Duration::from_millis(300);
-    let started = std::time::Instant::now();
-    assert_eq!(
-        credential.token_within(budget).expect_err("budget"),
-        unavailable("Azure CLI timed out")
-    );
+    // Another test thread may fork while the script is still open for writing, which
+    // makes the exec fail with "text file busy"; such an attempt ends at once and is
+    // simply retried, like the first call in the sibling CLI test.
+    let (error, elapsed) = (0..5)
+        .map(|_| {
+            let started = std::time::Instant::now();
+            let error = credential.token_within(budget).expect_err("budget");
+            (error, started.elapsed())
+        })
+        .find(|(error, _)| {
+            let retryable = *error == unavailable("Azure CLI could not be started");
+            if retryable {
+                // The window closes within milliseconds once the other fork execs.
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            !retryable
+        })
+        .expect("an attempt that started the CLI");
+    assert_eq!(error, unavailable("Azure CLI timed out"));
     assert!(
-        started.elapsed() < budget + Duration::from_millis(250),
-        "the call returns at the budget without waiting for the tree: {:?}",
-        started.elapsed()
+        elapsed < budget + Duration::from_millis(250),
+        "the call returns at the budget without waiting for the tree: {elapsed:?}"
     );
     // A refresh already running in another thread holds the cache lock; a budgeted
     // caller waits at most its budget for it instead of the refresh's whole run.
