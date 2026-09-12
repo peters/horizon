@@ -38,6 +38,13 @@ class ManifestTests(unittest.TestCase):
         enough = (NOW + dt.timedelta(minutes=client_off.required_minutes(manifest(), "validate"))).isoformat()
         self.assertEqual(client_off.validate_manifest(manifest(cleanup_deadline_utc=enough), NOW), [])
         self.assertEqual(client_off.validate_manifest(manifest(client_vm_size="Standard_E4-2s_v5"), NOW), [])
+        for region in ("Northern Europe", "northeurope\n", "", "NorthEurope", "north europe"):
+            with self.subTest(region=region):
+                self.assertTrue(any("region" in p for p in client_off.validate_manifest(manifest(location=region), NOW)))
+        self.assertEqual(client_off.validate_manifest(manifest(location="westus2"), NOW), [])
+        far = (NOW + dt.timedelta(hours=30)).isoformat()
+        self.assertTrue(any("24 hours" in p for p in client_off.validate_manifest(manifest(cleanup_deadline_utc=far), NOW, renting=False)),
+                        "the upper bound holds for verdict and cleanup too")
         # `$` alone would accept a trailing newline; the manifest is matched exactly.
         for field in ("worker_image", "subscription_id", "client_group", "client_sha", "client_vm_size"):
             with self.subTest(field=field):
@@ -172,11 +179,14 @@ class VerdictTests(unittest.TestCase):
             row["at"] = (NOW + dt.timedelta(seconds=15 * index + (4 if index % 2 else 0))).isoformat()
         seesaw_verdict = client_off.evaluate_samples(seesaw, 12, 600)
         self.assertEqual(seesaw_verdict["late_samples"], 0)
-        self.assertTrue(seesaw_verdict["passed"], "4 s alternating jitter keeps every actual gap within 20 s")
+        self.assertFalse(seesaw_verdict["passed"], "4 s alternating jitter opens 19-second gaps: A and B went unobserved")
+        self.assertTrue(any("gaps over 15s" in finding for finding in seesaw_verdict["findings"]), seesaw_verdict)
         for index, row in enumerate(seesaw):
-            row["at"] = (NOW + dt.timedelta(seconds=15 * index + (8 if index % 2 else 0))).isoformat()
-        verdict = client_off.evaluate_samples(seesaw, 12, 600)
-        self.assertFalse(verdict["passed"], "23-second actual gaps are a cadence finding even with contiguous slots")
+            row["at"] = (NOW + dt.timedelta(seconds=15 * index, milliseconds=(900 if index % 2 else 0))).isoformat()
+        self.assertTrue(client_off.evaluate_samples(seesaw, 12, 600)["passed"], "sub-second wake-up latency is not a gap")
+        for index, row in enumerate(seesaw):
+            row["at"] = (NOW + dt.timedelta(seconds=15 * index + index)).isoformat()
+        self.assertFalse(client_off.evaluate_samples(seesaw, 12, 600)["passed"], "16-second gaps are a cadence finding")
         early = samples(49)
         early[5]["at"] = (NOW + dt.timedelta(seconds=15 * 5 - 1)).isoformat()
         verdict = client_off.evaluate_samples(early, 12, 600)
@@ -289,6 +299,10 @@ class OfflineVerdictTests(unittest.TestCase):
         other_observed = dict(header, observed_image_ref="c" * 64)
         self.assertFalse(client_off.verdict_from_records([other_observed, *samples(49)], m)["passed"], "observed tag must match")
         self.assertFalse(client_off.verdict_from_records(samples(49), m)["passed"], "no header")
+        headless = {"baseline": header["baseline"]}
+        verdict = client_off.verdict_from_records([headless, *samples(49)], m)
+        self.assertFalse(verdict["passed"])
+        self.assertTrue(any("does not name the worker image" in f for f in verdict["findings"]), verdict)
         other_image = dict(header, worker_image="x.azurecr.io/horizon-remote-worker@sha256:" + "c" * 64)
         self.assertFalse(client_off.verdict_from_records([other_image, *samples(49)], m)["passed"])
         other_worker = dict(header, baseline=dict(header["baseline"], b_instance_id=A_INSTANCE))

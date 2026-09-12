@@ -12,6 +12,8 @@ ARM = "https://management.azure.com"
 CLI_STEP_SECONDS = 90
 SAMPLE_SECONDS = 15
 SAMPLE_JITTER_SECONDS = 5
+# Wake-up latency tolerated between two consecutive actual observations.
+ACTUAL_GAP_ALLOWANCE_SECONDS = 1
 MIN_OFF_MINUTES = 10
 REAPER_TAGS = {"purpose": "horizon-azure-vm-spike"}
 CLIENT_VM_NAME = "client"
@@ -21,6 +23,8 @@ RUN_COMMAND_SECONDS = 600
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 GROUP_RE = re.compile(r"^[A-Za-z0-9_.()-]{1,90}$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+# The same rule as the workspace preflight: a lowercase Azure region name.
+REGION_RE = re.compile(r"^[a-z][a-z0-9]{1,63}$")
 DIGEST_RE = re.compile(r"^[a-z0-9]+(?:[.-][a-z0-9]+)+(?::[0-9]{1,5})?/[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*@sha256:[0-9a-f]{64}$")
 MANIFEST_FIELDS = ("subscription_id", "location", "run_id", "client_group", "client_vm_size", "client_sha",
                    "client_binary_sha256", "worker_group", "worker_image", "hourly_cost_micros", "budget_micros",
@@ -71,7 +75,7 @@ def required_minutes(manifest: Dict[str, Any], phase: str) -> int:
     """How many minutes past `now` the deadline must lie for `phase` to start."""
     off = manifest.get("off_minutes") if type(manifest.get("off_minutes")) is int else MIN_OFF_MINUTES  # noqa: E721
     return {"validate": PROVISION_MINUTES + off + CLEANUP_MARGIN_MINUTES, "off": off + CLEANUP_MARGIN_MINUTES,
-            "return": RETURN_MARGIN_MINUTES}.get(phase, 0)
+            "install-observer-key": off + CLEANUP_MARGIN_MINUTES, "return": RETURN_MARGIN_MINUTES}.get(phase, 0)
 
 
 def validate_manifest(manifest: Dict[str, Any], now: Optional[_dt.datetime] = None, renting: bool = True,
@@ -109,8 +113,7 @@ def validate_manifest(manifest: Dict[str, Any], now: Optional[_dt.datetime] = No
     text("client_sha", SHA_RE, "a full commit SHA")
     text("client_binary_sha256", SHA256_RE, "a SHA-256 digest")
     text("worker_image", DIGEST_RE, "a complete registry/repository@sha256 digest reference")
-    if not isinstance(manifest["location"], str) or not manifest["location"]:
-        problems.append("location is not a region name")
+    text("location", REGION_RE, "a lowercase Azure region name such as northeurope")
     for field in ("hourly_cost_micros", "budget_micros"):
         # bool is an int subclass in JSON decoding; only an exact integer counts.
         if type(manifest[field]) is not int or manifest[field] <= 0:  # noqa: E721
@@ -121,13 +124,13 @@ def validate_manifest(manifest: Dict[str, Any], now: Optional[_dt.datetime] = No
         problems.append("cleanup_deadline_utc is not an ISO-8601 instant")
     else:
         needed = _dt.timedelta(minutes=required_minutes(manifest, phase)) if renting else _dt.timedelta(0)
-        if renting and deadline <= now:
+        if deadline - now > _dt.timedelta(hours=24):
+            problems.append("cleanup_deadline_utc is more than 24 hours away")
+        elif renting and deadline <= now:
             problems.append("cleanup_deadline_utc is not in the future")
         elif renting and deadline - now < needed:
             problems.append(f"cleanup_deadline_utc must lie at least {int(needed.total_seconds() // 60)} minutes "
                             f"ahead for the {phase} phase (provisioning bound, off interval and margins)")
-        elif deadline - now > _dt.timedelta(hours=24):
-            problems.append("cleanup_deadline_utc is more than 24 hours away")
     if type(manifest["off_minutes"]) is not int or manifest["off_minutes"] < MIN_OFF_MINUTES:  # noqa: E721
         problems.append(f"off_minutes must be at least {MIN_OFF_MINUTES}")
     if type(manifest["lease_seconds"]) is not int or manifest["lease_seconds"] < 0:  # noqa: E721

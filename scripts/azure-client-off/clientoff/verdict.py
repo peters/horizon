@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
-from .manifest import INSTANCE_ID_RE, SAMPLE_JITTER_SECONDS, SAMPLE_SECONDS, image_ref_digest, parse_utc, routable, same_id
+from .manifest import (ACTUAL_GAP_ALLOWANCE_SECONDS, INSTANCE_ID_RE, SAMPLE_JITTER_SECONDS, SAMPLE_SECONDS, image_ref_digest,
+                       parse_utc, routable, same_id)
 
 
 def evaluate_samples(samples: List[Dict[str, Any]], off_minutes: int, lease_seconds: int,
@@ -64,12 +65,14 @@ def evaluate_samples(samples: List[Dict[str, Any]], off_minutes: int, lease_seco
         return {"passed": False, "findings": ["a sample was recorded before its scheduled slot"], "samples": len(samples)}
     late = sum(1 for slot, actual in zip(slots, times) if (actual - slot).total_seconds() > SAMPLE_JITTER_SECONDS)
     misses = sum(round(delta / SAMPLE_SECONDS) - 1 for delta in deltas)
-    # The actual instants must also keep the cadence on their own.
+    # The actual instants must keep the cadence on their own: A and B are observed at
+    # least every 15 s, with only wake-up latency allowed between two consecutive
+    # observations; the jitter allowance applies to the slot, never here.
     wide = sum(1 for earlier, later in zip(times, times[1:])
-               if (later - earlier).total_seconds() > SAMPLE_SECONDS + SAMPLE_JITTER_SECONDS)
+               if (later - earlier).total_seconds() > SAMPLE_SECONDS + ACTUAL_GAP_ALLOWANCE_SECONDS)
     if misses or late or wide:
         findings.append(f"cadence not met: {misses} missed {SAMPLE_SECONDS}s observations, {late} late samples, "
-                        f"{wide} gaps over {SAMPLE_SECONDS + SAMPLE_JITTER_SECONDS}s")
+                        f"{wide} gaps over {SAMPLE_SECONDS}s between consecutive observations")
     not_off = [index for index, sample in enumerate(samples) if sample.get("a_power") != "PowerState/deallocated"]
     if not_off:
         findings.append(f"client A not deallocated in {len(not_off)} samples (first at index {not_off[0]})")
@@ -145,6 +148,8 @@ def verdict_from_records(records: List[Any], manifest: Dict[str, Any]) -> Dict[s
     if not records or not isinstance(records[0], dict) or not isinstance(records[0].get("baseline"), dict):
         return {"passed": False, "findings": ["journal has no baseline header; not produced by the off phase"]}
     header, samples = records[0], records[1:]
+    if not isinstance(header.get("worker_image"), str) or not isinstance(header.get("observed_image_ref"), str):
+        return {"passed": False, "findings": ["journal header does not name the worker image and its observed tag"]}
     problems = baseline_problems(header["baseline"], manifest)
     if problems:
         return {"passed": False, "findings": [f"baseline: {problem}" for problem in problems]}
