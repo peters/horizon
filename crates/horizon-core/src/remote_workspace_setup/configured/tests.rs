@@ -310,6 +310,45 @@ mod linux {
         retargeted_submit(Some("home"));
     }
 
+    fn shared_parent_fixture() -> Fixture {
+        let mut fixture = Fixture::new();
+        let parent = fixture.directory.path().join("shared");
+        std::fs::create_dir(&parent).expect("shared parent");
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o1777)).expect("sticky mode");
+        fixture.home = HorizonHome::from_root(parent.join("home"));
+        fixture
+    }
+
+    #[test]
+    fn missing_home_under_shared_sticky_parent_refuses_before_writes() {
+        let f = shared_parent_fixture();
+        let prepared = f.preview(false);
+        let result = submit_with(&f.home, &f.config, OWNER, &prepared, &consent(&prepared), |_, _| {
+            Err(Error::SetupUnconfirmed)
+        });
+        assert!(!f.home.root().exists(), "no control store below shared parent");
+        assert!(matches!(result, Err(Error::StorageUnavailable)));
+        let locator = prepared.locator().clone();
+        let approval = consent(&prepared);
+        let attempt = submit_configured_remote_workspace(&f.home, &f.config, OWNER, prepared, approval);
+        assert!(attempt.locator == locator);
+        assert!(matches!(attempt.result, Err(Error::StorageUnavailable)));
+        assert!(!f.home.root().exists());
+        assert!(!f.home.root().join("remote-ssh-identities").exists());
+    }
+
+    #[test]
+    fn existing_owned_home_below_shared_sticky_parent_remains_valid() {
+        let f = shared_parent_fixture();
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(f.home.root())
+            .expect("owned home");
+        let allocation = f.submit(&f.preview(false)).expect("fake dispatch");
+        assert_eq!(allocation.workspace().state().spec.generation, 1);
+        assert!(!f.home.root().join("remote-ssh-identities").exists());
+    }
+
     #[test]
     fn recovery_refuses_a_linked_home_before_adopting_a_saved_record() {
         let f = Fixture::new();

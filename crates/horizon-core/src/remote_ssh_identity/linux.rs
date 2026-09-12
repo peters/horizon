@@ -58,7 +58,9 @@ pub(super) fn validate_home(home: &Path) -> Result<(), Error> {
     // A trailing separator or `.` must not make symlink_metadata follow the final link.
     let root = trusted_home(&home.components().collect::<PathBuf>())?;
     match check_directory(&root, false, false) {
-        Ok(()) | Err(Error::Missing) => Ok(()),
+        Ok(()) => Ok(()),
+        // A sticky parent protects an existing owned child, not an absent final entry.
+        Err(Error::Missing) => check_directory(root.parent().ok_or(Error::InsecurePath)?, false, false),
         Err(error) => Err(error),
     }
 }
