@@ -1,9 +1,16 @@
 //! Explicit ordinary Git setup on an existing pinned worker; never reconnect automation.
 
+mod configured;
 #[cfg(target_os = "linux")]
 mod protocol;
 #[cfg(target_os = "linux")]
 mod transport;
+
+pub use configured::{
+    ConfiguredRemoteGitSetupError, ConfiguredRemoteGitSetupRequest, ConfiguredRemoteGitSubmission,
+    PreparedRemoteGitSetup, RemoteGitCredentialMode, inspect_configured_remote_git_setup,
+    prepare_configured_remote_git_setup, submit_configured_remote_git_setup,
+};
 
 use crate::{
     cloud_run::{CloudWorkflowStore, StoredRemoteAllocation, interactive_worker::InteractiveWorkerProvider},

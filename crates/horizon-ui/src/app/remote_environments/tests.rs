@@ -174,7 +174,7 @@ fn loader_finds_owned_record_without_creating_a_local_session() {
         page: Some(empty_page(None)),
         ..Default::default()
     };
-    let render = |view: &RemoteEnvironments| {
+    let render = |view: &mut RemoteEnvironments| {
         for _ in 0..2 {
             let _ = ctx
                 .run_ui(raw_input([900.0, 680.0], None), |ui| {
@@ -186,17 +186,20 @@ fn loader_finds_owned_record_without_creating_a_local_session() {
             .expect("close control")
             .top()
     };
-    let empty_top = render(&view);
+    let empty_top = render(&mut view);
     view.page = Some(page);
     assert!(
-        render(&view) < empty_top - 100.0,
+        render(&mut view) < empty_top - 100.0,
         "populated dialog must grow beyond its cached empty height"
     );
     view.failure = Some(LoadFailure {
         error: LoadError::ReadPage,
         cursor: None,
     });
-    assert!(render(&view) >= 32.0, "error controls must remain inside the viewport");
+    assert!(
+        render(&mut view) >= 32.0,
+        "error controls must remain inside the viewport"
+    );
     assert!(!home.sessions_dir().exists());
     assert_eq!(
         store.load_remote_workspace(&owner, "detached-workspace").expect("load"),

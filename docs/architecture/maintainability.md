@@ -175,6 +175,11 @@ back into large multi-purpose modules.
   Its transport leaf caps each write by the remaining lease and retains valid
   negative replies without granting replay. No allocation, PAT installation,
   task start, storage writes or implicit recovery occur. Linux clients first.
+- `remote_git_setup/configured` separately binds a local confirmation to the full
+  saved allocation, configuration, selected volume and credential disclosure mode.
+  Its explicit optional first-PAT install precedes detached Git submission only
+  after successful acknowledgement and renewed admission; mutation uncertainty
+  never grants retry or implies credential rollback. Preview retains no PAT.
 - `remote_worker_status.rs` gates non-creating panel inspection on exact owned
   recovery and current lifetime. Its `protocol.rs` leaf owns bounded status-only
   wire types; `ssh.rs` owns the query's private host-pin lifetime and retains the
@@ -554,6 +559,9 @@ back into large multi-purpose modules.
     `remote_environments/observation` owns single-flight manual provider checks,
     event-based invalidation and cached point-in-time labels, never provider I/O
     on the render thread or passive repaint polling.
+    `remote_environments/repository` owns explicit repository confirmation,
+    transient masked PAT input and manual receipt checks. Its paint leaf clears
+    text-edit undo history; stale mutation results retain an unattributed warning.
     Compact record projection belongs to `horizon-core::remote_workspace::summary`;
     the overview does not own provider actions or remote execution lifetime.
   - `sidebar`: sidebar rendering and deferred sidebar actions
