@@ -74,9 +74,10 @@ RETURN_MARGIN_MINUTES = 15
 def required_minutes(manifest: Dict[str, Any], phase: str) -> int:
     """How many minutes past `now` the deadline must lie for `phase` to start."""
     off = manifest.get("off_minutes") if type(manifest.get("off_minutes")) is int else MIN_OFF_MINUTES  # noqa: E721
-    return {"validate": PROVISION_MINUTES + off + CLEANUP_MARGIN_MINUTES, "off": off + CLEANUP_MARGIN_MINUTES,
+    install = RUN_COMMAND_SECONDS // 60
+    return {"validate": PROVISION_MINUTES + install + off + CLEANUP_MARGIN_MINUTES, "off": off + CLEANUP_MARGIN_MINUTES,
             # The install may spend its whole run-command bound before the off interval starts.
-            "install-observer-key": RUN_COMMAND_SECONDS // 60 + off + CLEANUP_MARGIN_MINUTES,
+            "install-observer-key": install + off + CLEANUP_MARGIN_MINUTES,
             "return": RETURN_MARGIN_MINUTES}.get(phase, 0)
 
 
