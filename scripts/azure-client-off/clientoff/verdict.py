@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
-from .manifest import SAMPLE_JITTER_SECONDS, SAMPLE_SECONDS, image_ref_digest, parse_utc, routable, same_id
+from .manifest import INSTANCE_ID_RE, SAMPLE_JITTER_SECONDS, SAMPLE_SECONDS, image_ref_digest, parse_utc, routable, same_id
 
 
 def evaluate_samples(samples: List[Dict[str, Any]], off_minutes: int, lease_seconds: int,
@@ -116,12 +116,35 @@ def evaluate_samples(samples: List[Dict[str, Any]], off_minutes: int, lease_seco
     }
 
 
+def baseline_problems(baseline: Any, manifest: Dict[str, Any]) -> List[str]:
+    """The header's identity must be an Azure worker in the manifest's worker group:
+    ARM group and VM ID paths under the manifest subscription, a VM instance identity,
+    a routable address. Stable but meaningless strings never identify a worker."""
+    if not isinstance(baseline, dict):
+        return ["baseline is not an object"]
+    problems = []
+    group = f"/subscriptions/{manifest['subscription_id']}/resourceGroups/{manifest['worker_group']}"
+    if not same_id(baseline.get("b_group_id"), group):
+        problems.append("baseline group ID is not the manifest worker group under the manifest subscription")
+    if not same_id(baseline.get("b_vm_id"), f"{group}/providers/Microsoft.Compute/virtualMachines/worker"):
+        problems.append("baseline VM ID is not the worker VM in that group")
+    if not isinstance(baseline.get("b_instance_id"), str) or not INSTANCE_ID_RE.fullmatch(baseline["b_instance_id"]):
+        problems.append("baseline instance identity is not a VM instance identity")
+    if not routable(baseline.get("b_host")):
+        problems.append("baseline address is not a public IP address")
+    return problems
+
+
 def verdict_from_records(records: List[Any], manifest: Dict[str, Any]) -> Dict[str, Any]:
     """Offline verdict over a journal: the first record must be the baseline header the
-    off phase wrote, so a journal from another worker can never pass."""
+    off phase wrote, naming an Azure worker in the manifest's group, so a journal from
+    another worker, or a fabricated one, can never pass."""
     if not records or not isinstance(records[0], dict) or not isinstance(records[0].get("baseline"), dict):
         return {"passed": False, "findings": ["journal has no baseline header; not produced by the off phase"]}
     header, samples = records[0], records[1:]
+    problems = baseline_problems(header["baseline"], manifest)
+    if problems:
+        return {"passed": False, "findings": [f"baseline: {problem}" for problem in problems]}
     if header.get("worker_image") != manifest["worker_image"]:
         return {"passed": False, "findings": ["journal was recorded for a different worker image"]}
     if header.get("observed_image_ref") != image_ref_digest(manifest["worker_image"]):

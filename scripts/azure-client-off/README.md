@@ -15,11 +15,14 @@ the provisioning scripts follow in the next slice together with the runbook.
   apart), `az.py` (bounded `az` calls without a shell; every mutation names the exact
   resource and `--dry-run` journals instead of issuing) and `cleanup.py` (deletion
   of exactly the groups this run journaled, re-proven owned immediately before the
-  delete, and only when their tags bind them to this run: A's group carries the
-  `run_id` passed to `cleanup`, B's group carries the workflow and job identities
-  its own name is derived from).
-- `client_off.py`: the command line: `validate`, `journal-group`, `cleanup`
-  (`--run-id` from the provisioning output), `verdict`, driven by a frozen manifest.
+  delete, and only when their tags bind them to this run: A's group is named
+  `horizon-client-<run_id>` and carries the manifest's `run_id`, B's group is the
+  adapter's `horizon-ws-<workflow>-<job>` and carries those identities). ARM offers
+  no conditional delete for resource groups, so this rests on names no other run can
+  reuse rather than on a compare-and-delete.
+- `client_off.py`: the command line: `validate`, `journal-group`, `cleanup`,
+  `verdict`, driven by a frozen manifest that carries a `run_id` drawn when it was
+  frozen (`head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n'`).
 - The tests run in CI (`Azure harness tests` job) next to the workspace preflight
   suite.
 - `tests/`: deterministic coverage of the manifest gates, the verdict logic, the

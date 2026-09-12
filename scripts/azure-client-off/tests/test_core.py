@@ -6,8 +6,8 @@ import datetime as dt
 import unittest
 import unittest.mock as mock
 
-from harness_fixtures import (A_INSTANCE, ADAPTER_TAGS, B_INSTANCE, IMAGE, JOB_ID, NOW, RUN_ID, WORKFLOW_ID, client_off,
-                              manifest, record, samples)
+from harness_fixtures import (A_INSTANCE, ADAPTER_TAGS, B_GROUP_ID, B_INSTANCE, B_VM_ID, IMAGE, JOB_ID, NOW, RUN_ID,
+                              WORKFLOW_ID, client_off, manifest, record, samples)
 
 class ManifestTests(unittest.TestCase):
     def test_complete_manifest_is_runnable(self):
@@ -46,8 +46,16 @@ class ManifestTests(unittest.TestCase):
     def test_interval_must_cross_the_lease_and_groups_must_differ(self):
         problems = client_off.validate_manifest(manifest(off_minutes=10, lease_seconds=600), NOW)
         self.assertTrue(any("exceed lease_seconds" in problem for problem in problems), problems)
-        problems = client_off.validate_manifest(manifest(worker_group="horizon-client-475-a"), NOW)
+        problems = client_off.validate_manifest(manifest(worker_group=manifest()["client_group"]), NOW)
         self.assertTrue(any("different exact groups" in problem for problem in problems), problems)
+        # Every name the harness may create or delete is unique to one run.
+        for group in ("horizon-client-475-a", f"horizon-client-{'f' * 32}", f"HORIZON-CLIENT-{RUN_ID}"):
+            with self.subTest(client_group=group):
+                self.assertTrue(any("no other run can reuse" in p for p in client_off.validate_manifest(manifest(client_group=group), NOW)))
+        for group in ("horizon-ws-b", f"horizon-ws-{WORKFLOW_ID}", f"horizon-ws-{WORKFLOW_ID}-{'g' * 36}"):
+            with self.subTest(worker_group=group):
+                self.assertTrue(any("horizon-ws-<workflow>-<job>" in p for p in client_off.validate_manifest(manifest(worker_group=group), NOW)))
+        self.assertTrue(client_off.validate_manifest(manifest(run_id="short"), NOW))
         far = client_off.validate_manifest(manifest(cleanup_deadline_utc=(NOW + dt.timedelta(hours=30)).isoformat()), NOW)
         self.assertTrue(any("24 hours" in problem for problem in far), far)
 
@@ -233,7 +241,7 @@ class SampleIdentityTests(unittest.TestCase):
         self.assertTrue(client_off.evaluate_samples(rows, 12, 600)["passed"])
 
     def test_first_sample_must_be_the_baseline_worker(self):
-        expected = {"b_group_id": "/G/B", "b_vm_id": "/g/b/vm", "b_instance_id": B_INSTANCE, "b_host": "52.174.10.5"}
+        expected = {"b_group_id": B_GROUP_ID.upper(), "b_vm_id": B_VM_ID, "b_instance_id": B_INSTANCE, "b_host": "52.174.10.5"}
         rows = samples(49)
         self.assertTrue(client_off.evaluate_samples(rows, 12, 600, IMAGE, expected)["passed"], "IDs compare case-insensitively")
         other = dict(expected, b_vm_id="/g/b/other")
@@ -254,16 +262,28 @@ class SampleIdentityTests(unittest.TestCase):
 class OfflineVerdictTests(unittest.TestCase):
     def test_journal_needs_the_baseline_header_and_the_same_image(self):
         m = manifest()
-        header = {"baseline": {"b_group_id": "/g/b", "b_vm_id": "/g/b/vm", "b_instance_id": B_INSTANCE, "b_host": "52.174.10.5"},
+        header = {"baseline": {"b_group_id": B_GROUP_ID, "b_vm_id": B_VM_ID, "b_instance_id": B_INSTANCE, "b_host": "52.174.10.5"},
                   "worker_image": IMAGE,
                   "observed_image_ref": client_off.image_ref_digest(IMAGE)}
         self.assertTrue(client_off.verdict_from_records([header, *samples(49)], m)["passed"])
+        # A header naming anything but an Azure worker in the manifest's group, however
+        # consistently the samples repeat it, is no evidence.
+        for field, value in (("b_group_id", "/g/b"), ("b_group_id", B_GROUP_ID.replace(m["subscription_id"], "0" * 36)),
+                             ("b_vm_id", "/g/b/vm"), ("b_vm_id", B_VM_ID.replace("/worker", "/other")),
+                             ("b_instance_id", "stable-but-not-a-vmid"), ("b_host", "10.0.0.5")):
+            with self.subTest(field=field, value=value):
+                fake = dict(header, baseline=dict(header["baseline"], **{field: value}))
+                rows = samples(49, identity=(fake["baseline"]["b_group_id"], fake["baseline"]["b_vm_id"]),
+                               instance=fake["baseline"]["b_instance_id"], host=fake["baseline"]["b_host"])
+                verdict = client_off.verdict_from_records([fake, *rows], m)
+                self.assertFalse(verdict["passed"])
+                self.assertTrue(any(finding.startswith("baseline:") for finding in verdict["findings"]), verdict)
         other_observed = dict(header, observed_image_ref="c" * 64)
         self.assertFalse(client_off.verdict_from_records([other_observed, *samples(49)], m)["passed"], "observed tag must match")
         self.assertFalse(client_off.verdict_from_records(samples(49), m)["passed"], "no header")
         other_image = dict(header, worker_image="x.azurecr.io/horizon-remote-worker@sha256:" + "c" * 64)
         self.assertFalse(client_off.verdict_from_records([other_image, *samples(49)], m)["passed"])
-        other_worker = dict(header, baseline=dict(header["baseline"], b_vm_id="/g/b/other"))
+        other_worker = dict(header, baseline=dict(header["baseline"], b_instance_id=A_INSTANCE))
         verdict = client_off.verdict_from_records([other_worker, *samples(49)], m)
         self.assertTrue(any("baseline" in finding for finding in verdict["findings"]), verdict)
 
@@ -272,15 +292,15 @@ class CleanupTests(unittest.TestCase):
     def test_only_groups_created_by_this_run_are_deleted(self):
         m = manifest()
         created = [record(m["client_group"], lane="azure-client-off", run_id=RUN_ID), record(m["worker_group"], **ADAPTER_TAGS)]
-        both = client_off.cleanup_targets(m, before=["horizon-worker-registry"], created=created, run_id=RUN_ID)
+        both = client_off.cleanup_targets(m, before=["horizon-worker-registry"], created=created)
         self.assertEqual([r["name"] for r in both["delete"]], [m["client_group"], m["worker_group"]])
         self.assertEqual(both["refused"], [])
-        pre_existing = client_off.cleanup_targets(m, before=[m["worker_group"]], created=created, run_id=RUN_ID)
+        pre_existing = client_off.cleanup_targets(m, before=[m["worker_group"]], created=created)
         self.assertEqual([r["name"] for r in pre_existing["delete"]], [m["client_group"]])
         self.assertEqual(pre_existing["refused"], [m["worker_group"]], "a pre-existing group is never deleted")
-        cased = client_off.cleanup_targets(m, before=[m["worker_group"].upper()], created=created, run_id=RUN_ID)
+        cased = client_off.cleanup_targets(m, before=[m["worker_group"].upper()], created=created)
         self.assertEqual(cased["refused"], [m["worker_group"]], "group names compare case-insensitively")
-        unjournaled = client_off.cleanup_targets(m, before=[], created=created[:1], run_id=RUN_ID)
+        unjournaled = client_off.cleanup_targets(m, before=[], created=created[:1])
         self.assertEqual(unjournaled["refused"], [m["worker_group"]], "a stale manifest name is not a creation record")
         # ARM group IDs are name-based and every reproducible tag can be restored, so a
         # record authorizes a delete only when its tags are bound to this run: A's group
@@ -291,18 +311,24 @@ class CleanupTests(unittest.TestCase):
                          record(m["worker_group"], **{"horizon-workflow-id": WORKFLOW_ID}), record(m["worker_group"], **foreign),
                          record(m["worker_group"], run_id=RUN_ID), record(m["worker_group"], run_id="short")):
             with self.subTest(tags=stranger["tags"]):
-                refused = client_off.cleanup_targets(m, before=[], created=[created[0], stranger], run_id=RUN_ID)
+                refused = client_off.cleanup_targets(m, before=[], created=[created[0], stranger])
                 self.assertEqual(refused["refused"], [m["worker_group"]])
-                self.assertFalse(client_off.owned_now(None, stranger, m, RUN_ID), "never even read, let alone deleted")
+                self.assertFalse(client_off.owned_now(None, stranger, m), "never even read, let alone deleted")
         for other_run in ("f" * 32, "", "short"):
             with self.subTest(run_id=other_run):
-                refused = client_off.cleanup_targets(m, before=[], created=created, run_id=other_run)
+                other = dict(m, run_id=other_run)
+                refused = client_off.cleanup_targets(other, before=[], created=created)
                 self.assertEqual(refused["refused"], [m["client_group"]], "A's group belongs to the run that drew its value")
+        # The name itself must be this run's: a same-tagged group under any other name
+        # is not the one the manifest froze.
+        renamed = dict(m, client_group="horizon-client-475-a")
+        refused = client_off.cleanup_targets(renamed, before=[], created=[record("horizon-client-475-a", run_id=RUN_ID), created[1]])
+        self.assertEqual(refused["refused"], ["horizon-client-475-a"])
         for malformed in ("horizon-client-475-a", {"horizon-client-475-a": True}, [1], ["bad/group"], None,
                           [m["client_group"]], [{"name": m["client_group"]}], [{"name": m["client_group"], "id": "", "tags": {}}],
                           [{"name": m["client_group"], "id": "/g", "tags": {"a": 1}}]):
             with self.subTest(malformed=malformed):
-                refused = client_off.cleanup_targets(m, before=[], created=malformed, run_id=RUN_ID)
+                refused = client_off.cleanup_targets(m, before=[], created=malformed)
                 self.assertEqual(refused["delete"], [], "a malformed journal authorizes nothing")
                 self.assertTrue(refused.get("malformed"))
 
@@ -315,7 +341,7 @@ class CleanupTests(unittest.TestCase):
             def run(self, args, mutating=False, timeout=0):
                 return answers.get("show")
 
-        owned = lambda rec=journaled: client_off.owned_now(FakeAz(), rec, m, RUN_ID)  # noqa: E731
+        owned = lambda rec=journaled: client_off.owned_now(FakeAz(), rec, m)  # noqa: E731
         answers["show"] = {"id": journaled["id"].upper(), "name": journaled["name"], "tags": dict(journaled["tags"])}
         self.assertTrue(owned(), "ARM IDs compare case-insensitively")
         answers["show"] = {"id": "/subscriptions/s/resourceGroups/other", "name": journaled["name"], "tags": dict(journaled["tags"])}
@@ -346,7 +372,7 @@ class CleanupTests(unittest.TestCase):
             return shown.get(args[args.index("-n") + 1]) if args[:2] == ["group", "show"] else None
 
         with mock.patch.object(az, "run", side_effect=fake_run):
-            result = client_off.phase_cleanup(az, m, [], created, RUN_ID)
+            result = client_off.phase_cleanup(az, m, [], created)
         self.assertTrue(result["dry_run"])
         self.assertEqual(result["would_delete"], [m["client_group"]])
         self.assertTrue(any("retagged" in finding for finding in result["findings"]), result)

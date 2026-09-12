@@ -22,9 +22,15 @@ UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 GROUP_RE = re.compile(r"^[A-Za-z0-9_.()-]{1,90}$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_RE = re.compile(r"^[a-z0-9]+(?:[.-][a-z0-9]+)+(?::[0-9]{1,5})?/[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*@sha256:[0-9a-f]{64}$")
-MANIFEST_FIELDS = ("subscription_id", "location", "client_group", "client_vm_size", "client_sha",
+MANIFEST_FIELDS = ("subscription_id", "location", "run_id", "client_group", "client_vm_size", "client_sha",
                    "client_binary_sha256", "worker_group", "worker_image", "hourly_cost_micros", "budget_micros",
                    "cleanup_deadline_utc", "off_minutes", "lease_seconds")
+# Every group name this harness may create or delete is unique to one run: A's group is
+# named from the run identity drawn when the manifest was frozen, B's group from the
+# adapter's workflow and job identities. ARM resource IDs are name-based, so a name
+# that no other run can reuse is what makes "the exact resource" meaningful.
+CLIENT_GROUP_PREFIX = "horizon-client-"
+WORKER_GROUP_RE = re.compile(r"^horizon-ws-([0-9a-f-]{36})-([0-9a-f-]{36})$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VM_SIZE_RE = re.compile(r"^Standard_[A-Za-z0-9_-]{2,40}$")
 # Plain components only: no `.` or `..`, so two spellings can never alias one file.
@@ -89,8 +95,15 @@ def validate_manifest(manifest: Dict[str, Any], now: Optional[_dt.datetime] = No
 
     text("subscription_id", UUID_RE, "an exact UUID")
     text("client_vm_size", VM_SIZE_RE, "an Azure VM size name")
+    text("run_id", RUN_ID_RE, "a 32-hex-digit run identity drawn for this manifest")
     text("client_group", GROUP_RE, "a valid resource group name")
+    if isinstance(manifest["client_group"], str) and isinstance(manifest["run_id"], str) \
+            and manifest["client_group"] != f"{CLIENT_GROUP_PREFIX}{manifest['run_id']}":
+        problems.append(f"client_group must be {CLIENT_GROUP_PREFIX}<run_id>: a name no other run can reuse")
     text("worker_group", GROUP_RE, "a valid resource group name")
+    worker_group = WORKER_GROUP_RE.fullmatch(str(manifest["worker_group"]))
+    if not worker_group or not all(UUID_RE.fullmatch(part) for part in worker_group.groups()):
+        problems.append("worker_group must be the adapter's horizon-ws-<workflow>-<job> name")
     if same_group(manifest["client_group"], manifest["worker_group"]):
         problems.append("client and worker must live in different exact groups")
     text("client_sha", SHA_RE, "a full commit SHA")

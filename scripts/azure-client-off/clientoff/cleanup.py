@@ -31,29 +31,31 @@ def journal_records(value: Any) -> Optional[Dict[str, Dict[str, Any]]]:
     return records
 
 
-def run_bound(record: Dict[str, Any], manifest: Dict[str, Any], run_id: str) -> bool:
+def run_bound(record: Dict[str, Any], manifest: Dict[str, Any]) -> bool:
     """Whether a journaled record is bound to this run and nothing else. ARM group IDs
-    are name-based and every other tag is reproducible, so the tags must carry a value
-    drawn fresh for this run and agree with the name: A's group must carry exactly this
-    run's `run_id`; B's group must carry the adapter's workflow and job identities from
-    which its own name is derived (`horizon-ws-<workflow>-<job>`)."""
+    are name-based and every other tag is reproducible, so the tags must carry the
+    identity the name itself is derived from: A's group (`horizon-client-<run_id>`)
+    must carry exactly the manifest's `run_id`; B's group (`horizon-ws-<workflow>-<job>`)
+    must carry the adapter's workflow and job identities."""
     tags, name = record.get("tags"), str(record.get("name", ""))
+    run_id = str(manifest.get("run_id", ""))
     if not isinstance(tags, dict):
         return False
     if name.casefold() == str(manifest["client_group"]).casefold():
-        return bool(RUN_ID_RE.fullmatch(run_id)) and tags.get("run_id") == run_id
+        return bool(RUN_ID_RE.fullmatch(run_id)) and tags.get("run_id") == run_id \
+            and name.casefold() == f"horizon-client-{run_id}"
     if name.casefold() == str(manifest["worker_group"]).casefold():
         workflow, job = str(tags.get("horizon-workflow-id", "")), str(tags.get("horizon-job-id", ""))
         return bool(UUID_RE.fullmatch(workflow) and UUID_RE.fullmatch(job)) and name.casefold() == f"horizon-ws-{workflow}-{job}"
     return False
 
 
-def owned_now(az: Az, record: Dict[str, Any], manifest: Dict[str, Any], run_id: str) -> Optional[bool]:
+def owned_now(az: Az, record: Dict[str, Any], manifest: Dict[str, Any]) -> Optional[bool]:
     """Immediately before a delete: is the group still the exact resource that was
     journaled at creation (same ARM ID, identical tag set) and bound to this run? None
     when it cannot be read; an absent, recreated or retagged group is not ours, and a
     record not bound to this run never authorizes a delete, nor even a read."""
-    if not run_bound(record, manifest, run_id):
+    if not run_bound(record, manifest):
         return False
     shown = az.run(["group", "show", "-n", record["name"]])
     if not isinstance(shown, dict) or not isinstance(shown.get("tags"), dict):
@@ -71,7 +73,7 @@ def identity_record(az: Az, group: str) -> Optional[Dict[str, Any]]:
     return {"name": shown["name"], "id": shown["id"], "tags": shown["tags"]}
 
 
-def cleanup_targets(manifest: Dict[str, Any], before: Any, created: Any, run_id: str) -> Dict[str, Any]:
+def cleanup_targets(manifest: Dict[str, Any], before: Any, created: Any) -> Dict[str, Any]:
     """Which groups may be deleted: only those this run journaled as created, bound to
     this run, and never one that existed before the run. Malformed inputs refuse
     everything. Pure, so the refusal is testable; the returned records carry the
@@ -82,15 +84,15 @@ def cleanup_targets(manifest: Dict[str, Any], before: Any, created: Any, run_id:
         return {"delete": [], "refused": wanted, "malformed": True}
     pre_existing = {name.casefold() for name in before}
     refused = [group for group in wanted if group.casefold() in pre_existing or group.casefold() not in records
-               or not run_bound(records[group.casefold()], manifest, run_id)]
+               or not run_bound(records[group.casefold()], manifest)]
     return {"delete": [records[group.casefold()] for group in wanted if group not in refused], "refused": refused}
 
 
-def phase_cleanup(az: Az, manifest: Dict[str, Any], before: List[str], created: List[str], run_id: str) -> Dict[str, Any]:
+def phase_cleanup(az: Az, manifest: Dict[str, Any], before: List[str], created: List[str]) -> Dict[str, Any]:
     """Delete only the exact groups this run created; verify absence and untouched peers.
     A dry run walks the same authorization (the reads happen, the delete is journaled
     and suppressed by `Az.run`) and stops before waiting for an absence it never caused."""
-    targets = cleanup_targets(manifest, before, created, run_id)
+    targets = cleanup_targets(manifest, before, created)
     if targets.get("malformed"):
         return {"passed": False, "deleted": [],
                 "findings": ["groups-before is not a JSON array of names or created is not a JSON array of identity records"]}
@@ -100,15 +102,18 @@ def phase_cleanup(az: Az, manifest: Dict[str, Any], before: List[str], created: 
     for record in targets["delete"]:
         group = record["name"]
         # A same-named group recreated or retagged since the journal entry is not ours.
-        owned = owned_now(az, record, manifest, run_id)
+        owned = owned_now(az, record, manifest)
         if owned is None:
             findings.append(f"refusing to delete {group}: ownership could not be read")
         elif not owned:
             findings.append(f"refusing to delete {group}: absent, replaced or retagged since it was journaled")
         else:
             deleting.append(group)
-            # Delete the exact resource ID that was journaled and re-attested, never the
-            # mutable name: a group replaced in between answers 404 instead of vanishing.
+            # Delete the resource ID that was journaled and re-attested a moment ago. ARM
+            # offers no conditional delete for resource groups and the ID is name-based,
+            # so the guarantee rests on the name: unique to this run, so nothing else can
+            # legitimately stand at this path in the window between the re-read and the
+            # delete reaching ARM.
             az.run(["rest", "--method", "delete", "--url", f"{ARM}{record['id']}?api-version=2022-09-01"], mutating=True)
     targets["delete"] = deleting
     if az.dry_run:

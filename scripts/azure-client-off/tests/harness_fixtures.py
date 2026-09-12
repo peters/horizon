@@ -30,13 +30,17 @@ RUN_ID = "0123456789abcdef0123456789abcdef"
 WORKFLOW_ID = "4c5d6e7f-8a9b-4c0d-8e1f-2a3b4c5d6e7f"
 JOB_ID = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
 ADAPTER_TAGS = {"horizon-workflow-id": WORKFLOW_ID, "horizon-job-id": JOB_ID}
+SUBSCRIPTION = "0f0e0d0c-0b0a-4908-8706-050403020100"
+B_GROUP_ID = f"/subscriptions/{SUBSCRIPTION}/resourceGroups/horizon-ws-{WORKFLOW_ID}-{JOB_ID}"
+B_VM_ID = f"{B_GROUP_ID}/providers/Microsoft.Compute/virtualMachines/worker"
 
 
 def manifest(**overrides):
     base = {
         "subscription_id": "0f0e0d0c-0b0a-4908-8706-050403020100",
         "location": "northeurope",
-        "client_group": "horizon-client-475-a",
+        "run_id": RUN_ID,
+        "client_group": f"horizon-client-{RUN_ID}",
         "client_vm_size": "Standard_B2s",
         "client_sha": "77d48a81" + "0" * 32,
         "client_binary_sha256": "b" * 64,
@@ -53,8 +57,9 @@ def manifest(**overrides):
 
 
 def samples(count, *, start=NOW, step=15, a_power="PowerState/deallocated", progress=None, checkpoint=None,
-            b_power="PowerState/running", identity=("/g/b", "/g/b/vm"), host="52.174.10.5", image=IMAGE, slot=15,
+            b_power="PowerState/running", identity=None, host="52.174.10.5", image=IMAGE, slot=15,
             instance=B_INSTANCE):
+    identity = identity or (B_GROUP_ID, B_VM_ID)
     rows = []
     for index in range(count):
         rows.append({
