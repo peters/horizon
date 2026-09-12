@@ -261,6 +261,14 @@ class SampleIdentityTests(unittest.TestCase):
         other_client = dict(expected, a_instance_id=B_INSTANCE)
         verdict = client_off.evaluate_samples(rows, 12, 600, IMAGE, other_client)
         self.assertTrue(any("baseline" in finding for finding in verdict["findings"]), "the VM that was off must be A")
+        for value in (False, None, "true", 1):
+            rows = samples(49)
+            rows[20]["a_attested"] = value
+            verdict = client_off.evaluate_samples(rows, 12, 600, IMAGE, expected)
+            self.assertTrue(any("not attested" in finding for finding in verdict["findings"]), f"{value!r}: {verdict}")
+        rows = samples(49)
+        del rows[20]["a_attested"]
+        self.assertFalse(client_off.evaluate_samples(rows, 12, 600, IMAGE, expected)["passed"], "a missing attestation is a miss")
         rows = samples(49)
         rows[20]["a_instance_id"] = B_INSTANCE
         verdict = client_off.evaluate_samples(rows, 12, 600, IMAGE, expected)

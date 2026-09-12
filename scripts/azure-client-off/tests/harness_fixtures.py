@@ -67,6 +67,7 @@ def samples(count, *, start=NOW, step=15, a_power="PowerState/deallocated", prog
             "at": (start + dt.timedelta(seconds=step * index)).isoformat(),
             "a_power": a_power,
             "a_instance_id": A_INSTANCE,
+            "a_attested": True,
             "b_group_id": identity[0],
             "b_vm_id": identity[1],
             "b_instance_id": instance,

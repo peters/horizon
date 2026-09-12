@@ -11,7 +11,7 @@ def evaluate_samples(samples: List[Dict[str, Any]], off_minutes: int, lease_seco
                      expected_identity: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Pure verdict over observer samples taken while A was meant to be off.
 
-    Each sample: {"at": ISO instant, "a_power": str|None, "b_group_id": str|None,
+    Each sample: {"at": ISO instant, "a_power": str|None, "a_attested": bool, "b_group_id": str|None,
     "b_vm_id": str|None, "b_instance_id": str|None (the VM's vmId, which a same-name
     recreation does not keep), "b_host": str|None, "b_image_ref": str|None (the worker's
     image-reference tag), "b_power": str|None, "progress": int|None, "checkpoint":
@@ -76,6 +76,13 @@ def evaluate_samples(samples: List[Dict[str, Any]], off_minutes: int, lease_seco
     not_off = [index for index, sample in enumerate(samples) if sample.get("a_power") != "PowerState/deallocated"]
     if not_off:
         findings.append(f"client A not deallocated in {len(not_off)} samples (first at index {not_off[0]})")
+    # Each sample carries the outcome of a full attestation of A (IDs, instance identity,
+    # complete tag set on group and VM) taken with its power state; anything but an
+    # explicit success means the VM that was off is not known to be the provisioned A.
+    unattested = [index for index, sample in enumerate(samples) if sample.get("a_attested") is not True]
+    if unattested:
+        findings.append(f"client A not attested as the provisioned resource in {len(unattested)} samples "
+                        f"(first at index {unattested[0]})")
     def identity(sample: Dict[str, Any], field: str) -> Optional[str]:
         value = sample.get(field)
         return value.casefold() if isinstance(value, str) and value.strip() else None
