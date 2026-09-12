@@ -54,11 +54,12 @@ fn completed(expected: &RemoteEnvironmentSummary) -> RemoteEnvironmentSummary {
 fn pending(
     state: &mut StopState,
     expected: &RemoteEnvironmentSummary,
-) -> mpsc::SyncSender<Result<RemoteEnvironmentSummary, StopError>> {
+) -> mpsc::SyncSender<Result<StopResult, StopError>> {
     let (tx, rx) = mpsc::sync_channel(1);
     state.pending = Some(PendingStop {
         rx,
         expected: expected.clone(),
+        operation: Operation::Stop,
         discard: false,
     });
     tx
@@ -206,7 +207,7 @@ fn confirmed_operation_stays_single_flight_through_close_and_invalidation() {
         assert!(!state.stop.drain_result());
         assert!(state.stop.is_pending());
     }
-    tx.send(Ok(completed(&expected))).expect("send");
+    tx.send(Ok(StopResult::Stopped(completed(&expected)))).expect("send");
     assert!(state.stop.drain_result());
     assert!(
         state.stop.notice.is_none(),
@@ -226,7 +227,9 @@ fn result_remains_readable_after_saved_page_refresh_but_is_bound_to_exact_target
         } else {
             Err(StopError::StorageUnavailable)
         };
-        pending(&mut state.stop, &expected).send(result).expect("send");
+        pending(&mut state.stop, &expected)
+            .send(result.map(StopResult::Stopped))
+            .expect("send");
         assert!(state.stop.drain_result());
         state.accept_result(None, Ok(page(&completed(&expected))));
         let notice = state.stop.notice.as_ref().expect("last explicit result");
@@ -272,7 +275,7 @@ fn manual_page_actions_discard_notices_but_retain_the_confirmed_operation() {
         assert!(state.stop.is_pending());
         let load = state.pending.take().expect("explicit page read");
         assert!(load.rx.recv_timeout(std::time::Duration::from_secs(2)).is_ok());
-        tx.send(Ok(completed(&expected))).expect("send");
+        tx.send(Ok(StopResult::Stopped(completed(&expected)))).expect("send");
         assert!(state.stop.drain_result());
         assert!(
             state.stop.notice.is_none(),
@@ -319,7 +322,7 @@ fn provider_reload_invalidates_confirmation_but_unrelated_visual_reload_does_not
     app.apply_runtime_config(&updated);
     assert!(app.remote_environments.stop.confirmation.is_none());
     assert!(app.remote_environments.stop.is_pending());
-    tx.send(Ok(completed(&expected))).expect("send");
+    tx.send(Ok(StopResult::Stopped(completed(&expected)))).expect("send");
     assert!(app.remote_environments.stop.drain_result());
     assert!(app.remote_environments.stop.notice.is_none());
 }
@@ -339,7 +342,7 @@ fn completion_queues_saved_refresh_behind_inventory_read_and_closed_view_does_no
         discard: false,
     });
     pending(&mut state.stop, &expected)
-        .send(Ok(completed(&expected)))
+        .send(Ok(StopResult::Stopped(completed(&expected))))
         .expect("send");
     state.drain_stop(&home, &ctx);
     assert!(state.refresh_after_stop);
@@ -355,7 +358,7 @@ fn completion_queues_saved_refresh_behind_inventory_read_and_closed_view_does_no
     let untouched = HorizonHome::from_root(fixture.path().join("closed"));
     let tx = pending(&mut state.stop, &expected);
     state.close();
-    tx.send(Ok(completed(&expected))).expect("send");
+    tx.send(Ok(StopResult::Stopped(completed(&expected)))).expect("send");
     state.drain_stop(&untouched, &ctx);
     assert!(!state.refresh_after_stop);
     assert!(!untouched.cloud_workflow_store_path().exists());
@@ -387,5 +390,216 @@ fn confirmation_never_consumes_enter_as_an_implicit_stop() {
         assert!(matches!(action, InventoryAction::None));
         assert!(state.confirmation.is_some());
         assert!(!state.is_pending());
+    }
+}
+
+fn check_summary() -> RemoteEnvironmentSummary {
+    let mut expected = summary();
+    expected.provider = CloudProvider::RunPod;
+    expected.worker_identity.as_mut().expect("worker").provider = CloudProvider::RunPod;
+    expected.saved_phase = Some(RemoteRuntimePhase::Stopping { requested_at_millis: 1 });
+    expected
+}
+
+#[test]
+fn checking_requires_existing_persistent_runpod_intent_and_paint_never_dispatches() {
+    use crate::app::test_support::raw_input;
+    use crate::test_egui::DiscardTextures;
+    let expected = check_summary();
+    let mut candidates = vec![expected.clone(); 6];
+    candidates[1].saved_phase = Some(RemoteRuntimePhase::Ready);
+    candidates[2].lifetime = WorkerLifetime::TimeLimited { seconds: 900 };
+    candidates[3].worker_identity = None;
+    candidates[4].provider = CloudProvider::Azure;
+    candidates[5].provider = CloudProvider::LocalDocker;
+    let ctx = Context::default();
+    let state = StopState::default();
+    for (index, candidate) in candidates.iter().enumerate() {
+        for size in [[1100.0, 780.0], [760.0, 560.0]] {
+            let mut action = InventoryAction::None;
+            let _ = ctx
+                .run_ui(raw_input(size, None), |ui| {
+                    show(ui, &state, candidate, true, &mut action);
+                })
+                .discard_textures();
+            assert_eq!(
+                ctx.data(|data| data.get_temp::<bool>(egui::Id::new("stop-check-enabled-test"))),
+                Some(index == 0 && cfg!(target_os = "linux"))
+            );
+            assert!(matches!(action, InventoryAction::None));
+            assert!(!state.is_pending());
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod checks {
+    use super::*;
+    use InteractiveWorkerStopObservation::{Absent, Pending, RetainedStopped};
+
+    fn checked(
+        expected: &RemoteEnvironmentSummary,
+        observation: InteractiveWorkerStopObservation,
+    ) -> ConfiguredStopConfirmation {
+        let mut saved = expected.clone();
+        if observation == RetainedStopped && matches!(expected.saved_phase, Some(RemoteRuntimePhase::Stopping { .. })) {
+            saved.revision += 1;
+            saved.saved_phase = Some(RemoteRuntimePhase::Stopped {
+                requested_at_millis: 1,
+                observed_at_millis: 2,
+            });
+        }
+        ConfiguredStopConfirmation { saved, observation }
+    }
+
+    fn pending_check(
+        state: &mut StopState,
+        expected: &RemoteEnvironmentSummary,
+    ) -> mpsc::SyncSender<Result<StopResult, StopError>> {
+        let sender = pending(state, expected);
+        state.pending.as_mut().expect("pending").operation = Operation::Check;
+        sender
+    }
+
+    #[test]
+    fn typed_results_never_conflate_absence_pending_or_an_old_saved_stop_with_fresh_success() {
+        let stopping = check_summary();
+        let stopped = checked(&stopping, RetainedStopped).saved;
+        for expected in [&stopping, &stopped] {
+            for observation in [Pending, Absent, RetainedStopped] {
+                let result = checked(expected, observation);
+                let notice = StopNotice::checked(expected.clone(), Ok(result.clone()));
+                assert!(notice.checked);
+                assert_eq!(notice.succeeded, observation == RetainedStopped);
+                assert!(notice.message.contains(match observation {
+                    Pending => "not yet confirmed",
+                    Absent => "absent",
+                    RetainedStopped => "confirmed at this check",
+                }));
+                if observation != RetainedStopped {
+                    assert_eq!(&result.saved, expected);
+                }
+                let mut wrong = result;
+                wrong.saved.generation += 1;
+                assert!(!StopNotice::checked(expected.clone(), Ok(wrong)).succeeded);
+            }
+        }
+        let valid = checked(&stopping, RetainedStopped);
+        let mut wrong = vec![valid.clone(); 5];
+        wrong[0].saved.revision += 1;
+        wrong[1].saved.workflow_id = Some(CloudWorkflowId::new());
+        wrong[2].saved.repository = "other/repository".into();
+        wrong[3].saved.saved_phase = Some(RemoteRuntimePhase::Stopped {
+            requested_at_millis: 2,
+            observed_at_millis: 2,
+        });
+        wrong[4].saved.saved_phase = Some(RemoteRuntimePhase::Ready);
+        for result in wrong {
+            assert!(!StopNotice::checked(stopping.clone(), Ok(result)).succeeded);
+        }
+        let mut renewed = checked(&stopped, RetainedStopped);
+        renewed.saved.saved_phase = Some(RemoteRuntimePhase::Stopped {
+            requested_at_millis: 1,
+            observed_at_millis: 3,
+        });
+        assert!(
+            !StopNotice::checked(stopped, Ok(renewed)).succeeded,
+            "saved Stop timestamps are immutable"
+        );
+    }
+
+    #[test]
+    fn check_is_single_flight_and_close_navigation_or_config_change_discard_only_presentation() {
+        let fixture = tempfile::tempdir().expect("fixture");
+        let home = HorizonHome::from_root(fixture.path().join("unused"));
+        let expected = check_summary();
+        let ctx = Context::default();
+        for action in [
+            InventoryAction::Close,
+            InventoryAction::Select(1),
+            InventoryAction::None,
+        ] {
+            let mut state = view(&expected);
+            let sender = pending_check(&mut state.stop, &expected);
+            assert!(state.stop.pending_label().contains("No Stop request is sent"));
+            for _ in 0..20 {
+                state.stop_action(InventoryAction::CheckStop, &home, &config(), &ctx);
+                assert!(!state.stop.drain_result());
+                state.start_observation(&home, &config(), &ctx);
+                assert!(!state.observation.is_pending());
+            }
+            if matches!(action, InventoryAction::None) {
+                state.invalidate_provider_state();
+            } else {
+                state.apply(action, &home, &ctx);
+            }
+            sender
+                .send(Ok(StopResult::Checked(checked(&expected, RetainedStopped))))
+                .expect("send");
+            assert!(state.stop.drain_result());
+            assert!(state.stop.notice.is_none());
+            assert!(!state.stop.is_pending());
+        }
+        assert!(!home.root().exists());
+    }
+
+    #[test]
+    fn check_notice_survives_own_saved_refresh_and_rejects_wrong_result_kind() {
+        let expected = check_summary();
+        let mut state = view(&expected);
+        let result = checked(&expected, RetainedStopped);
+        pending_check(&mut state.stop, &expected)
+            .send(Ok(StopResult::Checked(result.clone())))
+            .expect("send");
+        assert!(state.stop.drain_result());
+        state.accept_result(None, Ok(page(&result.saved)));
+        assert!(
+            state
+                .stop
+                .notice
+                .as_ref()
+                .is_some_and(|notice| notice.succeeded && notice.checked)
+        );
+        pending_check(&mut state.stop, &expected)
+            .send(Ok(StopResult::Stopped(result.saved)))
+            .expect("wrong callback kind");
+        assert!(state.stop.drain_result());
+        assert!(state.stop.notice.as_ref().is_some_and(|notice| !notice.succeeded));
+        drop(pending_check(&mut state.stop, &expected));
+        assert!(state.stop.drain_result());
+        assert!(
+            state
+                .stop
+                .notice
+                .as_ref()
+                .expect("error")
+                .message
+                .contains("does not resend Stop")
+        );
+    }
+
+    #[test]
+    fn missing_or_insecure_existing_store_is_not_created_or_repaired_by_check() {
+        use std::os::unix::fs::PermissionsExt;
+        let fixture = tempfile::tempdir().expect("fixture");
+        let home = HorizonHome::from_root(fixture.path().join("missing"));
+        let expected = check_summary();
+        assert!(matches!(
+            execute_check(&home, &config(), &expected),
+            Err(StopError::StorageUnavailable)
+        ));
+        assert!(!home.root().exists());
+        let store = CloudWorkflowStore::open(&home).expect("owned empty fixture");
+        let before = std::fs::read(store.path()).expect("snapshot");
+        std::fs::set_permissions(store.path(), std::fs::Permissions::from_mode(0o644)).expect("insecure fixture");
+        assert!(matches!(
+            execute_check(&home, &config(), &expected),
+            Err(StopError::StorageUnavailable)
+        ));
+        assert_eq!(
+            std::fs::metadata(store.path()).expect("metadata").permissions().mode() & 0o777,
+            0o644
+        );
+        assert_eq!(std::fs::read(store.path()).expect("retained"), before);
     }
 }

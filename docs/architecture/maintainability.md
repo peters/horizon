@@ -460,7 +460,11 @@ back into large multi-purpose modules.
   using the separate provider-read-only observer and exact allocation/selection fences.
   RunPod reuses retained-state checks without Stop, SSH or host-key lookup. Only
   verified retention permits local completion; pending/absence preserve saved state.
-  The saved public pin is shape-checked, not live-attested; configured/UI actions are separate.
+  The saved public pin is shape-checked, not live-attested.
+- `remote_workspace/stop/configured_confirmation.rs` admits manual Linux RunPod
+  checks through the exact saved request, pin, named profile and HPS selection before
+  lazy credential lookup. It calls the same confirmation coordinator, not Stop or
+  setup recovery. Only verified completion changes local state; absence is not retention.
 - `remote_workspace/stop/configured.rs` admits one explicitly confirmed saved
   selection through its exact named local provider profile. It reloads the owned
   record and compares the full summary/revision before durable Stop coordination,
@@ -470,7 +474,9 @@ back into large multi-purpose modules.
 - The overview's `remote_environments/stop.rs` owns only confirmation, single-flight
   background execution and cached outcome presentation; its `stop/paint.rs` collects
   explicit actions for retained persistent local workers; timed/cloud Stop stays
-  disabled. Closing invalidates presentation, not an admitted operation.
+  disabled. A separate Check saved Stop action observes existing RunPod intent in
+  the same single-flight slot, without replay or private SSH identity. Closing
+  invalidates presentation, not an admitted operation.
   Completion invalidates provider observations and refreshes saved inventory while
   keeping its target-bound result readable. All mutation remains in core coordination.
 - `cloud_run/runpod.rs` coordinates provider operations and exact ownership

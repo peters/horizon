@@ -1,4 +1,5 @@
 mod configured;
+mod configured_confirmation;
 mod confirmation;
 
 use super::*;
