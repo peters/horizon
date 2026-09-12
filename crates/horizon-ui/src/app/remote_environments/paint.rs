@@ -67,7 +67,7 @@ impl InventoryRow {
     }
 }
 
-pub(super) fn show(ctx: &Context, state: &RemoteEnvironments) -> InventoryAction {
+pub(super) fn show(ctx: &Context, state: &mut RemoteEnvironments) -> InventoryAction {
     let viewport = ctx.content_rect();
     let width = (viewport.width() - 64.0).clamp(260.0, 820.0);
     let mut action = InventoryAction::None;
@@ -172,7 +172,7 @@ fn render_controls(ui: &mut egui::Ui, state: &RemoteEnvironments, action: &mut I
     }
 }
 
-fn render_content(ui: &mut egui::Ui, state: &RemoteEnvironments, action: &mut InventoryAction) {
+fn render_content(ui: &mut egui::Ui, state: &mut RemoteEnvironments, action: &mut InventoryAction) {
     let Some(page) = &state.page else {
         return;
     };
@@ -196,7 +196,14 @@ fn render_content(ui: &mut egui::Ui, state: &RemoteEnvironments, action: &mut In
     }
     if let Some(row) = state.selected.and_then(|index| page.rows.get(index)) {
         render_observation(ui, state, action);
-        let views_enabled = state.pending.is_none() && !state.observation.is_pending() && !state.stop.is_pending();
+        let idle = state.pending.is_none() && !state.observation.is_pending() && !state.stop.is_pending();
+        super::repository::show(
+            ui,
+            &mut state.repository,
+            idle && !state.reopen.is_pending() && !state.reconnect.is_pending(),
+            action,
+        );
+        let views_enabled = idle && !state.repository.is_pending();
         super::reopen::show(
             ui,
             &state.reopen,
@@ -213,7 +220,7 @@ fn render_content(ui: &mut egui::Ui, state: &RemoteEnvironments, action: &mut In
             ui,
             &state.stop,
             &row.summary,
-            state.pending.is_none() && !state.observation.is_pending(),
+            state.pending.is_none() && !state.observation.is_pending() && !state.repository.is_pending(),
             action,
         );
         ui.separator();
@@ -245,7 +252,10 @@ fn render_observation(ui: &mut egui::Ui, state: &RemoteEnvironments, action: &mu
     ui.horizontal_wrapped(|ui| {
         ui.strong("Provider status");
         let check = ui.add_enabled(
-            state.pending.is_none() && !observation.is_pending() && !state.stop.is_pending(),
+            state.pending.is_none()
+                && !observation.is_pending()
+                && !state.stop.is_pending()
+                && !state.repository.is_pending(),
             egui::Button::new("Check provider status"),
         );
         #[cfg(test)]

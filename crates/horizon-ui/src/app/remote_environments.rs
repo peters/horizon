@@ -4,6 +4,7 @@ mod observation;
 mod paint;
 mod reconnect;
 mod reopen;
+mod repository;
 mod stop;
 
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -26,6 +27,7 @@ pub(super) struct RemoteEnvironments {
     stop: stop::StopState,
     reconnect: reconnect::ReconnectState,
     reopen: reopen::ReopenState,
+    repository: repository::RepositoryState,
     refresh_after_stop: bool,
 }
 
@@ -74,6 +76,10 @@ enum InventoryAction {
     PrepareTaskStart(usize),
     ConfirmTaskStart,
     CancelTaskStart,
+    PrepareRepository,
+    ConfirmRepository,
+    CancelRepository,
+    InspectRepository,
 }
 
 struct WakeOnDrop(Context);
@@ -90,6 +96,7 @@ impl RemoteEnvironments {
     }
 
     pub(super) fn invalidate_session_views(&mut self) {
+        self.repository.invalidate();
         self.reconnect.invalidate();
         self.reopen.invalidate();
     }
@@ -201,6 +208,16 @@ impl RemoteEnvironments {
     }
 
     fn apply(&mut self, action: InventoryAction, home: &HorizonHome, ctx: &Context) {
+        if !matches!(
+            action,
+            InventoryAction::None
+                | InventoryAction::PrepareRepository
+                | InventoryAction::ConfirmRepository
+                | InventoryAction::CancelRepository
+                | InventoryAction::InspectRepository
+        ) {
+            self.repository.invalidate();
+        }
         if self.open
             && self.pending.is_none()
             && matches!(
@@ -212,6 +229,10 @@ impl RemoteEnvironments {
         }
         match action {
             InventoryAction::None
+            | InventoryAction::PrepareRepository
+            | InventoryAction::ConfirmRepository
+            | InventoryAction::CancelRepository
+            | InventoryAction::InspectRepository
             | InventoryAction::Observe
             | InventoryAction::RequestStop
             | InventoryAction::ConfirmStop => {}
@@ -346,7 +367,16 @@ impl HorizonApp {
         let was_open = self.remote_environments.open;
         if was_open {
             self.handle_speech_input(ctx);
-            let action = paint::show(ctx, &self.remote_environments);
+            self.remote_repository_action(InventoryAction::None, ctx);
+            let mut action = paint::show(ctx, &mut self.remote_environments);
+            if self.remote_environments.repository.is_pending()
+                && !matches!(
+                    action,
+                    InventoryAction::None | InventoryAction::Close | InventoryAction::Select(_)
+                )
+            {
+                action = InventoryAction::None;
+            }
             if matches!(action, InventoryAction::Observe) {
                 self.remote_environments.start_observation(
                     self.session_store.home(),
@@ -365,12 +395,14 @@ impl HorizonApp {
             self.remote_environments.apply(action, self.session_store.home(), ctx);
             self.remote_reconnect_action(action, ctx);
             self.remote_reopen_action(action, ctx);
+            self.remote_repository_action(action, ctx);
             let modal_input = ctx.input(Clone::clone);
             self.suppress_root_viewport_interaction(ctx);
             return Some(modal_input);
         }
         self.remote_reconnect_action(InventoryAction::None, ctx);
         self.remote_reopen_action(InventoryAction::None, ctx);
+        self.remote_repository_action(InventoryAction::None, ctx);
         None
     }
 
