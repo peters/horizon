@@ -175,7 +175,7 @@ fn check(
     config: &RemoteProviderConfig,
     expected: &RemoteEnvironmentSummary,
 ) -> Result<RemoteEnvironmentObservation, ObservationError> {
-    let store = CloudWorkflowStore::open(home).map_err(|_| ObservationError::StorageUnavailable)?;
+    let store = CloudWorkflowStore::open_read_only(home).map_err(|_| ObservationError::StorageUnavailable)?;
     observe_configured_remote_environment(&store, config, expected).map_err(ObservationError::Check)
 }
 
