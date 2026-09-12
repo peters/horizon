@@ -65,9 +65,9 @@ impl Form {
     pub(super) fn show(&mut self, ui: &mut egui::Ui) {
         let stacked = ui.available_width() < 520.0;
         let selected = self.selected.and_then(|i| self.choices.get(i));
-        egui::ComboBox::from_id_salt("new-remote-profile")
-            .selected_text(selected.map_or("Choose a configured profile", |p| p.label.as_str()))
-            .show_ui(ui, |ui| {
+        egui::CollapsingHeader::new(selected.map_or("Choose a configured profile", |p| p.label.as_str()))
+            .id_salt("new-remote-profile")
+            .show(ui, |ui| {
                 for (index, profile) in self.choices.iter().enumerate() {
                     ui.selectable_value(&mut self.selected, Some(index), &profile.label);
                 }

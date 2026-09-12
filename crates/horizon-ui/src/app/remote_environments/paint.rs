@@ -155,7 +155,7 @@ fn render_controls(ui: &mut egui::Ui, state: &RemoteEnvironments, action: &mut I
         {
             *action = InventoryAction::Next;
         }
-        if !idle {
+        if state.pending.is_some() {
             ui.label("Loading saved inventory…");
         }
     });

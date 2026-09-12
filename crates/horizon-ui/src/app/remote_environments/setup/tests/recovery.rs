@@ -1,7 +1,6 @@
 use super::super::*;
+use super::{OWNER, pending};
 use crate::test_egui::DiscardTextures;
-
-const OWNER: &str = "00000000-0000-4000-8000-000000000001";
 
 fn scope(home: &HorizonHome) -> Scope {
     Scope {
@@ -12,22 +11,6 @@ fn scope(home: &HorizonHome) -> Scope {
         }]}))
         .expect("synthetic profile"),
     }
-}
-
-fn pending(
-    state: &mut SetupState,
-    scope: &Scope,
-    locator: Option<RemoteWorkspaceSetupLocator>,
-) -> mpsc::SyncSender<Result<Completion, String>> {
-    let (sender, receiver) = mpsc::sync_channel(1);
-    state.pending = Some(Pending {
-        receiver,
-        scope: scope.clone(),
-        creation_locator: locator,
-        discard: false,
-        started: std::time::Instant::now(),
-    });
-    sender
 }
 
 fn locator(home: &HorizonHome, name: &str) -> RemoteWorkspaceSetupLocator {
@@ -149,17 +132,14 @@ fn settled_history_preserves_inventory_and_check_rejects_wrong_home_or_owner() {
         next_cursor: None,
     });
     let ctx = Context::default();
-    let paint = |ui: &mut egui::Ui| {
-        super::super::super::paint::show(ui.ctx(), &mut app.remote_environments);
-    };
-    let _ = ctx
-        .run_ui(crate::app::test_support::raw_input([1000.0, 900.0], None), paint)
-        .discard_textures();
-    let output = ctx
-        .run_ui(crate::app::test_support::raw_input([1000.0, 900.0], None), |ui| {
+    let mut frame = || {
+        ctx.run_ui(crate::app::test_support::raw_input([1000.0, 900.0], None), |ui| {
             super::super::super::paint::show(ui.ctx(), &mut app.remote_environments);
         })
-        .discard_textures();
+        .discard_textures()
+    };
+    frame();
+    let output = frame();
     let painted = format!("{:?}", output.shapes);
     assert!(
         painted.contains("Refresh saved page") && painted.contains("No saved"),

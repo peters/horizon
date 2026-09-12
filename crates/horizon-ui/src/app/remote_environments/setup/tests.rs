@@ -1,5 +1,23 @@
 use super::*;
 
+const OWNER: &str = "00000000-0000-4000-8000-000000000001";
+
+fn pending(
+    state: &mut SetupState,
+    scope: &Scope,
+    locator: Option<RemoteWorkspaceSetupLocator>,
+) -> mpsc::SyncSender<Result<Completion, String>> {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    state.pending = Some(Pending {
+        receiver,
+        scope: scope.clone(),
+        creation_locator: locator,
+        discard: false,
+        started: std::time::Instant::now(),
+    });
+    sender
+}
+
 #[test]
 fn no_owning_session_or_other_pending_work_cannot_open_form() {
     let (_temp, mut app) = crate::app::test_support::test_app();
@@ -50,7 +68,6 @@ fn entry_action_requires_persistent_linux_owner_and_invalidates_on_session_chang
 mod linux {
     use super::*;
     use crate::{app::test_support::raw_input, test_egui::DiscardTextures};
-    const OWNER: &str = "00000000-0000-4000-8000-000000000001";
 
     fn fixture(cloud: bool) -> (tempfile::TempDir, HorizonHome, Scope, SetupState) {
         let temp = tempfile::tempdir().expect("fixture");
@@ -76,16 +93,11 @@ mod linux {
         )
         .expect("preview")
     }
-    fn pending(state: &mut SetupState, scope: &Scope) -> mpsc::SyncSender<Result<Completion, String>> {
-        let (sender, receiver) = mpsc::sync_channel(1);
-        state.pending = Some(Pending {
-            receiver,
-            scope: scope.clone(),
-            discard: false,
-            creation_locator: None,
-            started: std::time::Instant::now(),
-        });
-        sender
+    fn texts(output: &egui::FullOutput) -> impl Iterator<Item = &egui::epaint::TextShape> {
+        output.shapes.iter().filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text),
+            _ => None,
+        })
     }
     fn render(state: &mut SetupState, size: [f32; 2]) -> String {
         let ctx = Context::default();
@@ -94,13 +106,8 @@ mod linux {
                 egui::CentralPanel::default().show(ui, |ui| state.show(ui, &mut InventoryAction::None));
             })
             .discard_textures();
-        output
-            .shapes
-            .iter()
-            .filter_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
-                _ => None,
-            })
+        texts(&output)
+            .map(|text| text.galley.job.text.as_str())
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -131,7 +138,7 @@ mod linux {
     fn canceled_or_changed_context_discards_late_review_without_restart() {
         for mode in 0..5 {
             let (_temp, home, scope, mut state) = fixture(false);
-            let tx = pending(&mut state, &scope);
+            let tx = pending(&mut state, &scope, None);
             let mut config = scope.config.clone();
             let mut owner = OWNER;
             let other_home = HorizonHome::from_root(home.root().join("other"));
@@ -156,7 +163,7 @@ mod linux {
     #[test]
     fn disconnected_preview_has_definite_noncreating_notice_and_cancel_clears_it() {
         let (_temp, home, scope, mut state) = fixture(false);
-        drop(pending(&mut state, &scope));
+        drop(pending(&mut state, &scope, None));
         state.sync(Some((&home, OWNER, &scope.config)));
         assert_eq!(
             state.notice.as_deref(),
@@ -173,7 +180,7 @@ mod linux {
             let form = render(&mut state, [390.0, 1000.0]);
             assert!(form.contains("Nothing has been created") && form.contains("Review request"));
             assert!(!form.contains("Create task-free worker") && !form.contains("I trust this"));
-            let tx = pending(&mut state, &scope);
+            let tx = pending(&mut state, &scope, None);
             assert!(
                 tx.send(Ok(Completion::Preview(Box::new(prepared(&home, &scope, cloud)))))
                     .is_ok()
@@ -209,7 +216,7 @@ mod linux {
             setup: state,
             ..Default::default()
         };
-        let tx = pending(&mut inventory.setup, &scope);
+        let tx = pending(&mut inventory.setup, &scope, None);
         inventory.close();
         assert!(
             tx.send(Ok(Completion::Preview(Box::new(prepared(&home, &scope, false)))))
@@ -217,6 +224,46 @@ mod linux {
         );
         inventory.setup.sync(None);
         assert!(!inventory.open && !inventory.setup.is_active() && !home.root().exists());
+    }
+
+    #[test]
+    fn profile_selection_works_inside_actual_modal_without_false_loading() {
+        let (_temp, home, _, state) = fixture(true);
+        let mut inventory = super::super::super::RemoteEnvironments {
+            setup: state,
+            ..Default::default()
+        };
+        let ctx = Context::default();
+        ctx.all_styles_mut(|style| style.animation_time = 0.0);
+        let mut frame = |events| {
+            let mut input = raw_input([900.0, 900.0], None);
+            input.events = events;
+            ctx.run_ui(input, |ui| {
+                super::super::super::paint::show(ui.ctx(), &mut inventory);
+            })
+            .discard_textures()
+        };
+        for label in ["RunPod / gpu", "Local Docker / local"] {
+            frame(Vec::new());
+            let output = frame(Vec::new());
+            assert!(!texts(&output).any(|text| text.galley.job.text.contains("Loading saved inventory")));
+            let text = texts(&output)
+                .find(|text| text.galley.job.text == label)
+                .expect("visible profile control");
+            let position = text.pos + text.galley.size() / 2.0;
+            for pressed in [true, false] {
+                frame(vec![egui::Event::PointerButton {
+                    pos: position,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }]);
+            }
+        }
+        let form = inventory.setup.form.as_ref().expect("form");
+        let provider = form.draft(i64::MAX).expect("draft").target.provider;
+        assert_eq!(provider, horizon_core::cloud_run::CloudProvider::LocalDocker);
+        assert!(!home.root().exists() && inventory.pending.is_none() && inventory.setup.pending.is_none());
     }
 
     #[test]
@@ -276,8 +323,7 @@ mod linux {
                         unknown: prior,
                         ..Default::default()
                     };
-                    let sender = pending(&mut state, &scope);
-                    state.pending.as_mut().expect("pending").creation_locator = Some(locator.clone());
+                    let sender = pending(&mut state, &scope, Some(locator.clone()));
                     assert!(
                         sender
                             .send(Ok(Completion::Submitted(Box::new(
@@ -336,8 +382,7 @@ mod linux {
             attempts: vec![attempt.locator.clone()],
             ..Default::default()
         };
-        let sender = pending(&mut state, &scope);
-        state.pending.as_mut().expect("pending").creation_locator = Some(attempt.locator.clone());
+        let sender = pending(&mut state, &scope, Some(attempt.locator.clone()));
         state.invalidate();
         assert!(sender.send(Ok(Completion::Submitted(Box::new(attempt)))).is_ok());
         state.sync(None);
