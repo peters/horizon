@@ -33,6 +33,9 @@ class ManifestTests(unittest.TestCase):
         soon = (NOW + dt.timedelta(minutes=20)).isoformat()
         self.assertTrue(any("at least" in p for p in client_off.validate_manifest(manifest(cleanup_deadline_utc=soon), NOW)))
         self.assertTrue(client_off.validate_manifest(manifest(cleanup_deadline_utc=soon), NOW, phase="off"))
+        self.assertEqual(client_off.required_minutes(manifest(), "install-observer-key"),
+                         client_off.required_minutes(manifest(), "off") + client_off.RUN_COMMAND_SECONDS // 60,
+                         "the install may spend its whole run-command bound first")
         self.assertEqual(client_off.validate_manifest(manifest(cleanup_deadline_utc=soon), NOW, phase="return"), [])
         self.assertEqual(client_off.validate_manifest(manifest(cleanup_deadline_utc=soon), NOW, renting=False), [])
         enough = (NOW + dt.timedelta(minutes=client_off.required_minutes(manifest(), "validate"))).isoformat()
