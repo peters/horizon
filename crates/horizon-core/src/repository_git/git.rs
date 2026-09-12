@@ -254,6 +254,21 @@ pub(super) fn prepare(
     cancelled: &dyn Fn() -> bool,
     verify: &dyn Fn() -> Result<(), Error>,
 ) -> Result<(), Error> {
+    let mut budget = super::submodules::Budget::default();
+    prepare_repository(git, directory, request, cancelled, verify, &mut budget, 0)?;
+    budget.verify()?;
+    verify()
+}
+
+pub(super) fn prepare_repository(
+    git: &mut impl Commands,
+    directory: &Path,
+    request: &GitPreparation,
+    cancelled: &dyn Fn() -> bool,
+    verify: &dyn Fn() -> Result<(), Error>,
+    budget: &mut super::submodules::Budget,
+    depth: usize,
+) -> Result<(), Error> {
     let mut run = |args: &[&str], input: &[u8], missing| {
         verify()?;
         let output = git.run(directory, args, input, missing, cancelled)?;
@@ -284,12 +299,20 @@ pub(super) fn prepare(
         return Err(Error::Git);
     }
     let modes = run(&["ls-tree", "-r", "--format=%(objectmode)", commit], &[], false)?;
-    if modes.split(|byte| *byte == b'\n').any(|mode| mode == b"160000")
-        || !run(&["ls-tree", "--name-only", commit, "--", ".lfsconfig"], &[], false)?.is_empty()
-    {
+    budget.charge(modes.len())?;
+    if !run(&["ls-tree", "--name-only", commit, "--", ".lfsconfig"], &[], false)?.is_empty() {
         return Err(Error::UnsupportedRepository);
     }
-    run(&["checkout", "-b", &request.work_branch, commit], &[], false)?;
+    let has_children = modes.split(|byte| *byte == b'\n').any(|mode| mode == b"160000");
+    let mut plan = super::submodules::read_plan(&mut run, request, has_children, depth, budget)?;
+    // Git inherits caller umask. Admit and create only planned empty directories
+    // privately before checkout, rather than chmod/adopt paths after materialization.
+    plan.prepare_paths(directory, verify)?;
+    if depth == 0 {
+        run(&["checkout", "-b", &request.work_branch, commit], &[], false)?;
+    } else {
+        run(&["checkout", "--detach", commit], &[], false)?;
+    }
     let paths = run(&["ls-files", "-z"], &[], false)?;
     let attributes = run(&["check-attr", "--cached", "-z", "--stdin", "filter"], &paths, false)?;
     let pointers = run(
@@ -306,7 +329,58 @@ pub(super) fn prepare(
         &[],
         true,
     )?;
-    super::lfs::hydrate(git, directory, request, &attributes, &pointers, cancelled, verify)?;
+    super::lfs::hydrate(
+        git,
+        directory,
+        request,
+        super::lfs::Selection {
+            attributes: &attributes,
+            matches: &pointers,
+        },
+        &mut budget.lfs,
+        cancelled,
+        verify,
+    )?;
+    super::submodules::hydrate(git, directory, request, plan, cancelled, verify, budget)?;
+    if depth > 0 || has_children {
+        verify_checkout(git, directory, commit, cancelled, verify)?;
+    }
+    Ok(())
+}
+
+fn verify_checkout(
+    git: &mut impl Commands,
+    directory: &Path,
+    commit: &str,
+    cancelled: &dyn Fn() -> bool,
+    verify: &dyn Fn() -> Result<(), Error>,
+) -> Result<(), Error> {
+    let mut run = |args: &[&str]| {
+        verify()?;
+        let output = git.run(directory, args, &[], false, cancelled)?;
+        verify()?;
+        Ok::<_, Error>(output)
+    };
+    if run(&["rev-parse", "--verify", "HEAD^{commit}"])? != format!("{commit}\n").as_bytes() {
+        return Err(Error::Git);
+    }
+    run(&["diff-index", "--cached", "--quiet", commit, "--"])?;
+    // Match admitted LFS clean semantics, including Git's child status processes.
+    // Setup otherwise disables process filters while checking out pointers.
+    let status = run(&[
+        "-c",
+        "filter.lfs.process=/usr/bin/git-lfs filter-process",
+        "-c",
+        "filter.lfs.required=true",
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+        "--ignore-submodules=none",
+    ])?;
+    if !status.is_empty() {
+        return Err(Error::Git);
+    }
     Ok(())
 }
 

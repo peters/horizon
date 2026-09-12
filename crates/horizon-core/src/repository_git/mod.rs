@@ -7,6 +7,8 @@ mod git;
 mod lfs;
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "linux")]
+mod submodules;
 
 use crate::{cloud_run::GitSource, remote_workspace::valid_local_id};
 use serde::{Deserialize, Serialize};

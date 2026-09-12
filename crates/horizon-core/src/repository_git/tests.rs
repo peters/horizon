@@ -11,7 +11,7 @@ use std::{
     process::Command,
 };
 
-fn request() -> Request {
+pub(super) fn request() -> Request {
     Request {
         version: 1,
         workspace_local_id: "synthetic-workspace".into(),
@@ -25,7 +25,7 @@ fn request() -> Request {
     }
 }
 
-fn roots() -> tempfile::TempDir {
+pub(super) fn roots() -> tempfile::TempDir {
     let root = tempfile::tempdir().unwrap();
     for suffix in ["", ".horizon-worker", "horizon"] {
         let path = root.path().join(suffix);
@@ -319,16 +319,24 @@ fn unsafe_roots_preexisting_checkout_and_replacement_are_not_adopted() {
 }
 
 #[test]
-fn submodules_fail_explicitly_before_checkout() {
+fn submodules_without_matching_metadata_fail_without_a_completion_or_replay() {
     let root = roots();
     let mut git = Fake::new();
     git.mode = "100644\n160000\n";
-    let result = execute(root.path(), &request(), false, &mut git);
+    let request = request();
+    let result = execute(root.path(), &request, false, &mut git);
     assert_eq!(result.reason, Some(Error::UnsupportedRepository));
-    assert_eq!(git.calls, 5);
+    assert_eq!(result.state, State::ClaimedUnknown);
+    let calls = git.calls;
+    assert_eq!(
+        execute(root.path(), &request, false, &mut git).state,
+        State::ClaimedUnknown
+    );
+    assert_eq!(git.calls, calls);
+    assert!(!root.path().join(".horizon-worker/git-workspace/complete.json").exists());
 }
 
-fn local_git(root: &Path, args: &[&str]) -> String {
+pub(super) fn local_git(root: &Path, args: &[&str]) -> String {
     let output = Command::new("/usr/bin/git")
         .env_clear()
         .env("PATH", "/usr/bin:/bin")

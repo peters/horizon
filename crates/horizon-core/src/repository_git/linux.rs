@@ -49,6 +49,64 @@ pub(super) struct Directory {
 }
 
 impl Directory {
+    pub(super) fn submodule(parent: &Path, path: &str) -> Result<Vec<Self>, Error> {
+        if !super::submodules::valid_path(path) {
+            return Err(Error::UnsafeRoot);
+        }
+        let mut held = vec![Self::open_mode(parent, false)?];
+        for part in path.split('/') {
+            let parent = held.last().ok_or(Error::UnsafeRoot)?;
+            parent.verify()?;
+            let handle = match openat2(
+                &parent.handle,
+                part,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+                Mode::empty(),
+                CONFINED,
+            ) {
+                Ok(handle) => handle,
+                Err(rustix::io::Errno::NOENT) => {
+                    mkdirat(&parent.handle, part, PRIVATE).map_err(|_| Error::Conflict)?;
+                    parent.handle.sync_all().map_err(|_| Error::Storage)?;
+                    openat2(
+                        &parent.handle,
+                        part,
+                        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+                        Mode::empty(),
+                        CONFINED,
+                    )
+                    .map_err(|_| Error::UnsafeRoot)?
+                }
+                Err(_) => return Err(Error::UnsafeRoot),
+            };
+            let child = Self {
+                handle: File::from(handle),
+                path: parent.path.join(part),
+                private: false,
+            };
+            child.verify()?;
+            child.handle.sync_all().map_err(|_| Error::Storage)?;
+            parent.verify()?;
+            held.push(child);
+        }
+        let child = held.last().ok_or(Error::UnsafeRoot)?;
+        if std::fs::read_dir(&child.path)
+            .map_err(|_| Error::UnsafeRoot)?
+            .next()
+            .is_some()
+        {
+            return Err(Error::Conflict);
+        }
+        for handle in &held {
+            handle.verify()?;
+        }
+        Ok(held)
+    }
+
+    pub(super) fn fresh_git_directory(&self) -> Result<Self, Error> {
+        self.child(".git", true)?.ok_or(Error::UnsafeRoot)
+    }
+
     fn open_mode(path: &Path, private: bool) -> Result<Self, Error> {
         let handle = open_directory(path)?;
         let directory = Self {
