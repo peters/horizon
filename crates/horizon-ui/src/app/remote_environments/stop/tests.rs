@@ -1,3 +1,5 @@
+mod runpod;
+
 use super::super::{InventoryPage, RemoteEnvironments, paint as inventory_paint};
 use super::*;
 use horizon_core::cloud_run::{

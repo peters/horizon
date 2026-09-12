@@ -11,8 +11,9 @@ use horizon_core::{
     remote_workspace::{
         RemoteRuntimePhase,
         stop::{
-            ConfiguredStopConfirmation, ConfiguredStopConfirmationError, ConfiguredStopError,
-            confirm_configured_remote_environment_stop, stop_configured_remote_environment,
+            ConfiguredRunPodStopError, ConfiguredStopConfirmation, ConfiguredStopConfirmationError,
+            ConfiguredStopError, confirm_configured_remote_environment_stop, stop_configured_remote_environment,
+            stop_configured_runpod_environment,
         },
     },
 };
@@ -62,6 +63,7 @@ enum StopError {
     StorageUnavailable,
     SelectionChanged,
     Stop(ConfiguredStopError),
+    RunPod(ConfiguredRunPodStopError),
     Check(ConfiguredStopConfirmationError),
 }
 
@@ -76,6 +78,7 @@ impl StopError {
                 "The Stop result does not match this environment. Refresh before retrying.".into()
             }
             Self::Stop(error) => error.to_string(),
+            Self::RunPod(error) => error.to_string(),
             Self::Check(error) => error.to_string(),
         }
     }
@@ -90,6 +93,14 @@ impl StopState {
         match self.pending.as_ref().map(|pending| pending.operation) {
             Some(Operation::Check) => {
                 "Checking saved Stop. No Stop request is sent; verified completion may update this saved record."
+            }
+            Some(Operation::Stop)
+                if self
+                    .pending
+                    .as_ref()
+                    .is_some_and(|pending| pending.expected.provider == CloudProvider::RunPod) =>
+            {
+                "RunPod Stop is pending. Closing this overview does not cancel it. Exiting Horizon may interrupt local coordination; refresh and Check saved Stop, never resend it."
             }
             _ => "An explicitly confirmed Stop is pending. Closing this overview does not cancel it.",
         }
@@ -266,6 +277,7 @@ impl StopNotice {
             if !same_target(&expected, &saved)
                 || saved.revision < expected.revision
                 || !matches!(saved.saved_phase, Some(RemoteRuntimePhase::Stopped { .. }))
+                || (expected.provider == CloudProvider::RunPod && !valid_runpod_stop_result(&expected, &saved))
             {
                 return Err(StopError::SelectionChanged);
             }
@@ -356,9 +368,38 @@ fn check_supported(summary: &RemoteEnvironmentSummary) -> bool {
 }
 
 fn supported(summary: &RemoteEnvironmentSummary) -> bool {
-    summary.provider == CloudProvider::LocalDocker
-        && summary.lifetime == WorkerLifetime::Persistent
+    summary.lifetime == WorkerLifetime::Persistent
         && summary.worker_identity.is_some()
+        && (summary.provider == CloudProvider::LocalDocker
+            || (cfg!(target_os = "linux")
+                && summary.provider == CloudProvider::RunPod
+                && summary
+                    .worker_identity
+                    .as_ref()
+                    .is_some_and(|identity| identity.provider == CloudProvider::RunPod)
+                && summary.saved_phase.is_some_and(|phase| {
+                    !matches!(
+                        phase,
+                        RemoteRuntimePhase::Stopping { .. } | RemoteRuntimePhase::Stopped { .. }
+                    )
+                })))
+}
+
+fn valid_runpod_stop_result(expected: &RemoteEnvironmentSummary, saved: &RemoteEnvironmentSummary) -> bool {
+    let Some(RemoteRuntimePhase::Stopped {
+        requested_at_millis,
+        observed_at_millis,
+    }) = saved.saved_phase
+    else {
+        return false;
+    };
+    let Some(revision) = expected.revision.checked_add(2) else {
+        return false;
+    };
+    let mut allowed = expected.clone();
+    allowed.revision = revision;
+    allowed.saved_phase = saved.saved_phase;
+    supported(expected) && requested_at_millis >= 0 && observed_at_millis >= requested_at_millis && *saved == allowed
 }
 
 fn same_target(left: &RemoteEnvironmentSummary, right: &RemoteEnvironmentSummary) -> bool {
@@ -375,6 +416,14 @@ fn execute(
     config: &RemoteProviderConfig,
     expected: &RemoteEnvironmentSummary,
 ) -> Result<RemoteEnvironmentSummary, StopError> {
+    if expected.provider == CloudProvider::RunPod {
+        if !supported(expected) {
+            return Err(StopError::RunPod(ConfiguredRunPodStopError::UnsupportedProvider));
+        }
+        let store =
+            CloudWorkflowStore::open_existing_without_migration(home).map_err(|_| StopError::StorageUnavailable)?;
+        return stop_configured_runpod_environment(&store, config, expected).map_err(StopError::RunPod);
+    }
     let store = CloudWorkflowStore::open(home).map_err(|_| StopError::StorageUnavailable)?;
     stop_configured_remote_environment(&store, config, expected).map_err(StopError::Stop)
 }

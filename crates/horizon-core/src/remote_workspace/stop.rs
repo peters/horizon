@@ -2,12 +2,14 @@
 
 mod configured;
 mod configured_confirmation;
+mod configured_runpod;
 mod confirmation;
 
 pub use configured::{ConfiguredStopError, stop_configured_remote_environment};
 pub use configured_confirmation::{
     ConfiguredStopConfirmation, ConfiguredStopConfirmationError, confirm_configured_remote_environment_stop,
 };
+pub use configured_runpod::{ConfiguredRunPodStopError, stop_configured_runpod_environment};
 pub use confirmation::{RemoteWorkspaceStopConfirmation, confirm_remote_workspace_stop};
 
 use crate::{
@@ -41,7 +43,22 @@ pub fn stop_remote_workspace<P: InteractiveWorkerStopProvider + ?Sized>(
     if allocation.workspace() != expected {
         return Err(Error::StateChanged);
     }
-    let runtime = expected.state().runtime.as_ref().ok_or(Error::MissingAllocation)?;
+    stop_allocation(store, provider, &allocation)
+}
+
+// Configured admission must not reload/adopt a newer workflow after checking credentials.
+fn stop_allocation<P: InteractiveWorkerStopProvider + ?Sized>(
+    store: &CloudWorkflowStore,
+    provider: &P,
+    allocation: &StoredRemoteAllocation,
+) -> Result<StoredRemoteAllocation, RemoteWorkspaceStopError> {
+    use RemoteWorkspaceStopError as Error;
+    let runtime = allocation
+        .workspace()
+        .state()
+        .runtime
+        .as_ref()
+        .ok_or(Error::MissingAllocation)?;
     let worker = runtime.worker.as_ref().ok_or(Error::MissingWorker)?;
     if !worker.is_valid_for(provider.provider()) {
         return Err(Error::ProviderMismatch);
@@ -62,7 +79,7 @@ pub fn stop_remote_workspace<P: InteractiveWorkerStopProvider + ?Sized>(
     } else {
         RemoteRuntimePhase::Stopping { requested_at_millis }
     };
-    let stopping = store.record_remote_stop_phase(&allocation, phase)?;
+    let stopping = store.record_remote_stop_phase(allocation, phase)?;
     match provider.stop_worker(worker).map_err(|_| Error::ProviderUnavailable)? {
         InteractiveWorkerStop::AlreadyAbsent => return Err(Error::ResourceAbsent),
         InteractiveWorkerStop::Stopped => {}
