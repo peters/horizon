@@ -171,6 +171,104 @@ fn lost_start_response_never_offers_automatic_retry_or_fabricates_status() {
 }
 
 #[test]
+fn unavailable_start_response_is_definite_and_never_restarts_or_retries() {
+    let temp = tempfile::tempdir().expect("fixture");
+    let home = HorizonHome::from_root(temp.path().join("state"));
+    let (store, expected) = seed(&home, OWNER, 1);
+    let scope = scope(&expected);
+    let ctx = Context::default();
+    let mut state = loaded(&store, &scope, &ctx);
+    let mut board = Board::new();
+    state.accept_start(
+        PendingStart::Execute("task-0".into()),
+        scope.clone(),
+        Ok(Completion::Started(RemotePanelStatus::Unavailable)),
+    );
+    let rendered = text(&state, &ctx);
+    assert!(rendered.contains("Unavailable at start response. Not restarted."));
+    assert!(!rendered.contains("outcome is unknown"));
+    for _ in 0..3 {
+        assert!(state.drain(&client(&home, &scope), &mut board, &ctx).is_none());
+        assert!(!state.is_pending());
+        assert_eq!(text(&state, &ctx), rendered);
+    }
+    assert!(board.panels.is_empty());
+}
+
+#[test]
+fn rendered_start_and_direct_prepare_refuse_unsupported_saved_shapes_and_provider() {
+    use horizon_core::cloud_run::CloudProvider;
+    for (provider, kind, command, handoff, supported) in [
+        (CloudProvider::LocalDocker, PanelKind::Shell, true, false, true),
+        (CloudProvider::RunPod, PanelKind::Shell, true, false, true),
+        (CloudProvider::LocalDocker, PanelKind::Command, true, false, false),
+        (CloudProvider::LocalDocker, PanelKind::Pi, true, false, false),
+        (CloudProvider::LocalDocker, PanelKind::Shell, false, false, false),
+        (CloudProvider::LocalDocker, PanelKind::Shell, true, true, false),
+        (CloudProvider::Azure, PanelKind::Shell, true, false, false),
+    ] {
+        let temp = tempfile::tempdir().expect("fixture");
+        let home = HorizonHome::from_root(temp.path().join("state"));
+        let (store, _) = seed(&home, OWNER, 1);
+        let record = store
+            .load_remote_workspace(OWNER, "environment")
+            .expect("load")
+            .expect("record");
+        let mut saved = record.state().clone();
+        saved.spec.target.provider = provider;
+        let panel = &mut saved.spec.panels[0];
+        panel.kind = kind;
+        if !command {
+            panel.command = None;
+        }
+        panel.task_handoff = handoff.then(|| "private-handoff".into());
+        let record = store.replace_remote_workspace(&record, &saved).expect("fixture intent");
+        let scope = scope(&record.environment_summary());
+        let ctx = Context::default();
+        let mut state = loaded(&store, &scope, &ctx);
+        let rendered = text(&state, &ctx);
+        assert!(rendered.contains("Start saved Shell task"));
+        assert!(!rendered.contains("private-"));
+        let position = ctx
+            .data(|data| data.get_temp::<egui::Rect>(egui::Id::new(("start-task-request", 0_usize))))
+            .expect("start button")
+            .center();
+        let mut action = InventoryAction::None;
+        for pressed in [true, false] {
+            let mut input = raw_input([1100.0, 1200.0], None);
+            input.events.extend([
+                egui::Event::PointerMoved(position),
+                egui::Event::PointerButton {
+                    pos: position,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]);
+            let _ = ctx
+                .run_ui(input, |ui| super::super::paint::show(ui, &state, true, &mut action))
+                .discard_textures();
+        }
+        assert_eq!(
+            matches!(action, InventoryAction::PrepareTaskStart(0)),
+            supported,
+            "{provider:?}/{kind:?}"
+        );
+        if !supported {
+            assert!(matches!(action, InventoryAction::None));
+            let unopened = HorizonHome::from_root(temp.path().join("must-not-open"));
+            state.prepare_start(&client(&unopened, &scope), 0, &ctx);
+            assert!(!state.is_pending() && state.notice.is_none());
+            assert!(!unopened.root().exists());
+        }
+        assert_eq!(
+            store.load_remote_workspace(OWNER, "environment").expect("unchanged"),
+            Some(record)
+        );
+    }
+}
+
+#[test]
 fn stale_execution_keeps_an_unattributed_unknown_warning_after_reopening() {
     let temp = tempfile::tempdir().expect("fixture");
     let home = HorizonHome::from_root(temp.path().join("state"));

@@ -2,12 +2,19 @@
 
 use super::{ClientContext, Completion, Context, InventoryAction, ReopenState, RequestScope};
 use horizon_core::{
+    cloud_run::CloudProvider,
     remote_ssh_identity::RemoteSshIdentityStore,
     remote_worker_status::{
         ConfiguredRemotePanelStatusRequest, PreparedRemoteGitStart, RemotePanelStatus,
         prepare_configured_remote_git_start, start_configured_remote_git_shell,
     },
 };
+
+pub(super) fn supported(provider: CloudProvider, saved_shell_eligible: bool) -> bool {
+    cfg!(target_os = "linux")
+        && saved_shell_eligible
+        && matches!(provider, CloudProvider::LocalDocker | CloudProvider::RunPod)
+}
 
 #[derive(Default)]
 pub(super) struct StartState {
@@ -109,6 +116,9 @@ impl ReopenState {
             return;
         }
         let Some(row) = cached.rows.get(index) else { return };
+        if !row.start_supported {
+            return;
+        }
         let panel = row.id.clone();
         let requested_panel = panel.clone();
         let scope = cached.scope.clone();
@@ -200,6 +210,9 @@ impl ReopenState {
                             "Exited at start response (PID {pid}, exit status {}). Not restarted.",
                             exit_status.map_or_else(|| "unknown".into(), |status| status.to_string())
                         )
+                    }
+                    Ok(Completion::Started(RemotePanelStatus::Unavailable)) => {
+                        "Unavailable at start response. Not restarted.".into()
                     }
                     Err(message) => {
                         format!("{message} Inspect the retained task before another explicit start request.")

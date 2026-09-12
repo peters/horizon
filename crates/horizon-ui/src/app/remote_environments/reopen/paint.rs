@@ -52,7 +52,7 @@ pub(super) fn show(ui: &mut egui::Ui, state: &ReopenState, enabled: bool, action
                         *action = InventoryAction::InspectTask(index);
                     }
                     let start = ui.add_enabled(
-                        enabled && !state.is_pending(),
+                        enabled && !state.is_pending() && row.start_supported,
                         egui::Button::new("Start saved Shell task…"),
                     );
                     #[cfg(test)]

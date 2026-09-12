@@ -30,6 +30,7 @@ struct CachedCatalog {
 struct SavedView {
     id: String,
     present: bool,
+    start_supported: bool,
     inspection: inspection::TaskObservation,
 }
 
@@ -250,6 +251,10 @@ impl ReopenState {
                         .map(|id| SavedView {
                             id: id.clone(),
                             present: catalog.view_is_present(board, id),
+                            start_supported: start::supported(
+                                pending.scope.expected.provider,
+                                catalog.saved_shell_start_eligible(id),
+                            ),
                             inspection: inspection::TaskObservation::default(),
                         })
                         .collect(),
