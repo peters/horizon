@@ -133,6 +133,12 @@ back into large multi-purpose modules.
   positive first-pin intent or a complete retained pin. Selection and non-creating
   recovery bind the same owned snapshot; an unmarked interrupted start is refused,
   never inferred as first-bootstrap authority or automatically cleaned up.
+  Its `configured` leaf validates a home/owner/profile-bound new-workspace preview,
+  consumes exact image/storage consent and saves one immutable identity before
+  task-free allocation. Errors retain recovery coordinates; manual checks distinguish
+  dormant and interrupted records and recover only the same allocation snapshot.
+  This leaf does not prepare Git, deliver repository credentials, start tasks or
+  attest caller-supplied image/storage trust. UI confirmation remains a separate layer.
 - `remote_environment_observation.rs` produces overview-safe, point-in-time
   provider observations with exact snapshot checks but no private-key access or
   saved-state writes. It shares allocation observation validation with recovery;

@@ -1,7 +1,13 @@
 //! Explicit initial setup and interrupted-setup retry, separate from client reconnect.
 //! All operations are synchronous and must run off the render thread.
 
+mod configured;
 mod runpod;
+pub use configured::{
+    ConfiguredWorkspaceSetupAttempt, ConfiguredWorkspaceSetupError, ConfiguredWorkspaceSetupObservation,
+    PreparedRemoteWorkspaceSetup, RemoteWorkspaceSetupConsent, RemoteWorkspaceSetupDraft, RemoteWorkspaceSetupLocator,
+    check_configured_remote_workspace_setup, preview_configured_remote_workspace, submit_configured_remote_workspace,
+};
 pub use runpod::{
     RunPodWorkspaceSetupError, recover_runpod_workspace, retry_runpod_workspace_setup,
     start_task_free_runpod_workspace, start_task_free_runpod_workspace_with_network_volume,
