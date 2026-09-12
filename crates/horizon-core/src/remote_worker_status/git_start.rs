@@ -1,5 +1,7 @@
 //! Explicit one-shot startup; existing inspection never calls this mutation path.
 
+pub(super) mod configured;
+
 use super::RemotePanelStatus;
 use crate::{
     cloud_run::{CloudWorkflowStore, StoredRemoteAllocation, interactive_worker::InteractiveWorkerProvider},

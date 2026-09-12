@@ -6,9 +6,23 @@ use horizon_core::{CanvasViewState, PanelKind, PanelOptions, RuntimeState, Windo
 use std::time::{Duration, Instant};
 
 mod inspection;
+#[cfg(target_os = "linux")]
+mod start;
 
 const OWNER: &str = "00000000-0000-4000-8000-000000000001";
 const FOREIGN: &str = "00000000-0000-4000-8000-000000000002";
+
+#[test]
+fn saved_start_support_is_static_and_respects_provider_and_client_platform() {
+    use horizon_core::cloud_run::CloudProvider;
+    for provider in [CloudProvider::LocalDocker, CloudProvider::RunPod, CloudProvider::Azure] {
+        assert!(!super::start::supported(provider, false));
+        assert_eq!(
+            super::start::supported(provider, true),
+            cfg!(target_os = "linux") && provider != CloudProvider::Azure,
+        );
+    }
+}
 
 fn seed(home: &HorizonHome, owner: &str, count: usize) -> (CloudWorkflowStore, RemoteEnvironmentSummary) {
     let store = CloudWorkflowStore::open(home).expect("store");
@@ -59,6 +73,7 @@ fn pending(
         scope: scope.clone(),
         discard: false,
         inspection: None,
+        start: None,
     });
     state.repaint_context = Some(ctx.clone());
     tx
