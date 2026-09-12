@@ -23,7 +23,7 @@ def evaluate_samples(samples: List[Dict[str, Any]], off_minutes: int, lease_seco
     findings: List[str] = []
     if len(samples) < 2:
         return {"passed": False, "findings": ["fewer than two samples"], "samples": len(samples)}
-    text_fields = ("a_power", "b_group_id", "b_vm_id", "b_instance_id", "b_host", "b_image_ref", "b_power")
+    text_fields = ("a_power", "a_instance_id", "b_group_id", "b_vm_id", "b_instance_id", "b_host", "b_image_ref", "b_power")
     if any(not isinstance(sample, dict) or any(sample.get(field) is not None and not isinstance(sample.get(field), str)
                                                 for field in text_fields) for sample in samples):
         return {"passed": False, "findings": ["a sample has a field of the wrong shape"], "samples": len(samples)}
@@ -33,8 +33,8 @@ def evaluate_samples(samples: List[Dict[str, Any]], off_minutes: int, lease_seco
         return {"passed": False, "findings": ["a sample has a missing or invalid timestamp"], "samples": len(samples)}
     if expected_identity is not None:
         first = samples[0]
-        mismatched = [field for field in ("b_group_id", "b_vm_id", "b_instance_id", "b_host")
-                      if not same_id(first.get(field), expected_identity.get(field))]
+        mismatched = [field for field in ("b_group_id", "b_vm_id", "b_instance_id", "b_host", "a_instance_id")
+                      if field in expected_identity and not same_id(first.get(field), expected_identity.get(field))]
         if mismatched:
             findings.append(f"first sample does not match the worker recorded at baseline: {mismatched}")
     if any(later < earlier for earlier, later in zip(times, times[1:])):
@@ -81,6 +81,9 @@ def evaluate_samples(samples: List[Dict[str, Any]], off_minutes: int, lease_seco
                   for sample in samples}
     if len(identities) != 1 or any(None in pair for pair in identities):
         findings.append("worker B identity changed or was unreadable during the interval")
+    a_identities = {identity(sample, "a_instance_id") for sample in samples}
+    if len(a_identities) != 1 or None in a_identities:
+        findings.append("client A instance identity changed or was unreadable during the interval")
     b_states = {sample.get("b_power") for sample in samples}
     if b_states != {"PowerState/running"}:
         findings.append(f"worker B power states during the interval: {sorted(str(s) for s in b_states)}")

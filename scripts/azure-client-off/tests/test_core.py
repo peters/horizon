@@ -241,12 +241,20 @@ class SampleIdentityTests(unittest.TestCase):
         self.assertTrue(client_off.evaluate_samples(rows, 12, 600)["passed"])
 
     def test_first_sample_must_be_the_baseline_worker(self):
-        expected = {"b_group_id": B_GROUP_ID.upper(), "b_vm_id": B_VM_ID, "b_instance_id": B_INSTANCE, "b_host": "52.174.10.5"}
+        expected = {"b_group_id": B_GROUP_ID.upper(), "b_vm_id": B_VM_ID, "b_instance_id": B_INSTANCE, "b_host": "52.174.10.5",
+                    "a_instance_id": A_INSTANCE}
         rows = samples(49)
         self.assertTrue(client_off.evaluate_samples(rows, 12, 600, IMAGE, expected)["passed"], "IDs compare case-insensitively")
         other = dict(expected, b_vm_id="/g/b/other")
         verdict = client_off.evaluate_samples(rows, 12, 600, IMAGE, other)
         self.assertTrue(any("baseline" in finding for finding in verdict["findings"]), verdict)
+        other_client = dict(expected, a_instance_id=B_INSTANCE)
+        verdict = client_off.evaluate_samples(rows, 12, 600, IMAGE, other_client)
+        self.assertTrue(any("baseline" in finding for finding in verdict["findings"]), "the VM that was off must be A")
+        rows = samples(49)
+        rows[20]["a_instance_id"] = B_INSTANCE
+        verdict = client_off.evaluate_samples(rows, 12, 600, IMAGE, expected)
+        self.assertTrue(any("client A instance identity" in finding for finding in verdict["findings"]), verdict)
 
     def test_malformed_sample_shapes_fail_closed(self):
         rows = samples(49)
