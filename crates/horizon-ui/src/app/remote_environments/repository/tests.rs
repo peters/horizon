@@ -26,7 +26,11 @@ fn scope() -> Scope {
         owner: "owner".into(),
     }
 }
-fn pending(state: &mut RepositoryState, scope: &Scope, mutating: bool) -> mpsc::SyncSender<Result<Completion, String>> {
+fn pending(
+    state: &mut RepositoryState,
+    scope: &Scope,
+    mutating: bool,
+) -> mpsc::SyncSender<Result<Completion, Failure>> {
     let (tx, receiver) = mpsc::sync_channel(1);
     state.pending = Some(Pending {
         receiver,
@@ -68,11 +72,72 @@ fn changed_selection_or_lost_reply_preserves_unattributed_unknown() {
         let scope = scope();
         let tx = pending(&mut state, &scope, true);
         if !lost {
-            assert!(tx.send(Err("Synthetic Git refusal".into())).is_ok());
+            assert!(
+                tx.send(Err(Failure::Configured(git::ConfiguredRemoteGitSetupError::Git(
+                    git::RemoteGitSetupError::Rejected,
+                ))))
+                .is_ok()
+            );
         }
         drop(tx);
         state.drain(if lost { Some(current(&scope)) } else { None });
         assert!(state.unknown && !state.is_pending());
+    }
+}
+
+#[test]
+fn definite_refusals_do_not_add_uncertainty_but_nested_phase_errors_do() {
+    use git::ConfiguredRemoteGitSetupError::{
+        Configuration, Credential, CredentialConsentMismatch, Git, OutcomeUnknown, Recovery, StateChanged,
+    };
+    use horizon_core::{
+        remote_provider_config::RemoteProviderConfigError::UnconfiguredRunPodProfile,
+        remote_workspace_recovery::RemoteWorkspaceRecoveryError::MissingAllocation,
+    };
+    for (changed, prior_unknown) in [(false, false), (true, false), (false, true), (true, true)] {
+        for (failure, uncertain) in [
+            (Failure::Refused("Repository control storage is unavailable."), false),
+            (Failure::Configured(StateChanged), false),
+            (Failure::Configured(CredentialConsentMismatch), false),
+            (Failure::Configured(Configuration(UnconfiguredRunPodProfile)), false),
+            (Failure::Configured(Recovery(MissingAllocation)), false),
+            (Failure::Configured(OutcomeUnknown), true),
+            (Failure::Configured(Git(git::RemoteGitSetupError::Rejected)), true),
+            (
+                Failure::Configured(Credential(
+                    horizon_core::remote_github_credential::RemoteCredentialDeliveryError::InvalidToken,
+                )),
+                true,
+            ),
+        ] {
+            let mut state = RepositoryState {
+                unknown: prior_unknown,
+                ..Default::default()
+            };
+            let scope = scope();
+            let tx = pending(&mut state, &scope, true);
+            assert!(tx.send(Err(failure)).is_ok());
+            state.drain((!changed).then(|| current(&scope)));
+            assert_eq!(state.unknown, prior_unknown || uncertain);
+            assert_eq!(state.notice.is_none(), changed);
+            assert!(!state.is_pending());
+            state.drain(Some(current(&scope)));
+            assert_eq!(state.unknown, prior_unknown || uncertain);
+            assert!(!state.is_pending());
+        }
+    }
+}
+
+#[test]
+fn owning_session_refusal_names_preparation_and_inspection() {
+    let (_directory, mut app) = crate::app::test_support::test_app();
+    for action in [InventoryAction::PrepareRepository, InventoryAction::InspectRepository] {
+        app.remote_repository_action(action, &Context::default());
+        assert_eq!(
+            app.remote_environments.repository.notice.as_deref(),
+            Some("Open the owning persistent session before preparing or inspecting this repository.")
+        );
+        assert!(!app.remote_environments.repository.is_pending());
     }
 }
 

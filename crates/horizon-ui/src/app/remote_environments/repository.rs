@@ -44,7 +44,7 @@ impl Scope {
     }
 }
 struct Pending {
-    receiver: Receiver<Result<Completion, String>>,
+    receiver: Receiver<Result<Completion, Failure>>,
     scope: Scope,
     mutating: bool,
     discard: bool,
@@ -58,6 +58,27 @@ enum Completion {
     Preview(Box<PreparedRemoteGitSetup>),
     Submitted(git::ConfiguredRemoteGitSubmission),
     Observed(git::RemoteGitObservation),
+}
+enum Failure {
+    Refused(&'static str),
+    Configured(git::ConfiguredRemoteGitSetupError),
+    Unconfirmed,
+}
+impl Failure {
+    fn mutation_possible(&self) -> bool {
+        use git::ConfiguredRemoteGitSetupError::{Credential, Git, OutcomeUnknown};
+        matches!(
+            self,
+            Self::Unconfirmed | Self::Configured(OutcomeUnknown | Git(_) | Credential(_))
+        )
+    }
+    fn message(self) -> String {
+        match self {
+            Self::Refused(message) => message.into(),
+            Self::Configured(error) => error.to_string(),
+            Self::Unconfirmed => "Repository response was lost or unexpected.".into(),
+        }
+    }
 }
 
 pub(super) fn supported(provider: CloudProvider) -> bool {
@@ -118,10 +139,11 @@ impl RepositoryState {
                 self.pending = Some(pending);
                 return;
             }
-            Err(TryRecvError::Disconnected) => Err("Repository response was lost.".into()),
+            Err(TryRecvError::Disconnected) => Err(Failure::Unconfirmed),
         };
+        let mutation_possible = pending.mutating && result.as_ref().err().is_none_or(Failure::mutation_possible);
         if pending.discard || !pending.scope.matches(current) {
-            self.unknown |= pending.mutating;
+            self.unknown |= mutation_possible;
             return;
         }
         match result {
@@ -155,8 +177,9 @@ impl RepositoryState {
                 self.notice = Some(format!("{credential}{progress}"));
             }
             result => {
-                self.unknown |= pending.mutating;
-                self.notice = Some(result.err().unwrap_or_else(|| "Unexpected repository response.".into()));
+                let failure = result.err().unwrap_or(Failure::Unconfirmed);
+                self.unknown |= mutation_possible;
+                self.notice = Some(failure.message());
             }
         }
     }
@@ -201,23 +224,24 @@ impl RepositoryState {
     }
 }
 
-fn execute(home: &HorizonHome, scope: &Scope, work: Work) -> Result<Completion, String> {
-    let store = CloudWorkflowStore::open_read_only(home).map_err(|_| "Repository control storage is unavailable.")?;
+fn execute(home: &HorizonHome, scope: &Scope, work: Work) -> Result<Completion, Failure> {
+    let store = CloudWorkflowStore::open_read_only(home)
+        .map_err(|_| Failure::Refused("Repository control storage is unavailable."))?;
     let identities = RemoteSshIdentityStore::new(home);
     match work {
         Work::Preview(mode) => git::prepare_configured_remote_git_setup(&store, &scope.config, scope.request(), mode)
             .map(Box::new)
             .map(Completion::Preview)
-            .map_err(|error| error.to_string()),
+            .map_err(Failure::Configured),
         Work::Inspect => git::inspect_configured_remote_git_setup(&store, &identities, &scope.config, scope.request())
             .map(Completion::Observed)
-            .map_err(|error| error.to_string()),
+            .map_err(Failure::Configured),
         Work::Submit(prepared, token) => {
             let borrowed = token
                 .as_deref()
                 .map(RepositoryPat::new)
                 .transpose()
-                .map_err(|error| error.to_string())?;
+                .map_err(|_| Failure::Refused("Repository token is invalid."))?;
             git::submit_configured_remote_git_setup(
                 &store,
                 &identities,
@@ -227,7 +251,7 @@ fn execute(home: &HorizonHome, scope: &Scope, work: Work) -> Result<Completion, 
                 borrowed.as_ref(),
             )
             .map(Completion::Submitted)
-            .map_err(|error| error.to_string())
+            .map_err(Failure::Configured)
         }
     }
 }
@@ -307,7 +331,7 @@ impl super::HorizonApp {
             InventoryAction::PrepareRepository | InventoryAction::InspectRepository
         ) {
             state.repository.notice =
-                Some("Open the owning persistent session before preparing this repository.".into());
+                Some("Open the owning persistent session before preparing or inspecting this repository.".into());
         }
     }
 }
