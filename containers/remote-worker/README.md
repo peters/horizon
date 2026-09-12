@@ -11,13 +11,29 @@ a task; use the Git-bound start operation below for ordinary Git task admission.
 Authentication uses only the protected runtime token through the installed Git
 credential helper. No credentials belong in the request, URL or Git config.
 
-This prerequisite explicitly rejects submodules, LFS configuration/pointers and
-active Git filters as `unsupported_repository`; recursive Git/LFS support remains
-pending. It neither uploads a local overlay nor requires overlay/ext4 qualification.
+Standard GitHub LFS pointers are hydrated before completion using the packaged
+Git LFS 3.3+ client and an endpoint derived only from the validated repository:
+`https://github.com/<owner>/<repo>.git/info/lfs`. Submodules, `.lfsconfig`, pointer
+extensions and other active Git filters remain `unsupported_repository`.
+It neither uploads a local overlay nor requires overlay/ext4 qualification.
 The worker's existing private roots and trusted stable ancestry are prerequisites.
 Preparation has a 300-second child-I/O budget and bounded metadata output; slow
 or large repositories can fail conservatively. Filesystem/spawn/reap latency is
 not a hard wall-clock bound, and this is not an allocation or disk-quota manager.
+
+LFS admission allows at most 1,024 paths, 64 MiB per object and 512 MiB of total
+hydrated worktree bytes (repeated objects count per path). Downloads are serial
+and share the preparation deadline. Each child has a kernel file-size ceiling
+of its admitted object size, with a 4 KiB floor for Git metadata; stdout is bounded
+to the exact object size. The cache and hydrated checkout can together use about
+twice the admitted payload, plus bounded partial-object and Git metadata overhead.
+Object size/hash, pointer replacement, unchanged index tree and clean Git status
+are checked before completion. Missing, denied, corrupt, oversized or interrupted
+downloads leave the original claim unconfirmed; no fallback pointer completion.
+Only fixed packaged LFS filters are saved for subsequent ordinary Git operations.
+An empty regular file at `.git/lfs/logs` intentionally prevents LFS error-log
+creation; stderr is discarded so signed download URLs are not retained as logs.
+This is download preparation, not proof of LFS upload/locking support.
 
 An exclusive `.horizon-worker/git-workspace` slot prevents concurrent/replayed
 preparation. Interrupted/failed attempts retain all claims and partial data.

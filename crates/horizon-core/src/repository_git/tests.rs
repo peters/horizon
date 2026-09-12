@@ -456,3 +456,102 @@ fn command_has_no_inherited_configuration_or_token_and_deadline_prevents_spawn()
         Err(Error::Interrupted)
     );
 }
+
+#[test]
+fn lfs_initial_hydration_is_clean_and_completed_or_failed_claims_never_replay() {
+    struct Hydrating {
+        local: Local,
+        object: Vec<u8>,
+        fail: bool,
+        smudges: usize,
+    }
+    impl Commands for Hydrating {
+        fn run(
+            &mut self,
+            directory: &Path,
+            args: &[&str],
+            input: &[u8],
+            missing: bool,
+            cancelled: &dyn Fn() -> bool,
+        ) -> Result<Vec<u8>, Error> {
+            let output = self.local.run(directory, args, input, missing, cancelled)?;
+            if args[0] == "checkout" {
+                // Match the worker's private umask, independent of the host test runner.
+                fs::set_permissions(directory.join("asset.bin"), fs::Permissions::from_mode(0o600)).unwrap();
+            }
+            Ok(output)
+        }
+        fn smudge(
+            &mut self,
+            directory: &Path,
+            request: &Request,
+            pointer: &super::lfs::Pointer,
+            cancelled: &dyn Fn() -> bool,
+        ) -> Result<Vec<u8>, Error> {
+            self.smudges += 1;
+            if self.fail {
+                return Err(Error::Git);
+            }
+            // Seed only synthetic cached content; the real packaged smudge and all
+            // Git commands still run. HTTP/body limits have their own real-child test.
+            let digest = crate::cloud_run::ArtifactDigest::sha256(&self.object);
+            let oid = digest.as_str();
+            let cache = directory.join(".git/lfs/objects").join(&oid[..2]).join(&oid[2..4]);
+            fs::create_dir_all(&cache).unwrap();
+            fs::write(cache.join(oid), &self.object).unwrap();
+            self.local.git.smudge(directory, request, pointer, cancelled)
+        }
+    }
+    for fail in [false, true] {
+        let source = tempfile::tempdir().unwrap();
+        local_git(source.path(), &["init", "--template=", "--initial-branch=main"]);
+        let object = b"synthetic LFS bytes\0with binary tail".to_vec();
+        let digest = crate::cloud_run::ArtifactDigest::sha256(&object);
+        fs::write(
+            source.path().join(".gitattributes"),
+            "asset.bin filter=lfs diff=lfs merge=lfs -text\n",
+        )
+        .unwrap();
+        let pointer = format!(
+            "version https://git-lfs.github.com/spec/v1\noid sha256:{}\nsize {}\n",
+            digest.as_str(),
+            object.len()
+        );
+        fs::write(source.path().join("asset.bin"), &pointer).unwrap();
+        local_git(source.path(), &["add", "."]);
+        local_git(source.path(), &["commit", "-m", "Synthetic LFS object"]);
+        let mut request = request();
+        request.source.commit =
+            crate::cloud_run::GitCommitSha::parse(local_git(source.path(), &["rev-parse", "HEAD"])).unwrap();
+        let root = roots();
+        let mut git = Hydrating {
+            local: Local {
+                git: Git::new(),
+                source: source.path().to_owned(),
+            },
+            object: object.clone(),
+            fail,
+            smudges: 0,
+        };
+        let first = execute(root.path(), &request, false, &mut git);
+        assert_eq!(git.smudges, 1);
+        let checkout = root.path().join("horizon/repository");
+        if fail {
+            assert_eq!(first.state, State::ClaimedUnknown);
+            assert_eq!(first.reason, Some(Error::Git));
+            assert_eq!(fs::read(checkout.join("asset.bin")).unwrap(), pointer.as_bytes());
+        } else {
+            assert_eq!(first.state, State::Complete, "{first:?}");
+            assert_eq!(first.reason, None);
+            assert_eq!(fs::read(checkout.join("asset.bin")).unwrap(), object);
+            assert_eq!(local_git(&checkout, &["status", "--porcelain=v1"]), "");
+            fs::write(checkout.join("asset.bin"), b"dirty user edit").unwrap();
+        }
+        let repeated = execute(root.path(), &request, false, &mut git);
+        assert_eq!(repeated.state, first.state);
+        assert_eq!(git.smudges, 1);
+        if !fail {
+            assert_eq!(fs::read(checkout.join("asset.bin")).unwrap(), b"dirty user edit");
+        }
+    }
+}

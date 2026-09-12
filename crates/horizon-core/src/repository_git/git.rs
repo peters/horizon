@@ -18,6 +18,17 @@ pub(super) trait Commands {
         allow_missing: bool,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Vec<u8>, Error>;
+
+    fn smudge(
+        &mut self,
+        directory: &Path,
+        request: &GitPreparation,
+        pointer: &super::lfs::Pointer,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Vec<u8>, Error> {
+        let _ = (directory, request, pointer, cancelled);
+        Err(Error::Git)
+    }
 }
 
 pub(super) struct Git {
@@ -27,6 +38,13 @@ impl Git {
     pub fn new() -> Self {
         Self {
             deadline: Instant::now() + Duration::from_secs(300),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_timeout(timeout: Duration) -> Self {
+        Self {
+            deadline: Instant::now() + timeout,
         }
     }
 }
@@ -84,14 +102,89 @@ impl Commands for Git {
         &mut self,
         directory: &Path,
         args: &[&str],
+        input: &[u8],
+        allow_missing: bool,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Vec<u8>, Error> {
+        self.exchange(command(directory, args), input, LIMIT, allow_missing, cancelled)
+    }
+
+    fn smudge(
+        &mut self,
+        directory: &Path,
+        request: &GitPreparation,
+        pointer: &super::lfs::Pointer,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Vec<u8>, Error> {
+        self.smudge_endpoint(
+            directory,
+            pointer,
+            cancelled,
+            &format!("https://github.com/{}.git/info/lfs", request.source.repository),
+        )
+    }
+}
+
+impl Git {
+    pub(super) fn smudge_endpoint(
+        &mut self,
+        directory: &Path,
+        pointer: &super::lfs::Pointer,
+        cancelled: &dyn Fn() -> bool,
+        endpoint: &str,
+    ) -> Result<Vec<u8>, Error> {
+        let mut child = command(directory, &[]);
+        child.env_remove("GIT_LFS_SKIP_SMUDGE");
+        for option in [
+            format!("lfs.url={endpoint}"),
+            "lfs.basictransfersonly=true".into(),
+            "lfs.concurrenttransfers=1".into(),
+            "lfs.transfer.maxretries=1".into(),
+            "lfs.fetchinclude=".into(),
+            "lfs.fetchexclude=".into(),
+            "lfs.skipdownloaderrors=false".into(),
+            "lfs.remote.autodetect=false".into(),
+            "lfs.remote.searchall=false".into(),
+            "lfs.dialtimeout=10".into(),
+            "lfs.tlstimeout=10".into(),
+            "lfs.activitytimeout=10".into(),
+        ] {
+            child.args(["-c", &option]);
+        }
+        child.args(["lfs", "smudge", "--", &pointer.path]);
+        // A downloader may write before verifying the advertised object size.
+        // Apply a kernel ceiling to every child file, including incomplete cache files.
+        // Small fixed Git metadata writes need at most the additional 4 KiB floor.
+        let mut bounded = Command::new("/usr/bin/prlimit");
+        bounded
+            .arg(format!("--fsize={0}:{0}", pointer.size.max(4096)))
+            .args(["--core=0:0", "--", "/usr/bin/git"])
+            .args(child.get_args())
+            .env_clear()
+            .envs(
+                child
+                    .get_envs()
+                    .filter_map(|(key, value)| value.map(|value| (key, value))),
+            )
+            .current_dir(directory)
+            .process_group(0)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        self.exchange(bounded, &pointer.encoded, pointer.size, false, cancelled)
+    }
+    fn exchange(
+        &mut self,
+        mut command: Command,
         mut input: &[u8],
+        limit: usize,
         allow_missing: bool,
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Vec<u8>, Error> {
         if cancelled() || Instant::now() >= self.deadline {
             return Err(Error::Interrupted);
         }
-        let mut child = Owned(command(directory, args).spawn().map_err(|_| Error::Git)?);
+        let mut child = Owned(command.spawn().map_err(|_| Error::Git)?);
         let mut stdin = child.0.stdin.take();
         let mut stdout = child.0.stdout.take().ok_or(Error::Git)?;
         let input_fd = stdin.as_ref().ok_or(Error::Git)?;
@@ -125,7 +218,7 @@ impl Commands for Git {
             let mut buffer = [0; 8192];
             match stdout.read(&mut buffer) {
                 Ok(0) => eof = true,
-                Ok(count) if output.len() + count <= LIMIT => output.extend_from_slice(&buffer[..count]),
+                Ok(count) if output.len() + count <= limit => output.extend_from_slice(&buffer[..count]),
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
                 Ok(_) | Err(_) => return Err(Error::Git),
             }
@@ -199,29 +292,21 @@ pub(super) fn prepare(
     run(&["checkout", "-b", &request.work_branch, commit], &[], false)?;
     let paths = run(&["ls-files", "-z"], &[], false)?;
     let attributes = run(&["check-attr", "--cached", "-z", "--stdin", "filter"], &paths, false)?;
-    if attributes
-        .split(|byte| *byte == 0)
-        .skip(2)
-        .step_by(3)
-        .any(|value| value != b"unspecified" && value != b"unset")
-        || !run(
-            &[
-                "grep",
-                "-I",
-                "-l",
-                "-z",
-                "-e",
-                "^version https://git-lfs.github.com/spec/v1$",
-                commit,
-                "--",
-            ],
-            &[],
-            true,
-        )?
-        .is_empty()
-    {
-        return Err(Error::UnsupportedRepository);
-    }
+    let pointers = run(
+        &[
+            "grep",
+            "-I",
+            "-l",
+            "-z",
+            "-e",
+            "^version https://git-lfs.github.com/spec/v1$",
+            commit,
+            "--",
+        ],
+        &[],
+        true,
+    )?;
+    super::lfs::hydrate(git, directory, request, &attributes, &pointers, cancelled, verify)?;
     Ok(())
 }
 

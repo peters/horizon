@@ -582,9 +582,11 @@ modules.
 `repository_git` owns the worker-only ordinary Git preparation identity and
 observation API. Its `linux` leaf confines the separate one-shot claim and fixed
 task-accessible checkout, while `git` owns sanitized bounded Git subprocesses.
+The `lfs` leaf admits standard bounded pointers, hydrates them through the packaged
+client with per-child file limits, and verifies the fresh checkout/index before completion.
 The repository CLI only frames bounded requests and responses. This prerequisite
 does not use the retained overlay setup qualifier or
-support LFS/submodules yet; unsupported repositories retain state without a
+support submodules/custom LFS configuration; unsupported repositories retain state without a
 completion receipt. Observation never mutates user commits or worktree changes.
 
 Ordinary Git task admission uses `repository_git` canonical binding and read-only
