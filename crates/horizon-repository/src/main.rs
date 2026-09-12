@@ -23,6 +23,7 @@ fn main() -> ExitCode {
             command,
             Some(
                 "materialize"
+                    | "capture-binding"
                     | "capture-plan"
                     | "capture-once"
                     | "setup"
@@ -45,7 +46,7 @@ fn main() -> ExitCode {
     {
         let _ = writeln!(
             io::stderr().lock(),
-            "Usage: horizon-repository materialize|capture-plan|capture-once|setup|setup-status|setup-binding|setup-checkout|receive-overlay|overlay-status|receive-pack|pack-status|intake|intake-status|storage-status|git-prepare|git-status|git-binding|git-checkout < request"
+            "Usage: horizon-repository materialize|capture-binding|capture-plan|capture-once|setup|setup-status|setup-binding|setup-checkout|receive-overlay|overlay-status|receive-pack|pack-status|intake|intake-status|storage-status|git-prepare|git-status|git-binding|git-checkout < request"
         );
         return ExitCode::from(2);
     }
@@ -53,8 +54,9 @@ fn main() -> ExitCode {
     let mut output = io::stdout().lock();
     let mut diagnostics = io::stderr().lock();
     match command {
-        Some("capture-plan") => capture::run(true, &mut input, &mut output, &mut diagnostics),
-        Some("capture-once") => capture::run(false, &mut input, &mut output, &mut diagnostics),
+        Some("capture-binding") => capture::run(capture::Operation::Binding, &mut input, &mut output, &mut diagnostics),
+        Some("capture-plan") => capture::run(capture::Operation::Plan, &mut input, &mut output, &mut diagnostics),
+        Some("capture-once") => capture::run(capture::Operation::Once, &mut input, &mut output, &mut diagnostics),
         Some("git-binding") => git::inspect(false, &mut input, &mut output, &mut diagnostics),
         Some("git-checkout") => git::inspect(true, &mut input, &mut output, &mut diagnostics),
         Some("git-prepare") => git::run(false, &mut input, &mut output, &mut diagnostics),

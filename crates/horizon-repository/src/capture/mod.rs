@@ -90,8 +90,15 @@ struct Response {
     reason: Option<Reason>,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(super) enum Operation {
+    Binding,
+    Plan,
+    Once,
+}
+
 pub(super) fn run(
-    plan: bool,
+    operation: Operation,
     input: &mut impl Read,
     output: &mut impl Write,
     diagnostics: &mut impl Write,
@@ -118,7 +125,9 @@ pub(super) fn run(
         if request.available_bytes > CAPACITY {
             return Err(Reason::Invalid);
         }
-        execute(&request, &binding, plan, &mut response)?;
+        if operation != Operation::Binding {
+            execute(&request, &binding, operation == Operation::Plan, &mut response)?;
+        }
         response.binding = Some(binding);
         Ok(())
     })()

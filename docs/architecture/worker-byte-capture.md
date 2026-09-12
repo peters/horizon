@@ -32,6 +32,9 @@ Neither image entrypoint nor workspace setup automatically enrolls a capture.
 replaying capture, deleting data or stopping tasks. A repeated `start` observes
 an existing enrollment regardless of selected-path order and does not restart a cancelled, failed or uncertain
 service. A consumed enrollment with no status is `claimed_unknown`, not success.
+The pure `capture-binding` command derives enrollment identity without checkout
+access. Existing enrollment status is read before checkout admission; a new
+enrollment still requires `capture-plan` validation before its exclusive claim.
 
 ## Publication and limits
 

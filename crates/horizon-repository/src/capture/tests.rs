@@ -52,7 +52,7 @@ fn reordered_selection_keeps_identity_but_changed_paths_do_not() {
 
 #[test]
 fn rejection_is_bounded_redacted_and_never_acknowledges_capture() {
-    for plan in [false, true] {
+    for operation in [Operation::Binding, Operation::Plan, Operation::Once] {
         for bytes in [
             b"private malformed bytes".to_vec(),
             vec![b' '; usize::try_from(REQUEST_LIMIT).unwrap() + 1],
@@ -61,7 +61,7 @@ fn rejection_is_bounded_redacted_and_never_acknowledges_capture() {
         ] {
             let mut output = vec![];
             assert_eq!(
-                run(plan, &mut bytes.as_slice(), &mut output, &mut std::io::sink()),
+                run(operation, &mut bytes.as_slice(), &mut output, &mut std::io::sink()),
                 ExitCode::from(2)
             );
             let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
@@ -74,13 +74,35 @@ fn rejection_is_bounded_redacted_and_never_acknowledges_capture() {
     }
     assert_eq!(
         run(
-            true,
+            Operation::Plan,
             &mut b"{}".as_slice(),
             &mut [0; 0].as_mut_slice(),
             &mut std::io::sink()
         ),
         ExitCode::from(3)
     );
+}
+
+#[test]
+fn pure_binding_needs_no_checkout_and_never_acknowledges_capture() {
+    let request = enrollment();
+    let expected = request.binding().unwrap();
+    let input = serde_json::to_vec(&serde_json::json!({"enrollment":request,"available_bytes":0})).unwrap();
+    let mut output = vec![];
+    assert_eq!(
+        run(
+            Operation::Binding,
+            &mut input.as_slice(),
+            &mut output,
+            &mut std::io::sink()
+        ),
+        ExitCode::SUCCESS
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(value["binding"], expected.as_str());
+    for field in ["manifest", "record_sha256", "record_bytes", "reason"] {
+        assert!(value[field].is_null());
+    }
 }
 
 #[cfg(target_os = "linux")]

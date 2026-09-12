@@ -64,8 +64,8 @@ class PrivateFixture(unittest.TestCase):
         self.assertEqual(state['last_success']['manifest'], second['manifest'])
         self.assertEqual(len(list((Path(self.slot.path) / 'bundles').iterdir())), 2)
         self.assertEqual(len(list((Path(self.slot.path) / 'receipts').iterdir())), 2)
-        with patch.object(capture, 'invoke', return_value={'binding': BINDING}), patch.object(capture, 'status', return_value={'existing': True}), patch.object(capture.subprocess, 'Popen') as spawn:
-            self.assertEqual(capture.start({'fixture': True}), {'existing': True})
+        with patch.object(capture, 'invoke', return_value={'binding': BINDING}), patch.object(capture, 'status', return_value={'state': 'error'}), patch.object(capture.subprocess, 'Popen') as spawn:
+            self.assertEqual(capture.start({'fixture': True}), {'state': 'error'})
             spawn.assert_not_called()
 
     def test_readback_or_receipt_failure_cannot_advance_success(self):
@@ -80,6 +80,33 @@ class PrivateFixture(unittest.TestCase):
         self.assertEqual(state['generation'], 1)
         self.assertEqual(state['last_success']['manifest'], first['manifest'])
         self.assertEqual(state['state'], 'error')
+
+    def test_existing_start_observes_before_checkout_admission_but_new_start_does_not_claim(self):
+        state = self.run_service([self.observation(b'retained'), store.CaptureError('identity')])
+        state['interval_seconds'] = capture.INTERVAL
+        self.slot.write('status.json', state, True)
+        for binding in (BINDING, 'b' * 64):
+            def invoke(_, operation, __):
+                if operation == 'capture-binding':
+                    return {'binding': binding}
+                raise store.CaptureError('identity')
+            with patch.object(capture, 'invoke', side_effect=invoke), patch.object(capture.subprocess, 'Popen') as spawn:
+                if binding == BINDING:
+                    self.assertEqual(capture.start({'fixture': True})['last_success'], state['last_success'])
+                else:
+                    with self.assertRaises(store.CaptureError):
+                        capture.start({'fixture': True})
+                    self.assertFalse((Path(self.slot.path).parent / binding).exists())
+                spawn.assert_not_called()
+
+    def test_new_start_observes_exclusive_claim_race_winner_without_relaunch(self):
+        with patch.object(capture, 'invoke', return_value={'binding': BINDING}) as invoke, \
+                patch.object(capture, 'status', side_effect=[{'state': 'absent'}, {'state': 'claimed_unknown'}]), \
+                patch.object(store, 'open_slot', side_effect=FileExistsError), \
+                patch.object(capture.subprocess, 'Popen') as spawn:
+            self.assertEqual(capture.start({'fixture': True}), {'state': 'claimed_unknown'})
+            self.assertEqual([call.args[1] for call in invoke.call_args_list], ['capture-binding', 'capture-plan'])
+            spawn.assert_not_called()
 
     def test_changed_is_retried_without_advancing_success_and_recovery_clears_gap(self):
         first, second = self.observation(b'first'), self.observation(b'second')
@@ -294,10 +321,10 @@ class PrivateFixture(unittest.TestCase):
             helper.chmod(0o700)
             with patch.object(capture, 'HELPER', str(helper)), patch.object(capture, 'ATTEMPT_SECONDS', .3):
                 if accepted:
-                    self.assertEqual(capture.invoke({}, True, 0), response)
+                    self.assertEqual(capture.invoke({}, 'capture-plan', 0), response)
                 else:
                     with self.assertRaises((store.CaptureError, subprocess.SubprocessError)):
-                        capture.invoke({}, True, 0)
+                        capture.invoke({}, 'capture-plan', 0)
 
     def test_changed_binding_and_capacity_exhaustion_retain_success(self):
         first = self.observation(b'first')
@@ -335,7 +362,7 @@ def inside_proof():
     """Synthetic initial Git receipts only; actual capture/start/status code is unmodified."""
     usage = subprocess.run([capture.HELPER], capture_output=True, env=capture.ENV, timeout=5)
     store.require(usage.returncode == 2 and not usage.stdout
-                  and b'capture-plan' in usage.stderr and b'capture-once' in usage.stderr)
+                  and all(name in usage.stderr for name in (b'capture-binding', b'capture-plan', b'capture-once')))
     root = Path('/workspace')
     for directory in ('horizon', '.horizon-worker', 'horizon/repository', '.horizon-worker/git-workspace'):
         (root / directory).mkdir(mode=0o700)
@@ -435,6 +462,33 @@ def inside_proof():
             time.sleep(.1)
         store.require(refused['generation'] == second['generation']
                       and refused['last_success'] == second['last_success'])
+        for original in (checkout, claim / 'complete.json'):
+            retained = original.with_name(original.name + '.retained')
+            original.rename(retained)
+            try:
+                for replace in (False, True):
+                    if replace:
+                        if retained.is_dir():
+                            original.mkdir(mode=0o700)
+                        else:
+                            original.write_bytes(b'{}')
+                            original.chmod(0o600)
+                    observed = call('start', data=store.encode(enrollment))
+                    store.require(observed['last_success'] == refused['last_success']
+                                  and observed['started_at_millis'] == first['started_at_millis']
+                                  and store.identity(lock.stat()) == lock_identity)
+                    fresh = dict(enrollment, selected=['different.txt'])
+                    rejected = subprocess.run(command + ['start'], input=store.encode(fresh),
+                        capture_output=True, env=capture.ENV, timeout=20)
+                    store.require(rejected.returncode == 1 and not rejected.stdout
+                                  and list(captures.iterdir()) == [captures / binding])
+            finally:
+                if original.exists():
+                    if original.is_dir():
+                        original.rmdir()
+                    else:
+                        original.unlink()
+                retained.rename(original)
         print(json.dumps({'proof': 'controller exited; two verified byte versions', 'observed_interval_millis': interval}))
     finally:
         call('cancel', binding)

@@ -33,11 +33,12 @@ def child_limits():
     resource.setrlimit(resource.RLIMIT_CPU, (15, 15))
 
 
-def invoke(enrollment, plan, available, cancelled=lambda: False):
+def invoke(enrollment, operation, available, cancelled=lambda: False):
     """Bound child pipes/time. An uninterruptible filesystem can delay OS teardown."""
     request = store.encode({'enrollment': enrollment, 'available_bytes': available})
     store.require(len(request) <= store.LIMIT)
-    child = subprocess.Popen([HELPER, 'capture-plan' if plan else 'capture-once'],
+    store.require(operation in ('capture-binding', 'capture-plan', 'capture-once'))
+    child = subprocess.Popen([HELPER, operation],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         cwd='/', env=ENV, close_fds=True, start_new_session=True, umask=0o077, preexec_fn=child_limits)
     output = bytearray()
@@ -73,7 +74,7 @@ def invoke(enrollment, plan, available, cancelled=lambda: False):
             raise store.CaptureError(value['reason'])
         store.require(code == 0 and set(value) == {'version', 'binding', 'manifest', 'record_sha256', 'record_bytes', 'reason'}
                       and value['version'] == 1 and value['reason'] is None and store.digest(value['binding']))
-        if plan:
+        if operation != 'capture-once':
             store.require(all(value[field] is None for field in ('manifest', 'record_sha256', 'record_bytes')))
         return value
     finally:
@@ -115,7 +116,7 @@ def service(binding):
             slot.write('status.json', state, replace=True)
             try:
                 available = store.CAPACITY - bundles.usage()
-                observation = invoke(enrollment, False, available, lambda: cancelled(slot))
+                observation = invoke(enrollment, 'capture-once', available, lambda: cancelled(slot))
                 store.require(observation['binding'] == binding and not cancelled(slot))
                 bundles.verified_record(observation)
                 bundles.usage()
@@ -163,7 +164,11 @@ def service(binding):
 
 
 def start(enrollment):
-    binding = invoke(enrollment, True, store.CAPACITY)['binding']
+    binding = invoke(enrollment, 'capture-binding', store.CAPACITY)['binding']
+    existing = status(binding)
+    if existing['state'] != 'absent':
+        return existing
+    store.require(invoke(enrollment, 'capture-plan', store.CAPACITY)['binding'] == binding)
     try:
         slot = store.open_slot(BASE, binding, True)
     except FileExistsError:
