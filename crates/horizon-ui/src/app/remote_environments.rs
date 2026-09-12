@@ -5,6 +5,7 @@ mod paint;
 mod reconnect;
 mod reopen;
 mod repository;
+mod request_preview;
 mod stop;
 
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -28,6 +29,7 @@ pub(super) struct RemoteEnvironments {
     reconnect: reconnect::ReconnectState,
     reopen: reopen::ReopenState,
     repository: repository::RepositoryState,
+    request_preview: request_preview::PreviewState,
     refresh_after_stop: bool,
 }
 
@@ -80,6 +82,7 @@ enum InventoryAction {
     ConfirmRepository,
     CancelRepository,
     InspectRepository,
+    RequestPreview(request_preview::Action),
 }
 
 struct WakeOnDrop(Context);
@@ -96,6 +99,7 @@ impl RemoteEnvironments {
     }
 
     pub(super) fn invalidate_session_views(&mut self) {
+        self.request_preview.invalidate();
         self.repository.invalidate();
         self.reconnect.invalidate();
         self.reopen.invalidate();
@@ -230,6 +234,7 @@ impl RemoteEnvironments {
         }
         match action {
             InventoryAction::None
+            | InventoryAction::RequestPreview(_)
             | InventoryAction::PrepareRepository
             | InventoryAction::ConfirmRepository
             | InventoryAction::CancelRepository
@@ -369,7 +374,16 @@ impl HorizonApp {
         if was_open {
             self.handle_speech_input(ctx);
             self.remote_repository_action(InventoryAction::None, ctx);
+            self.remote_workspace_request_action(InventoryAction::None, ctx);
             let mut action = paint::show(ctx, &mut self.remote_environments);
+            if self.remote_environments.request_preview.is_active()
+                && !matches!(
+                    action,
+                    InventoryAction::None | InventoryAction::Close | InventoryAction::RequestPreview(_)
+                )
+            {
+                action = InventoryAction::None;
+            }
             if self.remote_environments.repository.is_pending()
                 && !matches!(
                     action,
@@ -397,6 +411,7 @@ impl HorizonApp {
             self.remote_reconnect_action(action, ctx);
             self.remote_reopen_action(action, ctx);
             self.remote_repository_action(action, ctx);
+            self.remote_workspace_request_action(action, ctx);
             let modal_input = ctx.input(Clone::clone);
             self.suppress_root_viewport_interaction(ctx);
             return Some(modal_input);
@@ -404,6 +419,7 @@ impl HorizonApp {
         self.remote_reconnect_action(InventoryAction::None, ctx);
         self.remote_reopen_action(InventoryAction::None, ctx);
         self.remote_repository_action(InventoryAction::None, ctx);
+        self.remote_workspace_request_action(InventoryAction::None, ctx);
         None
     }
 
