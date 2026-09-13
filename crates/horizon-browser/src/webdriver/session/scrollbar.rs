@@ -24,8 +24,9 @@ impl State {
         }
     }
 
-    pub(super) fn reset(&mut self) {
+    pub(super) fn reset(&mut self, frame_slot: &crate::frames::FrameSlot) {
         *self = Self::new();
+        let _ = frame_slot.clear_page_scroll_state();
     }
 
     pub(super) fn sample(&mut self, state: PageScrollState) {

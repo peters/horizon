@@ -364,6 +364,11 @@ impl FrameSlot {
         true
     }
 
+    pub(crate) fn clear_page_scroll_state(&self) -> bool {
+        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner.page_scroll_state.take().is_some()
+    }
+
     /// Claim the single outstanding UI wake-up for this slot. Further
     /// frames remain coalesced in `latest` until the UI releases the claim.
     #[must_use]
@@ -661,6 +666,9 @@ mod tests {
         assert!(slightly_narrow.is_valid());
         assert!(slot.publish_page_scroll_state(slightly_narrow));
         assert_eq!(slot.page_scroll_state(), Some(slightly_narrow));
+        assert!(slot.clear_page_scroll_state());
+        assert!(slot.page_scroll_state().is_none());
+        assert!(!slot.clear_page_scroll_state());
         slot.clear();
         assert!(slot.page_scroll_state().is_none());
     }

@@ -35,7 +35,7 @@ impl DriverState {
     ) -> bool {
         if self.session_id.as_deref() != Some(session) {
             self.reset_clipboard_tracking();
-            self.invalidate_scrollbar_layout();
+            self.invalidate_scrollbar_layout(event_tx);
             self.reset_runtime_enable_state();
         }
         self.session_id = Some(session.to_string());
@@ -259,7 +259,7 @@ impl DriverState {
     ) -> bool {
         self.session_id = None;
         self.screencast_on = false;
-        self.invalidate_scrollbar_layout();
+        self.invalidate_scrollbar_layout(event_tx);
         self.reset_clipboard_tracking();
         self.pending_reattach = self.target_id.is_some();
         frame_slot.clear();
@@ -370,7 +370,7 @@ impl DriverState {
             if let Some(target) = self.target_id.clone() {
                 self.reattach_in_flight = true;
                 self.session_id = None;
-                self.invalidate_scrollbar_layout();
+                self.invalidate_scrollbar_layout(event_tx);
                 match link.send_request(
                     "Target.attachToTarget",
                     &serde_json::json!({ "targetId": target, "flatten": true }),

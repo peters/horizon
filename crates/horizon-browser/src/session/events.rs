@@ -217,7 +217,7 @@ impl DriverState {
                     self.navigate_request_id = None;
                     self.pending_viewport_capture_at = None;
                     self.viewport_capture_request_id = None;
-                    self.invalidate_scrollbar_layout();
+                    self.invalidate_scrollbar_layout(event_tx);
                     self.reset_clipboard_tracking();
                     self.main_frame_id = None;
                     self.title_fetch_at = None;
@@ -232,7 +232,7 @@ impl DriverState {
             }
             "Target.targetDestroyed" => {
                 let destroyed = event.params.get("targetId").and_then(|t| t.as_str());
-                if self.forget_destroyed_bound_target(destroyed) {
+                if self.forget_destroyed_bound_target(destroyed, event_tx) {
                     // External agents discover the page through this field.
                     // Clear it synchronously so a destroyed target is not
                     // advertised as a live endpoint after this event.
@@ -290,7 +290,7 @@ impl DriverState {
         }
     }
 
-    fn forget_destroyed_bound_target(&mut self, destroyed: Option<&str>) -> bool {
+    fn forget_destroyed_bound_target(&mut self, destroyed: Option<&str>, event_tx: &BrowserEventSender) -> bool {
         let Some(destroyed) = destroyed else {
             return false;
         };
@@ -305,7 +305,7 @@ impl DriverState {
         self.navigate_request_id = None;
         self.pending_viewport_capture_at = None;
         self.viewport_capture_request_id = None;
-        self.invalidate_scrollbar_layout();
+        self.invalidate_scrollbar_layout(event_tx);
         self.reset_clipboard_tracking();
         self.pending_reattach = false;
         self.reset_runtime_enable_state();
@@ -325,7 +325,7 @@ impl DriverState {
         if frame.get("parentId").is_some() {
             return;
         }
-        self.invalidate_scrollbar_layout();
+        self.invalidate_scrollbar_layout(event_tx);
         self.semantic.invalidate();
         self.top_frame_navigating = false;
         self.main_frame_id = frame.get("id").and_then(|id| id.as_str()).map(str::to_string);
@@ -431,7 +431,7 @@ impl DriverState {
         self.semantic.invalidate();
         self.top_frame_navigating = false;
         self.navigation_failed = false;
-        self.invalidate_scrollbar_layout();
+        self.invalidate_scrollbar_layout(event_tx);
         let url = normalized_committed_url(target_url);
         if url == self.url {
             return;
@@ -621,17 +621,23 @@ mod tests {
     #[test]
     fn destroying_the_bound_target_marks_its_manifest_identity_for_removal() {
         let mut state = driver_state();
-        assert!(!state.forget_destroyed_bound_target(None));
+        let (tx, _rx) = mpsc::channel();
+        let events = BrowserEventSender {
+            tx,
+            wake: BrowserEventWake::default(),
+            committed_url: CommittedUrl::default(),
+        };
+        assert!(!state.forget_destroyed_bound_target(None, &events));
 
         state.target_id = Some("bound".to_string());
         state.session_id = Some("session".to_string());
         state.manifest_dirty = false;
 
-        assert!(!state.forget_destroyed_bound_target(Some("popup")));
+        assert!(!state.forget_destroyed_bound_target(Some("popup"), &events));
         assert_eq!(state.target_id.as_deref(), Some("bound"));
         assert!(!state.manifest_dirty);
 
-        assert!(state.forget_destroyed_bound_target(Some("bound")));
+        assert!(state.forget_destroyed_bound_target(Some("bound"), &events));
         assert_eq!(state.target_id, None);
         assert_eq!(state.session_id, None);
         assert!(state.manifest_dirty);

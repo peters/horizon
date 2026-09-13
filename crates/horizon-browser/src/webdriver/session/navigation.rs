@@ -435,7 +435,7 @@ impl Driver {
         // still being polled to its commit; otherwise the marker would keep
         // every later wait paused.
         self.classic_refresh = None;
-        self.scrollbar.reset();
+        self.scrollbar.reset(&self.config.frame_slot);
         self.frames.suspend_for_navigation();
     }
 

@@ -122,7 +122,7 @@ impl DriverState {
         match command {
             BrowserCommand::Stop => Ok(true),
             BrowserCommand::Navigate(url) => {
-                self.invalidate_scrollbar_layout();
+                self.invalidate_scrollbar_layout(event_tx);
                 // The user (or a non-agent caller) took over the page: a
                 // pending agent navigation can no longer claim the outcome.
                 self.supersede_pending_navigation(Instant::now());
@@ -130,7 +130,7 @@ impl DriverState {
                 Ok(false)
             }
             BrowserCommand::Reload => {
-                self.invalidate_scrollbar_layout();
+                self.invalidate_scrollbar_layout(event_tx);
                 self.supersede_pending_navigation(Instant::now());
                 // Marked before dispatch: events routed during the command's
                 // round trip (a fast reload's commit or stop) may already
@@ -148,12 +148,12 @@ impl DriverState {
                 }
             }
             BrowserCommand::Back => {
-                self.invalidate_scrollbar_layout();
+                self.invalidate_scrollbar_layout(event_tx);
                 self.navigate_history(link, event_tx, frame_slot, -1)?;
                 Ok(false)
             }
             BrowserCommand::Forward => {
-                self.invalidate_scrollbar_layout();
+                self.invalidate_scrollbar_layout(event_tx);
                 self.navigate_history(link, event_tx, frame_slot, 1)?;
                 Ok(false)
             }
@@ -319,13 +319,20 @@ impl DriverState {
         })
     }
 
-    pub(super) fn invalidate_scrollbar_layout(&mut self) {
+    pub(super) fn invalidate_scrollbar_layout(&mut self, event_tx: &BrowserEventSender) {
         self.scrollbar_layout.layout = None;
         // A detached page session is not guaranteed to answer its outstanding
         // request. CDP ids are connection-global, so a late reply cannot be
         // mistaken for the replacement request after this slot is cleared.
         self.scrollbar_layout.request_id = None;
         self.scrollbar_layout.refresh_at = Some(Instant::now());
+        Self::clear_published_scrollbar(&self.config.frame_slot, event_tx);
+    }
+
+    fn clear_published_scrollbar(frame_slot: &FrameSlot, event_tx: &BrowserEventSender) {
+        if frame_slot.clear_page_scroll_state() {
+            event_tx.wake_ui();
+        }
     }
 
     fn schedule_scrollbar_layout_refresh(&mut self, delay: Duration) {
@@ -376,6 +383,7 @@ impl DriverState {
         self.scrollbar_layout.request_id = None;
         if rejected {
             self.scrollbar_layout.layout = None;
+            Self::clear_published_scrollbar(frame_slot, event_tx);
             self.schedule_scrollbar_layout_refresh(SCROLLBAR_LAYOUT_RETRY_DELAY);
             return true;
         }
@@ -383,6 +391,7 @@ impl DriverState {
             PageScrollState::from_chromium_layout_metrics(metrics, self.viewport_w, self.viewport_h)
         }) else {
             self.scrollbar_layout.layout = None;
+            Self::clear_published_scrollbar(frame_slot, event_tx);
             self.schedule_scrollbar_layout_refresh(SCROLLBAR_LAYOUT_RETRY_DELAY);
             return true;
         };
@@ -399,17 +408,18 @@ impl DriverState {
         frame_slot: &FrameSlot,
         event_tx: &BrowserEventSender,
     ) {
-        let Some(scroll_y) = scroll_y.filter(|value| value.is_finite() && *value >= 0.0) else {
-            return;
-        };
-        if let Some(layout) = self.scrollbar_layout.layout.as_mut() {
+        if let Some(scroll_y) = scroll_y.filter(|value| value.is_finite() && *value >= 0.0)
+            && let Some(layout) = self.scrollbar_layout.layout.as_mut()
+        {
             *layout = layout.with_scroll_y(scroll_y);
             if frame_slot.publish_page_scroll_state(*layout) {
                 event_tx.wake_ui();
             }
-        } else {
-            self.schedule_scrollbar_layout_refresh(Duration::ZERO);
         }
+        // Screencast frames arrive when the page paints, including DOM-driven
+        // height changes that leave scrollY unchanged. Refresh layout metrics
+        // on that cadence so the overlay and hit box follow content size.
+        self.schedule_scrollbar_layout_refresh(SCROLLBAR_LAYOUT_RETRY_DELAY);
     }
 
     fn set_viewport(
@@ -473,7 +483,7 @@ impl DriverState {
             &Self::viewport_override_params(width, height),
         ) {
             Ok(_) => {
-                self.commit_viewport(width, height);
+                self.commit_viewport(width, height, event_tx);
                 self.pending_viewport_capture_at = Some(Instant::now() + VIEWPORT_CAPTURE_DELAY);
             }
             Err(error) => {
@@ -488,12 +498,12 @@ impl DriverState {
         }
     }
 
-    fn commit_viewport(&mut self, width: u32, height: u32) {
+    fn commit_viewport(&mut self, width: u32, height: u32, event_tx: &BrowserEventSender) {
         self.viewport_w = width;
         self.viewport_h = height;
         self.pending_viewport = None;
         self.viewport_retry_at = None;
-        self.invalidate_scrollbar_layout();
+        self.invalidate_scrollbar_layout(event_tx);
     }
 
     /// Chrome sometimes applies device metrics without emitting a new
@@ -682,12 +692,13 @@ mod tests {
     #[test]
     fn viewport_resize_becomes_authoritative_only_after_acknowledgement() {
         let mut state = driver_state();
+        let events = test_events();
 
         assert!(state.queue_viewport(900, 600));
         assert_eq!((state.viewport_w, state.viewport_h), (1280, 800));
         assert_eq!(state.pending_viewport, Some((900, 600)));
 
-        state.commit_viewport(900, 600);
+        state.commit_viewport(900, 600, &events);
 
         assert_eq!((state.viewport_w, state.viewport_h), (900, 600));
         assert_eq!(state.pending_viewport, None);
@@ -712,11 +723,24 @@ mod tests {
         assert_eq!(state.pending_viewport, Some((1280, 800)));
     }
 
+    fn scrollable_layout() -> PageScrollState {
+        PageScrollState {
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            viewport_width: 1_164.0,
+            viewport_height: 608.0,
+            client_width: 1_149.0,
+            client_height: 608.0,
+            content_width: 1_149.0,
+            content_height: 3_000.0,
+        }
+    }
+
     #[test]
     fn asynchronous_scrollbar_layout_response_populates_the_hit_test_cache() {
         let mut state = driver_state();
         let events = test_events();
-        let frame_slot = FrameSlot::new();
+        let frame_slot = Arc::clone(&state.config.frame_slot);
         state.scrollbar_layout.request_id = Some(41);
         state.scrollbar_layout.refresh_at = None;
         state.viewport_w = 1_164;
@@ -743,27 +767,58 @@ mod tests {
     }
 
     #[test]
-    fn invalidation_abandons_an_inflight_scrollbar_layout_request() {
+    fn invalidation_clears_the_published_overlay_and_abandons_inflight_metrics() {
         let mut state = driver_state();
         let events = test_events();
-        let frame_slot = FrameSlot::new();
+        let frame_slot = Arc::clone(&state.config.frame_slot);
+        let layout = scrollable_layout();
         state.scrollbar_layout.request_id = Some(41);
-        state.scrollbar_layout.layout = Some(PageScrollState {
-            scroll_x: 0.0,
-            scroll_y: 0.0,
-            viewport_width: 1_164.0,
-            viewport_height: 608.0,
-            client_width: 1_149.0,
-            client_height: 608.0,
-            content_width: 1_149.0,
-            content_height: 3_000.0,
-        });
+        state.scrollbar_layout.layout = Some(layout);
+        assert!(frame_slot.publish_page_scroll_state(layout));
 
-        state.invalidate_scrollbar_layout();
+        state.invalidate_scrollbar_layout(&events);
 
         assert_eq!(state.scrollbar_layout.request_id, None);
         assert!(state.scrollbar_layout.layout.is_none());
         assert!(state.scrollbar_layout.refresh_at.is_some());
+        assert!(frame_slot.page_scroll_state().is_none());
         assert!(!state.handle_scrollbar_layout_response(41, None, false, &frame_slot, &events));
+    }
+
+    #[test]
+    fn rejected_or_malformed_metrics_clear_the_published_overlay() {
+        let mut state = driver_state();
+        let events = test_events();
+        let frame_slot = Arc::clone(&state.config.frame_slot);
+        let layout = scrollable_layout();
+        state.scrollbar_layout.layout = Some(layout);
+        assert!(frame_slot.publish_page_scroll_state(layout));
+
+        state.scrollbar_layout.request_id = Some(7);
+        assert!(state.handle_scrollbar_layout_response(7, None, true, &frame_slot, &events));
+        assert!(state.scrollbar_layout.layout.is_none());
+        assert!(frame_slot.page_scroll_state().is_none());
+
+        assert!(frame_slot.publish_page_scroll_state(layout));
+        state.scrollbar_layout.layout = Some(layout);
+        state.scrollbar_layout.request_id = Some(8);
+        assert!(state.handle_scrollbar_layout_response(8, Some(&serde_json::json!({})), false, &frame_slot, &events));
+        assert!(state.scrollbar_layout.layout.is_none());
+        assert!(frame_slot.page_scroll_state().is_none());
+    }
+
+    #[test]
+    fn screencast_activity_refreshes_cached_layout_metrics() {
+        let mut state = driver_state();
+        let events = test_events();
+        let frame_slot = Arc::clone(&state.config.frame_slot);
+        state.scrollbar_layout.layout = Some(scrollable_layout());
+        state.scrollbar_layout.refresh_at = None;
+
+        state.note_screencast_scroll_offset(Some(80.0), &frame_slot, &events);
+
+        assert!(state.scrollbar_layout.refresh_at.is_some());
+        let layout = state.scrollbar_layout.layout.expect("cached layout");
+        assert!((layout.scroll_y - 80.0).abs() < f32::EPSILON);
     }
 }

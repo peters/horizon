@@ -14,6 +14,9 @@ pre-existing Horizon process.
 
 1. Chromium (default backend)
 2. Firefox (`backend: firefox`)
+3. Safari (`backend: safari`) — macOS only. `safaridriver` is unavailable on
+   Linux and Windows; those agents must record this lane as skipped with that
+   reason, not as a pass. On a Mac, run the same steps as Chromium/Firefox.
 
 Use a tall deterministic page (local `data:` URL or `scroll.html` fixture) whose
 root document is at least 3× the panel height.
@@ -35,17 +38,21 @@ root document is at least 3× the panel height.
 8. Navigate to a short page that does not overflow. The overlay must disappear.
 9. Switch Chromium → Firefox (or the reverse) on the same panel and repeat
    steps 2–6 on the tall page without a manual extra resize.
+10. On macOS, also switch to Safari and repeat steps 2–8.
 
 ## Pass
 
-- Overlay visible on a tall page in both backends before any wheel input.
-- Thumb drag and track click move `scrollY` in both backends.
+- Overlay visible on a tall page before any wheel input on every executed
+  backend (Chromium, Firefox, and Safari on macOS).
+- Thumb drag and track click move `scrollY`.
 - Content immediately left of the overlay still receives clicks.
 - Wheel still works.
 - Overlay gone on a non-overflowing page.
+- Safari skipped on Linux/Windows with the platform reason recorded.
 
 ## Fail
 
 - Overlay missing on Firefox (blank right strip only).
 - Chromium overlay missing or undraggable (wheel is the only way to scroll).
+- Safari overlay missing or undraggable on macOS.
 - Track/thumb clicks stolen by panel resize or sent into page content.
