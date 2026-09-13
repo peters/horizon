@@ -425,8 +425,8 @@ fn supported(summary: &RemoteEnvironmentSummary) -> bool {
     }
 }
 
-/// The `RunPod` name of the shared cloud result check, kept for its existing tests.
-#[cfg(test)]
+/// The `RunPod` name of the shared cloud result check, kept for its existing Linux tests.
+#[cfg(all(test, target_os = "linux"))]
 fn valid_runpod_stop_result(expected: &RemoteEnvironmentSummary, saved: &RemoteEnvironmentSummary) -> bool {
     valid_cloud_stop_result(expected, saved)
 }
