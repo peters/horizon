@@ -307,20 +307,21 @@ impl InteractiveWorkerStopObserver for AzureClient {
         let Some(current) = self.observe(handle.clone(), &group, &tags, None, Placement::Ignore)? else {
             return Ok(InteractiveWorkerStopObservation::Absent);
         };
+        // The static address is retained with the group, whatever the compute is doing:
+        // a present, different address means the saved endpoint no longer names this
+        // worker, in every state. Without a current deployment address (deployment
+        // absent, still in flight, unusable) the snapshot is uncertain and stays pending.
+        if current.host.as_deref().is_some_and(|host| host != expected.ssh.host) {
+            return Err(AzureError::ResourceIdentityMismatch);
+        }
         match current.lifecycle {
             AzureLifecycle::Failed => Err(AzureError::StopUnverified),
             AzureLifecycle::Deallocated => {
                 let Some(vm) = current.vm.as_ref() else {
                     return Ok(InteractiveWorkerStopObservation::Pending);
                 };
-                // The static address is retained with the group. Without a current
-                // deployment address (deployment absent, still in flight, unusable) the
-                // snapshot is uncertain and stays pending; a different address means
-                // the saved endpoint no longer names this worker.
-                match current.host.as_deref() {
-                    None => return Ok(InteractiveWorkerStopObservation::Pending),
-                    Some(host) if host != expected.ssh.host => return Err(AzureError::ResourceIdentityMismatch),
-                    Some(_) => {}
+                if current.host.is_none() {
+                    return Ok(InteractiveWorkerStopObservation::Pending);
                 }
                 Ok(if retained_data_disk(vm, &handle.group_id) {
                     InteractiveWorkerStopObservation::RetainedStopped

@@ -228,10 +228,29 @@ fn saved_identity_and_pin_are_validated_before_and_during_the_read() {
             }),
         Err(AzureError::InvalidPersistedWorker)
     );
-    // The saved address must still be the one the deployment reports.
+    // The saved address must still be the one the deployment reports, whatever the
+    // compute is doing: a moved address on a running or transitioning worker is a
+    // mismatch too, never something to keep retrying against.
     let mut moved = pin();
     moved.host = "203.0.113.10".into();
     assert_eq!(observe(&s, &moved), Err(AzureError::ResourceIdentityMismatch));
+    for power in ["running", "starting", "stopped"] {
+        s.plane.script(
+            Some(owned(&s)),
+            Some(deployment("Succeeded", HOST)),
+            vec![Some(retained_vm(&s, power))],
+        );
+        assert_eq!(
+            observe(&s, &moved),
+            Err(AzureError::ResourceIdentityMismatch),
+            "{power}"
+        );
+    }
+    s.plane.script(
+        Some(owned(&s)),
+        Some(deployment("Succeeded", HOST)),
+        vec![Some(retained_vm(&s, "deallocated"))],
+    );
     // A retagged group or VM at the same path is not this worker.
     let mut retagged = s.tags.clone();
     retagged.insert(TAG_JOB.into(), CloudJobId::new().to_string());
