@@ -276,11 +276,13 @@ mod tests {
     fn plan() -> Plan {
         Plan {
             version: 1,
+            variables: std::collections::BTreeMap::new(),
             steps: vec![
                 step("list", "browser_list"),
                 step("navigate", "browser_navigate"),
                 step("title", "browser_evaluate"),
             ],
+            project: None,
         }
     }
 

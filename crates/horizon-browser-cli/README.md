@@ -130,10 +130,33 @@ A plan is a sequence of literal MCP tool names and arguments:
 
 An exact `{"$ref":"step-id#/json/pointer"}` value reads typed structured
 content from an earlier successful step using RFC 6901 JSON Pointer syntax.
-References cannot point forward. The runner checks every tool against
-`tools/list` before making the first call, stops after the first failed step,
-and never copies tool arguments into its report. Plans are limited to 1 MiB and
-256 steps.
+References cannot point forward. An exact `{"$var":"name"}` value reads a
+plan-level JSON literal from `variables` (at most 32 names, 4 KiB each, 128 KiB
+combined). Optional `project` writes `projection.json` or `projection.csv` into
+the job directory from a `$ref` after the referenced step succeeds. CSV uses
+CRLF records, requires an array of objects, and prefixes formula-leading text
+cells with `'` after skipping leading whitespace or control characters;
+`columns` selects fields. A requested projection that exceeds 1 MiB, 10,000
+CSV rows, or 32 columns fails the run after the browser steps complete.
+Timeout and cancellation skip projection; only a completed successful or
+fail-fast run writes it. Resolved tool arguments after `$ref`/`$var`
+substitution are limited to 1 MiB per step. The runner checks every tool
+against `tools/list` before making the first call, stops after the first failed
+step, and never copies tool arguments into its report. Plans are limited to
+1 MiB and 256 steps.
+
+Checked examples for navigation, DOM extraction, interaction, and network
+monitoring live next to this crate. They reuse `panels#/panels/0/panel_id` and
+require a live keep-alive or Horizon UI panel; `run` does not create one, and
+an empty `browser_list` fails at the second step.
+
+```bash
+horizon-browser mcp --standalone --keep-alive
+horizon-browser run crates/horizon-browser-cli/examples/navigate.json
+horizon-browser run crates/horizon-browser-cli/examples/extract.json
+horizon-browser run crates/horizon-browser-cli/examples/interact.json
+horizon-browser run crates/horizon-browser-cli/examples/network-watch.json
+```
 
 The report is JSON with top-level `job_id`, `job_dir`, `state_path`, `ok`,
 `completed_steps`, ordered step results, and an `observability` summary of

@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "variables": {
+    "url": "https://example.com"
+  },
+  "steps": [
+    {
+      "id": "panels",
+      "tool": "browser_list"
+    },
+    {
+      "id": "capture",
+      "tool": "browser_network",
+      "arguments": {
+        "panel_id": { "$ref": "panels#/panels/0/panel_id" },
+        "operation": "start",
+        "include_http": true
+      }
+    },
+    {
+      "id": "open",
+      "tool": "browser_navigate",
+      "arguments": {
+        "panel_id": { "$ref": "panels#/panels/0/panel_id" },
+        "url": { "$var": "url" }
+      }
+    },
+    {
+      "id": "records",
+      "tool": "browser_network_watch",
+      "arguments": {
+        "panel_id": { "$ref": "panels#/panels/0/panel_id" },
+        "capture_id": { "$ref": "capture#/capture_id" }
+      }
+    },
+    {
+      "id": "stop",
+      "tool": "browser_network",
+      "arguments": {
+        "panel_id": { "$ref": "panels#/panels/0/panel_id" },
+        "operation": "stop"
+      }
+    }
+  ],
+  "project": {
+    "format": "json",
+    "from": { "$ref": "records#/records" }
+  }
+}

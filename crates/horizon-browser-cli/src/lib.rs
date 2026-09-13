@@ -10,8 +10,10 @@ pub mod checkpoint;
 pub mod execution_control;
 pub mod job;
 pub mod observability;
+pub mod project;
 pub mod run_state;
 pub mod standalone;
+mod variables;
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -28,10 +30,12 @@ use thiserror::Error;
 
 use execution_control::{ExecutionControl, ExecutionStopReason};
 use observability::ObservabilitySummary;
+use project::{PlanProject, ProjectionSummary};
 use run_state::{CheckpointPersistError, DurableRun};
 
 const PLAN_VERSION: u32 = 1;
 const MAX_PLAN_STEPS: usize = 256;
+const MAX_RESOLVED_ARGUMENTS_BYTES: usize = 1024 * 1024;
 const MCP_BUFFER_BYTES: usize = 64 * 1024;
 const MCP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -41,8 +45,14 @@ const MCP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct Plan {
     /// Plan format version. The only supported value is `1`.
     pub version: u32,
+    /// Bounded JSON literals substituted with `{"$var":"name"}`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub variables: BTreeMap<String, Value>,
     /// Tool calls in execution order.
     pub steps: Vec<PlanStep>,
+    /// Optional JSON or CSV projection of a prior structured result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<PlanProject>,
 }
 
 /// One named MCP tool call in a [`Plan`].
@@ -54,7 +64,8 @@ pub struct PlanStep {
     /// Exact MCP tool name, such as `browser_list` or `browser_navigate`.
     pub tool: String,
     /// MCP tool arguments. An exact `{"$ref":"step#/pointer"}` object is
-    /// replaced with a prior step's typed structured result value.
+    /// replaced with a prior step's typed structured result value, and
+    /// `{"$var":"name"}` is replaced with a plan variable.
     #[serde(default)]
     pub arguments: Map<String, Value>,
 }
@@ -78,6 +89,9 @@ pub struct ExecutionReport {
     pub stop_reason: Option<ExecutionStopReason>,
     /// Audit completeness and network-capture health from executed MCP results.
     pub observability: ObservabilitySummary,
+    /// Optional JSON/CSV projection written next to the durable report.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub projection: Option<ProjectionSummary>,
 }
 
 /// Prefix reused by an explicit resume and optional durable checkpoint sink.
@@ -138,6 +152,31 @@ pub enum PlanError {
     /// A `$ref` names a step that is not earlier in the plan.
     #[error("step `{step}` references unavailable prior step `{target}`")]
     UnavailableReference { step: String, target: String },
+    /// The plan declares more variables than the runner accepts.
+    #[error("plan has {actual} variables; the maximum is {maximum}")]
+    TooManyVariables { actual: usize, maximum: usize },
+    /// A variable name is malformed.
+    #[error("invalid plan variable `{0}`")]
+    InvalidVariableName(String),
+    /// A variable value is not a JSON literal.
+    #[error("plan variable `{name}` must be a JSON literal, not $ref or $var")]
+    InvalidVariableValue { name: String },
+    /// A single variable value exceeds the encoded-size bound.
+    #[error("plan variable `{name}` is {actual} bytes; the maximum is {maximum}")]
+    VariableTooLarge {
+        name: String,
+        actual: usize,
+        maximum: usize,
+    },
+    /// Combined variable values exceed the encoded-size bound.
+    #[error("plan variables total {actual} bytes; the maximum is {maximum}")]
+    VariablesTooLarge { actual: usize, maximum: usize },
+    /// A `$var` names a missing plan variable.
+    #[error("step `{step}` references unknown variable `{name}`")]
+    UnknownVariable { step: String, name: String },
+    /// The optional result projection is malformed.
+    #[error("invalid plan projection: {0}")]
+    InvalidProject(String),
 }
 
 /// Failure to initialize or use the in-process MCP connection.
@@ -348,7 +387,7 @@ async fn execute_steps(
     let mut steps = completed;
     let mut persistence_error = None;
     for step in plan.steps.iter().skip(start_index) {
-        let arguments = match resolve_arguments(step, &steps, &result_indexes) {
+        let arguments = match resolve_arguments(plan, step, &steps, &result_indexes) {
             Ok(arguments) => arguments,
             Err(error) => {
                 steps.push(failed_step(step, error));
@@ -421,7 +460,19 @@ fn completed_execution_report(
     } else {
         None
     };
-    execution_report(ok, steps, error, None)
+    with_projection(plan, execution_report(ok, steps, error, None))
+}
+
+fn with_projection(plan: &Plan, mut report: ExecutionReport) -> ExecutionReport {
+    match project::summarize(plan, &report.steps) {
+        Ok(projection) => report.projection = projection,
+        Err(error) if report.ok => {
+            report.ok = false;
+            report.error = Some(error);
+        }
+        Err(_) => {}
+    }
+    report
 }
 
 fn stop_execution(steps: Vec<StepReport>, reason: ExecutionStopReason, request_started: bool) -> ExecutionReport {
@@ -618,6 +669,7 @@ impl ExecutionReport {
         self.ok = false;
         self.error = Some(reason.message().to_string());
         self.stop_reason = Some(reason);
+        self.projection = None;
     }
 }
 
@@ -649,6 +701,7 @@ fn execution_report(
         error,
         stop_reason,
         observability,
+        projection: None,
     }
 }
 
@@ -702,13 +755,17 @@ fn validate_plan(plan: &Plan) -> Result<(), PlanError> {
                 tool: step.tool.clone(),
             });
         }
-        validate_references(&Value::Object(step.arguments.clone()), step, &prior)?;
+        validate_references(&Value::Object(step.arguments.clone()), step, &prior, &plan.variables)?;
         prior.insert(step.id.clone());
+    }
+    variables::validate(&plan.variables)?;
+    if let Some(project) = &plan.project {
+        project::validate(project, &plan.steps)?;
     }
     Ok(())
 }
 
-fn valid_identifier(value: &str) -> bool {
+pub(crate) fn valid_identifier(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 64
         && value
@@ -724,35 +781,56 @@ fn valid_tool_name(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
 }
 
-fn validate_references(value: &Value, step: &PlanStep, prior: &BTreeSet<String>) -> Result<(), PlanError> {
+fn validate_references(
+    value: &Value,
+    step: &PlanStep,
+    prior: &BTreeSet<String>,
+    variables: &BTreeMap<String, Value>,
+) -> Result<(), PlanError> {
     match value {
         Value::Array(values) => {
             for value in values {
-                validate_references(value, step, prior)?;
+                validate_references(value, step, prior, variables)?;
             }
         }
-        Value::Object(object) if object.contains_key("$ref") => {
+        Value::Object(object) if object.contains_key("$ref") || object.contains_key("$var") => {
             if object.len() != 1 {
-                return Err(invalid_reference(step, "a $ref object cannot contain other fields"));
+                return Err(invalid_reference(
+                    step,
+                    "a $ref or $var object cannot contain other fields",
+                ));
             }
-            let reference = object
-                .get("$ref")
-                .and_then(Value::as_str)
-                .ok_or_else(|| invalid_reference(step, "$ref must be a string"))?;
-            let (target, pointer) = parse_reference(step, reference)?;
-            if !prior.contains(target) {
-                return Err(PlanError::UnavailableReference {
-                    step: step.id.clone(),
-                    target: target.to_string(),
-                });
-            }
-            if !pointer.is_empty() && !pointer.starts_with('/') {
-                return Err(invalid_reference(step, "JSON pointer must be empty or start with `/`"));
+            if object.contains_key("$ref") {
+                let reference = object
+                    .get("$ref")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| invalid_reference(step, "$ref must be a string"))?;
+                let (target, pointer) = parse_reference(step, reference)?;
+                if !prior.contains(target) {
+                    return Err(PlanError::UnavailableReference {
+                        step: step.id.clone(),
+                        target: target.to_string(),
+                    });
+                }
+                if !pointer.is_empty() && !pointer.starts_with('/') {
+                    return Err(invalid_reference(step, "JSON pointer must be empty or start with `/`"));
+                }
+            } else {
+                let name = object
+                    .get("$var")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| invalid_reference(step, "$var must be a string"))?;
+                if !variables.contains_key(name) {
+                    return Err(PlanError::UnknownVariable {
+                        step: step.id.clone(),
+                        name: name.to_string(),
+                    });
+                }
             }
         }
         Value::Object(object) => {
             for value in object.values() {
-                validate_references(value, step, prior)?;
+                validate_references(value, step, prior, variables)?;
             }
         }
         _ => {}
@@ -761,29 +839,57 @@ fn validate_references(value: &Value, step: &PlanStep, prior: &BTreeSet<String>)
 }
 
 fn resolve_arguments(
+    plan: &Plan,
     step: &PlanStep,
     results: &[StepReport],
     result_indexes: &BTreeMap<String, usize>,
 ) -> Result<Map<String, Value>, String> {
-    let resolved = resolve_value(&Value::Object(step.arguments.clone()), step, results, result_indexes)?;
+    let mut budget = 0;
+    let resolved = resolve_value(
+        &Value::Object(step.arguments.clone()),
+        step,
+        results,
+        result_indexes,
+        &plan.variables,
+        Some(&mut budget),
+    )?;
+    let encoded = serde_json::to_vec(&resolved).map_err(|error| error.to_string())?;
+    if encoded.len() > MAX_RESOLVED_ARGUMENTS_BYTES {
+        return Err(format!(
+            "resolved arguments are {} bytes; the maximum is {MAX_RESOLVED_ARGUMENTS_BYTES}",
+            encoded.len()
+        ));
+    }
     resolved
         .as_object()
         .cloned()
         .ok_or_else(|| "resolved MCP arguments were not an object".to_string())
 }
 
-fn resolve_value(
+pub(crate) fn resolve_value(
     value: &Value,
     step: &PlanStep,
     results: &[StepReport],
     result_indexes: &BTreeMap<String, usize>,
+    variables: &BTreeMap<String, Value>,
+    budget: Option<&mut usize>,
 ) -> Result<Value, String> {
     match value {
-        Value::Array(values) => values
-            .iter()
-            .map(|value| resolve_value(value, step, results, result_indexes))
-            .collect::<Result<Vec<_>, _>>()
-            .map(Value::Array),
+        Value::Array(values) => {
+            let mut budget = budget;
+            let mut resolved = Vec::with_capacity(values.len());
+            for value in values {
+                resolved.push(resolve_value(
+                    value,
+                    step,
+                    results,
+                    result_indexes,
+                    variables,
+                    budget.as_deref_mut(),
+                )?);
+            }
+            Ok(Value::Array(resolved))
+        }
         Value::Object(object) if object.len() == 1 && object.contains_key("$ref") => {
             let reference = object
                 .get("$ref")
@@ -795,17 +901,61 @@ fn resolve_value(
                 .and_then(|index| results.get(*index))
                 .and_then(|report| report.result.as_ref())
                 .ok_or_else(|| format!("reference target `{target}` has no successful result"))?;
-            result
+            let selected = result
                 .pointer(pointer)
-                .cloned()
-                .ok_or_else(|| format!("reference `{reference}` did not match the prior structured result"))
+                .ok_or_else(|| format!("reference `{reference}` did not match the prior structured result"))?;
+            charge_resolved(budget, selected)?;
+            Ok(selected.clone())
         }
-        Value::Object(object) => object
-            .iter()
-            .map(|(key, value)| Ok((key.clone(), resolve_value(value, step, results, result_indexes)?)))
-            .collect::<Result<Map<_, _>, String>>()
-            .map(Value::Object),
+        Value::Object(object) if object.len() == 1 && object.contains_key("$var") => {
+            let name = object
+                .get("$var")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "$var must be a string".to_string())?;
+            let selected = variables::lookup(variables, step, name).map_err(|error| error.to_string())?;
+            charge_resolved(budget, &selected)?;
+            Ok(selected)
+        }
+        Value::Object(object) => {
+            let mut budget = budget;
+            let mut resolved = Map::new();
+            for (key, value) in object {
+                resolved.insert(
+                    key.clone(),
+                    resolve_value(value, step, results, result_indexes, variables, budget.as_deref_mut())?,
+                );
+            }
+            Ok(Value::Object(resolved))
+        }
         _ => Ok(value.clone()),
+    }
+}
+
+fn charge_resolved(budget: Option<&mut usize>, value: &Value) -> Result<(), String> {
+    let Some(budget) = budget else {
+        return Ok(());
+    };
+    let size = serde_json::to_vec(value).map_or(0, |bytes| bytes.len());
+    *budget = budget.saturating_add(size);
+    if *budget > MAX_RESOLVED_ARGUMENTS_BYTES {
+        Err(format!(
+            "resolved arguments are {budget} bytes; the maximum is {MAX_RESOLVED_ARGUMENTS_BYTES}"
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+pub(crate) fn parse_project_reference(reference: &str) -> Result<(&str, &str), PlanError> {
+    let placeholder = PlanStep {
+        id: "project".to_string(),
+        tool: "project".to_string(),
+        arguments: Map::new(),
+    };
+    match parse_reference(&placeholder, reference) {
+        Ok(parsed) => Ok(parsed),
+        Err(PlanError::InvalidReference { reason, .. }) => Err(PlanError::InvalidProject(reason)),
+        Err(error) => Err(error),
     }
 }
 
@@ -866,7 +1016,7 @@ mod tests {
             json!({"nested":{"panel/id":"panel-7"},"visible":true}),
         )];
         let indexes = BTreeMap::from([("list".to_string(), 0)]);
-        let resolved = resolve_arguments(&plan.steps[1], &results, &indexes).expect("resolve arguments");
+        let resolved = resolve_arguments(&plan, &plan.steps[1], &results, &indexes).expect("resolve arguments");
         assert_eq!(resolved["panel_id"], "panel-7");
         assert_eq!(resolved["visible"], true);
     }
@@ -878,8 +1028,92 @@ mod tests {
         );
         let results = [successful_step("list", json!({"panels":[]}))];
         let indexes = BTreeMap::from([("list".to_string(), 0)]);
-        let error = resolve_arguments(&plan.steps[1], &results, &indexes).expect_err("missing pointer");
+        let error = resolve_arguments(&plan, &plan.steps[1], &results, &indexes).expect_err("missing pointer");
         assert!(error.contains("did not match"));
+    }
+
+    #[test]
+    fn example_plans_are_valid() {
+        for (name, bytes) in [
+            ("navigate", include_str!("../examples/navigate.json").as_bytes()),
+            ("extract", include_str!("../examples/extract.json").as_bytes()),
+            ("interact", include_str!("../examples/interact.json").as_bytes()),
+            (
+                "network-watch",
+                include_str!("../examples/network-watch.json").as_bytes(),
+            ),
+        ] {
+            Plan::from_slice(bytes).unwrap_or_else(|error| panic!("{name}: {error}"));
+        }
+    }
+
+    #[test]
+    fn variables_substitute_literals_into_later_arguments() {
+        let plan = plan(
+            br#"{"version":1,"variables":{"url":"https://example.com"},"steps":[{"id":"list","tool":"browser_list"},{"id":"go","tool":"browser_navigate","arguments":{"panel_id":{"$ref":"list#/panels/0/panel_id"},"url":{"$var":"url"}}}]}"#,
+        );
+        let results = [successful_step("list", json!({"panels":[{"panel_id":"p1"}]}))];
+        let indexes = BTreeMap::from([("list".to_string(), 0)]);
+        let resolved = resolve_arguments(&plan, &plan.steps[1], &results, &indexes).expect("resolve var");
+        assert_eq!(resolved["panel_id"], "p1");
+        assert_eq!(resolved["url"], "https://example.com");
+        assert!(matches!(
+            Plan::from_slice(br#"{"version":1,"steps":[{"id":"go","tool":"browser_navigate","arguments":{"url":{"$var":"missing"}}}]}"#),
+            Err(PlanError::UnknownVariable { name, .. }) if name == "missing"
+        ));
+    }
+
+    #[test]
+    fn repeated_variable_substitution_is_bounded() {
+        let blob = "x".repeat(4 * 1024 - 2);
+        let mut arguments = serde_json::Map::new();
+        for index in 0..300 {
+            arguments.insert(format!("f{index}"), json!({"$var": "blob"}));
+        }
+        let plan = Plan {
+            version: 1,
+            variables: BTreeMap::from([("blob".to_string(), json!(blob))]),
+            steps: vec![PlanStep {
+                id: "go".to_string(),
+                tool: "browser_evaluate".to_string(),
+                arguments,
+            }],
+            project: None,
+        };
+        crate::variables::validate(&plan.variables).expect("max-sized literal is valid");
+        let error = resolve_arguments(&plan, &plan.steps[0], &[], &BTreeMap::new()).expect_err("over budget");
+        assert!(error.contains("resolved arguments are"));
+    }
+
+    #[test]
+    fn interrupted_reports_omit_projection() {
+        let mut report = execution_report(true, vec![successful_step("panels", json!({"panels": []}))], None, None);
+        report.projection = Some(crate::project::ProjectionSummary {
+            format: crate::project::ProjectFormat::Json,
+            file: "projection.json".to_string(),
+            rows: 0,
+        });
+        report.stop(ExecutionStopReason::Cancelled);
+        assert!(report.projection.is_none());
+        assert_eq!(report.stop_reason, Some(ExecutionStopReason::Cancelled));
+    }
+
+    #[tokio::test]
+    async fn requested_projection_failure_fails_an_otherwise_successful_run() {
+        let plan = plan(
+            br#"{"version":1,"steps":[{"id":"panels","tool":"browser_list"}],"project":{"format":"csv","from":{"$ref":"panels#"}}}"#,
+        );
+        let report = execute_plan(&plan).await.expect("list-only plan should execute");
+        assert!(!report.ok);
+        assert!(report.projection.is_none());
+        assert!(
+            report
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("csv projection requires the referenced value to be a JSON array")),
+            "error: {:?}",
+            report.error
+        );
     }
 
     #[tokio::test]

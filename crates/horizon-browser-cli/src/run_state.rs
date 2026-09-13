@@ -371,6 +371,17 @@ impl DurableRun {
     /// # Errors
     /// Returns when either terminal artifact cannot be atomically persisted.
     pub fn finish(&mut self, execution: &ExecutionReport) -> Result<(), RunStateError> {
+        self.clear_projection_files()?;
+        if execution.projection.is_some() {
+            let plan = self.load_plan().map_err(|error| {
+                io_error(
+                    "could not load plan for projection".to_string(),
+                    std::io::Error::other(error.to_string()),
+                )
+            })?;
+            crate::project::persist(&self.directory, &plan, &execution.steps)
+                .map_err(|error| io_error("could not write projection".to_string(), std::io::Error::other(error)))?;
+        }
         self.write_json(REPORT_FILE, &self.report(execution), "report")?;
         self.state.status = match execution.stop_reason {
             Some(ExecutionStopReason::Cancelled) => RunStatus::Cancelled,
@@ -391,6 +402,7 @@ impl DurableRun {
     /// # Errors
     /// Returns when the failed state cannot be atomically persisted.
     pub fn fail(&mut self, error: &str) -> Result<(), RunStateError> {
+        self.clear_unpublished_projection_files()?;
         self.state.status = RunStatus::Failed;
         self.state.updated_at_millis = now_millis();
         self.state.error = Some(error.to_string());
@@ -402,6 +414,7 @@ impl DurableRun {
     /// # Errors
     /// Returns when the stopped state cannot be atomically persisted.
     pub fn stop(&mut self, reason: ExecutionStopReason) -> Result<(), RunStateError> {
+        self.clear_unpublished_projection_files()?;
         self.state.status = match reason {
             ExecutionStopReason::Cancelled => RunStatus::Cancelled,
             ExecutionStopReason::DeadlineExceeded => RunStatus::TimedOut,
@@ -546,6 +559,12 @@ impl DurableRun {
         self.state.updated_at_millis = now_millis();
         self.state.runner_pid = std::process::id();
         self.state.report_file = None;
+        if let Err(source) = self.clear_projection_files() {
+            return Err(DurableRearmError {
+                run: Box::new(self),
+                source,
+            });
+        }
         self.state.completed_steps = self.state.checkpoint.completed.len();
         self.state.error = None;
         if let Some(step_id) = skipped {
@@ -728,6 +747,26 @@ impl DurableRun {
 
     fn write_json(&self, name: &str, value: &impl Serialize, artifact: &'static str) -> Result<(), RunStateError> {
         write_private_json(&self.directory.join(name), value, artifact)
+    }
+
+    fn clear_unpublished_projection_files(&self) -> Result<(), RunStateError> {
+        if self.state.report_file.is_some() {
+            return Ok(());
+        }
+        self.clear_projection_files()
+    }
+
+    fn clear_projection_files(&self) -> Result<(), RunStateError> {
+        for name in ["projection.json", "projection.csv"] {
+            match std::fs::remove_file(self.directory.join(name)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(io_error(format!("could not remove {name}"), error));
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -984,11 +1023,13 @@ mod tests {
     fn plan() -> Plan {
         Plan {
             version: 1,
+            variables: std::collections::BTreeMap::new(),
             steps: vec![PlanStep {
                 id: "panels".to_string(),
                 tool: "browser_list".to_string(),
                 arguments: serde_json::Map::new(),
             }],
+            project: None,
         }
     }
 
@@ -1002,6 +1043,7 @@ mod tests {
             error: None,
             stop_reason: None,
             observability: ObservabilitySummary::default(),
+            projection: None,
         }
     }
 
@@ -1053,8 +1095,11 @@ mod tests {
             error: None,
             stop_reason: None,
             observability: ObservabilitySummary::default(),
+            projection: None,
         };
+        std::fs::write(run.directory.join("projection.json"), b"[]\n").expect("stale projection");
         run.finish(&report).expect("finish durable run");
+        assert!(!run.directory.join("projection.json").is_file());
         let succeeded: RunState = serde_json::from_slice(&std::fs::read(&run.state_path).expect("terminal state"))
             .expect("decode terminal state");
         assert_eq!(succeeded.status, RunStatus::Succeeded);
@@ -1535,6 +1580,7 @@ mod tests {
     fn two_step_plan() -> Plan {
         Plan {
             version: 1,
+            variables: std::collections::BTreeMap::new(),
             steps: vec![
                 PlanStep {
                     id: "list".to_string(),
@@ -1547,6 +1593,7 @@ mod tests {
                     arguments: serde_json::Map::new(),
                 },
             ],
+            project: None,
         }
     }
 
