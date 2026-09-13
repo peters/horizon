@@ -106,7 +106,9 @@ pub(super) fn show(ctx: &Context, state: &mut RemoteEnvironments) -> InventoryAc
             );
             ui.separator();
             render_controls(ui, state, &mut action);
-            ui.add_enabled_ui(!state.delete.is_pending(), |ui| state.setup.new_button(ui, &mut action));
+            ui.add_enabled_ui(!state.delete.is_pending() && !state.endpoint.is_pending(), |ui| {
+                state.setup.new_button(ui, &mut action);
+            });
             let content_height =
                 if state.setup.has_content() || state.page.as_ref().is_some_and(|page| !page.rows.is_empty()) {
                     (viewport.height() - 96.0 - ui.min_rect().height()).max(80.0)
@@ -119,7 +121,9 @@ pub(super) fn show(ctx: &Context, state: &mut RemoteEnvironments) -> InventoryAc
                 .min_scrolled_height(content_height)
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    ui.add_enabled_ui(!state.delete.is_pending(), |ui| state.setup.history(ui, &mut action));
+                    ui.add_enabled_ui(!state.delete.is_pending() && !state.endpoint.is_pending(), |ui| {
+                        state.setup.history(ui, &mut action);
+                    });
                     if state.setup.is_active() {
                         state.setup.show(ui, &mut action);
                     } else {
@@ -135,7 +139,10 @@ pub(super) fn show(ctx: &Context, state: &mut RemoteEnvironments) -> InventoryAc
 }
 
 fn render_controls(ui: &mut egui::Ui, state: &RemoteEnvironments, action: &mut InventoryAction) {
-    let idle = state.pending.is_none() && !state.setup.is_active() && !state.delete.is_pending();
+    let idle = state.pending.is_none()
+        && !state.setup.is_active()
+        && !state.delete.is_pending()
+        && !state.endpoint.is_pending();
     ui.horizontal(|ui| {
         if ui.add_enabled(idle, egui::Button::new("Refresh saved page")).clicked() {
             *action = InventoryAction::Refresh;
@@ -165,6 +172,9 @@ fn render_controls(ui: &mut egui::Ui, state: &RemoteEnvironments, action: &mut I
     if state.delete.is_pending() {
         ui.label(state.delete.pending_label());
     }
+    if state.endpoint.is_pending() {
+        ui.label("Refreshing saved connection. Closing the overview does not cancel this operation; other management requests wait.");
+    }
     if let Some(failure) = &state.failure {
         let message = match failure.error {
             LoadError::OpenStore => "Cannot open the remote inventory store. Check its permissions and format.",
@@ -185,7 +195,7 @@ fn render_controls(ui: &mut egui::Ui, state: &RemoteEnvironments, action: &mut I
 }
 
 fn render_content(ui: &mut egui::Ui, state: &mut RemoteEnvironments, action: &mut InventoryAction) {
-    let deletion_idle = state.deletion_idle();
+    let deletion_idle = state.deletion_idle() && !state.endpoint.is_pending();
     let Some(page) = &state.page else {
         return;
     };
@@ -212,7 +222,8 @@ fn render_content(ui: &mut egui::Ui, state: &mut RemoteEnvironments, action: &mu
         let idle = state.pending.is_none()
             && !state.observation.is_pending()
             && !state.stop.is_pending()
-            && !state.delete.is_pending();
+            && !state.delete.is_pending()
+            && !state.endpoint.is_pending();
         super::repository::show(
             ui,
             &mut state.repository,
@@ -241,10 +252,12 @@ fn render_content(ui: &mut egui::Ui, state: &mut RemoteEnvironments, action: &mu
             state.pending.is_none()
                 && !state.observation.is_pending()
                 && !state.repository.is_pending()
-                && !state.delete.is_pending(),
+                && !state.delete.is_pending()
+                && !state.endpoint.is_pending(),
             action,
         );
         state.delete.show(ui, &row.summary, deletion_idle, action);
+        state.endpoint.show(ui, &row.summary, deletion_idle, action);
         ui.separator();
         ui.strong("Saved environment details");
         ui.label(
@@ -278,6 +291,7 @@ fn render_observation(ui: &mut egui::Ui, state: &RemoteEnvironments, action: &mu
                 && !observation.is_pending()
                 && !state.stop.is_pending()
                 && !state.delete.is_pending()
+                && !state.endpoint.is_pending()
                 && !state.repository.is_pending(),
             egui::Button::new("Check provider status"),
         );

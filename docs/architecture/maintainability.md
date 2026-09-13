@@ -5,6 +5,13 @@ back into large multi-purpose modules.
 
 ## Module Boundaries
 
+- `remote_environments::endpoint` owns consent, single-flight delivery and cached
+  notices for explicit saved-connection refresh; its paint leaf performs no I/O.
+  Shared overview guards serialize it with Delete, Start/Stop and repository work.
+  `start::configured_endpoint` admits the retained HPS/profile and original identity;
+  authenticated proof and coordinate-only mutation remain in the shared endpoint
+  coordinator. Closing invalidates presentation, not an in-flight operation.
+
 - Explicit retained connection refresh lives in `remote_workspace::start::endpoint`:
   its discovery contract, existing-identity admission, fixed authenticated SSH no-op
   and provider re-observation. `runpod::interactive::endpoint` supplies GET-only
