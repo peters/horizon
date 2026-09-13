@@ -461,6 +461,18 @@ class EngineFailures(Harness):
         self.assertEqual(by_id["os_linux"]["status"], "error")
         self.assertIsNone(by_id["os_linux"].get("value"))
 
+    def test_workspace_helper_disables_bytecode(self):
+        self.assertIn("-B", preflight.PROBE_ARGS["workspace_dir"])
+
+    def test_bounded_communicate_kills_runaway_output(self):
+        proc = subprocess.Popen(
+            [sys.executable, "-B", "-c", "import sys; sys.stdout.write('x'*200000)"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        _stdout, _stderr, overflow = preflight.bounded_communicate(proc, 5, 1024)
+        self.assertIsNotNone(overflow)
+        self.assertIn("exceeded", overflow)
+        self.assertIsNotNone(proc.poll())
+
     def test_podman_probe_forces_local_mode(self):
         self.assertIn("--remote=false", preflight.PROBE_ARGS["podman_info"])
         fixture = dict(DEFAULT_FIXTURE)

@@ -19,8 +19,10 @@ import json
 import math
 import os
 import re
+import select
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 
 SCHEMA = 1
@@ -32,6 +34,7 @@ MIN_MEM_KB = 16 * 1024 * 1024  # 16 GiB: reference CPU worker baseline
 MIN_FREE_KB = 20 * 1024 * 1024  # 20 GiB free on the workspace filesystem
 DEFAULT_WORKSPACE_PATH = "/var/lib/horizon-workers"
 DEFAULT_TIMEOUT = 10.0
+MAX_PROBE_OUTPUT_BYTES = 65536
 
 # Status values, kept separate on purpose per the issue contract.
 SUPPORTED = "supported"
@@ -50,7 +53,7 @@ PROBE_ARGS = {
                        "{{.Endpoints.docker.Host}}"],
     "podman_info": ["podman", "--remote=false", "info", "--format",
                     "{{.Version.Version}}"],
-    "workspace_dir": [sys.executable, "-c",
+    "workspace_dir": [sys.executable, "-B", "-c",
                       "import os,sys\n"
                       "p=os.path.normpath(os.path.realpath(sys.argv[1]))\n"
                       "c=p\n"
@@ -145,6 +148,8 @@ def run_probe(executor, key, timeout, extra_argv=None):
     if not isinstance(result, dict):
         return None, "probe returned malformed result"
     exit_code = result.get("exit_code")
+    if result.get("output_exceeded"):
+        return None, "probe output exceeded %d bytes" % MAX_PROBE_OUTPUT_BYTES
     if not isinstance(exit_code, int):
         return None, "probe returned malformed exit code"
     return result, None
@@ -722,12 +727,70 @@ def decode_probe_output(data):
     return str(data)
 
 
+def bounded_communicate(proc, timeout, max_bytes):
+    """Read stdout/stderr up to max_bytes. Kill the probe if it exceeds that.
+
+    Returns (stdout, stderr, overflow_or_None). Raises TimeoutExpired.
+    """
+    deadline = time.monotonic() + timeout
+    buckets = {proc.stdout: bytearray(), proc.stderr: bytearray()}
+    open_fds = [proc.stdout, proc.stderr]
+    for fd in open_fds:
+        os.set_blocking(fd.fileno(), False)
+    overflow = False
+    try:
+        while open_fds:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                proc.kill()
+                try:
+                    proc.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                raise subprocess.TimeoutExpired(proc.args, timeout)
+            ready, _, _ = select.select(open_fds, [], [], remaining)
+            for fd in ready:
+                chunk = fd.read(4096)
+                if chunk is None:
+                    continue
+                if chunk == b"":
+                    open_fds.remove(fd)
+                    continue
+                buckets[fd].extend(chunk)
+                if len(buckets[proc.stdout]) + len(buckets[proc.stderr]) > max_bytes:
+                    overflow = True
+                    proc.kill()
+                    try:
+                        proc.wait(timeout=1)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    open_fds = []
+                    break
+        if proc.poll() is None:
+            proc.wait()
+        stdout = bytes(buckets[proc.stdout])
+        stderr = bytes(buckets[proc.stderr])
+        if overflow:
+            return stdout, stderr, "probe output exceeded %d bytes" % max_bytes
+        return stdout, stderr, None
+    finally:
+        for fd in (proc.stdout, proc.stderr):
+            if fd is not None:
+                try:
+                    fd.close()
+                except OSError:
+                    pass
+
+
 def default_executor(argv, timeout):
-    proc = subprocess.run(argv, timeout=timeout, capture_output=True,
-                          check=False, shell=False)
+    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            shell=False)
+    stdout, stderr, overflow = bounded_communicate(proc, timeout, MAX_PROBE_OUTPUT_BYTES)
+    if overflow:
+        return {"exit_code": 1, "stdout": "", "stderr": overflow, "output_exceeded": True}
     return {"exit_code": proc.returncode,
-            "stdout": decode_probe_output(proc.stdout),
-            "stderr": decode_probe_output(proc.stderr)}
+            "stdout": decode_probe_output(stdout),
+            "stderr": decode_probe_output(stderr)}
 
 
 def parse_timeout(value):
