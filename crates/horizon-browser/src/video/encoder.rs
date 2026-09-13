@@ -340,6 +340,14 @@ impl EncodeSession {
                 if !self.paused {
                     self.paused = true;
                     self.paused_at = Some(Instant::now());
+                    if let Some(encoder) = self.encoder.as_mut() {
+                        if let Err(error) = encoder.flush_cluster() {
+                            self.handle.encoder_failed.store(true, Ordering::Relaxed);
+                            tracing::warn!(target: "browser", "failed to flush video cluster on pause: {error}");
+                        } else if let Some(bytes) = encoder.bytes_written() {
+                            self.handle.bytes_written.store(bytes, Ordering::Relaxed);
+                        }
+                    }
                     self.handle.set_state(STATE_PAUSED);
                 }
                 true
@@ -403,13 +411,12 @@ impl EncodeSession {
             return Ok(());
         };
         match encoder.encode_rgb(&frame.rgb, frame.width, frame.height, timestamp_ms)? {
-            PushOutcome::Written => {
-                self.handle.frames_encoded.fetch_add(1, Ordering::Relaxed);
-            }
+            PushOutcome::Written => {}
             PushOutcome::FileLimit => {
                 self.handle.file_limit_reached.store(true, Ordering::Relaxed);
             }
         }
+        self.handle.frames_encoded.store(encoder.muxed, Ordering::Relaxed);
         if let Some(bytes) = encoder.bytes_written() {
             self.handle.bytes_written.store(bytes, Ordering::Relaxed);
         }
@@ -419,8 +426,12 @@ impl EncodeSession {
     fn finish_file(&mut self) -> io::Result<()> {
         if let Some(encoder) = self.encoder.take() {
             match encoder.finish() {
-                Ok(bytes) => {
-                    self.handle.bytes_written.store(bytes, Ordering::Relaxed);
+                Ok(stats) => {
+                    self.handle.bytes_written.store(stats.bytes, Ordering::Relaxed);
+                    self.handle.frames_encoded.store(stats.muxed, Ordering::Relaxed);
+                    if stats.limit_reached {
+                        self.handle.file_limit_reached.store(true, Ordering::Relaxed);
+                    }
                     Ok(())
                 }
                 Err(error) => {
@@ -451,6 +462,7 @@ struct ActiveEncoder {
     height: u32,
     max_file_bytes: u64,
     fps: u32,
+    muxed: u64,
     timestamps: Vec<u64>,
     pending: Vec<(u64, bool, Vec<u8>)>,
     limit_reached: bool,
@@ -487,6 +499,7 @@ impl ActiveEncoder {
             height,
             max_file_bytes: options.max_file_bytes,
             fps: options.fps.max(1),
+            muxed: 0,
             timestamps: Vec::new(),
             pending: Vec::new(),
             limit_reached: false,
@@ -565,6 +578,7 @@ impl ActiveEncoder {
                 return Ok(PushOutcome::FileLimit);
             }
             muxer.write_frame(timestamp_ms, true, &data)?;
+            self.muxed = self.muxed.saturating_add(1);
             for (pending_ts, pending_key, pending_data) in self.pending.drain(..) {
                 let pending_extra = u64::try_from(pending_data.len()).unwrap_or(u64::MAX).saturating_add(16);
                 if muxer.would_exceed(pending_extra, self.max_file_bytes)? {
@@ -573,6 +587,7 @@ impl ActiveEncoder {
                     return Ok(PushOutcome::FileLimit);
                 }
                 muxer.write_frame(pending_ts, pending_key, &pending_data)?;
+                self.muxed = self.muxed.saturating_add(1);
             }
             self.muxer = Some(muxer);
             return Ok(PushOutcome::Written);
@@ -583,6 +598,7 @@ impl ActiveEncoder {
                 return Ok(PushOutcome::FileLimit);
             }
             muxer.write_frame(timestamp_ms, keyframe, &data)?;
+            self.muxed = self.muxed.saturating_add(1);
         }
         Ok(PushOutcome::Written)
     }
@@ -591,7 +607,14 @@ impl ActiveEncoder {
         self.muxer.as_mut().and_then(|muxer| muxer.bytes_written().ok())
     }
 
-    fn finish(mut self) -> io::Result<u64> {
+    fn flush_cluster(&mut self) -> io::Result<()> {
+        if let Some(muxer) = self.muxer.as_mut() {
+            muxer.flush_cluster()?;
+        }
+        Ok(())
+    }
+
+    fn finish(mut self) -> io::Result<FinishStats> {
         self.context.flush();
         for _ in 0..1_024 {
             match self.context.receive_packet() {
@@ -609,14 +632,25 @@ impl ActiveEncoder {
             }
         }
         let frame_ms = 1_000 / u64::from(self.fps.max(1));
-        if let Some(muxer) = self.muxer.take() {
-            muxer.finish(frame_ms)
+        let bytes = if let Some(muxer) = self.muxer.take() {
+            muxer.finish(frame_ms)?
         } else if let Some(file) = self.file.take() {
-            write_empty_webm(file)
+            write_empty_webm(file)?
         } else {
-            Ok(0)
-        }
+            0
+        };
+        Ok(FinishStats {
+            bytes,
+            muxed: self.muxed,
+            limit_reached: self.limit_reached,
+        })
     }
+}
+
+struct FinishStats {
+    bytes: u64,
+    muxed: u64,
+    limit_reached: bool,
 }
 
 fn fill_plane(frame: &mut Frame<u8>, plane: usize, source: &[u8], stride: usize) {

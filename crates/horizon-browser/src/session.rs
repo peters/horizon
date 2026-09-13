@@ -82,6 +82,8 @@ pub enum BrowserEvent {
     },
     /// Non-fatal problem surfaced to the panel body.
     Warning(String),
+    /// Page-pixel recording could not start, pause, resume, or finalize.
+    VideoFailed(String),
     /// The driver stopped.
     Stopped {
         code: Option<i32>,

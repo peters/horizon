@@ -428,10 +428,12 @@ impl Driver {
                 self.resolve_handoff(events);
                 Ok(false)
             }
-            BrowserCommand::Video { operation, options } => self
-                .video_action(&crate::new_action_id(), operation, options.as_ref())
-                .map(|_| false)
-                .map_err(|error| error.message),
+            BrowserCommand::Video { operation, options } => {
+                if let Err(error) = self.video_action(&crate::new_action_id(), operation, options.as_ref()) {
+                    let _ = events.send(BrowserEvent::VideoFailed(format!("{}: {}", error.code, error.message)));
+                }
+                Ok(false)
+            }
             BrowserCommand::Stop => Ok(true),
         }
     }

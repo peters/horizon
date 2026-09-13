@@ -194,10 +194,14 @@ fn video_controls(ui: &mut Ui, browser: &BrowserPanelState, interactive: bool) -
             );
         }
         Some(BrowserVideoState::Stopped) | None => {
-            let hover = capture.as_ref().map_or_else(
-                || "Record browser session to WebM".to_string(),
-                |capture| format!("Record browser session to WebM (last: {})", capture.path),
-            );
+            let hover = if let Some(error) = browser.video_error.as_deref() {
+                format!("Record browser session to WebM ({error})")
+            } else {
+                capture.as_ref().map_or_else(
+                    || "Record browser session to WebM".to_string(),
+                    |capture| format!("Record browser session to WebM (last: {})", capture.path),
+                )
+            };
             clicked |= video_start_button(ui, &hover, browser, interactive);
         }
     }

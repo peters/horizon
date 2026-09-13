@@ -100,7 +100,7 @@ impl WebmMuxer {
         count.saturating_mul(48).saturating_add(32)
     }
 
-    fn flush_cluster(&mut self) -> io::Result<()> {
+    pub(super) fn flush_cluster(&mut self) -> io::Result<()> {
         if self.cluster.payload.is_empty() {
             return Ok(());
         }
