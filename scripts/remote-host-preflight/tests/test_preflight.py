@@ -65,6 +65,10 @@ def docker_context_ok(host="unix:///var/run/docker.sock"):
     return {"stdout": host + "\n"}
 
 
+def workspace_dir_ok(path, major=259, minor=42):
+    return {"stdout": "%s\t%d\t%d\n" % (path, major, minor)}
+
+
 DEFAULT_FIXTURE = {
     "os": os_fixture(),
     "docker_version": docker_ok(),
@@ -123,9 +127,10 @@ class Harness(unittest.TestCase):
                 "no real subprocess allowed in unit tests"))
             patcher.start()
             self.addCleanup(patcher.stop)
-        ready = mock.patch.object(preflight, "podman_local_service_ready", return_value=True)
-        ready.start()
-        self.addCleanup(ready.stop)
+        sock = mock.patch.object(preflight, "existing_podman_socket",
+                                 return_value="/run/podman/podman.sock")
+        sock.start()
+        self.addCleanup(sock.stop)
         saved = {var: os.environ[var] for var in preflight.ENDPOINT_VARS if var in os.environ}
         for var in preflight.ENDPOINT_VARS:
             os.environ.pop(var, None)
@@ -146,6 +151,8 @@ class Harness(unittest.TestCase):
                 args = list(args)
                 matches = list(argv) == args
                 if key in ("disk", "workspace_dir") and list(argv[:len(args)]) == args and len(argv) == len(args) + 1:
+                    matches = True
+                if key == "podman_info" and list(argv[:len(args)]) == args and list(argv[len(args)+1:]) == list(preflight.PROBE_ARGS["podman_info_tail"]):
                     matches = True
                 if matches:
                     entry = fixture.get(key)
@@ -279,12 +286,12 @@ class EngineFailures(Harness):
         fixture.pop("docker_info")
         fixture.pop("docker_context", None)
         fixture["podman_info"] = podman_ok()
-        with mock.patch.object(preflight, "podman_local_service_ready", return_value=False):
+        with mock.patch.object(preflight, "existing_podman_socket", return_value=None):
             code, report, executor = self.run_main(fixture)
         self.assertEqual(code, 1)
         by_id = {check["id"]: check for check in report["checks"]}
         self.assertIn("podman local service is not running", by_id["container_engine"]["detail"])
-        self.assertNotIn(list(preflight.PROBE_ARGS["podman_info"]), executor.seen)
+        self.assertFalse(any(argv and argv[0] == "podman" for argv in executor.seen))
 
     def test_podman_empty_version_is_unusable(self):
         fixture = dict(DEFAULT_FIXTURE)
@@ -315,6 +322,7 @@ class EngineFailures(Harness):
             "Filesystem     1024-blocks      Used Available Capacity Mounted on\n"
             "/dev/root        1000000000  800000000   200000000     80% /\n"
             "/dev/data        2000000000 1900000000    41943040    98% /mnt/workspaces\n"}
+        fixture["workspace_dir"] = workspace_dir_ok("/mnt/workspaces")
         code, report, _ = self.run_main(fixture, workspace="/mnt/workspaces/job")
         self.assertEqual(code, 0)
         by_id = {check["id"]: check for check in report["checks"]}
@@ -492,14 +500,24 @@ class EngineFailures(Harness):
         self.assertIsNotNone(proc.poll())
 
     def test_podman_probe_forces_local_mode(self):
-        self.assertIn("--remote=false", preflight.PROBE_ARGS["podman_info"])
+        self.assertEqual(preflight.PROBE_ARGS["podman_info"][:2], ["podman", "--remote=true"])
         fixture = dict(DEFAULT_FIXTURE)
         fixture.pop("docker_version")
         fixture.pop("docker_info")
         fixture.pop("docker_context", None)
         fixture["podman_info"] = podman_ok()
         _, _, executor = self.run_main(fixture)
-        self.assertIn(list(preflight.PROBE_ARGS["podman_info"]), executor.seen)
+        self.assertIn(
+            ["podman", "--remote=true", "--url", "unix:///run/podman/podman.sock",
+             "info", "--format", "{{.Version.Version}}"],
+            executor.seen)
+
+    def test_select_mount_point_does_not_realpath(self):
+        with mock.patch.object(os.path, "realpath",
+                               side_effect=AssertionError("realpath in main process")):
+            self.assertEqual(
+                preflight.select_mount_point(["/", "/mnt/data"], "/mnt/data/workers"),
+                "/mnt/data")
 
     def test_decode_probe_output_replaces_invalid_utf8(self):
         self.assertIn("\ufffd", preflight.decode_probe_output(b"ok\xffend"))
@@ -714,6 +732,7 @@ class DiskAndCapacity(Harness):
             "Filesystem     1024-blocks      Used Available Capacity Mounted on\n"
             "/dev/root        1000000000  800000000   200000000     80% /\n"
             "/dev/data        2000000000 1900000000    41943040    98% /mnt/worker data\n"}
+        fixture["workspace_dir"] = workspace_dir_ok("/mnt/worker data")
         code, report, _ = self.run_main(fixture, workspace="/mnt/worker data/job")
         by_id = {check["id"]: check for check in report["checks"]}
         self.assertEqual(by_id["disk_capacity"]["value"], 41943040)
@@ -725,6 +744,7 @@ class DiskAndCapacity(Harness):
             "Filesystem     1024-blocks      Used Available Capacity Mounted on\n"
             "/dev/root        1000000000  800000000  200000000     80% /\n"
             "/dev/data        2000000000    100000  50000000     1% /mnt/token=supersecretvalue\n"}
+        fixture["workspace_dir"] = workspace_dir_ok("/mnt/token=supersecretvalue")
         code, report, _ = self.run_main(fixture, workspace="/mnt/token=supersecretvalue/job")
         text = json.dumps(report)
         self.assertNotIn("supersecretvalue", text)
@@ -734,6 +754,7 @@ class DiskAndCapacity(Harness):
         fixture = dict(DEFAULT_FIXTURE)
         # Workspace mount has less than 20 GiB free -> unsupported even though / is huge.
         fixture["disk"] = df_fixture(mounts=(("/var/lib/horizon-workers", "10000000"),))
+        fixture["workspace_dir"] = workspace_dir_ok("/var/lib/horizon-workers")
         code, report, _ = self.run_main(fixture,
                                         workspace="/var/lib/horizon-workers")
         by_id = {check["id"]: check for check in report["checks"]}
@@ -895,12 +916,12 @@ class RedactionAndDeterminism(Harness):
         fixture = dict(DEFAULT_FIXTURE)
         _, _, executor = self.run_main(fixture)
         allowed = [list(args) for args in preflight.PROBE_ARGS.values()]
-        extra_keys = ("disk", "workspace_dir")
+        extra_keys = ("disk", "workspace_dir", "podman_info")
         for argv in executor.seen:
             skipped = False
             for key in extra_keys:
                 prefix = list(preflight.PROBE_ARGS[key])
-                if argv[:len(prefix)] == prefix and len(argv) == len(prefix) + 1:
+                if argv[:len(prefix)] == prefix and len(argv) > len(prefix):
                     skipped = True
                     break
             if skipped:
@@ -924,7 +945,9 @@ class RedactionAndDeterminism(Harness):
         disk_calls = [argv for argv in executor.seen
                       if argv[:2] == ["df", "-kP"]]
         self.assertEqual(len(disk_calls), 1)
-        self.assertEqual(disk_calls[0][-1], workspace)
+        resolved, problem = preflight.workspace_directory(workspace)
+        self.assertIsNone(problem)
+        self.assertEqual(disk_calls[0][-1], resolved)
 
     def test_human_report_normalizes_multiline_details(self):
         fixture = dict(DEFAULT_FIXTURE)

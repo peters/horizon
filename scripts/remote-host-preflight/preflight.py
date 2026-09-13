@@ -52,8 +52,8 @@ PROBE_ARGS = {
     "docker_info": ["docker", "info", "--format", "{{.Driver}}"],
     "docker_context": ["docker", "context", "inspect", "--format",
                        "{{.Endpoints.docker.Host}}"],
-    "podman_info": ["podman", "--remote=false", "info", "--format",
-                    "{{.Version.Version}}"],
+    "podman_info": ["podman", "--remote=true", "--url"],
+    "podman_info_tail": ["info", "--format", "{{.Version.Version}}"],
     "workspace_dir": [sys.executable, "-B", "-c",
                       "import os,sys\n"
                       "p=os.path.normpath(os.path.realpath(sys.argv[1]))\n"
@@ -258,18 +258,20 @@ def docker_endpoint_reason(executor, timeout):
     return None
 
 
-def podman_local_service_ready():
-    """True when a local podman API socket already exists.
+def existing_podman_socket():
+    """Path of an already-running local podman API socket, or None.
 
-    `podman info` on a fresh rootless account initializes libpod runtime
-    directories. This checker must not do that; it only queries an
-    already-running local service.
+    Invoking local `podman info` initializes rootless runtime directories.
+    This checker only talks to an existing socket through `--remote=true`.
     """
     paths = ["/run/podman/podman.sock"]
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     if runtime:
         paths.insert(0, os.path.join(runtime, "podman", "podman.sock"))
-    return any(os.path.exists(path) for path in paths)
+    for path in paths:
+        if os.path.exists(path):
+            return path
+    return None
 
 
 def engine_endpoint_note(engine):
@@ -324,11 +326,14 @@ def check_container_engine(executor, timeout):
     podman_note = engine_endpoint_note("podman")
     if podman_note is not None:
         reasons["podman"] = podman_note
-    elif not podman_local_service_ready():
-        reasons["podman"] = "podman local service is not running"
     else:
-        podman_info, pi_err = run_probe(executor, "podman_info", timeout)
-        podman_version = parse_engine_version(podman_info, "podman")
+        socket = existing_podman_socket()
+        if not socket:
+            reasons["podman"] = "podman local service is not running"
+        else:
+            extra = ["unix://" + socket] + list(PROBE_ARGS["podman_info_tail"])
+            podman_info, pi_err = run_probe(executor, "podman_info", timeout, extra_argv=extra)
+            podman_version = parse_engine_version(podman_info, "podman")
 
     engine_ok = None
     if docker_server is not None and "docker" not in reasons:
@@ -433,19 +438,13 @@ def check_memory(procfs_root):
             "detail": "%d MiB total (reference baseline 16 GiB)" % (total_kb // 1024)}
 
 
-def select_mount_point(mount_paths, workspace_path):
-    """Longest mount point that is an ancestor of (or is) the resolved
-    workspace path.
+def select_mount_point(mount_paths, resolved_path):
+    """Longest mount point that is an ancestor of the already-resolved path.
 
-    A workspace such as /mnt/workspaces/job lives on the /mnt/workspaces
-    mount, not on /; selecting the wrong filesystem produces a wrong verdict.
-    The path is resolved first so a symlinked workspace is judged on the
-    mount its target actually lives on (the storage qualifier follows the
-    same resolution via os.stat). realpath resolves symlinks in the
-    existing prefix and preserves a not-yet-created suffix, so this works
-    for workspaces that do not exist yet.
+    Callers must pass the helper-resolved workspace directory so this does
+    not `realpath` in the main process (stale NFS/FUSE can block).
     """
-    normalized = os.path.normpath(os.path.realpath(workspace_path))
+    normalized = os.path.normpath(resolved_path)
     best = None
     for mount in mount_paths:
         if mount == "/" or mount == normalized or normalized.startswith(mount.rstrip("/") + "/"):
@@ -501,7 +500,7 @@ def check_disk(executor, timeout, workspace_path):
         if len(fields) >= 6:
             mounts.append(fields[5])
             free_by_mount[fields[5]] = int(fields[3]) if fields[3].isdigit() else None
-    mount = select_mount_point(mounts, workspace_path)
+    mount = select_mount_point(mounts, target)
     if mount is None:
         return {"id": "disk_capacity", "status": ERROR, "value": None,
                 "detail": "df output contains no mount point covering %s" % redact(workspace_path)}

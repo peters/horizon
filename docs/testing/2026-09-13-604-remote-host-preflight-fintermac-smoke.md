@@ -33,7 +33,7 @@ itself as the probe target — only SSH reachability of the Linux VM.
 
 ## Scope note: what is read-only here
 
-The **tool** is read-only (proven in the PR: strace audit, no-write runs).
+The **tool** is read-only (fixed argv allowlist, no write/install/pull APIs).
 The *verification plumbing* below — delivering the single checker file to
 `/tmp` on the VM and deleting it afterwards — deliberately is **not**
 read-only, and it is **not** a tool feature: issue #604 reserves SSH
@@ -52,9 +52,17 @@ explicit about which steps mutate the host so the proof is not overclaimed.
    scp scripts/remote-host-preflight/preflight.py "$VM_SSH":/tmp/preflight-604.py
    ```
 
-2. **Baseline snapshot (read-only):**
+2. **Baseline snapshot (read-only):** write the independent ground truth
+   to `before.txt` via the redirection below (assertion 11 diffs this file
+   against `after.txt`). Canonicalize `WS` with `readlink -m` **before** the
+   ancestor walk (so a dangling workspace symlink is judged on the target
+   side, matching the checker), then `df` that path (not `/`), record GNU `stat` `%Hd:%Ld`
+   (filesystem `st_dev` major/minor — not `%t:%T`/`st_rdev`) and the same
+   4097-byte ext4 options window the checker evaluates (4096+1 to detect
+   overflow, no extra newline). That is the
+   independent ground truth for matrix assertions 4–6.
    ```sh
-   ssh "$VM_SSH" 'date -u; uname -srm; nproc; grep MemTotal /proc/meminfo;
+   SNAPSHOT_REMOTE='date -u; uname -srm; nproc; grep MemTotal /proc/meminfo;
      WS=/var/lib/horizon-workers;
      WS=$(readlink -m "$WS" 2>/dev/null || echo "$WS");
      while [ ! -e "$WS" ]; do
@@ -67,14 +75,8 @@ explicit about which steps mutate the host so the proof is not overclaimed.
      stat -c "ws=%n dev=%Hd:%Ld" "$WS" 2>/dev/null || echo "ws missing: $WS";
      B=$(basename "$(readlink /sys/dev/block/$(stat -c "%Hd:%Ld" "$WS" 2>/dev/null) 2>/dev/null)" 2>/dev/null);
      [ -n "$B" ] && { echo "dev=$B"; head -c 4097 "/proc/fs/ext4/$B/options"; } || echo "no ext4 options"'
+   ssh "$VM_SSH" "$SNAPSHOT_REMOTE" > before.txt
    ```
-   Save as `before.txt`. Canonicalize `WS` with `readlink -m` **before** the
-   ancestor walk (so a dangling workspace symlink is judged on the target
-   side, matching the checker), then `df` that path (not `/`), record GNU `stat` `%Hd:%Ld`
-   (filesystem `st_dev` major/minor — not `%t:%T`/`st_rdev`) and the same
-   4097-byte ext4 options window the checker evaluates (4096+1 to detect
-   overflow, no extra newline). That is the
-   independent ground truth for matrix assertions 4–6.
 
 3. **Run the preflight on the VM** (the tool run under test; fixed args, bounded probes, 10 s each). Capture reports **locally** before any VM cleanup. Assertion 9 needs two JSON runs with the same `--now`:
    ```sh
@@ -92,16 +94,17 @@ explicit about which steps mutate the host so the proof is not overclaimed.
    between the two JSON runs; if `cmp` differs only in `disk_capacity`,
    treat that as sampling, not a generated_at/probe-structure failure.
 
-4. **Post-run snapshot (read-only):** same commands as step 2 (including
-   `nproc`, `MemTotal`, the workspace ancestor, its block device and the raw
-   ext4 options) into
-   `after.txt`. Take `after.txt` **before** step 5 so the before/after diff
-   is clock-only for the tool run (the delivered `/tmp/preflight-604.py`
+4. **Post-run snapshot (read-only):** reuse `SNAPSHOT_REMOTE` from step 2
+   and write `after.txt` **before** step 5 so the before/after diff is
+   clock-only for the tool run (the delivered `/tmp/preflight-604.py`
    existed in both snapshots; reports were captured locally in step 3).
-
-   Read-only proof of the tool additionally comes from the strace audit in
-   the PR description (4 writes total, all to stdout; zero file-creating
-   opens) — the snapshot diff is corroborating, not the primary evidence.
+   The snapshot pair corroborates this live run. The checker's read-only
+   contract is the fixed argv allowlist and the absence of write/install/pull
+   APIs — not a partial syscall filter (`strace -e write,openat` omits
+   `mkdir`/`unlink`/`rename`/`truncate` and is not claimed as proof here).
+   ```sh
+   ssh "$VM_SSH" "$SNAPSHOT_REMOTE" > after.txt
+   ```
 
 5. **Remove the verification copy** (the delivered checker, not host state):
    ```sh
@@ -122,7 +125,7 @@ explicit about which steps mutate the host so the proof is not overclaimed.
 | 8 | No raw secrets/tokens/keys anywhere in either report (visual + `grep -E 'eyJ[A-Za-z0-9_-]{4,}\.|PRIVATE KEY|token='`) |
 | 9 | Two runs with the same `--now` produce byte-identical JSON (`cmp` in step 3); disk free-space sampling drift is the only allowed difference |
 | 10 | The 3 `unverified` entries are always present with their fixed details |
-| 11 | `before.txt`/`after.txt` diff is clock-only for the tool run (corroboration; primary read-only evidence is the strace audit in the PR) |
+| 11 | `before.txt`/`after.txt` exist as files from the redirections in steps 2 and 4; the diff is clock-only for the tool run (live-run corroboration; the checker's read-only contract is the argv allowlist, not a partial syscall trace) |
 | 12 | If the VM has no docker: the engine check says `docker: tool not present` / podman path — no crash, exit code still consistent |
 
 ## Failure handling
