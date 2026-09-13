@@ -208,11 +208,16 @@ is not needed by normal consumers.
 
 The package inherits Horizon's synchronized version, Rust version, MIT license,
 repository, and lints while keeping its own description, keywords, categories,
-README, and crates.io allow-list. A future release should first validate the
-standalone archive with `cargo package -p horizon-browser --locked`, inspect its
-contents, and only then run an explicitly authorized
-`cargo publish -p horizon-browser --locked`. Neither command publishes during a
-normal Horizon build, and this rollout does not execute the publish step.
+README, and crates.io allow-list. Packaging measurements, public-API/semver
+expectations, and the current `cargo package` constraints are recorded in
+[`docs/architecture/browser-packaging.md`](../../docs/architecture/browser-packaging.md).
+A future release should first publish `horizon-browser-protocol` (or stop
+depending on it as a registry crate), validate the engine archive with
+`cargo package -p horizon-browser --locked`, inspect its contents, and only
+then run an explicitly authorized `cargo publish -p horizon-browser --locked`.
+Neither command publishes during a normal Horizon build, and this rollout does
+not execute the publish step. Check invariants with
+`./scripts/check-browser-packaging.sh`.
 
 ## Validation
 

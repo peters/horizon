@@ -651,6 +651,10 @@ back into large multi-purpose modules.
 - Browser performance acceptance for #324 is the combined G1 WebSocket fixture
   plus G1b five-minute E24 observation, recorded in
   [`docs/architecture/browser-performance-acceptance.md`](browser-performance-acceptance.md).
+- Browser packaging measurements, public-API/semver expectations, and
+  publish-flag/package-content checks live in
+  [`docs/architecture/browser-packaging.md`](browser-packaging.md) and
+  `scripts/check-browser-packaging.sh`. No crate is published from that check.
 
 ### `horizon-ui`
 

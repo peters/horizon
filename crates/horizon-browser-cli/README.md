@@ -14,7 +14,8 @@ modes:
 The crate is intentionally thin and is not published. Browser actions, schemas,
 ownership, redacted audit, and backend behavior remain in
 `horizon-browser-mcp`, `horizon-core`, and the publishable `horizon-browser`
-engine.
+engine. Binary size, CLI cold start, and semver expectations are recorded in
+[`docs/architecture/browser-packaging.md`](../../docs/architecture/browser-packaging.md).
 
 ## Choose the interface
 
