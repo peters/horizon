@@ -81,19 +81,31 @@ gives A no identity today, so before the product pass A needs, in this order:
    a client provisioned by the current script has no CLI and the product cannot
    authenticate on it.
 2. An identity A can log in non-interactively. The intended shape is a
-   system-assigned managed identity on A with a role covering everything the product
-   paths do: resource group create, read and delete; deployments; compute (virtual
-   machines, disks, and `Microsoft.Compute/virtualMachines/runCommand/action`, which
-   setup, Check and Start use to attest the worker host key); network (public IP,
-   network interface, security group, virtual network); and
-   `Microsoft.ManagedIdentity/userAssignedIdentities/assign/action` on
-   `horizon-worker-puller`. Use a custom role that lists exactly those actions at
-   subscription scope (the product creates one new resource group per worker, so the
-   scope cannot be a single group) plus Managed Identity Operator scoped to
-   `horizon-worker-puller`; subscription-wide Contributor is not used, because it
-   would let a compromised client write to or delete unrelated pre-existing resources
-   and weaken the untouched-peer guarantee below. The role definition and assignment
-   are an authorization change and are posted on #474 for approval before they are
+   system-assigned managed identity on A with a custom role listing exactly the
+   actions the product paths under test send, and nothing destructive: resource
+   groups (`Microsoft.Resources/subscriptions/resourceGroups/read` and `write`);
+   deployments (`Microsoft.Resources/deployments/read`, `write` and
+   `operationstatuses/read`); compute (`Microsoft.Compute/virtualMachines/read`,
+   `write`, `deallocate/action` for Stop, `start/action` for Start and
+   `runCommand/action`, which setup and Start's readiness path use to attest the
+   worker host key; `Microsoft.Compute/disks/read` and `write`); network
+   (`read`, `write` and `join/action` on `Microsoft.Network/publicIPAddresses`,
+   `networkInterfaces` and `networkSecurityGroups`, `read` and `write` on
+   `virtualNetworks` and `virtualNetworks/subnets/join/action`); plus the built-in
+   Managed Identity Operator scoped to `horizon-worker-puller` alone. Check saved
+   Stop is ARM read-only and needs nothing beyond the reads. The role grants no
+   `delete` action: deletion is not part of this pass, so the product's own
+   failure-path group deletion is refused on A and surfaces as a setup finding, and
+   every group this run creates is removed by the operator's cleanup from C (step 9)
+   under the operator's credentials, never A's. Neither subscription-wide
+   Contributor nor any role with `delete` is assigned to A. The residual that Azure
+   RBAC cannot remove is that the `write` actions must sit at subscription scope
+   (the product creates one new resource group per worker, so no narrower scope
+   exists before the run), which lets a compromised A modify resources of those
+   types in unrelated groups for the run's duration; the run detects that through the
+   peer comparison in step 9 but cannot prevent it, and the only prevention is a
+   subscription holding nothing but this lane's resources. The role definition, its
+   scope and that residual are posted on #474 for approval before the assignment is
    made. No user credential is copied to A. Before Horizon is launched, and under the same `HOME`
    Horizon will use, run `az login --identity` as A's Horizon user and prove the token
    path the product will take without printing a token: `az account get-access-token
@@ -124,9 +136,10 @@ configured.rs`, the overview's **Check provider status**), is not used by this
 procedure and is tracked separately.
 
 The deterministic task this lane runs on B, for the pinned worker image: saved Shell
-panel with program `/bin/sh` and arguments `["-c", "i=0; while :; do i=$((i+1));
-printf '%s\n' "$i" > /workspace/progress.counter.tmp && mv
-/workspace/progress.counter.tmp /workspace/progress.counter; sleep 5; done"]`,
+panel with program `/bin/sh` and arguments (one JSON array, pasted verbatim into
+*Literal arguments (JSON array)*, so the shell receives a single `-c` script)
+`["-c", "i=0; while :; do i=$((i+1)); echo $i > /workspace/progress.counter.tmp &&
+mv /workspace/progress.counter.tmp /workspace/progress.counter; sleep 5; done"]`,
 working directory `.`, which the saved Git task resolves relative to the worker's
 fixed checkout `/workspace/horizon/repository`, so `/workspace/progress.counter`
 advances every five seconds and every 15-second sample sees a higher value; no
@@ -221,8 +234,10 @@ back unchanged at return and after the worker lifecycle step.
      overview deliberately never shows the pin; the `host_key` for `worker.json` is
      taken from A's saved record, whose snapshot is JSON. The store runs in WAL mode,
      so a plain file copy can miss the newest rows: take a consistent copy with
-     SQLite's online backup (`sqlite3 $HOME/.horizon/cloud-run/workflows.sqlite3
-     ".backup /tmp/horizon-store-copy.sqlite3"`) and read `state.runtime.ssh.host_key`
+     SQLite's online backup through `python3`, which the client image has (cloud-init
+     depends on it; the provisioner installs no `sqlite3` binary):
+     `python3 -c 'import sqlite3; s = sqlite3.connect("/home/horizon/.horizon-client-home/.horizon/cloud-run/workflows.sqlite3"); d = sqlite3.connect("/tmp/horizon-store-copy.sqlite3"); s.backup(d)'`,
+     and read `state.runtime.ssh.host_key`
      from the `snapshot` column of `remote_workspaces` for the workspace in that copy
      (a supported export of the saved pin is preferable and is tracked on #474;
      scanning the host would defeat the attestation).
@@ -284,9 +299,11 @@ back unchanged at return and after the worker lifecycle step.
    container only: the worker entrypoint rewrites `authorized_keys` on every container
    start. A first-class observer account in the worker image is lead-owned and would
    replace this step.
-   If this run created B's group, journal its exact identity: `client_off.py
-   --manifest m.json journal-group --group <B's group> --created created-groups.json`
-   (it reads the ARM ID and full tag set into the journal).
+   Because the product created B's group in step 3, journal its exact identity now:
+   `client_off.py --manifest m.json journal-group --group <B's group> --created
+   created-groups.json` (it reads the ARM ID and full tag set into the journal). The
+   journal is what authorizes step 9 to delete B: retention beyond the run is not
+   authorized, so B is deleted by this run's cleanup, not left for a later pass.
 4. **Off**: `client_off.py --manifest m.json --journal journal.ndjson off --worker
    worker.json --client client.json` (the provisioning output; the journal path is the
    one the verdict reads in step 6). Binds the whole phase to one absolute
@@ -367,19 +384,23 @@ back unchanged at return and after the worker lifecycle step.
    the cleanup margin (35 minutes) remains, skip the step, report it as not run, and
    proceed to the observer-key removal and cleanup. It uses the product controls on
    A, in the *Explicit Stop* section of the overview:
-   **Stop environment…** → confirm (one Stop; records intent, deallocates B, verifies
-   `PowerState/deallocated` with the retained `worker-data` disk). If the Stop ends
-   unverified the record stays `Stop requested (saved)`: run **Check saved Stop**
-   (provider-read-only; it confirms only deallocated compute with the retained disk
-   and the saved address, and a confirmed observation writes the saved phase
-   `Stopped` and a new revision locally) until the row shows `Stopped (saved, not
-   live)`; **Start environment…**
+   **Stop environment…** → confirm (one Stop; records intent, deallocates B and
+   verifies only that the compute reached `PowerState/deallocated`). A verified Stop
+   is not yet the retention proof: the retained `worker-data` disk and the saved
+   address are confirmed by **Check saved Stop**'s read-only observer, so run it after
+   every Stop, verified or not (an unverified Stop leaves the record at `Stop
+   requested (saved)`; a confirmed observation writes the saved phase `Stopped` and a
+   new revision locally), and continue only once the row shows `Stopped (saved, not
+   live)`. **Start environment…**
    is offered only for that verified Stop or an existing Start intent. Then **Start
    environment…** → confirm (records Start intent, starts only the exact worker,
-   accepts only the saved identity and pin). An unverified Start leaves the row at
-   `Start requested (saved)`: **Refresh saved page** and press **Start environment…**
-   again (the retry reuses the saved intent and never re-posts a running worker) until
-   the row shows `Reconciling`. Then read the retained bytes back without the product's
+   accepts only the saved identity and pin). The result arrives as a notice and the
+   selected row is not reloaded, so after every Start result press **Refresh saved
+   page** and select the row again: it must show `Reconciling` before this step
+   continues. Only when the notice reports an unverified Start and the refreshed row
+   still shows `Start requested (saved)` is **Start environment…** pressed again (the
+   retry reuses the saved intent and never re-posts a running worker); a refreshed row
+   at `Reconciling` is never retried. Then read the retained bytes back without the product's
    panel path, which cannot serve this step: the worker's panel runtime (its sockets
    under `/run/horizon/panels`) does not survive the VM restart, attachment refuses an
    unavailable panel, and Start resumes no task, so the counter stops at its last
@@ -402,9 +423,10 @@ back unchanged at return and after the worker lifecycle step.
    through the product.
 8. **Remove the observer key**: `client_off.py --manifest m.json remove-observer-key
    --worker worker.json --public-key observer.pub`, once the return and the reconnect
-   check on A are done and before the run is reported finished. B may outlive the
-   run (a product worker is left in place by cleanup), and the run's observer private
-   key must not keep a reading channel into it. The phase attests B, removes exactly
+   check on A are done and before the run is reported finished. Step 9 deletes B
+   only when its journaled identity still matches and the budget holds, so B can
+   outlive the run when that delete is refused or fails, and the run's observer
+   private key must not keep a reading channel into it. The phase attests B, removes exactly
    the observer's `authorized_keys` line inside the worker container through the ARM
    run-command channel (matched whole and literally; a read error leaves the file
    untouched), re-attests B, and passes only once B explicitly refuses the observer
