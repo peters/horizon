@@ -1,5 +1,5 @@
 use super::super::{
-    AzureDeploymentPlan, AzureError, RESOURCE_GROUP_PREFIX,
+    AzureDeploymentPlan, AzureError, DATA_DISK_NAME, RESOURCE_GROUP_PREFIX, WORKER_VM_NAME,
     deployment::{
         SSH_PORT, TAG_CLIENT_KEY_DIGEST, TAG_DISK_GIB, TAG_IMAGE_DIGEST, TAG_IMAGE_REF_DIGEST, TAG_JOB, TAG_LIFETIME,
         TAG_PROFILE, TAG_PROTOCOL, TAG_WORKFLOW, client_key_digest, worker_tags,
@@ -96,6 +96,23 @@ fn plan_derives_identity_parameters_and_tags_from_validated_inputs() {
             .values()
             .all(|value| value.len() <= 256 && !value.chars().any(char::is_control))
     );
+}
+
+#[test]
+fn the_retained_disk_is_named_once_for_creation_and_observation() {
+    let plan = AzureDeploymentPlan::new(&profile(), &request("")).expect("plan");
+    assert_eq!(
+        plan.template.pointer("/variables/data").and_then(|v| v.as_str()),
+        Some(DATA_DISK_NAME)
+    );
+    assert_eq!(DATA_DISK_NAME, format!("{WORKER_VM_NAME}-data"));
+    let disk = plan.template["resources"]
+        .as_array()
+        .expect("resources")
+        .iter()
+        .find(|r| r["type"] == "Microsoft.Compute/disks")
+        .expect("disk resource");
+    assert_eq!(disk["name"], "[variables('data')]");
 }
 
 #[test]

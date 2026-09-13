@@ -115,7 +115,7 @@ fn vm_body(power: &str, name: &str, group: &str) -> String {
 
 fn vm_body_with_instance(power: &str, name: &str, group: &str, instance: &str) -> String {
     format!(
-        r#"{{"id":"/subscriptions/{SUB}/resourceGroups/{group}/providers/Microsoft.Compute/virtualMachines/worker","name":"{name}","location":"northeurope","tags":{{"horizon-job-id":"j"}},"properties":{{{instance}"provisioningState":"Succeeded","hardwareProfile":{{"vmSize":"Standard_D4s_v3"}},"instanceView":{{"statuses":[{{"code":"ProvisioningState/succeeded"}},{{"code":"PowerState/{power}"}}]}}}}}}"#
+        r#"{{"id":"/subscriptions/{SUB}/resourceGroups/{group}/providers/Microsoft.Compute/virtualMachines/worker","name":"{name}","location":"northeurope","tags":{{"horizon-job-id":"j"}},"properties":{{{instance}"provisioningState":"Succeeded","hardwareProfile":{{"vmSize":"Standard_D4s_v3"}},"storageProfile":{{"osDisk":{{"deleteOption":"Delete"}},"dataDisks":[{{"lun":0,"deleteOption":"Detach","managedDisk":{{"id":"/subscriptions/{SUB}/resourceGroups/{group}/providers/Microsoft.Compute/disks/worker-data"}}}},{{"lun":1,"managedDisk":{{}}}}]}},"instanceView":{{"statuses":[{{"code":"ProvisioningState/succeeded"}},{{"code":"PowerState/{power}"}}]}}}}}}"#
     )
 }
 
@@ -467,6 +467,14 @@ fn virtual_machine_views_verify_the_returned_identity() {
         ("Succeeded", Some("PowerState/running"))
     );
     assert_eq!(vm.tags.get("horizon-job-id").map(String::as_str), Some("j"));
+    // Only data disks with a managed-disk ID are represented, the OS disk never is, and
+    // the count keeps every entry so an unrepresented one is never silently dropped.
+    assert_eq!((vm.data_disks.len(), vm.data_disk_count), (1, 2));
+    assert_eq!(
+        (vm.data_disks[0].lun, vm.data_disks[0].delete_option.as_str()),
+        (Some(0), "Detach")
+    );
+    assert!(vm.data_disks[0].id.ends_with("/disks/worker-data"));
     assert_eq!(
         transport.get_vm(GROUP, "worker"),
         Err(AzureError::ResourceIdentityMismatch),

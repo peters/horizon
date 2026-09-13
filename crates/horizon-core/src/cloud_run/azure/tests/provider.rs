@@ -1,6 +1,6 @@
 pub(super) use super::super::{
-    AzureClient, AzureDeploymentState, AzureError, AzureGroupInfo, AzureLongRunningState, AzureManagementTransport,
-    AzureRunCommand, AzureVmView, AzureWorker, SSH_USERNAME,
+    AzureClient, AzureDataDisk, AzureDeploymentState, AzureError, AzureGroupInfo, AzureLongRunningState,
+    AzureManagementTransport, AzureRunCommand, AzureVmView, AzureWorker, SSH_USERNAME,
     deployment::{DEPLOYMENT_NAME, SSH_PORT, TAG_CLIENT_KEY_DIGEST, TAG_IMAGE_REF_DIGEST, TAG_JOB, worker_tags},
     resource_group_name,
 };
@@ -319,6 +319,17 @@ pub(super) fn vm(power: &str, tags: &BTreeMap<String, String>) -> AzureVmView {
         provisioning_state: "Succeeded".into(),
         power_state: Some(format!("PowerState/{power}")),
         tags: tags.clone(),
+        data_disks: vec![retained_disk()],
+        data_disk_count: 1,
+    }
+}
+
+/// The retained data disk as the deployment attaches it.
+pub(super) fn retained_disk() -> AzureDataDisk {
+    AzureDataDisk {
+        id: format!("/subscriptions/{SUB}/resourceGroups/g/providers/Microsoft.Compute/disks/worker-data"),
+        lun: Some(0),
+        delete_option: "Detach".into(),
     }
 }
 
@@ -426,4 +437,5 @@ mod instance;
 mod observation;
 mod running;
 mod start;
+mod stop_observer;
 mod wait;

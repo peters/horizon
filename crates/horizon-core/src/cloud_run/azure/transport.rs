@@ -52,6 +52,21 @@ pub struct AzureVmView {
     pub provisioning_state: String,
     pub power_state: Option<String>,
     pub tags: BTreeMap<String, String>,
+    /// The managed data disks attached to the VM, as far as the storage profile lists
+    /// them in a form this view represents (a managed-disk ID at least).
+    pub data_disks: Vec<AzureDataDisk>,
+    /// Every data-disk entry in the storage profile, represented or not: a count above
+    /// `data_disks.len()` means storage this view cannot vouch for.
+    pub data_disk_count: usize,
+}
+
+/// One attached managed data disk: its ARM ID, logical unit and what happens to it when
+/// the VM is deleted (`Detach` keeps it, `Delete` removes it with the VM).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct AzureDataDisk {
+    pub id: String,
+    pub lun: Option<u64>,
+    pub delete_option: String,
 }
 
 /// Outcome of a request that ARM may complete asynchronously.
@@ -598,6 +613,11 @@ impl AzureManagementTransport for AzureArmHttp {
         {
             return Err(AzureError::ResourceIdentityMismatch);
         }
+        let data_disk_entries: Vec<serde_json::Value> = value
+            .pointer("/properties/storageProfile/dataDisks")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
         let power_state = value
             .pointer("/properties/instanceView/statuses")
             .and_then(serde_json::Value::as_array)
@@ -614,6 +634,17 @@ impl AzureManagementTransport for AzureArmHttp {
             provisioning_state: text(&value, "/properties/provisioningState").unwrap_or_default(),
             power_state,
             tags: tags(&value),
+            data_disks: data_disk_entries
+                .iter()
+                .filter_map(|disk| {
+                    Some(AzureDataDisk {
+                        id: text(disk, "/managedDisk/id")?,
+                        lun: disk.pointer("/lun").and_then(serde_json::Value::as_u64),
+                        delete_option: text(disk, "/deleteOption").unwrap_or_default(),
+                    })
+                })
+                .collect(),
+            data_disk_count: data_disk_entries.len(),
         }))
     }
 
