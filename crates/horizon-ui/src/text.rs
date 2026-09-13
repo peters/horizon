@@ -3,9 +3,22 @@
 use std::borrow::Cow;
 
 use egui::{
-    Color32, FontId,
+    Color32, FontId, Label, TextWrapMode, Ui,
     text::{LayoutJob, TextFormat, TextWrapping},
 };
+
+/// Tooltip content as a single line elided to a stable width.
+///
+/// egui lays an open tooltip out inside the size it measured last frame, so a
+/// wrapping label in a continuously open tooltip narrows a little every frame
+/// until it collapses into a glyph-wide strip. Bounding the label by a width
+/// derived from the content area — not the tooltip's own measured size —
+/// breaks that feedback loop while keeping long text elided.
+pub(crate) fn truncating_tooltip_label(ui: &mut Ui, text: &str) {
+    let max_width = (ui.ctx().content_rect().width() - 24.0).clamp(80.0, ui.spacing().tooltip_width);
+    ui.set_max_width(max_width);
+    ui.add(Label::new(text).wrap_mode(TextWrapMode::Truncate));
+}
 
 /// Caps `label` at `max_chars` characters, ending a truncated result with an
 /// ellipsis that counts toward the budget. Borrows when nothing is cut.

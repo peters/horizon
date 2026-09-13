@@ -671,7 +671,7 @@ impl HorizonApp {
                                 },
                             ),
                         };
-                        ui.label(tooltip);
+                        crate::text::truncating_tooltip_label(ui, &tooltip);
                     });
                     PanelMicInteraction {
                         response,
