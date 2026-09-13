@@ -3,6 +3,7 @@ use egui::{
 };
 
 use crate::app::util::usize_to_f32;
+use crate::text::truncate_chars;
 use crate::theme;
 
 use super::{BADGE_FONT, DETAIL_FONT, LABEL_FONT, ROW_HEIGHT, SECTION_HEADER_HEIGHT};
@@ -331,13 +332,17 @@ fn truncate_to_width(text: &str, max_width: f32, font_size: f32) -> String {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let max_chars = (max_width / char_width) as usize;
 
-    if text.chars().count() <= max_chars {
-        return text.to_string();
+    if max_chars == 0 {
+        // Sub-character budget: keep the ellipsis placeholder so the row still
+        // signals there is hidden content.
+        return if text.is_empty() {
+            String::new()
+        } else {
+            "…".to_string()
+        };
     }
 
-    let mut result: String = text.chars().take(max_chars.saturating_sub(1)).collect();
-    result.push('\u{2026}');
-    result
+    truncate_chars(text, max_chars).into_owned()
 }
 
 #[cfg(test)]

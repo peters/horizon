@@ -5,6 +5,10 @@ use egui::{
     text::{LayoutJob, TextFormat, TextWrapping},
 };
 
+/// Character-safe truncation; the canonical implementation lives in
+/// `horizon-core` so core and UI call sites share one helper.
+pub(crate) use horizon_core::truncate_chars;
+
 /// Empty single-line layout job that elides overflow with an ellipsis instead
 /// of wrapping; newlines render as spaces rather than swallowing the line.
 pub(crate) fn single_line_job(max_width: f32) -> LayoutJob {
