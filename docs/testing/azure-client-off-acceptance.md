@@ -18,10 +18,12 @@ PC, existing Horizon processes or existing workspaces.
 | Operator | The operator's own Azure CLI login on the same controller, the only credential that changes anything from outside A: it provisions and later deallocates and restarts A (`provision-client.sh`, `off`, `return`), journals and reaper-tags B's product-created resources, deletes the run's groups (`cleanup`) and removes A's role assignments and custom role | Azure lane |
 
 C never renews a lease, delivers a keepalive, reconnects a terminal, checkpoints or
-replays a task, and the harness phases that act as C issue no ARM write; every
-mutating step in this runbook names the operator, and that separation is
-procedural (the phases and commands that write) rather than a credential
-boundary, because the harness has no second Azure login. The operator may enforce
+replays a task, and the harness phases that act as C issue no ARM write. Two
+credentials mutate B: the product's Create, Prepare Repository, Stop and Start
+run on A under A's managed identity, and every mutating harness phase or
+controller command in this runbook names the operator; the C-versus-operator
+separation is procedural (the phases and commands that write) rather than a
+credential boundary, because the harness has no second Azure login. The operator may enforce
 the declared cleanup deadline.
 
 ## Manifest, frozen before anything is rented
@@ -54,8 +56,10 @@ post-setup binding step yet, so **the product pass is gated on a harness change 
 this lane**, claimed on #474 before it is written, with two explicit manifest
 states. *Unbound*: `worker_group` is the literal `unbound`; `validate` accepts it,
 `provision-client.sh` (which validates before renting A and needs only A's fields)
-runs, and every phase that names B (`install-observer-key`, `off`, `return`,
-`verdict`, `cleanup`) refuses to start. *Bound*: a `bind-worker` command, run once
+runs, and every command or phase that names B (`journal-group`,
+`install-observer-key`, `off`, `return`, `verdict`, `remove-observer-key`,
+`cleanup`) refuses to start, because `client_off.py` validates the manifest before
+dispatching any of them; B cannot be journaled before it is bound. *Bound*: a `bind-worker` command, run once
 by the operator after step 3, reads the product-created group, checks that it
 carries the adapter's `horizon-workflow-id` and `horizon-job-id` tags from which
 its `horizon-ws-<workflow>-<job>` name derives and that it is absent from the
@@ -187,7 +191,12 @@ gives A no identity today, so before the product pass A needs, in this order:
    command-execution blast radius is disclosed on #474 as its own approval item,
    separate from the write residual, and the only isolation that removes it is a
    subscription holding nothing but this lane's resources; the run itself neither
-   detects nor prevents it. Step 9's peer comparison detects only a vanished
+   detects nor prevents it. The Managed Identity Operator grant has the same shape:
+   scoped to `horizon-worker-puller` it limits which identity A may assign, but
+   combined with the subscription-scope VM writes it lets a compromised A attach
+   that identity to a VM of its own and pull from the registry with it; that
+   identity-assignment path is disclosed on #474 with the same approval and
+   isolation requirement. Step 9's peer comparison detects only a vanished
    or added peer resource or group (it compares resource IDs and group names, not
    properties or tags), so an in-place mutation of a peer would pass it; the run
    neither prevents nor fully detects that residual, and the only prevention is a
@@ -327,7 +336,10 @@ back unchanged at return and after the worker lifecycle step.
      *Exact commit SHA* (40 hex characters; the draft refuses an empty or short value),
      *Dedicated work branch*, *Repository directory* `.`, *Planned Shell program*
      `/bin/sh`, *Literal arguments (JSON array)* exactly the argv of the deterministic
-     task below, *Panel directory (optional)* empty, the disk size, and the
+     task below, *Panel directory (optional)* empty, the disk size `32` GiB (the
+     size the adapter evidence fixed for this candidate; the form has no default
+     and the manifest does not bind it, so it is recorded with the baseline
+     evidence), and the
      *Azure CPU cost limit*, which the product treats as optional but this
      acceptance requires; **Review request** shows the complete profile, the
      declared price and the immutable-binding disclosure. The manifest's
@@ -645,8 +657,11 @@ back unchanged at return and after the worker lifecycle step.
    notice `Retained Stop confirmed at this check; completion is saved` and the
    reloaded row shows `Stopped (saved, not live)`. The row alone is not enough: a
    record already at `Stopped` keeps that label, and Start stays offered, when a
-   later check fails or is unverified, so a check without that notice is repeated
-   until it reports it. **Start environment…**
+   later check fails or is unverified. A check without that notice is repeated
+   only while its notice is a pending or provider-side one, at most three times
+   inside the gate above; the notice `Worker is absent: retained Stop cannot be
+   certified`, or an identity or observer mismatch, is terminal: retention is
+   recorded as unproven and the run proceeds to step 8 and step 9. **Start environment…**
    is offered only for that verified Stop or an existing Start intent. Then **Start
    environment…** → confirm (records Start intent, starts only the exact worker,
    accepts only the saved identity and pin). The result arrives as a notice and the
@@ -725,10 +740,14 @@ back unchanged at return and after the worker lifecycle step.
    attests a running B, so it cannot run when step 7 ended with B deallocated (a
    successful Stop followed by a failed or exhausted Start). Nothing restarts B
    outside the product to make it runnable: in that state the operator destroys
-   the observer private key on the controller (`shred -u observer.key`, the only
-   copy; the public half is inert without it) and records that, so the retained
-   `authorized_keys` line can no longer be exercised by anyone, and proceeds to
-   step 9, which deletes the group with the OS disk whose container layer holds
+   the observer private key on the controller (`shred -u <the path recorded as
+   observer_key_path in worker.json>`, the only copy; the public half is inert
+   without it) and records that, so the retained `authorized_keys` line can no
+   longer be exercised by anyone, and proceeds to
+   step 9. The same destruction applies to every unproven removal: whenever this
+   step does not pass (B running but the removal unproven, or B deallocated), the
+   key is shredded before B is allowed to outlive the run, and the run records it.
+   Step 9 then deletes the group with the OS disk whose container layer holds
    that line (the line lives in the running container's `authorized_keys`, never
    on the data disk, which holds only `/workspace`). If step 9 is
    refused, fails or runs out of time with B still deallocated, the run is
