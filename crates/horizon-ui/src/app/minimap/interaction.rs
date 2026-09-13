@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use egui::{Context, CursorIcon, Id, Label, Order, PopupAnchor, Pos2, Rect, Sense, TextWrapMode, Tooltip, Ui, Vec2};
+use egui::{Context, CursorIcon, Id, Order, PopupAnchor, Pos2, Rect, Sense, Tooltip, Ui, Vec2};
 use horizon_core::{Board, Panel, PanelId, WorkspaceId};
 
 use super::{
@@ -165,9 +165,7 @@ fn show_minimap_hover_tooltip(ui: &Ui, overlay_id: Id, hovered_label: Option<&st
     )
     .gap(12.0)
     .show(|ui| {
-        let max_width = (ui.ctx().content_rect().width() - 24.0).clamp(80.0, ui.spacing().tooltip_width);
-        ui.set_max_width(max_width);
-        ui.add(Label::new(text).wrap_mode(TextWrapMode::Truncate));
+        crate::text::truncating_tooltip_label(ui, text);
     });
 }
 
