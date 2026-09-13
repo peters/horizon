@@ -1,6 +1,7 @@
-//! One explicit background Stop or saved-Stop check; client closure never replays either.
+//! One explicit background Stop, saved-Stop check or Start; client closure never replays any.
 
 mod paint;
+mod start;
 
 use super::{Context, HorizonHome, InventoryAction, RemoteEnvironmentSummary, WakeOnDrop};
 use horizon_core::{
@@ -10,6 +11,7 @@ use horizon_core::{
     remote_provider_config::RemoteProviderConfig,
     remote_workspace::{
         RemoteRuntimePhase,
+        start::{ConfiguredAzureStart, ConfiguredAzureStartError},
         stop::{
             ConfiguredAzureStopError, ConfiguredRunPodStopError, ConfiguredStopConfirmation,
             ConfiguredStopConfirmationError, ConfiguredStopError, RemoteWorkspaceStopError,
@@ -18,6 +20,7 @@ use horizon_core::{
         },
     },
 };
+use start::{execute_start, start_supported};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
 #[derive(Default)]
@@ -31,6 +34,8 @@ pub(super) struct StopState {
 struct Confirmation {
     expected: RemoteEnvironmentSummary,
     config: RemoteProviderConfig,
+    /// What confirming submits: an explicit Stop or an explicit Start.
+    operation: Operation,
 }
 
 struct PendingStop {
@@ -40,22 +45,29 @@ struct PendingStop {
     discard: bool,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Operation {
     Stop,
     Check,
+    Start,
 }
 
 enum StopResult {
     Stopped(RemoteEnvironmentSummary),
     Checked(ConfiguredStopConfirmation),
+    Started(ConfiguredAzureStart),
 }
 
+// Four independent facts about one finished operation; an enum would only move the
+// same flags behind accessors that every test reads as fields.
+#[allow(clippy::struct_excessive_bools)]
 struct StopNotice {
     expected: RemoteEnvironmentSummary,
     message: String,
     succeeded: bool,
     checked: bool,
+    /// The result of an explicit Start rather than a Stop or a check.
+    started: bool,
     /// The provider observation itself failed (credential or control plane); a pending
     /// or absent answer and every local refusal are not this.
     unverified: bool,
@@ -69,6 +81,7 @@ enum StopError {
     Stop(ConfiguredStopError),
     RunPod(ConfiguredRunPodStopError),
     Azure(ConfiguredAzureStopError),
+    AzureStart(ConfiguredAzureStartError),
     Check(ConfiguredStopConfirmationError),
 }
 
@@ -85,6 +98,7 @@ impl StopError {
             Self::Stop(error) => error.to_string(),
             Self::RunPod(error) => error.to_string(),
             Self::Azure(error) => error.to_string(),
+            Self::AzureStart(error) => error.to_string(),
             Self::Check(error) => error.to_string(),
         }
     }
@@ -115,6 +129,9 @@ impl StopState {
                     .is_some_and(|pending| pending.expected.provider == CloudProvider::Azure) =>
             {
                 "Azure Stop is pending. Closing this overview does not cancel it. Exiting Horizon may interrupt local coordination; refresh and Check saved Stop, never resend it."
+            }
+            Some(Operation::Start) => {
+                "Azure Start is pending. Closing this overview does not cancel it. Exiting Horizon may interrupt local coordination; refresh, and press Start again only if Start intent remains. A retry never re-posts a running worker."
             }
             _ => "An explicitly confirmed Stop is pending. Closing this overview does not cancel it.",
         }
@@ -157,11 +174,33 @@ impl StopState {
         self.confirmation = Some(Confirmation {
             expected: expected.clone(),
             config: config.clone(),
+            operation: Operation::Stop,
         });
         self.notice = None;
         ctx.request_repaint();
     }
 
+    /// Open the explicit Start confirmation for a saved-Stopped Azure worker.
+    pub(super) fn prepare_start(
+        &mut self,
+        expected: &RemoteEnvironmentSummary,
+        config: &RemoteProviderConfig,
+        ctx: &Context,
+    ) {
+        if self.is_pending() || !start_supported(expected) {
+            return;
+        }
+        self.repaint_context = Some(ctx.clone());
+        self.confirmation = Some(Confirmation {
+            expected: expected.clone(),
+            config: config.clone(),
+            operation: Operation::Start,
+        });
+        self.notice = None;
+        ctx.request_repaint();
+    }
+
+    /// Submit the open confirmation, whichever operation it carries.
     pub(super) fn start(
         &mut self,
         home: &HorizonHome,
@@ -179,7 +218,8 @@ impl StopState {
             self.wake();
             return false;
         }
-        self.spawn(home, confirmation.config, confirmation.expected, Operation::Stop, ctx)
+        let operation = confirmation.operation;
+        self.spawn(home, confirmation.config, confirmation.expected, operation, ctx)
     }
 
     pub(super) fn check(
@@ -215,6 +255,7 @@ impl StopState {
                 match operation {
                     Operation::Stop => "remote-environment-stop",
                     Operation::Check => "remote-environment-stop-check",
+                    Operation::Start => "remote-environment-start",
                 }
                 .into(),
             )
@@ -223,6 +264,7 @@ impl StopState {
                 let result = match operation {
                     Operation::Stop => execute(&home, &config, &selected).map(StopResult::Stopped),
                     Operation::Check => execute_check(&home, &config, &selected).map(StopResult::Checked),
+                    Operation::Start => execute_start(&home, &config, &selected).map(StopResult::Started),
                 };
                 let _ = tx.send(result);
             });
@@ -273,14 +315,21 @@ impl StopNotice {
                 expected,
                 result.and_then(|result| match result {
                     StopResult::Stopped(saved) => Ok(saved),
-                    StopResult::Checked(_) => Err(StopError::SelectionChanged),
+                    StopResult::Checked(_) | StopResult::Started(_) => Err(StopError::SelectionChanged),
                 }),
             ),
             Operation::Check => Self::checked(
                 expected,
                 result.and_then(|result| match result {
                     StopResult::Checked(checked) => Ok(checked),
-                    StopResult::Stopped(_) => Err(StopError::SelectionChanged),
+                    StopResult::Stopped(_) | StopResult::Started(_) => Err(StopError::SelectionChanged),
+                }),
+            ),
+            Operation::Start => Self::started(
+                expected,
+                result.and_then(|result| match result {
+                    StopResult::Started(started) => Ok(started),
+                    StopResult::Stopped(_) | StopResult::Checked(_) => Err(StopError::SelectionChanged),
                 }),
             ),
         }
@@ -308,6 +357,7 @@ impl StopNotice {
             message,
             succeeded,
             checked: false,
+            started: false,
             unverified: false,
         }
     }
@@ -347,6 +397,7 @@ impl StopNotice {
             message,
             succeeded,
             checked: true,
+            started: false,
             unverified,
         }
     }
@@ -402,8 +453,8 @@ fn check_supported(summary: &RemoteEnvironmentSummary) -> bool {
 
 /// A first explicit Stop: Local Docker for any retained persistent worker; `RunPod` on
 /// Linux and Azure on every platform only for a retained persistent worker whose saved
-/// identity names the same provider and which carries no Stop intent yet (existing
-/// intent is checked, never resent).
+/// identity names the same provider and which carries neither Stop intent (existing
+/// intent is checked, never resent) nor Start intent (resolved by Start, never raced).
 fn supported(summary: &RemoteEnvironmentSummary) -> bool {
     let Some(identity) = summary.worker_identity.as_ref() else {
         return false;
@@ -415,7 +466,9 @@ fn supported(summary: &RemoteEnvironmentSummary) -> bool {
         && summary.saved_phase.is_some_and(|phase| {
             !matches!(
                 phase,
-                RemoteRuntimePhase::Stopping { .. } | RemoteRuntimePhase::Stopped { .. }
+                RemoteRuntimePhase::Stopping { .. }
+                    | RemoteRuntimePhase::Stopped { .. }
+                    | RemoteRuntimePhase::Starting { .. }
             )
         });
     match summary.provider {
