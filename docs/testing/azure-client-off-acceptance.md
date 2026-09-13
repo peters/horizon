@@ -260,8 +260,15 @@ gives A no identity today, so before the product pass A needs, in this order:
    intended write is either recorded with its ID or verified absent. Ordering:
    a system-assigned identity exists only once A's VM exists, so step 2
    provisions A first (its launch gate needs no Azure identity and touches no
-   Azure resource), the operator then reads the principal with `az vm show
+   Azure resource; its `az vm create` attaches no identity), the operator then
+   gives A's exact VM its system-assigned identity, the one operator mutation of
+   A outside the harness phases: `az vm identity assign --subscription <id> --ids
+   <A's VM ID from client.json>` (a `--assign-identity` option for
+   `provision-client.sh` is a harness follow-up in this lane), verifies it with
+   `az vm show --subscription <id> --ids <A's VM ID> --query identity.type -o
+   tsv` printing `SystemAssigned`, and reads the principal with `az vm show
    --subscription <id> --ids <A's VM ID> --query identity.principalId -o tsv`,
+   which must be non-empty;
    creates the role and the two assignments as described here, verifies them,
    and only then runs the login and token probe on A and continues to step 3;
    A does nothing with Azure in between. If the definition or
@@ -885,8 +892,12 @@ back unchanged at return and after the worker lifecycle step.
    was attempted in step 3, which the run records at that moment; if the baseline
    aborted before that (no `worker.json`, or the install never ran), there is no
    line to remove and the command cannot validate the descriptor, so the operator
-   destroys any generated observer key (`shred -u observer.key` at its recorded
-   path, if it was created), records that step 8 did not apply, and proceeds to
+   destroys the generated observer private key at the exact path recorded when
+   it was generated (the key generation in step 3 records that path the moment
+   the key exists, the same value that goes into `worker.json` as
+   `observer_key_path`; no default filename is assumed, and a key whose recorded
+   path is unavailable is reported as a residual credential instead of guessed
+   at), records that step 8 did not apply, and proceeds to
    steps 9 and 10. Otherwise: `timeout 35m client_off.py --manifest m.json remove-observer-key
    --worker worker.json --public-key observer.pub` (the phase bounds each CLI call
    but, unlike `cleanup`, sets no whole-phase deadline, so the operator's GNU
