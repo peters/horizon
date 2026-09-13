@@ -1020,6 +1020,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn requested_projection_failure_fails_an_otherwise_successful_run() {
+        let plan = plan(
+            br#"{"version":1,"steps":[{"id":"panels","tool":"browser_list"}],"project":{"format":"csv","from":{"$ref":"panels#"}}}"#,
+        );
+        let report = execute_plan(&plan).await.expect("list-only plan should execute");
+        assert!(!report.ok);
+        assert!(report.projection.is_none());
+        assert!(
+            report
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("csv projection requires the referenced value to be a JSON array")),
+            "error: {:?}",
+            report.error
+        );
+    }
+
+    #[tokio::test]
     async fn expired_control_stops_before_mcp_initialization() {
         let plan = plan(br#"{"version":1,"steps":[{"id":"list","tool":"browser_list"}]}"#);
         let mut control = ExecutionControl::with_timeout(Duration::ZERO);

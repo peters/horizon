@@ -201,7 +201,8 @@ fn encode_csv(value: &Value, columns: &[String]) -> Result<Vec<u8>, String> {
     }
     let mut out = Vec::new();
     if !headers.is_empty() {
-        write_csv_row(&mut out, headers.iter().map(String::as_str));
+        let header_cells = headers.iter().map(|header| csv_safe_text(header)).collect::<Vec<_>>();
+        write_csv_row(&mut out, header_cells.iter().map(String::as_str));
     }
     for row in rows {
         let object = row
@@ -210,7 +211,7 @@ fn encode_csv(value: &Value, columns: &[String]) -> Result<Vec<u8>, String> {
         let cells = headers
             .iter()
             .map(|header| match object.get(header) {
-                Some(Value::String(text)) => text.clone(),
+                Some(Value::String(text)) => csv_safe_text(text),
                 Some(Value::Null) | None => String::new(),
                 Some(other) => csv_cell(other),
             })
@@ -238,11 +239,22 @@ fn csv_headers(rows: &[Value]) -> Result<Vec<String>, String> {
 
 fn csv_cell(value: &Value) -> String {
     match value {
-        Value::String(text) => text.clone(),
+        Value::String(text) => csv_safe_text(text),
         Value::Number(number) => number.to_string(),
         Value::Bool(flag) => flag.to_string(),
         Value::Null => String::new(),
-        other => serde_json::to_string(other).unwrap_or_default(),
+        other => csv_safe_text(&serde_json::to_string(other).unwrap_or_default()),
+    }
+}
+
+fn csv_safe_text(text: &str) -> String {
+    if text.starts_with(['=', '+', '-', '@']) {
+        let mut escaped = String::with_capacity(text.len() + 1);
+        escaped.push('\'');
+        escaped.push_str(text);
+        escaped
+    } else {
+        text.to_string()
     }
 }
 
@@ -258,7 +270,7 @@ where
         first = false;
         write_csv_field(out, field);
     }
-    out.push(b'\n');
+    out.extend_from_slice(b"\r\n");
 }
 
 fn write_csv_field(out: &mut Vec<u8>, field: &str) {
@@ -347,7 +359,50 @@ mod tests {
         let csv = encode(plan.project.as_ref().expect("project"), &value).expect("csv");
         assert_eq!(
             String::from_utf8(csv).expect("utf8"),
-            "title,price\n\"Widget, large\",12\nBolt,1\n"
+            "title,price\r\n\"Widget, large\",12\r\nBolt,1\r\n"
         );
+    }
+
+    #[test]
+    fn csv_projection_neutralizes_formula_leading_text() {
+        let plan = Plan {
+            version: 1,
+            variables: BTreeMap::new(),
+            steps: vec![PlanStep {
+                id: "extract".to_string(),
+                tool: "browser_evaluate".to_string(),
+                arguments: Map::new(),
+            }],
+            project: Some(PlanProject {
+                format: ProjectFormat::Csv,
+                from: json!({"$ref":"extract#/items"}),
+                columns: vec!["=cmd".to_string(), "n".to_string()],
+            }),
+        };
+        let steps = [step("extract", json!({"items":[{"=cmd":"=1+1","n":2}]}))];
+        let (value, _) = projected_value(plan.project.as_ref().expect("project"), &steps).expect("value");
+        let csv = encode(plan.project.as_ref().expect("project"), &value).expect("csv");
+        assert_eq!(String::from_utf8(csv).expect("utf8"), "'=cmd,n\r\n'=1+1,2\r\n");
+    }
+
+    #[test]
+    fn json_projection_fails_on_a_missing_pointer() {
+        let plan = Plan {
+            version: 1,
+            variables: BTreeMap::new(),
+            steps: vec![PlanStep {
+                id: "extract".to_string(),
+                tool: "browser_evaluate".to_string(),
+                arguments: Map::new(),
+            }],
+            project: Some(PlanProject {
+                format: ProjectFormat::Json,
+                from: json!({"$ref":"extract#/missing"}),
+                columns: Vec::new(),
+            }),
+        };
+        let steps = [step("extract", json!({"items":[]}))];
+        let error = summarize(&plan, &steps).expect_err("missing pointer");
+        assert!(error.contains("did not match"));
     }
 }

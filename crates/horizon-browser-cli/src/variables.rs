@@ -8,7 +8,7 @@ use crate::{PlanError, PlanStep, valid_identifier};
 
 pub(crate) const MAX_VARIABLES: usize = 32;
 const MAX_VARIABLE_BYTES: usize = 4 * 1024;
-const MAX_VARIABLES_TOTAL_BYTES: usize = 32 * 1024;
+const MAX_VARIABLES_TOTAL_BYTES: usize = MAX_VARIABLES * MAX_VARIABLE_BYTES;
 
 pub(crate) fn validate(variables: &BTreeMap<String, Value>) -> Result<(), PlanError> {
     if variables.len() > MAX_VARIABLES {

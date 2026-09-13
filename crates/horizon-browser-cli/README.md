@@ -131,10 +131,11 @@ A plan is a sequence of literal MCP tool names and arguments:
 An exact `{"$ref":"step-id#/json/pointer"}` value reads typed structured
 content from an earlier successful step using RFC 6901 JSON Pointer syntax.
 References cannot point forward. An exact `{"$var":"name"}` value reads a
-plan-level JSON literal from `variables` (at most 32 names, 4 KiB each).
-Optional `project` writes `projection.json` or `projection.csv` into the job
-directory from a `$ref` after the referenced step succeeds. CSV requires an
-array of objects; `columns` selects fields. The runner checks every tool
+plan-level JSON literal from `variables` (at most 32 names, 4 KiB each, 128 KiB
+combined). Optional `project` writes `projection.json` or `projection.csv` into
+the job directory from a `$ref` after the referenced step succeeds. CSV uses
+CRLF records, requires an array of objects, and prefixes formula-leading text
+cells with `'`; `columns` selects fields. The runner checks every tool
 against `tools/list` before making the first call, stops after the first failed
 step, and never copies tool arguments into its report. Plans are limited to
 1 MiB and 256 steps.
