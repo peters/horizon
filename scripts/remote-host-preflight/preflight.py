@@ -35,6 +35,7 @@ MIN_MEM_KB = 16 * 1024 * 1024  # 16 GiB: reference CPU worker baseline
 MIN_FREE_KB = 20 * 1024 * 1024  # 20 GiB free on the workspace filesystem
 DEFAULT_WORKSPACE_PATH = "/var/lib/horizon-workers"
 DEFAULT_TIMEOUT = 10.0
+MAX_TIMEOUT = 3600.0  # select/wait cannot represent 1e300-class values
 MAX_PROBE_OUTPUT_BYTES = 65536
 
 # Status values, kept separate on purpose per the issue contract.
@@ -663,7 +664,8 @@ def check_storage_qualifier(procfs_root, sysfs_root, workspace_path, executor, t
         else:
             status, value = UNSUPPORTED, name
             detail = "device %s fails the qualifier: %s" % (name, "; ".join(problems))
-    return {"id": "storage_ext4_qualifier", "status": status, "value": value,
+    return {"id": "storage_ext4_qualifier", "status": status,
+            "value": None if value is None else redact(value),
             "detail": redact(detail)}
 
 
@@ -863,6 +865,9 @@ def parse_timeout(value):
             "timeout must be a positive finite number") from exc
     if not math.isfinite(timeout) or timeout <= 0:
         raise argparse.ArgumentTypeError("timeout must be a positive finite number")
+    if timeout > MAX_TIMEOUT:
+        raise argparse.ArgumentTypeError(
+            "timeout must be at most %ss" % format_seconds(MAX_TIMEOUT))
     return timeout
 
 
@@ -882,8 +887,9 @@ def main(argv=None, executor=None, now=None):
     args = parser.parse_args(argv)
 
     executor = executor or default_executor
+    stamp = args.now if args.now is not None else now
     report = build_report(args.procfs_root, args.sysfs_root, args.workspace_path,
-                          args.timeout, executor, args.now)
+                          args.timeout, executor, stamp)
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:

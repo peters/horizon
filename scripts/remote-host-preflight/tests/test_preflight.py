@@ -224,6 +224,17 @@ class PreflightVerdicts(Harness):
         self.assertEqual(by_id["storage_ext4_qualifier"]["value"], "nvme0n1p2")
         self.assertEqual(by_id["tailscale"]["value"], "vm.example.ts.net")
 
+    def test_storage_qualifier_value_is_redacted(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        with mock.patch.object(
+                preflight, "read_ext4_options",
+                return_value=("token=supersecretvalue", EXT4_OK.encode(), None)):
+            _, report, _ = self.run_main(fixture)
+        text = json.dumps(report)
+        self.assertNotIn("supersecretvalue", text)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["storage_ext4_qualifier"]["value"], "<redacted>")
+
     def test_aarch64_podman_only_supported(self):
         fixture = dict(DEFAULT_FIXTURE)
         fixture["os"] = os_fixture(machine="aarch64")
@@ -918,7 +929,7 @@ class RedactionAndDeterminism(Harness):
     def test_timeout_must_be_positive_finite(self):
         import io
         from contextlib import redirect_stderr
-        for value in ("-1", "0", "nan", "inf", "-inf"):
+        for value in ("-1", "0", "nan", "inf", "-inf", "1e300"):
             with self.subTest(value=value):
                 with redirect_stderr(io.StringIO()):
                     with self.assertRaises(SystemExit):
@@ -941,6 +952,22 @@ class RedactionAndDeterminism(Harness):
         first = render()
         second = render()
         self.assertEqual(first, second)
+
+    def test_main_honors_injected_now_without_cli_flag(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        procfs, sysfs, _ = build_roots(self.tmp.name, meminfo(), None, EXT4_OK, True)
+        workspace = os.path.join(self.tmp.name, "ws")
+        os.makedirs(workspace, exist_ok=True)
+        argv = ["--procfs-root", procfs, "--sysfs-root", sysfs,
+                "--workspace-path", workspace, "--json"]
+        executor = self.executor_for(fixture)
+        import io
+        from contextlib import redirect_stdout
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            preflight.main(argv, executor=executor, now=NOW)
+        report = json.loads(buffer.getvalue())
+        self.assertEqual(report["generated_at"], NOW)
 
     def test_argv_allowlist_enforced(self):
         fixture = dict(DEFAULT_FIXTURE)

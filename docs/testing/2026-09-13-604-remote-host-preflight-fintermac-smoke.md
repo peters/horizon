@@ -71,7 +71,17 @@ explicit about which steps mutate the host so the proof is not overclaimed.
        WS=$parent;
      done;
      df -kP "$WS" | tail -1;
-     docker info --format "{{.ServerVersion}}" 2>&1 | head -1 || true;
+     docker info --format "{{.ServerVersion}}" 2>&1 | head -1 || echo "docker: tool not present";
+     SOCK="";
+     if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -S "$XDG_RUNTIME_DIR/podman/podman.sock" ]; then
+       SOCK="$XDG_RUNTIME_DIR/podman/podman.sock";
+     fi;
+     [ -z "$SOCK" ] && [ -S /run/podman/podman.sock ] && SOCK=/run/podman/podman.sock;
+     if [ -n "$SOCK" ]; then
+       podman --remote=true --url "unix://$SOCK" info --format "{{.Version.Version}}" 2>&1 | head -1;
+     else
+       echo "podman local service is not running";
+     fi;
      stat -c "ws=%n dev=%Hd:%Ld" "$WS" 2>/dev/null || echo "ws missing: $WS";
      B=$(basename "$(readlink /sys/dev/block/$(stat -c "%Hd:%Ld" "$WS" 2>/dev/null) 2>/dev/null)" 2>/dev/null);
      [ -n "$B" ] && { echo "dev=$B"; head -c 4097 "/proc/fs/ext4/$B/options"; } || echo "no ext4 options"'
@@ -95,13 +105,16 @@ explicit about which steps mutate the host so the proof is not overclaimed.
    treat that as sampling, not a generated_at/probe-structure failure.
 
 4. **Post-run snapshot (read-only):** reuse `SNAPSHOT_REMOTE` from step 2
-   and write `after.txt` **before** step 5 so the before/after diff is
-   clock-only for the tool run (the delivered `/tmp/preflight-604.py`
-   existed in both snapshots; reports were captured locally in step 3).
-   The snapshot pair corroborates this live run. The checker's read-only
-   contract is the fixed argv allowlist and the absence of write/install/pull
-   APIs — not a partial syscall filter (`strace -e write,openat` omits
-   `mkdir`/`unlink`/`rename`/`truncate` and is not claimed as proof here).
+   and write `after.txt` **before** step 5. The delivered `/tmp/preflight-604.py`
+   existed in both snapshots; reports were captured locally in step 3.
+   Compare invariant fields (`uname`, `nproc`, `MemTotal`, engine identity,
+   workspace device, ext4 options). Allow `date -u` to change and allow
+   `df` Available/Capacity sampling drift — inspect that drift the same way
+   as the two JSON runs in step 3; do not treat a free-space change as a
+   tool write. The checker's read-only contract is the fixed argv allowlist
+   and the absence of write/install/pull APIs — not a partial syscall filter
+   (`strace -e write,openat` omits `mkdir`/`unlink`/`rename`/`truncate` and
+   is not claimed as proof here).
    ```sh
    ssh "$VM_SSH" "$SNAPSHOT_REMOTE" > after.txt
    ```
@@ -117,15 +130,15 @@ explicit about which steps mutate the host so the proof is not overclaimed.
 |---|-----------|
 | 1 | Exit code is 0/1/2 and matches the JSON `summary` counts exactly |
 | 2 | `os_linux` value is the VM's real `uname -srm`; status matches the arch rules (x86_64/aarch64 → supported) |
-| 3 | `container_engine` names the engine actually running (cross-check against step 2 `docker info` version); storage driver reported for docker |
+| 3 | `container_engine` names the engine actually running (cross-check against the step 2 docker and/or Podman remote-socket version capture; if only Podman is present, use that capture, not `docker info`); storage driver reported for docker |
 | 4 | `cpu_capacity` / `memory_capacity` values match `nproc` / `MemTotal` read independently in step 2 |
 | 5 | `disk_capacity` free space matches `df -kP` for the workspace path (or `/`) within sampling drift |
 | 6 | `storage_ext4_qualifier` device name matches the real block device of the workspace filesystem (`stat -c '%Hd:%Ld'` → `/sys/dev/block/<maj>:<min>`); pass/fail against the full 4096-byte ext4 options captured independently |
-| 7 | `tailscale` DNS name matches the VM's tailnet identity from precondition 2; online state is a bool |
+| 7 | If Tailscale is present: DNS name matches the VM's tailnet identity from precondition 2 and online state is a bool. If Tailscale is absent (pinned SSH only): status is `unverified` and the verdict is not gated on it |
 | 8 | No raw secrets/tokens/keys anywhere in either report (visual + `grep -E 'eyJ[A-Za-z0-9_-]{4,}\.|PRIVATE KEY|token='`) |
 | 9 | Two runs with the same `--now` produce byte-identical JSON (`cmp` in step 3); disk free-space sampling drift is the only allowed difference |
 | 10 | The 3 `unverified` entries are always present with their fixed details |
-| 11 | `before.txt`/`after.txt` exist as files from the redirections in steps 2 and 4; the diff is clock-only for the tool run (live-run corroboration; the checker's read-only contract is the argv allowlist, not a partial syscall trace) |
+| 11 | `before.txt`/`after.txt` exist as files from the redirections in steps 2 and 4; the diff is limited to the clock and optional `df` free-space sampling drift (inspect that drift; live-run corroboration; the checker's read-only contract is the argv allowlist, not a partial syscall trace) |
 | 12 | If the VM has no docker: the engine check says `docker: tool not present` / podman path — no crash, exit code still consistent |
 
 ## Failure handling

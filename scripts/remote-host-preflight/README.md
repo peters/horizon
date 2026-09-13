@@ -21,7 +21,7 @@ Options:
 - `--workspace-path PATH` — intended worker workspace directory
   (default `/var/lib/horizon-workers`). The storage qualifier is evaluated on
   the nearest existing ancestor when the path does not exist yet.
-- `--timeout SECONDS` — per-probe timeout (default 10).
+- `--timeout SECONDS` — per-probe timeout (default 10, maximum 3600).
 - `--now ISO` — fixed `generated_at` timestamp for deterministic output.
 - `--procfs-root` / `--sysfs-root` — alternate procfs/sysfs roots, for
   synthetic testing only.
