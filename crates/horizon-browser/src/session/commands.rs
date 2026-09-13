@@ -320,6 +320,7 @@ impl DriverState {
     }
 
     pub(super) fn invalidate_scrollbar_layout(&mut self, event_tx: &BrowserEventSender) {
+        self.vertical_scrollbar_drag = None;
         self.scrollbar_layout.layout = None;
         // A detached page session is not guaranteed to answer its outstanding
         // request. CDP ids are connection-global, so a late reply cannot be
@@ -333,6 +334,13 @@ impl DriverState {
         if frame_slot.clear_page_scroll_state() {
             event_tx.wake_ui();
         }
+    }
+
+    fn abandon_sampled_scrollbar(&mut self, frame_slot: &FrameSlot, event_tx: &BrowserEventSender) {
+        self.vertical_scrollbar_drag = None;
+        self.scrollbar_layout.layout = None;
+        Self::clear_published_scrollbar(frame_slot, event_tx);
+        self.schedule_scrollbar_layout_refresh(SCROLLBAR_LAYOUT_RETRY_DELAY);
     }
 
     fn schedule_scrollbar_layout_refresh(&mut self, delay: Duration) {
@@ -382,17 +390,13 @@ impl DriverState {
         }
         self.scrollbar_layout.request_id = None;
         if rejected {
-            self.scrollbar_layout.layout = None;
-            Self::clear_published_scrollbar(frame_slot, event_tx);
-            self.schedule_scrollbar_layout_refresh(SCROLLBAR_LAYOUT_RETRY_DELAY);
+            self.abandon_sampled_scrollbar(frame_slot, event_tx);
             return true;
         }
         let Some(layout) = result.and_then(|metrics| {
             PageScrollState::from_chromium_layout_metrics(metrics, self.viewport_w, self.viewport_h)
         }) else {
-            self.scrollbar_layout.layout = None;
-            Self::clear_published_scrollbar(frame_slot, event_tx);
-            self.schedule_scrollbar_layout_refresh(SCROLLBAR_LAYOUT_RETRY_DELAY);
+            self.abandon_sampled_scrollbar(frame_slot, event_tx);
             return true;
         };
         self.scrollbar_layout.layout = Some(layout);
@@ -723,6 +727,13 @@ mod tests {
         assert_eq!(state.pending_viewport, Some((1280, 800)));
     }
 
+    fn seed_thumb_drag(state: &mut DriverState, layout: PageScrollState) {
+        let Some(crate::page_scroll::VerticalScrollbarPress::Drag(drag)) = layout.vertical_press(1_155.0, 72.0) else {
+            panic!("scrollable layout should start a thumb drag");
+        };
+        state.vertical_scrollbar_drag = Some(drag);
+    }
+
     fn scrollable_layout() -> PageScrollState {
         PageScrollState {
             scroll_x: 0.0,
@@ -774,12 +785,14 @@ mod tests {
         let layout = scrollable_layout();
         state.scrollbar_layout.request_id = Some(41);
         state.scrollbar_layout.layout = Some(layout);
+        seed_thumb_drag(&mut state, layout);
         assert!(frame_slot.publish_page_scroll_state(layout));
 
         state.invalidate_scrollbar_layout(&events);
 
         assert_eq!(state.scrollbar_layout.request_id, None);
         assert!(state.scrollbar_layout.layout.is_none());
+        assert!(state.vertical_scrollbar_drag.is_none());
         assert!(state.scrollbar_layout.refresh_at.is_some());
         assert!(frame_slot.page_scroll_state().is_none());
         assert!(!state.handle_scrollbar_layout_response(41, None, false, &frame_slot, &events));
@@ -792,18 +805,22 @@ mod tests {
         let frame_slot = Arc::clone(&state.config.frame_slot);
         let layout = scrollable_layout();
         state.scrollbar_layout.layout = Some(layout);
+        seed_thumb_drag(&mut state, layout);
         assert!(frame_slot.publish_page_scroll_state(layout));
 
         state.scrollbar_layout.request_id = Some(7);
         assert!(state.handle_scrollbar_layout_response(7, None, true, &frame_slot, &events));
         assert!(state.scrollbar_layout.layout.is_none());
+        assert!(state.vertical_scrollbar_drag.is_none());
         assert!(frame_slot.page_scroll_state().is_none());
 
         assert!(frame_slot.publish_page_scroll_state(layout));
         state.scrollbar_layout.layout = Some(layout);
+        seed_thumb_drag(&mut state, layout);
         state.scrollbar_layout.request_id = Some(8);
         assert!(state.handle_scrollbar_layout_response(8, Some(&serde_json::json!({})), false, &frame_slot, &events));
         assert!(state.scrollbar_layout.layout.is_none());
+        assert!(state.vertical_scrollbar_drag.is_none());
         assert!(frame_slot.page_scroll_state().is_none());
     }
 
