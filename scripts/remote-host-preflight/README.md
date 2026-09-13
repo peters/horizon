@@ -33,9 +33,9 @@ unsupported, `2` at least one probe error (report is still emitted).
 
 | Check | Source | Meaning |
 | --- | --- | --- |
-| `os_linux` | `uname -srm` | Linux kernel on `x86_64` or `aarch64` (release + arch in the report) |
-| `container_engine` | `docker version` / `docker info` / `podman info` | a usable engine is present **and reachable by the current user on this host**: the endpoint must be local (a remote `DOCKER_HOST` / named podman connection, or a non-Linux docker server OS, is rejected) and, for docker, the storage driver is reported or explicitly marked `unverified` with the reason |
-| `cpu_capacity` | `nproc`, fallback `/proc/cpuinfo` | at least the 4-core reference baseline |
+| `os_linux` | `uname -srm` | Linux kernel on `x86_64` or `aarch64` (release + arch in the report). A failed or truncated `uname` is an **error**, not a rejection; only a parsed non-Linux kernel is `unsupported` |
+| `container_engine` | `docker version` / `docker context inspect` / `docker info` / `podman info` | a usable engine is present **and reachable by the current user on this host**: the endpoint must be a local unix socket (`DOCKER_HOST` or the active docker context Host; named podman/`CONTAINER_*` connections are rejected), the docker server OS must be present and `linux`, and for docker the storage driver is reported or explicitly marked `unverified` with the reason |
+| `cpu_capacity` | `nproc`, fallback `/proc/cpuinfo` | at least the 4-core reference baseline. The cpuinfo fallback is used only when it contains at least one `processor` record; otherwise the report is incomplete |
 | `memory_capacity` | `/proc/meminfo` `MemTotal` | at least the 16 GiB reference baseline (an unreadable `MemTotal` is an **error**, not a rejection) |
 | `disk_capacity` | `df -kP` | at least 20 GiB free on the mount that will hold the workspace: the **longest mount-point ancestor** of the resolved (symlink-followed) workspace path; a malformed free value on that mount is an **error** |
 | `storage_ext4_qualifier` | `stat` + `/sys/dev/block` + `/proc/fs/ext4/<dev>/options` | the worker repository-storage qualifier, mirrored exactly from `crates/horizon-core/src/repository_overlay/storage.rs`: ext4 options with exact tokens `rw` + `barrier`, no `ro`/`nobarrier`, exactly one `data=ordered`/`data=journal` line, no duplicates/spaces/control characters, 4096-byte cap, trailing newline |
@@ -54,10 +54,11 @@ unsupported, `2` at least one probe error (report is still emitted).
   names) passes through a credential redactor (JWT-like material,
   private-key blocks, `password|token|secret|api_key` assignments redacted
   to end of line, `Authorization` headers case-insensitively), truncated to
-  400 characters. Only two specific environment variables (`DOCKER_HOST`,
-  plus `PODMAN_CONNECTION`/`PODMAN_HOST`/`CONTAINER_HOST` presence for
-  endpoint-locality) are inspected — never an environment dump; full
-  engine configuration and unrelated workloads are never read or reported.
+  400 characters. Only the endpoint-selection variables `DOCKER_HOST` and
+  `PODMAN_CONNECTION`/`PODMAN_HOST`/`CONTAINER_HOST`/`CONTAINER_CONNECTION`
+  (presence) are inspected, plus the active docker context Host from
+  `docker context inspect` — never an environment dump; full engine
+  configuration and unrelated workloads are never read or reported.
 
 ## Tests
 

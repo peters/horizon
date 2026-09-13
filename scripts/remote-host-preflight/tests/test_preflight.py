@@ -28,7 +28,7 @@ def os_fixture(osname="Linux", release="6.1.0", machine="x86_64"):
 
 def docker_ok(version="26.1.4"):
     return {"stdout": json.dumps({"Client": {"Version": version},
-                                  "Server": {"Version": version, "OSType": "linux"}})}
+                                  "Server": {"Version": version, "OSType": "linux", "Os": "linux"}})}
 
 
 def docker_daemon_down(stderr="Cannot connect to the Docker daemon at unix:///var/run/docker.sock. "
@@ -66,10 +66,16 @@ def tailscale_status_fixture(dns_name="fintermac-vm.tailnet-f382.ts.net.", onlin
     return {"stdout": json.dumps({"Self": {"DNSName": dns_name, "Online": online}})}
 
 
+def docker_context_ok(host="unix:///var/run/docker.sock"):
+    return {"stdout": json.dumps([{"Name": "default",
+                                   "Endpoints": {"docker": {"Host": host}}}] )}
+
+
 DEFAULT_FIXTURE = {
     "os": os_fixture(),
     "docker_version": docker_ok(),
     "docker_info": {"stdout": "Storage Driver: overlay2\nCgroup Driver: systemd\n"},
+    "docker_context": docker_context_ok(),
     "cores": nproc_fixture(),
     "disk": df_fixture(),
     "tailscale_version": tailscale_version_fixture(),
@@ -121,6 +127,16 @@ class Harness(unittest.TestCase):
             "no real subprocess allowed in unit tests"))
         self.popen = patcher.start()
         self.addCleanup(patcher.stop)
+        saved = {var: os.environ[var] for var in preflight.ENDPOINT_VARS if var in os.environ}
+        for var in preflight.ENDPOINT_VARS:
+            os.environ.pop(var, None)
+
+        def restore_endpoint_vars():
+            for var in preflight.ENDPOINT_VARS:
+                os.environ.pop(var, None)
+            os.environ.update(saved)
+
+        self.addCleanup(restore_endpoint_vars)
 
     def executor_for(self, fixture):
         seen = []
@@ -189,6 +205,7 @@ class PreflightVerdicts(Harness):
         fixture["os"] = os_fixture(machine="aarch64")
         fixture.pop("docker_version")
         fixture.pop("docker_info")
+        fixture.pop("docker_context", None)
         fixture["podman_info"] = podman_ok()
         code, report, _ = self.run_main(fixture)
         self.assertEqual(code, 0)
@@ -219,6 +236,7 @@ class EngineFailures(Harness):
         fixture = dict(DEFAULT_FIXTURE)
         fixture.pop("docker_version")
         fixture.pop("docker_info")
+        fixture.pop("docker_context", None)
         fixture.pop("podman_info", None)
         code, report, _ = self.run_main(fixture)
         self.assertEqual(code, 1)
@@ -242,6 +260,7 @@ class EngineFailures(Harness):
         fixture = dict(DEFAULT_FIXTURE)
         fixture.pop("docker_version")
         fixture.pop("docker_info")
+        fixture.pop("docker_context", None)
         fixture["podman_info"] = podman_ok_legacy("4.9.0")
         code, report, _ = self.run_main(fixture)
         self.assertEqual(code, 0)
@@ -278,6 +297,7 @@ class EngineFailures(Harness):
         fixture = dict(DEFAULT_FIXTURE)
         fixture["docker_version"] = {"stdout": "this is not json {{{"}
         fixture.pop("docker_info")
+        fixture.pop("docker_context", None)
         fixture.pop("podman_info", None)
         code, report, _ = self.run_main(fixture)
         self.assertEqual(code, 1)
@@ -313,10 +333,57 @@ class EngineFailures(Harness):
         self.assertEqual(by_id["container_engine"]["status"], "unsupported")
         self.assertIn("not linux", by_id["container_engine"]["detail"])
 
+    def test_remote_docker_context_is_rejected(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["docker_context"] = docker_context_ok(host="tcp://remote-daemon:2376")
+        code, report, _ = self.run_main(fixture)
+        self.assertEqual(code, 1)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["container_engine"]["status"], "unsupported")
+        self.assertIn("context Host=", by_id["container_engine"]["detail"])
+        self.assertIn("tcp://", by_id["container_engine"]["detail"])
+
+    def test_missing_docker_server_ostype_is_rejected(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["docker_version"] = {"stdout": json.dumps(
+            {"Client": {"Version": "26.1.4"}, "Server": {"Version": "26.1.4"}})}
+        code, report, _ = self.run_main(fixture)
+        self.assertEqual(code, 1)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["container_engine"]["status"], "unsupported")
+        self.assertIn("OSType missing", by_id["container_engine"]["detail"])
+
+    def test_docker_version_os_field_is_accepted(self):
+        # Live `docker version --format json` on Engine 29 uses Server.Os,
+        # not Server.OSType.
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["docker_version"] = {"stdout": json.dumps(
+            {"Client": {"Version": "29.7.2"},
+             "Server": {"Version": "29.7.2", "Os": "linux"}})}
+        code, report, _ = self.run_main(fixture)
+        self.assertEqual(code, 0)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["container_engine"]["status"], "supported")
+        self.assertEqual(by_id["container_engine"]["value"], "docker 29.7.2")
+
+    def test_podman_container_connection_is_rejected(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture.pop("docker_version")
+        fixture.pop("docker_info")
+        fixture.pop("docker_context", None)
+        fixture["podman_info"] = podman_ok()
+        with mock.patch.dict(os.environ, {"CONTAINER_CONNECTION": "remote-worker"}):
+            code, report, _ = self.run_main(fixture)
+        self.assertEqual(code, 1)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["container_engine"]["status"], "unsupported")
+        self.assertIn("CONTAINER_CONNECTION", by_id["container_engine"]["detail"])
+
     def test_podman_named_connection_is_rejected(self):
         fixture = dict(DEFAULT_FIXTURE)
         fixture.pop("docker_version")
         fixture.pop("docker_info")
+        fixture.pop("docker_context", None)
         fixture["podman_info"] = podman_ok()
         with mock.patch.dict(os.environ, {"PODMAN_CONNECTION": "remote-worker"}):
             code, report, _ = self.run_main(fixture)
@@ -350,6 +417,23 @@ class EngineFailures(Harness):
         self.assertNotIn(JWT, text)
         self.assertIn("<redacted>", text)
 
+    def test_uname_truncated_is_error_not_rejection(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["os"] = {"stdout": "Linux\n"}
+        code, report, _ = self.run_main(fixture)
+        self.assertEqual(code, 2)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["os_linux"]["status"], "error")
+        self.assertIn("truncated", by_id["os_linux"]["detail"])
+
+    def test_uname_nonzero_exit_is_error_not_rejection(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["os"] = {"exit_code": 1, "stdout": "", "stderr": "uname: boom"}
+        code, report, _ = self.run_main(fixture)
+        self.assertEqual(code, 2)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["os_linux"]["status"], "error")
+
     def test_os_detail_reports_release_and_arch(self):
         code, report, _ = self.run_main(dict(DEFAULT_FIXTURE))
         by_id = {check["id"]: check for check in report["checks"]}
@@ -361,6 +445,7 @@ class EngineFailures(Harness):
         fixture = dict(DEFAULT_FIXTURE)
         fixture["docker_version"] = {"timeout": True}
         fixture.pop("docker_info")
+        fixture.pop("docker_context", None)
         fixture.pop("podman_info", None)
         code, report, _ = self.run_main(fixture)
         self.assertEqual(code, 1)
@@ -378,6 +463,14 @@ class MalformedInputs(Harness):
         by_id = {check["id"]: check for check in report["checks"]}
         self.assertEqual(by_id["cpu_capacity"]["value"], 2)
         self.assertEqual(by_id["cpu_capacity"]["status"], "unsupported")
+
+    def test_cpuinfo_without_processor_records_is_error(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["cores"] = {"exit_code": 1, "stdout": "", "stderr": "nproc failed"}
+        code, report, _ = self.run_main(fixture, cpuinfo_text="vendor_id\t: GenuineIntel\n")
+        self.assertEqual(code, 2)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["cpu_capacity"]["status"], "error")
 
     def test_nproc_missing_and_no_cpuinfo(self):
         fixture = dict(DEFAULT_FIXTURE)
@@ -507,19 +600,35 @@ class StorageQualifier(Harness):
 
 class DiskAndCapacity(Harness):
     def test_symlinked_workspace_selects_target_mount(self):
-        # A symlinked workspace must be judged on the mount its target lives
-        # on, the same resolution the storage qualifier uses via os.stat.
+        # A dangling workspace symlink must be judged on the target-side
+        # mount and the same resolved ancestor the storage qualifier stats.
+        target_root = os.path.join(self.tmp.name, "data", "workspaces")
+        os.makedirs(target_root)
         link = os.path.join(self.tmp.name, "ws-link")
-        os.symlink("/mnt/workspaces/job", link)
+        os.symlink(os.path.join(target_root, "job"), link)
         fixture = dict(DEFAULT_FIXTURE)
         fixture["disk"] = {"stdout":
             "Filesystem     1024-blocks      Used Available Capacity Mounted on\n"
             "/dev/root        1000000000  800000000   200000000     80% /\n"
-            "/dev/data        2000000000 1900000000    41943040    98% /mnt/workspaces\n"}
+            "/dev/data        2000000000 1900000000    41943040    98% "
+            + target_root + "\n"}
         code, report, _ = self.run_main(fixture, workspace=link)
         by_id = {check["id"]: check for check in report["checks"]}
         self.assertEqual(by_id["disk_capacity"]["value"], 41943040)
-        self.assertIn("/mnt/workspaces", by_id["disk_capacity"]["detail"])
+        self.assertIn(target_root, by_id["disk_capacity"]["detail"])
+        self.assertEqual(by_id["storage_ext4_qualifier"]["status"], "supported")
+        self.assertEqual(by_id["storage_ext4_qualifier"]["value"], "nvme0n1p2")
+
+    def test_credential_shaped_mount_is_redacted(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["disk"] = {"stdout":
+            "Filesystem     1024-blocks      Used Available Capacity Mounted on\n"
+            "/dev/root        1000000000  800000000  200000000     80% /\n"
+            "/dev/data        2000000000    100000  50000000     1% /mnt/token=supersecretvalue\n"}
+        code, report, _ = self.run_main(fixture, workspace="/mnt/token=supersecretvalue/job")
+        text = json.dumps(report)
+        self.assertNotIn("supersecretvalue", text)
+        self.assertIn("<redacted>", text)
 
     def test_workspace_mount_free_used_over_root(self):
         fixture = dict(DEFAULT_FIXTURE)

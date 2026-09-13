@@ -43,16 +43,24 @@ explicit about which steps mutate the host so the proof is not overclaimed.
 1. **Baseline snapshot (read-only):**
    ```sh
    ssh fintermac@<VM> 'date -u; uname -srm; nproc; grep MemTotal /proc/meminfo;
-     df -kP / | tail -1;
+     WS=/var/lib/horizon-workers;
+     while [ ! -e "$WS" ]; do
+       parent=$(dirname "$WS");
+       [ "$parent" = "$WS" ] && break;
+       WS=$parent;
+     done;
+     WS=$(readlink -f "$WS" 2>/dev/null || echo "$WS");
+     df -kP "$WS" | tail -1;
      docker info --format "{{.ServerVersion}}" 2>&1 | head -1 || true;
-     WS=/var/lib/horizon-workers; [ -e "$WS" ] || WS=$(dirname "$WS"));
-     stat -c "ws=%n dev=%H:%I" "$WS" 2>/dev/null || echo "ws missing: $WS";
-     B=$(basename "$(readlink /sys/dev/block/$(stat -c "%H:%I" "$WS" 2>/dev/null) 2>/dev/null)" 2>/dev/null);
-     [ -n "$B" ] && { echo "dev=$B"; head -5 "/proc/fs/ext4/$B/options" 2>/dev/null || echo "no ext4 options"; } || true'
+     stat -c "ws=%n dev=%Hd:%Ld" "$WS" 2>/dev/null || echo "ws missing: $WS";
+     B=$(basename "$(readlink /sys/dev/block/$(stat -c "%Hd:%Ld" "$WS" 2>/dev/null) 2>/dev/null)" 2>/dev/null);
+     [ -n "$B" ] && { echo "dev=$B"; head -c 4096 "/proc/fs/ext4/$B/options"; echo; } || echo "no ext4 options"'
    ```
-   Save as `before.txt`. The `WS` block records the nearest existing
-   workspace ancestor, its resolved block device, and the raw ext4 options —
-   the independent ground truth for matrix assertions 4–6.
+   Save as `before.txt`. Resolve `WS` to the nearest existing workspace
+   ancestor first, then `df` that path (not `/`), record GNU `stat` `%Hd:%Ld`
+   (filesystem `st_dev` major/minor — not `%t:%T`/`st_rdev`) and the same
+   4096-byte ext4 options window the checker evaluates. That is the
+   independent ground truth for matrix assertions 4–6.
 
 2. **Deliver the checker — MUTATES the host (verification plumbing, not a tool feature):**
    single file to `/tmp`, removed in step 5. No package manager, no service,
@@ -61,29 +69,31 @@ explicit about which steps mutate the host so the proof is not overclaimed.
    scp scripts/remote-host-preflight/preflight.py fintermac@<VM>:/tmp/preflight-604.py
    ```
 
-3. **Run the preflight on the VM** (the tool run under test; fixed args, bounded probes, 10 s each). Step 3's `> /tmp/preflight-604.json` writes one report file owned by this verification, removed in step 5:
+3. **Run the preflight on the VM** (the tool run under test; fixed args, bounded probes, 10 s each). Capture both reports **locally** before any VM cleanup:
    ```sh
-   ssh fintermac@<VM> 'python3 -B /tmp/preflight-604.py --json --now 2026-09-13T00:00:00Z > /tmp/preflight-604.json; echo exit=$?; python3 -B /tmp/preflight-604.py'
+   ssh fintermac@<VM> 'python3 -B /tmp/preflight-604.py --json --now 2026-09-13T00:00:00Z' > fintermac-preflight.json
+   echo json_exit=$?
+   ssh fintermac@<VM> 'python3 -B /tmp/preflight-604.py' > fintermac-preflight.txt
+   echo human_exit=$?
    ```
-   Save the JSON report as `fintermac-preflight.json` and the human report as
-   `fintermac-preflight.txt`.
+   Keep `fintermac-preflight.json` and `fintermac-preflight.txt` as the
+   evidence artifacts. Do not rely on a VM-side report file (step 5 deletes
+   only the delivered checker).
 
 4. **Post-run snapshot (read-only):** same commands as step 1 (including
    `nproc`, `MemTotal`, the workspace ancestor, its block device and the raw
    ext4 options) into
-   `after.txt`. `diff before.txt after.txt` must show only the clock line
-   changed *and* the presence/removal of the two `/tmp` verification files if
-   the snapshots straddle step 5 — take `after.txt` **before** step 5 so the
-   diff is exactly clock-only for the tool run itself (the two `/tmp` files
-   existed in both snapshots and are removed afterwards).
+   `after.txt`. Take `after.txt` **before** step 5 so the before/after diff
+   is clock-only for the tool run (the delivered `/tmp/preflight-604.py`
+   existed in both snapshots; reports were captured locally in step 3).
 
    Read-only proof of the tool additionally comes from the strace audit in
    the PR description (4 writes total, all to stdout; zero file-creating
    opens) — the snapshot diff is corroborating, not the primary evidence.
 
-5. **Remove the verification copies** (our own `/tmp` files, not host state):
+5. **Remove the verification copy** (the delivered checker, not host state):
    ```sh
-   ssh fintermac@<VM> 'rm -f /tmp/preflight-604.py /tmp/preflight-604.json'
+   ssh fintermac@<VM> 'rm -f /tmp/preflight-604.py'
    ```
 
 ## Bug-hunt matrix (assert each on the real output)
@@ -95,7 +105,7 @@ explicit about which steps mutate the host so the proof is not overclaimed.
 | 3 | `container_engine` names the engine actually running (cross-check against step 1 `docker info` version); storage driver reported for docker |
 | 4 | `cpu_capacity` / `memory_capacity` values match `nproc` / `MemTotal` read independently in step 1 |
 | 5 | `disk_capacity` free space matches `df -kP` for the workspace path (or `/`) within sampling drift |
-| 6 | `storage_ext4_qualifier` device name matches the real block device of the workspace filesystem (`stat -c '%t:%T'`); pass/fail against the ext4 options listed independently (`cat /proc/fs/ext4/<dev>/options`) |
+| 6 | `storage_ext4_qualifier` device name matches the real block device of the workspace filesystem (`stat -c '%Hd:%Ld'` → `/sys/dev/block/<maj>:<min>`); pass/fail against the full 4096-byte ext4 options captured independently |
 | 7 | `tailscale` DNS name matches the VM's tailnet identity from precondition 2; online state is a bool |
 | 8 | No raw secrets/tokens/keys anywhere in either report (visual + `grep -E 'eyJ[A-Za-z0-9_-]{4,}\.|PRIVATE KEY|token='`) |
 | 9 | Two runs with the same `--now` produce byte-identical JSON |

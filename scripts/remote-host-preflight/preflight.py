@@ -45,6 +45,7 @@ PROBE_ARGS = {
     "cores": ["nproc"],
     "docker_version": ["docker", "version", "--format", "json"],
     "docker_info": ["docker", "info"],
+    "docker_context": ["docker", "context", "inspect"],
     "podman_info": ["podman", "info", "--format", "json"],
     "disk": ["df", "-kP"],
     "tailscale_version": ["tailscale", "version"],
@@ -52,8 +53,15 @@ PROBE_ARGS = {
 }
 
 # Probes whose absence is a finding, not a crash: the engine pair and tailscale.
-OPTIONAL_PROBES = {"docker_version", "docker_info", "podman_info",
+OPTIONAL_PROBES = {"docker_version", "docker_info", "docker_context", "podman_info",
                    "tailscale_version", "tailscale_status"}
+
+# Endpoint-selection variables inspected for locality. Presence only — never
+# an environment dump. Tests clear this set so developer shells cannot leak.
+DOCKER_ENDPOINT_VARS = ("DOCKER_HOST",)
+PODMAN_ENDPOINT_VARS = ("PODMAN_CONNECTION", "PODMAN_HOST",
+                        "CONTAINER_HOST", "CONTAINER_CONNECTION")
+ENDPOINT_VARS = DOCKER_ENDPOINT_VARS + PODMAN_ENDPOINT_VARS
 
 # Credential-shaped material that must never survive into the report.
 # Redactors redact the complete value (to end of line) for the assignment and
@@ -123,8 +131,14 @@ def check_os(executor, timeout):
     result, error = run_probe(executor, "os", timeout)
     if error:
         return {"id": "os_linux", "status": ERROR, "detail": error}
+    if result["exit_code"] != 0:
+        return {"id": "os_linux", "status": ERROR, "value": None,
+                "detail": redact(result.get("stderr", "")) or "uname failed"}
     fields = redact(result.get("stdout", "")).strip().split()
-    if result["exit_code"] != 0 or len(fields) < 3 or fields[0] != "Linux":
+    if len(fields) < 3:
+        return {"id": "os_linux", "status": ERROR, "value": None,
+                "detail": "uname output truncated"}
+    if fields[0] != "Linux":
         detail = "kernel reports %s" % (" ".join(fields[:2]) or "unknown")
         return {"id": "os_linux", "status": UNSUPPORTED, "value": None,
                 "detail": redact(detail)}
@@ -180,34 +194,82 @@ def parse_engine_version(probe, name):
     return None
 
 
-def engine_endpoint_note(engine):
-    """None when the engine endpoint looks local; otherwise a reason.
+def is_local_unix_endpoint(host):
+    """True for a unix socket URL or an absolute socket path."""
+    if not host:
+        return False
+    text = str(host)
+    return text.startswith("unix://") or (len(text) >= 2 and text[0] == "/")
 
-    `docker version`/`podman info` succeed against a *remote* daemon too
-    (DOCKER_HOST, docker contexts, named podman connections), which would
-    combine a remote engine with this host's CPU/memory/disk/ext4 checks.
-    Only the two endpoint variables are inspected — never an env dump.
-    """
-    if engine == "docker":
-        host = os.environ.get("DOCKER_HOST")
-        if host:
-            if host.startswith("unix://") or (len(host) >= 2 and host[0] == "/"):
-                return None  # local socket path
-            return "docker endpoint is remote (DOCKER_HOST=%s)" % redact(host)
+
+def docker_context_host(probe):
+    """Active-context docker Host, or None if the inspect payload is unusable."""
+    if probe is None or probe["exit_code"] != 0:
         return None
-    for var in ("PODMAN_CONNECTION", "PODMAN_HOST", "CONTAINER_HOST"):
+    payload = parse_json_output(probe)
+    if isinstance(payload, list) and payload:
+        payload = payload[0]
+    if not isinstance(payload, dict):
+        return None
+    endpoints = payload.get("Endpoints")
+    docker = endpoints.get("docker") if isinstance(endpoints, dict) else None
+    if isinstance(docker, dict) and docker.get("Host"):
+        return redact(str(docker["Host"]))
+    return None
+
+
+def docker_endpoint_reason(executor, timeout):
+    """None when the selected docker endpoint is a local unix socket.
+
+    `DOCKER_HOST` overrides the active context. When it is unset, the active
+    context's `Endpoints.docker.Host` (from `docker context inspect`) is
+    required: a remote context must not be combined with this host's
+    CPU/memory/disk/ext4 checks. Missing inspect output fails closed.
+    """
+    host_env = os.environ.get("DOCKER_HOST")
+    if host_env:
+        if is_local_unix_endpoint(host_env):
+            return None
+        return "docker endpoint is remote (DOCKER_HOST=%s)" % redact(host_env)
+    ctx, err = run_probe(executor, "docker_context", timeout)
+    if err is not None:
+        return "docker context inspect failed (%s)" % redact(err)
+    ctx_host = docker_context_host(ctx)
+    if not ctx_host:
+        return "docker context endpoint missing"
+    if is_local_unix_endpoint(ctx_host):
+        return None
+    return "docker endpoint is remote (context Host=%s)" % ctx_host
+
+
+def engine_endpoint_note(engine):
+    """None when a podman client has no named/remote connection variables set.
+
+    Only those endpoint variables are inspected — never an env dump.
+    """
+    for var in PODMAN_ENDPOINT_VARS:
         if os.environ.get(var):
             return "%s endpoint may be remote (%s is set)" % (engine, var)
     return None
 
 
 def docker_server_ostype(probe):
+    """Linux/OS name from `docker version` JSON.
+
+    The documented Go field is `Server.OSType`; the live `docker version
+    --format json` payload on Engine 29 exposes `Server.Os` instead. Either
+    value establishes the server OS; absence of both is missing.
+    """
     if probe is None or probe["exit_code"] != 0:
         return None
     payload = parse_json_output(probe)
     server = payload.get("Server") if isinstance(payload, dict) else None
-    if isinstance(server, dict) and server.get("OSType"):
-        return redact(str(server["OSType"]))
+    if not isinstance(server, dict):
+        return None
+    for key in ("OSType", "Os", "os"):
+        raw = server.get(key)
+        if raw:
+            return redact(str(raw)).strip().lower()
     return None
 
 
@@ -221,10 +283,11 @@ def check_container_engine(executor, timeout):
     reasons = {}
     if docker_server is not None:
         ostype = docker_server_ostype(docker_version)
-        if ostype is not None and ostype != "linux":
-            reasons["docker"] = "docker server OS is %s, not linux" % ostype
+        if ostype != "linux":
+            reasons["docker"] = ("docker server OS is %s, not linux" % ostype
+                                 if ostype else "docker server OSType missing")
         else:
-            note = engine_endpoint_note("docker")
+            note = docker_endpoint_reason(executor, timeout)
             if note is not None:
                 reasons["docker"] = note
     if podman_version is not None:
@@ -301,7 +364,8 @@ def check_capacity(executor, timeout, procfs_root):
     if cores is None:
         cpuinfo = read_procfs(procfs_root, "cpuinfo")
         if cpuinfo:
-            cores = sum(1 for line in cpuinfo.splitlines() if line.startswith("processor"))
+            parsed = sum(1 for line in cpuinfo.splitlines() if line.startswith("processor"))
+            cores = parsed if parsed > 0 else None
     if cores is None:
         status = ERROR if probe_failed else UNSUPPORTED
         detail = "cpu count unreadable (nproc probe failed)" if probe_failed \
@@ -379,14 +443,20 @@ def check_disk(executor, timeout, workspace_path):
         # A malformed free value on the *selected* entry is rejected rather
         # than silently falling back to another filesystem.
         return {"id": "disk_capacity", "status": ERROR, "value": None,
-                "detail": "df reported a malformed free value for mount %s" % mount}
+                "detail": "df reported a malformed free value for mount %s" % redact(mount)}
     status = SUPPORTED if free_kb >= MIN_FREE_KB else UNSUPPORTED
-    detail = "%d MiB free on %s (reference baseline 20 GiB)" % (free_kb // 1024, mount)
+    detail = "%d MiB free on %s (reference baseline 20 GiB)" % (
+        free_kb // 1024, redact(mount))
     return {"id": "disk_capacity", "status": status, "value": free_kb, "detail": detail}
 
 
 def nearest_existing(path):
-    current = path
+    """Nearest existing ancestor of the resolved (symlink-followed) path.
+
+    Resolve first so a dangling workspace symlink is judged on the target
+    side, matching `check_disk`'s realpath-then-mount selection.
+    """
+    current = os.path.normpath(os.path.realpath(path))
     while True:
         if os.path.exists(current):
             return current
