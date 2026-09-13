@@ -1,6 +1,6 @@
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use horizon_core::browser::manifest::{self, BrowserManifest};
 use serde_json::{Value, json};
@@ -396,18 +396,90 @@ fn run_timeout_starts_after_stdin_plan_validation() {
     stdin
         .write_all(br#"{"version":1,"steps":[{"id":"panels","tool":"browser_list"}]}"#)
         .expect("write delayed plan");
+    let before_eof = SystemTime::now().duration_since(UNIX_EPOCH).expect("EOF clock");
     drop(stdin);
     wait_for_exit(&mut child, "delayed stdin browser job");
     let output = child.wait_with_output().expect("collect delayed-plan browser job");
+    let after_exit = SystemTime::now().duration_since(UNIX_EPOCH).expect("exit clock");
+    assert_stdin_deadline_result(root.path(), &output, before_eof, after_exit);
+}
 
+fn assert_stdin_deadline_result(
+    root: &std::path::Path,
+    output: &std::process::Output,
+    before_eof: Duration,
+    after_exit: Duration,
+) {
     assert!(
-        output.status.success(),
-        "stderr: {}",
+        matches!(output.status.code(), Some(0 | 124)),
+        "exit: {}; stderr: {}",
+        output.status,
         String::from_utf8_lossy(&output.stderr)
     );
-    let report: Value = serde_json::from_slice(&output.stdout).expect("delayed-plan report");
-    assert_eq!(report["ok"], true);
-    assert_eq!(report["completed_steps"], 1);
+    let jobs = std::fs::read_dir(root.join(".horizon/browser-jobs"))
+        .expect("delayed-plan jobs")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("job entries");
+    assert_eq!(jobs.len(), 1);
+    let job_dir = jobs[0].path();
+    let state: Value = serde_json::from_slice(&std::fs::read(job_dir.join("state.json")).expect("job state"))
+        .expect("decode job state");
+    assert_eq!(state["version"], 4);
+    assert_eq!(state["execution_timeout_seconds"], 1);
+    assert!(state["completed_steps"].as_u64().is_some_and(|count| count <= 1));
+    let deadline = u128::from(state["deadline_at_millis"].as_u64().expect("saved deadline"));
+    // Check timer admission, not filesystem speed; allow only millisecond rounding slack.
+    assert!(deadline + 1 >= before_eof.as_millis() + 1_000);
+    assert!(deadline <= after_exit.as_millis() + 1_000);
+    assert_eq!(
+        state["job_id"].as_str(),
+        job_dir.file_name().and_then(|name| name.to_str())
+    );
+    let success = output.status.success();
+    assert_eq!(state["status"], if success { "succeeded" } else { "timed_out" });
+    if success {
+        assert_eq!(state["completed_steps"], 1);
+    } else {
+        assert!(deadline <= after_exit.as_millis());
+        assert!(
+            state["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("job deadline exceeded"))
+        );
+    }
+    if state["report_file"].is_null() {
+        assert!(!success);
+        assert_eq!(state["completed_steps"], 0);
+        assert!(output.stdout.is_empty());
+        assert!(!job_dir.join("report.json").exists());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("job deadline exceeded"));
+        assert!(stderr.contains(state["job_id"].as_str().expect("saved job id")));
+    } else {
+        assert_eq!(state["report_file"], "report.json");
+        assert!(output.stderr.is_empty());
+        let report: Value = serde_json::from_slice(&output.stdout).expect("delayed-plan report");
+        let saved: Value = serde_json::from_slice(&std::fs::read(job_dir.join("report.json")).expect("saved report"))
+            .expect("decode saved report");
+        assert_eq!(saved, report);
+        assert_eq!(report["job_id"], state["job_id"]);
+        assert_eq!(report["ok"], success);
+        assert_eq!(report["completed_steps"], state["completed_steps"]);
+        assert_eq!(
+            report["steps"].as_array().map(Vec::len),
+            state["completed_steps"]
+                .as_u64()
+                .and_then(|count| usize::try_from(count).ok())
+        );
+        assert_eq!(
+            report["stop_reason"],
+            if success {
+                Value::Null
+            } else {
+                json!("deadline_exceeded")
+            }
+        );
+    }
 }
 
 #[cfg(unix)]
