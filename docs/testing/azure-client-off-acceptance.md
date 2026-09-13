@@ -14,12 +14,15 @@ PC, existing Horizon processes or existing workspaces.
 | --- | --- | --- |
 | Client A | Disposable Ubuntu VM in its own exact resource group, running the exact Horizon Linux client (built from `client_sha`) under a virtual display, with an isolated persistent client home on its OS disk (retained across deallocation) | Azure lane |
 | Worker B | Separate persistent Azure CPU worker in its own exact group, created on A through the product setup path and prepared through Prepare Repository; its Stop, saved-Stop check and compute Start are product operations; the saved-Shell task start and panel reconnect are gated for Azure until their slices land | Azure lane (product Azure paths and adapter) |
-| Observer C | The read-only principal on the controller, outside A and B: ARM reads and one pinned SSH session per sample with a key that sshd restricts (`restrict,command=`) to a forced reader of the progress and checkpoint files | Azure lane |
-| Operator | The operator's own Azure CLI login on the same controller, the only principal that changes anything from outside A: it provisions and later deallocates and restarts A (`provision-client.sh`, `off`, `return`), journals and reaper-tags B's product-created resources, deletes the run's groups (`cleanup`) and removes A's role assignments and custom role | Azure lane |
+| Observer C | The controller's read-only role, outside A and B: the harness's ARM reads and one pinned SSH session per sample with a key that sshd restricts (`restrict,command=`) to a forced reader of the progress and checkpoint files. C is a logical role, not a separate credential: the harness holds one `Az` client over the operator's ambient `az` login, so C's ARM reads use that login; only C's SSH channel is a distinct, restricted identity | Azure lane |
+| Operator | The operator's own Azure CLI login on the same controller, the only credential that changes anything from outside A: it provisions and later deallocates and restarts A (`provision-client.sh`, `off`, `return`), journals and reaper-tags B's product-created resources, deletes the run's groups (`cleanup`) and removes A's role assignments and custom role | Azure lane |
 
 C never renews a lease, delivers a keepalive, reconnects a terminal, checkpoints or
-replays a task, and never writes to ARM; every mutating step in this runbook names
-the operator. The operator may enforce the declared cleanup deadline.
+replays a task, and the harness phases that act as C issue no ARM write; every
+mutating step in this runbook names the operator, and that separation is
+procedural (the phases and commands that write) rather than a credential
+boundary, because the harness has no second Azure login. The operator may enforce
+the declared cleanup deadline.
 
 ## Manifest, frozen before anything is rented
 
@@ -144,11 +147,13 @@ gives A no identity today, so before the product pass A needs, in this order:
    operation-status endpoint); every VM read expands `instanceView` and the
    lifecycle decisions come from its power statuses; `deallocate/action` is Stop,
    `start/action` is Start and `runCommand/action` is the host-key attestation used
-   by setup and by Start's readiness path; deallocate, start and run-command are
-   accepted with 202 and the transport then follows the returned
-   `Azure-AsyncOperation` status resource with bounded reads, which is the
+   by setup and by Start's readiness path; deallocate and start are accepted with
+   202 and the provider then polls the VM's `instanceView` (covered by the reads
+   above), while run-command alone follows the returned `Azure-AsyncOperation`
+   status resource with bounded reads, which is the
    `Microsoft.Compute/locations/operations/read` operation, so a role without it
-   submits successfully and fails while polling; the template creates the data
+   submits the attestation command successfully and fails while polling it; the
+   template creates the data
    disk, the public IP, the NIC, the security group and the virtual network with
    its inline `workers` subnet (the subnet is created and, on a setup retry,
    updated as part of the VNet write, and Azure authorizes that child write as
@@ -186,8 +191,11 @@ gives A no identity today, so before the product pass A needs, in this order:
    identity but can leave its role assignments and the custom role definition
    behind, so the removal is an explicit operator step from the controller, before the manifest
    deadline: `az role assignment delete --subscription <id> --assignee <A's
-   principal ID> --scope /subscriptions/<id>` and the same for the
-   `horizon-worker-puller` scope, then `az role definition delete --subscription
+   principal ID> --scope /subscriptions/<id>`, then the same command with `--scope
+   <the profile's image_pull_identity_id, the full resource ID of
+   horizon-worker-puller>` for the Managed Identity Operator assignment (its scope
+   is that identity resource, not the subscription, and it survives A's deletion),
+   then `az role definition delete --subscription
    <id> --name <custom role>`, verified with `az role assignment list
    --subscription <id> --all --assignee <principal ID>` printing an empty list and
    `az role definition list --subscription <id> --custom-role-only true --name
@@ -365,12 +373,18 @@ back unchanged at return and after the worker lifecycle step.
      may hold `horizon-ws-` groups in the same subscription. With the harness
      `bind-worker` step, this journal entry is written in the same step as the
      binding. Then, as the operator on the
-     controller (never with observer C's principal, which stays read-only), read
-     the journaled group's VM: `az vm list --subscription <id> --resource-group
+     controller (a write, so an operator step even though the same `az` login also
+     serves C's reads), read the journaled group's VM: `az vm list --subscription <id> --resource-group
      horizon-ws-<workflow>-<job> --query '[].{id:id, name:name}'`. If it lists no
-     `worker` VM (a deployment that created the group and nothing else), record
-     that exact absence, do not continue to the baseline, and go to step 9 with the
-     journaled group. Otherwise put that VM under the deadline reaper, which the
+     `worker` VM, the deployment may still be in flight (the VM appears only as the
+     deployment progresses), so absence is not yet known: read `az deployment group
+     show --subscription <id> --resource-group horizon-ws-<workflow>-<job> --name
+     worker --query properties.provisioningState`; while it answers `Accepted` or
+     `Running`, wait, run **Check this setup** and read again. Only when the
+     deployment is absent, `Failed` or `Canceled` and the VM list is still empty is
+     the absence definitive: record it with the time, do not continue to the
+     baseline, and go to step 9 with the journaled group. Otherwise, once the VM
+     exists, put it under the deadline reaper, which the
      product deployment
      does not do (it tags B with worker identity tags only, and the reaper skips a VM
      without both `purpose` and `deadline`): `az tag update --subscription <id>
@@ -462,9 +476,9 @@ back unchanged at return and after the worker lifecycle step.
    components, so no two spellings can name one file), and the identity
    recorded now, before A is stopped: `group_id`, `vm_id`, `instance_id` (the VM's
    `vmId`, which a same-name recreation does not keep) and `host` as ARM reports them.
-   Then, as the operator (the command mutates B through ARM run-command, which
-   observer C's read-only principal cannot do), install the observer key as a
-   restricted key: `client_off.py --manifest m.json
+   Then, as an operator step (the command mutates B through ARM run-command; it
+   runs under the same `az` login as everything else, and is named so that it is
+   never counted among C's reads), install the observer key as a restricted key: `client_off.py --manifest m.json
    install-observer-key --worker worker.json --public-key observer.pub`. The worker image authorises `HORIZON_SSH_PUBLIC_KEY` as an
    unrestricted root key, so a plain key would not be a read-only channel; the
    harness instead appends one `authorized_keys` line of the form
@@ -618,8 +632,13 @@ back unchanged at return and after the worker lifecycle step.
    remains, press Start again.`) is **Start environment…** pressed again (the retry
    reuses the saved intent and never re-posts a running worker); an identity,
    absence or authorization error is never retried, and a row at `Reconciling` is
-   never retried. Then read the retained bytes back without the product's
-   panel path, which cannot serve this step: the worker's panel runtime (its sockets
+   never retried. The reads below happen only after this run's own Start has
+   succeeded and the reloaded row shows `Reconciling`; after a non-retryable Start
+   outcome, or a retry budget exhausted at `Start requested (saved)`, retention is
+   recorded as unproven and the lifecycle step ends here without touching the
+   worker (a read at that point could come from a stale or replaced endpoint and
+   would prove nothing about the saved worker). Then read the retained bytes back
+   without the product's panel path, which cannot serve this step: the worker's panel runtime (its sockets
    under `/run/horizon/panels`) does not survive the VM restart, attachment refuses an
    unavailable panel, and Start resumes no task, so the counter stops at its last
    value. A verified Start may still report the endpoint as not attested (the saved
@@ -647,9 +666,9 @@ back unchanged at return and after the worker lifecycle step.
    rewrites `authorized_keys`), so it is not the reader here. The adapter proved the same sequence
    live in runs 16 to 18 (`azure-workspace-live-acceptance.md`); this step proves it
    through the product.
-8. **Remove the observer key**, as the operator (the command mutates B through ARM
-   run-command; observer C's principal cannot run it and a run must not end with
-   it skipped): `client_off.py --manifest m.json remove-observer-key
+8. **Remove the observer key**, an operator step (the command mutates B through
+   ARM run-command under the operator's login, and a run must not end with it
+   skipped): `client_off.py --manifest m.json remove-observer-key
    --worker worker.json --public-key observer.pub`, once the return and the reconnect
    check on A are done and before the run is reported finished. Step 9 deletes B
    only when its journaled identity still matches and within its 20-minute bound (the
