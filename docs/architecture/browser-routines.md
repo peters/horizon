@@ -134,10 +134,10 @@ JSON object, `schema_version` 1, `deny_unknown_fields`:
 | `name` | string | User-facing, not used in paths. Bounded printable text. |
 | `backend_requirement` | `"chromium"` or `"firefox"` | Safari is not a valid requirement while it cannot persist a profile. |
 | `profile_id` | UUID string | Routine-owned profile; equal to `routine_id` in v1. |
-| `allowed_origins` | array of exact origins | Scheme + host + port. No path, userinfo, or query. HTTPS only, plus `http://127.0.0.1` and `http://localhost` for local fixtures. |
+| `allowed_origins` | array of exact origins | Scheme + host + port. HTTPS only, plus loopback HTTP fixtures. Navigation templates, recorded `page_origin`, frame origins, and post-redirect origins must be members. Leaving the set is `needs_user` (fail closed). |
 | `credential_policy` | object | See below. Default stores no username or password. |
 | `variables` | array of `RoutineVariable` | Named parameters. Never secret values. |
-| `steps` | array of `RoutineStep` | Reviewed compiler output. |
+| `steps` | array of `RoutineStep` | 1..=256 reviewed compiler outputs (CLI plan bound). |
 | `completion_assertions` | array of `Assertion` | At least one user-marked final outcome. Empty is malformed. |
 | `plan_version` | `u32` | Increments on every reviewed save. Resume binds to this exact value. |
 | `verified_plan_version` | `u32` or omitted | Set only after a verification run of that exact version succeeded. `ready` is derived from `verified_plan_version == plan_version`. An edit that bumps `plan_version` returns the routine to `draft`. |
@@ -185,16 +185,16 @@ duplicate real-world mutations merely to validate a plan.
 
 ## `CompiledAction`
 
-Tagged `type`, `deny_unknown_fields`. Selector strings are 1..=16 KiB
-printable CSS derived from a durable fingerprint candidate (`unique_id`,
-`test_id`, or reviewed `css_fallback`). `count` is 1..=3.
+Tagged `type`, `deny_unknown_fields`. Click, fill, credential fill, and
+targeted scroll use the step's `target_fingerprint`, not a CSS selector.
+`count` is 1..=3.
 
 ```text
 { "type": "navigate", "navigation": <NavigationTemplate> }
-{ "type": "click", "selector": "#generate", "count": 1 }
-{ "type": "fill", "selector": "#month" }
-{ "type": "credential_fill", "selector": "#password" }
-{ "type": "scroll", "selector": "#list", "delta_x": 0.0, "delta_y": 120.0 }
+{ "type": "click", "count": 1 }
+{ "type": "fill" }
+{ "type": "credential_fill" }
+{ "type": "scroll", "delta_x": 0.0, "delta_y": 120.0 }
 { "type": "wait", "selector": "#status", "state": "present" | "visible" | "hidden" }
 { "type": "reload" }
 { "type": "back" }
@@ -202,7 +202,8 @@ printable CSS derived from a durable fingerprint candidate (`unique_id`,
 { "type": "handoff", "pause": "needs_login" | "needs_user" | "needs_reteach" }
 ```
 
-`scroll.selector` may be omitted for viewport scrolls. Navigate persists the
+Viewport scroll omits `target_fingerprint`. Targeted scroll requires one.
+Navigate persists the
 [`NavigationTemplate`](#navigation-template); the runner builds the URL at
 each run from origin, path, and current non-secret variables. It never stores
 or replays a `redact_url` string. `credential_fill` is not an MCP tool (see
@@ -301,8 +302,10 @@ user-marked sensitive) never become `literal` or `variable`. If
 `credential_policy.mode` does not permit a password field (the default
 `none`, or `username_only`), the fill is compiled to `handoff` and later
 runs become `needs_login`. `credential_field` is emitted only after the user
-opts into a mode that permits that field. Username/email login fields stay
-`variable` unless the user chose to remember them.
+opts into a mode that permits that field. Username/email login fields also become `handoff` / `needs_login` unless
+the user opted into `credential_field` for username. They must not be stored
+as `variable` or `literal` (that would serialize the username into
+`Plan.variables` and MCP arguments).
 
 `literal` and `variable` values may appear in compiled MCP plans using the
 existing `Plan.variables` / `{"$var":"..."}` substitution. `credential_field`
@@ -324,7 +327,7 @@ Navigate actions carry a separate `navigation` object:
 ```text
 {
   "origin": "https://reports.example",
-  "path": "/app",
+  "path": [ { "source": { "type": "literal", "value": "app" } } ],
   "query": [ { "name": "month", "source": { "type": "variable", "name": "report_month" } } ],
   "fragment": null
 }
@@ -387,11 +390,12 @@ fields into `PlanStep` where a tool exists.
 
 | Recorded kind | Crate output | CLI/MCP adapter |
 | --- | --- | --- |
-| navigation | `navigate` + template | `browser_navigate` URL built at run start |
-| click | `click` selector, `count` 1..=3 | `browser_act` `click` |
-| fill (literal/variable) | `fill` | `browser_act` `fill` with literal or `{"$var":"..."}` |
-| fill (credential) | `credential_fill` | **not** an MCP step; runner-to-engine `FillSink` |
-| scroll | coalesced `scroll` | `browser_act` `scroll` |
+| navigation | `navigate` + template | `browser_navigate` only if origin+path stay in `allowed_origins`; else `needs_user` |
+| click | `click` + fingerprint | engine fingerprint dispatch, **not** MCP |
+| fill (non-login) | `fill` + fingerprint | engine fingerprint dispatch, **not** MCP |
+| fill (credential) | `credential_fill` | runner-to-engine `FillSink`, **not** MCP |
+| viewport scroll | coalesced `scroll` without fingerprint | `browser_act` `scroll` |
+| targeted scroll | `scroll` + fingerprint | engine fingerprint dispatch, **not** MCP |
 | wait | `wait` | `browser_wait` |
 | back / forward / reload | same | `browser_act` |
 | user handoff / needs_login | `handoff` | **not** a successful `browser_handoff` `PlanStep`. The routine runner suspends with `needs_login` / `needs_user` and a checkpoint. Today's `browser_handoff` is checkpointed as success and then cleared on teardown, so it cannot be the pause. |
