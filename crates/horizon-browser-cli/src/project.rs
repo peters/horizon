@@ -42,7 +42,7 @@ pub struct PlanProject {
 pub struct ProjectionSummary {
     /// Encoding that was written.
     pub format: ProjectFormat,
-    /// Job-directory-relative file name.
+    /// Job-directory-relative file name written during durable finalization.
     pub file: String,
     /// Number of projected array rows, or 1 for a non-array JSON value.
     pub rows: usize,

@@ -155,9 +155,12 @@ pub enum PlanError {
     /// The plan declares more variables than the runner accepts.
     #[error("plan has {actual} variables; the maximum is {maximum}")]
     TooManyVariables { actual: usize, maximum: usize },
-    /// A variable name is malformed or its value is not a literal.
+    /// A variable name is malformed.
     #[error("invalid plan variable `{0}`")]
     InvalidVariableName(String),
+    /// A variable value is not a JSON literal.
+    #[error("plan variable `{name}` must be a JSON literal, not $ref or $var")]
+    InvalidVariableValue { name: String },
     /// A single variable value exceeds the encoded-size bound.
     #[error("plan variable `{name}` is {actual} bytes; the maximum is {maximum}")]
     VariableTooLarge {
@@ -1062,9 +1065,9 @@ mod tests {
 
     #[test]
     fn repeated_variable_substitution_is_bounded() {
-        let blob = "x".repeat(8 * 1024);
+        let blob = "x".repeat(4 * 1024 - 2);
         let mut arguments = serde_json::Map::new();
-        for index in 0..200 {
+        for index in 0..300 {
             arguments.insert(format!("f{index}"), json!({"$var": "blob"}));
         }
         let plan = Plan {
@@ -1077,6 +1080,7 @@ mod tests {
             }],
             project: None,
         };
+        crate::variables::validate(&plan.variables).expect("max-sized literal is valid");
         let error = resolve_arguments(&plan, &plan.steps[0], &[], &BTreeMap::new()).expect_err("over budget");
         assert!(error.contains("resolved arguments are"));
     }

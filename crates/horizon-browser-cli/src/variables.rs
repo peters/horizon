@@ -23,9 +23,7 @@ pub(crate) fn validate(variables: &BTreeMap<String, Value>) -> Result<(), PlanEr
             return Err(PlanError::InvalidVariableName(name.clone()));
         }
         if value_contains_substitution(value) {
-            return Err(PlanError::InvalidVariableName(format!(
-                "{name}: variable values must be JSON literals, not $ref or $var"
-            )));
+            return Err(PlanError::InvalidVariableValue { name: name.clone() });
         }
         let encoded = serde_json::to_vec(value).map_err(|error| PlanError::InvalidVariableName(error.to_string()))?;
         if encoded.len() > MAX_VARIABLE_BYTES {
@@ -81,6 +79,6 @@ mod tests {
             Err(PlanError::TooManyVariables { actual, .. }) if actual == MAX_VARIABLES + 1
         ));
         let nested = BTreeMap::from([("url".to_string(), json!({"$var":"other"}))]);
-        assert!(matches!(validate(&nested), Err(PlanError::InvalidVariableName(_))));
+        assert!(matches!(validate(&nested), Err(PlanError::InvalidVariableValue { name }) if name == "url"));
     }
 }
