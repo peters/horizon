@@ -37,13 +37,8 @@ def docker_daemon_down(stderr="Cannot connect to the Docker daemon at unix:///va
 
 
 def podman_ok(version="4.9.0"):
-    # Real `podman info --format json` schema: top-level version.Version.
-    return {"stdout": json.dumps({"version": {"Version": version}, "host": {}})}
-
-
-def podman_ok_legacy(version="4.9.0"):
-    # Legacy shape, kept as a parser fallback.
-    return {"stdout": json.dumps({"host": {"version": {"output": version}}})}
+    # `podman info --format '{{.Version.Version}}'` returns one field.
+    return {"stdout": version + "\n"}
 
 
 def nproc_fixture(cores="8"):
@@ -62,19 +57,18 @@ def tailscale_version_fixture(version="1.78.3"):
     return {"stdout": version + "\n  long version: %s-t0\n" % version}
 
 
-def tailscale_status_fixture(dns_name="fintermac-vm.tailnet-f382.ts.net.", online=True):
+def tailscale_status_fixture(dns_name="vm.example.ts.net.", online=True):
     return {"stdout": json.dumps({"Self": {"DNSName": dns_name, "Online": online}})}
 
 
 def docker_context_ok(host="unix:///var/run/docker.sock"):
-    return {"stdout": json.dumps([{"Name": "default",
-                                   "Endpoints": {"docker": {"Host": host}}}] )}
+    return {"stdout": host + "\n"}
 
 
 DEFAULT_FIXTURE = {
     "os": os_fixture(),
     "docker_version": docker_ok(),
-    "docker_info": {"stdout": "Storage Driver: overlay2\nCgroup Driver: systemd\n"},
+    "docker_info": {"stdout": "overlay2\n"},
     "docker_context": docker_context_ok(),
     "cores": nproc_fixture(),
     "disk": df_fixture(),
@@ -198,7 +192,7 @@ class PreflightVerdicts(Harness):
         self.assertEqual(by_id["os_linux"]["status"], "supported")
         self.assertEqual(by_id["container_engine"]["value"], "docker 26.1.4")
         self.assertEqual(by_id["storage_ext4_qualifier"]["value"], "nvme0n1p2")
-        self.assertEqual(by_id["tailscale"]["value"], "fintermac-vm.tailnet-f382.ts.net")
+        self.assertEqual(by_id["tailscale"]["value"], "vm.example.ts.net")
 
     def test_aarch64_podman_only_supported(self):
         fixture = dict(DEFAULT_FIXTURE)
@@ -256,16 +250,16 @@ class EngineFailures(Harness):
         self.assertIn("docker present but probe failed", by_id["container_engine"]["detail"])
         self.assertIn("permission denied", by_id["container_engine"]["detail"].lower())
 
-    def test_podman_legacy_version_shape_still_parses(self):
+    def test_podman_empty_version_is_unusable(self):
         fixture = dict(DEFAULT_FIXTURE)
         fixture.pop("docker_version")
         fixture.pop("docker_info")
         fixture.pop("docker_context", None)
-        fixture["podman_info"] = podman_ok_legacy("4.9.0")
+        fixture["podman_info"] = {"stdout": "\n"}
         code, report, _ = self.run_main(fixture)
-        self.assertEqual(code, 0)
+        self.assertEqual(code, 1)
         by_id = {check["id"]: check for check in report["checks"]}
-        self.assertEqual(by_id["container_engine"]["value"], "podman 4.9.0")
+        self.assertEqual(by_id["container_engine"]["status"], "unsupported")
 
     def test_bearer_authorization_line_is_fully_redacted(self):
         fixture = dict(DEFAULT_FIXTURE)
@@ -396,7 +390,7 @@ class EngineFailures(Harness):
         cases = {
             "timeout": {"docker_info": {"timeout": True}},
             "nonzero": {"docker_info": {"exit_code": 1, "stdout": "", "stderr": "denied"}},
-            "no_line": {"docker_info": {"stdout": "Cgroup Driver: systemd\n"}},
+            "no_line": {"docker_info": {"stdout": ""}},
         }
         for label, overrides in cases.items():
             with self.subTest(label=label):
@@ -619,6 +613,17 @@ class DiskAndCapacity(Harness):
         self.assertEqual(by_id["storage_ext4_qualifier"]["status"], "supported")
         self.assertEqual(by_id["storage_ext4_qualifier"]["value"], "nvme0n1p2")
 
+    def test_df_keeps_mount_points_with_spaces(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["disk"] = {"stdout":
+            "Filesystem     1024-blocks      Used Available Capacity Mounted on\n"
+            "/dev/root        1000000000  800000000   200000000     80% /\n"
+            "/dev/data        2000000000 1900000000    41943040    98% /mnt/worker data\n"}
+        code, report, _ = self.run_main(fixture, workspace="/mnt/worker data/job")
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["disk_capacity"]["value"], 41943040)
+        self.assertIn("/mnt/worker data", by_id["disk_capacity"]["detail"])
+
     def test_credential_shaped_mount_is_redacted(self):
         fixture = dict(DEFAULT_FIXTURE)
         fixture["disk"] = {"stdout":
@@ -710,6 +715,26 @@ class RedactionAndDeterminism(Harness):
         self.assertNotIn("supersecretvalue", text)
         self.assertNotIn(JWT, text)
         self.assertIn("<redacted>", text)
+
+    def test_prefixed_credential_keys_are_redacted(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["docker_version"] = docker_daemon_down(
+            "access_token=aaa111 refresh-token=bbb222 client_secret=ccc333")
+        _, report, _ = self.run_main(fixture)
+        text = json.dumps(report)
+        self.assertNotIn("aaa111", text)
+        self.assertNotIn("bbb222", text)
+        self.assertNotIn("ccc333", text)
+        self.assertIn("<redacted>", text)
+
+    def test_timeout_must_be_positive_finite(self):
+        import io
+        from contextlib import redirect_stderr
+        for value in ("-1", "0", "nan", "inf", "-inf"):
+            with self.subTest(value=value):
+                with redirect_stderr(io.StringIO()):
+                    with self.assertRaises(SystemExit):
+                        preflight.main(["--timeout", value])
 
     def test_report_is_deterministic(self):
         import io

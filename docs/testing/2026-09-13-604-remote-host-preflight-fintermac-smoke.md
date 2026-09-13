@@ -6,27 +6,30 @@ pass is complete.
 
 ## Target
 
-- **Fintermac**: Linux VM hosted on `finter-sin-mac-studio-1` (macOS,
-  Tailscale `finter-sin-mac-studio-1.tailnet-f382.ts.net`).
-- SSH access alias `fintermac` (`~/.ssh/config`): user `fintermac`,
-  HostName `finter-sin-mac-studio-1`. The **Linux VM** is the preflight
-  target; its own Tailscale identity is discovered in step 2 (not known from
-  this machine's tailnet list while the Mac is offline).
-- The host was **offline (Mac asleep)** when this plan was written. The live
-  run executes when the host is back; nothing here requires the Mac itself as
-  the target — only SSH reachability of the Linux VM.
+Motivating example: a Linux VM hosted on a user-owned Mac, reachable over
+SSH. **Do not commit real hostnames, DNS names, aliases or logins.** Supply
+them locally:
+
+```sh
+MAC_SSH=user@mac-host    # ssh target for the Mac (alias or user@host)
+VM_SSH=user@linux-vm     # ssh target for the Linux VM (pinned host key)
+```
+
+The **Linux VM** is the preflight target. The Mac is only used to discover
+the VM when its address is not already known. Nothing here requires the Mac
+itself as the probe target — only SSH reachability of the Linux VM.
 
 ## Preconditions
 
-- [ ] `ssh fintermac` (the Mac) answers: `ssh -o BatchMode=yes -o ConnectTimeout=15 fintermac 'echo MAC_REACHABLE'`
-- [ ] Identify the VM: `ssh fintermac 'tailscale status 2>/dev/null || /Applications/Tailscale.app/Contents/MacOS/Tailscale status'`
-      → pick the **Linux** node (name/IP). Record it as `$VM` (DNS name or
-      tailnet IP). If the VM is not a tailnet node, get its reachable IP from
-      the Mac and use it (pinned SSH, known host key — see step 3).
+- [ ] The Mac answers: `ssh -o BatchMode=yes -o ConnectTimeout=15 "$MAC_SSH" 'echo MAC_REACHABLE'`
+- [ ] Identify the VM: `ssh "$MAC_SSH" 'tailscale status 2>/dev/null || true'`
+      → pick the **Linux** node. Record it as `VM_SSH` (`user@name` or
+      `user@ip`). If the VM is not a tailnet node, get its reachable address
+      from the Mac (pinned SSH, known host key).
 - [ ] Key-based auth to the VM works non-interactively:
-      `ssh -o BatchMode=yes -o ConnectTimeout=15 fintermac@<VM> 'echo VM_REACHABLE'`
-      (if the VM user differs, use that user; keep the key-based auth and
-      pinned host key — do not weaken host-key checking.)
+      `ssh -o BatchMode=yes -o ConnectTimeout=15 "$VM_SSH" 'echo VM_REACHABLE'`
+      (keep key-based auth and pinned host-key checking; do not add
+      `StrictHostKeyChecking=no`).
 
 ## Scope note: what is read-only here
 
@@ -42,7 +45,7 @@ explicit about which steps mutate the host so the proof is not overclaimed.
 
 1. **Baseline snapshot (read-only):**
    ```sh
-   ssh fintermac@<VM> 'date -u; uname -srm; nproc; grep MemTotal /proc/meminfo;
+   ssh "$VM_SSH" 'date -u; uname -srm; nproc; grep MemTotal /proc/meminfo;
      WS=/var/lib/horizon-workers;
      while [ ! -e "$WS" ]; do
        parent=$(dirname "$WS");
@@ -66,19 +69,24 @@ explicit about which steps mutate the host so the proof is not overclaimed.
    single file to `/tmp`, removed in step 5. No package manager, no service,
    no install path.
    ```sh
-   scp scripts/remote-host-preflight/preflight.py fintermac@<VM>:/tmp/preflight-604.py
+   scp scripts/remote-host-preflight/preflight.py "$VM_SSH":/tmp/preflight-604.py
    ```
 
-3. **Run the preflight on the VM** (the tool run under test; fixed args, bounded probes, 10 s each). Capture both reports **locally** before any VM cleanup:
+3. **Run the preflight on the VM** (the tool run under test; fixed args, bounded probes, 10 s each). Capture reports **locally** before any VM cleanup. Assertion 9 needs two JSON runs with the same `--now`:
    ```sh
-   ssh fintermac@<VM> 'python3 -B /tmp/preflight-604.py --json --now 2026-09-13T00:00:00Z' > fintermac-preflight.json
-   echo json_exit=$?
-   ssh fintermac@<VM> 'python3 -B /tmp/preflight-604.py' > fintermac-preflight.txt
+   ssh "$VM_SSH" 'python3 -B /tmp/preflight-604.py --json --now 2026-09-13T00:00:00Z' > preflight-1.json
+   echo json_exit_1=$?
+   ssh "$VM_SSH" 'python3 -B /tmp/preflight-604.py --json --now 2026-09-13T00:00:00Z' > preflight-2.json
+   echo json_exit_2=$?
+   cmp preflight-1.json preflight-2.json
+   ssh "$VM_SSH" 'python3 -B /tmp/preflight-604.py' > preflight.txt
    echo human_exit=$?
    ```
-   Keep `fintermac-preflight.json` and `fintermac-preflight.txt` as the
+   Keep `preflight-1.json`, `preflight-2.json` and `preflight.txt` as the
    evidence artifacts. Do not rely on a VM-side report file (step 5 deletes
-   only the delivered checker).
+   only the delivered checker). On a live host, `df` free space can drift
+   between the two JSON runs; if `cmp` differs only in `disk_capacity`,
+   treat that as sampling, not a generated_at/probe-structure failure.
 
 4. **Post-run snapshot (read-only):** same commands as step 1 (including
    `nproc`, `MemTotal`, the workspace ancestor, its block device and the raw
@@ -93,7 +101,7 @@ explicit about which steps mutate the host so the proof is not overclaimed.
 
 5. **Remove the verification copy** (the delivered checker, not host state):
    ```sh
-   ssh fintermac@<VM> 'rm -f /tmp/preflight-604.py'
+   ssh "$VM_SSH" 'rm -f /tmp/preflight-604.py'
    ```
 
 ## Bug-hunt matrix (assert each on the real output)
@@ -108,7 +116,7 @@ explicit about which steps mutate the host so the proof is not overclaimed.
 | 6 | `storage_ext4_qualifier` device name matches the real block device of the workspace filesystem (`stat -c '%Hd:%Ld'` → `/sys/dev/block/<maj>:<min>`); pass/fail against the full 4096-byte ext4 options captured independently |
 | 7 | `tailscale` DNS name matches the VM's tailnet identity from precondition 2; online state is a bool |
 | 8 | No raw secrets/tokens/keys anywhere in either report (visual + `grep -E 'eyJ[A-Za-z0-9_-]{4,}\.|PRIVATE KEY|token='`) |
-| 9 | Two runs with the same `--now` produce byte-identical JSON |
+| 9 | Two runs with the same `--now` produce byte-identical JSON (`cmp` in step 3); disk free-space sampling drift is the only allowed difference |
 | 10 | The 3 `unverified` entries are always present with their fixed details |
 | 11 | `before.txt`/`after.txt` diff is clock-only for the tool run (corroboration; primary read-only evidence is the strace audit in the PR) |
 | 12 | If the VM has no docker: the engine check says `docker: tool not present` / podman path — no crash, exit code still consistent |

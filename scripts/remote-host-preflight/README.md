@@ -27,19 +27,20 @@ Options:
   synthetic testing only.
 
 Exit codes: `0` all decided prerequisites supported, `1` at least one
-unsupported, `2` at least one probe error (report is still emitted).
+unsupported check **and no probe errors**, `2` at least one probe error
+(errors take precedence; the report is still emitted).
 
 ## What it checks
 
 | Check | Source | Meaning |
 | --- | --- | --- |
 | `os_linux` | `uname -srm` | Linux kernel on `x86_64` or `aarch64` (release + arch in the report). A failed or truncated `uname` is an **error**, not a rejection; only a parsed non-Linux kernel is `unsupported` |
-| `container_engine` | `docker version` / `docker context inspect` / `docker info` / `podman info` | a usable engine is present **and reachable by the current user on this host**: the endpoint must be a local unix socket (`DOCKER_HOST` or the active docker context Host; named podman/`CONTAINER_*` connections are rejected), the docker server OS must be present and `linux`, and for docker the storage driver is reported or explicitly marked `unverified` with the reason |
+| `container_engine` | `docker version --format json` / `docker context inspect --format '{{.Endpoints.docker.Host}}'` / `docker info --format '{{.Driver}}'` / `podman info --format '{{.Version.Version}}'` | a usable engine is present **and reachable by the current user on this host**: the endpoint must be a local unix socket (`DOCKER_HOST` or the active docker context Host; named podman/`CONTAINER_*` connections are rejected), the docker server OS must be present and `linux`, and for docker the storage driver is reported or explicitly marked `unverified` with the reason. Engine probes request only those fields |
 | `cpu_capacity` | `nproc`, fallback `/proc/cpuinfo` | at least the 4-core reference baseline. The cpuinfo fallback is used only when it contains at least one `processor` record; otherwise the report is incomplete |
 | `memory_capacity` | `/proc/meminfo` `MemTotal` | at least the 16 GiB reference baseline (an unreadable `MemTotal` is an **error**, not a rejection) |
 | `disk_capacity` | `df -kP` | at least 20 GiB free on the mount that will hold the workspace: the **longest mount-point ancestor** of the resolved (symlink-followed) workspace path; a malformed free value on that mount is an **error** |
 | `storage_ext4_qualifier` | `stat` + `/sys/dev/block` + `/proc/fs/ext4/<dev>/options` | the worker repository-storage qualifier, mirrored exactly from `crates/horizon-core/src/repository_overlay/storage.rs`: ext4 options with exact tokens `rw` + `barrier`, no `ro`/`nobarrier`, exactly one `data=ordered`/`data=journal` line, no duplicates/spaces/control characters, 4096-byte cap, trailing newline |
-| `tailscale` | `tailscale version` / `tailscale status --json` | **informational, never gates the verdict** (issue #604 permits ordinary pinned SSH): presence + self DNS name + online state when available, `unverified` when absent |
+| `tailscale` | `tailscale version` / `tailscale status --json --peers=false` | **informational, never gates the verdict** (issue #604 permits ordinary pinned SSH): presence + self DNS name + online state when available, `unverified` when absent. Peer inventory is not requested |
 | `storage_durability`, `effective_isolation`, `worker_startup` | — | always **unverified**: read-only metadata cannot prove retention, isolation or startup; the later on-worker acceptance closes these |
 
 ## Read-only guarantees
@@ -54,11 +55,14 @@ unsupported, `2` at least one probe error (report is still emitted).
   names) passes through a credential redactor (JWT-like material,
   private-key blocks, `password|token|secret|api_key` assignments redacted
   to end of line, `Authorization` headers case-insensitively), truncated to
-  400 characters. Only the endpoint-selection variables `DOCKER_HOST` and
-  `PODMAN_CONNECTION`/`PODMAN_HOST`/`CONTAINER_HOST`/`CONTAINER_CONNECTION`
-  (presence) are inspected, plus the active docker context Host from
-  `docker context inspect` — never an environment dump; full engine
-  configuration and unrelated workloads are never read or reported.
+  400 characters, including prefixed assignment keys such as
+  `access_token=` / `refresh-token=` / `client_secret=`. Only the
+  endpoint-selection variables `DOCKER_HOST` and `PODMAN_CONNECTION` /
+  `PODMAN_HOST` / `CONTAINER_HOST` / `CONTAINER_CONNECTION` (presence) are
+  inspected, plus the active docker context Host from the formatted inspect
+  probe — never an environment dump; full engine configuration, peer
+  inventories and unrelated workloads are never read or reported. `--timeout`
+  must be a positive finite number.
 
 ## Tests
 

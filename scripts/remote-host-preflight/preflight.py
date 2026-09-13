@@ -16,6 +16,7 @@ Read-only guarantees:
 
 import argparse
 import json
+import math
 import os
 import re
 import subprocess
@@ -44,12 +45,13 @@ PROBE_ARGS = {
     "os": ["uname", "-srm"],
     "cores": ["nproc"],
     "docker_version": ["docker", "version", "--format", "json"],
-    "docker_info": ["docker", "info"],
-    "docker_context": ["docker", "context", "inspect"],
-    "podman_info": ["podman", "info", "--format", "json"],
+    "docker_info": ["docker", "info", "--format", "{{.Driver}}"],
+    "docker_context": ["docker", "context", "inspect", "--format",
+                       "{{.Endpoints.docker.Host}}"],
+    "podman_info": ["podman", "info", "--format", "{{.Version.Version}}"],
     "disk": ["df", "-kP"],
     "tailscale_version": ["tailscale", "version"],
-    "tailscale_status": ["tailscale", "status", "--json"],
+    "tailscale_status": ["tailscale", "status", "--json", "--peers=false"],
 }
 
 # Probes whose absence is a finding, not a crash: the engine pair and tailscale.
@@ -71,7 +73,9 @@ ENDPOINT_VARS = DOCKER_ENDPOINT_VARS + PODMAN_ENDPOINT_VARS
 REDACTED_PATTERNS = (
     re.compile(r"eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}(?:\.[A-Za-z0-9_-]{4,})?"),  # JWT-like
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*"),
-    re.compile(r"(?i)\b(password|passwd|secret|token|api[_-]?key)\b\s*[:=]\s*[^\n]*"),
+    re.compile(
+        r"(?i)[A-Za-z0-9_-]*(password|passwd|secret|token|api[_-]?key)\s*[:=]\s*[^\n]*"
+    ),
     re.compile(r"(?i)\bauthorization\s*:\s*[^\n]*"),
 )
 
@@ -172,25 +176,16 @@ def parse_engine_version(probe, name):
     """Version string from a successful engine probe, or None."""
     if probe is None or probe["exit_code"] != 0:
         return None
+    if name == "podman":
+        # `podman info --format '{{.Version.Version}}'` returns one field.
+        text = redact(str(probe.get("stdout", "")).strip())
+        return text or None
     payload = parse_json_output(probe)
     if not isinstance(payload, dict):
         return None
-    if name == "docker":
-        server = payload.get("Server")
-        if isinstance(server, dict) and server.get("Version"):
-            return redact(str(server["Version"]))
-        return None
-    # podman: the real `podman info --format json` schema exposes the version
-    # under top-level `version.Version`; `host.version.output` is the legacy
-    # shape and is kept only as a fallback.
-    version = payload.get("version")
-    if isinstance(version, dict) and version.get("Version"):
-        return redact(str(version["Version"]))
-    host = payload.get("host")
-    if isinstance(host, dict):
-        outputs = host.get("version")
-        if isinstance(outputs, dict) and outputs.get("output"):
-            return redact(str(outputs["output"]))
+    server = payload.get("Server")
+    if isinstance(server, dict) and server.get("Version"):
+        return redact(str(server["Version"]))
     return None
 
 
@@ -203,19 +198,11 @@ def is_local_unix_endpoint(host):
 
 
 def docker_context_host(probe):
-    """Active-context docker Host, or None if the inspect payload is unusable."""
+    """Active-context docker Host from the `--format` template, or None."""
     if probe is None or probe["exit_code"] != 0:
         return None
-    payload = parse_json_output(probe)
-    if isinstance(payload, list) and payload:
-        payload = payload[0]
-    if not isinstance(payload, dict):
-        return None
-    endpoints = payload.get("Endpoints")
-    docker = endpoints.get("docker") if isinstance(endpoints, dict) else None
-    if isinstance(docker, dict) and docker.get("Host"):
-        return redact(str(docker["Host"]))
-    return None
+    host = redact(str(probe.get("stdout", "")).strip())
+    return host or None
 
 
 def docker_endpoint_reason(executor, timeout):
@@ -327,12 +314,9 @@ def check_container_engine(executor, timeout):
         elif info["exit_code"] != 0:
             reason = "probe failed (%s)" % (redact(info.get("stderr", "")) or "exit %s" % info["exit_code"])
         else:
-            for line in str(info.get("stdout", "")).splitlines():
-                if line.strip().startswith("Storage Driver:"):
-                    driver = redact(line.split(":", 1)[1].strip())
-                    break
+            driver = redact(str(info.get("stdout", "")).strip()) or None
             if driver is None:
-                reason = "no Storage Driver line in output"
+                reason = "docker info --format Driver was empty"
         if driver:
             detail += "; storage driver %s" % driver
         else:
@@ -430,7 +414,9 @@ def check_disk(executor, timeout, workspace_path):
     mounts = []
     free_by_mount = {}
     for line in str(result.get("stdout", "")).splitlines()[1:]:
-        fields = line.split()
+        # POSIX `df -P`: six fields; the mount point may contain spaces, so
+        # split at most five times and keep the remainder intact.
+        fields = line.split(None, 5)
         if len(fields) >= 6:
             mounts.append(fields[5])
             free_by_mount[fields[5]] = int(fields[3]) if fields[3].isdigit() else None
@@ -654,6 +640,18 @@ def default_executor(argv, timeout):
     return {"exit_code": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr}
 
 
+def parse_timeout(value):
+    """Positive finite seconds. Rejects negatives, zero, NaN and infinities."""
+    try:
+        timeout = float(value)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError(
+            "timeout must be a positive finite number") from exc
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise argparse.ArgumentTypeError("timeout must be a positive finite number")
+    return timeout
+
+
 def main(argv=None, executor=None, now=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workspace-path", default=DEFAULT_WORKSPACE_PATH,
@@ -664,7 +662,7 @@ def main(argv=None, executor=None, now=None):
                         help="sysfs root for synthetic testing (default: /sys)")
     parser.add_argument("--now", default=None,
                         help="fixed generated_at timestamp for deterministic output")
-    parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT,
+    parser.add_argument("--timeout", type=parse_timeout, default=DEFAULT_TIMEOUT,
                         help="per-probe timeout in seconds (default: %(default)s)")
     parser.add_argument("--json", action="store_true", help="emit the JSON report")
     args = parser.parse_args(argv)
