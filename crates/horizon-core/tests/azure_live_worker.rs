@@ -47,7 +47,10 @@ use horizon_core::cloud_run::{
         InteractiveWorkerProvider, InteractiveWorkerRequest, InteractiveWorkerSshEndpoint, InteractiveWorkerStatus,
     },
     interactive_worker_start::{InteractiveWorkerStart, InteractiveWorkerStartProvider},
-    interactive_worker_stop::{InteractiveWorkerStop, InteractiveWorkerStopProvider},
+    interactive_worker_stop::{
+        InteractiveWorkerStop, InteractiveWorkerStopExpectation, InteractiveWorkerStopObservation,
+        InteractiveWorkerStopObserver, InteractiveWorkerStopProvider,
+    },
 };
 use std::{
     path::Path,
@@ -849,6 +852,40 @@ impl Live {
         );
     }
 
+    /// `Check saved Stop` against the live control plane: the read-only observation of
+    /// the exact saved worker and pin answers as expected, and a pin whose address is
+    /// not this worker's is an identity error rather than any observation.
+    fn check_saved_stop(
+        &self,
+        persisted: &InteractiveWorker,
+        endpoint: &InteractiveWorkerSshEndpoint,
+        expected: InteractiveWorkerStopObservation,
+        when: &str,
+    ) {
+        let observe = |ssh: &InteractiveWorkerSshEndpoint| {
+            self.client.observe_worker_stop(InteractiveWorkerStopExpectation {
+                worker: persisted,
+                ssh,
+                network_volume: None,
+            })
+        };
+        let observed = observe(endpoint).expect("observe saved stop");
+        assert_eq!(observed, expected, "check saved stop {when}");
+        if expected == InteractiveWorkerStopObservation::RetainedStopped {
+            // TEST-NET-3 is never an Azure public address: a saved pin that names
+            // another host must be refused as this worker's identity, not observed.
+            let moved = InteractiveWorkerSshEndpoint {
+                host: "203.0.113.1".into(),
+                ..endpoint.clone()
+            };
+            assert_eq!(observe(&moved), Err(AzureError::ResourceIdentityMismatch));
+        }
+        self.run.event(
+            "saved_stop_checked",
+            &format!("{when}: {observed:?} from the persisted handle and the saved pin"),
+        );
+    }
+
     /// Delete exactly the owned group and prove it is gone.
     fn delete(&self, persisted: &InteractiveWorker) {
         let started = Instant::now();
@@ -899,9 +936,33 @@ fn live_worker_create_ready_stop_delete() {
     let live = setup();
     let persisted = live.create();
     let endpoint = live.ready_and_prove_ssh(&persisted);
+    live.check_saved_stop(
+        &persisted,
+        &endpoint,
+        InteractiveWorkerStopObservation::Pending,
+        "while running",
+    );
     live.stop(&persisted);
+    live.check_saved_stop(
+        &persisted,
+        &endpoint,
+        InteractiveWorkerStopObservation::RetainedStopped,
+        "after the stop",
+    );
     live.start_and_reattach(&persisted, &endpoint);
+    live.check_saved_stop(
+        &persisted,
+        &endpoint,
+        InteractiveWorkerStopObservation::Pending,
+        "after the start",
+    );
     live.stop(&persisted);
+    live.check_saved_stop(
+        &persisted,
+        &endpoint,
+        InteractiveWorkerStopObservation::RetainedStopped,
+        "after the second stop",
+    );
     if keep() {
         live.cleanup.borrow_mut().armed = false;
         live.run
@@ -909,8 +970,14 @@ fn live_worker_create_ready_stop_delete() {
         return;
     }
     live.delete(&persisted);
+    live.check_saved_stop(
+        &persisted,
+        &endpoint,
+        InteractiveWorkerStopObservation::Absent,
+        "after the delete",
+    );
     live.run.event(
         "done",
-        "create, ready, pinned ssh, stop, start, pinned reattach with retained data, stop, delete all proven",
+        "create, ready, pinned ssh, check saved stop, stop, start, pinned reattach with retained data, stop, delete all proven",
     );
 }
