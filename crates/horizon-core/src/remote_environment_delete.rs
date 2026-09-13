@@ -1,5 +1,11 @@
 //! Explicit destructive intent and exact worker-absence confirmation, never client cleanup.
 
+mod configured;
+pub use configured::{
+    ConfiguredEnvironmentDeleteError, ConfiguredEnvironmentDeletion, confirm_configured_remote_environment_deletion,
+    delete_configured_remote_environment, retry_configured_remote_environment_deletion,
+};
+
 use crate::{
     cloud_run::{
         CloudStoreError, CloudWorkflowStore, RemoteWorkspaceStoreError, StoredRemoteAllocation, WorkerLifetime,
