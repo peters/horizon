@@ -1,4 +1,5 @@
 use horizon_browser_protocol::{SelectorState, redact_url};
+use serde::ser::{SerializeStruct, Serializer};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -10,9 +11,10 @@ use crate::{RoutineError, SCHEMA_VERSION};
 
 const MAX_ACTIONS: usize = 256;
 const MAX_WAIT_SELECTOR_BYTES: usize = 16 * 1024;
+const MAX_URL_PATTERN_BYTES: usize = 8 * 1024;
 
 /// Versioned list of privacy-filtered semantic actions from one Teach session.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SemanticRecording {
     pub schema_version: u32,
@@ -105,9 +107,6 @@ pub enum MutationClass {
 
 impl NavigationTemplate {
     pub(crate) fn validate(&self) -> Result<(), RoutineError> {
-        if self.path.is_empty() {
-            return Err(RoutineError::InvalidNavigation);
-        }
         for segment in &self.path {
             match &segment.source {
                 ValueSource::Literal { value } => {
@@ -154,6 +153,17 @@ impl QueryComponent {
             }
             ValueSource::CredentialField { .. } => Err(RoutineError::InvalidNavigation),
         }
+    }
+}
+
+impl Serialize for SemanticRecording {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.validate().map_err(serde::ser::Error::custom)?;
+        let mut state = serializer.serialize_struct("SemanticRecording", 3)?;
+        state.serialize_field("schema_version", &self.schema_version)?;
+        state.serialize_field("recording_id", &self.recording_id)?;
+        state.serialize_field("actions", &self.actions)?;
+        state.end()
     }
 }
 
@@ -205,7 +215,10 @@ impl RecordedAction {
         if self.recorded_at_millis < 0 {
             return Err(RoutineError::InvalidRecording);
         }
-        if self.url_pattern != redact_url(&self.url_pattern) || self.url_pattern.is_empty() {
+        if self.url_pattern.len() > MAX_URL_PATTERN_BYTES
+            || self.url_pattern.is_empty()
+            || self.url_pattern != redact_url(&self.url_pattern)
+        {
             return Err(RoutineError::UnredactedUrl);
         }
         if let Some(navigation) = &self.navigation {
@@ -246,11 +259,11 @@ impl RecordedAction {
                 reject_value(self.value_source.as_ref())
             }
             RecordedKind::Wait { selector, .. } => {
+                let selector = selector.trim();
                 if selector.is_empty()
                     || selector.len() > MAX_WAIT_SELECTOR_BYTES
                     || selector.chars().any(char::is_control)
                     || selector.contains('?')
-                    || selector.contains('#')
                 {
                     return Err(RoutineError::InvalidRecording);
                 }
@@ -425,9 +438,10 @@ mod tests {
             postcondition: None,
         };
         assert_eq!(
-            recording(vec![fill]).to_redacted_json(),
+            recording(vec![fill.clone()]).to_redacted_json(),
             Err(RoutineError::SecretLiteral)
         );
+        assert!(serde_json::to_string(&recording(vec![fill])).is_err());
     }
 
     #[test]

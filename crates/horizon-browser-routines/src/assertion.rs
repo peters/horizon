@@ -30,7 +30,7 @@ impl Assertion {
 
 fn validate_url_pattern(value: &str) -> Result<(), RoutineError> {
     validate_text(value)?;
-    if value.starts_with('/') {
+    if value.starts_with('/') && !value.starts_with("//") {
         return Ok(());
     }
     Origin::parse(value)

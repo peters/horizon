@@ -26,6 +26,10 @@ impl Origin {
             return Err(RoutineError::InvalidOrigin);
         }
         let host = url.host_str().ok_or(RoutineError::InvalidOrigin)?;
+        let host = host
+            .strip_prefix('[')
+            .and_then(|value| value.strip_suffix(']'))
+            .unwrap_or(host);
         let scheme = url.scheme();
         let loopback = is_loopback_host(host);
         match scheme {
