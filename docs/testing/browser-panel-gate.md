@@ -225,6 +225,13 @@ Because this gate uses a public site, report external markup/feed drift
 separately from a browser regression and keep G1 as the deterministic pass/fail
 oracle.
 
+Issue [#324](https://github.com/peters/horizon/issues/324) accepts this
+five-minute E24 HTTP/JSONP observation **together with** the G1
+`websocket.html` high-rate WebSocket fixture as the performance-acceptance
+oracle. It does not require a third-party public WebSocket. The decision and
+rerun commands are recorded in
+[`docs/architecture/browser-performance-acceptance.md`](../architecture/browser-performance-acceptance.md).
+
 Use the periodic mode to prove sustained, low-overhead consumption and produce
 an agent-readable summary every 30 seconds for five minutes:
 
