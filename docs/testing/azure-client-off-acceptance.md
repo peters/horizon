@@ -87,14 +87,19 @@ gives A no identity today, so before the product pass A needs, in this order:
    setup, Check and Start use to attest the worker host key); network (public IP,
    network interface, security group, virtual network); and
    `Microsoft.ManagedIdentity/userAssignedIdentities/assign/action` on
-   `horizon-worker-puller`. Contributor on the subscription plus Managed Identity
-   Operator on the pull identity covers this; a custom role must list those actions.
-   The role assignment is an authorization change and is posted on #474 for approval
-   before it is made. No user credential is copied to A. Before Horizon is launched, and under the same `HOME`
+   `horizon-worker-puller`. Use a custom role that lists exactly those actions at
+   subscription scope (the product creates one new resource group per worker, so the
+   scope cannot be a single group) plus Managed Identity Operator scoped to
+   `horizon-worker-puller`; subscription-wide Contributor is not used, because it
+   would let a compromised client write to or delete unrelated pre-existing resources
+   and weaken the untouched-peer guarantee below. The role definition and assignment
+   are an authorization change and are posted on #474 for approval before they are
+   made. No user credential is copied to A. Before Horizon is launched, and under the same `HOME`
    Horizon will use, run `az login --identity` as A's Horizon user and prove the token
    path the product will take without printing a token: `az account get-access-token
-   --subscription <id> --resource https://management.azure.com/ --query expiresOn -o
-   tsv` must print an expiry. The product's credential issues the same subscription
+   --subscription <id> --resource https://management.azure.com/ --query expires_on -o
+   tsv` must print the epoch expiry, the same `expires_on` field the product's
+   credential parses from the JSON answer. The credential issues the same subscription
    and resource arguments (adding only `--output json` and `--only-show-errors`) with
    stdin closed, so an unauthenticated CLI leaves setup, Stop and Start unable to
    obtain a token.
@@ -214,11 +219,13 @@ back unchanged at return and after the worker lifecycle step.
      trusted on first connection. Check updates the setup notice, not the row: press
      **Refresh saved page** and select the row again before the next step. The
      overview deliberately never shows the pin; the `host_key` for `worker.json` is
-     taken from A's saved record, whose snapshot is JSON: copy
-     `$HOME/.horizon/cloud-run/workflows.sqlite3` read-only and read
-     `state.runtime.ssh.host_key` from the `snapshot` column of `remote_workspaces` for
-     the workspace (a supported export of the saved pin is preferable and is tracked
-     on #474; scanning the host would defeat the attestation).
+     taken from A's saved record, whose snapshot is JSON. The store runs in WAL mode,
+     so a plain file copy can miss the newest rows: take a consistent copy with
+     SQLite's online backup (`sqlite3 $HOME/.horizon/cloud-run/workflows.sqlite3
+     ".backup /tmp/horizon-store-copy.sqlite3"`) and read `state.runtime.ssh.host_key`
+     from the `snapshot` column of `remote_workspaces` for the workspace in that copy
+     (a supported export of the saved pin is preferable and is tracked on #474;
+     scanning the host would defeat the attestation).
    - Under *Remote repository preparation*, tick *Include explicit first-token
      installation* first if the PAT is to be delivered, then **Review repository
      preparation**; the confirmation that follows carries the token field, the
@@ -323,8 +330,11 @@ back unchanged at return and after the worker lifecycle step.
    the same way to the manifest deadline minus the cleanup window, and the start is
    issued only while its 10-minute start-and-poll bound still fits. Attests
    the same exact A again, requires it to be deallocated, starts it only and requires
-   `PowerState/running`. On A, start Horizon again with the same home, open
-   **Environments**, select the same saved environment (same workspace, owning
+   `PowerState/running`. On A, start Horizon again with the same home; it opens the
+   session chooser, and the reconnect path admits only the recorded owning session,
+   so resume that exact persistent session (the owning session ID recorded in the
+   baseline) before anything else. Then open **Environments**, select the same saved
+   environment (same workspace, owning
    session, generation and exact resource ID), then **Show session panels** and,
    **gated** (Azure panel attachment), **Reconnect** to the same B and task
    sessions: same worker identity, no additional create, no task replay, dirty bytes
@@ -347,14 +357,16 @@ back unchanged at return and after the worker lifecycle step.
 7. **Worker lifecycle** is a different assertion and runs only after the offline and
    reconnect evidence is captured; never Stop or start B during the off interval. The
    harness's deadline arithmetic (`manifest.py`) reserves provisioning, the observer
-   install, the off interval, the return and the cleanup window, not this step, so the
-   manifest deadline is frozen at `validate`'s minimum plus a lifecycle margin of 60
-   minutes (a Stop with its 5-minute verification bound, the check, a Start with its
-   5-minute bound and up to 300 s of readiness, the bounded pinned reads and slack).
-   Before this step starts, the deadline must still be at least that margin plus the
-   cleanup margin (35 minutes) away; otherwise the step is skipped and reported as
-   not run, and the run proceeds to the observer-key removal and cleanup. It uses the
-   product controls on A, in the *Explicit Stop* section of the overview:
+   install, the off interval, the return and the cleanup window, not this step, and
+   `validate` does not check for it. Until the harness gains a lifecycle-aware check
+   (tracked on #474), this is a manual operator requirement: freeze the manifest
+   deadline at `validate`'s minimum plus a lifecycle margin of 60 minutes (a Stop with
+   its 5-minute verification bound, the check, a Start with its 5-minute bound and up
+   to 300 s of readiness, the bounded pinned reads and slack), and immediately before
+   this step compare the clock with the deadline: unless at least that margin plus
+   the cleanup margin (35 minutes) remains, skip the step, report it as not run, and
+   proceed to the observer-key removal and cleanup. It uses the product controls on
+   A, in the *Explicit Stop* section of the overview:
    **Stop environment…** → confirm (one Stop; records intent, deallocates B, verifies
    `PowerState/deallocated` with the retained `worker-data` disk). If the Stop ends
    unverified the record stays `Stop requested (saved)`: run **Check saved Stop**
@@ -377,10 +389,13 @@ back unchanged at return and after the worker lifecycle step.
    (`$HOME/.horizon/remote-ssh-identities/<workflow>-<job>.key`, the saved pin as the
    only known host, port 2222, user `root`) every 30 s for at most 10 minutes until it
    answers, and read `/workspace/progress.counter` and
-   `/workspace/horizon/repository/horizon-dirty-marker.txt`: the counter equals the
-   value recorded in the pinned read before the Stop, the marker's SHA-256 equals the
-   baseline hash, the host key equals the saved pin, and the worker identity in the
-   overview is unchanged. A session that never answers within the bound leaves the
+   `/workspace/horizon/repository/horizon-dirty-marker.txt`: the counter is at least
+   the value recorded in the pinned read before the Stop (the task legitimately keeps
+   counting while the Stop request is submitted and the VM deallocates), a second
+   read 60 s later returns the same counter (nothing is running after the start, so a
+   changing value would mean a resumed or replayed task), the marker's SHA-256 equals
+   the baseline hash, the host key equals the saved pin, and the worker identity in
+   the overview is unchanged. A session that never answers within the bound leaves the
    retention unproven; nothing is retried on the worker beyond the reads. Observer C's restricted key does not survive the restart (the entrypoint
    rewrites `authorized_keys`), so it is not the reader here. The adapter proved the same sequence
    live in runs 16 to 18 (`azure-workspace-live-acceptance.md`); this step proves it
