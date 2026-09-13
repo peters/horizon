@@ -1,18 +1,20 @@
 #![forbid(unsafe_code)]
 
-//! Backend-neutral Teach-mode recording protocol for Horizon browser routines.
+//! Backend-neutral Teach-mode recording protocol and draft-plan compiler.
 //!
-//! This crate stores semantic recordings. It has no browser process, MCP, UI,
-//! filesystem registry, or durable-runner dependency. See
-//! `docs/architecture/browser-routines.md`.
+//! This crate stores semantic recordings and compiles them into crate-local
+//! plan steps. It has no browser process, MCP server, UI, filesystem registry,
+//! or durable-runner dependency. See `docs/architecture/browser-routines.md`.
 
 mod assertion;
+mod compile;
 mod fingerprint;
 mod origin;
 mod recording;
 mod value;
 
 pub use assertion::Assertion;
+pub use compile::{CompiledAction, CompiledRoutine, CompiledStep, McpCall, ResumePolicy, compile};
 pub use fingerprint::{
     FrameContext, FrameLink, RankedCandidate, TargetCandidate, TargetFingerprint, UniquenessEvidence,
 };
@@ -82,6 +84,9 @@ pub enum RoutineError {
     /// Navigation path or query component is malformed or secret-bearing.
     #[error("navigation template is not a replayable non-secret destination")]
     InvalidNavigation,
+    /// A recorded variable used the runner-reserved `panel_id` name.
+    #[error("variable name panel_id is reserved for the routine runner")]
+    ReservedVariable,
 }
 
 #[cfg(test)]
