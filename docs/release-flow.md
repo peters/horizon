@@ -4,8 +4,10 @@ Horizon releases are tag-driven.
 
 - `vX.Y.Z-alpha.N` and `vX.Y.Z-beta.N` are prereleases.
 - `vX.Y.Z` is a stable release.
-- Publishing a GitHub Release with one of those tags triggers the release workflow, which uploads the platform binaries to the same GitHub Release.
-- The same release workflow can also be started manually with an existing tag to recover a failed release after fixing workflow automation, without bumping the version.
+- The Git tag is the source identity. Saving a draft GitHub Release for one of those tags, or dispatching the Release workflow with an existing tag, builds the deliverables.
+- The workflow uploads and verifies the required asset set while the GitHub Release is still a draft, then publishes it. A failed build therefore stays pending instead of advertising an empty public release.
+- Interrupted uploads resume from the recorded tag commit and existing asset digests. Matching files are skipped; changed files for the same commit are replaced. The workflow never retags.
+- The same release workflow can also be started manually with an existing tag to recover a failed or incomplete release after fixing workflow automation, without bumping the version.
 - Stable releases also publish `SHA256SUMS.txt`, build Surge-managed GUI installers, publish Surge update packages to the dedicated `surge` GitHub Release tag in `peters/horizon-updates`, update the `peters/homebrew-horizon` tap, and open or update the WinGet manifest PR for `Peters.Horizon`. Snap Store publication is currently paused.
 
 ## Source Of Truth
@@ -52,22 +54,26 @@ If the stable tag for the current base version already exists, the script stops 
 5. Choose the commit you want the tag to point at.
 6. If the tag has an `-alpha.N` or `-beta.N` suffix, enable **Set as a pre-release**.
 7. If the tag is plain `vX.Y.Z`, leave **Set as a pre-release** disabled.
-8. Publish the release.
+8. **Save draft**. Do not click **Publish release**.
+
+Saving the draft creates the Git tag if needed and starts the release workflow. If a release is published before the assets exist, the workflow converts it back to a draft, builds, uploads, and publishes only after the required set is present.
 
 The release workflow validates:
 
 - the tag format
-- the GitHub prerelease checkbox matches the tag suffix
+- the GitHub prerelease checkbox matches the tag suffix when a GitHub Release already exists
 - the tag's base version matches `Cargo.toml`
+- the Git tag commit recorded on the draft
 
-If the workflow itself needs a fix after a release was already published, merge the workflow fix and run **GitHub Actions → Release → Run workflow** with the existing tag. The manual recovery path reuses the existing GitHub Release instead of requiring a bumped version tag. The manual form's `publish_snap` input is currently disabled and has no effect while Snap Store publication is paused.
+If the workflow itself needs a fix after a release was started, merge the workflow fix and run **GitHub Actions → Release → Run workflow** with the existing tag. The manual recovery path accepts a draft, an incomplete published release, or a tag with no GitHub Release yet, and it does not require a bumped version tag. The manual form's `publish_snap` input is currently disabled and has no effect while Snap Store publication is paused.
 
 Then it:
 
 - rewrites the workspace version to the exact tag version in CI
 - builds the release binaries for Linux, macOS, and Windows
 - for stable releases, stages Surge packages and GUI installers for the same platform matrix
-- uploads the raw release assets, Surge installer assets, and `SHA256SUMS.txt` to the GitHub Release you just published
+- uploads the raw release assets, Surge installer assets, and `SHA256SUMS.txt` to the draft GitHub Release, skipping assets whose digests already match
+- publishes the GitHub Release only after the required asset set is present on that draft
 - for stable releases in `peters/horizon`, publishes Surge update metadata and package artifacts to the internal `surge` GitHub Release tag in `peters/horizon-updates` using the `stable` channel
 - for stable releases in non-canonical staging repos, defaults Surge update storage to the current repository so hosted smoke can stay self-contained
 - Snap Store publication is currently paused; the `publish-snap` job and its `publish_snap` manual input remain disabled
@@ -84,12 +90,15 @@ gh release create "$TAG" \
   --target main \
   --title "$TAG" \
   --notes "Release $TAG" \
-  --prerelease
+  --prerelease \
+  --draft
 ```
 
 `--target` accepts any branch, tag, or commit SHA. For beta or stable releases from a specific commit, replace `main` with the desired ref.
 
-For a stable release, omit `--prerelease`.
+For a stable release, omit `--prerelease` and keep `--draft`. The workflow publishes the GitHub Release after the required assets are uploaded and verified.
+
+To recover an interrupted tag without creating the GitHub Release by hand, run **GitHub Actions → Release → Run workflow** and pass that tag. The workflow creates the draft if needed.
 
 ## Stable Packaging Requirements
 

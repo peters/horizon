@@ -92,6 +92,8 @@ jobs:
           lfs: true
       - name: Verify Ubuntu dependency installer
         run: python3 -B scripts/test_install_ci_ubuntu_dependencies.py -v
+      - name: Verify GitHub release orchestration
+        run: python3 -B scripts/test_release_github.py -v
       - run: ./scripts/check-maintainability.sh
 
   clippy:

@@ -2,11 +2,11 @@ name: Release
 
 on:
   release:
-    types: [published]
+    types: [created]
   workflow_dispatch:
     inputs:
       tag_name:
-        description: Existing Git tag or GitHub Release tag to publish
+        description: Existing Git tag to build and finalize
         required: true
         type: string
       publish_snap:
@@ -31,23 +31,24 @@ permissions:
 jobs:
   validate-release:
     name: Validate Release
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.release.author.login != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
     outputs:
       release_tag: ${{ steps.validate.outputs.release_tag }}
       release_version: ${{ steps.validate.outputs.release_version }}
       release_prerelease: ${{ steps.validate.outputs.release_prerelease }}
+      release_commit: ${{ steps.pending.outputs.release_commit }}
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.release.tag_name || inputs.tag_name }}
           fetch-depth: 0
           lfs: true
-      - name: Restore workflow scripts for manual recovery
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+      - name: Use workflow scripts
         shell: bash
         run: |
-          git fetch --no-tags --depth=1 origin "${{ github.sha }}"
-          git checkout "${{ github.sha }}" -- scripts
+          git fetch --no-tags --depth=1 origin "${{ github.workflow_sha }}"
+          git checkout "${{ github.workflow_sha }}" -- scripts
 
       - name: Verify workspace versions are aligned
         run: ./scripts/check-version-sync.sh
@@ -61,19 +62,6 @@ jobs:
 
           tag_name="${{ github.event.release.tag_name || inputs.tag_name }}"
 
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            release_json="$(gh release view "$tag_name" --repo "${{ github.repository }}" --json isDraft,isPrerelease)"
-            release_draft="$(jq -r '.isDraft' <<<"$release_json")"
-            release_prerelease="$(jq -r '.isPrerelease' <<<"$release_json")"
-
-            if [ "$release_draft" = "true" ]; then
-              echo "::error::GitHub Release ${tag_name} is still a draft."
-              exit 1
-            fi
-          else
-            release_prerelease="${{ github.event.release.prerelease }}"
-          fi
-
           if [[ "$tag_name" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
             release_version="${BASH_REMATCH[1]}"
             tag_prerelease="false"
@@ -85,10 +73,24 @@ jobs:
             exit 1
           fi
 
-          if [[ "$release_prerelease" != "$tag_prerelease" ]]; then
-            echo "::error::GitHub Release prerelease flag does not match tag ${tag_name}."
-            exit 1
+          err_file="$(mktemp)"
+          if release_json="$(gh release view "$tag_name" --repo "${{ github.repository }}" --json isDraft,isPrerelease 2>"$err_file")"; then
+            release_prerelease="$(jq -r '.isPrerelease' <<<"$release_json")"
+            if [[ "$release_prerelease" != "$tag_prerelease" ]]; then
+              echo "::error::GitHub Release prerelease flag does not match tag ${tag_name}."
+              exit 1
+            fi
+          else
+            if ! grep -qiE 'release not found|HTTP[[:space:]]*404|Not Found' "$err_file"; then
+              cat "$err_file" >&2
+              exit 1
+            fi
+            if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+              echo "::error::GitHub Release ${tag_name} was not found."
+              exit 1
+            fi
           fi
+          rm -f "$err_file"
 
           repo_base_version="$(workspace_base_version)"
           tag_base_version="${release_version%%-*}"
@@ -106,6 +108,21 @@ jobs:
           echo "## Release validation" >> "$GITHUB_STEP_SUMMARY"
           echo "Tag: \`${tag_name}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "Version: \`${release_version}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - id: pending
+        name: Keep GitHub Release pending until assets exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag_name="${{ steps.validate.outputs.release_tag }}"
+          commit="$(git rev-parse "${tag_name}^{commit}")"
+          echo "release_commit=${commit}" >> "$GITHUB_OUTPUT"
+
+          ./scripts/release-github.sh ensure-pending \
+            --repo "${{ github.repository }}" \
+            --tag "$tag_name" \
+            --commit "$commit" \
+            --prerelease "${{ steps.validate.outputs.release_prerelease }}"
 
   build-artifacts:
     name: Artifacts (${{ matrix.name }})
@@ -169,12 +186,11 @@ jobs:
         with:
           ref: ${{ needs.validate-release.outputs.release_tag }}
           lfs: true
-      - name: Restore workflow scripts for manual recovery
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+      - name: Use workflow scripts
         shell: bash
         run: |
-          git fetch --no-tags --depth=1 origin "${{ github.sha }}"
-          git checkout "${{ github.sha }}" -- scripts
+          git fetch --no-tags --depth=1 origin "${{ github.workflow_sha }}"
+          git checkout "${{ github.workflow_sha }}" -- scripts
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.cache_key }}
@@ -302,6 +318,11 @@ jobs:
       windows_x64_sha256: ${{ steps.checksums.outputs.windows_x64_sha256 }}
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: |
+            scripts
       - name: Download all artifacts
         uses: actions/download-artifact@v8
         with:
@@ -372,9 +393,31 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "${{ needs.validate-release.outputs.release_tag }}" release-assets/* \
+          ./scripts/release-github.sh upload-assets \
             --repo "${{ github.repository }}" \
-            --clobber
+            --tag "${{ needs.validate-release.outputs.release_tag }}" \
+            --commit "${{ needs.validate-release.outputs.release_commit }}" \
+            --dir release-assets
+
+  publish-github-release:
+    name: Publish GitHub Release
+    needs: [validate-release, upload-release-assets]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: |
+            scripts
+      - name: Publish only after the required asset set is present
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ./scripts/release-github.sh publish \
+            --repo "${{ github.repository }}" \
+            --tag "${{ needs.validate-release.outputs.release_tag }}" \
+            --commit "${{ needs.validate-release.outputs.release_commit }}" \
+            --prerelease "${{ needs.validate-release.outputs.release_prerelease }}"
 
   publish-surge-release-index:
     name: Publish Surge Update Storage
@@ -396,12 +439,11 @@ jobs:
         with:
           ref: ${{ needs.validate-release.outputs.release_tag }}
           lfs: true
-      - name: Restore workflow scripts for manual recovery
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+      - name: Use workflow scripts
         shell: bash
         run: |
-          git fetch --no-tags --depth=1 origin "${{ github.sha }}"
-          git checkout "${{ github.sha }}" -- scripts
+          git fetch --no-tags --depth=1 origin "${{ github.workflow_sha }}"
+          git checkout "${{ github.workflow_sha }}" -- scripts
 
       - uses: actions/cache@v6
         with:
@@ -563,7 +605,7 @@ jobs:
   update-homebrew-tap:
     name: Update Homebrew Tap
     if: ${{ needs.validate-release.outputs.release_prerelease == 'false' && github.repository == 'peters/horizon' }}
-    needs: [validate-release, upload-release-assets]
+    needs: [validate-release, upload-release-assets, publish-github-release]
     runs-on: ubuntu-latest
     steps:
       - name: Validate Homebrew tap token
@@ -579,12 +621,11 @@ jobs:
         with:
           ref: ${{ needs.validate-release.outputs.release_tag }}
           lfs: true
-      - name: Restore workflow scripts for manual recovery
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+      - name: Use workflow scripts
         shell: bash
         run: |
-          git fetch --no-tags --depth=1 origin "${{ github.sha }}"
-          git checkout "${{ github.sha }}" -- scripts
+          git fetch --no-tags --depth=1 origin "${{ github.workflow_sha }}"
+          git checkout "${{ github.workflow_sha }}" -- scripts
 
       - name: Checkout Homebrew tap repository
         uses: actions/checkout@v7
@@ -622,7 +663,7 @@ jobs:
   update-winget-pkgs:
     name: Update WinGet Package
     if: ${{ needs.validate-release.outputs.release_prerelease == 'false' && github.repository == 'peters/horizon' }}
-    needs: [validate-release, upload-release-assets]
+    needs: [validate-release, upload-release-assets, publish-github-release]
     runs-on: ubuntu-latest
     env:
       WINGET_PKGS_REPOSITORY: peters/winget-pkgs
@@ -654,12 +695,11 @@ jobs:
         with:
           ref: ${{ needs.validate-release.outputs.release_tag }}
           lfs: true
-      - name: Restore workflow scripts for manual recovery
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+      - name: Use workflow scripts
         shell: bash
         run: |
-          git fetch --no-tags --depth=1 origin "${{ github.sha }}"
-          git checkout "${{ github.sha }}" -- scripts
+          git fetch --no-tags --depth=1 origin "${{ github.workflow_sha }}"
+          git checkout "${{ github.workflow_sha }}" -- scripts
 
       - name: Checkout WinGet fork
         uses: actions/checkout@v7

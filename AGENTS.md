@@ -188,14 +188,14 @@ cargo clippy --workspace --all-targets --features speech -- -D warnings -W clipp
 Releases are tag-driven and documented in [`docs/release-flow.md`](docs/release-flow.md).
 
 - Use `./scripts/next-version.sh alpha`, `./scripts/next-version.sh beta`, or `./scripts/next-version.sh stable` to suggest the next tag for the current release line
-- Publish from **GitHub → Releases** using tags like `vX.Y.Z-alpha.N`, `vX.Y.Z-beta.N`, or `vX.Y.Z`
+- Save a **draft** GitHub Release using tags like `vX.Y.Z-alpha.N`, `vX.Y.Z-beta.N`, or `vX.Y.Z`; do not publish the GitHub Release by hand
 - Mark alpha and beta tags as prereleases in GitHub; leave stable tags as normal releases
-- Publishing the GitHub Release triggers CI to build and upload the release binaries
+- Saving the draft (or dispatching the Release workflow with an existing tag) triggers CI to build and upload binaries, then publish the GitHub Release
 - After a stable release, bump `Cargo.toml` to the next release line in a normal PR before cutting more prereleases
 
 ### Release Notes
 
-When cutting a new release, generate concise release notes from the commits since the last tag (`git log <prev-tag>..HEAD --oneline --no-merges`). Group into **What's new** (features) and **Fixes** (bug fixes). Keep it scannable -- one line per item, no commit hashes. Pass the notes to `gh release create --notes`.
+When cutting a new release, generate concise release notes from the commits since the last tag (`git log <prev-tag>..HEAD --oneline --no-merges`). Group into **What's new** (features) and **Fixes** (bug fixes). Keep it scannable -- one line per item, no commit hashes. Pass the notes to `gh release create --notes --draft`.
 
 ### Dependencies
 
