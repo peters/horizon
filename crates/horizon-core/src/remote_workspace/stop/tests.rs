@@ -1,5 +1,6 @@
 mod configured;
 mod configured_azure;
+mod configured_azure_stop;
 mod configured_confirmation;
 mod configured_runpod;
 mod confirmation;

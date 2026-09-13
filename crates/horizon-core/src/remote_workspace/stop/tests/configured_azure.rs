@@ -16,7 +16,7 @@ use crate::remote_workspace::{
 
 const SUBSCRIPTION: &str = "11111111-1111-4111-8111-111111111111";
 
-fn azure_profile() -> AzureProfile {
+pub(super) fn azure_profile() -> AzureProfile {
     AzureProfile {
         name: "cpu".into(),
         subscription_id: SUBSCRIPTION.into(),
@@ -31,20 +31,20 @@ fn azure_profile() -> AzureProfile {
     }
 }
 
-struct AzureFixture {
-    directory: tempfile::TempDir,
-    store: CloudWorkflowStore,
-    profile: AzureProfile,
+pub(super) struct AzureFixture {
+    pub(super) directory: tempfile::TempDir,
+    pub(super) store: CloudWorkflowStore,
+    pub(super) profile: AzureProfile,
 }
 
-struct Shape {
-    lifetime: WorkerLifetime,
-    binding: bool,
-    intent: bool,
-    pin: bool,
+pub(super) struct Shape {
+    pub(super) lifetime: WorkerLifetime,
+    pub(super) binding: bool,
+    pub(super) intent: bool,
+    pub(super) pin: bool,
     /// The retained worker's resource ID, given its identity-derived group name; the
     /// default is the exact group under the fixture subscription.
-    resource_id: Option<fn(&str) -> String>,
+    pub(super) resource_id: Option<fn(&str) -> String>,
 }
 
 impl Default for Shape {
@@ -60,7 +60,7 @@ impl Default for Shape {
 }
 
 impl AzureFixture {
-    fn new(shape: &Shape) -> Self {
+    pub(super) fn new(shape: &Shape) -> Self {
         let directory = tempfile::tempdir().expect("fixture");
         let store = CloudWorkflowStore::open_path(directory.path().join("control/store.sqlite3")).expect("store");
         let profile = azure_profile();
@@ -143,7 +143,7 @@ impl AzureFixture {
         }
     }
 
-    fn current(&self) -> StoredRemoteAllocation {
+    pub(super) fn current(&self) -> StoredRemoteAllocation {
         self.store
             .load_remote_allocation(OWNER, "workspace")
             .expect("load")
@@ -455,7 +455,7 @@ fn foreign_selection(fixture: &AzureFixture) {
 
 /// Change the immutable binding row underneath the allocation, as only corruption or a
 /// foreign writer could; the store's own triggers are bypassed for the fixture only.
-fn drift_binding(path: &std::path::Path) {
+pub(super) fn drift_binding(path: &std::path::Path) {
     let mut connection = rusqlite::Connection::open(path).expect("fixture database");
     let transaction = connection.transaction().expect("fixture transaction");
     let trigger: String = transaction
@@ -551,7 +551,7 @@ fn drift_after_a_written_completion_never_denies_the_saved_completion() {
     assert_eq!(after.workspace().revision(), before.workspace().revision() + 1);
 }
 
-fn drift(fixture: &AzureFixture) {
+pub(super) fn drift(fixture: &AzureFixture) {
     let current = fixture.current();
     let mut workflow = current.workflow().workflow().clone();
     workflow.updated_at_millis += 1;

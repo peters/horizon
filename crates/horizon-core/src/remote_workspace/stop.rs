@@ -7,6 +7,7 @@ mod configured_runpod;
 mod confirmation;
 
 pub use configured::{ConfiguredStopError, stop_configured_remote_environment};
+pub use configured_azure::{ConfiguredAzureStopError, stop_configured_azure_environment};
 pub use configured_confirmation::{
     ConfiguredStopConfirmation, ConfiguredStopConfirmationError, confirm_configured_remote_environment_stop,
 };

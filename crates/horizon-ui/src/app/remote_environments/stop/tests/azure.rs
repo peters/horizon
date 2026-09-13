@@ -46,7 +46,7 @@ fn azure_check_requires_saved_intent_on_a_retained_persistent_azure_worker_and_n
     ] {
         let expected = azure_summary(phase);
         assert!(check_supported(&expected), "{phase:?}");
-        assert!(!supported(&expected), "a first Azure Stop is a later slice");
+        assert!(!supported(&expected), "existing intent is checked, never resent");
         let mut faults = vec![expected.clone(); 4];
         faults[0].lifetime = WorkerLifetime::TimeLimited { seconds: 900 };
         faults[1].worker_identity = None;
@@ -67,8 +67,136 @@ fn azure_check_requires_saved_intent_on_a_retained_persistent_azure_worker_and_n
     ] {
         let expected = azure_summary(phase);
         assert!(!check_supported(&expected), "{phase:?}");
-        assert!(!supported(&expected), "{phase:?}");
+        assert!(
+            supported(&expected),
+            "a retained worker without intent may be stopped: {phase:?}"
+        );
+        let mut faults = vec![expected.clone(); 3];
+        faults[0].lifetime = WorkerLifetime::TimeLimited { seconds: 900 };
+        faults[1].worker_identity = None;
+        faults[2].worker_identity.as_mut().expect("worker").provider = CloudProvider::RunPod;
+        for fault in faults {
+            assert!(!supported(&fault), "{phase:?}");
+        }
     }
+}
+
+#[test]
+fn azure_stop_confirmation_discloses_the_deallocation_and_never_submits_implicitly() {
+    let fixture = tempfile::tempdir().expect("fixture");
+    let home = HorizonHome::from_root(fixture.path().join("unused"));
+    let expected = azure_summary(RemoteRuntimePhase::Ready);
+    let ctx = Context::default();
+    let mut state = StopState::default();
+    for size in [[1200.0, 900.0], [960.0, 720.0]] {
+        state.prepare(&expected, &config(), &ctx);
+        assert!(state.confirmation.is_some());
+        let mut input = raw_input(size, None);
+        input.events.push(egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        });
+        let mut action = InventoryAction::None;
+        let output = ctx.run_ui(input, |ui| show(ui, &state, &expected, true, &mut action));
+        let text = visible_text(&output.shapes);
+        let _ = output.discard_textures();
+        for required in [
+            "Unsaved process memory is lost",
+            "Deallocates the worker VM",
+            "retained data disk keeps /workspace",
+            "continues to be billed",
+            "immutable saved binding",
+            "no private SSH key",
+            "not filesystem durability",
+            "Azure CLI login",
+            "never resend",
+            "exiting Horizon",
+        ] {
+            assert!(text.contains(required), "missing {required}: {text}");
+        }
+        assert!(!text.contains("exact saved HPS"));
+        assert!(!text.contains("Retains this local container"));
+        assert!(matches!(action, InventoryAction::None));
+        assert_eq!(
+            ctx.data(|data| data.get_temp::<bool>(egui::Id::new("stop-request-enabled-test"))),
+            Some(true)
+        );
+        assert_eq!(
+            ctx.data(|data| data.get_temp::<bool>(egui::Id::new("stop-check-enabled-test"))),
+            Some(false)
+        );
+        state.cancel_confirmation();
+        assert!(!state.start(&home, &config(), &expected, &ctx));
+    }
+    assert!(!state.is_pending());
+    assert!(!home.root().exists());
+}
+
+#[test]
+fn azure_stop_results_require_exact_two_step_completion_and_pending_label_warns() {
+    let expected = azure_summary(RemoteRuntimePhase::Ready);
+    assert!(StopNotice::new(expected.clone(), Ok(completed(&expected))).succeeded);
+    let mut changes = vec![completed(&expected); 7];
+    changes[0].revision += 1;
+    changes[1].workflow_id = Some(CloudWorkflowId::new());
+    changes[2].repository = "foreign/repository".into();
+    changes[3].saved_phase = Some(RemoteRuntimePhase::Stopped {
+        requested_at_millis: 3,
+        observed_at_millis: 2,
+    });
+    changes[4].generation += 1;
+    changes[5].lifetime = WorkerLifetime::TimeLimited { seconds: 900 };
+    changes[6].saved_phase = Some(RemoteRuntimePhase::Ready);
+    for changed in changes {
+        assert!(!StopNotice::new(expected.clone(), Ok(changed)).succeeded);
+    }
+    let failed = StopNotice::new(
+        expected.clone(),
+        Err(StopError::Azure(ConfiguredAzureStopError::Stop(
+            RemoteWorkspaceStopError::ProviderUnavailable,
+        ))),
+    );
+    assert!(!failed.succeeded && !failed.checked);
+    assert!(failed.message.contains("Check"), "{}", failed.message);
+    let mut state = view(&expected);
+    let _sender = pending(&mut state.stop, &expected);
+    assert!(state.stop.pending_label().contains("Azure Stop is pending"));
+    assert!(state.stop.pending_label().contains("never resend"));
+    assert!(!state.stop.check(
+        &HorizonHome::from_root("/nonexistent-stop-fixture".into()),
+        &config(),
+        &expected,
+        &Context::default()
+    ));
+}
+
+#[test]
+fn azure_stop_callback_never_creates_or_migrates_the_store_and_reaches_named_profile_admission() {
+    let fixture = tempfile::tempdir().expect("fixture");
+    let missing = HorizonHome::from_root(fixture.path().join("missing"));
+    let expected = azure_summary(RemoteRuntimePhase::Ready);
+    assert!(matches!(
+        execute(&missing, &config(), &expected),
+        Err(StopError::StorageUnavailable)
+    ));
+    assert!(!missing.root().exists());
+    let home = HorizonHome::from_root(fixture.path().join("current"));
+    let store = CloudWorkflowStore::open(&home).expect("owned current store");
+    let before = std::fs::read(store.path()).expect("snapshot");
+    assert!(matches!(
+        execute(&home, &config(), &expected),
+        Err(StopError::Azure(ConfiguredAzureStopError::Configuration(_)))
+    ));
+    assert_eq!(std::fs::read(store.path()).expect("retained"), before);
+    let mut intent = expected;
+    intent.saved_phase = Some(RemoteRuntimePhase::Stopping { requested_at_millis: 1 });
+    assert!(matches!(
+        execute(&home, &config(), &intent),
+        Err(StopError::Azure(ConfiguredAzureStopError::UnsupportedProvider))
+    ));
 }
 
 #[test]
