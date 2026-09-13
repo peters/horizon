@@ -14,10 +14,12 @@ PC, existing Horizon processes or existing workspaces.
 | --- | --- | --- |
 | Client A | Disposable Ubuntu VM in its own exact resource group, running the exact Horizon Linux client (built from `client_sha`) under a virtual display, with an isolated persistent client home on its OS disk (retained across deallocation) | Azure lane |
 | Worker B | Separate persistent Azure CPU worker in its own exact group, created on A through the product setup path and prepared through Prepare Repository; its Stop, saved-Stop check and compute Start are product operations; the saved-Shell task start and panel reconnect are gated for Azure until their slices land | Azure lane (product Azure paths and adapter) |
-| Observer C | This controller, outside A and B: read-only ARM reads and one pinned SSH session per sample with a key that sshd restricts (`restrict,command=`) to a forced reader of the progress and checkpoint files | Azure lane |
+| Observer C | The read-only principal on the controller, outside A and B: ARM reads and one pinned SSH session per sample with a key that sshd restricts (`restrict,command=`) to a forced reader of the progress and checkpoint files | Azure lane |
+| Operator | The operator's own Azure CLI login on the same controller, the only principal that changes anything from outside A: it provisions and later deallocates and restarts A (`provision-client.sh`, `off`, `return`), journals and reaper-tags B's product-created resources, deletes the run's groups (`cleanup`) and removes A's role assignments and custom role | Azure lane |
 
 C never renews a lease, delivers a keepalive, reconnects a terminal, checkpoints or
-replays a task. C may enforce the declared cleanup deadline.
+replays a task, and never writes to ARM; every mutating step in this runbook names
+the operator. The operator may enforce the declared cleanup deadline.
 
 ## Manifest, frozen before anything is rented
 
@@ -95,28 +97,57 @@ gives A no identity today, so before the product pass A needs, in this order:
    a client provisioned by the current script has no CLI and the product cannot
    authenticate on it.
 2. An identity A can log in non-interactively. The intended shape is a
-   system-assigned managed identity on A with a custom role listing exactly the
-   actions the product paths under test send and no `delete` action (the `write`
-   actions below are still modification authority, see the residual): resource
-   groups (`Microsoft.Resources/subscriptions/resourceGroups/read` and `write`);
-   deployments (`Microsoft.Resources/deployments/read` and `write`; the transport
-   only submits deployments and reads the deployment resource back, never the
-   operation-status endpoint); compute (`Microsoft.Compute/virtualMachines/read` and
-   `instanceView/read`, because every VM read the transport issues expands
-   `instanceView` and the lifecycle decisions come from its power statuses;
-   `write`, `deallocate/action` for Stop, `start/action` for Start and
-   `runCommand/action`, which setup and Start's readiness path use to attest the
-   worker host key; `Microsoft.Compute/disks/read` and `write`); network
-   (`read`, `write` and `join/action` on `Microsoft.Network/publicIPAddresses`,
-   `networkInterfaces` and `networkSecurityGroups`, `read` and `write` on
-   `virtualNetworks` and `virtualNetworks/subnets/join/action`); plus the built-in
-   Managed Identity Operator scoped to `horizon-worker-puller` alone. Check saved
-   Stop is ARM read-only and needs nothing beyond the reads. The role grants no
+   system-assigned managed identity on A with a custom role whose `Actions` are
+   exactly the following operations, the ones the product paths under test send,
+   and no `delete` operation (the write operations are still modification
+   authority, see the residual):
+
+   ```text
+   Microsoft.Resources/subscriptions/resourceGroups/read
+   Microsoft.Resources/subscriptions/resourceGroups/write
+   Microsoft.Resources/deployments/read
+   Microsoft.Resources/deployments/write
+   Microsoft.Compute/virtualMachines/read
+   Microsoft.Compute/virtualMachines/write
+   Microsoft.Compute/virtualMachines/instanceView/read
+   Microsoft.Compute/virtualMachines/deallocate/action
+   Microsoft.Compute/virtualMachines/start/action
+   Microsoft.Compute/virtualMachines/runCommand/action
+   Microsoft.Compute/disks/read
+   Microsoft.Compute/disks/write
+   Microsoft.Network/publicIPAddresses/read
+   Microsoft.Network/publicIPAddresses/write
+   Microsoft.Network/publicIPAddresses/join/action
+   Microsoft.Network/networkInterfaces/read
+   Microsoft.Network/networkInterfaces/write
+   Microsoft.Network/networkInterfaces/join/action
+   Microsoft.Network/networkSecurityGroups/read
+   Microsoft.Network/networkSecurityGroups/write
+   Microsoft.Network/networkSecurityGroups/join/action
+   Microsoft.Network/virtualNetworks/read
+   Microsoft.Network/virtualNetworks/write
+   Microsoft.Network/virtualNetworks/subnets/read
+   Microsoft.Network/virtualNetworks/subnets/join/action
+   ```
+
+   Why each group: the transport creates and reads the worker's resource group,
+   submits the deployment and reads the deployment resource back (never the
+   operation-status endpoint); every VM read expands `instanceView` and the
+   lifecycle decisions come from its power statuses; `deallocate/action` is Stop,
+   `start/action` is Start and `runCommand/action` is the host-key attestation used
+   by setup and by Start's readiness path; the template creates the data disk, the
+   public IP, the NIC, the security group and the virtual network with its inline
+   `workers` subnet (so no separate subnet write), and the NIC references the public
+   IP, the security group and that child subnet, which needs the `join/action` and
+   the child `subnets/read` operations. Plus the built-in Managed Identity Operator
+   scoped to `horizon-worker-puller` alone. Check saved Stop is ARM read-only and
+   needs nothing beyond the reads. The role grants no
    `delete` action: deletion is not part of this pass and no product path on A
    deletes anything (the setup coordinator dispatches no compensating cleanup when a
    later step fails; it preserves the allocation for recovery and retry), so the
    removal of every group this run creates is authorized and attempted only by the
-   operator's cleanup from C (step 9) under the operator's credentials, never A's;
+   operator's cleanup from the controller (step 9) under the operator's own
+   credentials, never A's or the observer's;
    a refused, failed or timed-out step 9 leaves the group for the operator, it is
    not a complete run. Neither subscription-wide Contributor nor
    any role with `delete` is assigned to A. The residual that Azure RBAC cannot
@@ -136,7 +167,7 @@ gives A no identity today, so before the product pass A needs, in this order:
    owner of the identity, and an exact expiry and removal plan. Step 9's `cleanup`
    deletes resource groups only; deleting A's group removes the system-assigned
    identity but can leave its role assignments and the custom role definition
-   behind, so the removal is an explicit operator step from C, before the manifest
+   behind, so the removal is an explicit operator step from the controller, before the manifest
    deadline: `az role assignment delete --subscription <id> --assignee <A's
    principal ID> --scope /subscriptions/<id>` and the same for the
    `horizon-worker-puller` scope, then `az role definition delete --subscription
@@ -259,9 +290,16 @@ back unchanged at return and after the worker lifecycle step.
      `/bin/sh`, *Literal arguments (JSON array)* exactly the argv of the deterministic
      task below, *Panel directory (optional)* empty, the disk size, and optionally an
      *Azure CPU cost limit*; **Review request** shows the complete profile, the
-     declared price and the immutable-binding disclosure; tick the consent box and
-     press **Create task-free worker**. Nothing is checked out and no task starts
-     here. Then **Refresh saved page** and select the new row: the repository, panel
+     declared price and the immutable-binding disclosure. The manifest's
+     `hourly_cost_micros` and `budget_micros` bound A only (the harness checks them
+     as positive numbers and never meters B); B's admission uses the profile's
+     declared price and the limit typed here, so before the consent box is ticked
+     the review screen must show the price posted for B on #474 (`Standard_D2s_v3`,
+     0.107 USD/h at the time of the post; a profile declaring anything else is
+     corrected on A before the run) and the *Azure CPU cost limit* must equal the B
+     budget posted there; a mismatch aborts the step before **Create task-free
+     worker**. Then tick the consent box and press **Create task-free worker**.
+     Nothing is checked out and no task starts here. Then **Refresh saved page** and select the new row: the repository, panel
      and Stop sections render only for a selected saved row, and the page shown after
      creation is still the previous one. Record the workspace, owning session,
      workflow and job identities and both forms of B's group identity: the
@@ -281,8 +319,9 @@ back unchanged at return and after the worker lifecycle step.
      group may exist unjournaled. Nothing on A deletes a group after a failed setup
      (the coordinator preserves the allocation for retry), so a group journaled only
      after a successful baseline would survive an aborted run; journaling it here is
-     what lets step 9 remove it in every outcome. Then, from C under the operator's
-     credentials, put B's VM under the deadline reaper, which the product deployment
+     what lets step 9 remove it in every outcome. Then, as the operator on the
+     controller (never with observer C's principal, which stays read-only), put B's
+     VM under the deadline reaper, which the product deployment
      does not do (it tags B with worker identity tags only, and the reaper skips a VM
      without both `purpose` and `deadline`): `az tag update --subscription <id>
      --resource-id <B's VM ID> --operation merge --tags purpose=horizon-azure-vm-spike
@@ -307,15 +346,31 @@ back unchanged at return and after the worker lifecycle step.
      so a plain file copy can miss the newest rows: take a consistent copy with
      SQLite's online backup through `python3`, which the client image has (cloud-init
      depends on it; the provisioner installs no `sqlite3` binary):
-     as A's Horizon user, `umask 077; copy=$(mktemp /home/horizon/store-copy.XXXXXX)`
-     then
-     `python3 -c 'import sqlite3, sys; s = sqlite3.connect("/home/horizon/.horizon-client-home/.horizon/cloud-run/workflows.sqlite3"); d = sqlite3.connect(sys.argv[1]); s.backup(d)' "$copy"`,
-     read `state.runtime.ssh.host_key`
-     from the `snapshot` column of `remote_workspaces` for the workspace in that copy,
-     and remove the copy at once (`rm -f "$copy"`): it holds the pinned host key and
-     the repository details, so it is never a predictable or world-readable path
-     and never left behind (a supported export of the saved pin is preferable and
-     is tracked on #474; scanning the host would defeat the attestation).
+     as A's Horizon user, in one shell whose exit trap removes the copy on every
+     exit, interrupted or not:
+
+     ```sh
+     (
+       umask 077
+       copy=$(mktemp /home/horizon/store-copy.XXXXXX) || exit 1
+       trap 'rm -f "$copy"' EXIT INT TERM
+       python3 - "$copy" <<'PY'
+     import json, sqlite3, sys
+     src = sqlite3.connect("/home/horizon/.horizon-client-home/.horizon/cloud-run/workflows.sqlite3")
+     dst = sqlite3.connect(sys.argv[1])
+     src.backup(dst)
+     src.close()
+     for (workspace, snapshot) in dst.execute("select workspace_local_id, snapshot from remote_workspaces"):
+         print(workspace, json.loads(snapshot)["state"]["runtime"]["ssh"]["host_key"])
+     PY
+     )
+     ```
+
+     Take the `host_key` printed for this run's workspace. The copy holds the pinned
+     host key and the repository details, so it is never a predictable or
+     world-readable path and never outlives the subshell (a supported export of the
+     saved pin is preferable and is tracked on #474; scanning the host would defeat
+     the attestation).
    - Under *Remote repository preparation*, tick *Include explicit first-token
      installation* first if the PAT is to be delivered, then **Review repository
      preparation**; the confirmation that follows carries the token field, the
@@ -507,7 +562,14 @@ back unchanged at return and after the worker lifecycle step.
    read 60 s later returns the same counter (nothing is running after the start, so a
    changing value would mean a resumed or replayed task), the marker's SHA-256 equals
    the baseline hash, the host key equals the saved pin, and the worker identity in
-   the overview is unchanged. A session that never answers within the bound leaves the
+   the overview is unchanged. The product's Start compares the VM it observed
+   immediately before its own call with the one after it, not with the worker that
+   existed before the Stop, so the operator closes that gap from the controller:
+   `az vm show --subscription <id> --ids <B's VM ID> --query '{id:id, vmId:vmId}'`
+   must return the `vm_id` and `instance_id` recorded in `worker.json` in step 3,
+   and the group ID read back must equal its `group_id`; a same-name replacement
+   created while B was stopped keeps the name but not the `vmId`, and fails here.
+   A session that never answers within the bound leaves the
    retention unproven; nothing is retried on the worker beyond the reads. Observer C's restricted key does not survive the restart (the entrypoint
    rewrites `authorized_keys`), so it is not the reader here. The adapter proved the same sequence
    live in runs 16 to 18 (`azure-workspace-live-acceptance.md`); this step proves it
