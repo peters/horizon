@@ -137,8 +137,10 @@ the job directory from a `$ref` after the referenced step succeeds. CSV uses
 CRLF records, requires an array of objects, and prefixes formula-leading text
 cells with `'` after skipping leading whitespace or control characters;
 `columns` selects fields. A requested projection that exceeds 1 MiB, 10,000
-CSV rows, or 32 columns fails the run after the browser steps complete. The
-runner checks every tool
+CSV rows, or 32 columns fails the run after the browser steps complete.
+Timeout and cancellation skip projection; only a completed successful or
+fail-fast run writes it. Resolved tool arguments after `$ref`/`$var`
+substitution are limited to 1 MiB per step. The runner checks every tool
 against `tools/list` before making the first call, stops after the first failed
 step, and never copies tool arguments into its report. Plans are limited to
 1 MiB and 256 steps.

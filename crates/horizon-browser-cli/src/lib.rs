@@ -35,6 +35,7 @@ use run_state::{CheckpointPersistError, DurableRun};
 
 const PLAN_VERSION: u32 = 1;
 const MAX_PLAN_STEPS: usize = 256;
+const MAX_RESOLVED_ARGUMENTS_BYTES: usize = 1024 * 1024;
 const MCP_BUFFER_BYTES: usize = 64 * 1024;
 const MCP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -846,6 +847,13 @@ fn resolve_arguments(
         result_indexes,
         &plan.variables,
     )?;
+    let encoded = serde_json::to_vec(&resolved).map_err(|error| error.to_string())?;
+    if encoded.len() > MAX_RESOLVED_ARGUMENTS_BYTES {
+        return Err(format!(
+            "resolved arguments are {} bytes; the maximum is {MAX_RESOLVED_ARGUMENTS_BYTES}",
+            encoded.len()
+        ));
+    }
     resolved
         .as_object()
         .cloned()
@@ -1017,6 +1025,40 @@ mod tests {
             Plan::from_slice(br#"{"version":1,"steps":[{"id":"go","tool":"browser_navigate","arguments":{"url":{"$var":"missing"}}}]}"#),
             Err(PlanError::UnknownVariable { name, .. }) if name == "missing"
         ));
+    }
+
+    #[test]
+    fn repeated_variable_substitution_is_bounded() {
+        let blob = "x".repeat(8 * 1024);
+        let mut arguments = serde_json::Map::new();
+        for index in 0..200 {
+            arguments.insert(format!("f{index}"), json!({"$var": "blob"}));
+        }
+        let plan = Plan {
+            version: 1,
+            variables: BTreeMap::from([("blob".to_string(), json!(blob))]),
+            steps: vec![PlanStep {
+                id: "go".to_string(),
+                tool: "browser_evaluate".to_string(),
+                arguments,
+            }],
+            project: None,
+        };
+        let error = resolve_arguments(&plan, &plan.steps[0], &[], &BTreeMap::new()).expect_err("over budget");
+        assert!(error.contains("resolved arguments are"));
+    }
+
+    #[test]
+    fn interrupted_reports_omit_projection() {
+        let report = stopped_report(
+            vec![successful_step("panels", json!({"panels": []}))],
+            &ActionWaitStopped {
+                reason: ExecutionStopReason::Cancelled,
+                request_started: false,
+            },
+        );
+        assert!(report.projection.is_none());
+        assert_eq!(report.stop_reason, Some(ExecutionStopReason::Cancelled));
     }
 
     #[tokio::test]
