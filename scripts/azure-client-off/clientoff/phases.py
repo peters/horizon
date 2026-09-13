@@ -375,8 +375,10 @@ def probe_worker(az: Az, manifest: Dict[str, Any], worker: Dict[str, Any], direc
     before = az.vm_identity(manifest["worker_group"], worker["vm_name"])
     answer = reader(worker["host"], worker["port"], worker["host_key"], worker["observer_key_path"], directory,
                     observation_budget(az))
-    _, problem = attest_worker(az, manifest, worker)
-    if problem or not same_worker(before, az.vm_identity(manifest["worker_group"], worker["vm_name"])):
+    # The attestation after the probe reads B's identity itself; that read is the
+    # second half of the bracket (seven bounded ARM calls per probe in all).
+    after, problem = attest_worker(az, manifest, worker)
+    if problem or not same_worker(before, after):
         return {"progress": None, "checkpoint": None, "channel": "unavailable", "paths": None}
     return answer
 
@@ -452,11 +454,14 @@ def phase_install_observer(az: Az, manifest: Dict[str, Any], worker: Dict[str, A
         return {"passed": False, "installed": "unknown",
                 "findings": ["run-command did not confirm the append and the forced reader does not answer; inspect "
                              "/root/.ssh/authorized_keys on B before retrying, a retry could append a second line"]}
+    # A run-command answer only says ARM ran something; whether the guest edit took is
+    # proven by the reader alone, so anything short of an answer for the descriptor's
+    # paths leaves the installation unknown, never installed.
     after = probe_worker(az, manifest, worker, directory, reader)
     if after.get("channel") != "answered" or not observed_paths_match(after, worker):
-        return {"passed": False, "installed": True,
-                "findings": ["the forced reader did not answer for the descriptor's paths after the append; do not use "
-                             "this key as observer C"]}
+        return {"passed": False, "installed": "unknown",
+                "findings": ["the forced reader did not answer for the descriptor's paths after the append; inspect "
+                             "/root/.ssh/authorized_keys on B before retrying, a retry could append a second line"]}
     # The key is installed whatever the file holds right now; an unreadable counter is
     # the off phase's finding, not this one's.
     return {"passed": True, "installed": True, "progress": after.get("progress"), "checkpoint": after.get("checkpoint")}

@@ -87,11 +87,13 @@ OFF_SETUP_MINUTES = (11 * CLI_STEP_SECONDS + 30 + 600) // 60 + 2
 RETURN_SETUP_MINUTES = (7 * CLI_STEP_SECONDS + 600) // 60 + 2
 # What the return phase must leave untouched after itself: the cleanup window.
 RETURN_RESERVE_MINUTES = CLEANUP_MARGIN_MINUTES - RETURN_MARGIN_MINUTES
-# Work the install phase does before and after its run-command append, at its bounds:
-# eight bounded ARM reads (two worker attestations before the append), the key
-# derivation and the probe before; four reads and a probe to reconcile after.
-INSTALL_SETUP_MINUTES = (8 * CLI_STEP_SECONDS + 30 + 30) // 60 + 2
-INSTALL_RECONCILE_SECONDS = 4 * CLI_STEP_SECONDS + 30
+# Work the install phase does before and after its run-command append, at its bounds.
+# A bracketed probe costs seven bounded ARM reads (identity before, attestation after)
+# plus the observation. Before the append: two worker attestations (four reads each),
+# the key derivation and one bracketed probe; after it: one bracketed probe.
+PROBE_READS = 7
+INSTALL_SETUP_MINUTES = ((8 + PROBE_READS) * CLI_STEP_SECONDS + 30 + 30) // 60 + 2
+INSTALL_RECONCILE_SECONDS = PROBE_READS * CLI_STEP_SECONDS + 30
 # What must remain after the off interval: the whole return phase (its setup at its
 # bounds) and the cleanup window it leaves; the off phase may deallocate A only when
 # the return can still complete.

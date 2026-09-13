@@ -746,7 +746,7 @@ class OffPhaseTests(unittest.TestCase):
         # (answers, append result, flip after which probe, expected passed/installed)
         cases = ((iter([answered]), {}, 1, (False, "unknown")),          # "already installed" from a replaced B
                  (iter([refused, answered]), None, 2, (False, "unknown")),  # lost answer settled from a replaced B
-                 (iter([refused, answered]), {}, 2, (False, True)))         # post-append proof from a replaced B
+                 (iter([refused, answered]), {}, 2, (False, "unknown")))    # post-append proof from a replaced B: unproven
         for answers, append_result, flip_after, expected in cases:
             with self.subTest(expected=expected):
                 m, az, calls = self.plane()
