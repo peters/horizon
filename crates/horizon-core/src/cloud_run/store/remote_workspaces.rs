@@ -199,6 +199,21 @@ pub(super) struct WorkspaceReplacement<'a> {
 }
 
 impl<'a> WorkspaceReplacement<'a> {
+    /// Only the deletion coordinator may enter or complete destructive intent.
+    /// Validate a phase-only transition before retaining the usual exact-snapshot CAS.
+    pub(super) fn for_deletion(
+        expected: &'a StoredRemoteWorkspace,
+        next: &'a RemoteWorkspaceState,
+    ) -> Result<Self, RemoteWorkspaceStoreError> {
+        validate_key(&expected.session_id, &expected.state.spec.workspace_local_id)?;
+        validation::validate_delete_replacement(&expected.state, next)?;
+        Ok(Self {
+            expected,
+            next,
+            snapshot: encode(&expected.session_id, next)?,
+        })
+    }
+
     pub(super) fn new(
         expected: &'a StoredRemoteWorkspace,
         next: &'a RemoteWorkspaceState,
@@ -481,6 +496,8 @@ pub enum RemoteWorkspaceStoreError {
     RuntimeRequestUnavailable,
     #[error("remote workspace has pending management intent; reconnect cannot change it")]
     RuntimeRecoveryUnavailable,
+    #[error("remote Delete intent and completion require the verified coordinator")]
+    RuntimeDeleteCoordinationRequired,
     #[error("remote Stop completion requires the verified coordinator")]
     RuntimeStopConfirmationRequired,
     #[error("remote Start intent is recorded and resolved only by the verified Start coordinator")]

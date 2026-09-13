@@ -482,6 +482,12 @@ back into large multi-purpose modules.
   implementation reads only the exact saved resource group with owned identity
   tags; a surviving or deleting group remains present even when its VM is absent.
   It never uses guest commands, host-key lookup, lifecycle mutation or polling.
+- `remote_environment_delete.rs` coordinates explicit Delete, separately confirmed
+  Retry and read-only confirmation over an exact owned allocation. Its dedicated store transition
+  retains worker identity and creation fences as a tombstone; generic writes
+  cannot introduce, resolve or erase the new destructive intent. Provider
+  acceptance is not absence, and independent network storage is not implicitly
+  deleted. Legacy cleanup phases remain separate from this explicit operation.
 - `cloud_run/interactive_worker_stop.rs` is an opt-in Stop contract, separate from
   deletion and client lifetime. The local adapter's `local_docker/stop.rs` verifies
   exact ownership and disabled automatic removal before a bounded stop, then

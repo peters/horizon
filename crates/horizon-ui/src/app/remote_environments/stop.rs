@@ -455,11 +455,17 @@ fn check_supported(summary: &RemoteEnvironmentSummary) -> bool {
 /// Linux and Azure on every platform only for a retained persistent worker whose saved
 /// identity names the same provider and which carries neither Stop intent (existing
 /// intent is checked, never resent) nor Start intent (resolved by Start, never raced).
+/// Saved Delete intent and verified deletion exclude Stop for every provider.
 fn supported(summary: &RemoteEnvironmentSummary) -> bool {
     let Some(identity) = summary.worker_identity.as_ref() else {
         return false;
     };
-    if summary.lifetime != WorkerLifetime::Persistent {
+    if summary.lifetime != WorkerLifetime::Persistent
+        || matches!(
+            summary.saved_phase,
+            Some(RemoteRuntimePhase::DeleteRequested { .. } | RemoteRuntimePhase::Deleted { .. })
+        )
+    {
         return false;
     }
     let cloud = identity.provider == summary.provider

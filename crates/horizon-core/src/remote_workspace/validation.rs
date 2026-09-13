@@ -203,6 +203,18 @@ impl RemoteRuntimeGeneration {
         {
             return Err(Error::InvalidRuntime("Start intent"));
         }
+        if let Some(requested_at_millis) = self.phase.delete_requested_at_millis()
+            && (requested_at_millis < 0
+                || self.worker.is_none()
+                || self.cleanup.as_ref().is_none_or(|intent| {
+                    intent.reason != super::RemoteCleanupReason::WorkspaceRemoved
+                        || intent.requested_at_millis != requested_at_millis
+                })
+                || matches!(self.phase, RemoteRuntimePhase::Deleted { observed_at_millis, .. }
+                    if observed_at_millis < requested_at_millis))
+        {
+            return Err(Error::InvalidRuntime("Delete intent"));
+        }
         Ok(())
     }
 }

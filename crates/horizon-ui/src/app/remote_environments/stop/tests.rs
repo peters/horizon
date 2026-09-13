@@ -167,6 +167,52 @@ fn retained_timed_workers_never_offer_or_prepare_stop_in_any_saved_stop_phase() 
 }
 
 #[test]
+fn saved_deletion_never_offers_prepares_or_dispatches_stop_for_any_provider() {
+    use crate::app::test_support::raw_input;
+    use crate::test_egui::DiscardTextures;
+    let fixture = tempfile::tempdir().expect("fixture");
+    let home = HorizonHome::from_root(fixture.path().join("unused"));
+    for provider in [CloudProvider::LocalDocker, CloudProvider::RunPod, CloudProvider::Azure] {
+        for phase in [
+            RemoteRuntimePhase::DeleteRequested { requested_at_millis: 1 },
+            RemoteRuntimePhase::Deleted {
+                requested_at_millis: 1,
+                observed_at_millis: 2,
+            },
+        ] {
+            let ctx = Context::default();
+            let mut expected = summary();
+            expected.provider = provider;
+            expected.worker_identity.as_mut().expect("worker").provider = provider;
+            let mut previous = StopState::default();
+            previous.prepare(&expected, &config(), &ctx);
+            assert_eq!(previous.confirmation.is_some(), supported(&expected));
+            expected.saved_phase = Some(phase);
+            assert!(!supported(&expected));
+            let mut state = StopState::default();
+            let mut action = InventoryAction::None;
+            let _ = ctx
+                .run_ui(raw_input([1100.0, 780.0], None), |ui| {
+                    show(ui, &state, &expected, true, &mut action);
+                })
+                .discard_textures();
+            assert_eq!(
+                ctx.data(|data| data.get_temp::<bool>(egui::Id::new("stop-request-enabled-test"))),
+                Some(false)
+            );
+            assert!(matches!(action, InventoryAction::None));
+            state.prepare(&expected, &config(), &ctx);
+            assert!(state.confirmation.is_none());
+            assert!(!state.start(&home, &config(), &expected, &ctx));
+            assert!(!previous.start(&home, &config(), &expected, &ctx));
+            assert!(!state.is_pending());
+            assert!(!previous.is_pending());
+            assert!(!home.root().exists());
+        }
+    }
+}
+
+#[test]
 fn cancel_selection_page_and_close_clear_only_unconfirmed_intent() {
     let fixture = tempfile::tempdir().expect("fixture");
     let home = HorizonHome::from_root(fixture.path().join("unused"));

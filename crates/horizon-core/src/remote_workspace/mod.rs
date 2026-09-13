@@ -183,9 +183,28 @@ pub enum RemoteRuntimePhase {
     Starting {
         requested_at_millis: i64,
     },
+    /// Explicit destructive request, separate from legacy cleanup and client closure.
+    DeleteRequested {
+        requested_at_millis: i64,
+    },
+    /// Exact worker absence was observed; retained identity is a tombstone, not a backup.
+    Deleted {
+        requested_at_millis: i64,
+        observed_at_millis: i64,
+    },
 }
 
 impl RemoteRuntimePhase {
+    pub(crate) const fn delete_requested_at_millis(self) -> Option<i64> {
+        match self {
+            Self::DeleteRequested { requested_at_millis }
+            | Self::Deleted {
+                requested_at_millis, ..
+            } => Some(requested_at_millis),
+            _ => None,
+        }
+    }
+
     pub(crate) const fn stop_requested_at_millis(self) -> Option<i64> {
         match self {
             Self::Stopping { requested_at_millis }

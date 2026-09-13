@@ -3,6 +3,7 @@
 //! off the render thread; only the durable creation fence may grant provider creation.
 
 mod binding;
+mod delete;
 mod guards;
 mod recovery;
 mod request;
