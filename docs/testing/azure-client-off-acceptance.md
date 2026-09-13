@@ -137,12 +137,15 @@ gives A no identity today, so before the product pass A needs, in this order:
    deletes resource groups only; deleting A's group removes the system-assigned
    identity but can leave its role assignments and the custom role definition
    behind, so the removal is an explicit operator step from C, before the manifest
-   deadline: `az role assignment delete --assignee <A's principal ID> --scope
-   /subscriptions/<id>` and the same for the `horizon-worker-puller` scope, then
-   `az role definition delete --name <custom role>`, verified with `az role
-   assignment list --all --assignee <principal ID>` printing an empty list and `az
-   role definition list --custom-role-only true --name <custom role>` printing an
-   empty list, and the verification recorded with the run. Cost approval is not
+   deadline: `az role assignment delete --subscription <id> --assignee <A's
+   principal ID> --scope /subscriptions/<id>` and the same for the
+   `horizon-worker-puller` scope, then `az role definition delete --subscription
+   <id> --name <custom role>`, verified with `az role assignment list
+   --subscription <id> --all --assignee <principal ID>` printing an empty list and
+   `az role definition list --subscription <id> --custom-role-only true --name
+   <custom role>` printing an empty list (every call pinned to the manifest
+   subscription, as the harness pins its own), and the verification recorded with
+   the run. Cost approval is not
    approval for this authority. No Azure user credential is copied to A: the
    managed identity is A's only Azure credential. The repository PAT in item 4 is a
    different credential, typed by the operator into the preparation's token field
@@ -265,13 +268,34 @@ back unchanged at return and after the worker lifecycle step.
      resource-group name `horizon-ws-<workflow>-<job>` (the manifest's
      `worker_group`) and the full ARM group ID
      `/subscriptions/<id>/resourceGroups/horizon-ws-<workflow>-<job>` (the overview's
-     *Exact resource ID* and `worker.json`'s `group_id`). Journal that group the
-     moment the saved record shows it, whether or not the setup goes on to succeed:
-     `client_off.py --manifest m.json journal-group --group <B's group> --created
-     created-groups.json`. Nothing on A deletes a group after a failed setup (the
-     coordinator preserves the allocation for retry), so a group journaled only after
-     a successful baseline would survive an aborted run; journaling it here is what
-     lets step 9 remove it in every outcome.
+     *Exact resource ID* and `worker.json`'s `group_id`). The group name is
+     derived from the workflow and job identities the record carries from the
+     moment the allocation is saved, before the deployment is sent, so it is known
+     even when an accepted deployment followed by a lost observation leaves the
+     record without a worker identity yet. Journal it the moment the record exists,
+     whether or not the setup goes on to succeed: `client_off.py --manifest m.json
+     journal-group --group horizon-ws-<workflow>-<job> --created
+     created-groups.json`. The command refuses a group it cannot read; if it refuses,
+     run **Check this setup** and the command again until either the group is
+     journaled or Check reports that no group exists, and do not continue while a
+     group may exist unjournaled. Nothing on A deletes a group after a failed setup
+     (the coordinator preserves the allocation for retry), so a group journaled only
+     after a successful baseline would survive an aborted run; journaling it here is
+     what lets step 9 remove it in every outcome. Then, from C under the operator's
+     credentials, put B's VM under the deadline reaper, which the product deployment
+     does not do (it tags B with worker identity tags only, and the reaper skips a VM
+     without both `purpose` and `deadline`): `az tag update --subscription <id>
+     --resource-id <B's VM ID> --operation merge --tags purpose=horizon-azure-vm-spike
+     deadline=<the manifest's cleanup_deadline_utc>` and read the two tags back with
+     `az vm show --subscription <id> --ids <B's VM ID> --query tags`. The tags go on
+     the VM only: the product checks its own tags as a subset, so extra VM tags are
+     tolerated, while step 9 refuses a group whose tag set changed since it was
+     journaled, so the group is never retagged. This is the cost stop if A, Horizon
+     or the operator dies before step 9: the reaper deallocates B after the
+     deadline (it never deletes, so the retained disk bills until step 9 or the
+     operator removes the group). Until the harness `bind-worker` step lands and
+     performs this tagging with the same read-back, it is a manual operator
+     requirement and the run does not proceed without the read-back recorded.
    - **Check this setup** until it reports the original setup as observed: the saved
      phase becomes `Reconciling` (setup recovery never writes `Ready`) and the record
      carries the attested pin, read through ARM's run-command channel and never
@@ -283,11 +307,15 @@ back unchanged at return and after the worker lifecycle step.
      so a plain file copy can miss the newest rows: take a consistent copy with
      SQLite's online backup through `python3`, which the client image has (cloud-init
      depends on it; the provisioner installs no `sqlite3` binary):
-     `python3 -c 'import sqlite3; s = sqlite3.connect("/home/horizon/.horizon-client-home/.horizon/cloud-run/workflows.sqlite3"); d = sqlite3.connect("/tmp/horizon-store-copy.sqlite3"); s.backup(d)'`,
-     and read `state.runtime.ssh.host_key`
-     from the `snapshot` column of `remote_workspaces` for the workspace in that copy
-     (a supported export of the saved pin is preferable and is tracked on #474;
-     scanning the host would defeat the attestation).
+     as A's Horizon user, `umask 077; copy=$(mktemp /home/horizon/store-copy.XXXXXX)`
+     then
+     `python3 -c 'import sqlite3, sys; s = sqlite3.connect("/home/horizon/.horizon-client-home/.horizon/cloud-run/workflows.sqlite3"); d = sqlite3.connect(sys.argv[1]); s.backup(d)' "$copy"`,
+     read `state.runtime.ssh.host_key`
+     from the `snapshot` column of `remote_workspaces` for the workspace in that copy,
+     and remove the copy at once (`rm -f "$copy"`): it holds the pinned host key and
+     the repository details, so it is never a predictable or world-readable path
+     and never left behind (a supported export of the saved pin is preferable and
+     is tracked on #474; scanning the host would defeat the attestation).
    - Under *Remote repository preparation*, tick *Include explicit first-token
      installation* first if the PAT is to be delivered, then **Review repository
      preparation**; the confirmation that follows carries the token field, the
@@ -432,7 +460,11 @@ back unchanged at return and after the worker lifecycle step.
    install, the off interval, the return and the cleanup window, not this step, and
    `validate` does not check for it. Until the harness gains a lifecycle-aware check
    (tracked on #474), this is a manual operator requirement: freeze the manifest
-   deadline at `validate`'s minimum plus a lifecycle margin of 60 minutes (a Stop with
+   deadline at `validate`'s minimum plus a product-baseline reserve of 90 minutes
+   (`validate` reserves nothing for step 3: the setup deployment and its check,
+   Prepare Repository, the panel steps and the identity recording all run before
+   `off` against the same absolute deadline) plus a lifecycle margin of 60 minutes
+   (a Stop with
    its 5-minute verification bound, the check, a Start with its 5-minute bound and up
    to 300 s of readiness, the bounded pinned reads and slack), and immediately before
    this step compare the clock with the deadline: unless at least that margin plus
@@ -445,8 +477,12 @@ back unchanged at return and after the worker lifecycle step.
    address are confirmed by **Check saved Stop**'s read-only observer, so run it after
    every Stop, verified or not (an unverified Stop leaves the record at `Stop
    requested (saved)`; a confirmed observation writes the saved phase `Stopped` and a
-   new revision locally), and continue only once the row shows `Stopped (saved, not
-   live)`. **Start environment…**
+   new revision locally), and continue only once this run's check has reported the
+   notice `Retained Stop confirmed at this check; completion is saved` and the
+   reloaded row shows `Stopped (saved, not live)`. The row alone is not enough: a
+   record already at `Stopped` keeps that label, and Start stays offered, when a
+   later check fails or is unverified, so a check without that notice is repeated
+   until it reports it. **Start environment…**
    is offered only for that verified Stop or an existing Start intent. Then **Start
    environment…** → confirm (records Start intent, starts only the exact worker,
    accepts only the saved identity and pin). The result arrives as a notice and the
