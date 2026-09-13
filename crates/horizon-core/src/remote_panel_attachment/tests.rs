@@ -11,6 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod azure;
 mod board;
 mod configured;
 
