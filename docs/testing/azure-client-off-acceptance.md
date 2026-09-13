@@ -293,12 +293,19 @@ back unchanged at return and after the worker lifecycle step.
      declared price and the immutable-binding disclosure. The manifest's
      `hourly_cost_micros` and `budget_micros` bound A only (the harness checks them
      as positive numbers and never meters B); B's admission uses the profile's
-     declared price and the limit typed here, so before the consent box is ticked
-     the review screen must show the price posted for B on #474 (`Standard_D2s_v3`,
-     0.107 USD/h at the time of the post; a profile declaring anything else is
-     corrected on A before the run) and the *Azure CPU cost limit* must equal the B
-     budget posted there; a mismatch aborts the step before **Create task-free
-     worker**. Then tick the consent box and press **Create task-free worker**.
+     `declared_hourly_cost_micros` and the ceiling typed here, both whole
+     micro-units of the billing currency per hour (1,000,000 = one currency unit;
+     the product performs no USD conversion and shows no live quote). So before the
+     consent box is ticked the review screen must show the declared price as
+     exactly the micro-unit value posted for B on #474 (`107_000` per hour for
+     `Standard_D2s_v3` under the billing assumption stated there; the external
+     retail price that value was derived from is recorded on #474, not checked
+     here), the *Azure CPU cost limit* must be that same value, so admission refuses
+     any profile declaring more (the limit is a per-hour compute ceiling, not the
+     run's total budget, which only the manifest and the operator bound), and the
+     profile's `vm_size` must read `Standard_D2s_v3`; a mismatch aborts the step
+     before **Create task-free worker** and the profile is corrected on A first.
+     Then tick the consent box and press **Create task-free worker**.
      Nothing is checked out and no task starts here. Then **Refresh saved page** and select the new row: the repository, panel
      and Stop sections render only for a selected saved row, and the page shown after
      creation is still the previous one. Record the workspace, owning session,
