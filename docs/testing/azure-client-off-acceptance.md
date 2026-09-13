@@ -96,8 +96,12 @@ reaper can never reach a group mid-run; the phases arm their runtime deadline fr
 the same numbers,
 an off interval of at least ten minutes that exceeds the configured lease. `verdict` and `cleanup` also run after the deadline: a late cleanup is exactly
 the case that must run. The
-manifest, current price and deadline are posted on #474 before the paid run starts;
-credentials and identifiers stay private.
+manifest, current price and deadline are posted on #474 before the paid run starts
+in redacted form: the public post carries the VM sizes, image digest, prices,
+budget, off interval, lease, deadline and the SHA-256 of the full unbound manifest
+file, while `subscription_id`, `run_id`, `client_group` and, once bound,
+`worker_group` stay in the private manifest (its hash lets the lead verify later
+that the run used the posted manifest); credentials never appear anywhere.
 
 ## Client A prerequisites for the product path
 
@@ -210,12 +214,13 @@ gives A no identity today, so before the product pass A needs, in this order:
    deletes resource groups only; deleting A's group removes the system-assigned
    identity but can leave its role assignments and the custom role definition
    behind, so the removal is an explicit operator step from the controller, before the manifest
-   deadline: `az role assignment delete --subscription <id> --assignee <A's
-   principal ID> --scope /subscriptions/<id>`, then the same command with `--scope
-   <the profile's image_pull_identity_id, the full resource ID of
-   horizon-worker-puller>` for the Managed Identity Operator assignment (its scope
-   is that identity resource, not the subscription, and it survives A's deletion),
-   then `az role definition delete --subscription
+   deadline and before A's group is deleted (a system-assigned principal may no
+   longer resolve by `--assignee` once A is gone): when the two roles are granted,
+   record each assignment's ID from the `az role assignment create` output, and
+   remove exactly those two with `az role assignment delete --subscription <id>
+   --ids <custom-role assignment ID> <Managed Identity Operator assignment ID>`
+   (never a filter by assignee or scope, which would also remove any unrelated
+   assignment the principal holds), then `az role definition delete --subscription
    <id> --name <custom role>`, verified with `az role assignment list
    --subscription <id> --all --assignee <principal ID>` printing an empty list and
    `az role definition list --subscription <id> --custom-role-only true --name
@@ -246,11 +251,14 @@ gives A no identity today, so before the product pass A needs, in this order:
    field on A (stdin-only delivery to the worker) and is never written to A's disk or
    to any manifest, journal or receipt.
 
-Two product paths are still refused for Azure and gate the baseline and return
-steps below until they land (tracked as the next slices on #474): the saved-Shell
-task start (`remote_worker_status/git_start/configured.rs` and the overview's saved
-panel Start admit Local Docker and RunPod only) and configured panel attachment
-(`remote_panel_attachment/configured.rs`, which every Reconnect uses). Steps marked
+Three product gates block the baseline and return steps below until they land
+(tracked on #474): two Azure provider paths still refused for Azure, the
+saved-Shell task start (`remote_worker_status/git_start/configured.rs` and the
+overview's saved panel Start admit Local Docker and RunPod only) and configured
+panel attachment (`remote_panel_attachment/configured.rs`, which every Reconnect
+uses), and the independent panel-addition control (tracked under #472) that the
+three-panel item needs; the harness binding change under the manifest is a
+fourth, harness-side gate. Steps marked
 **gated** below cannot be executed for an Azure worker today; a product run stops
 before the first gated step and collects no counter evidence until both land. A
 third refused path, the provider status read (`remote_environment_observation/
@@ -414,10 +422,12 @@ back unchanged at return and after the worker lifecycle step.
      show --subscription <id> --resource-group horizon-ws-<workflow>-<job> --name
      worker --query properties.provisioningState`; while it answers `Accepted` or
      `Running`, wait, run **Check this setup** and read again. Only when the
-     deployment is absent, `Failed` or `Canceled` and the VM list is still empty is
-     the absence definitive: record it with the time, do not continue to the
-     baseline, and go to step 9. A group that exists without a VM was journaled
-     above and step 9 deletes it; if the group itself was never readable,
+     deployment is absent, `Failed` or `Canceled` is the outcome known. A
+     `Failed` or `Canceled` deployment is terminal whether or not a VM was left
+     behind (ARM can leave a partially created VM, which setup can never observe
+     as its worker): record it with the time, do not continue to the baseline, do
+     not bind, tag or start anything, and go to step 9. A group that exists in
+     that state was journaled above and step 9 deletes it; if the group itself was never readable,
      `journal-group` has refused and appended nothing, so there is no B entry,
      step 9 reports the worker group as unjournaled and deletes only A's group,
      and that is the correct outcome: no cleanup record is written by hand.
@@ -666,7 +676,9 @@ back unchanged at return and after the worker lifecycle step.
    environment…** → confirm (records Start intent, starts only the exact worker,
    accepts only the saved identity and pin). The result arrives as a notice and the
    overview then reloads the saved page on its own, keeping the selected workspace
-   by ID: the reloaded row must show `Reconciling` before this step continues. Only
+   by ID, and the reloaded row decides which of two paths follows: `Reconciling`
+   is the success path and this step continues to the reads below; `Start
+   requested (saved)` is the retry path. Only
    when the reloaded row still shows `Start requested (saved)` and the notice
    reports either an unverified Start or the loss of the local completion (`The
    Start could not finish locally. Refresh saved inventory; if Start intent
@@ -737,8 +749,14 @@ back unchanged at return and after the worker lifecycle step.
    failure or a reader answering with nothing proves nothing and the removal stays
    unproven); like cleanup it also runs after the manifest deadline. A worker restart drops the line as well (the entrypoint rewrites
    the file), but the run does not rely on that. The command first
-   attests a running B, so it cannot run when step 7 ended with B deallocated (a
-   successful Stop followed by a failed or exhausted Start). Nothing restarts B
+   attests a running B. A failed or exhausted Start does not decide B's state (the
+   provider may have sent `start/action` and then failed its identity, readiness
+   or host-key observation, leaving B running under a durable Start intent with
+   no compensating deallocation), so after step 7 the operator re-reads B's power
+   state with the `get-instance-view` probe above: whenever B is running, this
+   step runs in full and must pass. Only for a genuinely deallocated or
+   unavailable B (a successful Stop followed by a Start that never started
+   compute) can it not run. Nothing restarts B
    outside the product to make it runnable: in that state the operator destroys
    the observer private key on the controller (`shred -u <the path recorded as
    observer_key_path in worker.json>`, the only copy; the public half is inert
