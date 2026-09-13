@@ -840,12 +840,14 @@ fn resolve_arguments(
     results: &[StepReport],
     result_indexes: &BTreeMap<String, usize>,
 ) -> Result<Map<String, Value>, String> {
+    let mut budget = 0;
     let resolved = resolve_value(
         &Value::Object(step.arguments.clone()),
         step,
         results,
         result_indexes,
         &plan.variables,
+        &mut budget,
     )?;
     let encoded = serde_json::to_vec(&resolved).map_err(|error| error.to_string())?;
     if encoded.len() > MAX_RESOLVED_ARGUMENTS_BYTES {
@@ -866,11 +868,12 @@ pub(crate) fn resolve_value(
     results: &[StepReport],
     result_indexes: &BTreeMap<String, usize>,
     variables: &BTreeMap<String, Value>,
+    budget: &mut usize,
 ) -> Result<Value, String> {
     match value {
         Value::Array(values) => values
             .iter()
-            .map(|value| resolve_value(value, step, results, result_indexes, variables))
+            .map(|value| resolve_value(value, step, results, result_indexes, variables, budget))
             .collect::<Result<Vec<_>, _>>()
             .map(Value::Array),
         Value::Object(object) if object.len() == 1 && object.contains_key("$ref") => {
@@ -884,29 +887,44 @@ pub(crate) fn resolve_value(
                 .and_then(|index| results.get(*index))
                 .and_then(|report| report.result.as_ref())
                 .ok_or_else(|| format!("reference target `{target}` has no successful result"))?;
-            result
+            let selected = result
                 .pointer(pointer)
-                .cloned()
-                .ok_or_else(|| format!("reference `{reference}` did not match the prior structured result"))
+                .ok_or_else(|| format!("reference `{reference}` did not match the prior structured result"))?;
+            charge_resolved(budget, selected)?;
+            Ok(selected.clone())
         }
         Value::Object(object) if object.len() == 1 && object.contains_key("$var") => {
             let name = object
                 .get("$var")
                 .and_then(Value::as_str)
                 .ok_or_else(|| "$var must be a string".to_string())?;
-            variables::lookup(variables, step, name).map_err(|error| error.to_string())
+            let selected = variables::lookup(variables, step, name).map_err(|error| error.to_string())?;
+            charge_resolved(budget, &selected)?;
+            Ok(selected)
         }
         Value::Object(object) => object
             .iter()
             .map(|(key, value)| {
                 Ok((
                     key.clone(),
-                    resolve_value(value, step, results, result_indexes, variables)?,
+                    resolve_value(value, step, results, result_indexes, variables, budget)?,
                 ))
             })
             .collect::<Result<Map<_, _>, String>>()
             .map(Value::Object),
         _ => Ok(value.clone()),
+    }
+}
+
+fn charge_resolved(budget: &mut usize, value: &Value) -> Result<(), String> {
+    let size = serde_json::to_vec(value).map_or(0, |bytes| bytes.len());
+    *budget = budget.saturating_add(size);
+    if *budget > MAX_RESOLVED_ARGUMENTS_BYTES {
+        Err(format!(
+            "resolved arguments are {budget} bytes; the maximum is {MAX_RESOLVED_ARGUMENTS_BYTES}"
+        ))
+    } else {
+        Ok(())
     }
 }
 

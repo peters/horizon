@@ -371,6 +371,7 @@ impl DurableRun {
     /// # Errors
     /// Returns when either terminal artifact cannot be atomically persisted.
     pub fn finish(&mut self, execution: &ExecutionReport) -> Result<(), RunStateError> {
+        self.clear_projection_files();
         if execution.projection.is_some() {
             let plan = self.load_plan().map_err(|error| {
                 io_error(
@@ -739,6 +740,11 @@ impl DurableRun {
     fn write_json(&self, name: &str, value: &impl Serialize, artifact: &'static str) -> Result<(), RunStateError> {
         write_private_json(&self.directory.join(name), value, artifact)
     }
+
+    fn clear_projection_files(&self) {
+        let _ = std::fs::remove_file(self.directory.join("projection.json"));
+        let _ = std::fs::remove_file(self.directory.join("projection.csv"));
+    }
 }
 
 impl CheckpointStore for DurableRun {
@@ -1068,7 +1074,9 @@ mod tests {
             observability: ObservabilitySummary::default(),
             projection: None,
         };
+        std::fs::write(run.directory.join("projection.json"), b"[]\n").expect("stale projection");
         run.finish(&report).expect("finish durable run");
+        assert!(!run.directory.join("projection.json").is_file());
         let succeeded: RunState = serde_json::from_slice(&std::fs::read(&run.state_path).expect("terminal state"))
             .expect("decode terminal state");
         assert_eq!(succeeded.status, RunStatus::Succeeded);
