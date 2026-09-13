@@ -66,13 +66,14 @@ explicit about which steps mutate the host so the proof is not overclaimed.
      docker info --format "{{.ServerVersion}}" 2>&1 | head -1 || true;
      stat -c "ws=%n dev=%Hd:%Ld" "$WS" 2>/dev/null || echo "ws missing: $WS";
      B=$(basename "$(readlink /sys/dev/block/$(stat -c "%Hd:%Ld" "$WS" 2>/dev/null) 2>/dev/null)" 2>/dev/null);
-     [ -n "$B" ] && { echo "dev=$B"; head -c 4096 "/proc/fs/ext4/$B/options"; echo; } || echo "no ext4 options"'
+     [ -n "$B" ] && { echo "dev=$B"; head -c 4097 "/proc/fs/ext4/$B/options"; } || echo "no ext4 options"'
    ```
    Save as `before.txt`. Canonicalize `WS` with `readlink -m` **before** the
    ancestor walk (so a dangling workspace symlink is judged on the target
    side, matching the checker), then `df` that path (not `/`), record GNU `stat` `%Hd:%Ld`
    (filesystem `st_dev` major/minor — not `%t:%T`/`st_rdev`) and the same
-   4096-byte ext4 options window the checker evaluates. That is the
+   4097-byte ext4 options window the checker evaluates (4096+1 to detect
+   overflow, no extra newline). That is the
    independent ground truth for matrix assertions 4–6.
 
 3. **Run the preflight on the VM** (the tool run under test; fixed args, bounded probes, 10 s each). Capture reports **locally** before any VM cleanup. Assertion 9 needs two JSON runs with the same `--now`:

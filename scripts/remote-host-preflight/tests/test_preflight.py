@@ -140,10 +140,20 @@ class Harness(unittest.TestCase):
             for key, args in preflight.PROBE_ARGS.items():
                 args = list(args)
                 matches = list(argv) == args
-                if key == "disk" and list(argv[:len(args)]) == args and len(argv) == len(args) + 1:
+                if key in ("disk", "workspace_dir") and list(argv[:len(args)]) == args and len(argv) == len(args) + 1:
                     matches = True
                 if matches:
                     entry = fixture.get(key)
+                    if entry is None and key == "workspace_dir":
+                        target, problem = preflight.workspace_directory(argv[-1])
+                        if problem:
+                            code = 2 if "not a directory" in problem else 3
+                            return {"exit_code": code, "stdout": "", "stderr": problem}
+                        st = os.stat(target)
+                        return {"exit_code": 0,
+                                "stdout": "%s\t%d\t%d\n" % (
+                                    target, os.major(st.st_dev), os.minor(st.st_dev)),
+                                "stderr": ""}
                     if entry is None:
                         raise FileNotFoundError
                     if entry.get("timeout"):
@@ -220,6 +230,8 @@ class PreflightVerdicts(Harness):
         self.assertEqual(code, 1)
         by_id = {check["id"]: check for check in report["checks"]}
         self.assertEqual(by_id["os_linux"]["status"], "unsupported")
+        self.assertEqual(by_id["os_linux"]["value"], "Darwin 6.1.0 arm64")
+        self.assertIn("arm64", by_id["os_linux"]["detail"])
         self.assertEqual(report["summary"]["verdict"], "unsupported")
 
     def test_unsupported_architecture(self):
@@ -314,6 +326,17 @@ class EngineFailures(Harness):
         self.assertIn("tcp://", by_id["container_engine"]["detail"])
         self.assertNotIn(list(preflight.PROBE_ARGS["docker_version"]), executor.seen)
         self.assertNotIn(list(preflight.PROBE_ARGS["docker_info"]), executor.seen)
+
+    def test_local_docker_host_with_remote_context_is_rejected(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["docker_context"] = docker_context_ok(host="tcp://remote-daemon:2376")
+        with mock.patch.dict(os.environ, {"DOCKER_HOST": "unix:///var/run/docker.sock",
+                                          "DOCKER_CONTEXT": "remote"}):
+            code, report, executor = self.run_main(fixture)
+        self.assertEqual(code, 1)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertIn("context Host=", by_id["container_engine"]["detail"])
+        self.assertNotIn(list(preflight.PROBE_ARGS["docker_version"]), executor.seen)
 
     def test_local_unix_docker_endpoint_is_accepted(self):
         fixture = dict(DEFAULT_FIXTURE)
@@ -833,11 +856,26 @@ class RedactionAndDeterminism(Harness):
         fixture = dict(DEFAULT_FIXTURE)
         _, _, executor = self.run_main(fixture)
         allowed = [list(args) for args in preflight.PROBE_ARGS.values()]
-        disk_prefix = list(preflight.PROBE_ARGS["disk"])
+        extra_keys = ("disk", "workspace_dir")
         for argv in executor.seen:
-            if argv[:len(disk_prefix)] == disk_prefix and len(argv) == len(disk_prefix) + 1:
+            skipped = False
+            for key in extra_keys:
+                prefix = list(preflight.PROBE_ARGS[key])
+                if argv[:len(prefix)] == prefix and len(argv) == len(prefix) + 1:
+                    skipped = True
+                    break
+            if skipped:
                 continue
             self.assertIn(argv, allowed)
+
+    def test_workspace_resolution_timeout_is_bounded(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["workspace_dir"] = {"timeout": True}
+        code, report, _ = self.run_main(fixture)
+        self.assertEqual(code, 2)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["disk_capacity"]["status"], "error")
+        self.assertIn("timed out", by_id["disk_capacity"]["detail"])
 
     def test_disk_probe_is_restricted_to_workspace_path(self):
         fixture = dict(DEFAULT_FIXTURE)

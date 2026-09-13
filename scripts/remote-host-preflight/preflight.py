@@ -50,6 +50,21 @@ PROBE_ARGS = {
                        "{{.Endpoints.docker.Host}}"],
     "podman_info": ["podman", "--remote=false", "info", "--format",
                     "{{.Version.Version}}"],
+    "workspace_dir": [sys.executable, "-c",
+                      "import os,sys\n"
+                      "p=os.path.normpath(os.path.realpath(sys.argv[1]))\n"
+                      "c=p\n"
+                      "while True:\n"
+                      "    if os.path.isdir(c):\n"
+                      "        st=os.stat(c)\n"
+                      "        sys.stdout.write('%s\\t%d\\t%d\\n'%(c,os.major(st.st_dev),os.minor(st.st_dev)))\n"
+                      "        sys.exit(0)\n"
+                      "    if os.path.lexists(c):\n"
+                      "        sys.stderr.write('not-a-directory\\n'); sys.exit(2)\n"
+                      "    n=os.path.dirname(c)\n"
+                      "    if n==c:\n"
+                      "        sys.stderr.write('missing\\n'); sys.exit(3)\n"
+                      "    c=n\n"],
     "disk": ["df", "-kP"],
     "tailscale_version": ["tailscale", "version"],
     "tailscale_status": ["tailscale", "status", "--json", "--peers=false"],
@@ -61,7 +76,7 @@ OPTIONAL_PROBES = {"docker_version", "docker_info", "docker_context", "podman_in
 
 # Endpoint-selection variables inspected for locality. Presence only — never
 # an environment dump. Tests clear this set so developer shells cannot leak.
-DOCKER_ENDPOINT_VARS = ("DOCKER_HOST",)
+DOCKER_ENDPOINT_VARS = ("DOCKER_HOST", "DOCKER_CONTEXT")
 PODMAN_ENDPOINT_VARS = ("PODMAN_CONNECTION", "PODMAN_HOST",
                         "CONTAINER_HOST", "CONTAINER_CONNECTION")
 ENDPOINT_VARS = DOCKER_ENDPOINT_VARS + PODMAN_ENDPOINT_VARS
@@ -154,9 +169,9 @@ def check_os(executor, timeout):
         return {"id": "os_linux", "status": ERROR, "value": None,
                 "detail": "uname output truncated"}
     if fields[0] != "Linux":
-        detail = "kernel reports %s" % (" ".join(fields[:2]) or "unknown")
-        return {"id": "os_linux", "status": UNSUPPORTED, "value": None,
-                "detail": redact(detail)}
+        value = " ".join(fields[:3])
+        return {"id": "os_linux", "status": UNSUPPORTED, "value": value,
+                "detail": redact("kernel reports %s" % value)}
     machine = fields[2]
     release = fields[1]
     if machine in SUPPORTED_ARCHS:
@@ -219,15 +234,12 @@ def docker_context_host(probe):
 def docker_endpoint_reason(executor, timeout):
     """None when the selected docker endpoint is a local unix socket.
 
-    `DOCKER_HOST` overrides the active context. When it is unset, the active
-    context's `Endpoints.docker.Host` (from `docker context inspect`) is
-    required: a remote context must not be combined with this host's
-    CPU/memory/disk/ext4 checks. Missing inspect output fails closed.
+    Both `DOCKER_HOST` and the active context (selected by `DOCKER_CONTEXT`)
+    must be local unix sockets. A local socket env var must not skip a
+    remote context, and missing inspect output fails closed.
     """
     host_env = os.environ.get("DOCKER_HOST")
-    if host_env:
-        if is_local_unix_endpoint(host_env):
-            return None
+    if host_env and not is_local_unix_endpoint(host_env):
         return "docker endpoint is remote (DOCKER_HOST=%s)" % redact(host_env)
     ctx, err = run_probe(executor, "docker_context", timeout)
     if err is not None:
@@ -235,9 +247,9 @@ def docker_endpoint_reason(executor, timeout):
     ctx_host = docker_context_host(ctx)
     if not ctx_host:
         return "docker context endpoint missing"
-    if is_local_unix_endpoint(ctx_host):
-        return None
-    return "docker endpoint is remote (context Host=%s)" % ctx_host
+    if not is_local_unix_endpoint(ctx_host):
+        return "docker endpoint is remote (context Host=%s)" % ctx_host
+    return None
 
 
 def engine_endpoint_note(engine):
@@ -425,8 +437,30 @@ def format_seconds(timeout):
     return ("%.6f" % timeout).rstrip("0").rstrip(".")
 
 
+def resolve_workspace_directory(executor, timeout, path):
+    """Killable workspace dir + device identity, bounded by `timeout`."""
+    result, error = run_probe(executor, "workspace_dir", timeout, extra_argv=[path])
+    if error:
+        return None, None, None, error
+    if result["exit_code"] == 0:
+        line = str(result.get("stdout", "")).splitlines()[0] if result.get("stdout") else ""
+        parts = line.split("\t")
+        if len(parts) != 3:
+            return None, None, None, "workspace resolver returned malformed output"
+        try:
+            return parts[0], int(parts[1]), int(parts[2]), None
+        except ValueError:
+            return None, None, None, "workspace resolver returned malformed output"
+    err = redact(result.get("stderr", "")).strip()
+    if result["exit_code"] == 2 or "not-a-directory" in err:
+        return None, None, None, "workspace path is not a directory"
+    return None, None, None, ("workspace path %s does not exist and no ancestor is stat-able"
+                              % redact(path))
+
+
 def check_disk(executor, timeout, workspace_path):
-    target, problem = workspace_directory(workspace_path)
+    target, _major, _minor, problem = resolve_workspace_directory(
+        executor, timeout, workspace_path)
     if problem:
         return {"id": "disk_capacity", "status": ERROR, "value": None,
                 "detail": problem}
@@ -559,18 +593,14 @@ def ext4_qualifier_problems(raw):
     return problems
 
 
-def check_storage_qualifier(procfs_root, sysfs_root, workspace_path):
-    target, problem = workspace_directory(workspace_path)
+def check_storage_qualifier(procfs_root, sysfs_root, workspace_path, executor, timeout):
+    _target, major, minor, problem = resolve_workspace_directory(
+        executor, timeout, workspace_path)
     if problem:
-        return {"id": "storage_ext4_qualifier", "status": UNSUPPORTED, "value": None,
+        status = ERROR if "timed out" in problem else UNSUPPORTED
+        return {"id": "storage_ext4_qualifier", "status": status, "value": None,
                 "detail": problem}
-    try:
-        stat = os.stat(target)
-    except OSError:
-        return {"id": "storage_ext4_qualifier", "status": ERROR, "value": None,
-                "detail": "workspace path %s could not be stat-ed" % redact(workspace_path)}
-    name, options, error = read_ext4_options(procfs_root, sysfs_root,
-                                              os.major(stat.st_dev), os.minor(stat.st_dev))
+    name, options, error = read_ext4_options(procfs_root, sysfs_root, major, minor)
     if error is not None or options is None:
         status = UNSUPPORTED
         value = name
@@ -632,7 +662,7 @@ def build_report(procfs_root, sysfs_root, workspace_path, timeout, executor, now
         check_capacity(executor, timeout, procfs_root),
         check_memory(procfs_root),
         check_disk(executor, timeout, workspace_path),
-        check_storage_qualifier(procfs_root, sysfs_root, workspace_path),
+        check_storage_qualifier(procfs_root, sysfs_root, workspace_path, executor, timeout),
         check_tailscale(executor, timeout),
     ]
     checks.extend({"id": check_id, "status": UNVERIFIED, "value": None, "detail": detail}
