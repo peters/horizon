@@ -22,12 +22,15 @@ replays a task, and the harness phases that act as C issue no ARM write. Two
 Azure control-plane credentials mutate B: the product's Create, Prepare
 Repository, Stop and Start run on A under A's managed identity, and every
 mutating harness phase or controller command in this runbook names the operator
-(three further, non-Azure credentials are described where they appear and are
-never interchanged: the repository PAT that Prepare Repository delivers to B, the
-product's saved worker SSH client identity that product operations and the
-step 7 pinned reads use, and observer C's restricted key, a fresh separate key
-pair generated for C alone and recorded in `worker.json`, never the product
-key); the C-versus-operator
+(four further, non-Azure credentials are described where they appear and are
+never interchanged: the fresh SSH key pair for A that step 1 generates and only
+the controller uses to reach A; the repository PAT that Prepare Repository
+delivers to B; the product's saved worker SSH client identity, used by the
+SSH-dependent product flows (Prepare Repository, panel attachment, the saved
+task start) and by the step 7 pinned reads, while Stop, Check saved Stop and
+Start use the managed identity alone; and observer C's restricted key, a fresh
+separate key pair generated for C alone and recorded in `worker.json`, never the
+product key); the C-versus-operator
 separation is procedural (the phases and commands that write) rather than a
 credential boundary, because the harness has no second Azure login. The operator may enforce
 the declared cleanup deadline.
@@ -452,8 +455,11 @@ back unchanged at return and after the worker lifecycle step.
      the run proceeds after any interruption of step 3, and again before step 9:
      `az group list --subscription <id> --query "[?starts_with(name, 'horizon-ws-')].{name:name, tags:tags}"`
      is compared with `groups.json`; a group absent from the pre-run list whose
-     `horizon-workflow-id` tag equals the workflow identity recorded for this run is
-     journaled with `journal-group` before anything else happens. If that identity
+     `horizon-workflow-id` and `horizon-job-id` tags both equal the workflow and
+     job identities recorded for this run (both, as `bind-worker` and the cleanup's
+     own binding check require: several jobs can share a workflow, and a
+     workflow-only match could journal a peer worker) is journaled with
+     `journal-group` before anything else happens. If that identity
      was never recorded (A died before it could be read), no group is journaled or
      deleted by guesswork: the candidates are posted on #474 with their tags and
      creation times and resolved by the lead before cleanup, because another lane
@@ -689,24 +695,24 @@ back unchanged at return and after the worker lifecycle step.
    install, the off interval, the return and the cleanup window, not this step, and
    `validate` does not check for it. Until the harness gains a lifecycle-aware check
    (tracked on #474), this is a manual operator requirement: freeze the manifest
-   deadline at `validate`'s minimum plus 220 minutes: a product-baseline reserve of
+   deadline at `validate`'s minimum plus 225 minutes: a product-baseline reserve of
    90 minutes (`validate` reserves nothing for step 3: the setup deployment and its
    check, Prepare Repository, the panel steps and the identity recording all run
    before `off` against the same absolute deadline), 15 minutes for the manual
-   reconnect check on A after `return`, 40 minutes for step 8 and the role removal
-   (the observer-key removal can spend about 33 minutes at the harness's bounds and
-   `validate` reserves nothing for it), a lifecycle margin of 60 minutes (a Stop
+   reconnect check on A after `return`, 45 minutes for step 8 and the role removal
+   (the observer-key removal can spend about 33 minutes at the harness's bounds, plus the 10-minute role-removal bound, and
+   `validate` reserves nothing for either), a lifecycle margin of 60 minutes (a Stop
    with its 5-minute verification bound, the check, a Start with its 5-minute bound
    and up to 300 s of readiness, the bounded pinned reads and slack) and the
    15-minute return margin the gate below counts but `validate`'s minimum does
    not. Worked example with `off_minutes` 12: `validate`'s minimum is 160 minutes,
-   so the deadline is at least 380 minutes after provisioning starts; at the gate
+   so the deadline is at least 385 minutes after provisioning starts; at the gate
    below, with every bound spent (30 provisioning, 47 observer install, 90
    baseline, 29 off setup, 12 off, 22 return setup, 15 reconnect check), 245
-   minutes have elapsed and 135 remain, which is exactly what the gate requires.
+   minutes have elapsed and 140 remain, which is exactly what the gate requires.
    Immediately before
    this step compare the clock with the deadline: unless at least that margin plus
-   75 minutes remains (step 8 at its bounds, about 33 minutes, the role removal, the
+   80 minutes remains (step 8 at its bounds, about 33 minutes, the 10-minute role removal, the
    15-minute return margin and the 20-minute cleanup bound), skip the step, report
    it as not run, and proceed to the observer-key removal and cleanup. It uses the product controls on
    A, in the *Explicit Stop* section of the overview:
@@ -759,7 +765,7 @@ back unchanged at return and after the worker lifecycle step.
    still print an expiry; a missing or replaced VM, or a failed probe, ends the
    retries as a non-retryable outcome. Retries are budgeted: at most three presses
    in total, each only after the previous result has been reloaded, and none once
-   the clock is past the gate above (the deadline minus 135 minutes), because every
+   the clock is past the gate above (the deadline minus 140 minutes), because every
    press can spend the 5-minute Start bound and up to 300 s of readiness. An
    identity or absence result is never retried, and a row at `Reconciling` is
    never retried. The reads below happen only after this run's own Start has
@@ -798,8 +804,12 @@ back unchanged at return and after the worker lifecycle step.
    through the product.
 8. **Remove the observer key**, an operator step (the command mutates B through
    ARM run-command under the operator's login, and a run must not end with it
-   skipped): `client_off.py --manifest m.json remove-observer-key
-   --worker worker.json --public-key observer.pub`, once the return and the reconnect
+   skipped): `timeout 35m client_off.py --manifest m.json remove-observer-key
+   --worker worker.json --public-key observer.pub` (the phase bounds each CLI call
+   but, unlike `cleanup`, sets no whole-phase deadline, so the operator's GNU
+   `timeout` supplies the 35-minute bound the reserve assumes; a phase-level bound
+   in the harness is a follow-up in this lane; an expired bound leaves the removal
+   unproven and takes the key-destruction path below), once the return and the reconnect
    check on A have reached any recorded terminal result (passed, failed within
    their bounds, or skipped and recorded as such) and before the run is reported
    finished; a failed or skipped return does not skip this step, since B may
@@ -846,7 +856,9 @@ back unchanged at return and after the worker lifecycle step.
    normal case after a successful step 7 Start) or `PowerState/stopped`
    (stopped-allocated), or still transitional after that bound,
    keeps billing compute, so the operator deallocates it from the controller,
-   the one mutation of B outside the product this runbook allows and only on
+   the one out-of-product power-state mutation of B this runbook allows (the
+   reaper tags and the observer-key line are the other, non-power, controller
+   writes to B) and only on
    this failure path: `az vm deallocate --subscription <id> --ids <B's VM ID>
    --no-wait`, then the instance-view read every 30 s for at most 10 minutes
    until it prints `PowerState/deallocated`; a deallocation that does not
@@ -858,7 +870,7 @@ back unchanged at return and after the worker lifecycle step.
 9. **Role removal, then cleanup.** First, as the operator and while A's group
    still exists, remove A's authority exactly as prerequisite 2 records it, every
    call under `timeout 90` (the harness's own CLI bound) and the whole substep
-   under 10 minutes of the 40 reserved for it and step 8: `az
+   under 10 minutes of the 45 reserved for it and step 8: `az
    role assignment delete --subscription <id> --ids <custom-role assignment ID>
    <Managed Identity Operator assignment ID>`, then `az role definition delete
    --subscription <id> --name <the recorded custom role definition ID>`, then
