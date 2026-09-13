@@ -350,6 +350,41 @@ mod linux {
     }
 
     #[test]
+    fn start_intent_is_refused_before_credentials() {
+        let fixture = Retained::new(true, true, false);
+        fixture
+            .stop(&provider(Ok(InteractiveWorkerStop::Stopped)))
+            .expect("saved Stop");
+        let stopped = fixture.current();
+        let RemoteRuntimePhase::Stopped { observed_at_millis, .. } =
+            stopped.workspace().state().runtime.as_ref().expect("runtime").phase
+        else {
+            panic!("stopped");
+        };
+        fixture
+            .store
+            .record_remote_start_phase(
+                &stopped,
+                RemoteRuntimePhase::Starting {
+                    requested_at_millis: observed_at_millis,
+                },
+            )
+            .expect("start intent");
+        let starting = fixture.current();
+        assert_eq!(
+            stop_with(
+                &fixture.store,
+                &fixture.profile,
+                &starting.workspace().environment_summary(),
+                || panic!("credentials must remain unread"),
+                |_, _| panic!("no provider work")
+            ),
+            Err(Rejected::Stop(Error::ManagementConflict))
+        );
+        assert_eq!(fixture.current(), starting);
+    }
+
+    #[test]
     fn exact_allocation_cas_does_not_reload_a_new_workflow_before_stop() {
         let fixture = Retained::new(true, true, false);
         let before = fixture.current();

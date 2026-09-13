@@ -206,6 +206,12 @@ pub(super) fn stop_with(
     if runtime.phase.stop_requested_at_millis().is_some() {
         return Err(ConfiguredRunPodStopError::ExistingStopIntent);
     }
+    // A start in flight is resolved first; Stop never races it, before any credential.
+    if runtime.phase.start_requested_at_millis().is_some() {
+        return Err(ConfiguredRunPodStopError::Stop(
+            RemoteWorkspaceStopError::ManagementConflict,
+        ));
+    }
     if admitted.selection.is_none() {
         return Err(ConfiguredRunPodStopError::InvalidBinding);
     }

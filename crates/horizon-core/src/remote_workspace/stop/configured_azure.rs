@@ -16,6 +16,7 @@ use crate::{
             InteractiveWorker, InteractiveWorkerCleanup, InteractiveWorkerEnsure, InteractiveWorkerProvider,
             InteractiveWorkerRequest, InteractiveWorkerStatus,
         },
+        interactive_worker_start::{InteractiveWorkerStart, InteractiveWorkerStartProvider},
         interactive_worker_stop::{
             InteractiveWorkerStop, InteractiveWorkerStopExpectation, InteractiveWorkerStopObservation,
             InteractiveWorkerStopObserver, InteractiveWorkerStopProvider,
@@ -87,6 +88,20 @@ pub(super) fn stop_with<P: InteractiveWorkerStopProvider>(
     {
         return Err(ConfiguredAzureStopError::ExistingStopIntent);
     }
+    // A start in flight is resolved first (explicit Start retry, then the saved-Stop
+    // check); Stop never races it, and the refusal precedes the client.
+    if admitted
+        .allocation
+        .workspace()
+        .state()
+        .runtime
+        .as_ref()
+        .is_some_and(|runtime| runtime.phase.start_requested_at_millis().is_some())
+    {
+        return Err(ConfiguredAzureStopError::Stop(
+            RemoteWorkspaceStopError::ManagementConflict,
+        ));
+    }
     let provider = client(&admitted);
     admitted.check_current(store, &admitted.allocation)?;
     let bound = Bound::new(provider?, store, &admitted);
@@ -103,14 +118,14 @@ pub(super) fn stop_with<P: InteractiveWorkerStopProvider>(
 /// target within the named profile, immutable binding to that profile, no `RunPod`
 /// storage expectation, no management intent, and a retained worker whose complete
 /// Azure handle validates under the profile's subscription with a complete pin.
-pub(super) struct RetainedAzure {
-    pub(super) allocation: StoredRemoteAllocation,
+pub(in crate::remote_workspace) struct RetainedAzure {
+    pub(in crate::remote_workspace) allocation: StoredRemoteAllocation,
     request: InteractiveWorkerRequest,
     binding: RemoteCpuProfileBinding,
 }
 
 impl RetainedAzure {
-    pub(super) fn load(
+    pub(in crate::remote_workspace) fn load(
         store: &CloudWorkflowStore,
         profile: &AzureProfile,
         expected: &RemoteEnvironmentSummary,
@@ -214,7 +229,10 @@ impl RetainedAzure {
     /// and the Azure client over it. Both are lazy; no token is requested or persisted
     /// here, and a missing CLI login surfaces as an unverified observation. Callers
     /// reach this only through [`azure_with`], after admission.
-    pub(super) fn client(store: &CloudWorkflowStore, profile: &AzureProfile) -> Result<AzureClient, BindingError> {
+    pub(in crate::remote_workspace) fn client(
+        store: &CloudWorkflowStore,
+        profile: &AzureProfile,
+    ) -> Result<AzureClient, BindingError> {
         let credential =
             AzureCliCredential::new(profile.subscription_id.clone()).map_err(|_| BindingError::InvalidBinding)?;
         AzureClient::new(profile.clone(), credential, store.clone()).map_err(|_| BindingError::InvalidBinding)
@@ -223,7 +241,7 @@ impl RetainedAzure {
     /// The binding and the absence of a storage selection must still hold for the
     /// allocation as it is now; used where the coordinator has already advanced the
     /// allocation (intent recorded) and fences it with its own CAS.
-    fn check_binding(&self, store: &CloudWorkflowStore) -> Result<(), BindingError> {
+    pub(in crate::remote_workspace) fn check_binding(&self, store: &CloudWorkflowStore) -> Result<(), BindingError> {
         let current = store
             .load_remote_allocation(
                 self.allocation.workspace().session_id(),
@@ -248,7 +266,7 @@ impl RetainedAzure {
 
     /// The exact allocation, its binding and the absence of a storage selection must
     /// all still hold: any drift around the observation is a changed state, not a result.
-    pub(super) fn check_current(
+    pub(in crate::remote_workspace) fn check_current(
         &self,
         store: &CloudWorkflowStore,
         expected: &StoredRemoteAllocation,
@@ -280,7 +298,7 @@ impl RetainedAzure {
 /// answer reaches the shared coordinator, by the binding recheck admission ran, so a
 /// binding that changed while the control plane was being read or the Stop was in
 /// flight can never be completed as a retained Stop.
-pub(super) struct Bound<'a, P> {
+pub(in crate::remote_workspace) struct Bound<'a, P> {
     inner: P,
     store: &'a CloudWorkflowStore,
     admitted: &'a RetainedAzure,
@@ -288,7 +306,11 @@ pub(super) struct Bound<'a, P> {
 }
 
 impl<'a, P> Bound<'a, P> {
-    fn new(inner: P, store: &'a CloudWorkflowStore, admitted: &'a RetainedAzure) -> Self {
+    pub(in crate::remote_workspace) fn new(
+        inner: P,
+        store: &'a CloudWorkflowStore,
+        admitted: &'a RetainedAzure,
+    ) -> Self {
         Self {
             inner,
             store,
@@ -297,7 +319,7 @@ impl<'a, P> Bound<'a, P> {
         }
     }
 
-    fn drifted(&self) -> bool {
+    pub(in crate::remote_workspace) fn drifted(&self) -> bool {
         self.drifted.load(Ordering::SeqCst)
     }
 
@@ -317,7 +339,7 @@ impl<'a, P> Bound<'a, P> {
 
 /// The provider's own error, or the saved binding drifting during an observation or Stop.
 #[derive(Debug)]
-pub(super) enum BoundError<E> {
+pub(in crate::remote_workspace) enum BoundError<E> {
     Provider(E),
     Drift,
 }
@@ -377,6 +399,16 @@ impl<P: InteractiveWorkerStopProvider> InteractiveWorkerStopProvider for Bound<'
         // The coordinator has recorded intent (its own CAS fences the allocation); the
         // binding and storage must still be the admitted ones before completion.
         self.fence(stopped, self.admitted.check_binding(self.store).is_ok())
+    }
+}
+
+impl<P: InteractiveWorkerStartProvider> InteractiveWorkerStartProvider for Bound<'_, P> {
+    fn start_worker(&self, worker: &InteractiveWorker) -> Result<InteractiveWorkerStart, Self::Error> {
+        let started = self.inner.start_worker(worker).map_err(BoundError::Provider);
+        // Start intent is recorded (the coordinator's CAS fences the allocation); the
+        // binding and storage must still be the admitted ones before the renewed
+        // observation is written.
+        self.fence(started, self.admitted.check_binding(self.store).is_ok())
     }
 }
 
