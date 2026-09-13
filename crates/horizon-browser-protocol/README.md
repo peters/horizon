@@ -15,8 +15,10 @@ The crate is an internal workspace package for now and is not published.
 
 ## Build footprint baseline
 
-Measured on Linux on 2026-08-29 with cached Cargo sources and a separate empty
-target directory for each command:
+Current packaging measurements, including a later compile-graph comparison,
+live in [`docs/architecture/browser-packaging.md`](https://github.com/peters/horizon/blob/main/docs/architecture/browser-packaging.md).
+The 2026-08-29 snapshot on Linux with cached Cargo sources and a separate empty
+target directory for each command was:
 
 | Package | Normal dependency packages | `cargo check` | Peak build RSS |
 | --- | ---: | ---: | ---: |

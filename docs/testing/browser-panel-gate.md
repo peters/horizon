@@ -65,14 +65,18 @@ For package-boundary changes, also run:
 
 ```bash
 cargo doc -p horizon-browser --no-deps
-cargo package -p horizon-browser
+./scripts/check-browser-packaging.sh
+cargo package -p horizon-browser --locked --no-verify
 cargo check -p horizon-browser --target x86_64-apple-darwin
 cargo check -p horizon-browser --target x86_64-pc-windows-gnu
 cargo check -p horizon-browser --target x86_64-pc-windows-msvc
 ```
 
 The targets and their linkers/toolchains must already be installed. A clean
-package dry-run is required; do not publish the crate.
+`--no-verify` package dry-run is required until `horizon-browser-protocol` is
+on crates.io. Do not publish the crate. Recorded sizes, cold start, and
+compile-graph numbers live in
+[`docs/architecture/browser-packaging.md`](../architecture/browser-packaging.md).
 
 ### G1 — deterministic fixture and MCP contract
 
