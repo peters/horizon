@@ -6,10 +6,10 @@ use std::borrow::Cow;
 /// ellipsis that counts toward the budget. Borrows when nothing is cut.
 ///
 /// The cut is character-based: byte-indexed slicing would panic whenever a
-/// multi-byte character straddles the cut point. Mirrors the UI's
-/// `crate::text::truncate_chars`; horizon-core cannot depend on the UI, so
-/// keep the two implementations in sync.
-pub(crate) fn truncate_chars(value: &str, max_chars: usize) -> Cow<'_, str> {
+/// multi-byte character straddling the cut point. This is the canonical
+/// implementation; the UI re-exports it as `crate::text::truncate_chars`.
+#[must_use]
+pub fn truncate_chars(value: &str, max_chars: usize) -> Cow<'_, str> {
     if max_chars == 0 {
         return Cow::Borrowed(if value.is_empty() { value } else { "" });
     }
