@@ -324,6 +324,8 @@ fn phase_label(phase: Option<RemoteRuntimePhase>) -> &'static str {
         Some(RemoteRuntimePhase::Checkpointing) => "Checkpointing",
         Some(RemoteRuntimePhase::Cancelling) => "Cancelling",
         Some(RemoteRuntimePhase::Deleting) => "Deleting",
+        Some(RemoteRuntimePhase::DeleteRequested { .. }) => "Delete requested (saved)",
+        Some(RemoteRuntimePhase::Deleted { .. }) => "Worker absence verified (saved)",
         Some(RemoteRuntimePhase::Failed) => "Failed",
         Some(RemoteRuntimePhase::Stopping { .. }) => "Stop requested (saved)",
         Some(RemoteRuntimePhase::Stopped { .. }) => "Stopped (saved, not live)",

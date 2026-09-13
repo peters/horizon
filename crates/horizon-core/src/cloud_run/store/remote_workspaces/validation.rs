@@ -19,6 +19,16 @@ pub(in crate::cloud_run::store) fn validate_key(session_id: &str, workspace_loca
 
 pub(super) fn validate_replacement(previous: &RemoteWorkspaceState, next: &RemoteWorkspaceState) -> Result<(), Error> {
     next.validate()?;
+    if previous != next
+        && [previous, next].into_iter().any(|state| {
+            state
+                .runtime
+                .as_ref()
+                .is_some_and(|runtime| runtime.phase.delete_requested_at_millis().is_some())
+        })
+    {
+        return Err(Error::RuntimeDeleteCoordinationRequired);
+    }
     if previous.spec.workspace_local_id != next.spec.workspace_local_id {
         return Err(Error::ReplacementIdentityMismatch);
     }
@@ -96,6 +106,63 @@ pub(super) fn validate_replacement(previous: &RemoteWorkspaceState, next: &Remot
         && previous.spec.generation.checked_add(1) != Some(next.spec.generation)
     {
         return Err(Error::NonMonotonicReplacement);
+    }
+    Ok(())
+}
+
+pub(super) fn validate_delete_replacement(
+    previous: &RemoteWorkspaceState,
+    next: &RemoteWorkspaceState,
+) -> Result<(), Error> {
+    use crate::{
+        cloud_run::WorkerLifetime,
+        remote_workspace::{RemoteCleanupIntent, RemoteCleanupReason},
+    };
+    next.validate()?;
+    let mut permitted = previous.clone();
+    let runtime = permitted
+        .runtime
+        .as_mut()
+        .ok_or(Error::RuntimeDeleteCoordinationRequired)?;
+    let next_runtime = next.runtime.as_ref().ok_or(Error::RuntimeDeleteCoordinationRequired)?;
+    if runtime.worker.is_none() || previous.spec.target.lifetime != WorkerLifetime::Persistent {
+        return Err(Error::RuntimeDeleteCoordinationRequired);
+    }
+    match (runtime.phase, next_runtime.phase) {
+        (
+            RemoteRuntimePhase::Ready
+            | RemoteRuntimePhase::Reconciling
+            | RemoteRuntimePhase::Failed
+            | RemoteRuntimePhase::Stopped { .. },
+            RemoteRuntimePhase::DeleteRequested { requested_at_millis },
+        ) if runtime.cleanup.is_none()
+            && requested_at_millis >= 0
+            && !matches!(runtime.phase, RemoteRuntimePhase::Stopped { observed_at_millis, .. }
+                    if requested_at_millis < observed_at_millis) =>
+        {
+            runtime.cleanup = Some(RemoteCleanupIntent {
+                reason: RemoteCleanupReason::WorkspaceRemoved,
+                requested_at_millis,
+            });
+        }
+        (
+            RemoteRuntimePhase::DeleteRequested { requested_at_millis },
+            RemoteRuntimePhase::DeleteRequested {
+                requested_at_millis: retained,
+            },
+        ) if requested_at_millis == retained => {}
+        (
+            RemoteRuntimePhase::DeleteRequested { requested_at_millis },
+            RemoteRuntimePhase::Deleted {
+                requested_at_millis: retained,
+                observed_at_millis,
+            },
+        ) if requested_at_millis == retained && observed_at_millis >= requested_at_millis => {}
+        _ => return Err(Error::RuntimeDeleteCoordinationRequired),
+    }
+    runtime.phase = next_runtime.phase;
+    if &permitted != next {
+        return Err(Error::ReplacementIdentityMismatch);
     }
     Ok(())
 }
