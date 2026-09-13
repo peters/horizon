@@ -137,7 +137,7 @@ fn backend_picker(
     true
 }
 
-fn video_controls(ui: &mut Ui, browser: &BrowserPanelState, interactive: bool) -> bool {
+fn video_controls(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: bool) -> bool {
     let capture = browser.video_capture();
     let state = capture.as_ref().map(|capture| capture.state);
     if matches!(state, Some(BrowserVideoState::Recording | BrowserVideoState::Paused)) {
@@ -196,6 +196,11 @@ fn video_controls(ui: &mut Ui, browser: &BrowserPanelState, interactive: bool) -
         Some(BrowserVideoState::Stopped) | None => {
             let hover = if let Some(error) = browser.video_error.as_deref() {
                 format!("Record browser session to WebM ({error})")
+            } else if capture.as_ref().is_some_and(|capture| capture.encoder_failed) {
+                format!(
+                    "Record browser session to WebM (encoder failed: {})",
+                    capture.as_ref().map_or("-", |capture| capture.path.as_str())
+                )
             } else {
                 capture.as_ref().map_or_else(
                     || "Record browser session to WebM".to_string(),
@@ -208,7 +213,7 @@ fn video_controls(ui: &mut Ui, browser: &BrowserPanelState, interactive: bool) -
     clicked
 }
 
-fn video_start_button(ui: &mut Ui, hover: &str, browser: &BrowserPanelState, interactive: bool) -> bool {
+fn video_start_button(ui: &mut Ui, hover: &str, browser: &mut BrowserPanelState, interactive: bool) -> bool {
     let response = ui.add_enabled(
         interactive,
         egui::Button::new(RichText::new("●").size(13.0).color(theme::PALETTE_RED()))
@@ -221,6 +226,7 @@ fn video_start_button(ui: &mut Ui, hover: &str, browser: &BrowserPanelState, int
     response.widget_info(|| nav_widget_info("Record", enabled));
     let response = response.on_hover_text_at_pointer(hover);
     if response.clicked() {
+        browser.video_error = None;
         browser.send(BrowserCommand::Video {
             operation: BrowserVideoOperation::Start,
             options: None,
