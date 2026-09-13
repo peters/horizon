@@ -18,7 +18,8 @@ acceptable alternatives.
   not secrets).
 - Routine-owned browser profile cookies and site storage (session replay
   material, not OS-store secrets).
-- The fill operation's short-lived process buffers.
+- The fill operation's short-lived process buffers, and after dispatch the
+  browser driver / page as a secret recipient (not a Horizon artifact).
 
 ## Adversaries and non-goals
 
@@ -131,20 +132,30 @@ postcondition is.
 
 ## Fill contract
 
-`CredentialStore::fill_field` (name to be used by the crate) takes the slot,
-field, approved origin, and target fingerprint. It returns success or a typed
-error. It never returns the secret.
+Two types, not one:
 
-The only consumer is the browser engine fill path, after the claimed additive
-MCP change described in [browser-routines.md](browser-routines.md) (fill by
-slot instead of by `value`). Until that change exists, no production path may
+- `CredentialStore` is persistence: `put`, `delete`, `contains`, and lock
+  detection. Those methods return success, failure, or presence. They never
+  return secret bytes.
+- `CredentialBroker` owns origin/frame/fingerprint checks and engine
+  dispatch. Lookup key is `(routine_id, slot)`. It calls
+  `fill_into(sink: &mut dyn FillSink)` where `FillSink` is implemented by the
+  browser engine. The store copies bytes into the sink inside that call; the
+  broker's caller still receives only success or a typed error.
+
+`FillSink` is the in-process boundary. Tests use a sink that records
+success/failure and drops bytes. There is no API that returns a `String`
+password to MCP, the compiler, or UI.
+
+Until the claimed additive MCP fill-by-slot change in
+[browser-routines.md](browser-routines.md) exists, no production path may
 copy a secret into `BrowserControlAction::Fill { value }` or into a plan
 variable.
 
-Keep secret material scoped to the fill operation. Clear reusable buffers
-where the platform API allows it. Do not log, `Debug`-print, or include the
-secret in `Display` / error types. Tracing fields use slot UUID and field
-kind only.
+Keep secret material scoped to the fill call. Clear reusable buffers where
+the platform API allows it. Do not log, `Debug`-print, or include the secret
+in `Display` / error types. Tracing fields use routine id, slot UUID, and
+field kind only.
 
 ## Locked, missing, or unsupported store
 
@@ -190,11 +201,12 @@ values, cookies, profile files, or raw keyring payloads.
 
 The first credential code PR lands only:
 
-- the `CredentialStore` trait
-- a fake store used by unit tests
-- origin-bound `fill_field` that returns success/failure
+- the `CredentialStore` trait (no secret-returning methods)
+- the `CredentialBroker` / `FillSink` seam with a fake store
+- origin-bound fill that returns success/failure
 - locked-store behaviour
 - export that emits field names and missing-secret markers only
+- tests that a slot from another `routine_id` does not fill
 
 The fake store returns success or failure, never a secret, including in test
 names, fixtures, and assertion messages. Native Keychain, Credential Manager,
@@ -202,12 +214,35 @@ and Secret Service adapters are separate platform PRs after this ADR merges
 and the `keyring` 4.2.0 (or then-current latest stable) dependency is added
 with the feature set above.
 
+## Secret locations after a successful fill
+
+The OS store and the fill call's buffers are not the only places plaintext
+can exist. Once the engine types into the page, the browser driver, the
+renderer, the DOM, and possibly visible pixels (especially a username) also
+hold it. The page is a secret recipient after fill; this feature cannot
+prevent the site from seeing a password it just accepted.
+
+Horizon-controlled capture must not copy that plaintext into routine
+artifacts:
+
+- Do not take Horizon screenshots, CDP snapshots, `evaluate` dumps, or MCP
+  structured results during the fill window (from broker dispatch until the
+  fill postcondition is recorded).
+- The existing redacted audit continues to store character counts, not
+  values.
+- After fill, Horizon still must not copy DOM values back into plans, drafts,
+  traces, reports, or exports.
+
 ## Invariants
 
 - Default policy stores no username or password.
-- Secrets exist only in the OS store and in the fill operation's ephemeral
-  buffers.
-- Page content cannot widen origins or choose a slot.
+- Horizon APIs never return secret bytes. Persistence is the OS store;
+  in-process plaintext is limited to the broker-to-engine `FillSink` call and
+  then to the page as a secret recipient.
+- Page content cannot widen origins or choose a slot. Broker lookup is
+  `(routine_id, slot)` from the reviewed routine, not from the DOM.
 - Fill is rejected outside approved origins/frames or against an incompatible
   field fingerprint.
 - Missing or locked storage degrades to handoff, never plaintext.
+- Import clears slot bindings; a copied slot UUID cannot fill another
+  routine's OS-store item.

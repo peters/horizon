@@ -135,12 +135,20 @@ JSON object, `schema_version` 1, `deny_unknown_fields`:
 | `plan_version` | `u32` | Increments on every reviewed save. Resume binds to this exact value. |
 | `created_at` / `updated_at` | RFC 3339 timestamps | |
 
-`credential_policy.mode` is one of `none` (default), `username_only`, or
-`username_and_password`. Optional `slot` is an opaque UUID present only when
-the user opted in. The policy never contains a secret.
+`credential_policy` is `{ "mode": ..., "slot": <uuid> | omitted }`. `mode` is
+one of `none` (default), `username_only`, or `username_and_password`. `slot`
+is present only when the user opted in. The policy never contains a secret.
 
-`RoutineVariable` has `name` and optional non-secret `default`. Defaults are
-omitted for fields the user did not explicitly choose to remember.
+Every `credential_field` on this routine must use exactly `credential_policy.slot`.
+`none` forbids any credential field. `username_only` permits `username` only.
+`username_and_password` permits `username` and `password`. The broker looks up
+`(routine_id, slot)`; a copied slot UUID from another routine does not fill.
+Import of an exported routine clears `slot` and every `credential_field.slot`
+and requires the user to bind credentials again.
+
+`RoutineVariable` has `name` (bounded identifier, not `panel_id`) and optional
+non-secret `default`. Defaults are omitted for fields the user did not
+explicitly choose to remember.
 
 ## `RoutineStep`
 
@@ -149,7 +157,7 @@ omitted for fields the user did not explicitly choose to remember.
 | `step_id` | string | Stable within the plan version. |
 | `target_fingerprint` | `TargetFingerprint` or omitted | Required for click/fill/targeted scroll. |
 | `precondition` | `Assertion` | Observed before dispatch during teaching. |
-| `action` | `CompiledAction` | MCP-expressible action; see compiler mapping. |
+| `action` | `CompiledAction` | Tagged union below. |
 | `value_source` | `ValueSource` or omitted | Fill/select only. |
 | `postcondition` | `Assertion` | Observed after the demonstration step. |
 | `mutation_class` | enum | `read_only`, `idempotent`, `mutating`, `consequential`. |
@@ -162,6 +170,47 @@ duplicate real-world mutations merely to validate a plan.
 
 `never_replay_if_uncertain` is required for `mutating` and `consequential`.
 `retry_if_idempotent` is allowed only for `read_only` and `idempotent`.
+
+## `CompiledAction`
+
+Tagged `type`, `deny_unknown_fields`. Selector strings are 1..=16 KiB
+printable CSS derived from a durable fingerprint candidate (`unique_id`,
+`test_id`, or reviewed `css_fallback`). `count` is 1..=3.
+
+```text
+{ "type": "navigate", "url": "https://reports.example/app" }
+{ "type": "click", "selector": "#generate", "count": 1 }
+{ "type": "fill", "selector": "#month" }
+{ "type": "credential_fill", "selector": "#password" }
+{ "type": "scroll", "selector": "#list", "delta_x": 0.0, "delta_y": 120.0 }
+{ "type": "wait", "selector": "#status", "state": "present" | "visible" | "hidden" }
+{ "type": "reload" }
+{ "type": "back" }
+{ "type": "forward" }
+{ "type": "handoff" }
+```
+
+`scroll.selector` may be omitted for viewport scrolls. `navigate.url` is built
+from a [`NavigationTemplate`](#navigation-template), never from a redacted
+audit URL. `credential_fill` has no MCP mapping until the claimed fill-by-slot
+change; it is still a valid routine step.
+
+## `Assertion`
+
+Tagged `type`, `deny_unknown_fields`. Text `value` is 1..=4 KiB printable and
+must not contain `?` or `#`.
+
+```text
+{ "type": "url_pattern", "value": "/reports/done" }
+{ "type": "heading", "value": "Report ready" }
+{ "type": "element_present", "target": <TargetFingerprint> }
+{ "type": "element_absent", "target": <TargetFingerprint> }
+{ "type": "accessible_state", "target": <TargetFingerprint>, "value": "selected" }
+{ "type": "text_shape", "value": "NNN rows" }
+```
+
+`url_pattern` is a path or origin+path with no query or fragment. It is not a
+`browser_navigate` URL.
 
 ## Target fingerprints
 
@@ -218,17 +267,60 @@ existing `Plan.variables` / `{"$var":"..."}` substitution. `credential_field`
 must not. Putting a secret into a plan variable would serialize it into MCP
 arguments, job state, and traces.
 
+A `credential_field.slot` that is missing, or that does not equal
+`credential_policy.slot`, or whose `field` is not permitted by `mode`, makes
+the document malformed.
+
+## Navigation template
+
+`horizon_browser_protocol::redact_url` replaces query and fragment with the
+literals `?<redacted>` and `#<redacted>`. That string is diagnostic-only. It
+must not be a `browser_navigate` destination.
+
+Navigate actions carry a separate `navigation` object:
+
+```text
+{
+  "origin": "https://reports.example",
+  "path": "/app",
+  "query": [ { "name": "month", "source": { "type": "variable", "name": "report_month" } } ],
+  "fragment": null
+}
+```
+
+`origin` is an exact origin as defined above. `path` is 1..=8 KiB, starts with
+`/`, and has no query or fragment. Each `query` entry maps a parameter name to
+a non-secret `literal` or `variable`. Secret query values observed while
+teaching are dropped; they never become literals. If the route cannot run
+without a dropped secret parameter, the step is not auto-replayed
+(`needs_user` / reteach). Fragment follows the same rule via `fragment`.
+
+The compiler concatenates `origin` + `path` + substituted non-secret query
+pairs into `CompiledAction::navigate.url`.
+
 ## Recording protocol
 
 The crate's first code module stores a backend-neutral `RecordedAction` list.
 It is not a durable job and does not use the #324 run directory.
 
-`RecordedAction` includes: `action_id`, `recorded_at_millis`, `kind`, optional
-`target_fingerprint`, `page_origin`, redacted `url_pattern` (reuse
-`horizon_browser_protocol` URL redaction: drop userinfo, query, and fragment),
-`value_source`, observed pre/post assertions, and `mutation_class`. Gesture
-buffering (press/release → click, scroll coalescing, per-field typing) is
-controller work, not schema.
+`RecordedAction` JSON (`deny_unknown_fields`):
+
+| Field | Type |
+| --- | --- |
+| `action_id` | bounded identifier |
+| `recorded_at_millis` | non-negative i64 |
+| `kind` | `RecordedKind` tagged union (`navigate`, `click` with `count`, `fill`, `scroll` with finite `delta_x`/`delta_y`, `wait` with selector and `SelectorState`, `reload`, `back`, `forward`, `handoff`) |
+| `target` | optional `TargetFingerprint` (required for click/fill/targeted scroll) |
+| `page_origin` | `Origin` |
+| `url_pattern` | `redact_url` diagnostic string; may contain `?<redacted>` |
+| `navigation` | optional `NavigationTemplate`; required on `navigate` |
+| `value_source` | optional; required on `fill` |
+| `field_classification` | `ordinary` (default), `username`, `password` |
+| `mutation_class` | enum above |
+| `precondition` / `postcondition` | optional `Assertion` |
+
+Gesture buffering (press/release → click, scroll coalescing, per-field typing)
+is controller work, not schema.
 
 A redaction pass refuses to serialize typed secrets. Tests must cover round
 trips, `deny_unknown_fields` drift, malformed input, and that password-shaped
@@ -241,7 +333,7 @@ choices to a validated list of MCP `PlanStep`s. It does not call a model.
 
 | Recorded kind | MCP tool | Notes |
 | --- | --- | --- |
-| navigation | `browser_navigate` | URL already redacted; wait defaults to the protocol commit wait. |
+| navigation | `browser_navigate` | URL from `NavigationTemplate`, never from `url_pattern`. Wait defaults to the protocol commit wait. |
 | click / double-click | `browser_act` `click` | `count` 1 or 2. Target is a reviewed selector derived from the fingerprint, never coordinates. |
 | fill (literal/variable) | `browser_act` `fill` | `value` is a literal or `{"$var":"..."}`. |
 | fill (credential) | *not expressible today* | See below. |
@@ -261,9 +353,11 @@ routine step and do not emit a `browser_act` fill for it.
 No other new MCP primitive is in scope for the first usable release.
 
 The compiler rejects: coordinate-only clicks; empty fingerprints; credential
-literals; unknown `schema_version`; steps whose action is not in the table
-above; `consequential` steps without a resume policy of
-`never_replay_if_uncertain`.
+literals; a `credential_field` that does not match `credential_policy`;
+unknown `schema_version`; steps whose action is not in the table above;
+`consequential` steps without a resume policy of
+`never_replay_if_uncertain`; navigate steps that still use a redacted audit
+URL as the destination.
 
 ## Assertions
 
