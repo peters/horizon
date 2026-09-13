@@ -608,8 +608,9 @@ back into large multi-purpose modules.
   Large verified step results live in immutable files managed by
   `run_state/checkpoint_artifacts.rs`; `state.json` retains only compact result
   references so intent updates never rewrite prior payloads.
-- `standalone/lease.rs` records keep-alive host identity so resume can reconnect
-  to the same browser or fail closed after a crash.
+- `standalone/lease.rs` records keep-alive host identity, process-start identity,
+  and creation order so resume can reconnect to the newest live browser or fail
+  closed after a crash or PID reuse.
 
 ### `horizon-ui`
 

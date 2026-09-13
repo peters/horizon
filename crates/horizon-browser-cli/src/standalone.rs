@@ -254,33 +254,51 @@ pub async fn serve(options: StandaloneOptions) -> Result<(), StandaloneError> {
     lease::prune_dead_at(&root);
     let session = OwnedSession::start(options, &HorizonHome::resolve())?;
     if options.keep_alive {
-        lease::publish(
-            &root,
-            &StandaloneHostRef {
-                panel_id: session.panel_id.clone(),
-                host_pid: std::process::id(),
-            },
-        )?;
+        lease::publish(&root, &StandaloneHostRef::current(session.panel_id.clone())?)?;
     }
-    let mcp_result = horizon_browser_mcp::serve_stdio().await;
-    if options.keep_alive {
-        tokio::select! {
-            () = wait_for_interrupt() => {}
-            _ = lease::await_keep_alive_at(
-                &root,
-                &session.panel_id,
-                lease::keep_alive_idle(),
-                lease::keep_alive_poll(),
-            ) => {}
-        }
-        lease::remove(&root, &session.panel_id);
-    }
+    let mcp_result = serve_until_host_exit(&root, &session.panel_id, options.keep_alive).await;
+    let panel_id = session.panel_id.clone();
     let stopped = session.shutdown();
+    if stopped && options.keep_alive {
+        lease::remove(&root, &panel_id);
+    }
     mcp_result?;
     if stopped {
         Ok(())
     } else {
         Err(StandaloneError::Shutdown)
+    }
+}
+
+async fn serve_until_host_exit(root: &Path, panel_id: &str, keep_alive: bool) -> Result<(), StandaloneError> {
+    let mcp = horizon_browser_mcp::serve_stdio();
+    tokio::pin!(mcp);
+    let interrupt = wait_for_interrupt();
+    tokio::pin!(interrupt);
+    if !keep_alive {
+        return tokio::select! {
+            result = mcp => result.map_err(Into::into),
+            () = interrupt => Ok(()),
+        };
+    }
+
+    let stop = lease::await_stop_at(root, panel_id, lease::keep_alive_poll());
+    tokio::pin!(stop);
+    tokio::select! {
+        result = &mut mcp => {
+            tokio::select! {
+                () = interrupt => result,
+                _ = lease::await_keep_alive_at(
+                    root,
+                    panel_id,
+                    lease::keep_alive_idle(),
+                    lease::keep_alive_poll(),
+                ) => result,
+            }
+            .map_err(Into::into)
+        }
+        () = &mut interrupt => Ok(()),
+        () = stop => Ok(()),
     }
 }
 

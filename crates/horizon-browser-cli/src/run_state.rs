@@ -465,6 +465,7 @@ impl DurableRun {
             RunStatus::Failed | RunStatus::Cancelled | RunStatus::TimedOut => {}
         }
         run.load_completed_reports()?;
+        crate::standalone::prune_dead_hosts();
         if let Some(host) = run.recorded_standalone()? {
             crate::standalone::reconnect(&host).map_err(ResumeError::StandaloneGone)?;
         }

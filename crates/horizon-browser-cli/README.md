@@ -176,8 +176,8 @@ host, resume reconnects to that same browser; a dead host is an error and is
 never silently replaced. Start a keep-alive host with
 `horizon-browser mcp --standalone --keep-alive` so later `run`, `--connect`,
 or `resume` can reuse it. `horizon-browser mcp --stop` asks that host to exit
-and remove its profile. Crashed hosts are pruned on the next MCP or resume
-command.
+and remove its profile. Crashed or PID-recycled hosts are pruned on the next
+MCP or resume command, including resume of jobs that never recorded a host.
 
 Every deterministic run gets one action deadline. The default is 1800 seconds;
 `--timeout` accepts 1 through 86400 whole seconds. The budget is selected after
