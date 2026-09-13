@@ -6,6 +6,8 @@ use horizon_core::browser::manifest::{self, BrowserManifest};
 use serde_json::{Value, json};
 
 const DEADLINE_TEST_TIMEOUT_SECONDS: u64 = 3;
+const STDIN_EXECUTION_TIMEOUT: Duration = Duration::from_secs(1);
+const DEADLINE_ROUNDING_SLACK_MILLIS: u128 = 1;
 
 #[test]
 fn run_writes_the_same_structured_report_to_stdout_or_a_private_file() {
@@ -378,7 +380,7 @@ fn resume_skip_runs_later_steps_without_replaying_or_succeeding() {
 fn run_timeout_starts_after_stdin_plan_validation() {
     let root = tempfile::tempdir().expect("isolated root");
     let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
-        .args(["run", "-", "--timeout", "1"])
+        .args(["run", "-", "--timeout", &STDIN_EXECUTION_TIMEOUT.as_secs().to_string()])
         .env("HOME", root.path())
         .env("HORIZON_BROWSER_ACTOR", "browser-cli-test")
         .env("RUST_LOG", "off")
@@ -401,6 +403,10 @@ fn run_timeout_starts_after_stdin_plan_validation() {
     wait_for_exit(&mut child, "delayed stdin browser job");
     let output = child.wait_with_output().expect("collect delayed-plan browser job");
     let after_exit = SystemTime::now().duration_since(UNIX_EPOCH).expect("exit clock");
+    assert!(
+        after_exit >= before_eof,
+        "wall clock moved backwards: before EOF {before_eof:?}, after exit {after_exit:?}"
+    );
     assert_stdin_deadline_result(root.path(), &output, before_eof, after_exit);
 }
 
@@ -421,16 +427,27 @@ fn assert_stdin_deadline_result(
         .collect::<Result<Vec<_>, _>>()
         .expect("job entries");
     assert_eq!(jobs.len(), 1);
+    assert!(
+        jobs[0].file_type().expect("job entry type").is_dir(),
+        "single job entry must be a directory"
+    );
     let job_dir = jobs[0].path();
     let state: Value = serde_json::from_slice(&std::fs::read(job_dir.join("state.json")).expect("job state"))
         .expect("decode job state");
     assert_eq!(state["version"], 4);
-    assert_eq!(state["execution_timeout_seconds"], 1);
+    assert_eq!(state["execution_timeout_seconds"], STDIN_EXECUTION_TIMEOUT.as_secs());
     assert!(state["completed_steps"].as_u64().is_some_and(|count| count <= 1));
     let deadline = u128::from(state["deadline_at_millis"].as_u64().expect("saved deadline"));
     // Check timer admission, not filesystem speed; allow only millisecond rounding slack.
-    assert!(deadline + 1 >= before_eof.as_millis() + 1_000);
-    assert!(deadline <= after_exit.as_millis() + 1_000);
+    let timeout_millis = STDIN_EXECUTION_TIMEOUT.as_millis();
+    assert!(
+        deadline + DEADLINE_ROUNDING_SLACK_MILLIS >= before_eof.as_millis() + timeout_millis,
+        "saved deadline {deadline} predates EOF {before_eof:?} plus timeout {STDIN_EXECUTION_TIMEOUT:?}"
+    );
+    assert!(
+        deadline <= after_exit.as_millis() + timeout_millis,
+        "saved deadline {deadline} exceeds exit {after_exit:?} plus timeout {STDIN_EXECUTION_TIMEOUT:?}"
+    );
     assert_eq!(
         state["job_id"].as_str(),
         job_dir.file_name().and_then(|name| name.to_str())
