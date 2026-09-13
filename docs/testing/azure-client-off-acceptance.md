@@ -48,13 +48,20 @@ after A has been provisioned from this manifest, and `validate` (which
 `provision-client.sh` runs before renting A) refuses any `worker_group` that is not
 the adapter's `horizon-ws-<workflow>-<job>` with two exact UUIDs. The harness has no
 post-setup binding step yet, so **the product pass is gated on a harness change in
-this lane** (a `bind-worker` command that writes the product-created group into the
-manifest's `worker_group` only if the group carries the adapter's
-`horizon-workflow-id` and `horizon-job-id` tags from which that name derives, plus a
-`validate` rule that everything except `worker_group` is unchanged since
-provisioning; claimed on #474 before it is written). Until it lands, a manifest
-whose `worker_group` is edited by hand after provisioning is not a runnable product
-path and is not used. The other fields are frozen before anything is rented.
+this lane**, claimed on #474 before it is written, with two explicit manifest
+states. *Unbound*: `worker_group` is the literal `unbound`; `validate` accepts it,
+`provision-client.sh` (which validates before renting A and needs only A's fields)
+runs, and every phase that names B (`install-observer-key`, `off`, `return`,
+`verdict`, `cleanup`) refuses to start. *Bound*: a `bind-worker` command, run once
+by the operator after step 3, reads the product-created group, checks that it
+carries the adapter's `horizon-workflow-id` and `horizon-job-id` tags from which
+its `horizon-ws-<workflow>-<job>` name derives and that it is absent from the
+pre-run group list, journals it in `created-groups.json` in the same step, and
+writes the name into `worker_group`; from then on `validate` requires the adapter
+name and that every other field is unchanged since provisioning (it records a
+digest of the unbound manifest at provisioning for that comparison). A manifest
+edited by hand in either direction is not a runnable product path and is not used.
+The other fields are frozen before anything is rented.
 
 `client_off.py --manifest m.json validate` refuses to run anything until the
 manifest is complete: exact UUID, a fresh `run_id` with A's group named
@@ -113,6 +120,7 @@ gives A no identity today, so before the product pass A needs, in this order:
    Microsoft.Compute/virtualMachines/deallocate/action
    Microsoft.Compute/virtualMachines/start/action
    Microsoft.Compute/virtualMachines/runCommand/action
+   Microsoft.Compute/locations/operations/read
    Microsoft.Compute/disks/read
    Microsoft.Compute/disks/write
    Microsoft.Network/publicIPAddresses/read
@@ -127,6 +135,7 @@ gives A no identity today, so before the product pass A needs, in this order:
    Microsoft.Network/virtualNetworks/read
    Microsoft.Network/virtualNetworks/write
    Microsoft.Network/virtualNetworks/subnets/read
+   Microsoft.Network/virtualNetworks/subnets/write
    Microsoft.Network/virtualNetworks/subnets/join/action
    ```
 
@@ -135,9 +144,15 @@ gives A no identity today, so before the product pass A needs, in this order:
    operation-status endpoint); every VM read expands `instanceView` and the
    lifecycle decisions come from its power statuses; `deallocate/action` is Stop,
    `start/action` is Start and `runCommand/action` is the host-key attestation used
-   by setup and by Start's readiness path; the template creates the data disk, the
-   public IP, the NIC, the security group and the virtual network with its inline
-   `workers` subnet (so no separate subnet write); the security group is attached
+   by setup and by Start's readiness path; deallocate, start and run-command are
+   accepted with 202 and the transport then follows the returned
+   `Azure-AsyncOperation` status resource with bounded reads, which is the
+   `Microsoft.Compute/locations/operations/read` operation, so a role without it
+   submits successfully and fails while polling; the template creates the data
+   disk, the public IP, the NIC, the security group and the virtual network with
+   its inline `workers` subnet (the subnet is created and, on a setup retry,
+   updated as part of the VNet write, and Azure authorizes that child write as
+   `subnets/write`, so it is listed); the security group is attached
    to that subnet, which needs `networkSecurityGroups/join/action`, and the NIC
    references only the public IP and that child subnet, which needs
    `publicIPAddresses/join/action`, `subnets/join/action` and the child
@@ -326,13 +341,30 @@ back unchanged at return and after the worker lifecycle step.
      record without a worker identity yet. Journal it the moment the record exists,
      whether or not the setup goes on to succeed: `client_off.py --manifest m.json
      journal-group --group horizon-ws-<workflow>-<job> --created
-     created-groups.json`. The command refuses a group it cannot read; if it refuses,
-     run **Check this setup** and the command again until either the group is
-     journaled or Check reports that no group exists, and do not continue while a
-     group may exist unjournaled. Nothing on A deletes a group after a failed setup
-     (the coordinator preserves the allocation for retry), so a group journaled only
-     after a successful baseline would survive an aborted run; journaling it here is
-     what lets step 9 remove it in every outcome. Then, as the operator on the
+     created-groups.json`. The command refuses a group it cannot read, and a
+     refusal is unknown, not absence (**Check this setup** cannot say that Azure
+     holds no group: its observed result covers a reconciled-missing group too), so
+     the operator resolves the read directly: `az group show --subscription <id>
+     --name horizon-ws-<workflow>-<job>` either returns the group, which is then
+     journaled, or a definitive `ResourceGroupNotFound`, which is recorded with the
+     time; any other answer (throttling, transport, authorization) is retried, and
+     the run does not continue while the group is unreadable. Nothing on A deletes
+     a group after a failed setup (the coordinator preserves the allocation for
+     retry), so a group journaled only after a successful baseline would survive an
+     aborted run. The window between the product's create and this journal entry
+     is real: if A, Horizon or the operator fails inside it, the group is neither
+     journaled nor reaper-tagged. The recovery is controller-side and runs before
+     the run proceeds after any interruption of step 3, and again before step 9:
+     `az group list --subscription <id> --query "[?starts_with(name, 'horizon-ws-')].{name:name, tags:tags}"`
+     is compared with `groups.json`; a group absent from the pre-run list whose
+     `horizon-workflow-id` tag equals the workflow identity recorded for this run is
+     journaled with `journal-group` before anything else happens. If that identity
+     was never recorded (A died before it could be read), no group is journaled or
+     deleted by guesswork: the candidates are posted on #474 with their tags and
+     creation times and resolved by the lead before cleanup, because another lane
+     may hold `horizon-ws-` groups in the same subscription. With the harness
+     `bind-worker` step, this journal entry is written in the same step as the
+     binding. Then, as the operator on the
      controller (never with observer C's principal, which stays read-only), read
      the journaled group's VM: `az vm list --subscription <id> --resource-group
      horizon-ws-<workflow>-<job> --query '[].{id:id, name:name}'`. If it lists no
@@ -356,9 +388,10 @@ back unchanged at return and after the worker lifecycle step.
    - **Check this setup** until it reports the original setup as observed: the saved
      phase becomes `Reconciling` (setup recovery never writes `Ready`) and the record
      carries the attested pin, read through ARM's run-command channel and never
-     trusted on first connection. Check reports in the setup notice and the overview
-     then reloads the saved page on its own, keeping the selected workspace by ID;
-     confirm the reloaded row before the next step. The
+     trusted on first connection. Check reports in the setup notice only; the saved
+     page is not reloaded for it (unlike the Stop-section operations), so press
+     **Refresh saved page**, which keeps the selected workspace by ID, and confirm
+     the refreshed row before the next step. The
      overview deliberately never shows the pin; the `host_key` for `worker.json` is
      taken from A's saved record, whose snapshot is JSON. The store runs in WAL mode,
      so a plain file copy can miss the newest rows: take a consistent copy with
@@ -541,16 +574,22 @@ back unchanged at return and after the worker lifecycle step.
    install, the off interval, the return and the cleanup window, not this step, and
    `validate` does not check for it. Until the harness gains a lifecycle-aware check
    (tracked on #474), this is a manual operator requirement: freeze the manifest
-   deadline at `validate`'s minimum plus a product-baseline reserve of 90 minutes
-   (`validate` reserves nothing for step 3: the setup deployment and its check,
-   Prepare Repository, the panel steps and the identity recording all run before
-   `off` against the same absolute deadline) plus 40 minutes for step 8 and the
-   role removal (the observer-key removal can spend about 33 minutes at the
-   harness's bounds and `validate` reserves nothing for it) plus a lifecycle margin
-   of 60 minutes
-   (a Stop with
-   its 5-minute verification bound, the check, a Start with its 5-minute bound and up
-   to 300 s of readiness, the bounded pinned reads and slack), and immediately before
+   deadline at `validate`'s minimum plus 220 minutes: a product-baseline reserve of
+   90 minutes (`validate` reserves nothing for step 3: the setup deployment and its
+   check, Prepare Repository, the panel steps and the identity recording all run
+   before `off` against the same absolute deadline), 15 minutes for the manual
+   reconnect check on A after `return`, 40 minutes for step 8 and the role removal
+   (the observer-key removal can spend about 33 minutes at the harness's bounds and
+   `validate` reserves nothing for it), a lifecycle margin of 60 minutes (a Stop
+   with its 5-minute verification bound, the check, a Start with its 5-minute bound
+   and up to 300 s of readiness, the bounded pinned reads and slack) and the
+   15-minute return margin the gate below counts but `validate`'s minimum does
+   not. Worked example with `off_minutes` 12: `validate`'s minimum is 160 minutes,
+   so the deadline is at least 380 minutes after provisioning starts; at the gate
+   below, with every bound spent (30 provisioning, 47 observer install, 90
+   baseline, 29 off setup, 12 off, 22 return setup, 15 reconnect check), 245
+   minutes have elapsed and 135 remain, which is exactly what the gate requires.
+   Immediately before
    this step compare the clock with the deadline: unless at least that margin plus
    75 minutes remains (step 8 at its bounds, about 33 minutes, the role removal, the
    15-minute return margin and the 20-minute cleanup bound), skip the step, report
@@ -573,10 +612,13 @@ back unchanged at return and after the worker lifecycle step.
    accepts only the saved identity and pin). The result arrives as a notice and the
    overview then reloads the saved page on its own, keeping the selected workspace
    by ID: the reloaded row must show `Reconciling` before this step continues. Only
-   when the notice reports an unverified Start and the reloaded row still shows
-   `Start requested (saved)` is **Start environment…** pressed again (the retry
-   reuses the saved intent and never re-posts a running worker); a row at
-   `Reconciling` is never retried. Then read the retained bytes back without the product's
+   when the reloaded row still shows `Start requested (saved)` and the notice
+   reports either an unverified Start or the loss of the local completion (`The
+   Start could not finish locally. Refresh saved inventory; if Start intent
+   remains, press Start again.`) is **Start environment…** pressed again (the retry
+   reuses the saved intent and never re-posts a running worker); an identity,
+   absence or authorization error is never retried, and a row at `Reconciling` is
+   never retried. Then read the retained bytes back without the product's
    panel path, which cannot serve this step: the worker's panel runtime (its sockets
    under `/run/horizon/panels`) does not survive the VM restart, attachment refuses an
    unavailable panel, and Start resumes no task, so the counter stops at its last
