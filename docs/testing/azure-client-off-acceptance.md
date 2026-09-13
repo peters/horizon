@@ -83,10 +83,12 @@ gives A no identity today, so before the product pass A needs, in this order:
    authorization change and is posted on #474 for approval before it is made. No user
    credential is copied to A. Before Horizon is launched, and under the same `HOME`
    Horizon will use, run `az login --identity` as A's Horizon user and prove the token
-   path the product will take: `az account get-access-token --subscription <id>
-   --query expiresOn -o tsv` must print an expiry. The product's credential invokes
-   that same command with stdin closed, so an unauthenticated CLI leaves setup, Stop
-   and Start unable to obtain a token.
+   path the product will take without printing a token: `az account get-access-token
+   --subscription <id> --resource https://management.azure.com/ --query expiresOn -o
+   tsv` must print an expiry. The product's credential issues the same subscription
+   and resource arguments (adding only `--output json` and `--only-show-errors`) with
+   stdin closed, so an unauthenticated CLI leaves setup, Stop and Start unable to
+   obtain a token.
 3. A Horizon configuration on A whose `remote.azure` list holds the exact profile the
    run uses (subscription, `northeurope`, VM size, the pull identity, the registry
    login server, the declared hourly cost and the disk SKU); the product binds that
@@ -111,13 +113,14 @@ The deterministic task this lane runs on B, for the pinned worker image: saved S
 panel with program `/bin/sh` and arguments `["-c", "i=0; while :; do i=$((i+1));
 printf '%s\n' "$i" > /workspace/progress.counter.tmp && mv
 /workspace/progress.counter.tmp /workspace/progress.counter; sleep 5; done"]`,
-working directory `.` (the repository root under `/workspace`), so
-`/workspace/progress.counter` advances every five seconds and every 15-second sample
-sees a higher value; no checkpoint path (worker-owned checkpoints are deferred to
-#471, so the verdict's checkpoint boolean stays false). Dirty bytes: before the off
-phase, write one file `/workspace/<repository>/horizon-dirty-marker.txt` containing a
-fresh random token from a second panel session, record its SHA-256 in the baseline,
-and read it back unchanged at return and after the worker lifecycle step.
+working directory `.`, which the saved Git task resolves relative to the worker's
+fixed checkout `/workspace/horizon/repository`, so `/workspace/progress.counter`
+advances every five seconds and every 15-second sample sees a higher value; no
+checkpoint path (worker-owned checkpoints are deferred to #471, so the verdict's
+checkpoint boolean stays false). Dirty bytes: before the off phase, write one file
+`/workspace/horizon/repository/horizon-dirty-marker.txt` containing a fresh random
+token from a second panel session, record its SHA-256 in the baseline, and read it
+back unchanged at return and after the worker lifecycle step.
 
 ## Procedure
 
@@ -186,7 +189,10 @@ and read it back unchanged at return and after the worker lifecycle step.
      complete profile, the declared price and the immutable-binding disclosure; tick
      the consent box and press **Create task-free worker**. Nothing is checked out
      and no task starts here. Record the workspace, owning session, workflow and job
-     identities and B's exact group ID (`horizon-ws-<workflow>-<job>`).
+     identities and both forms of B's group identity: the resource-group name
+     `horizon-ws-<workflow>-<job>` (the manifest's `worker_group`) and the full ARM
+     group ID `/subscriptions/<id>/resourceGroups/horizon-ws-<workflow>-<job>` (the
+     overview's *Exact resource ID* and `worker.json`'s `group_id`).
    - **Check this setup** until it reports the original setup as observed: the saved
      phase becomes `Reconciling` (setup recovery never writes `Ready`) and the record
      carries the attested pin, read through ARM's run-command channel and never
@@ -321,10 +327,21 @@ and read it back unchanged at return and after the worker lifecycle step.
    address) until the row shows `Stopped (saved, not live)`; **Start environment…**
    is offered only for that verified Stop or an existing Start intent. Then **Start
    environment…** → confirm (records Start intent, starts only the exact worker,
-   accepts only the saved identity and pin, resolves to Reconciling); then **gated**
-   (Azure panel attachment): **Show session panels** → **Reconnect** and read the
-   counter file and the dirty files back: same worker, same pin, retained bytes, no
-   task resumed. The adapter proved the same sequence
+   accepts only the saved identity and pin). An unverified Start leaves the row at
+   `Start requested (saved)`: **Refresh saved page** and press **Start environment…**
+   again (the retry reuses the saved intent and never re-posts a running worker) until
+   the row shows `Reconciling`. Then read the retained bytes back without the product's
+   panel path, which cannot serve this step: the worker's panel runtime (its sockets
+   under `/run/horizon/panels`) does not survive the VM restart, attachment refuses an
+   unavailable panel, and Start resumes no task, so the counter stops at its last
+   value. On A, open one pinned SSH session with the retained client key
+   (`$HOME/.horizon/remote-ssh-identities/<workflow>-<job>.key`, the saved pin as the
+   only known host, port 2222, user `root`) and read `/workspace/progress.counter` and
+   `/workspace/horizon/repository/horizon-dirty-marker.txt`: the counter equals the
+   last value recorded before the Stop, the marker's SHA-256 equals the baseline hash,
+   the host key equals the saved pin, and the worker identity in the overview is
+   unchanged. Observer C's restricted key does not survive the restart (the entrypoint
+   rewrites `authorized_keys`), so it is not the reader here. The adapter proved the same sequence
    live in runs 16 to 18 (`azure-workspace-live-acceptance.md`); this step proves it
    through the product.
 8. **Remove the observer key**: `client_off.py --manifest m.json remove-observer-key
