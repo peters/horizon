@@ -13,7 +13,7 @@ PC, existing Horizon processes or existing workspaces.
 | Role | What it is | Owner of its paths |
 | --- | --- | --- |
 | Client A | Disposable Ubuntu VM in its own exact resource group, running the exact Horizon Linux client (built from `client_sha`) under a virtual display, with an isolated persistent client home on its OS disk (retained across deallocation) | Azure lane |
-| Worker B | Separate persistent Azure CPU worker in its own exact group, created through the product path once the shared wiring accepts Azure; until then through the adapter's live driver | Product path: lead lane; adapter: Azure lane |
+| Worker B | Separate persistent Azure CPU worker in its own exact group, created on A through the product path (setup, Prepare Repository, saved-Shell Start); its Stop, saved-Stop check and Start are product operations too | Azure lane (product Azure paths and adapter) |
 | Observer C | This controller, outside A and B: read-only ARM reads and one pinned SSH session per sample with a key that sshd restricts (`restrict,command=`) to a forced reader of the progress and checkpoint files | Azure lane |
 
 C never renews a lease, delivers a keepalive, reconnects a terminal, checkpoints or
@@ -67,6 +67,29 @@ an off interval of at least ten minutes that exceeds the configured lease. `verd
 the case that must run. The
 manifest, current price and deadline are posted on #474 before the paid run starts;
 credentials and identifiers stay private.
+
+## Client A prerequisites for the product path
+
+The product on A authenticates to Azure the same way the controller does: the
+subscription-pinned Azure CLI credential (`az account get-access-token --subscription
+<id>`), never a stored bearer token. `provision-client.sh` installs no Azure CLI and
+gives A no identity today, so before the product pass A needs, in this order:
+
+1. The Azure CLI on A (added to the cloud-init package list; no extension install).
+2. An identity A can log in with non-interactively. The intended shape is a
+   system-assigned managed identity on A with `az login --identity`, granted a role
+   that can create resource groups and deployments in the subscription and assign the
+   worker pull identity (`horizon-worker-puller`) to the worker VM; the exact role
+   assignment is an authorization change and is posted on #474 for approval before it
+   is made. No user credential is copied to A.
+3. A Horizon configuration on A whose `remote.azure` list holds the exact profile the
+   run uses (subscription, `northeurope`, VM size, the pull identity, the registry
+   login server, the declared hourly cost and the disk SKU); the product binds that
+   profile immutably to the worker at creation.
+4. For the Git lane, a user-supplied repository-scoped PAT for the authorized
+   disposable repository. It is typed only into the repository preparation's token
+   field on A (stdin-only delivery to the worker) and is never written to A's disk or
+   to any manifest, journal or receipt.
 
 ## Procedure
 
@@ -124,12 +147,31 @@ credentials and identifiers stay private.
 3. **Baseline on A** (product path): start Horizon on A's display with
    `HOME=/home/horizon/.horizon-client-home` (the descriptor's `client_home`; Horizon
    keeps its state under `$HOME/.horizon`, reported as `client_state_root`), the same
-   `HOME` the launch gate used, create or recover B through the common setup, verify the original SSH
-   identity and pin, prepare the remote repository and start a deterministic task on
-   B that writes an increasing counter to a progress file and, where the shared
-   checkpoint capability exists, worker-owned checkpoints. Record worker, session and
-   task identities, the starting counter, dirty file hashes and the checkpoint
-   sequence. The task must advance its counter at least once per 15-second sample.
+   `HOME` the launch gate used, and drive it through the overview (input on A's
+   virtual display through `xdotool`, screenshots through `import`, exactly as the
+   slice smokes did):
+   - **Environments** → **New remote workspace**: under *Worker and repository* pick
+     the Azure profile (the exact `remote.azure` name), enter the worker image digest
+     reference, repository, branch, working directory, command and disk size, and
+     optionally an *Azure CPU cost limit*; **Review request** shows the complete
+     profile, the declared price and the immutable-binding disclosure; tick the
+     consent box and press **Create task-free worker**. Nothing is checked out and no
+     task starts here. Record the workspace, owning session, workflow and job
+     identities and B's exact group ID (`horizon-ws-<workflow>-<job>`).
+   - **Check this setup** until the saved phase is Ready with the attested pin (the
+     host key is read through ARM's run-command channel, never trusted on first
+     connection); the pin is the `host_key` the observer descriptor carries.
+   - **Review repository preparation** → optionally *Include explicit first-token
+     installation* with the PAT typed into the token field → confirm; **Check
+     preparation receipt** proves the checkout without a second submission.
+   - **Show saved panels** → start the saved Shell task (the deterministic counter
+     script that writes an increasing counter to a progress file under
+     `/workspace`); **Show session panels** → **Reconnect** to attach the view. Three
+     independent panels on B are part of this lane's acceptance; the control path for
+     adding the second and third panel intents to a remote workspace is confirmed on
+     #474 before the run and recorded here.
+   Record worker, session and task identities, the starting counter and dirty file
+   hashes. The task must advance its counter at least once per 15-second sample.
    Write `worker.json` for the observer: `vm_name`, `port`, `host_key` (the attested
    key), `observer_key_path` (the private half of a fresh Ed25519 key generated for
    observer C only, never the client's worker key), `progress_path` and optionally
@@ -211,9 +253,12 @@ credentials and identifiers stay private.
    the same way to the manifest deadline minus the cleanup window, and the start is
    issued only while its 10-minute start-and-poll bound still fits. Attests
    the same exact A again, requires it to be deallocated, starts it only and requires
-   `PowerState/running`. On A, start Horizon again with the same home and reconnect
-   to the same B and task sessions: same worker identity, no additional create, no
-   task replay, dirty bytes intact, no credential rotation.
+   `PowerState/running`. On A, start Horizon again with the same home, open
+   **Environments**, select the same saved environment (same workspace, owning
+   session, generation and exact resource ID; **Check provider status** is a read
+   only), and **Show session panels** → **Reconnect** to the same B and task
+   sessions: same worker identity, no additional create, no task replay, dirty bytes
+   intact, no credential rotation.
 6. **Verdict**: `client_off.py --manifest m.json verdict --journal-in journal.ndjson`.
    The journal's first line is the baseline header the off phase wrote (worker
    identity and image); a journal without it, or for another image, never passes.
@@ -226,9 +271,19 @@ credentials and identifiers stay private.
    image's reference tag throughout, and a counter that advances between every pair
    of consecutive samples. Worker-owned checkpoint progress is reported as a
    separate boolean and is never inferred from the counter.
-7. **Worker lifecycle** is a different assertion, already covered by the adapter's
-   live driver (Stop, explicit start, pinned reattach). Do not Stop or start B during
-   the off interval.
+7. **Worker lifecycle** is a different assertion and runs only after the offline and
+   reconnect evidence is captured; never Stop or start B during the off interval. It
+   uses the product controls on A, in the *Explicit Stop* section of the overview:
+   **Stop environment…** → confirm (one Stop; records intent, deallocates B, verifies
+   `PowerState/deallocated` with the retained `worker-data` disk); if the Stop ends
+   unverified, **Check saved Stop** (read-only; confirms only deallocated compute with
+   the retained disk and the saved address); then **Start environment…** → confirm
+   (records Start intent, starts only the exact worker, accepts only the saved
+   identity and pin, resolves to Reconciling); then **Show session panels** →
+   **Reconnect** and read the counter file and the dirty files back: same worker,
+   same pin, retained bytes, no task resumed. The adapter proved the same sequence
+   live in runs 16 to 18 (`azure-workspace-live-acceptance.md`); this step proves it
+   through the product.
 8. **Remove the observer key**: `client_off.py --manifest m.json remove-observer-key
    --worker worker.json --public-key observer.pub`, once the return and the reconnect
    check on A are done and before the run is reported finished. B may outlive the
@@ -264,16 +319,20 @@ credentials and identifiers stay private.
 - A run whose B was created through the adapter's live driver instead of the
   product path is an **adapter-only rehearsal**. It exercises A, C, the off interval
   and the cleanup, and it is reported as such; it is never the #475 product pass.
-- The product pass needs the shared product paths to accept Azure end to end. The
-  configured setup path (`remote_workspace_setup/configured.rs`) and the saved-Stop
-  check dispatch to Azure by the named `remote.azure` profile; the first explicit
-  Azure Stop and the explicit Start of a stopped worker through the product are
-  tracked as the following slices on #474.
+- The product paths this pass needs are merged as of 2026-09-13: configured setup
+  and consent (#561), Prepare Repository (#567), Check saved Stop (#574), the first
+  explicit Stop (#575), and durable explicit Start with its configured Azure admission
+  and overview control (#576, #578, #584). What still gates the first paid run is
+  listed under *Client A prerequisites*: the Azure CLI and an approved identity on A,
+  the PAT for the disposable repository, and the confirmed control path for the second
+  and third panel; the compact worker image is lead-owned and the full image proved
+  the adapter lane meanwhile.
 - Counter progress proves the task kept running. Checkpoint proof needs
   worker-owned checkpoints advancing during the interval.
 
 ## Status
 
 No allocation has been made under this runbook yet. The harness and its
-deterministic tests are in place; the manifest will be posted on #474 before the
-first paid run.
+deterministic tests are in place and the product Azure lifecycle is merged; the
+manifest, current prices, budget and deadline are posted on #474 before the first
+paid run, after the client prerequisites above are approved and in place.
