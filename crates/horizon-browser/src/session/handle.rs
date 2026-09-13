@@ -150,6 +150,11 @@ impl BrowserSession {
     pub fn committed_url(&self) -> CommittedUrl {
         self.committed_url.clone()
     }
+
+    #[must_use]
+    pub fn video_capture(&self) -> Option<crate::BrowserVideoCapture> {
+        self.video.snapshot()
+    }
 }
 
 pub(crate) fn publish_frame(event_tx: &BrowserEventSender, frame_slot: &FrameSlot, seq: u64) {
@@ -219,6 +224,7 @@ mod tests {
                 command_tx,
                 stop_requested: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 frame_slot,
+                video: Arc::new(crate::VideoCaptureHandle::default()),
                 event_rx: mpsc::channel().1,
                 completion_rx,
                 event_wake: BrowserEventWake::default(),

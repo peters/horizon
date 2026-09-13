@@ -144,6 +144,9 @@ pub enum BrowserControlValue {
     Network {
         capture: crate::BrowserNetworkCapture,
     },
+    Video {
+        capture: crate::BrowserVideoCapture,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]

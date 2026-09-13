@@ -176,6 +176,7 @@ struct Driver {
     semantic: SemanticState,
     challenge_loop: crate::challenge::ChallengeLoopDetector,
     network: crate::network::NetworkCaptureState,
+    video: crate::video::VideoCaptureState,
     firefox_network: Option<network::FirefoxNetworkBridge>,
     pending_http_bodies: VecDeque<(String, Option<String>)>,
 }
@@ -398,6 +399,7 @@ impl Driver {
             semantic: SemanticState::default(),
             challenge_loop: crate::challenge::ChallengeLoopDetector::default(),
             network: crate::network::NetworkCaptureState::default(),
+            video: crate::video::VideoCaptureState::new(Arc::clone(&config.video)),
             firefox_network: None,
             pending_http_bodies: VecDeque::new(),
         })
@@ -426,6 +428,10 @@ impl Driver {
                 self.resolve_handoff(events);
                 Ok(false)
             }
+            BrowserCommand::Video { operation, options } => self
+                .video_action(&crate::new_action_id(), operation, options)
+                .map(|_| false)
+                .map_err(|error| error.message),
             BrowserCommand::Stop => Ok(true),
         }
     }

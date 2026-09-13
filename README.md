@@ -494,7 +494,8 @@ The panel is a shared human-and-agent session. It can:
 - click (including trusted double-click), fill, scroll, evaluate bounded JavaScript, and keep the URL while the page scrolls;
 - start visible or hidden, switch visibility without losing the session, and pause automation so you can steer before handing the same panel back;
 - capture bounded HTTP metadata and response bodies plus high-rate WebSocket frames on Chromium and Firefox;
-- reconnect an MCP client without restarting the browser, and keep a redacted action audit after the panel closes.
+- reconnect an MCP client without restarting the browser, and keep a redacted action audit after the panel closes;
+- record the live page to a private WebM (Record in the chrome, or `browser_video` start/pause/resume/stop).
 
 Safari shares the semantic action and audit surface but currently reports network capture as unsupported.
 
@@ -517,6 +518,12 @@ browser:
   quality: 60                    # Chromium JPEG screencast quality, 1–100
   every_nth_frame: 1             # Chromium screencast sampling
   profile_root: ~/.horizon/browser-profiles
+  video:
+    quality: 70                  # WebM visual quality, 1–100
+    compression_level: 4         # 0 fastest/largest … 10 slowest/smallest
+    fps: 10                      # encoded frames per second, 1–30
+    max_width: 1280              # longest encoded side, 320–1920
+    max_file_bytes: 536870912    # stop ingest at this WebM size
 ```
 
 All executable fields are optional. Chromium and Firefox get separate directories under `profile_root`. Permanently closing the panel or deleting its saved session removes that panel's profile. Safari always uses Safari's isolated automation window and does not reuse your normal history, cookies, or preferences.

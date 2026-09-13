@@ -101,8 +101,9 @@ fn capture_file(entry: &DirEntry) -> std::io::Result<Option<CaptureFile>> {
         return Ok(None);
     }
     let path = entry.path();
-    if path.extension().and_then(|extension| extension.to_str()) != Some("ndjson") {
-        return Ok(None);
+    match path.extension().and_then(|extension| extension.to_str()) {
+        Some("ndjson" | "webm") => {}
+        _ => return Ok(None),
     }
     let metadata = entry.metadata()?;
     Ok(Some(CaptureFile {

@@ -45,8 +45,8 @@ back into large multi-purpose modules.
 
 - Owns the small serialized contract shared by browser engines and clients:
   backend identifiers/capabilities, input and command values, validated agent
-  actions, semantic results, bounded network records, and redacted audit
-  entries.
+  actions, semantic results, bounded network records, video-capture options,
+  and redacted audit entries.
 - Depends only on serialization support. It must not acquire process, socket,
   async-runtime, image-decoder, filesystem-coordination, MCP, `horizon-core`,
   or UI dependencies.
@@ -56,8 +56,9 @@ back into large multi-purpose modules.
 
 ### `horizon-browser`
 
-- Owns browser processes, CDP/WebDriver/BiDi transports, frame delivery, and
-  deterministic shutdown. It consumes and re-exports the lightweight protocol
+- Owns browser processes, CDP/WebDriver/BiDi transports, frame delivery,
+  bounded WebM page-pixel recording (`video/`), and deterministic shutdown.
+  It consumes and re-exports the lightweight protocol
   values, and must not depend on `horizon-core`, `horizon-ui`, a GUI toolkit,
   or an async runtime.
 - Host-specific IPC, authentication, persistence, and retention stay outside

@@ -117,6 +117,13 @@ selector; `Evaluate` returns a size-bounded JSON value. A new snapshot replaces
 the previous reference set, and navigation invalidates it, so callers must
 ground an action in fresh page state instead of reusing stale handles.
 
+`BrowserControlAction::Video` records page pixels already published on
+`FrameSlot` into a private WebM. Start/pause/resume/stop keep encoding on a
+dedicated thread; pause skips time in the file; stop finalizes Duration and
+Cues. Embedders must set `BrowserSessionConfig::capture_directory` and may
+implement `BrowserCoordination::prepare_video_capture` (Horizon reuses its
+network-capture retention, including `.webm` files).
+
 `BrowserControlAction::Network` lets a host start, inspect, and stop a bounded
 network export without coupling the engine to the host's filesystem layout.
 The embedder opts in with `BrowserSessionConfig::capture_directory`; successful

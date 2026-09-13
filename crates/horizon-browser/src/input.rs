@@ -12,7 +12,10 @@ pub(crate) fn is_user_activity(command: &BrowserCommand) -> bool {
     match command {
         BrowserCommand::Navigate(_) | BrowserCommand::Reload | BrowserCommand::Back | BrowserCommand::Forward => true,
         BrowserCommand::Input(input) => is_activity(input),
-        BrowserCommand::SetViewport { .. } | BrowserCommand::HandoffDone | BrowserCommand::Stop => false,
+        BrowserCommand::SetViewport { .. }
+        | BrowserCommand::HandoffDone
+        | BrowserCommand::Stop
+        | BrowserCommand::Video { .. } => false,
     }
 }
 

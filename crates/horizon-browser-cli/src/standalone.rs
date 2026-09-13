@@ -308,6 +308,7 @@ fn start_backend(
         frame_slot: Arc::new(FrameSlot::new()),
         coordination: Some(coordination.clone()),
         capture_directory: Some(profile_root.join("captures")),
+        video: Arc::new(horizon_browser::VideoCaptureHandle::default()),
     })?;
     if let Err(error) = wait_until_ready(&session) {
         let shutdown = session.shutdown_signal().with_profile_cleanup(profile_root);

@@ -17,7 +17,8 @@ pub use horizon_browser::{
     ActiveBackendCapabilities, AutomationDisclosurePolicy, AutomationDisclosureStatus, BackendAvailability,
     BackendCapabilities, BackendKind, BrowserButton, BrowserCommand, BrowserConfig, BrowserEditCommand, BrowserEvent,
     BrowserEventWaker, BrowserInput, BrowserKey, BrowserModifiers, BrowserSession, BrowserShutdownSignal,
-    DEFAULT_VIEWPORT, FrameDelivery, FrameMetrics, FrameSlot, PageScrollState, normalize_navigation_target,
+    BrowserVideoCapture, BrowserVideoCaptureOptions, BrowserVideoOperation, BrowserVideoState, DEFAULT_VIEWPORT,
+    FrameDelivery, FrameMetrics, FrameSlot, PageScrollState, normalize_navigation_target,
 };
 const FORCED_CHROME_SHUTDOWN_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
 
@@ -319,6 +320,7 @@ impl BrowserPanelState {
             frame_slot: Arc::clone(&self.frame_slot),
             coordination: Some(Arc::new(manifest::ManifestCoordination::default())),
             capture_directory: Some(capture_directory),
+            video: Arc::new(horizon_browser::VideoCaptureHandle::default()),
         };
         match session::start_session(session_config) {
             Ok(handle) => {
@@ -360,6 +362,11 @@ impl BrowserPanelState {
 
     pub fn send(&self, command: BrowserCommand) {
         let _ = self.try_send(command);
+    }
+
+    #[must_use]
+    pub fn video_capture(&self) -> Option<BrowserVideoCapture> {
+        self.session.as_ref().and_then(|session| session.video_capture())
     }
 
     #[must_use]

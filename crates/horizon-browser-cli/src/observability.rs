@@ -115,7 +115,10 @@ impl ObservabilitySummary {
     /// Keep only bounded health fields from a tool result. Payload arrays are dropped.
     #[must_use]
     pub fn health_payload(tool: &str, result: &Value) -> Option<Value> {
-        if !matches!(tool, "browser_audit" | "browser_network" | "browser_network_watch") {
+        if !matches!(
+            tool,
+            "browser_audit" | "browser_network" | "browser_network_watch" | "browser_video"
+        ) {
             return None;
         }
         let mut object = structured_content(result).as_object()?.clone();

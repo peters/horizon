@@ -74,6 +74,28 @@ impl DriverState {
         Ok(BrowserControlValue::Network { capture })
     }
 
+    pub(super) fn video_action(
+        &mut self,
+        frame_slot: &Arc<FrameSlot>,
+        capture_id: &str,
+        operation: crate::BrowserVideoOperation,
+        options: Option<crate::BrowserVideoCaptureOptions>,
+    ) -> Result<BrowserControlValue, BrowserControlFailure> {
+        let capture = self.video.apply(
+            crate::video::VideoCaptureHost::new(
+                self.config.capture_directory.as_deref(),
+                self.config.coordination.as_deref(),
+                &self.config.panel_local_id,
+                &self.config.browser.video,
+            ),
+            capture_id,
+            Arc::clone(frame_slot),
+            operation,
+            options,
+        )?;
+        Ok(BrowserControlValue::Video { capture })
+    }
+
     /// A target reattach clears domain enablement. Restore an active capture
     /// without making page recovery depend on optional observation state.
     pub(super) fn restore_network_capture(

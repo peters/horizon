@@ -20,7 +20,7 @@ use crate::model::{
     ActInput, ActKind, ActionOutput, AuditInput, AuditOutput, BrowserListOutput, CreateInput, CreateOutput,
     EvaluateInput, EvaluateOutput, HandoffInput, HandoffOutput, NavigateInput, NavigateOutput, NetworkInput,
     NetworkOutput, NetworkWatchInput, NetworkWatchOutput, NodeOutput, NodesOutput, PanelInput, QueryInput,
-    SnapshotInput, SnapshotOutput, VisibilityInput, VisibilityOutput, WaitInput, WaitOutput,
+    SnapshotInput, SnapshotOutput, VideoInput, VideoOutput, VisibilityInput, VisibilityOutput, WaitInput, WaitOutput,
 };
 use crate::network_watch::NetworkWatchState;
 
@@ -280,6 +280,23 @@ impl HorizonBrowserMcp {
     }
 
     #[tool(
+        name = "browser_video",
+        description = "Start, pause, resume, inspect, or stop a bounded WebM recording of the panel's page pixels. Start-only options: quality (1-100), compression_level (0-10), fps (1-30), max_width (320-1920), max_file_bytes. Pause skips time in the file; stop finalizes a private .webm path. Works on Chromium, Firefox, and Safari because it samples the existing decoded frame slot. Page pixels never enter audit."
+    )]
+    async fn browser_video(&self, Parameters(input): Parameters<VideoInput>) -> Result<Json<VideoOutput>, String> {
+        let action = input.build_action()?;
+        let receipt = self
+            .controller
+            .execute(&input.panel_id, action, input.timeout_millis)
+            .await
+            .map_err(|error| error.to_string())?;
+        let BrowserControlValue::Video { capture } = receipt.value else {
+            return Err("browser returned an unexpected video capture result".to_string());
+        };
+        Ok(Json(VideoOutput::new(input.panel_id, receipt.action_id, capture)))
+    }
+
+    #[tool(
         name = "browser_wait",
         description = "Wait for a CSS selector to become present, visible, or hidden as one audited engine-side action: the browser driver observes the page itself (no repeated queries) and returns the matched nodes and elapsed_millis, or a typed failure (wait_timeout, wait_navigation_invalidated when the page navigated, wait_ownership_lost, wait_handoff_pending, wait_superseded when a later wait on the same panel replaced it, browser_unavailable when the browser backend stops). timeout_millis is 1000-60000 (default 10000) and is enforced in full by the engine; poll_millis is accepted for compatibility and ignored."
     )]
@@ -359,7 +376,7 @@ impl ServerHandler for HorizonBrowserMcp {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("horizon-browser", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "MCP is the sole agent control contract for Horizon browser panels. For agent identities injected by Horizon, discovery and control are scoped to the workspace that contains the calling agent panel: browser_list shows only that workspace's panels, every other tool rejects panel ids outside it, and a panel's visible field is host presentation state rather than proof that it is in your workspace; identities from outside Horizon keep unscoped discovery. Start with browser_list; if it is empty, call browser_create in your current Horizon workspace. Reuse an existing panel for iframe, popup, dialog, and consent interactions: never create or reveal a helper panel as a workaround. If the current top-level semantic tools cannot reach embedded frame content, call browser_handoff on the original panel. Only set browser_create allow_additional=true when the user explicitly requests an independent browser session. Use visible=false for a live background panel and browser_visibility to show or hide it later without stopping automation or capture. Each panel advertises navigation, DOM, steering, audit, and backend-specific network capabilities. For WebSocket or HTTP observation, call browser_network start before browser_navigate; opt into native bounded response bodies with include_http_bodies. Prefer browser_network_watch with its returned capture_id and next_sequence for bounded event-driven monitoring, or tail the exact private NDJSON path returned by browser_network with ordinary read-only Unix tools; call browser_network stop to flush. Take a fresh semantic snapshot or query before acting through refs, and verify afterward. Never use raw browser endpoints or Horizon's private runtime files.",
+                "MCP is the sole agent control contract for Horizon browser panels. For agent identities injected by Horizon, discovery and control are scoped to the workspace that contains the calling agent panel: browser_list shows only that workspace's panels, every other tool rejects panel ids outside it, and a panel's visible field is host presentation state rather than proof that it is in your workspace; identities from outside Horizon keep unscoped discovery. Start with browser_list; if it is empty, call browser_create in your current Horizon workspace. Reuse an existing panel for iframe, popup, dialog, and consent interactions: never create or reveal a helper panel as a workaround. If the current top-level semantic tools cannot reach embedded frame content, call browser_handoff on the original panel. Only set browser_create allow_additional=true when the user explicitly requests an independent browser session. Use visible=false for a live background panel and browser_visibility to show or hide it later without stopping automation or capture. Each panel advertises navigation, DOM, steering, audit, network, and video capabilities. For WebSocket or HTTP observation, call browser_network start before browser_navigate; opt into native bounded response bodies with include_http_bodies. Prefer browser_network_watch with its returned capture_id and next_sequence for bounded event-driven monitoring, or tail the exact private NDJSON path returned by browser_network with ordinary read-only Unix tools; call browser_network stop to flush. For page-pixel recording, call browser_video start, optionally pause/resume, then stop to finalize a private WebM path; quality, compression_level, fps, max_width, and max_file_bytes are start-only. Take a fresh semantic snapshot or query before acting through refs, and verify afterward. Never use raw browser endpoints or Horizon's private runtime files.",
             )
     }
 
@@ -479,6 +496,7 @@ mod tests {
                 "browser_panel",
                 "browser_query",
                 "browser_snapshot",
+                "browser_video",
                 "browser_visibility",
                 "browser_wait",
             ]

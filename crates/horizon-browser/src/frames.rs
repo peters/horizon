@@ -330,6 +330,11 @@ impl FrameSlot {
         inner.page_scroll_state = None;
     }
 
+    #[cfg(test)]
+    pub(crate) fn store_test_rgb(&self, width: u32, height: u32, rgb: Vec<u8>) -> u64 {
+        self.publish_rgb(width, height, rgb)
+    }
+
     /// Clone the newest frame handle, if any. Pixel conversion and texture
     /// upload can then proceed without holding the publication lock.
     #[must_use]

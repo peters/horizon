@@ -425,6 +425,9 @@ impl Config {
                 self.browser.quality
             )));
         }
+        if let Err(message) = self.browser.video.validate() {
+            return Err(Error::Config(format!("browser.video: {message}")));
+        }
         self.remote
             .validate()
             .map_err(|error| Error::Config(error.to_string()))?;
@@ -779,6 +782,14 @@ mod tests {
 
         Config::from_yaml("browser:\n  quality: 1\n").expect("minimum quality should be accepted");
         Config::from_yaml("browser:\n  quality: 100\n").expect("maximum quality should be accepted");
+    }
+
+    #[test]
+    fn browser_video_options_must_fit_engine_range() {
+        let error = Config::from_yaml("browser:\n  video:\n    fps: 0\n").expect_err("fps must be rejected");
+        assert!(error.to_string().contains("browser.video"));
+        Config::from_yaml("browser:\n  video:\n    quality: 70\n    compression_level: 4\n    fps: 10\n")
+            .expect("default-like video options should be accepted");
     }
 
     #[test]
