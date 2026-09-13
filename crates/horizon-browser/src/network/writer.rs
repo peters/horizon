@@ -147,6 +147,31 @@ impl Drop for CaptureWriter {
     }
 }
 
+fn reserve_queued_bytes(
+    metrics: &WriterMetrics,
+    record_bytes: u64,
+    priority: bool,
+    deadline: std::time::Instant,
+) -> bool {
+    loop {
+        if metrics
+            .queued_bytes
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                current
+                    .checked_add(record_bytes)
+                    .filter(|next| *next <= QUEUE_MAX_BYTES)
+            })
+            .is_ok()
+        {
+            return true;
+        }
+        if !priority || std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 fn enqueue_record(
     sender: &SyncSender<BrowserNetworkRecord>,
     metrics: &WriterMetrics,
@@ -155,20 +180,12 @@ fn enqueue_record(
     timeout: Duration,
 ) {
     let record_bytes = estimated_record_bytes(&record);
-    if metrics
-        .queued_bytes
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-            current
-                .checked_add(record_bytes)
-                .filter(|next| *next <= QUEUE_MAX_BYTES)
-        })
-        .is_err()
-    {
+    let deadline = std::time::Instant::now() + timeout;
+    if !reserve_queued_bytes(metrics, record_bytes, priority, deadline) {
         metrics.dropped.fetch_add(1, Ordering::Relaxed);
         return;
     }
     let mut pending = Some(record);
-    let deadline = std::time::Instant::now() + timeout;
     while let Some(record) = pending.take() {
         match sender.try_send(record) {
             Ok(()) => {
@@ -419,5 +436,36 @@ mod tests {
         assert_eq!(metrics.dropped.load(Ordering::Relaxed), 1);
         assert_eq!(metrics.queued_bytes.load(Ordering::Relaxed), QUEUE_MAX_BYTES);
         assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn priority_enqueue_retries_until_queued_bytes_have_room() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let metrics = std::sync::Arc::new(WriterMetrics::default());
+        metrics.queued_bytes.store(QUEUE_MAX_BYTES, Ordering::Relaxed);
+        let release = std::sync::Arc::clone(&metrics);
+        let drain = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            release.queued_bytes.store(0, Ordering::Relaxed);
+        });
+
+        enqueue_record(&sender, &metrics, sample_record(2), true, Duration::from_secs(1));
+        drain
+            .join()
+            .unwrap_or_else(|_| panic!("queued-bytes release thread panicked"));
+
+        assert_eq!(metrics.enqueued.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.dropped.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            metrics.queued_bytes.load(Ordering::Relaxed),
+            estimated_record_bytes(&sample_record(2))
+        );
+        assert_eq!(
+            receiver
+                .try_recv()
+                .unwrap_or_else(|error| panic!("priority record missing: {error}"))
+                .sequence,
+            2
+        );
     }
 }
