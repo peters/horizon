@@ -153,8 +153,7 @@ fn projected_value(project: &PlanProject, steps: &[StepReport]) -> Result<(Value
         tool: "project".to_string(),
         arguments: Map::new(),
     };
-    let mut budget = 0;
-    let value = crate::resolve_value(&project.from, &dummy, steps, &indexes, &BTreeMap::new(), &mut budget)?;
+    let value = crate::resolve_value(&project.from, &dummy, steps, &indexes, &BTreeMap::new(), None)?;
     let rows = match (&project.format, &value) {
         (ProjectFormat::Csv, Value::Array(rows)) => {
             if rows.len() > MAX_CSV_ROWS {

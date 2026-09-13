@@ -402,7 +402,7 @@ impl DurableRun {
     /// # Errors
     /// Returns when the failed state cannot be atomically persisted.
     pub fn fail(&mut self, error: &str) -> Result<(), RunStateError> {
-        self.clear_projection_files()?;
+        self.clear_unpublished_projection_files()?;
         self.state.status = RunStatus::Failed;
         self.state.updated_at_millis = now_millis();
         self.state.error = Some(error.to_string());
@@ -414,7 +414,7 @@ impl DurableRun {
     /// # Errors
     /// Returns when the stopped state cannot be atomically persisted.
     pub fn stop(&mut self, reason: ExecutionStopReason) -> Result<(), RunStateError> {
-        self.clear_projection_files()?;
+        self.clear_unpublished_projection_files()?;
         self.state.status = match reason {
             ExecutionStopReason::Cancelled => RunStatus::Cancelled,
             ExecutionStopReason::DeadlineExceeded => RunStatus::TimedOut,
@@ -747,6 +747,13 @@ impl DurableRun {
 
     fn write_json(&self, name: &str, value: &impl Serialize, artifact: &'static str) -> Result<(), RunStateError> {
         write_private_json(&self.directory.join(name), value, artifact)
+    }
+
+    fn clear_unpublished_projection_files(&self) -> Result<(), RunStateError> {
+        if self.state.report_file.is_some() {
+            return Ok(());
+        }
+        self.clear_projection_files()
     }
 
     fn clear_projection_files(&self) -> Result<(), RunStateError> {

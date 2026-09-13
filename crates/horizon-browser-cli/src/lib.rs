@@ -848,7 +848,7 @@ fn resolve_arguments(
         results,
         result_indexes,
         &plan.variables,
-        &mut budget,
+        Some(&mut budget),
     )?;
     let encoded = serde_json::to_vec(&resolved).map_err(|error| error.to_string())?;
     if encoded.len() > MAX_RESOLVED_ARGUMENTS_BYTES {
@@ -869,14 +869,24 @@ pub(crate) fn resolve_value(
     results: &[StepReport],
     result_indexes: &BTreeMap<String, usize>,
     variables: &BTreeMap<String, Value>,
-    budget: &mut usize,
+    budget: Option<&mut usize>,
 ) -> Result<Value, String> {
     match value {
-        Value::Array(values) => values
-            .iter()
-            .map(|value| resolve_value(value, step, results, result_indexes, variables, budget))
-            .collect::<Result<Vec<_>, _>>()
-            .map(Value::Array),
+        Value::Array(values) => {
+            let mut budget = budget;
+            let mut resolved = Vec::with_capacity(values.len());
+            for value in values {
+                resolved.push(resolve_value(
+                    value,
+                    step,
+                    results,
+                    result_indexes,
+                    variables,
+                    budget.as_deref_mut(),
+                )?);
+            }
+            Ok(Value::Array(resolved))
+        }
         Value::Object(object) if object.len() == 1 && object.contains_key("$ref") => {
             let reference = object
                 .get("$ref")
@@ -903,21 +913,25 @@ pub(crate) fn resolve_value(
             charge_resolved(budget, &selected)?;
             Ok(selected)
         }
-        Value::Object(object) => object
-            .iter()
-            .map(|(key, value)| {
-                Ok((
+        Value::Object(object) => {
+            let mut budget = budget;
+            let mut resolved = Map::new();
+            for (key, value) in object {
+                resolved.insert(
                     key.clone(),
-                    resolve_value(value, step, results, result_indexes, variables, budget)?,
-                ))
-            })
-            .collect::<Result<Map<_, _>, String>>()
-            .map(Value::Object),
+                    resolve_value(value, step, results, result_indexes, variables, budget.as_deref_mut())?,
+                );
+            }
+            Ok(Value::Object(resolved))
+        }
         _ => Ok(value.clone()),
     }
 }
 
-fn charge_resolved(budget: &mut usize, value: &Value) -> Result<(), String> {
+fn charge_resolved(budget: Option<&mut usize>, value: &Value) -> Result<(), String> {
+    let Some(budget) = budget else {
+        return Ok(());
+    };
     let size = serde_json::to_vec(value).map_or(0, |bytes| bytes.len());
     *budget = budget.saturating_add(size);
     if *budget > MAX_RESOLVED_ARGUMENTS_BYTES {
