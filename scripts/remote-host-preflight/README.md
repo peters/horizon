@@ -33,13 +33,13 @@ unsupported, `2` at least one probe error (report is still emitted).
 
 | Check | Source | Meaning |
 | --- | --- | --- |
-| `os_linux` | `uname -srm` | Linux kernel on `x86_64` or `aarch64` |
-| `container_engine` | `docker version` / `docker info` / `podman info` | a usable engine is present **and reachable** by the current user; reports the engine version and (for docker) the storage driver |
+| `os_linux` | `uname -srm` | Linux kernel on `x86_64` or `aarch64` (release + arch in the report) |
+| `container_engine` | `docker version` / `docker info` / `podman info` | a usable engine is present **and reachable by the current user on this host**: the endpoint must be local (a remote `DOCKER_HOST` / named podman connection, or a non-Linux docker server OS, is rejected) and, for docker, the storage driver is reported or explicitly marked `unverified` with the reason |
 | `cpu_capacity` | `nproc`, fallback `/proc/cpuinfo` | at least the 4-core reference baseline |
-| `memory_capacity` | `/proc/meminfo` `MemTotal` | at least the 16 GiB reference baseline |
-| `disk_capacity` | `df -kP` | at least 20 GiB free on the workspace filesystem (falls back to `/`) |
-| `storage_ext4_qualifier` | `stat` + `/sys/dev/block` + `/proc/fs/ext4/<dev>/options` | the worker repository-storage qualifier: ext4 mounted with `rw`, `barrier`, exactly one `data=ordered`/`data=journal`, no `ro`/`nobarrier` (see `docs/testing/azure-workspace-readiness.md`) |
-| `tailscale` | `tailscale version` / `tailscale status --json` | informational: presence, self DNS name, online state |
+| `memory_capacity` | `/proc/meminfo` `MemTotal` | at least the 16 GiB reference baseline (an unreadable `MemTotal` is an **error**, not a rejection) |
+| `disk_capacity` | `df -kP` | at least 20 GiB free on the mount that will hold the workspace: the **longest mount-point ancestor** of the resolved (symlink-followed) workspace path; a malformed free value on that mount is an **error** |
+| `storage_ext4_qualifier` | `stat` + `/sys/dev/block` + `/proc/fs/ext4/<dev>/options` | the worker repository-storage qualifier, mirrored exactly from `crates/horizon-core/src/repository_overlay/storage.rs`: ext4 options with exact tokens `rw` + `barrier`, no `ro`/`nobarrier`, exactly one `data=ordered`/`data=journal` line, no duplicates/spaces/control characters, 4096-byte cap, trailing newline |
+| `tailscale` | `tailscale version` / `tailscale status --json` | **informational, never gates the verdict** (issue #604 permits ordinary pinned SSH): presence + self DNS name + online state when available, `unverified` when absent |
 | `storage_durability`, `effective_isolation`, `worker_startup` | — | always **unverified**: read-only metadata cannot prove retention, isolation or startup; the later on-worker acceptance closes these |
 
 ## Read-only guarantees
@@ -50,11 +50,14 @@ unsupported, `2` at least one probe error (report is still emitted).
 - Direct file reads are limited to fixed paths under `--procfs-root` /
   `--sysfs-root`.
 - The report contains only fixed fields. Any host-provided text that is
-  surfaced (error excerpts) passes through a credential redactor
-  (JWT-like material, private-key blocks, `password|token|secret|api_key`
-  assignments, `Authorization` headers), truncated to 400 characters.
-  Environment variables, full engine configuration and unrelated workloads
-  are never read or reported.
+  surfaced (error excerpts, daemon-provided version strings, Tailscale DNS
+  names) passes through a credential redactor (JWT-like material,
+  private-key blocks, `password|token|secret|api_key` assignments redacted
+  to end of line, `Authorization` headers case-insensitively), truncated to
+  400 characters. Only two specific environment variables (`DOCKER_HOST`,
+  plus `PODMAN_CONNECTION`/`PODMAN_HOST`/`CONTAINER_HOST` presence for
+  endpoint-locality) are inspected — never an environment dump; full
+  engine configuration and unrelated workloads are never read or reported.
 
 ## Tests
 

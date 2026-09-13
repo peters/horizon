@@ -64,7 +64,7 @@ REDACTED_PATTERNS = (
     re.compile(r"eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}(?:\.[A-Za-z0-9_-]{4,})?"),  # JWT-like
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*"),
     re.compile(r"(?i)\b(password|passwd|secret|token|api[_-]?key)\b\s*[:=]\s*[^\n]*"),
-    re.compile(r"\b[Aa]uthorization\s*:\s*[^\n]*"),
+    re.compile(r"(?i)\bauthorization\s*:\s*[^\n]*"),
 )
 
 # Precomputed read-only facts that cannot be proven from host metadata alone.
@@ -129,11 +129,13 @@ def check_os(executor, timeout):
         return {"id": "os_linux", "status": UNSUPPORTED, "value": None,
                 "detail": redact(detail)}
     machine = fields[2]
+    release = fields[1]
     if machine in SUPPORTED_ARCHS:
         return {"id": "os_linux", "status": SUPPORTED, "value": " ".join(fields[:3]),
-                "detail": "Linux on a supported architecture"}
+                "detail": "Linux %s on %s (supported architecture)" % (release, machine)}
     return {"id": "os_linux", "status": UNSUPPORTED, "value": " ".join(fields[:3]),
-            "detail": "architecture %s is outside %s" % (machine, "/".join(SUPPORTED_ARCHS))}
+            "detail": "Linux %s: architecture %s is outside %s"
+                      % (release, machine, "/".join(SUPPORTED_ARCHS))}
 
 
 def engine_failure_bit(name, probe, error, timeout):
@@ -162,19 +164,50 @@ def parse_engine_version(probe, name):
     if name == "docker":
         server = payload.get("Server")
         if isinstance(server, dict) and server.get("Version"):
-            return str(server["Version"])
+            return redact(str(server["Version"]))
         return None
     # podman: the real `podman info --format json` schema exposes the version
     # under top-level `version.Version`; `host.version.output` is the legacy
     # shape and is kept only as a fallback.
     version = payload.get("version")
     if isinstance(version, dict) and version.get("Version"):
-        return str(version["Version"])
+        return redact(str(version["Version"]))
     host = payload.get("host")
     if isinstance(host, dict):
         outputs = host.get("version")
         if isinstance(outputs, dict) and outputs.get("output"):
-            return str(outputs["output"])
+            return redact(str(outputs["output"]))
+    return None
+
+
+def engine_endpoint_note(engine):
+    """None when the engine endpoint looks local; otherwise a reason.
+
+    `docker version`/`podman info` succeed against a *remote* daemon too
+    (DOCKER_HOST, docker contexts, named podman connections), which would
+    combine a remote engine with this host's CPU/memory/disk/ext4 checks.
+    Only the two endpoint variables are inspected — never an env dump.
+    """
+    if engine == "docker":
+        host = os.environ.get("DOCKER_HOST")
+        if host:
+            if host.startswith("unix://") or (len(host) >= 2 and host[0] == "/"):
+                return None  # local socket path
+            return "docker endpoint is remote (DOCKER_HOST=%s)" % redact(host)
+        return None
+    for var in ("PODMAN_CONNECTION", "PODMAN_HOST", "CONTAINER_HOST"):
+        if os.environ.get(var):
+            return "%s endpoint may be remote (%s is set)" % (engine, var)
+    return None
+
+
+def docker_server_ostype(probe):
+    if probe is None or probe["exit_code"] != 0:
+        return None
+    payload = parse_json_output(probe)
+    server = payload.get("Server") if isinstance(payload, dict) else None
+    if isinstance(server, dict) and server.get("OSType"):
+        return redact(str(server["OSType"]))
     return None
 
 
@@ -184,13 +217,36 @@ def check_container_engine(executor, timeout):
 
     docker_server = parse_engine_version(docker_version, "docker")
     podman_version = parse_engine_version(podman_info, "podman")
-    engine_ok = "docker" if docker_server else ("podman" if podman_version else None)
+
+    reasons = {}
+    if docker_server is not None:
+        ostype = docker_server_ostype(docker_version)
+        if ostype is not None and ostype != "linux":
+            reasons["docker"] = "docker server OS is %s, not linux" % ostype
+        else:
+            note = engine_endpoint_note("docker")
+            if note is not None:
+                reasons["docker"] = note
+    if podman_version is not None:
+        note = engine_endpoint_note("podman")
+        if note is not None:
+            reasons["podman"] = note
+
+    engine_ok = None
+    if docker_server is not None and "docker" not in reasons:
+        engine_ok = "docker"
+    elif podman_version is not None and "podman" not in reasons:
+        engine_ok = "podman"
 
     if engine_ok is None:
-        detail_bits = [
-            engine_failure_bit("docker", docker_version, dv_err, timeout),
-            engine_failure_bit("podman", podman_info, pi_err, timeout),
-        ]
+        detail_bits = []
+        for name, probe, err, version, reason in (
+                ("docker", docker_version, dv_err, docker_server, reasons.get("docker")),
+                ("podman", podman_info, pi_err, podman_version, reasons.get("podman"))):
+            if version is None:
+                detail_bits.append(engine_failure_bit(name, probe, err, timeout))
+            else:
+                detail_bits.append("%s: %s" % (name, reason))
         return {"id": "container_engine", "status": UNSUPPORTED, "value": None,
                 "detail": "no usable container engine: %s" % "; ".join(detail_bits)}
 
@@ -202,11 +258,22 @@ def check_container_engine(executor, timeout):
         detail += " (also found %s)" % ", ".join(others)
     if engine_ok == "docker":
         info, err = run_probe(executor, "docker_info", timeout)
-        if err is None and info["exit_code"] == 0:
+        driver = None
+        if err is not None:
+            reason = "probe timed out" if "timed out" in err else "probe failed"
+        elif info["exit_code"] != 0:
+            reason = "probe failed (%s)" % (redact(info.get("stderr", "")) or "exit %s" % info["exit_code"])
+        else:
             for line in str(info.get("stdout", "")).splitlines():
                 if line.strip().startswith("Storage Driver:"):
-                    detail += "; storage driver %s" % redact(line.split(":", 1)[1].strip())
+                    driver = redact(line.split(":", 1)[1].strip())
                     break
+            if driver is None:
+                reason = "no Storage Driver line in output"
+        if driver:
+            detail += "; storage driver %s" % driver
+        else:
+            detail += "; storage driver unverified (docker info: %s)" % reason
     return {"id": "container_engine", "status": SUPPORTED, "value": "%s %s" % (engine_ok, engine_version),
             "detail": detail}
 
@@ -259,7 +326,9 @@ def check_memory(procfs_root):
                 total_kb = None
             break
     if total_kb is None:
-        return {"id": "memory_capacity", "status": UNSUPPORTED, "value": None,
+        # An unreadable MemTotal is a probe failure (incomplete report),
+        # not evidence of insufficient memory.
+        return {"id": "memory_capacity", "status": ERROR, "value": None,
                 "detail": "MemTotal missing or malformed"}
     status = SUPPORTED if total_kb >= MIN_MEM_KB else UNSUPPORTED
     return {"id": "memory_capacity", "status": status, "value": total_kb,
@@ -267,12 +336,18 @@ def check_memory(procfs_root):
 
 
 def select_mount_point(mount_paths, workspace_path):
-    """Longest mount point that is an ancestor of (or is) the workspace path.
+    """Longest mount point that is an ancestor of (or is) the resolved
+    workspace path.
 
     A workspace such as /mnt/workspaces/job lives on the /mnt/workspaces
     mount, not on /; selecting the wrong filesystem produces a wrong verdict.
+    The path is resolved first so a symlinked workspace is judged on the
+    mount its target actually lives on (the storage qualifier follows the
+    same resolution via os.stat). realpath resolves symlinks in the
+    existing prefix and preserves a not-yet-created suffix, so this works
+    for workspaces that do not exist yet.
     """
-    normalized = os.path.normpath(workspace_path)
+    normalized = os.path.normpath(os.path.realpath(workspace_path))
     best = None
     for mount in mount_paths:
         if mount == "/" or mount == normalized or normalized.startswith(mount.rstrip("/") + "/"):
@@ -441,14 +516,21 @@ def check_tailscale(executor, timeout):
         payload = parse_json_output(status)
         if isinstance(payload, dict) and isinstance(payload.get("Self"), dict):
             if payload["Self"].get("DNSName"):
-                self_name = str(payload["Self"]["DNSName"]).rstrip(".")
-            online = payload["Self"].get("Online")
+                # Host-provided: redact before it can reach the report, then
+                # drop the tailnet DNS trailing dot.
+                self_name = redact(str(payload["Self"]["DNSName"]))
+                if self_name.endswith("<redacted>."):
+                    self_name = self_name[:-1]
+                elif self_name.endswith("."):
+                    self_name = self_name[:-1]
+            raw_online = payload["Self"].get("Online")
+            online = raw_online if isinstance(raw_online, bool) else None
     stdout_lines = [line for line in str(version.get("stdout", "")).splitlines() if line.strip()]
     version_line = redact(stdout_lines[0] if stdout_lines else "unknown")
     value = self_name or version_line.split()[0]
     detail = "tailscale %s" % version_line
     if self_name:
-        detail += " as %s (online=%s)" % (self_name, str(online).lower())
+        detail += " as %s (online=%s)" % (self_name, "unknown" if online is None else str(online).lower())
     return {"id": "tailscale", "status": SUPPORTED, "value": value,
             "detail": detail + "; client-side reachability remains unverified"}
 

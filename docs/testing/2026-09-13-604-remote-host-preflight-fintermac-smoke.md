@@ -42,9 +42,17 @@ explicit about which steps mutate the host so the proof is not overclaimed.
 
 1. **Baseline snapshot (read-only):**
    ```sh
-   ssh fintermac@<VM> 'date -u; uname -srm; df -kP / | tail -1; docker info --format "{{.ServerVersion}}" 2>&1 | head -1 || true'
+   ssh fintermac@<VM> 'date -u; uname -srm; nproc; grep MemTotal /proc/meminfo;
+     df -kP / | tail -1;
+     docker info --format "{{.ServerVersion}}" 2>&1 | head -1 || true;
+     WS=/var/lib/horizon-workers; [ -e "$WS" ] || WS=$(dirname "$WS"));
+     stat -c "ws=%n dev=%H:%I" "$WS" 2>/dev/null || echo "ws missing: $WS";
+     B=$(basename "$(readlink /sys/dev/block/$(stat -c "%H:%I" "$WS" 2>/dev/null) 2>/dev/null)" 2>/dev/null);
+     [ -n "$B" ] && { echo "dev=$B"; head -5 "/proc/fs/ext4/$B/options" 2>/dev/null || echo "no ext4 options"; } || true'
    ```
-   Save as `before.txt`.
+   Save as `before.txt`. The `WS` block records the nearest existing
+   workspace ancestor, its resolved block device, and the raw ext4 options —
+   the independent ground truth for matrix assertions 4–6.
 
 2. **Deliver the checker — MUTATES the host (verification plumbing, not a tool feature):**
    single file to `/tmp`, removed in step 5. No package manager, no service,
@@ -60,7 +68,9 @@ explicit about which steps mutate the host so the proof is not overclaimed.
    Save the JSON report as `fintermac-preflight.json` and the human report as
    `fintermac-preflight.txt`.
 
-4. **Post-run snapshot (read-only):** same commands as step 1 into
+4. **Post-run snapshot (read-only):** same commands as step 1 (including
+   `nproc`, `MemTotal`, the workspace ancestor, its block device and the raw
+   ext4 options) into
    `after.txt`. `diff before.txt after.txt` must show only the clock line
    changed *and* the presence/removal of the two `/tmp` verification files if
    the snapshots straddle step 5 — take `after.txt` **before** step 5 so the

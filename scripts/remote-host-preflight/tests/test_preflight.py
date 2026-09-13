@@ -284,6 +284,79 @@ class EngineFailures(Harness):
         by_id = {check["id"]: check for check in report["checks"]}
         self.assertEqual(by_id["container_engine"]["status"], "unsupported")
 
+    def test_remote_docker_endpoint_is_rejected(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        with mock.patch.dict(os.environ, {"DOCKER_HOST": "tcp://remote-daemon:2376"}):
+            code, report, _ = self.run_main(fixture)
+        self.assertEqual(code, 1)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["container_engine"]["status"], "unsupported")
+        self.assertIn("endpoint is remote", by_id["container_engine"]["detail"])
+        self.assertIn("tcp://", by_id["container_engine"]["detail"])
+
+    def test_local_unix_docker_endpoint_is_accepted(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        with mock.patch.dict(os.environ, {"DOCKER_HOST": "unix:///var/run/docker.sock"}):
+            code, report, _ = self.run_main(fixture)
+        self.assertEqual(code, 0)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["container_engine"]["status"], "supported")
+
+    def test_non_linux_docker_server_os_is_rejected(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["docker_version"] = {"stdout": json.dumps(
+            {"Client": {"Version": "26.1.4"},
+             "Server": {"Version": "26.1.4", "OSType": "windows"}})}
+        code, report, _ = self.run_main(fixture)
+        self.assertEqual(code, 1)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["container_engine"]["status"], "unsupported")
+        self.assertIn("not linux", by_id["container_engine"]["detail"])
+
+    def test_podman_named_connection_is_rejected(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture.pop("docker_version")
+        fixture.pop("docker_info")
+        fixture["podman_info"] = podman_ok()
+        with mock.patch.dict(os.environ, {"PODMAN_CONNECTION": "remote-worker"}):
+            code, report, _ = self.run_main(fixture)
+        self.assertEqual(code, 1)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["container_engine"]["status"], "unsupported")
+        self.assertIn("PODMAN_CONNECTION", by_id["container_engine"]["detail"])
+
+    def test_storage_driver_unverified_when_info_fails(self):
+        cases = {
+            "timeout": {"docker_info": {"timeout": True}},
+            "nonzero": {"docker_info": {"exit_code": 1, "stdout": "", "stderr": "denied"}},
+            "no_line": {"docker_info": {"stdout": "Cgroup Driver: systemd\n"}},
+        }
+        for label, overrides in cases.items():
+            with self.subTest(label=label):
+                fixture = dict(DEFAULT_FIXTURE)
+                fixture.update(overrides)
+                code, report, _ = self.run_main(fixture)
+                self.assertEqual(code, 0, label)
+                by_id = {check["id"]: check for check in report["checks"]}
+                self.assertEqual(by_id["container_engine"]["status"], "supported", label)
+                self.assertIn("storage driver unverified", by_id["container_engine"]["detail"], label)
+
+    def test_engine_version_strings_are_redacted(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["docker_version"] = {"stdout": json.dumps(
+            {"Server": {"Version": JWT, "OSType": "linux"}})}
+        _, report, _ = self.run_main(fixture)
+        text = json.dumps(report)
+        self.assertNotIn(JWT, text)
+        self.assertIn("<redacted>", text)
+
+    def test_os_detail_reports_release_and_arch(self):
+        code, report, _ = self.run_main(dict(DEFAULT_FIXTURE))
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(code, 0)
+        self.assertIn("6.1.0", by_id["os_linux"]["detail"])
+        self.assertIn("x86_64", by_id["os_linux"]["detail"])
+
     def test_engine_probe_timeout(self):
         fixture = dict(DEFAULT_FIXTURE)
         fixture["docker_version"] = {"timeout": True}
@@ -314,12 +387,14 @@ class MalformedInputs(Harness):
         by_id = {check["id"]: check for check in report["checks"]}
         self.assertEqual(by_id["cpu_capacity"]["status"], "error")
 
-    def test_meminfo_missing_total(self):
+    def test_meminfo_missing_total_is_error_not_rejection(self):
+        # An unreadable MemTotal is a probe failure (incomplete report),
+        # not evidence of insufficient memory.
         fixture = dict(DEFAULT_FIXTURE)
         code, report, _ = self.run_main(fixture, meminfo_text="MemFree: 100 kB\n")
-        self.assertEqual(code, 1)
+        self.assertEqual(code, 2)
         by_id = {check["id"]: check for check in report["checks"]}
-        self.assertEqual(by_id["memory_capacity"]["status"], "unsupported")
+        self.assertEqual(by_id["memory_capacity"]["status"], "error")
 
     def test_meminfo_absent(self):
         code, report, _ = self.run_main(dict(DEFAULT_FIXTURE), meminfo_text=None)
@@ -431,6 +506,21 @@ class StorageQualifier(Harness):
 
 
 class DiskAndCapacity(Harness):
+    def test_symlinked_workspace_selects_target_mount(self):
+        # A symlinked workspace must be judged on the mount its target lives
+        # on, the same resolution the storage qualifier uses via os.stat.
+        link = os.path.join(self.tmp.name, "ws-link")
+        os.symlink("/mnt/workspaces/job", link)
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["disk"] = {"stdout":
+            "Filesystem     1024-blocks      Used Available Capacity Mounted on\n"
+            "/dev/root        1000000000  800000000   200000000     80% /\n"
+            "/dev/data        2000000000 1900000000    41943040    98% /mnt/workspaces\n"}
+        code, report, _ = self.run_main(fixture, workspace=link)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["disk_capacity"]["value"], 41943040)
+        self.assertIn("/mnt/workspaces", by_id["disk_capacity"]["detail"])
+
     def test_workspace_mount_free_used_over_root(self):
         fixture = dict(DEFAULT_FIXTURE)
         # Workspace mount has less than 20 GiB free -> unsupported even though / is huge.
@@ -462,6 +552,33 @@ class TailscaleChecks(Harness):
         by_id = {check["id"]: check for check in report["checks"]}
         self.assertEqual(by_id["tailscale"]["status"], "unverified")
         self.assertIn("pinned SSH", by_id["tailscale"]["detail"])
+
+    def test_tailscale_dns_name_is_redacted(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["tailscale_status"] = {"stdout": json.dumps(
+            {"Self": {"DNSName": "%s." % JWT, "Online": True}})}
+        _, report, _ = self.run_main(fixture)
+        text = json.dumps(report)
+        self.assertNotIn(JWT, text)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertIn("<redacted>", by_id["tailscale"]["detail"])
+
+    def test_tailscale_non_boolean_online_is_unknown(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["tailscale_status"] = {"stdout": json.dumps(
+            {"Self": {"DNSName": "vm.tailnet.ts.net.", "Online": "true"}})}
+        _, report, _ = self.run_main(fixture)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertIn("online=unknown", by_id["tailscale"]["detail"])
+
+    def test_mixed_case_authorization_is_redacted(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["docker_version"] = docker_daemon_down(
+            "AUTHORIZATION: bearer mixedcase-secret-value")
+        _, report, _ = self.run_main(fixture)
+        text = json.dumps(report)
+        self.assertNotIn("mixedcase-secret-value", text)
+        self.assertNotIn("AUTHORIZATION", text)
 
     def test_tailscale_version_only_when_status_fails(self):
         fixture = dict(DEFAULT_FIXTURE)
