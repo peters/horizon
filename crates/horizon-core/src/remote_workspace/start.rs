@@ -2,10 +2,14 @@
 //! reopening a view or restarting the application never invokes this operation.
 
 mod configured_azure;
+mod configured_endpoint;
 mod configured_runpod;
 pub(crate) mod endpoint;
 
 pub use configured_azure::{ConfiguredAzureStart, ConfiguredAzureStartError, start_configured_azure_environment};
+pub use configured_endpoint::{
+    ConfiguredEndpointRefresh, ConfiguredEndpointRefreshError, refresh_configured_runpod_connection,
+};
 pub use configured_runpod::{ConfiguredRunPodStartError, start_configured_runpod_environment};
 pub use endpoint::{
     InteractiveWorkerEndpointCandidate, InteractiveWorkerEndpointObserver, RemoteEndpointRefreshError,

@@ -23,12 +23,11 @@ pub struct FrameData {
     pub seq: u64,
 }
 
-/// Root-page scroll geometry sampled alongside `WebDriver` screenshots.
+/// Root-page scroll geometry sampled alongside screenshot or screencast frames.
 ///
-/// Some `WebDriver` backends omit native scrollbars from screenshot pixels even
-/// though the browser still reserves and accepts input in the scrollbar
-/// gutter. Embedders can use this state to paint a faithful indicator over the
-/// rendered frame without injecting or modifying page content.
+/// Some backends omit native scrollbar pixels, and others paint a native
+/// gutter that CDP/`WebDriver` cannot operate. Embedders paint a host-owned
+/// indicator from this state without injecting or modifying page content.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct PageScrollState {
     pub scroll_x: f32,
@@ -60,8 +59,8 @@ impl PageScrollState {
             && self.viewport_height > 0.0
             && self.client_width > 0.0
             && self.client_height > 0.0
-            && self.content_width >= self.client_width
-            && self.content_height >= self.client_height
+            && self.content_width > 0.0
+            && self.content_height > 0.0
     }
 }
 
@@ -346,8 +345,7 @@ impl FrameSlot {
             .clone()
     }
 
-    /// Most recently sampled root-page scroll geometry, when the active
-    /// backend provides screenshot frames without native scrollbar pixels.
+    /// Most recently sampled root-page scroll geometry for the host overlay.
     #[must_use]
     pub fn page_scroll_state(&self) -> Option<PageScrollState> {
         self.inner
@@ -364,6 +362,11 @@ impl FrameSlot {
         }
         inner.page_scroll_state = next;
         true
+    }
+
+    pub(crate) fn clear_page_scroll_state(&self) -> bool {
+        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner.page_scroll_state.take().is_some()
     }
 
     /// Claim the single outstanding UI wake-up for this slot. Further
@@ -658,6 +661,14 @@ mod tests {
         }));
         assert!(slot.page_scroll_state().is_none());
         assert!(slot.publish_page_scroll_state(state));
+        let mut slightly_narrow = state;
+        slightly_narrow.content_width = state.client_width - 0.25;
+        assert!(slightly_narrow.is_valid());
+        assert!(slot.publish_page_scroll_state(slightly_narrow));
+        assert_eq!(slot.page_scroll_state(), Some(slightly_narrow));
+        assert!(slot.clear_page_scroll_state());
+        assert!(slot.page_scroll_state().is_none());
+        assert!(!slot.clear_page_scroll_state());
         slot.clear();
         assert!(slot.page_scroll_state().is_none());
     }

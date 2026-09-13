@@ -1,5 +1,7 @@
 //! Lazy, single-flight saved inventory loading for the Remote Environments overview.
 
+mod delete;
+mod endpoint;
 mod observation;
 mod paint;
 mod reconnect;
@@ -26,6 +28,8 @@ pub(super) struct RemoteEnvironments {
     refresh_when_idle: bool,
     observation: observation::ObservationState,
     stop: stop::StopState,
+    delete: delete::DeleteState,
+    endpoint: endpoint::EndpointState,
     reconnect: reconnect::ReconnectState,
     reopen: reopen::ReopenState,
     repository: repository::RepositoryState,
@@ -86,6 +90,8 @@ enum InventoryAction {
     CancelRepository,
     InspectRepository,
     WorkspaceSetup(setup::Action),
+    Delete(delete::Action),
+    Endpoint(endpoint::Action),
 }
 
 struct WakeOnDrop(Context);
@@ -120,6 +126,8 @@ impl RemoteEnvironments {
         self.failure = None;
         self.observation.invalidate();
         self.stop.invalidate();
+        self.delete.invalidate();
+        self.endpoint.invalidate();
         if let Some(pending) = &mut self.pending {
             pending.discard = true;
             self.refresh_when_idle = true;
@@ -134,6 +142,8 @@ impl RemoteEnvironments {
         self.invalidate_session_views();
         self.observation.invalidate();
         self.stop.invalidate();
+        self.delete.invalidate();
+        self.endpoint.invalidate();
         self.refresh_after_stop = false;
         self.refresh_when_idle = false;
         if let Some(pending) = &mut self.pending {
@@ -145,9 +155,15 @@ impl RemoteEnvironments {
         if !self.open || self.pending.is_some() {
             return;
         }
+        if self.delete.is_pending() || self.endpoint.is_pending() {
+            self.refresh_when_idle = true;
+            return;
+        }
         self.invalidate_session_views();
         self.observation.invalidate();
         self.stop.cancel_confirmation();
+        self.delete.cancel();
+        self.endpoint.cancel();
         let (tx, rx) = mpsc::sync_channel(1);
         let home = home.clone();
         let requested_cursor = cursor.clone();
@@ -193,6 +209,8 @@ impl RemoteEnvironments {
         self.invalidate_session_views();
         self.observation.invalidate();
         self.stop.cancel_confirmation();
+        self.delete.cancel();
+        self.endpoint.cancel();
         match result {
             Ok(page) => {
                 let previous = self
@@ -237,6 +255,8 @@ impl RemoteEnvironments {
         }
         match action {
             InventoryAction::None
+            | InventoryAction::Delete(_)
+            | InventoryAction::Endpoint(_)
             | InventoryAction::WorkspaceSetup(_)
             | InventoryAction::PrepareRepository
             | InventoryAction::ConfirmRepository
@@ -264,6 +284,8 @@ impl RemoteEnvironments {
                     self.invalidate_session_views();
                     self.observation.invalidate();
                     self.stop.invalidate();
+                    self.delete.invalidate();
+                    self.endpoint.invalidate();
                     self.selected = Some(index);
                 }
             }
@@ -286,6 +308,8 @@ impl RemoteEnvironments {
         self.invalidate_session_views();
         self.observation.invalidate();
         self.stop.invalidate();
+        self.delete.invalidate();
+        self.endpoint.invalidate();
     }
 
     fn start_observation(
@@ -381,7 +405,15 @@ impl HorizonApp {
         self.remote_environments.drain_result();
         self.remote_environments.observation.drain_result();
         self.remote_environments.drain_stop(self.session_store.home(), ctx);
-        if self.remote_environments.refresh_when_idle && self.remote_environments.pending.is_none() {
+        self.remote_environments
+            .drain_delete(self.session_store.home(), &self.template_config.remote);
+        self.remote_environments
+            .drain_endpoint(self.session_store.home(), &self.template_config.remote);
+        if self.remote_environments.refresh_when_idle
+            && self.remote_environments.pending.is_none()
+            && !self.remote_environments.delete.is_pending()
+            && !self.remote_environments.endpoint.is_pending()
+        {
             self.remote_environments.refresh_when_idle = false;
             self.remote_environments
                 .start_load(self.session_store.home(), ctx, None);
@@ -392,6 +424,8 @@ impl HorizonApp {
             self.remote_repository_action(InventoryAction::None, ctx);
             self.remote_workspace_setup_action(InventoryAction::None, ctx);
             let mut action = paint::show(ctx, &mut self.remote_environments);
+            action = self.remote_environments.guard_endpoint_action(action);
+            action = self.remote_environments.guard_delete_action(action);
             if self.remote_environments.setup.is_active()
                 && !matches!(
                     action,
@@ -430,6 +464,18 @@ impl HorizonApp {
                     ctx,
                 );
             }
+            self.remote_environments.delete_action(
+                action,
+                self.session_store.home(),
+                &self.template_config.remote,
+                ctx,
+            );
+            self.remote_environments.endpoint_action(
+                action,
+                self.session_store.home(),
+                &self.template_config.remote,
+                ctx,
+            );
             self.remote_environments.apply(action, self.session_store.home(), ctx);
             self.remote_reconnect_action(action, ctx);
             self.remote_reopen_action(action, ctx);

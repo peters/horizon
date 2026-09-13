@@ -121,7 +121,7 @@ impl DriverState {
             self.flush_pending_clipboard(link);
             return;
         }
-        if self.handle_scrollbar_layout_response(id, result.as_ref(), error.is_some()) {
+        if self.handle_scrollbar_layout_response(id, result.as_ref(), error.is_some(), frame_slot, event_tx) {
             if let Some(error) = error {
                 tracing::debug!(target: "browser", "scrollbar layout request rejected: {error}");
             }
@@ -188,6 +188,9 @@ impl DriverState {
     ) {
         let on_page_session = event.session_id.is_some_and(|s| Some(s) == self.session_id.as_deref());
         if on_page_session {
+            // Queue completed HTTP bodies here; the driver loop pumps them
+            // after this drain returns. `tick_http_response_bodies` uses
+            // `call_and_ack`, which re-enters `handle_message`.
             self.handle_network_event(&event);
         }
         match event.method {
@@ -217,7 +220,7 @@ impl DriverState {
                     self.navigate_request_id = None;
                     self.pending_viewport_capture_at = None;
                     self.viewport_capture_request_id = None;
-                    self.invalidate_scrollbar_layout();
+                    self.invalidate_scrollbar_layout(event_tx);
                     self.reset_clipboard_tracking();
                     self.main_frame_id = None;
                     self.title_fetch_at = None;
@@ -232,7 +235,7 @@ impl DriverState {
             }
             "Target.targetDestroyed" => {
                 let destroyed = event.params.get("targetId").and_then(|t| t.as_str());
-                if self.forget_destroyed_bound_target(destroyed) {
+                if self.forget_destroyed_bound_target(destroyed, event_tx) {
                     // External agents discover the page through this field.
                     // Clear it synchronously so a destroyed target is not
                     // advertised as a live endpoint after this event.
@@ -290,7 +293,7 @@ impl DriverState {
         }
     }
 
-    fn forget_destroyed_bound_target(&mut self, destroyed: Option<&str>) -> bool {
+    fn forget_destroyed_bound_target(&mut self, destroyed: Option<&str>, event_tx: &BrowserEventSender) -> bool {
         let Some(destroyed) = destroyed else {
             return false;
         };
@@ -305,7 +308,7 @@ impl DriverState {
         self.navigate_request_id = None;
         self.pending_viewport_capture_at = None;
         self.viewport_capture_request_id = None;
-        self.invalidate_scrollbar_layout();
+        self.invalidate_scrollbar_layout(event_tx);
         self.reset_clipboard_tracking();
         self.pending_reattach = false;
         self.reset_runtime_enable_state();
@@ -325,7 +328,7 @@ impl DriverState {
         if frame.get("parentId").is_some() {
             return;
         }
-        self.invalidate_scrollbar_layout();
+        self.invalidate_scrollbar_layout(event_tx);
         self.semantic.invalidate();
         self.top_frame_navigating = false;
         self.main_frame_id = frame.get("id").and_then(|id| id.as_str()).map(str::to_string);
@@ -431,7 +434,7 @@ impl DriverState {
         self.semantic.invalidate();
         self.top_frame_navigating = false;
         self.navigation_failed = false;
-        self.invalidate_scrollbar_layout();
+        self.invalidate_scrollbar_layout(event_tx);
         let url = normalized_committed_url(target_url);
         if url == self.url {
             return;
@@ -460,6 +463,8 @@ impl DriverState {
                 .params
                 .pointer("/metadata/scrollOffsetY")
                 .and_then(serde_json::Value::as_f64),
+            frame_slot,
+            event_tx,
         );
         // Ack so the stream continues: params.sessionId echoes the frame's
         // session identifier, the top-level sessionId scopes the call
@@ -619,17 +624,23 @@ mod tests {
     #[test]
     fn destroying_the_bound_target_marks_its_manifest_identity_for_removal() {
         let mut state = driver_state();
-        assert!(!state.forget_destroyed_bound_target(None));
+        let (tx, _rx) = mpsc::channel();
+        let events = BrowserEventSender {
+            tx,
+            wake: BrowserEventWake::default(),
+            committed_url: CommittedUrl::default(),
+        };
+        assert!(!state.forget_destroyed_bound_target(None, &events));
 
         state.target_id = Some("bound".to_string());
         state.session_id = Some("session".to_string());
         state.manifest_dirty = false;
 
-        assert!(!state.forget_destroyed_bound_target(Some("popup")));
+        assert!(!state.forget_destroyed_bound_target(Some("popup"), &events));
         assert_eq!(state.target_id.as_deref(), Some("bound"));
         assert!(!state.manifest_dirty);
 
-        assert!(state.forget_destroyed_bound_target(Some("bound")));
+        assert!(state.forget_destroyed_bound_target(Some("bound"), &events));
         assert_eq!(state.target_id, None);
         assert_eq!(state.session_id, None);
         assert!(state.manifest_dirty);
