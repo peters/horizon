@@ -101,7 +101,17 @@ impl CaptureWriter {
             self.metrics.dropped.fetch_add(1, Ordering::Relaxed);
             return;
         };
-        enqueue_record(sender, &self.metrics, record, priority);
+        enqueue_record(
+            sender,
+            &self.metrics,
+            record,
+            priority,
+            if priority {
+                PRIORITY_ENQUEUE_TIMEOUT
+            } else {
+                Duration::ZERO
+            },
+        );
     }
 
     pub(super) fn note_truncated(&self) {
@@ -142,6 +152,7 @@ fn enqueue_record(
     metrics: &WriterMetrics,
     record: BrowserNetworkRecord,
     priority: bool,
+    timeout: Duration,
 ) {
     let record_bytes = estimated_record_bytes(&record);
     if metrics
@@ -157,7 +168,7 @@ fn enqueue_record(
         return;
     }
     let mut pending = Some(record);
-    let deadline = std::time::Instant::now() + PRIORITY_ENQUEUE_TIMEOUT;
+    let deadline = std::time::Instant::now() + timeout;
     while let Some(record) = pending.take() {
         match sender.try_send(record) {
             Ok(()) => {
@@ -324,7 +335,7 @@ mod tests {
             .send(sample_record(1))
             .unwrap_or_else(|error| panic!("occupying send failed: {error}"));
 
-        enqueue_record(&sender, &metrics, sample_record(2), false);
+        enqueue_record(&sender, &metrics, sample_record(2), false, Duration::ZERO);
 
         assert_eq!(metrics.enqueued.load(Ordering::Relaxed), 0);
         assert_eq!(metrics.dropped.load(Ordering::Relaxed), 1);
@@ -348,15 +359,15 @@ mod tests {
         let drain = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(20));
             let occupying = receiver
-                .recv()
+                .recv_timeout(Duration::from_secs(2))
                 .unwrap_or_else(|error| panic!("occupying recv failed: {error}"));
             let priority = receiver
-                .recv()
+                .recv_timeout(Duration::from_secs(2))
                 .unwrap_or_else(|error| panic!("priority recv failed: {error}"));
             (occupying.sequence, priority.sequence)
         });
 
-        enqueue_record(&sender, &metrics, sample_record(2), true);
+        enqueue_record(&sender, &metrics, sample_record(2), true, Duration::from_secs(1));
 
         let sequences = drain
             .join()
@@ -379,7 +390,7 @@ mod tests {
             .unwrap_or_else(|error| panic!("occupying send failed: {error}"));
 
         let started = std::time::Instant::now();
-        enqueue_record(&sender, &metrics, sample_record(2), true);
+        enqueue_record(&sender, &metrics, sample_record(2), true, PRIORITY_ENQUEUE_TIMEOUT);
         let elapsed = started.elapsed();
 
         assert_eq!(metrics.enqueued.load(Ordering::Relaxed), 0);
@@ -402,7 +413,7 @@ mod tests {
         let metrics = WriterMetrics::default();
         metrics.queued_bytes.store(QUEUE_MAX_BYTES, Ordering::Relaxed);
 
-        enqueue_record(&sender, &metrics, sample_record(2), true);
+        enqueue_record(&sender, &metrics, sample_record(2), true, Duration::ZERO);
 
         assert_eq!(metrics.enqueued.load(Ordering::Relaxed), 0);
         assert_eq!(metrics.dropped.load(Ordering::Relaxed), 1);

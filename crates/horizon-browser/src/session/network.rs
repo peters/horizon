@@ -18,7 +18,6 @@ const MAX_HTTP_BODY_FLUSH_BATCHES: usize = 16;
 const MAX_PENDING_HTTP_BODIES: usize = 4_096;
 const NETWORK_BODY_BUFFER_BYTES: u32 = 5 * 1024 * 1024;
 const NETWORK_TOTAL_BUFFER_BYTES: u32 = 10 * 1024 * 1024;
-const NETWORK_POST_BUFFER_BYTES: u32 = 64 * 1024;
 
 impl DriverState {
     pub(super) fn network_action(
@@ -440,10 +439,11 @@ impl DriverState {
 }
 
 pub(super) fn network_enable_params() -> serde_json::Value {
+    // Omit maxPostDataSize: Network.enable also runs on every page attach
+    // for challenge-header observation, which must not retain POST bodies.
     serde_json::json!({
         "maxTotalBufferSize": NETWORK_TOTAL_BUFFER_BYTES,
         "maxResourceBufferSize": NETWORK_BODY_BUFFER_BYTES,
-        "maxPostDataSize": NETWORK_POST_BUFFER_BYTES,
     })
 }
 
@@ -487,10 +487,7 @@ mod tests {
             params["maxTotalBufferSize"].as_u64(),
             Some(u64::from(NETWORK_TOTAL_BUFFER_BYTES))
         );
-        assert_eq!(
-            params["maxPostDataSize"].as_u64(),
-            Some(u64::from(NETWORK_POST_BUFFER_BYTES))
-        );
+        assert!(params.get("maxPostDataSize").is_none());
     }
 
     #[test]
