@@ -32,6 +32,18 @@ pub(super) fn prepare(
 
 pub(super) fn reserve(parent: &Path, cancelled: &impl Fn() -> bool) -> Result<std::path::PathBuf, Error> {
     check_cancel(cancelled)?;
+    let _parent = private_parent(parent)?;
+    // Stable ancestry and exclusive same-user ownership are caller preconditions.
+    // Keep immediately: a failed seed is evidence, never an automatic recursive delete.
+    tempfile::Builder::new()
+        .prefix("repository-seed-")
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir_in(parent)
+        .map(tempfile::TempDir::keep)
+        .map_err(|_| Error::Storage)
+}
+
+pub(super) fn private_parent(parent: &Path) -> Result<SelectedRepositoryReader, Error> {
     if !parent.is_absolute() {
         return Err(Error::UnsafeParent);
     }
@@ -44,14 +56,7 @@ pub(super) fn reserve(parent: &Path, cancelled: &impl Fn() -> bool) -> Result<st
     {
         return Err(Error::UnsafeParent);
     }
-    // Stable ancestry and exclusive same-user ownership are caller preconditions.
-    // Keep immediately: a failed seed is evidence, never an automatic recursive delete.
-    tempfile::Builder::new()
-        .prefix("repository-seed-")
-        .permissions(fs::Permissions::from_mode(0o700))
-        .tempdir_in(parent)
-        .map(tempfile::TempDir::keep)
-        .map_err(|_| Error::Storage)
+    Ok(reader)
 }
 
 fn populate(
