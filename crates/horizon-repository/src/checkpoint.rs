@@ -18,6 +18,15 @@ struct Response {
 }
 
 pub(super) fn run(input: &mut impl Read, output: &mut impl Write, diagnostics: &mut impl Write) -> ExitCode {
+    run_with(input, output, diagnostics, |request| checkpoint_once(request, || false))
+}
+
+fn run_with(
+    input: &mut impl Read,
+    output: &mut impl Write,
+    diagnostics: &mut impl Write,
+    execute: impl FnOnce(&CheckpointRequest) -> Result<CheckpointGeneration, CheckpointFailure>,
+) -> ExitCode {
     let mut bytes = Vec::new();
     let request = input
         .take(REQUEST_LIMIT as u64 + 1)
@@ -36,7 +45,7 @@ pub(super) fn run(input: &mut impl Read, output: &mut impl Write, diagnostics: &
         retained: None,
         reason: None,
     };
-    let code = match request.and_then(|request| checkpoint_once(&request, || false)) {
+    let code = match request.and_then(|request| execute(&request)) {
         Ok(generation) => {
             response.generation = Some(generation);
             0
@@ -52,3 +61,6 @@ pub(super) fn run(input: &mut impl Read, output: &mut impl Write, diagnostics: &
     };
     super::write_response(&response, code, super::protocol::RESPONSE_LIMIT, output, diagnostics)
 }
+
+#[cfg(test)]
+mod tests;

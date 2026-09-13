@@ -47,6 +47,10 @@ caller's umask, as in the named receiver: their modes alone do not expose data
 through the verified private root. Accounting still rejects foreign ownership,
 devices, links, special nodes and set-id/sticky modes. It does not chmod retained
 data or change process-global umask; stable exclusive ownership remains required.
+Admission requires the pinned checkout and destination to share a kernel mount
+identity, not merely a device, and rejects overlapping descriptor ancestry before
+claiming anything. Bind aliases and unavailable mount identity fail closed; a
+separately mounted destination is not supported by this first implementation.
 
 ## Options considered
 
