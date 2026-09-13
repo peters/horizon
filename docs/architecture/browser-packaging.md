@@ -93,7 +93,9 @@ on #324, not this packaging record.
 On this head:
 
 - `cargo package -p horizon-browser-protocol --locked` succeeds. The archive
-  is README, `Cargo.toml`, `Cargo.lock`, and `src/*.rs`.
+  is README, `Cargo.toml`, `Cargo.lock`, `src/*.rs`, plus Cargo-generated
+  `Cargo.toml.orig` and `.cargo_vcs_info.json`. Use `cargo package --list`
+  for the exact inventory.
 - `cargo package -p horizon-browser --locked --no-verify` succeeds and does
   not include Horizon UI, MCP, CLI, core, or `scripts/browser-smoke`.
 - `cargo doc -p horizon-browser --no-deps` succeeds.
