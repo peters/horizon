@@ -40,6 +40,12 @@ the same file run in every matrix without Azure.
 6. **Explicit Stop** deallocates and verifies `PowerState/deallocated` within its
    deadline; inspect, a repeated Stop and `ensure_worker` all report the retained
    stop without creating.
+   **Check saved Stop** (`observe_worker_stop`, the read-only observation behind the
+   shared stop confirmation) is asked at every station with the persisted handle and
+   the attested pin: `Pending` while the worker runs and again after the start,
+   `RetainedStopped` after each stop (deallocated compute, the `worker-data` disk on
+   LUN 0 with `Detach`, the saved address) and `Absent` after the delete; at each
+   retained stop a pin naming another address is refused as an identity error.
 7. **Delete exactly the owned group**, then prove absence through the adapter
    (`inspect_worker` returns nothing) and through `az group exists` in the exercised
    subscription; a repeated delete is `AlreadyAbsent`. A failure anywhere between the
@@ -213,6 +219,35 @@ same identity (address and host key) and the retained data, is idempotent on a
 running worker, and never allocates. What it does not prove: anything about
 processes that were running before the stop, which do not survive a deallocation;
 and nothing here is the saved Shell task Start, which is a separate operation.
+
+## Check saved Stop (run 18, 2026-09-13)
+
+With the Azure `InteractiveWorkerStopObserver` (the read-only observation behind the
+shared "Check saved Stop" confirmation) the driver asks `observe_worker_stop` with the
+persisted handle and the attested pin at every station of the sequence above, and at
+each retained stop also with a pin naming another address. Run 18 passed end to end,
+same fixture and settings as above:
+
+| Step | Seconds after the driver started | Observation |
+| --- | --- | --- |
+| ready with attested host key, pinned SSH | 213.9, 214.7 | |
+| check while running | 233.1 | `Pending`; nothing mutated |
+| stop verified | 249.7 | 17 s |
+| check after the stop | 251.7 | `RetainedStopped`; a pin with another address refused as an identity error |
+| `start_worker` returned `Started`, `Ready` again | 330.9, 348.8 | 79 s and 97 s after the call, same endpoint and host key |
+| check after the start | 367.4 | `Pending` |
+| second stop verified | 383.8 | 16 s |
+| check after the second stop | 385.7 | `RetainedStopped`; moved-address pin refused |
+| deleted and gone | 631.7 | 246 s |
+| check after the delete | 632.4 | `Absent` |
+
+What this proves: on the real control plane a deallocated worker carries exactly the
+retained-disk shape the observer requires (`worker-data` on LUN 0 with `Detach`, under
+the worker's own group) and the saved address, so a saved Stop is confirmed only
+there; running, starting and deleted workers are reported as pending or absent, never
+as a retained stop; and the observation issues no mutation at any station. What it
+does not prove: the shared confirmation path calling this observer for Azure, which
+is wired by the lead lane.
 
 ## What this run does not prove
 
