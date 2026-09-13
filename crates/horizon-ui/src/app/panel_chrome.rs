@@ -7,7 +7,7 @@ use super::RenameEditAction;
 use super::speech::MicState;
 use super::util::{format_compact_count, short_session_id, usize_to_f32};
 
-use crate::text::truncate_chars;
+use crate::text::{single_line_label_job, truncate_chars};
 
 #[derive(Clone, Copy)]
 pub(super) struct PanelChrome<'a> {
@@ -502,22 +502,8 @@ fn paint_working_indicator(
 
 #[profiling::function]
 fn paint_truncated_title(painter: &egui::Painter, title: &str, x: f32, center_y: f32, max_width: f32, focused: bool) {
-    use egui::text::{LayoutJob, TextFormat, TextWrapping};
-
-    let mut job = LayoutJob::single_section(
-        title.to_string(),
-        TextFormat {
-            font_id: egui::FontId::proportional(13.0),
-            color: panel_title_color(focused),
-            ..Default::default()
-        },
-    );
-    job.wrap = TextWrapping {
-        max_width,
-        max_rows: 1,
-        break_anywhere: true,
-        overflow_character: Some('\u{2026}'),
-    };
+    let font = egui::FontId::proportional(13.0);
+    let job = single_line_label_job(title, &font, panel_title_color(focused), max_width);
     let galley = painter.layout_job(job);
     let text_height = galley.size().y;
     painter.galley(Pos2::new(x, center_y - text_height * 0.5), galley, Color32::TRANSPARENT);
