@@ -41,6 +41,10 @@ def podman_ok(version="4.9.0"):
     return {"stdout": version + "\n"}
 
 
+def podman_socket_ok(path="/run/podman/podman.sock"):
+    return {"stdout": path + "\n"}
+
+
 def nproc_fixture(cores="8"):
     return {"stdout": cores + "\n"}
 
@@ -127,10 +131,6 @@ class Harness(unittest.TestCase):
                 "no real subprocess allowed in unit tests"))
             patcher.start()
             self.addCleanup(patcher.stop)
-        sock = mock.patch.object(preflight, "existing_podman_socket",
-                                 return_value="/run/podman/podman.sock")
-        sock.start()
-        self.addCleanup(sock.stop)
         saved = {var: os.environ[var] for var in preflight.ENDPOINT_VARS if var in os.environ}
         for var in preflight.ENDPOINT_VARS:
             os.environ.pop(var, None)
@@ -150,12 +150,14 @@ class Harness(unittest.TestCase):
             for key, args in preflight.PROBE_ARGS.items():
                 args = list(args)
                 matches = list(argv) == args
-                if key in ("disk", "workspace_dir") and list(argv[:len(args)]) == args and len(argv) == len(args) + 1:
+                if key in ("disk", "workspace_dir", "podman_socket") and list(argv[:len(args)]) == args and len(argv) in (len(args), len(args) + 1):
                     matches = True
                 if key == "podman_info" and list(argv[:len(args)]) == args and list(argv[len(args)+1:]) == list(preflight.PROBE_ARGS["podman_info_tail"]):
                     matches = True
                 if matches:
                     entry = fixture.get(key)
+                    if entry is None and key == "podman_socket":
+                        return {"exit_code": 1, "stdout": "", "stderr": ""}
                     if entry is None and key == "workspace_dir":
                         target, problem = preflight.workspace_directory(argv[-1])
                         if problem:
@@ -228,6 +230,7 @@ class PreflightVerdicts(Harness):
         fixture.pop("docker_version")
         fixture.pop("docker_info")
         fixture.pop("docker_context", None)
+        fixture["podman_socket"] = podman_socket_ok()
         fixture["podman_info"] = podman_ok()
         code, report, _ = self.run_main(fixture)
         self.assertEqual(code, 0)
@@ -286,8 +289,7 @@ class EngineFailures(Harness):
         fixture.pop("docker_info")
         fixture.pop("docker_context", None)
         fixture["podman_info"] = podman_ok()
-        with mock.patch.object(preflight, "existing_podman_socket", return_value=None):
-            code, report, executor = self.run_main(fixture)
+        code, report, executor = self.run_main(fixture)
         self.assertEqual(code, 1)
         by_id = {check["id"]: check for check in report["checks"]}
         self.assertIn("podman local service is not running", by_id["container_engine"]["detail"])
@@ -298,6 +300,7 @@ class EngineFailures(Harness):
         fixture.pop("docker_version")
         fixture.pop("docker_info")
         fixture.pop("docker_context", None)
+        fixture["podman_socket"] = podman_socket_ok()
         fixture["podman_info"] = {"stdout": "\n"}
         code, report, _ = self.run_main(fixture)
         self.assertEqual(code, 1)
@@ -489,6 +492,7 @@ class EngineFailures(Harness):
 
     def test_workspace_helper_disables_bytecode(self):
         self.assertIn("-B", preflight.PROBE_ARGS["workspace_dir"])
+        self.assertIn("-B", preflight.PROBE_ARGS["podman_socket"])
 
     def test_bounded_communicate_kills_runaway_output(self):
         proc = self.real_popen(
@@ -505,12 +509,38 @@ class EngineFailures(Harness):
         fixture.pop("docker_version")
         fixture.pop("docker_info")
         fixture.pop("docker_context", None)
+        fixture["podman_socket"] = podman_socket_ok()
         fixture["podman_info"] = podman_ok()
         _, _, executor = self.run_main(fixture)
         self.assertIn(
             ["podman", "--remote=true", "--url", "unix:///run/podman/podman.sock",
              "info", "--format", "{{.Version.Version}}"],
             executor.seen)
+
+    def test_podman_socket_discovery_timeout_is_bounded(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture.pop("docker_version")
+        fixture.pop("docker_info")
+        fixture.pop("docker_context", None)
+        fixture["podman_socket"] = {"timeout": True}
+        code, report, executor = self.run_main(fixture)
+        self.assertEqual(code, 1)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertIn("timed out", by_id["container_engine"]["detail"])
+        self.assertFalse(any(argv and argv[0] == "podman" for argv in executor.seen))
+
+    def test_podman_socket_helper_rejects_unexpected_path(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture.pop("docker_version")
+        fixture.pop("docker_info")
+        fixture.pop("docker_context", None)
+        fixture["podman_socket"] = {"stdout": "/tmp/evil.sock\n"}
+        fixture["podman_info"] = podman_ok()
+        code, report, executor = self.run_main(fixture)
+        self.assertEqual(code, 1)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertIn("unexpected path", by_id["container_engine"]["detail"])
+        self.assertFalse(any(argv and argv[0] == "podman" for argv in executor.seen))
 
     def test_select_mount_point_does_not_realpath(self):
         with mock.patch.object(os.path, "realpath",
@@ -916,7 +946,7 @@ class RedactionAndDeterminism(Harness):
         fixture = dict(DEFAULT_FIXTURE)
         _, _, executor = self.run_main(fixture)
         allowed = [list(args) for args in preflight.PROBE_ARGS.values()]
-        extra_keys = ("disk", "workspace_dir", "podman_info")
+        extra_keys = ("disk", "workspace_dir", "podman_info", "podman_socket")
         for argv in executor.seen:
             skipped = False
             for key in extra_keys:
