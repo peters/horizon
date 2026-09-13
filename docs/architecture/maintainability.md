@@ -505,6 +505,18 @@ back into large multi-purpose modules.
   cannot introduce, resolve or erase the new destructive intent. Provider
   acceptance is not absence, and independent network storage is not implicitly
   deleted. Legacy cleanup phases remain separate from this explicit operation.
+  Its `configured` façade admits the exact named RunPod/Azure profile, retained
+  public request and immutable HPS/CPU binding before lazy credentials. Separate
+  Delete, Check and Retry entrypoints reuse the coordinator without SSH pins or
+  guest access. Provider calls are fenced against full snapshots and immutable
+  selections before completion CAS; tombstone checks do not construct a client.
+  Provider-specific admission leaves do not relax Stop/Start trust rules or add
+  UI, provisioning, storage discovery or independent-volume deletion authority.
+  RunPod lacks durable account binding: owned Present and acknowledged Delete from
+  the same operation's client are required for later Absent; failed/AlreadyAbsent
+  dispatch never qualifies. First Delete preflights before intent;
+  fresh Check/Retry bare absence stays unverified. This is a fail-closed fallback,
+  not lost-reply/restart recovery acceptance; that MVP gap still needs durable context.
 - `cloud_run/interactive_worker_stop.rs` is an opt-in Stop contract, separate from
   deletion and client lifetime. The local adapter's `local_docker/stop.rs` verifies
   exact ownership and disabled automatic removal before a bounded stop, then
