@@ -134,23 +134,22 @@ postcondition is.
 
 Two types, not one:
 
-- `CredentialStore` is persistence: `put`, `delete`, `contains`, and lock
-  detection. Those methods return success, failure, or presence. They never
-  return secret bytes.
-- `CredentialBroker` owns origin/frame/fingerprint checks and engine
-  dispatch. Lookup key is `(routine_id, slot)`. It calls
-  `fill_into(sink: &mut dyn FillSink)` where `FillSink` is implemented by the
-  browser engine. The store copies bytes into the sink inside that call; the
-  broker's caller still receives only success or a typed error.
+- `CredentialStore` is persistence. Its methods are `put`, `delete`,
+  `contains`, `is_locked`, and `fill_into(routine_id, slot, field, sink)`.
+  None of them return secret bytes. `fill_into` is the only path that copies
+  stored bytes, and it copies them only into the provided `FillSink`.
+- `CredentialBroker` owns origin/frame/fingerprint checks and is invoked
+  only from a runner-held routine lease. Lookup key is `(routine_id, slot)`.
+  After those checks it calls `CredentialStore::fill_into`. The broker's
+  caller still receives only success or a typed error.
 
-`FillSink` is the in-process boundary. Tests use a sink that records
-success/failure and drops bytes. There is no API that returns a `String`
-password to MCP, the compiler, or UI.
+`FillSink` is implemented by the browser engine. Tests use a sink that
+records success/failure and drops bytes. There is no API that returns a
+`String` password to MCP, the compiler, or UI. Generic `browser_act` callers
+cannot nominate a slot.
 
-Until the claimed additive MCP fill-by-slot change in
-[browser-routines.md](browser-routines.md) exists, no production path may
-copy a secret into `BrowserControlAction::Fill { value }` or into a plan
-variable.
+No production path may copy a secret into `BrowserControlAction::Fill { value }`
+or into a plan variable.
 
 Keep secret material scoped to the fill call. Clear reusable buffers where
 the platform API allows it. Do not log, `Debug`-print, or include the secret
@@ -201,7 +200,7 @@ values, cookies, profile files, or raw keyring payloads.
 
 The first credential code PR lands only:
 
-- the `CredentialStore` trait (no secret-returning methods)
+- the `CredentialStore` trait including `fill_into` (no secret-returning methods)
 - the `CredentialBroker` / `FillSink` seam with a fake store
 - origin-bound fill that returns success/failure
 - locked-store behaviour
@@ -225,13 +224,16 @@ prevent the site from seeing a password it just accepted.
 Horizon-controlled capture must not copy that plaintext into routine
 artifacts:
 
-- Do not take Horizon screenshots, CDP snapshots, `evaluate` dumps, or MCP
-  structured results during the fill window (from broker dispatch until the
-  fill postcondition is recorded).
+- From broker dispatch until a verified navigation leaves the filled
+  document, or an explicit field-clear postcondition holds, the routine run
+  keeps exclusive ownership. Agent steering, `browser_evaluate`, snapshots,
+  screenshots, and MCP structured results that could read the field are
+  blocked. Ending protection at the fill postcondition alone is not enough
+  while the value can still sit in the DOM.
 - The existing redacted audit continues to store character counts, not
   values.
-- After fill, Horizon still must not copy DOM values back into plans, drafts,
-  traces, reports, or exports.
+- Horizon still must not copy DOM values back into plans, drafts, traces,
+  reports, or exports.
 
 ## Invariants
 

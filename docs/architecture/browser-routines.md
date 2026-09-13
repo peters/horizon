@@ -178,7 +178,7 @@ printable CSS derived from a durable fingerprint candidate (`unique_id`,
 `test_id`, or reviewed `css_fallback`). `count` is 1..=3.
 
 ```text
-{ "type": "navigate", "url": "https://reports.example/app" }
+{ "type": "navigate", "navigation": <NavigationTemplate> }
 { "type": "click", "selector": "#generate", "count": 1 }
 { "type": "fill", "selector": "#month" }
 { "type": "credential_fill", "selector": "#password" }
@@ -190,10 +190,11 @@ printable CSS derived from a durable fingerprint candidate (`unique_id`,
 { "type": "handoff" }
 ```
 
-`scroll.selector` may be omitted for viewport scrolls. `navigate.url` is built
-from a [`NavigationTemplate`](#navigation-template), never from a redacted
-audit URL. `credential_fill` has no MCP mapping until the claimed fill-by-slot
-change; it is still a valid routine step.
+`scroll.selector` may be omitted for viewport scrolls. Navigate persists the
+[`NavigationTemplate`](#navigation-template); the runner builds the URL at
+each run from origin, path, and current non-secret variables. It never stores
+or replays a `redact_url` string. `credential_fill` is not an MCP tool (see
+compiler mapping).
 
 ## `Assertion`
 
@@ -238,14 +239,34 @@ Candidate preference order:
 | `frame` | `{ "top_level": bool, "origin": Origin, "chain": opaque frame ids }` |
 | `digest` | compact non-secret element fingerprint |
 
-`TargetCandidate` is `{ "kind": ..., "value": string, "reviewed": bool }`.
-`kind` is `role_name`, `label_control`, `test_id`, `unique_id`, `visible_text`,
-or `css_fallback`. Replay uses candidates in order and succeeds only when
-exactly one current match is compatible with `digest`. A weak or ambiguous
-match becomes `needs_reteach` and does not click.
+`TargetCandidate` is a tagged union. Multi-component kinds have explicit
+fields; `value` is only for scalar ids/CSS. Each string field is 1..=4 KiB
+printable. `reviewed` defaults to false.
+
+```text
+{ "kind": "role_name", "role": "button", "name": "Generate report", "reviewed": false }
+{ "kind": "label_control", "label": "Month", "control": "textbox", "reviewed": false }
+{ "kind": "test_id", "value": "row-save", "reviewed": false }
+{ "kind": "unique_id", "value": "generate", "reviewed": false }
+{ "kind": "visible_text", "text": "Save", "context": "row 3", "reviewed": false }
+{ "kind": "css_fallback", "value": "div > button", "reviewed": true }
+```
+
+Replay uses candidates in order and succeeds only when exactly one current
+match is compatible with `digest`. A weak or ambiguous match becomes
+`needs_reteach` and does not click.
 
 A frame target cannot inherit credential permission or `allowed_origins`
 membership from the top-level page. The frame's own origin is authoritative.
+
+Today's MCP `browser_snapshot` / `browser_query` / `browser_act` inspect only
+the top-level document and have no digest check. v1 MCP-emitted clicks and
+fills are therefore top-level, unique, selector-capable targets only
+(`unique_id`, `test_id`, or reviewed `css_fallback`). Nested-frame targets
+and digest-gated replay are recorded on the fingerprint and execute as
+`handoff` / `needs_reteach` until the Chromium resolver slice claims an
+engine-side fill/click-by-fingerprint. That is not a new agent-facing MCP
+tool.
 
 ## `ValueSource`
 
@@ -256,11 +277,15 @@ membership from the top-level page. The frame's own origin is authoritative.
 ```
 
 Ordinary fields default to `variable`. The user may explicitly choose
-`literal` for a non-sensitive remembered value. Password-like fields
-(`type=password`, password `autocomplete` tokens, or user-marked sensitive)
-become `credential_field` immediately and never `literal`. Username/email
-login fields become `variable` unless the user chose to remember them under
-the credential policy.
+`literal` for a non-sensitive remembered value.
+
+Password-like fields (`type=password`, password `autocomplete` tokens, or
+user-marked sensitive) never become `literal` or `variable`. If
+`credential_policy.mode` does not permit a password field (the default
+`none`, or `username_only`), the fill is compiled to `handoff` and later
+runs become `needs_login`. `credential_field` is emitted only after the user
+opts into a mode that permits that field. Username/email login fields stay
+`variable` unless the user chose to remember them.
 
 `literal` and `variable` values may appear in compiled MCP plans using the
 existing `Plan.variables` / `{"$var":"..."}` substitution. `credential_field`
@@ -295,8 +320,10 @@ teaching are dropped; they never become literals. If the route cannot run
 without a dropped secret parameter, the step is not auto-replayed
 (`needs_user` / reteach). Fragment follows the same rule via `fragment`.
 
-The compiler concatenates `origin` + `path` + substituted non-secret query
-pairs into `CompiledAction::navigate.url`.
+The persisted `RoutineStep` keeps this template on
+`CompiledAction::navigate`. The runner constructs and encodes the URL when
+each run starts, substituting current non-secret variables. `$var` is not
+applied as a substring inside a stored URL.
 
 ## Recording protocol
 
@@ -324,7 +351,7 @@ is controller work, not schema.
 
 A redaction pass refuses to serialize typed secrets. Tests must cover round
 trips, `deny_unknown_fields` drift, malformed input, and that password-shaped
-fields persist only as `credential_field` placeholders.
+fields persist as `credential_field` or `handoff`, never as a literal.
 
 ## Compiler mapping to MCP
 
@@ -342,15 +369,18 @@ choices to a validated list of MCP `PlanStep`s. It does not call a model.
 | back / forward / reload | `browser_act` | |
 | user handoff | `browser_handoff` | Login/MFA pauses. |
 
-Existing `browser_act` `fill` requires a `value` string. Credential fill
-therefore cannot use that path without placing a secret on the MCP wire. The
-credential execution slice must claim an additive MCP change: `fill` accepts
-either the existing `value` or `{ "credential_slot", "field" }`, mutually
-exclusive, and the engine fill never returns the secret. Until that claimed
-change lands, compiled plans keep the `credential_field` placeholder on the
-routine step and do not emit a `browser_act` fill for it.
+Existing `browser_act` `fill` requires a `value` string and is agent-facing.
+Credential fill must not be exposed as `browser_act` `{ credential_slot }` —
+any MCP caller who saw an exported slot UUID could then nominate a target.
+The runner instead holds a scoped capability created when it acquired the
+routine lease (`routine_id`, `plan_version`, profile lease). Only that
+capability may ask the engine to call `CredentialBroker`, which already
+knows the slot, allowed field, origins, and fingerprint. Generic
+`browser_*` calls cannot request credential fill.
 
-No other new MCP primitive is in scope for the first usable release.
+No new agent-facing MCP primitive is in scope for the first usable release.
+Engine-side click/fill-by-fingerprint (item 3) is a claimed
+`horizon-browser` change, not a second MCP contract.
 
 The compiler rejects: coordinate-only clicks; empty fingerprints; credential
 literals; a `credential_field` that does not match `credential_policy`;
