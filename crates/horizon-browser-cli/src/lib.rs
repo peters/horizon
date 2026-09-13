@@ -666,6 +666,7 @@ impl ExecutionReport {
         self.ok = false;
         self.error = Some(reason.message().to_string());
         self.stop_reason = Some(reason);
+        self.projection = None;
     }
 }
 
@@ -1068,13 +1069,13 @@ mod tests {
 
     #[test]
     fn interrupted_reports_omit_projection() {
-        let report = stopped_report(
-            vec![successful_step("panels", json!({"panels": []}))],
-            &ActionWaitStopped {
-                reason: ExecutionStopReason::Cancelled,
-                request_started: false,
-            },
-        );
+        let mut report = execution_report(true, vec![successful_step("panels", json!({"panels": []}))], None, None);
+        report.projection = Some(crate::project::ProjectionSummary {
+            format: crate::project::ProjectFormat::Json,
+            file: "projection.json".to_string(),
+            rows: 0,
+        });
+        report.stop(ExecutionStopReason::Cancelled);
         assert!(report.projection.is_none());
         assert_eq!(report.stop_reason, Some(ExecutionStopReason::Cancelled));
     }

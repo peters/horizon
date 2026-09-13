@@ -371,7 +371,7 @@ impl DurableRun {
     /// # Errors
     /// Returns when either terminal artifact cannot be atomically persisted.
     pub fn finish(&mut self, execution: &ExecutionReport) -> Result<(), RunStateError> {
-        self.clear_projection_files();
+        self.clear_projection_files()?;
         if execution.projection.is_some() {
             let plan = self.load_plan().map_err(|error| {
                 io_error(
@@ -402,6 +402,7 @@ impl DurableRun {
     /// # Errors
     /// Returns when the failed state cannot be atomically persisted.
     pub fn fail(&mut self, error: &str) -> Result<(), RunStateError> {
+        self.clear_projection_files()?;
         self.state.status = RunStatus::Failed;
         self.state.updated_at_millis = now_millis();
         self.state.error = Some(error.to_string());
@@ -413,6 +414,7 @@ impl DurableRun {
     /// # Errors
     /// Returns when the stopped state cannot be atomically persisted.
     pub fn stop(&mut self, reason: ExecutionStopReason) -> Result<(), RunStateError> {
+        self.clear_projection_files()?;
         self.state.status = match reason {
             ExecutionStopReason::Cancelled => RunStatus::Cancelled,
             ExecutionStopReason::DeadlineExceeded => RunStatus::TimedOut,
@@ -557,6 +559,12 @@ impl DurableRun {
         self.state.updated_at_millis = now_millis();
         self.state.runner_pid = std::process::id();
         self.state.report_file = None;
+        if let Err(source) = self.clear_projection_files() {
+            return Err(DurableRearmError {
+                run: Box::new(self),
+                source,
+            });
+        }
         self.state.completed_steps = self.state.checkpoint.completed.len();
         self.state.error = None;
         if let Some(step_id) = skipped {
@@ -741,9 +749,17 @@ impl DurableRun {
         write_private_json(&self.directory.join(name), value, artifact)
     }
 
-    fn clear_projection_files(&self) {
-        let _ = std::fs::remove_file(self.directory.join("projection.json"));
-        let _ = std::fs::remove_file(self.directory.join("projection.csv"));
+    fn clear_projection_files(&self) -> Result<(), RunStateError> {
+        for name in ["projection.json", "projection.csv"] {
+            match std::fs::remove_file(self.directory.join(name)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(io_error(format!("could not remove {name}"), error));
+                }
+            }
+        }
+        Ok(())
     }
 }
 
