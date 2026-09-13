@@ -371,6 +371,16 @@ impl DurableRun {
     /// # Errors
     /// Returns when either terminal artifact cannot be atomically persisted.
     pub fn finish(&mut self, execution: &ExecutionReport) -> Result<(), RunStateError> {
+        if execution.projection.is_some() {
+            let plan = self.load_plan().map_err(|error| {
+                io_error(
+                    "could not load plan for projection".to_string(),
+                    std::io::Error::other(error.to_string()),
+                )
+            })?;
+            crate::project::persist(&self.directory, &plan, &execution.steps)
+                .map_err(|error| io_error("could not write projection".to_string(), std::io::Error::other(error)))?;
+        }
         self.write_json(REPORT_FILE, &self.report(execution), "report")?;
         self.state.status = match execution.stop_reason {
             Some(ExecutionStopReason::Cancelled) => RunStatus::Cancelled,
@@ -984,11 +994,13 @@ mod tests {
     fn plan() -> Plan {
         Plan {
             version: 1,
+            variables: std::collections::BTreeMap::new(),
             steps: vec![PlanStep {
                 id: "panels".to_string(),
                 tool: "browser_list".to_string(),
                 arguments: serde_json::Map::new(),
             }],
+            project: None,
         }
     }
 
@@ -1002,6 +1014,7 @@ mod tests {
             error: None,
             stop_reason: None,
             observability: ObservabilitySummary::default(),
+            projection: None,
         }
     }
 
@@ -1053,6 +1066,7 @@ mod tests {
             error: None,
             stop_reason: None,
             observability: ObservabilitySummary::default(),
+            projection: None,
         };
         run.finish(&report).expect("finish durable run");
         let succeeded: RunState = serde_json::from_slice(&std::fs::read(&run.state_path).expect("terminal state"))
@@ -1535,6 +1549,7 @@ mod tests {
     fn two_step_plan() -> Plan {
         Plan {
             version: 1,
+            variables: std::collections::BTreeMap::new(),
             steps: vec![
                 PlanStep {
                     id: "list".to_string(),
@@ -1547,6 +1562,7 @@ mod tests {
                     arguments: serde_json::Map::new(),
                 },
             ],
+            project: None,
         }
     }
 

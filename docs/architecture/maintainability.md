@@ -617,6 +617,8 @@ back into large multi-purpose modules.
 - `standalone/lease.rs` records keep-alive host identity, process-start identity,
   and creation order so resume can reconnect to the newest live browser or fail
   closed after a crash or PID reuse.
+- `variables.rs` validates bounded plan literals; `project.rs` writes optional
+  JSON/CSV projections of prior structured results.
 
 ### `horizon-ui`
 

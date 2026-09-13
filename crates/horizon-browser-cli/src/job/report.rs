@@ -329,7 +329,15 @@ impl JobTrace {
                 }
             })
             .collect();
-        (Plan { version: 1, steps }, self.replayable)
+        (
+            Plan {
+                version: 1,
+                variables: std::collections::BTreeMap::new(),
+                steps,
+                project: None,
+            },
+            self.replayable,
+        )
     }
 }
 

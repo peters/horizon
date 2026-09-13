@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "variables": {
+    "url": "https://example.com",
+    "expression": "Array.from(document.querySelectorAll('a'), (node) => ({ title: node.textContent.trim(), href: node.href })).filter((row) => row.title && row.href).slice(0, 20)"
+  },
+  "steps": [
+    {
+      "id": "panels",
+      "tool": "browser_list"
+    },
+    {
+      "id": "open",
+      "tool": "browser_navigate",
+      "arguments": {
+        "panel_id": { "$ref": "panels#/panels/0/panel_id" },
+        "url": { "$var": "url" }
+      }
+    },
+    {
+      "id": "ready",
+      "tool": "browser_wait",
+      "arguments": {
+        "panel_id": { "$ref": "panels#/panels/0/panel_id" },
+        "selector": "body",
+        "state": "present"
+      }
+    },
+    {
+      "id": "links",
+      "tool": "browser_evaluate",
+      "arguments": {
+        "panel_id": { "$ref": "panels#/panels/0/panel_id" },
+        "expression": { "$var": "expression" }
+      }
+    }
+  ],
+  "project": {
+    "format": "csv",
+    "from": { "$ref": "links#/value" },
+    "columns": ["title", "href"]
+  }
+}
