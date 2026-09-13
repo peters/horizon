@@ -3,6 +3,7 @@ use egui::{
 };
 
 use crate::app::util::usize_to_f32;
+use crate::badge::{BadgeStyle, paint_badge};
 use crate::text::truncate_chars;
 use crate::theme;
 
@@ -249,12 +250,15 @@ pub(super) fn render_toggle_button(ui: &mut egui::Ui, label: &str, active: bool,
     let size = Vec2::new(estimate_text_width(label, 11.0) + 14.0, 22.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
 
-    ui.painter().rect_filled(rect, CornerRadius::same(5), bg);
-    ui.painter().rect_stroke(
+    paint_badge(
+        ui.painter(),
         rect,
-        CornerRadius::same(5),
-        Stroke::new(0.5_f32, theme::alpha(theme::BORDER_SUBTLE(), 180)),
-        StrokeKind::Inside,
+        BadgeStyle {
+            radius: 5,
+            fill: bg,
+            stroke: Stroke::new(0.5_f32, theme::alpha(theme::BORDER_SUBTLE(), 180)),
+            stroke_kind: StrokeKind::Inside,
+        },
     );
     ui.painter().text(
         rect.center(),

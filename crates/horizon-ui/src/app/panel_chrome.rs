@@ -7,6 +7,7 @@ use super::RenameEditAction;
 use super::speech::MicState;
 use super::util::{format_compact_count, short_session_id, usize_to_f32};
 
+use crate::badge;
 use crate::text::{single_line_label_job, truncate_chars};
 
 #[derive(Clone, Copy)]
@@ -513,22 +514,21 @@ fn paint_truncated_title(painter: &egui::Painter, title: &str, x: f32, center_y:
 /// panel, styled after the history meter badge.
 #[profiling::function]
 fn paint_session_badge(painter: &egui::Painter, badge_rect: Rect, accent: Color32, session_id: &str, focused: bool) {
-    painter.rect_filled(
+    badge::paint_badge(
+        painter,
         badge_rect,
-        CornerRadius::same(4),
-        theme::alpha(
-            theme::blend(theme::BG_ELEVATED(), accent, 0.10),
-            if focused { 200 } else { 160 },
-        ),
-    );
-    painter.rect_stroke(
-        badge_rect,
-        CornerRadius::same(4),
-        Stroke::new(
-            1.0_f32,
-            theme::alpha(theme::blend(theme::BORDER_SUBTLE(), accent, 0.34), 150),
-        ),
-        StrokeKind::Inside,
+        badge::BadgeStyle {
+            radius: 4,
+            fill: theme::alpha(
+                theme::blend(theme::BG_ELEVATED(), accent, 0.10),
+                if focused { 200 } else { 160 },
+            ),
+            stroke: Stroke::new(
+                1.0_f32,
+                theme::alpha(theme::blend(theme::BORDER_SUBTLE(), accent, 0.34), 150),
+            ),
+            stroke_kind: StrokeKind::Inside,
+        },
     );
     painter.text(
         badge_rect.center(),

@@ -1,10 +1,9 @@
 use std::{cmp::Ordering, collections::HashMap, f32::consts::FRAC_PI_2, sync::Arc};
 
-use egui::{
-    Align2, Color32, CornerRadius, FontId, Galley, Painter, Pos2, Rect, Stroke, StrokeKind, Vec2, epaint::TextShape,
-};
+use egui::{Align2, Color32, FontId, Galley, Painter, Pos2, Rect, Stroke, Vec2, epaint::TextShape};
 use horizon_core::WorkspaceId;
 
+use crate::badge::{BadgeStyle, paint_badge};
 use crate::{text::single_line_label_job, theme};
 
 use super::{
@@ -326,13 +325,19 @@ fn resolve_label_rect(base_rect: Rect, workspace_rect: Rect, occupied: &[Rect]) 
 }
 
 fn paint_label_badge(painter: &Painter, rect: Rect, color: Color32, is_active: bool) {
-    let fill = theme::alpha(
-        theme::blend(theme::BG_ELEVATED(), color, if is_active { 0.24 } else { 0.14 }),
-        236,
+    paint_badge(
+        painter,
+        rect,
+        BadgeStyle {
+            radius: 4,
+            fill: theme::alpha(
+                theme::blend(theme::BG_ELEVATED(), color, if is_active { 0.24 } else { 0.14 }),
+                236,
+            ),
+            stroke: Stroke::new(1.0_f32, theme::alpha(color, if is_active { 210 } else { 140 })),
+            stroke_kind: egui::StrokeKind::Outside,
+        },
     );
-    let stroke = Stroke::new(1.0_f32, theme::alpha(color, if is_active { 210 } else { 140 }));
-    painter.rect_filled(rect, CornerRadius::same(4), fill);
-    painter.rect_stroke(rect, CornerRadius::same(4), stroke, StrokeKind::Outside);
 }
 
 fn label_text_color(is_active: bool) -> Color32 {
