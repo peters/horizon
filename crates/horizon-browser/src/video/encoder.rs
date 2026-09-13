@@ -26,9 +26,17 @@ const STATE_STOPPED: u8 = 3;
 
 #[derive(Debug)]
 pub(super) enum EncoderCommand {
-    Pause { requested_at: Instant },
-    Resume { requested_at: Instant },
-    Stop,
+    Pause {
+        requested_at: Instant,
+        ack: mpsc::Sender<bool>,
+    },
+    Resume {
+        requested_at: Instant,
+        ack: mpsc::Sender<bool>,
+    },
+    Stop {
+        requested_at: Instant,
+    },
 }
 
 #[derive(Debug)]
@@ -200,6 +208,20 @@ impl EncoderThread {
         }
     }
 
+    pub(super) fn request_pause(&self, requested_at: Instant) -> bool {
+        self.request_ack(|ack| EncoderCommand::Pause { requested_at, ack })
+    }
+
+    pub(super) fn request_resume(&self, requested_at: Instant) -> bool {
+        self.request_ack(|ack| EncoderCommand::Resume { requested_at, ack })
+    }
+
+    fn request_ack(&self, command: impl FnOnce(mpsc::Sender<bool>) -> EncoderCommand) -> bool {
+        let (ack_tx, ack_rx) = mpsc::channel();
+        self.send(command(ack_tx));
+        ack_rx.recv() == Ok(true)
+    }
+
     pub(super) fn snapshot(&self, state: BrowserVideoState) -> BrowserVideoCapture {
         let mut capture = self.handle.snapshot().unwrap_or_else(|| BrowserVideoCapture {
             capture_id: String::new(),
@@ -227,32 +249,10 @@ impl EncoderThread {
         self.thread.as_ref().is_some_and(std::thread::JoinHandle::is_finished)
     }
 
-    pub(super) fn wait_until_paused(&self, timeout: Duration) -> bool {
-        self.wait_for_state(STATE_PAUSED, timeout)
-    }
-
-    pub(super) fn wait_until_recording(&self, timeout: Duration) -> bool {
-        self.wait_for_state(STATE_RECORDING, timeout)
-    }
-
-    fn wait_for_state(&self, want: u8, timeout: Duration) -> bool {
-        let deadline = Instant::now() + timeout;
-        loop {
-            if self.handle.state.load(Ordering::Relaxed) == want {
-                return true;
-            }
-            if self.is_finished() {
-                return false;
-            }
-            if Instant::now() >= deadline {
-                return false;
-            }
-            std::thread::sleep(Duration::from_millis(2));
-        }
-    }
-
     pub(super) fn finish(mut self) -> io::Result<BrowserVideoCapture> {
-        self.send(EncoderCommand::Stop);
+        self.send(EncoderCommand::Stop {
+            requested_at: Instant::now(),
+        });
         self.sender.take();
         let joined = self.thread.take().map(|thread| {
             thread
@@ -272,7 +272,9 @@ impl EncoderThread {
 
 impl Drop for EncoderThread {
     fn drop(&mut self) {
-        self.send(EncoderCommand::Stop);
+        self.send(EncoderCommand::Stop {
+            requested_at: Instant::now(),
+        });
         self.sender.take();
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
@@ -346,6 +348,9 @@ impl EncodeSession {
                 break Ok(());
             }
         };
+        if self.paused_at.is_none() {
+            self.freeze_elapsed(Instant::now());
+        }
         let finish_result = self.finish_file();
         self.handle.set_state(STATE_STOPPED);
         match (run_result, finish_result) {
@@ -359,13 +364,21 @@ impl EncodeSession {
 
     fn drain_commands(&mut self) -> bool {
         match self.commands.try_recv() {
-            Ok(EncoderCommand::Stop) | Err(mpsc::TryRecvError::Disconnected) => false,
-            Ok(EncoderCommand::Pause { requested_at }) => {
+            Ok(EncoderCommand::Stop { requested_at }) => {
+                self.freeze_elapsed(requested_at);
+                false
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.freeze_elapsed(Instant::now());
+                false
+            }
+            Ok(EncoderCommand::Pause { requested_at, ack }) => {
                 if !self.paused {
                     if let Some(encoder) = self.encoder.as_mut() {
                         if let Err(error) = encoder.flush_cluster() {
                             self.handle.encoder_failed.store(true, Ordering::Relaxed);
                             tracing::warn!(target: "browser", "failed to flush video cluster on pause: {error}");
+                            let _ = ack.send(false);
                             return false;
                         }
                         if let Some(bytes) = encoder.bytes_written() {
@@ -376,9 +389,10 @@ impl EncodeSession {
                     self.paused_at = Some(clamp_command_instant(requested_at, self.started));
                     self.handle.set_state(STATE_PAUSED);
                 }
+                let _ = ack.send(true);
                 true
             }
-            Ok(EncoderCommand::Resume { requested_at }) => {
+            Ok(EncoderCommand::Resume { requested_at, ack }) => {
                 if self.paused {
                     self.paused = false;
                     if let Some(at) = self.paused_at.take() {
@@ -388,10 +402,21 @@ impl EncodeSession {
                     self.next_tick = Instant::now();
                     self.handle.set_state(STATE_RECORDING);
                 }
+                let _ = ack.send(true);
                 true
             }
             Err(mpsc::TryRecvError::Empty) => true,
         }
+    }
+
+    fn freeze_elapsed(&mut self, requested_at: Instant) {
+        if !self.paused {
+            self.paused_at = Some(clamp_command_instant(requested_at, self.started));
+        }
+        self.handle.elapsed_millis.store(
+            elapsed_millis(self.started, self.paused_total, self.paused_at),
+            Ordering::Relaxed,
+        );
     }
 
     fn wait_for_tick(&mut self) -> bool {
@@ -401,7 +426,7 @@ impl EncodeSession {
             return false;
         }
         let fps = self.options.fps.max(1);
-        let interval = Duration::from_millis(1_000 / u64::from(fps));
+        let interval = Duration::from_nanos(1_000_000_000 / u64::from(fps));
         while self.next_tick + interval <= Instant::now() {
             self.handle.frames_dropped.fetch_add(1, Ordering::Relaxed);
             self.tick += 1;
@@ -768,11 +793,7 @@ mod tests {
         let requested_at = Instant::now()
             .checked_sub(Duration::from_millis(400))
             .unwrap_or_else(Instant::now);
-        thread.send(EncoderCommand::Pause { requested_at });
-        assert!(
-            thread.wait_until_paused(Duration::from_secs(8)),
-            "encoder did not acknowledge pause"
-        );
+        assert!(thread.request_pause(requested_at), "encoder did not acknowledge pause");
         let capture = handle.snapshot().unwrap_or_else(|| panic!("paused capture missing"));
         assert_eq!(capture.state, BrowserVideoState::Paused);
         let wall = u64::try_from(system_now_millis().saturating_sub(capture.started_at_millis).max(0)).unwrap_or(0);
@@ -783,5 +804,44 @@ mod tests {
             wall
         );
         let _ = thread.finish();
+    }
+
+    #[test]
+    fn stop_elapsed_uses_the_request_timestamp() {
+        let root = tempfile::tempdir().unwrap_or_else(|error| panic!("tempdir failed: {error}"));
+        let slot = Arc::new(FrameSlot::new());
+        slot.store_test_rgb(64, 64, solid_rgb(0, 255, 0));
+        let handle = Arc::new(VideoCaptureHandle::default());
+        let options = BrowserVideoCaptureOptions {
+            fps: 5,
+            compression_level: 0,
+            max_width: 320,
+            max_file_bytes: 4 * 1024 * 1024,
+            ..BrowserVideoCaptureOptions::default()
+        };
+        let thread = EncoderThread::start(root.path(), "stop-ts", Arc::clone(&slot), options, Arc::clone(&handle))
+            .unwrap_or_else(|error| panic!("start encoder: {error}"));
+        let ready = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < ready {
+            if handle.snapshot().is_some_and(|capture| capture.frames_encoded >= 1) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let requested_at = Instant::now()
+            .checked_sub(Duration::from_millis(400))
+            .unwrap_or_else(Instant::now);
+        thread.send(EncoderCommand::Stop { requested_at });
+        let capture = thread
+            .finish()
+            .unwrap_or_else(|error| panic!("finish encoder: {error}"));
+        assert_eq!(capture.state, BrowserVideoState::Stopped);
+        let wall = u64::try_from(system_now_millis().saturating_sub(capture.started_at_millis).max(0)).unwrap_or(0);
+        assert!(
+            wall.saturating_sub(capture.elapsed_millis) >= 200,
+            "elapsed should freeze at the backdated stop request (elapsed={} wall={})",
+            capture.elapsed_millis,
+            wall
+        );
     }
 }

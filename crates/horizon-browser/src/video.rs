@@ -6,10 +6,10 @@ mod muxer;
 
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
+use encoder::EncoderThread;
 pub use encoder::VideoCaptureHandle;
-use encoder::{EncoderCommand, EncoderThread};
 
 use crate::frames::FrameSlot;
 use crate::{
@@ -18,7 +18,6 @@ use crate::{
 };
 
 const MAX_CAPTURE_ID_BYTES: usize = 96;
-const COMMAND_ACK_TIMEOUT: Duration = Duration::from_secs(8);
 
 #[derive(Clone, Copy)]
 pub(crate) struct VideoCaptureHost<'a> {
@@ -134,10 +133,7 @@ impl VideoCaptureState {
             let active = self.active.as_ref().ok_or_else(|| {
                 BrowserControlFailure::new("capture_not_started", "no browser video capture has been started")
             })?;
-            active.thread.send(EncoderCommand::Pause {
-                requested_at: Instant::now(),
-            });
-            active.thread.wait_until_paused(COMMAND_ACK_TIMEOUT)
+            active.thread.request_pause(Instant::now())
         };
         if !acknowledged {
             self.reconcile();
@@ -157,10 +153,7 @@ impl VideoCaptureState {
             let active = self.active.as_ref().ok_or_else(|| {
                 BrowserControlFailure::new("capture_not_started", "no browser video capture has been started")
             })?;
-            active.thread.send(EncoderCommand::Resume {
-                requested_at: Instant::now(),
-            });
-            active.thread.wait_until_recording(COMMAND_ACK_TIMEOUT)
+            active.thread.request_resume(Instant::now())
         };
         if !acknowledged {
             self.reconcile();

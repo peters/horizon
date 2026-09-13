@@ -32,15 +32,15 @@ pub(crate) struct VideoInput {
     pub(crate) panel_id: String,
     /// Start a new `WebM` recording, pause, resume, inspect, or stop and finalize it.
     operation: VideoOperation,
-    /// Visual quality 1-100 (default 70). Start only.
+    /// Visual quality 1-100. Start only; omit to keep the host `browser.video` setting.
     quality: Option<u32>,
-    /// Compression effort 0-10 (default 4; 0 is fastest/largest). Start only.
+    /// Compression effort 0-10 (0 is fastest/largest). Start only; omit to keep the host `browser.video` setting.
     compression_level: Option<u32>,
-    /// Target frames per second 1-30 (default 10). Start only.
+    /// Target frames per second 1-30. Start only; omit to keep the host `browser.video` setting.
     fps: Option<u32>,
-    /// Longest encoded side in pixels 320-1920 (default 1280). Start only.
+    /// Longest encoded side in pixels 320-1920. Start only; omit to keep the host `browser.video` setting.
     max_width: Option<u32>,
-    /// Maximum `WebM` file size in bytes (default 536870912, minimum 4096, maximum 1073741824). Start only.
+    /// Maximum `WebM` file size in bytes (minimum 4096, maximum 1073741824). Start only; omit to keep the host `browser.video` setting.
     max_file_bytes: Option<u64>,
     /// Per-action timeout in milliseconds (1-60000).
     pub(crate) timeout_millis: Option<u64>,
@@ -122,15 +122,20 @@ impl VideoOutput {
             encoder_failed: capture.encoder_failed,
             started_at_millis: capture.started_at_millis,
             elapsed_millis: capture.elapsed_millis,
-            next_step: match capture.state {
-                BrowserVideoState::Recording => {
-                    "Call browser_video pause or stop; inspect status for elapsed time and file size.".to_string()
-                }
-                BrowserVideoState::Paused => {
-                    "Call browser_video resume to continue or stop to finalize this WebM.".to_string()
-                }
-                BrowserVideoState::Stopped => {
-                    "The WebM is finalized; inspect this exact path with a player or read-only tool.".to_string()
+            next_step: if capture.encoder_failed {
+                "The encoder failed; this WebM may be incomplete and should not be treated as a successful export."
+                    .to_string()
+            } else {
+                match capture.state {
+                    BrowserVideoState::Recording => {
+                        "Call browser_video pause or stop; inspect status for elapsed time and file size.".to_string()
+                    }
+                    BrowserVideoState::Paused => {
+                        "Call browser_video resume to continue or stop to finalize this WebM.".to_string()
+                    }
+                    BrowserVideoState::Stopped => {
+                        "The WebM is finalized; inspect this exact path with a player or read-only tool.".to_string()
+                    }
                 }
             },
         }
@@ -172,5 +177,29 @@ mod tests {
             timeout_millis: None,
         };
         assert!(input.build_action().is_err());
+    }
+
+    #[test]
+    fn failed_stop_does_not_present_the_webm_as_finalized() {
+        let capture = BrowserVideoCapture {
+            capture_id: "capture".to_string(),
+            path: "/tmp/failed.webm".to_string(),
+            state: BrowserVideoState::Stopped,
+            active: false,
+            width: 16,
+            height: 16,
+            fps: 5,
+            frames_encoded: 0,
+            frames_dropped: 0,
+            frames_repeated: 0,
+            bytes_written: 12,
+            file_limit_reached: false,
+            encoder_failed: true,
+            started_at_millis: 0,
+            elapsed_millis: 0,
+        };
+        let output = VideoOutput::new("panel".to_string(), "action".to_string(), capture);
+        assert!(output.encoder_failed);
+        assert!(output.next_step.contains("incomplete"));
     }
 }
