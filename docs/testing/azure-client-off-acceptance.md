@@ -134,6 +134,7 @@ gives A no identity today, so before the product pass A needs, in this order:
    Microsoft.Network/networkInterfaces/join/action
    Microsoft.Network/networkSecurityGroups/read
    Microsoft.Network/networkSecurityGroups/write
+   Microsoft.Network/networkSecurityGroups/securityRules/write
    Microsoft.Network/networkSecurityGroups/join/action
    Microsoft.Network/virtualNetworks/read
    Microsoft.Network/virtualNetworks/write
@@ -157,7 +158,9 @@ gives A no identity today, so before the product pass A needs, in this order:
    disk, the public IP, the NIC, the security group and the virtual network with
    its inline `workers` subnet (the subnet is created and, on a setup retry,
    updated as part of the VNet write, and Azure authorizes that child write as
-   `subnets/write`, so it is listed); the security group is attached
+   `subnets/write`, so it is listed); the security group is created with its
+   inline `worker-ssh` rule, whose child write Azure authorizes separately as
+   `securityRules/write`; the security group is attached
    to that subnet, which needs `networkSecurityGroups/join/action`, and the NIC
    references only the public IP and that child subnet, which needs
    `publicIPAddresses/join/action`, `subnets/join/action` and the child
@@ -630,8 +633,20 @@ back unchanged at return and after the worker lifecycle step.
    reports either an unverified Start or the loss of the local completion (`The
    Start could not finish locally. Refresh saved inventory; if Start intent
    remains, press Start again.`) is **Start environment…** pressed again (the retry
-   reuses the saved intent and never re-posts a running worker); an identity,
-   absence or authorization error is never retried, and a row at `Reconciling` is
+   reuses the saved intent and never re-posts a running worker). The product
+   collapses provider and ARM failures, an expired token among them, into the same
+   unverified notice, so the notice alone cannot separate a lost result from a
+   denied one; before every retry the operator classifies out of band: on the
+   controller `az vm show --subscription <id> --ids <B's VM ID> --query
+   '{vmId:vmId, power:instanceView.statuses[?starts_with(code, `PowerState/`)].code | [0]}'`
+   must return the recorded `instance_id` and a power state (`deallocated`,
+   `starting` or `running`), and on A the token probe from prerequisite 2 must
+   still print an expiry; a missing or replaced VM, or a failed probe, ends the
+   retries as a non-retryable outcome. Retries are budgeted: at most three presses
+   in total, each only after the previous result has been reloaded, and none once
+   the clock is past the gate above (the deadline minus 135 minutes), because every
+   press can spend the 5-minute Start bound and up to 300 s of readiness. An
+   identity or absence result is never retried, and a row at `Reconciling` is
    never retried. The reads below happen only after this run's own Start has
    succeeded and the reloaded row shows `Reconciling`; after a non-retryable Start
    outcome, or a retry budget exhausted at `Start requested (saved)`, retention is
@@ -681,7 +696,19 @@ back unchanged at return and after the worker lifecycle step.
    key under the pinned host key (an answer means it is still authorized; a transport
    failure or a reader answering with nothing proves nothing and the removal stays
    unproven); like cleanup it also runs after the manifest deadline. A worker restart drops the line as well (the entrypoint rewrites
-   the file), but the run does not rely on that.
+   the file), but the run does not rely on that. The command first
+   attests a running B, so it cannot run when step 7 ended with B deallocated (a
+   successful Stop followed by a failed or exhausted Start). Nothing restarts B
+   outside the product to make it runnable: in that state the operator destroys
+   the observer private key on the controller (`shred -u observer.key`, the only
+   copy; the public half is inert without it) and records that, so the retained
+   `authorized_keys` line can no longer be exercised by anyone, and proceeds to
+   step 9, which deletes the group and the disk holding that line. If step 9 is
+   refused, fails or runs out of time with B still deallocated, the run is
+   reported with that residual (a deallocated VM whose retained disk holds an
+   inert observer line that the entrypoint rewrites on the next container start)
+   and the group is handed to the lead on #474 for removal; the run is not
+   reported clean.
 9. **Cleanup**: `client_off.py --manifest m.json cleanup --groups-before groups.json
    --resources-before resources.json --created created-groups.json`. Runs under one
    20-minute bound (every ARM call is handed what is left of it; the manifest margin
