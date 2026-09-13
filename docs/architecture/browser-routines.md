@@ -133,11 +133,14 @@ JSON object, `schema_version` 1, `deny_unknown_fields`:
 | `steps` | array of `RoutineStep` | Reviewed compiler output. |
 | `completion_assertions` | array of `Assertion` | At least one user-marked final outcome. Empty is malformed. |
 | `plan_version` | `u32` | Increments on every reviewed save. Resume binds to this exact value. |
+| `verified_plan_version` | `u32` or omitted | Set only after a verification run of that exact version succeeded. `ready` is derived from `verified_plan_version == plan_version`. An edit that bumps `plan_version` returns the routine to `draft`. |
 | `created_at` / `updated_at` | RFC 3339 timestamps | |
 
-`credential_policy` is `{ "mode": ..., "slot": <uuid> | omitted }`. `mode` is
-one of `none` (default), `username_only`, or `username_and_password`. `slot`
-is present only when the user opted in. The policy never contains a secret.
+`credential_policy` is `{ "mode": ..., "slot": <uuid> | omitted, "allowed_origins": [...] }`.
+`mode` is one of `none` (default), `username_only`, or `username_and_password`.
+`slot` is present only when the user opted in. `allowed_origins` is the
+login-form allowlist used by the broker; it is not the routine-wide
+navigation origin list. The policy never contains a secret.
 
 Every `credential_field` on this routine must use exactly `credential_policy.slot`.
 `none` forbids any credential field. `username_only` permits `username` only.
@@ -158,7 +161,7 @@ explicitly choose to remember.
 | `target_fingerprint` | `TargetFingerprint` or omitted | Required for click/fill/targeted scroll. |
 | `precondition` | `Assertion` | Observed before dispatch during teaching. |
 | `action` | `CompiledAction` | Tagged union below. |
-| `value_source` | `ValueSource` or omitted | Fill/select only. |
+| `value_source` | `ValueSource` or omitted | Required on `fill` and `credential_fill`. Generic `fill` allows only `literal` or `variable`. `credential_fill` allows only `credential_field`. Other pairings are malformed. |
 | `postcondition` | `Assertion` | Observed after the demonstration step. |
 | `mutation_class` | enum | `read_only`, `idempotent`, `mutating`, `consequential`. |
 | `resume_policy` | enum | `retry_if_idempotent` or `never_replay_if_uncertain`. |
@@ -318,11 +321,15 @@ Navigate actions carry a separate `navigation` object:
 ```
 
 `origin` is an exact origin as defined above. `path` is 1..=8 KiB, starts with
-`/`, and has no query or fragment. Each `query` entry maps a parameter name to
-a non-secret `literal` or `variable`. Secret query values observed while
-teaching are dropped; they never become literals. If the route cannot run
-without a dropped secret parameter, the step is not auto-replayed
-(`needs_user` / reteach). Fragment follows the same rule via `fragment`.
+`/`, and has no query or fragment. Path segments that look like access tokens
+(long unguessable values, `token`, `reset`, `magic` login tails) are classified
+as secret: they are dropped from the template and the step becomes `handoff`
+/`needs_user` unless the user supplied a non-secret variable for that segment.
+Each `query` entry maps a parameter name to a non-secret `literal` or
+`variable`. Secret query values observed while teaching are dropped; they
+never become literals. If the route cannot run without a dropped secret
+parameter or path segment, the step is not auto-replayed. Fragment follows
+the same rule via `fragment`.
 
 The persisted `RoutineStep` keeps this template on
 `CompiledAction::navigate`. The runner constructs and encodes the URL when

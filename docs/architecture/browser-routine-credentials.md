@@ -96,14 +96,15 @@ fake store so that cost is not paid until the adapter PR.
 `keyring` entries are addressed by a service name and a user/target name. Use:
 
 - service: `horizon-browser-routine`
-- user: `<slot-uuid>:username` or `<slot-uuid>:password` (not the display
-  name, not an origin, not a username value)
+- user: `<routine-uuid>:<slot-uuid>:<field>` where `<field>` is `username`
+  or `password` (not the display name, not an origin, not a username value)
 
 `keyring` 4.2.0 stores one secret per `(service, user)` pair. Horizon uses
 **one native item per field**, never a bundled username+password payload:
 
 - service: `horizon-browser-routine`
-- user: `<slot-uuid>:<field>` where `<field>` is `username` or `password`
+- user: `<routine-uuid>:<slot-uuid>:<field>` where `<field>` is `username`
+  or `password`
 
 Rotation and deletion target that exact pair. Plans still store only
 `{ "type": "credential_field", "slot": "<uuid>", "field": "username" | "password" }`.
@@ -114,9 +115,10 @@ No API lists secret bytes. List/show/export emit field names and
 ## Origin and frame binding
 
 Every slot records the exact HTTPS origins (scheme + host + port) observed
-for that login during teaching. `http://127.0.0.1` and `http://localhost` are
-allowed only for local fixtures in tests; they are not a general HTTP
-exception.
+for that login during teaching, stored on `credential_policy.allowed_origins`
+(not the routine-wide navigation `allowed_origins`). `http://127.0.0.1` and
+`http://localhost` are allowed only for local fixtures in tests; they are not
+a general HTTP exception. Broker step 3 uses this slot allowlist.
 
 Before every fill:
 
