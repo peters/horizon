@@ -125,7 +125,10 @@ file, while `subscription_id`, `run_id`, `client_group` and, once bound,
 only, so it lets the lead verify later that the frozen, pre-bind fields were
 preserved (the bound manifest differs in exactly `worker_group` and is hashed
 and recorded separately once `bind-worker` has written it); credentials never
-appear anywhere.
+appear in the public post, the manifest, the journal or the receipts (the steps
+below say where they do exist transiently: A's CLI keeps its managed-identity
+token cache locally, and the PAT passes through Horizon's memory and transport
+during preparation).
 
 ## Client A prerequisites for the product path
 
@@ -245,7 +248,16 @@ gives A no identity today, so before the product pass A needs, in this order:
    each step is recorded the moment it succeeds, not after the whole grant (the
    custom role's definition ID from `az role definition create`, then each
    assignment's ID from its own `az role assignment create` output, written to
-   the run's private record before the next command runs); if the definition or
+   the run's private record before the next command runs). These are remote,
+   non-transactional writes, so each intended write is recorded before it is
+   sent (the chosen custom role name, and for each assignment the principal,
+   role and scope), and a timeout or lost response is reconciled from that
+   record rather than assumed absent: `az role definition list --subscription
+   <id> --custom-role-only true --name <chosen name>` and `az role assignment
+   list --subscription <id> --assignee <principal> --scope <scope> --role <role>`
+   either return the accepted write, whose ID is then recorded, or confirm
+   absence; A is not provisioned until every intended write is either recorded
+   with its ID or verified absent. If the definition or
    the second assignment fails after an earlier step succeeded, nothing further
    is granted, the steps already recorded are rolled back immediately with the
    same delete commands and verified with the same empty listings, and the
@@ -426,9 +438,11 @@ back unchanged at return and after the worker lifecycle step.
      *Exact resource ID* and `worker.json`'s `group_id`) is recorded the moment
      the overview shows it: a confirmed Create already persists the worker
      handle, so it is usually visible right after creation while Azure is still
-     provisioning, and only an unconfirmed or lost Create response leaves the
-     saved allocation without a worker identity and the overview at `No resource
-     identity recorded`, in which case the overview may never show it (recovery
+     provisioning; the saved allocation is left without a worker identity, and
+     the overview at `No resource identity recorded`, when the Create response
+     was lost or unconfirmed and also when a provider or ARM error followed an
+     accepted deployment (the coordinator records the handle only once the
+     worker status comes back), in which case the overview may never show it (recovery
      can legitimately observe an absent worker), so the group ID is derived from
      the recorded workflow and job identities as
      `/subscriptions/<id>/resourceGroups/horizon-ws-<workflow>-<job>` and verified
@@ -517,10 +531,15 @@ back unchanged at return and after the worker lifecycle step.
      operator removes the group). Until the harness `bind-worker` step lands and
      performs this tagging with the same read-back, it is a manual operator
      requirement and the run does not proceed without the read-back recorded.
-   - **Check this setup** until it reports the original setup as observed: the saved
+   - **Check this setup** until it reports the original setup as observed with a
+     complete worker identity and the attested pin: the saved
      phase becomes `Reconciling` (setup recovery never writes `Ready`) and the record
      carries the attested pin, read through ARM's run-command channel and never
-     trusted on first connection. Check reports in the setup notice only; the saved
+     trusted on first connection. `Original setup observed` alone is not enough:
+     the check can report it while Azure is still provisioning and before any
+     host key is saved (the notice itself says it is not readiness), and the
+     next bullets and `worker.json` need the pin, so a check that observes the
+     setup without the identity and pin is repeated until they are present. Check reports in the setup notice only; the saved
      page is not reloaded for it (unlike the Stop-section operations), so press
      **Refresh saved page**, which keeps the selected workspace by ID, and confirm
      the refreshed row before the next step. The
@@ -710,10 +729,17 @@ back unchanged at return and after the worker lifecycle step.
    install, the off interval, the return and the cleanup window, not this step, and
    `validate` does not check for it. Until the harness gains a lifecycle-aware check
    (tracked on #474), this is a manual operator requirement: freeze the manifest
-   deadline at `validate`'s minimum plus 225 minutes: a product-baseline reserve of
+   deadline at `validate`'s minimum plus 227 minutes (225 plus two rounding minutes, because `manifest.py` floors
+   the observer-install and return-setup bounds to whole minutes): a
+   product-baseline reserve of
    90 minutes (`validate` reserves nothing for step 3: the setup deployment and its
    check, Prepare Repository, the panel steps and the identity recording all run
-   before `off` against the same absolute deadline), 15 minutes for the manual
+   before `off` against the same absolute deadline; the reserve is a hard wall,
+   not a description: before step 3 starts the operator writes down its wall
+   clock, provisioning start plus the 30-minute provisioning bound, the 47-minute
+   observer-install bound and these 90 minutes, and if step 3 has not completed
+   by then the baseline is aborted and recorded, no `off` phase runs, and the run
+   goes to steps 8 to 10), 15 minutes for the manual
    reconnect check on A after `return`, 45 minutes for step 8 and the role removal
    (the observer-key removal can spend about 33 minutes at the harness's bounds, plus the 10-minute role-removal bound, and
    `validate` reserves nothing for either), a lifecycle margin of 60 minutes (a Stop
@@ -721,10 +747,10 @@ back unchanged at return and after the worker lifecycle step.
    and up to 300 s of readiness, the bounded pinned reads and slack) and the
    15-minute return margin the gate below counts but `validate`'s minimum does
    not. Worked example with `off_minutes` 12: `validate`'s minimum is 160 minutes,
-   so the deadline is at least 385 minutes after provisioning starts; at the gate
+   so the deadline is at least 387 minutes after provisioning starts; at the gate
    below, with every bound spent (30 provisioning, 47 observer install, 90
    baseline, 29 off setup, 12 off, 22 return setup, 15 reconnect check), 245
-   minutes have elapsed and 140 remain, which is exactly what the gate requires.
+   minutes have elapsed and at least 140 remain, which is what the gate requires.
    Immediately before
    this step compare the clock with the deadline: unless at least that margin plus
    80 minutes remains (step 8 at its bounds, about 33 minutes, the 10-minute role removal, the
