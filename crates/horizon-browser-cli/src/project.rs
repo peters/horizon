@@ -88,7 +88,7 @@ pub(crate) fn validate(project: &PlanProject, steps: &[PlanStep]) -> Result<(), 
     if project
         .columns
         .iter()
-        .any(|column| column.is_empty() || column.len() > 64 || column.bytes().any(|byte| byte < b' '))
+        .any(|column| column.is_empty() || column.chars().count() > 64 || column.chars().any(char::is_control))
     {
         return Err(PlanError::InvalidProject(
             "project.columns names must be 1-64 characters without control bytes".to_string(),
@@ -145,6 +145,7 @@ fn projected_value(project: &PlanProject, steps: &[StepReport]) -> Result<(Value
     let indexes = steps
         .iter()
         .enumerate()
+        .filter(|(_, step)| step.ok)
         .map(|(index, step)| (step.id.clone(), index))
         .collect::<BTreeMap<_, _>>();
     let dummy = PlanStep {
@@ -415,5 +416,32 @@ mod tests {
         let steps = [step("extract", json!({"items":[]}))];
         let error = summarize(&plan, &steps).expect_err("missing pointer");
         assert!(error.contains("did not match"));
+    }
+
+    #[test]
+    fn projection_ignores_structured_content_from_a_failed_step() {
+        let plan = Plan {
+            version: 1,
+            variables: BTreeMap::new(),
+            steps: vec![PlanStep {
+                id: "extract".to_string(),
+                tool: "browser_evaluate".to_string(),
+                arguments: Map::new(),
+            }],
+            project: Some(PlanProject {
+                format: ProjectFormat::Json,
+                from: json!({"$ref":"extract#/items"}),
+                columns: Vec::new(),
+            }),
+        };
+        let steps = [StepReport {
+            id: "extract".to_string(),
+            tool: "browser_evaluate".to_string(),
+            ok: false,
+            result: Some(json!({"items":[{"title":"leaked"}]})),
+            error: Some("evaluate failed".to_string()),
+        }];
+        let error = summarize(&plan, &steps).expect_err("failed source");
+        assert!(error.contains("no successful result"));
     }
 }
