@@ -57,8 +57,12 @@ after A has been provisioned from this manifest, and `validate` (which
 the adapter's `horizon-ws-<workflow>-<job>` with two exact UUIDs. The harness has no
 post-setup binding step yet, so **the product pass is gated on a harness change in
 this lane**, claimed on #474 before it is written, with two explicit manifest
-states. *Unbound*: `worker_group` is the literal `unbound`; `validate` accepts it,
-`provision-client.sh` (which validates before renting A and needs only A's fields)
+states, neither of which the current harness implements (today `validate`, which
+`provision-client.sh` runs before renting A, accepts only the adapter-form
+`worker_group`, so an `unbound` manifest cannot be provisioned yet and the
+product path cannot reach the binding step until the change lands). *Unbound*
+(future): `worker_group` is the literal `unbound`; `validate` accepts it,
+`provision-client.sh` (which needs only A's fields)
 runs, and every command or phase that names B (`journal-group`,
 `install-observer-key`, `off`, `return`, `verdict`, `remove-observer-key`,
 `cleanup`) refuses to start, because `client_off.py` validates the manifest before
@@ -373,12 +377,17 @@ back unchanged at return and after the worker lifecycle step.
      Then tick the consent box and press **Create task-free worker**.
      Nothing is checked out and no task starts here. Then **Refresh saved page** and select the new row: the repository, panel
      and Stop sections render only for a selected saved row, and the page shown after
-     creation is still the previous one. Record the workspace, owning session,
-     workflow and job identities and both forms of B's group identity: the
-     resource-group name `horizon-ws-<workflow>-<job>` (the manifest's
-     `worker_group`) and the full ARM group ID
+     creation is still the previous one. Record now the workspace, owning session,
+     workflow and job identities and the resource-group name
+     `horizon-ws-<workflow>-<job>` (the manifest's `worker_group`), which follows
+     from those identities. The full ARM group ID
      `/subscriptions/<id>/resourceGroups/horizon-ws-<workflow>-<job>` (the overview's
-     *Exact resource ID* and `worker.json`'s `group_id`). The group name is
+     *Exact resource ID* and `worker.json`'s `group_id`) and the rest of
+     `worker.json`'s identity are captured only after **Check this setup** below
+     reports the deployment observed: until then a valid recovery state (an
+     accepted deployment or a lost observation) leaves the saved allocation
+     without a worker identity and the overview shows `No resource identity
+     recorded`. The group name is
      derived from the workflow and job identities the record carries from the
      moment the allocation is saved, before the deployment is sent, so it is known
      even when an accepted deployment followed by a lost observation leaves the
@@ -783,11 +792,19 @@ back unchanged at return and after the worker lifecycle step.
    Step 9 then deletes the group with the OS disk whose container layer holds
    that line (the line lives in the running container's `authorized_keys`, never
    on the data disk, which holds only `/workspace`). If step 9 is
-   refused, fails or runs out of time with B still deallocated, the run is
-   reported with that residual (a deallocated VM whose container layer holds an
-   inert observer line that the entrypoint rewrites on the next container start)
-   and the group is handed to the lead on #474 for removal; the run is not
-   reported clean.
+   refused, fails or runs out of time, the residual depends on B's state, which
+   the operator re-reads with the instance-view read. A B that is `running` (the
+   normal case after a successful step 7 Start) or `stopped` (stopped-allocated)
+   keeps billing compute, so the operator deallocates it from the controller,
+   the one mutation of B outside the product this runbook allows and only on
+   this failure path: `az vm deallocate --subscription <id> --ids <B's VM ID>
+   --no-wait`, then the instance-view read every 30 s for at most 10 minutes
+   until it prints `PowerState/deallocated`; a deallocation that does not
+   complete in that bound is itself reported. In every state the run is then
+   reported with the residual (a deallocated VM with its retained disks, the
+   group still present, and in the container layer an inert observer line that
+   the entrypoint rewrites on the next container start), the group is handed to
+   the lead on #474 for removal, and the run is not reported clean.
 9. **Role removal, then cleanup.** First, as the operator and while A's group
    still exists, remove A's authority exactly as prerequisite 2 records it: `az
    role assignment delete --subscription <id> --ids <custom-role assignment ID>
