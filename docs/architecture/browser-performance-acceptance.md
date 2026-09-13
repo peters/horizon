@@ -22,11 +22,12 @@ already specified in [`docs/testing/browser-panel-gate.md`](../testing/browser-p
 | --- | --- | --- |
 | G1 `websocket.html` | High-rate native WebSocket capture (4,096-frame burst), 17-frame reconnect, gap/loss/truncation/drop accounting, URL redaction, bounded NDJSON | Not a public site; not five minutes |
 | G1b E24 `--observation-seconds 300` | Five-minute public-site capture on Chromium and Firefox (Linux and macOS), 30-second summaries, cursor-only `browser_network_watch`, capture health, DOM/feed match | E24 `/bors` is HTTP/JSONP, not a WebSocket; the runner reloads at each interval |
-| G3 | Workload-matched CPU/RSS and frame latency on the deterministic fixture | Not a public WebSocket |
 
-Together these lanes cover high-rate WebSocket correctness, public-site
-duration and summaries, and resource bounds. They do **not** claim a
-five-minute capture of a third-party public WebSocket.
+Together these two lanes are the #324 performance-acceptance oracle: high-rate
+WebSocket correctness plus public-site duration and summaries. They do **not**
+claim a five-minute capture of a third-party public WebSocket, and they do
+**not** include G3 workload-matched CPU/RSS (that remains a separate gate
+lane; the combined proof does not report warm resource bounds).
 
 ## Why not a literal public WebSocket
 
@@ -63,8 +64,8 @@ python3 scripts/browser-smoke/e24_smoke.py --backend chromium --horizon target/d
   --observation-seconds 300 --summary-interval-seconds 30
 ```
 
-Resource bounds (G3) stay on the deterministic fixture with a workload-matched
-base build on the same host.
+G3 CPU/RSS and latency remain a separate gate lane, not part of this #324
+oracle. Use a workload-matched base build on the same host when running G3.
 
 ## Non-goals
 
