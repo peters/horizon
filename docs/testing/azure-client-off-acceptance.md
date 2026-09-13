@@ -222,8 +222,16 @@ gives A no identity today, so before the product pass A needs, in this order:
    identity but can leave its role assignments and the custom role definition
    behind, so the removal is an explicit operator step from the controller, before the manifest
    deadline and before A's group is deleted (a system-assigned principal may no
-   longer resolve by `--assignee` once A is gone): when the two roles are granted,
-   record each assignment's ID from the `az role assignment create` output, and
+   longer resolve by `--assignee` once A is gone): when the roles are granted,
+   each step is recorded the moment it succeeds, not after the whole grant (the
+   custom role's definition ID from `az role definition create`, then each
+   assignment's ID from its own `az role assignment create` output, written to
+   the run's private record before the next command runs); if the definition or
+   the second assignment fails after an earlier step succeeded, nothing further
+   is granted, the steps already recorded are rolled back immediately with the
+   same delete commands and verified with the same empty listings, and the
+   failure is posted on #474 before any retry; A is never provisioned or used
+   with a partial grant. At removal time,
    remove exactly those two with `az role assignment delete --subscription <id>
    --ids <custom-role assignment ID> <Managed Identity Operator assignment ID>`
    (never a filter by assignee or scope, which would also remove any unrelated
@@ -358,8 +366,9 @@ back unchanged at return and after the worker lifecycle step.
      *Azure CPU cost limit*, which the product treats as optional but this
      acceptance requires; **Review request** shows the complete profile, the
      declared price and the immutable-binding disclosure. The manifest's
-     `hourly_cost_micros` and `budget_micros` bound A only (the harness checks them
-     as positive numbers and never meters B); B's admission uses the profile's
+     `hourly_cost_micros` and `budget_micros` are validation-only metadata (the
+     harness checks that both are positive and no phase meters or enforces them,
+     for A or for B); B's only enforced limit is the profile's
      `declared_hourly_cost_micros` and the ceiling typed here, both whole
      micro-units of the billing currency per hour (1,000,000 = one currency unit;
      the product performs no USD conversion and shows no live quote). So before the
@@ -438,7 +447,10 @@ back unchanged at return and after the worker lifecycle step.
      `Failed` or `Canceled` deployment is terminal whether or not a VM was left
      behind (ARM can leave a partially created VM, which setup can never observe
      as its worker): record it with the time, do not continue to the baseline, do
-     not bind, tag or start anything, and go to step 9. A group that exists in
+     not bind, tag or start anything, and go to step 9. A `Succeeded` deployment
+     with an empty VM list is a mismatch, not a wait: the worker existed and is
+     gone, so record it with the time and the deployment's outputs, do not
+     continue, and go to step 9 with the journaled group. A group that exists in
      that state was journaled above and step 9 deletes it; if the group itself was never readable,
      `journal-group` has refused and appended nothing, so there is no B entry,
      step 9 reports the worker group as unjournaled and deletes only A's group,
@@ -530,7 +542,7 @@ back unchanged at return and after the worker lifecycle step.
      **Add independent Shell panel** control on a saved remote workspace, tracked
      under #472) lands before this run; its controls, and the three recorded panel
      identities, are written into this step when it does.
-   Once the three gates have landed, record worker, session and task identities, the
+   Only once all three product gates and the harness binding gate have landed, record worker, session and task identities, the
    starting counter and the dirty-marker hash. The task must advance its counter at
    least once per 15-second sample.
    Write `worker.json` for the observer: `vm_name`, `port`, `host_key` (the attested
@@ -707,6 +719,8 @@ back unchanged at return and after the worker lifecycle step.
    instance view (a plain `az vm show` carries no instance view):
 
    ```sh
+   SUB=$(jq -r .subscription_id m.json)
+   VM_ID=$(jq -r .vm_id worker.json)
    az vm show --subscription "$SUB" --ids "$VM_ID" --query vmId -o tsv
    az vm get-instance-view --subscription "$SUB" --ids "$VM_ID" \
      --query "instanceView.statuses[?starts_with(code, 'PowerState/')].code | [0]" -o tsv
@@ -760,7 +774,10 @@ back unchanged at return and after the worker lifecycle step.
    ARM run-command under the operator's login, and a run must not end with it
    skipped): `client_off.py --manifest m.json remove-observer-key
    --worker worker.json --public-key observer.pub`, once the return and the reconnect
-   check on A are done and before the run is reported finished. Step 9 deletes B
+   check on A have reached any recorded terminal result (passed, failed within
+   their bounds, or skipped and recorded as such) and before the run is reported
+   finished; a failed or skipped return does not skip this step, since B may
+   still be running with the observer line in place. Step 9 deletes B
    only when its journaled identity still matches and within its 20-minute bound (the
    manifest budget is validated, not metered against elapsed cost), so B can outlive
    the run when that delete is refused, fails or runs out of time, and the run's
@@ -777,9 +794,13 @@ back unchanged at return and after the worker lifecycle step.
    or host-key observation, leaving B running under a durable Start intent with
    no compensating deallocation), so after step 7 the operator re-reads B's power
    state with the instance-view read above: whenever B is running, this
-   step runs in full and must pass. Only for a B that is not running, whether
+   step runs in full and must pass. A transitional state (`starting`,
+   `deallocating`, `stopping`) is re-read every 30 s for at most 10 minutes
+   until it settles; a state still transitional after that bound is treated as
+   not running and reported. Only for a B that is not running, whether
    `deallocated`, `stopped` (stopped-allocated, which a failed or timed-out Start
-   can leave behind and which this command cannot attest either) or unavailable,
+   can leave behind and which this command cannot attest either), settled from a
+   transitional state into one of those, or unavailable,
    can it not run. Nothing restarts B
    outside the product to make it runnable: in that state the operator destroys
    the observer private key on the controller (`shred -u <the path recorded as
@@ -793,8 +814,11 @@ back unchanged at return and after the worker lifecycle step.
    that line (the line lives in the running container's `authorized_keys`, never
    on the data disk, which holds only `/workspace`). If step 9 is
    refused, fails or runs out of time, the residual depends on B's state, which
-   the operator re-reads with the instance-view read. A B that is `running` (the
-   normal case after a successful step 7 Start) or `stopped` (stopped-allocated)
+   the operator re-reads with the instance-view read, waiting out a transitional
+   state (`starting`, `deallocating`, `stopping`) every 30 s for at most 10
+   minutes first. A B that is `running` (the
+   normal case after a successful step 7 Start) or `stopped` (stopped-allocated),
+   or still transitional after that bound,
    keeps billing compute, so the operator deallocates it from the controller,
    the one mutation of B outside the product this runbook allows and only on
    this failure path: `az vm deallocate --subscription <id> --ids <B's VM ID>
