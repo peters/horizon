@@ -41,6 +41,13 @@ bounded admission and native limits are not a hard filesystem quota or a promise
 that uninterruptible I/O terminates promptly. Initial generations are self-contained;
 shared-pack reuse is a later optimization, not a correctness prerequisite.
 
+Existing destination and generation roots must remain owned private `0700`
+directories with no symlink ancestry. Confined descendants may inherit the
+caller's umask, as in the named receiver: their modes alone do not expose data
+through the verified private root. Accounting still rejects foreign ownership,
+devices, links, special nodes and set-id/sticky modes. It does not chmod retained
+data or change process-global umask; stable exclusive ownership remains required.
+
 ## Options considered
 
 | Option | Complexity and cost | Growth and maintenance |

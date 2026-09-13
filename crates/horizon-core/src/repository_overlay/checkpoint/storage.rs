@@ -50,9 +50,10 @@ pub(super) fn usage(path: &Path, budget: u64) -> Result<u64, Error> {
             return Err(Error::Capacity);
         }
         let meta = fs::symlink_metadata(&path).map_err(|_| Error::Storage)?;
+        // The held 0700 root confines inherited descendant modes, as in the pack receiver.
         if meta.dev() != device
             || meta.uid() != rustix::process::geteuid().as_raw()
-            || meta.mode() & 0o7022 != 0
+            || meta.mode() & 0o7000 != 0
             || !(meta.is_dir() || (meta.is_file() && meta.nlink() == 1))
         {
             return Err(Error::Identity);

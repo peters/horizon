@@ -136,8 +136,17 @@ mod linux {
     #[test]
     fn actual_generation_preserves_full_base_selected_layers_and_prior_attempts() {
         let (_root, checkout, mut request) = fixture();
+        let inherited = request.parent.join("inherited");
+        fs::create_dir(&inherited).unwrap();
+        let file = inherited.join("file");
+        fs::write(&file, b"retained").unwrap();
+        fs::set_permissions(&inherited, fs::Permissions::from_mode(0o775)).unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o664)).unwrap();
         let source = snapshot(&checkout);
         let first = super::super::linux::run(&request, &checkout, &|| Ok(()), &|| false).unwrap();
+        assert_eq!(inherited.metadata().unwrap().permissions().mode() & 0o7777, 0o775);
+        assert_eq!(file.metadata().unwrap().permissions().mode() & 0o7777, 0o664);
+        assert_eq!(fs::read(&file).unwrap(), b"retained");
         let bytes = fs::read(first.path.join("generation.json")).unwrap();
         assert_eq!(ArtifactDigest::sha256(&bytes), first.manifest_sha256);
         assert!(serde_json::from_slice::<GenerationManifest>(&bytes).unwrap() == first.manifest);
@@ -189,7 +198,7 @@ mod linux {
 
     #[test]
     fn admission_rejects_low_capacity_overlap_links_and_cancellation_without_a_claim() {
-        for case in 0..5 {
+        for case in 0..6 {
             let (root, checkout, mut request) = fixture();
             match case {
                 0 => request.max_retained_bytes = ADMISSION_BYTES,
@@ -200,6 +209,7 @@ mod linux {
                     symlink(&request.parent, &alias).unwrap();
                     request.parent = alias;
                 }
+                5 => fs::set_permissions(&request.parent, fs::Permissions::from_mode(0o770)).unwrap(),
                 _ => {}
             }
             let failure = super::super::linux::run(&request, &checkout, &|| Ok(()), &|| case == 4).unwrap_err();
