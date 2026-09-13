@@ -19,9 +19,12 @@ PC, existing Horizon processes or existing workspaces.
 
 C never renews a lease, delivers a keepalive, reconnects a terminal, checkpoints or
 replays a task, and the harness phases that act as C issue no ARM write. Two
-credentials mutate B: the product's Create, Prepare Repository, Stop and Start
-run on A under A's managed identity, and every mutating harness phase or
-controller command in this runbook names the operator; the C-versus-operator
+Azure control-plane credentials mutate B: the product's Create, Prepare
+Repository, Stop and Start run on A under A's managed identity, and every
+mutating harness phase or controller command in this runbook names the operator
+(the repository PAT that Prepare Repository delivers to B and the saved SSH
+client identity that product operations and the observer's restricted key use
+are separate, non-Azure credentials and are described where they appear); the C-versus-operator
 separation is procedural (the phases and commands that write) rather than a
 credential boundary, because the harness has no second Azure login. The operator may enforce
 the declared cleanup deadline.
@@ -491,8 +494,12 @@ back unchanged at return and after the worker lifecycle step.
      mandatory here. Then **Review repository
      preparation**; the confirmation that follows carries the token field, the
      first-token consent box and **Confirm repository preparation**. **Check
-     preparation receipt** shows the receipt of the original preparation and its
-     fixed checkout path `/workspace/horizon/repository` without a second submission;
+     preparation receipt** shows the receipt of the original preparation without
+     a second submission (its notice is `Original preparation complete. This
+     receipt does not prove current task readiness.`; the fixed checkout path
+     `/workspace/horizon/repository` is validated by the preparation protocol and
+     is not displayed, so it is recorded as protocol-validated evidence, not read
+     off the receipt);
      it is evidence of that preparation, not of present task readiness, which the
      later task start admits on its own.
    - **gated** (Azure saved-Shell Start): **Show saved panels** → on the saved row
@@ -687,11 +694,18 @@ back unchanged at return and after the worker lifecycle step.
    collapses provider and ARM failures, an expired token among them, into the same
    unverified notice, so the notice alone cannot separate a lost result from a
    denied one; before every retry the operator classifies out of band: on the
-   controller `az vm get-instance-view --subscription <id> --ids <B's VM ID>
-   --query '{vmId:vmId, power:instanceView.statuses[?starts_with(code, `PowerState/`)].code | [0]}'`
-   (a plain `az vm show` carries no instance view) must return the recorded
-   `instance_id` and a power state of `deallocated`, `stopped` (which the provider
-   treats as stopped-allocated and accepts for Start), `starting` or `running`,
+   controller two reads, identity from the VM resource and power state from the
+   instance view (a plain `az vm show` carries no instance view):
+
+   ```sh
+   az vm show --subscription "$SUB" --ids "$VM_ID" --query vmId -o tsv
+   az vm get-instance-view --subscription "$SUB" --ids "$VM_ID" \
+     --query "instanceView.statuses[?starts_with(code, 'PowerState/')].code | [0]" -o tsv
+   ```
+
+   The first must print the recorded `instance_id` and the second a power state
+   of `deallocated`, `stopped` (which the provider treats as stopped-allocated and
+   accepts for Start), `starting` or `running`,
    and on A the token probe from prerequisite 2 must
    still print an expiry; a missing or replaced VM, or a failed probe, ends the
    retries as a non-retryable outcome. Retries are budgeted: at most three presses
@@ -753,10 +767,11 @@ back unchanged at return and after the worker lifecycle step.
    provider may have sent `start/action` and then failed its identity, readiness
    or host-key observation, leaving B running under a durable Start intent with
    no compensating deallocation), so after step 7 the operator re-reads B's power
-   state with the `get-instance-view` probe above: whenever B is running, this
-   step runs in full and must pass. Only for a genuinely deallocated or
-   unavailable B (a successful Stop followed by a Start that never started
-   compute) can it not run. Nothing restarts B
+   state with the instance-view read above: whenever B is running, this
+   step runs in full and must pass. Only for a B that is not running, whether
+   `deallocated`, `stopped` (stopped-allocated, which a failed or timed-out Start
+   can leave behind and which this command cannot attest either) or unavailable,
+   can it not run. Nothing restarts B
    outside the product to make it runnable: in that state the operator destroys
    the observer private key on the controller (`shred -u <the path recorded as
    observer_key_path in worker.json>`, the only copy; the public half is inert
@@ -773,7 +788,16 @@ back unchanged at return and after the worker lifecycle step.
    inert observer line that the entrypoint rewrites on the next container start)
    and the group is handed to the lead on #474 for removal; the run is not
    reported clean.
-9. **Cleanup**: `client_off.py --manifest m.json cleanup --groups-before groups.json
+9. **Role removal, then cleanup.** First, as the operator and while A's group
+   still exists, remove A's authority exactly as prerequisite 2 records it: `az
+   role assignment delete --subscription <id> --ids <custom-role assignment ID>
+   <Managed Identity Operator assignment ID>`, then `az role definition delete
+   --subscription <id> --name <custom role>`, then verify with `az role assignment
+   list --subscription <id> --all --assignee <A's principal ID>` printing `[]` and
+   `az role definition list --subscription <id> --custom-role-only true --name
+   <custom role>` printing `[]`, and record both listings with the run; a run
+   whose listings are not empty is not reported clean even if the groups are
+   deleted. Then **cleanup**: `client_off.py --manifest m.json cleanup --groups-before groups.json
    --resources-before resources.json --created created-groups.json`. Runs under one
    20-minute bound (every ARM call is handed what is left of it; the manifest margin
    is the return phase plus this bound). Deletes only the manifest groups that this run
