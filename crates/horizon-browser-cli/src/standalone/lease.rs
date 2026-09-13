@@ -1,12 +1,18 @@
 //! Durable identity for a keep-alive standalone browser host.
 
+use std::fs::OpenOptions;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+use atomicwrites::{AllowOverwrite, AtomicFile};
 use serde::{Deserialize, Serialize};
 
 use horizon_core::browser::manifest;
+
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 
 use super::StandaloneError;
 
@@ -28,10 +34,13 @@ pub struct StandaloneHostRef {
     /// Process start identity used to reject PID reuse before signaling.
     #[serde(default)]
     pub start_identity: String,
+    /// Resolved browser profile directory for this host.
+    #[serde(default)]
+    pub profile_dir: PathBuf,
 }
 
 impl StandaloneHostRef {
-    pub(super) fn current(panel_id: String) -> Result<Self, StandaloneError> {
+    pub(super) fn current(panel_id: String, profile_dir: PathBuf) -> Result<Self, StandaloneError> {
         let host_pid = std::process::id();
         let start_identity = process_start_identity(host_pid)
             .ok_or_else(|| StandaloneError::Startup("could not read host process start identity".to_string()))?;
@@ -40,6 +49,7 @@ impl StandaloneHostRef {
             host_pid,
             created_at: now_millis(),
             start_identity,
+            profile_dir,
         })
     }
 }
@@ -50,16 +60,17 @@ impl StandaloneHostRef {
 /// manifest so a failed startup cannot leak a dead panel.
 pub(super) struct PendingLease {
     root: PathBuf,
-    panel_id: String,
+    host: StandaloneHostRef,
     committed: bool,
 }
 
 impl PendingLease {
-    pub(super) fn publish(root: &Path, panel_id: String) -> Result<Self, StandaloneError> {
-        publish(root, &StandaloneHostRef::current(panel_id.clone())?)?;
+    pub(super) fn publish(root: &Path, panel_id: String, profile_dir: PathBuf) -> Result<Self, StandaloneError> {
+        let host = StandaloneHostRef::current(panel_id, profile_dir)?;
+        publish(root, &host)?;
         Ok(Self {
             root: root.to_path_buf(),
-            panel_id,
+            host,
             committed: false,
         })
     }
@@ -72,7 +83,7 @@ impl PendingLease {
 impl Drop for PendingLease {
     fn drop(&mut self) {
         if !self.committed {
-            remove_host(&self.root, &self.panel_id);
+            remove_host(&self.root, &self.host);
         }
     }
 }
@@ -98,10 +109,20 @@ pub(super) fn publish(root: &Path, host: &StandaloneHostRef) -> Result<(), Stand
             StandaloneError::Startup(format!("could not create standalone lease directory: {error}"))
         })?;
     }
-    let bytes = serde_json::to_vec_pretty(host)
+    let mut bytes = serde_json::to_vec_pretty(host)
         .map_err(|error| StandaloneError::Startup(format!("could not encode standalone lease: {error}")))?;
-    std::fs::write(&path, bytes)
+    bytes.push(b'\n');
+    let mut options = OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    AtomicFile::new(&path, AllowOverwrite)
+        .write_with_options(|file| file.write_all(&bytes).and_then(|()| file.sync_all()), options)
+        .map_err(std::io::Error::from)
         .map_err(|error| StandaloneError::Startup(format!("could not write {}: {error}", path.display())))?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+        .map_err(|error| StandaloneError::Startup(format!("could not secure {}: {error}", path.display())))?;
     Ok(())
 }
 
@@ -110,13 +131,33 @@ pub(super) fn remove(root: &Path, panel_id: &str) {
     let _ = std::fs::remove_file(stop_path_for_root(root, panel_id));
 }
 
-pub(super) fn remove_host(root: &Path, panel_id: &str) {
-    let manifest_path = manifest::manifest_path_for_root(root, panel_id);
-    if let Some(encoded) = manifest_path.file_stem() {
-        let _ = std::fs::remove_dir_all(root.join("browser-profiles").join(encoded));
+fn remove_host(root: &Path, host: &StandaloneHostRef) {
+    if profile_is_allowed(root, &host.panel_id, &host.profile_dir) {
+        let _ = std::fs::remove_dir_all(&host.profile_dir);
     }
-    let _ = std::fs::remove_file(manifest_path);
-    remove(root, panel_id);
+    let _ = std::fs::remove_file(manifest::manifest_path_for_root(root, &host.panel_id));
+    remove(root, &host.panel_id);
+}
+
+fn profile_is_allowed(horizon_root: &Path, panel_id: &str, profile: &Path) -> bool {
+    if profile.as_os_str().is_empty() {
+        return false;
+    }
+    let manifest_path = manifest::manifest_path_for_root(horizon_root, panel_id);
+    if profile.file_name() != manifest_path.file_stem() {
+        return false;
+    }
+    allowed_profile_roots(horizon_root)
+        .iter()
+        .any(|root| profile.starts_with(root))
+}
+
+fn allowed_profile_roots(horizon_root: &Path) -> Vec<PathBuf> {
+    let mut roots = vec![horizon_root.join("browser-profiles")];
+    if let Some(home) = horizon_root.parent() {
+        roots.push(home.join("Horizon").join("browser-profiles"));
+    }
+    roots
 }
 
 pub(super) fn request_stop(root: &Path, panel_id: &str) -> Result<(), String> {
@@ -211,10 +252,10 @@ fn wait_until_exited(hosts: &[StandaloneHostRef], grace: Duration) {
 pub(super) fn prune_dead_at(root: &Path) -> Vec<String> {
     let mut pruned = Vec::new();
     for host in list_leases(root) {
-        if host_is_current(&host) {
+        if host_liveness(&host) != HostLiveness::Stale {
             continue;
         }
-        remove_host(root, &host.panel_id);
+        remove_host(root, &host);
         pruned.push(host.panel_id);
     }
     pruned
@@ -302,10 +343,30 @@ fn now_millis() -> i64 {
     .unwrap_or(i64::MAX)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HostLiveness {
+    Current,
+    Stale,
+    Unknown,
+}
+
 fn host_is_current(host: &StandaloneHostRef) -> bool {
-    !host.start_identity.is_empty()
-        && pid_is_alive(host.host_pid)
-        && process_start_identity(host.host_pid).as_deref() == Some(host.start_identity.as_str())
+    host_liveness(host) == HostLiveness::Current
+}
+
+fn host_liveness(host: &StandaloneHostRef) -> HostLiveness {
+    if host.start_identity.is_empty() {
+        return HostLiveness::Stale;
+    }
+    match pid_probe(host.host_pid) {
+        PidProbe::Dead => HostLiveness::Stale,
+        PidProbe::Unknown => HostLiveness::Unknown,
+        PidProbe::Alive => match process_start_identity(host.host_pid) {
+            Some(identity) if identity == host.start_identity => HostLiveness::Current,
+            Some(_) => HostLiveness::Stale,
+            None => HostLiveness::Unknown,
+        },
+    }
 }
 
 fn panel_manifest_exists(root: &Path, panel_id: &str) -> bool {
@@ -387,27 +448,42 @@ fn command_identity(output: std::process::Output) -> Option<String> {
     if identity.is_empty() { None } else { Some(identity) }
 }
 
-fn pid_is_alive(pid: u32) -> bool {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PidProbe {
+    Alive,
+    Dead,
+    Unknown,
+}
+
+fn pid_probe(pid: u32) -> PidProbe {
     if pid == 0 {
-        return false;
+        return PidProbe::Dead;
     }
     #[cfg(unix)]
     {
-        Command::new("kill")
+        match Command::new("kill")
             .args(["-0", &pid.to_string()])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
-            .is_ok_and(|status| status.success())
+        {
+            Ok(status) if status.success() => PidProbe::Alive,
+            Ok(_) => PidProbe::Dead,
+            Err(_) => PidProbe::Unknown,
+        }
     }
     #[cfg(windows)]
     {
-        Command::new("tasklist")
+        match Command::new("tasklist")
             .args(["/FI", &format!("PID eq {pid}"), "/NH"])
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .output()
-            .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).contains(&pid.to_string()))
+        {
+            Ok(output) if String::from_utf8_lossy(&output.stdout).contains(&pid.to_string()) => PidProbe::Alive,
+            Ok(_) => PidProbe::Dead,
+            Err(_) => PidProbe::Unknown,
+        }
     }
 }
 
@@ -462,6 +538,7 @@ mod tests {
             host_pid: pid,
             created_at,
             start_identity: identity.to_string(),
+            profile_dir: PathBuf::new(),
         }
     }
 
@@ -514,7 +591,7 @@ mod tests {
     fn pending_lease_is_removed_with_its_manifest_unless_committed() {
         let home = tempfile::tempdir().unwrap_or_else(|error| panic!("home: {error}"));
         let abandoned = "standalone-9-abandoned";
-        let pending = PendingLease::publish(home.path(), abandoned.to_string())
+        let pending = PendingLease::publish(home.path(), abandoned.to_string(), PathBuf::new())
             .unwrap_or_else(|error| panic!("publish pending: {error}"));
         write_manifest(home.path(), abandoned);
         drop(pending);
@@ -522,7 +599,7 @@ mod tests {
         assert!(!panel_manifest_exists(home.path(), abandoned));
 
         let kept = "standalone-9-kept";
-        PendingLease::publish(home.path(), kept.to_string())
+        PendingLease::publish(home.path(), kept.to_string(), PathBuf::new())
             .unwrap_or_else(|error| panic!("publish kept: {error}"))
             .commit();
         assert!(read_lease(home.path(), kept).is_some());
@@ -541,14 +618,15 @@ mod tests {
     #[test]
     fn dead_host_leases_are_pruned_with_their_manifests() {
         let home = tempfile::tempdir().unwrap_or_else(|error| panic!("home: {error}"));
-        let recorded = host("standalone-9-dead", 0, 1, "");
-        publish(home.path(), &recorded).unwrap_or_else(|error| panic!("publish: {error}"));
-        write_manifest(home.path(), &recorded.panel_id);
+        let mut recorded = host("standalone-9-dead", 0, 1, "");
         let profile = home.path().join("browser-profiles").join(
             manifest::manifest_path_for_root(home.path(), &recorded.panel_id)
                 .file_stem()
                 .unwrap_or_default(),
         );
+        recorded.profile_dir = profile.clone();
+        publish(home.path(), &recorded).unwrap_or_else(|error| panic!("publish: {error}"));
+        write_manifest(home.path(), &recorded.panel_id);
         std::fs::create_dir_all(&profile).unwrap_or_else(|error| panic!("profile: {error}"));
         std::fs::write(profile.join("state"), b"left behind").unwrap_or_else(|error| panic!("profile file: {error}"));
 
@@ -557,6 +635,27 @@ mod tests {
         assert!(read_lease(home.path(), &recorded.panel_id).is_none());
         assert!(!panel_manifest_exists(home.path(), &recorded.panel_id));
         assert!(!profile.exists());
+    }
+
+    #[test]
+    fn dead_host_prune_removes_a_relocated_snap_profile() {
+        let home = tempfile::tempdir().unwrap_or_else(|error| panic!("home: {error}"));
+        let horizon = home.path().join(".horizon");
+        let mut recorded = host("standalone-9-snap", 0, 1, "");
+        let profile = home.path().join("Horizon").join("browser-profiles").join(
+            manifest::manifest_path_for_root(&horizon, &recorded.panel_id)
+                .file_stem()
+                .unwrap_or_default(),
+        );
+        recorded.profile_dir = profile.clone();
+        publish(&horizon, &recorded).unwrap_or_else(|error| panic!("publish: {error}"));
+        write_manifest(&horizon, &recorded.panel_id);
+        std::fs::create_dir_all(&profile).unwrap_or_else(|error| panic!("snap profile: {error}"));
+        std::fs::write(profile.join("state"), b"snap").unwrap_or_else(|error| panic!("snap file: {error}"));
+
+        assert_eq!(prune_dead_at(&horizon), vec![recorded.panel_id.clone()]);
+        assert!(!profile.exists());
+        assert!(read_lease(&horizon, &recorded.panel_id).is_none());
     }
 
     #[test]

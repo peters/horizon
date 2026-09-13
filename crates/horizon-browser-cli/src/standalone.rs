@@ -391,11 +391,6 @@ fn start_backend(
     keep_alive: bool,
 ) -> Result<(BrowserSession, std::path::PathBuf, String), StandaloneError> {
     let panel_id = standalone_panel_id();
-    let mut pending_lease = if keep_alive {
-        Some(lease::PendingLease::publish(home.root(), panel_id.clone())?)
-    } else {
-        None
-    };
     let mut browser = BrowserConfig {
         backend,
         headless: !visible,
@@ -405,6 +400,15 @@ fn start_backend(
         browser.profile_root = Some(browser.effective_profile_root(&home.root().join("browser-profiles")));
     }
     let profile_root = browser.panel_profile_dir_with_default_root(&panel_id, &home.root().join("browser-profiles"));
+    let mut pending_lease = if keep_alive {
+        Some(lease::PendingLease::publish(
+            home.root(),
+            panel_id.clone(),
+            profile_root.clone(),
+        )?)
+    } else {
+        None
+    };
     let coordination = Arc::new(ManifestCoordination::default());
     let session = start_session(BrowserSessionConfig {
         browser,
