@@ -72,9 +72,11 @@ credentials, query values, or fragments had to be redacted. Tool results and
 page contents are not copied into the trace.
 
 The normal workspace build contains no model SDK. Job mode invokes an optional
-local agent executable and expects its structured `exec` event interface; set
-`HORIZON_BROWSER_AGENT_COMMAND` to a compatible adapter. A missing adapter is a
-clear runtime error and does not affect `run` or `mcp`.
+local agent executable. When `HORIZON_BROWSER_AGENT_COMMAND` is unset, the CLI
+uses `grok` if it is on `PATH` and otherwise `codex`. A basename of `grok`
+selects Grok's headless flags, isolated `GROK_HOME`, and streaming-json MCP
+events; any other basename keeps the Codex `exec` event interface. A missing
+adapter is a clear runtime error and does not affect `run` or `mcp`.
 
 ## Plan runner
 
