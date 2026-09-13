@@ -4,9 +4,10 @@
 use super::*;
 use crate::cloud_run::{
     interactive_worker::InteractiveWorkerSshEndpoint,
+    interactive_worker_start::{InteractiveWorkerStart, InteractiveWorkerStartProvider},
     interactive_worker_stop::{
-        InteractiveWorkerStopExpectation, InteractiveWorkerStopObservation as Observation,
-        InteractiveWorkerStopObserver,
+        InteractiveWorkerStop, InteractiveWorkerStopExpectation, InteractiveWorkerStopObservation as Observation,
+        InteractiveWorkerStopObserver, InteractiveWorkerStopProvider,
     },
     runpod::RunPodNetworkVolumeExpectation,
 };
@@ -268,5 +269,83 @@ fn saved_identity_and_pin_are_validated_before_and_during_the_read() {
         vec![Some(foreign_vm)],
     );
     assert_eq!(observe(&s, &pin()), Err(MISMATCH));
+    assert_read_only(&s);
+}
+
+/// The retained disk through a whole Stop, Check saved Stop, Start cycle on one
+/// instance: the plane keeps the disk attached across deallocation (the template's
+/// `Detach` delete option), the observer confirms it exactly then, and the started
+/// worker comes back on the same instance with the same disk. The observation itself
+/// issues no mutation at any point of the cycle.
+#[test]
+fn the_retained_disk_survives_a_stop_observe_start_cycle_on_the_same_instance() {
+    let s = Scenario::new();
+    let worker = s.persisted();
+    let client = s.client(false, Some(host_key()));
+    let address = || Some(deployment("Succeeded", HOST));
+    let disk_of = |view: &AzureVmView| (view.instance_id.clone(), view.data_disks.clone(), view.data_disk_count);
+    let running = retained_vm(&s, "running");
+    let retained = disk_of(&running);
+    // Running: observed only, nothing to confirm yet.
+    s.plane.script(Some(owned(&s)), address(), vec![Some(running.clone())]);
+    assert_eq!(observe(&s, &pin()), Ok(Observation::Pending));
+    assert_read_only(&s);
+    // Stop: the deallocation is posted once and the disk stays attached throughout.
+    s.plane.script(
+        Some(owned(&s)),
+        address(),
+        vec![
+            Some(running.clone()),
+            Some(retained_vm(&s, "deallocating")),
+            Some(retained_vm(&s, "deallocated")),
+        ],
+    );
+    assert_eq!(client.stop_worker(&worker), Ok(InteractiveWorkerStop::Stopped));
+    assert_eq!(s.plane.mutations(), [Call::Deallocate(s.group.clone())]);
+    // Check saved Stop against the state the stop left behind, not a fresh script:
+    // deallocated compute, the same disk, the saved address.
+    let after_stop = s.plane.lock().vm_states.clone();
+    assert_eq!(
+        after_stop.iter().flatten().map(disk_of).collect::<Vec<_>>(),
+        std::slice::from_ref(&retained),
+        "the stop's final VM state keeps the disk on the same instance"
+    );
+    s.plane.lock().calls.clear();
+    assert_eq!(observe(&s, &pin()), Ok(Observation::RetainedStopped));
+    assert_read_only(&s);
+    // Start: the same instance comes back with the same disk and is ready through the
+    // attested key; the observer then reports the running worker as pending again.
+    s.plane.script(
+        Some(owned(&s)),
+        address(),
+        vec![
+            Some(retained_vm(&s, "deallocated")),
+            Some(retained_vm(&s, "starting")),
+            Some(running),
+        ],
+    );
+    let started = client.start_worker(&worker).expect("start");
+    let InteractiveWorkerStart::Started(status) = &started else {
+        panic!("the retained worker starts: {started:?}");
+    };
+    assert_eq!(status.lifecycle, Lifecycle::Ready);
+    assert_eq!(s.plane.mutations(), [Call::Start(s.group.clone())]);
+    let after_start = s.plane.lock().vm_states.clone();
+    assert_eq!(
+        after_start.iter().flatten().map(disk_of).collect::<Vec<_>>(),
+        [retained],
+        "the started instance carries the retained disk"
+    );
+    s.plane.lock().calls.clear();
+    assert_eq!(observe(&s, &pin()), Ok(Observation::Pending));
+    assert_read_only(&s);
+    // A rebuilt worker on another instance without the retained disk is never confirmed
+    // as the saved Stop: retention is proven by the disk, not by the power state.
+    let mut replaced = retained_vm(&s, "deallocated");
+    replaced.instance_id = Some("7d6c5b4a-3928-4170-a6b5-c4d3e2f1a0b9".into());
+    replaced.data_disks.clear();
+    replaced.data_disk_count = 0;
+    s.plane.script(Some(owned(&s)), address(), vec![Some(replaced)]);
+    assert_eq!(observe(&s, &pin()), Ok(Observation::Pending));
     assert_read_only(&s);
 }

@@ -126,9 +126,7 @@ impl AzureArmHttp {
                 break;
             };
             let delay = Duration::from_millis(delay_ms).max(retry_after.unwrap_or_default());
-            if !cfg!(test) {
-                std::thread::sleep(delay.min(left));
-            }
+            (self.sleeper)(delay.min(left));
             let Some(budget) = super::remaining(deadline) else {
                 break;
             };

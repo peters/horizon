@@ -25,7 +25,7 @@ struct Expectation {
     status: u16,
     body: String,
     request_body: Option<serde_json::Value>,
-    header: Option<(&'static str, String)>,
+    headers: Vec<(&'static str, String)>,
 }
 
 fn expect(
@@ -41,17 +41,26 @@ fn expect(
         status,
         body: body.to_string(),
         request_body,
-        header: None,
+        headers: Vec::new(),
     }
 }
 
 fn with_header(mut expectation: Expectation, name: &'static str, value: String) -> Expectation {
-    expectation.header = Some((name, value));
+    expectation.headers.push((name, value));
     expectation
 }
 
 fn http(expectations: Vec<Expectation>) -> (AzureArmHttp, Arc<AtomicUsize>) {
+    let (transport, calls, _) = http_with_sleeps(expectations);
+    (transport, calls)
+}
+
+/// The scripted transport plus every wait its poll loops asked for, in order; the
+/// waits are recorded instead of slept.
+fn http_with_sleeps(expectations: Vec<Expectation>) -> (AzureArmHttp, Arc<AtomicUsize>, Arc<Mutex<Vec<Duration>>>) {
     let calls = Arc::new(AtomicUsize::new(0));
+    let sleeps = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&sleeps);
     let count = Arc::clone(&calls);
     let queue = Arc::new(Mutex::new(expectations));
     let agent = ureq::Agent::config_builder()
@@ -75,7 +84,7 @@ fn http(expectations: Vec<Expectation>) -> (AzureArmHttp, Arc<AtomicUsize>) {
                 None => assert!(payload.is_empty(), "unexpected body on call {index}"),
             }
             let mut response = Response::builder().status(expectation.status);
-            if let Some((name, value)) = expectation.header {
+            for (name, value) in expectation.headers {
                 response = response.header(name, value);
             }
             Ok(response.body(Body::builder().data(expectation.body)).expect("response"))
@@ -83,11 +92,13 @@ fn http(expectations: Vec<Expectation>) -> (AzureArmHttp, Arc<AtomicUsize>) {
         .build()
         .new_agent();
     let credential = || AzureAccessToken::new("synthetic-token-value", Duration::from_secs(3_600));
-    (
-        AzureArmHttp::with_agent(agent, SUB, credential).expect("transport"),
-        calls,
-    )
+    let transport = AzureArmHttp::with_agent(agent, SUB, credential)
+        .expect("transport")
+        .with_sleeper(move |duration| recorded.lock().expect("sleeps").push(duration));
+    (transport, calls, sleeps)
 }
+
+mod run_command_schedule;
 
 fn group_url(name: &str) -> String {
     format!("https://management.azure.com/subscriptions/{SUB}/resourcegroups/{name}?api-version=2022-09-01")
