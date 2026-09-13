@@ -118,14 +118,14 @@ pub(super) fn stop_with<P: InteractiveWorkerStopProvider>(
 /// target within the named profile, immutable binding to that profile, no `RunPod`
 /// storage expectation, no management intent, and a retained worker whose complete
 /// Azure handle validates under the profile's subscription with a complete pin.
-pub(in crate::remote_workspace) struct RetainedAzure {
-    pub(in crate::remote_workspace) allocation: StoredRemoteAllocation,
+pub(crate) struct RetainedAzure {
+    pub(crate) allocation: StoredRemoteAllocation,
     request: InteractiveWorkerRequest,
     binding: RemoteCpuProfileBinding,
 }
 
 impl RetainedAzure {
-    pub(in crate::remote_workspace) fn load(
+    pub(crate) fn load(
         store: &CloudWorkflowStore,
         profile: &AzureProfile,
         expected: &RemoteEnvironmentSummary,
@@ -230,10 +230,7 @@ impl RetainedAzure {
     /// persisted here, and a missing CLI login surfaces as an unverified operation. The
     /// admitted Stop paths (`stop_with`, `azure_with`) and the configured Start path reach
     /// this only after admission.
-    pub(in crate::remote_workspace) fn client(
-        store: &CloudWorkflowStore,
-        profile: &AzureProfile,
-    ) -> Result<AzureClient, BindingError> {
+    pub(crate) fn client(store: &CloudWorkflowStore, profile: &AzureProfile) -> Result<AzureClient, BindingError> {
         let credential =
             AzureCliCredential::new(profile.subscription_id.clone()).map_err(|_| BindingError::InvalidBinding)?;
         AzureClient::new(profile.clone(), credential, store.clone()).map_err(|_| BindingError::InvalidBinding)
@@ -242,7 +239,7 @@ impl RetainedAzure {
     /// The binding and the absence of a storage selection must still hold for the
     /// allocation as it is now; used where the coordinator has already advanced the
     /// allocation (intent recorded) and fences it with its own CAS.
-    pub(in crate::remote_workspace) fn check_binding(&self, store: &CloudWorkflowStore) -> Result<(), BindingError> {
+    pub(crate) fn check_binding(&self, store: &CloudWorkflowStore) -> Result<(), BindingError> {
         let current = store
             .load_remote_allocation(
                 self.allocation.workspace().session_id(),
@@ -267,7 +264,7 @@ impl RetainedAzure {
 
     /// The exact allocation, its binding and the absence of a storage selection must
     /// all still hold: any drift around the observation is a changed state, not a result.
-    pub(in crate::remote_workspace) fn check_current(
+    pub(crate) fn check_current(
         &self,
         store: &CloudWorkflowStore,
         expected: &StoredRemoteAllocation,
@@ -299,7 +296,7 @@ impl RetainedAzure {
 /// answer reaches the shared coordinator, by the binding recheck admission ran, so a
 /// binding that changed while the control plane was being read or the Stop was in
 /// flight can never be completed as a retained Stop.
-pub(in crate::remote_workspace) struct Bound<'a, P> {
+pub(crate) struct Bound<'a, P> {
     inner: P,
     store: &'a CloudWorkflowStore,
     admitted: &'a RetainedAzure,
@@ -307,11 +304,7 @@ pub(in crate::remote_workspace) struct Bound<'a, P> {
 }
 
 impl<'a, P> Bound<'a, P> {
-    pub(in crate::remote_workspace) fn new(
-        inner: P,
-        store: &'a CloudWorkflowStore,
-        admitted: &'a RetainedAzure,
-    ) -> Self {
+    pub(crate) fn new(inner: P, store: &'a CloudWorkflowStore, admitted: &'a RetainedAzure) -> Self {
         Self {
             inner,
             store,
@@ -320,7 +313,7 @@ impl<'a, P> Bound<'a, P> {
         }
     }
 
-    pub(in crate::remote_workspace) fn drifted(&self) -> bool {
+    pub(crate) fn drifted(&self) -> bool {
         self.drifted.load(Ordering::SeqCst)
     }
 
@@ -340,7 +333,7 @@ impl<'a, P> Bound<'a, P> {
 
 /// The provider's own error, or the saved binding drifting during an observation or Stop.
 #[derive(Debug)]
-pub(in crate::remote_workspace) enum BoundError<E> {
+pub(crate) enum BoundError<E> {
     Provider(E),
     Drift,
 }
@@ -365,13 +358,19 @@ impl<P: InteractiveWorkerProvider> InteractiveWorkerProvider for Bound<'_, P> {
         self.inner.ensure_worker(request).map_err(BoundError::Provider)
     }
     fn inspect_worker(&self, worker: &InteractiveWorker) -> Result<Option<InteractiveWorkerStatus>, Self::Error> {
-        self.inner.inspect_worker(worker).map_err(BoundError::Provider)
+        let observed = self.inner.inspect_worker(worker).map_err(BoundError::Provider);
+        // An inspection writes nothing but decides what follows (a reconnection, a
+        // renewed observation); the binding and storage must still be the admitted ones.
+        // The allocation itself is fenced by each caller's own current-state checks, so
+        // a coordinator that has already advanced the record is not falsely refused.
+        self.fence(observed, self.admitted.check_binding(self.store).is_ok())
     }
     fn reconcile_worker(
         &self,
         request: &InteractiveWorkerRequest,
     ) -> Result<Option<InteractiveWorkerStatus>, Self::Error> {
-        self.inner.reconcile_worker(request).map_err(BoundError::Provider)
+        let observed = self.inner.reconcile_worker(request).map_err(BoundError::Provider);
+        self.fence(observed, self.admitted.check_binding(self.store).is_ok())
     }
     fn delete_worker(&self, worker: &InteractiveWorker) -> Result<InteractiveWorkerCleanup, Self::Error> {
         self.inner.delete_worker(worker).map_err(BoundError::Provider)

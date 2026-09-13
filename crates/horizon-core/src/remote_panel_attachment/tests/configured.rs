@@ -369,10 +369,11 @@ fn actual_owner_and_supported_provider_are_required_before_profile_access() {
         ),
         ConfiguredRemotePanelAttachError::ClientSessionMismatch
     );
+    // Azure is admitted through its own named profile, never through the local one.
     expected.provider = CloudProvider::Azure;
     assert_eq!(
         connect(&fixture, &RemoteProviderConfig::default(), &expected, OWNER, "terminal"),
-        ConfiguredRemotePanelAttachError::UnsupportedProvider
+        ConfiguredRemotePanelAttachError::Configuration(RemoteProviderConfigError::UnconfiguredAzureProfile)
     );
     assert_eq!(fixture.current(), before);
 }
