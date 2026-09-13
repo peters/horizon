@@ -255,6 +255,87 @@ fn variable_navigation_keeps_the_template_and_skips_mcp() {
 }
 
 #[test]
+fn empty_completion_assertions_are_rejected() {
+    let mut navigate = action("go", RecordedKind::Navigate, None);
+    navigate.navigation = Some(app_navigation());
+    assert_eq!(
+        compile(&recording(vec![navigate]), Vec::new()),
+        Err(RoutineError::InvalidAssertion)
+    );
+}
+
+#[test]
+fn duplicate_action_ids_are_rejected() {
+    let first = action(
+        "s1",
+        RecordedKind::Scroll {
+            delta_x: 0.0,
+            delta_y: 80.0,
+        },
+        None,
+    );
+    let mut second = action(
+        "s1",
+        RecordedKind::Wait {
+            selector: "#status".to_string(),
+            state: SelectorState::Visible,
+        },
+        None,
+    );
+    second.recorded_at_millis = 2;
+    assert_eq!(
+        compile(&recording(vec![first, second]), heading()),
+        Err(RoutineError::InvalidRecording)
+    );
+}
+
+#[test]
+fn opposite_scrolls_are_not_coalesced() {
+    let first = action(
+        "s1",
+        RecordedKind::Scroll {
+            delta_x: 0.0,
+            delta_y: 80.0,
+        },
+        None,
+    );
+    let second = action(
+        "s2",
+        RecordedKind::Scroll {
+            delta_x: 0.0,
+            delta_y: -40.0,
+        },
+        None,
+    );
+    let compiled = compile(&recording(vec![first, second]), heading()).expect("compile");
+    assert_eq!(compiled.steps.len(), 2);
+}
+
+#[test]
+fn overflowed_scroll_coalescing_is_rejected() {
+    let first = action(
+        "s1",
+        RecordedKind::Scroll {
+            delta_x: 0.0,
+            delta_y: f64::MAX,
+        },
+        None,
+    );
+    let second = action(
+        "s2",
+        RecordedKind::Scroll {
+            delta_x: 0.0,
+            delta_y: f64::MAX,
+        },
+        None,
+    );
+    assert_eq!(
+        compile(&recording(vec![first, second]), heading()),
+        Err(RoutineError::InvalidRecording)
+    );
+}
+
+#[test]
 fn variable_named_panel_id_is_reserved() {
     let mut fill = action("month", RecordedKind::Fill, Some(unique_id("month", 1)));
     fill.value_source = Some(ValueSource::Variable {

@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use url::Url;
@@ -88,19 +90,31 @@ pub struct McpCall {
 
 /// Compile a validated recording into crate-local plan steps.
 ///
-/// Consecutive scrolls that share a target are coalesced. Click, fill, targeted
-/// scroll, credential fill, and handoff stay off the MCP selector path.
+/// Consecutive same-direction scrolls that share a target and mutation class
+/// are coalesced. Click, fill, targeted scroll, credential fill, and handoff
+/// stay off the MCP selector path.
 ///
 /// # Errors
-/// Returns the recording's validation error, an assertion validation error, or
+/// Returns the recording's validation error, [`RoutineError::InvalidAssertion`]
+/// when completion assertions are missing, [`RoutineError::InvalidRecording`]
+/// when action IDs collide or coalesced scroll deltas overflow, or
 /// [`RoutineError::ReservedVariable`] when a variable is named `panel_id`.
 pub fn compile(
     recording: &SemanticRecording,
     completion_assertions: Vec<Assertion>,
 ) -> Result<CompiledRoutine, RoutineError> {
     recording.validate()?;
+    if completion_assertions.is_empty() {
+        return Err(RoutineError::InvalidAssertion);
+    }
     for assertion in &completion_assertions {
         assertion.validate()?;
+    }
+    let mut seen_ids = HashSet::new();
+    for action in &recording.actions {
+        if !seen_ids.insert(action.action_id.as_str()) {
+            return Err(RoutineError::InvalidRecording);
+        }
     }
     let mut steps = Vec::new();
     let mut pending_scroll: Option<CompiledStep> = None;
@@ -108,7 +122,7 @@ pub fn compile(
         if let RecordedKind::Scroll { .. } = action.kind {
             let compiled = compile_action(action)?;
             pending_scroll = Some(match pending_scroll.take() {
-                Some(previous) if same_scroll_target(&previous, &compiled) => coalesce_scroll(previous, compiled)?,
+                Some(previous) if can_coalesce_scroll(&previous, &compiled) => coalesce_scroll(previous, compiled)?,
                 Some(previous) => {
                     steps.push(previous);
                     compiled
@@ -176,10 +190,29 @@ fn compile_action(action: &RecordedAction) -> Result<CompiledStep, RoutineError>
     })
 }
 
-fn same_scroll_target(previous: &CompiledStep, next: &CompiledStep) -> bool {
-    matches!(previous.action, CompiledAction::Scroll { .. })
-        && matches!(next.action, CompiledAction::Scroll { .. })
-        && previous.target == next.target
+fn can_coalesce_scroll(previous: &CompiledStep, next: &CompiledStep) -> bool {
+    match (&previous.action, &next.action) {
+        (
+            CompiledAction::Scroll {
+                delta_x: previous_x,
+                delta_y: previous_y,
+            },
+            CompiledAction::Scroll {
+                delta_x: next_x,
+                delta_y: next_y,
+            },
+        ) => {
+            previous.target == next.target
+                && previous.mutation_class == next.mutation_class
+                && same_scroll_direction(*previous_x, *next_x)
+                && same_scroll_direction(*previous_y, *next_y)
+        }
+        _ => false,
+    }
+}
+
+fn same_scroll_direction(previous: f64, next: f64) -> bool {
+    previous == 0.0 || next == 0.0 || previous.signum() == next.signum()
 }
 
 fn coalesce_scroll(mut previous: CompiledStep, next: CompiledStep) -> Result<CompiledStep, RoutineError> {
@@ -193,8 +226,13 @@ fn coalesce_scroll(mut previous: CompiledStep, next: CompiledStep) -> Result<Com
     else {
         return Err(RoutineError::InvalidRecording);
     };
-    *delta_x += next_x;
-    *delta_y += next_y;
+    let summed_x = *delta_x + next_x;
+    let summed_y = *delta_y + next_y;
+    if !summed_x.is_finite() || !summed_y.is_finite() {
+        return Err(RoutineError::InvalidRecording);
+    }
+    *delta_x = summed_x;
+    *delta_y = summed_y;
     previous.postcondition = next.postcondition;
     previous.mcp = mcp_call(&previous.action, previous.target.as_ref())?;
     Ok(previous)
