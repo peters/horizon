@@ -338,16 +338,18 @@ impl EncodeSession {
             Ok(EncoderCommand::Stop) | Err(mpsc::TryRecvError::Disconnected) => false,
             Ok(EncoderCommand::Pause) => {
                 if !self.paused {
-                    self.paused = true;
-                    self.paused_at = Some(Instant::now());
                     if let Some(encoder) = self.encoder.as_mut() {
                         if let Err(error) = encoder.flush_cluster() {
                             self.handle.encoder_failed.store(true, Ordering::Relaxed);
                             tracing::warn!(target: "browser", "failed to flush video cluster on pause: {error}");
-                        } else if let Some(bytes) = encoder.bytes_written() {
+                            return false;
+                        }
+                        if let Some(bytes) = encoder.bytes_written() {
                             self.handle.bytes_written.store(bytes, Ordering::Relaxed);
                         }
                     }
+                    self.paused = true;
+                    self.paused_at = Some(Instant::now());
                     self.handle.set_state(STATE_PAUSED);
                 }
                 true

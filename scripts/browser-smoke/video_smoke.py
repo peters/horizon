@@ -155,10 +155,19 @@ def exercise(client: mcp_gate.McpClient, args: Any) -> dict[str, Any]:
     paused_delta = still_paused["elapsed_millis"] - elapsed_at_pause
     if paused_delta < 0 or paused_delta > 250:
         raise AssertionError(f"pause counted idle time: delta={paused_delta}ms status={still_paused}")
+    paused_frames = paused.get("frames_encoded", 0)
     resumed = call_video(client, panel_id, "resume")
     if resumed["state"] != "recording":
         raise AssertionError(resumed)
-    wait_for_encoded_frame(client, panel_id)
+    deadline = time.monotonic() + 45
+    status = resumed
+    while time.monotonic() < deadline:
+        status = call_video(client, panel_id, "status")
+        if status.get("frames_encoded", 0) > paused_frames:
+            break
+        time.sleep(0.4)
+    else:
+        raise AssertionError(f"resume did not encode additional frames: paused={paused_frames} status={status}")
     stopped = call_video(client, panel_id, "stop")
     if stopped["state"] != "stopped" or stopped["active"]:
         raise AssertionError(stopped)
