@@ -197,6 +197,12 @@ impl VideoCaptureState {
         operation: BrowserVideoOperation,
         options: Option<&BrowserVideoCaptureOverrides>,
     ) -> Result<BrowserVideoCapture, BrowserControlFailure> {
+        if !matches!(operation, BrowserVideoOperation::Start) && options.is_some() {
+            return Err(BrowserControlFailure::new(
+                "invalid_input",
+                "video pause, resume, status, and stop do not accept capture options",
+            ));
+        }
         match operation {
             BrowserVideoOperation::Start => self.start(host, capture_id, frame_slot, options),
             BrowserVideoOperation::Pause => self.pause(),
@@ -288,6 +294,33 @@ mod tests {
             .start(host, "two", slot, None)
             .expect_err("second start must fail");
         assert_eq!(error.code, "capture_active");
+        let _ = state.stop();
+    }
+
+    #[test]
+    fn pause_rejects_start_only_options() {
+        let root = tempfile::tempdir().unwrap_or_else(|error| panic!("tempdir failed: {error}"));
+        let slot = Arc::new(FrameSlot::new());
+        slot.store_test_rgb(64, 64, solid_rgb(32, 32, 32));
+        let mut state = VideoCaptureState::default();
+        let defaults = BrowserVideoCaptureOptions {
+            fps: 5,
+            compression_level: 0,
+            ..BrowserVideoCaptureOptions::default()
+        };
+        let host = VideoCaptureHost::new(Some(root.path()), None, "panel", &defaults);
+        state
+            .start(host, "one", Arc::clone(&slot), None)
+            .unwrap_or_else(|error| panic!("start video: {error:?}"));
+        let host = VideoCaptureHost::new(Some(root.path()), None, "panel", &defaults);
+        let overlay = BrowserVideoCaptureOverrides {
+            fps: Some(5),
+            ..BrowserVideoCaptureOverrides::default()
+        };
+        let error = state
+            .apply(host, "one", slot, BrowserVideoOperation::Pause, Some(&overlay))
+            .expect_err("pause must reject start-only options");
+        assert_eq!(error.code, "invalid_input");
         let _ = state.stop();
     }
 }

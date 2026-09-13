@@ -2,11 +2,11 @@
 
 Temporary plan for [#587](https://github.com/peters/horizon/issues/587). Delete after the UI validation pass unless asked to keep it.
 
-Launch the exact candidate (`target/debug/horizon`) with an isolated `--config` and `--ephemeral` so this does not reuse the operator session. Unset `HORIZON` for the child.
+Launch the exact candidate (`target/debug/horizon`) with an isolated `--config` and `--ephemeral` so this does not reuse the operator session. Unset `HORIZON` for the child. Do not touch `~/github/horizon`; use a task-owned worktree at the exact PR SHA.
 
 ## Lanes
 
-1. **Chrome Record control (Linux Chromium)**
+1. **Chrome Record control (Linux Chromium or macOS/Metal Chrome)**
    - Open a Browser panel to a local fixture or `example.com`.
    - Click Record. Confirm a red elapsed timer appears and the page still paints.
    - Navigate and scroll for ~5 seconds.
@@ -24,9 +24,14 @@ Launch the exact candidate (`target/debug/horizon`) with an isolated `--config` 
    - Repeat with `quality: 90` and `compression_level: 8`. Higher quality/higher compression should not crash; sizes may differ.
 
 4. **MCP**
+   - Unattended runner: `python3 scripts/browser-smoke/video_smoke.py --backend chromium --ephemeral` (add `--chromium-command` on macOS).
    - `browser_video` start → status (`recording`) → pause → resume → stop.
    - Returned `path` exists and starts with EBML `1A 45 DF A3`.
    - Audit records the operation and numeric options, not pixels.
+
+## macOS / fintermac (Metal)
+
+Checkout the exact PR SHA into `/Users/fintermac/horizon-smoke/pr-590-webm` (never `~/github/horizon`). `PATH=/opt/homebrew/bin:$PATH git lfs pull`, then `cargo build`. Run lane 4 against `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`. Capture a screenshot of the task-owned window after Record if a console session is available. Close only that PID.
 
 5. **Backend switch / close**
    - Start recording, switch Chromium → Firefox (or close the panel).

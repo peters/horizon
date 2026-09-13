@@ -406,7 +406,9 @@ impl EncodeSession {
                 }
             }
         } else if let Some(file) = self.file.take() {
-            write_empty_webm(file)
+            let bytes = write_empty_webm(file)?;
+            self.handle.bytes_written.store(bytes, Ordering::Relaxed);
+            Ok(())
         } else {
             Ok(())
         }
@@ -427,6 +429,7 @@ struct ActiveEncoder {
     max_file_bytes: u64,
     timestamps: Vec<u64>,
     pending: Vec<(u64, bool, Vec<u8>)>,
+    limit_reached: bool,
 }
 
 impl ActiveEncoder {
@@ -461,6 +464,7 @@ impl ActiveEncoder {
             max_file_bytes: options.max_file_bytes,
             timestamps: Vec::new(),
             pending: Vec::new(),
+            limit_reached: false,
         })
     }
 
@@ -496,6 +500,10 @@ impl ActiveEncoder {
         loop {
             match self.context.receive_packet() {
                 Ok(packet) => {
+                    if self.limit_reached {
+                        outcome = PushOutcome::FileLimit;
+                        continue;
+                    }
                     let keyframe = packet.frame_type == FrameType::KEY;
                     let timestamp_ms = self.timestamp_for(packet.input_frameno);
                     match self.push_packet(timestamp_ms, keyframe, packet.data)? {
@@ -511,6 +519,9 @@ impl ActiveEncoder {
     }
 
     fn push_packet(&mut self, timestamp_ms: u64, keyframe: bool, data: Vec<u8>) -> io::Result<PushOutcome> {
+        if self.limit_reached {
+            return Ok(PushOutcome::FileLimit);
+        }
         let extra = u64::try_from(data.len()).unwrap_or(u64::MAX).saturating_add(16);
         if self.muxer.is_none() {
             if !keyframe {
@@ -524,6 +535,7 @@ impl ActiveEncoder {
             let private = av1_codec_private(&sequence_header_obu(&data));
             let mut muxer = WebmMuxer::create(file, self.width, self.height, &private)?;
             if muxer.would_exceed(extra, self.max_file_bytes)? {
+                self.limit_reached = true;
                 self.muxer = Some(muxer);
                 return Ok(PushOutcome::FileLimit);
             }
@@ -531,6 +543,7 @@ impl ActiveEncoder {
             for (pending_ts, pending_key, pending_data) in self.pending.drain(..) {
                 let pending_extra = u64::try_from(pending_data.len()).unwrap_or(u64::MAX).saturating_add(16);
                 if muxer.would_exceed(pending_extra, self.max_file_bytes)? {
+                    self.limit_reached = true;
                     self.muxer = Some(muxer);
                     return Ok(PushOutcome::FileLimit);
                 }
@@ -541,6 +554,7 @@ impl ActiveEncoder {
         }
         if let Some(muxer) = self.muxer.as_mut() {
             if muxer.would_exceed(extra, self.max_file_bytes)? {
+                self.limit_reached = true;
                 return Ok(PushOutcome::FileLimit);
             }
             muxer.write_frame(timestamp_ms, keyframe, &data)?;
@@ -557,6 +571,9 @@ impl ActiveEncoder {
         loop {
             match self.context.receive_packet() {
                 Ok(packet) => {
+                    if self.limit_reached {
+                        continue;
+                    }
                     let keyframe = packet.frame_type == FrameType::KEY;
                     let timestamp_ms = self.timestamp_for(packet.input_frameno);
                     let _ = self.push_packet(timestamp_ms, keyframe, packet.data)?;
@@ -567,10 +584,9 @@ impl ActiveEncoder {
         }
         if let Some(muxer) = self.muxer.take() {
             muxer.finish()
+        } else if let Some(file) = self.file.take() {
+            write_empty_webm(file)
         } else {
-            if let Some(file) = self.file.take() {
-                write_empty_webm(file)?;
-            }
             Ok(0)
         }
     }
@@ -580,9 +596,9 @@ fn fill_plane(frame: &mut Frame<u8>, plane: usize, source: &[u8], stride: usize)
     frame.planes[plane].copy_from_raw_u8(source, stride, 1);
 }
 
-fn write_empty_webm(file: File) -> io::Result<()> {
+fn write_empty_webm(file: File) -> io::Result<u64> {
     let muxer = WebmMuxer::create(file, 16, 16, &[0x81, 0x1F, 0x0C, 0x00])?;
-    muxer.finish().map(|_| ())
+    muxer.finish()
 }
 
 fn quality_to_quantizer(quality: u32) -> usize {
