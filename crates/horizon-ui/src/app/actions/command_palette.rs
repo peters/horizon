@@ -60,7 +60,7 @@ impl HorizonApp {
             CommandId::SwitchWorkspace(workspace_id) => {
                 let _ = self.focus_workspace_visible(ctx, workspace_id, true);
             }
-            CommandId::FocusPanel(panel_id) => self.reveal_panel_visible(ctx, panel_id),
+            CommandId::FocusPanel(panel_id) => self.reveal_selected_panel(ctx, panel_id),
             CommandId::FocusActiveWorkspace => {
                 let _ = self.focus_active_workspace(ctx, false);
             }
