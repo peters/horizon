@@ -37,13 +37,22 @@ The **tool** is read-only (proven in the PR: strace audit, no-write runs).
 The *verification plumbing* below — delivering the single checker file to
 `/tmp` on the VM and deleting it afterwards — deliberately is **not**
 read-only, and it is **not** a tool feature: issue #604 reserves SSH
-delivery/invocation for a later slice. The before/after snapshot in steps 1
-and 4 evidences the *tool run* (step 3), not the plumbing. The plan is
+delivery/invocation for a later slice. The before/after snapshot in steps 2
+and 4 evidences the *tool run* (step 3), not the plumbing. Delivery is step 1
+so both snapshots include the checker file. The plan is
 explicit about which steps mutate the host so the proof is not overclaimed.
 
 ## Steps (run in order)
 
-1. **Baseline snapshot (read-only):**
+1. **Deliver the checker — MUTATES the host (verification plumbing, not a tool feature):**
+   single file to `/tmp`, removed in step 5. No package manager, no service,
+   no install path. Deliver **before** the baseline so both snapshots include
+   the file and the delivery itself is not part of the before/after diff.
+   ```sh
+   scp scripts/remote-host-preflight/preflight.py "$VM_SSH":/tmp/preflight-604.py
+   ```
+
+2. **Baseline snapshot (read-only):**
    ```sh
    ssh "$VM_SSH" 'date -u; uname -srm; nproc; grep MemTotal /proc/meminfo;
      WS=/var/lib/horizon-workers;
@@ -65,13 +74,6 @@ explicit about which steps mutate the host so the proof is not overclaimed.
    4096-byte ext4 options window the checker evaluates. That is the
    independent ground truth for matrix assertions 4–6.
 
-2. **Deliver the checker — MUTATES the host (verification plumbing, not a tool feature):**
-   single file to `/tmp`, removed in step 5. No package manager, no service,
-   no install path.
-   ```sh
-   scp scripts/remote-host-preflight/preflight.py "$VM_SSH":/tmp/preflight-604.py
-   ```
-
 3. **Run the preflight on the VM** (the tool run under test; fixed args, bounded probes, 10 s each). Capture reports **locally** before any VM cleanup. Assertion 9 needs two JSON runs with the same `--now`:
    ```sh
    ssh "$VM_SSH" 'python3 -B /tmp/preflight-604.py --json --now 2026-09-13T00:00:00Z' > preflight-1.json
@@ -88,7 +90,7 @@ explicit about which steps mutate the host so the proof is not overclaimed.
    between the two JSON runs; if `cmp` differs only in `disk_capacity`,
    treat that as sampling, not a generated_at/probe-structure failure.
 
-4. **Post-run snapshot (read-only):** same commands as step 1 (including
+4. **Post-run snapshot (read-only):** same commands as step 2 (including
    `nproc`, `MemTotal`, the workspace ancestor, its block device and the raw
    ext4 options) into
    `after.txt`. Take `after.txt` **before** step 5 so the before/after diff

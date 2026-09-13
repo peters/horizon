@@ -103,9 +103,16 @@ def redact(text):
     return out[:400]
 
 
-def run_probe(executor, key, timeout):
-    """Run one fixed probe; returns (result_dict, error_string_or_None)."""
+def run_probe(executor, key, timeout, extra_argv=None):
+    """Run one fixed probe; returns (result_dict, error_string_or_None).
+
+    `extra_argv` is appended as additional argv elements (never through a
+    shell). The disk probe uses this for the workspace path so `df` does
+    not enumerate unrelated mounts.
+    """
     argv = list(PROBE_ARGS[key])
+    if extra_argv:
+        argv.extend(extra_argv)
     try:
         result = executor(argv, timeout)
     except subprocess.TimeoutExpired:
@@ -261,26 +268,29 @@ def docker_server_ostype(probe):
 
 
 def check_container_engine(executor, timeout):
-    docker_version, dv_err = run_probe(executor, "docker_version", timeout)
-    podman_info, pi_err = run_probe(executor, "podman_info", timeout)
-
-    docker_server = parse_engine_version(docker_version, "docker")
-    podman_version = parse_engine_version(podman_info, "podman")
-
+    """Locality first, then daemon probes. A remote endpoint is never contacted."""
     reasons = {}
-    if docker_server is not None:
-        ostype = docker_server_ostype(docker_version)
-        if ostype != "linux":
-            reasons["docker"] = ("docker server OS is %s, not linux" % ostype
-                                 if ostype else "docker server OSType missing")
-        else:
-            note = docker_endpoint_reason(executor, timeout)
-            if note is not None:
-                reasons["docker"] = note
-    if podman_version is not None:
-        note = engine_endpoint_note("podman")
-        if note is not None:
-            reasons["podman"] = note
+    docker_version, dv_err, docker_server = None, None, None
+    podman_info, pi_err, podman_version = None, None, None
+
+    docker_note = docker_endpoint_reason(executor, timeout)
+    if docker_note is not None:
+        reasons["docker"] = docker_note
+    else:
+        docker_version, dv_err = run_probe(executor, "docker_version", timeout)
+        docker_server = parse_engine_version(docker_version, "docker")
+        if docker_server is not None:
+            ostype = docker_server_ostype(docker_version)
+            if ostype != "linux":
+                reasons["docker"] = ("docker server OS is %s, not linux" % ostype
+                                     if ostype else "docker server OSType missing")
+
+    podman_note = engine_endpoint_note("podman")
+    if podman_note is not None:
+        reasons["podman"] = podman_note
+    else:
+        podman_info, pi_err = run_probe(executor, "podman_info", timeout)
+        podman_version = parse_engine_version(podman_info, "podman")
 
     engine_ok = None
     if docker_server is not None and "docker" not in reasons:
@@ -293,7 +303,9 @@ def check_container_engine(executor, timeout):
         for name, probe, err, version, reason in (
                 ("docker", docker_version, dv_err, docker_server, reasons.get("docker")),
                 ("podman", podman_info, pi_err, podman_version, reasons.get("podman"))):
-            if version is None:
+            if reason:
+                detail_bits.append("%s: %s" % (name, reason))
+            elif version is None:
                 detail_bits.append(engine_failure_bit(name, probe, err, timeout))
             else:
                 detail_bits.append("%s: %s" % (name, reason))
@@ -405,7 +417,12 @@ def select_mount_point(mount_paths, workspace_path):
 
 
 def check_disk(executor, timeout, workspace_path):
-    result, error = run_probe(executor, "disk", timeout)
+    target = nearest_existing(workspace_path)
+    if target is None:
+        return {"id": "disk_capacity", "status": ERROR, "value": None,
+                "detail": "workspace path %s does not exist and no ancestor is stat-able"
+                          % workspace_path}
+    result, error = run_probe(executor, "disk", timeout, extra_argv=[target])
     if error:
         return {"id": "disk_capacity", "status": ERROR, "value": None, "detail": error}
     if result["exit_code"] != 0:
@@ -622,10 +639,25 @@ def build_report(procfs_root, sysfs_root, workspace_path, timeout, executor, now
     }
 
 
+def printable_line(text):
+    """One printable line: drop C0/DEL controls, collapse newlines to spaces."""
+    chars = []
+    for char in str(text or ""):
+        code = ord(char)
+        if char in "\n\r":
+            chars.append(" ")
+        elif code < 32 or code == 127:
+            continue
+        else:
+            chars.append(char)
+    return " ".join("".join(chars).split())
+
+
 def render_text(report):
     lines = ["%s report (schema %d)" % (report["tool"], report["schema"]), ""]
     for check in report["checks"]:
-        lines.append("%-24s %-11s %s" % (check["id"], check["status"], check.get("detail", "")))
+        detail = printable_line(check.get("detail", ""))
+        lines.append("%-24s %-11s %s" % (check["id"], check["status"], detail))
     summary = report["summary"]
     lines.append("")
     lines.append("verdict: %s (supported %d, unsupported %d, unverified %d, errors %d)"

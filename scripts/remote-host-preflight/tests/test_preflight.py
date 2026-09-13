@@ -138,7 +138,11 @@ class Harness(unittest.TestCase):
         def executor(argv, timeout):
             seen.append(list(argv))
             for key, args in preflight.PROBE_ARGS.items():
-                if list(args) == list(argv):
+                args = list(args)
+                matches = list(argv) == args
+                if key == "disk" and list(argv[:len(args)]) == args and len(argv) == len(args) + 1:
+                    matches = True
+                if matches:
                     entry = fixture.get(key)
                     if entry is None:
                         raise FileNotFoundError
@@ -291,7 +295,6 @@ class EngineFailures(Harness):
         fixture = dict(DEFAULT_FIXTURE)
         fixture["docker_version"] = {"stdout": "this is not json {{{"}
         fixture.pop("docker_info")
-        fixture.pop("docker_context", None)
         fixture.pop("podman_info", None)
         code, report, _ = self.run_main(fixture)
         self.assertEqual(code, 1)
@@ -301,12 +304,14 @@ class EngineFailures(Harness):
     def test_remote_docker_endpoint_is_rejected(self):
         fixture = dict(DEFAULT_FIXTURE)
         with mock.patch.dict(os.environ, {"DOCKER_HOST": "tcp://remote-daemon:2376"}):
-            code, report, _ = self.run_main(fixture)
+            code, report, executor = self.run_main(fixture)
         self.assertEqual(code, 1)
         by_id = {check["id"]: check for check in report["checks"]}
         self.assertEqual(by_id["container_engine"]["status"], "unsupported")
         self.assertIn("endpoint is remote", by_id["container_engine"]["detail"])
         self.assertIn("tcp://", by_id["container_engine"]["detail"])
+        self.assertNotIn(list(preflight.PROBE_ARGS["docker_version"]), executor.seen)
+        self.assertNotIn(list(preflight.PROBE_ARGS["docker_info"]), executor.seen)
 
     def test_local_unix_docker_endpoint_is_accepted(self):
         fixture = dict(DEFAULT_FIXTURE)
@@ -330,12 +335,14 @@ class EngineFailures(Harness):
     def test_remote_docker_context_is_rejected(self):
         fixture = dict(DEFAULT_FIXTURE)
         fixture["docker_context"] = docker_context_ok(host="tcp://remote-daemon:2376")
-        code, report, _ = self.run_main(fixture)
+        code, report, executor = self.run_main(fixture)
         self.assertEqual(code, 1)
         by_id = {check["id"]: check for check in report["checks"]}
         self.assertEqual(by_id["container_engine"]["status"], "unsupported")
         self.assertIn("context Host=", by_id["container_engine"]["detail"])
         self.assertIn("tcp://", by_id["container_engine"]["detail"])
+        self.assertNotIn(list(preflight.PROBE_ARGS["docker_version"]), executor.seen)
+        self.assertNotIn(list(preflight.PROBE_ARGS["docker_info"]), executor.seen)
 
     def test_missing_docker_server_ostype_is_rejected(self):
         fixture = dict(DEFAULT_FIXTURE)
@@ -439,7 +446,6 @@ class EngineFailures(Harness):
         fixture = dict(DEFAULT_FIXTURE)
         fixture["docker_version"] = {"timeout": True}
         fixture.pop("docker_info")
-        fixture.pop("docker_context", None)
         fixture.pop("podman_info", None)
         code, report, _ = self.run_main(fixture)
         self.assertEqual(code, 1)
@@ -758,8 +764,30 @@ class RedactionAndDeterminism(Harness):
         fixture = dict(DEFAULT_FIXTURE)
         _, _, executor = self.run_main(fixture)
         allowed = [list(args) for args in preflight.PROBE_ARGS.values()]
+        disk_prefix = list(preflight.PROBE_ARGS["disk"])
         for argv in executor.seen:
+            if argv[:len(disk_prefix)] == disk_prefix and len(argv) == len(disk_prefix) + 1:
+                continue
             self.assertIn(argv, allowed)
+
+    def test_disk_probe_is_restricted_to_workspace_path(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        workspace = os.path.join(self.tmp.name, "ws")
+        os.makedirs(workspace, exist_ok=True)
+        _, _, executor = self.run_main(fixture, workspace=workspace)
+        disk_calls = [argv for argv in executor.seen
+                      if argv[:2] == ["df", "-kP"]]
+        self.assertEqual(len(disk_calls), 1)
+        self.assertEqual(disk_calls[0][-1], workspace)
+
+    def test_human_report_normalizes_multiline_details(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["docker_version"] = docker_daemon_down(
+            "denied\ncpu_capacity             supported   forged")
+        _, report, _ = self.run_main(fixture)
+        text = preflight.render_text(report)
+        cpu_rows = [line for line in text.splitlines() if line.startswith("cpu_capacity")]
+        self.assertEqual(len(cpu_rows), 1)
 
 
 if __name__ == "__main__":
