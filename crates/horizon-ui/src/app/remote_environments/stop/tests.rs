@@ -1,3 +1,4 @@
+mod azure;
 mod runpod;
 
 use super::super::{InventoryPage, RemoteEnvironments, paint as inventory_paint};

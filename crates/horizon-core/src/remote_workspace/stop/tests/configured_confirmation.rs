@@ -10,7 +10,9 @@ fn public_check_refuses_unsupported_and_unconfigured_providers_without_writes() 
         expected.provider = provider;
         let result =
             confirm_configured_remote_environment_stop(&fixture.store, &RemoteProviderConfig::default(), &expected);
-        if cfg!(target_os = "linux") && provider == CloudProvider::RunPod {
+        // Azure and (on Linux) RunPod are dispatched by their named profile: an unconfigured
+        // profile is a configuration error before any admission, credential or client work.
+        if provider == CloudProvider::Azure || (cfg!(target_os = "linux") && provider == CloudProvider::RunPod) {
             assert!(matches!(result, Err(ConfiguredStopConfirmationError::Configuration(_))));
         } else {
             assert_eq!(result, Err(ConfiguredStopConfirmationError::UnsupportedProvider));

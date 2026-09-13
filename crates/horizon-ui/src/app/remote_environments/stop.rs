@@ -12,8 +12,8 @@ use horizon_core::{
         RemoteRuntimePhase,
         stop::{
             ConfiguredRunPodStopError, ConfiguredStopConfirmation, ConfiguredStopConfirmationError,
-            ConfiguredStopError, confirm_configured_remote_environment_stop, stop_configured_remote_environment,
-            stop_configured_runpod_environment,
+            ConfiguredStopError, RemoteWorkspaceStopError, confirm_configured_remote_environment_stop,
+            stop_configured_remote_environment, stop_configured_runpod_environment,
         },
     },
 };
@@ -55,6 +55,9 @@ struct StopNotice {
     message: String,
     succeeded: bool,
     checked: bool,
+    /// The provider observation itself failed (credential or control plane); a pending
+    /// or absent answer and every local refusal are not this.
+    unverified: bool,
 }
 
 #[derive(Debug)]
@@ -293,6 +296,7 @@ impl StopNotice {
             message,
             succeeded,
             checked: false,
+            unverified: false,
         }
     }
 
@@ -305,6 +309,12 @@ impl StopNotice {
             Ok(result.observation)
         });
         let succeeded = matches!(result, Ok(RetainedStopped));
+        let unverified = matches!(
+            result,
+            Err(StopError::Check(ConfiguredStopConfirmationError::Stop(
+                RemoteWorkspaceStopError::ProviderUnavailable
+            )))
+        );
         let message = match result {
             Ok(RetainedStopped) => {
                 "Retained Stop confirmed at this check; completion is saved. No Stop request was sent.".into()
@@ -325,6 +335,7 @@ impl StopNotice {
             message,
             succeeded,
             checked: true,
+            unverified,
         }
     }
 }
@@ -356,11 +367,21 @@ fn valid_check_result(expected: &RemoteEnvironmentSummary, result: &ConfiguredSt
     result.saved == allowed
 }
 
+/// Saved Stop intent on a retained persistent cloud worker: `RunPod` on Linux, Azure on
+/// every platform its CLI credential runs on. The saved identity must name the same
+/// provider as the summary; a first Stop is a separate, provider-specific admission.
 fn check_supported(summary: &RemoteEnvironmentSummary) -> bool {
-    cfg!(target_os = "linux")
-        && summary.provider == CloudProvider::RunPod
+    let provider = match summary.provider {
+        CloudProvider::RunPod => cfg!(target_os = "linux"),
+        CloudProvider::Azure => true,
+        CloudProvider::LocalDocker => false,
+    };
+    provider
         && summary.lifetime == WorkerLifetime::Persistent
-        && summary.worker_identity.is_some()
+        && summary
+            .worker_identity
+            .as_ref()
+            .is_some_and(|identity| identity.provider == summary.provider)
         && matches!(
             summary.saved_phase,
             Some(RemoteRuntimePhase::Stopping { .. } | RemoteRuntimePhase::Stopped { .. })
