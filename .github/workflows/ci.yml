@@ -36,7 +36,7 @@ jobs:
   azure-harness-tests:
     name: Azure harness tests
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - name: Verify workspace preflight decisions

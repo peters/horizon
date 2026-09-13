@@ -82,8 +82,7 @@ credentials and identifiers stay private.
    the pre-existing resources
    (`az resource list --subscription <id> --query '[].id' -o json > resources.json`)
    for the cleanup comparison.
-2. **Provision A** (the script lands in a following slice; the contract below is what
-   it must meet): `provision-client.sh --manifest m.json --ssh-private-key key
+2. **Provision A**: `provision-client.sh --manifest m.json --ssh-private-key key
    --horizon-binary <binary from the record> --build-record client-build.json
    --ssh-source-cidr <controller address>/32 --out client.json`. Diagnostics go to
    stderr and `client.json` is the exact-A descriptor the later phases take. A's Ed25519 host key is read through

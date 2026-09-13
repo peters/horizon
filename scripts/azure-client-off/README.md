@@ -33,9 +33,11 @@ labelling rules.
   the provenance the provisioning step verifies.
 - The tests run in CI (`Azure harness tests` job) next to the workspace preflight
   suite.
-- `provision-client.sh` (a following slice): creates client VM A in the manifest's
-  run-named group with the reaper tags and the run identity, and copies the exact
-  Horizon build after checking its provenance.
+- `provision-client.sh`: creates client VM A in the manifest's run-named group with
+  the reaper tags and the run identity under one 30-minute bound, every local file
+  reserved before the first cloud call and every create reconciled by reading the
+  exact resource back, and copies the exact Horizon build after checking its
+  provenance.
 - `tests/`: deterministic coverage of the manifest gates, the verdict logic, the
   cleanup authorization, the `az` client, the observer channel and the mutation
   phases, run with `python3 -B -m unittest discover -s scripts/azure-client-off/tests -v`
