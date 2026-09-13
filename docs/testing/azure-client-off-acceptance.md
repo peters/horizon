@@ -13,11 +13,13 @@ PC, existing Horizon processes or existing workspaces.
 | Role | What it is | Owner of its paths |
 | --- | --- | --- |
 | Client A | Disposable Ubuntu VM in its own exact resource group, running the exact Horizon Linux client (built from `client_sha`) under a virtual display, with an isolated persistent client home on its OS disk (retained across deallocation) | Azure lane |
-| Worker B | Separate persistent Azure CPU worker in its own exact group, created through the product path once the shared wiring accepts Azure; until then through the adapter's live driver | Product path: lead lane; adapter: Azure lane |
-| Observer C | This controller, outside A and B: read-only ARM reads and one pinned SSH session per sample with a key that sshd restricts (`restrict,command=`) to a forced reader of the progress and checkpoint files | Azure lane |
+| Worker B | Separate persistent Azure CPU worker in its own exact group, created on A through the product setup path and prepared through Prepare Repository; its Stop, saved-Stop check and compute Start are product operations; the saved-Shell task start and panel reconnect are gated for Azure until their slices land | Azure lane (product Azure paths and adapter) |
+| Observer C | The read-only principal on the controller, outside A and B: ARM reads and one pinned SSH session per sample with a key that sshd restricts (`restrict,command=`) to a forced reader of the progress and checkpoint files | Azure lane |
+| Operator | The operator's own Azure CLI login on the same controller, the only principal that changes anything from outside A: it provisions and later deallocates and restarts A (`provision-client.sh`, `off`, `return`), journals and reaper-tags B's product-created resources, deletes the run's groups (`cleanup`) and removes A's role assignments and custom role | Azure lane |
 
 C never renews a lease, delivers a keepalive, reconnects a terminal, checkpoints or
-replays a task. C may enforce the declared cleanup deadline.
+replays a task, and never writes to ARM; every mutating step in this runbook names
+the operator. The operator may enforce the declared cleanup deadline.
 
 ## Manifest, frozen before anything is rented
 
@@ -31,7 +33,7 @@ replays a task. C may enforce the declared cleanup deadline.
   "client_sha": "<40-hex commit the client binary was built from>",
   "client_binary_sha256": "<digest of that binary, from record-client-build.sh>",
   "worker_group": "horizon-ws-<workflow>-<job>",
-  "worker_image": "<registry>/horizon-remote-worker@sha256:<digest>",
+  "worker_image": "<registry>/horizon-remote-worker-shell@sha256:<the complete Shell image digest named under Labelling>",
   "hourly_cost_micros": 41000,
   "budget_micros": 2000000,
   "cleanup_deadline_utc": "<ISO-8601 with an explicit offset, within 24 h and far enough ahead for the run>",
@@ -39,6 +41,20 @@ replays a task. C may enforce the declared cleanup deadline.
   "lease_seconds": 600
 }
 ```
+
+`worker_group` is the one field a product pass cannot freeze before renting: the
+product draws B's workflow and job identities when setup is submitted on A (step 3),
+after A has been provisioned from this manifest, and `validate` (which
+`provision-client.sh` runs before renting A) refuses any `worker_group` that is not
+the adapter's `horizon-ws-<workflow>-<job>` with two exact UUIDs. The harness has no
+post-setup binding step yet, so **the product pass is gated on a harness change in
+this lane** (a `bind-worker` command that writes the product-created group into the
+manifest's `worker_group` only if the group carries the adapter's
+`horizon-workflow-id` and `horizon-job-id` tags from which that name derives, plus a
+`validate` rule that everything except `worker_group` is unchanged since
+provisioning; claimed on #474 before it is written). Until it lands, a manifest
+whose `worker_group` is edited by hand after provisioning is not a runnable product
+path and is not used. The other fields are frozen before anything is rented.
 
 `client_off.py --manifest m.json validate` refuses to run anything until the
 manifest is complete: exact UUID, a fresh `run_id` with A's group named
@@ -67,6 +83,145 @@ an off interval of at least ten minutes that exceeds the configured lease. `verd
 the case that must run. The
 manifest, current price and deadline are posted on #474 before the paid run starts;
 credentials and identifiers stay private.
+
+## Client A prerequisites for the product path
+
+The product on A authenticates to Azure the same way the controller does: the
+subscription-pinned Azure CLI credential (`az account get-access-token --subscription
+<id>`), never a stored bearer token. `provision-client.sh` installs no Azure CLI and
+gives A no identity today, so before the product pass A needs, in this order:
+
+1. The Azure CLI on A. `provision-client.sh` does not install it today: before the
+   product pass the script's cloud-init must be augmented with the `azure-cli` package
+   from Microsoft's repository (a harness change in this lane, no extension install);
+   a client provisioned by the current script has no CLI and the product cannot
+   authenticate on it.
+2. An identity A can log in non-interactively. The intended shape is a
+   system-assigned managed identity on A with a custom role whose `Actions` are
+   exactly the following operations, the ones the product paths under test send,
+   and no `delete` operation (the write operations are still modification
+   authority, see the residual):
+
+   ```text
+   Microsoft.Resources/subscriptions/resourceGroups/read
+   Microsoft.Resources/subscriptions/resourceGroups/write
+   Microsoft.Resources/deployments/read
+   Microsoft.Resources/deployments/write
+   Microsoft.Compute/virtualMachines/read
+   Microsoft.Compute/virtualMachines/write
+   Microsoft.Compute/virtualMachines/instanceView/read
+   Microsoft.Compute/virtualMachines/deallocate/action
+   Microsoft.Compute/virtualMachines/start/action
+   Microsoft.Compute/virtualMachines/runCommand/action
+   Microsoft.Compute/disks/read
+   Microsoft.Compute/disks/write
+   Microsoft.Network/publicIPAddresses/read
+   Microsoft.Network/publicIPAddresses/write
+   Microsoft.Network/publicIPAddresses/join/action
+   Microsoft.Network/networkInterfaces/read
+   Microsoft.Network/networkInterfaces/write
+   Microsoft.Network/networkInterfaces/join/action
+   Microsoft.Network/networkSecurityGroups/read
+   Microsoft.Network/networkSecurityGroups/write
+   Microsoft.Network/networkSecurityGroups/join/action
+   Microsoft.Network/virtualNetworks/read
+   Microsoft.Network/virtualNetworks/write
+   Microsoft.Network/virtualNetworks/subnets/read
+   Microsoft.Network/virtualNetworks/subnets/join/action
+   ```
+
+   Why each group: the transport creates and reads the worker's resource group,
+   submits the deployment and reads the deployment resource back (never the
+   operation-status endpoint); every VM read expands `instanceView` and the
+   lifecycle decisions come from its power statuses; `deallocate/action` is Stop,
+   `start/action` is Start and `runCommand/action` is the host-key attestation used
+   by setup and by Start's readiness path; the template creates the data disk, the
+   public IP, the NIC, the security group and the virtual network with its inline
+   `workers` subnet (so no separate subnet write), and the NIC references the public
+   IP, the security group and that child subnet, which needs the `join/action` and
+   the child `subnets/read` operations. Plus the built-in Managed Identity Operator
+   scoped to `horizon-worker-puller` alone. Check saved Stop is ARM read-only and
+   needs nothing beyond the reads. The role grants no
+   `delete` action: deletion is not part of this pass and no product path on A
+   deletes anything (the setup coordinator dispatches no compensating cleanup when a
+   later step fails; it preserves the allocation for recovery and retry), so the
+   removal of every group this run creates is authorized and attempted only by the
+   operator's cleanup from the controller (step 9) under the operator's own
+   credentials, never A's or the observer's;
+   a refused, failed or timed-out step 9 leaves the group for the operator, it is
+   not a complete run. Neither subscription-wide Contributor nor
+   any role with `delete` is assigned to A. The residual that Azure RBAC cannot
+   remove is that the `write` actions must sit at subscription scope (the product
+   creates one new resource group per worker, so no narrower scope exists before the
+   run), which lets a compromised A modify resources of those types in unrelated
+   groups for the run's duration. Step 9's peer comparison detects only a vanished
+   or added peer resource or group (it compares resource IDs and group names, not
+   properties or tags), so an in-place mutation of a peer would pass it; the run
+   neither prevents nor fully detects that residual, and the only prevention is a
+   subscription holding nothing but this lane's resources. **This assignment is not
+   made yet.** Per the
+   #474 coordination, the proposal posted there for approval must carry, before any
+   role or identity is created or assigned: the action list above with its
+   justification from the product transport (file and line per action) and the
+   official Azure RBAC operation reference, the exact scope of each assignment, the
+   owner of the identity, and an exact expiry and removal plan. Step 9's `cleanup`
+   deletes resource groups only; deleting A's group removes the system-assigned
+   identity but can leave its role assignments and the custom role definition
+   behind, so the removal is an explicit operator step from the controller, before the manifest
+   deadline: `az role assignment delete --subscription <id> --assignee <A's
+   principal ID> --scope /subscriptions/<id>` and the same for the
+   `horizon-worker-puller` scope, then `az role definition delete --subscription
+   <id> --name <custom role>`, verified with `az role assignment list
+   --subscription <id> --all --assignee <principal ID>` printing an empty list and
+   `az role definition list --subscription <id> --custom-role-only true --name
+   <custom role>` printing an empty list (every call pinned to the manifest
+   subscription, as the harness pins its own), and the verification recorded with
+   the run. Cost approval is not
+   approval for this authority. No Azure user credential is copied to A: the
+   managed identity is A's only Azure credential. The repository PAT in item 4 is a
+   different credential, typed by the operator into the preparation's token field
+   on A for one delivery and never stored there. Before Horizon is launched, and under the same `HOME`
+   Horizon will use, run `az login --identity` as A's Horizon user and prove the token
+   path the product will take without printing a token: `az account get-access-token
+   --subscription <id> --resource https://management.azure.com/ --query expires_on -o
+   tsv` must print the epoch expiry, the same `expires_on` field the product's
+   credential parses from the JSON answer. The credential issues the same subscription
+   and resource arguments (adding only `--output json` and `--only-show-errors`) with
+   stdin closed, so an unauthenticated CLI leaves setup, Stop and Start unable to
+   obtain a token.
+3. A Horizon configuration on A whose `remote.azure` list holds the exact profile the
+   run uses (subscription, `northeurope`, VM size, the pull identity, the registry
+   login server, the declared hourly cost and the disk SKU); the product binds that
+   profile immutably to the worker at creation.
+4. For the Git lane, a user-supplied repository-scoped PAT for the authorized
+   disposable repository. It is typed only into the repository preparation's token
+   field on A (stdin-only delivery to the worker) and is never written to A's disk or
+   to any manifest, journal or receipt.
+
+Two product paths are still refused for Azure and gate the baseline and return
+steps below until they land (tracked as the next slices on #474): the saved-Shell
+task start (`remote_worker_status/git_start/configured.rs` and the overview's saved
+panel Start admit Local Docker and RunPod only) and configured panel attachment
+(`remote_panel_attachment/configured.rs`, which every Reconnect uses). Steps marked
+**gated** below cannot be executed for an Azure worker today; a product run stops
+before the first gated step and collects no counter evidence until both land. A
+third refused path, the provider status read (`remote_environment_observation/
+configured.rs`, the overview's **Check provider status**), is not used by this
+procedure and is tracked separately.
+
+The deterministic task this lane runs on B, for the pinned worker image: saved Shell
+panel with program `/bin/sh` and arguments (one JSON array, pasted verbatim into
+*Literal arguments (JSON array)*, so the shell receives a single `-c` script)
+`["-c", "i=0; while :; do i=$((i+1)); echo $i > /workspace/progress.counter.tmp &&
+mv /workspace/progress.counter.tmp /workspace/progress.counter; sleep 5; done"]`,
+working directory `.`, which the saved Git task resolves relative to the worker's
+fixed checkout `/workspace/horizon/repository`, so `/workspace/progress.counter`
+advances every five seconds and every 15-second sample sees a higher value; no
+checkpoint path (worker-owned checkpoints are deferred to #471, so the verdict's
+checkpoint boolean stays false). Dirty bytes: before the off phase, write one file
+`/workspace/horizon/repository/horizon-dirty-marker.txt` containing a fresh random
+token from a second panel session, record its SHA-256 in the baseline, and read it
+back unchanged at return and after the worker lifecycle step.
 
 ## Procedure
 
@@ -124,12 +279,128 @@ credentials and identifiers stay private.
 3. **Baseline on A** (product path): start Horizon on A's display with
    `HOME=/home/horizon/.horizon-client-home` (the descriptor's `client_home`; Horizon
    keeps its state under `$HOME/.horizon`, reported as `client_state_root`), the same
-   `HOME` the launch gate used, create or recover B through the common setup, verify the original SSH
-   identity and pin, prepare the remote repository and start a deterministic task on
-   B that writes an increasing counter to a progress file and, where the shared
-   checkpoint capability exists, worker-owned checkpoints. Record worker, session and
-   task identities, the starting counter, dirty file hashes and the checkpoint
-   sequence. The task must advance its counter at least once per 15-second sample.
+   `HOME` the launch gate used, and drive it through the overview (input on A's
+   virtual display through `xdotool`, screenshots through `import`, exactly as the
+   slice smokes did):
+   - **Environments** → **New remote workspace**: under *Worker and repository* pick
+     the Azure profile (the exact `remote.azure` name) and fill the fields:
+     *Digest-pinned image* (the manifest's `worker_image`), *GitHub owner/repository*,
+     *Exact commit SHA* (40 hex characters; the draft refuses an empty or short value),
+     *Dedicated work branch*, *Repository directory* `.`, *Planned Shell program*
+     `/bin/sh`, *Literal arguments (JSON array)* exactly the argv of the deterministic
+     task below, *Panel directory (optional)* empty, the disk size, and optionally an
+     *Azure CPU cost limit*; **Review request** shows the complete profile, the
+     declared price and the immutable-binding disclosure. The manifest's
+     `hourly_cost_micros` and `budget_micros` bound A only (the harness checks them
+     as positive numbers and never meters B); B's admission uses the profile's
+     declared price and the limit typed here, so before the consent box is ticked
+     the review screen must show the price posted for B on #474 (`Standard_D2s_v3`,
+     0.107 USD/h at the time of the post; a profile declaring anything else is
+     corrected on A before the run) and the *Azure CPU cost limit* must equal the B
+     budget posted there; a mismatch aborts the step before **Create task-free
+     worker**. Then tick the consent box and press **Create task-free worker**.
+     Nothing is checked out and no task starts here. Then **Refresh saved page** and select the new row: the repository, panel
+     and Stop sections render only for a selected saved row, and the page shown after
+     creation is still the previous one. Record the workspace, owning session,
+     workflow and job identities and both forms of B's group identity: the
+     resource-group name `horizon-ws-<workflow>-<job>` (the manifest's
+     `worker_group`) and the full ARM group ID
+     `/subscriptions/<id>/resourceGroups/horizon-ws-<workflow>-<job>` (the overview's
+     *Exact resource ID* and `worker.json`'s `group_id`). The group name is
+     derived from the workflow and job identities the record carries from the
+     moment the allocation is saved, before the deployment is sent, so it is known
+     even when an accepted deployment followed by a lost observation leaves the
+     record without a worker identity yet. Journal it the moment the record exists,
+     whether or not the setup goes on to succeed: `client_off.py --manifest m.json
+     journal-group --group horizon-ws-<workflow>-<job> --created
+     created-groups.json`. The command refuses a group it cannot read; if it refuses,
+     run **Check this setup** and the command again until either the group is
+     journaled or Check reports that no group exists, and do not continue while a
+     group may exist unjournaled. Nothing on A deletes a group after a failed setup
+     (the coordinator preserves the allocation for retry), so a group journaled only
+     after a successful baseline would survive an aborted run; journaling it here is
+     what lets step 9 remove it in every outcome. Then, as the operator on the
+     controller (never with observer C's principal, which stays read-only), put B's
+     VM under the deadline reaper, which the product deployment
+     does not do (it tags B with worker identity tags only, and the reaper skips a VM
+     without both `purpose` and `deadline`): `az tag update --subscription <id>
+     --resource-id <B's VM ID> --operation merge --tags purpose=horizon-azure-vm-spike
+     deadline=<the manifest's cleanup_deadline_utc>` and read the two tags back with
+     `az vm show --subscription <id> --ids <B's VM ID> --query tags`. The tags go on
+     the VM only: the product checks its own tags as a subset, so extra VM tags are
+     tolerated, while step 9 refuses a group whose tag set changed since it was
+     journaled, so the group is never retagged. This is the cost stop if A, Horizon
+     or the operator dies before step 9: the reaper deallocates B after the
+     deadline (it never deletes, so the retained disk bills until step 9 or the
+     operator removes the group). Until the harness `bind-worker` step lands and
+     performs this tagging with the same read-back, it is a manual operator
+     requirement and the run does not proceed without the read-back recorded.
+   - **Check this setup** until it reports the original setup as observed: the saved
+     phase becomes `Reconciling` (setup recovery never writes `Ready`) and the record
+     carries the attested pin, read through ARM's run-command channel and never
+     trusted on first connection. Check reports in the setup notice and the overview
+     then reloads the saved page on its own, keeping the selected workspace by ID;
+     confirm the reloaded row before the next step. The
+     overview deliberately never shows the pin; the `host_key` for `worker.json` is
+     taken from A's saved record, whose snapshot is JSON. The store runs in WAL mode,
+     so a plain file copy can miss the newest rows: take a consistent copy with
+     SQLite's online backup through `python3`, which the client image has (cloud-init
+     depends on it; the provisioner installs no `sqlite3` binary):
+     as A's Horizon user, in one shell whose exit trap removes the copy on every
+     exit, interrupted or not:
+
+     ```sh
+     (
+       umask 077
+       copy=$(mktemp /home/horizon/store-copy.XXXXXX) || exit 1
+       trap 'rm -f "$copy"' EXIT INT TERM
+       python3 - "$copy" <<'PY'
+     import json, sqlite3, sys
+     src = sqlite3.connect("/home/horizon/.horizon-client-home/.horizon/cloud-run/workflows.sqlite3")
+     dst = sqlite3.connect(sys.argv[1])
+     src.backup(dst)
+     src.close()
+     for (workspace, snapshot) in dst.execute("select workspace_local_id, snapshot from remote_workspaces"):
+         print(workspace, json.loads(snapshot)["state"]["runtime"]["ssh"]["host_key"])
+     PY
+     )
+     ```
+
+     Take the `host_key` printed for this run's workspace. The copy holds the pinned
+     host key and the repository details, so it is never a predictable or
+     world-readable path and never outlives the subshell (a supported export of the
+     saved pin is preferable and is tracked on #474; scanning the host would defeat
+     the attestation).
+   - Under *Remote repository preparation*, tick *Include explicit first-token
+     installation* first if the PAT is to be delivered, then **Review repository
+     preparation**; the confirmation that follows carries the token field, the
+     first-token consent box and **Confirm repository preparation**. **Check
+     preparation receipt** shows the receipt of the original preparation and its
+     fixed checkout path `/workspace/horizon/repository` without a second submission;
+     it is evidence of that preparation, not of present task readiness, which the
+     later task start admits on its own.
+   - **gated** (Azure saved-Shell Start): **Show saved panels** → on the saved row
+     **Start saved Shell task…**, then the **Start saved Shell task** confirmation
+     starts the counter task defined above (optionally **Reopen view** first to open
+     its disconnected local view). Until the Azure task-start path lands, the counter
+     task for an Azure run cannot be started through the product, and the run stops
+     here.
+   - **gated** (Azure panel attachment): **Show session panels** is a local listing
+     of the board's panels and works today; **Reconnect** on one of them is the
+     attachment call and needs the Azure path.
+   - **gated** (independent panel addition, a separate blocking product gate):
+     configured setup seeds exactly one Shell intent and the overview has no control
+     that adds a panel intent to an existing remote workspace. The three-panel item
+     requires three independent task and panel identities and processes on B, each
+     added through the product, each started on its own and each reconnected under
+     its original identity; three views attached to one task do not count, and a
+     pre-run confirmation on #474 does not stand in for the control. The flow (an
+     **Add independent Shell panel** control on a saved remote workspace, tracked
+     under #472) lands before this run; its controls, and the three recorded panel
+     identities, are written into this step when it does.
+   Once the three gates have landed, record worker, session and task identities, the
+   starting counter and the dirty-marker hash. The task must advance its counter at
+   least once per 15-second sample.
    Write `worker.json` for the observer: `vm_name`, `port`, `host_key` (the attested
    key), `observer_key_path` (the private half of a fresh Ed25519 key generated for
    observer C only, never the client's worker key), `progress_path` and optionally
@@ -165,9 +436,12 @@ credentials and identifiers stay private.
    container only: the worker entrypoint rewrites `authorized_keys` on every container
    start. A first-class observer account in the worker image is lead-owned and would
    replace this step.
-   If this run created B's group, journal its exact identity: `client_off.py
-   --manifest m.json journal-group --group <B's group> --created created-groups.json`
-   (it reads the ARM ID and full tag set into the journal).
+   Because the product created B's group in step 3, journal its exact identity now
+   if that was not already done: `client_off.py --manifest m.json journal-group
+   --group <B's group> --created created-groups.json` (it reads the ARM ID and full
+   tag set into the journal). The journal is what authorizes step 9 to delete B:
+   retention beyond the run is not authorized, so B is deleted by this run's
+   cleanup, not left for a later pass.
 4. **Off**: `client_off.py --manifest m.json --journal journal.ndjson off --worker
    worker.json --client client.json` (the provisioning output; the journal path is the
    one the verdict reads in step 6). Binds the whole phase to one absolute
@@ -211,9 +485,18 @@ credentials and identifiers stay private.
    the same way to the manifest deadline minus the cleanup window, and the start is
    issued only while its 10-minute start-and-poll bound still fits. Attests
    the same exact A again, requires it to be deallocated, starts it only and requires
-   `PowerState/running`. On A, start Horizon again with the same home and reconnect
-   to the same B and task sessions: same worker identity, no additional create, no
-   task replay, dirty bytes intact, no credential rotation.
+   `PowerState/running`. On A, start Horizon again with the same home; it opens the
+   session chooser, and the reconnect path admits only the recorded owning session,
+   so resume that exact persistent session (the owning session ID recorded in the
+   baseline) before anything else. Then open **Environments**, select the same saved
+   environment (same workspace, owning
+   session, generation and exact resource ID), then **Show session panels** and,
+   **gated** (Azure panel attachment), **Reconnect** to the same B and task
+   sessions: same worker identity, no additional create, no task replay, dirty bytes
+   intact, no credential rotation. Before the worker lifecycle step, read the counter
+   and the dirty marker once more over the pinned session on A described in step 7
+   and record that counter value: the task keeps running after the journal's last
+   sample, so only this reading is the value the post-start comparison uses.
 6. **Verdict**: `client_off.py --manifest m.json verdict --journal-in journal.ndjson`.
    The journal's first line is the baseline header the off phase wrote (worker
    identity and image); a journal without it, or for another image, never passes.
@@ -226,14 +509,78 @@ credentials and identifiers stay private.
    image's reference tag throughout, and a counter that advances between every pair
    of consecutive samples. Worker-owned checkpoint progress is reported as a
    separate boolean and is never inferred from the counter.
-7. **Worker lifecycle** is a different assertion, already covered by the adapter's
-   live driver (Stop, explicit start, pinned reattach). Do not Stop or start B during
-   the off interval.
+7. **Worker lifecycle** is a different assertion and runs only after the offline and
+   reconnect evidence is captured; never Stop or start B during the off interval. The
+   harness's deadline arithmetic (`manifest.py`) reserves provisioning, the observer
+   install, the off interval, the return and the cleanup window, not this step, and
+   `validate` does not check for it. Until the harness gains a lifecycle-aware check
+   (tracked on #474), this is a manual operator requirement: freeze the manifest
+   deadline at `validate`'s minimum plus a product-baseline reserve of 90 minutes
+   (`validate` reserves nothing for step 3: the setup deployment and its check,
+   Prepare Repository, the panel steps and the identity recording all run before
+   `off` against the same absolute deadline) plus a lifecycle margin of 60 minutes
+   (a Stop with
+   its 5-minute verification bound, the check, a Start with its 5-minute bound and up
+   to 300 s of readiness, the bounded pinned reads and slack), and immediately before
+   this step compare the clock with the deadline: unless at least that margin plus
+   the cleanup margin (35 minutes) remains, skip the step, report it as not run, and
+   proceed to the observer-key removal and cleanup. It uses the product controls on
+   A, in the *Explicit Stop* section of the overview:
+   **Stop environment…** → confirm (one Stop; records intent, deallocates B and
+   verifies only that the compute reached `PowerState/deallocated`). A verified Stop
+   is not yet the retention proof: the retained `worker-data` disk and the saved
+   address are confirmed by **Check saved Stop**'s read-only observer, so run it after
+   every Stop, verified or not (an unverified Stop leaves the record at `Stop
+   requested (saved)`; a confirmed observation writes the saved phase `Stopped` and a
+   new revision locally), and continue only once this run's check has reported the
+   notice `Retained Stop confirmed at this check; completion is saved` and the
+   reloaded row shows `Stopped (saved, not live)`. The row alone is not enough: a
+   record already at `Stopped` keeps that label, and Start stays offered, when a
+   later check fails or is unverified, so a check without that notice is repeated
+   until it reports it. **Start environment…**
+   is offered only for that verified Stop or an existing Start intent. Then **Start
+   environment…** → confirm (records Start intent, starts only the exact worker,
+   accepts only the saved identity and pin). The result arrives as a notice and the
+   overview then reloads the saved page on its own, keeping the selected workspace
+   by ID: the reloaded row must show `Reconciling` before this step continues. Only
+   when the notice reports an unverified Start and the reloaded row still shows
+   `Start requested (saved)` is **Start environment…** pressed again (the retry
+   reuses the saved intent and never re-posts a running worker); a row at
+   `Reconciling` is never retried. Then read the retained bytes back without the product's
+   panel path, which cannot serve this step: the worker's panel runtime (its sockets
+   under `/run/horizon/panels`) does not survive the VM restart, attachment refuses an
+   unavailable panel, and Start resumes no task, so the counter stops at its last
+   value. A verified Start may still report the endpoint as not attested (the saved
+   phase is `Reconciling` either way), so the read is retried under a bound: on A,
+   open one pinned SSH session with the retained client key
+   (`$HOME/.horizon/remote-ssh-identities/<workflow>-<job>.key`, the saved pin as the
+   only known host, port 2222, user `root`) every 30 s for at most 10 minutes until it
+   answers, and read `/workspace/progress.counter` and
+   `/workspace/horizon/repository/horizon-dirty-marker.txt`: the counter is at least
+   the value recorded in the pinned read before the Stop (the task legitimately keeps
+   counting while the Stop request is submitted and the VM deallocates), a second
+   read 60 s later returns the same counter (nothing is running after the start, so a
+   changing value would mean a resumed or replayed task), the marker's SHA-256 equals
+   the baseline hash, the host key equals the saved pin, and the worker identity in
+   the overview is unchanged. The product's Start compares the VM it observed
+   immediately before its own call with the one after it, not with the worker that
+   existed before the Stop, so the operator closes that gap from the controller:
+   `az vm show --subscription <id> --ids <B's VM ID> --query '{id:id, vmId:vmId}'`
+   must return the `vm_id` and `instance_id` recorded in `worker.json` in step 3,
+   and the group ID read back must equal its `group_id`; a same-name replacement
+   created while B was stopped keeps the name but not the `vmId`, and fails here.
+   A session that never answers within the bound leaves the
+   retention unproven; nothing is retried on the worker beyond the reads. Observer C's restricted key does not survive the restart (the entrypoint
+   rewrites `authorized_keys`), so it is not the reader here. The adapter proved the same sequence
+   live in runs 16 to 18 (`azure-workspace-live-acceptance.md`); this step proves it
+   through the product.
 8. **Remove the observer key**: `client_off.py --manifest m.json remove-observer-key
    --worker worker.json --public-key observer.pub`, once the return and the reconnect
-   check on A are done and before the run is reported finished. B may outlive the
-   run (a product worker is left in place by cleanup), and the run's observer private
-   key must not keep a reading channel into it. The phase attests B, removes exactly
+   check on A are done and before the run is reported finished. Step 9 deletes B
+   only when its journaled identity still matches and within its 20-minute bound (the
+   manifest budget is validated, not metered against elapsed cost), so B can outlive
+   the run when that delete is refused, fails or runs out of time, and the run's
+   observer private key must not keep a reading channel into it. The phase attests B, removes exactly
    the observer's `authorized_keys` line inside the worker container through the ARM
    run-command channel (matched whole and literally; a read error leaves the file
    untouched), re-attests B, and passes only once B explicitly refuses the observer
@@ -264,16 +611,27 @@ credentials and identifiers stay private.
 - A run whose B was created through the adapter's live driver instead of the
   product path is an **adapter-only rehearsal**. It exercises A, C, the off interval
   and the cleanup, and it is reported as such; it is never the #475 product pass.
-- The product pass needs the shared product paths to accept Azure end to end. The
-  configured setup path (`remote_workspace_setup/configured.rs`) and the saved-Stop
-  check dispatch to Azure by the named `remote.azure` profile; the first explicit
-  Azure Stop and the explicit Start of a stopped worker through the product are
-  tracked as the following slices on #474.
+- Merged product paths as of 2026-09-13: configured setup and consent (#561),
+  Prepare Repository (#567), Check saved Stop (#574), the first explicit Stop (#575),
+  and durable explicit Start with its configured Azure admission and overview control
+  (#576, #578, #584). Still refused for Azure and therefore open gates for this pass:
+  the saved-Shell task start and configured panel attachment (Reconnect); the
+  provider status read is also refused but not used by this procedure. Also open:
+  the Azure CLI and an approved, logged-in identity on A, the PAT for the disposable
+  repository, the independent panel-addition control for the second and third panel,
+  and the manifest's post-setup worker binding. The worker image for this run is the
+  lead's tested complete Shell image, exactly
+  `horizonworkersa898ee.azurecr.io/horizon-remote-worker-shell@sha256:01c2ea1ed90ee3d3db7a557bfcc0138fc75248317639ce0adb031cd42d06239f`
+  (source `290daba7000c4d02f8fbc9c843eea882a68bb6e5`); the older adapter image
+  `horizon-remote-worker@sha256:20cc03ef…` proved the adapter lane only and is not
+  valid for a product pass. A manifest naming any other digest is an adapter-only
+  rehearsal at best.
 - Counter progress proves the task kept running. Checkpoint proof needs
   worker-owned checkpoints advancing during the interval.
 
 ## Status
 
 No allocation has been made under this runbook yet. The harness and its
-deterministic tests are in place; the manifest will be posted on #474 before the
-first paid run.
+deterministic tests are in place and the product Azure lifecycle is merged; the
+manifest, current prices, budget and deadline are posted on #474 before the first
+paid run, after the client prerequisites above are approved and in place.
