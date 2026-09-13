@@ -137,9 +137,11 @@ gives A no identity today, so before the product pass A needs, in this order:
    `start/action` is Start and `runCommand/action` is the host-key attestation used
    by setup and by Start's readiness path; the template creates the data disk, the
    public IP, the NIC, the security group and the virtual network with its inline
-   `workers` subnet (so no separate subnet write), and the NIC references the public
-   IP, the security group and that child subnet, which needs the `join/action` and
-   the child `subnets/read` operations. Plus the built-in Managed Identity Operator
+   `workers` subnet (so no separate subnet write); the security group is attached
+   to that subnet, which needs `networkSecurityGroups/join/action`, and the NIC
+   references only the public IP and that child subnet, which needs
+   `publicIPAddresses/join/action`, `subnets/join/action` and the child
+   `subnets/read` operation. Plus the built-in Managed Identity Operator
    scoped to `horizon-worker-puller` alone. Check saved Stop is ARM read-only and
    needs nothing beyond the reads. The role grants no
    `delete` action: deletion is not part of this pass and no product path on A
@@ -192,7 +194,10 @@ gives A no identity today, so before the product pass A needs, in this order:
 3. A Horizon configuration on A whose `remote.azure` list holds the exact profile the
    run uses (subscription, `northeurope`, VM size, the pull identity, the registry
    login server, the declared hourly cost and the disk SKU); the product binds that
-   profile immutably to the worker at creation.
+   profile immutably to the worker at creation. Target validation requires the
+   image's registry prefix to equal the profile's `registry_login_server`, so for
+   the image named under Labelling that field must be exactly
+   `horizonworkersa898ee.azurecr.io`; any other value has Create refused.
 4. For the Git lane, a user-supplied repository-scoped PAT for the authorized
    disposable repository. It is typed only into the repository preparation's token
    field on A (stdin-only delivery to the worker) and is never written to A's disk or
@@ -288,8 +293,9 @@ back unchanged at return and after the worker lifecycle step.
      *Exact commit SHA* (40 hex characters; the draft refuses an empty or short value),
      *Dedicated work branch*, *Repository directory* `.`, *Planned Shell program*
      `/bin/sh`, *Literal arguments (JSON array)* exactly the argv of the deterministic
-     task below, *Panel directory (optional)* empty, the disk size, and optionally an
-     *Azure CPU cost limit*; **Review request** shows the complete profile, the
+     task below, *Panel directory (optional)* empty, the disk size, and the
+     *Azure CPU cost limit*, which the product treats as optional but this
+     acceptance requires; **Review request** shows the complete profile, the
      declared price and the immutable-binding disclosure. The manifest's
      `hourly_cost_micros` and `budget_micros` bound A only (the harness checks them
      as positive numbers and never meters B); B's admission uses the profile's
@@ -327,8 +333,13 @@ back unchanged at return and after the worker lifecycle step.
      (the coordinator preserves the allocation for retry), so a group journaled only
      after a successful baseline would survive an aborted run; journaling it here is
      what lets step 9 remove it in every outcome. Then, as the operator on the
-     controller (never with observer C's principal, which stays read-only), put B's
-     VM under the deadline reaper, which the product deployment
+     controller (never with observer C's principal, which stays read-only), read
+     the journaled group's VM: `az vm list --subscription <id> --resource-group
+     horizon-ws-<workflow>-<job> --query '[].{id:id, name:name}'`. If it lists no
+     `worker` VM (a deployment that created the group and nothing else), record
+     that exact absence, do not continue to the baseline, and go to step 9 with the
+     journaled group. Otherwise put that VM under the deadline reaper, which the
+     product deployment
      does not do (it tags B with worker identity tags only, and the reaper skips a VM
      without both `purpose` and `deadline`): `az tag update --subscription <id>
      --resource-id <B's VM ID> --operation merge --tags purpose=horizon-azure-vm-spike
@@ -379,7 +390,10 @@ back unchanged at return and after the worker lifecycle step.
      saved pin is preferable and is tracked on #474; scanning the host would defeat
      the attestation).
    - Under *Remote repository preparation*, tick *Include explicit first-token
-     installation* first if the PAT is to be delivered, then **Review repository
+     installation* first: a fresh worker holds no credential, and the unticked
+     path ("use the worker's existing credential; no PAT will be sent") is outside
+     this acceptance, so the tick, the token and the first-token consent are
+     mandatory here. Then **Review repository
      preparation**; the confirmation that follows carries the token field, the
      first-token consent box and **Confirm repository preparation**. **Check
      preparation receipt** shows the receipt of the original preparation and its
@@ -415,7 +429,9 @@ back unchanged at return and after the worker lifecycle step.
    components, so no two spellings can name one file), and the identity
    recorded now, before A is stopped: `group_id`, `vm_id`, `instance_id` (the VM's
    `vmId`, which a same-name recreation does not keep) and `host` as ARM reports them.
-   Then install the observer key as a restricted key: `client_off.py --manifest m.json
+   Then, as the operator (the command mutates B through ARM run-command, which
+   observer C's read-only principal cannot do), install the observer key as a
+   restricted key: `client_off.py --manifest m.json
    install-observer-key --worker worker.json --public-key observer.pub`. The worker image authorises `HORIZON_SSH_PUBLIC_KEY` as an
    unrestricted root key, so a plain key would not be a read-only channel; the
    harness instead appends one `authorized_keys` line of the form
@@ -492,10 +508,13 @@ back unchanged at return and after the worker lifecycle step.
    the same way to the manifest deadline minus the cleanup window, and the start is
    issued only while its 10-minute start-and-poll bound still fits. Attests
    the same exact A again, requires it to be deallocated, starts it only and requires
-   `PowerState/running`. On A, start Horizon again with the same home; it opens the
-   session chooser, and the reconnect path admits only the recorded owning session,
-   so resume that exact persistent session (the owning session ID recorded in the
-   baseline) before anything else. Then open **Environments**, select the same saved
+   `PowerState/running`. On A, start Horizon again with the same home. The reconnect
+   path admits only the recorded owning session, so the session that ends up open
+   must be that exact persistent session (the owning session ID recorded in the
+   baseline): startup may open a single recoverable session directly without the
+   chooser, in which case verify the opened session's ID against the baseline
+   before anything else, and when the chooser does appear resume that recorded
+   session from it; a different session is closed, never used. Then open **Environments**, select the same saved
    environment (same workspace, owning
    session, generation and exact resource ID), then **Show session panels** and,
    **gated** (Azure panel attachment), **Reconnect** to the same B and task
@@ -525,13 +544,17 @@ back unchanged at return and after the worker lifecycle step.
    deadline at `validate`'s minimum plus a product-baseline reserve of 90 minutes
    (`validate` reserves nothing for step 3: the setup deployment and its check,
    Prepare Repository, the panel steps and the identity recording all run before
-   `off` against the same absolute deadline) plus a lifecycle margin of 60 minutes
+   `off` against the same absolute deadline) plus 40 minutes for step 8 and the
+   role removal (the observer-key removal can spend about 33 minutes at the
+   harness's bounds and `validate` reserves nothing for it) plus a lifecycle margin
+   of 60 minutes
    (a Stop with
    its 5-minute verification bound, the check, a Start with its 5-minute bound and up
    to 300 s of readiness, the bounded pinned reads and slack), and immediately before
    this step compare the clock with the deadline: unless at least that margin plus
-   the cleanup margin (35 minutes) remains, skip the step, report it as not run, and
-   proceed to the observer-key removal and cleanup. It uses the product controls on
+   75 minutes remains (step 8 at its bounds, about 33 minutes, the role removal, the
+   15-minute return margin and the 20-minute cleanup bound), skip the step, report
+   it as not run, and proceed to the observer-key removal and cleanup. It uses the product controls on
    A, in the *Explicit Stop* section of the overview:
    **Stop environment…** → confirm (one Stop; records intent, deallocates B and
    verifies only that the compute reached `PowerState/deallocated`). A verified Stop
@@ -574,14 +597,17 @@ back unchanged at return and after the worker lifecycle step.
    existed before the Stop, so the operator closes that gap from the controller:
    `az vm show --subscription <id> --ids <B's VM ID> --query '{id:id, vmId:vmId}'`
    must return the `vm_id` and `instance_id` recorded in `worker.json` in step 3,
-   and the group ID read back must equal its `group_id`; a same-name replacement
+   and `az group show --subscription <id> --name horizon-ws-<workflow>-<job> --query
+   id` must return its `group_id`; a same-name replacement
    created while B was stopped keeps the name but not the `vmId`, and fails here.
    A session that never answers within the bound leaves the
    retention unproven; nothing is retried on the worker beyond the reads. Observer C's restricted key does not survive the restart (the entrypoint
    rewrites `authorized_keys`), so it is not the reader here. The adapter proved the same sequence
    live in runs 16 to 18 (`azure-workspace-live-acceptance.md`); this step proves it
    through the product.
-8. **Remove the observer key**: `client_off.py --manifest m.json remove-observer-key
+8. **Remove the observer key**, as the operator (the command mutates B through ARM
+   run-command; observer C's principal cannot run it and a run must not end with
+   it skipped): `client_off.py --manifest m.json remove-observer-key
    --worker worker.json --public-key observer.pub`, once the return and the reconnect
    check on A are done and before the run is reported finished. Step 9 deletes B
    only when its journaled identity still matches and within its 20-minute bound (the
