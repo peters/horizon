@@ -14,6 +14,8 @@ use crate::{
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::sync::Mutex;
 
+#[cfg(target_os = "linux")]
+mod azure;
 mod configured;
 mod guards;
 #[cfg(target_os = "linux")]

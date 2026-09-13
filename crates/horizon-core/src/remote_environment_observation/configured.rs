@@ -4,13 +4,17 @@ use super::{RemoteEnvironmentObservation, RemoteEnvironmentObservationError, obs
 use crate::{
     cloud_run::{CloudProvider, CloudWorkflowStore, local_docker::LocalDockerInteractiveWorkerProvider},
     remote_provider_config::{RemoteProviderConfig, RemoteProviderConfigError},
-    remote_workspace::RemoteEnvironmentSummary,
+    remote_workspace::{
+        RemoteEnvironmentSummary,
+        stop::{ConfiguredStopConfirmationError as BindingError, RemoteWorkspaceStopError},
+    },
 };
 
 /// Check one saved selection using only its explicitly configured provider profile.
 /// This synchronous read belongs off the render thread. It never allocates, adopts,
 /// manages or attaches a worker, and does not need the retained private SSH key.
-/// On Linux, `RunPod` checks require an already retained worker and complete host pin.
+/// On Linux, `RunPod` and Azure checks require an already retained worker and complete
+/// host pin; Azure additionally requires the allocation's immutable profile binding.
 /// # Errors
 /// Rejects unsupported/unconfigured providers, stale selections and unsafe or failed
 /// observations. Diagnostics do not include provider output or executable task data.
@@ -21,6 +25,9 @@ pub fn observe_configured_remote_environment(
 ) -> Result<RemoteEnvironmentObservation, ConfiguredObservationError> {
     if expected.provider == CloudProvider::RunPod {
         return observe_runpod(store, config, expected);
+    }
+    if expected.provider == CloudProvider::Azure {
+        return observe_azure(store, config, expected);
     }
     if expected.provider != CloudProvider::LocalDocker {
         return Err(ConfiguredObservationError::UnsupportedProvider);
@@ -155,6 +162,70 @@ pub(super) fn runpod_with<T>(
     Ok(result)
 }
 
+/// Azure checks share the Stop and Start admission (named `remote.azure` profile,
+/// immutable CPU profile binding, retained worker with its complete handle and saved
+/// pin, no `RunPod` storage expectation) with one difference: pending management
+/// intent stays observable, because this path never writes or manages. The
+/// subscription-pinned CLI credential and client are built lazily after admission and
+/// every provider read is fenced by the binding recheck; drift is a changed state.
+fn observe_azure(
+    store: &CloudWorkflowStore,
+    config: &RemoteProviderConfig,
+    expected: &RemoteEnvironmentSummary,
+) -> Result<RemoteEnvironmentObservation, ConfiguredObservationError> {
+    #[cfg(target_os = "linux")]
+    {
+        use crate::remote_workspace::stop::configured_azure::RetainedAzure;
+        let profile = config.azure_profile(&expected.profile)?;
+        azure_with(
+            store,
+            profile,
+            expected,
+            |_admitted| RetainedAzure::client(store, profile),
+            |provider, workspace| observe_remote_environment(store, provider, workspace),
+        )
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (store, config, expected);
+        Err(ConfiguredObservationError::UnsupportedProvider)
+    }
+}
+
+/// Admission, then the lazy client, then the shared read through the bound provider,
+/// with the admitted snapshot rechecked before the client and after the read. `client`
+/// and `observe` are injectable so tests run the real ordering without the Azure CLI or ARM.
+#[cfg(target_os = "linux")]
+pub(super) fn azure_with<P, T>(
+    store: &CloudWorkflowStore,
+    profile: &crate::cloud_run::azure::AzureProfile,
+    expected: &RemoteEnvironmentSummary,
+    client: impl FnOnce(&crate::remote_workspace::stop::configured_azure::RetainedAzure) -> Result<P, BindingError>,
+    observe: impl FnOnce(
+        &crate::remote_workspace::stop::configured_azure::Bound<'_, P>,
+        &crate::cloud_run::StoredRemoteWorkspace,
+    ) -> Result<T, RemoteEnvironmentObservationError>,
+) -> Result<T, ConfiguredObservationError>
+where
+    P: crate::cloud_run::interactive_worker::InteractiveWorkerProvider,
+{
+    use crate::remote_workspace::stop::configured_azure::{Bound, RetainedAzure};
+    let admitted = RetainedAzure::load_observable(store, profile, expected)?;
+    // The client (and its lazy credential) is built first, then the saved state is
+    // rechecked, so drift during that step is a changed state even when the client
+    // could not be built.
+    let provider = client(&admitted);
+    admitted.check_current(store, &admitted.allocation)?;
+    let bound = Bound::new(provider?, store, &admitted);
+    let result = observe(&bound, admitted.allocation.workspace());
+    if bound.drifted() {
+        return Err(RemoteEnvironmentObservationError::StateChanged.into());
+    }
+    // The read writes nothing, so the whole admitted snapshot must still hold after it.
+    admitted.check_current(store, &admitted.allocation)?;
+    result.map_err(Into::into)
+}
+
 #[derive(Debug, thiserror::Error, Eq, PartialEq)]
 pub enum ConfiguredObservationError {
     #[error("provider checks are not yet supported for this environment's provider")]
@@ -163,8 +234,45 @@ pub enum ConfiguredObservationError {
     RunPodCredentialUnavailable,
     #[error("the configured RunPod profile or retained public worker, pin and storage binding is invalid")]
     InvalidRunPodBinding,
+    #[error(
+        "the configured Azure profile or retained public worker, pin, profile binding and storage binding is invalid"
+    )]
+    InvalidAzureBinding,
     #[error(transparent)]
     Configuration(#[from] RemoteProviderConfigError),
     #[error(transparent)]
     Observation(#[from] RemoteEnvironmentObservationError),
+}
+
+impl From<BindingError> for ConfiguredObservationError {
+    fn from(error: BindingError) -> Self {
+        match error {
+            BindingError::UnsupportedProvider => Self::UnsupportedProvider,
+            BindingError::CredentialUnavailable => Self::RunPodCredentialUnavailable,
+            BindingError::InvalidBinding => Self::InvalidAzureBinding,
+            BindingError::Configuration(error) => Self::Configuration(error),
+            BindingError::Stop(error) => match error {
+                RemoteWorkspaceStopError::MissingAllocation => {
+                    RemoteEnvironmentObservationError::MissingAllocation.into()
+                }
+                RemoteWorkspaceStopError::ProviderMismatch => {
+                    RemoteEnvironmentObservationError::ProviderMismatch.into()
+                }
+                RemoteWorkspaceStopError::StateChanged => RemoteEnvironmentObservationError::StateChanged.into(),
+                RemoteWorkspaceStopError::StorageUnavailable => {
+                    RemoteEnvironmentObservationError::StorageUnavailable.into()
+                }
+                // A missing retained worker or pin, a timed target, or a Stop-only outcome
+                // is an invalid binding for a read that requires the retained public identity.
+                RemoteWorkspaceStopError::MissingWorker
+                | RemoteWorkspaceStopError::MissingTrust
+                | RemoteWorkspaceStopError::UnsupportedLifetime
+                | RemoteWorkspaceStopError::ManagementConflict
+                | RemoteWorkspaceStopError::MissingStopIntent
+                | RemoteWorkspaceStopError::InvalidTimestamp
+                | RemoteWorkspaceStopError::ProviderUnavailable
+                | RemoteWorkspaceStopError::ResourceAbsent => Self::InvalidAzureBinding,
+            },
+        }
+    }
 }
