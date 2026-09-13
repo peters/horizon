@@ -14,6 +14,7 @@ pub const MIN_VIDEO_FPS: u32 = 1;
 pub const MAX_VIDEO_FPS: u32 = 30;
 pub const MIN_VIDEO_MAX_WIDTH: u32 = 320;
 pub const MAX_VIDEO_MAX_WIDTH: u32 = 1920;
+pub const MIN_VIDEO_FILE_BYTES: u64 = 4 * 1024;
 pub const MAX_VIDEO_FILE_BYTES: u64 = 1024 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -76,7 +77,7 @@ impl BrowserVideoCaptureOptions {
         if !(MIN_VIDEO_MAX_WIDTH..=MAX_VIDEO_MAX_WIDTH).contains(&max_width) {
             return Err("video max width must be between 320 and 1920");
         }
-        if !(1..=MAX_VIDEO_FILE_BYTES).contains(&max_file_bytes) {
+        if !(MIN_VIDEO_FILE_BYTES..=MAX_VIDEO_FILE_BYTES).contains(&max_file_bytes) {
             return Err("video capture file limit is outside the supported range");
         }
         Ok(())
@@ -230,6 +231,14 @@ mod tests {
         assert!(
             BrowserVideoCaptureOptions {
                 max_file_bytes: 0,
+                ..BrowserVideoCaptureOptions::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            BrowserVideoCaptureOptions {
+                max_file_bytes: 1,
                 ..BrowserVideoCaptureOptions::default()
             }
             .validate()

@@ -134,6 +134,17 @@ impl VideoCaptureHandle {
     fn set_state(&self, state: u8) {
         self.state.store(state, Ordering::Relaxed);
     }
+
+    fn clear_active(&self) {
+        self.state.store(STATE_IDLE, Ordering::Relaxed);
+        self.file_limit_reached.store(false, Ordering::Relaxed);
+        self.encoder_failed.store(false, Ordering::Relaxed);
+        *self
+            .capture_id
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = String::new();
+        *self.path.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = String::new();
+    }
 }
 
 #[derive(Debug)]
@@ -177,6 +188,7 @@ impl EncoderThread {
             }),
             Err(error) => {
                 let _ = std::fs::remove_file(&path);
+                handle.clear_active();
                 Err(error)
             }
         }
@@ -438,6 +450,7 @@ struct ActiveEncoder {
     width: u32,
     height: u32,
     max_file_bytes: u64,
+    fps: u32,
     timestamps: Vec<u64>,
     pending: Vec<(u64, bool, Vec<u8>)>,
     limit_reached: bool,
@@ -473,6 +486,7 @@ impl ActiveEncoder {
             width,
             height,
             max_file_bytes: options.max_file_bytes,
+            fps: options.fps.max(1),
             timestamps: Vec::new(),
             pending: Vec::new(),
             limit_reached: false,
@@ -579,7 +593,7 @@ impl ActiveEncoder {
 
     fn finish(mut self) -> io::Result<u64> {
         self.context.flush();
-        for _ in 0..8 {
+        for _ in 0..1_024 {
             match self.context.receive_packet() {
                 Ok(packet) => {
                     if self.limit_reached {
@@ -589,12 +603,14 @@ impl ActiveEncoder {
                     let timestamp_ms = self.timestamp_for(packet.input_frameno);
                     let _ = self.push_packet(timestamp_ms, keyframe, packet.data)?;
                 }
-                Err(EncoderStatus::LimitReached | EncoderStatus::NeedMoreData | EncoderStatus::Encoded) => break,
+                Err(EncoderStatus::Encoded) => {}
+                Err(EncoderStatus::LimitReached | EncoderStatus::NeedMoreData) => break,
                 Err(error) => return Err(io::Error::other(error.to_string())),
             }
         }
+        let frame_ms = 1_000 / u64::from(self.fps.max(1));
         if let Some(muxer) = self.muxer.take() {
-            muxer.finish()
+            muxer.finish(frame_ms)
         } else if let Some(file) = self.file.take() {
             write_empty_webm(file)
         } else {
@@ -609,7 +625,7 @@ fn fill_plane(frame: &mut Frame<u8>, plane: usize, source: &[u8], stride: usize)
 
 fn write_empty_webm(file: File) -> io::Result<u64> {
     let muxer = WebmMuxer::create(file, 16, 16, &[0x81, 0x1F, 0x0C, 0x00])?;
-    muxer.finish()
+    muxer.finish(1)
 }
 
 fn quality_to_quantizer(quality: u32) -> usize {

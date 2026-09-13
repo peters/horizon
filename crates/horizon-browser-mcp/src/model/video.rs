@@ -40,7 +40,7 @@ pub(crate) struct VideoInput {
     fps: Option<u32>,
     /// Longest encoded side in pixels 320-1920 (default 1280). Start only.
     max_width: Option<u32>,
-    /// Maximum `WebM` file size in bytes (default 536870912, maximum 1073741824). Start only.
+    /// Maximum `WebM` file size in bytes (default 536870912, minimum 4096, maximum 1073741824). Start only.
     max_file_bytes: Option<u64>,
     /// Per-action timeout in milliseconds (1-60000).
     pub(crate) timeout_millis: Option<u64>,

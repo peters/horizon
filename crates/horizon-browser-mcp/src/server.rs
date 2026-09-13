@@ -281,7 +281,7 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_video",
-        description = "Start, pause, resume, inspect, or stop a bounded WebM recording of the panel's page pixels. Start-only options: quality (1-100), compression_level (0-10), fps (1-30), max_width (320-1920), max_file_bytes. Pause skips time in the file; stop finalizes a private .webm path. Works on Chromium, Firefox, and Safari because it samples the existing decoded frame slot. Page pixels never enter audit."
+        description = "Start, pause, resume, inspect, or stop a bounded WebM recording of the panel's page pixels. Start-only options: quality (1-100), compression_level (0-10), fps (1-30), max_width (320-1920), max_file_bytes (4096-1073741824). Pause skips time in the file; stop finalizes a private .webm path. Works on Chromium, Firefox, and Safari because it samples the existing decoded frame slot. Page pixels never enter audit."
     )]
     async fn browser_video(&self, Parameters(input): Parameters<VideoInput>) -> Result<Json<VideoOutput>, String> {
         let action = input.build_action()?;

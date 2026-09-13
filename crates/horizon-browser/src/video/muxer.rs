@@ -23,6 +23,7 @@ struct CuePoint {
 struct ClusterBuffer {
     timestamp_ms: u64,
     payload: Vec<u8>,
+    starts_keyframe: bool,
 }
 
 impl WebmMuxer {
@@ -41,6 +42,7 @@ impl WebmMuxer {
             cluster: ClusterBuffer {
                 timestamp_ms: 0,
                 payload: Vec::new(),
+                starts_keyframe: false,
             },
             last_timestamp_ms: 0,
         })
@@ -49,9 +51,11 @@ impl WebmMuxer {
     pub(super) fn write_frame(&mut self, timestamp_ms: u64, keyframe: bool, data: &[u8]) -> io::Result<()> {
         if self.cluster.payload.is_empty() {
             self.cluster.timestamp_ms = timestamp_ms;
+            self.cluster.starts_keyframe = keyframe;
         } else if timestamp_ms.saturating_sub(self.cluster.timestamp_ms) >= CLUSTER_MAX_MS {
             self.flush_cluster()?;
             self.cluster.timestamp_ms = timestamp_ms;
+            self.cluster.starts_keyframe = keyframe;
         }
         let relative = i16::try_from(timestamp_ms.saturating_sub(self.cluster.timestamp_ms)).unwrap_or(i16::MAX);
         self.cluster
@@ -66,7 +70,6 @@ impl WebmMuxer {
     }
 
     pub(super) fn would_exceed(&mut self, extra: u64, max_file_bytes: u64) -> io::Result<bool> {
-        const FINALIZE_RESERVE: u64 = 8 * 1024;
         const CLUSTER_HEADER_SLACK: u64 = 32;
         let position = self.file.stream_position()?;
         let buffered = u64::try_from(self.cluster.payload.len()).unwrap_or(u64::MAX);
@@ -74,18 +77,27 @@ impl WebmMuxer {
             .saturating_add(buffered)
             .saturating_add(CLUSTER_HEADER_SLACK)
             .saturating_add(extra)
-            .saturating_add(FINALIZE_RESERVE)
+            .saturating_add(self.projected_cues_bytes())
             > max_file_bytes)
     }
 
-    pub(super) fn finish(mut self) -> io::Result<u64> {
+    pub(super) fn finish(mut self, frame_duration_ms: u64) -> io::Result<u64> {
         self.flush_cluster()?;
         write_cues(&mut self.file, &self.cues)?;
         let end = self.file.stream_position()?;
         self.file.seek(SeekFrom::Start(self.duration_offset))?;
-        self.file.write_all(&duration_millis(self.last_timestamp_ms))?;
+        let duration = self.last_timestamp_ms.saturating_add(frame_duration_ms.max(1));
+        self.file.write_all(&duration_millis(duration))?;
         self.file.flush()?;
         Ok(end)
+    }
+
+    fn projected_cues_bytes(&self) -> u64 {
+        let pending = u64::from(!self.cluster.payload.is_empty() && self.cluster.starts_keyframe);
+        let count = u64::try_from(self.cues.len())
+            .unwrap_or(u64::MAX)
+            .saturating_add(pending);
+        count.saturating_mul(48).saturating_add(32)
     }
 
     fn flush_cluster(&mut self) -> io::Result<()> {
@@ -97,10 +109,12 @@ impl WebmMuxer {
         append_element(&mut payload, &[0xE7], &encode_uint(self.cluster.timestamp_ms));
         payload.extend_from_slice(&self.cluster.payload);
         write_element(&mut self.file, &[0x1F, 0x43, 0xB6, 0x75], &payload)?;
-        self.cues.push(CuePoint {
-            time_ms: self.cluster.timestamp_ms,
-            cluster_position: position,
-        });
+        if self.cluster.starts_keyframe {
+            self.cues.push(CuePoint {
+                time_ms: self.cluster.timestamp_ms,
+                cluster_position: position,
+            });
+        }
         self.cluster.payload.clear();
         Ok(())
     }
@@ -303,7 +317,9 @@ mod tests {
         muxer
             .write_frame(100, false, &[5, 6, 7, 8])
             .unwrap_or_else(|error| panic!("write frame: {error}"));
-        muxer.finish().unwrap_or_else(|error| panic!("finish muxer: {error}"));
+        muxer
+            .finish(100)
+            .unwrap_or_else(|error| panic!("finish muxer: {error}"));
         let bytes = std::fs::read(&path).unwrap_or_else(|error| panic!("read muxer file: {error}"));
         assert_eq!(&bytes[..4], &[0x1A, 0x45, 0xDF, 0xA3]);
         assert!(bytes.windows(4).any(|window| window == b"webm"));

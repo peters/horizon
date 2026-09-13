@@ -152,8 +152,9 @@ def exercise(client: mcp_gate.McpClient, args: Any) -> dict[str, Any]:
     elapsed_at_pause = paused["elapsed_millis"]
     time.sleep(0.8)
     still_paused = call_video(client, panel_id, "status")
-    if still_paused["elapsed_millis"] < elapsed_at_pause:
-        raise AssertionError(f"pause rewound elapsed time: {still_paused}")
+    paused_delta = still_paused["elapsed_millis"] - elapsed_at_pause
+    if paused_delta < 0 or paused_delta > 250:
+        raise AssertionError(f"pause counted idle time: delta={paused_delta}ms status={still_paused}")
     resumed = call_video(client, panel_id, "resume")
     if resumed["state"] != "recording":
         raise AssertionError(resumed)
