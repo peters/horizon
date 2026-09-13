@@ -288,6 +288,47 @@ fn retained_lifecycle_absence_and_pending_management_are_observable_without_muta
 }
 
 #[test]
+fn cleanup_intent_is_observable_here_and_a_conflict_for_the_managing_admissions() {
+    use crate::remote_workspace::{RemoteCleanupIntent, RemoteCleanupReason, stop::configured_azure::RetainedAzure};
+    let fixture = AzureFixture::new(&Shape::default());
+    let mut state = fixture.allocation.workspace().state().clone();
+    let runtime = state.runtime.as_mut().expect("runtime");
+    runtime.phase = RemoteRuntimePhase::Deleting;
+    runtime.cleanup = Some(RemoteCleanupIntent {
+        reason: RemoteCleanupReason::Cancelled,
+        requested_at_millis: 1,
+    });
+    fixture
+        .store
+        .replace_remote_workspace(fixture.allocation.workspace(), &state)
+        .expect("management intent");
+    let managed = fixture.current();
+    let expected = managed.workspace().environment_summary();
+    // The Stop and Start admission refuses the record; the observable admission does not.
+    assert!(RetainedAzure::load(&fixture.store, &fixture.profile, &expected).is_err());
+    let provider = azure_provider(Some(fixture.retained_status(InteractiveWorkerLifecycle::Ready)));
+    let observed = azure_with(
+        &fixture.store,
+        &fixture.profile,
+        &expected,
+        |_| Ok(provider),
+        |provider: &Bound<'_, Provider>, workspace| observe_remote_environment(&fixture.store, provider, workspace),
+    )
+    .expect("pending cleanup stays observable");
+    assert_eq!(observed.saved.saved_phase, Some(RemoteRuntimePhase::Deleting));
+    assert_eq!(
+        observed.worker.map(|worker| worker.lifecycle),
+        Some(InteractiveWorkerLifecycle::Ready)
+    );
+    assert_eq!(
+        fixture.current(),
+        managed,
+        "the intent is neither changed nor cancelled"
+    );
+    assert_eq!(fixture.counts(), [1, 1, 0]);
+}
+
+#[test]
 fn drift_at_the_client_during_the_read_and_after_it_never_yields_an_observation() {
     // Drift while the client is being built: the client failure is outranked.
     let fixture = AzureFixture::new(&Shape::default());

@@ -136,6 +136,7 @@ impl RetainedAzure {
     /// The same admission for a read-only observation: pending cleanup intent stays
     /// observable (the overview must still show such a worker) instead of being a
     /// conflict, because nothing admitted this way may write or manage.
+    #[cfg(target_os = "linux")]
     pub(crate) fn load_observable(
         store: &CloudWorkflowStore,
         profile: &AzureProfile,

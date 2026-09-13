@@ -192,8 +192,8 @@ fn observe_azure(
     }
 }
 
-/// Admission, then the lazy client, then the shared read through the bound provider,
-/// with the admitted snapshot rechecked before the client and after the read. `client`
+/// Admission, then the lazy client, then the admitted snapshot rechecked, then the
+/// shared read through the bound provider, then the snapshot rechecked again. `client`
 /// and `observe` are injectable so tests run the real ordering without the Azure CLI or ARM.
 #[cfg(target_os = "linux")]
 pub(super) fn azure_with<P, T>(
