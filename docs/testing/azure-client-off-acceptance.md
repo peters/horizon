@@ -91,6 +91,14 @@ gives A no identity today, so before the product pass A needs, in this order:
    field on A (stdin-only delivery to the worker) and is never written to A's disk or
    to any manifest, journal or receipt.
 
+Three product paths are still refused for Azure and gate the baseline and return
+steps below until they land (tracked as the next slices on #474): the saved-Shell
+task start (`remote_worker_status/git_start/configured.rs` and the overview's saved
+panel Start admit Local Docker and RunPod only), configured panel attachment
+(`remote_panel_attachment/configured.rs`, which every Reconnect uses), and the
+provider status read (`remote_environment_observation/configured.rs`). Steps marked
+**gated** below cannot be executed for an Azure worker today.
+
 ## Procedure
 
 1. **Prepare locally** (Linux controller with GNU `timeout`). In a fully clean
@@ -152,24 +160,31 @@ gives A no identity today, so before the product pass A needs, in this order:
    slice smokes did):
    - **Environments** → **New remote workspace**: under *Worker and repository* pick
      the Azure profile (the exact `remote.azure` name), enter the worker image digest
-     reference, repository, branch, working directory, command and disk size, and
-     optionally an *Azure CPU cost limit*; **Review request** shows the complete
-     profile, the declared price and the immutable-binding disclosure; tick the
-     consent box and press **Create task-free worker**. Nothing is checked out and no
-     task starts here. Record the workspace, owning session, workflow and job
+     reference, repository, branch, the *Exact commit SHA* (40 hex characters; the
+     draft refuses an empty or short value), working directory, command and disk
+     size, and optionally an *Azure CPU cost limit*; **Review request** shows the
+     complete profile, the declared price and the immutable-binding disclosure; tick
+     the consent box and press **Create task-free worker**. Nothing is checked out
+     and no task starts here. Record the workspace, owning session, workflow and job
      identities and B's exact group ID (`horizon-ws-<workflow>-<job>`).
    - **Check this setup** until the saved phase is Ready with the attested pin (the
      host key is read through ARM's run-command channel, never trusted on first
      connection); the pin is the `host_key` the observer descriptor carries.
-   - **Review repository preparation** → optionally *Include explicit first-token
-     installation* with the PAT typed into the token field → confirm; **Check
+   - Under *Remote repository preparation*, tick *Include explicit first-token
+     installation* first if the PAT is to be delivered, then **Review repository
+     preparation**; the confirmation that follows carries the token field, the
+     first-token consent box and **Confirm repository preparation**. **Check
      preparation receipt** proves the checkout without a second submission.
-   - **Show saved panels** → start the saved Shell task (the deterministic counter
-     script that writes an increasing counter to a progress file under
-     `/workspace`); **Show session panels** → **Reconnect** to attach the view. Three
-     independent panels on B are part of this lane's acceptance; the control path for
-     adding the second and third panel intents to a remote workspace is confirmed on
-     #474 before the run and recorded here.
+   - **gated** (Azure saved-Shell Start): **Show saved panels** → **Reopen view** on
+     the saved row, then its Start confirmation starts the saved Shell task (the
+     deterministic counter script that writes an increasing counter to a progress
+     file under `/workspace`). Until the Azure task-start path lands, the counter task
+     for an Azure run cannot be started through the product.
+   - **gated** (Azure panel attachment): **Show session panels** lists the reopened
+     board panels and **Reconnect** attaches one; both need the Azure attachment path.
+     Three independent panels on B are part of this lane's acceptance; the control
+     path for adding the second and third panel intents to a remote workspace is
+     confirmed on #474 before the run and recorded here.
    Record worker, session and task identities, the starting counter and dirty file
    hashes. The task must advance its counter at least once per 15-second sample.
    Write `worker.json` for the observer: `vm_name`, `port`, `host_key` (the attested
@@ -255,10 +270,11 @@ gives A no identity today, so before the product pass A needs, in this order:
    the same exact A again, requires it to be deallocated, starts it only and requires
    `PowerState/running`. On A, start Horizon again with the same home, open
    **Environments**, select the same saved environment (same workspace, owning
-   session, generation and exact resource ID; **Check provider status** is a read
-   only), and **Show session panels** → **Reconnect** to the same B and task
-   sessions: same worker identity, no additional create, no task replay, dirty bytes
-   intact, no credential rotation.
+   session, generation and exact resource ID; **Check provider status** is refused
+   for Azure until the provider status path lands and is not part of this step),
+   then **gated** (Azure panel attachment): **Show session panels** → **Reconnect** to
+   the same B and task sessions: same worker identity, no additional create, no task
+   replay, dirty bytes intact, no credential rotation.
 6. **Verdict**: `client_off.py --manifest m.json verdict --journal-in journal.ndjson`.
    The journal's first line is the baseline header the off phase wrote (worker
    identity and image); a journal without it, or for another image, never passes.
@@ -275,13 +291,16 @@ gives A no identity today, so before the product pass A needs, in this order:
    reconnect evidence is captured; never Stop or start B during the off interval. It
    uses the product controls on A, in the *Explicit Stop* section of the overview:
    **Stop environment…** → confirm (one Stop; records intent, deallocates B, verifies
-   `PowerState/deallocated` with the retained `worker-data` disk); if the Stop ends
-   unverified, **Check saved Stop** (read-only; confirms only deallocated compute with
-   the retained disk and the saved address); then **Start environment…** → confirm
-   (records Start intent, starts only the exact worker, accepts only the saved
-   identity and pin, resolves to Reconciling); then **Show session panels** →
-   **Reconnect** and read the counter file and the dirty files back: same worker,
-   same pin, retained bytes, no task resumed. The adapter proved the same sequence
+   `PowerState/deallocated` with the retained `worker-data` disk). If the Stop ends
+   unverified the record stays `Stop requested (saved)`: run **Check saved Stop**
+   (read-only; confirms only deallocated compute with the retained disk and the saved
+   address) until the row shows `Stopped (saved, not live)`; **Start environment…**
+   is offered only for that verified Stop or an existing Start intent. Then **Start
+   environment…** → confirm (records Start intent, starts only the exact worker,
+   accepts only the saved identity and pin, resolves to Reconciling); then **gated**
+   (Azure panel attachment): **Show session panels** → **Reconnect** and read the
+   counter file and the dirty files back: same worker, same pin, retained bytes, no
+   task resumed. The adapter proved the same sequence
    live in runs 16 to 18 (`azure-workspace-live-acceptance.md`); this step proves it
    through the product.
 8. **Remove the observer key**: `client_off.py --manifest m.json remove-observer-key
@@ -319,14 +338,15 @@ gives A no identity today, so before the product pass A needs, in this order:
 - A run whose B was created through the adapter's live driver instead of the
   product path is an **adapter-only rehearsal**. It exercises A, C, the off interval
   and the cleanup, and it is reported as such; it is never the #475 product pass.
-- The product paths this pass needs are merged as of 2026-09-13: configured setup
-  and consent (#561), Prepare Repository (#567), Check saved Stop (#574), the first
-  explicit Stop (#575), and durable explicit Start with its configured Azure admission
-  and overview control (#576, #578, #584). What still gates the first paid run is
-  listed under *Client A prerequisites*: the Azure CLI and an approved identity on A,
-  the PAT for the disposable repository, and the confirmed control path for the second
-  and third panel; the compact worker image is lead-owned and the full image proved
-  the adapter lane meanwhile.
+- Merged product paths as of 2026-09-13: configured setup and consent (#561),
+  Prepare Repository (#567), Check saved Stop (#574), the first explicit Stop (#575),
+  and durable explicit Start with its configured Azure admission and overview control
+  (#576, #578, #584). Still refused for Azure and therefore open gates for this pass:
+  the saved-Shell task start, configured panel attachment (Reconnect) and the provider
+  status read. Also open: the Azure CLI and an approved identity on A, the PAT for the
+  disposable repository, and the confirmed control path for the second and third
+  panel; the compact worker image is lead-owned and the full image proved the adapter
+  lane meanwhile.
 - Counter progress proves the task kept running. Checkpoint proof needs
   worker-owned checkpoints advancing during the interval.
 
