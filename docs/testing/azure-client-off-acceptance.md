@@ -22,9 +22,12 @@ replays a task, and the harness phases that act as C issue no ARM write. Two
 Azure control-plane credentials mutate B: the product's Create, Prepare
 Repository, Stop and Start run on A under A's managed identity, and every
 mutating harness phase or controller command in this runbook names the operator
-(the repository PAT that Prepare Repository delivers to B and the saved SSH
-client identity that product operations and the observer's restricted key use
-are separate, non-Azure credentials and are described where they appear); the C-versus-operator
+(three further, non-Azure credentials are described where they appear and are
+never interchanged: the repository PAT that Prepare Repository delivers to B, the
+product's saved worker SSH client identity that product operations and the
+step 7 pinned reads use, and observer C's restricted key, a fresh separate key
+pair generated for C alone and recorded in `worker.json`, never the product
+key); the C-versus-operator
 separation is procedural (the phases and commands that write) rather than a
 credential boundary, because the harness has no second Azure login. The operator may enforce
 the declared cleanup deadline.
@@ -408,10 +411,14 @@ back unchanged at return and after the worker lifecycle step.
      `/subscriptions/<id>/resourceGroups/horizon-ws-<workflow>-<job>` (the overview's
      *Exact resource ID* and `worker.json`'s `group_id`) and the rest of
      `worker.json`'s identity are captured only after **Check this setup** below
-     reports the deployment observed: until then a valid recovery state (an
-     accepted deployment or a lost observation) leaves the saved allocation
-     without a worker identity and the overview shows `No resource identity
-     recorded`. The group name is
+     reports the deployment observed. A confirmed Create already records the
+     worker handle, so the overview's *Exact resource ID* (the group ID) can be
+     present while Azure is still provisioning and is recorded as soon as it
+     shows; only an unconfirmed or lost Create response leaves the saved
+     allocation without a worker identity and the overview at `No resource
+     identity recorded`, which is the state that waits for Check. The VM fields
+     (`vm_id`, `instance_id`, `host`, the attested host key) always wait for the
+     observation. The group name is
      derived from the workflow and job identities the record carries from the
      moment the allocation is saved, before the deployment is sent, so it is known
      even when an accepted deployment followed by a lost observation leaves the
@@ -849,14 +856,20 @@ back unchanged at return and after the worker lifecycle step.
    the entrypoint rewrites on the next container start), the group is handed to
    the lead on #474 for removal, and the run is not reported clean.
 9. **Role removal, then cleanup.** First, as the operator and while A's group
-   still exists, remove A's authority exactly as prerequisite 2 records it: `az
+   still exists, remove A's authority exactly as prerequisite 2 records it, every
+   call under `timeout 90` (the harness's own CLI bound) and the whole substep
+   under 10 minutes of the 40 reserved for it and step 8: `az
    role assignment delete --subscription <id> --ids <custom-role assignment ID>
    <Managed Identity Operator assignment ID>`, then `az role definition delete
    --subscription <id> --name <the recorded custom role definition ID>`, then
    verify with `az role assignment list --subscription <id> --all --assignee <A's
    principal ID>` printing `[]` and `az role definition list --subscription <id>
    --custom-role-only true --query "[?id=='<the recorded definition ID>']"`
-   printing `[]`, and record both listings with the run; a run
+   printing `[]`, and record both listings with the run. When the substep's
+   bound expires, or a listing is not empty, record which recorded IDs are still
+   present and continue to cleanup anyway, so that compute stops on time; the run
+   is then reported with A's residual authority as a finding and the remaining
+   removal is handed to the lead on #474 with the exact IDs. A run
    whose listings are not empty is not reported clean even if the groups are
    deleted. Then **cleanup**: `client_off.py --manifest m.json cleanup --groups-before groups.json
    --resources-before resources.json --created created-groups.json`. Runs under one
