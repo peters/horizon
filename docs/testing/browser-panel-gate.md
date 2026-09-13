@@ -66,7 +66,7 @@ For package-boundary changes, also run:
 ```bash
 cargo doc -p horizon-browser --no-deps
 ./scripts/check-browser-packaging.sh
-cargo package -p horizon-browser --no-verify
+cargo package -p horizon-browser --locked --no-verify
 cargo check -p horizon-browser --target x86_64-apple-darwin
 cargo check -p horizon-browser --target x86_64-pc-windows-gnu
 cargo check -p horizon-browser --target x86_64-pc-windows-msvc

@@ -16,7 +16,7 @@ The crate is an internal workspace package for now and is not published.
 ## Build footprint baseline
 
 Current packaging measurements, including a later compile-graph comparison,
-live in [`docs/architecture/browser-packaging.md`](../../docs/architecture/browser-packaging.md).
+live in [`docs/architecture/browser-packaging.md`](https://github.com/peters/horizon/blob/main/docs/architecture/browser-packaging.md).
 The 2026-08-29 snapshot on Linux with cached Cargo sources and a separate empty
 target directory for each command was:
 
