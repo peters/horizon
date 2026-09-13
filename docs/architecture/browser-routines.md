@@ -92,25 +92,32 @@ concurrent definitions against the same UUID.
 
 ## Lifecycle states
 
-A routine or an in-flight run occupies exactly one of:
+Routine definition status and run status are separate machines. A ready
+routine can have a running run and historical succeeded runs at once.
+
+Definition status is exactly one of `draft | ready`. `ready` iff
+`verified_plan_version == plan_version`. `needs_reteach` on a run also
+clears `verified_plan_version` so the definition returns to `draft`.
+
+A run occupies exactly one of:
 
 ```text
-draft | ready | running | needs_login | needs_user | needs_reteach
+running | needs_login | needs_user | needs_reteach
 succeeded | failed | cancelled | timed_out
 ```
 
-| State | Meaning |
-| --- | --- |
-| `draft` | Saved recording or compiled plan that has not passed verification on the exact `plan_version`. |
-| `ready` | Verification policy succeeded; eligible for manual (later, scheduled) runs. |
-| `running` | One lease owns the routine profile. |
-| `needs_login` | Cookies are insufficient and credentials are missing, locked, or not approved for this origin. Visible handoff. |
-| `needs_user` | MFA, passkey, CAPTCHA, unexpected identity-provider change, or an uncertain mutation that cannot be proven complete. |
-| `needs_reteach` | Target resolution is ambiguous or incompatible; no click is dispatched. |
-| `succeeded` | Completion assertions held after the last step's postcondition. |
-| `failed` | A step failed without a pause state. |
-| `cancelled` | Cooperative cancellation from the #324 runner. |
-| `timed_out` | Bounded run duration elapsed. |
+| State | Machine | Meaning |
+| --- | --- | --- |
+| `draft` | definition | `verified_plan_version` is missing or not equal to `plan_version`. |
+| `ready` | definition | Verification of this exact `plan_version` succeeded. |
+| `running` | run | One lease owns the routine profile. |
+| `needs_login` | run | Cookies are insufficient and credentials are missing, locked, or not approved for this origin. |
+| `needs_user` | run | MFA, passkey, CAPTCHA, identity-provider change, or an uncertain mutation. |
+| `needs_reteach` | run | Target resolution is ambiguous; also returns the definition to `draft`. |
+| `succeeded` | run | Completion assertions held after the last step's postcondition. |
+| `failed` | run | A step failed without a pause state. |
+| `cancelled` | run | Cooperative cancellation from the #324 runner. |
+| `timed_out` | run | Bounded run duration elapsed. |
 
 Stopping a recording does not mark the routine `ready`. The user must mark
 final assertions and a verification run of that exact `plan_version` must
@@ -146,8 +153,10 @@ Every `credential_field` on this routine must use exactly `credential_policy.slo
 `none` forbids any credential field. `username_only` permits `username` only.
 `username_and_password` permits `username` and `password`. The broker looks up
 `(routine_id, slot)`; a copied slot UUID from another routine does not fill.
-Import of an exported routine clears `slot` and every `credential_field.slot`
-and requires the user to bind credentials again.
+Import of an exported routine allocates new ids, sets `credential_policy.mode`
+to `none`, rewrites every `credential_fill` to `handoff` / `needs_login`,
+clears `verified_plan_version`, and requires the user to bind credentials
+again. It does not leave a `credential_field` with a missing slot.
 
 `RoutineVariable` has `name` (bounded identifier, not `panel_id`) and optional
 non-secret `default`. Defaults are omitted for fields the user did not
@@ -266,14 +275,15 @@ membership from the top-level page. The frame's own origin is authoritative.
 session can relocate the frame. Unknown or empty names make the target
 non-MCP (`handoff` / `needs_reteach`) until the engine resolver lands.
 
-Today's MCP `browser_snapshot` / `browser_query` / `browser_act` inspect only
-the top-level document and have no digest check. v1 MCP-emitted clicks and
-fills are therefore top-level, unique, selector-capable targets only
-(`unique_id`, `test_id`, or reviewed `css_fallback`). Nested-frame targets
-and digest-gated replay are recorded on the fingerprint and execute as
-`handoff` / `needs_reteach` until the Chromium resolver slice claims an
-engine-side fill/click-by-fingerprint. That is not a new agent-facing MCP
-tool.
+Today's MCP `browser_act` has no digest check, so a taught selector can match
+a different element on a later page. v1 therefore does **not** dispatch
+MCP click/fill from a selector alone. Those steps wait for the claimed
+engine click/fill-by-fingerprint (item 3), which re-resolves candidates,
+requires `unique` and digest compatibility on the current document
+generation, and fails closed to `needs_reteach`. Nested-frame targets use
+the same engine path. Until that engine operation exists, click/fill steps
+are `handoff` / `needs_reteach` and are not MCP `PlanStep`s. Navigate, wait,
+viewport scroll, reload, back, and forward may still emit MCP.
 
 ## `ValueSource`
 
@@ -320,16 +330,14 @@ Navigate actions carry a separate `navigation` object:
 }
 ```
 
-`origin` is an exact origin as defined above. `path` is 1..=8 KiB, starts with
-`/`, and has no query or fragment. Path segments that look like access tokens
-(long unguessable values, `token`, `reset`, `magic` login tails) are classified
-as secret: they are dropped from the template and the step becomes `handoff`
-/`needs_user` unless the user supplied a non-secret variable for that segment.
-Each `query` entry maps a parameter name to a non-secret `literal` or
-`variable`. Secret query values observed while teaching are dropped; they
-never become literals. If the route cannot run without a dropped secret
-parameter or path segment, the step is not auto-replayed. Fragment follows
-the same rule via `fragment`.
+`origin` is an exact origin as defined above. `path` is an ordered array of
+segments, each `{ "source": <literal|variable> }`, joined with `/` and
+percent-encoded at run time. `$var` is never a substring inside a stored
+string. Segments classified as secret (token-like, reset/magic tails) are
+omitted from the template; without a user-supplied non-secret variable the
+step is `handoff` / `needs_user`. Each `query` entry maps a parameter name to
+a non-secret `literal` or `variable`. Secret query values observed while
+teaching are dropped. Fragment follows the same rule via `fragment`.
 
 The persisted `RoutineStep` keeps this template on
 `CompiledAction::navigate`. The runner constructs and encodes the URL when

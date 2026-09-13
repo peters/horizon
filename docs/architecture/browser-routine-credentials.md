@@ -45,8 +45,11 @@ Out of scope for this feature (fail closed, do not invent a store):
 ## User choices
 
 Credential persistence is an explicit prompt after a successful sign-in during
-teaching. The default is **do not remember username or password**. Cookies may
-still remain in the routine profile.
+teaching. Typed password bytes from the demonstration are discarded when the
+page navigates; they are not a pre-consent buffer. If the user opts in, Horizon
+prompts for explicit re-entry of the permitted fields and only then calls
+`CredentialStore::put`. The default is **do not remember username or password**.
+Cookies may still remain in the routine profile.
 
 | Choice | Stored in the OS store | Plan reference |
 | --- | --- | --- |
@@ -146,8 +149,11 @@ Two types, not one:
   stored bytes, and it copies them only into the provided `FillSink`.
 - `CredentialBroker` owns origin/frame/fingerprint checks and is invoked
   only from a runner-held routine lease. Lookup key is `(routine_id, slot)`.
-  After those checks it calls `CredentialStore::fill_into`. The broker's
-  caller still receives only success or a typed error.
+  After those checks it calls `CredentialStore::fill_into`. The engine
+  `FillSink` rechecks origin, frame, fingerprint, and document generation
+  atomically at dispatch and fails closed if the page navigated or the
+  frame was replaced while the OS store was unlocking. The broker's caller
+  still receives only success or a typed error.
 
 `FillSink` is implemented by the browser engine. Tests use a sink that
 records success/failure and drops bytes. There is no API that returns a
@@ -183,10 +189,13 @@ Rotation overwrites the OS-store item for that slot and field after an
 explicit user action. The routine `plan_version` does not need to change when
 only secret bytes change.
 
-Deletion of a slot removes the OS-store items and the policy's `slot`
-reference. Deletion of a routine offers to delete the slot and the routine
-profile. Failure to delete an OS item is reported; it is not retried as a
-side effect of an unrelated operation.
+Deletion of a slot removes the OS-store items, sets `mode` to `none`,
+rewrites every `credential_fill` to `handoff` / `needs_login`, and clears
+`verified_plan_version` in one definition write. If a native item fails to
+delete, that error is reported and the definition rewrite still proceeds so
+the file cannot remain malformed. Deletion of a routine offers to delete the
+slot and the routine profile. Failure to delete an OS item is not retried as
+a side effect of an unrelated operation.
 
 Interrupted writes must not leave a second live slot for the same routine.
 The fake store and later native tests use disposable records and must clean
