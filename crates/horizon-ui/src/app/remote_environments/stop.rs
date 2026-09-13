@@ -12,8 +12,8 @@ use horizon_core::{
         RemoteRuntimePhase,
         stop::{
             ConfiguredRunPodStopError, ConfiguredStopConfirmation, ConfiguredStopConfirmationError,
-            ConfiguredStopError, confirm_configured_remote_environment_stop, stop_configured_remote_environment,
-            stop_configured_runpod_environment,
+            ConfiguredStopError, RemoteWorkspaceStopError, confirm_configured_remote_environment_stop,
+            stop_configured_remote_environment, stop_configured_runpod_environment,
         },
     },
 };
@@ -55,6 +55,9 @@ struct StopNotice {
     message: String,
     succeeded: bool,
     checked: bool,
+    /// The provider observation itself failed (credential or control plane); a pending
+    /// or absent answer and every local refusal are not this.
+    unverified: bool,
 }
 
 #[derive(Debug)]
@@ -293,6 +296,7 @@ impl StopNotice {
             message,
             succeeded,
             checked: false,
+            unverified: false,
         }
     }
 
@@ -305,6 +309,12 @@ impl StopNotice {
             Ok(result.observation)
         });
         let succeeded = matches!(result, Ok(RetainedStopped));
+        let unverified = matches!(
+            result,
+            Err(StopError::Check(ConfiguredStopConfirmationError::Stop(
+                RemoteWorkspaceStopError::ProviderUnavailable
+            )))
+        );
         let message = match result {
             Ok(RetainedStopped) => {
                 "Retained Stop confirmed at this check; completion is saved. No Stop request was sent.".into()
@@ -325,6 +335,7 @@ impl StopNotice {
             message,
             succeeded,
             checked: true,
+            unverified,
         }
     }
 }

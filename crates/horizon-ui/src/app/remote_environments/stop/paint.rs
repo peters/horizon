@@ -80,7 +80,7 @@ pub(super) fn show(
         );
         if notice.checked {
             ui.label("Checks are manual point-in-time observations. Opening or closing this view never repeats them.");
-            if !notice.succeeded && selected.provider == CloudProvider::Azure {
+            if notice.unverified && selected.provider == CloudProvider::Azure {
                 ui.label("An unverified Azure check can mean the Azure CLI is not signed in to the profile's subscription. Sign in, then check again; nothing was sent to the worker.");
             }
         } else if !notice.succeeded {

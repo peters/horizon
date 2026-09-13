@@ -1,7 +1,7 @@
 //! Configured Azure saved-Stop admission: the exact named profile, its immutable CPU
-//! binding, the retained persistent worker and the complete public pin are bound before
-//! the CLI credential or client exists. Observation only: no Stop, Start, creation,
-//! deletion, private-key repair or host-key attestation happens here.
+//! binding, the retained persistent worker with its complete Azure handle and public pin
+//! are bound before the CLI credential or client exists. Observation only: no Stop,
+//! Start, creation, deletion, private-key repair or host-key attestation happens here.
 
 use super::{
     ConfiguredStopConfirmation, ConfiguredStopConfirmationError as BindingError, RemoteWorkspaceStopConfirmation,
@@ -10,16 +10,23 @@ use super::{
 use crate::{
     cloud_run::{
         CloudProvider, CloudWorkflowStore, RemoteCpuProfileBinding, StoredRemoteAllocation, WorkerLifetime,
-        azure::{AzureCliCredential, AzureClient, AzureDeploymentPlan, AzureProfile},
-        interactive_worker::InteractiveWorkerRequest,
-        interactive_worker_stop::InteractiveWorkerStopObserver,
+        azure::{AzureCliCredential, AzureClient, AzureDeploymentPlan, AzureProfile, AzureWorker, resource_group_name},
+        interactive_worker::{
+            InteractiveWorker, InteractiveWorkerCleanup, InteractiveWorkerEnsure, InteractiveWorkerProvider,
+            InteractiveWorkerRequest, InteractiveWorkerStatus,
+        },
+        interactive_worker_stop::{
+            InteractiveWorkerStopExpectation, InteractiveWorkerStopObservation, InteractiveWorkerStopObserver,
+        },
     },
     remote_workspace::RemoteEnvironmentSummary,
 };
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// One admitted Azure allocation: exact summary, valid public request, persistent
 /// target within the named profile, immutable binding to that profile, no `RunPod`
-/// storage expectation, no management intent, and a retained worker with a complete pin.
+/// storage expectation, no management intent, and a retained worker whose complete
+/// Azure handle validates under the profile's subscription with a complete pin.
 pub(super) struct RetainedAzure {
     pub(super) allocation: StoredRemoteAllocation,
     request: InteractiveWorkerRequest,
@@ -83,13 +90,16 @@ impl RetainedAzure {
             request,
             binding,
         };
-        admitted.trust()?;
+        admitted.trust(profile)?;
         Ok(admitted)
     }
 
-    /// The retained worker is the reserved request's worker and its saved pin is complete.
-    /// The pin is saved and shape-checked, never attested here.
-    fn trust(&self) -> Result<(), BindingError> {
+    /// The retained worker is the reserved request's worker, its complete Azure handle
+    /// (subscription, identity-derived group, exact group ID, image, lifetime) validates
+    /// under the named profile, and its saved pin is complete. The pin is saved and
+    /// shape-checked, never attested here; the client sees this handle later and must
+    /// not be the first to reject it.
+    fn trust(&self, profile: &AzureProfile) -> Result<(), BindingError> {
         let runtime = self
             .allocation
             .workspace()
@@ -107,6 +117,17 @@ impl RetainedAzure {
         {
             return Err(BindingError::InvalidBinding);
         }
+        AzureWorker {
+            workflow_id: worker.identity.workflow_id,
+            job_id: worker.identity.job_id,
+            subscription_id: profile.subscription_id.clone(),
+            resource_group: resource_group_name(worker.identity.workflow_id, worker.identity.job_id),
+            group_id: worker.identity.resource_id.clone(),
+            image: worker.target.image.clone(),
+            lifetime: worker.lifetime.clone(),
+        }
+        .validate()
+        .map_err(|_| BindingError::InvalidBinding)?;
         if !ssh.is_complete() {
             return Err(RemoteWorkspaceStopError::MissingTrust.into());
         }
@@ -153,16 +174,93 @@ impl RetainedAzure {
     }
 }
 
+/// The admitted observer: every observation is followed, before it reaches the shared
+/// coordinator, by the same binding recheck admission ran, so a binding that changed
+/// while the control plane was being read can never be completed as a retained Stop.
+pub(super) struct BoundObserver<'a, P> {
+    inner: P,
+    store: &'a CloudWorkflowStore,
+    admitted: &'a RetainedAzure,
+    drifted: AtomicBool,
+}
+
+impl<P> BoundObserver<'_, P> {
+    fn drifted(&self) -> bool {
+        self.drifted.load(Ordering::SeqCst)
+    }
+}
+
+/// The provider's own error, or the saved binding drifting during an observation.
+#[derive(Debug)]
+pub(super) enum BoundError<E> {
+    Provider(E),
+    Drift,
+}
+
+impl<E: std::fmt::Display> std::fmt::Display for BoundError<E> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Provider(error) => error.fmt(formatter),
+            Self::Drift => formatter.write_str("saved Azure binding changed during the observation"),
+        }
+    }
+}
+
+impl<E: std::error::Error> std::error::Error for BoundError<E> {}
+
+impl<P: InteractiveWorkerProvider> InteractiveWorkerProvider for BoundObserver<'_, P> {
+    type Error = BoundError<P::Error>;
+    fn provider(&self) -> CloudProvider {
+        self.inner.provider()
+    }
+    fn ensure_worker(&self, request: &InteractiveWorkerRequest) -> Result<InteractiveWorkerEnsure, Self::Error> {
+        self.inner.ensure_worker(request).map_err(BoundError::Provider)
+    }
+    fn inspect_worker(&self, worker: &InteractiveWorker) -> Result<Option<InteractiveWorkerStatus>, Self::Error> {
+        self.inner.inspect_worker(worker).map_err(BoundError::Provider)
+    }
+    fn reconcile_worker(
+        &self,
+        request: &InteractiveWorkerRequest,
+    ) -> Result<Option<InteractiveWorkerStatus>, Self::Error> {
+        self.inner.reconcile_worker(request).map_err(BoundError::Provider)
+    }
+    fn delete_worker(&self, worker: &InteractiveWorker) -> Result<InteractiveWorkerCleanup, Self::Error> {
+        self.inner.delete_worker(worker).map_err(BoundError::Provider)
+    }
+}
+
+impl<P: InteractiveWorkerStopObserver> InteractiveWorkerStopObserver for BoundObserver<'_, P> {
+    fn observe_worker_stop(
+        &self,
+        expected: InteractiveWorkerStopExpectation<'_>,
+    ) -> Result<InteractiveWorkerStopObservation, Self::Error> {
+        let observation = self.inner.observe_worker_stop(expected).map_err(BoundError::Provider);
+        if self
+            .admitted
+            .check_current(self.store, &self.admitted.allocation)
+            .is_err()
+        {
+            self.drifted.store(true, Ordering::SeqCst);
+            return Err(BoundError::Drift);
+        }
+        observation
+    }
+}
+
 /// Admission, then the observer, then the shared coordinator, with the saved state
-/// rechecked before the observer exists and after the observation returned, even on
-/// error. `client` and `confirm` are injectable so tests run the real ordering without
-/// the Azure CLI or ARM.
+/// rechecked before the observer exists, inside every observation and after the
+/// coordinator returned, even on error. `client` and `confirm` are injectable so tests
+/// run the real ordering without the Azure CLI or ARM.
 pub(super) fn azure_with<P: InteractiveWorkerStopObserver>(
     store: &CloudWorkflowStore,
     profile: &AzureProfile,
     expected: &RemoteEnvironmentSummary,
     client: impl FnOnce(&RetainedAzure) -> Result<P, BindingError>,
-    confirm: impl FnOnce(&P, &StoredRemoteAllocation) -> Result<RemoteWorkspaceStopConfirmation, RemoteWorkspaceStopError>,
+    confirm: impl FnOnce(
+        &BoundObserver<'_, P>,
+        &StoredRemoteAllocation,
+    ) -> Result<RemoteWorkspaceStopConfirmation, RemoteWorkspaceStopError>,
 ) -> Result<ConfiguredStopConfirmation, BindingError> {
     let admitted = RetainedAzure::load(store, profile, expected)?;
     let requested = admitted
@@ -181,7 +279,16 @@ pub(super) fn azure_with<P: InteractiveWorkerStopObserver>(
     // could not be built.
     let provider = client(&admitted);
     admitted.check_current(store, &admitted.allocation)?;
-    let result = confirm(&provider?, &admitted.allocation);
+    let bound = BoundObserver {
+        inner: provider?,
+        store,
+        admitted: &admitted,
+        drifted: AtomicBool::new(false),
+    };
+    let result = confirm(&bound, &admitted.allocation);
+    if bound.drifted() {
+        return Err(RemoteWorkspaceStopError::StateChanged.into());
+    }
     let current = result
         .as_ref()
         .map_or(&admitted.allocation, |result| &result.allocation);

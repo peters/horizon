@@ -143,27 +143,45 @@ fn azure_check_results_follow_the_shared_typing_and_an_unverified_check_explains
         )
         .succeeded
     );
-    let unverified = StopNotice::checked(
-        stopping.clone(),
-        Err(StopError::Check(ConfiguredStopConfirmationError::Stop(
-            horizon_core::remote_workspace::stop::RemoteWorkspaceStopError::ProviderUnavailable,
-        ))),
-    );
-    assert!(!unverified.succeeded && unverified.checked);
-    let state = StopState {
-        notice: Some(unverified),
-        ..Default::default()
+    // Only a failed provider observation (credential or control plane) earns the CLI
+    // hint; pending, absence and local refusals do not.
+    let hint = |result: Result<ConfiguredStopConfirmation, StopError>| {
+        let state = StopState {
+            notice: Some(StopNotice::checked(stopping.clone(), result)),
+            ..Default::default()
+        };
+        let ctx = Context::default();
+        let mut action = InventoryAction::None;
+        let output = ctx.run_ui(raw_input([1200.0, 900.0], None), |ui| {
+            show(ui, &state, &stopping, true, &mut action);
+        });
+        let text = visible_text(&output.shapes);
+        let _ = output.discard_textures();
+        assert!(matches!(action, InventoryAction::None));
+        assert!(text.contains("Last saved Stop check:"), "{text}");
+        text.contains("Azure CLI is not signed in") && text.contains("nothing was sent to the worker")
     };
-    let ctx = Context::default();
-    let mut action = InventoryAction::None;
-    let output = ctx.run_ui(raw_input([1200.0, 900.0], None), |ui| {
-        show(ui, &state, &stopping, true, &mut action);
-    });
-    let text = visible_text(&output.shapes);
-    let _ = output.discard_textures();
-    assert!(text.contains("Azure CLI is not signed in"), "{text}");
-    assert!(text.contains("nothing was sent to the worker"), "{text}");
-    assert!(matches!(action, InventoryAction::None));
+    assert!(hint(Err(StopError::Check(ConfiguredStopConfirmationError::Stop(
+        RemoteWorkspaceStopError::ProviderUnavailable,
+    )))));
+    for result in [
+        Ok(ConfiguredStopConfirmation {
+            saved: stopping.clone(),
+            observation: Pending,
+        }),
+        Ok(ConfiguredStopConfirmation {
+            saved: stopping.clone(),
+            observation: Absent,
+        }),
+        Err(StopError::Check(ConfiguredStopConfirmationError::InvalidBinding)),
+        Err(StopError::Check(ConfiguredStopConfirmationError::Stop(
+            RemoteWorkspaceStopError::StateChanged,
+        ))),
+        Err(StopError::StorageUnavailable),
+        Err(StopError::WorkerUnavailable),
+    ] {
+        assert!(!hint(result));
+    }
 }
 
 #[test]

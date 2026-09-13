@@ -42,6 +42,9 @@ struct Shape {
     binding: bool,
     intent: bool,
     pin: bool,
+    /// The retained worker's resource ID, given its identity-derived group name; the
+    /// default is the exact group under the fixture subscription.
+    resource_id: Option<fn(&str) -> String>,
 }
 
 impl Default for Shape {
@@ -51,6 +54,7 @@ impl Default for Shape {
             binding: true,
             intent: true,
             pin: true,
+            resource_id: None,
         }
     }
 }
@@ -100,10 +104,13 @@ impl AzureFixture {
                     provider: CloudProvider::Azure,
                     workflow_id: request.workflow_id,
                     job_id: request.job_id,
-                    resource_id: format!(
-                        "/subscriptions/{SUBSCRIPTION}/resourceGroups/{}",
-                        resource_group_name(request.workflow_id, request.job_id)
-                    ),
+                    resource_id: {
+                        let group = resource_group_name(request.workflow_id, request.job_id);
+                        shape.resource_id.map_or_else(
+                            || format!("/subscriptions/{SUBSCRIPTION}/resourceGroups/{group}"),
+                            |resource_id| resource_id(&group),
+                        )
+                    },
                 },
                 target: request.target,
                 ssh_public_key: request.ssh_public_key,
@@ -154,9 +161,22 @@ impl AzureFixture {
     }
 }
 
+type ObserveHook = Box<dyn Fn() + Send + Sync>;
+
 struct Observer {
     result: Result<Observation, &'static str>,
     calls: Mutex<usize>,
+    on_observe: Option<ObserveHook>,
+}
+
+impl Observer {
+    fn answering(result: Result<Observation, &'static str>) -> Self {
+        Self {
+            result,
+            calls: Mutex::new(0),
+            on_observe: None,
+        }
+    }
 }
 
 impl InteractiveWorkerProvider for &Observer {
@@ -184,6 +204,9 @@ impl InteractiveWorkerStopObserver for &Observer {
         assert!(expected.ssh.is_complete());
         assert!(expected.worker.is_valid_for(CloudProvider::Azure));
         *self.calls.lock().expect("calls") += 1;
+        if let Some(hook) = &self.on_observe {
+            hook();
+        }
         self.result.map_err(std::io::Error::other)
     }
 }
@@ -198,10 +221,7 @@ fn typed_observations_use_actual_coordinator_without_private_key_or_replay() {
         Err("private-provider-marker"),
         Ok(Observation::RetainedStopped),
     ] {
-        let observer = Observer {
-            result,
-            calls: Mutex::new(0),
-        };
+        let observer = Observer::answering(result);
         let before = fixture.current();
         let checked = fixture.check(&observer);
         if let Ok(observation) = result {
@@ -229,12 +249,7 @@ fn typed_observations_use_actual_coordinator_without_private_key_or_replay() {
     }
     let stopped = fixture.current();
     for result in [Observation::Pending, Observation::Absent, Observation::RetainedStopped] {
-        fixture
-            .check(&Observer {
-                result: Ok(result),
-                calls: Mutex::new(0),
-            })
-            .expect("repeat check");
+        fixture.check(&Observer::answering(Ok(result))).expect("repeat check");
         assert_eq!(fixture.current(), stopped, "original Stop times never renewed");
     }
     assert_eq!(original.workflow(), stopped.workflow());
@@ -364,6 +379,27 @@ fn injected_faults_are_refused_before_client_construction_and_provider_calls() {
         refused(&fixture, &fixture.profile, Some(summary)),
         ConfiguredStopConfirmationError::Stop(Error::StateChanged)
     );
+    // A retained worker whose Azure handle does not validate under the profile (a group
+    // ID in another subscription, one that is not this worker's identity-derived group,
+    // or no resource ID at all) is refused by admission, never by the client later.
+    // The store pins a retained identity, so such a record is built that way.
+    let handles: [fn(&str) -> String; 3] = [
+        |group| format!("/subscriptions/22222222-2222-4222-8222-222222222222/resourceGroups/{group}"),
+        |_| format!("/subscriptions/{SUBSCRIPTION}/resourceGroups/horizon-ws-other"),
+        |_| "not-a-resource-id".to_string(),
+    ];
+    for (index, resource_id) in handles.into_iter().enumerate() {
+        let fixture = AzureFixture::new(&Shape {
+            resource_id: Some(resource_id),
+            ..Shape::default()
+        });
+        assert_eq!(
+            refused(&fixture, &fixture.profile, None),
+            ConfiguredStopConfirmationError::InvalidBinding,
+            "handle {index}"
+        );
+    }
+    let fixture = AzureFixture::new(&Shape::default());
     // The store itself reports a RunPod storage row under an Azure allocation as corrupt
     // storage, so a foreign selection never reaches admission's own check or the observer.
     foreign_selection(&fixture);
@@ -417,6 +453,75 @@ fn foreign_selection(fixture: &AzureFixture) {
         .expect("fixture only");
 }
 
+/// Change the immutable binding row underneath the allocation, as only corruption or a
+/// foreign writer could; the store's own triggers are bypassed for the fixture only.
+fn drift_binding(path: &std::path::Path) {
+    let mut connection = rusqlite::Connection::open(path).expect("fixture database");
+    let transaction = connection.transaction().expect("fixture transaction");
+    let trigger: String = transaction
+        .query_row(
+            "SELECT sql FROM sqlite_schema WHERE name='remote_provider_bindings_no_update'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("trigger");
+    let digest: String = transaction
+        .query_row(
+            "SELECT profile_digest FROM remote_provider_bindings WHERE workspace_local_id='workspace'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("digest");
+    let head = &digest[..digest.len() - 1];
+    let flipped = if digest.ends_with('0') {
+        format!("{head}1")
+    } else {
+        format!("{head}0")
+    };
+    transaction
+        .execute_batch("DROP TRIGGER remote_provider_bindings_no_update")
+        .expect("fixture only");
+    transaction
+        .execute(
+            "UPDATE remote_provider_bindings SET profile_digest=?1 WHERE workspace_local_id='workspace'",
+            [&flipped],
+        )
+        .expect("binding drift");
+    transaction.execute_batch(&trigger).expect("restore exact schema");
+    transaction.commit().expect("atomic fixture");
+}
+
+#[test]
+fn binding_drift_during_the_observation_is_never_completed_as_a_retained_stop() {
+    for result in [
+        Ok(Observation::RetainedStopped),
+        Ok(Observation::Pending),
+        Err("in-flight failure"),
+    ] {
+        let fixture = AzureFixture::new(&Shape::default());
+        let before = fixture.current();
+        let path = fixture.store.path().to_path_buf();
+        let observer = Observer {
+            result,
+            calls: Mutex::new(0),
+            on_observe: Some(Box::new(move || drift_binding(&path))),
+        };
+        let checked = fixture.check(&observer);
+        assert_eq!(
+            checked,
+            Err(ConfiguredStopConfirmationError::Stop(Error::StateChanged)),
+            "{result:?}"
+        );
+        assert_eq!(*observer.calls.lock().expect("calls"), 1);
+        let after = fixture.current();
+        assert_eq!(after, before, "no completion was written: {result:?}");
+        assert!(matches!(
+            after.workspace().state().runtime.as_ref().expect("runtime").phase,
+            RemoteRuntimePhase::Stopping { .. }
+        ));
+    }
+}
+
 fn drift(fixture: &AzureFixture) {
     let current = fixture.current();
     let mut workflow = current.workflow().workflow().clone();
@@ -433,10 +538,7 @@ fn full_allocation_drift_is_rejected_at_both_callbacks_even_on_error() {
         for failure in [false, true] {
             let fixture = AzureFixture::new(&Shape::default());
             let before = fixture.current();
-            let observer = Observer {
-                result: Ok(Observation::Pending),
-                calls: Mutex::new(0),
-            };
+            let observer = Observer::answering(Ok(Observation::Pending));
             let result = azure_with(
                 &fixture.store,
                 &fixture.profile,
