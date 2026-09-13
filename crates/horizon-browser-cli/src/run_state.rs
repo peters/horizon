@@ -481,11 +481,19 @@ impl DurableRun {
     /// # Errors
     /// Returns when the sidecar file cannot be written.
     pub fn bind_live_standalone(&mut self) -> Result<(), RunStateError> {
+        Self::bind_live_standalone_in(&self.directory)
+    }
+
+    /// Record a live keep-alive host into an already published job directory.
+    ///
+    /// # Errors
+    /// Returns when the sidecar file cannot be written.
+    pub fn bind_live_standalone_in(directory: &Path) -> Result<(), RunStateError> {
         crate::standalone::prune_dead_hosts();
         let Some(host) = crate::standalone::live_host() else {
             return Ok(());
         };
-        write_private_json(&self.directory.join(STANDALONE_FILE), &host, "standalone")
+        write_private_json(&directory.join(STANDALONE_FILE), &host, "standalone")
     }
 
     /// Keep-alive host recorded for this job, if any.

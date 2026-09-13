@@ -13,6 +13,7 @@ use super::StandaloneError;
 const KEEP_ALIVE_IDLE: Duration = Duration::from_secs(60);
 const KEEP_ALIVE_POLL: Duration = Duration::from_millis(100);
 const STOP_GRACE: Duration = Duration::from_secs(15);
+const STOP_ESCALATION: Duration = Duration::from_secs(3);
 
 /// Recorded keep-alive host a later MCP client or `resume` can reconnect to.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -168,12 +169,25 @@ pub(super) fn stop_hosts(root: &Path, panel_id: Option<&str>) -> Result<Vec<Stri
         stopped.push(host.panel_id.clone());
     }
     wait_until_exited(&targets, STOP_GRACE);
-    for host in targets {
-        if host_is_current(&host) {
+    for host in &targets {
+        if host_is_current(host) {
             let _ = signal_terminate(host.host_pid);
         }
     }
-    Ok(stopped)
+    wait_until_exited(&targets, STOP_ESCALATION);
+    let survivors = targets
+        .iter()
+        .filter(|host| host_is_current(host))
+        .map(|host| host.panel_id.clone())
+        .collect::<Vec<_>>();
+    if survivors.is_empty() {
+        Ok(stopped)
+    } else {
+        Err(format!(
+            "keep-alive standalone host did not stop: {}",
+            survivors.join(", ")
+        ))
+    }
 }
 
 fn wait_until_exited(hosts: &[StandaloneHostRef], grace: Duration) {
@@ -216,9 +230,7 @@ fn list_leases(root: &Path) -> Vec<StandaloneHostRef> {
         if !name.ends_with(".lease.json") {
             continue;
         }
-        if let Ok(bytes) = std::fs::read(&path)
-            && let Ok(host) = serde_json::from_slice::<StandaloneHostRef>(&bytes)
-        {
+        if let Some(host) = decode_lease(root, &path) {
             hosts.push(host);
         }
     }
@@ -231,8 +243,13 @@ fn list_leases(root: &Path) -> Vec<StandaloneHostRef> {
 }
 
 fn read_lease(root: &Path, panel_id: &str) -> Option<StandaloneHostRef> {
-    let bytes = std::fs::read(lease_path_for_root(root, panel_id)).ok()?;
-    serde_json::from_slice(&bytes).ok()
+    decode_lease(root, &lease_path_for_root(root, panel_id)).filter(|host| host.panel_id == panel_id)
+}
+
+fn decode_lease(root: &Path, path: &Path) -> Option<StandaloneHostRef> {
+    let bytes = std::fs::read(path).ok()?;
+    let host = serde_json::from_slice::<StandaloneHostRef>(&bytes).ok()?;
+    (lease_path_for_root(root, &host.panel_id) == path).then_some(host)
 }
 
 pub(super) async fn await_stop_at(root: &Path, panel_id: &str, poll: Duration) {
@@ -463,6 +480,29 @@ mod tests {
         assert!(!first.is_empty());
         assert_eq!(first, second);
         assert!(host_is_current(&current_host("standalone-identity", 1)));
+    }
+
+    #[test]
+    fn leases_are_ignored_when_the_embedded_panel_id_does_not_match_the_path() {
+        let home = tempfile::tempdir().unwrap_or_else(|error| panic!("home: {error}"));
+        let live = current_host("standalone-victim", 1);
+        publish(home.path(), &live).unwrap_or_else(|error| panic!("publish live: {error}"));
+        write_manifest(home.path(), &live.panel_id);
+        let spoofed = host(&live.panel_id, 0, 1, "");
+        let spoof_path = home
+            .path()
+            .join("runtime")
+            .join("browsers")
+            .join("standalone-spoofed.lease.json");
+        std::fs::write(
+            &spoof_path,
+            serde_json::to_vec(&spoofed).unwrap_or_else(|error| panic!("encode spoof: {error}")),
+        )
+        .unwrap_or_else(|error| panic!("write spoof: {error}"));
+
+        assert!(decode_lease(home.path(), &spoof_path).is_none());
+        assert_eq!(prune_dead_at(home.path()), Vec::<String>::new());
+        reconnect(home.path(), &live).unwrap_or_else(|error| panic!("live host must survive a spoofed lease: {error}"));
     }
 
     #[test]

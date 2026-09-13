@@ -286,15 +286,26 @@ async fn prepare_run(
             return Err(stop_exit_code(reason));
         }
     };
-    let mut durable = match prepared {
+    let durable = match prepared {
         Ok(durable) => durable,
         Err(error) => return Err(persist_preparation_failure(error, cancellation).await),
     };
-    if let Err(reason) = control.check() {
-        return Err(persist_stopped(&durable, reason, cancellation).await);
-    }
-    if let Err(error) = durable.bind_live_standalone() {
-        return Err(persist_failed(&durable, error.to_string(), cancellation).await);
+    let Some(job_dir) = durable.state_path().parent().map(Path::to_path_buf) else {
+        return Err(persist_failed(&durable, "durable job directory is missing".to_string(), cancellation).await);
+    };
+    match controlled_blocking(&mut control, "horizon-browser-bind-standalone", move || {
+        DurableRun::bind_live_standalone_in(&job_dir)
+    })
+    .await
+    {
+        Ok(BlockingCompletion::Completed(Ok(()))) => {}
+        Ok(BlockingCompletion::Completed(Err(error))) => {
+            return Err(persist_failed(&durable, error.to_string(), cancellation).await);
+        }
+        Ok(BlockingCompletion::InfrastructureFailed(error)) => {
+            return Err(persist_failed(&durable, error, cancellation).await);
+        }
+        Err(reason) => return Err(persist_stopped(&durable, reason, cancellation).await),
     }
 
     Ok(PreparedRun { plan, durable, control })
