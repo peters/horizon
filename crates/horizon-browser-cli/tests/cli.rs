@@ -112,6 +112,61 @@ fn run_writes_the_same_structured_report_to_stdout_or_a_private_file() {
     assert!(failed_state["checkpoint"].get("completed").is_none());
 }
 
+#[test]
+fn run_projects_json_from_a_prior_step() {
+    let root = tempfile::tempdir().expect("isolated root");
+    let plan = root.path().join("plan.json");
+    std::fs::write(
+        &plan,
+        br#"{"version":1,"variables":{"note":"list-only"},"steps":[{"id":"panels","tool":"browser_list"}],"project":{"format":"json","from":{"$ref":"panels#/panels"}}}"#,
+    )
+    .expect("write plan");
+
+    let output = run_command(root.path(), ["run", plan.to_str().expect("UTF-8 path")]);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("stdout report");
+    assert_eq!(report["ok"], true);
+    assert_eq!(report["projection"]["format"], "json");
+    assert_eq!(report["projection"]["file"], "projection.json");
+    assert_eq!(report["projection"]["rows"], 0);
+    let job_dir = std::path::PathBuf::from(report["job_dir"].as_str().expect("job directory"));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&std::fs::read(job_dir.join("projection.json")).expect("projection"))
+            .expect("decode projection"),
+        json!([])
+    );
+}
+
+#[test]
+fn run_fails_when_a_requested_projection_cannot_be_produced() {
+    let root = tempfile::tempdir().expect("isolated root");
+    let plan = root.path().join("plan.json");
+    std::fs::write(
+        &plan,
+        br#"{"version":1,"steps":[{"id":"panels","tool":"browser_list"}],"project":{"format":"json","from":{"$ref":"panels#/missing"}}}"#,
+    )
+    .expect("write plan");
+
+    let output = run_command(root.path(), ["run", plan.to_str().expect("UTF-8 path")]);
+    assert_eq!(output.status.code(), Some(1));
+    let report: Value = serde_json::from_slice(&output.stdout).expect("stdout report");
+    assert_eq!(report["ok"], false);
+    assert!(report.get("projection").is_none());
+    assert!(
+        report["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("did not match")),
+        "error: {}",
+        report["error"]
+    );
+    let job_dir = std::path::PathBuf::from(report["job_dir"].as_str().expect("job directory"));
+    assert!(!job_dir.join("projection.json").is_file());
+}
+
 fn assert_checkpoint_artifact(job_dir: &std::path::Path, state: &Value, expected: &Value) {
     assert!(state["checkpoint"]["completed"][0].get("result").is_none());
     let checkpoint_report = job_dir.join(
