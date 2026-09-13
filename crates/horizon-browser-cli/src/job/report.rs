@@ -20,6 +20,7 @@ const PLAN_NAME: &str = "executed-plan.json";
 const REPORT_NAME: &str = "report.json";
 const MAX_TRACE_CALLS: usize = 256;
 const MAX_TRACE_BYTES: usize = 1024 * 1024;
+const MAX_GROK_TEXT_BYTES: usize = MAX_TRACE_BYTES;
 
 pub(super) struct JobTrace {
     writer: File,
@@ -103,11 +104,14 @@ impl JobTrace {
         if let Some(result) = parse_structured_result(line) {
             self.structured_result = Some(result);
         }
-        self.observe_grok_text(line);
-        let Some(call) = parse_tool_call(line).or_else(|| self.parse_grok_tool_event(line)) else {
-            return Ok(None);
-        };
-        self.record_call(call)
+        self.observe_grok_text(line)?;
+        if let Some(call) = parse_tool_call(line) {
+            return self.record_call(call);
+        }
+        match self.parse_grok_tool_event(line)? {
+            Some(call) => self.record_call(call),
+            None => Ok(None),
+        }
     }
 
     pub(super) fn is_empty(&self) -> bool {
@@ -129,9 +133,7 @@ impl JobTrace {
 
     fn record_call(&mut self, mut call: RecordedCall) -> Result<Option<String>, JobError> {
         if self.calls.len() >= MAX_TRACE_CALLS {
-            return Err(JobError::Result(
-                "agent exceeded the 256-call executed-plan limit".to_string(),
-            ));
+            return Err(call_limit_error());
         }
         if !call.ok || !redact_arguments(&mut call.arguments) {
             self.replayable = false;
@@ -160,14 +162,14 @@ impl JobTrace {
         Ok(Some(tool))
     }
 
-    fn observe_grok_text(&mut self, line: &str) {
+    fn observe_grok_text(&mut self, line: &str) -> Result<(), JobError> {
         let Ok(event) = serde_json::from_str::<Value>(line) else {
-            return;
+            return Ok(());
         };
         match event.get("type").and_then(Value::as_str) {
             Some("text") => {
                 if let Some(data) = event.get("data").and_then(Value::as_str) {
-                    self.grok_text.push_str(data);
+                    append_bounded_text(&mut self.grok_text, data)?;
                 }
             }
             Some("end") => {
@@ -182,37 +184,70 @@ impl JobTrace {
             }
             _ => {}
         }
+        Ok(())
     }
 
-    fn parse_grok_tool_event(&mut self, line: &str) -> Option<RecordedCall> {
-        let event: Value = serde_json::from_str(line).ok()?;
-        match event.get("type")?.as_str()? {
-            "tool_call" => {
-                let id = event.get("toolCallId")?.as_str()?.to_string();
-                let tool_name = event.get("toolName")?.as_str()?;
+    fn parse_grok_tool_event(&mut self, line: &str) -> Result<Option<RecordedCall>, JobError> {
+        let Ok(event) = serde_json::from_str::<Value>(line) else {
+            return Ok(None);
+        };
+        match event.get("type").and_then(Value::as_str) {
+            Some("tool_call") => {
+                let Some(id) = event.get("toolCallId").and_then(Value::as_str).map(str::to_string) else {
+                    return Ok(None);
+                };
+                let Some(tool_name) = event.get("toolName").and_then(Value::as_str) else {
+                    return Ok(None);
+                };
                 let input = event.get("rawInput").cloned().unwrap_or(Value::Null);
-                let (tool, arguments) = horizon_browser_call(tool_name, &input)?;
+                let Some((tool, arguments)) = horizon_browser_call(tool_name, &input) else {
+                    return Ok(None);
+                };
                 let pending = PendingCall { tool, arguments };
                 if event.get("status").and_then(Value::as_str) == Some("completed") {
-                    return Some(completed_grok_call(pending, event.get("rawOutput"), true));
+                    return Ok(Some(completed_grok_call(pending, event.get("rawOutput"), true)));
                 }
-                self.pending.insert(id, pending);
-                None
+                self.retain_pending(id, pending)?;
+                Ok(None)
             }
-            "tool_call_update" => {
-                let id = event.get("toolCallId")?.as_str()?;
+            Some("tool_call_update") => {
+                let Some(id) = event.get("toolCallId").and_then(Value::as_str) else {
+                    return Ok(None);
+                };
                 let status = event.get("status").and_then(Value::as_str).unwrap_or_default();
                 if !matches!(status, "completed" | "failed") {
-                    return None;
+                    return Ok(None);
                 }
-                let pending = self.pending.remove(id)?;
-                Some(completed_grok_call(
+                let Some(pending) = self.pending.remove(id) else {
+                    return Ok(None);
+                };
+                Ok(Some(completed_grok_call(
                     pending,
                     event.get("rawOutput"),
                     status == "completed",
-                ))
+                )))
             }
-            _ => None,
+            _ => Ok(None),
+        }
+    }
+
+    fn retain_pending(&mut self, id: String, pending: PendingCall) -> Result<(), JobError> {
+        let pending_len = self.pending.len();
+        match self.pending.entry(id) {
+            std::collections::hash_map::Entry::Occupied(mut occupied) => {
+                occupied.insert(pending);
+                Ok(())
+            }
+            std::collections::hash_map::Entry::Vacant(vacant) => {
+                let Some(total) = self.calls.len().checked_add(pending_len) else {
+                    return Err(call_limit_error());
+                };
+                if total >= MAX_TRACE_CALLS {
+                    return Err(call_limit_error());
+                }
+                vacant.insert(pending);
+                Ok(())
+            }
         }
     }
 
@@ -526,6 +561,25 @@ fn step_id(index: usize) -> String {
     format!("step-{:03}", index + 1)
 }
 
+fn call_limit_error() -> JobError {
+    JobError::Result("agent exceeded the 256-call executed-plan limit".to_string())
+}
+
+fn grok_text_limit_error() -> JobError {
+    JobError::Result("agent exceeded the 1 MiB Grok text limit".to_string())
+}
+
+fn append_bounded_text(buffer: &mut String, data: &str) -> Result<(), JobError> {
+    let Some(total) = buffer.len().checked_add(data.len()) else {
+        return Err(grok_text_limit_error());
+    };
+    if total > MAX_GROK_TEXT_BYTES {
+        return Err(grok_text_limit_error());
+    }
+    buffer.push_str(data);
+    Ok(())
+}
+
 fn trace_limit_error() -> JobError {
     JobError::Result("agent exceeded the 1 MiB redacted MCP trace limit".to_string())
 }
@@ -788,6 +842,56 @@ mod tests {
             Some("browser_wait")
         );
         assert!(!trace.calls[2].ok);
+    }
+
+    #[test]
+    fn grok_text_is_bounded_before_retaining_another_chunk() {
+        let directory = tempfile::tempdir().expect("job directory");
+        let mut trace = JobTrace::start(directory.path()).expect("trace");
+        let chunk = "x".repeat(MAX_GROK_TEXT_BYTES / 2 + 1);
+        trace
+            .record_line(&json!({"type":"text","data": &chunk}).to_string())
+            .expect("first bounded text");
+        let error = trace
+            .record_line(&json!({"type":"text","data": &chunk}).to_string())
+            .expect_err("second text must exceed aggregate Grok text limit");
+        assert!(matches!(error, JobError::Result(message) if message.contains("1 MiB")));
+        assert!(trace.grok_text.len() <= MAX_GROK_TEXT_BYTES);
+    }
+
+    #[test]
+    fn unfinished_grok_tool_calls_count_toward_the_call_limit() {
+        let directory = tempfile::tempdir().expect("job directory");
+        let mut trace = JobTrace::start(directory.path()).expect("trace");
+        for index in 0..MAX_TRACE_CALLS {
+            trace
+                .record_line(
+                    &json!({
+                        "type":"tool_call",
+                        "toolCallId": format!("call_{index}"),
+                        "toolName":"horizon-browser__browser_list",
+                        "status":"in_progress",
+                        "rawInput":{}
+                    })
+                    .to_string(),
+                )
+                .unwrap_or_else(|error| panic!("pending {index}: {error}"));
+        }
+        let error = trace
+            .record_line(
+                &json!({
+                    "type":"tool_call",
+                    "toolCallId":"overflow",
+                    "toolName":"horizon-browser__browser_list",
+                    "status":"in_progress",
+                    "rawInput":{}
+                })
+                .to_string(),
+            )
+            .expect_err("pending overflow");
+        assert!(matches!(error, JobError::Result(message) if message.contains("256-call")));
+        assert_eq!(trace.pending.len(), MAX_TRACE_CALLS);
+        assert!(trace.is_empty());
     }
 
     #[test]

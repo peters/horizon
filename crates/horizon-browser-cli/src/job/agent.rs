@@ -3,6 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use horizon_core::grok_home_dir;
+
 use super::{JobError, JobOptions, io_error, write_private};
 
 const MCP_ARGS: [&str; 2] = ["mcp", "--connect"];
@@ -78,7 +80,7 @@ fn agent_executable_from(override_command: Option<OsString>, path: Option<&OsStr
     if let Some(command) = override_command.filter(|value| !value.is_empty()) {
         return command;
     }
-    if command_on_path("grok", path) || command_on_path("grok.exe", path) {
+    if command_on_path("grok", path) {
         return OsString::from("grok");
     }
     OsString::from("codex")
@@ -88,7 +90,59 @@ fn command_on_path(name: &str, path: Option<&OsStr>) -> bool {
     let Some(path) = path else {
         return false;
     };
-    std::env::split_paths(path).any(|directory| directory.join(name).is_file())
+    std::env::split_paths(path).any(|directory| executable_in_dir(&directory, name))
+}
+
+fn executable_in_dir(directory: &Path, name: &str) -> bool {
+    if is_executable_file(&directory.join(name)) {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        if Path::new(name).extension().is_some() {
+            return false;
+        }
+        return windows_path_names(name)
+            .iter()
+            .any(|candidate| is_executable_file(&directory.join(candidate)));
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = name;
+        false
+    }
+}
+
+#[cfg(unix)]
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    path.is_file()
+        && path
+            .metadata()
+            .is_ok_and(|metadata| metadata.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable_file(path: &Path) -> bool {
+    path.is_file()
+}
+
+#[cfg(windows)]
+fn windows_path_names(name: &str) -> Vec<OsString> {
+    let extensions = std::env::var_os("PATHEXT").unwrap_or_else(|| OsString::from(".COM;.EXE;.BAT;.CMD"));
+    extensions
+        .to_string_lossy()
+        .split(';')
+        .filter(|extension| !extension.is_empty())
+        .map(|extension| {
+            let mut candidate = OsString::from(name);
+            if !extension.starts_with('.') {
+                candidate.push(".");
+            }
+            candidate.push(extension);
+            candidate
+        })
+        .collect()
 }
 
 fn codex_command(
@@ -221,10 +275,7 @@ fn pin_job_dir_as_project_root(job_dir: &Path) {
 }
 
 fn user_grok_auth() -> Option<PathBuf> {
-    let home = std::env::var_os("GROK_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".grok")))?;
-    let auth = home.join("auth.json");
+    let auth = grok_home_dir()?.join("auth.json");
     auth.is_file().then_some(auth)
 }
 
@@ -276,13 +327,24 @@ mod tests {
     }
 
     #[test]
-    fn default_executable_prefers_grok_on_path_then_codex() {
+    fn default_executable_prefers_runnable_grok_on_path_then_codex() {
         let path = tempfile::tempdir().unwrap_or_else(|error| panic!("path root: {error}"));
         assert_eq!(
             agent_executable_from(None, Some(path.path().as_os_str())),
             OsString::from("codex")
         );
-        std::fs::write(path.path().join("grok"), []).unwrap_or_else(|error| panic!("create grok: {error}"));
+        let grok = path.path().join("grok");
+        std::fs::write(&grok, []).unwrap_or_else(|error| panic!("create grok: {error}"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                agent_executable_from(None, Some(path.path().as_os_str())),
+                OsString::from("codex")
+            );
+            std::fs::set_permissions(&grok, std::fs::Permissions::from_mode(0o755))
+                .unwrap_or_else(|error| panic!("chmod grok: {error}"));
+        }
         assert_eq!(
             agent_executable_from(None, Some(path.path().as_os_str())),
             OsString::from("grok")
@@ -290,6 +352,17 @@ mod tests {
         assert_eq!(
             agent_executable_from(Some(OsString::from("codex")), Some(path.path().as_os_str())),
             OsString::from("codex")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_path_lookup_accepts_pathext_shims() {
+        let path = tempfile::tempdir().unwrap_or_else(|error| panic!("path root: {error}"));
+        std::fs::write(path.path().join("grok.cmd"), []).unwrap_or_else(|error| panic!("create grok.cmd: {error}"));
+        assert_eq!(
+            agent_executable_from(None, Some(path.path().as_os_str())),
+            OsString::from("grok")
         );
     }
 
