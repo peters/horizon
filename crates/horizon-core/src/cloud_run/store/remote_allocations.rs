@@ -4,6 +4,7 @@
 
 mod binding;
 mod delete;
+mod endpoint;
 mod guards;
 mod recovery;
 mod request;

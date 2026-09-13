@@ -15,6 +15,22 @@ use std::{path::Path, process::Command, sync::Arc};
 
 pub(crate) const HOST_ALIAS: &str = "horizon-retained-worker";
 
+/// Proves the original saved host key and client identity at candidate coordinates.
+/// An open socket or a timeout is not success; the fixed no-op must exit successfully.
+pub(crate) fn prove_endpoint(
+    identity: &RemoteSshIdentity,
+    endpoint: &InteractiveWorkerSshEndpoint,
+) -> Result<(), query::Error> {
+    let trust = known_hosts(identity, endpoint).map_err(|_| query::Error::QueryFailed)?;
+    let command = command_for(identity.private_key_path(), trust.path(), endpoint, Operation::Probe)
+        .map_err(|_| query::Error::QueryFailed)?;
+    let output = query::run(command, &[], std::time::Duration::from_secs(10), 1)?;
+    if !output.is_empty() {
+        return Err(query::Error::QueryFailed);
+    }
+    Ok(())
+}
+
 pub(crate) fn prepared_command(
     identity: &Path,
     known_hosts: &Path,
@@ -67,6 +83,7 @@ pub(crate) fn prepared_github_install(
 
 #[derive(Clone, Copy)]
 enum Operation<'a> {
+    Probe,
     Request,
     PackStatus,
     Intake,
@@ -88,7 +105,8 @@ fn command_for(
     }
     let mut command = Command::new("ssh");
     let terminal_mode = match operation {
-        Operation::Request
+        Operation::Probe
+        | Operation::Request
         | Operation::PackStatus
         | Operation::Intake
         | Operation::IntakeStatus
@@ -142,6 +160,7 @@ fn command_for(
         &endpoint.host,
     ]);
     command.arg(match operation {
+        Operation::Probe => "/usr/bin/true".into(),
         Operation::Request => "/usr/local/bin/horizon-panel-session request".into(),
         Operation::PackStatus => "/usr/local/bin/horizon-repository pack-status".into(),
         Operation::Intake => "/usr/local/bin/horizon-repository intake".into(),
@@ -237,6 +256,14 @@ mod tests {
         let identity = Path::new("/private/client key");
         let trust = Path::new("/private/known hosts");
         let baseline = prepared_command(identity, trust, &endpoint).expect("query");
+        let probe = command_for(identity, trust, &endpoint, Operation::Probe).expect("probe");
+        let mut probe_args: Vec<_> = baseline.get_args().map(std::ffi::OsStr::to_os_string).collect();
+        *probe_args.last_mut().expect("command") = "/usr/bin/true".into();
+        assert_eq!(probe.get_args().collect::<Vec<_>>(), probe_args);
+        assert_eq!(
+            probe.get_envs().collect::<Vec<_>>(),
+            baseline.get_envs().collect::<Vec<_>>()
+        );
         let storage = prepared_storage_status(identity, trust, &endpoint).expect("storage query");
         let mut expected: Vec<_> = baseline.get_args().map(std::ffi::OsStr::to_os_string).collect();
         *expected.last_mut().expect("fixed command") = "/usr/local/bin/horizon-repository storage-status".into();

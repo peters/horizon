@@ -1,3 +1,5 @@
+mod endpoint;
+
 use super::super::{
     CloudProvider, WorkerTarget,
     interactive_worker::{

@@ -199,6 +199,19 @@ pub(super) struct WorkspaceReplacement<'a> {
 }
 
 impl<'a> WorkspaceReplacement<'a> {
+    pub(super) fn for_endpoint_refresh(
+        expected: &'a StoredRemoteWorkspace,
+        next: &'a RemoteWorkspaceState,
+    ) -> Result<Self, RemoteWorkspaceStoreError> {
+        validate_key(&expected.session_id, &expected.state.spec.workspace_local_id)?;
+        validation::validate_endpoint_refresh(&expected.state, next)?;
+        Ok(Self {
+            expected,
+            next,
+            snapshot: encode(&expected.session_id, next)?,
+        })
+    }
+
     /// Only the deletion coordinator may enter or complete destructive intent.
     /// Validate a phase-only transition before retaining the usual exact-snapshot CAS.
     pub(super) fn for_deletion(

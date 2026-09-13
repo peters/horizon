@@ -5,6 +5,13 @@ back into large multi-purpose modules.
 
 ## Module Boundaries
 
+- Explicit retained connection refresh lives in `remote_workspace::start::endpoint`:
+  its discovery contract, existing-identity admission, fixed authenticated SSH no-op
+  and provider re-observation. `runpod::interactive::endpoint` supplies GET-only
+  candidates; `store::remote_allocations::endpoint` owns the coordinate-only CAS.
+  These leaves never start compute/tasks or change keys/management phase.
+  Generic replacements keep full SSH identity immutable, including after Delete.
+
 ### Remote worker image
 
 - `repository_overlay::bundle::store` keeps anonymous publication as its default;
