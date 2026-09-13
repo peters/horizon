@@ -56,11 +56,15 @@ OPTIONAL_PROBES = {"docker_version", "docker_info", "podman_info",
                    "tailscale_version", "tailscale_status"}
 
 # Credential-shaped material that must never survive into the report.
+# Redactors redact the complete value (to end of line) for the assignment and
+# header forms: a partial redaction of "Authorization: Bearer <token>" would
+# leak the credential, and whitespace-containing values are otherwise only
+# partially removed.
 REDACTED_PATTERNS = (
     re.compile(r"eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}(?:\.[A-Za-z0-9_-]{4,})?"),  # JWT-like
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*"),
-    re.compile(r"(?i)\b(password|passwd|secret|token|api[_-]?key)\b\s*[:=]\s*\S+"),
-    re.compile(r"\b[Aa]uthorization\s*:\s*\S+"),
+    re.compile(r"(?i)\b(password|passwd|secret|token|api[_-]?key)\b\s*[:=]\s*[^\n]*"),
+    re.compile(r"\b[Aa]uthorization\s*:\s*[^\n]*"),
 )
 
 # Precomputed read-only facts that cannot be proven from host metadata alone.
@@ -132,50 +136,70 @@ def check_os(executor, timeout):
             "detail": "architecture %s is outside %s" % (machine, "/".join(SUPPORTED_ARCHS))}
 
 
+def engine_failure_bit(name, probe, error, timeout):
+    """One reason bit for an engine that was not usable, classified as
+    absent / timeout / nonzero-exit / malformed-or-unreachable."""
+    if error is not None:
+        if "timed out" in error:
+            return "%s: probe timed out after %ss" % (name, timeout)
+        if "not present" in error:
+            return "%s: tool not present" % name
+        return "%s: %s" % (name, redact(error))
+    if probe is None:
+        return "%s: probe could not run" % name
+    if probe["exit_code"] != 0:
+        return "%s present but probe failed (%s)" % (name, redact(probe.get("stderr", "")) or "exit %s" % probe["exit_code"])
+    return "%s present but response payload unusable" % name
+
+
+def parse_engine_version(probe, name):
+    """Version string from a successful engine probe, or None."""
+    if probe is None or probe["exit_code"] != 0:
+        return None
+    payload = parse_json_output(probe)
+    if not isinstance(payload, dict):
+        return None
+    if name == "docker":
+        server = payload.get("Server")
+        if isinstance(server, dict) and server.get("Version"):
+            return str(server["Version"])
+        return None
+    # podman: the real `podman info --format json` schema exposes the version
+    # under top-level `version.Version`; `host.version.output` is the legacy
+    # shape and is kept only as a fallback.
+    version = payload.get("version")
+    if isinstance(version, dict) and version.get("Version"):
+        return str(version["Version"])
+    host = payload.get("host")
+    if isinstance(host, dict):
+        outputs = host.get("version")
+        if isinstance(outputs, dict) and outputs.get("output"):
+            return str(outputs["output"])
+    return None
+
+
 def check_container_engine(executor, timeout):
     docker_version, dv_err = run_probe(executor, "docker_version", timeout)
     podman_info, pi_err = run_probe(executor, "podman_info", timeout)
 
-    engines = []
-    engine_ok = None
-    docker_server = None
-    if docker_version is not None and docker_version["exit_code"] == 0:
-        payload = parse_json_output(docker_version)
-        server = payload.get("Server") if isinstance(payload, dict) else None
-        if isinstance(server, dict) and server.get("Version"):
-            docker_server = str(server["Version"])
-            engines.append("docker %s" % docker_server)
-            engine_ok = "docker"
-    if podman_info is not None and podman_info["exit_code"] == 0:
-        payload = parse_json_output(podman_info)
-        host = payload.get("host") if isinstance(payload, dict) else None
-        version = None
-        if isinstance(host, dict):
-            outputs = host.get("version")
-            if isinstance(outputs, dict):
-                version = outputs.get("output")
-        if version:
-            engines.append("podman %s" % str(version))
-            if engine_ok is None:
-                engine_ok = "podman"
+    docker_server = parse_engine_version(docker_version, "docker")
+    podman_version = parse_engine_version(podman_info, "podman")
+    engine_ok = "docker" if docker_server else ("podman" if podman_version else None)
 
     if engine_ok is None:
-        detail_bits = []
-        if dv_err:
-            detail_bits.append("docker: %s" % dv_err)
-        elif docker_version is not None:
-            stderr = redact(docker_version.get("stderr", ""))
-            detail_bits.append("docker present but daemon unreachable (%s)"
-                               % (stderr or "no server response"))
-        if pi_err:
-            detail_bits.append("podman: %s" % pi_err)
+        detail_bits = [
+            engine_failure_bit("docker", docker_version, dv_err, timeout),
+            engine_failure_bit("podman", podman_info, pi_err, timeout),
+        ]
         return {"id": "container_engine", "status": UNSUPPORTED, "value": None,
-                "detail": "no usable container engine: %s"
-                          % ("; ".join(detail_bits) or "none found")}
+                "detail": "no usable container engine: %s" % "; ".join(detail_bits)}
 
-    detail = "usable engine: %s" % engines[0]
-    if len(engines) > 1:
-        detail += " (also found %s)" % ", ".join(engines[1:])
+    engine_version = docker_server if engine_ok == "docker" else podman_version
+    detail = "usable engine: %s %s" % (engine_ok, engine_version)
+    found = {"docker": docker_server, "podman": podman_version}
+    others = ["%s %s" % (n, v) for n, v in found.items() if v and n != engine_ok]
+    if others:
+        detail += " (also found %s)" % ", ".join(others)
     if engine_ok == "docker":
         info, err = run_probe(executor, "docker_info", timeout)
         if err is None and info["exit_code"] == 0:
@@ -183,7 +207,7 @@ def check_container_engine(executor, timeout):
                 if line.strip().startswith("Storage Driver:"):
                     detail += "; storage driver %s" % redact(line.split(":", 1)[1].strip())
                     break
-    return {"id": "container_engine", "status": SUPPORTED, "value": engines[0],
+    return {"id": "container_engine", "status": SUPPORTED, "value": "%s %s" % (engine_ok, engine_version),
             "detail": detail}
 
 
@@ -213,7 +237,7 @@ def check_capacity(executor, timeout, procfs_root):
             cores = sum(1 for line in cpuinfo.splitlines() if line.startswith("processor"))
     if cores is None:
         status = ERROR if probe_failed else UNSUPPORTED
-        detail = "cpu count unreadable (nprobe probe failed)" if probe_failed \
+        detail = "cpu count unreadable (nproc probe failed)" if probe_failed \
             else "cpu count unreadable"
         return {"id": "cpu_capacity", "status": status, "value": None, "detail": detail}
     status = SUPPORTED if cores >= MIN_CORES else UNSUPPORTED
@@ -242,6 +266,21 @@ def check_memory(procfs_root):
             "detail": "%d MiB total (reference baseline 16 GiB)" % (total_kb // 1024)}
 
 
+def select_mount_point(mount_paths, workspace_path):
+    """Longest mount point that is an ancestor of (or is) the workspace path.
+
+    A workspace such as /mnt/workspaces/job lives on the /mnt/workspaces
+    mount, not on /; selecting the wrong filesystem produces a wrong verdict.
+    """
+    normalized = os.path.normpath(workspace_path)
+    best = None
+    for mount in mount_paths:
+        if mount == "/" or mount == normalized or normalized.startswith(mount.rstrip("/") + "/"):
+            if best is None or len(mount) > len(best):
+                best = mount
+    return best
+
+
 def check_disk(executor, timeout, workspace_path):
     result, error = run_probe(executor, "disk", timeout)
     if error:
@@ -249,20 +288,25 @@ def check_disk(executor, timeout, workspace_path):
     if result["exit_code"] != 0:
         return {"id": "disk_capacity", "status": ERROR, "value": None,
                 "detail": redact(result.get("stderr", "")) or "df failed"}
-    available = {}
+    mounts = []
+    free_by_mount = {}
     for line in str(result.get("stdout", "")).splitlines()[1:]:
         fields = line.split()
         if len(fields) >= 6:
-            available[fields[5]] = int(fields[3]) if fields[3].isdigit() else None
-    root_kb = available.get("/")
-    workspace_kb = available.get(workspace_path)
-    if root_kb is None:
+            mounts.append(fields[5])
+            free_by_mount[fields[5]] = int(fields[3]) if fields[3].isdigit() else None
+    mount = select_mount_point(mounts, workspace_path)
+    if mount is None:
         return {"id": "disk_capacity", "status": ERROR, "value": None,
-                "detail": "df output did not include /"}
-    free_kb = workspace_kb if workspace_kb is not None else root_kb
+                "detail": "df output contains no mount point covering %s" % workspace_path}
+    free_kb = free_by_mount.get(mount)
+    if free_kb is None:
+        # A malformed free value on the *selected* entry is rejected rather
+        # than silently falling back to another filesystem.
+        return {"id": "disk_capacity", "status": ERROR, "value": None,
+                "detail": "df reported a malformed free value for mount %s" % mount}
     status = SUPPORTED if free_kb >= MIN_FREE_KB else UNSUPPORTED
-    detail = "%d MiB free on %s (reference baseline 20 GiB)" \
-        % (free_kb // 1024, workspace_path if workspace_kb is not None else "/")
+    detail = "%d MiB free on %s (reference baseline 20 GiB)" % (free_kb // 1024, mount)
     return {"id": "disk_capacity", "status": status, "value": free_kb, "detail": detail}
 
 
@@ -280,7 +324,10 @@ def nearest_existing(path):
 def read_ext4_options(procfs_root, sysfs_root, dev_major, dev_minor):
     """Resolve the block device name via sysfs, then read its ext4 options.
 
-    Returns (name, options_content_or_None, error_or_None).
+    Returns (name, options_bytes_or_None, error_or_None). The options are
+    returned as raw bytes: the gate below enforces the authoritative
+    byte-level contract (4096-byte cap before decoding, trailing newline,
+    exact tokens) and must see exactly what the kernel wrote.
     """
     block_id = "%d:%d" % (dev_major, dev_minor)
     block_path = os.path.join(sysfs_root, "dev", "block", block_id)
@@ -292,10 +339,58 @@ def read_ext4_options(procfs_root, sysfs_root, dev_major, dev_minor):
         return None, None, "block device %s not resolvable via sysfs" % block_id
     if not name or name in (".", "..") or os.sep in name:
         return None, None, "sysfs reported an unsafe device name"
-    options = read_procfs(procfs_root, os.path.join("fs", "ext4", name, "options"))
-    if options is None:
+    options_path = os.path.join(procfs_root, "fs", "ext4", name, "options")
+    try:
+        with open(options_path, "rb") as handle:
+            raw = handle.read(MAX_OPTIONS_BYTES + 1)
+    except OSError:
         return name, None, "no /proc/fs/ext4/%s entry (not a mounted ext4 filesystem)" % name
-    return name, options, None
+    return name, raw, None
+
+
+# Mirrors crates/horizon-core/src/repository_overlay/storage.rs
+# `journaled_options`: exact tokens ("rwx" or a space-padded line must not
+# pass), no duplicates, no empty lines, no ASCII control bytes, no spaces,
+# exactly one data= line, 4096-byte cap, trailing newline required.
+MAX_OPTIONS_BYTES = 4096
+
+
+def ext4_qualifier_problems(raw):
+    """Returns the list of gate violations for a raw options payload."""
+    if len(raw) > MAX_OPTIONS_BYTES:
+        return ["options longer than %d bytes" % MAX_OPTIONS_BYTES]
+    try:
+        options = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return ["options are not valid UTF-8"]
+    if not options.endswith("\n"):
+        return ["options missing trailing newline"]
+    lines = options.split("\n")[:-1]
+    problems = []
+    if len(set(lines)) != len(lines):
+        problems.append("duplicate option lines")
+    for line in lines:
+        if line == "":
+            problems.append("empty option line")
+            break
+        for byte in line.encode("utf-8"):
+            if byte < 0x20 or byte == 0x7F or byte == 0x20:
+                problems.append("control character or space in option line")
+                break
+        if problems:
+            break
+    if "rw" not in lines:
+        problems.append("missing exact token rw")
+    if "barrier" not in lines:
+        problems.append("missing exact token barrier")
+    if "ro" in lines:
+        problems.append("forbidden token ro")
+    if "nobarrier" in lines:
+        problems.append("forbidden token nobarrier")
+    data_lines = [line for line in lines if line.startswith("data=")]
+    if len(data_lines) != 1 or data_lines[0] not in ("data=ordered", "data=journal"):
+        problems.append("needs exactly one data=ordered or data=journal line")
+    return problems
 
 
 def check_storage_qualifier(procfs_root, sysfs_root, workspace_path):
@@ -316,42 +411,29 @@ def check_storage_qualifier(procfs_root, sysfs_root, workspace_path):
         value = name
         detail = error or "ext4 options unreadable"
     else:
-        lines = [line.strip() for line in options.splitlines() if line.strip()]
-        has_rw = any(line.startswith("rw") for line in lines)
-        has_ro = any(line.startswith("ro") for line in lines)
-        has_barrier = any(line.startswith("barrier") for line in lines)
-        data_entries = [line for line in lines if line.startswith("data=")]
-        data_ok = len(data_entries) == 1 and data_entries[0] in ("data=ordered", "data=journal")
-        has_nobarrier = any(line.startswith("nobarrier") for line in lines)
-        if has_rw and has_barrier and data_ok and not has_ro and not has_nobarrier:
+        problems = ext4_qualifier_problems(options)
+        if not problems:
             status, value = SUPPORTED, name
             detail = "device %s meets the on-worker ext4 qualifier" % name
         else:
             status, value = UNSUPPORTED, name
-            missing = []
-            if not has_rw:
-                missing.append("rw")
-            if has_ro:
-                missing.append("ro present")
-            if not has_barrier:
-                missing.append("barrier")
-            if has_nobarrier:
-                missing.append("nobarrier present")
-            if not data_ok:
-                missing.append("data=ordered|journal")
-            detail = "device %s fails the qualifier: %s" % (name, ", ".join(missing))
+            detail = "device %s fails the qualifier: %s" % (name, "; ".join(problems))
     return {"id": "storage_ext4_qualifier", "status": status, "value": value,
             "detail": redact(detail)}
 
 
 def check_tailscale(executor, timeout):
     version, verr = run_probe(executor, "tailscale_version", timeout)
+    # Tailscale is optional: issue #604 explicitly permits ordinary pinned
+    # SSH, so absence keeps the verdict out of the prerequisite gate.
     if verr:
-        return {"id": "tailscale", "status": UNSUPPORTED, "value": None,
-                "detail": "tailscale not present: %s" % verr}
+        return {"id": "tailscale", "status": UNVERIFIED, "value": None,
+                "detail": "tailscale not present (%s); ordinary pinned SSH remains usable; "
+                          "client-side reachability remains unverified" % redact(verr)}
     if version["exit_code"] != 0:
-        return {"id": "tailscale", "status": UNSUPPORTED, "value": None,
-                "detail": redact(version.get("stderr", "")) or "tailscale version failed"}
+        return {"id": "tailscale", "status": UNVERIFIED, "value": None,
+                "detail": redact(version.get("stderr", "")) or "tailscale version failed; "
+                          "client-side reachability remains unverified"}
     self_name = None
     online = None
     status, serr = run_probe(executor, "tailscale_status", timeout)

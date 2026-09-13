@@ -37,6 +37,12 @@ def docker_daemon_down(stderr="Cannot connect to the Docker daemon at unix:///va
 
 
 def podman_ok(version="4.9.0"):
+    # Real `podman info --format json` schema: top-level version.Version.
+    return {"stdout": json.dumps({"version": {"Version": version}, "host": {}})}
+
+
+def podman_ok_legacy(version="4.9.0"):
+    # Legacy shape, kept as a parser fallback.
     return {"stdout": json.dumps({"host": {"version": {"output": version}}})}
 
 
@@ -229,7 +235,44 @@ class EngineFailures(Harness):
         self.assertEqual(code, 1)
         by_id = {check["id"]: check for check in report["checks"]}
         self.assertEqual(by_id["container_engine"]["status"], "unsupported")
-        self.assertIn("daemon unreachable", by_id["container_engine"]["detail"])
+        self.assertIn("docker present but probe failed", by_id["container_engine"]["detail"])
+        self.assertIn("permission denied", by_id["container_engine"]["detail"].lower())
+
+    def test_podman_legacy_version_shape_still_parses(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture.pop("docker_version")
+        fixture.pop("docker_info")
+        fixture["podman_info"] = podman_ok_legacy("4.9.0")
+        code, report, _ = self.run_main(fixture)
+        self.assertEqual(code, 0)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["container_engine"]["value"], "podman 4.9.0")
+
+    def test_bearer_authorization_line_is_fully_redacted(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["docker_version"] = docker_daemon_down(
+            "error: Authorization: Bearer supersecrettok value")
+        code, report, _ = self.run_main(fixture)
+        self.assertEqual(code, 1)
+        by_id = {check["id"]: check for check in report["checks"]}
+        detail = by_id["container_engine"]["detail"]
+        self.assertNotIn("supersecrettok", detail)
+        self.assertNotIn("Bearer", detail)
+        self.assertIn("<redacted>", detail)
+
+    def test_disk_selects_longest_mount_ancestor(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["disk"] = {"stdout":
+            "Filesystem     1024-blocks      Used Available Capacity Mounted on\n"
+            "/dev/root        1000000000  800000000   200000000     80% /\n"
+            "/dev/data        2000000000 1900000000    41943040    98% /mnt/workspaces\n"}
+        code, report, _ = self.run_main(fixture, workspace="/mnt/workspaces/job")
+        self.assertEqual(code, 0)
+        by_id = {check["id"]: check for check in report["checks"]}
+        # /mnt/workspaces (40 GiB free) is the workspace's real filesystem,
+        # not / (200 GB free).
+        self.assertEqual(by_id["disk_capacity"]["value"], 41943040)
+        self.assertIn("/mnt/workspaces", by_id["disk_capacity"]["detail"])
 
     def test_docker_malformed_json_falls_through_to_unsupported(self):
         fixture = dict(DEFAULT_FIXTURE)
@@ -317,7 +360,7 @@ class StorageQualifier(Harness):
         by_id = {check["id"]: check for check in report["checks"]}
         check = by_id["storage_ext4_qualifier"]
         self.assertEqual(check["status"], "unsupported")
-        self.assertIn("data=ordered|journal", check["detail"])
+        self.assertIn("exactly one data=ordered or data=journal", check["detail"])
 
     def test_read_only_mount_fails(self):
         _, report, _ = self.variant("ro\nbarrier\ndata=ordered\n")
@@ -328,6 +371,41 @@ class StorageQualifier(Harness):
         _, report, _ = self.variant("rw\nnobarrier\ndata=ordered\n")
         by_id = {check["id"]: check for check in report["checks"]}
         self.assertEqual(by_id["storage_ext4_qualifier"]["status"], "unsupported")
+
+    def test_gate_rejects_rust_contract_violations(self):
+        # Mirrors storage.rs journal_contract tests: each must fail.
+        bad = {
+            "rwx": "rwx\nbarrier\ndata=ordered\n",             # prefix, not exact token
+            "space": "rw\n barrier\ndata=ordered\n",           # space in line
+            "duplicate": "rw\nbarrier\nbarrier\ndata=ordered\n",
+            "no_newline": "rw\nbarrier\ndata=ordered",
+            "crlf": "rw\nbarrier\ndata=ordered\r\n",
+            "ro": "rw\nbarrier\ndata=ordered\nro\n",
+            "two_data": "rw\nbarrier\ndata=ordered\ndata=journal\n",
+            "empty_line": "rw\nbarrier\ndata=ordered\n\n",
+        }
+        for label, options in bad.items():
+            with self.subTest(label=label):
+                _, report, _ = self.variant(options)
+                by_id = {check["id"]: check for check in report["checks"]}
+                self.assertEqual(by_id["storage_ext4_qualifier"]["status"], "unsupported", label)
+        # over the 4096-byte cap
+        _, report, _ = self.variant("rw\nbarrier\ndata=ordered\n" + "x" * 4100 + "\n")
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["storage_ext4_qualifier"]["status"], "unsupported")
+
+    def test_gate_unit_rejects_and_accepts(self):
+        bad = [b"rwx\nbarrier\ndata=ordered\n", b"rw\n barrier\ndata=ordered\n",
+               b"rw\nbarrier\nbarrier\ndata=ordered\n", b"rw\nbarrier\ndata=ordered",
+               b"rw\nbarrier\ndata=ordered\r\n", b"rw\nbarrier\ndata=writeback\n",
+               b"rw\nbarrier\ndata=ordered\nro\n", b"rw\nbarrier\ndata=ordered\nnobarrier\n",
+               b"rw\nbarrier\ndata=ordered\ndata=journal\n", b"\n",
+               b"rw\nbarrier\ndata=ordered\n" + b"x" * 4100]
+        for raw in bad:
+            with self.subTest(raw=raw):
+                self.assertTrue(preflight.ext4_qualifier_problems(raw), "accepted %r" % raw)
+        for raw in (b"rw\nbarrier\ndata=ordered\n", b"rw\nbarrier\ndata=journal\n"):
+            self.assertEqual(preflight.ext4_qualifier_problems(raw), [])
 
     def test_not_ext4(self):
         _, report, _ = self.run_main(dict(DEFAULT_FIXTURE), ext4_options=None)
@@ -372,14 +450,18 @@ class DiskAndCapacity(Harness):
 
 
 class TailscaleChecks(Harness):
-    def test_tailscale_absent(self):
+    def test_tailscale_absent_keeps_verdict_supported(self):
+        # Issue #604 permits ordinary pinned SSH, so tailscale absence is
+        # informational (unverified), not a prerequisite failure.
         fixture = dict(DEFAULT_FIXTURE)
         fixture.pop("tailscale_version")
         fixture.pop("tailscale_status")
         code, report, _ = self.run_main(fixture)
-        self.assertEqual(code, 1)
+        self.assertEqual(code, 0)
+        self.assertEqual(report["summary"]["verdict"], "supported")
         by_id = {check["id"]: check for check in report["checks"]}
-        self.assertEqual(by_id["tailscale"]["status"], "unsupported")
+        self.assertEqual(by_id["tailscale"]["status"], "unverified")
+        self.assertIn("pinned SSH", by_id["tailscale"]["detail"])
 
     def test_tailscale_version_only_when_status_fails(self):
         fixture = dict(DEFAULT_FIXTURE)

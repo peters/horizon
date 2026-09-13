@@ -28,7 +28,17 @@ pass is complete.
       (if the VM user differs, use that user; keep the key-based auth and
       pinned host key — do not weaken host-key checking.)
 
-## Steps (run in order; the run is read-only by construction)
+## Scope note: what is read-only here
+
+The **tool** is read-only (proven in the PR: strace audit, no-write runs).
+The *verification plumbing* below — delivering the single checker file to
+`/tmp` on the VM and deleting it afterwards — deliberately is **not**
+read-only, and it is **not** a tool feature: issue #604 reserves SSH
+delivery/invocation for a later slice. The before/after snapshot in steps 1
+and 4 evidences the *tool run* (step 3), not the plumbing. The plan is
+explicit about which steps mutate the host so the proof is not overclaimed.
+
+## Steps (run in order)
 
 1. **Baseline snapshot (read-only):**
    ```sh
@@ -36,12 +46,14 @@ pass is complete.
    ```
    Save as `before.txt`.
 
-2. **Deliver the checker** (single file, to `/tmp` — no install):
+2. **Deliver the checker — MUTATES the host (verification plumbing, not a tool feature):**
+   single file to `/tmp`, removed in step 5. No package manager, no service,
+   no install path.
    ```sh
    scp scripts/remote-host-preflight/preflight.py fintermac@<VM>:/tmp/preflight-604.py
    ```
 
-3. **Run the preflight on the VM** (fixed args, bounded probes, 10 s each):
+3. **Run the preflight on the VM** (the tool run under test; fixed args, bounded probes, 10 s each). Step 3's `> /tmp/preflight-604.json` writes one report file owned by this verification, removed in step 5:
    ```sh
    ssh fintermac@<VM> 'python3 -B /tmp/preflight-604.py --json --now 2026-09-13T00:00:00Z > /tmp/preflight-604.json; echo exit=$?; python3 -B /tmp/preflight-604.py'
    ```
@@ -49,11 +61,17 @@ pass is complete.
    `fintermac-preflight.txt`.
 
 4. **Post-run snapshot (read-only):** same commands as step 1 into
-   `after.txt`; `diff before.txt after.txt` must show only the clock line
-   changed. This is the read-only proof (the tool also never writes — see the
-   strace audit in the PR description).
+   `after.txt`. `diff before.txt after.txt` must show only the clock line
+   changed *and* the presence/removal of the two `/tmp` verification files if
+   the snapshots straddle step 5 — take `after.txt` **before** step 5 so the
+   diff is exactly clock-only for the tool run itself (the two `/tmp` files
+   existed in both snapshots and are removed afterwards).
 
-5. **Remove the delivery copy** (our own `/tmp` file, not host state):
+   Read-only proof of the tool additionally comes from the strace audit in
+   the PR description (4 writes total, all to stdout; zero file-creating
+   opens) — the snapshot diff is corroborating, not the primary evidence.
+
+5. **Remove the verification copies** (our own `/tmp` files, not host state):
    ```sh
    ssh fintermac@<VM> 'rm -f /tmp/preflight-604.py /tmp/preflight-604.json'
    ```
@@ -72,7 +90,7 @@ pass is complete.
 | 8 | No raw secrets/tokens/keys anywhere in either report (visual + `grep -E 'eyJ[A-Za-z0-9_-]{4,}\.|PRIVATE KEY|token='`) |
 | 9 | Two runs with the same `--now` produce byte-identical JSON |
 | 10 | The 3 `unverified` entries are always present with their fixed details |
-| 11 | `before.txt`/`after.txt` diff is clock-only (read-only proof) |
+| 11 | `before.txt`/`after.txt` diff is clock-only for the tool run (corroboration; primary read-only evidence is the strace audit in the PR) |
 | 12 | If the VM has no docker: the engine check says `docker: tool not present` / podman path — no crash, exit code still consistent |
 
 ## Failure handling
