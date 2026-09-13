@@ -236,10 +236,7 @@ fn unsupported_repository_actions_never_dispatch() {
     let temp = tempfile::tempdir().expect("fixture");
     let home = HorizonHome::from_root(temp.path().join("never-opened"));
     for provider in [CloudProvider::LocalDocker, CloudProvider::RunPod, CloudProvider::Azure] {
-        assert_eq!(
-            supported(provider),
-            cfg!(target_os = "linux") && provider != CloudProvider::Azure
-        );
+        assert_eq!(supported(provider), cfg!(target_os = "linux"));
         if supported(provider) {
             continue;
         }
@@ -256,6 +253,45 @@ fn unsupported_repository_actions_never_dispatch() {
         }
     }
     assert!(!home.cloud_workflow_store_path().exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn azure_actions_use_common_preview_and_inspection_without_creating_storage() {
+    let ctx = Context::default();
+    let temp = tempfile::tempdir().expect("fixture");
+    let home = HorizonHome::from_root(temp.path().join("absent-home"));
+    let mut scope = scope();
+    scope.expected.provider = CloudProvider::Azure;
+    assert!(supported(scope.expected.provider));
+    for action in [InventoryAction::PrepareRepository, InventoryAction::InspectRepository] {
+        let mut state = RepositoryState::default();
+        let mut rendered_action = InventoryAction::None;
+        let output = ctx
+            .run_ui(raw_input([800.0, 600.0], None), |ui| {
+                paint::show(ui, &mut state, supported(scope.expected.provider), &mut rendered_action);
+            })
+            .discard_textures();
+        let shapes = format!("{:?}", output.shapes);
+        assert!(shapes.contains("Review repository preparation") && shapes.contains("Check preparation receipt"));
+        assert!(matches!(rendered_action, InventoryAction::None));
+        state.action(InventoryAction::ConfirmRepository, &home, &ctx, scope.clone());
+        assert!(!state.is_pending());
+        state.action(action, &home, &ctx, scope.clone());
+        let result = state
+            .pending
+            .as_ref()
+            .expect("common background operation")
+            .receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("local refusal");
+        assert!(matches!(
+            result,
+            Err(Failure::Refused("Repository control storage is unavailable."))
+        ));
+        assert!(state.confirmation.is_none() && state.token.is_empty() && !state.consent && !state.unknown);
+        assert!(!home.root().exists());
+    }
 }
 
 #[test]

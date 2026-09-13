@@ -6,8 +6,11 @@ use crate::{
 };
 use std::os::unix::fs::PermissionsExt;
 
+mod azure;
+
 const OWNER: &str = "00000000-0000-4000-8000-000000000001";
 const KEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcH";
+const SUBSCRIPTION: &str = "11111111-1111-4111-8111-111111111111";
 
 struct Fixture {
     directory: tempfile::TempDir,
@@ -28,9 +31,28 @@ impl Fixture {
         pinned: bool,
         branch: Option<&str>,
     ) -> Self {
+        Self::build(provider, network, lifetime, pinned, branch, false)
+    }
+    fn build(
+        provider: CloudProvider,
+        network: bool,
+        lifetime: WorkerLifetime,
+        pinned: bool,
+        branch: Option<&str>,
+        private_identity: bool,
+    ) -> Self {
         let directory = tempfile::tempdir().unwrap();
         std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        let store = CloudWorkflowStore::open(&HorizonHome::from_root(directory.path().join("home"))).unwrap();
+        let home = HorizonHome::from_root(directory.path().join("home"));
+        let store = CloudWorkflowStore::open(&home).unwrap();
+        let config: RemoteProviderConfig = serde_json::from_value(serde_json::json!({
+            "local_docker":[{"name":"development","docker_host":"unix:///tmp/synthetic-docker.sock"}],
+            "runpod":[{"name":"development","gpu_type_ids":["synthetic-gpu"],"gpu_count":1,"ports":["22/tcp"],"volume_gib":0,"data_center_id":"EU-RO-1"}],
+            "azure":[{"name":"development","subscription_id":SUBSCRIPTION,"location":"northeurope",
+                "vm_size":"Standard_D4s_v3","declared_hourly_cost_micros":100_000,
+                "image_pull_identity_id":format!("/subscriptions/{SUBSCRIPTION}/resourceGroups/synthetic/providers/Microsoft.ManagedIdentity/userAssignedIdentities/pull"),
+                "registry_login_server":"synthetic.azurecr.io","disk_sku":"StandardSSD_LRS"}]
+        })).unwrap();
         let mut state: RemoteWorkspaceState = serde_json::from_value(serde_json::json!({"version":1,"spec":{
             "workspace_local_id":"workspace","working_directory":"nested","generation":0,
             "repository":{"repository":"fixture/project","commit":"a".repeat(40),"branch":"work/one"},
@@ -39,8 +61,16 @@ impl Fixture {
         }})).unwrap();
         state.spec.target.lifetime = lifetime;
         state.spec.repository.branch = branch.map(str::to_owned);
+        if provider == CloudProvider::Azure {
+            state.spec.target.image = format!("synthetic.azurecr.io/worker@sha256:{}", "b".repeat(64));
+        }
         let workspace = store.create_remote_workspace(OWNER, &state).unwrap();
         let allocation = store.allocate_remote_runtime(&workspace, i64::MAX).unwrap();
+        if provider == CloudProvider::Azure {
+            store
+                .record_remote_cpu_profile_binding(&allocation, &config.azure[0])
+                .unwrap();
+        }
         if network {
             store
                 .record_remote_network_volume_selection(
@@ -53,8 +83,24 @@ impl Fixture {
                 )
                 .unwrap();
         }
-        let allocation = store.reserve_remote_worker_request(&allocation, KEY).unwrap();
+        let runtime = allocation.workspace().state().runtime.as_ref().unwrap();
+        let key = if private_identity {
+            RemoteSshIdentityStore::new(&home)
+                .prepare_new(runtime.workflow_id, runtime.job_id)
+                .unwrap()
+                .public_key()
+                .to_owned()
+        } else {
+            KEY.to_owned()
+        };
+        let allocation = store.reserve_remote_worker_request(&allocation, &key).unwrap();
         let request = allocation.worker_request().unwrap();
+        let resource = if provider == CloudProvider::Azure {
+            let group = crate::cloud_run::azure::resource_group_name(request.workflow_id, request.job_id);
+            format!("/subscriptions/{SUBSCRIPTION}/resourceGroups/{group}")
+        } else {
+            "fixture-worker".into()
+        };
         store
             .record_remote_worker_recovery(
                 &allocation,
@@ -64,7 +110,7 @@ impl Fixture {
                             provider,
                             workflow_id: request.workflow_id,
                             job_id: request.job_id,
-                            resource_id: "fixture-worker".into(),
+                            resource_id: resource,
                         },
                         target: request.target,
                         ssh_public_key: request.ssh_public_key,
@@ -87,10 +133,6 @@ impl Fixture {
                 }),
             )
             .unwrap();
-        let config = serde_json::from_value(serde_json::json!({
-            "local_docker":[{"name":"development","docker_host":"unix:///tmp/synthetic-docker.sock"}],
-            "runpod":[{"name":"development","gpu_type_ids":["synthetic-gpu"],"gpu_count":1,"ports":["22/tcp"],"volume_gib":0,"data_center_id":"EU-RO-1"}]
-        })).unwrap();
         Self {
             directory,
             store,

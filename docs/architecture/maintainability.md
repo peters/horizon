@@ -204,6 +204,11 @@ back into large multi-purpose modules.
   Its explicit optional first-PAT install precedes detached Git submission only
   after successful acknowledgement and renewed admission; mutation uncertainty
   never grants retry or implies credential rollback. Preview retains no PAT.
+  Its Azure leaf admits the immutable CPU profile binding and retained resource
+  before lazy client construction; it reuses the common Git/PAT transport.
+  Existing ARM host-key attestation must still match the saved SSH pin. Missing
+  provenance or private identity is never repaired, and no compute lifecycle API
+  is called by repository preparation or its manual receipt check.
 - `remote_worker_status.rs` gates non-creating panel inspection on exact owned
   recovery and current lifetime. Its `protocol.rs` leaf owns bounded status-only
   wire types; `ssh.rs` owns the query's private host-pin lifetime and retains the
