@@ -13,7 +13,7 @@ PC, existing Horizon processes or existing workspaces.
 | Role | What it is | Owner of its paths |
 | --- | --- | --- |
 | Client A | Disposable Ubuntu VM in its own exact resource group, running the exact Horizon Linux client (built from `client_sha`) under a virtual display, with an isolated persistent client home on its OS disk (retained across deallocation) | Azure lane |
-| Worker B | Separate persistent Azure CPU worker in its own exact group, created on A through the product path (setup, Prepare Repository, saved-Shell Start); its Stop, saved-Stop check and Start are product operations too | Azure lane (product Azure paths and adapter) |
+| Worker B | Separate persistent Azure CPU worker in its own exact group, created on A through the product setup path and prepared through Prepare Repository; its Stop, saved-Stop check and compute Start are product operations; the saved-Shell task start and panel reconnect are gated for Azure until their slices land | Azure lane (product Azure paths and adapter) |
 | Observer C | This controller, outside A and B: read-only ARM reads and one pinned SSH session per sample with a key that sshd restricts (`restrict,command=`) to a forced reader of the progress and checkpoint files | Azure lane |
 
 C never renews a lease, delivers a keepalive, reconnects a terminal, checkpoints or
@@ -76,12 +76,17 @@ subscription-pinned Azure CLI credential (`az account get-access-token --subscri
 gives A no identity today, so before the product pass A needs, in this order:
 
 1. The Azure CLI on A (added to the cloud-init package list; no extension install).
-2. An identity A can log in with non-interactively. The intended shape is a
-   system-assigned managed identity on A with `az login --identity`, granted a role
-   that can create resource groups and deployments in the subscription and assign the
-   worker pull identity (`horizon-worker-puller`) to the worker VM; the exact role
-   assignment is an authorization change and is posted on #474 for approval before it
-   is made. No user credential is copied to A.
+2. An identity A can log in non-interactively. The intended shape is a
+   system-assigned managed identity on A, granted a role that can create resource
+   groups and deployments in the subscription and assign the worker pull identity
+   (`horizon-worker-puller`) to the worker VM; the exact role assignment is an
+   authorization change and is posted on #474 for approval before it is made. No user
+   credential is copied to A. Before Horizon is launched, and under the same `HOME`
+   Horizon will use, run `az login --identity` as A's Horizon user and prove the token
+   path the product will take: `az account get-access-token --subscription <id>
+   --query expiresOn -o tsv` must print an expiry. The product's credential invokes
+   that same command with stdin closed, so an unauthenticated CLI leaves setup, Stop
+   and Start unable to obtain a token.
 3. A Horizon configuration on A whose `remote.azure` list holds the exact profile the
    run uses (subscription, `northeurope`, VM size, the pull identity, the registry
    login server, the declared hourly cost and the disk SKU); the product binds that
@@ -91,13 +96,28 @@ gives A no identity today, so before the product pass A needs, in this order:
    field on A (stdin-only delivery to the worker) and is never written to A's disk or
    to any manifest, journal or receipt.
 
-Three product paths are still refused for Azure and gate the baseline and return
+Two product paths are still refused for Azure and gate the baseline and return
 steps below until they land (tracked as the next slices on #474): the saved-Shell
 task start (`remote_worker_status/git_start/configured.rs` and the overview's saved
-panel Start admit Local Docker and RunPod only), configured panel attachment
-(`remote_panel_attachment/configured.rs`, which every Reconnect uses), and the
-provider status read (`remote_environment_observation/configured.rs`). Steps marked
-**gated** below cannot be executed for an Azure worker today.
+panel Start admit Local Docker and RunPod only) and configured panel attachment
+(`remote_panel_attachment/configured.rs`, which every Reconnect uses). Steps marked
+**gated** below cannot be executed for an Azure worker today; a product run stops
+before the first gated step and collects no counter evidence until both land. A
+third refused path, the provider status read (`remote_environment_observation/
+configured.rs`, the overview's **Check provider status**), is not used by this
+procedure and is tracked separately.
+
+The deterministic task this lane runs on B, for the pinned worker image: saved Shell
+panel with program `/bin/sh` and arguments `["-c", "i=0; while :; do i=$((i+1));
+printf '%s\n' "$i" > /workspace/progress.counter.tmp && mv
+/workspace/progress.counter.tmp /workspace/progress.counter; sleep 5; done"]`,
+working directory `.` (the repository root under `/workspace`), so
+`/workspace/progress.counter` advances every five seconds and every 15-second sample
+sees a higher value; no checkpoint path (worker-owned checkpoints are deferred to
+#471, so the verdict's checkpoint boolean stays false). Dirty bytes: before the off
+phase, write one file `/workspace/<repository>/horizon-dirty-marker.txt` containing a
+fresh random token from a second panel session, record its SHA-256 in the baseline,
+and read it back unchanged at return and after the worker lifecycle step.
 
 ## Procedure
 
@@ -167,26 +187,31 @@ provider status read (`remote_environment_observation/configured.rs`). Steps mar
      the consent box and press **Create task-free worker**. Nothing is checked out
      and no task starts here. Record the workspace, owning session, workflow and job
      identities and B's exact group ID (`horizon-ws-<workflow>-<job>`).
-   - **Check this setup** until the saved phase is Ready with the attested pin (the
-     host key is read through ARM's run-command channel, never trusted on first
-     connection); the pin is the `host_key` the observer descriptor carries.
+   - **Check this setup** until it reports the original setup as observed: the saved
+     phase becomes `Reconciling` (setup recovery never writes `Ready`) and the record
+     carries the attested pin, read through ARM's run-command channel and never
+     trusted on first connection; that pin is the `host_key` the observer descriptor
+     carries.
    - Under *Remote repository preparation*, tick *Include explicit first-token
      installation* first if the PAT is to be delivered, then **Review repository
      preparation**; the confirmation that follows carries the token field, the
      first-token consent box and **Confirm repository preparation**. **Check
      preparation receipt** proves the checkout without a second submission.
-   - **gated** (Azure saved-Shell Start): **Show saved panels** → **Reopen view** on
-     the saved row, then its Start confirmation starts the saved Shell task (the
-     deterministic counter script that writes an increasing counter to a progress
-     file under `/workspace`). Until the Azure task-start path lands, the counter task
-     for an Azure run cannot be started through the product.
-   - **gated** (Azure panel attachment): **Show session panels** lists the reopened
-     board panels and **Reconnect** attaches one; both need the Azure attachment path.
-     Three independent panels on B are part of this lane's acceptance; the control
-     path for adding the second and third panel intents to a remote workspace is
-     confirmed on #474 before the run and recorded here.
-   Record worker, session and task identities, the starting counter and dirty file
-   hashes. The task must advance its counter at least once per 15-second sample.
+   - **gated** (Azure saved-Shell Start): **Show saved panels** → on the saved row
+     **Start saved Shell task…**, then the **Start saved Shell task** confirmation
+     starts the counter task defined above (optionally **Reopen view** first to open
+     its disconnected local view). Until the Azure task-start path lands, the counter
+     task for an Azure run cannot be started through the product, and the run stops
+     here.
+   - **gated** (Azure panel attachment): **Show session panels** is a local listing
+     of the board's panels and works today; **Reconnect** on one of them is the
+     attachment call and needs the Azure path. Three independent panels on B are part
+     of this lane's acceptance; the control path for adding the second and third
+     panel intents to a remote workspace is confirmed on #474 before the run and
+     recorded here.
+   Once both gates have landed, record worker, session and task identities, the
+   starting counter and the dirty-marker hash. The task must advance its counter at
+   least once per 15-second sample.
    Write `worker.json` for the observer: `vm_name`, `port`, `host_key` (the attested
    key), `observer_key_path` (the private half of a fresh Ed25519 key generated for
    observer C only, never the client's worker key), `progress_path` and optionally
@@ -270,11 +295,10 @@ provider status read (`remote_environment_observation/configured.rs`). Steps mar
    the same exact A again, requires it to be deallocated, starts it only and requires
    `PowerState/running`. On A, start Horizon again with the same home, open
    **Environments**, select the same saved environment (same workspace, owning
-   session, generation and exact resource ID; **Check provider status** is refused
-   for Azure until the provider status path lands and is not part of this step),
-   then **gated** (Azure panel attachment): **Show session panels** → **Reconnect** to
-   the same B and task sessions: same worker identity, no additional create, no task
-   replay, dirty bytes intact, no credential rotation.
+   session, generation and exact resource ID), then **Show session panels** and,
+   **gated** (Azure panel attachment), **Reconnect** to the same B and task
+   sessions: same worker identity, no additional create, no task replay, dirty bytes
+   intact, no credential rotation.
 6. **Verdict**: `client_off.py --manifest m.json verdict --journal-in journal.ndjson`.
    The journal's first line is the baseline header the off phase wrote (worker
    identity and image); a journal without it, or for another image, never passes.
@@ -342,11 +366,12 @@ provider status read (`remote_environment_observation/configured.rs`). Steps mar
   Prepare Repository (#567), Check saved Stop (#574), the first explicit Stop (#575),
   and durable explicit Start with its configured Azure admission and overview control
   (#576, #578, #584). Still refused for Azure and therefore open gates for this pass:
-  the saved-Shell task start, configured panel attachment (Reconnect) and the provider
-  status read. Also open: the Azure CLI and an approved identity on A, the PAT for the
-  disposable repository, and the confirmed control path for the second and third
-  panel; the compact worker image is lead-owned and the full image proved the adapter
-  lane meanwhile.
+  the saved-Shell task start and configured panel attachment (Reconnect); the
+  provider status read is also refused but not used by this procedure. Also open:
+  the Azure CLI and an approved, logged-in identity on A, the PAT for the disposable
+  repository, and the confirmed control path for the second and third panel; the
+  compact worker image is lead-owned and the full image proved the adapter lane
+  meanwhile.
 - Counter progress proves the task kept running. Checkpoint proof needs
   worker-owned checkpoints advancing during the interval.
 
