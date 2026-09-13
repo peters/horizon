@@ -91,8 +91,8 @@ pub struct McpCall {
 /// Compile a validated recording into crate-local plan steps.
 ///
 /// Consecutive same-direction scrolls that share a target and mutation class
-/// are coalesced. Click, fill, targeted scroll, credential fill, and handoff
-/// stay off the MCP selector path.
+/// are coalesced when no assertion sits between them. Click, fill, targeted
+/// scroll, credential fill, and handoff stay off the MCP selector path.
 ///
 /// # Errors
 /// Returns the recording's validation error, [`RoutineError::InvalidAssertion`]
@@ -204,6 +204,8 @@ fn can_coalesce_scroll(previous: &CompiledStep, next: &CompiledStep) -> bool {
         ) => {
             previous.target == next.target
                 && previous.mutation_class == next.mutation_class
+                && previous.postcondition.is_none()
+                && next.precondition.is_none()
                 && same_scroll_direction(*previous_x, *next_x)
                 && same_scroll_direction(*previous_y, *next_y)
         }

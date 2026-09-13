@@ -312,6 +312,31 @@ fn opposite_scrolls_are_not_coalesced() {
 }
 
 #[test]
+fn asserted_scrolls_are_not_coalesced() {
+    let mut first = action(
+        "s1",
+        RecordedKind::Scroll {
+            delta_x: 0.0,
+            delta_y: 80.0,
+        },
+        None,
+    );
+    first.postcondition = Some(Assertion::Heading {
+        value: "More rows".to_string(),
+    });
+    let second = action(
+        "s2",
+        RecordedKind::Scroll {
+            delta_x: 0.0,
+            delta_y: 40.0,
+        },
+        None,
+    );
+    let compiled = compile(&recording(vec![first, second]), heading()).expect("compile");
+    assert_eq!(compiled.steps.len(), 2);
+}
+
+#[test]
 fn overflowed_scroll_coalescing_is_rejected() {
     let first = action(
         "s1",
