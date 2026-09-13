@@ -135,7 +135,8 @@ plan-level JSON literal from `variables` (at most 32 names, 4 KiB each, 128 KiB
 combined). Optional `project` writes `projection.json` or `projection.csv` into
 the job directory from a `$ref` after the referenced step succeeds. CSV uses
 CRLF records, requires an array of objects, and prefixes formula-leading text
-cells with `'`; `columns` selects fields. The runner checks every tool
+cells with `'` after skipping leading whitespace or control characters;
+`columns` selects fields. The runner checks every tool
 against `tools/list` before making the first call, stops after the first failed
 step, and never copies tool arguments into its report. Plans are limited to
 1 MiB and 256 steps.

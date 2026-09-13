@@ -18,6 +18,15 @@
       }
     },
     {
+      "id": "ready",
+      "tool": "browser_wait",
+      "arguments": {
+        "panel_id": { "$ref": "panels#/panels/0/panel_id" },
+        "selector": { "$var": "selector" },
+        "state": "present"
+      }
+    },
+    {
       "id": "matches",
       "tool": "browser_query",
       "arguments": {
