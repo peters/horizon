@@ -16,6 +16,7 @@ const QUEUE_MAX_BYTES: u64 = 32 * 1024 * 1024;
 const WRITE_BUFFER_BYTES: usize = 256 * 1024;
 const FLUSH_INTERVAL: Duration = Duration::from_millis(50);
 const FLUSH_RECORDS: usize = 128;
+const PRIORITY_ENQUEUE_TIMEOUT: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Default)]
 struct WriterMetrics {
@@ -83,6 +84,14 @@ impl CaptureWriter {
     }
 
     pub(super) fn try_record(&self, record: BrowserNetworkRecord) {
+        self.enqueue(record, false);
+    }
+
+    pub(super) fn record_priority(&self, record: BrowserNetworkRecord) {
+        self.enqueue(record, true);
+    }
+
+    fn enqueue(&self, record: BrowserNetworkRecord, priority: bool) {
         if self.metrics.file_limit_reached.load(Ordering::Relaxed) || self.metrics.writer_failed.load(Ordering::Relaxed)
         {
             self.metrics.dropped.fetch_add(1, Ordering::Relaxed);
@@ -106,13 +115,28 @@ impl CaptureWriter {
             self.metrics.dropped.fetch_add(1, Ordering::Relaxed);
             return;
         }
-        match sender.try_send(record) {
-            Ok(()) => {
-                self.metrics.enqueued.fetch_add(1, Ordering::Relaxed);
-            }
-            Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => {
-                self.metrics.queued_bytes.fetch_sub(record_bytes, Ordering::Relaxed);
-                self.metrics.dropped.fetch_add(1, Ordering::Relaxed);
+        let mut pending = Some(record);
+        let deadline = std::time::Instant::now() + PRIORITY_ENQUEUE_TIMEOUT;
+        while let Some(record) = pending.take() {
+            match sender.try_send(record) {
+                Ok(()) => {
+                    self.metrics.enqueued.fetch_add(1, Ordering::Relaxed);
+                    return;
+                }
+                Err(TrySendError::Disconnected(_)) => {
+                    self.metrics.queued_bytes.fetch_sub(record_bytes, Ordering::Relaxed);
+                    self.metrics.dropped.fetch_add(1, Ordering::Relaxed);
+                    return;
+                }
+                Err(TrySendError::Full(full)) => {
+                    if !priority || std::time::Instant::now() >= deadline {
+                        self.metrics.queued_bytes.fetch_sub(record_bytes, Ordering::Relaxed);
+                        self.metrics.dropped.fetch_add(1, Ordering::Relaxed);
+                        return;
+                    }
+                    pending = Some(full);
+                    std::thread::sleep(Duration::from_millis(5));
+                }
             }
         }
     }

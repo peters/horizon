@@ -16,6 +16,9 @@ use super::{BrowserEvent, BrowserEventSender, DriverState};
 const MAX_HTTP_BODY_FETCHES_PER_TICK: usize = 4;
 const MAX_HTTP_BODY_FLUSH_BATCHES: usize = 16;
 const MAX_PENDING_HTTP_BODIES: usize = 4_096;
+const NETWORK_BODY_BUFFER_BYTES: u32 = 5 * 1024 * 1024;
+const NETWORK_TOTAL_BUFFER_BYTES: u32 = 10 * 1024 * 1024;
+const NETWORK_POST_BUFFER_BYTES: u32 = 64 * 1024;
 
 impl DriverState {
     pub(super) fn network_action(
@@ -54,7 +57,7 @@ impl DriverState {
                     event_tx,
                     frame_slot,
                     "Network.enable",
-                    &serde_json::json!({}),
+                    &network_enable_params(),
                     Some(session.as_str()),
                 ) {
                     let _ = self.network.stop();
@@ -115,7 +118,7 @@ impl DriverState {
             event_tx,
             frame_slot,
             "Network.enable",
-            &serde_json::json!({}),
+            &network_enable_params(),
             Some(session),
         ) {
             let _ = self.network.stop();
@@ -431,6 +434,14 @@ impl DriverState {
     }
 }
 
+pub(super) fn network_enable_params() -> serde_json::Value {
+    serde_json::json!({
+        "maxTotalBufferSize": NETWORK_TOTAL_BUFFER_BYTES,
+        "maxResourceBufferSize": NETWORK_BODY_BUFFER_BYTES,
+        "maxPostDataSize": NETWORK_POST_BUFFER_BYTES,
+    })
+}
+
 fn string_at<'a>(value: &'a serde_json::Value, pointer: &str) -> Option<&'a str> {
     value.pointer(pointer).and_then(serde_json::Value::as_str)
 }
@@ -459,6 +470,23 @@ fn u8_at(value: &serde_json::Value, pointer: &str) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn network_enable_asks_chromium_to_retain_response_bodies() {
+        let params = network_enable_params();
+        assert_eq!(
+            params["maxResourceBufferSize"].as_u64(),
+            Some(u64::from(NETWORK_BODY_BUFFER_BYTES))
+        );
+        assert_eq!(
+            params["maxTotalBufferSize"].as_u64(),
+            Some(u64::from(NETWORK_TOTAL_BUFFER_BYTES))
+        );
+        assert_eq!(
+            params["maxPostDataSize"].as_u64(),
+            Some(u64::from(NETWORK_POST_BUFFER_BYTES))
+        );
+    }
 
     #[test]
     fn cdp_numeric_helpers_reject_invalid_values() {

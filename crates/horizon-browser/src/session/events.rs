@@ -189,6 +189,9 @@ impl DriverState {
         let on_page_session = event.session_id.is_some_and(|s| Some(s) == self.session_id.as_deref());
         if on_page_session {
             self.handle_network_event(&event);
+            if event.method == "Network.loadingFinished" {
+                self.tick_http_response_bodies(link, event_tx, frame_slot);
+            }
         }
         match event.method {
             "Target.attachedToTarget" => {

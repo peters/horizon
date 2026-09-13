@@ -70,7 +70,7 @@ impl DriverState {
             event_tx,
             frame_slot,
             "Network.enable",
-            &serde_json::json!({}),
+            &super::network::network_enable_params(),
             Some(session),
         ) {
             return false;

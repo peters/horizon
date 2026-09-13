@@ -257,7 +257,7 @@ impl NetworkCaptureState {
                 active.writer.note_truncated();
             }
         }
-        active.writer.try_record(record);
+        active.writer.record_priority(record);
     }
 
     pub(crate) fn record_websocket_created(&mut self, connection_id: &str, url: &str) {
