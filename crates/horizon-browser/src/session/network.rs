@@ -72,9 +72,9 @@ impl DriverState {
             BrowserNetworkOperation::Status => self.network.status()?,
             BrowserNetworkOperation::Stop => {
                 self.flush_http_response_bodies(link, event_tx, frame_slot);
-                let capture = self.network.stop()?;
+                let capture = self.network.stop();
                 self.restore_baseline_network_observation(link, event_tx, frame_slot);
-                capture
+                capture?
             }
         };
         Ok(BrowserControlValue::Network { capture })
