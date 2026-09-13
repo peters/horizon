@@ -2,7 +2,8 @@
 //! control plane rather than trusting whatever answers on the network address, and stop
 //! it by deallocating the VM with retained disks.
 use super::super::{
-    AzureError, AzureLifecycle, AzureManagementTransport, AzureRunCommand, AzureVmView, AzureWorker, WORKER_VM_NAME,
+    AzureError, AzureLifecycle, AzureManagementTransport, AzureRunCommand, AzureVmView, AzureWorker, DATA_DISK_NAME,
+    WORKER_VM_NAME,
     deployment::{SSH_PORT, identity_tags},
     transport::remaining_at,
 };
@@ -11,7 +12,10 @@ use crate::cloud_run::{
     WorkerTarget,
     interactive_worker::{InteractiveWorker, InteractiveWorkerSshEndpoint, valid_ssh_public_key},
     interactive_worker_start::{InteractiveWorkerStart, InteractiveWorkerStartProvider},
-    interactive_worker_stop::{InteractiveWorkerStop, InteractiveWorkerStopProvider},
+    interactive_worker_stop::{
+        InteractiveWorkerStop, InteractiveWorkerStopExpectation, InteractiveWorkerStopObservation,
+        InteractiveWorkerStopObserver, InteractiveWorkerStopProvider,
+    },
 };
 use std::time::Duration;
 
@@ -251,6 +255,73 @@ impl AzureClient {
             }
         }
         Ok(None)
+    }
+}
+
+/// The retained data disk the deployment attaches: exactly one, at LUN 0, kept when the
+/// VM is deleted, and living in the worker's own group under its fixed name.
+fn retained_data_disk(vm: &AzureVmView, group_id: &str) -> bool {
+    let expected = format!("{group_id}/providers/Microsoft.Compute/disks/{DATA_DISK_NAME}");
+    match vm.data_disks.as_slice() {
+        [disk] => disk.lun == Some(0) && disk.delete_option == "Detach" && disk.id.eq_ignore_ascii_case(&expected),
+        _ => false,
+    }
+}
+
+impl InteractiveWorkerStopObserver for AzureClient {
+    /// One read-only observation of the exact saved worker: the persisted handle and the
+    /// saved endpoint are validated before any request; then the owned group and VM are
+    /// re-proved (identity tags, recorded IDs) and the VM's power state and storage
+    /// profile are read once. `RetainedStopped` needs all of: compute deallocated (a
+    /// halted-but-allocated guest is still billed and is not it), the single retained
+    /// data disk attached at LUN 0 with `Detach` semantics under its own name, and the
+    /// saved address still the one the deployment reports. Absence of the owned group is
+    /// `Absent`; a failed deployment is an error; everything else is `Pending`. Nothing
+    /// is stopped, started, created, deleted, repaired or connected to.
+    fn observe_worker_stop(
+        &self,
+        expected: InteractiveWorkerStopExpectation<'_>,
+    ) -> Result<InteractiveWorkerStopObservation, Self::Error> {
+        if expected.network_volume.is_some() {
+            // Network volumes are a RunPod binding; an Azure worker keeps its own disk.
+            return Err(AzureError::InvalidTarget);
+        }
+        if !expected.ssh.is_complete()
+            || expected.ssh.port != SSH_PORT
+            || expected.ssh.username != SSH_USERNAME
+            || expected.ssh.host.parse::<std::net::IpAddr>().is_err()
+        {
+            return Err(AzureError::InvalidPersistedWorker);
+        }
+        let Some((handle, group, tags)) = self.owned_handle(expected.worker)? else {
+            return Ok(InteractiveWorkerStopObservation::Absent);
+        };
+        let Some(current) = self.observe(handle.clone(), &group, &tags, None, Placement::Ignore)? else {
+            return Ok(InteractiveWorkerStopObservation::Absent);
+        };
+        match current.lifecycle {
+            AzureLifecycle::Failed => Err(AzureError::StopUnverified),
+            AzureLifecycle::Deallocated => {
+                let Some(vm) = current.vm.as_ref() else {
+                    return Ok(InteractiveWorkerStopObservation::Pending);
+                };
+                if current.host.as_deref() != Some(expected.ssh.host.as_str()) {
+                    // The static address is retained with the group; a different one
+                    // means the saved endpoint no longer names this worker.
+                    return Err(AzureError::ResourceIdentityMismatch);
+                }
+                Ok(if retained_data_disk(vm, &handle.group_id) {
+                    InteractiveWorkerStopObservation::RetainedStopped
+                } else {
+                    InteractiveWorkerStopObservation::Pending
+                })
+            }
+            AzureLifecycle::Transitioning
+            | AzureLifecycle::Running
+            | AzureLifecycle::StoppedAllocated
+            | AzureLifecycle::Deleting
+            | AzureLifecycle::Unknown => Ok(InteractiveWorkerStopObservation::Pending),
+        }
     }
 }
 

@@ -21,7 +21,7 @@ pub use credential::{AzureAccessToken, AzureCliCredential, AzureCredentialSource
 pub use deployment::AzureDeploymentPlan;
 pub use provider::{AzureClient, AzureCreationFence, AzureHostKeySource, AzureRunCommandHostKeys, SSH_USERNAME};
 pub use transport::{
-    AzureArmHttp, AzureDeploymentState, AzureGroupInfo, AzureLongRunningState, AzureManagementTransport,
+    AzureArmHttp, AzureDataDisk, AzureDeploymentState, AzureGroupInfo, AzureLongRunningState, AzureManagementTransport,
     AzureRunCommand, AzureVmView,
 };
 
@@ -37,6 +37,8 @@ pub(crate) const RESPONSE_LIMIT_BYTES: u64 = 2 * 1024 * 1024;
 pub const RESOURCE_GROUP_PREFIX: &str = "horizon-ws-";
 /// Constant VM name inside a worker's resource group; the group carries the identity.
 pub const WORKER_VM_NAME: &str = "worker";
+/// The retained data disk the deployment creates beside the VM (`<vm>-data`).
+pub const DATA_DISK_NAME: &str = "worker-data";
 
 /// Operator-declared placement for Azure CPU workers. Prices are declared, not
 /// discovered: ARM does not return an hourly rate for a VM, so the cost limit in a

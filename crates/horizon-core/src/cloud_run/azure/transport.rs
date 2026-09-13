@@ -52,6 +52,17 @@ pub struct AzureVmView {
     pub provisioning_state: String,
     pub power_state: Option<String>,
     pub tags: BTreeMap<String, String>,
+    /// The managed data disks attached to the VM, as the storage profile lists them.
+    pub data_disks: Vec<AzureDataDisk>,
+}
+
+/// One attached managed data disk: its ARM ID, logical unit and what happens to it when
+/// the VM is deleted (`Detach` keeps it, `Delete` removes it with the VM).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct AzureDataDisk {
+    pub id: String,
+    pub lun: Option<u64>,
+    pub delete_option: String,
 }
 
 /// Outcome of a request that ARM may complete asynchronously.
@@ -614,6 +625,19 @@ impl AzureManagementTransport for AzureArmHttp {
             provisioning_state: text(&value, "/properties/provisioningState").unwrap_or_default(),
             power_state,
             tags: tags(&value),
+            data_disks: value
+                .pointer("/properties/storageProfile/dataDisks")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|disk| {
+                    Some(AzureDataDisk {
+                        id: text(disk, "/managedDisk/id")?,
+                        lun: disk.pointer("/lun").and_then(serde_json::Value::as_u64),
+                        delete_option: text(disk, "/deleteOption").unwrap_or_default(),
+                    })
+                })
+                .collect(),
         }))
     }
 
