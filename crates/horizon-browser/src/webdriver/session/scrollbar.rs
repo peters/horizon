@@ -32,6 +32,13 @@ impl State {
     pub(super) fn sample(&mut self, state: PageScrollState) {
         self.page = Some(state);
     }
+
+    /// Drop cached page/gesture and the published overlay, keeping the sample backoff.
+    pub(super) fn clear_sampled(&mut self, frame_slot: &crate::frames::FrameSlot) -> bool {
+        self.page = None;
+        self.gesture = None;
+        frame_slot.clear_page_scroll_state()
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -135,6 +142,22 @@ mod tests {
             panic!("thumb should own the press");
         };
         assert!((drag.target_scroll_y(400.0) - 1_700.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn sampling_failure_clears_cached_page_and_gesture() {
+        let slot = crate::frames::FrameSlot::new();
+        let mut scrollbar = super::State::new();
+        let page = state();
+        scrollbar.sample(page);
+        scrollbar.gesture = Some(super::Gesture::Track);
+        assert!(slot.publish_page_scroll_state(page));
+
+        assert!(scrollbar.clear_sampled(&slot));
+        assert!(scrollbar.page.is_none());
+        assert!(scrollbar.gesture.is_none());
+        assert!(slot.page_scroll_state().is_none());
+        assert!(!scrollbar.clear_sampled(&slot));
     }
 
     #[test]

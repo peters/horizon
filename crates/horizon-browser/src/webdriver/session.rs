@@ -605,13 +605,13 @@ impl Driver {
             "execute/sync",
             &json!({ "script": PAGE_SCROLL_STATE_SCRIPT, "args": [] }),
         ) else {
-            return frame_slot.clear_page_scroll_state();
+            return self.scrollbar.clear_sampled(frame_slot);
         };
         let Some(value) = webdriver_value(&response).cloned() else {
-            return frame_slot.clear_page_scroll_state();
+            return self.scrollbar.clear_sampled(frame_slot);
         };
         let Ok(state) = serde_json::from_value::<PageScrollState>(value) else {
-            return frame_slot.clear_page_scroll_state();
+            return self.scrollbar.clear_sampled(frame_slot);
         };
         self.scrollbar.sample(state);
         frame_slot.publish_page_scroll_state(state)

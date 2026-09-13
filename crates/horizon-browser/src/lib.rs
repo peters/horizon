@@ -50,6 +50,7 @@ pub use network::{
     BrowserNetworkPayloadEncoding, BrowserNetworkRecord, DEFAULT_NETWORK_MAX_FILE_BYTES,
     DEFAULT_NETWORK_MAX_PAYLOAD_BYTES, MAX_NETWORK_FILE_BYTES, MAX_NETWORK_PAYLOAD_BYTES, MAX_NETWORK_URL_PATTERNS,
 };
+pub use page_scroll::VerticalScrollbarOverlay;
 pub use semantic::{
     AgentActionResult, BrowserActionOutcome, BrowserBounds, BrowserControlFailure, BrowserControlValue, BrowserNode,
     BrowserSnapshot, BrowserTarget, NavigationOutcome, NavigationState, SelectorState, WaitOutcome,
