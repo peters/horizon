@@ -2,14 +2,42 @@
 
 use crate::{
     cloud_run::{
-        CloudProvider, CloudWorkflowStore, StoredRemoteAllocation, WorkerLifetime,
-        interactive_worker::{InteractiveWorker, InteractiveWorkerSshEndpoint},
-        interactive_worker_start::{InteractiveWorkerEndpointCandidate, InteractiveWorkerEndpointObserver},
+        ArtifactDigest, CloudProvider, CloudWorkflowStore, RemoteWorkspaceStoreError, StoredRemoteAllocation,
+        WorkerLifetime,
+        interactive_worker::{InteractiveWorker, InteractiveWorkerProvider, InteractiveWorkerSshEndpoint},
         runpod::RunPodNetworkVolumeExpectation,
     },
     remote_ssh_identity::{RemoteSshIdentity, RemoteSshIdentityStore},
     remote_workspace::{RemoteRuntimePhase, RemoteWorkspaceState},
 };
+
+/// Provider coordinates are candidates, never an attestation or authority to connect.
+/// The storage fingerprint compares two observations, not contents or durability.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InteractiveWorkerEndpointCandidate {
+    pub worker: InteractiveWorker,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub storage_fingerprint: ArtifactDigest,
+    pub network_volume: Option<RunPodNetworkVolumeExpectation>,
+}
+
+/// Optional read-only coordinate discovery, separate from compute Start. Currently
+/// implemented for retained `RunPod` workers; never calls initial host-key bootstrap.
+pub trait InteractiveWorkerEndpointObserver: InteractiveWorkerProvider {
+    /// Validate exact ownership, retained storage and the caller's original saved pin
+    /// before returning a running worker's candidate coordinates. Each call must be
+    /// bounded and GET-only. Absence or uncertain storage/readiness is an error.
+    /// # Errors
+    /// Rejects missing retained trust, foreign identity, absent/unready resources and
+    /// unverifiable storage. The caller must still prove original-key possession.
+    fn observe_endpoint_candidate(
+        &self,
+        worker: &InteractiveWorker,
+        saved: &InteractiveWorkerSshEndpoint,
+    ) -> Result<InteractiveWorkerEndpointCandidate, Self::Error>;
+}
 
 /// Refresh only the host/port of one exact retained `RunPod` connection after explicit
 /// user action. Uses the existing private identity and original host key to execute
@@ -92,7 +120,10 @@ fn selection(
 ) -> Result<Option<RunPodNetworkVolumeExpectation>, Error> {
     store
         .load_remote_network_volume_selection(expected)
-        .map_err(|_| Error::StorageUnavailable)
+        .map_err(|error| match error {
+            RemoteWorkspaceStoreError::SnapshotConflict => Error::StateChanged,
+            _ => Error::StorageUnavailable,
+        })
 }
 
 fn refresh_with<P: InteractiveWorkerEndpointObserver + ?Sized, I>(

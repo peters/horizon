@@ -4,9 +4,9 @@ use super::{RunPodInteractiveWorkerProvider, runpod_worker};
 use crate::cloud_run::{
     ArtifactDigest,
     interactive_worker::{InteractiveWorker, InteractiveWorkerLifetime, InteractiveWorkerSshEndpoint},
-    interactive_worker_start::{InteractiveWorkerEndpointCandidate, InteractiveWorkerEndpointObserver},
     runpod::{RunPodError, RunPodLifecycle, status_from_resource, validate_target},
 };
+use crate::remote_workspace::start::{InteractiveWorkerEndpointCandidate, InteractiveWorkerEndpointObserver};
 
 impl InteractiveWorkerEndpointObserver for RunPodInteractiveWorkerProvider {
     fn observe_endpoint_candidate(

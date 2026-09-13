@@ -304,6 +304,30 @@ fn unchanged_coordinates_are_authenticated_without_advancing_revision() {
 }
 
 #[test]
+fn stale_volume_selection_is_a_state_conflict_without_writes() {
+    for network in [false, true] {
+        let f = Fixture::new(RemoteRuntimePhase::Reconciling, network);
+        let original = f.current();
+        let mut edited = original.workspace().state().clone();
+        edited.spec.working_directory = "changed".into();
+        f.store
+            .replace_remote_workspace(original.workspace(), &edited)
+            .expect("concurrent edit");
+        let current = f.current();
+        assert!(matches!(
+            f.store.load_remote_network_volume_selection(&original),
+            Err(RemoteWorkspaceStoreError::SnapshotConflict)
+        ));
+        assert_eq!(selection(&f.store, &original), Err(Error::StateChanged));
+        assert_eq!(
+            selection(&f.store, &current).expect("current selection"),
+            network.then(volume)
+        );
+        assert_eq!(f.current(), current);
+    }
+}
+
+#[test]
 fn selection_changes_during_identity_recovery_refuse_provider_io() {
     let f = Fixture::new(RemoteRuntimePhase::Reconciling, false);
     let original = f.current();
