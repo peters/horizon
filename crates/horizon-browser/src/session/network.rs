@@ -62,6 +62,7 @@ impl DriverState {
                     Some(session.as_str()),
                 ) {
                     let _ = self.network.stop();
+                    self.restore_baseline_network_observation(link, event_tx, frame_slot);
                     return Err(BrowserControlFailure::new(
                         "capture_protocol",
                         format!("Chromium could not enable network observation: {error}"),
@@ -130,6 +131,7 @@ impl DriverState {
             Some(session),
         ) {
             let _ = self.network.stop();
+            self.restore_baseline_network_observation(link, event_tx, frame_slot);
             let _ = event_tx.send(BrowserEvent::Warning(format!(
                 "browser network capture stopped after target reattach: {error}"
             )));

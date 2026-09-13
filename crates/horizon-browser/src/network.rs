@@ -263,7 +263,11 @@ impl NetworkCaptureState {
                 active.writer.note_truncated();
             }
         }
-        active.writer.record_priority(record);
+        if record.payload.is_some() {
+            active.writer.record_priority(record);
+        } else {
+            active.writer.try_record(record);
+        }
     }
 
     pub(crate) fn record_websocket_created(&mut self, connection_id: &str, url: &str) {
