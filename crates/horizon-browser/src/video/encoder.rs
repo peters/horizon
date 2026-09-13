@@ -214,17 +214,18 @@ impl EncoderThread {
     pub(super) fn finish(mut self) -> io::Result<BrowserVideoCapture> {
         self.send(EncoderCommand::Stop);
         self.sender.take();
-        let join_error = self.thread.take().and_then(|thread| thread.join().err());
+        let joined = self.thread.take().map(|thread| {
+            thread
+                .join()
+                .map_err(|_| io::Error::other("browser video encoder panicked"))
+        });
         self.handle.set_state(STATE_STOPPED);
-        if join_error.is_some() {
-            self.handle.encoder_failed.store(true, Ordering::Relaxed);
-        }
-        let mut capture = self.snapshot(BrowserVideoState::Stopped);
-        if join_error.is_some() {
-            capture.encoder_failed = true;
-            Err(io::Error::other("browser video encoder panicked"))
-        } else {
-            Ok(capture)
+        match joined {
+            Some(Ok(Ok(()))) | None => Ok(self.snapshot(BrowserVideoState::Stopped)),
+            Some(Ok(Err(error)) | Err(error)) => {
+                self.handle.encoder_failed.store(true, Ordering::Relaxed);
+                Err(error)
+            }
         }
     }
 }
@@ -326,6 +327,7 @@ impl EncodeSession {
                     if let Some(at) = self.paused_at.take() {
                         self.paused_total += Instant::now().saturating_duration_since(at);
                     }
+                    self.next_tick = Instant::now();
                     self.handle.set_state(STATE_RECORDING);
                 }
                 true
@@ -377,13 +379,16 @@ impl EncodeSession {
         let Some(encoder) = self.encoder.as_mut() else {
             return Ok(());
         };
-        encoder.encode_rgb(&frame.rgb, frame.width, frame.height, timestamp_ms)?;
-        self.handle.frames_encoded.fetch_add(1, Ordering::Relaxed);
-        if let Some(bytes) = encoder.bytes_written() {
-            self.handle.bytes_written.store(bytes, Ordering::Relaxed);
-            if bytes >= self.options.max_file_bytes {
+        match encoder.encode_rgb(&frame.rgb, frame.width, frame.height, timestamp_ms)? {
+            PushOutcome::Written => {
+                self.handle.frames_encoded.fetch_add(1, Ordering::Relaxed);
+            }
+            PushOutcome::FileLimit => {
                 self.handle.file_limit_reached.store(true, Ordering::Relaxed);
             }
+        }
+        if let Some(bytes) = encoder.bytes_written() {
+            self.handle.bytes_written.store(bytes, Ordering::Relaxed);
         }
         Ok(())
     }
@@ -408,12 +413,19 @@ impl EncodeSession {
     }
 }
 
+enum PushOutcome {
+    Written,
+    FileLimit,
+}
+
 struct ActiveEncoder {
     context: Context<u8>,
     muxer: Option<WebmMuxer>,
     file: Option<File>,
     width: u32,
     height: u32,
+    max_file_bytes: u64,
+    timestamps: Vec<u64>,
     pending: Vec<(u64, bool, Vec<u8>)>,
 }
 
@@ -446,41 +458,64 @@ impl ActiveEncoder {
             file: Some(file),
             width,
             height,
+            max_file_bytes: options.max_file_bytes,
+            timestamps: Vec::new(),
             pending: Vec::new(),
         })
     }
 
-    fn encode_rgb(&mut self, rgb: &[u8], src_width: u32, src_height: u32, timestamp_ms: u64) -> io::Result<()> {
+    fn encode_rgb(
+        &mut self,
+        rgb: &[u8],
+        src_width: u32,
+        src_height: u32,
+        timestamp_ms: u64,
+    ) -> io::Result<PushOutcome> {
         let yuv = rgb_to_yuv420(rgb, src_width, src_height, self.width, self.height);
         let mut frame = self.context.new_frame();
         fill_plane(&mut frame, 0, &yuv.y, usize::try_from(self.width).unwrap_or(16));
         fill_plane(&mut frame, 1, &yuv.u, usize::try_from(self.width).unwrap_or(16) / 2);
         fill_plane(&mut frame, 2, &yuv.v, usize::try_from(self.width).unwrap_or(16) / 2);
+        self.timestamps.push(timestamp_ms);
         self.context
             .send_frame(frame)
             .map_err(|error| io::Error::other(error.to_string()))?;
-        self.drain_packets(timestamp_ms)
+        self.drain_packets()
     }
 
-    fn drain_packets(&mut self, timestamp_ms: u64) -> io::Result<()> {
+    fn timestamp_for(&self, frameno: u64) -> u64 {
+        usize::try_from(frameno)
+            .ok()
+            .and_then(|index| self.timestamps.get(index).copied())
+            .or_else(|| self.timestamps.last().copied())
+            .unwrap_or(0)
+    }
+
+    fn drain_packets(&mut self) -> io::Result<PushOutcome> {
+        let mut outcome = PushOutcome::Written;
         loop {
             match self.context.receive_packet() {
                 Ok(packet) => {
                     let keyframe = packet.frame_type == FrameType::KEY;
-                    self.push_packet(timestamp_ms, keyframe, packet.data)?;
+                    let timestamp_ms = self.timestamp_for(packet.input_frameno);
+                    match self.push_packet(timestamp_ms, keyframe, packet.data)? {
+                        PushOutcome::FileLimit => outcome = PushOutcome::FileLimit,
+                        PushOutcome::Written => {}
+                    }
                 }
                 Err(EncoderStatus::Encoded | EncoderStatus::NeedMoreData | EncoderStatus::LimitReached) => break,
                 Err(error) => return Err(io::Error::other(error.to_string())),
             }
         }
-        Ok(())
+        Ok(outcome)
     }
 
-    fn push_packet(&mut self, timestamp_ms: u64, keyframe: bool, data: Vec<u8>) -> io::Result<()> {
+    fn push_packet(&mut self, timestamp_ms: u64, keyframe: bool, data: Vec<u8>) -> io::Result<PushOutcome> {
+        let extra = u64::try_from(data.len()).unwrap_or(u64::MAX).saturating_add(16);
         if self.muxer.is_none() {
             if !keyframe {
                 self.pending.push((timestamp_ms, keyframe, data));
-                return Ok(());
+                return Ok(PushOutcome::Written);
             }
             let file = self
                 .file
@@ -488,17 +523,29 @@ impl ActiveEncoder {
                 .ok_or_else(|| io::Error::other("video muxer file already taken"))?;
             let private = av1_codec_private(&sequence_header_obu(&data));
             let mut muxer = WebmMuxer::create(file, self.width, self.height, &private)?;
+            if muxer.would_exceed(extra, self.max_file_bytes)? {
+                self.muxer = Some(muxer);
+                return Ok(PushOutcome::FileLimit);
+            }
             muxer.write_frame(timestamp_ms, true, &data)?;
             for (pending_ts, pending_key, pending_data) in self.pending.drain(..) {
+                let pending_extra = u64::try_from(pending_data.len()).unwrap_or(u64::MAX).saturating_add(16);
+                if muxer.would_exceed(pending_extra, self.max_file_bytes)? {
+                    self.muxer = Some(muxer);
+                    return Ok(PushOutcome::FileLimit);
+                }
                 muxer.write_frame(pending_ts, pending_key, &pending_data)?;
             }
             self.muxer = Some(muxer);
-            return Ok(());
+            return Ok(PushOutcome::Written);
         }
         if let Some(muxer) = self.muxer.as_mut() {
+            if muxer.would_exceed(extra, self.max_file_bytes)? {
+                return Ok(PushOutcome::FileLimit);
+            }
             muxer.write_frame(timestamp_ms, keyframe, &data)?;
         }
-        Ok(())
+        Ok(PushOutcome::Written)
     }
 
     fn bytes_written(&mut self) -> Option<u64> {
@@ -511,7 +558,8 @@ impl ActiveEncoder {
             match self.context.receive_packet() {
                 Ok(packet) => {
                     let keyframe = packet.frame_type == FrameType::KEY;
-                    self.push_packet(0, keyframe, packet.data)?;
+                    let timestamp_ms = self.timestamp_for(packet.input_frameno);
+                    let _ = self.push_packet(timestamp_ms, keyframe, packet.data)?;
                 }
                 Err(EncoderStatus::LimitReached | EncoderStatus::NeedMoreData | EncoderStatus::Encoded) => break,
                 Err(error) => return Err(io::Error::other(error.to_string())),

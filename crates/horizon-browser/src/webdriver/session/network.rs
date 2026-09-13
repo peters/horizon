@@ -276,7 +276,7 @@ impl Driver {
         &mut self,
         capture_id: &str,
         operation: crate::BrowserVideoOperation,
-        options: Option<crate::BrowserVideoCaptureOptions>,
+        options: Option<&crate::BrowserVideoCaptureOverrides>,
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
         let capture = self.video.apply(
             crate::video::VideoCaptureHost::new(

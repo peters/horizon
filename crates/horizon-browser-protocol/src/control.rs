@@ -6,7 +6,7 @@
 
 use crate::{
     BrowserCommand, BrowserInput, BrowserKey, BrowserNetworkCaptureOptions, BrowserNetworkOperation, BrowserTarget,
-    BrowserVideoCaptureOptions, BrowserVideoOperation, SelectorState,
+    BrowserVideoCaptureOverrides, BrowserVideoOperation, SelectorState,
 };
 
 const MAX_NAVIGATION_BYTES: usize = 8 * 1024;
@@ -154,7 +154,7 @@ pub enum BrowserControlAction {
     Video {
         operation: BrowserVideoOperation,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        options: Option<BrowserVideoCaptureOptions>,
+        options: Option<BrowserVideoCaptureOverrides>,
     },
 }
 
@@ -220,7 +220,7 @@ impl BrowserControlAction {
                 BrowserNetworkOperation::Status | BrowserNetworkOperation::Stop => Ok(()),
             },
             Self::Video { operation, options } => match operation {
-                BrowserVideoOperation::Start => options.clone().unwrap_or_default().validate(),
+                BrowserVideoOperation::Start => options.as_ref().map_or(Ok(()), BrowserVideoCaptureOverrides::validate),
                 BrowserVideoOperation::Pause
                 | BrowserVideoOperation::Resume
                 | BrowserVideoOperation::Status
@@ -672,14 +672,14 @@ mod tests {
     fn video_start_validates_options_and_other_ops_reject_them() {
         let start = BrowserControlAction::Video {
             operation: crate::BrowserVideoOperation::Start,
-            options: Some(crate::BrowserVideoCaptureOptions::default()),
+            options: Some(crate::BrowserVideoCaptureOverrides::default()),
         };
         assert!(start.validate().is_ok());
         assert!(start.to_command().is_none());
 
-        let bad = crate::BrowserVideoCaptureOptions {
-            fps: 0,
-            ..crate::BrowserVideoCaptureOptions::default()
+        let bad = crate::BrowserVideoCaptureOverrides {
+            fps: Some(0),
+            ..crate::BrowserVideoCaptureOverrides::default()
         };
         assert!(
             BrowserControlAction::Video {
@@ -699,7 +699,10 @@ mod tests {
             assert!(
                 BrowserControlAction::Video {
                     operation,
-                    options: Some(crate::BrowserVideoCaptureOptions::default()),
+                    options: Some(crate::BrowserVideoCaptureOverrides {
+                        quality: Some(70),
+                        ..crate::BrowserVideoCaptureOverrides::default()
+                    }),
                 }
                 .validate()
                 .is_err()

@@ -242,18 +242,14 @@ impl BrowserAuditAction {
                     max_file_bytes: options.as_ref().map(|options| options.max_file_bytes),
                 }
             }
-            BrowserControlAction::Video { operation, options } => {
-                let options =
-                    (*operation == crate::BrowserVideoOperation::Start).then(|| options.clone().unwrap_or_default());
-                Self::Video {
-                    operation: *operation,
-                    quality: options.as_ref().map(|options| options.quality),
-                    compression_level: options.as_ref().map(|options| options.compression_level),
-                    fps: options.as_ref().map(|options| options.fps),
-                    max_width: options.as_ref().map(|options| options.max_width),
-                    max_file_bytes: options.as_ref().map(|options| options.max_file_bytes),
-                }
-            }
+            BrowserControlAction::Video { operation, options } => Self::Video {
+                operation: *operation,
+                quality: options.as_ref().and_then(|options| options.quality),
+                compression_level: options.as_ref().and_then(|options| options.compression_level),
+                fps: options.as_ref().and_then(|options| options.fps),
+                max_width: options.as_ref().and_then(|options| options.max_width),
+                max_file_bytes: options.as_ref().and_then(|options| options.max_file_bytes),
+            },
         }
     }
 
@@ -271,18 +267,14 @@ impl BrowserAuditAction {
                 height: *height,
             },
             BrowserCommand::Input(input) => Self::from_input(input),
-            BrowserCommand::Video { operation, options } => {
-                let options =
-                    (*operation == crate::BrowserVideoOperation::Start).then(|| options.clone().unwrap_or_default());
-                Self::Video {
-                    operation: *operation,
-                    quality: options.as_ref().map(|options| options.quality),
-                    compression_level: options.as_ref().map(|options| options.compression_level),
-                    fps: options.as_ref().map(|options| options.fps),
-                    max_width: options.as_ref().map(|options| options.max_width),
-                    max_file_bytes: options.as_ref().map(|options| options.max_file_bytes),
-                }
-            }
+            BrowserCommand::Video { operation, options } => Self::Video {
+                operation: *operation,
+                quality: options.as_ref().and_then(|options| options.quality),
+                compression_level: options.as_ref().and_then(|options| options.compression_level),
+                fps: options.as_ref().and_then(|options| options.fps),
+                max_width: options.as_ref().and_then(|options| options.max_width),
+                max_file_bytes: options.as_ref().and_then(|options| options.max_file_bytes),
+            },
             BrowserCommand::HandoffDone => Self::HandoffDone,
             BrowserCommand::Stop => Self::Stop,
         }

@@ -53,7 +53,7 @@ impl Driver {
                 self.network_action(request, *operation, options.clone(), event_tx)
             }
             BrowserControlAction::Video { operation, options } => {
-                self.video_action(&request.action_id, *operation, options.clone())
+                self.video_action(&request.action_id, *operation, options.as_ref())
             }
             BrowserControlAction::Navigate { .. }
             | BrowserControlAction::Reload

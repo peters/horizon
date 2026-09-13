@@ -429,7 +429,7 @@ impl Driver {
                 Ok(false)
             }
             BrowserCommand::Video { operation, options } => self
-                .video_action(&crate::new_action_id(), operation, options)
+                .video_action(&crate::new_action_id(), operation, options.as_ref())
                 .map(|_| false)
                 .map_err(|error| error.message),
             BrowserCommand::Stop => Ok(true),

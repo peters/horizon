@@ -12,8 +12,8 @@ use encoder::{EncoderCommand, EncoderThread};
 
 use crate::frames::FrameSlot;
 use crate::{
-    BrowserControlFailure, BrowserCoordination, BrowserVideoCapture, BrowserVideoCaptureOptions, BrowserVideoOperation,
-    BrowserVideoState,
+    BrowserControlFailure, BrowserCoordination, BrowserVideoCapture, BrowserVideoCaptureOptions,
+    BrowserVideoCaptureOverrides, BrowserVideoOperation, BrowserVideoState,
 };
 
 const MAX_CAPTURE_ID_BYTES: usize = 96;
@@ -69,7 +69,7 @@ impl VideoCaptureState {
         host: VideoCaptureHost<'_>,
         capture_id: &str,
         frame_slot: Arc<FrameSlot>,
-        options: Option<BrowserVideoCaptureOptions>,
+        options: Option<&BrowserVideoCaptureOverrides>,
     ) -> Result<BrowserVideoCapture, BrowserControlFailure> {
         if self.active.is_some() {
             return Err(BrowserControlFailure::new(
@@ -86,7 +86,15 @@ impl VideoCaptureState {
                 "video capture id must be a short printable value",
             ));
         }
-        let options = options.unwrap_or_else(|| host.defaults.clone());
+        if let Some(overlay) = options {
+            overlay
+                .validate()
+                .map_err(|message| BrowserControlFailure::new("invalid_input", message))?;
+        }
+        let options = options.map_or_else(
+            || host.defaults.clone(),
+            |overlay| overlay.apply_to(host.defaults.clone()),
+        );
         options
             .validate()
             .map_err(|message| BrowserControlFailure::new("invalid_input", message))?;
@@ -187,7 +195,7 @@ impl VideoCaptureState {
         capture_id: &str,
         frame_slot: Arc<FrameSlot>,
         operation: BrowserVideoOperation,
-        options: Option<BrowserVideoCaptureOptions>,
+        options: Option<&BrowserVideoCaptureOverrides>,
     ) -> Result<BrowserVideoCapture, BrowserControlFailure> {
         match operation {
             BrowserVideoOperation::Start => self.start(host, capture_id, frame_slot, options),
@@ -238,7 +246,7 @@ mod tests {
         };
         let host = VideoCaptureHost::new(Some(root.path()), None, "panel", &defaults);
         let started = state
-            .start(host, "capture-1", Arc::clone(&slot), Some(defaults.clone()))
+            .start(host, "capture-1", Arc::clone(&slot), None)
             .unwrap_or_else(|error| panic!("start video: {error:?}"));
         assert!(started.active);
         assert_eq!(started.state, BrowserVideoState::Recording);
@@ -273,11 +281,11 @@ mod tests {
         };
         let host = VideoCaptureHost::new(Some(root.path()), None, "panel", &defaults);
         state
-            .start(host, "one", Arc::clone(&slot), Some(defaults.clone()))
+            .start(host, "one", Arc::clone(&slot), None)
             .unwrap_or_else(|error| panic!("start video: {error:?}"));
         let host = VideoCaptureHost::new(Some(root.path()), None, "panel", &defaults);
         let error = state
-            .start(host, "two", slot, Some(defaults.clone()))
+            .start(host, "two", slot, None)
             .expect_err("second start must fail");
         assert_eq!(error.code, "capture_active");
         let _ = state.stop();

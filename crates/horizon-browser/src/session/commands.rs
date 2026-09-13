@@ -187,7 +187,7 @@ impl DriverState {
                 Ok(false)
             }
             BrowserCommand::Video { operation, options } => self
-                .video_action(frame_slot, &crate::new_action_id(), operation, options)
+                .video_action(frame_slot, &crate::new_action_id(), operation, options.as_ref())
                 .map(|_| false),
         }
     }

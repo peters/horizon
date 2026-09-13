@@ -1,5 +1,5 @@
 use horizon_browser::{
-    BrowserControlAction, BrowserVideoCapture, BrowserVideoCaptureOptions, BrowserVideoOperation, BrowserVideoState,
+    BrowserControlAction, BrowserVideoCapture, BrowserVideoCaptureOverrides, BrowserVideoOperation, BrowserVideoState,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -56,24 +56,14 @@ impl VideoInput {
         if !matches!(self.operation, VideoOperation::Start) && has_options {
             return Err("video pause, resume, status, and stop do not accept capture options".to_string());
         }
-        let options = if matches!(self.operation, VideoOperation::Start) {
-            let mut options = BrowserVideoCaptureOptions::default();
-            if let Some(value) = self.quality {
-                options.quality = value;
-            }
-            if let Some(value) = self.compression_level {
-                options.compression_level = value;
-            }
-            if let Some(value) = self.fps {
-                options.fps = value;
-            }
-            if let Some(value) = self.max_width {
-                options.max_width = value;
-            }
-            if let Some(value) = self.max_file_bytes {
-                options.max_file_bytes = value;
-            }
-            Some(options)
+        let options = if matches!(self.operation, VideoOperation::Start) && has_options {
+            Some(BrowserVideoCaptureOverrides {
+                quality: self.quality,
+                compression_level: self.compression_level,
+                fps: self.fps,
+                max_width: self.max_width,
+                max_file_bytes: self.max_file_bytes,
+            })
         } else {
             None
         };
@@ -150,6 +140,24 @@ impl VideoOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn start_without_options_does_not_send_protocol_defaults() {
+        let input = VideoInput {
+            panel_id: "panel".to_string(),
+            operation: VideoOperation::Start,
+            quality: None,
+            compression_level: None,
+            fps: None,
+            max_width: None,
+            max_file_bytes: None,
+            timeout_millis: None,
+        };
+        let BrowserControlAction::Video { options, .. } = input.build_action().expect("start") else {
+            panic!("expected video action");
+        };
+        assert!(options.is_none());
+    }
 
     #[test]
     fn start_options_are_rejected_on_pause() {

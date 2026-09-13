@@ -65,6 +65,19 @@ impl WebmMuxer {
         self.file.stream_position()
     }
 
+    pub(super) fn would_exceed(&mut self, extra: u64, max_file_bytes: u64) -> io::Result<bool> {
+        const FINALIZE_RESERVE: u64 = 8 * 1024;
+        const CLUSTER_HEADER_SLACK: u64 = 32;
+        let position = self.file.stream_position()?;
+        let buffered = u64::try_from(self.cluster.payload.len()).unwrap_or(u64::MAX);
+        Ok(position
+            .saturating_add(buffered)
+            .saturating_add(CLUSTER_HEADER_SLACK)
+            .saturating_add(extra)
+            .saturating_add(FINALIZE_RESERVE)
+            > max_file_bytes)
+    }
+
     pub(super) fn finish(mut self) -> io::Result<u64> {
         self.flush_cluster()?;
         write_cues(&mut self.file, &self.cues)?;
@@ -187,15 +200,15 @@ fn encode_uint(value: u64) -> Vec<u8> {
 fn encode_vint(value: u64) -> Vec<u8> {
     for width in 1_u8..=8 {
         let value_bits = 7_u32.saturating_mul(u32::from(width));
-        let max = (1_u64 << value_bits) - 1;
-        if value <= max {
+        let unknown = (1_u64 << value_bits) - 1;
+        if value < unknown {
             let marker = 1_u64 << value_bits;
             let encoded = value | marker;
             let width = usize::from(width);
             return encoded.to_be_bytes()[8 - width..].to_vec();
         }
     }
-    vec![0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
+    vec![0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE]
 }
 
 fn duration_millis(timestamp_ms: u64) -> [u8; 8] {
@@ -296,5 +309,8 @@ mod tests {
         assert!(bytes.windows(4).any(|window| window == b"webm"));
         assert!(bytes.windows(5).any(|window| window == b"V_AV1"));
         assert!(bytes.len() > 64);
+        assert_ne!(encode_vint(127), vec![0xFF]);
+        assert_eq!(encode_vint(127), vec![0x40, 0x7F]);
+        assert_ne!(encode_vint(16_383), vec![0x7F, 0xFF]);
     }
 }

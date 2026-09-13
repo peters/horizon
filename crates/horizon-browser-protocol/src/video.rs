@@ -57,25 +57,99 @@ impl Default for BrowserVideoCaptureOptions {
 }
 
 impl BrowserVideoCaptureOptions {
-    /// # Errors
-    /// Returns a stable explanation when a numeric option is outside the engine contract.
-    pub fn validate(&self) -> Result<(), &'static str> {
-        if !(MIN_VIDEO_QUALITY..=MAX_VIDEO_QUALITY).contains(&self.quality) {
+    fn field_errors(
+        quality: u32,
+        compression_level: u32,
+        fps: u32,
+        max_width: u32,
+        max_file_bytes: u64,
+    ) -> Result<(), &'static str> {
+        if !(MIN_VIDEO_QUALITY..=MAX_VIDEO_QUALITY).contains(&quality) {
             return Err("video quality must be between 1 and 100");
         }
-        if self.compression_level > MAX_VIDEO_COMPRESSION_LEVEL {
+        if compression_level > MAX_VIDEO_COMPRESSION_LEVEL {
             return Err("video compression level must be between 0 and 10");
         }
-        if !(MIN_VIDEO_FPS..=MAX_VIDEO_FPS).contains(&self.fps) {
+        if !(MIN_VIDEO_FPS..=MAX_VIDEO_FPS).contains(&fps) {
             return Err("video fps must be between 1 and 30");
         }
-        if !(MIN_VIDEO_MAX_WIDTH..=MAX_VIDEO_MAX_WIDTH).contains(&self.max_width) {
+        if !(MIN_VIDEO_MAX_WIDTH..=MAX_VIDEO_MAX_WIDTH).contains(&max_width) {
             return Err("video max width must be between 320 and 1920");
         }
-        if !(1..=MAX_VIDEO_FILE_BYTES).contains(&self.max_file_bytes) {
+        if !(1..=MAX_VIDEO_FILE_BYTES).contains(&max_file_bytes) {
             return Err("video capture file limit is outside the supported range");
         }
         Ok(())
+    }
+
+    /// # Errors
+    /// Returns a stable explanation when a numeric option is outside the engine contract.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        Self::field_errors(
+            self.quality,
+            self.compression_level,
+            self.fps,
+            self.max_width,
+            self.max_file_bytes,
+        )
+    }
+}
+
+/// Start-only overrides. Omitted fields keep the host's `browser.video` defaults.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+pub struct BrowserVideoCaptureOverrides {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compression_level: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fps: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_width: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_file_bytes: Option<u64>,
+}
+
+impl BrowserVideoCaptureOverrides {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.quality.is_none()
+            && self.compression_level.is_none()
+            && self.fps.is_none()
+            && self.max_width.is_none()
+            && self.max_file_bytes.is_none()
+    }
+
+    /// # Errors
+    /// Returns a stable explanation when a provided override is outside the engine contract.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        BrowserVideoCaptureOptions::field_errors(
+            self.quality.unwrap_or(DEFAULT_VIDEO_QUALITY),
+            self.compression_level.unwrap_or(DEFAULT_VIDEO_COMPRESSION_LEVEL),
+            self.fps.unwrap_or(DEFAULT_VIDEO_FPS),
+            self.max_width.unwrap_or(DEFAULT_VIDEO_MAX_WIDTH),
+            self.max_file_bytes.unwrap_or(DEFAULT_VIDEO_MAX_FILE_BYTES),
+        )
+    }
+
+    #[must_use]
+    pub fn apply_to(&self, mut base: BrowserVideoCaptureOptions) -> BrowserVideoCaptureOptions {
+        if let Some(quality) = self.quality {
+            base.quality = quality;
+        }
+        if let Some(compression_level) = self.compression_level {
+            base.compression_level = compression_level;
+        }
+        if let Some(fps) = self.fps {
+            base.fps = fps;
+        }
+        if let Some(max_width) = self.max_width {
+            base.max_width = max_width;
+        }
+        if let Some(max_file_bytes) = self.max_file_bytes {
+            base.max_file_bytes = max_file_bytes;
+        }
+        base
     }
 }
 
@@ -101,6 +175,18 @@ pub struct BrowserVideoCapture {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overrides_merge_onto_host_defaults() {
+        let overlay = BrowserVideoCaptureOverrides {
+            fps: Some(5),
+            ..BrowserVideoCaptureOverrides::default()
+        };
+        let merged = overlay.apply_to(BrowserVideoCaptureOptions::default());
+        assert_eq!(merged.fps, 5);
+        assert_eq!(merged.quality, DEFAULT_VIDEO_QUALITY);
+        assert!(overlay.validate().is_ok());
+    }
 
     #[test]
     fn default_options_are_valid() {

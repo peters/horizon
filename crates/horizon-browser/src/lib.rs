@@ -34,8 +34,8 @@ pub use error::BrowserError;
 pub use frames::{FrameData, FrameMetrics, FrameSlot, PageScrollState};
 pub use horizon_browser_protocol::{
     AgentAction, BackendAvailability, BackendCapabilities, BackendKind, BrowserControlAction, BrowserVideoCapture,
-    BrowserVideoCaptureOptions, BrowserVideoOperation, BrowserVideoState, DEFAULT_CLICK_COUNT,
-    DEFAULT_NAVIGATION_TIMEOUT_MILLIS, DEFAULT_VIDEO_COMPRESSION_LEVEL, DEFAULT_VIDEO_FPS,
+    BrowserVideoCaptureOptions, BrowserVideoCaptureOverrides, BrowserVideoOperation, BrowserVideoState,
+    DEFAULT_CLICK_COUNT, DEFAULT_NAVIGATION_TIMEOUT_MILLIS, DEFAULT_VIDEO_COMPRESSION_LEVEL, DEFAULT_VIDEO_FPS,
     DEFAULT_VIDEO_MAX_FILE_BYTES, DEFAULT_VIDEO_MAX_WIDTH, DEFAULT_VIDEO_QUALITY, DEFAULT_WAIT_TIMEOUT_MILLIS,
     FrameDelivery, MAX_CLICK_COUNT, MAX_NAVIGATION_TIMEOUT_MILLIS, MAX_QUERY_RESULTS, MAX_SNAPSHOT_NODES,
     MAX_VIDEO_COMPRESSION_LEVEL, MAX_VIDEO_FILE_BYTES, MAX_VIDEO_FPS, MAX_VIDEO_MAX_WIDTH, MAX_VIDEO_QUALITY,
