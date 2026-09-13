@@ -22,10 +22,10 @@ The engine's public Rust API is every reachable `pub` item from
 `crates/horizon-browser/src/lib.rs`:
 
 - root types and constants defined there (`BrowserConfig`,
-  `ActiveBackendCapabilities`, `DEFAULT_VIEWPORT`, `VideoCaptureHandle`);
+  `ActiveBackendCapabilities`, `DEFAULT_VIEWPORT`);
 - the crate-root `pub use` re-exports (`start_session`, `BrowserSession`,
-  `BrowserCommand`, `BrowserEvent`, `FrameSlot`, coordination/audit/network
-  types, and protocol types);
+  `BrowserCommand`, `BrowserEvent`, `FrameSlot`, `VideoCaptureHandle`,
+  coordination/audit/network types, and protocol types);
 - public modules `cdp`, `frames`, `input`, `process`, and `session`, including
   the public items those modules re-export.
 
