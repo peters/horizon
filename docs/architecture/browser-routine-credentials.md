@@ -81,7 +81,7 @@ Rejected alternatives:
 
 | Option | Why not |
 | --- | --- |
-| Browser password manager | Backend-specific, not a testable routine contract, not origin-bound the same way across Chromium and Firefox. |
+| Browser password manager | Backend-specific, not a testable routine contract, not origin-bound the same way across Chromium and Firefox. A backend is not eligible for routine login until its launch path disables the browser password manager and form autofill for that routine profile. |
 | Encrypt a file next to `routine.json` | The key would live beside the ciphertext or in config. Forbidden by #342. |
 | Direct `security-framework` + `windows-sys` + `secret-service` | Three stacks, more surface, no shared fake-store seam. Revisit only if `keyring` cannot meet the fill/delete/lock tests. |
 | Environment variables or agent-visible config | Secrets would enter MCP, traces, and process listings. |
@@ -224,12 +224,15 @@ prevent the site from seeing a password it just accepted.
 Horizon-controlled capture must not copy that plaintext into routine
 artifacts:
 
-- From broker dispatch until a verified navigation leaves the filled
-  document, or an explicit field-clear postcondition holds, the routine run
-  keeps exclusive ownership. Agent steering, `browser_evaluate`, snapshots,
-  screenshots, and MCP structured results that could read the field are
-  blocked. Ending protection at the fill postcondition alone is not enough
-  while the value can still sit in the DOM.
+- The protected window starts at the first Teach-mode focus of a
+  username/password field (manual typing, before the opt-in prompt) and at
+  broker dispatch during replay. It lasts until a verified navigation leaves
+  the filled document or an explicit field-clear postcondition holds.
+  Horizon screenshots, `browser_video` / WebM capture, CDP snapshots,
+  `evaluate`, and MCP results that could read the field are stopped or
+  blocked for that window. A capture started before the field was focused
+  must be paused. Ending protection at fill postcondition alone is not
+  enough while the value can still sit in the DOM.
 - The existing redacted audit continues to store character counts, not
   values.
 - Horizon still must not copy DOM values back into plans, drafts, traces,

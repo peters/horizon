@@ -24,8 +24,8 @@ only names the opaque slot references that plans may carry.
 | `horizon-browser-protocol` | Action model (`BrowserControlAction`, `BrowserTarget`, `AgentActionResult`). Routines compile into that model; they do not fork it. |
 | `horizon-browser` | Process, profile, semantic resolution. Teach recording and Chromium/Firefox target resolution claim files here in later slices. |
 | `horizon-browser-mcp` | Sole agent-facing `browser_*` contract. A new primitive is added only when a demonstrated interaction cannot be expressed, and only after a claimed additive change. |
-| `horizon-browser-cli` | Durable jobs, `Plan` / `PlanStep`, `$var` substitution, intent/completion checkpoints. Routine replay consumes these APIs; it does not edit lifecycle machinery. |
-| `horizon-browser-routines` | New workspace crate for the recording protocol, compiler, registry, and credential-broker interface. Depends on `horizon-browser-protocol` only. |
+| `horizon-browser-cli` | Durable jobs, `Plan` / `PlanStep`, `$var` substitution, intent/completion checkpoints. The CLI layer adapts routine DTOs into those APIs; it does not edit lifecycle machinery. |
+| `horizon-browser-routines` | New workspace crate for the recording protocol, compiler, registry, and credential-broker interface. Depends on `horizon-browser-protocol` only. The compiler emits crate-local `CompiledRoutine` / `McpCall` values, not CLI `PlanStep`. |
 
 Safari remains unavailable for persistent routine login while
 `BackendKind::SafariWebDriver` reports `persistent_profile: false`.
@@ -246,7 +246,7 @@ printable. `reviewed` defaults to false.
 ```text
 { "kind": "role_name", "role": "button", "name": "Generate report", "reviewed": false }
 { "kind": "label_control", "label": "Month", "control": "textbox", "reviewed": false }
-{ "kind": "test_id", "value": "row-save", "reviewed": false }
+{ "kind": "test_id", "attribute": "data-testid", "value": "row-save", "reviewed": false }
 { "kind": "unique_id", "value": "generate", "reviewed": false }
 { "kind": "visible_text", "text": "Save", "context": "row 3", "reviewed": false }
 { "kind": "css_fallback", "value": "div > button", "reviewed": true }
@@ -327,8 +327,14 @@ applied as a substring inside a stored URL.
 
 ## Recording protocol
 
-The crate's first code module stores a backend-neutral `RecordedAction` list.
-It is not a durable job and does not use the #324 run directory.
+The crate's first code module stores a versioned envelope, not a bare action
+list. It is not a durable job and does not use the #324 run directory.
+
+```text
+{ "schema_version": 1, "recording_id": "<uuid>", "actions": [ <RecordedAction>, ... ] }
+```
+
+`schema_version` is required and must be `1`. Unknown versions are rejected.
 
 `RecordedAction` JSON (`deny_unknown_fields`):
 
@@ -356,31 +362,31 @@ fields persist as `credential_field` or `handoff`, never as a literal.
 ## Compiler mapping to MCP
 
 The compiler is a pure function from a semantic recording plus reviewer
-choices to a validated list of MCP `PlanStep`s. It does not call a model.
+choices to a `CompiledRoutine`. It does not depend on `horizon-browser-cli`
+and does not return CLI `PlanStep`. The CLI adapter later copies `McpCall`
+fields into `PlanStep` where a tool exists.
 
-| Recorded kind | MCP tool | Notes |
+| Recorded kind | Crate output | CLI/MCP adapter |
 | --- | --- | --- |
-| navigation | `browser_navigate` | URL from `NavigationTemplate`, never from `url_pattern`. Wait defaults to the protocol commit wait. |
-| click / double-click | `browser_act` `click` | `count` 1 or 2. Target is a reviewed selector derived from the fingerprint, never coordinates. |
-| fill (literal/variable) | `browser_act` `fill` | `value` is a literal or `{"$var":"..."}`. |
-| fill (credential) | *not expressible today* | See below. |
-| scroll | `browser_act` `scroll` | Only coalesced bursts required to reach a target. |
-| wait | `browser_wait` | Selector state from the postcondition. |
-| back / forward / reload | `browser_act` | |
-| user handoff | `browser_handoff` | Login/MFA pauses. |
+| navigation | `navigate` + template | `browser_navigate` URL built at run start |
+| click | `click` selector, `count` 1..=3 | `browser_act` `click` |
+| fill (literal/variable) | `fill` | `browser_act` `fill` with literal or `{"$var":"..."}` |
+| fill (credential) | `credential_fill` | **not** an MCP step; runner-to-engine `FillSink` |
+| scroll | coalesced `scroll` | `browser_act` `scroll` |
+| wait | `wait` | `browser_wait` |
+| back / forward / reload | same | `browser_act` |
+| user handoff / needs_login | `handoff` | **not** a successful `browser_handoff` `PlanStep`. The routine runner suspends with `needs_login` / `needs_user` and a checkpoint. Today's `browser_handoff` is checkpointed as success and then cleared on teardown, so it cannot be the pause. |
 
-Existing `browser_act` `fill` requires a `value` string and is agent-facing.
-Credential fill must not be exposed as `browser_act` `{ credential_slot }` —
-any MCP caller who saw an exported slot UUID could then nominate a target.
-The runner instead holds a scoped capability created when it acquired the
-routine lease (`routine_id`, `plan_version`, profile lease). Only that
-capability may ask the engine to call `CredentialBroker`, which already
-knows the slot, allowed field, origins, and fingerprint. Generic
-`browser_*` calls cannot request credential fill.
+The durable runner still dispatches ordinary MCP `PlanStep`s. Credential fill
+and login pause are **not** MCP steps. The routine runner, holding the lease,
+calls `horizon-browser` in-process (`CredentialBroker` → `FillSink`) between
+MCP steps. That transport is the engine API, not `browser_act`. Generic
+agent-facing `browser_*` calls cannot request credential fill.
 
 No new agent-facing MCP primitive is in scope for the first usable release.
 Engine-side click/fill-by-fingerprint (item 3) is a claimed
-`horizon-browser` change, not a second MCP contract.
+`horizon-browser` change. Routine-step checkpoint grouping (dispatch +
+postcondition as one unit) is a claimed additive runner hook; see execution.
 
 The compiler rejects: coordinate-only clicks; empty fingerprints; credential
 literals; a `credential_field` that does not match `credential_policy`;
@@ -402,10 +408,17 @@ observes all of them on the exact `plan_version`.
 
 ## Execution, leases, and resume
 
-Replay is a later slice. It must consume the settled #324 APIs:
+Replay is a later slice. Today's runner records completion as soon as an MCP
+`PlanStep` returns success, before any later snapshot could prove a
+postcondition. Routine replay therefore cannot put a mutating `browser_act`
+and its postcondition in two independent MCP steps.
 
-- Persist intent before dispatch and completion only after the postcondition
-  holds (`RunCheckpoint` / `CheckpointIntent`).
+The claimed additive hook is a grouped routine-step unit: persist intent,
+dispatch (MCP or in-process engine fill), evaluate the postcondition, then
+record completion. Consume existing `RunCheckpoint` / `CheckpointIntent`
+fields; do not replace the runner. Until that hook exists, mutating routine
+steps are not executed through the current per-tool completion path.
+
 - An interrupted mutating step is `uncertain` and is never blindly replayed.
 - Resume first re-evaluates the recorded postcondition; if it already holds,
   checkpoint without repeating the step.
