@@ -7,16 +7,20 @@ use egui::{
     text::{LayoutJob, TextFormat, TextWrapping},
 };
 
-/// Tooltip content as a single line elided to a stable width.
+/// Stable width budget for tooltip contents.
 ///
 /// egui lays an open tooltip out inside the size it measured last frame, so a
 /// wrapping label in a continuously open tooltip narrows a little every frame
-/// until it collapses into a glyph-wide strip. Bounding the label by a width
-/// derived from the content area — not the tooltip's own measured size —
-/// breaks that feedback loop while keeping long text elided.
+/// until it collapses into a glyph-wide strip. Bounding the contents by a
+/// width derived from the content area — not the tooltip's own measured size —
+/// breaks that feedback loop.
+pub(crate) fn stable_tooltip_max_width(ui: &Ui) -> f32 {
+    (ui.ctx().content_rect().width() - 24.0).clamp(80.0, ui.spacing().tooltip_width)
+}
+
+/// Tooltip content as a single line elided to a stable width.
 pub(crate) fn truncating_tooltip_label(ui: &mut Ui, text: &str) {
-    let max_width = (ui.ctx().content_rect().width() - 24.0).clamp(80.0, ui.spacing().tooltip_width);
-    ui.set_max_width(max_width);
+    ui.set_max_width(stable_tooltip_max_width(ui));
     ui.add(Label::new(text).wrap_mode(TextWrapMode::Truncate));
 }
 

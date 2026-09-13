@@ -671,7 +671,8 @@ impl HorizonApp {
                                 },
                             ),
                         };
-                        crate::text::truncating_tooltip_label(ui, &tooltip);
+                        ui.set_max_width(crate::text::stable_tooltip_max_width(ui));
+                        ui.label(tooltip);
                     });
                     PanelMicInteraction {
                         response,
