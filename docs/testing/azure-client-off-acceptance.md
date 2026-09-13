@@ -63,10 +63,16 @@ states, neither of which the current harness implements (today `validate`, which
 product path cannot reach the binding step until the change lands). *Unbound*
 (future): `worker_group` is the literal `unbound`; `validate` accepts it,
 `provision-client.sh` (which needs only A's fields)
-runs, and every command or phase that names B (`journal-group`,
-`install-observer-key`, `off`, `return`, `verdict`, `remove-observer-key`,
-`cleanup`) refuses to start, because `client_off.py` validates the manifest before
-dispatching any of them; B cannot be journaled before it is bound. *Bound*: a `bind-worker` command, run once
+runs, and every command or phase that acts on B (`install-observer-key`, `off`,
+`return`, `verdict`, `remove-observer-key`) refuses to start, because
+`client_off.py` validates the manifest before dispatching any of them. Two
+commands accept the unbound state so that a crash between the product's create
+and the binding never strands a paid resource: `journal-group`, so B can be
+journaled as soon as it exists, and `cleanup` in an unbound mode that deletes
+only groups present in `created-groups.json` with a journaled identity absent
+from the pre-run list (it never derives a name from the manifest), so step 9
+stays runnable after a crash before `bind-worker`; the harness change ships a
+crash-before-bind test for exactly that sequence. *Bound*: a `bind-worker` command, run once
 by the operator after step 3, reads the product-created group, checks that it
 carries the adapter's `horizon-workflow-id` and `horizon-job-id` tags from which
 its `horizon-ws-<workflow>-<job>` name derives and that it is absent from the
@@ -101,7 +107,9 @@ same sum; `return`: its own setup at its bounds (seven bounded reads and the sta
 with its poll, about 22 minutes) plus the cleanup window it must leave intact), so the
 reaper can never reach a group mid-run; the phases arm their runtime deadline from
 the same numbers,
-an off interval of at least ten minutes that exceeds the configured lease. `verdict` and `cleanup` also run after the deadline: a late cleanup is exactly
+an off interval of at least ten minutes that exceeds `lease_seconds`, a
+harness-only threshold that the verdict applies (the product's persistent Azure
+target configures no lease and sets no termination timer on B). `verdict` and `cleanup` also run after the deadline: a late cleanup is exactly
 the case that must run. The
 manifest, current price and deadline are posted on #474 before the paid run starts
 in redacted form: the public post carries the VM sizes, image digest, prices,
@@ -236,10 +244,12 @@ gives A no identity today, so before the product pass A needs, in this order:
    --ids <custom-role assignment ID> <Managed Identity Operator assignment ID>`
    (never a filter by assignee or scope, which would also remove any unrelated
    assignment the principal holds), then `az role definition delete --subscription
-   <id> --name <custom role>`, verified with `az role assignment list
-   --subscription <id> --all --assignee <principal ID>` printing an empty list and
-   `az role definition list --subscription <id> --custom-role-only true --name
-   <custom role>` printing an empty list (every call pinned to the manifest
+   <id> --name <the recorded custom role definition ID>` (the ID, never the display
+   name, which another custom definition could share), verified with `az role
+   assignment list --subscription <id> --all --assignee <principal ID>` printing an
+   empty list and `az role definition list --subscription <id> --custom-role-only
+   true --query "[?id=='<the recorded definition ID>']"` printing an empty list
+   (every call pinned to the manifest
    subscription, as the harness pins its own), and the verification recorded with
    the run. Cost approval is not
    approval for this authority. No Azure user credential is copied to A: the
@@ -275,7 +285,9 @@ uses), and the independent panel-addition control (tracked under #472) that the
 three-panel item needs; the harness binding change under the manifest is a
 fourth, harness-side gate. Steps marked
 **gated** below cannot be executed for an Azure worker today; a product run stops
-before the first gated step and collects no counter evidence until both land. A
+before the first gated step and collects no counter evidence until all four land
+(the two Azure provider paths, the independent panel addition and the harness
+binding). A
 third refused path, the provider status read (`remote_environment_observation/
 configured.rs`, the overview's **Check provider status**), is not used by this
 procedure and is tracked separately.
@@ -388,7 +400,8 @@ back unchanged at return and after the worker lifecycle step.
      and Stop sections render only for a selected saved row, and the page shown after
      creation is still the previous one. Record now the workspace, owning session,
      workflow and job identities and the resource-group name
-     `horizon-ws-<workflow>-<job>` (the manifest's `worker_group`), which follows
+     `horizon-ws-<workflow>-<job>` (the value `bind-worker` will write into
+     `worker_group`, which stays `unbound` until then), which follows
      from those identities. The full ARM group ID
      `/subscriptions/<id>/resourceGroups/horizon-ws-<workflow>-<job>` (the overview's
      *Exact resource ID* and `worker.json`'s `group_id`) and the rest of
@@ -833,10 +846,11 @@ back unchanged at return and after the worker lifecycle step.
    still exists, remove A's authority exactly as prerequisite 2 records it: `az
    role assignment delete --subscription <id> --ids <custom-role assignment ID>
    <Managed Identity Operator assignment ID>`, then `az role definition delete
-   --subscription <id> --name <custom role>`, then verify with `az role assignment
-   list --subscription <id> --all --assignee <A's principal ID>` printing `[]` and
-   `az role definition list --subscription <id> --custom-role-only true --name
-   <custom role>` printing `[]`, and record both listings with the run; a run
+   --subscription <id> --name <the recorded custom role definition ID>`, then
+   verify with `az role assignment list --subscription <id> --all --assignee <A's
+   principal ID>` printing `[]` and `az role definition list --subscription <id>
+   --custom-role-only true --query "[?id=='<the recorded definition ID>']"`
+   printing `[]`, and record both listings with the run; a run
    whose listings are not empty is not reported clean even if the groups are
    deleted. Then **cleanup**: `client_off.py --manifest m.json cleanup --groups-before groups.json
    --resources-before resources.json --created created-groups.json`. Runs under one
