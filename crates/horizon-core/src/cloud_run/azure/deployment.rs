@@ -4,7 +4,7 @@
 //! and cloud-init that logs in to the registry with that identity and starts the
 //! digest-pinned worker image. Everything is derived from validated inputs; nothing
 //! operator-controlled is interpolated into YAML or shell.
-use super::{AzureError, AzureProfile, COMPUTE_API_VERSION, WORKER_VM_NAME, resource_group_name};
+use super::{AzureError, AzureProfile, COMPUTE_API_VERSION, DATA_DISK_NAME, WORKER_VM_NAME, resource_group_name};
 
 /// Network and disk resource API versions used inside the template.
 const NETWORK_API_VERSION: &str = "2023-11-01";
@@ -324,7 +324,9 @@ fn template() -> serde_json::Value {
             "nsg": "[concat(parameters('vmName'), '-nsg')]", "vnet": "[concat(parameters('vmName'), '-vnet')]",
             "pip": "[concat(parameters('vmName'), '-pip')]",
             "nic": "[concat(parameters('vmName'), '-nic')]",
-            "data": "[concat(parameters('vmName'), '-data')]",
+            // One name for creation and observation: the observer verifies the retained
+            // disk against the same constant.
+            "data": DATA_DISK_NAME,
         },
         "resources": [
             with(common("Microsoft.Network/networkSecurityGroups", NETWORK_API_VERSION, "[variables('nsg')]"), serde_json::json!({
