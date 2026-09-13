@@ -111,7 +111,11 @@ pub(super) fn remove(root: &Path, panel_id: &str) {
 }
 
 pub(super) fn remove_host(root: &Path, panel_id: &str) {
-    let _ = std::fs::remove_file(manifest::manifest_path_for_root(root, panel_id));
+    let manifest_path = manifest::manifest_path_for_root(root, panel_id);
+    if let Some(encoded) = manifest_path.file_stem() {
+        let _ = std::fs::remove_dir_all(root.join("browser-profiles").join(encoded));
+    }
+    let _ = std::fs::remove_file(manifest_path);
     remove(root, panel_id);
 }
 
@@ -175,6 +179,7 @@ pub(super) fn stop_hosts(root: &Path, panel_id: Option<&str>) -> Result<Vec<Stri
         }
     }
     wait_until_exited(&targets, STOP_ESCALATION);
+    prune_dead_at(root);
     let survivors = targets
         .iter()
         .filter(|host| host_is_current(host))
@@ -539,11 +544,19 @@ mod tests {
         let recorded = host("standalone-9-dead", 0, 1, "");
         publish(home.path(), &recorded).unwrap_or_else(|error| panic!("publish: {error}"));
         write_manifest(home.path(), &recorded.panel_id);
+        let profile = home.path().join("browser-profiles").join(
+            manifest::manifest_path_for_root(home.path(), &recorded.panel_id)
+                .file_stem()
+                .unwrap_or_default(),
+        );
+        std::fs::create_dir_all(&profile).unwrap_or_else(|error| panic!("profile: {error}"));
+        std::fs::write(profile.join("state"), b"left behind").unwrap_or_else(|error| panic!("profile file: {error}"));
 
         let pruned = prune_dead_at(home.path());
         assert_eq!(pruned, vec![recorded.panel_id.clone()]);
         assert!(read_lease(home.path(), &recorded.panel_id).is_none());
         assert!(!panel_manifest_exists(home.path(), &recorded.panel_id));
+        assert!(!profile.exists());
     }
 
     #[test]

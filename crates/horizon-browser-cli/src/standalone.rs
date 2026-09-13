@@ -377,6 +377,7 @@ fn start(
     for backend in candidates {
         match start_backend(home, backend, options.visible, options.keep_alive) {
             Ok(session) => return Ok(session),
+            Err(StandaloneError::Shutdown) => return Err(StandaloneError::Shutdown),
             Err(error) => last_error = Some(error),
         }
     }
@@ -390,7 +391,7 @@ fn start_backend(
     keep_alive: bool,
 ) -> Result<(BrowserSession, std::path::PathBuf, String), StandaloneError> {
     let panel_id = standalone_panel_id();
-    let pending_lease = if keep_alive {
+    let mut pending_lease = if keep_alive {
         Some(lease::PendingLease::publish(home.root(), panel_id.clone())?)
     } else {
         None
@@ -416,9 +417,7 @@ fn start_backend(
         capture_directory: Some(profile_root.join("captures")),
     })?;
     if let Err(error) = wait_until_ready(&session) {
-        let shutdown = session.shutdown_signal().with_profile_cleanup(profile_root);
-        let _ = shutdown.wait(SHUTDOWN_TIMEOUT) || shutdown.force_cleanup(FORCED_SHUTDOWN_TIMEOUT);
-        return Err(error);
+        return Err(fail_started_session(session, profile_root, pending_lease.take(), error));
     }
     let entry = BrowserAuditEntry::new(
         new_action_id(),
@@ -432,16 +431,33 @@ fn start_backend(
     })
     .and_then(|_| coordination.record_action(&panel_id, &entry));
     if let Err(error) = publish {
-        let shutdown = session.shutdown_signal().with_profile_cleanup(profile_root);
-        let _ = shutdown.wait(SHUTDOWN_TIMEOUT) || shutdown.force_cleanup(FORCED_SHUTDOWN_TIMEOUT);
-        return Err(StandaloneError::Startup(format!(
-            "could not publish standalone browser state: {error}"
-        )));
+        return Err(fail_started_session(
+            session,
+            profile_root,
+            pending_lease.take(),
+            StandaloneError::Startup(format!("could not publish standalone browser state: {error}")),
+        ));
     }
     if let Some(pending_lease) = pending_lease {
         pending_lease.commit();
     }
     Ok((session, profile_root, panel_id))
+}
+
+fn fail_started_session(
+    session: BrowserSession,
+    profile_root: PathBuf,
+    pending_lease: Option<lease::PendingLease>,
+    error: StandaloneError,
+) -> StandaloneError {
+    let shutdown = session.shutdown_signal().with_profile_cleanup(profile_root);
+    if shutdown.wait(SHUTDOWN_TIMEOUT) || shutdown.force_cleanup(FORCED_SHUTDOWN_TIMEOUT) {
+        return error;
+    }
+    if let Some(pending_lease) = pending_lease {
+        pending_lease.commit();
+    }
+    StandaloneError::Shutdown
 }
 
 fn wait_until_ready(session: &BrowserSession) -> Result<(), StandaloneError> {
