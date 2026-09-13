@@ -23,7 +23,7 @@ mod tests;
 
 use create_request::CreatePodRequest;
 pub use host_key::RunPodHostTrust;
-pub use interactive::{RunPodHostKeySource, RunPodInteractiveWorkerProvider};
+pub use interactive::{RunPodDeletionWorkerProvider, RunPodHostKeySource, RunPodInteractiveWorkerProvider};
 pub use models::{
     RunPodCleanup, RunPodEnsure, RunPodError, RunPodLifecycle, RunPodProfile, RunPodSshEndpoint, RunPodWorker,
     RunPodWorkerStatus,
