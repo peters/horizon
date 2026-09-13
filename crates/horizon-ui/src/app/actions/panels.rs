@@ -325,11 +325,10 @@ mod tests {
         click_screen_pos(&ctx, &mut app, viewport, titlebar);
 
         assert_eq!(app.board.focused, Some(panel_id));
-        assert!(
-            (app.canvas_view.pan_offset[0] - reveal_pan[0]).abs() < 1.0
-                && (app.canvas_view.pan_offset[1] - reveal_pan[1]).abs() < 1.0,
-            "titlebar click should restore the sidebar reveal pan, {reveal_pan:?} vs {:?}",
-            app.canvas_view.pan_offset
+        assert_pan_near(
+            app.canvas_view.pan_offset,
+            reveal_pan,
+            "titlebar click should restore the sidebar reveal pan",
         );
     }
 
@@ -345,26 +344,59 @@ mod tests {
 
         let workspace_id = seeded_workspace(&mut app, "body-click");
         app.add_panel_to_workspace(&ctx, workspace_id, shell_preset(), None);
-        app.add_panel_to_workspace(&ctx, workspace_id, shell_preset(), None);
-
-        let panels = app
+        let panel_id = app
             .board
             .workspace(workspace_id)
-            .map(|workspace| workspace.panels.clone())
-            .expect("workspace panels");
-        let first = panels[0];
-        run_app_frame_with_input(&ctx, &mut app, raw_input(viewport, Some([0.0, 0.0])));
-        let body = body_click_pos(&app, first);
-        let pan_before = app.canvas_view.pan_offset;
+            .and_then(|workspace| workspace.panels.last().copied())
+            .expect("panel");
+        let reveal_pan = app.canvas_view.pan_offset;
 
+        let nudged = [reveal_pan[0] + 120.0, reveal_pan[1] + 80.0];
+        app.canvas_view.set_pan_offset(nudged);
+        run_app_frame_with_input(&ctx, &mut app, raw_input(viewport, Some([0.0, 0.0])));
+        let body = body_click_pos(&app, panel_id);
         click_screen_pos(&ctx, &mut app, viewport, body);
 
-        assert_eq!(app.board.focused, Some(first));
+        assert_eq!(app.board.focused, Some(panel_id));
+        assert_pan_near(
+            app.canvas_view.pan_offset,
+            nudged,
+            "body click should keep the nudged pan instead of restoring the sidebar reveal pose",
+        );
         assert!(
-            (app.canvas_view.pan_offset[0] - pan_before[0]).abs() < 1.0
-                && (app.canvas_view.pan_offset[1] - pan_before[1]).abs() < 1.0,
-            "body click should focus without the sidebar reveal pan, {pan_before:?} vs {:?}",
-            app.canvas_view.pan_offset
+            !pan_near(app.canvas_view.pan_offset, reveal_pan),
+            "body click must not snap back to the reveal pan {reveal_pan:?}"
+        );
+    }
+
+    #[test]
+    fn reveal_selected_panel_does_not_pan_the_root_canvas_for_detached_workspaces() {
+        use crate::app::test_support::{raw_input, run_app_frame_with_input, test_app_with_startup};
+
+        let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+            runtime_state: Box::new(RuntimeState::default()),
+        });
+        run_app_frame_with_input(&ctx, &mut app, raw_input([1600.0, 1000.0], Some([0.0, 0.0])));
+
+        let workspace_id = seeded_workspace(&mut app, "detached-reveal");
+        app.add_panel_to_workspace(&ctx, workspace_id, shell_preset(), None);
+        let panel_id = app
+            .board
+            .workspace(workspace_id)
+            .and_then(|workspace| workspace.panels.last().copied())
+            .expect("panel");
+        let reveal_pan = app.canvas_view.pan_offset;
+        app.detach_workspace(workspace_id);
+
+        let nudged = [reveal_pan[0] + 120.0, reveal_pan[1] + 80.0];
+        app.canvas_view.set_pan_offset(nudged);
+        app.reveal_selected_panel(&ctx, panel_id);
+
+        assert_eq!(app.board.focused, Some(panel_id));
+        assert_pan_near(
+            app.canvas_view.pan_offset,
+            nudged,
+            "detached reveal should focus the panel without panning the root canvas",
         );
     }
 
@@ -383,7 +415,10 @@ mod tests {
             .get(&panel_id)
             .copied()
             .expect("panel screen rect");
-        egui::Pos2::new(rect.min.x + 80.0, rect.min.y + 16.0)
+        egui::Pos2::new(
+            rect.min.x + 80.0,
+            rect.min.y + super::super::super::PANEL_TITLEBAR_HEIGHT * 0.5,
+        )
     }
 
     fn body_click_pos(app: &crate::app::HorizonApp, panel_id: horizon_core::PanelId) -> egui::Pos2 {
@@ -392,7 +427,18 @@ mod tests {
             .get(&panel_id)
             .copied()
             .expect("panel screen rect");
-        egui::Pos2::new(rect.min.x + 80.0, rect.min.y + 80.0)
+        egui::Pos2::new(
+            rect.min.x + 80.0,
+            rect.min.y + super::super::super::PANEL_TITLEBAR_HEIGHT + 40.0,
+        )
+    }
+
+    fn pan_near(actual: [f32; 2], expected: [f32; 2]) -> bool {
+        (actual[0] - expected[0]).abs() < 1.0 && (actual[1] - expected[1]).abs() < 1.0
+    }
+
+    fn assert_pan_near(actual: [f32; 2], expected: [f32; 2], message: &str) {
+        assert!(pan_near(actual, expected), "{message}: {expected:?} vs {actual:?}");
     }
 
     fn click_screen_pos(ctx: &egui::Context, app: &mut crate::app::HorizonApp, viewport: [f32; 2], pos: egui::Pos2) {
