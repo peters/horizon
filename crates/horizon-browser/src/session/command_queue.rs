@@ -211,6 +211,10 @@ fn is_state_closing(command: &BrowserCommand) -> bool {
     matches!(
         command,
         BrowserCommand::Input(crate::BrowserInput::MouseRelease { .. } | crate::BrowserInput::KeyUp { .. })
+            | BrowserCommand::Video {
+                operation: crate::BrowserVideoOperation::Stop,
+                ..
+            }
     )
 }
 
@@ -218,7 +222,7 @@ fn is_state_closing(command: &BrowserCommand) -> bool {
 mod tests {
     use std::sync::Arc;
 
-    use crate::{BrowserButton, BrowserInput, BrowserModifiers, FrameSlot};
+    use crate::{BrowserButton, BrowserInput, BrowserModifiers, BrowserVideoOperation, FrameSlot};
 
     use super::{BrowserCommand, COMMAND_CAPACITY, channel};
 
@@ -381,5 +385,52 @@ mod tests {
             Some(BrowserCommand::Input(BrowserInput::MouseRelease { .. }))
         ));
         assert_eq!(frame_slot.metrics().commands_rejected, 0);
+    }
+
+    #[test]
+    fn bounded_queue_evicts_stale_navigation_before_dropping_video_stop() {
+        let frame_slot = Arc::new(FrameSlot::new());
+        let (sender, receiver) = channel(Arc::clone(&frame_slot));
+        for index in 0..COMMAND_CAPACITY {
+            assert!(sender.send(BrowserCommand::Navigate(format!("https://example.test/{index}"))));
+        }
+        assert!(sender.send(BrowserCommand::Video {
+            operation: BrowserVideoOperation::Stop,
+            options: None,
+        }));
+
+        let batch = receiver.drain(COMMAND_CAPACITY + 1);
+        assert_eq!(batch.commands.len(), COMMAND_CAPACITY);
+        assert!(matches!(
+            batch.commands.last(),
+            Some(BrowserCommand::Video {
+                operation: BrowserVideoOperation::Stop,
+                ..
+            })
+        ));
+        assert_eq!(frame_slot.metrics().commands_coalesced, 1);
+        assert_eq!(frame_slot.metrics().commands_rejected, 0);
+    }
+
+    #[test]
+    fn bounded_queue_rejects_video_stop_when_every_slot_is_state_closing() {
+        let frame_slot = Arc::new(FrameSlot::new());
+        let (sender, _receiver) = channel(Arc::clone(&frame_slot));
+        let modifiers = BrowserModifiers::none();
+        for _ in 0..COMMAND_CAPACITY {
+            assert!(sender.send(BrowserCommand::Input(BrowserInput::MouseRelease {
+                x: 1.0,
+                y: 1.0,
+                button: BrowserButton::Left,
+                click_count: 1,
+                buttons: 0,
+                modifiers,
+            })));
+        }
+        assert!(!sender.send(BrowserCommand::Video {
+            operation: BrowserVideoOperation::Stop,
+            options: None,
+        }));
+        assert_eq!(frame_slot.metrics().commands_rejected, 1);
     }
 }

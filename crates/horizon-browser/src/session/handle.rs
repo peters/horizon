@@ -297,4 +297,40 @@ mod tests {
         assert_eq!(entries[0].status, BrowserAuditStatus::Dispatched);
         assert_eq!(entries[0].action, BrowserAuditAction::Stop);
     }
+
+    #[test]
+    fn video_stop_rejection_is_audited_when_the_queue_cannot_evict() {
+        let coordination = Arc::new(RecordingCoordination::default());
+        let (session, _receiver) = session_for_audit(Arc::clone(&coordination));
+        let modifiers = crate::BrowserModifiers::none();
+        for _ in 0..crate::session::command_queue::COMMAND_CAPACITY {
+            assert!(session.send(BrowserCommand::Input(crate::BrowserInput::MouseRelease {
+                x: 1.0,
+                y: 1.0,
+                button: crate::BrowserButton::Left,
+                click_count: 1,
+                buttons: 0,
+                modifiers,
+            })));
+        }
+
+        assert!(!session.send(BrowserCommand::Video {
+            operation: crate::BrowserVideoOperation::Stop,
+            options: None,
+        }));
+        assert_eq!(session.frame_slot.metrics().commands_rejected, 1);
+        let entries = coordination
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].status, BrowserAuditStatus::Rejected);
+        assert!(matches!(
+            entries[0].action,
+            BrowserAuditAction::Video {
+                operation: crate::BrowserVideoOperation::Stop,
+                ..
+            }
+        ));
+    }
 }

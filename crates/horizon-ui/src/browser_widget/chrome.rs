@@ -18,6 +18,7 @@ const CHROME_HEIGHT: f32 = 30.0;
 /// The URL bar keeps at least this much width even when an owner chip is
 /// present on a narrow panel.
 const URL_MIN_WIDTH: f32 = 120.0;
+const VIDEO_QUEUE_REJECTED: &str = "browser command queue is full; video command was not queued";
 
 /// Draw the top strip. Returns whether the URL bar has focus and whether
 /// any chrome widget was clicked this frame (for panel-focus requests).
@@ -160,14 +161,7 @@ fn video_controls(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: boo
                 BrowserVideoOperation::Pause,
                 interactive,
             );
-            clicked |= video_button(
-                ui,
-                "⏹",
-                "Stop recording",
-                browser,
-                BrowserVideoOperation::Stop,
-                interactive,
-            );
+            clicked |= video_stop_button(ui, browser, interactive);
         }
         Some(BrowserVideoState::Paused) => {
             let elapsed = capture.as_ref().map_or(0, |capture| capture.elapsed_millis);
@@ -184,14 +178,7 @@ fn video_controls(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: boo
                 BrowserVideoOperation::Resume,
                 interactive,
             );
-            clicked |= video_button(
-                ui,
-                "⏹",
-                "Stop recording",
-                browser,
-                BrowserVideoOperation::Stop,
-                interactive,
-            );
+            clicked |= video_stop_button(ui, browser, interactive);
         }
         Some(BrowserVideoState::Stopped) | None => {
             let hover = if let Some(error) = browser.video_error.as_deref() {
@@ -227,20 +214,30 @@ fn video_start_button(ui: &mut Ui, hover: &str, browser: &mut BrowserPanelState,
     let response = response.on_hover_text_at_pointer(hover);
     if response.clicked() {
         browser.video_error = None;
-        browser.send(BrowserCommand::Video {
+        if !browser.try_send(BrowserCommand::Video {
             operation: BrowserVideoOperation::Start,
             options: None,
-        });
+        }) {
+            browser.video_error = Some(VIDEO_QUEUE_REJECTED.to_string());
+        }
         return true;
     }
     false
+}
+
+fn video_stop_button(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: bool) -> bool {
+    let label = browser.video_error.as_deref().map_or_else(
+        || "Stop recording".to_string(),
+        |error| format!("Stop recording ({error})"),
+    );
+    video_button(ui, "⏹", &label, browser, BrowserVideoOperation::Stop, interactive)
 }
 
 fn video_button(
     ui: &mut Ui,
     glyph: &str,
     label: &str,
-    browser: &BrowserPanelState,
+    browser: &mut BrowserPanelState,
     operation: BrowserVideoOperation,
     interactive: bool,
 ) -> bool {
@@ -256,10 +253,12 @@ fn video_button(
     response.widget_info(|| nav_widget_info(label, enabled));
     let response = response.on_hover_text_at_pointer(label);
     if response.clicked() {
-        browser.send(BrowserCommand::Video {
+        if !browser.try_send(BrowserCommand::Video {
             operation,
             options: None,
-        });
+        }) {
+            browser.video_error = Some(VIDEO_QUEUE_REJECTED.to_string());
+        }
         return true;
     }
     false

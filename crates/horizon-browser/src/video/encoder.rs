@@ -26,8 +26,8 @@ const STATE_STOPPED: u8 = 3;
 
 #[derive(Debug)]
 pub(super) enum EncoderCommand {
-    Pause,
-    Resume,
+    Pause { requested_at: Instant },
+    Resume { requested_at: Instant },
     Stop,
 }
 
@@ -227,6 +227,30 @@ impl EncoderThread {
         self.thread.as_ref().is_some_and(std::thread::JoinHandle::is_finished)
     }
 
+    pub(super) fn wait_until_paused(&self, timeout: Duration) -> bool {
+        self.wait_for_state(STATE_PAUSED, timeout)
+    }
+
+    pub(super) fn wait_until_recording(&self, timeout: Duration) -> bool {
+        self.wait_for_state(STATE_RECORDING, timeout)
+    }
+
+    fn wait_for_state(&self, want: u8, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if self.handle.state.load(Ordering::Relaxed) == want {
+                return true;
+            }
+            if self.is_finished() {
+                return false;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
     pub(super) fn finish(mut self) -> io::Result<BrowserVideoCapture> {
         self.send(EncoderCommand::Stop);
         self.sender.take();
@@ -336,7 +360,7 @@ impl EncodeSession {
     fn drain_commands(&mut self) -> bool {
         match self.commands.try_recv() {
             Ok(EncoderCommand::Stop) | Err(mpsc::TryRecvError::Disconnected) => false,
-            Ok(EncoderCommand::Pause) => {
+            Ok(EncoderCommand::Pause { requested_at }) => {
                 if !self.paused {
                     if let Some(encoder) = self.encoder.as_mut() {
                         if let Err(error) = encoder.flush_cluster() {
@@ -349,16 +373,17 @@ impl EncodeSession {
                         }
                     }
                     self.paused = true;
-                    self.paused_at = Some(Instant::now());
+                    self.paused_at = Some(clamp_command_instant(requested_at, self.started));
                     self.handle.set_state(STATE_PAUSED);
                 }
                 true
             }
-            Ok(EncoderCommand::Resume) => {
+            Ok(EncoderCommand::Resume { requested_at }) => {
                 if self.paused {
                     self.paused = false;
                     if let Some(at) = self.paused_at.take() {
-                        self.paused_total += Instant::now().saturating_duration_since(at);
+                        let resume_at = clamp_command_instant(requested_at, at);
+                        self.paused_total += resume_at.saturating_duration_since(at);
                     }
                     self.next_tick = Instant::now();
                     self.handle.set_state(STATE_RECORDING);
@@ -681,6 +706,10 @@ fn elapsed_millis(started: Instant, paused_total: Duration, paused_at: Option<In
     u64::try_from(running.saturating_sub(paused_total).as_millis()).unwrap_or(u64::MAX)
 }
 
+fn clamp_command_instant(requested_at: Instant, earliest: Instant) -> Instant {
+    requested_at.clamp(earliest, Instant::now())
+}
+
 fn system_now_millis() -> i64 {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -695,4 +724,64 @@ fn safe_file_stem(value: &str) -> String {
         let _ = write!(encoded, "{byte:02x}");
     }
     encoded
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use super::*;
+    use crate::BrowserVideoCaptureOptions;
+    use crate::frames::FrameSlot;
+
+    fn solid_rgb(red: u8, green: u8, blue: u8) -> Vec<u8> {
+        let mut rgb = Vec::with_capacity(64 * 64 * 3);
+        for _ in 0..(64 * 64) {
+            rgb.extend_from_slice(&[red, green, blue]);
+        }
+        rgb
+    }
+
+    #[test]
+    fn pause_elapsed_uses_the_request_timestamp() {
+        let root = tempfile::tempdir().unwrap_or_else(|error| panic!("tempdir failed: {error}"));
+        let slot = Arc::new(FrameSlot::new());
+        slot.store_test_rgb(64, 64, solid_rgb(255, 0, 0));
+        let handle = Arc::new(VideoCaptureHandle::default());
+        let options = BrowserVideoCaptureOptions {
+            fps: 5,
+            compression_level: 0,
+            max_width: 320,
+            max_file_bytes: 4 * 1024 * 1024,
+            ..BrowserVideoCaptureOptions::default()
+        };
+        let thread = EncoderThread::start(root.path(), "pause-ts", Arc::clone(&slot), options, Arc::clone(&handle))
+            .unwrap_or_else(|error| panic!("start encoder: {error}"));
+        let ready = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < ready {
+            if handle.snapshot().is_some_and(|capture| capture.frames_encoded >= 1) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let requested_at = Instant::now()
+            .checked_sub(Duration::from_millis(400))
+            .unwrap_or_else(Instant::now);
+        thread.send(EncoderCommand::Pause { requested_at });
+        assert!(
+            thread.wait_until_paused(Duration::from_secs(8)),
+            "encoder did not acknowledge pause"
+        );
+        let capture = handle.snapshot().unwrap_or_else(|| panic!("paused capture missing"));
+        assert_eq!(capture.state, BrowserVideoState::Paused);
+        let wall = u64::try_from(system_now_millis().saturating_sub(capture.started_at_millis).max(0)).unwrap_or(0);
+        assert!(
+            wall.saturating_sub(capture.elapsed_millis) >= 200,
+            "elapsed should freeze at the backdated pause request (elapsed={} wall={})",
+            capture.elapsed_millis,
+            wall
+        );
+        let _ = thread.finish();
+    }
 }

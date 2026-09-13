@@ -6,6 +6,7 @@ mod muxer;
 
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 pub use encoder::VideoCaptureHandle;
 use encoder::{EncoderCommand, EncoderThread};
@@ -17,6 +18,7 @@ use crate::{
 };
 
 const MAX_CAPTURE_ID_BYTES: usize = 96;
+const COMMAND_ACK_TIMEOUT: Duration = Duration::from_secs(8);
 
 #[derive(Clone, Copy)]
 pub(crate) struct VideoCaptureHost<'a> {
@@ -52,7 +54,6 @@ pub(crate) struct VideoCaptureState {
 #[derive(Debug)]
 struct ActiveVideo {
     thread: EncoderThread,
-    paused: bool,
 }
 
 impl VideoCaptureState {
@@ -117,7 +118,7 @@ impl VideoCaptureState {
         let thread = EncoderThread::start(directory, capture_id, frame_slot, options, Arc::clone(&self.handle))
             .map_err(|error| BrowserControlFailure::new("capture_io", error.to_string()))?;
         let capture = thread.snapshot(BrowserVideoState::Recording);
-        self.active = Some(ActiveVideo { thread, paused: false });
+        self.active = Some(ActiveVideo { thread });
         Ok(capture)
     }
 
@@ -129,34 +130,52 @@ impl VideoCaptureState {
 
     pub(crate) fn pause(&mut self) -> Result<BrowserVideoCapture, BrowserControlFailure> {
         self.reconcile();
-        let active = self.active.as_mut().ok_or_else(|| {
+        let acknowledged = {
+            let active = self.active.as_ref().ok_or_else(|| {
+                BrowserControlFailure::new("capture_not_started", "no browser video capture has been started")
+            })?;
+            active.thread.send(EncoderCommand::Pause {
+                requested_at: Instant::now(),
+            });
+            active.thread.wait_until_paused(COMMAND_ACK_TIMEOUT)
+        };
+        if !acknowledged {
+            self.reconcile();
+            return Err(BrowserControlFailure::new(
+                "capture_io",
+                "video encoder did not acknowledge pause after flushing the WebM cluster",
+            ));
+        }
+        self.handle.snapshot().ok_or_else(|| {
             BrowserControlFailure::new("capture_not_started", "no browser video capture has been started")
-        })?;
-        active.paused = true;
-        active.thread.send(EncoderCommand::Pause);
-        Ok(active.thread.snapshot(BrowserVideoState::Paused))
+        })
     }
 
     pub(crate) fn resume(&mut self) -> Result<BrowserVideoCapture, BrowserControlFailure> {
         self.reconcile();
-        let active = self.active.as_mut().ok_or_else(|| {
+        let acknowledged = {
+            let active = self.active.as_ref().ok_or_else(|| {
+                BrowserControlFailure::new("capture_not_started", "no browser video capture has been started")
+            })?;
+            active.thread.send(EncoderCommand::Resume {
+                requested_at: Instant::now(),
+            });
+            active.thread.wait_until_recording(COMMAND_ACK_TIMEOUT)
+        };
+        if !acknowledged {
+            self.reconcile();
+            return Err(BrowserControlFailure::new(
+                "capture_io",
+                "video encoder did not acknowledge resume",
+            ));
+        }
+        self.handle.snapshot().ok_or_else(|| {
             BrowserControlFailure::new("capture_not_started", "no browser video capture has been started")
-        })?;
-        active.paused = false;
-        active.thread.send(EncoderCommand::Resume);
-        Ok(active.thread.snapshot(BrowserVideoState::Recording))
+        })
     }
 
     pub(crate) fn status(&mut self) -> Result<BrowserVideoCapture, BrowserControlFailure> {
         self.reconcile();
-        if let Some(active) = self.active.as_ref() {
-            let state = if active.paused {
-                BrowserVideoState::Paused
-            } else {
-                BrowserVideoState::Recording
-            };
-            return Ok(active.thread.snapshot(state));
-        }
         self.handle.snapshot().or_else(|| self.last.clone()).ok_or_else(|| {
             BrowserControlFailure::new("capture_not_started", "no browser video capture has been started")
         })
