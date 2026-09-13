@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -11,18 +12,30 @@ use crate::{Plan, PlanStep, observability::ObservabilitySummary};
 
 use super::{JobError, JobOptions, create_private, io_error, write_private};
 
+const MCP_SERVER: &str = "horizon-browser";
+const MCP_PREFIX: &str = "horizon-browser__";
+
 const TRACE_NAME: &str = "trace.jsonl";
 const PLAN_NAME: &str = "executed-plan.json";
 const REPORT_NAME: &str = "report.json";
 const MAX_TRACE_CALLS: usize = 256;
 const MAX_TRACE_BYTES: usize = 1024 * 1024;
+const MAX_GROK_TEXT_BYTES: usize = MAX_TRACE_BYTES;
 
 pub(super) struct JobTrace {
     writer: File,
     trace_path: PathBuf,
     calls: Vec<RecordedCall>,
+    pending: HashMap<String, PendingCall>,
+    grok_text: String,
+    structured_result: Option<Value>,
     replayable: bool,
     trace_bytes: usize,
+}
+
+struct PendingCall {
+    tool: String,
+    arguments: Map<String, Value>,
 }
 
 struct RecordedCall {
@@ -79,19 +92,48 @@ impl JobTrace {
             writer: create_private(&trace_path)?,
             trace_path,
             calls: Vec::new(),
+            pending: HashMap::new(),
+            grok_text: String::new(),
+            structured_result: None,
             replayable: true,
             trace_bytes: 0,
         })
     }
 
     pub(super) fn record_line(&mut self, line: &str) -> Result<Option<String>, JobError> {
-        let Some(mut call) = parse_tool_call(line) else {
-            return Ok(None);
-        };
+        if let Some(result) = parse_structured_result(line) {
+            self.structured_result = Some(result);
+        }
+        self.observe_grok_text(line)?;
+        if let Some(call) = parse_tool_call(line) {
+            return self.record_call(call);
+        }
+        match self.parse_grok_tool_event(line)? {
+            Some(call) => self.record_call(call),
+            None => Ok(None),
+        }
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.calls.is_empty()
+    }
+
+    pub(super) fn structured_result_bytes(&self) -> Option<Vec<u8>> {
+        let value = self
+            .structured_result
+            .clone()
+            .or_else(|| last_agent_result(&self.grok_text))?;
+        serde_json::to_vec(&json!({
+            "ok": value.get("ok")?,
+            "summary": value.get("summary")?,
+            "artifact_content": value.get("artifact_content")?,
+        }))
+        .ok()
+    }
+
+    fn record_call(&mut self, mut call: RecordedCall) -> Result<Option<String>, JobError> {
         if self.calls.len() >= MAX_TRACE_CALLS {
-            return Err(JobError::Result(
-                "agent exceeded the 256-call executed-plan limit".to_string(),
-            ));
+            return Err(call_limit_error());
         }
         if !call.ok || !redact_arguments(&mut call.arguments) {
             self.replayable = false;
@@ -120,8 +162,93 @@ impl JobTrace {
         Ok(Some(tool))
     }
 
-    pub(super) fn is_empty(&self) -> bool {
-        self.calls.is_empty()
+    fn observe_grok_text(&mut self, line: &str) -> Result<(), JobError> {
+        let Ok(event) = serde_json::from_str::<Value>(line) else {
+            return Ok(());
+        };
+        match event.get("type").and_then(Value::as_str) {
+            Some("text") => {
+                if let Some(data) = event.get("data").and_then(Value::as_str) {
+                    append_bounded_text(&mut self.grok_text, data)?;
+                }
+            }
+            Some("end") => {
+                if let Some(result) = event
+                    .get("structured_output")
+                    .cloned()
+                    .and_then(value_as_agent_result)
+                    .or_else(|| last_agent_result(&self.grok_text))
+                {
+                    self.structured_result = Some(result);
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn parse_grok_tool_event(&mut self, line: &str) -> Result<Option<RecordedCall>, JobError> {
+        let Ok(event) = serde_json::from_str::<Value>(line) else {
+            return Ok(None);
+        };
+        match event.get("type").and_then(Value::as_str) {
+            Some("tool_call") => {
+                let Some(id) = event.get("toolCallId").and_then(Value::as_str).map(str::to_string) else {
+                    return Ok(None);
+                };
+                let Some(tool_name) = event.get("toolName").and_then(Value::as_str) else {
+                    return Ok(None);
+                };
+                let input = event.get("rawInput").cloned().unwrap_or(Value::Null);
+                let Some((tool, arguments)) = horizon_browser_call(tool_name, &input) else {
+                    return Ok(None);
+                };
+                let pending = PendingCall { tool, arguments };
+                if event.get("status").and_then(Value::as_str) == Some("completed") {
+                    return Ok(Some(completed_grok_call(pending, event.get("rawOutput"), true)));
+                }
+                self.retain_pending(id, pending)?;
+                Ok(None)
+            }
+            Some("tool_call_update") => {
+                let Some(id) = event.get("toolCallId").and_then(Value::as_str) else {
+                    return Ok(None);
+                };
+                let status = event.get("status").and_then(Value::as_str).unwrap_or_default();
+                if !matches!(status, "completed" | "failed") {
+                    return Ok(None);
+                }
+                let Some(pending) = self.pending.remove(id) else {
+                    return Ok(None);
+                };
+                Ok(Some(completed_grok_call(
+                    pending,
+                    event.get("rawOutput"),
+                    status == "completed",
+                )))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn retain_pending(&mut self, id: String, pending: PendingCall) -> Result<(), JobError> {
+        let pending_len = self.pending.len();
+        match self.pending.entry(id) {
+            std::collections::hash_map::Entry::Occupied(mut occupied) => {
+                occupied.insert(pending);
+                Ok(())
+            }
+            std::collections::hash_map::Entry::Vacant(vacant) => {
+                let Some(total) = self.calls.len().checked_add(pending_len) else {
+                    return Err(call_limit_error());
+                };
+                if total >= MAX_TRACE_CALLS {
+                    return Err(call_limit_error());
+                }
+                vacant.insert(pending);
+                Ok(())
+            }
+        }
     }
 
     pub(super) fn finish(mut self, job_dir: &Path, input: &ReportInput<'_>) -> Result<ReportArtifacts, JobError> {
@@ -212,7 +339,7 @@ fn parse_tool_call(line: &str) -> Option<RecordedCall> {
         return None;
     }
     let item = event.get("item")?;
-    if item.get("type")?.as_str()? != "mcp_tool_call" || item.get("server")?.as_str()? != "horizon-browser" {
+    if item.get("type")?.as_str()? != "mcp_tool_call" || item.get("server")?.as_str()? != MCP_SERVER {
         return None;
     }
     let tool = item.get("tool")?.as_str()?.to_string();
@@ -227,6 +354,135 @@ fn parse_tool_call(line: &str) -> Option<RecordedCall> {
         health: result.and_then(|result| ObservabilitySummary::health_payload(&tool, result)),
         tool,
     })
+}
+
+fn parse_structured_result(line: &str) -> Option<Value> {
+    let event: Value = serde_json::from_str(line).ok()?;
+    if let Some(result) = event.get("structured_output").cloned().and_then(value_as_agent_result) {
+        return Some(result);
+    }
+    if event.get("type").and_then(Value::as_str) == Some("end") {
+        return event
+            .get("text")
+            .and_then(Value::as_str)
+            .and_then(parse_result_json)
+            .or_else(|| event.get("structured_output").cloned().and_then(value_as_agent_result));
+    }
+    if event.get("ok").is_some() && event.get("summary").is_some() && event.get("artifact_content").is_some() {
+        return value_as_agent_result(event);
+    }
+    if event.get("type").is_none()
+        && let Some(text) = event.get("text").and_then(Value::as_str)
+    {
+        return parse_result_json(text);
+    }
+    None
+}
+
+fn parse_result_json(text: &str) -> Option<Value> {
+    last_agent_result(text)
+}
+
+fn last_agent_result(text: &str) -> Option<Value> {
+    let trimmed = text.trim();
+    let unfenced = trimmed
+        .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```JSON"))
+        .or_else(|| trimmed.strip_prefix("```"))
+        .map_or(trimmed, |value| value.strip_suffix("```").unwrap_or(value).trim());
+    let mut last = None;
+    let mut offset = 0;
+    while let Some(relative) = unfenced[offset..].find('{') {
+        offset += relative;
+        match json_object_at(unfenced, offset) {
+            Some((value, end)) => {
+                if let Some(result) = value_as_agent_result(value) {
+                    last = Some(result);
+                }
+                offset = end;
+            }
+            None => offset += 1,
+        }
+    }
+    last
+}
+
+fn json_object_at(text: &str, start: usize) -> Option<(Value, usize)> {
+    let bytes = text.as_bytes();
+    if bytes.get(start).copied() != Some(b'{') {
+        return None;
+    }
+    let mut depth = 0_i32;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (index, byte) in bytes.iter().enumerate().skip(start) {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if *byte == b'\\' {
+                escaped = true;
+            } else if *byte == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match byte {
+            b'"' => in_string = true,
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    let end = index + 1;
+                    let value = serde_json::from_str(&text[start..end]).ok()?;
+                    return Some((value, end));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn value_as_agent_result(value: Value) -> Option<Value> {
+    let object = value.as_object()?;
+    object.get("ok")?.as_bool()?;
+    object.get("summary")?.as_str()?;
+    object.contains_key("artifact_content").then_some(value)
+}
+
+fn horizon_browser_call(tool_name: &str, input: &Value) -> Option<(String, Map<String, Value>)> {
+    if let Some(tool) = tool_name.strip_prefix(MCP_PREFIX) {
+        return Some((tool.to_string(), object_args(input)));
+    }
+    if tool_name != "use_tool" {
+        return None;
+    }
+    let qualified = input
+        .get("tool_name")
+        .or_else(|| input.get("name"))
+        .or_else(|| input.get("tool"))
+        .and_then(Value::as_str)?;
+    let tool = qualified.strip_prefix(MCP_PREFIX)?;
+    let arguments = input
+        .get("tool_input")
+        .or_else(|| input.get("arguments"))
+        .or_else(|| input.get("input"))
+        .unwrap_or(&Value::Null);
+    Some((tool.to_string(), object_args(arguments)))
+}
+
+fn object_args(value: &Value) -> Map<String, Value> {
+    value.as_object().cloned().unwrap_or_default()
+}
+
+fn completed_grok_call(pending: PendingCall, output: Option<&Value>, ok: bool) -> RecordedCall {
+    let result = output.cloned().unwrap_or(Value::Null);
+    RecordedCall {
+        health: ObservabilitySummary::health_payload(&pending.tool, &result),
+        tool: pending.tool,
+        arguments: pending.arguments,
+        ok,
+    }
 }
 
 fn redact_arguments(arguments: &mut Map<String, Value>) -> bool {
@@ -303,6 +559,25 @@ fn contains_ephemeral_reference(arguments: &Map<String, Value>) -> bool {
 
 fn step_id(index: usize) -> String {
     format!("step-{:03}", index + 1)
+}
+
+fn call_limit_error() -> JobError {
+    JobError::Result("agent exceeded the 256-call executed-plan limit".to_string())
+}
+
+fn grok_text_limit_error() -> JobError {
+    JobError::Result("agent exceeded the 1 MiB Grok text limit".to_string())
+}
+
+fn append_bounded_text(buffer: &mut String, data: &str) -> Result<(), JobError> {
+    let Some(total) = buffer.len().checked_add(data.len()) else {
+        return Err(grok_text_limit_error());
+    };
+    if total > MAX_GROK_TEXT_BYTES {
+        return Err(grok_text_limit_error());
+    }
+    buffer.push_str(data);
+    Ok(())
 }
 
 fn trace_limit_error() -> JobError {
@@ -463,6 +738,241 @@ mod tests {
         assert!(matches!(error, JobError::Result(message) if message.contains("1 MiB")));
         assert_eq!(trace.calls.len(), 1);
         assert!(trace.trace_bytes <= MAX_TRACE_BYTES);
+    }
+
+    #[test]
+    fn grok_use_tool_events_record_horizon_browser_calls() {
+        let directory = tempfile::tempdir().expect("job directory");
+        let mut trace = JobTrace::start(directory.path()).expect("trace");
+        assert!(
+            trace
+                .record_line(
+                    &json!({
+                        "type":"tool_call",
+                        "toolCallId":"call_1",
+                        "toolName":"use_tool",
+                        "status":"in_progress",
+                        "rawInput":{
+                            "tool_name":"horizon-browser__browser_list",
+                            "tool_input":{}
+                        }
+                    })
+                    .to_string()
+                )
+                .expect("start")
+                .is_none()
+        );
+        assert_eq!(
+            trace
+                .record_line(
+                    &json!({
+                        "type":"tool_call_update",
+                        "toolCallId":"call_1",
+                        "status":"completed",
+                        "rawOutput":{"panels":[{"panel_id":"p1"}]}
+                    })
+                    .to_string()
+                )
+                .expect("complete")
+                .as_deref(),
+            Some("browser_list")
+        );
+        assert!(
+            trace
+                .record_line(
+                    &json!({
+                        "type":"tool_call",
+                        "toolCallId":"call_2",
+                        "toolName":"search_tool",
+                        "rawInput":{"query":"browser"}
+                    })
+                    .to_string()
+                )
+                .expect("search")
+                .is_none()
+        );
+        assert_eq!(
+            trace
+                .record_line(
+                    &json!({
+                        "type":"tool_call",
+                        "toolCallId":"call_3",
+                        "toolName":"horizon-browser__browser_navigate",
+                        "status":"completed",
+                        "rawInput":{"panel_id":"p1","url":"example.com"},
+                        "rawOutput":{"completed":true}
+                    })
+                    .to_string()
+                )
+                .expect("navigate")
+                .as_deref(),
+            Some("browser_navigate")
+        );
+        assert!(!trace.is_empty());
+        assert_eq!(trace.calls.len(), 2);
+        assert_eq!(trace.calls[0].tool, "browser_list");
+        assert_eq!(trace.calls[1].arguments["url"], "example.com");
+
+        let failed = trace
+            .record_line(
+                &json!({
+                    "type":"tool_call",
+                    "toolCallId":"call_4",
+                    "toolName":"use_tool",
+                    "rawInput":{"name":"horizon-browser__browser_wait","arguments":{"panel_id":"p1"}},
+                    "status":"in_progress"
+                })
+                .to_string(),
+            )
+            .expect("wait start");
+        assert!(failed.is_none());
+        assert_eq!(
+            trace
+                .record_line(
+                    &json!({
+                        "type":"tool_call_update",
+                        "toolCallId":"call_4",
+                        "status":"failed",
+                        "rawOutput":{"error":"timeout"}
+                    })
+                    .to_string()
+                )
+                .expect("wait failed")
+                .as_deref(),
+            Some("browser_wait")
+        );
+        assert!(!trace.calls[2].ok);
+    }
+
+    #[test]
+    fn grok_text_is_bounded_before_retaining_another_chunk() {
+        let directory = tempfile::tempdir().expect("job directory");
+        let mut trace = JobTrace::start(directory.path()).expect("trace");
+        let chunk = "x".repeat(MAX_GROK_TEXT_BYTES / 2 + 1);
+        trace
+            .record_line(&json!({"type":"text","data": &chunk}).to_string())
+            .expect("first bounded text");
+        let error = trace
+            .record_line(&json!({"type":"text","data": &chunk}).to_string())
+            .expect_err("second text must exceed aggregate Grok text limit");
+        assert!(matches!(error, JobError::Result(message) if message.contains("1 MiB")));
+        assert!(trace.grok_text.len() <= MAX_GROK_TEXT_BYTES);
+    }
+
+    #[test]
+    fn unfinished_grok_tool_calls_count_toward_the_call_limit() {
+        let directory = tempfile::tempdir().expect("job directory");
+        let mut trace = JobTrace::start(directory.path()).expect("trace");
+        for index in 0..MAX_TRACE_CALLS {
+            trace
+                .record_line(
+                    &json!({
+                        "type":"tool_call",
+                        "toolCallId": format!("call_{index}"),
+                        "toolName":"horizon-browser__browser_list",
+                        "status":"in_progress",
+                        "rawInput":{}
+                    })
+                    .to_string(),
+                )
+                .unwrap_or_else(|error| panic!("pending {index}: {error}"));
+        }
+        let error = trace
+            .record_line(
+                &json!({
+                    "type":"tool_call",
+                    "toolCallId":"overflow",
+                    "toolName":"horizon-browser__browser_list",
+                    "status":"in_progress",
+                    "rawInput":{}
+                })
+                .to_string(),
+            )
+            .expect_err("pending overflow");
+        assert!(matches!(error, JobError::Result(message) if message.contains("256-call")));
+        assert_eq!(trace.pending.len(), MAX_TRACE_CALLS);
+        assert!(trace.is_empty());
+    }
+
+    #[test]
+    fn grok_text_and_end_events_capture_the_structured_result() {
+        let directory = tempfile::tempdir().expect("job directory");
+        let mut trace = JobTrace::start(directory.path()).expect("trace");
+        trace
+            .record_line(&json!({"type":"text","data":"```json\n"}).to_string())
+            .expect("fence open");
+        trace
+            .record_line(
+                &json!({
+                    "type":"text",
+                    "data":"{\"ok\":true,\"summary\":\"Example Domain\",\"artifact_content\":\"Example Domain\"}\n"
+                })
+                .to_string(),
+            )
+            .expect("json text");
+        trace
+            .record_line(&json!({"type":"text","data":"```"}).to_string())
+            .expect("fence close");
+        trace
+            .record_line(&json!({"type":"end","stopReason":"end_turn"}).to_string())
+            .expect("end");
+        let bytes = trace.structured_result_bytes().expect("structured result");
+        let result: Value = serde_json::from_slice(&bytes).expect("decode result");
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["summary"], "Example Domain");
+        assert_eq!(result["artifact_content"], "Example Domain");
+    }
+
+    #[test]
+    fn later_grok_result_json_replaces_an_earlier_planning_object() {
+        let directory = tempfile::tempdir().expect("job directory");
+        let mut trace = JobTrace::start(directory.path()).expect("trace");
+        trace
+            .record_line(
+                &json!({
+                    "type":"text",
+                    "data":"{\"ok\":true,\"summary\":\"planning\",\"artifact_content\":null}\n"
+                })
+                .to_string(),
+            )
+            .expect("planning json");
+        trace
+            .record_line(
+                &json!({
+                    "type":"text",
+                    "data":"{\"ok\":true,\"summary\":\"Example Domain\",\"artifact_content\":\"Example Domain\"}\n"
+                })
+                .to_string(),
+            )
+            .expect("final json");
+        trace
+            .record_line(&json!({"type":"end","stopReason":"end_turn"}).to_string())
+            .expect("end");
+        let bytes = trace.structured_result_bytes().expect("structured result");
+        let result: Value = serde_json::from_slice(&bytes).expect("decode result");
+        assert_eq!(result["summary"], "Example Domain");
+        assert_eq!(result["artifact_content"], "Example Domain");
+    }
+
+    #[test]
+    fn grok_json_document_text_is_accepted_as_the_structured_result() {
+        let directory = tempfile::tempdir().expect("job directory");
+        let mut trace = JobTrace::start(directory.path()).expect("trace");
+        trace
+            .record_line(
+                &json!({
+                    "text":"{\"ok\":false,\"summary\":\"blocked\",\"artifact_content\":null}",
+                    "stopReason":"end_turn",
+                    "sessionId":"abc"
+                })
+                .to_string(),
+            )
+            .expect("json document");
+        let bytes = trace.structured_result_bytes().expect("structured result");
+        let result: Value = serde_json::from_slice(&bytes).expect("decode result");
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["summary"], "blocked");
+        assert_eq!(result["artifact_content"], Value::Null);
     }
 
     fn event(tool: &str, arguments: &Value) -> String {

@@ -597,6 +597,8 @@ back into large multi-purpose modules.
 
 - Owns deterministic browser plans, bounded execution control, durable job
   lifecycle, explicit resume policy, and user-facing reports.
+- `job/agent.rs` selects and invokes the optional local prompt-job adapter
+  (Grok headless or Codex `exec`); MCP actions stay on the existing contract.
 - `run_state.rs` coordinates lifecycle metadata and exclusive resume leases.
   Large verified step results live in immutable files managed by
   `run_state/checkpoint_artifacts.rs`; `state.json` retains only compact result
