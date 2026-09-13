@@ -272,6 +272,27 @@ impl Driver {
         Ok(BrowserControlValue::Network { capture })
     }
 
+    pub(super) fn video_action(
+        &mut self,
+        capture_id: &str,
+        operation: crate::BrowserVideoOperation,
+        options: Option<&crate::BrowserVideoCaptureOverrides>,
+    ) -> Result<BrowserControlValue, BrowserControlFailure> {
+        let capture = self.video.apply(
+            crate::video::VideoCaptureHost::new(
+                self.config.capture_directory.as_deref(),
+                self.config.coordination.as_deref(),
+                &self.config.panel_local_id,
+                &self.config.browser.video,
+            ),
+            capture_id,
+            std::sync::Arc::clone(&self.config.frame_slot),
+            operation,
+            options,
+        )?;
+        Ok(BrowserControlValue::Video { capture })
+    }
+
     pub(super) fn handle_network_bidi_event(&mut self, event: &Value) -> bool {
         let method = event.get("method").and_then(Value::as_str).unwrap_or_default();
         let params = event.get("params").unwrap_or(&Value::Null);

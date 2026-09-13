@@ -1,4 +1,4 @@
-use crate::BrowserInput;
+use crate::{BrowserInput, BrowserVideoCaptureOverrides, BrowserVideoOperation};
 
 /// What a host asks a live browser driver to do.
 #[derive(Clone, Debug)]
@@ -12,6 +12,11 @@ pub enum BrowserCommand {
         height: u32,
     },
     Input(BrowserInput),
+    /// Start, pause, resume, inspect, or stop page-pixel `WebM` capture.
+    Video {
+        operation: BrowserVideoOperation,
+        options: Option<BrowserVideoCaptureOverrides>,
+    },
     /// The user finished steering and handed control back to the agent.
     HandoffDone,
     Stop,

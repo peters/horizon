@@ -91,6 +91,19 @@ pub trait BrowserCoordination: Debug + Send + Sync + 'static {
     ) -> std::io::Result<()> {
         Ok(())
     }
+    /// Apply the host's retention policy before the engine creates a `WebM` export.
+    ///
+    /// # Errors
+    /// Returns an I/O error when the host cannot make enough bounded storage
+    /// available for the requested capture.
+    fn prepare_video_capture(
+        &self,
+        panel_local_id: &str,
+        directory: &Path,
+        requested_max_file_bytes: u64,
+    ) -> std::io::Result<()> {
+        self.prepare_network_capture(panel_local_id, directory, requested_max_file_bytes)
+    }
     fn remove(&self, panel_local_id: &str, timeout: Duration) -> bool;
 }
 
@@ -173,6 +186,7 @@ mod tests {
             frame_slot: Arc::new(crate::FrameSlot::new()),
             coordination: Some(Arc::new(RefusingCoordination)),
             capture_directory: None,
+            video: Arc::new(crate::VideoCaptureHandle::default()),
         };
 
         assert!(CoordinationLifetime::start(&config).is_none());

@@ -150,6 +150,11 @@ impl BrowserSession {
     pub fn committed_url(&self) -> CommittedUrl {
         self.committed_url.clone()
     }
+
+    #[must_use]
+    pub fn video_capture(&self) -> Option<crate::BrowserVideoCapture> {
+        self.video.snapshot()
+    }
 }
 
 pub(crate) fn publish_frame(event_tx: &BrowserEventSender, frame_slot: &FrameSlot, seq: u64) {
@@ -219,6 +224,7 @@ mod tests {
                 command_tx,
                 stop_requested: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 frame_slot,
+                video: Arc::new(crate::VideoCaptureHandle::default()),
                 event_rx: mpsc::channel().1,
                 completion_rx,
                 event_wake: BrowserEventWake::default(),
@@ -290,5 +296,41 @@ mod tests {
         assert_eq!(entries[0].actor, BrowserAuditActor::System);
         assert_eq!(entries[0].status, BrowserAuditStatus::Dispatched);
         assert_eq!(entries[0].action, BrowserAuditAction::Stop);
+    }
+
+    #[test]
+    fn video_stop_rejection_is_audited_when_the_queue_cannot_evict() {
+        let coordination = Arc::new(RecordingCoordination::default());
+        let (session, _receiver) = session_for_audit(Arc::clone(&coordination));
+        let modifiers = crate::BrowserModifiers::none();
+        for _ in 0..crate::session::command_queue::COMMAND_CAPACITY {
+            assert!(session.send(BrowserCommand::Input(crate::BrowserInput::MouseRelease {
+                x: 1.0,
+                y: 1.0,
+                button: crate::BrowserButton::Left,
+                click_count: 1,
+                buttons: 0,
+                modifiers,
+            })));
+        }
+
+        assert!(!session.send(BrowserCommand::Video {
+            operation: crate::BrowserVideoOperation::Stop,
+            options: None,
+        }));
+        assert_eq!(session.frame_slot.metrics().commands_rejected, 1);
+        let entries = coordination
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].status, BrowserAuditStatus::Rejected);
+        assert!(matches!(
+            entries[0].action,
+            BrowserAuditAction::Video {
+                operation: crate::BrowserVideoOperation::Stop,
+                ..
+            }
+        ));
     }
 }

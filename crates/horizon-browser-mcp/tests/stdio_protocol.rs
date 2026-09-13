@@ -96,6 +96,7 @@ fn exercise_protocol(requested_version: &str, negotiated_version: &str) {
             .is_some_and(|instructions| instructions.contains("browser_create")
                 && instructions.contains("browser_network start before browser_navigate")
                 && instructions.contains("browser_network_watch")
+                && instructions.contains("browser_video")
                 && instructions.contains("browser_visibility")
                 && instructions.contains("allow_additional=true")
                 && instructions.contains("original panel")),
@@ -136,7 +137,7 @@ fn listed_tool<'a>(tools: &'a Value, name: &str) -> &'a Value {
 
 fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     let encoded_tools = tools.to_string();
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(14));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(15));
     let create = listed_tool(tools, "browser_create");
     assert!(
         create["description"]
@@ -153,6 +154,13 @@ fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
             .is_some_and(|description| description.contains("tail -f"))
     );
     assert!(network["inputSchema"].to_string().contains("Start only"));
+    let video = listed_tool(tools, "browser_video");
+    assert!(
+        video["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("WebM") && description.contains("pause"))
+    );
+    assert!(video["inputSchema"].to_string().contains("Start only"));
     let watch = listed_tool(tools, "browser_network_watch");
     assert!(watch["description"].as_str().is_some_and(|description| {
         description.contains("next_sequence") && description.contains("no capture path")

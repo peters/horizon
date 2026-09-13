@@ -579,6 +579,7 @@ mod tests {
                 frame_slot: Arc::new(FrameSlot::new()),
                 coordination: None,
                 capture_directory: None,
+                video: Arc::new(crate::VideoCaptureHandle::default()),
             },
             "ws://127.0.0.1/devtools/browser/test",
             None,

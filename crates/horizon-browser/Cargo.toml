@@ -28,6 +28,7 @@ png.workspace = true
 base64.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+rav1e.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 process-wrap.workspace = true

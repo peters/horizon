@@ -59,6 +59,9 @@ impl DriverState {
             BrowserControlAction::Network { operation, options } => {
                 self.network_action(link, event_tx, frame_slot, request, *operation, options.clone())
             }
+            BrowserControlAction::Video { operation, options } => {
+                self.video_action(frame_slot, &request.action_id, *operation, options.as_ref())
+            }
             BrowserControlAction::Navigate { .. }
             | BrowserControlAction::Reload
             | BrowserControlAction::Back

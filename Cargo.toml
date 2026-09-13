@@ -41,6 +41,9 @@ tungstenite = "0.30.0"
 # JPEG decoder for CDP screencast frames (change-driven video stream).
 zune-jpeg = "0.5.15"
 png = "0.18.1"
+# Pure-Rust AV1 encoder for browser-panel WebM export. Assembly is left off so
+# CI and developer machines do not need NASM; encoding runs on a dedicated thread.
+rav1e = { version = "0.8.1", default-features = false, features = ["threading"] }
 base64 = "0.23.1"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 profiling = "1.0.18"

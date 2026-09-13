@@ -1,9 +1,11 @@
 mod network;
+mod video;
 
 pub(crate) use network::{
     NetworkInput, NetworkOutput, NetworkWatchCaptureState, NetworkWatchDeliveryState, NetworkWatchEventKind,
     NetworkWatchInput, NetworkWatchOutput, NetworkWatchRecord,
 };
+pub(crate) use video::{VideoInput, VideoOutput};
 
 use horizon_browser::{BackendKind, BrowserBounds, BrowserNode, BrowserSnapshot, BrowserTarget};
 use horizon_core::browser::manifest::{self, BrowserManifest};
@@ -35,6 +37,7 @@ pub(crate) struct BrowserPanel {
     pub(crate) agent_state: BrowserPanelAgentState,
     pub(crate) capabilities: Vec<String>,
     pub(crate) network_capture: NetworkCaptureCapability,
+    pub(crate) video_capture: VideoCaptureCapability,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -67,6 +70,7 @@ impl BrowserPanel {
             },
             capabilities: semantic_capabilities(value.backend),
             network_capture: NetworkCaptureCapability::for_backend(value.backend),
+            video_capture: VideoCaptureCapability::for_backend(),
         }
     }
 }
@@ -79,6 +83,25 @@ pub(crate) struct NetworkCaptureCapability {
     pub(crate) http_response_body_transport: Option<String>,
     pub(crate) page_instrumentation: bool,
     pub(crate) workflow: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub(crate) struct VideoCaptureCapability {
+    pub(crate) supported: bool,
+    pub(crate) container: String,
+    pub(crate) codec: String,
+    pub(crate) workflow: String,
+}
+
+impl VideoCaptureCapability {
+    fn for_backend() -> Self {
+        Self {
+            supported: true,
+            container: "webm".to_string(),
+            codec: "av1".to_string(),
+            workflow: "Call browser_video start to record page pixels, pause/resume to skip idle time, then stop to finalize a private WebM path.".to_string(),
+        }
+    }
 }
 
 impl NetworkCaptureCapability {

@@ -20,6 +20,7 @@ pub mod process;
 mod profile;
 mod semantic;
 pub mod session;
+mod video;
 mod wait;
 mod webdriver;
 mod websocket;
@@ -32,10 +33,14 @@ pub use disclosure::{AutomationDisclosurePolicy, AutomationDisclosureStatus};
 pub use error::BrowserError;
 pub use frames::{FrameData, FrameMetrics, FrameSlot, PageScrollState};
 pub use horizon_browser_protocol::{
-    AgentAction, BackendAvailability, BackendCapabilities, BackendKind, BrowserControlAction, DEFAULT_CLICK_COUNT,
-    DEFAULT_NAVIGATION_TIMEOUT_MILLIS, DEFAULT_WAIT_TIMEOUT_MILLIS, FrameDelivery, MAX_CLICK_COUNT,
-    MAX_NAVIGATION_TIMEOUT_MILLIS, MAX_QUERY_RESULTS, MAX_SNAPSHOT_NODES, MAX_WAIT_TIMEOUT_MILLIS, NavigationWait,
-    normalize_navigation_target,
+    AgentAction, BackendAvailability, BackendCapabilities, BackendKind, BrowserControlAction, BrowserVideoCapture,
+    BrowserVideoCaptureOptions, BrowserVideoCaptureOverrides, BrowserVideoOperation, BrowserVideoState,
+    DEFAULT_CLICK_COUNT, DEFAULT_NAVIGATION_TIMEOUT_MILLIS, DEFAULT_VIDEO_COMPRESSION_LEVEL, DEFAULT_VIDEO_FPS,
+    DEFAULT_VIDEO_MAX_FILE_BYTES, DEFAULT_VIDEO_MAX_WIDTH, DEFAULT_VIDEO_QUALITY, DEFAULT_WAIT_TIMEOUT_MILLIS,
+    FrameDelivery, MAX_CLICK_COUNT, MAX_NAVIGATION_TIMEOUT_MILLIS, MAX_QUERY_RESULTS, MAX_SNAPSHOT_NODES,
+    MAX_VIDEO_COMPRESSION_LEVEL, MAX_VIDEO_FILE_BYTES, MAX_VIDEO_FPS, MAX_VIDEO_MAX_WIDTH, MAX_VIDEO_QUALITY,
+    MAX_WAIT_TIMEOUT_MILLIS, MIN_VIDEO_FILE_BYTES, MIN_VIDEO_FPS, MIN_VIDEO_MAX_WIDTH, MIN_VIDEO_QUALITY,
+    NavigationWait, normalize_navigation_target,
 };
 pub use input::{BrowserButton, BrowserEditCommand, BrowserInput, BrowserKey, BrowserModifiers};
 pub use network::{
@@ -52,6 +57,7 @@ pub use session::{
     BrowserCommand, BrowserEvent, BrowserEventWaker, BrowserSession, BrowserSessionConfig, BrowserShutdownSignal,
     CommittedUrl, start_session,
 };
+pub use video::VideoCaptureHandle;
 
 /// Default emulated viewport for a newly created browser session.
 pub const DEFAULT_VIEWPORT: (u32, u32) = (1280, 800);
@@ -82,6 +88,8 @@ pub struct BrowserConfig {
     /// Chromium CDP screencast sampling interval (`1` publishes every frame).
     pub every_nth_frame: u32,
     pub profile_root: Option<PathBuf>,
+    /// Defaults for page-pixel `WebM` capture. Per-recording options may override.
+    pub video: BrowserVideoCaptureOptions,
 }
 
 impl Default for BrowserConfig {
@@ -98,6 +106,7 @@ impl Default for BrowserConfig {
             quality: 60,
             every_nth_frame: 1,
             profile_root: None,
+            video: BrowserVideoCaptureOptions::default(),
         }
     }
 }

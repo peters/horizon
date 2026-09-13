@@ -30,6 +30,7 @@ TOOL_NAMES = [
     "browser_panel",
     "browser_query",
     "browser_snapshot",
+    "browser_video",
     "browser_visibility",
     "browser_wait",
 ]
@@ -192,6 +193,8 @@ def initialize(client: McpClient) -> list[dict[str, Any]]:
         raise AssertionError("MCP instructions do not teach empty-workspace browser creation")
     if "browser_network start before browser_navigate" not in result["instructions"]:
         raise AssertionError("MCP instructions do not teach the network capture workflow")
+    if "browser_video start" not in result["instructions"]:
+        raise AssertionError("MCP instructions do not teach the video capture workflow")
     if "browser_network_watch" not in result["instructions"] or "browser_visibility" not in result["instructions"]:
         raise AssertionError("MCP instructions do not teach watch and visibility workflows")
     if "allow_additional=true" not in result["instructions"] or "original panel" not in result["instructions"]:
@@ -210,6 +213,9 @@ def initialize(client: McpClient) -> list[dict[str, Any]]:
     network = next(tool for tool in tools if tool["name"] == "browser_network")
     if "tail -f" not in network["description"] or "Start only" not in json.dumps(network["inputSchema"]):
         raise AssertionError("browser_network is not self-discovering")
+    video = next(tool for tool in tools if tool["name"] == "browser_video")
+    if "WebM" not in video["description"] or "Start only" not in json.dumps(video["inputSchema"]):
+        raise AssertionError("browser_video is not self-discovering")
     create = next(tool for tool in tools if tool["name"] == "browser_create")
     if (
         "browser_list is empty" not in create["description"]
@@ -1151,6 +1157,14 @@ def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
         raise AssertionError(network_capability)
     if args.backend == "chromium" and network_capability["page_instrumentation"]:
         raise AssertionError(network_capability)
+    video_capability = detail["video_capture"]
+    if (
+        not video_capability["supported"]
+        or video_capability["container"] != "webm"
+        or video_capability["codec"] != "av1"
+        or "browser_video start" not in video_capability["workflow"]
+    ):
+        raise AssertionError(video_capability)
 
     action_ids: list[str] = [create_action_id]
     failed_ids: list[str] = []

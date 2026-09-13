@@ -6,7 +6,7 @@
 
 use crate::{
     BrowserCommand, BrowserInput, BrowserKey, BrowserNetworkCaptureOptions, BrowserNetworkOperation, BrowserTarget,
-    SelectorState,
+    BrowserVideoCaptureOverrides, BrowserVideoOperation, SelectorState,
 };
 
 const MAX_NAVIGATION_BYTES: usize = 8 * 1024;
@@ -150,6 +150,12 @@ pub enum BrowserControlAction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         options: Option<BrowserNetworkCaptureOptions>,
     },
+    /// Start, pause, resume, inspect, or stop a bounded `WebM` page-pixel export.
+    Video {
+        operation: BrowserVideoOperation,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        options: Option<BrowserVideoCaptureOverrides>,
+    },
 }
 
 impl BrowserControlAction {
@@ -213,6 +219,21 @@ impl BrowserControlAction {
                 }
                 BrowserNetworkOperation::Status | BrowserNetworkOperation::Stop => Ok(()),
             },
+            Self::Video { operation, options } => match operation {
+                BrowserVideoOperation::Start => options.as_ref().map_or(Ok(()), BrowserVideoCaptureOverrides::validate),
+                BrowserVideoOperation::Pause
+                | BrowserVideoOperation::Resume
+                | BrowserVideoOperation::Status
+                | BrowserVideoOperation::Stop
+                    if options.is_some() =>
+                {
+                    Err("video pause, resume, status, and stop do not accept capture options")
+                }
+                BrowserVideoOperation::Pause
+                | BrowserVideoOperation::Resume
+                | BrowserVideoOperation::Status
+                | BrowserVideoOperation::Stop => Ok(()),
+            },
             Self::Reload | Self::Back | Self::Forward => Ok(()),
         }
     }
@@ -232,7 +253,8 @@ impl BrowserControlAction {
             | Self::Fill { .. }
             | Self::Scroll { .. }
             | Self::Evaluate { .. }
-            | Self::Network { .. } => None,
+            | Self::Network { .. }
+            | Self::Video { .. } => None,
         }
     }
 }
@@ -644,5 +666,55 @@ mod tests {
                 count: DEFAULT_CLICK_COUNT,
             }
         );
+    }
+
+    #[test]
+    fn video_start_validates_options_and_other_ops_reject_them() {
+        let start = BrowserControlAction::Video {
+            operation: crate::BrowserVideoOperation::Start,
+            options: Some(crate::BrowserVideoCaptureOverrides::default()),
+        };
+        assert!(start.validate().is_ok());
+        assert!(start.to_command().is_none());
+
+        let bad = crate::BrowserVideoCaptureOverrides {
+            fps: Some(0),
+            ..crate::BrowserVideoCaptureOverrides::default()
+        };
+        assert!(
+            BrowserControlAction::Video {
+                operation: crate::BrowserVideoOperation::Start,
+                options: Some(bad),
+            }
+            .validate()
+            .is_err()
+        );
+
+        for operation in [
+            crate::BrowserVideoOperation::Pause,
+            crate::BrowserVideoOperation::Resume,
+            crate::BrowserVideoOperation::Status,
+            crate::BrowserVideoOperation::Stop,
+        ] {
+            assert!(
+                BrowserControlAction::Video {
+                    operation,
+                    options: Some(crate::BrowserVideoCaptureOverrides {
+                        quality: Some(70),
+                        ..crate::BrowserVideoCaptureOverrides::default()
+                    }),
+                }
+                .validate()
+                .is_err()
+            );
+            assert!(
+                BrowserControlAction::Video {
+                    operation,
+                    options: None,
+                }
+                .validate()
+                .is_ok()
+            );
+        }
     }
 }

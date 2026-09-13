@@ -11,6 +11,7 @@ mod control;
 pub mod input;
 mod network;
 mod semantic;
+mod video;
 
 pub use audit::{
     BrowserAuditAction, BrowserAuditActor, BrowserAuditEntry, BrowserAuditStatus, new_action_id, redact_url,
@@ -31,6 +32,13 @@ pub use network::{
 pub use semantic::{
     AgentActionResult, BrowserActionOutcome, BrowserBounds, BrowserControlFailure, BrowserControlValue, BrowserNode,
     BrowserSnapshot, BrowserTarget, NavigationOutcome, NavigationState, SelectorState, WaitOutcome,
+};
+pub use video::{
+    BrowserVideoCapture, BrowserVideoCaptureOptions, BrowserVideoCaptureOverrides, BrowserVideoOperation,
+    BrowserVideoState, DEFAULT_VIDEO_COMPRESSION_LEVEL, DEFAULT_VIDEO_FPS, DEFAULT_VIDEO_MAX_FILE_BYTES,
+    DEFAULT_VIDEO_MAX_WIDTH, DEFAULT_VIDEO_QUALITY, MAX_VIDEO_COMPRESSION_LEVEL, MAX_VIDEO_FILE_BYTES, MAX_VIDEO_FPS,
+    MAX_VIDEO_MAX_WIDTH, MAX_VIDEO_QUALITY, MIN_VIDEO_FILE_BYTES, MIN_VIDEO_FPS, MIN_VIDEO_MAX_WIDTH,
+    MIN_VIDEO_QUALITY,
 };
 
 /// Browser automation backend selected for a session.

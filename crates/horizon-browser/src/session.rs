@@ -82,6 +82,8 @@ pub enum BrowserEvent {
     },
     /// Non-fatal problem surfaced to the panel body.
     Warning(String),
+    /// Page-pixel recording could not start, pause, resume, or finalize.
+    VideoFailed(String),
     /// The driver stopped.
     Stopped {
         code: Option<i32>,
@@ -122,6 +124,8 @@ pub struct BrowserSessionConfig {
     /// Host-owned directory for explicit network-capture exports. Standalone
     /// embedders can opt in without depending on Horizon's home layout.
     pub capture_directory: Option<PathBuf>,
+    /// Shared page-pixel recording status for the host UI and driver.
+    pub video: Arc<crate::VideoCaptureHandle>,
 }
 
 /// The panel-side handle to a running driver.
@@ -129,6 +133,7 @@ pub struct BrowserSession {
     command_tx: CommandSender,
     stop_requested: Arc<AtomicBool>,
     pub frame_slot: Arc<FrameSlot>,
+    video: Arc<crate::VideoCaptureHandle>,
     pub event_rx: mpsc::Receiver<BrowserEvent>,
     /// Resolved when the driver thread has finished tearing down Chrome.
     completion_rx: mpsc::Receiver<()>,
@@ -181,6 +186,7 @@ pub fn start_session(config: BrowserSessionConfig) -> Result<BrowserSession, cra
         .resolved_for_launch()
         .map_err(crate::BrowserError::LaunchConfig)?;
     let frame_slot = config.frame_slot.clone();
+    let video = Arc::clone(&config.video);
     let (command_tx, command_rx) = command_queue::channel(Arc::clone(&frame_slot));
     let (raw_event_tx, event_rx) = mpsc::channel::<BrowserEvent>();
     let event_wake = BrowserEventWake::default();
@@ -225,6 +231,7 @@ pub fn start_session(config: BrowserSessionConfig) -> Result<BrowserSession, cra
         command_tx,
         stop_requested,
         frame_slot,
+        video,
         event_rx,
         completion_rx,
         event_wake,
@@ -476,6 +483,7 @@ struct DriverState {
     semantic: SemanticState,
     challenge_loop: crate::challenge::ChallengeLoopDetector,
     network: crate::network::NetworkCaptureState,
+    video: crate::video::VideoCaptureState,
     pending_http_bodies: VecDeque<http_bodies::PendingHttpBody>,
     http_body_evidence: http_bodies::HttpBodyEvidenceTable,
     stop_requested: Arc<AtomicBool>,
@@ -538,6 +546,7 @@ impl DriverState {
             semantic: SemanticState::default(),
             challenge_loop: crate::challenge::ChallengeLoopDetector::default(),
             network: crate::network::NetworkCaptureState::default(),
+            video: crate::video::VideoCaptureState::new(Arc::clone(&config.video)),
             pending_http_bodies: VecDeque::new(),
             http_body_evidence: http_bodies::HttpBodyEvidenceTable::default(),
             stop_requested,
@@ -851,6 +860,10 @@ mod tests {
         }));
         assert!(!is_user_activity(&BrowserCommand::HandoffDone));
         assert!(!is_user_activity(&BrowserCommand::Stop));
+        assert!(!is_user_activity(&BrowserCommand::Video {
+            operation: crate::BrowserVideoOperation::Start,
+            options: None,
+        }));
     }
 
     #[test]

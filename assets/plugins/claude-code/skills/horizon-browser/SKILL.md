@@ -80,6 +80,14 @@ inspect the exact path returned by `browser_network` with read-only tools such
 as `tail -f`, `jq`, or `rg`; never infer or inspect another Horizon runtime
 path. Call `operation: stop` to flush the capture.
 
+For page-pixel recording, inspect `video_capture` then call `browser_video`
+with `operation: start`. Optional start-only knobs: `quality` (1-100),
+`compression_level` (0-10, higher is slower/smaller), `fps` (1-30),
+`max_width` (320-1920), `max_file_bytes`. Pause skips time in the file;
+resume continues the same WebM; stop finalizes a private `.webm` path.
+Page pixels never enter the action audit. The recording samples the existing
+decoded frame slot on Chromium, Firefox, and Safari.
+
 Chromium HTTP bodies and WebSocket frames are protocol-native, but CDP cannot
 return a `fetch()` body the page drained with `response.blob()`; that
 `http_response_body` record carries an `error` and no `payload`, so when the

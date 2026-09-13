@@ -17,7 +17,8 @@ pub use horizon_browser::{
     ActiveBackendCapabilities, AutomationDisclosurePolicy, AutomationDisclosureStatus, BackendAvailability,
     BackendCapabilities, BackendKind, BrowserButton, BrowserCommand, BrowserConfig, BrowserEditCommand, BrowserEvent,
     BrowserEventWaker, BrowserInput, BrowserKey, BrowserModifiers, BrowserSession, BrowserShutdownSignal,
-    DEFAULT_VIEWPORT, FrameDelivery, FrameMetrics, FrameSlot, PageScrollState, normalize_navigation_target,
+    BrowserVideoCapture, BrowserVideoCaptureOptions, BrowserVideoOperation, BrowserVideoState, DEFAULT_VIEWPORT,
+    FrameDelivery, FrameMetrics, FrameSlot, PageScrollState, normalize_navigation_target,
 };
 const FORCED_CHROME_SHUTDOWN_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
 
@@ -103,6 +104,8 @@ pub struct BrowserPanelState {
     host_focus_request: Option<bool>,
     /// Most recent URL submission error; cleared after a committed navigation.
     pub navigation_error: Option<String>,
+    /// Last page-pixel recording failure; cleared when a new recording starts.
+    pub video_error: Option<String>,
     /// User-typed navigation kept as the display and retry target until the
     /// driver commits a reachable page, so the input is never discarded.
     pending_user_navigation: Option<String>,
@@ -151,6 +154,7 @@ impl BrowserPanelState {
             pending_clipboard_text: None,
             host_focus_request: None,
             navigation_error: None,
+            video_error: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -193,6 +197,7 @@ impl BrowserPanelState {
             pending_clipboard_text: None,
             host_focus_request: None,
             navigation_error: None,
+            video_error: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: profile_root_resolved,
@@ -319,6 +324,7 @@ impl BrowserPanelState {
             frame_slot: Arc::clone(&self.frame_slot),
             coordination: Some(Arc::new(manifest::ManifestCoordination::default())),
             capture_directory: Some(capture_directory),
+            video: Arc::new(horizon_browser::VideoCaptureHandle::default()),
         };
         match session::start_session(session_config) {
             Ok(handle) => {
@@ -360,6 +366,11 @@ impl BrowserPanelState {
 
     pub fn send(&self, command: BrowserCommand) {
         let _ = self.try_send(command);
+    }
+
+    #[must_use]
+    pub fn video_capture(&self) -> Option<BrowserVideoCapture> {
+        self.session.as_ref().and_then(|session| session.video_capture())
     }
 
     #[must_use]
@@ -579,6 +590,10 @@ impl BrowserPanelState {
                 self.status = BrowserStatus::Error { message };
                 output.had_output = true;
             }
+            BrowserEvent::VideoFailed(message) => {
+                self.video_error = Some(message);
+                output.had_output = true;
+            }
             BrowserEvent::Stopped { code } => self.apply_stopped(code, output),
             BrowserEvent::HandoffRequested(reason) => {
                 self.handoff_reason = Some(reason);
@@ -771,6 +786,7 @@ mod tests {
             pending_clipboard_text: None,
             host_focus_request: None,
             navigation_error: None,
+            video_error: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -811,6 +827,7 @@ mod tests {
             pending_clipboard_text: None,
             host_focus_request: None,
             navigation_error: None,
+            video_error: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -845,6 +862,7 @@ mod tests {
             pending_clipboard_text: None,
             host_focus_request: None,
             navigation_error: None,
+            video_error: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -887,6 +905,7 @@ mod tests {
             pending_clipboard_text: None,
             host_focus_request: None,
             navigation_error: None,
+            video_error: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -927,6 +946,7 @@ mod tests {
             pending_clipboard_text: None,
             host_focus_request: None,
             navigation_error: None,
+            video_error: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1001,6 +1021,7 @@ mod tests {
             pending_clipboard_text: None,
             host_focus_request: None,
             navigation_error: None,
+            video_error: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1037,6 +1058,7 @@ mod tests {
             pending_clipboard_text: None,
             host_focus_request: None,
             navigation_error: Some("stale error".to_string()),
+            video_error: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1072,6 +1094,7 @@ mod tests {
             pending_clipboard_text: None,
             host_focus_request: None,
             navigation_error: None,
+            video_error: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1110,6 +1133,7 @@ mod tests {
             pending_clipboard_text: None,
             host_focus_request: None,
             navigation_error: None,
+            video_error: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,

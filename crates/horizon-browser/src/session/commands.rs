@@ -186,6 +186,16 @@ impl DriverState {
                 self.resolve_handoff(event_tx);
                 Ok(false)
             }
+            BrowserCommand::Video { operation, options } => {
+                if let Err(error) = self.video_action(frame_slot, &crate::new_action_id(), operation, options.as_ref())
+                {
+                    let _ = event_tx.send(super::BrowserEvent::VideoFailed(format!(
+                        "{}: {}",
+                        error.code, error.message
+                    )));
+                }
+                Ok(false)
+            }
         }
     }
 
@@ -660,6 +670,7 @@ mod tests {
                 frame_slot: Arc::new(FrameSlot::new()),
                 coordination: None,
                 capture_directory: None,
+                video: Arc::new(crate::VideoCaptureHandle::default()),
             },
             "ws://127.0.0.1/devtools/browser/test",
             None,

@@ -7,7 +7,8 @@ use egui::{
     vec2,
 };
 use horizon_core::browser::{
-    BackendAvailability, BackendKind, BrowserCommand, BrowserPanelState, normalize_navigation_target,
+    BackendAvailability, BackendKind, BrowserCommand, BrowserPanelState, BrowserVideoOperation, BrowserVideoState,
+    normalize_navigation_target,
 };
 
 use crate::browser_widget::BrowserUiState;
@@ -17,6 +18,7 @@ const CHROME_HEIGHT: f32 = 30.0;
 /// The URL bar keeps at least this much width even when an owner chip is
 /// present on a narrow panel.
 const URL_MIN_WIDTH: f32 = 120.0;
+const VIDEO_QUEUE_REJECTED: &str = "browser command queue is full; video command was not queued";
 
 /// Draw the top strip. Returns whether the URL bar has focus and whether
 /// any chrome widget was clicked this frame (for panel-focus requests).
@@ -44,6 +46,7 @@ pub fn show(
         clicked |= nav_button(ui, "←", "Back", browser, BrowserCommand::Back, interactive);
         clicked |= nav_button(ui, "→", "Forward", browser, BrowserCommand::Forward, interactive);
         clicked |= nav_button(ui, "⟳", "Reload", browser, BrowserCommand::Reload, interactive);
+        clicked |= video_controls(ui, browser, interactive);
         clicked |= backend_picker(ui, panel_id, browser, interactive);
         // Measure after the nav buttons so the cap fits the real remainder.
         // The owner name is an unrestricted external string: cap the chip to
@@ -133,6 +136,139 @@ fn backend_picker(
     }
     browser.switch_backend(selected);
     true
+}
+
+fn video_controls(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: bool) -> bool {
+    let capture = browser.video_capture();
+    let state = capture.as_ref().map(|capture| capture.state);
+    if matches!(state, Some(BrowserVideoState::Recording | BrowserVideoState::Paused)) {
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+    }
+    let mut clicked = false;
+    match state {
+        Some(BrowserVideoState::Recording) => {
+            let elapsed = capture.as_ref().map_or(0, |capture| capture.elapsed_millis);
+            ui.label(
+                RichText::new(format_elapsed(elapsed))
+                    .size(10.5)
+                    .color(theme::PALETTE_RED()),
+            );
+            clicked |= video_button(
+                ui,
+                "⏸",
+                "Pause recording",
+                browser,
+                BrowserVideoOperation::Pause,
+                interactive,
+            );
+            clicked |= video_stop_button(ui, browser, interactive);
+        }
+        Some(BrowserVideoState::Paused) => {
+            let elapsed = capture.as_ref().map_or(0, |capture| capture.elapsed_millis);
+            ui.label(
+                RichText::new(format!("{} paused", format_elapsed(elapsed)))
+                    .size(10.5)
+                    .color(theme::PALETTE_YELLOW()),
+            );
+            clicked |= video_button(
+                ui,
+                "▶",
+                "Resume recording",
+                browser,
+                BrowserVideoOperation::Resume,
+                interactive,
+            );
+            clicked |= video_stop_button(ui, browser, interactive);
+        }
+        Some(BrowserVideoState::Stopped) | None => {
+            let hover = if let Some(error) = browser.video_error.as_deref() {
+                format!("Record browser session to WebM ({error})")
+            } else if capture.as_ref().is_some_and(|capture| capture.encoder_failed) {
+                format!(
+                    "Record browser session to WebM (encoder failed: {})",
+                    capture.as_ref().map_or("-", |capture| capture.path.as_str())
+                )
+            } else {
+                capture.as_ref().map_or_else(
+                    || "Record browser session to WebM".to_string(),
+                    |capture| format!("Record browser session to WebM (last: {})", capture.path),
+                )
+            };
+            clicked |= video_start_button(ui, &hover, browser, interactive);
+        }
+    }
+    clicked
+}
+
+fn video_start_button(ui: &mut Ui, hover: &str, browser: &mut BrowserPanelState, interactive: bool) -> bool {
+    let response = ui.add_enabled(
+        interactive,
+        egui::Button::new(RichText::new("●").size(13.0).color(theme::PALETTE_RED()))
+            .min_size(vec2(22.0, 22.0))
+            .fill(theme::PANEL_BG_ALT())
+            .corner_radius(6)
+            .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE())),
+    );
+    let enabled = response.enabled();
+    response.widget_info(|| nav_widget_info("Record", enabled));
+    let response = response.on_hover_text_at_pointer(hover);
+    if response.clicked() {
+        browser.video_error = None;
+        if !browser.try_send(BrowserCommand::Video {
+            operation: BrowserVideoOperation::Start,
+            options: None,
+        }) {
+            browser.video_error = Some(VIDEO_QUEUE_REJECTED.to_string());
+        }
+        return true;
+    }
+    false
+}
+
+fn video_stop_button(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: bool) -> bool {
+    let label = browser.video_error.as_deref().map_or_else(
+        || "Stop recording".to_string(),
+        |error| format!("Stop recording ({error})"),
+    );
+    video_button(ui, "⏹", &label, browser, BrowserVideoOperation::Stop, interactive)
+}
+
+fn video_button(
+    ui: &mut Ui,
+    glyph: &str,
+    label: &str,
+    browser: &mut BrowserPanelState,
+    operation: BrowserVideoOperation,
+    interactive: bool,
+) -> bool {
+    let response = ui.add_enabled(
+        interactive,
+        egui::Button::new(RichText::new(glyph).size(13.0))
+            .min_size(vec2(22.0, 22.0))
+            .fill(theme::PANEL_BG_ALT())
+            .corner_radius(6)
+            .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE())),
+    );
+    let enabled = response.enabled();
+    response.widget_info(|| nav_widget_info(label, enabled));
+    let response = response.on_hover_text_at_pointer(label);
+    if response.clicked() {
+        if !browser.try_send(BrowserCommand::Video {
+            operation,
+            options: None,
+        }) {
+            browser.video_error = Some(VIDEO_QUEUE_REJECTED.to_string());
+        }
+        return true;
+    }
+    false
+}
+
+fn format_elapsed(millis: u64) -> String {
+    let total_secs = millis / 1_000;
+    let mins = total_secs / 60;
+    let secs = total_secs % 60;
+    format!("{mins:02}:{secs:02}")
 }
 
 fn nav_button(
@@ -316,7 +452,7 @@ mod tests {
 
     #[test]
     fn navigation_widget_info_names_glyph_only_controls() {
-        for label in ["Back", "Forward", "Reload"] {
+        for label in ["Back", "Forward", "Reload", "Record"] {
             let info = nav_widget_info(label, true);
             assert_eq!(info.typ, egui::WidgetType::Button);
             assert!(info.enabled);

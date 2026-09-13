@@ -792,6 +792,15 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
         })
     }
 
+    fn prepare_video_capture(
+        &self,
+        panel_local_id: &str,
+        directory: &Path,
+        requested_max_file_bytes: u64,
+    ) -> std::io::Result<()> {
+        self.prepare_network_capture(panel_local_id, directory, requested_max_file_bytes)
+    }
+
     fn remove(&self, panel_local_id: &str, timeout: Duration) -> bool {
         self.remove_at(HorizonHome::resolve().root(), panel_local_id, host_instance(), timeout)
             .is_some()

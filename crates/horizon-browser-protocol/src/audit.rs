@@ -154,6 +154,19 @@ pub enum BrowserAuditAction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_file_bytes: Option<u64>,
     },
+    Video {
+        operation: crate::BrowserVideoOperation,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        quality: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        compression_level: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fps: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_width: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_file_bytes: Option<u64>,
+    },
     HandoffRequested,
     HandoffDone,
     Stop,
@@ -229,6 +242,14 @@ impl BrowserAuditAction {
                     max_file_bytes: options.as_ref().map(|options| options.max_file_bytes),
                 }
             }
+            BrowserControlAction::Video { operation, options } => Self::Video {
+                operation: *operation,
+                quality: options.as_ref().and_then(|options| options.quality),
+                compression_level: options.as_ref().and_then(|options| options.compression_level),
+                fps: options.as_ref().and_then(|options| options.fps),
+                max_width: options.as_ref().and_then(|options| options.max_width),
+                max_file_bytes: options.as_ref().and_then(|options| options.max_file_bytes),
+            },
         }
     }
 
@@ -246,6 +267,14 @@ impl BrowserAuditAction {
                 height: *height,
             },
             BrowserCommand::Input(input) => Self::from_input(input),
+            BrowserCommand::Video { operation, options } => Self::Video {
+                operation: *operation,
+                quality: options.as_ref().and_then(|options| options.quality),
+                compression_level: options.as_ref().and_then(|options| options.compression_level),
+                fps: options.as_ref().and_then(|options| options.fps),
+                max_width: options.as_ref().and_then(|options| options.max_width),
+                max_file_bytes: options.as_ref().and_then(|options| options.max_file_bytes),
+            },
             BrowserCommand::HandoffDone => Self::HandoffDone,
             BrowserCommand::Stop => Self::Stop,
         }
