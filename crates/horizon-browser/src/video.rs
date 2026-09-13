@@ -121,7 +121,14 @@ impl VideoCaptureState {
         Ok(capture)
     }
 
+    fn reconcile(&mut self) {
+        if self.active.as_ref().is_some_and(|active| active.thread.is_finished()) {
+            let _ = self.stop();
+        }
+    }
+
     pub(crate) fn pause(&mut self) -> Result<BrowserVideoCapture, BrowserControlFailure> {
+        self.reconcile();
         let active = self.active.as_mut().ok_or_else(|| {
             BrowserControlFailure::new("capture_not_started", "no browser video capture has been started")
         })?;
@@ -131,6 +138,7 @@ impl VideoCaptureState {
     }
 
     pub(crate) fn resume(&mut self) -> Result<BrowserVideoCapture, BrowserControlFailure> {
+        self.reconcile();
         let active = self.active.as_mut().ok_or_else(|| {
             BrowserControlFailure::new("capture_not_started", "no browser video capture has been started")
         })?;
@@ -139,7 +147,8 @@ impl VideoCaptureState {
         Ok(active.thread.snapshot(BrowserVideoState::Recording))
     }
 
-    pub(crate) fn status(&self) -> Result<BrowserVideoCapture, BrowserControlFailure> {
+    pub(crate) fn status(&mut self) -> Result<BrowserVideoCapture, BrowserControlFailure> {
+        self.reconcile();
         if let Some(active) = self.active.as_ref() {
             let state = if active.paused {
                 BrowserVideoState::Paused
@@ -155,7 +164,9 @@ impl VideoCaptureState {
 
     pub(crate) fn stop(&mut self) -> Result<BrowserVideoCapture, BrowserControlFailure> {
         let Some(active) = self.active.take() else {
-            return self.status();
+            return self.handle.snapshot().or_else(|| self.last.clone()).ok_or_else(|| {
+                BrowserControlFailure::new("capture_not_started", "no browser video capture has been started")
+            });
         };
         match active.thread.finish() {
             Ok(capture) => {
@@ -203,6 +214,7 @@ impl VideoCaptureState {
                 "video pause, resume, status, and stop do not accept capture options",
             ));
         }
+        self.reconcile();
         match operation {
             BrowserVideoOperation::Start => self.start(host, capture_id, frame_slot, options),
             BrowserVideoOperation::Pause => self.pause(),

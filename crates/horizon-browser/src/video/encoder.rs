@@ -211,6 +211,10 @@ impl EncoderThread {
         capture
     }
 
+    pub(super) fn is_finished(&self) -> bool {
+        self.thread.as_ref().is_some_and(std::thread::JoinHandle::is_finished)
+    }
+
     pub(super) fn finish(mut self) -> io::Result<BrowserVideoCapture> {
         self.send(EncoderCommand::Stop);
         self.sender.take();
@@ -284,9 +288,9 @@ struct EncodeSession {
 
 impl EncodeSession {
     fn run(&mut self) -> io::Result<()> {
-        loop {
+        let run_result = loop {
             if !self.drain_commands() {
-                break;
+                break Ok(());
             }
             self.handle.elapsed_millis.store(
                 elapsed_millis(self.started, self.paused_total, self.paused_at),
@@ -300,14 +304,21 @@ impl EncodeSession {
                 continue;
             }
             if let Err(error) = self.encode_tick() {
-                self.handle.encoder_failed.store(true, Ordering::Relaxed);
-                return Err(error);
+                break Err(error);
             }
             if self.handle.file_limit_reached.load(Ordering::Relaxed) {
-                break;
+                break Ok(());
+            }
+        };
+        let finish_result = self.finish_file();
+        self.handle.set_state(STATE_STOPPED);
+        match (run_result, finish_result) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), _) | (Ok(()), Err(error)) => {
+                self.handle.encoder_failed.store(true, Ordering::Relaxed);
+                Err(error)
             }
         }
-        self.finish_file()
     }
 
     fn drain_commands(&mut self) -> bool {
@@ -568,7 +579,7 @@ impl ActiveEncoder {
 
     fn finish(mut self) -> io::Result<u64> {
         self.context.flush();
-        loop {
+        for _ in 0..8 {
             match self.context.receive_packet() {
                 Ok(packet) => {
                     if self.limit_reached {

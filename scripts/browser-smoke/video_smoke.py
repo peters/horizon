@@ -19,6 +19,23 @@ import run as browser_smoke
 EBML_MAGIC = bytes([0x1A, 0x45, 0xDF, 0xA3])
 
 
+def mcp_client(
+    command: Path,
+    log: Path,
+    environment: dict[str, str],
+    actor: str,
+    host_instance: str,
+) -> mcp_gate.McpClient:
+    original = os.environ.copy()
+    os.environ.clear()
+    os.environ.update(environment)
+    try:
+        return mcp_gate.McpClient(command, log, 90, actor, host_instance)
+    finally:
+        os.environ.clear()
+        os.environ.update(original)
+
+
 def wait_for_actor(root: Path, timeout: float = 30) -> tuple[str, str]:
     actor_path = root / "agent-actor"
     host_path = root / "agent-host-instance"
@@ -81,11 +98,26 @@ def assert_webm(path: str) -> int:
 
 
 def call_video(client: mcp_gate.McpClient, panel_id: str, operation: str, **options: Any) -> dict[str, Any]:
-    arguments: dict[str, Any] = {"panel_id": panel_id, "operation": operation}
+    arguments: dict[str, Any] = {
+        "panel_id": panel_id,
+        "operation": operation,
+        "timeout_millis": 60_000,
+    }
     arguments.update({key: value for key, value in options.items() if value is not None})
     result, _ = client.call("browser_video", arguments)
     assert result is not None
     return result
+
+
+def wait_for_encoded_frame(client: mcp_gate.McpClient, panel_id: str, timeout: float = 45.0) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout
+    status = call_video(client, panel_id, "status")
+    while time.monotonic() < deadline:
+        if status.get("frames_encoded", 0) >= 1:
+            return status
+        time.sleep(0.4)
+        status = call_video(client, panel_id, "status")
+    raise AssertionError(f"encoder did not produce a frame: {status}")
 
 
 def exercise(client: mcp_gate.McpClient, args: Any) -> dict[str, Any]:
@@ -100,12 +132,19 @@ def exercise(client: mcp_gate.McpClient, args: Any) -> dict[str, Any]:
     )
     assert navigated is not None
 
-    started = call_video(client, panel_id, "start")
+    started = call_video(
+        client,
+        panel_id,
+        "start",
+        quality=40,
+        compression_level=0,
+        fps=5,
+        max_width=320,
+    )
     if started["state"] != "recording" or not started["active"]:
         raise AssertionError(f"start did not begin recording: {started}")
-    time.sleep(2.0)
-    status = call_video(client, panel_id, "status")
-    if status["state"] != "recording" or status["elapsed_millis"] < 500:
+    status = wait_for_encoded_frame(client, panel_id)
+    if status["state"] != "recording":
         raise AssertionError(f"status while recording: {status}")
     paused = call_video(client, panel_id, "pause")
     if paused["state"] != "paused":
@@ -118,7 +157,7 @@ def exercise(client: mcp_gate.McpClient, args: Any) -> dict[str, Any]:
     resumed = call_video(client, panel_id, "resume")
     if resumed["state"] != "recording":
         raise AssertionError(resumed)
-    time.sleep(1.5)
+    wait_for_encoded_frame(client, panel_id)
     stopped = call_video(client, panel_id, "stop")
     if stopped["state"] != "stopped" or stopped["active"]:
         raise AssertionError(stopped)
@@ -133,16 +172,25 @@ def exercise(client: mcp_gate.McpClient, args: Any) -> dict[str, Any]:
         quality=40,
         compression_level=0,
         fps=8,
-        max_width=640,
+        max_width=320,
     )
     if knobs["state"] != "recording" or knobs["fps"] != 8:
         raise AssertionError(f"start overlays were not applied: {knobs}")
-    time.sleep(1.2)
+    wait_for_encoded_frame(client, panel_id)
     knobs_stopped = call_video(client, panel_id, "stop")
     assert_webm(knobs_stopped["path"])
 
-    limited = call_video(client, panel_id, "start", fps=15, compression_level=0, max_file_bytes=65536)
-    deadline = time.monotonic() + 20
+    limit_bytes = 32 * 1024
+    limited = call_video(
+        client,
+        panel_id,
+        "start",
+        fps=10,
+        compression_level=0,
+        max_width=320,
+        max_file_bytes=limit_bytes,
+    )
+    deadline = time.monotonic() + 45
     limited_status = limited
     while time.monotonic() < deadline:
         limited_status = call_video(client, panel_id, "status")
@@ -150,9 +198,11 @@ def exercise(client: mcp_gate.McpClient, args: Any) -> dict[str, Any]:
             break
         time.sleep(0.4)
     limited_stopped = call_video(client, panel_id, "stop")
-    limited_bytes = assert_webm(limited_stopped["path"])
-    if not limited_stopped.get("file_limit_reached") and limited_bytes > 65536 + 16 * 1024:
-        raise AssertionError(f"file limit did not bound the export: {limited_stopped} bytes={limited_bytes}")
+    limited_size = assert_webm(limited_stopped["path"])
+    if not limited_stopped.get("file_limit_reached"):
+        raise AssertionError(f"file limit was not reached: {limited_stopped} bytes={limited_size}")
+    if limited_size > limit_bytes + 16 * 1024:
+        raise AssertionError(f"file exceeded the export bound: {limited_stopped} bytes={limited_size}")
 
     audit, _ = client.call("browser_audit", {"panel_id": panel_id, "limit": 200})
     assert audit is not None
@@ -166,7 +216,7 @@ def exercise(client: mcp_gate.McpClient, args: Any) -> dict[str, Any]:
     return {
         "backend": args.backend,
         "bytes_written": bytes_written,
-        "file_limit_bytes": limited_bytes,
+        "file_limit_bytes": limited_size,
         "file_limit_reached": bool(limited_stopped.get("file_limit_reached")),
         "frames_encoded": stopped["frames_encoded"],
         "panel_id": panel_id,
@@ -190,10 +240,21 @@ def main(argv: list[str] | None = None) -> int:
         (root / child).mkdir(parents=True, exist_ok=True)
     server, server_thread, base_url = browser_smoke.start_fixture_server(root)
     config = browser_smoke.write_config(args, root)
+    parsed = json.loads(config.read_text(encoding="utf-8"))
+    parsed.setdefault("browser", {})["video"] = {
+        "quality": 40,
+        "compression_level": 0,
+        "fps": 5,
+        "max_width": 320,
+        "max_file_bytes": 32 * 1024 * 1024,
+    }
+    config.write_text(json.dumps(parsed, indent=2) + "\n", encoding="utf-8")
     environment = browser_smoke.smoke_environment(root)
     horizon_log = root / "logs" / f"{args.backend}-video-horizon.log"
-    result: dict[str, Any]
+    result: dict[str, Any] = {"backend": args.backend, "passed": False}
     close_mode = "not_started"
+    candidate_status = 1
+    candidate: subprocess.Popen[Any] | None = None
     tracker: browser_smoke.ProcessTracker | None = None
     launch = [str(command), "--config", str(config)]
     if args.ephemeral:
@@ -211,10 +272,10 @@ def main(argv: list[str] | None = None) -> int:
             tracker.start()
             print(json.dumps({"candidate_pid": candidate.pid, "root": str(root)}, sort_keys=True), flush=True)
             actor, host_instance = wait_for_actor(root)
-            client = mcp_gate.McpClient(
+            client = mcp_client(
                 command,
                 root / "logs" / f"{args.backend}-video-mcp.log",
-                60,
+                environment,
                 actor,
                 host_instance,
             )
@@ -226,6 +287,8 @@ def main(argv: list[str] | None = None) -> int:
                 result = {"backend": args.backend, "error": str(error), "passed": False}
             finally:
                 client.close()
+    finally:
+        if candidate is not None:
             close_mode = close_candidate(candidate)
             try:
                 candidate_status = candidate.wait(timeout=20)
@@ -233,7 +296,6 @@ def main(argv: list[str] | None = None) -> int:
                 os.killpg(candidate.pid, 15)
                 candidate_status = candidate.wait(timeout=10)
                 close_mode = "task_owned_timeout_terminate"
-    finally:
         if tracker is not None:
             tracker.stop()
         server.shutdown()
