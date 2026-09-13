@@ -438,6 +438,11 @@ fn assert_stdin_deadline_result(
     assert_eq!(state["execution_timeout_seconds"], STDIN_EXECUTION_TIMEOUT.as_secs());
     assert!(state["completed_steps"].as_u64().is_some_and(|count| count <= 1));
     let deadline = u128::from(state["deadline_at_millis"].as_u64().expect("saved deadline"));
+    let created = u128::from(state["created_at_millis"].as_u64().expect("saved creation time"));
+    assert!(
+        created + DEADLINE_ROUNDING_SLACK_MILLIS >= before_eof.as_millis() && created <= after_exit.as_millis(),
+        "saved creation {created} is outside before EOF {before_eof:?} and after exit {after_exit:?}"
+    );
     // Check timer admission, not filesystem speed; allow only millisecond rounding slack.
     let timeout_millis = STDIN_EXECUTION_TIMEOUT.as_millis();
     assert!(
@@ -445,8 +450,8 @@ fn assert_stdin_deadline_result(
         "saved deadline {deadline} predates EOF {before_eof:?} plus timeout {STDIN_EXECUTION_TIMEOUT:?}"
     );
     assert!(
-        deadline <= after_exit.as_millis() + timeout_millis,
-        "saved deadline {deadline} exceeds exit {after_exit:?} plus timeout {STDIN_EXECUTION_TIMEOUT:?}"
+        deadline <= created + timeout_millis + DEADLINE_ROUNDING_SLACK_MILLIS,
+        "saved deadline {deadline} exceeds creation {created} plus timeout {STDIN_EXECUTION_TIMEOUT:?}"
     );
     assert_eq!(
         state["job_id"].as_str(),
