@@ -32,6 +32,7 @@ impl StoredRemoteAllocation {
         let runtime = self.workspace.state().runtime.as_ref().ok_or(Error::UnboundRuntime)?;
         if runtime.cleanup.is_some()
             || runtime.phase.stop_requested_at_millis().is_some()
+            || runtime.phase.start_requested_at_millis().is_some()
             || matches!(
                 runtime.phase,
                 RemoteRuntimePhase::Cancelling | RemoteRuntimePhase::Deleting

@@ -154,11 +154,19 @@ impl CloudWorkflowStore {
         next: &RemoteWorkspaceState,
     ) -> Result<StoredRemoteWorkspace, RemoteWorkspaceStoreError> {
         let replacement = WorkspaceReplacement::new(expected, next)?;
-        if next.runtime.as_ref().is_some_and(|runtime| {
-            matches!(runtime.phase, RemoteRuntimePhase::Stopped { .. })
-                && expected.state.runtime.as_ref().map(|previous| previous.phase) != Some(runtime.phase)
-        }) {
+        let previous_phase = expected.state.runtime.as_ref().map(|previous| previous.phase);
+        let next_phase = next.runtime.as_ref().map(|runtime| runtime.phase);
+        if next_phase
+            .is_some_and(|phase| matches!(phase, RemoteRuntimePhase::Stopped { .. }) && previous_phase != Some(phase))
+        {
             return Err(RemoteWorkspaceStoreError::RuntimeStopConfirmationRequired);
+        }
+        // Start intent is introduced and resolved only by the verified Start coordinator.
+        if next_phase.is_some_and(|phase| phase.start_requested_at_millis().is_some() && previous_phase != Some(phase))
+            || previous_phase
+                .is_some_and(|phase| phase.start_requested_at_millis().is_some() && next_phase != Some(phase))
+        {
+            return Err(RemoteWorkspaceStoreError::RuntimeStartCoordinationRequired);
         }
         if expected.state.runtime.is_none() && next.runtime.is_some() {
             return Err(RemoteWorkspaceStoreError::RuntimeAllocationRequired);
@@ -475,6 +483,8 @@ pub enum RemoteWorkspaceStoreError {
     RuntimeRecoveryUnavailable,
     #[error("remote Stop completion requires the verified coordinator")]
     RuntimeStopConfirmationRequired,
+    #[error("remote Start intent is recorded and resolved only by the verified Start coordinator")]
+    RuntimeStartCoordinationRequired,
     #[error("remote worker observation does not match the saved request or pinned identity")]
     InvalidWorkerObservation,
     #[error("remote allocation setup cannot create; non-creating recovery is required")]
