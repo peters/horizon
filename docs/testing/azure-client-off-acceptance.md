@@ -66,7 +66,8 @@ digest of the unbound manifest at provisioning for that comparison). A manifest
 edited by hand in either direction is not a runnable product path and is not used.
 The other fields are frozen before anything is rented.
 
-`client_off.py --manifest m.json validate` refuses to run anything until the
+With the current harness, which knows only the bound state, `client_off.py
+--manifest m.json validate` refuses to run anything until the
 manifest is complete: exact UUID, a fresh `run_id` with A's group named
 `horizon-client-<run_id>` and B's group the adapter's `horizon-ws-<workflow>-<job>`
 (every name the harness may create or delete is unique to one run, because ARM
@@ -179,7 +180,14 @@ gives A no identity today, so before the product pass A needs, in this order:
    remove is that the `write` actions must sit at subscription scope (the product
    creates one new resource group per worker, so no narrower scope exists before the
    run), which lets a compromised A modify resources of those types in unrelated
-   groups for the run's duration. Step 9's peer comparison detects only a vanished
+   groups for the run's duration. One operation in the list is broader than a
+   write: `Microsoft.Compute/virtualMachines/runCommand/action` at subscription
+   scope lets A execute arbitrary commands as administrator inside any VM in the
+   subscription, not only B, for as long as the assignment exists. That
+   command-execution blast radius is disclosed on #474 as its own approval item,
+   separate from the write residual, and the only isolation that removes it is a
+   subscription holding nothing but this lane's resources; the run itself neither
+   detects nor prevents it. Step 9's peer comparison detects only a vanished
    or added peer resource or group (it compares resource IDs and group names, not
    properties or tags), so an in-place mutation of a peer would pass it; the run
    neither prevents nor fully detects that residual, and the only prevention is a
@@ -329,7 +337,9 @@ back unchanged at return and after the worker lifecycle step.
      micro-units of the billing currency per hour (1,000,000 = one currency unit;
      the product performs no USD conversion and shows no live quote). So before the
      consent box is ticked the review screen must show the declared price as
-     exactly the micro-unit value posted for B on #474 (`107_000` per hour for
+     exactly the micro-unit value posted for B on #474 (`107000` per hour, typed as
+     plain digits because the field is parsed as an integer and rejects
+     separators, for
      `Standard_D2s_v3` under the billing assumption stated there; the external
      retail price that value was derived from is recorded on #474, not checked
      here), the *Azure CPU cost limit* must be that same value, so admission refuses
@@ -349,7 +359,15 @@ back unchanged at return and after the worker lifecycle step.
      derived from the workflow and job identities the record carries from the
      moment the allocation is saved, before the deployment is sent, so it is known
      even when an accepted deployment followed by a lost observation leaves the
-     record without a worker identity yet. Journal it the moment the record exists,
+     record without a worker identity yet. **gated** (harness binding): with the
+     current harness the manifest cannot be `unbound`, so this baseline cannot
+     reach `off` through the product path until the harness change described under
+     the manifest lands; then this step is `client_off.py --manifest m.json
+     bind-worker --group horizon-ws-<workflow>-<job> --groups-before groups.json
+     --created created-groups.json`, which checks the adapter tags and pre-run
+     absence, journals the group and writes `worker_group` in one step, and the
+     `journal-group` command below is its journaling half, kept here for an
+     already-bound manifest. Journal it the moment the record exists,
      whether or not the setup goes on to succeed: `client_off.py --manifest m.json
      journal-group --group horizon-ws-<workflow>-<job> --created
      created-groups.json`. The command refuses a group it cannot read, and a
@@ -386,7 +404,12 @@ back unchanged at return and after the worker lifecycle step.
      `Running`, wait, run **Check this setup** and read again. Only when the
      deployment is absent, `Failed` or `Canceled` and the VM list is still empty is
      the absence definitive: record it with the time, do not continue to the
-     baseline, and go to step 9 with the journaled group. Otherwise, once the VM
+     baseline, and go to step 9. A group that exists without a VM was journaled
+     above and step 9 deletes it; if the group itself was never readable,
+     `journal-group` has refused and appended nothing, so there is no B entry,
+     step 9 reports the worker group as unjournaled and deletes only A's group,
+     and that is the correct outcome: no cleanup record is written by hand.
+     Otherwise, once the VM
      exists, put it under the deadline reaper, which the
      product deployment
      does not do (it tags B with worker identity tags only, and the reaper skips a VM
@@ -637,10 +660,12 @@ back unchanged at return and after the worker lifecycle step.
    collapses provider and ARM failures, an expired token among them, into the same
    unverified notice, so the notice alone cannot separate a lost result from a
    denied one; before every retry the operator classifies out of band: on the
-   controller `az vm show --subscription <id> --ids <B's VM ID> --query
-   '{vmId:vmId, power:instanceView.statuses[?starts_with(code, `PowerState/`)].code | [0]}'`
-   must return the recorded `instance_id` and a power state (`deallocated`,
-   `starting` or `running`), and on A the token probe from prerequisite 2 must
+   controller `az vm get-instance-view --subscription <id> --ids <B's VM ID>
+   --query '{vmId:vmId, power:instanceView.statuses[?starts_with(code, `PowerState/`)].code | [0]}'`
+   (a plain `az vm show` carries no instance view) must return the recorded
+   `instance_id` and a power state of `deallocated`, `stopped` (which the provider
+   treats as stopped-allocated and accepts for Start), `starting` or `running`,
+   and on A the token probe from prerequisite 2 must
    still print an expiry; a missing or replaced VM, or a failed probe, ends the
    retries as a non-retryable outcome. Retries are budgeted: at most three presses
    in total, each only after the previous result has been reloaded, and none once
@@ -703,9 +728,11 @@ back unchanged at return and after the worker lifecycle step.
    the observer private key on the controller (`shred -u observer.key`, the only
    copy; the public half is inert without it) and records that, so the retained
    `authorized_keys` line can no longer be exercised by anyone, and proceeds to
-   step 9, which deletes the group and the disk holding that line. If step 9 is
+   step 9, which deletes the group with the OS disk whose container layer holds
+   that line (the line lives in the running container's `authorized_keys`, never
+   on the data disk, which holds only `/workspace`). If step 9 is
    refused, fails or runs out of time with B still deallocated, the run is
-   reported with that residual (a deallocated VM whose retained disk holds an
+   reported with that residual (a deallocated VM whose container layer holds an
    inert observer line that the entrypoint rewrites on the next container start)
    and the group is handed to the lead on #474 for removal; the run is not
    reported clean.
