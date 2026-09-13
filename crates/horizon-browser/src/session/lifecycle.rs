@@ -65,6 +65,8 @@ impl DriverState {
         // Observe only top-level response metadata so a completed user
         // handoff can report a repeated Cloudflare challenge. The driver
         // receives response headers but never emits them or request bodies.
+        // Response-body buffers are applied only when capture starts or is
+        // restored — not on every attach.
         if !self.setup_command(
             link,
             event_tx,
