@@ -302,10 +302,15 @@ fn the_retained_disk_survives_a_stop_observe_start_cycle_on_the_same_instance() 
     );
     assert_eq!(client.stop_worker(&worker), Ok(InteractiveWorkerStop::Stopped));
     assert_eq!(s.plane.mutations(), [Call::Deallocate(s.group.clone())]);
-    // Check saved Stop: deallocated compute, the same disk, the saved address.
-    let deallocated = retained_vm(&s, "deallocated");
-    assert_eq!(disk_of(&deallocated), retained, "deallocation keeps the disk");
-    s.plane.script(Some(owned(&s)), address(), vec![Some(deallocated)]);
+    // Check saved Stop against the state the stop left behind, not a fresh script:
+    // deallocated compute, the same disk, the saved address.
+    let after_stop = s.plane.lock().vm_states.clone();
+    assert_eq!(
+        after_stop.iter().flatten().map(disk_of).collect::<Vec<_>>(),
+        std::slice::from_ref(&retained),
+        "the stop's final VM state keeps the disk on the same instance"
+    );
+    s.plane.lock().calls.clear();
     assert_eq!(observe(&s, &pin()), Ok(Observation::RetainedStopped));
     assert_read_only(&s);
     // Start: the same instance comes back with the same disk and is ready through the
@@ -316,7 +321,7 @@ fn the_retained_disk_survives_a_stop_observe_start_cycle_on_the_same_instance() 
         vec![
             Some(retained_vm(&s, "deallocated")),
             Some(retained_vm(&s, "starting")),
-            Some(running.clone()),
+            Some(running),
         ],
     );
     let started = client.start_worker(&worker).expect("start");
@@ -325,7 +330,13 @@ fn the_retained_disk_survives_a_stop_observe_start_cycle_on_the_same_instance() 
     };
     assert_eq!(status.lifecycle, Lifecycle::Ready);
     assert_eq!(s.plane.mutations(), [Call::Start(s.group.clone())]);
-    s.plane.script(Some(owned(&s)), address(), vec![Some(running)]);
+    let after_start = s.plane.lock().vm_states.clone();
+    assert_eq!(
+        after_start.iter().flatten().map(disk_of).collect::<Vec<_>>(),
+        [retained],
+        "the started instance carries the retained disk"
+    );
+    s.plane.lock().calls.clear();
     assert_eq!(observe(&s, &pin()), Ok(Observation::Pending));
     assert_read_only(&s);
     // A rebuilt worker on another instance without the retained disk is never confirmed

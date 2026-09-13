@@ -13,6 +13,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 const REASON: &str = "Azure CLI did not return a token";
 
+/// One entry point of the client, invoked with its own arguments.
+type Attempt<'a> = &'a dyn Fn() -> Result<(), AzureError>;
+
 fn unavailable() -> AzureError {
     AzureError::CredentialUnavailable { reason: REASON }
 }
@@ -49,26 +52,24 @@ fn every_entry_point_reports_the_credential_failure_before_any_request_or_claim(
         ssh: &pin,
         network_volume: None,
     };
-    let attempts: [(&str, Result<(), AzureError>); 7] = [
-        ("ensure", client.ensure_worker(&s.request).map(drop)),
-        ("reconcile", client.reconcile_worker(&s.request).map(drop)),
-        ("inspect", client.inspect_worker(&worker).map(drop)),
-        ("delete", client.delete_worker(&worker).map(drop)),
-        ("stop", client.stop_worker(&worker).map(drop)),
-        ("start", client.start_worker(&worker).map(drop)),
-        ("observe stop", client.observe_worker_stop(expectation).map(drop)),
+    let attempts: [(&str, Attempt); 7] = [
+        ("ensure", &|| client.ensure_worker(&s.request).map(drop)),
+        ("reconcile", &|| client.reconcile_worker(&s.request).map(drop)),
+        ("inspect", &|| client.inspect_worker(&worker).map(drop)),
+        ("delete", &|| client.delete_worker(&worker).map(drop)),
+        ("stop", &|| client.stop_worker(&worker).map(drop)),
+        ("start", &|| client.start_worker(&worker).map(drop)),
+        ("observe stop", &|| client.observe_worker_stop(expectation).map(drop)),
     ];
-    for (entry, outcome) in &attempts {
+    for (entry, attempt) in attempts {
         assert_eq!(
-            outcome,
-            &Err(unavailable()),
+            attempt(),
+            Err(unavailable()),
             "{entry} passes the credential error through"
         );
+        // The delta of this one call: exactly one token request, no retry around a
+        // failing credential and no path that skips the credential.
+        assert_eq!(asked.swap(0, Ordering::SeqCst), 1, "{entry} asks the credential once");
     }
-    assert_eq!(
-        asked.load(Ordering::SeqCst),
-        attempts.len(),
-        "one token request per entry point, no retry around a failing credential"
-    );
     assert!(format!("{}", unavailable()).contains(REASON));
 }
