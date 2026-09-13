@@ -427,6 +427,28 @@ class EngineFailures(Harness):
         self.assertEqual(by_id["os_linux"]["status"], "error")
         self.assertIn("truncated", by_id["os_linux"]["detail"])
 
+    def test_uname_timeout_includes_value_none(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["os"] = {"timeout": True}
+        code, report, _ = self.run_main(fixture)
+        self.assertEqual(code, 2)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["os_linux"]["status"], "error")
+        self.assertIsNone(by_id["os_linux"].get("value"))
+
+    def test_podman_probe_forces_local_mode(self):
+        self.assertIn("--remote=false", preflight.PROBE_ARGS["podman_info"])
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture.pop("docker_version")
+        fixture.pop("docker_info")
+        fixture.pop("docker_context", None)
+        fixture["podman_info"] = podman_ok()
+        _, _, executor = self.run_main(fixture)
+        self.assertIn(list(preflight.PROBE_ARGS["podman_info"]), executor.seen)
+
+    def test_decode_probe_output_replaces_invalid_utf8(self):
+        self.assertIn("\ufffd", preflight.decode_probe_output(b"ok\xffend"))
+
     def test_uname_nonzero_exit_is_error_not_rejection(self):
         fixture = dict(DEFAULT_FIXTURE)
         fixture["os"] = {"exit_code": 1, "stdout": "", "stderr": "uname: boom"}
@@ -499,10 +521,13 @@ class MalformedInputs(Harness):
         fixture = dict(DEFAULT_FIXTURE)
         fixture["disk"] = {"stdout": "Filesystem  1024-blocks Used Available Capacity Mounted on\n"
                                      "/dev/data  100000 10000 90000 10% /data\n"}
-        code, report, _ = self.run_main(fixture)
+        workspace = os.path.join(self.tmp.name, "token=supersecretvalue")
+        os.makedirs(workspace)
+        code, report, _ = self.run_main(fixture, workspace=workspace)
         self.assertEqual(code, 2)
         by_id = {check["id"]: check for check in report["checks"]}
         self.assertEqual(by_id["disk_capacity"]["status"], "error")
+        self.assertNotIn("supersecretvalue", json.dumps(report))
 
     def test_df_non_numeric_free(self):
         fixture = dict(DEFAULT_FIXTURE)

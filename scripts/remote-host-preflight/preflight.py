@@ -48,7 +48,8 @@ PROBE_ARGS = {
     "docker_info": ["docker", "info", "--format", "{{.Driver}}"],
     "docker_context": ["docker", "context", "inspect", "--format",
                        "{{.Endpoints.docker.Host}}"],
-    "podman_info": ["podman", "info", "--format", "{{.Version.Version}}"],
+    "podman_info": ["podman", "--remote=false", "info", "--format",
+                    "{{.Version.Version}}"],
     "disk": ["df", "-kP"],
     "tailscale_version": ["tailscale", "version"],
     "tailscale_status": ["tailscale", "status", "--json", "--peers=false"],
@@ -141,7 +142,7 @@ def parse_json_output(result):
 def check_os(executor, timeout):
     result, error = run_probe(executor, "os", timeout)
     if error:
-        return {"id": "os_linux", "status": ERROR, "detail": error}
+        return {"id": "os_linux", "status": ERROR, "value": None, "detail": error}
     if result["exit_code"] != 0:
         return {"id": "os_linux", "status": ERROR, "value": None,
                 "detail": redact(result.get("stderr", "")) or "uname failed"}
@@ -421,7 +422,7 @@ def check_disk(executor, timeout, workspace_path):
     if target is None:
         return {"id": "disk_capacity", "status": ERROR, "value": None,
                 "detail": "workspace path %s does not exist and no ancestor is stat-able"
-                          % workspace_path}
+                          % redact(workspace_path)}
     result, error = run_probe(executor, "disk", timeout, extra_argv=[target])
     if error:
         return {"id": "disk_capacity", "status": ERROR, "value": None, "detail": error}
@@ -440,7 +441,7 @@ def check_disk(executor, timeout, workspace_path):
     mount = select_mount_point(mounts, workspace_path)
     if mount is None:
         return {"id": "disk_capacity", "status": ERROR, "value": None,
-                "detail": "df output contains no mount point covering %s" % workspace_path}
+                "detail": "df output contains no mount point covering %s" % redact(workspace_path)}
     free_kb = free_by_mount.get(mount)
     if free_kb is None:
         # A malformed free value on the *selected* entry is rejected rather
@@ -546,12 +547,12 @@ def check_storage_qualifier(procfs_root, sysfs_root, workspace_path):
     if target is None:
         return {"id": "storage_ext4_qualifier", "status": UNSUPPORTED, "value": None,
                 "detail": "workspace path %s does not exist and no ancestor is stat-able"
-                          % workspace_path}
+                          % redact(workspace_path)}
     try:
         stat = os.stat(target)
     except OSError:
         return {"id": "storage_ext4_qualifier", "status": ERROR, "value": None,
-                "detail": "workspace path %s could not be stat-ed" % workspace_path}
+                "detail": "workspace path %s could not be stat-ed" % redact(workspace_path)}
     name, options, error = read_ext4_options(procfs_root, sysfs_root,
                                               os.major(stat.st_dev), os.minor(stat.st_dev))
     if error is not None or options is None:
@@ -666,10 +667,21 @@ def render_text(report):
     return "\n".join(lines)
 
 
+def decode_probe_output(data):
+    """Decode probe bytes with replacement so non-UTF-8 cannot crash preflight."""
+    if data is None:
+        return ""
+    if isinstance(data, bytes):
+        return data.decode("utf-8", errors="replace")
+    return str(data)
+
+
 def default_executor(argv, timeout):
-    proc = subprocess.run(argv, timeout=timeout, capture_output=True, text=True,
+    proc = subprocess.run(argv, timeout=timeout, capture_output=True,
                           check=False, shell=False)
-    return {"exit_code": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr}
+    return {"exit_code": proc.returncode,
+            "stdout": decode_probe_output(proc.stdout),
+            "stderr": decode_probe_output(proc.stderr)}
 
 
 def parse_timeout(value):

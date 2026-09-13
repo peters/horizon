@@ -56,20 +56,21 @@ explicit about which steps mutate the host so the proof is not overclaimed.
    ```sh
    ssh "$VM_SSH" 'date -u; uname -srm; nproc; grep MemTotal /proc/meminfo;
      WS=/var/lib/horizon-workers;
+     WS=$(readlink -m "$WS" 2>/dev/null || echo "$WS");
      while [ ! -e "$WS" ]; do
        parent=$(dirname "$WS");
        [ "$parent" = "$WS" ] && break;
        WS=$parent;
      done;
-     WS=$(readlink -f "$WS" 2>/dev/null || echo "$WS");
      df -kP "$WS" | tail -1;
      docker info --format "{{.ServerVersion}}" 2>&1 | head -1 || true;
      stat -c "ws=%n dev=%Hd:%Ld" "$WS" 2>/dev/null || echo "ws missing: $WS";
      B=$(basename "$(readlink /sys/dev/block/$(stat -c "%Hd:%Ld" "$WS" 2>/dev/null) 2>/dev/null)" 2>/dev/null);
      [ -n "$B" ] && { echo "dev=$B"; head -c 4096 "/proc/fs/ext4/$B/options"; echo; } || echo "no ext4 options"'
    ```
-   Save as `before.txt`. Resolve `WS` to the nearest existing workspace
-   ancestor first, then `df` that path (not `/`), record GNU `stat` `%Hd:%Ld`
+   Save as `before.txt`. Canonicalize `WS` with `readlink -m` **before** the
+   ancestor walk (so a dangling workspace symlink is judged on the target
+   side, matching the checker), then `df` that path (not `/`), record GNU `stat` `%Hd:%Ld`
    (filesystem `st_dev` major/minor — not `%t:%T`/`st_rdev`) and the same
    4096-byte ext4 options window the checker evaluates. That is the
    independent ground truth for matrix assertions 4–6.
@@ -112,8 +113,8 @@ explicit about which steps mutate the host so the proof is not overclaimed.
 |---|-----------|
 | 1 | Exit code is 0/1/2 and matches the JSON `summary` counts exactly |
 | 2 | `os_linux` value is the VM's real `uname -srm`; status matches the arch rules (x86_64/aarch64 → supported) |
-| 3 | `container_engine` names the engine actually running (cross-check against step 1 `docker info` version); storage driver reported for docker |
-| 4 | `cpu_capacity` / `memory_capacity` values match `nproc` / `MemTotal` read independently in step 1 |
+| 3 | `container_engine` names the engine actually running (cross-check against step 2 `docker info` version); storage driver reported for docker |
+| 4 | `cpu_capacity` / `memory_capacity` values match `nproc` / `MemTotal` read independently in step 2 |
 | 5 | `disk_capacity` free space matches `df -kP` for the workspace path (or `/`) within sampling drift |
 | 6 | `storage_ext4_qualifier` device name matches the real block device of the workspace filesystem (`stat -c '%Hd:%Ld'` → `/sys/dev/block/<maj>:<min>`); pass/fail against the full 4096-byte ext4 options captured independently |
 | 7 | `tailscale` DNS name matches the VM's tailnet identity from precondition 2; online state is a bool |
