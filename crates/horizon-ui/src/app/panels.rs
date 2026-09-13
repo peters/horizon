@@ -57,9 +57,17 @@ struct PanelDragOutcome {
     stopped: bool,
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum PanelFocusRequest {
+    #[default]
+    None,
+    Focus,
+    Reveal,
+}
+
 #[derive(Default)]
 struct PanelUiOutcome {
-    focus_requested: bool,
+    focus: PanelFocusRequest,
     drag: PanelDragOutcome,
     resize_delta: Vec2,
     commit_terminal_resize: bool,
@@ -68,6 +76,24 @@ struct PanelUiOutcome {
     command: Option<PanelCommand>,
     rename_action: RenameEditAction,
     mic_clicked: bool,
+}
+
+impl PanelUiOutcome {
+    fn request_focus(&mut self) {
+        if self.focus == PanelFocusRequest::None {
+            self.focus = PanelFocusRequest::Focus;
+        }
+    }
+
+    fn request_reveal(&mut self) {
+        self.focus = PanelFocusRequest::Reveal;
+    }
+
+    fn clear_reveal(&mut self) {
+        if self.focus == PanelFocusRequest::Reveal {
+            self.focus = PanelFocusRequest::Focus;
+        }
+    }
 }
 
 #[derive(Default)]
@@ -788,7 +814,7 @@ impl HorizonApp {
                             } else {
                                 None
                             };
-                            outcome.focus_requested |= show_panel_body_contents(
+                            if show_panel_body_contents(
                                 ui,
                                 panel,
                                 claim_editor_focus,
@@ -809,7 +835,9 @@ impl HorizonApp {
                                     browser_frame_has_pointer_button: scope.frame_has_pointer_button,
                                     browser_fullscreen_active: false,
                                 },
-                            );
+                            ) {
+                                outcome.request_focus();
+                            }
                         }
                         if reconnect_requested {
                             self.queue_panel_restart(panel_id);

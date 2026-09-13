@@ -21,7 +21,7 @@ impl HorizonApp {
                 }
                 self.board.focus(panel_id);
                 scroll_to_search_match(&mut self.board, panel_id, line_index, total_lines);
-                self.reveal_panel_visible(ui.ctx(), panel_id);
+                self.reveal_selected_panel(ui.ctx(), panel_id);
             }
         }
     }

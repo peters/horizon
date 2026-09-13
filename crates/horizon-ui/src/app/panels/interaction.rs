@@ -5,7 +5,9 @@ use crate::app::{HorizonApp, RenameEditAction, util::clamp_panel_size};
 use crate::terminal_widget::viewport_for_available_space;
 use crate::theme;
 
-use super::{PanelCommand, PanelFrame, PanelSnapshot, PanelUiOutcome, render_session_rebind_options};
+use super::{
+    PanelCommand, PanelFocusRequest, PanelFrame, PanelSnapshot, PanelUiOutcome, render_session_rebind_options,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(in crate::app) struct ArrangedPanelDrag {
@@ -84,15 +86,16 @@ impl HorizonApp {
     ) {
         if mic_response.is_some_and(egui::Response::clicked) {
             outcome.mic_clicked = true;
-            outcome.focus_requested = true;
+            outcome.request_focus();
         }
         if resize_response.drag_started() || resize_response.clicked() {
-            outcome.focus_requested = true;
+            outcome.request_focus();
         }
-        if !is_renaming && (drag_response.clicked() || drag_response.drag_started()) {
-            outcome.focus_requested = true;
+        if !is_renaming && drag_response.clicked() && !drag_response.double_clicked() {
+            outcome.request_reveal();
         }
         if !is_renaming && drag_response.drag_started() {
+            outcome.request_focus();
             outcome.drag.started = true;
         }
         if !is_renaming && drag_response.dragged() {
@@ -112,7 +115,11 @@ impl HorizonApp {
         }
         if !is_renaming && drag_response.double_clicked() {
             outcome.command = Some(PanelCommand::StartRename);
-            outcome.focus_requested = true;
+            outcome.request_focus();
+            outcome.clear_reveal();
+        }
+        if outcome.mic_clicked || matches!(outcome.command, Some(PanelCommand::Close)) {
+            outcome.clear_reveal();
         }
     }
 
@@ -261,8 +268,12 @@ impl HorizonApp {
             }
             ctx.request_repaint();
         }
-        if outcome.focus_requested {
-            self.board.focus(panel_id);
+        match outcome.focus {
+            PanelFocusRequest::Reveal => self.reveal_selected_panel(ctx, panel_id),
+            PanelFocusRequest::Focus => {
+                self.board.focus(panel_id);
+            }
+            PanelFocusRequest::None => {}
         }
         if outcome.mic_clicked
             && let Some(speech) = self.speech.as_mut()

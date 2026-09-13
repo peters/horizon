@@ -302,7 +302,7 @@ impl HorizonApp {
                 let _ = self.board.dismiss_attention(attention_id);
             }
             if let Some(panel_id) = feed_result.focus_panel {
-                self.reveal_panel_visible(ui, panel_id);
+                self.reveal_selected_panel(ui.ctx(), panel_id);
             }
         }
         self.render_canvas_hud(ui);

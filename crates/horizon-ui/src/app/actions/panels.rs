@@ -35,6 +35,16 @@ impl HorizonApp {
         self.board.create_panel(options, workspace_id)
     }
 
+    /// Reveal a panel the same way a sidebar panel-row click does: detached
+    /// workspaces get their OS window focused, attached canvases pan/zoom so
+    /// the panel is visible.
+    pub(in crate::app) fn reveal_selected_panel(&mut self, ctx: &egui::Context, panel_id: PanelId) {
+        match self.board.panel_workspace_id(panel_id) {
+            Some(workspace_id) => self.reveal_new_panel(ctx, workspace_id, panel_id),
+            None => self.board.focus(panel_id),
+        }
+    }
+
     /// Reveal a newly created panel the same way the sidebar reveals a
     /// selected panel: detached workspaces get their OS window focused, the
     /// panel re-focused so the helper stays self-contained, and attached
@@ -287,5 +297,125 @@ mod tests {
             canvas_rect.intersects(screen_rect),
             "new panel should be visible after creation: panel screen {screen_rect:?} vs canvas {canvas_rect:?}"
         );
+    }
+
+    #[test]
+    fn titlebar_click_reveals_panel_the_same_way_as_sidebar() {
+        use crate::app::test_support::{raw_input, run_app_frame_with_input, test_app_with_startup};
+
+        let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+            runtime_state: Box::new(RuntimeState::default()),
+        });
+        let viewport = [1600.0, 1000.0];
+        run_app_frame_with_input(&ctx, &mut app, raw_input(viewport, Some([0.0, 0.0])));
+
+        let workspace_id = seeded_workspace(&mut app, "click-reveal");
+        app.add_panel_to_workspace(&ctx, workspace_id, shell_preset(), None);
+        let panel_id = app
+            .board
+            .workspace(workspace_id)
+            .and_then(|workspace| workspace.panels.last().copied())
+            .expect("panel");
+        let reveal_pan = app.canvas_view.pan_offset;
+
+        app.canvas_view
+            .set_pan_offset([reveal_pan[0] + 120.0, reveal_pan[1] + 80.0]);
+        run_app_frame_with_input(&ctx, &mut app, raw_input(viewport, Some([0.0, 0.0])));
+        let titlebar = titlebar_click_pos(&app, panel_id);
+        click_screen_pos(&ctx, &mut app, viewport, titlebar);
+
+        assert_eq!(app.board.focused, Some(panel_id));
+        assert!(
+            (app.canvas_view.pan_offset[0] - reveal_pan[0]).abs() < 1.0
+                && (app.canvas_view.pan_offset[1] - reveal_pan[1]).abs() < 1.0,
+            "titlebar click should restore the sidebar reveal pan, {reveal_pan:?} vs {:?}",
+            app.canvas_view.pan_offset
+        );
+    }
+
+    #[test]
+    fn panel_body_click_focuses_without_revealing() {
+        use crate::app::test_support::{raw_input, run_app_frame_with_input, test_app_with_startup};
+
+        let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+            runtime_state: Box::new(RuntimeState::default()),
+        });
+        let viewport = [1600.0, 1000.0];
+        run_app_frame_with_input(&ctx, &mut app, raw_input(viewport, Some([0.0, 0.0])));
+
+        let workspace_id = seeded_workspace(&mut app, "body-click");
+        app.add_panel_to_workspace(&ctx, workspace_id, shell_preset(), None);
+        app.add_panel_to_workspace(&ctx, workspace_id, shell_preset(), None);
+
+        let panels = app
+            .board
+            .workspace(workspace_id)
+            .map(|workspace| workspace.panels.clone())
+            .expect("workspace panels");
+        let first = panels[0];
+        run_app_frame_with_input(&ctx, &mut app, raw_input(viewport, Some([0.0, 0.0])));
+        let body = body_click_pos(&app, first);
+        let pan_before = app.canvas_view.pan_offset;
+
+        click_screen_pos(&ctx, &mut app, viewport, body);
+
+        assert_eq!(app.board.focused, Some(first));
+        assert!(
+            (app.canvas_view.pan_offset[0] - pan_before[0]).abs() < 1.0
+                && (app.canvas_view.pan_offset[1] - pan_before[1]).abs() < 1.0,
+            "body click should focus without the sidebar reveal pan, {pan_before:?} vs {:?}",
+            app.canvas_view.pan_offset
+        );
+    }
+
+    fn seeded_workspace(app: &mut crate::app::HorizonApp, name: &str) -> horizon_core::WorkspaceId {
+        let workspace_id = app.board.create_workspace(name);
+        {
+            let workspace = app.board.workspace_mut(workspace_id).expect("workspace");
+            workspace.cwd = Some(std::path::PathBuf::from("/tmp"));
+        }
+        workspace_id
+    }
+
+    fn titlebar_click_pos(app: &crate::app::HorizonApp, panel_id: horizon_core::PanelId) -> egui::Pos2 {
+        let rect = app
+            .panel_screen_rects
+            .get(&panel_id)
+            .copied()
+            .expect("panel screen rect");
+        egui::Pos2::new(rect.min.x + 80.0, rect.min.y + 16.0)
+    }
+
+    fn body_click_pos(app: &crate::app::HorizonApp, panel_id: horizon_core::PanelId) -> egui::Pos2 {
+        let rect = app
+            .panel_screen_rects
+            .get(&panel_id)
+            .copied()
+            .expect("panel screen rect");
+        egui::Pos2::new(rect.min.x + 80.0, rect.min.y + 80.0)
+    }
+
+    fn click_screen_pos(ctx: &egui::Context, app: &mut crate::app::HorizonApp, viewport: [f32; 2], pos: egui::Pos2) {
+        use crate::app::test_support::run_app_frame_with_input;
+
+        run_app_frame_with_input(ctx, app, pointer_input(viewport, pos, None));
+        run_app_frame_with_input(ctx, app, pointer_input(viewport, pos, Some(true)));
+        run_app_frame_with_input(ctx, app, pointer_input(viewport, pos, Some(false)));
+    }
+
+    fn pointer_input(viewport: [f32; 2], pos: egui::Pos2, pressed: Option<bool>) -> egui::RawInput {
+        use crate::app::test_support::raw_input;
+
+        let mut input = raw_input(viewport, Some([0.0, 0.0]));
+        input.events.push(egui::Event::PointerMoved(pos));
+        if let Some(pressed) = pressed {
+            input.events.push(egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+        }
+        input
     }
 }
