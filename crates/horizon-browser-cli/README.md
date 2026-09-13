@@ -144,9 +144,12 @@ step, and never copies tool arguments into its report. Plans are limited to
 1 MiB and 256 steps.
 
 Checked examples for navigation, DOM extraction, interaction, and network
-monitoring live next to this crate:
+monitoring live next to this crate. They reuse `panels#/panels/0/panel_id` and
+require a live keep-alive or Horizon UI panel; `run` does not create one, and
+an empty `browser_list` fails at the second step.
 
 ```bash
+horizon-browser mcp --standalone --keep-alive
 horizon-browser run crates/horizon-browser-cli/examples/navigate.json
 horizon-browser run crates/horizon-browser-cli/examples/extract.json
 horizon-browser run crates/horizon-browser-cli/examples/interact.json
