@@ -5,7 +5,7 @@ use crate::theme;
 
 use super::RenameEditAction;
 use super::speech::MicState;
-use super::util::{format_compact_count, short_session_id, usize_to_f32};
+use super::util::{format_compact_count, short_session_id, truncate_chars, usize_to_f32};
 
 #[derive(Clone, Copy)]
 pub(super) struct PanelChrome<'a> {
@@ -635,14 +635,7 @@ fn attention_badge_geometry(
     let color = attention_severity_color(*severity);
     let icon = attention_severity_icon(*severity);
 
-    // Truncate the summary for display.
-    let display_text = if summary.len() > 30 {
-        let mut truncated = summary[..29].to_string();
-        truncated.push('\u{2026}');
-        truncated
-    } else {
-        summary.to_string()
-    };
+    let display_text = attention_badge_summary(summary);
     let badge_text = format!("{icon} {display_text}");
     let font = egui::FontId::proportional(10.0);
 
@@ -665,6 +658,17 @@ fn attention_badge_geometry(
 /// it — long summaries measure wider than the fixed titlebar reserve.
 fn session_badge_clears_attention_badge(session_badge: Rect, attention_left: f32) -> bool {
     session_badge.max.x <= attention_left
+}
+
+/// Character budget for attention badge summaries, ellipsis included; keeps
+/// the badge within the fixed titlebar reserve.
+const ATTENTION_SUMMARY_MAX_CHARS: usize = 30;
+
+/// Character-based truncation for the attention badge summary. Summaries come
+/// from arbitrary agent output, so the cut must never be byte-indexed: a
+/// multi-byte character straddling the cut point would panic.
+fn attention_badge_summary(summary: &str) -> String {
+    truncate_chars(summary, ATTENTION_SUMMARY_MAX_CHARS).into_owned()
 }
 
 #[profiling::function]
@@ -823,10 +827,11 @@ mod tests {
     use egui::{Color32, Pos2, Rect};
 
     use super::{
-        AgentStatus, PanelChrome, SESSION_BADGE_MIN_TITLE_SPACE, SESSION_BADGE_TITLE_GAP, SESSION_BADGE_WIDTH,
-        WORKING_BADGE_GAP, badges_left_boundary, focus_ring_stroke, panel_border_stroke, panel_fill, panel_title_color,
-        panel_title_content_rect, panel_titlebar_fill, session_badge_clears_attention_badge, session_badge_rect,
-        title_focus_indicator_rect, title_right_boundary, working_indicator_reserve, working_indicator_width,
+        ATTENTION_SUMMARY_MAX_CHARS, AgentStatus, PanelChrome, SESSION_BADGE_MIN_TITLE_SPACE, SESSION_BADGE_TITLE_GAP,
+        SESSION_BADGE_WIDTH, WORKING_BADGE_GAP, attention_badge_summary, badges_left_boundary, focus_ring_stroke,
+        panel_border_stroke, panel_fill, panel_title_color, panel_title_content_rect, panel_titlebar_fill,
+        session_badge_clears_attention_badge, session_badge_rect, title_focus_indicator_rect, title_right_boundary,
+        working_indicator_reserve, working_indicator_width,
     };
 
     /// The boundary math is exact constant arithmetic, so an epsilon of one
@@ -1046,5 +1051,49 @@ mod tests {
         assert!(titlebar_rect.contains(indicator.max - indicator.size() * 0.01));
         assert!(indicator.width() > 0.0);
         assert!(indicator.height() > 0.0);
+    }
+
+    // Regression: the badge summary used to be cut with `summary[..29]` after
+    // a byte-length check, which panics whenever a multi-byte character
+    // straddles byte 29 (e.g. Norwegian or emoji content near the boundary).
+    #[test]
+    fn attention_summary_truncates_by_chars_when_bytes_exceed_the_budget() {
+        // 28 ASCII chars + 3 two-byte æ = 31 chars / 34 bytes; the old byte
+        // slice [..29] landed inside the first æ.
+        let summary = format!("{}æææ", "a".repeat(28));
+
+        let truncated = attention_badge_summary(&summary);
+
+        assert_eq!(truncated, format!("{}æ…", "a".repeat(28)));
+        assert_eq!(truncated.chars().count(), ATTENTION_SUMMARY_MAX_CHARS);
+    }
+
+    #[test]
+    fn attention_summary_survives_emoji_at_the_cut() {
+        // 27 ASCII chars + 4-byte emoji + 6 chars = 34 chars / 37 bytes; the
+        // old byte slice [..29] landed inside the emoji.
+        let summary = format!("{}🔥{}", "a".repeat(27), "b".repeat(6));
+
+        let truncated = attention_badge_summary(&summary);
+
+        assert_eq!(truncated, format!("{}🔥b…", "a".repeat(27)));
+        assert_eq!(truncated.chars().count(), ATTENTION_SUMMARY_MAX_CHARS);
+    }
+
+    #[test]
+    fn attention_summary_keeps_exactly_budgeted_multibyte_text() {
+        // 30 chars but 60 bytes: the old byte-length check truncated (and
+        // panicked); the char budget fits the whole summary.
+        let summary = "æ".repeat(ATTENTION_SUMMARY_MAX_CHARS);
+
+        assert_eq!(attention_badge_summary(&summary), summary);
+    }
+
+    #[test]
+    fn attention_summary_matches_old_ascii_behavior() {
+        assert_eq!(attention_badge_summary("Disk almost full"), "Disk almost full");
+        assert_eq!(attention_badge_summary(&"a".repeat(30)), "a".repeat(30));
+        assert_eq!(attention_badge_summary(&"a".repeat(31)), format!("{}…", "a".repeat(29)));
+        assert_eq!(attention_badge_summary(&"æ".repeat(40)), format!("{}…", "æ".repeat(29)));
     }
 }
