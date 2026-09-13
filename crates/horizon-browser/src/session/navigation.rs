@@ -51,7 +51,7 @@ impl DriverState {
         self.supersede_pending_navigation(now);
         self.interaction_started_at.get_or_insert(now);
         self.vertical_scrollbar_drag = None;
-        self.invalidate_scrollbar_layout();
+        self.invalidate_scrollbar_layout(event_tx);
         if let Err(failure) = self.navigate_to(link, event_tx, frame_slot, url) {
             return AgentActionExecution::Done(Err(failure));
         }

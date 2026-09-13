@@ -498,7 +498,7 @@ impl Driver {
         if activity {
             self.pending_classic_history_start = None;
         }
-        if self.config.browser.backend == BackendKind::SafariWebDriver && self.handle_safari_scrollbar_input(&input)? {
+        if self.handle_scrollbar_input(&input)? {
             return Ok(());
         }
         let (result, demand_frame) = if self.config.browser.backend == BackendKind::FirefoxBidi {
@@ -605,13 +605,13 @@ impl Driver {
             "execute/sync",
             &json!({ "script": PAGE_SCROLL_STATE_SCRIPT, "args": [] }),
         ) else {
-            return false;
+            return self.scrollbar.clear_sampled(frame_slot);
         };
         let Some(value) = webdriver_value(&response).cloned() else {
-            return false;
+            return self.scrollbar.clear_sampled(frame_slot);
         };
         let Ok(state) = serde_json::from_value::<PageScrollState>(value) else {
-            return false;
+            return self.scrollbar.clear_sampled(frame_slot);
         };
         self.scrollbar.sample(state);
         frame_slot.publish_page_scroll_state(state)
@@ -738,7 +738,7 @@ impl Driver {
 
     fn advance_generation(&mut self) {
         self.generation = self.generation.wrapping_add(1);
-        self.scrollbar.reset();
+        self.scrollbar.reset(&self.config.frame_slot);
         if !self.retain_frame_during_navigation {
             self.frames.invalidate();
         }

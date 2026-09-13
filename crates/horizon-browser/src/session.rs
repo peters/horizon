@@ -56,9 +56,10 @@ use std::time::{Duration, Instant};
 
 use crate::cdp::{CdpError, CdpLink};
 use crate::frames::FrameSlot;
+use crate::page_scroll::VerticalScrollbarDrag;
 use crate::process::{ChromeProcess, ChromeProcessControl};
 use crate::semantic::SemanticState;
-use crate::{ActiveBackendCapabilities, BackendKind, normalize_navigation_target};
+use crate::{ActiveBackendCapabilities, BackendKind, PageScrollState, normalize_navigation_target};
 use crate::{BrowserConfig, BrowserControlFailure};
 
 /// What the driver reports to the panel.
@@ -356,42 +357,9 @@ fn stop_for_chrome_exit(state: &mut DriverState, chrome: &mut ChromeProcess, eve
     true
 }
 
-#[derive(Clone, Copy, Debug)]
-struct VerticalScrollbarLayout {
-    client_width: f64,
-    client_height: f64,
-    scroll_y: f64,
-    content_height: f64,
-}
-
-impl VerticalScrollbarLayout {
-    fn from_metrics(metrics: &serde_json::Value) -> Option<Self> {
-        let layout = metrics.get("cssLayoutViewport")?;
-        let content = metrics.get("cssContentSize")?;
-        let candidate = Self {
-            client_width: layout.get("clientWidth")?.as_f64()?,
-            client_height: layout.get("clientHeight")?.as_f64()?,
-            scroll_y: layout.get("pageY")?.as_f64()?,
-            content_height: content.get("height")?.as_f64()?,
-        };
-        candidate.is_valid().then_some(candidate)
-    }
-
-    fn is_valid(self) -> bool {
-        self.client_width.is_finite()
-            && self.client_width >= 0.0
-            && self.client_height.is_finite()
-            && self.client_height > 0.0
-            && self.scroll_y.is_finite()
-            && self.scroll_y >= 0.0
-            && self.content_height.is_finite()
-            && self.content_height >= self.client_height
-    }
-}
-
 #[derive(Debug)]
 struct ScrollbarLayoutCache {
-    layout: Option<VerticalScrollbarLayout>,
+    layout: Option<PageScrollState>,
     request_id: Option<u64>,
     refresh_at: Option<Instant>,
 }
@@ -425,10 +393,9 @@ struct DriverState {
     viewport_retry_at: Option<Instant>,
     pending_viewport_capture_at: Option<Instant>,
     viewport_capture_request_id: Option<u64>,
-    /// Headless Chromium paints its native scrollbar into screencast frames,
-    /// but `Input.dispatchMouseEvent` cannot operate that browser-owned UI.
-    /// A press inside the measured gutter therefore becomes an engine-owned
-    /// scroll interaction until the matching release.
+    /// Headless Chromium paints a native scrollbar that CDP mouse events
+    /// cannot operate. Presses in the host overlay gutter become an
+    /// engine-owned scroll interaction until the matching release.
     vertical_scrollbar_drag: Option<VerticalScrollbarDrag>,
     scrollbar_layout: ScrollbarLayoutCache,
     /// First visually meaningful command waiting for a published frame.
@@ -804,20 +771,6 @@ impl DriverState {
         let _ = event_tx.send(BrowserEvent::NavigationFailed(message.to_string()));
         let _ = event_tx.send(BrowserEvent::Loading(false));
         self.observe_navigation_signal(crate::navigation::NavigationSignal::Failed { message, id: None });
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-struct VerticalScrollbarDrag {
-    pointer_y: f64,
-    scroll_y: f64,
-    max_scroll: f64,
-    scroll_per_pointer_pixel: f64,
-}
-
-impl VerticalScrollbarDrag {
-    fn target_scroll_y(self, pointer_y: f64) -> f64 {
-        (self.scroll_y + ((pointer_y - self.pointer_y) * self.scroll_per_pointer_pixel)).clamp(0.0, self.max_scroll)
     }
 }
 
