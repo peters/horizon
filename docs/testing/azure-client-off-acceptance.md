@@ -96,7 +96,8 @@ gives A no identity today, so before the product pass A needs, in this order:
    authenticate on it.
 2. An identity A can log in non-interactively. The intended shape is a
    system-assigned managed identity on A with a custom role listing exactly the
-   actions the product paths under test send, and nothing destructive: resource
+   actions the product paths under test send and no `delete` action (the `write`
+   actions below are still modification authority, see the residual): resource
    groups (`Microsoft.Resources/subscriptions/resourceGroups/read` and `write`);
    deployments (`Microsoft.Resources/deployments/read` and `write`; the transport
    only submits deployments and reads the deployment resource back, never the
@@ -113,25 +114,39 @@ gives A no identity today, so before the product pass A needs, in this order:
    Stop is ARM read-only and needs nothing beyond the reads. The role grants no
    `delete` action: deletion is not part of this pass and no product path on A
    deletes anything (the setup coordinator dispatches no compensating cleanup when a
-   later step fails; it preserves the allocation for recovery and retry), so every
-   group this run creates is removed by the operator's cleanup from C (step 9) under
-   the operator's credentials, never A's. Neither subscription-wide Contributor nor
+   later step fails; it preserves the allocation for recovery and retry), so the
+   removal of every group this run creates is authorized and attempted only by the
+   operator's cleanup from C (step 9) under the operator's credentials, never A's;
+   a refused, failed or timed-out step 9 leaves the group for the operator, it is
+   not a complete run. Neither subscription-wide Contributor nor
    any role with `delete` is assigned to A. The residual that Azure RBAC cannot
    remove is that the `write` actions must sit at subscription scope (the product
    creates one new resource group per worker, so no narrower scope exists before the
    run), which lets a compromised A modify resources of those types in unrelated
-   groups for the run's duration; the run detects that through the peer comparison
-   in step 9 but cannot prevent it, and the only prevention is a subscription holding
-   nothing but this lane's resources. **This assignment is not made yet.** Per the
+   groups for the run's duration. Step 9's peer comparison detects only a vanished
+   or added peer resource or group (it compares resource IDs and group names, not
+   properties or tags), so an in-place mutation of a peer would pass it; the run
+   neither prevents nor fully detects that residual, and the only prevention is a
+   subscription holding nothing but this lane's resources. **This assignment is not
+   made yet.** Per the
    #474 coordination, the proposal posted there for approval must carry, before any
    role or identity is created or assigned: the action list above with its
    justification from the product transport (file and line per action) and the
    official Azure RBAC operation reference, the exact scope of each assignment, the
-   owner of the identity, and an exact expiry and removal plan (the assignment and
-   A's identity are removed with A's group in step 9, and no later than the manifest
-   deadline, by the operator from C; the custom role definition is deleted once the
-   pass is reported). Cost approval is not approval for this authority. No user
-   credential is copied to A. Before Horizon is launched, and under the same `HOME`
+   owner of the identity, and an exact expiry and removal plan. Step 9's `cleanup`
+   deletes resource groups only; deleting A's group removes the system-assigned
+   identity but can leave its role assignments and the custom role definition
+   behind, so the removal is an explicit operator step from C, before the manifest
+   deadline: `az role assignment delete --assignee <A's principal ID> --scope
+   /subscriptions/<id>` and the same for the `horizon-worker-puller` scope, then
+   `az role definition delete --name <custom role>`, verified with `az role
+   assignment list --all --assignee <principal ID>` printing an empty list and `az
+   role definition list --custom-role-only true --name <custom role>` printing an
+   empty list, and the verification recorded with the run. Cost approval is not
+   approval for this authority. No Azure user credential is copied to A: the
+   managed identity is A's only Azure credential. The repository PAT in item 4 is a
+   different credential, typed by the operator into the preparation's token field
+   on A for one delivery and never stored there. Before Horizon is launched, and under the same `HOME`
    Horizon will use, run `az login --identity` as A's Horizon user and prove the token
    path the product will take without printing a token: `az account get-access-token
    --subscription <id> --resource https://management.azure.com/ --query expires_on -o
