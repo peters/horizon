@@ -121,8 +121,11 @@ manifest, current price and deadline are posted on #474 before the paid run star
 in redacted form: the public post carries the VM sizes, image digest, prices,
 budget, off interval, lease, deadline and the SHA-256 of the full unbound manifest
 file, while `subscription_id`, `run_id`, `client_group` and, once bound,
-`worker_group` stay in the private manifest (its hash lets the lead verify later
-that the run used the posted manifest); credentials never appear anywhere.
+`worker_group` stay in the private manifest; the hash covers the unbound file
+only, so it lets the lead verify later that the frozen, pre-bind fields were
+preserved (the bound manifest differs in exactly `worker_group` and is hashed
+and recorded separately once `bind-worker` has written it); credentials never
+appear anywhere.
 
 ## Client A prerequisites for the product path
 
@@ -304,7 +307,15 @@ The deterministic task this lane runs on B, for the pinned worker image: saved S
 panel with program `/bin/sh` and arguments (one JSON array, pasted verbatim into
 *Literal arguments (JSON array)*, so the shell receives a single `-c` script)
 `["-c", "i=0; while :; do i=$((i+1)); echo $i > /workspace/progress.counter.tmp &&
-mv /workspace/progress.counter.tmp /workspace/progress.counter; sleep 5; done"]`,
+mv /workspace/progress.counter.tmp /workspace/progress.counter; sleep 5; done"]`
+for the first task, which is the one the observer samples (`worker.json`'s
+`progress_path`) and the one the verdict's monotonic check reads; the second and
+third tasks of the three-panel item run the same script with their own files,
+`/workspace/progress-2.counter` and `/workspace/progress-3.counter` (and matching
+`.tmp` names), never the first task's path, so no task can overwrite another's
+value, and their liveness is proven by their own independent identities and by
+reading their files in the step 7 pinned reads with the same non-decreasing and
+stable-after-Start checks, not by the harness verdict, which reads one path,
 working directory `.`, which the saved Git task resolves relative to the worker's
 fixed checkout `/workspace/horizon/repository`, so `/workspace/progress.counter`
 advances every five seconds and every 15-second sample sees a higher value; no
