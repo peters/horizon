@@ -131,7 +131,7 @@ JSON object, `schema_version` 1, `deny_unknown_fields`:
 | `credential_policy` | object | See below. Default stores no username or password. |
 | `variables` | array of `RoutineVariable` | Named parameters. Never secret values. |
 | `steps` | array of `RoutineStep` | Reviewed compiler output. |
-| `completion_assertions` | array of `Assertion` | User-marked final outcome. |
+| `completion_assertions` | array of `Assertion` | At least one user-marked final outcome. Empty is malformed. |
 | `plan_version` | `u32` | Increments on every reviewed save. Resume binds to this exact value. |
 | `created_at` / `updated_at` | RFC 3339 timestamps | |
 
@@ -154,7 +154,7 @@ explicitly choose to remember.
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `step_id` | string | Stable within the plan version. |
+| `step_id` | string | Unique in the plan version; 1..=64 ASCII alphanumeric / `_` / `-` (CLI `PlanStep.id`). |
 | `target_fingerprint` | `TargetFingerprint` or omitted | Required for click/fill/targeted scroll. |
 | `precondition` | `Assertion` | Observed before dispatch during teaching. |
 | `action` | `CompiledAction` | Tagged union below. |
@@ -187,14 +187,15 @@ printable CSS derived from a durable fingerprint candidate (`unique_id`,
 { "type": "reload" }
 { "type": "back" }
 { "type": "forward" }
-{ "type": "handoff" }
+{ "type": "handoff", "pause": "needs_login" | "needs_user" | "needs_reteach" }
 ```
 
 `scroll.selector` may be omitted for viewport scrolls. Navigate persists the
 [`NavigationTemplate`](#navigation-template); the runner builds the URL at
 each run from origin, path, and current non-secret variables. It never stores
 or replays a `redact_url` string. `credential_fill` is not an MCP tool (see
-compiler mapping).
+compiler mapping). `handoff.pause` is the durable run state the runner
+enters; it is required.
 
 ## `Assertion`
 
@@ -206,7 +207,6 @@ must not contain `?` or `#`.
 { "type": "heading", "value": "Report ready" }
 { "type": "element_present", "target": <TargetFingerprint> }
 { "type": "element_absent", "target": <TargetFingerprint> }
-{ "type": "accessible_state", "target": <TargetFingerprint>, "value": "selected" }
 { "type": "text_shape", "value": "NNN rows" }
 ```
 
@@ -234,9 +234,9 @@ Candidate preference order:
 
 | Field | Type |
 | --- | --- |
-| `candidates` | ordered `TargetCandidate` array, at least one |
-| `uniqueness` | `{ "match_count": u32, "unique": bool }` for the selected candidate |
-| `frame` | `{ "top_level": bool, "origin": Origin, "chain": opaque frame ids }` |
+| `candidates` | ordered `TargetCandidate` array, at least one. Each candidate carries its own `{ "match_count", "unique" }`. |
+| `selected` | index of the candidate the compiler used for a selector, when any |
+| `frame` | `{ "top_level": bool, "origin": Origin, "chain": durable iframe descriptors }` |
 | `digest` | compact non-secret element fingerprint |
 
 `TargetCandidate` is a tagged union. Multi-component kinds have explicit
@@ -244,12 +244,12 @@ fields; `value` is only for scalar ids/CSS. Each string field is 1..=4 KiB
 printable. `reviewed` defaults to false.
 
 ```text
-{ "kind": "role_name", "role": "button", "name": "Generate report", "reviewed": false }
-{ "kind": "label_control", "label": "Month", "control": "textbox", "reviewed": false }
-{ "kind": "test_id", "attribute": "data-testid", "value": "row-save", "reviewed": false }
-{ "kind": "unique_id", "value": "generate", "reviewed": false }
-{ "kind": "visible_text", "text": "Save", "context": "row 3", "reviewed": false }
-{ "kind": "css_fallback", "value": "div > button", "reviewed": true }
+{ "kind": "role_name", "role": "button", "name": "Generate report", "reviewed": false, "match_count": 1, "unique": true }
+{ "kind": "label_control", "label": "Month", "control": "textbox", "reviewed": false, "match_count": 1, "unique": true }
+{ "kind": "test_id", "attribute": "data-testid", "value": "row-save", "reviewed": false, "match_count": 1, "unique": true }
+{ "kind": "unique_id", "value": "generate", "reviewed": false, "match_count": 1, "unique": true }
+{ "kind": "visible_text", "text": "Save", "context": "row 3", "reviewed": false, "match_count": 2, "unique": false }
+{ "kind": "css_fallback", "value": "div > button", "reviewed": true, "match_count": 1, "unique": true }
 ```
 
 Replay uses candidates in order and succeeds only when exactly one current
@@ -258,6 +258,10 @@ match is compatible with `digest`. A weak or ambiguous match becomes
 
 A frame target cannot inherit credential permission or `allowed_origins`
 membership from the top-level page. The frame's own origin is authoritative.
+`chain` is not a session-scoped browser frame id. Each entry is
+`{ "origin": Origin, "name": <accessible iframe name or title> }` so a later
+session can relocate the frame. Unknown or empty names make the target
+non-MCP (`handoff` / `needs_reteach`) until the engine resolver lands.
 
 Today's MCP `browser_snapshot` / `browser_query` / `browser_act` inspect only
 the top-level document and have no digest check. v1 MCP-emitted clicks and
@@ -342,7 +346,7 @@ list. It is not a durable job and does not use the #324 run directory.
 | --- | --- |
 | `action_id` | bounded identifier |
 | `recorded_at_millis` | non-negative i64 |
-| `kind` | `RecordedKind` tagged union (`navigate`, `click` with `count`, `fill`, `scroll` with finite `delta_x`/`delta_y`, `wait` with selector and `SelectorState`, `reload`, `back`, `forward`, `handoff`) |
+| `kind` | `RecordedKind` tagged union (`navigate`, `click` with `count` 1..=3, `fill`, `scroll` with finite `delta_x`/`delta_y`, `wait` with selector and `SelectorState`, `reload`, `back`, `forward`, `handoff` with `pause`) |
 | `target` | optional `TargetFingerprint` (required for click/fill/targeted scroll) |
 | `page_origin` | `Origin` |
 | `url_pattern` | `redact_url` diagnostic string; may contain `?<redacted>` |
@@ -400,11 +404,11 @@ URL as the destination.
 Assertions are evaluated from a snapshot/query, never from page-supplied
 scripts.
 
-Allowed kinds: URL path/pattern (already redacted), unique heading or status
-element, element presence/absence, accessible state or selected value, and
-bounded text shape that does not contain secrets. Completion assertions are
-the user-marked subset. A routine stays `draft` until a verification run
-observes all of them on the exact `plan_version`.
+Allowed kinds are the `Assertion` variants above. `accessible_state` is not
+v1: today's `BrowserNode` has no selected/checked/expanded field. Completion
+assertions are the user-marked subset and must be non-empty. A routine stays
+`draft` until a verification run observes all of them on the exact
+`plan_version`.
 
 ## Execution, leases, and resume
 

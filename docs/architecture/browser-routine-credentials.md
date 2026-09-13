@@ -96,13 +96,17 @@ fake store so that cost is not paid until the adapter PR.
 `keyring` entries are addressed by a service name and a user/target name. Use:
 
 - service: `horizon-browser-routine`
-- user/target: the opaque slot UUID (not the routine display name, not an
-  origin, not a username value)
+- user: `<slot-uuid>:username` or `<slot-uuid>:password` (not the display
+  name, not an origin, not a username value)
 
-One slot holds the opted-in fields for one routine. Username and password are
-distinct fields inside that slot (or distinct `keyring` items keyed by
-`slot` + field name). Plans store only `{ "type": "credential_field", "slot":
-"<uuid>", "field": "username" | "password" }`.
+`keyring` 4.2.0 stores one secret per `(service, user)` pair. Horizon uses
+**one native item per field**, never a bundled username+password payload:
+
+- service: `horizon-browser-routine`
+- user: `<slot-uuid>:<field>` where `<field>` is `username` or `password`
+
+Rotation and deletion target that exact pair. Plans still store only
+`{ "type": "credential_field", "slot": "<uuid>", "field": "username" | "password" }`.
 
 No API lists secret bytes. List/show/export emit field names and
 `missing` / `present` markers.
@@ -192,9 +196,12 @@ to bind or enter credentials again.
 
 ## Export
 
-Export may include: routine name, `routine_id`, origins, field kinds, slot
-UUIDs, and `present` / `missing` markers. Export must not include secret
-values, cookies, profile files, or raw keyring payloads.
+Export may include: routine name, origins, field kinds, and `present` /
+`missing` markers. Export must not include secret values, cookies, profile
+files, raw keyring payloads, or a live `routine_id` used as an overwrite
+key. Import always allocates a new `routine_id` / `profile_id`, rewrites
+internal bindings, and never replaces an existing routine directory. Collision
+with an existing id is a reject, not a merge.
 
 ## Test seams
 
@@ -228,11 +235,12 @@ artifacts:
   username/password field (manual typing, before the opt-in prompt) and at
   broker dispatch during replay. It lasts until a verified navigation leaves
   the filled document or an explicit field-clear postcondition holds.
-  Horizon screenshots, `browser_video` / WebM capture, CDP snapshots,
-  `evaluate`, and MCP results that could read the field are stopped or
-  blocked for that window. A capture started before the field was focused
-  must be paused. Ending protection at fill postcondition alone is not
-  enough while the value can still sit in the DOM.
+  Horizon screenshots, `browser_video` / WebM capture, `browser_network`
+  (including WebSocket payloads), CDP snapshots, `evaluate`, and MCP
+  results that could read the field are stopped or blocked for that window.
+  A capture started before the field was focused must be paused and must
+  not restart until protection ends. Ending protection at fill postcondition
+  alone is not enough while the value can still sit in the DOM.
 - The existing redacted audit continues to store character counts, not
   values.
 - Horizon still must not copy DOM values back into plans, drafts, traces,
