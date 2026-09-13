@@ -3,7 +3,7 @@
 mod configured;
 pub(super) mod configured_azure;
 mod configured_confirmation;
-mod configured_runpod;
+pub(super) mod configured_runpod;
 mod confirmation;
 
 pub use configured::{ConfiguredStopError, stop_configured_remote_environment};

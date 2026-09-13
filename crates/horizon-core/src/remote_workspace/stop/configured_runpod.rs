@@ -59,15 +59,15 @@ pub fn stop_configured_runpod_environment(
 }
 
 #[cfg(target_os = "linux")]
-pub(super) struct RetainedRunPod {
-    pub(super) allocation: StoredRemoteAllocation,
-    pub(super) selection: Option<RunPodNetworkVolumeExpectation>,
+pub(in crate::remote_workspace) struct RetainedRunPod {
+    pub(in crate::remote_workspace) allocation: StoredRemoteAllocation,
+    pub(in crate::remote_workspace) selection: Option<RunPodNetworkVolumeExpectation>,
     request: InteractiveWorkerRequest,
 }
 
 #[cfg(target_os = "linux")]
 impl RetainedRunPod {
-    pub(super) fn load(
+    pub(in crate::remote_workspace) fn load(
         store: &CloudWorkflowStore,
         profile: &RunPodProfile,
         expected: &RemoteEnvironmentSummary,
@@ -140,7 +140,7 @@ impl RetainedRunPod {
         RunPodHostTrust::retained(worker, ssh).map_err(|_| BindingError::InvalidBinding)
     }
 
-    pub(super) fn provider(
+    pub(in crate::remote_workspace) fn provider(
         &self,
         store: &CloudWorkflowStore,
         profile: &RunPodProfile,
@@ -161,7 +161,7 @@ impl RetainedRunPod {
         }
     }
 
-    pub(super) fn check_current(
+    pub(in crate::remote_workspace) fn check_current(
         &self,
         store: &CloudWorkflowStore,
         expected: &StoredRemoteAllocation,
@@ -181,6 +181,22 @@ impl RetainedRunPod {
             return Err(RemoteWorkspaceStopError::StateChanged.into());
         }
         Ok(())
+    }
+
+    /// Read against the actual post-intent allocation; the Start coordinator fences
+    /// that allocation with its own CAS before recording completion.
+    pub(in crate::remote_workspace) fn check_binding(&self, store: &CloudWorkflowStore) -> Result<(), BindingError> {
+        let current = store
+            .load_remote_allocation(
+                self.allocation.workspace().session_id(),
+                &self.allocation.workspace().state().spec.workspace_local_id,
+            )
+            .map_err(RemoteWorkspaceStopError::from)?
+            .ok_or(RemoteWorkspaceStopError::MissingAllocation)?;
+        if current.worker_request().map_err(RemoteWorkspaceStopError::from)? != self.request {
+            return Err(RemoteWorkspaceStopError::StateChanged.into());
+        }
+        self.check_current(store, &current)
     }
 }
 

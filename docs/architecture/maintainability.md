@@ -546,6 +546,13 @@ back into large multi-purpose modules.
   to Check, never another Stop. The internal coordinator consumes the exact admitted
   allocation, so workflow drift cannot be adopted between validation and the intent CAS.
   No private identity, host-key lookup, storage discovery or creation is authorized.
+- `remote_workspace/start/configured_runpod.rs` adds explicit Linux Start admission
+  through that retained binding, requiring HPS before lazy credentials and fencing
+  the actual post-intent binding before completion. Its private provider wrapper
+  exposes only Start to the shared coordinator. `ConfiguredStart` is shared with
+  the backward-compatible Azure result alias; provider-specific errors and consent
+  stay separate. The overview reuses its existing single-flight confirmation flow;
+  no endpoint refresh, task replay, replacement or storage-durability claim is added.
 - `remote_workspace/stop/configured.rs` admits one explicitly confirmed saved
   selection through its exact named local provider profile. It reloads the owned
   record and compares the full summary/revision before durable Stop coordination,

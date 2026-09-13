@@ -57,13 +57,17 @@ pub(super) fn show(
     if !supported(selected) {
         ui.label(
             RichText::new(
-                "Stop requires a retained persistent supported worker. Existing RunPod or Azure Stop intent can only be checked, never resent; a saved-Stopped Azure worker can be started; timed workers are not supported.",
+                "Stop requires a retained persistent supported worker. Existing RunPod or Azure Stop intent can only be checked, never resent; saved-Stopped supported workers can be started; timed workers are not supported.",
             )
             .color(theme::FG_DIM()),
         );
     }
     if start_supported(selected) {
-        ui.label("Starts the retained compute of this saved-Stopped Azure worker under the same identity. Compute billing resumes at the profile's declared hourly cost; the retained data disk keeps /workspace.");
+        if selected.provider == CloudProvider::RunPod {
+            ui.label("Starts this retained RunPod worker under its saved identity and exact HPS attachment. Compute billing resumes; retained HPS remains separately billable, not a backup or filesystem-durability proof.");
+        } else {
+            ui.label("Starts the retained compute of this saved-Stopped Azure worker under the same identity. Compute billing resumes at the profile's declared hourly cost; the retained data disk keeps /workspace.");
+        }
         ui.label("In-memory work did not survive the stop and no task resumes. After the start, reconnect session panels; an existing Start intent is retried without re-posting a running worker.");
     }
     if check_supported(selected) {
@@ -154,6 +158,14 @@ fn confirm_start(ui: &mut egui::Ui, confirmation: &Confirmation, enabled: bool, 
     let selected = &confirmation.expected;
     ui.strong("Start this environment?");
     identity_rows(ui, selected);
+    if selected.provider == CloudProvider::RunPod {
+        ui.colored_label(theme::PALETTE_YELLOW(), "Compute billing resumes at the provider's current rate; this view does not quote a price or enforce a spending cap. Retained HPS storage remains separately billable.");
+        ui.label("Starts only the same retained Pod with its exact saved HPS attachment and public pin; no private SSH key is needed. No replacement worker, endpoint refresh, storage deletion or task replay is requested. In-memory work did not survive the stop; HPS attachment is not a backup or filesystem-durability proof.");
+        ui.label("Requires the exact named RunPod profile and RUNPOD_API_KEY on this client. The provider observes for up to five minutes; a running worker is never re-posted. After uncertainty, refresh and explicitly retry Start only if its saved intent remains. Reconnect session panels once the saved phase is Reconciling.");
+        ui.label("Closing this overview does not cancel Start; exiting Horizon may interrupt local coordination. Compute may already be billing even if no successful reply is shown.");
+        start_buttons(ui, enabled, action);
+        return;
+    }
     let cost = confirmation
         .config
         .azure_profile(&selected.profile)
@@ -170,6 +182,10 @@ fn confirm_start(ui: &mut egui::Ui, confirmation: &Confirmation, enabled: bool, 
     ui.colored_label(theme::PALETTE_YELLOW(), billing);
     ui.label("Starts the same worker VM with its retained data disk, saved address and host key; a worker that already runs is not re-posted. In-memory work did not survive the stop and nothing resumes a task. Requires the exact named Azure profile, its immutable saved binding and the saved public pin; no private SSH key is needed.");
     ui.label("This sends one Start request through the Azure CLI login for that subscription. After uncertainty, refresh and press Start again; the retry reuses the saved intent. Reconnect session panels once the saved phase is Reconciling. Closing this overview does not cancel Start; exiting Horizon may interrupt local coordination.");
+    start_buttons(ui, enabled, action);
+}
+
+fn start_buttons(ui: &mut egui::Ui, enabled: bool, action: &mut InventoryAction) {
     ui.horizontal_wrapped(|ui| {
         let cancel = ui.button("Cancel");
         let confirm = ui.add_enabled(enabled, egui::Button::new("Start environment"));
@@ -211,7 +227,7 @@ fn show_notice(ui: &mut egui::Ui, notice: &super::StopNotice, selected: &RemoteE
     } else if notice.started {
         if !notice.succeeded {
             ui.label("Refresh the saved page. If Start intent remains, press Start again: the retry reuses the saved intent and never re-posts a running worker. Compute may already be billing.");
-            if notice.unverified {
+            if notice.unverified && selected.provider == CloudProvider::Azure {
                 ui.label("An unverified Azure start can mean the Azure CLI is not signed in to the profile's subscription. Sign in, then press Start again.");
             }
         }
