@@ -264,9 +264,11 @@ credentials and identifiers stay private.
 - A run whose B was created through the adapter's live driver instead of the
   product path is an **adapter-only rehearsal**. It exercises A, C, the off interval
   and the cleanup, and it is reported as such; it is never the #475 product pass.
-- The product pass needs the shared wiring to accept Azure in the configured
-  setup path (today it answers `UnsupportedProvider`); that dependency and its
-  owner are recorded on #474.
+- The product pass needs the shared product paths to accept Azure end to end. The
+  configured setup path (`remote_workspace_setup/configured.rs`) and the saved-Stop
+  check dispatch to Azure by the named `remote.azure` profile; the first explicit
+  Azure Stop and the explicit Start of a stopped worker through the product are
+  tracked as the following slices on #474.
 - Counter progress proves the task kept running. Checkpoint proof needs
   worker-owned checkpoints advancing during the interval.
 

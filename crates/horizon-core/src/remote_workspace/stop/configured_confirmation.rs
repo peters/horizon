@@ -1,20 +1,21 @@
 //! Explicit configured observation of saved Stop intent; only verified completion changes local state.
 
-use super::RemoteWorkspaceStopError;
+use super::{
+    RemoteWorkspaceStopError,
+    configured_azure::{RetainedAzure, azure_with},
+    confirm_remote_workspace_stop,
+};
 use crate::{
-    cloud_run::{CloudWorkflowStore, interactive_worker_stop::InteractiveWorkerStopObservation},
+    cloud_run::{CloudProvider, CloudWorkflowStore, interactive_worker_stop::InteractiveWorkerStopObservation},
     remote_provider_config::{RemoteProviderConfig, RemoteProviderConfigError},
     remote_workspace::RemoteEnvironmentSummary,
 };
 
 #[cfg(target_os = "linux")]
 use {
-    super::{
-        RemoteWorkspaceStopConfirmation, configured_runpod::RetainedRunPod, confirm_remote_workspace_stop,
-        current_millis,
-    },
+    super::{RemoteWorkspaceStopConfirmation, configured_runpod::RetainedRunPod, current_millis},
     crate::cloud_run::{
-        CloudProvider, StoredRemoteAllocation,
+        StoredRemoteAllocation,
         runpod::{RunPodApiKey, RunPodInteractiveWorkerProvider, RunPodProfile},
     },
 };
@@ -27,10 +28,14 @@ pub struct ConfiguredStopConfirmation {
 }
 
 /// Check one existing Stop intent using its exact named profile, worker and saved public pin.
-/// Currently supports `RunPod` on Linux. Run off the render thread after an explicit check.
+/// Supports `RunPod` on Linux and Azure. Run off the render thread after an explicit check.
 /// Provider operations are read-only, but retained-stopped proof may CAS-write local completion.
 /// Pending, absence and errors retain identity and intent; saved Stopped timestamps are not renewed.
 /// No private SSH key, first-pin lookup, Stop replay, setup, creation or deletion is attempted.
+/// Azure binds the named `remote.azure` profile, the allocation's immutable CPU profile
+/// binding, the retained worker and its complete pin before the subscription-pinned CLI
+/// credential exists; no bearer token is persisted, and a missing CLI login leaves the
+/// observation unverified.
 /// # Errors
 /// Rejects stale or malformed ownership, missing intent/trust, incompatible profiles/storage,
 /// unavailable credentials, provider failures and conflicting local updates, with redacted errors.
@@ -39,23 +44,26 @@ pub fn confirm_configured_remote_environment_stop(
     config: &RemoteProviderConfig,
     expected: &RemoteEnvironmentSummary,
 ) -> Result<ConfiguredStopConfirmation, ConfiguredStopConfirmationError> {
-    #[cfg(target_os = "linux")]
-    {
-        if expected.provider != CloudProvider::RunPod {
-            return Err(ConfiguredStopConfirmationError::UnsupportedProvider);
+    match expected.provider {
+        CloudProvider::Azure => {
+            let profile = config.azure_profile(&expected.profile)?;
+            azure_with(
+                store,
+                profile,
+                expected,
+                |_admitted| RetainedAzure::client(store, profile),
+                |provider, allocation| confirm_remote_workspace_stop(store, provider, allocation),
+            )
         }
-        runpod_with(
+        #[cfg(target_os = "linux")]
+        CloudProvider::RunPod => runpod_with(
             store,
             config.runpod_profile(&expected.profile)?,
             expected,
             || RunPodApiKey::from_env().map_err(|_| ConfiguredStopConfirmationError::CredentialUnavailable),
             |provider, allocation| confirm_remote_workspace_stop(store, provider, allocation),
-        )
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = (store, config, expected);
-        Err(ConfiguredStopConfirmationError::UnsupportedProvider)
+        ),
+        _ => Err(ConfiguredStopConfirmationError::UnsupportedProvider),
     }
 }
 
@@ -103,7 +111,7 @@ pub enum ConfiguredStopConfirmationError {
     UnsupportedProvider,
     #[error("saved Stop checks require a valid RUNPOD_API_KEY supplied to the controller")]
     CredentialUnavailable,
-    #[error("the configured profile or retained public worker, pin and storage binding is invalid")]
+    #[error("the configured profile or retained public worker, pin, profile binding and storage binding is invalid")]
     InvalidBinding,
     #[error(transparent)]
     Configuration(#[from] RemoteProviderConfigError),

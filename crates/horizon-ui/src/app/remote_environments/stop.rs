@@ -356,11 +356,21 @@ fn valid_check_result(expected: &RemoteEnvironmentSummary, result: &ConfiguredSt
     result.saved == allowed
 }
 
+/// Saved Stop intent on a retained persistent cloud worker: `RunPod` on Linux, Azure on
+/// every platform its CLI credential runs on. The saved identity must name the same
+/// provider as the summary; a first Stop is a separate, provider-specific admission.
 fn check_supported(summary: &RemoteEnvironmentSummary) -> bool {
-    cfg!(target_os = "linux")
-        && summary.provider == CloudProvider::RunPod
+    let provider = match summary.provider {
+        CloudProvider::RunPod => cfg!(target_os = "linux"),
+        CloudProvider::Azure => true,
+        CloudProvider::LocalDocker => false,
+    };
+    provider
         && summary.lifetime == WorkerLifetime::Persistent
-        && summary.worker_identity.is_some()
+        && summary
+            .worker_identity
+            .as_ref()
+            .is_some_and(|identity| identity.provider == summary.provider)
         && matches!(
             summary.saved_phase,
             Some(RemoteRuntimePhase::Stopping { .. } | RemoteRuntimePhase::Stopped { .. })

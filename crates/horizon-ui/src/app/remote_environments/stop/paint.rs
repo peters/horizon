@@ -45,14 +45,19 @@ pub(super) fn show(
     if !supported(selected) {
         ui.label(
             RichText::new(
-                "Stop requires a retained persistent supported worker. Existing RunPod Stop intent can only be checked; timed workers and other cloud providers are not supported.",
+                "Stop requires a retained persistent supported worker. Existing RunPod or Azure Stop intent can only be checked; timed workers are not supported, and a first Azure Stop is not offered here yet.",
             )
             .color(theme::FG_DIM()),
         );
     }
     if check_supported(selected) {
-        ui.label("Checks the existing RunPod Stop intent without sending Stop again. Verified completion may update its saved record; no private SSH key is needed.");
-        ui.label("A retained worker/public pin and matching profile/storage are required. This is not task, filesystem, billing or live SSH proof.");
+        if selected.provider == CloudProvider::Azure {
+            ui.label("Checks the existing Azure Stop intent without sending Stop again. Verified completion may update its saved record; no private SSH key is needed.");
+            ui.label("Requires the exact named Azure profile, its immutable saved binding, the retained worker and public pin, and an Azure CLI login for that subscription. This is not task, filesystem, billing or live SSH proof.");
+        } else {
+            ui.label("Checks the existing RunPod Stop intent without sending Stop again. Verified completion may update its saved record; no private SSH key is needed.");
+            ui.label("A retained worker/public pin and matching profile/storage are required. This is not task, filesystem, billing or live SSH proof.");
+        }
     }
     if let Some(confirmation) = &state.confirmation {
         confirm(ui, confirmation, idle && !state.is_pending(), action);
@@ -75,6 +80,9 @@ pub(super) fn show(
         );
         if notice.checked {
             ui.label("Checks are manual point-in-time observations. Opening or closing this view never repeats them.");
+            if !notice.succeeded && selected.provider == CloudProvider::Azure {
+                ui.label("An unverified Azure check can mean the Azure CLI is not signed in to the profile's subscription. Sign in, then check again; nothing was sent to the worker.");
+            }
         } else if !notice.succeeded {
             ui.label(if selected.provider == CloudProvider::RunPod {
                 "Refresh the saved page. If Stop intent exists, use Check saved Stop; do not send another Stop request."
