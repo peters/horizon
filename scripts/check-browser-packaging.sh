@@ -7,6 +7,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 status=0
+tmp_dir="$(mktemp -d)"
+trap 'rm -rf "$tmp_dir"' EXIT
 
 package_publish() {
   local crate="$1"
@@ -44,22 +46,32 @@ expect_publish horizon-browser-cli 'publish = false'
 
 forbidden='horizon-ui|horizon-core|horizon-browser-mcp|horizon-browser-cli|browser-smoke|\.github/'
 
-if cargo package -p horizon-browser-protocol --locked --allow-dirty --list | grep -E "$forbidden" >/dev/null; then
-  printf 'packaging: horizon-browser-protocol package contains product or smoke paths\n' >&2
-  status=1
-fi
+list_package() {
+  local crate="$1"
+  shift
+  local out="$tmp_dir/${crate}.list"
+  if ! cargo package -p "$crate" --locked --allow-dirty --list "$@" >"$out"; then
+    printf 'packaging: cargo package --list failed for %s\n' "$crate" >&2
+    status=1
+    return 1
+  fi
+  if grep -E "$forbidden" "$out" >/dev/null; then
+    printf 'packaging: %s package contains product or smoke paths\n' "$crate" >&2
+    status=1
+    return 1
+  fi
+}
 
-if cargo package -p horizon-browser --locked --allow-dirty --list --no-verify | grep -E "$forbidden" >/dev/null; then
-  printf 'packaging: horizon-browser package contains product or smoke paths\n' >&2
-  status=1
-fi
+list_package horizon-browser-protocol
+list_package horizon-browser --no-verify
 
-if cargo package -p horizon-browser --locked --allow-dirty >/tmp/horizon-browser-package-verify.log 2>&1; then
+verify_log="$tmp_dir/horizon-browser-package-verify.log"
+if cargo package -p horizon-browser --locked --allow-dirty >"$verify_log" 2>&1; then
   printf 'packaging: verified cargo package -p horizon-browser unexpectedly succeeded; protocol is not on crates.io\n' >&2
   status=1
-elif ! grep -q 'no matching package named `horizon-browser-protocol`' /tmp/horizon-browser-package-verify.log; then
+elif ! grep -q 'no matching package named `horizon-browser-protocol`' "$verify_log"; then
   printf 'packaging: verified engine package failed for an unexpected reason:\n' >&2
-  cat /tmp/horizon-browser-package-verify.log >&2
+  cat "$verify_log" >&2
   status=1
 fi
 

@@ -18,11 +18,20 @@ them as performance guarantees.
 | `horizon-browser-cli` | unpublished | `horizon-browser` binary: plans, prompt jobs, standalone MCP |
 | `horizon-core` / `horizon-ui` | unpublished | Horizon product, not the reusable engine |
 
-The engine's public Rust API is the `pub use` surface of
-`crates/horizon-browser/src/lib.rs` (`start_session`, `BrowserSession`,
-`BrowserCommand`, `BrowserEvent`, `FrameSlot`, coordination/audit/network
-types, and the protocol types it re-exports). Agents must keep using MCP, not
-that Rust API. The CLI is a binary, not a published library.
+The engine's public Rust API is every reachable `pub` item from
+`crates/horizon-browser/src/lib.rs`:
+
+- root types and constants defined there (`BrowserConfig`,
+  `ActiveBackendCapabilities`, `DEFAULT_VIEWPORT`, `VideoCaptureHandle`);
+- the crate-root `pub use` re-exports (`start_session`, `BrowserSession`,
+  `BrowserCommand`, `BrowserEvent`, `FrameSlot`, coordination/audit/network
+  types, and protocol types);
+- public modules `cdp`, `frames`, `input`, `process`, and `session`, including
+  the public items those modules re-export.
+
+Agents must keep using MCP, not that Rust API. The CLI is a binary, not a
+published library. Making a currently public module private is a breaking
+change after crates.io publication.
 
 Until a crates.io release exists, the workspace version (`0.2.7` at this
 recording) is a Horizon-internal sync token, not a public stability promise.
