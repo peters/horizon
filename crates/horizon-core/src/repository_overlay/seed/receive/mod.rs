@@ -1,9 +1,11 @@
 //! Bounded private pack receipt, independent of source approval and setup admission.
 
+mod named;
 mod native;
 mod observe;
 pub mod publication;
 
+pub use named::receive_named_git_base_pack;
 pub use observe::observe_git_base_pack;
 
 use super::{
@@ -156,7 +158,7 @@ pub fn receive_git_base_pack(
         .and_then(|()| staging::check_cancel(&cancelled))
         .map_err(|reason| SeedFailure { reason, residue: None })?;
     let path = staging::reserve(parent, &cancelled).map_err(|reason| SeedFailure { reason, residue: None })?;
-    receive(&path, expected, input, limits, &cancelled).map_err(|reason| SeedFailure {
+    receive(&path, expected, input, limits, &cancelled, &mut native::relocate).map_err(|reason| SeedFailure {
         reason,
         residue: Some(path),
     })
@@ -168,6 +170,7 @@ fn receive(
     input: &mut impl Read,
     limits: PackReceiveLimits,
     cancelled: &impl Fn() -> bool,
+    relocate: &mut impl FnMut(&Path, &str) -> Result<(), SeedError>,
 ) -> Result<ReceivedGitPack, SeedError> {
     let decoded = path.join("decoded");
     let selection = path.join("selection");
@@ -199,7 +202,8 @@ fn receive(
         return Err(SeedError::Object);
     }
     file.flush().map_err(|_| SeedError::Storage)?;
-    native::index(command, &decoded, summary.objects, limits.source, cancelled)?;
+    let hash = native::index(command, &decoded, summary.objects, limits.source, cancelled)?;
+    relocate(&decoded, &hash)?;
     let objects_directory = decoded.join("objects");
     native::closure(
         &selection,

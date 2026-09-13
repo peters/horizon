@@ -343,6 +343,10 @@ back into large multi-purpose modules.
   encoded verification before shared read-only native index/closure checks. The
   reader's existing metadata fingerprint is reused for held/named comparisons.
   See [private pack receipt](../remote-repository-pack-receipt.md).
+  The opt-in `seed/receive/named` leaf owns caller-named exclusive attempts and
+  held-private-directory ordinary renames without changing the default receiver.
+  It reuses stream/native/observer validation and retains uncertain attempt names;
+  see [named private receipt](named-git-pack-receive.md) for ownership and proof limits.
   Its peer `publication/` subtree owns explicit qualified no-replace publication
   and distinct pre/post/uncertain rename receipts. It reuses the read-only fixed
   layout's bound handles and fingerprints for synchronization instead of adding

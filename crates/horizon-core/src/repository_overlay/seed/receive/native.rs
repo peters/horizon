@@ -15,7 +15,7 @@ pub(super) fn index(
     objects: u32,
     limits: PackedSourceLimits,
     cancelled: &impl Fn() -> bool,
-) -> Result<(), SeedError> {
+) -> Result<String, SeedError> {
     let mut session = Session::spawn(command, limits.object_timeout, Box::new(cancelled))?;
     session.begin_without_input();
     let hash = line(&mut session)?.ok_or(SeedError::Object)?;
@@ -34,6 +34,10 @@ pub(super) fn index(
         return Err(SeedError::Object);
     }
     fs::set_permissions(&index, fs::Permissions::from_mode(0o600)).map_err(|_| SeedError::Storage)?;
+    Ok(hash.to_owned())
+}
+
+pub(super) fn relocate(path: &Path, hash: &str) -> Result<(), SeedError> {
     for extension in ["pack", "idx"] {
         renameat_with(
             CWD,
