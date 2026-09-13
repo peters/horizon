@@ -1,6 +1,9 @@
+use std::sync::Arc;
+
 use egui::{Align, Color32, CornerRadius, Id, Layout, Margin, Pos2, Rect, Stroke, StrokeKind, UiBuilder, Vec2};
 use horizon_core::{AgentStatus, AttentionSeverity, PanelId, PanelKind, SshConnectionStatus, agent_definition};
 
+use crate::text::single_line_label_job;
 use crate::theme;
 
 use super::RenameEditAction;
@@ -430,8 +433,8 @@ fn badges_left_boundary(chrome: &PanelChrome<'_>) -> f32 {
         right -= 90.0;
     }
     if chrome.attention_badge.is_some() {
-        // Attention badge sits left of the history meter; reserve ~110px.
-        right -= 110.0;
+        // Attention badge sits left of the history meter.
+        right -= ATTENTION_BADGE_MAX_WIDTH;
     }
     right
 }
@@ -629,29 +632,34 @@ fn paint_history_meter(ui: &egui::Ui, painter: &egui::Painter, meter: HistoryMet
 fn attention_badge_geometry(
     painter: &egui::Painter,
     chrome: &PanelChrome<'_>,
-) -> Option<(Rect, String, egui::FontId, Color32)> {
+) -> Option<(Rect, Arc<egui::Galley>, Color32)> {
     let (severity, summary) = chrome.attention_badge?;
     let summary: &str = summary;
     let color = attention_severity_color(*severity);
     let icon = attention_severity_icon(*severity);
-
-    let display_text = attention_badge_summary(summary);
-    let badge_text = format!("{icon} {display_text}");
     let font = egui::FontId::proportional(10.0);
 
     // Position the badge left of the history meter area.
     let history_badge = panel_history_badge_rect(chrome.titlebar_rect, chrome.controls_anchor());
     let badge_right = history_badge.min.x - 6.0;
-    let text_galley = painter.layout_no_wrap(badge_text.clone(), font.clone(), color);
-    let text_width = text_galley.size().x;
-    let badge_width = text_width + 12.0;
+    let max_badge_width = (badge_right - (chrome.titlebar_rect.min.x + ATTENTION_BADGE_MIN_LEFT_INSET))
+        .clamp(0.0, ATTENTION_BADGE_MAX_WIDTH);
+    let max_text_width = (max_badge_width - ATTENTION_BADGE_HORIZONTAL_PADDING).max(0.0);
+    if max_text_width == 0.0 {
+        return None;
+    }
+
+    let display_text = attention_badge_summary(summary);
+    let badge_text = attention_badge_text(icon, &display_text);
+    let galley = painter.layout_job(single_line_label_job(&badge_text, &font, color, max_text_width));
+    let badge_width = (galley.size().x + ATTENTION_BADGE_HORIZONTAL_PADDING).min(max_badge_width);
     let badge_height: f32 = 18.0;
-    let badge_left = (badge_right - badge_width).max(chrome.titlebar_rect.min.x + 60.0);
+    let badge_left = badge_right - badge_width;
     let rect = Rect::from_min_size(
         Pos2::new(badge_left, chrome.titlebar_rect.center().y - badge_height * 0.5),
         Vec2::new(badge_right - badge_left, badge_height),
     );
-    Some((rect, badge_text, font, color))
+    Some((rect, galley, color))
 }
 
 /// The session badge is hidden when the painted attention badge would cover
@@ -663,6 +671,10 @@ fn session_badge_clears_attention_badge(session_badge: Rect, attention_left: f32
 /// Character budget for attention badge summaries, ellipsis included; keeps
 /// the badge within the fixed titlebar reserve.
 const ATTENTION_SUMMARY_MAX_CHARS: usize = 30;
+const ATTENTION_BADGE_MAX_WIDTH: f32 = 110.0;
+const ATTENTION_BADGE_HORIZONTAL_PADDING: f32 = 12.0;
+const ATTENTION_BADGE_MIN_LEFT_INSET: f32 = 60.0;
+const ATTENTION_BADGE_TEXT_INSET: f32 = 6.0;
 
 /// Character-based truncation for the attention badge summary. Summaries come
 /// from arbitrary agent output, so the cut must never be byte-indexed: a
@@ -671,21 +683,30 @@ fn attention_badge_summary(summary: &str) -> String {
     truncate_chars(summary, ATTENTION_SUMMARY_MAX_CHARS).into_owned()
 }
 
+fn attention_badge_text(icon: &str, summary: &str) -> String {
+    if summary.is_empty() {
+        icon.to_string()
+    } else {
+        format!("{icon} {summary}")
+    }
+}
+
 #[profiling::function]
-fn paint_attention_badge(painter: &egui::Painter, geometry: &(Rect, String, egui::FontId, Color32)) {
-    let (rect, badge_text, font, color) = geometry;
+fn paint_attention_badge(painter: &egui::Painter, geometry: &(Rect, Arc<egui::Galley>, Color32)) {
+    let (rect, galley, color) = geometry;
 
     painter.rect_filled(
         *rect,
         CornerRadius::same(4),
         Color32::from_rgba_unmultiplied(color.r() / 6, color.g() / 6, color.b() / 6, 60),
     );
-    painter.text(
-        Pos2::new(rect.min.x + 6.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        badge_text.clone(),
-        font.clone(),
-        *color,
+    painter.galley(
+        Pos2::new(
+            rect.min.x + ATTENTION_BADGE_TEXT_INSET,
+            rect.center().y - galley.size().y * 0.5,
+        ),
+        Arc::clone(galley),
+        Color32::TRANSPARENT,
     );
 }
 
@@ -824,11 +845,13 @@ pub(super) fn show_inline_rename_editor(
 
 #[cfg(test)]
 mod tests {
-    use egui::{Color32, Pos2, Rect};
+    use crate::test_egui::DiscardTextures;
+    use egui::{Color32, Context, Pos2, RawInput, Rect};
 
     use super::{
-        ATTENTION_SUMMARY_MAX_CHARS, AgentStatus, PanelChrome, SESSION_BADGE_MIN_TITLE_SPACE, SESSION_BADGE_TITLE_GAP,
-        SESSION_BADGE_WIDTH, WORKING_BADGE_GAP, attention_badge_summary, badges_left_boundary, focus_ring_stroke,
+        ATTENTION_BADGE_MAX_WIDTH, ATTENTION_BADGE_MIN_LEFT_INSET, ATTENTION_SUMMARY_MAX_CHARS, AgentStatus,
+        PanelChrome, SESSION_BADGE_MIN_TITLE_SPACE, SESSION_BADGE_TITLE_GAP, SESSION_BADGE_WIDTH, WORKING_BADGE_GAP,
+        attention_badge_geometry, attention_badge_summary, badges_left_boundary, focus_ring_stroke,
         panel_border_stroke, panel_fill, panel_title_color, panel_title_content_rect, panel_titlebar_fill,
         session_badge_clears_attention_badge, session_badge_rect, title_focus_indicator_rect, title_right_boundary,
         working_indicator_reserve, working_indicator_width,
@@ -889,6 +912,24 @@ mod tests {
                 Some(ATTENTION.get_or_init(|| (super::AttentionSeverity::Low, "Waiting for input".to_string())));
         }
         chrome
+    }
+
+    fn attention_badge_rect(chrome: &PanelChrome<'_>) -> Option<Rect> {
+        let ctx = Context::default();
+        let mut geometry = None;
+        let _ = ctx
+            .run_ui(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 160.0))),
+                    ..RawInput::default()
+                },
+                |ui| {
+                    geometry =
+                        attention_badge_geometry(&ui.painter_at(chrome.panel_rect), chrome).map(|(rect, ..)| rect);
+                },
+            )
+            .discard_textures();
+        geometry
     }
 
     #[test]
@@ -1095,5 +1136,28 @@ mod tests {
         assert_eq!(attention_badge_summary(&"a".repeat(30)), "a".repeat(30));
         assert_eq!(attention_badge_summary(&"a".repeat(31)), format!("{}…", "a".repeat(29)));
         assert_eq!(attention_badge_summary(&"æ".repeat(40)), format!("{}…", "æ".repeat(29)));
+    }
+
+    #[test]
+    fn attention_badge_geometry_keeps_wide_multibyte_text_inside_fixed_reserve() {
+        let mut chrome = chrome_at_width_with_session(AgentStatus::Idle, 320.0, false);
+        let attention = (super::AttentionSeverity::Low, "æ".repeat(ATTENTION_SUMMARY_MAX_CHARS));
+        chrome.attention_badge = Some(&attention);
+
+        let rect = attention_badge_rect(&chrome).expect("attention badge geometry");
+
+        assert!(rect.width() <= ATTENTION_BADGE_MAX_WIDTH + f32::EPSILON);
+        assert!(rect.min.x >= chrome.titlebar_rect.min.x + ATTENTION_BADGE_MIN_LEFT_INSET - f32::EPSILON);
+    }
+
+    #[test]
+    fn attention_badge_geometry_clips_to_available_titlebar_space() {
+        let mut chrome = chrome_at_width_with_session(AgentStatus::Idle, 240.0, false);
+        let attention = (super::AttentionSeverity::Low, "⚠️".repeat(ATTENTION_SUMMARY_MAX_CHARS));
+        chrome.attention_badge = Some(&attention);
+
+        let rect = attention_badge_rect(&chrome).expect("attention badge geometry");
+
+        assert!(rect.min.x >= chrome.titlebar_rect.min.x + ATTENTION_BADGE_MIN_LEFT_INSET - f32::EPSILON);
     }
 }
