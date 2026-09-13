@@ -172,7 +172,9 @@ gives A no identity today, so before the product pass A needs, in this order:
    operation-status endpoint); every VM read expands `instanceView` and the
    lifecycle decisions come from its power statuses; `deallocate/action` is Stop,
    `start/action` is Start and `runCommand/action` is the host-key attestation used
-   by setup and by Start's readiness path; deallocate and start are accepted with
+   by setup, by Start's readiness path and by Prepare Repository's allocation
+   inspection before it dispatches (which inspects the worker and can attest the
+   host key through the same channel); deallocate and start are accepted with
    202 and the provider then polls the VM's `instanceView` (covered by the reads
    above), while run-command alone follows the returned `Azure-AsyncOperation`
    status resource with bounded reads, which is the
@@ -420,8 +422,12 @@ back unchanged at return and after the worker lifecycle step.
      bind-worker --group horizon-ws-<workflow>-<job> --groups-before groups.json
      --created created-groups.json`, which checks the adapter tags and pre-run
      absence, journals the group and writes `worker_group` in one step, and the
-     `journal-group` command below is its journaling half, kept here for an
-     already-bound manifest. Journal it the moment the record exists,
+     `journal-group` command below is its journaling half. The journal is
+     append-only and `journal-group` refuses a group already present in it, so
+     the two are alternatives, never a sequence: after `bind-worker` has run,
+     `journal-group` is not run for B; `journal-group` is run only when B is not
+     yet in `created-groups.json` (today's harness, or a crash before the binding
+     with B already created). In that case journal it the moment the record exists,
      whether or not the setup goes on to succeed: `client_off.py --manifest m.json
      journal-group --group horizon-ws-<workflow>-<job> --created
      created-groups.json`. The command refuses a group it cannot read, and a
