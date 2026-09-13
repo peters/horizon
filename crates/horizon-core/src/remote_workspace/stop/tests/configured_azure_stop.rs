@@ -409,3 +409,31 @@ fn the_production_client_for_stop_is_lazy_and_unsupported_profiles_never_reach_i
     assert_eq!(fixture.current(), before);
     assert_eq!(fixture.directory.path().read_dir().expect("root").count(), 1);
 }
+
+#[test]
+fn start_intent_is_refused_before_the_client_and_never_stopped_over() {
+    let fixture = retained();
+    let fake = Stopper::answering(Ok(InteractiveWorkerStop::Stopped));
+    stop(&fixture, &fake).expect("saved Stop");
+    let stopped = fixture.current();
+    let RemoteRuntimePhase::Stopped { observed_at_millis, .. } = phase(&fixture) else {
+        panic!("stopped");
+    };
+    fixture
+        .store
+        .record_remote_start_phase(
+            &stopped,
+            RemoteRuntimePhase::Starting {
+                requested_at_millis: observed_at_millis,
+            },
+        )
+        .expect("start intent");
+    let starting = fixture.current();
+    assert_eq!(
+        refused(&fixture, &fixture.profile, None),
+        Rejected::Stop(Error::ManagementConflict),
+        "a start in flight is resolved first, before any client exists"
+    );
+    assert_eq!(fixture.current(), starting);
+    assert_eq!(fake.calls(), 1);
+}

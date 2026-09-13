@@ -1,3 +1,5 @@
+mod configured_azure;
+
 use super::*;
 use crate::{
     cloud_run::{

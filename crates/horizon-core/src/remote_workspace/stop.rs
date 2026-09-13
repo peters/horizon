@@ -1,7 +1,7 @@
 //! Explicit, durable Stop coordination. Client lifecycle never invokes this operation.
 
 mod configured;
-mod configured_azure;
+pub(super) mod configured_azure;
 mod configured_confirmation;
 mod configured_runpod;
 mod confirmation;

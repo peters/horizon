@@ -1,6 +1,10 @@
 //! Explicit, durable Start of a stopped worker's retained compute. Reconnecting,
 //! reopening a view or restarting the application never invokes this operation.
 
+mod configured_azure;
+
+pub use configured_azure::{ConfiguredAzureStart, ConfiguredAzureStartError, start_configured_azure_environment};
+
 use crate::{
     cloud_run::{
         CloudStoreError, CloudWorkflowStore, RemoteWorkspaceStoreError, StoredRemoteAllocation, WorkerLifetime,
