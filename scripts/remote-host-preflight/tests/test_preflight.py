@@ -318,6 +318,28 @@ class EngineFailures(Harness):
         by_id = {check["id"]: check for check in report["checks"]}
         self.assertEqual(by_id["container_engine"]["status"], "unsupported")
 
+    def test_podman_multiline_version_is_unusable(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture.pop("docker_version")
+        fixture.pop("docker_info")
+        fixture.pop("docker_context", None)
+        fixture["podman_socket"] = podman_socket_ok()
+        fixture["podman_info"] = {"stdout": "4.9.0\nWARN: extra line\n"}
+        code, report, _ = self.run_main(fixture)
+        self.assertEqual(code, 1)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["container_engine"]["status"], "unsupported")
+
+    def test_docker_non_string_version_is_unusable(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["docker_version"] = {"stdout": json.dumps(
+            {"Server": {"Version": ["26.1.4"], "OSType": "linux"}})}
+        fixture.pop("podman_info", None)
+        code, report, _ = self.run_main(fixture)
+        self.assertEqual(code, 1)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["container_engine"]["status"], "unsupported")
+
     def test_bearer_authorization_line_is_fully_redacted(self):
         fixture = dict(DEFAULT_FIXTURE)
         fixture["docker_version"] = docker_daemon_down(
@@ -808,6 +830,15 @@ class DiskAndCapacity(Harness):
         self.assertEqual(code, 1)
         by_id = {check["id"]: check for check in report["checks"]}
         self.assertEqual(by_id["memory_capacity"]["status"], "unsupported")
+
+    def test_nominal_16_gib_memtotal_is_supported(self):
+        # Installed 16 GiB minus ~200 MiB kernel reserve still meets the gate.
+        reserved = 16 * 1024 * 1024 - 200 * 1024
+        code, report, _ = self.run_main(dict(DEFAULT_FIXTURE),
+                                        meminfo_text=meminfo(total_kb=reserved))
+        self.assertEqual(code, 0)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["memory_capacity"]["status"], "supported")
 
 
 class TailscaleChecks(Harness):

@@ -31,7 +31,10 @@ TOOL = "remote-host-preflight"
 
 SUPPORTED_ARCHS = ("x86_64", "aarch64")
 MIN_CORES = 4
-MIN_MEM_KB = 16 * 1024 * 1024  # 16 GiB: reference CPU worker baseline
+# 16 GiB installed RAM minus kernel-reserved pages that never appear in
+# MemTotal, so a nominal 16 GiB host is not rejected.
+MEM_KERNEL_RESERVE_KB = 512 * 1024
+MIN_MEM_KB = 16 * 1024 * 1024 - MEM_KERNEL_RESERVE_KB
 MIN_FREE_KB = 20 * 1024 * 1024  # 20 GiB free on the workspace filesystem
 DEFAULT_WORKSPACE_PATH = "/var/lib/horizon-workers"
 DEFAULT_TIMEOUT = 10.0
@@ -220,15 +223,23 @@ def parse_engine_version(probe, name):
         return None
     if name == "podman":
         # `podman info --format '{{.Version.Version}}'` returns one field.
-        text = redact(str(probe.get("stdout", "")).strip())
+        # Multiline stdout (warnings mixed in) is not a version.
+        lines = [line.strip() for line in str(probe.get("stdout", "")).splitlines()
+                 if line.strip()]
+        if len(lines) != 1:
+            return None
+        text = redact(lines[0])
         return text or None
     payload = parse_json_output(probe)
     if not isinstance(payload, dict):
         return None
     server = payload.get("Server")
-    if isinstance(server, dict) and server.get("Version"):
-        return redact(str(server["Version"]))
-    return None
+    if not isinstance(server, dict):
+        return None
+    version = server.get("Version")
+    if not isinstance(version, str) or not version.strip():
+        return None
+    return redact(version.strip())
 
 
 def is_local_unix_endpoint(host):
