@@ -311,6 +311,11 @@ impl DriverState {
         );
     }
 
+    /// Fetch a bounded batch of queued HTTP bodies.
+    ///
+    /// Call this from the driver loop after the current CDP drain, not from
+    /// `handle_event`: `call_and_ack` routes in-flight messages back through
+    /// that path, and a nested `Network.loadingFinished` would recurse.
     pub(super) fn tick_http_response_bodies(
         &mut self,
         link: &mut CdpLink,

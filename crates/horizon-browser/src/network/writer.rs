@@ -101,44 +101,7 @@ impl CaptureWriter {
             self.metrics.dropped.fetch_add(1, Ordering::Relaxed);
             return;
         };
-        let record_bytes = estimated_record_bytes(&record);
-        if self
-            .metrics
-            .queued_bytes
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                current
-                    .checked_add(record_bytes)
-                    .filter(|next| *next <= QUEUE_MAX_BYTES)
-            })
-            .is_err()
-        {
-            self.metrics.dropped.fetch_add(1, Ordering::Relaxed);
-            return;
-        }
-        let mut pending = Some(record);
-        let deadline = std::time::Instant::now() + PRIORITY_ENQUEUE_TIMEOUT;
-        while let Some(record) = pending.take() {
-            match sender.try_send(record) {
-                Ok(()) => {
-                    self.metrics.enqueued.fetch_add(1, Ordering::Relaxed);
-                    return;
-                }
-                Err(TrySendError::Disconnected(_)) => {
-                    self.metrics.queued_bytes.fetch_sub(record_bytes, Ordering::Relaxed);
-                    self.metrics.dropped.fetch_add(1, Ordering::Relaxed);
-                    return;
-                }
-                Err(TrySendError::Full(full)) => {
-                    if !priority || std::time::Instant::now() >= deadline {
-                        self.metrics.queued_bytes.fetch_sub(record_bytes, Ordering::Relaxed);
-                        self.metrics.dropped.fetch_add(1, Ordering::Relaxed);
-                        return;
-                    }
-                    pending = Some(full);
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-            }
-        }
+        enqueue_record(sender, &self.metrics, record, priority);
     }
 
     pub(super) fn note_truncated(&self) {
@@ -171,6 +134,51 @@ impl CaptureWriter {
 impl Drop for CaptureWriter {
     fn drop(&mut self) {
         let _ = self.finish();
+    }
+}
+
+fn enqueue_record(
+    sender: &SyncSender<BrowserNetworkRecord>,
+    metrics: &WriterMetrics,
+    record: BrowserNetworkRecord,
+    priority: bool,
+) {
+    let record_bytes = estimated_record_bytes(&record);
+    if metrics
+        .queued_bytes
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            current
+                .checked_add(record_bytes)
+                .filter(|next| *next <= QUEUE_MAX_BYTES)
+        })
+        .is_err()
+    {
+        metrics.dropped.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    let mut pending = Some(record);
+    let deadline = std::time::Instant::now() + PRIORITY_ENQUEUE_TIMEOUT;
+    while let Some(record) = pending.take() {
+        match sender.try_send(record) {
+            Ok(()) => {
+                metrics.enqueued.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                metrics.queued_bytes.fetch_sub(record_bytes, Ordering::Relaxed);
+                metrics.dropped.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+            Err(TrySendError::Full(full)) => {
+                if !priority || std::time::Instant::now() >= deadline {
+                    metrics.queued_bytes.fetch_sub(record_bytes, Ordering::Relaxed);
+                    metrics.dropped.fetch_add(1, Ordering::Relaxed);
+                    return;
+                }
+                pending = Some(full);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
     }
 }
 
@@ -297,5 +305,108 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(std::fs::metadata(path).unwrap().permissions().mode() & 0o777, 0o600);
         }
+    }
+
+    fn sample_record(sequence: u64) -> BrowserNetworkRecord {
+        BrowserNetworkRecord::empty(
+            "capture",
+            sequence,
+            BackendKind::ChromiumCdp,
+            BrowserNetworkEventKind::HttpResponseBody,
+        )
+    }
+
+    #[test]
+    fn non_priority_enqueue_drops_immediately_when_the_channel_is_full() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let metrics = WriterMetrics::default();
+        sender
+            .send(sample_record(1))
+            .unwrap_or_else(|error| panic!("occupying send failed: {error}"));
+
+        enqueue_record(&sender, &metrics, sample_record(2), false);
+
+        assert_eq!(metrics.enqueued.load(Ordering::Relaxed), 0);
+        assert_eq!(metrics.dropped.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.queued_bytes.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            receiver
+                .try_recv()
+                .unwrap_or_else(|error| panic!("occupying record missing: {error}"))
+                .sequence,
+            1
+        );
+    }
+
+    #[test]
+    fn priority_enqueue_retries_until_a_full_channel_has_room() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let metrics = WriterMetrics::default();
+        sender
+            .send(sample_record(1))
+            .unwrap_or_else(|error| panic!("occupying send failed: {error}"));
+        let drain = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            let occupying = receiver
+                .recv()
+                .unwrap_or_else(|error| panic!("occupying recv failed: {error}"));
+            let priority = receiver
+                .recv()
+                .unwrap_or_else(|error| panic!("priority recv failed: {error}"));
+            (occupying.sequence, priority.sequence)
+        });
+
+        enqueue_record(&sender, &metrics, sample_record(2), true);
+
+        let sequences = drain
+            .join()
+            .unwrap_or_else(|_| panic!("priority drain thread panicked"));
+        assert_eq!(sequences, (1, 2));
+        assert_eq!(metrics.enqueued.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.dropped.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            metrics.queued_bytes.load(Ordering::Relaxed),
+            estimated_record_bytes(&sample_record(2))
+        );
+    }
+
+    #[test]
+    fn priority_enqueue_drops_after_timeout_when_the_channel_stays_full() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let metrics = WriterMetrics::default();
+        sender
+            .send(sample_record(1))
+            .unwrap_or_else(|error| panic!("occupying send failed: {error}"));
+
+        let started = std::time::Instant::now();
+        enqueue_record(&sender, &metrics, sample_record(2), true);
+        let elapsed = started.elapsed();
+
+        assert_eq!(metrics.enqueued.load(Ordering::Relaxed), 0);
+        assert_eq!(metrics.dropped.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.queued_bytes.load(Ordering::Relaxed), 0);
+        assert!(elapsed >= PRIORITY_ENQUEUE_TIMEOUT);
+        assert!(elapsed < Duration::from_millis(500));
+        assert_eq!(
+            receiver
+                .try_recv()
+                .unwrap_or_else(|error| panic!("occupying record missing: {error}"))
+                .sequence,
+            1
+        );
+    }
+
+    #[test]
+    fn enqueue_drops_when_queued_bytes_would_exceed_the_cap() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let metrics = WriterMetrics::default();
+        metrics.queued_bytes.store(QUEUE_MAX_BYTES, Ordering::Relaxed);
+
+        enqueue_record(&sender, &metrics, sample_record(2), true);
+
+        assert_eq!(metrics.enqueued.load(Ordering::Relaxed), 0);
+        assert_eq!(metrics.dropped.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.queued_bytes.load(Ordering::Relaxed), QUEUE_MAX_BYTES);
+        assert!(receiver.try_recv().is_err());
     }
 }

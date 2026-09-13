@@ -188,10 +188,10 @@ impl DriverState {
     ) {
         let on_page_session = event.session_id.is_some_and(|s| Some(s) == self.session_id.as_deref());
         if on_page_session {
+            // Queue completed HTTP bodies here; the driver loop pumps them
+            // after this drain returns. `tick_http_response_bodies` uses
+            // `call_and_ack`, which re-enters `handle_message`.
             self.handle_network_event(&event);
-            if event.method == "Network.loadingFinished" {
-                self.tick_http_response_bodies(link, event_tx, frame_slot);
-            }
         }
         match event.method {
             "Target.attachedToTarget" => {
