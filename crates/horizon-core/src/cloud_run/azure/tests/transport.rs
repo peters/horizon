@@ -25,7 +25,7 @@ struct Expectation {
     status: u16,
     body: String,
     request_body: Option<serde_json::Value>,
-    header: Option<(&'static str, String)>,
+    headers: Vec<(&'static str, String)>,
 }
 
 fn expect(
@@ -41,12 +41,12 @@ fn expect(
         status,
         body: body.to_string(),
         request_body,
-        header: None,
+        headers: Vec::new(),
     }
 }
 
 fn with_header(mut expectation: Expectation, name: &'static str, value: String) -> Expectation {
-    expectation.header = Some((name, value));
+    expectation.headers.push((name, value));
     expectation
 }
 
@@ -84,7 +84,7 @@ fn http_with_sleeps(expectations: Vec<Expectation>) -> (AzureArmHttp, Arc<Atomic
                 None => assert!(payload.is_empty(), "unexpected body on call {index}"),
             }
             let mut response = Response::builder().status(expectation.status);
-            if let Some((name, value)) = expectation.header {
+            for (name, value) in expectation.headers {
                 response = response.header(name, value);
             }
             Ok(response.body(Body::builder().data(expectation.body)).expect("response"))

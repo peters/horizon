@@ -3,12 +3,16 @@
 //! nothing slept once the operation is terminal.
 use super::*;
 
-fn accepted() -> Expectation {
-    with_header(
+fn accepted(retry_after: Option<&str>) -> Expectation {
+    let accepted = with_header(
         expect("POST", vm_url("/runCommand"), 202, "", Some(run_command_body())),
         "azure-asyncoperation",
         operation_url(),
-    )
+    );
+    match retry_after {
+        Some(seconds) => with_header(accepted, "retry-after", seconds.into()),
+        None => accepted,
+    }
 }
 
 fn poll(status: u16, body: &str, retry_after: Option<&str>) -> Expectation {
@@ -25,7 +29,8 @@ const DONE: &str = r#"{"status":"Succeeded","properties":{"output":{"value":[{"c
 #[test]
 fn polls_follow_the_backoff_table_and_retry_after_only_lengthens_a_capped_step() {
     let (transport, calls, sleeps) = http_with_sleeps(vec![
-        accepted(),
+        // The acceptance's own guidance governs the first wait.
+        accepted(Some("3")),
         // A far-future Retry-After is honoured only up to the cap.
         poll(200, IN_PROGRESS, Some("3600")),
         // Longer than the table step: the header wins.
@@ -46,7 +51,7 @@ fn polls_follow_the_backoff_table_and_retry_after_only_lengthens_a_capped_step()
     assert_eq!(
         *sleeps.lock().expect("sleeps"),
         [
-            Duration::from_millis(500),
+            Duration::from_secs(3),
             Duration::from_secs(60),
             Duration::from_secs(7),
             Duration::from_secs(4),
@@ -89,7 +94,7 @@ fn a_synchronous_answer_and_a_refused_operation_never_wait() {
 #[test]
 fn the_bounded_poll_sleeps_the_whole_table_exactly_once() {
     let (transport, _, sleeps) = http_with_sleeps(
-        std::iter::once(accepted())
+        std::iter::once(accepted(None))
             .chain((0..9).map(|_| poll(200, IN_PROGRESS, None)))
             .collect(),
     );
