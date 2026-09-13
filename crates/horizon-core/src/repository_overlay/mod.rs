@@ -5,6 +5,7 @@
 pub mod bundle;
 pub mod capture;
 pub mod checkout;
+pub mod checkpoint;
 pub mod intake;
 pub mod materialize;
 pub mod namespace;

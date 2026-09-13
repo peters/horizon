@@ -11,6 +11,11 @@ back into large multi-purpose modules.
   the explicit named layout owns permanent digest slots in a focused Linux leaf.
   Neither layout discovers data, transfers it, schedules capture or certifies
   provider durability. See [named publication](named-bundle-publication.md).
+- One-shot checkpoint generations keep explicit request/receipt types in
+  `repository_overlay::checkpoint`, bounded composition in its `linux` leaf and
+  retained-attempt accounting/publication in `storage`; the worker CLI only
+  decodes and reports. Existing byte-capture enrollment remains unchanged; see
+  [checkpoint generations](checkpoint-generations.md) for coverage and proof limits.
 - Explicit worker byte capture keeps request validation and existing core
   capture/bundle reuse in `horizon-repository::capture`; `byte-capture.py` owns
   the detached bounded-attempt loop and `byte_capture_store.py` owns private
