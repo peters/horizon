@@ -143,7 +143,9 @@ release_is_complete() {
 
 extract_recorded_commit() {
   local body="$1"
-  sed -n "s/.*${COMMIT_MARKER_PREFIX}\\([0-9a-fA-F]\\{40,64\\}\\)${COMMIT_MARKER_SUFFIX}.*/\\1/p" <<<"$body" | head -n 1
+  if [[ "$body" =~ horizon-release-commit:[\ ]([0-9a-fA-F]{40,64}) ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+  fi
 }
 
 body_with_commit() {
