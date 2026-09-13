@@ -522,6 +522,35 @@ fn binding_drift_during_the_observation_is_never_completed_as_a_retained_stop() 
     }
 }
 
+/// Drift after a completion was written cannot turn that saved completion into an
+/// error: the result and the store agree on the new Stopped record.
+#[test]
+fn drift_after_a_written_completion_never_denies_the_saved_completion() {
+    let fixture = AzureFixture::new(&Shape::default());
+    let before = fixture.current();
+    let observer = Observer::answering(Ok(Observation::RetainedStopped));
+    let result = azure_with(
+        &fixture.store,
+        &fixture.profile,
+        &before.workspace().environment_summary(),
+        |_| Ok(&observer),
+        |observer, allocation| {
+            let result = confirm_remote_workspace_stop(&fixture.store, observer, allocation);
+            drift(&fixture);
+            result
+        },
+    )
+    .expect("the written completion stands");
+    assert_eq!(result.observation, Observation::RetainedStopped);
+    let after = fixture.current();
+    assert!(matches!(
+        after.workspace().state().runtime.as_ref().expect("runtime").phase,
+        RemoteRuntimePhase::Stopped { .. }
+    ));
+    assert_eq!(result.saved, after.workspace().environment_summary());
+    assert_eq!(after.workspace().revision(), before.workspace().revision() + 1);
+}
+
 fn drift(fixture: &AzureFixture) {
     let current = fixture.current();
     let mut workflow = current.workflow().workflow().clone();

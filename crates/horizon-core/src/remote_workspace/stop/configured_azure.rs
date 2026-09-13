@@ -249,9 +249,9 @@ impl<P: InteractiveWorkerStopObserver> InteractiveWorkerStopObserver for BoundOb
 }
 
 /// Admission, then the observer, then the shared coordinator, with the saved state
-/// rechecked before the observer exists, inside every observation and after the
-/// coordinator returned, even on error. `client` and `confirm` are injectable so tests
-/// run the real ordering without the Azure CLI or ARM.
+/// rechecked before the observer exists, inside every observation and, for every
+/// outcome that wrote nothing, after the coordinator returned. `client` and `confirm`
+/// are injectable so tests run the real ordering without the Azure CLI or ARM.
 pub(super) fn azure_with<P: InteractiveWorkerStopObserver>(
     store: &CloudWorkflowStore,
     profile: &AzureProfile,
@@ -289,10 +289,16 @@ pub(super) fn azure_with<P: InteractiveWorkerStopObserver>(
     if bound.drifted() {
         return Err(RemoteWorkspaceStopError::StateChanged.into());
     }
-    let current = result
+    // Completion is written by the coordinator's CAS against the allocation it re-read
+    // after the observation, and the binding was rechecked inside that observation. Once
+    // that write exists no fallible validation may follow it: a late error would deny a
+    // completion that is already saved. Every non-writing outcome is still fenced here.
+    let written = result
         .as_ref()
-        .map_or(&admitted.allocation, |result| &result.allocation);
-    admitted.check_current(store, current)?;
+        .is_ok_and(|result| result.allocation != admitted.allocation);
+    if !written {
+        admitted.check_current(store, &admitted.allocation)?;
+    }
     let result = result?;
     Ok(ConfiguredStopConfirmation {
         saved: result.allocation.workspace().environment_summary(),
