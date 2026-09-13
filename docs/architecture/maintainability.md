@@ -517,6 +517,16 @@ back into large multi-purpose modules.
   dispatch never qualifies. First Delete preflights before intent;
   fresh Check/Retry bare absence stays unverified. This is a fail-closed fallback,
   not lost-reply/restart recovery acceptance; that MVP gap still needs durable context.
+- UI `remote_environments/delete` owns exact-snapshot destructive consent and one
+  background configured Delete, manual Check or separately confirmed Retry. Its
+  `result` leaf validates saved identity/revision/phase before cached presentation;
+  `paint` discloses the full Azure group or RunPod Pod scope and retained HPS billing.
+  Overview dispatch and paint exclude competing work while pending. Closure and
+  context changes discard stale presentation without cancelling/replaying requests;
+  completion wakes the UI and refreshes saved inventory when the overview is open.
+  Historical tombstones and unverified RunPod lost-response/restart outcomes are
+  never promoted to fresh provider absence. Core admission/CAS stays authoritative;
+  UI paint never accesses storage, credentials, SSH or provider endpoints.
 - `cloud_run/interactive_worker_stop.rs` is an opt-in Stop contract, separate from
   deletion and client lifetime. The local adapter's `local_docker/stop.rs` verifies
   exact ownership and disabled automatic removal before a bounded stop, then
