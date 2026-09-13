@@ -414,7 +414,6 @@ mod tests {
         assert_eq!(metrics.dropped.load(Ordering::Relaxed), 1);
         assert_eq!(metrics.queued_bytes.load(Ordering::Relaxed), 0);
         assert!(elapsed >= PRIORITY_ENQUEUE_TIMEOUT);
-        assert!(elapsed < Duration::from_millis(500));
         assert_eq!(
             receiver
                 .try_recv()

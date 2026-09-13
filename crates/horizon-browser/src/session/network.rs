@@ -34,6 +34,8 @@ impl DriverState {
                 let session = self.session_id.clone().ok_or_else(|| {
                     BrowserControlFailure::new("browser_unavailable", "the Chromium page session is not attached")
                 })?;
+                let options = options.unwrap_or_default();
+                let enable_params = capture_network_enable_params(&options);
                 self.network.start(
                     NetworkCaptureHost::new(
                         self.config.capture_directory.as_deref(),
@@ -43,7 +45,7 @@ impl DriverState {
                     &request.action_id,
                     crate::BackendKind::ChromiumCdp,
                     "cdp",
-                    options.unwrap_or_default(),
+                    options,
                 )?;
                 // A rejected start (capture already active, session detached)
                 // must not disturb the capture that is still running, so the
@@ -56,7 +58,7 @@ impl DriverState {
                     event_tx,
                     frame_slot,
                     "Network.enable",
-                    &network_enable_params(),
+                    &enable_params,
                     Some(session.as_str()),
                 ) {
                     let _ = self.network.stop();
@@ -70,7 +72,9 @@ impl DriverState {
             BrowserNetworkOperation::Status => self.network.status()?,
             BrowserNetworkOperation::Stop => {
                 self.flush_http_response_bodies(link, event_tx, frame_slot);
-                self.network.stop()?
+                let capture = self.network.stop()?;
+                self.restore_baseline_network_observation(link, event_tx, frame_slot);
+                capture
             }
         };
         Ok(BrowserControlValue::Network { capture })
@@ -112,18 +116,55 @@ impl DriverState {
         }
         self.abandon_http_response_bodies("Chromium target reattached before response-body retrieval");
         self.http_body_evidence.clear();
+        let enable_params = if self.network.include_http_bodies() {
+            network_enable_params()
+        } else {
+            serde_json::json!({})
+        };
         if let Err(error) = self.call_and_ack(
             link,
             event_tx,
             frame_slot,
             "Network.enable",
-            &network_enable_params(),
+            &enable_params,
             Some(session),
         ) {
             let _ = self.network.stop();
             let _ = event_tx.send(BrowserEvent::Warning(format!(
                 "browser network capture stopped after target reattach: {error}"
             )));
+        }
+    }
+
+    fn restore_baseline_network_observation(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+    ) {
+        let Some(session) = self.session_id.clone() else {
+            return;
+        };
+        let _ = self.call_and_ack(
+            link,
+            event_tx,
+            frame_slot,
+            "Network.disable",
+            &serde_json::json!({}),
+            Some(session.as_str()),
+        );
+        if let Err(error) = self.call_and_ack(
+            link,
+            event_tx,
+            frame_slot,
+            "Network.enable",
+            &serde_json::json!({}),
+            Some(session.as_str()),
+        ) {
+            tracing::warn!(
+                target: "browser",
+                "failed to restore unbuffered Chromium network observation after capture stop: {error}"
+            );
         }
     }
 
@@ -438,6 +479,14 @@ impl DriverState {
     }
 }
 
+fn capture_network_enable_params(options: &BrowserNetworkCaptureOptions) -> serde_json::Value {
+    if options.include_http_bodies {
+        network_enable_params()
+    } else {
+        serde_json::json!({})
+    }
+}
+
 pub(super) fn network_enable_params() -> serde_json::Value {
     // Omit maxPostDataSize: Network.enable also runs on every page attach
     // for challenge-header observation, which must not retain POST bodies.
@@ -488,6 +537,18 @@ mod tests {
             Some(u64::from(NETWORK_TOTAL_BUFFER_BYTES))
         );
         assert!(params.get("maxPostDataSize").is_none());
+    }
+
+    #[test]
+    fn websocket_only_capture_does_not_ask_chromium_to_retain_response_bodies() {
+        let options = BrowserNetworkCaptureOptions::default();
+        assert!(!options.include_http_bodies);
+        assert_eq!(capture_network_enable_params(&options), serde_json::json!({}));
+        let with_bodies = BrowserNetworkCaptureOptions {
+            include_http_bodies: true,
+            ..BrowserNetworkCaptureOptions::default()
+        };
+        assert_eq!(capture_network_enable_params(&with_bodies), network_enable_params());
     }
 
     #[test]

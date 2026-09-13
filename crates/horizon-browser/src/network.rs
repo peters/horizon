@@ -216,6 +216,12 @@ impl NetworkCaptureState {
         }
     }
 
+    pub(crate) fn include_http_bodies(&self) -> bool {
+        self.active
+            .as_ref()
+            .is_some_and(|active| active.options.include_http_bodies)
+    }
+
     pub(crate) fn http_body_url(&self, connection_id: &str) -> Option<String> {
         let active = self.active.as_ref()?;
         if !active.options.include_http_bodies || !connection_id_is_bounded(connection_id) {
