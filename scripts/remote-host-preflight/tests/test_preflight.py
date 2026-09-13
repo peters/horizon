@@ -117,10 +117,15 @@ class Harness(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        patcher = mock.patch.object(subprocess, "run", side_effect=AssertionError(
-            "no real subprocess allowed in unit tests"))
-        self.popen = patcher.start()
-        self.addCleanup(patcher.stop)
+        self.real_popen = subprocess.Popen
+        for name in ("Popen", "run"):
+            patcher = mock.patch.object(subprocess, name, side_effect=AssertionError(
+                "no real subprocess allowed in unit tests"))
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        ready = mock.patch.object(preflight, "podman_local_service_ready", return_value=True)
+        ready.start()
+        self.addCleanup(ready.stop)
         saved = {var: os.environ[var] for var in preflight.ENDPOINT_VARS if var in os.environ}
         for var in preflight.ENDPOINT_VARS:
             os.environ.pop(var, None)
@@ -267,6 +272,19 @@ class EngineFailures(Harness):
         self.assertEqual(by_id["container_engine"]["status"], "unsupported")
         self.assertIn("docker present but probe failed", by_id["container_engine"]["detail"])
         self.assertIn("permission denied", by_id["container_engine"]["detail"].lower())
+
+    def test_podman_skipped_when_local_service_is_not_running(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture.pop("docker_version")
+        fixture.pop("docker_info")
+        fixture.pop("docker_context", None)
+        fixture["podman_info"] = podman_ok()
+        with mock.patch.object(preflight, "podman_local_service_ready", return_value=False):
+            code, report, executor = self.run_main(fixture)
+        self.assertEqual(code, 1)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertIn("podman local service is not running", by_id["container_engine"]["detail"])
+        self.assertNotIn(list(preflight.PROBE_ARGS["podman_info"]), executor.seen)
 
     def test_podman_empty_version_is_unusable(self):
         fixture = dict(DEFAULT_FIXTURE)
@@ -465,7 +483,7 @@ class EngineFailures(Harness):
         self.assertIn("-B", preflight.PROBE_ARGS["workspace_dir"])
 
     def test_bounded_communicate_kills_runaway_output(self):
-        proc = subprocess.Popen(
+        proc = self.real_popen(
             [sys.executable, "-B", "-c", "import sys; sys.stdout.write('x'*200000)"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         _stdout, _stderr, overflow = preflight.bounded_communicate(proc, 5, 1024)
@@ -636,6 +654,15 @@ class StorageQualifier(Harness):
                 self.assertTrue(preflight.ext4_qualifier_problems(raw), "accepted %r" % raw)
         for raw in (b"rw\nbarrier\ndata=ordered\n", b"rw\nbarrier\ndata=journal\n"):
             self.assertEqual(preflight.ext4_qualifier_problems(raw), [])
+
+    def test_ext4_options_io_failure_is_error(self):
+        procfs, sysfs, _ = build_roots(self.tmp.name, meminfo(), None, EXT4_OK, True)
+        options_path = os.path.join(procfs, "fs", "ext4", "nvme0n1p2", "options")
+        os.remove(options_path)
+        os.mkdir(options_path)
+        _name, _raw, error = preflight.read_ext4_options(procfs, sysfs, 259, 42)
+        self.assertIsNotNone(error)
+        self.assertIn("unreadable", error)
 
     def test_not_ext4(self):
         _, report, _ = self.run_main(dict(DEFAULT_FIXTURE), ext4_options=None)

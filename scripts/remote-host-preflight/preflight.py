@@ -15,6 +15,7 @@ Read-only guarantees:
 """
 
 import argparse
+import errno
 import json
 import math
 import os
@@ -257,6 +258,20 @@ def docker_endpoint_reason(executor, timeout):
     return None
 
 
+def podman_local_service_ready():
+    """True when a local podman API socket already exists.
+
+    `podman info` on a fresh rootless account initializes libpod runtime
+    directories. This checker must not do that; it only queries an
+    already-running local service.
+    """
+    paths = ["/run/podman/podman.sock"]
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if runtime:
+        paths.insert(0, os.path.join(runtime, "podman", "podman.sock"))
+    return any(os.path.exists(path) for path in paths)
+
+
 def engine_endpoint_note(engine):
     """None when a podman client has no named/remote connection variables set.
 
@@ -309,6 +324,8 @@ def check_container_engine(executor, timeout):
     podman_note = engine_endpoint_note("podman")
     if podman_note is not None:
         reasons["podman"] = podman_note
+    elif not podman_local_service_ready():
+        reasons["podman"] = "podman local service is not running"
     else:
         podman_info, pi_err = run_probe(executor, "podman_info", timeout)
         podman_version = parse_engine_version(podman_info, "podman")
@@ -540,16 +557,20 @@ def read_ext4_options(procfs_root, sysfs_root, dev_major, dev_minor):
         return None, None, "block device %s not resolvable via sysfs" % block_id
     try:
         name = os.path.basename(os.path.realpath(block_path))
-    except OSError:
-        return None, None, "block device %s not resolvable via sysfs" % block_id
+    except OSError as exc:
+        if getattr(exc, "errno", None) in (errno.ENOENT, errno.ENOTDIR):
+            return None, None, "block device %s not resolvable via sysfs" % block_id
+        return None, None, "block device %s unreadable: %s" % (block_id, redact(exc))
     if not name or name in (".", "..") or os.sep in name:
         return None, None, "sysfs reported an unsafe device name"
     options_path = os.path.join(procfs_root, "fs", "ext4", name, "options")
     try:
         with open(options_path, "rb") as handle:
             raw = handle.read(MAX_OPTIONS_BYTES + 1)
-    except OSError:
-        return name, None, "no /proc/fs/ext4/%s entry (not a mounted ext4 filesystem)" % name
+    except OSError as exc:
+        if getattr(exc, "errno", None) in (errno.ENOENT, errno.ENOTDIR):
+            return name, None, "no /proc/fs/ext4/%s entry (not a mounted ext4 filesystem)" % name
+        return name, None, "ext4 options unreadable: %s" % redact(exc)
     return name, raw, None
 
 
@@ -607,7 +628,7 @@ def check_storage_qualifier(procfs_root, sysfs_root, workspace_path, executor, t
                 "detail": problem}
     name, options, error = read_ext4_options(procfs_root, sysfs_root, major, minor)
     if error is not None or options is None:
-        status = UNSUPPORTED
+        status = ERROR if error and "unreadable" in error else UNSUPPORTED
         value = name
         detail = error or "ext4 options unreadable"
     else:
@@ -766,8 +787,24 @@ def bounded_communicate(proc, timeout, max_bytes):
                         proc.kill()
                     open_fds = []
                     break
+        remaining = deadline - time.monotonic()
         if proc.poll() is None:
-            proc.wait()
+            if remaining <= 0:
+                proc.kill()
+                try:
+                    proc.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                raise subprocess.TimeoutExpired(proc.args, timeout)
+            try:
+                proc.wait(timeout=remaining)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                try:
+                    proc.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                raise subprocess.TimeoutExpired(proc.args, timeout)
         stdout = bytes(buckets[proc.stdout])
         stderr = bytes(buckets[proc.stderr])
         if overflow:
