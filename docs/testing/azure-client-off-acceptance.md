@@ -256,8 +256,15 @@ gives A no identity today, so before the product pass A needs, in this order:
    <id> --custom-role-only true --name <chosen name>` and `az role assignment
    list --subscription <id> --assignee <principal> --scope <scope> --role <role>`
    either return the accepted write, whose ID is then recorded, or confirm
-   absence; A is not provisioned until every intended write is either recorded
-   with its ID or verified absent. If the definition or
+   absence; A's Horizon is not launched for the product path until every
+   intended write is either recorded with its ID or verified absent. Ordering:
+   a system-assigned identity exists only once A's VM exists, so step 2
+   provisions A first (its launch gate needs no Azure identity and touches no
+   Azure resource), the operator then reads the principal with `az vm show
+   --subscription <id> --ids <A's VM ID> --query identity.principalId -o tsv`,
+   creates the role and the two assignments as described here, verifies them,
+   and only then runs the login and token probe on A and continues to step 3;
+   A does nothing with Azure in between. If the definition or
    the second assignment fails after an earlier step succeeded, nothing further
    is granted, the steps already recorded are rolled back immediately with the
    same delete commands and verified with the same empty listings, and the
@@ -278,7 +285,10 @@ gives A no identity today, so before the product pass A needs, in this order:
    approval for this authority. No Azure user credential is copied to A: the
    managed identity is A's only Azure credential. The repository PAT in item 4 is a
    different credential, typed by the operator into the preparation's token field
-   on A for one delivery and never stored there. Before Horizon is launched, and under the same `HOME`
+   on A for one delivery and never stored there. After step 2 has provisioned A
+   (its launch gate starts and stops Horizon once, with no Azure identity and no
+   Azure call) and the roles above are verified, and before the product-path
+   launch in step 3, under the same `HOME`
    Horizon will use, run `az login --identity` as A's Horizon user and prove the token
    path the product will take without printing a token: `az account get-access-token
    --subscription <id> --resource https://management.azure.com/ --query expires_on -o
@@ -350,7 +360,15 @@ back unchanged at return and after the worker lifecycle step.
    (`az group list --subscription <id> --query '[].name' -o json > groups.json`) and
    the pre-existing resources
    (`az resource list --subscription <id> --query '[].id' -o json > resources.json`)
-   for the cleanup comparison.
+   for the cleanup comparison; and prove that the deadline reaper this runbook
+   relies on exists and is running in the manifest subscription: the automation
+   account `horizon-spike-reaper` must have its schedule enabled and a job that
+   completed successfully within the last 30 minutes (`az automation job list
+   --subscription <id> --resource-group horizon-worker-registry
+   --automation-account-name horizon-spike-reaper --query
+   "[?status=='Completed'] | sort_by(@, &endTime) | [-1].{id:jobId, end:endTime}"`),
+   recorded with the run; without that proof nothing is rented, because the
+   controller-loss cost stop below is the reaper.
 2. **Provision A**: `provision-client.sh --manifest m.json --ssh-private-key key
    --horizon-binary <binary from the record> --build-record client-build.json
    --ssh-source-cidr <controller address>/32 --out client.json`. Diagnostics go to
@@ -438,11 +456,13 @@ back unchanged at return and after the worker lifecycle step.
      *Exact resource ID* and `worker.json`'s `group_id`) is recorded the moment
      the overview shows it: a confirmed Create already persists the worker
      handle, so it is usually visible right after creation while Azure is still
-     provisioning; the saved allocation is left without a worker identity, and
-     the overview at `No resource identity recorded`, when the Create response
-     was lost or unconfirmed and also when a provider or ARM error followed an
-     accepted deployment (the coordinator records the handle only once the
-     worker status comes back), in which case the overview may never show it (recovery
+     provisioning: the handle is recorded as soon as the provider returns any
+     observed status, a `Provisioning` one included, so a normal provisioning
+     observation shows the resource ID and is not a missing identity. The saved
+     allocation is left without a worker identity, and the overview at `No
+     resource identity recorded`, only when no status was observed at all: the
+     Create response was lost or unconfirmed, or the provider or ARM call
+     errored before a status came back, in which case the overview may never show it (recovery
      can legitimately observe an absent worker), so the group ID is derived from
      the recorded workflow and job identities as
      `/subscriptions/<id>/resourceGroups/horizon-ws-<workflow>-<job>` and verified
@@ -480,7 +500,18 @@ back unchanged at return and after the worker lifecycle step.
      retry), so a group journaled only after a successful baseline would survive an
      aborted run. The window between the product's create and this journal entry
      is real: if A, Horizon or the operator fails inside it, the group is neither
-     journaled nor reaper-tagged. The recovery is controller-side and runs before
+     journaled nor reaper-tagged, and an asynchronous deployment can still
+     materialize an untagged VM afterwards. A controller-side recovery cannot
+     close that window after a permanent failure, so it is a blocking
+     prerequisite for the paid run with a safety path that does not depend on
+     the controller: either the worker deployment template carries the reaper
+     tags itself (a lead-owned product change, requested on #474 with this
+     runbook: `purpose` and a `deadline` taken from the profile or the request)
+     or a subscription-side policy appends them to every resource created in a
+     `horizon-ws-*` group (an authority the lane does not hold, requested the same
+     way). Until one of those is in place the paid run does not start. The
+     controller-side recovery below covers the surviving-controller case only;
+     it runs before
      the run proceeds after any interruption of step 3, and again before step 10:
      `az group list --subscription <id> --query "[?starts_with(name, 'horizon-ws-')].{name:name, tags:tags}"`
      is compared with `groups.json`; a group absent from the pre-run list whose
@@ -505,8 +536,11 @@ back unchanged at return and after the worker lifecycle step.
      `Running`, wait, run **Check this setup** and read again. Only when the
      deployment is absent, `Failed` or `Canceled` is the outcome known. A
      `Failed` or `Canceled` deployment is terminal whether or not a VM was left
-     behind (ARM can leave a partially created VM, which setup can never observe
-     as its worker): record it with the time, do not continue to the baseline, do
+     behind (ARM can leave a partially created VM; the product's observer may
+     even report it under the exact worker identity with a `Failed` status, which
+     is a recorded identity that is not usable, distinct from no identity
+     recorded, and the evidence names which of the two it was): record it with
+     the time, do not continue to the baseline, do
      not bind, tag or start anything, and go to step 10. A `Succeeded` deployment
      with an empty VM list is a mismatch, not a wait: the worker existed and is
      gone, so record it with the time and the deployment's outputs, do not
@@ -823,7 +857,9 @@ back unchanged at return and after the worker lifecycle step.
    open one pinned SSH session with the retained client key
    (`$HOME/.horizon/remote-ssh-identities/<workflow>-<job>.key`, the saved pin as the
    only known host, port 2222, user `root`) every 30 s for at most 10 minutes until it
-   answers, and read `/workspace/progress.counter` and
+   answers, and read `/workspace/progress.counter`, and once the three-panel gate
+   has landed `/workspace/progress-2.counter` and `/workspace/progress-3.counter`
+   under exactly the same checks against their own baseline values, and
    `/workspace/horizon/repository/horizon-dirty-marker.txt`: the counter is at least
    the value recorded in the pinned read before the Stop (the task legitimately keeps
    counting while the Stop request is submitted and the VM deallocates), a second
@@ -845,7 +881,13 @@ back unchanged at return and after the worker lifecycle step.
    through the product.
 8. **Remove the observer key**, an operator step (the command mutates B through
    ARM run-command under the operator's login, and a run must not end with it
-   skipped): `timeout 35m client_off.py --manifest m.json remove-observer-key
+   skipped once the key was installed). It applies only when `install-observer-key`
+   was attempted in step 3, which the run records at that moment; if the baseline
+   aborted before that (no `worker.json`, or the install never ran), there is no
+   line to remove and the command cannot validate the descriptor, so the operator
+   destroys any generated observer key (`shred -u observer.key` at its recorded
+   path, if it was created), records that step 8 did not apply, and proceeds to
+   steps 9 and 10. Otherwise: `timeout 35m client_off.py --manifest m.json remove-observer-key
    --worker worker.json --public-key observer.pub` (the phase bounds each CLI call
    but, unlike `cleanup`, sets no whole-phase deadline, so the operator's GNU
    `timeout` supplies the 35-minute bound the reserve assumes; a phase-level bound
