@@ -128,8 +128,9 @@ impl PageScrollState {
     }
 
     fn vertical_track_width(self) -> f32 {
-        let native_gutter = (self.viewport_width - self.client_width).max(0.0);
-        native_gutter.max(MIN_TRACK_WIDTH).min(self.viewport_width)
+        // Independent of `viewport - client`, which is aggregate reserved space
+        // and can include a left gutter (`scrollbar-gutter: stable both-edges`).
+        MIN_TRACK_WIDTH.min(self.viewport_width)
     }
 }
 
@@ -197,11 +198,11 @@ mod tests {
     }
 
     #[test]
-    fn classic_gutter_matches_native_chrome_and_pages_the_track() {
+    fn classic_gutter_keeps_a_fixed_host_track_and_pages() {
         let state = classic();
         let overlay = state.vertical_overlay().expect("scrollable page");
-        assert!((overlay.track_width - 15.0).abs() < f32::EPSILON);
-        assert!((overlay.track_x - 1_149.0).abs() < f32::EPSILON);
+        assert!((overlay.track_width - super::MIN_TRACK_WIDTH).abs() < f32::EPSILON);
+        assert!((overlay.track_x - (1_164.0 - super::MIN_TRACK_WIDTH)).abs() < f32::EPSILON);
 
         let Some(VerticalScrollbarPress::Drag(drag)) = state.with_scroll_y(0.0).vertical_press(1_155.0, 72.0) else {
             panic!("visible scrollbar thumb should start a drag");
@@ -214,6 +215,18 @@ mod tests {
         };
         assert!((target - 608.0).abs() < f64::EPSILON);
         assert!(state.vertical_press(1_148.0, 300.0).is_none());
+    }
+
+    #[test]
+    fn aggregate_client_delta_does_not_widen_the_right_edge_track() {
+        let mut state = classic();
+        state.client_width = state.viewport_width - 30.0;
+        state.content_width = state.client_width;
+        let overlay = state.vertical_overlay().expect("scrollable both-edges page");
+        assert!((overlay.track_width - super::MIN_TRACK_WIDTH).abs() < f32::EPSILON);
+        assert!((overlay.track_x - (state.viewport_width - super::MIN_TRACK_WIDTH)).abs() < f32::EPSILON);
+        assert!(state.vertical_press(f64::from(overlay.track_x - 1.0), 300.0).is_none());
+        assert!(state.vertical_press(f64::from(overlay.track_x + 1.0), 300.0).is_some());
     }
 
     #[test]
