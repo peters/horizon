@@ -482,6 +482,15 @@ back into large multi-purpose modules.
   implementation reads only the exact saved resource group with owned identity
   tags; a surviving or deleting group remains present even when its VM is absent.
   It never uses guest commands, host-key lookup, lifecycle mutation or polling.
+  The RunPod `runpod/interactive/deletion.rs` leaf observes only the exact Pod,
+  retaining ownership and bound-attachment checks without host-key or volume
+  lookup. Even a terminated Pod is present until its exact GET reports absence;
+  this does not establish the state of independent storage or grant its deletion.
+  Its deletion-only wrapper binds the saved persistent request and network
+  selection without an SSH pin. It refuses provisioning, recovery and generic
+  inspection before I/O, exposes no Start/Stop capability and cannot install a
+  host-key source. Explicit Delete delegates the unchanged volume/Pod admission;
+  only the separate observation path is Pod-GET-only.
 - `remote_environment_delete.rs` coordinates explicit Delete, separately confirmed
   Retry and read-only confirmation over an exact owned allocation. Its dedicated store transition
   retains worker identity and creation fences as a tombstone; generic writes

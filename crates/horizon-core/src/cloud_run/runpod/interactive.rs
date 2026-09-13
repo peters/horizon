@@ -16,6 +16,9 @@ use super::{
     network_attachment::NetworkBinding, resource_name,
 };
 
+mod deletion;
+pub use deletion::RunPodDeletionWorkerProvider;
+
 /// Trusted source for the runtime SSH host key of one exact worker.
 ///
 /// Returning `None` keeps a running worker in `Provisioning`. Implementations

@@ -9,6 +9,7 @@ use super::*;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::sync::{Arc, Mutex};
 
+mod deletion;
 mod noncreating;
 mod persistence;
 mod reconciliation;
