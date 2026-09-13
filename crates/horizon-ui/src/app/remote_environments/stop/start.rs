@@ -1,26 +1,27 @@
-//! Explicit Start of a saved-Stopped Azure worker's retained compute from the overview:
+//! Explicit Start of a saved-Stopped cloud worker's retained compute from the overview:
 //! eligibility, the background callback and the result typing. Painting grants nothing.
 
 use super::{
-    CloudProvider, CloudWorkflowStore, ConfiguredAzureStart, ConfiguredAzureStartError, HorizonHome,
-    RemoteEnvironmentSummary, RemoteProviderConfig, RemoteRuntimePhase, StopError, StopNotice, WorkerLifetime,
-    same_target,
+    CloudProvider, CloudWorkflowStore, ConfiguredAzureStartError, ConfiguredRunPodStartError, ConfiguredStart,
+    HorizonHome, RemoteEnvironmentSummary, RemoteProviderConfig, RemoteRuntimePhase, StopError, StopNotice,
+    WorkerLifetime, same_target,
 };
 use horizon_core::{
     cloud_run::interactive_worker::InteractiveWorkerLifecycle,
-    remote_workspace::start::start_configured_azure_environment,
+    remote_workspace::start::{start_configured_azure_environment, start_configured_runpod_environment},
 };
 
-/// Explicit Start is offered only for a retained persistent Azure worker whose saved
-/// identity is Azure and whose saved phase is a verified Stop or existing Start intent
+/// Explicit Start is offered only for a supported retained persistent worker whose saved
+/// identity matches its provider and whose phase is a verified Stop or existing Start intent
 /// (a retry). A Stop still in flight is checked first, never started over.
 pub(super) fn start_supported(summary: &RemoteEnvironmentSummary) -> bool {
-    summary.provider == CloudProvider::Azure
+    (summary.provider == CloudProvider::Azure
+        || (cfg!(target_os = "linux") && summary.provider == CloudProvider::RunPod))
         && summary.lifetime == WorkerLifetime::Persistent
         && summary
             .worker_identity
             .as_ref()
-            .is_some_and(|identity| identity.provider == CloudProvider::Azure)
+            .is_some_and(|identity| identity.provider == summary.provider)
         && matches!(
             summary.saved_phase,
             Some(RemoteRuntimePhase::Stopped { .. } | RemoteRuntimePhase::Starting { .. })
@@ -31,20 +32,29 @@ pub(super) fn execute_start(
     home: &HorizonHome,
     config: &RemoteProviderConfig,
     expected: &RemoteEnvironmentSummary,
-) -> Result<ConfiguredAzureStart, StopError> {
+) -> Result<ConfiguredStart, StopError> {
     if !start_supported(expected) {
-        return Err(StopError::AzureStart(ConfiguredAzureStartError::UnsupportedProvider));
+        return Err(if expected.provider == CloudProvider::RunPod {
+            StopError::RunPodStart(ConfiguredRunPodStartError::UnsupportedProvider)
+        } else {
+            StopError::AzureStart(ConfiguredAzureStartError::UnsupportedProvider)
+        });
     }
     // Intent and the renewed observation need a writer, but a Start must not initialize
     // or migrate storage.
     let store = CloudWorkflowStore::open_existing_without_migration(home).map_err(|_| StopError::StorageUnavailable)?;
-    start_configured_azure_environment(&store, config, expected).map_err(StopError::AzureStart)
+    match expected.provider {
+        CloudProvider::RunPod => {
+            start_configured_runpod_environment(&store, config, expected).map_err(StopError::RunPodStart)
+        }
+        _ => start_configured_azure_environment(&store, config, expected).map_err(StopError::AzureStart),
+    }
 }
 
 /// A verified start writes intent (unless it already existed) and then the renewed
 /// observation: the same record with exactly those revisions and the saved phase
 /// `Reconciling`, nothing else changed.
-pub(super) fn valid_start_result(expected: &RemoteEnvironmentSummary, result: &ConfiguredAzureStart) -> bool {
+pub(super) fn valid_start_result(expected: &RemoteEnvironmentSummary, result: &ConfiguredStart) -> bool {
     let steps = match expected.saved_phase {
         Some(RemoteRuntimePhase::Stopped { .. }) => 2,
         Some(RemoteRuntimePhase::Starting { .. }) => 1,
@@ -60,7 +70,7 @@ pub(super) fn valid_start_result(expected: &RemoteEnvironmentSummary, result: &C
 }
 
 impl StopNotice {
-    pub(super) fn started(expected: RemoteEnvironmentSummary, result: Result<ConfiguredAzureStart, StopError>) -> Self {
+    pub(super) fn started(expected: RemoteEnvironmentSummary, result: Result<ConfiguredStart, StopError>) -> Self {
         let result = result.and_then(|result| {
             if !valid_start_result(&expected, &result) {
                 return Err(StopError::SelectionChanged);
@@ -71,6 +81,8 @@ impl StopNotice {
         let unverified = matches!(
             result,
             Err(StopError::AzureStart(ConfiguredAzureStartError::Start(
+                horizon_core::remote_workspace::start::RemoteWorkspaceStartError::ProviderUnavailable
+            )) | StopError::RunPodStart(ConfiguredRunPodStartError::Start(
                 horizon_core::remote_workspace::start::RemoteWorkspaceStartError::ProviderUnavailable
             )))
         );
@@ -93,6 +105,8 @@ impl StopNotice {
                 "The Start could not finish locally. Refresh saved inventory; if Start intent remains, press Start again."
                     .into()
             }
+            Err(StopError::StorageUnavailable) => "The saved environment could not be safely accessed for Start. No Start request was dispatched.".into(),
+            Err(StopError::SelectionChanged) => "The Start result does not match this environment. Refresh saved inventory; compute may already be billing.".into(),
             Err(error) => error.message(),
         };
         Self {

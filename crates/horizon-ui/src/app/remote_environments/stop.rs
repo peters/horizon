@@ -4,6 +4,8 @@ mod paint;
 mod start;
 
 use super::{Context, HorizonHome, InventoryAction, RemoteEnvironmentSummary, WakeOnDrop};
+#[cfg(test)]
+use horizon_core::remote_workspace::start::ConfiguredAzureStart;
 use horizon_core::{
     cloud_run::{
         CloudProvider, CloudWorkflowStore, WorkerLifetime, interactive_worker_stop::InteractiveWorkerStopObservation,
@@ -11,7 +13,7 @@ use horizon_core::{
     remote_provider_config::RemoteProviderConfig,
     remote_workspace::{
         RemoteRuntimePhase,
-        start::{ConfiguredAzureStart, ConfiguredAzureStartError},
+        start::{ConfiguredAzureStartError, ConfiguredRunPodStartError, ConfiguredStart},
         stop::{
             ConfiguredAzureStopError, ConfiguredRunPodStopError, ConfiguredStopConfirmation,
             ConfiguredStopConfirmationError, ConfiguredStopError, RemoteWorkspaceStopError,
@@ -55,7 +57,7 @@ enum Operation {
 enum StopResult {
     Stopped(RemoteEnvironmentSummary),
     Checked(ConfiguredStopConfirmation),
-    Started(ConfiguredAzureStart),
+    Started(ConfiguredStart),
 }
 
 // Four independent facts about one finished operation; an enum would only move the
@@ -82,6 +84,7 @@ enum StopError {
     RunPod(ConfiguredRunPodStopError),
     Azure(ConfiguredAzureStopError),
     AzureStart(ConfiguredAzureStartError),
+    RunPodStart(ConfiguredRunPodStartError),
     Check(ConfiguredStopConfirmationError),
 }
 
@@ -99,6 +102,7 @@ impl StopError {
             Self::RunPod(error) => error.to_string(),
             Self::Azure(error) => error.to_string(),
             Self::AzureStart(error) => error.to_string(),
+            Self::RunPodStart(error) => error.to_string(),
             Self::Check(error) => error.to_string(),
         }
     }
@@ -129,6 +133,14 @@ impl StopState {
                     .is_some_and(|pending| pending.expected.provider == CloudProvider::Azure) =>
             {
                 "Azure Stop is pending. Closing this overview does not cancel it. Exiting Horizon may interrupt local coordination; refresh and Check saved Stop, never resend it."
+            }
+            Some(Operation::Start)
+                if self
+                    .pending
+                    .as_ref()
+                    .is_some_and(|p| p.expected.provider == CloudProvider::RunPod) =>
+            {
+                "RunPod Start is pending; provider observation can take up to five minutes. Closing this overview does not cancel it. Exiting Horizon may interrupt local coordination; refresh and explicitly retry only if Start intent remains. A retry never re-posts a running worker."
             }
             Some(Operation::Start) => {
                 "Azure Start is pending. Closing this overview does not cancel it. Exiting Horizon may interrupt local coordination; refresh, and press Start again only if Start intent remains. A retry never re-posts a running worker."
@@ -180,7 +192,7 @@ impl StopState {
         ctx.request_repaint();
     }
 
-    /// Open the explicit Start confirmation for a saved-Stopped Azure worker.
+    /// Open the explicit Start confirmation for supported retained compute.
     pub(super) fn prepare_start(
         &mut self,
         expected: &RemoteEnvironmentSummary,

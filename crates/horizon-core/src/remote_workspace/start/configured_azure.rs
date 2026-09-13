@@ -8,7 +8,7 @@ use super::{RemoteWorkspaceStart, RemoteWorkspaceStartError, start_remote_worksp
 use crate::{
     cloud_run::{
         CloudProvider, CloudWorkflowStore, StoredRemoteAllocation, azure::AzureProfile,
-        interactive_worker::InteractiveWorkerLifecycle, interactive_worker_start::InteractiveWorkerStartProvider,
+        interactive_worker_start::InteractiveWorkerStartProvider,
     },
     remote_provider_config::{RemoteProviderConfig, RemoteProviderConfigError},
     remote_workspace::{
@@ -23,12 +23,7 @@ use crate::{
 /// Safe overview result of one start: the saved record after the renewed observation
 /// (`Reconciling`), the provider's lifecycle, and whether the worker already ran.
 /// Reconnecting session panels re-establishes readiness; nothing resumed a task.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ConfiguredAzureStart {
-    pub saved: RemoteEnvironmentSummary,
-    pub lifecycle: InteractiveWorkerLifecycle,
-    pub already_running: bool,
-}
+pub use super::ConfiguredStart as ConfiguredAzureStart;
 
 /// Start the retained compute of one explicitly confirmed, saved-Stopped Azure worker.
 /// Run off the render thread after explicit confirmation. Requires the named

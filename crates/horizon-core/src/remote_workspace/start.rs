@@ -2,9 +2,11 @@
 //! reopening a view or restarting the application never invokes this operation.
 
 mod configured_azure;
+mod configured_runpod;
 pub(crate) mod endpoint;
 
 pub use configured_azure::{ConfiguredAzureStart, ConfiguredAzureStartError, start_configured_azure_environment};
+pub use configured_runpod::{ConfiguredRunPodStartError, start_configured_runpod_environment};
 pub use endpoint::{
     InteractiveWorkerEndpointCandidate, InteractiveWorkerEndpointObserver, RemoteEndpointRefreshError,
     refresh_remote_worker_endpoint,
@@ -18,6 +20,14 @@ use crate::{
     },
     remote_workspace::RemoteRuntimePhase,
 };
+
+/// Shared overview result of explicitly starting retained compute, not a task.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConfiguredStart {
+    pub saved: super::RemoteEnvironmentSummary,
+    pub lifecycle: InteractiveWorkerLifecycle,
+    pub already_running: bool,
+}
 
 /// The record after a verified start: the same worker under the same saved identity,
 /// now `Reconciling`. Reconnecting session panels re-establishes readiness; nothing
