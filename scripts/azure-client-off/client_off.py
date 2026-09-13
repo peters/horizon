@@ -32,7 +32,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from clientoff.az import Az  # noqa: E402
 from clientoff.cleanup import identity_record, journal_records, phase_cleanup  # noqa: E402
 from clientoff.manifest import TOOL_VERSION, validate_manifest  # noqa: E402
-from clientoff.phases import phase_off, phase_return  # noqa: E402
+from clientoff.observer import observer_authorized_line  # noqa: E402
+from clientoff.phases import phase_install_observer, phase_off, phase_remove_observer, phase_return  # noqa: E402
 from clientoff.verdict import verdict_from_records  # noqa: E402
 
 def load_json(path: str) -> Any:
@@ -51,6 +52,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="never issue a mutating az call")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("validate", help="check the manifest; nothing is called")
+    line = sub.add_parser("observer-key-line", help="print the restricted authorized_keys line for the observer key")
+    line.add_argument("--public-key", required=True, help="the observer's Ed25519 public key file")
+    line.add_argument("--progress-path", required=True)
+    line.add_argument("--checkpoint-path")
     journal = sub.add_parser("journal-group", help="append a group's ARM identity and tags to the creation journal")
     journal.add_argument("--group", required=True)
     journal.add_argument("--created", required=True, help="JSON array file to append to (created if absent)")
@@ -59,10 +64,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     off.add_argument("--worker", required=True,
                      help="JSON with vm_name, port, host_key, observer_key_path (the restricted key), progress_path, "
                           "optional checkpoint_path, and the baseline identity group_id, vm_id, host")
+    install = sub.add_parser("install-observer-key", help="install the restricted observer key on B via run-command")
+    install.add_argument("--worker", required=True, help="the same worker JSON the off phase reads")
+    install.add_argument("--public-key", required=True, help="the observer's Ed25519 public key file")
+    remove = sub.add_parser("remove-observer-key", help="remove the observer key from B once the run is over")
+    remove.add_argument("--worker", required=True, help="the same worker JSON the off phase reads")
+    remove.add_argument("--public-key", required=True, help="the observer's Ed25519 public key file")
     ret = sub.add_parser("return", help="start A only and require running")
     ret.add_argument("--client", required=True, help="provision-client.sh output JSON (exact A identity)")
     cleanup = sub.add_parser("cleanup", help="delete exactly the groups this run created")
     cleanup.add_argument("--groups-before", required=True, help="JSON list of group names recorded before the run")
+    cleanup.add_argument("--resources-before", required=True,
+                         help="JSON list of ARM resource IDs recorded before the run (az resource list --query '[].id')")
     cleanup.add_argument("--created", required=True,
                          help="creation journal: JSON array of {name, id, tags} records written at creation "
                               "(provision-client.sh for A, journal-group for B)")
@@ -85,6 +98,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
     if args.command == "validate":
         print(json.dumps({"runnable": True, "tool_version": TOOL_VERSION}, indent=2))
+        return 0
+    if args.command == "observer-key-line":
+        try:
+            with open(args.public_key, encoding="utf-8") as handle:
+                public_key = handle.read().strip().split("\n")[0]
+            print(observer_authorized_line(" ".join(public_key.split()[:2]), args.progress_path, args.checkpoint_path))
+        except (OSError, ValueError, IndexError) as error:
+            print(json.dumps({"passed": False, "findings": [f"observer key line: {error}"]}, indent=2))
+            return 2
         return 0
     if args.command == "verdict":
         try:
@@ -124,7 +146,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
     if args.command in ("off", "return"):
         client = load_json(args.client)
-    if args.command == "off":
+    if args.command == "install-observer-key":
+        result = phase_install_observer(az, manifest, load_json(args.worker), args.public_key,
+                                        os.path.dirname(os.path.abspath(args.journal)) or ".")
+    elif args.command == "remove-observer-key":
+        result = phase_remove_observer(az, manifest, load_json(args.worker), args.public_key,
+                                       os.path.dirname(os.path.abspath(args.journal)) or ".")
+    elif args.command == "off":
         worker = load_json(args.worker)
         result = phase_off(az, manifest, worker, client, args.journal)
     elif args.command == "return":
@@ -135,11 +163,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                 before = json.load(handle)
             with open(args.created, encoding="utf-8") as handle:
                 created = json.load(handle)
+            with open(args.resources_before, encoding="utf-8") as handle:
+                resources_before = json.load(handle)
         except (OSError, json.JSONDecodeError) as error:
             result = {"passed": False, "deleted": [],
-                      "findings": [f"groups-before or created unreadable: {type(error).__name__}; nothing deleted"]}
+                      "findings": [f"groups-before, created or resources-before unreadable: {type(error).__name__}; nothing deleted"]}
         else:
-            result = phase_cleanup(az, manifest, before, created)
+            result = phase_cleanup(az, manifest, before, created, resources_before)
     result["az_calls"] = az.journal
     print(json.dumps(result, indent=2))
     return 0 if result.get("passed") else 1

@@ -50,12 +50,15 @@ the binary digest, a digest image reference, positive price and budget (the exam
 values above are a `Standard_B2s` list price and a two-currency-unit budget; replace
 them with the current price and your bound), a deadline within 24 hours carrying an
 explicit UTC offset and, for the phases that rent or keep compute alive, far enough
-ahead to outlast them (`validate`: the 30-minute provisioning bound, the 10-minute
-observer install bound, the off-phase setup at its bounds (eleven bounded ARM reads
+ahead to outlast them (`validate`: the 30-minute provisioning bound, the observer
+install at its bounds (fifteen bounded reads, the key derivation and one bracketed
+probe before the 10-minute run-command bound, seven reads and a probe to reconcile
+after it; about 47 minutes), the off-phase setup at its bounds (eleven bounded ARM reads
 for the client, worker and identity-bracketed state attestations, the observer
 probe, and the deallocation with its poll, which share one 10-minute bound; about
 29 minutes), the off interval and everything that must still follow it: the return
-phase's own setup and the cleanup window (about 37 minutes); `off` and `install-observer-key`: their share of the
+phase's own setup and the cleanup window (about 42 minutes: 22 for the return at its
+bounds and the 20-minute cleanup bound); `off` and `install-observer-key`: their share of the
 same sum; `return`: its own setup at its bounds (seven bounded reads and the start
 with its poll, about 22 minutes) plus the cleanup window it must leave intact), so the
 reaper can never reach a group mid-run; the phases arm their runtime deadline from
@@ -68,16 +71,17 @@ credentials and identifiers stay private.
 ## Procedure
 
 1. **Prepare locally** (Linux controller with GNU `timeout`). In a fully clean
-   checkout at `client_sha` run `record-client-build.sh --out client-build.json` (lands
-   in the slice after this one): it
+   checkout at `client_sha` run `record-client-build.sh --out client-build.json`: it
    refuses modified or untracked files, builds the `horizon` binary for
    `x86_64-unknown-linux-gnu` from that tree, refuses anything that is not an ELF
    x86-64 binary, and records HEAD together with the digest of the binary it just
    produced, so the digest can only belong to that commit; confirm the worker image digest is pullable by the pull identity; generate
    a fresh Ed25519 key pair for A (`key`, `key.pub`); record the pre-existing resource
    groups in the manifest subscription as JSON
-   (`az group list --subscription <id> --query '[].name' -o json > groups.json`) for
-   the cleanup comparison.
+   (`az group list --subscription <id> --query '[].name' -o json > groups.json`) and
+   the pre-existing resources
+   (`az resource list --subscription <id> --query '[].id' -o json > resources.json`)
+   for the cleanup comparison.
 2. **Provision A** (the script lands in a following slice; the contract below is what
    it must meet): `provision-client.sh --manifest m.json --ssh-private-key key
    --horizon-binary <binary from the record> --build-record client-build.json
@@ -134,19 +138,31 @@ credentials and identifiers stay private.
    components, so no two spellings can name one file), and the identity
    recorded now, before A is stopped: `group_id`, `vm_id`, `instance_id` (the VM's
    `vmId`, which a same-name recreation does not keep) and `host` as ARM reports them.
-   Then install the observer key as a restricted key (`install-observer-key`, which
-   lands in the slice after this one together with `observer-key-line` and
-   `remove-observer-key`). The worker image authorises `HORIZON_SSH_PUBLIC_KEY` as an
+   Then install the observer key as a restricted key: `client_off.py --manifest m.json
+   install-observer-key --worker worker.json --public-key observer.pub`. The worker image authorises `HORIZON_SSH_PUBLIC_KEY` as an
    unrestricted root key, so a plain key would not be a read-only channel; the
    harness instead appends one `authorized_keys` line of the form
    `restrict,command="<reader>" ssh-ed25519 ...` inside the worker container through
    the ARM run-command channel, after the same identity, image-tag and running gates
-   the off phase applies. `restrict` disables pty, port, agent and X11 forwarding and
+   the off phase applies. The install reserves the whole off phase after itself, hands
+   every probe what is left of its bound, appends only while the run-command bound
+   and its reconciliation still fit, and edits `authorized_keys` through an editor
+   that opens `/root/.ssh` and the file relative to a verified directory descriptor
+   with `O_NOFOLLOW`, so no planted symlink can redirect a root write. `restrict`
+   disables pty, port, agent and X11 forwarding and
    user rc; the forced reader (its source and arguments travel base64-encoded, so no
    quoting layer can alter them) opens the two paths component by component with
    `O_NOFOLLOW` below `/workspace`, returns a capped prefix of regular files only and
-   prints one JSON object, whatever command the client asked for. The off phase
-   requires this channel to answer before A is touched. The line lives in the running
+   prints one JSON object naming the paths it was installed for, whatever command
+   the client asked for; the off phase and every sample require those echoed paths to
+   be exactly the descriptor's, so a stale or foreign observer line can never supply
+   another task's counter. The off phase
+   requires this channel to answer before A is touched. The install step probes first
+   and appends nothing unless B explicitly refuses the key (an answer means it is
+   already installed; anything else leaves the state unknown and appends nothing);
+   afterwards it requires the forced reader to answer a session that requested `id`,
+   and refuses the key otherwise. `observer-key-line` prints the same line for
+   inspection or for an image that installs it itself. The line lives in the running
    container only: the worker entrypoint rewrites `authorized_keys` on every container
    start. A first-class observer account in the worker image is lead-owned and would
    replace this step.
@@ -187,8 +203,9 @@ credentials and identifiers stay private.
    power state and public address as ARM reports them, and the counter and
    checkpoint sequence through one restricted, pinned session to that address only
    (any answer other than the forced reader's JSON object is an unreadable sample).
-   B's identity is read again after its state and reading; if it changed in
-   between, the sample keeps the identity it named but no state or reading. Each
+   B's identity is read again after its state and reading (ARM IDs compared
+   case-insensitively, instance identity, image tag and endpoint exactly); if it
+   changed in between, the sample keeps the identity it named but no state or reading. Each
    sample's instant is taken at its start, so acquisition latency never makes it late. The journal is one JSON line per sample and its
    path must be unused.
 5. **Return**: `client_off.py --manifest m.json return --client client.json`. Bound
@@ -213,14 +230,22 @@ credentials and identifiers stay private.
 7. **Worker lifecycle** is a different assertion, already covered by the adapter's
    live driver (Stop, explicit start, pinned reattach). Do not Stop or start B during
    the off interval.
-8. **Remove the observer key** (lands in the slice after this one): once the return
-   and the reconnect check on A are done and before the run is reported finished, the
-   observer's `authorized_keys` line is removed from B through the run-command
-   channel and the removal is proven by B refusing the key. Until that slice lands, a
-   run must not be reported finished while the observer key is authorized on a B
-   that outlives it.
+8. **Remove the observer key**: `client_off.py --manifest m.json remove-observer-key
+   --worker worker.json --public-key observer.pub`, once the return and the reconnect
+   check on A are done and before the run is reported finished. B may outlive the
+   run (a product worker is left in place by cleanup), and the run's observer private
+   key must not keep a reading channel into it. The phase attests B, removes exactly
+   the observer's `authorized_keys` line inside the worker container through the ARM
+   run-command channel (matched whole and literally; a read error leaves the file
+   untouched), re-attests B, and passes only once B explicitly refuses the observer
+   key under the pinned host key (an answer means it is still authorized; a transport
+   failure or a reader answering with nothing proves nothing and the removal stays
+   unproven); like cleanup it also runs after the manifest deadline. A worker restart drops the line as well (the entrypoint rewrites
+   the file), but the run does not rely on that.
 9. **Cleanup**: `client_off.py --manifest m.json cleanup --groups-before groups.json
-   --created created-groups.json`. Deletes only the manifest groups that this run
+   --resources-before resources.json --created created-groups.json`. Runs under one
+   20-minute bound (every ARM call is handed what is left of it; the manifest margin
+   is the return phase plus this bound). Deletes only the manifest groups that this run
    journaled as created and that did not exist before the run (anything else is
    refused and reported; the journal holds each group's ARM ID and full tag set from
    creation), re-reads each group immediately before its delete and refuses one whose
@@ -230,8 +255,10 @@ credentials and identifiers stay private.
    group must be `horizon-client-<run_id>` carrying the manifest's `run_id`, and B's group must carry the
    adapter's `horizon-workflow-id` and `horizon-job-id` from which its own name is
    derived; anything else is refused before it is even read. It then waits for
-   proven absence (an unreadable answer is unknown, never absence) and compares the
-   remaining groups with the list from step 1.
+   proven absence (an unreadable answer is unknown, never absence) and proves the
+   peers untouched: every resource outside the deleted groups must be exactly the set
+   recorded in step 1 (a vanished peer resource, or a group recreated under its old
+   name, is a finding), and the remaining group names must match the list from step 1.
 
 ## Labelling
 

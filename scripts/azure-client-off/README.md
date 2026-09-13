@@ -9,29 +9,30 @@ labelling rules.
   evaluation of recorded observer samples; the offline verdict also checks that the
   journal's baseline names an Azure worker in the manifest's group), `az.py` (bounded
   `az` calls without a shell; every mutation names the exact resource and `--dry-run`
-  journals instead of issuing), `observer.py` (worker descriptor gates and the pinned,
-  channel-aware read; the forced reader and its authorized_keys line join it in the
-  next slice), `phases.py`
-  (attestation of the exact A and B from ARM, off, return; the observer-key install
-  and removal join it in the next slice) and
-  `cleanup.py` (deletion of exactly the journaled groups, re-proven owned immediately
-  before the delete and only when name and tags bind them to this run: A's group is
-  `horizon-client-<run_id>` carrying the manifest's `run_id`, B's group is the
-  adapter's `horizon-ws-<workflow>-<job>` carrying those identities; ARM offers no
-  conditional delete for resource groups, so this rests on names no other run can
-  reuse rather than on a compare-and-delete).
-- `client_off.py`: the command line: `validate`, `journal-group`, `off`, `return`,
-  `cleanup`, `verdict` (the observer-key lifecycle, `observer-key-line`,
-  `install-observer-key` and `remove-observer-key`, lands in the next slice),
-  driven by a frozen manifest that carries a `run_id` drawn when it was frozen
+  journals instead of issuing), `observer.py` (worker descriptor gates, the forced
+  reader behind the restricted observer key and the pinned read), `phases.py`
+  (attestation of the exact A and B from ARM, off, observer-key install and removal,
+  return) and `cleanup.py` (deletion of exactly the journaled groups, re-proven owned
+  immediately before the delete and only when name and tags bind them to this run:
+  A's group is `horizon-client-<run_id>` carrying the manifest's `run_id`, B's group
+  is the adapter's `horizon-ws-<workflow>-<job>` carrying those identities; ARM
+  offers no conditional delete for resource groups, so this rests on names no other
+  run can reuse rather than on a compare-and-delete; untouched peers are proven from
+  a resource inventory recorded before the run, and the whole phase runs under one
+  20-minute bound).
+- `client_off.py`: the command line: `validate`, `observer-key-line`,
+  `install-observer-key`, `journal-group`, `off`, `return`, `remove-observer-key`,
+  `cleanup` (`--groups-before` and `--resources-before`, the group names and ARM
+  resource IDs recorded before the run), `verdict`, driven by a frozen manifest that
+  carries a `run_id` drawn when it was frozen
   (`head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n'`); `--dry-run` never issues
   a mutating call and returns the journaled plan instead of waiting for a state it
   never caused.
+- `record-client-build.sh`: run in a fully clean checkout; builds the client from that
+  tree for x86-64 Linux and records HEAD with the digest of the binary it produced,
+  the provenance the provisioning step verifies.
 - The tests run in CI (`Azure harness tests` job) next to the workspace preflight
   suite.
-- `record-client-build.sh` (next slice): builds the client from a fully clean checkout
-  and records HEAD with the digest of the binary it produced, the provenance the
-  provisioning step verifies.
 - `provision-client.sh` (a following slice): creates client VM A in the manifest's
   run-named group with the reaper tags and the run identity, and copies the exact
   Horizon build after checking its provenance.

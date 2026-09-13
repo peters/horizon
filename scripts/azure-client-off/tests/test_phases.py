@@ -3,10 +3,13 @@ happen, in which order, on which resource, and what the restricted reader accept
 Azure, no network."""
 from __future__ import annotations
 
+import base64
 import datetime as dt
 import json
 import os
 import pathlib
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -91,24 +94,29 @@ class ObserverChannelTests(unittest.TestCase):
             return client_off.read_observations("52.174.10.5", 2222, self.HOST_KEY, "/dev/null", directory)
 
     def test_only_the_forced_readers_json_answer_counts(self):
-        nothing = {"progress": None, "checkpoint": None, "channel": "unavailable"}
-        self.assertEqual(self.observe(b'{"progress": "42\\n", "checkpoint": " 7 "}'),
-                         {"progress": 42, "checkpoint": 7, "channel": "answered"})
-        self.assertEqual(self.observe(b'{"progress": "42", "checkpoint": null}'),
-                         {"progress": 42, "checkpoint": None, "channel": "answered"})
-        self.assertEqual(self.observe(b'{"progress": null, "checkpoint": null}'),
-                         {"progress": None, "checkpoint": None, "channel": "answered"},
+        nothing = {"progress": None, "checkpoint": None, "channel": "unavailable", "paths": None}
+        paths = b'"paths": {"progress": "/workspace/live/progress", "checkpoint": null}'
+        echoed = {"progress": "/workspace/live/progress", "checkpoint": None}
+        self.assertEqual(self.observe(b'{"progress": "42\\n", "checkpoint": " 7 ", ' + paths + b'}'),
+                         {"progress": 42, "checkpoint": 7, "channel": "answered", "paths": echoed})
+        self.assertEqual(self.observe(b'{"progress": "42", "checkpoint": null, ' + paths + b'}'),
+                         {"progress": 42, "checkpoint": None, "channel": "answered", "paths": echoed})
+        self.assertEqual(self.observe(b'{"progress": null, "checkpoint": null, ' + paths + b'}'),
+                         {"progress": None, "checkpoint": None, "channel": "answered", "paths": echoed},
                          "an authorized key whose files are missing is still an authorized key")
+        self.assertEqual(self.observe(b'{"progress": "42", "checkpoint": null}')["channel"], "unavailable",
+                         "a reader that does not echo its paths is not the forced reader")
         # The forced reader answered but the pty was granted: a `command=` line without
         # `restrict`, which is not the read-only channel the acceptance needs.
-        self.assertEqual(self.observe(b'{"progress": "42", "checkpoint": null}', diagnostics=b""),
-                         {"progress": 42, "checkpoint": None, "channel": "unrestricted"})
-        self.assertEqual(self.observe(b'{"progress": "42",\r\n "checkpoint": null}\r\n', diagnostics=b""),
-                         {"progress": 42, "checkpoint": None, "channel": "unrestricted"}, "a pty's CRLF is not a parse failure")
+        self.assertEqual(self.observe(b'{"progress": "42", "checkpoint": null, ' + paths + b'}', diagnostics=b""),
+                         {"progress": 42, "checkpoint": None, "channel": "unrestricted", "paths": echoed})
+        self.assertEqual(self.observe(b'{"progress": "42",\r\n "checkpoint": null, ' + paths + b'}\r\n', diagnostics=b""),
+                         {"progress": 42, "checkpoint": None, "channel": "unrestricted", "paths": echoed},
+                         "a pty's CRLF is not a parse failure")
         for partial in (b"PTY allocation request failed on channel 0\r\n",
                         b"Warning: remote port forwarding failed for listen port 47331\r\n"):
             with self.subTest(partial=partial):
-                self.assertEqual(self.observe(b'{"progress": "42", "checkpoint": null}', diagnostics=partial)["channel"],
+                self.assertEqual(self.observe(b'{"progress": "42", "checkpoint": null, ' + paths + b'}', diagnostics=partial)["channel"],
                                  "unrestricted", "one denied capability is not `restrict`: both must be denied")
         refused = b"root@52.174.10.5: Permission denied (publickey).\n"
         self.assertEqual(self.observe(b"", 255, refused), dict(nothing, channel="refused"))
@@ -120,10 +128,10 @@ class ObserverChannelTests(unittest.TestCase):
                                  "only an explicit publickey refusal under the pin is a refusal")
         # The forced reader answered, but the counter is not exactly one integer: the
         # key is authorized and the sample is unreadable.
-        for payload in (b'{"progress": "1\\n2\\n", "checkpoint": null}', b'{"progress": "-3", "checkpoint": null}',
-                        b'{"progress": "4x", "checkpoint": null}', b'{"progress": "' + b"1" * 19 + b'", "checkpoint": null}'):
+        for payload in (b'{"progress": "1\\n2\\n", "checkpoint": null, ', b'{"progress": "-3", "checkpoint": null, ',
+                        b'{"progress": "4x", "checkpoint": null, ', b'{"progress": "' + b"1" * 19 + b'", "checkpoint": null, '):
             with self.subTest(payload=payload[:40]):
-                self.assertEqual(self.observe(payload), dict(nothing, channel="answered"))
+                self.assertEqual(self.observe(payload + paths + b'}'), dict(nothing, channel="answered", paths=echoed))
         # Not the forced reader's answer at all: nothing is known.
         for payload in (b"uid=0(root) gid=0(root)\n",  # the sent command ran: the key is not restricted
                         b'{"progress": "42"}', b'{"progress": "42", "checkpoint": null, "shell": "sh"}', b"", b"\xff",
@@ -134,6 +142,64 @@ class ObserverChannelTests(unittest.TestCase):
                          nothing, "a pin with a newline is never written")
         self.assertEqual(client_off.read_observations("203.0.113.5", 2222, self.HOST_KEY, "/dev/null", "/tmp"), nothing,
                          "an unroutable endpoint is never dialled")
+
+    def test_forced_reader_reads_regular_files_below_the_root_only(self):
+        with tempfile.TemporaryDirectory() as root:
+            os.makedirs(f"{root}/task")
+            pathlib.Path(f"{root}/task/progress").write_text("42\n", encoding="utf-8")
+            pathlib.Path(f"{root}/secret").write_text("no\n", encoding="utf-8")
+            os.symlink(f"{root}/secret", f"{root}/task/link")
+            os.symlink(f"{root}", f"{root}/task/dirlink")
+            pathlib.Path(f"{root}/task/padded").write_text("42" + " " * client_off.PROGRESS_READ_LIMIT + "x\n",
+                                                            encoding="utf-8")
+            pathlib.Path(f"{root}/task/full").write_text("4" * client_off.PROGRESS_READ_LIMIT, encoding="utf-8")
+            os.link(f"{root}/task/progress", f"{root}/task/hardlink")
+            command = client_off.reader_command(f"{root}/task/progress", f"{root}/task/hardlink", root=root)
+            completed = subprocess.run(["sh", "-c", command], capture_output=True, text=True, check=False)
+            self.assertEqual(json.loads(completed.stdout)["checkpoint"], None,
+                             "a checkpoint that is the counter file under another name is never checkpoint proof")
+            cases = {f"{root}/task/progress": "42\n", f"{root}/task/link": None, f"{root}/task": None,
+                     f"{root}/task/dirlink/secret": None, f"{root}/task/missing": None,
+                     # Over the cap is never "exactly one integer", whatever the prefix looks like.
+                     f"{root}/task/padded": None, f"{root}/task/full": "4" * client_off.PROGRESS_READ_LIMIT}
+            for path, expected in cases.items():
+                with self.subTest(path=path):
+                    command = client_off.reader_command(path, None, root=root)
+                    self.assertNotIn("'", command, "the forced command must survive every quoting layer")
+                    completed = subprocess.run(["sh", "-c", command], capture_output=True, text=True, check=False)
+                    self.assertEqual(completed.returncode, 0, completed.stderr)
+                    answer = json.loads(completed.stdout)
+                    self.assertEqual((answer["progress"], answer["checkpoint"]), (expected, None))
+                    self.assertEqual(answer["paths"], {"progress": path, "checkpoint": None}, "the reader echoes its paths")
+            with self.assertRaises(ValueError):
+                client_off.reader_command(f"{root}/../etc/passwd", None, root=root)
+            with self.assertRaises(ValueError):
+                client_off.reader_command("/etc/passwd", None, root=root)
+
+    def test_authorized_line_restricts_the_key_and_survives_sshd_dequoting(self):
+        line = client_off.observer_authorized_line(self.HOST_KEY, "/workspace/live/progress", "/workspace/live/ckpt")
+        self.assertTrue(line.startswith('restrict,command="'))
+        self.assertTrue(line.endswith(" " + self.HOST_KEY))
+        self.assertNotIn("\n", line)
+        quoted = line[len("restrict,command="):]
+        # sshd's auth-options dequote: only a backslash before a double quote is an escape.
+        dequoted, index = "", 1
+        while index < len(quoted):
+            if quoted[index] == "\\" and quoted[index + 1] == '"':
+                index += 1
+            elif quoted[index] == '"':
+                break
+            dequoted += quoted[index]
+            index += 1
+        self.assertEqual(dequoted, client_off.reader_command("/workspace/live/progress", "/workspace/live/ckpt"))
+        self.assertIn(f" {client_off.PROGRESS_READ_LIMIT}", dequoted)
+        for key, progress, checkpoint in (("ssh-rsa AAAA", "/workspace/p", None), (self.HOST_KEY, "/etc/passwd", None),
+                                          (self.HOST_KEY, "/workspace/p", "/workspace/p"),
+                                          (self.HOST_KEY + " comment", "/workspace/p", None),
+                                          (self.HOST_KEY, "/workspace/p", "/workspace/../p")):
+            with self.subTest(key=key, progress=progress, checkpoint=checkpoint):
+                with self.assertRaises(ValueError):
+                    client_off.observer_authorized_line(key, progress, checkpoint)
 
 
 class ClientIdentityTests(unittest.TestCase):
@@ -253,7 +319,7 @@ class OffPhaseTests(unittest.TestCase):
         counter = iter(range(1, 10_000))
         journal = pathlib.Path(directory) / "journal.ndjson"
         return client_off.phase_off(az, m, worker, client, str(journal), sample_seconds=1, interval_seconds=seconds,
-                                    reader=lambda *args: {"progress": next(counter), "checkpoint": None, "channel": "answered"})
+                                    reader=lambda *args: {"progress": next(counter), "checkpoint": None, "channel": "answered", "paths": {"progress": "/workspace/live/progress", "checkpoint": None}})
 
     def mutations(self, calls):
         return [c[1][:2] for c in calls if c[0] == "mutate"]
@@ -288,7 +354,7 @@ class OffPhaseTests(unittest.TestCase):
             "client already off": dict(plane={"a_power": "PowerState/deallocated"}),
             "observer channel unavailable": dict(reader=lambda *args: {"progress": None, "checkpoint": None, "channel": "unavailable"}),
             "observer key refused": dict(reader=lambda *args: {"progress": None, "checkpoint": None, "channel": "refused"}),
-            "observer key not restricted": dict(reader=lambda *args: {"progress": 3, "checkpoint": None, "channel": "unrestricted"}),
+            "observer key not restricted": dict(reader=lambda *args: {"progress": 3, "checkpoint": None, "channel": "unrestricted", "paths": {"progress": "/workspace/live/progress", "checkpoint": None}}),
         }
         for label, case in cases.items():
             with self.subTest(label=label):
@@ -493,7 +559,7 @@ class OffPhaseTests(unittest.TestCase):
 
         def reader(*args):
             budgets.append(args[5] if len(args) > 5 else None)
-            return {"progress": len(budgets), "checkpoint": None, "channel": "answered"}
+            return {"progress": len(budgets), "checkpoint": None, "channel": "answered", "paths": {"progress": "/workspace/live/progress", "checkpoint": None}}
 
         with tempfile.TemporaryDirectory() as directory:
             client_off.phase_off(az, m, worker, client, f"{directory}/j.ndjson", sample_seconds=1, interval_seconds=0.2,
@@ -516,8 +582,8 @@ class OffPhaseTests(unittest.TestCase):
     def test_a_sample_from_a_channel_that_is_not_the_restricted_reader_is_unreadable(self):
         m, az, calls = self.plane()
         worker, client = self.descriptors(m)
-        answers = iter([{"progress": 1, "checkpoint": None, "channel": "answered"}])  # the gate probe
-        later = {"progress": 9, "checkpoint": None, "channel": "unrestricted"}
+        answers = iter([{"progress": 1, "checkpoint": None, "channel": "answered", "paths": {"progress": "/workspace/live/progress", "checkpoint": None}}])  # the gate probe
+        later = {"progress": 9, "checkpoint": None, "channel": "unrestricted", "paths": {"progress": "/workspace/live/progress", "checkpoint": None}}
         with tempfile.TemporaryDirectory() as directory:
             client_off.phase_off(az, m, worker, client, f"{directory}/j.ndjson", sample_seconds=1, interval_seconds=0.2,
                                  reader=lambda *args: next(answers, later))
@@ -530,7 +596,7 @@ class OffPhaseTests(unittest.TestCase):
         worker, client = self.descriptors(m)
         with tempfile.TemporaryDirectory() as directory:
             result = client_off.phase_off(az, m, worker, client, f"{directory}/j.ndjson",
-                                          reader=lambda *args: {"progress": 1, "checkpoint": None, "channel": "answered"})
+                                          reader=lambda *args: {"progress": 1, "checkpoint": None, "channel": "answered", "paths": {"progress": "/workspace/live/progress", "checkpoint": None}})
             self.assertFalse(os.path.exists(f"{directory}/j.ndjson"), "no header is left behind")
         self.assertTrue(result["dry_run"])
 
@@ -596,11 +662,290 @@ class OffPhaseTests(unittest.TestCase):
         started = time.monotonic()
         with tempfile.TemporaryDirectory() as directory:
             result = client_off.phase_off(az, m, worker, client, f"{directory}/j.ndjson",
-                                          reader=lambda *args: {"progress": 1, "checkpoint": None, "channel": "answered"})
+                                          reader=lambda *args: {"progress": 1, "checkpoint": None, "channel": "answered", "paths": {"progress": "/workspace/live/progress", "checkpoint": None}})
         self.assertLess(time.monotonic() - started, 5, "a dry run returns without polling for a state it never caused")
         self.assertFalse(result["passed"])
         self.assertTrue(result["dry_run"])
         self.assertEqual(self.mutations(calls), [("vm", "deallocate")], "the intended call is journaled, not issued")
+
+    def test_install_appends_the_restricted_line_through_run_command_and_proves_it(self):
+        m, az, calls = self.plane()
+        worker, _ = self.descriptors(m)
+        answers = iter([{"progress": None, "checkpoint": None, "channel": "refused"}, {"progress": 3, "checkpoint": None, "channel": "answered", "paths": {"progress": "/workspace/live/progress", "checkpoint": None}}])
+        az.edit_container_authorized_keys = lambda group, name, line, action: client_off.Az.edit_container_authorized_keys(
+            az, group, name, line, action)
+        az.append_container_authorized_key = lambda group, name, line: client_off.Az.append_container_authorized_key(
+            az, group, name, line)
+        with tempfile.TemporaryDirectory() as directory:
+            private, public, public_key = self.observer_pair(directory)
+            result = client_off.phase_install_observer(az, m, dict(worker, observer_key_path=private), public, directory,
+                                                       reader=lambda *args: next(answers))
+        self.assertEqual(result, {"passed": True, "installed": True, "progress": 3, "checkpoint": None})
+        invoke = [c[1] for c in calls if c[0] == "mutate"]
+        self.assertEqual([c[:3] for c in invoke], [("vm", "run-command", "invoke")])
+        self.assertIn(m["worker_group"], invoke[0])
+        script = invoke[0][invoke[0].index("--scripts") + 1]
+        self.assertIn("docker exec horizon-worker", script)
+        self.assertIn("python3 - append ", script, "the editor runs in the container, relative to a verified /root/.ssh")
+        line = base64.b64decode(script.rsplit(" ", 1)[1].rstrip("'")).decode("ascii")
+        self.assertEqual(line, client_off.observer_authorized_line(public_key, worker["progress_path"], None))
+        program = base64.b64decode(script.split("echo ")[1].split(" |")[0]).decode("ascii")
+        self.assertIn("O_NOFOLLOW", program)
+        self.assertIn("dir_fd=ssh", program)
+        # The worker is attested immediately before the append and again after it.
+        mutation_index = next(i for i, c in enumerate(calls) if c[0] == "mutate")
+        shows = [i for i, c in enumerate(calls) if c[0] == "read" and c[1][:2] == ("vm", "show") and m["worker_group"] in c[1]]
+        self.assertTrue(any(i < mutation_index for i in shows) and any(i > mutation_index for i in shows), calls)
+
+    def test_install_reports_an_unanswered_append_by_what_the_reader_proves(self):
+        for answers, installed, passed in (([{"progress": None, "checkpoint": None, "channel": "refused"}, {"progress": 5, "checkpoint": None, "channel": "answered", "paths": {"progress": "/workspace/live/progress", "checkpoint": None}}], True, True),
+                                           ([{"progress": None, "checkpoint": None, "channel": "refused"}, {"progress": None, "checkpoint": None, "channel": "refused"}], "unknown", False)):
+            with self.subTest(installed=installed):
+                m, az, calls = self.plane()
+                worker, _ = self.descriptors(m)
+                az.append_container_authorized_key = lambda group, name, line: None  # answer lost, not a dry run
+                del calls[:]
+                replies = iter(answers)
+                with tempfile.TemporaryDirectory() as directory:
+                    private, public, _ = self.observer_pair(directory)
+                    result = client_off.phase_install_observer(az, m, dict(worker, observer_key_path=private), public,
+                                                               directory, reader=lambda *args: next(replies))
+                self.assertEqual((result["passed"], result["installed"]), (passed, installed), result)
+                if not passed:
+                    self.assertIn("retry could append a second line", result["findings"][0])
+                shows = [c for c in calls if c[1][:2] == ("vm", "show") and m["worker_group"] in c[1]]
+                self.assertGreaterEqual(len(shows), 2, "B is attested before the append and again before the reader is believed")
+        m, az, calls = self.plane(b_vm_id="/g/b/other")
+        worker, _ = self.descriptors(m)
+        az.append_container_authorized_key = lambda group, name, line: None
+        with tempfile.TemporaryDirectory() as directory:
+            private, public, _ = self.observer_pair(directory)
+            result = client_off.phase_install_observer(az, m, dict(worker, observer_key_path=private), public, directory,
+                                                       reader=lambda *args: {"progress": 5, "checkpoint": None, "channel": "answered", "paths": {"progress": "/workspace/live/progress", "checkpoint": None}})
+        self.assertFalse(result["passed"], "a reader answering from a replaced B proves nothing")
+        m, az, calls = self.plane()
+        worker, _ = self.descriptors(m)
+        az.dry_run = True
+        az.edit_container_authorized_keys = lambda group, name, line, action: client_off.Az.edit_container_authorized_keys(
+            az, group, name, line, action)
+        az.append_container_authorized_key = lambda group, name, line: client_off.Az.append_container_authorized_key(
+            az, group, name, line)
+        with tempfile.TemporaryDirectory() as directory:
+            private, public, _ = self.observer_pair(directory)
+            result = client_off.phase_install_observer(az, m, dict(worker, observer_key_path=private), public, directory,
+                                                       reader=lambda *args: {"progress": None, "checkpoint": None, "channel": "refused"})
+        self.assertTrue(result["dry_run"] and not result["installed"] and not result["passed"], result)
+        self.assertEqual([c[1][:3] for c in calls if c[0] == "mutate"], [("vm", "run-command", "invoke")], "journaled, not issued")
+
+    def test_every_install_probe_is_bracketed_by_worker_identity_reads(self):
+        # B's instance flips once the probe has run: the "already installed" answer, the
+        # lost-answer recovery and the post-append proof all fall back to unproven.
+        answered = {"progress": 2, "checkpoint": None, "channel": "answered",
+                    "paths": {"progress": "/workspace/live/progress", "checkpoint": None}}
+        refused = {"progress": None, "checkpoint": None, "channel": "refused", "paths": None}
+        # (answers, append result, flip after which probe, expected passed/installed)
+        cases = ((iter([answered]), {}, 1, (False, "unknown")),          # "already installed" from a replaced B
+                 (iter([refused, answered]), None, 2, (False, "unknown")),  # lost answer settled from a replaced B
+                 (iter([refused, answered]), {}, 2, (False, "unknown")))    # post-append proof from a replaced B: unproven
+        for answers, append_result, flip_after, expected in cases:
+            with self.subTest(expected=expected):
+                m, az, calls = self.plane()
+                worker, _ = self.descriptors(m)
+                az.append_container_authorized_key = lambda group, name, line, result=append_result: result
+                original = az.run
+                state = {"probed": 0}
+
+                def flipping(args, mutating=False, timeout=0, original=original, state=state, m=m, flip_after=flip_after):
+                    answer = original(args, mutating, timeout)
+                    if args[:2] == ["vm", "show"] and m["worker_group"] in args and state["probed"] >= flip_after:
+                        answer = dict(answer, vmId=A_INSTANCE)
+                    return answer
+
+                def reader(*args, answers=answers, state=state):
+                    state["probed"] += 1
+                    return next(answers)
+
+                az.run = flipping
+                with tempfile.TemporaryDirectory() as directory:
+                    private, public, _ = self.observer_pair(directory)
+                    result = client_off.phase_install_observer(az, m, dict(worker, observer_key_path=private), public, directory,
+                                                               reader=reader)
+                self.assertEqual((result["passed"], result["installed"]), expected, result)
+
+    def test_install_refuses_a_public_key_that_is_not_the_observer_private_keys(self):
+        m, az, calls = self.plane()
+        worker, _ = self.descriptors(m)
+        with tempfile.TemporaryDirectory() as directory:
+            private, _, _ = self.observer_pair(directory)
+            other = pathlib.Path(directory) / "other.pub"
+            other.write_text("ssh-ed25519 " + "B" * 68 + " other\n", encoding="utf-8")
+            result = client_off.phase_install_observer(az, m, dict(worker, observer_key_path=private), str(other), directory,
+                                                       reader=lambda *args: {"progress": None, "checkpoint": None, "channel": "refused"})
+        self.assertFalse(result["passed"])
+        self.assertIn("not the observer private key's", result["findings"][0])
+        self.assertEqual(self.mutations(calls), [], "a foreign key is never appended")
+
+    def test_install_applies_the_off_phase_identity_gates_before_the_append(self):
+        with tempfile.TemporaryDirectory() as directory:
+            public = pathlib.Path(directory) / "observer.pub"
+            public.write_text("ssh-ed25519 " + "B" * 68 + "\n", encoding="utf-8")
+            cases = {"replaced worker": dict(plane={"b_vm_id": "/g/b/other"}),
+                     "other image": dict(plane={"image": "x.azurecr.io/horizon-remote-worker@sha256:" + "c" * 64}),
+                     "worker not running": dict(plane={"b_power": "PowerState/deallocated"}),
+                     "stale address": dict(worker_patch={"host": "52.174.10.6"})}
+            for label, case in cases.items():
+                with self.subTest(label=label):
+                    m, az, calls = self.plane(**case.get("plane", {}))
+                    worker, _ = self.descriptors(m)
+                    worker.update(case.get("worker_patch", {}))
+                    result = client_off.phase_install_observer(az, m, worker, str(public), directory,
+                                                               reader=lambda *args: {"progress": None, "checkpoint": None, "channel": "refused"})
+                    self.assertFalse(result["passed"], label)
+                    self.assertEqual(self.mutations(calls), [], f"{label}: never a run-command on another VM")
+
+    def test_install_never_appends_when_the_key_already_answers_or_the_gates_fail(self):
+        with tempfile.TemporaryDirectory() as directory:
+            private, public, _ = self.observer_pair(directory)
+            m, az, calls = self.plane()
+            worker, _ = self.descriptors(m)
+            worker["observer_key_path"] = private
+            result = client_off.phase_install_observer(az, m, worker, str(public), directory,
+                                                       reader=lambda *args: {"progress": 1, "checkpoint": None, "channel": "answered", "paths": {"progress": "/workspace/live/progress", "checkpoint": None}})
+            self.assertTrue(result["passed"] and not result["installed"])
+            self.assertEqual(self.mutations(calls), [])
+            # A probe that neither answers nor refuses authorizes nothing: an append on top
+            # of an unknown state could stack a second line.
+            for unknown in ({"progress": None, "checkpoint": None, "channel": "unavailable"},
+                            {"progress": None, "checkpoint": None, "channel": "answered", "paths": {"progress": "/workspace/live/progress", "checkpoint": None}}):
+                result = client_off.phase_install_observer(az, m, worker, str(public), directory, reader=lambda *args: unknown)
+                self.assertEqual(self.mutations(calls), [], unknown)
+                if unknown["channel"] == "unavailable":
+                    self.assertEqual((result["passed"], result["installed"]), (False, "unknown"), result)
+                else:
+                    self.assertTrue(result["passed"] and not result["installed"], "an answer with missing files is still installed")
+            result = client_off.phase_install_observer(az, m, dict(worker, host_key="ssh-rsa AAAA"), str(public), directory,
+                                                       reader=lambda *args: {"progress": None, "checkpoint": None, "channel": "refused"})
+            self.assertFalse(result["passed"])
+            self.assertEqual(self.mutations(calls), [])
+
+    def observer_pair(self, directory):
+        """A real Ed25519 pair for observer C, so the pair check runs for real."""
+        private = pathlib.Path(directory) / "observer"
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "observer@c", "-f", str(private)], check=True)
+        public_key = " ".join(private.with_suffix(".pub").read_text(encoding="utf-8").split()[:2])
+        return str(private), str(private.with_suffix(".pub")), public_key
+
+    def test_the_key_editor_appends_and_removes_relative_to_a_verified_directory(self):
+        line = client_off.observer_authorized_line("ssh-ed25519 " + "A" * 68, "/workspace/live/progress", None)
+        encoded = base64.b64encode(line.encode("ascii")).decode("ascii")
+        with tempfile.TemporaryDirectory() as root:
+            os.makedirs(f"{root}/.ssh", mode=0o700)
+            program = client_off.AUTHORIZED_KEYS_EDITOR.replace('os.open("/root", flags)', f'os.open("{root}", flags)')
+            keys = pathlib.Path(root) / ".ssh" / "authorized_keys"
+            keys.write_text("ssh-ed25519 " + "B" * 68 + " client\n", encoding="utf-8")
+
+            def run(action):
+                return subprocess.run([sys.executable, "-", action, encoded], input=program, text=True, capture_output=True, check=False)
+
+            self.assertEqual(run("append").returncode, 0)
+            self.assertEqual(keys.read_text(encoding="utf-8").splitlines()[1], line)
+            self.assertEqual(run("remove").returncode, 0)
+            self.assertEqual(keys.read_text(encoding="utf-8"), "ssh-ed25519 " + "B" * 68 + " client\n", "only the observer line went")
+            self.assertEqual(sorted(os.listdir(f"{root}/.ssh")), ["authorized_keys"], "no temporary left behind")
+            # A symlinked .ssh, or a symlinked key file, is never followed.
+            os.rename(f"{root}/.ssh", f"{root}/elsewhere")
+            os.symlink(f"{root}/elsewhere", f"{root}/.ssh")
+            self.assertEqual(run("append").returncode, 2)
+            os.unlink(f"{root}/.ssh")
+            os.rename(f"{root}/elsewhere", f"{root}/.ssh")
+            os.rename(keys, f"{root}/real_keys")
+            os.symlink(f"{root}/real_keys", keys)
+            self.assertEqual(run("append").returncode, 2)
+            self.assertEqual(pathlib.Path(f"{root}/real_keys").read_text(encoding="utf-8").count("\n"), 1, "the target was not written")
+            # A hard link or a FIFO at the key path is refused as well; the other file is untouched.
+            os.unlink(keys)
+            os.link(f"{root}/real_keys", keys)
+            self.assertEqual(run("append").returncode, 3)
+            self.assertEqual(pathlib.Path(f"{root}/real_keys").read_text(encoding="utf-8").count("\n"), 1)
+            os.unlink(keys)
+            os.mkfifo(keys)
+            self.assertEqual(run("append").returncode, 3, "a FIFO never blocks the editor")
+            os.unlink(keys)
+            # Appending to a missing file creates it; a long line is written in full.
+            long_line = line + " " + "x" * 50_000
+            long_encoded = base64.b64encode(long_line.encode("ascii")).decode("ascii")
+            self.assertEqual(subprocess.run([sys.executable, "-", "append", long_encoded], input=program, text=True,
+                                            capture_output=True, check=False).returncode, 0)
+            self.assertEqual(keys.read_text(encoding="utf-8"), long_line + "\n")
+            self.assertEqual(oct(keys.stat().st_mode)[-3:], "600")
+
+    def test_remove_observer_key_is_reconciled_by_the_reader(self):
+        for answers, passed, removed in (([{"progress": None, "checkpoint": None, "channel": "refused"}], True, True),
+                                         ([{"progress": 4, "checkpoint": None, "channel": "answered", "paths": {"progress": "/workspace/live/progress", "checkpoint": None}}], False, False),
+                                         ([{"progress": None, "checkpoint": None, "channel": "answered", "paths": {"progress": "/workspace/live/progress", "checkpoint": None}}], False, False),
+                                         ([{"progress": None, "checkpoint": None, "channel": "unavailable"}], False, "unknown")):
+            with self.subTest(channel=answers[0]["channel"]):
+                m, az, calls = self.plane()
+                worker, _ = self.descriptors(m)
+                az.edit_container_authorized_keys = lambda group, name, line, action: client_off.Az.edit_container_authorized_keys(
+                    az, group, name, line, action)
+                az.remove_container_authorized_key = lambda group, name, line: client_off.Az.remove_container_authorized_key(
+                    az, group, name, line)
+                replies = iter(answers)
+                with tempfile.TemporaryDirectory() as directory:
+                    private, public, public_key = self.observer_pair(directory)
+                    result = client_off.phase_remove_observer(az, m, dict(worker, observer_key_path=private), public, directory,
+                                                              reader=lambda *args: next(replies))
+                self.assertEqual((result["passed"], result["removed"]), (passed, removed), result)
+                invoke = [c[1] for c in calls if c[0] == "mutate"]
+                self.assertEqual([c[:3] for c in invoke], [("vm", "run-command", "invoke")])
+                script = invoke[0][invoke[0].index("--scripts") + 1]
+                self.assertIn("python3 - remove ", script)
+                self.assertEqual(base64.b64decode(script.rsplit(" ", 1)[1].rstrip("'")).decode("ascii"),
+                                 client_off.observer_authorized_line(public_key, worker["progress_path"], None))
+                program = base64.b64decode(script.split("echo ")[1].split(" |")[0]).decode("ascii")
+                self.assertIn("os.replace(name, \"authorized_keys\", src_dir_fd=ssh, dst_dir_fd=ssh)", program)
+        m, az, calls = self.plane(b_vm_id="/g/b/other")
+        worker, _ = self.descriptors(m)
+        with tempfile.TemporaryDirectory() as directory:
+            private, public, _ = self.observer_pair(directory)
+            result = client_off.phase_remove_observer(az, m, dict(worker, observer_key_path=private), public, directory,
+                                                      reader=lambda *args: {"progress": None, "checkpoint": None, "channel": "refused"})
+        self.assertFalse(result["passed"])
+        self.assertEqual(self.mutations(calls), [], "a replaced worker is never touched")
+        # A refusal from a B that changed identity during the probe proves nothing.
+        m, az, calls = self.plane()
+        worker, _ = self.descriptors(m)
+        az.remove_container_authorized_key = lambda group, name, line: {}
+        original = az.run
+        state = {"probed": False}
+
+        def flipping(args, mutating=False, timeout=0):
+            answer = original(args, mutating, timeout)
+            if args[:2] == ["vm", "show"] and m["worker_group"] in args and state["probed"]:
+                answer = dict(answer, vmId=A_INSTANCE)
+            return answer
+
+        def refusing(*args):
+            state["probed"] = True
+            return {"progress": None, "checkpoint": None, "channel": "refused"}
+
+        az.run = flipping
+        with tempfile.TemporaryDirectory() as directory:
+            private, public, _ = self.observer_pair(directory)
+            result = client_off.phase_remove_observer(az, m, dict(worker, observer_key_path=private), public, directory,
+                                                      reader=refusing)
+        self.assertEqual((result["passed"], result["removed"]), (False, "unknown"), result)
+        m, az, calls = self.plane()
+        worker, _ = self.descriptors(m)
+        with tempfile.TemporaryDirectory() as directory:
+            private, _, _ = self.observer_pair(directory)
+            other = pathlib.Path(directory) / "other.pub"
+            other.write_text("ssh-ed25519 " + "B" * 68 + " other\n", encoding="utf-8")
+            result = client_off.phase_remove_observer(az, m, dict(worker, observer_key_path=private), str(other), directory,
+                                                      reader=lambda *args: {"progress": None, "checkpoint": None, "channel": "refused"})
+        self.assertFalse(result["passed"])
+        self.assertEqual(self.mutations(calls), [], "somebody else's line is never removed")
 
     def test_return_requires_a_deallocated_client(self):
         m, az, calls = self.plane(a_power="PowerState/running")

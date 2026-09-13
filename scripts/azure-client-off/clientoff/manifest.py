@@ -67,8 +67,13 @@ def same_group(left: Any, right: Any) -> bool:
 # under a 30-minute bound, the off interval is declared, and return plus cleanup need
 # a margin. A deadline that the reaper could reach mid-run is not runnable.
 PROVISION_MINUTES = 30
-CLEANUP_MARGIN_MINUTES = 30
+# The whole cleanup phase (ownership re-reads, deletes, absence polls, inventory) runs
+# under one absolute bound; the margin a manifest must reserve after the off interval
+# is the return phase plus that bound, so the reaper deadline can never fall inside
+# either.
+CLEANUP_BOUND_SECONDS = 1_200
 RETURN_MARGIN_MINUTES = 15
+CLEANUP_MARGIN_MINUTES = RETURN_MARGIN_MINUTES + CLEANUP_BOUND_SECONDS // 60
 
 
 # Work the off phase does before its sampling interval starts, at its bounds: eleven
@@ -82,6 +87,13 @@ OFF_SETUP_MINUTES = (11 * CLI_STEP_SECONDS + 30 + 600) // 60 + 2
 RETURN_SETUP_MINUTES = (7 * CLI_STEP_SECONDS + 600) // 60 + 2
 # What the return phase must leave untouched after itself: the cleanup window.
 RETURN_RESERVE_MINUTES = CLEANUP_MARGIN_MINUTES - RETURN_MARGIN_MINUTES
+# Work the install phase does before and after its run-command append, at its bounds.
+# A bracketed probe costs seven bounded ARM reads (identity before, attestation after)
+# plus the observation. Before the append: two worker attestations (four reads each),
+# the key derivation and one bracketed probe; after it: one bracketed probe.
+PROBE_READS = 7
+INSTALL_SETUP_MINUTES = ((8 + PROBE_READS) * CLI_STEP_SECONDS + 30 + 30) // 60 + 2
+INSTALL_RECONCILE_SECONDS = PROBE_READS * CLI_STEP_SECONDS + 30
 # What must remain after the off interval: the whole return phase (its setup at its
 # bounds) and the cleanup window it leaves; the off phase may deallocate A only when
 # the return can still complete.
@@ -93,10 +105,11 @@ def required_minutes(manifest: Dict[str, Any], phase: str) -> int:
     phases arm their runtime deadline from these same numbers, so a manifest that
     validates can always run its phase to the end of the declared work."""
     off = manifest.get("off_minutes") if type(manifest.get("off_minutes")) is int else MIN_OFF_MINUTES  # noqa: E721
-    install = RUN_COMMAND_SECONDS // 60
+    install = INSTALL_SETUP_MINUTES + RUN_COMMAND_SECONDS // 60 + INSTALL_RECONCILE_SECONDS // 60 + 1
     return {"validate": PROVISION_MINUTES + install + OFF_SETUP_MINUTES + off + AFTER_OFF_MINUTES,
             "off": OFF_SETUP_MINUTES + off + AFTER_OFF_MINUTES,
-            # The install may spend its whole run-command bound before the off interval starts.
+            # The install: its setup, the run-command bound and its reconciliation, before
+            # the whole off phase.
             "install-observer-key": install + OFF_SETUP_MINUTES + off + AFTER_OFF_MINUTES,
             # The return needs its own setup and keeps the cleanup window intact after it.
             "return": RETURN_SETUP_MINUTES + RETURN_RESERVE_MINUTES}.get(phase, 0)
