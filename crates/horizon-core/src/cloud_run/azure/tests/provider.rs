@@ -320,6 +320,7 @@ pub(super) fn vm(power: &str, tags: &BTreeMap<String, String>) -> AzureVmView {
         power_state: Some(format!("PowerState/{power}")),
         tags: tags.clone(),
         data_disks: vec![retained_disk()],
+        data_disk_count: 1,
     }
 }
 

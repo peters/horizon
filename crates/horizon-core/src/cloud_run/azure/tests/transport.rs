@@ -467,8 +467,9 @@ fn virtual_machine_views_verify_the_returned_identity() {
         ("Succeeded", Some("PowerState/running"))
     );
     assert_eq!(vm.tags.get("horizon-job-id").map(String::as_str), Some("j"));
-    // Only data disks with a managed-disk ID are listed; the OS disk never is.
-    assert_eq!(vm.data_disks.len(), 1);
+    // Only data disks with a managed-disk ID are represented, the OS disk never is, and
+    // the count keeps every entry so an unrepresented one is never silently dropped.
+    assert_eq!((vm.data_disks.len(), vm.data_disk_count), (1, 2));
     assert_eq!(
         (vm.data_disks[0].lun, vm.data_disks[0].delete_option.as_str()),
         (Some(0), "Detach")

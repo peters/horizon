@@ -142,11 +142,29 @@ fn absence_stays_absence_and_uncertain_storage_stays_pending() {
     ];
     for (label, disks) in doubtful {
         let mut view = retained_vm(&s, "deallocated");
+        view.data_disk_count = disks.len();
         view.data_disks = disks;
         s.plane
             .script(Some(owned(&s)), Some(deployment("Succeeded", HOST)), vec![Some(view)]);
         assert_eq!(observe(&s, &pin()), Ok(Observation::Pending), "{label}");
     }
+    // A storage entry the view could not represent (no managed-disk ID) is storage
+    // nobody vouched for: the count says two, the list says one.
+    let mut view = retained_vm(&s, "deallocated");
+    view.data_disk_count = 2;
+    s.plane
+        .script(Some(owned(&s)), Some(deployment("Succeeded", HOST)), vec![Some(view)]);
+    assert_eq!(observe(&s, &pin()), Ok(Observation::Pending), "unrepresented entry");
+    // No current deployment address (in flight or unusable): uncertain, so pending, not
+    // a mismatch.
+    for state in [deployment("Running", HOST), deployment("Succeeded", "10.0.0.5")] {
+        s.plane
+            .script(Some(owned(&s)), Some(state), vec![Some(retained_vm(&s, "deallocated"))]);
+        assert_eq!(observe(&s, &pin()), Ok(Observation::Pending));
+    }
+    s.plane
+        .script(Some(owned(&s)), None, vec![Some(retained_vm(&s, "deallocated"))]);
+    assert_eq!(observe(&s, &pin()), Ok(Observation::Pending), "no deployment at all");
     // The disk ID compares case-insensitively, as every ARM path does.
     let mut view = retained_vm(&s, "deallocated");
     view.data_disks[0].id = view.data_disks[0].id.to_uppercase();
