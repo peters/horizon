@@ -317,6 +317,11 @@ where
     if bound.drifted() {
         return Err(RemotePanelAttachError::StateChanged.into());
     }
+    // The attachment writes nothing, so the whole admitted snapshot (allocation, binding
+    // and storage) must still hold after it: a binding that changed during the SSH
+    // intent check or the terminal spawn drops the terminal here instead of handing it
+    // over, since a connection is never returned for a binding that no longer holds.
+    admitted.check_current(store, &admitted.allocation)?;
     result.map_err(Into::into)
 }
 

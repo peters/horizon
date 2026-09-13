@@ -511,6 +511,44 @@ fn the_bound_provider_carries_the_admitted_allocation_and_fences_binding_drift_d
     assert_eq!(error, RemotePanelAttachError::StateChanged.into());
 }
 
+#[test]
+fn binding_drift_after_the_provider_answered_drops_a_finished_attachment() {
+    let fixture = AzureFixture::new(&Shape::default());
+    let expected = fixture.allocation.workspace().environment_summary();
+    let database = fixture.directory.path().join("control/store.sqlite3");
+    let error = super::super::configured::azure_with(
+        &fixture.store,
+        &fixture.identities,
+        &fixture.profile,
+        AzureFixture::request(&expected, "terminal"),
+        |_| {
+            Ok(Inspector {
+                status: retained_status(&fixture.allocation),
+                calls: Mutex::new(0),
+                on_inspect: None,
+            })
+        },
+        |provider: &Bound<'_, Inspector>, request| {
+            let worker = request
+                .allocation
+                .workspace()
+                .state()
+                .runtime
+                .as_ref()
+                .and_then(|runtime| runtime.worker.clone());
+            provider
+                .inspect_worker(worker.as_ref().expect("worker"))
+                .expect("intact binding at inspection");
+            // The binding changes between the provider's answer and the terminal
+            // handover, as a foreign writer could do during the SSH intent check.
+            drift_binding(&database);
+            Ok("a terminal that must not be handed over")
+        },
+    )
+    .expect_err("late binding drift");
+    assert_eq!(error, RemotePanelAttachError::StateChanged.into());
+}
+
 /// Change the immutable binding row underneath the allocation, as only corruption or a
 /// foreign writer could; the store's own triggers are bypassed for the fixture only.
 fn drift_binding(path: &std::path::Path) {
