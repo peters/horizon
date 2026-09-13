@@ -354,6 +354,10 @@ back into large multi-purpose modules.
   another repository walker. Storage qualification and sibling-name policy remain
   shared; non-root fingerprints survive relocation unchanged. See
   [pack publication](../remote-repository-pack-publication.md).
+  Its explicit `named` leaf instead uses permanent digest-directory claims and
+  ordinary rename only for the fresh claim owner. Independent named outcomes
+  preserve uncertain operations and unused inputs; fixed-layout verification and
+  synchronization remain shared. See [named packs](named-git-pack-publication.md).
   `intake/` combines fixed retained-root initialization with pack/bundle receipt and
   noncreating observation. Its pure request/response shell keeps strict identities;
   the Linux leaf owns the create-new claim, held directory bindings and component
