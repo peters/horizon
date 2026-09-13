@@ -13,10 +13,13 @@ mod recording;
 mod value;
 
 pub use assertion::Assertion;
-pub use fingerprint::{FrameContext, TargetCandidate, TargetFingerprint, UniquenessEvidence};
+pub use fingerprint::{
+    FrameContext, FrameLink, RankedCandidate, TargetCandidate, TargetFingerprint, UniquenessEvidence,
+};
 pub use origin::Origin;
 pub use recording::{
-    MutationClass, NavigationTemplate, QueryComponent, RecordedAction, RecordedKind, SemanticRecording,
+    MutationClass, NavigationTemplate, PathSegment, PauseReason, QueryComponent, RecordedAction, RecordedKind,
+    SemanticRecording,
 };
 pub use value::{CredentialFieldKind, FieldClassification, ValueSource};
 

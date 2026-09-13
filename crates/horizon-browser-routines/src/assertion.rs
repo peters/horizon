@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::RoutineError;
 use crate::fingerprint::TargetFingerprint;
+use crate::origin::Origin;
 
 const MAX_ASSERTION_BYTES: usize = 4 * 1024;
 
@@ -14,21 +15,27 @@ pub enum Assertion {
     Heading { value: String },
     ElementPresent { target: TargetFingerprint },
     ElementAbsent { target: TargetFingerprint },
-    AccessibleState { target: TargetFingerprint, value: String },
     TextShape { value: String },
 }
 
 impl Assertion {
     pub(crate) fn validate(&self) -> Result<(), RoutineError> {
         match self {
-            Self::UrlPattern { value } | Self::Heading { value } | Self::TextShape { value } => validate_text(value),
-            Self::AccessibleState { target, value } => {
-                target.validate()?;
-                validate_text(value)
-            }
+            Self::UrlPattern { value } => validate_url_pattern(value),
+            Self::Heading { value } | Self::TextShape { value } => validate_text(value),
             Self::ElementPresent { target } | Self::ElementAbsent { target } => target.validate(),
         }
     }
+}
+
+fn validate_url_pattern(value: &str) -> Result<(), RoutineError> {
+    validate_text(value)?;
+    if value.starts_with('/') {
+        return Ok(());
+    }
+    Origin::parse(value)
+        .map(|_| ())
+        .map_err(|_| RoutineError::InvalidAssertion)
 }
 
 fn validate_text(value: &str) -> Result<(), RoutineError> {
@@ -69,6 +76,11 @@ mod tests {
         let err = serde_json::from_value::<Assertion>(serde_json::json!({
             "type": "script",
             "value": "window.ok"
+        }));
+        assert!(err.is_err());
+        let err = serde_json::from_value::<Assertion>(serde_json::json!({
+            "type": "accessible_state",
+            "value": "selected"
         }));
         assert!(err.is_err());
     }

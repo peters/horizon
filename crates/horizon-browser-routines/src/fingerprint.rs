@@ -12,10 +12,20 @@ const MAX_FRAME_CHAIN: usize = 8;
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TargetFingerprint {
-    pub candidates: Vec<TargetCandidate>,
-    pub uniqueness: UniquenessEvidence,
+    pub candidates: Vec<RankedCandidate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected: Option<u32>,
     pub frame: FrameContext,
     pub digest: String,
+}
+
+/// One ranked identity plus uniqueness evidence for that candidate.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RankedCandidate {
+    pub identity: TargetCandidate,
+    pub match_count: u32,
+    pub unique: bool,
 }
 
 /// One identity strategy. Multi-component kinds have explicit fields.
@@ -72,7 +82,15 @@ pub struct FrameContext {
     pub top_level: bool,
     pub origin: Origin,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub chain: Vec<String>,
+    pub chain: Vec<FrameLink>,
+}
+
+/// Durable iframe identity. Not a session-scoped browser frame id.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrameLink {
+    pub origin: Origin,
+    pub name: String,
 }
 
 impl TargetCandidate {
@@ -116,18 +134,15 @@ impl TargetFingerprint {
         if self.digest.is_empty() || self.digest.len() > MAX_DIGEST_BYTES || self.digest.chars().any(char::is_control) {
             return Err(RoutineError::InvalidFingerprint);
         }
-        if self.uniqueness.match_count == 0 {
-            return Err(RoutineError::InvalidFingerprint);
-        }
-        if self.uniqueness.unique != (self.uniqueness.match_count == 1) {
+        if let Some(selected) = self.selected
+            && usize::try_from(selected).map_or(true, |index| index >= self.candidates.len())
+        {
             return Err(RoutineError::InvalidFingerprint);
         }
         if self.frame.chain.len() > MAX_FRAME_CHAIN
-            || self
-                .frame
-                .chain
-                .iter()
-                .any(|frame| frame.is_empty() || frame.len() > MAX_DIGEST_BYTES || frame.chars().any(char::is_control))
+            || self.frame.chain.iter().any(|frame| {
+                frame.name.is_empty() || frame.name.len() > MAX_DIGEST_BYTES || frame.name.chars().any(char::is_control)
+            })
         {
             return Err(RoutineError::InvalidFingerprint);
         }
@@ -135,7 +150,10 @@ impl TargetFingerprint {
             return Err(RoutineError::InvalidFingerprint);
         }
         for candidate in &self.candidates {
-            candidate.validate_fields()?;
+            if candidate.match_count == 0 || candidate.unique != (candidate.match_count == 1) {
+                return Err(RoutineError::InvalidFingerprint);
+            }
+            candidate.identity.validate_fields()?;
         }
         if !self.has_durable_candidate() {
             return Err(RoutineError::UndurableTarget);
@@ -147,27 +165,28 @@ impl TargetFingerprint {
     pub fn has_durable_candidate(&self) -> bool {
         self.candidates
             .iter()
-            .any(|candidate| !candidate.is_css_fallback() || candidate.reviewed())
+            .any(|candidate| !candidate.identity.is_css_fallback() || candidate.identity.reviewed())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{FrameContext, TargetCandidate, TargetFingerprint, UniquenessEvidence};
+    use super::{FrameContext, FrameLink, RankedCandidate, TargetCandidate, TargetFingerprint};
     use crate::RoutineError;
     use crate::origin::Origin;
 
     fn fingerprint() -> TargetFingerprint {
         TargetFingerprint {
-            candidates: vec![TargetCandidate::RoleName {
-                role: "button".to_string(),
-                name: "Generate report".to_string(),
-                reviewed: false,
-            }],
-            uniqueness: UniquenessEvidence {
+            candidates: vec![RankedCandidate {
+                identity: TargetCandidate::RoleName {
+                    role: "button".to_string(),
+                    name: "Generate report".to_string(),
+                    reviewed: false,
+                },
                 match_count: 1,
                 unique: true,
-            },
+            }],
+            selected: Some(0),
             frame: FrameContext {
                 top_level: true,
                 origin: Origin::parse("https://reports.example").expect("origin"),
@@ -180,22 +199,24 @@ mod tests {
     #[test]
     fn duplicate_text_is_recorded_as_non_unique() {
         let mut target = fingerprint();
-        target.uniqueness = UniquenessEvidence {
-            match_count: 2,
-            unique: false,
-        };
+        target.candidates[0].match_count = 2;
+        target.candidates[0].unique = false;
         assert_eq!(target.validate(), Ok(()));
     }
 
     #[test]
     fn css_fallback_alone_is_not_durable_unless_reviewed() {
         let mut target = fingerprint();
-        target.candidates = vec![TargetCandidate::CssFallback {
-            value: "div > span:nth-child(3)".to_string(),
-            reviewed: false,
+        target.candidates = vec![RankedCandidate {
+            identity: TargetCandidate::CssFallback {
+                value: "div > span:nth-child(3)".to_string(),
+                reviewed: false,
+            },
+            match_count: 1,
+            unique: true,
         }];
         assert_eq!(target.validate(), Err(RoutineError::UndurableTarget));
-        let TargetCandidate::CssFallback { reviewed, .. } = &mut target.candidates[0] else {
+        let TargetCandidate::CssFallback { reviewed, .. } = &mut target.candidates[0].identity else {
             panic!("css");
         };
         *reviewed = true;
@@ -208,15 +229,19 @@ mod tests {
         target.frame = FrameContext {
             top_level: false,
             origin: Origin::parse("https://idp.example").expect("frame origin"),
-            chain: vec!["frame-1".to_string()],
+            chain: vec![FrameLink {
+                origin: Origin::parse("https://idp.example").expect("frame origin"),
+                name: "login".to_string(),
+            }],
         };
         assert_eq!(target.validate(), Ok(()));
         let encoded = serde_json::to_value(&target).expect("encode");
         assert_eq!(encoded["frame"]["origin"], "https://idp.example");
         assert_eq!(encoded["frame"]["top_level"], false);
-        assert_eq!(encoded["candidates"][0]["kind"], "role_name");
-        assert_eq!(encoded["candidates"][0]["role"], "button");
-        assert_eq!(encoded["candidates"][0]["name"], "Generate report");
+        assert_eq!(encoded["candidates"][0]["identity"]["kind"], "role_name");
+        assert_eq!(encoded["candidates"][0]["identity"]["role"], "button");
+        assert_eq!(encoded["candidates"][0]["identity"]["name"], "Generate report");
+        assert_eq!(encoded["frame"]["chain"][0]["name"], "login");
     }
 
     #[test]

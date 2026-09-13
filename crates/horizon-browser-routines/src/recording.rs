@@ -55,7 +55,16 @@ pub enum RecordedKind {
     Reload,
     Back,
     Forward,
-    Handoff,
+    Handoff { pause: PauseReason },
+}
+
+/// Durable pause a handoff step asks the runner to enter.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PauseReason {
+    NeedsLogin,
+    NeedsUser,
+    NeedsReteach,
 }
 
 /// Replayable navigation destination. Distinct from diagnostic `url_pattern`.
@@ -63,11 +72,18 @@ pub enum RecordedKind {
 #[serde(deny_unknown_fields)]
 pub struct NavigationTemplate {
     pub origin: Origin,
-    pub path: String,
+    pub path: Vec<PathSegment>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub query: Vec<QueryComponent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fragment: Option<QueryComponent>,
+}
+
+/// One path segment, either a literal or a non-secret variable.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PathSegment {
+    pub source: ValueSource,
 }
 
 /// Non-secret query or fragment component supplied as a literal or variable.
@@ -89,13 +105,25 @@ pub enum MutationClass {
 
 impl NavigationTemplate {
     pub(crate) fn validate(&self) -> Result<(), RoutineError> {
-        if !self.path.starts_with('/')
-            || self.path.len() > 8 * 1024
-            || self.path.contains('?')
-            || self.path.contains('#')
-            || self.path.chars().any(char::is_control)
-        {
+        if self.path.is_empty() {
             return Err(RoutineError::InvalidNavigation);
+        }
+        for segment in &self.path {
+            match &segment.source {
+                ValueSource::Literal { value } => {
+                    if value.is_empty()
+                        || value.contains('/')
+                        || value.contains('?')
+                        || value.contains('#')
+                        || value.chars().any(char::is_control)
+                    {
+                        return Err(RoutineError::InvalidNavigation);
+                    }
+                    segment.source.validate(FieldClassification::Ordinary)?;
+                }
+                ValueSource::Variable { .. } => segment.source.validate(FieldClassification::Ordinary)?,
+                ValueSource::CredentialField { .. } => return Err(RoutineError::InvalidNavigation),
+            }
         }
         for component in self.query.iter().chain(self.fragment.iter()) {
             component.validate()?;
@@ -103,11 +131,17 @@ impl NavigationTemplate {
         Ok(())
     }
 
-    /// Origin plus path, with no query or fragment. The compiler appends
-    /// non-secret query variables separately.
+    /// Origin plus literal path segments. Variable segments are omitted.
     #[must_use]
     pub fn origin_and_path(&self) -> String {
-        format!("{}{}", self.origin.as_str(), self.path)
+        let mut url = self.origin.as_str().to_string();
+        for segment in &self.path {
+            if let ValueSource::Literal { value } = &segment.source {
+                url.push('/');
+                url.push_str(value);
+            }
+        }
+        url
     }
 }
 
@@ -149,7 +183,7 @@ impl SemanticRecording {
     /// Returns the validation error, or [`RoutineError::Json`] if encoding fails.
     pub fn to_redacted_json(&self) -> Result<String, RoutineError> {
         self.validate()?;
-        serde_json::to_string(self).map_err(|error| RoutineError::Json(error.to_string()))
+        serde_json::to_string(self).map_err(|_| RoutineError::Json("malformed routine JSON".to_string()))
     }
 
     /// Decode and validate a recording document.
@@ -158,7 +192,8 @@ impl SemanticRecording {
     /// Returns [`RoutineError::Json`] for malformed JSON (including unknown
     /// fields) or the validation error for a well-typed but illegal document.
     pub fn from_json(bytes: &str) -> Result<Self, RoutineError> {
-        let recording: Self = serde_json::from_str(bytes).map_err(|error| RoutineError::Json(error.to_string()))?;
+        let recording: Self =
+            serde_json::from_str(bytes).map_err(|_| RoutineError::Json("malformed routine JSON".to_string()))?;
         recording.validate()?;
         Ok(recording)
     }
@@ -214,6 +249,8 @@ impl RecordedAction {
                 if selector.is_empty()
                     || selector.len() > MAX_WAIT_SELECTOR_BYTES
                     || selector.chars().any(char::is_control)
+                    || selector.contains('?')
+                    || selector.contains('#')
                 {
                     return Err(RoutineError::InvalidRecording);
                 }
@@ -228,7 +265,7 @@ impl RecordedAction {
                     .ok_or(RoutineError::MissingNavigation)?
                     .validate()
             }
-            RecordedKind::Reload | RecordedKind::Back | RecordedKind::Forward | RecordedKind::Handoff => {
+            RecordedKind::Reload | RecordedKind::Back | RecordedKind::Forward | RecordedKind::Handoff { .. } => {
                 if self.target.is_some() || self.navigation.is_some() {
                     return Err(RoutineError::InvalidRecording);
                 }
@@ -253,9 +290,9 @@ fn reject_value(value_source: Option<&ValueSource>) -> Result<(), RoutineError> 
 
 #[cfg(test)]
 mod tests {
-    use super::{MutationClass, NavigationTemplate, RecordedAction, RecordedKind, SemanticRecording};
+    use super::{MutationClass, NavigationTemplate, PathSegment, RecordedAction, RecordedKind, SemanticRecording};
     use crate::assertion::Assertion;
-    use crate::fingerprint::{FrameContext, TargetCandidate, TargetFingerprint, UniquenessEvidence};
+    use crate::fingerprint::{FrameContext, RankedCandidate, TargetCandidate, TargetFingerprint};
     use crate::origin::Origin;
     use crate::value::{CredentialFieldKind, FieldClassification, ValueSource};
     use crate::{RoutineError, SCHEMA_VERSION};
@@ -267,15 +304,16 @@ mod tests {
 
     fn target() -> TargetFingerprint {
         TargetFingerprint {
-            candidates: vec![TargetCandidate::RoleName {
-                role: "button".to_string(),
-                name: "Generate report".to_string(),
-                reviewed: false,
-            }],
-            uniqueness: UniquenessEvidence {
+            candidates: vec![RankedCandidate {
+                identity: TargetCandidate::RoleName {
+                    role: "button".to_string(),
+                    name: "Generate report".to_string(),
+                    reviewed: false,
+                },
                 match_count: 1,
                 unique: true,
-            },
+            }],
+            selected: Some(0),
             frame: FrameContext {
                 top_level: true,
                 origin: origin(),
@@ -323,7 +361,11 @@ mod tests {
             url_pattern: "https://reports.example/app".to_string(),
             navigation: Some(NavigationTemplate {
                 origin: origin(),
-                path: "/app".to_string(),
+                path: vec![PathSegment {
+                    source: ValueSource::Literal {
+                        value: "app".to_string(),
+                    },
+                }],
                 query: Vec::new(),
                 fragment: None,
             }),

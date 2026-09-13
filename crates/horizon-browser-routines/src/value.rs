@@ -39,7 +39,10 @@ impl ValueSource {
     pub(crate) fn validate(&self, classification: FieldClassification) -> Result<(), RoutineError> {
         match self {
             Self::Literal { value } => {
-                if classification == FieldClassification::Password {
+                if matches!(
+                    classification,
+                    FieldClassification::Password | FieldClassification::Username
+                ) {
                     return Err(RoutineError::SecretLiteral);
                 }
                 if value.len() > MAX_LITERAL_BYTES {
@@ -51,7 +54,10 @@ impl ValueSource {
                 Ok(())
             }
             Self::Variable { name } => {
-                if classification == FieldClassification::Password {
+                if matches!(
+                    classification,
+                    FieldClassification::Password | FieldClassification::Username
+                ) {
                     return Err(RoutineError::SecretLiteral);
                 }
                 validate_identifier(name)
@@ -99,6 +105,10 @@ mod tests {
         };
         assert_eq!(
             variable.validate(FieldClassification::Password),
+            Err(RoutineError::SecretLiteral)
+        );
+        assert_eq!(
+            literal.validate(FieldClassification::Username),
             Err(RoutineError::SecretLiteral)
         );
     }
