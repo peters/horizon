@@ -409,16 +409,15 @@ back unchanged at return and after the worker lifecycle step.
      `worker_group`, which stays `unbound` until then), which follows
      from those identities. The full ARM group ID
      `/subscriptions/<id>/resourceGroups/horizon-ws-<workflow>-<job>` (the overview's
-     *Exact resource ID* and `worker.json`'s `group_id`) and the rest of
-     `worker.json`'s identity are captured only after **Check this setup** below
-     reports the deployment observed. A confirmed Create already records the
-     worker handle, so the overview's *Exact resource ID* (the group ID) can be
-     present while Azure is still provisioning and is recorded as soon as it
-     shows; only an unconfirmed or lost Create response leaves the saved
-     allocation without a worker identity and the overview at `No resource
-     identity recorded`, which is the state that waits for Check. The VM fields
-     (`vm_id`, `instance_id`, `host`, the attested host key) always wait for the
-     observation. The group name is
+     *Exact resource ID* and `worker.json`'s `group_id`) is recorded the moment
+     the overview shows it: a confirmed Create already persists the worker
+     handle, so it is usually visible right after creation while Azure is still
+     provisioning, and only an unconfirmed or lost Create response leaves the
+     saved allocation without a worker identity and the overview at `No resource
+     identity recorded`, in which case the group ID is recorded when **Check
+     this setup** below first shows it. The remaining `worker.json` fields
+     (`vm_id`, `instance_id`, `host`, the attested host key) are captured only
+     after that Check reports the deployment observed. The group name is
      derived from the workflow and job identities the record carries from the
      moment the allocation is saved, before the deployment is sent, so it is known
      even when an accepted deployment followed by a lost observation leaves the
@@ -752,9 +751,10 @@ back unchanged at return and after the worker lifecycle step.
      --query "instanceView.statuses[?starts_with(code, 'PowerState/')].code | [0]" -o tsv
    ```
 
-   The first must print the recorded `instance_id` and the second a power state
-   of `deallocated`, `stopped` (which the provider treats as stopped-allocated and
-   accepts for Start), `starting` or `running`,
+   The first must print the recorded `instance_id` and the second one of the
+   full codes `PowerState/deallocated`, `PowerState/stopped` (which the provider
+   treats as stopped-allocated and accepts for Start), `PowerState/starting` or
+   `PowerState/running`,
    and on A the token probe from prerequisite 2 must
    still print an expiry; a missing or replaced VM, or a failed probe, ends the
    retries as a non-retryable outcome. Retries are budgeted: at most three presses
@@ -820,14 +820,14 @@ back unchanged at return and after the worker lifecycle step.
    or host-key observation, leaving B running under a durable Start intent with
    no compensating deallocation), so after step 7 the operator re-reads B's power
    state with the instance-view read above: whenever B is running, this
-   step runs in full and must pass. A transitional state (`starting`,
-   `deallocating`, `stopping`) is re-read every 30 s for at most 10 minutes
-   until it settles; a state still transitional after that bound is treated as
-   not running and reported. Only for a B that is not running, whether
-   `deallocated`, `stopped` (stopped-allocated, which a failed or timed-out Start
-   can leave behind and which this command cannot attest either), settled from a
-   transitional state into one of those, or unavailable,
-   can it not run. Nothing restarts B
+   step runs in full and must pass. A transitional code (`PowerState/starting`,
+   `PowerState/deallocating`, `PowerState/stopping`) is re-read every 30 s for at
+   most 10 minutes until it settles; a code still transitional after that bound
+   is treated as not running and reported. Only for a B that is not
+   `PowerState/running`, whether `PowerState/deallocated`, `PowerState/stopped`
+   (stopped-allocated, which a failed or timed-out Start can leave behind and
+   which this command cannot attest either), settled from a transitional code
+   into one of those, or unavailable, can it not run. Nothing restarts B
    outside the product to make it runnable: in that state the operator destroys
    the observer private key on the controller (`shred -u <the path recorded as
    observer_key_path in worker.json>`, the only copy; the public half is inert
@@ -841,10 +841,10 @@ back unchanged at return and after the worker lifecycle step.
    on the data disk, which holds only `/workspace`). If step 9 is
    refused, fails or runs out of time, the residual depends on B's state, which
    the operator re-reads with the instance-view read, waiting out a transitional
-   state (`starting`, `deallocating`, `stopping`) every 30 s for at most 10
-   minutes first. A B that is `running` (the
-   normal case after a successful step 7 Start) or `stopped` (stopped-allocated),
-   or still transitional after that bound,
+   code (`PowerState/starting`, `PowerState/deallocating`, `PowerState/stopping`)
+   every 30 s for at most 10 minutes first. A B at `PowerState/running` (the
+   normal case after a successful step 7 Start) or `PowerState/stopped`
+   (stopped-allocated), or still transitional after that bound,
    keeps billing compute, so the operator deallocates it from the controller,
    the one mutation of B outside the product this runbook allows and only on
    this failure path: `az vm deallocate --subscription <id> --ids <B's VM ID>
