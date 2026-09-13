@@ -78,7 +78,9 @@ REDACTED_PATTERNS = (
         r"(?i)[A-Za-z0-9_-]*(password|passwd|secret|token|api[_-]?key)\s*[:=]\s*[^\n]*"
     ),
     re.compile(r"(?i)\bauthorization\s*:\s*[^\n]*"),
+    re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{8,}"),
 )
+URI_USERINFO = re.compile(r"(?i)([a-z][a-z0-9+.-]*://)[^/@\s]+:[^/@\s]+@")
 
 # Precomputed read-only facts that cannot be proven from host metadata alone.
 ALWAYS_UNVERIFIED = (
@@ -99,6 +101,7 @@ def redact(text):
     if not text:
         return ""
     out = str(text)
+    out = URI_USERINFO.sub(r"\1<redacted>@", out)
     for pattern in REDACTED_PATTERNS:
         out = pattern.sub("<redacted>", out)
     return out[:400]
@@ -117,7 +120,7 @@ def run_probe(executor, key, timeout, extra_argv=None):
     try:
         result = executor(argv, timeout)
     except subprocess.TimeoutExpired:
-        return None, "probe timed out after %.0fs" % timeout
+        return None, "probe timed out after %ss" % format_seconds(timeout)
     except FileNotFoundError:
         if key in OPTIONAL_PROBES:
             return None, "tool not present"
@@ -169,7 +172,7 @@ def engine_failure_bit(name, probe, error, timeout):
     absent / timeout / nonzero-exit / malformed-or-unreachable."""
     if error is not None:
         if "timed out" in error:
-            return "%s: probe timed out after %ss" % (name, timeout)
+            return "%s: probe timed out after %ss" % (name, format_seconds(timeout))
         if "not present" in error:
             return "%s: tool not present" % name
         return "%s: %s" % (name, redact(error))
@@ -417,12 +420,16 @@ def select_mount_point(mount_paths, workspace_path):
     return best
 
 
+def format_seconds(timeout):
+    """Render a timeout without rounding (0.1 stays 0.1, not 0)."""
+    return ("%.6f" % timeout).rstrip("0").rstrip(".")
+
+
 def check_disk(executor, timeout, workspace_path):
-    target = nearest_existing(workspace_path)
-    if target is None:
+    target, problem = workspace_directory(workspace_path)
+    if problem:
         return {"id": "disk_capacity", "status": ERROR, "value": None,
-                "detail": "workspace path %s does not exist and no ancestor is stat-able"
-                          % redact(workspace_path)}
+                "detail": problem}
     result, error = run_probe(executor, "disk", timeout, extra_argv=[target])
     if error:
         return {"id": "disk_capacity", "status": ERROR, "value": None, "detail": error}
@@ -454,20 +461,30 @@ def check_disk(executor, timeout, workspace_path):
     return {"id": "disk_capacity", "status": status, "value": free_kb, "detail": detail}
 
 
-def nearest_existing(path):
-    """Nearest existing ancestor of the resolved (symlink-followed) path.
+def workspace_directory(path):
+    """Nearest existing directory of the resolved path, or (None, error).
 
-    Resolve first so a dangling workspace symlink is judged on the target
-    side, matching `check_disk`'s realpath-then-mount selection.
+    A workspace that exists as a regular file (or whose first existing
+    ancestor is not a directory) cannot host the worker tree.
     """
-    current = os.path.normpath(os.path.realpath(path))
+    resolved = os.path.normpath(os.path.realpath(path))
+    current = resolved
     while True:
-        if os.path.exists(current):
-            return current
+        if os.path.isdir(current):
+            return current, None
+        if os.path.lexists(current):
+            return None, "workspace path is not a directory"
         parent = os.path.dirname(current)
         if parent == current:
-            return None
+            return None, ("workspace path %s does not exist and no ancestor is stat-able"
+                          % redact(path))
         current = parent
+
+
+def nearest_existing(path):
+    """Nearest existing directory of the resolved path, or None."""
+    target, _error = workspace_directory(path)
+    return target
 
 
 def read_ext4_options(procfs_root, sysfs_root, dev_major, dev_minor):
@@ -543,11 +560,10 @@ def ext4_qualifier_problems(raw):
 
 
 def check_storage_qualifier(procfs_root, sysfs_root, workspace_path):
-    target = nearest_existing(workspace_path)
-    if target is None:
+    target, problem = workspace_directory(workspace_path)
+    if problem:
         return {"id": "storage_ext4_qualifier", "status": UNSUPPORTED, "value": None,
-                "detail": "workspace path %s does not exist and no ancestor is stat-able"
-                          % redact(workspace_path)}
+                "detail": problem}
     try:
         stat = os.stat(target)
     except OSError:

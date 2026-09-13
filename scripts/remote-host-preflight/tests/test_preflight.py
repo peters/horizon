@@ -164,6 +164,8 @@ class Harness(unittest.TestCase):
             workspace = os.path.join(self.tmp.name, "ws")
             os.makedirs(workspace, exist_ok=True)
         target = preflight.nearest_existing(workspace)
+        if target is None:
+            target = os.path.dirname(os.path.abspath(workspace))
         st = os.stat(target)
         real_block = "%d:%d" % (os.major(st.st_dev), os.minor(st.st_dev))
         # Point the synthetic block entry at the workspace's real device id.
@@ -746,6 +748,48 @@ class RedactionAndDeterminism(Harness):
         self.assertNotIn("supersecretvalue", text)
         self.assertNotIn(JWT, text)
         self.assertIn("<redacted>", text)
+
+    def test_github_pat_and_uri_userinfo_are_redacted(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["docker_version"] = docker_daemon_down(
+            "clone https://user:hunter2@github.com/org/repo.git ghp_abcdefghijklmnop123")
+        _, report, _ = self.run_main(fixture)
+        text = json.dumps(report)
+        self.assertNotIn("hunter2", text)
+        self.assertNotIn("ghp_abcdefghijklmnop123", text)
+        self.assertIn("<redacted>", text)
+
+    def test_timeout_message_preserves_fractional_seconds(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["os"] = {"timeout": True}
+        argv = ["--procfs-root", os.path.join(self.tmp.name, "procfs"),
+                "--sysfs-root", os.path.join(self.tmp.name, "sysfs"),
+                "--workspace-path", os.path.join(self.tmp.name, "ws"),
+                "--now", NOW, "--json", "--timeout", "0.1"]
+        os.makedirs(os.path.join(self.tmp.name, "ws"), exist_ok=True)
+        executor = self.executor_for(fixture)
+        import io
+        from contextlib import redirect_stdout
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            preflight.main(argv, executor=executor, now=NOW)
+        report = json.loads(buffer.getvalue())
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertIn("0.1", by_id["os_linux"]["detail"])
+        self.assertNotIn("after 0s", by_id["os_linux"]["detail"])
+
+    def test_existing_file_workspace_is_rejected(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        path = os.path.join(self.tmp.name, "not-a-dir")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("x")
+        code, report, _ = self.run_main(fixture, workspace=path)
+        self.assertEqual(code, 2)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["disk_capacity"]["status"], "error")
+        self.assertIn("not a directory", by_id["disk_capacity"]["detail"])
+        self.assertEqual(by_id["storage_ext4_qualifier"]["status"], "unsupported")
+        self.assertIn("not a directory", by_id["storage_ext4_qualifier"]["detail"])
 
     def test_prefixed_credential_keys_are_redacted(self):
         fixture = dict(DEFAULT_FIXTURE)
