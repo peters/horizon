@@ -1,11 +1,13 @@
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use horizon_core::browser::manifest::{self, BrowserManifest};
 use serde_json::{Value, json};
 
 const DEADLINE_TEST_TIMEOUT_SECONDS: u64 = 3;
+const STDIN_EXECUTION_TIMEOUT: Duration = Duration::from_secs(1);
+const DEADLINE_ROUNDING_SLACK_MILLIS: u128 = 1;
 
 #[test]
 fn run_writes_the_same_structured_report_to_stdout_or_a_private_file() {
@@ -378,7 +380,7 @@ fn resume_skip_runs_later_steps_without_replaying_or_succeeding() {
 fn run_timeout_starts_after_stdin_plan_validation() {
     let root = tempfile::tempdir().expect("isolated root");
     let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
-        .args(["run", "-", "--timeout", "1"])
+        .args(["run", "-", "--timeout", &STDIN_EXECUTION_TIMEOUT.as_secs().to_string()])
         .env("HOME", root.path())
         .env("HORIZON_BROWSER_ACTOR", "browser-cli-test")
         .env("RUST_LOG", "off")
@@ -396,18 +398,110 @@ fn run_timeout_starts_after_stdin_plan_validation() {
     stdin
         .write_all(br#"{"version":1,"steps":[{"id":"panels","tool":"browser_list"}]}"#)
         .expect("write delayed plan");
+    let before_eof = SystemTime::now().duration_since(UNIX_EPOCH).expect("EOF clock");
     drop(stdin);
     wait_for_exit(&mut child, "delayed stdin browser job");
     let output = child.wait_with_output().expect("collect delayed-plan browser job");
-
+    let after_exit = SystemTime::now().duration_since(UNIX_EPOCH).expect("exit clock");
     assert!(
-        output.status.success(),
-        "stderr: {}",
+        after_exit >= before_eof,
+        "wall clock moved backwards: before EOF {before_eof:?}, after exit {after_exit:?}"
+    );
+    assert_stdin_deadline_result(root.path(), &output, before_eof, after_exit);
+}
+
+fn assert_stdin_deadline_result(
+    root: &std::path::Path,
+    output: &std::process::Output,
+    before_eof: Duration,
+    after_exit: Duration,
+) {
+    assert!(
+        matches!(output.status.code(), Some(0 | 124)),
+        "exit: {}; stderr: {}",
+        output.status,
         String::from_utf8_lossy(&output.stderr)
     );
-    let report: Value = serde_json::from_slice(&output.stdout).expect("delayed-plan report");
-    assert_eq!(report["ok"], true);
-    assert_eq!(report["completed_steps"], 1);
+    let jobs = std::fs::read_dir(root.join(".horizon/browser-jobs"))
+        .expect("delayed-plan jobs")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("job entries");
+    assert_eq!(jobs.len(), 1);
+    assert!(
+        jobs[0].file_type().expect("job entry type").is_dir(),
+        "single job entry must be a directory"
+    );
+    let job_dir = jobs[0].path();
+    let state: Value = serde_json::from_slice(&std::fs::read(job_dir.join("state.json")).expect("job state"))
+        .expect("decode job state");
+    assert_eq!(state["version"], 4);
+    assert_eq!(state["execution_timeout_seconds"], STDIN_EXECUTION_TIMEOUT.as_secs());
+    assert!(state["completed_steps"].as_u64().is_some_and(|count| count <= 1));
+    let deadline = u128::from(state["deadline_at_millis"].as_u64().expect("saved deadline"));
+    let created = u128::from(state["created_at_millis"].as_u64().expect("saved creation time"));
+    assert!(
+        created + DEADLINE_ROUNDING_SLACK_MILLIS >= before_eof.as_millis() && created <= after_exit.as_millis(),
+        "saved creation {created} is outside before EOF {before_eof:?} and after exit {after_exit:?}"
+    );
+    // Check timer admission, not filesystem speed; allow only millisecond rounding slack.
+    let timeout_millis = STDIN_EXECUTION_TIMEOUT.as_millis();
+    assert!(
+        deadline + DEADLINE_ROUNDING_SLACK_MILLIS >= before_eof.as_millis() + timeout_millis,
+        "saved deadline {deadline} predates EOF {before_eof:?} plus timeout {STDIN_EXECUTION_TIMEOUT:?}"
+    );
+    assert!(
+        deadline <= created + timeout_millis + DEADLINE_ROUNDING_SLACK_MILLIS,
+        "saved deadline {deadline} exceeds creation {created} plus timeout {STDIN_EXECUTION_TIMEOUT:?}"
+    );
+    assert_eq!(
+        state["job_id"].as_str(),
+        job_dir.file_name().and_then(|name| name.to_str())
+    );
+    let success = output.status.success();
+    assert_eq!(state["status"], if success { "succeeded" } else { "timed_out" });
+    if success {
+        assert_eq!(state["completed_steps"], 1);
+    } else {
+        assert!(deadline <= after_exit.as_millis());
+        assert!(
+            state["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("job deadline exceeded"))
+        );
+    }
+    if state["report_file"].is_null() {
+        assert!(!success);
+        assert_eq!(state["completed_steps"], 0);
+        assert!(output.stdout.is_empty());
+        assert!(!job_dir.join("report.json").exists());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("job deadline exceeded"));
+        assert!(stderr.contains(state["job_id"].as_str().expect("saved job id")));
+    } else {
+        assert_eq!(state["report_file"], "report.json");
+        assert!(output.stderr.is_empty());
+        let report: Value = serde_json::from_slice(&output.stdout).expect("delayed-plan report");
+        let saved: Value = serde_json::from_slice(&std::fs::read(job_dir.join("report.json")).expect("saved report"))
+            .expect("decode saved report");
+        assert_eq!(saved, report);
+        assert_eq!(report["job_id"], state["job_id"]);
+        assert_eq!(report["ok"], success);
+        assert_eq!(report["completed_steps"], state["completed_steps"]);
+        assert_eq!(
+            report["steps"].as_array().map(Vec::len),
+            state["completed_steps"]
+                .as_u64()
+                .and_then(|count| usize::try_from(count).ok())
+        );
+        assert_eq!(
+            report["stop_reason"],
+            if success {
+                Value::Null
+            } else {
+                json!("deadline_exceeded")
+            }
+        );
+    }
 }
 
 #[cfg(unix)]
