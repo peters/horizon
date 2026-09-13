@@ -14,6 +14,7 @@ use crate::cloud_run::{
         InteractiveWorkerLifecycle, InteractiveWorkerLifetime, InteractiveWorkerProvider, InteractiveWorkerRequest,
         InteractiveWorkerStatus,
     },
+    interactive_worker_delete::{InteractiveWorkerDeleteObserver, InteractiveWorkerDeletionObservation},
 };
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
@@ -551,6 +552,19 @@ impl InteractiveWorkerProvider for AzureClient {
             Err(AzureError::UnexpectedStatus { status: 404, .. }) => Ok(InteractiveWorkerCleanup::AlreadyAbsent),
             Err(error) => Err(error),
         }
+    }
+}
+
+impl InteractiveWorkerDeleteObserver for AzureClient {
+    fn observe_worker_deletion(
+        &self,
+        worker: &InteractiveWorker,
+    ) -> Result<InteractiveWorkerDeletionObservation, Self::Error> {
+        Ok(if self.owned_handle(worker)?.is_some() {
+            InteractiveWorkerDeletionObservation::Present
+        } else {
+            InteractiveWorkerDeletionObservation::Absent
+        })
     }
 }
 

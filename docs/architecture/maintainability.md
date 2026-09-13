@@ -477,6 +477,11 @@ back into large multi-purpose modules.
   Persistent post-create verification failures retain the resource and consumed
   grant for explicit non-creating recovery or management. An in-flight creation
   response cannot undo another client's retained Stop through failure cleanup.
+- `cloud_run/interactive_worker_delete.rs` is an opt-in deletion-scope observer,
+  separate from issuing deletion or recording durable completion. The Azure
+  implementation reads only the exact saved resource group with owned identity
+  tags; a surviving or deleting group remains present even when its VM is absent.
+  It never uses guest commands, host-key lookup, lifecycle mutation or polling.
 - `cloud_run/interactive_worker_stop.rs` is an opt-in Stop contract, separate from
   deletion and client lifetime. The local adapter's `local_docker/stop.rs` verifies
   exact ownership and disabled automatic removal before a bounded stop, then

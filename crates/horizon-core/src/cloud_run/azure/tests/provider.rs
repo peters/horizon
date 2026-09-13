@@ -80,6 +80,7 @@ pub(super) enum GroupChange {
 #[derive(Default)]
 pub(super) struct Plane {
     pub(super) group: Option<AzureGroupInfo>,
+    pub(super) group_error: Option<AzureError>,
     pub(super) deployment: Option<AzureDeploymentState>,
     pub(super) vm_states: Vec<Option<AzureVmView>>,
     pub(super) fail_deployment: bool,
@@ -169,6 +170,9 @@ impl AzureManagementTransport for Fake {
     fn get_resource_group(&self, name: &str) -> Result<Option<AzureGroupInfo>, AzureError> {
         let mut plane = self.lock();
         plane.calls.push(Call::GetGroup(name.into()));
+        if let Some(error) = &plane.group_error {
+            return Err(error.clone());
+        }
         let found = plane.group.clone().filter(|group| group.name == name);
         if found.is_none() {
             plane.group = plane.appear_on_second_lookup.take();
@@ -434,6 +438,7 @@ pub(super) const MISMATCH: AzureError = AzureError::ResourceIdentityMismatch;
 
 mod creation;
 mod credential;
+mod delete_observer;
 mod instance;
 mod observation;
 mod running;
