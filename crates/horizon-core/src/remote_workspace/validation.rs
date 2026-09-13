@@ -154,6 +154,7 @@ impl RemoteRuntimeGeneration {
                 return Err(Error::InvalidRuntime("worker identity"));
             }
         } else if self.phase.stop_requested_at_millis().is_some()
+            || self.phase.start_requested_at_millis().is_some()
             || matches!(
                 self.phase,
                 RemoteRuntimePhase::Materializing
@@ -196,6 +197,11 @@ impl RemoteRuntimeGeneration {
                     if observed_at_millis < requested_at_millis))
         {
             return Err(Error::InvalidRuntime("Stop intent"));
+        }
+        if let Some(requested_at_millis) = self.phase.start_requested_at_millis()
+            && (requested_at_millis < 0 || self.cleanup.is_some() || self.ssh.is_none())
+        {
+            return Err(Error::InvalidRuntime("Start intent"));
         }
         Ok(())
     }

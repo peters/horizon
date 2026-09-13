@@ -327,5 +327,6 @@ fn phase_label(phase: Option<RemoteRuntimePhase>) -> &'static str {
         Some(RemoteRuntimePhase::Failed) => "Failed",
         Some(RemoteRuntimePhase::Stopping { .. }) => "Stop requested (saved)",
         Some(RemoteRuntimePhase::Stopped { .. }) => "Stopped (saved, not live)",
+        Some(RemoteRuntimePhase::Starting { .. }) => "Start requested (saved)",
     }
 }

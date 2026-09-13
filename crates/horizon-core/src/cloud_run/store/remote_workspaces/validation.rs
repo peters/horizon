@@ -48,11 +48,24 @@ pub(super) fn validate_replacement(previous: &RemoteWorkspaceState, next: &Remot
     {
         return Err(Error::NonMonotonicReplacement);
     }
+    // Stop intent is never erased, retargeted or rewound; a saved Stopped record changes
+    // only into explicit Start intent requested no earlier than its observation.
     if let Some(runtime) = &previous.runtime
         && let Some(requested_at_millis) = runtime.phase.stop_requested_at_millis()
         && next.runtime.as_ref().is_none_or(|next_runtime| {
-            next_runtime.phase.stop_requested_at_millis() != Some(requested_at_millis)
-                || (matches!(runtime.phase, RemoteRuntimePhase::Stopped { .. }) && next_runtime.phase != runtime.phase)
+            !starts_after_stop(runtime.phase, next_runtime.phase)
+                && (next_runtime.phase.stop_requested_at_millis() != Some(requested_at_millis)
+                    || (matches!(runtime.phase, RemoteRuntimePhase::Stopped { .. })
+                        && next_runtime.phase != runtime.phase))
+        })
+    {
+        return Err(Error::NonMonotonicReplacement);
+    }
+    // Start intent resolves only into the same intent or a renewed observation.
+    if let Some(runtime) = &previous.runtime
+        && runtime.phase.start_requested_at_millis().is_some()
+        && next.runtime.as_ref().is_none_or(|next_runtime| {
+            next_runtime.phase != runtime.phase && next_runtime.phase != RemoteRuntimePhase::Reconciling
         })
     {
         return Err(Error::NonMonotonicReplacement);
@@ -85,4 +98,16 @@ pub(super) fn validate_replacement(previous: &RemoteWorkspaceState, next: &Remot
         return Err(Error::NonMonotonicReplacement);
     }
     Ok(())
+}
+
+/// A saved Stopped record may take explicit Start intent requested at or after the
+/// retention observation; no other phase follows a saved Stop.
+fn starts_after_stop(previous: RemoteRuntimePhase, next: RemoteRuntimePhase) -> bool {
+    matches!(
+        (previous, next),
+        (
+            RemoteRuntimePhase::Stopped { observed_at_millis, .. },
+            RemoteRuntimePhase::Starting { requested_at_millis },
+        ) if requested_at_millis >= observed_at_millis
+    )
 }

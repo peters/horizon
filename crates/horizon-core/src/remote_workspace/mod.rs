@@ -2,6 +2,7 @@
 //! The data model is independent of provider, persistence I/O, and UI implementations.
 //! Snapshot validation is not permission to attach: fresh provider observation and lease checks remain required.
 
+pub mod start;
 pub mod stop;
 mod summary;
 #[cfg(test)]
@@ -176,6 +177,12 @@ pub enum RemoteRuntimePhase {
         requested_at_millis: i64,
         observed_at_millis: i64,
     },
+    /// Explicit Start intent for a stopped worker's retained compute, never inferred
+    /// from reconnecting, reopening a view or restarting the application. It resolves
+    /// to `Reconciling` once the same worker was observed again; nothing resumes a task.
+    Starting {
+        requested_at_millis: i64,
+    },
 }
 
 impl RemoteRuntimePhase {
@@ -185,6 +192,13 @@ impl RemoteRuntimePhase {
             | Self::Stopped {
                 requested_at_millis, ..
             } => Some(requested_at_millis),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn start_requested_at_millis(self) -> Option<i64> {
+        match self {
+            Self::Starting { requested_at_millis } => Some(requested_at_millis),
             _ => None,
         }
     }

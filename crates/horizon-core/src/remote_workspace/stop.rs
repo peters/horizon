@@ -68,7 +68,8 @@ fn stop_allocation<P: InteractiveWorkerStopProvider + ?Sized>(
     if worker.target.lifetime != WorkerLifetime::Persistent {
         return Err(Error::UnsupportedLifetime);
     }
-    if runtime.cleanup.is_some() {
+    // Pending management or Start intent is resolved first; Stop never races a start.
+    if runtime.cleanup.is_some() || runtime.phase.start_requested_at_millis().is_some() {
         return Err(Error::ManagementConflict);
     }
     let now_millis = current_millis()?;
