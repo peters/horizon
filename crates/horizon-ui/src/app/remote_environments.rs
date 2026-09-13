@@ -71,6 +71,8 @@ enum InventoryAction {
     ConfirmStop,
     CheckStop,
     CancelStop,
+    RequestStart,
+    ConfirmStart,
     ListReconnectViews,
     Reconnect(horizon_core::PanelId),
     ListReopenPanels,
@@ -243,7 +245,9 @@ impl RemoteEnvironments {
             | InventoryAction::Observe
             | InventoryAction::RequestStop
             | InventoryAction::CheckStop
-            | InventoryAction::ConfirmStop => {}
+            | InventoryAction::ConfirmStop
+            | InventoryAction::RequestStart
+            | InventoryAction::ConfirmStart => {}
             InventoryAction::ListReconnectViews | InventoryAction::Reconnect(_) => self.reopen.invalidate(),
             InventoryAction::ListReopenPanels
             | InventoryAction::ReopenView(_)
@@ -325,13 +329,19 @@ impl RemoteEnvironments {
                 self.invalidate_session_views();
                 self.stop.prepare(&summary, config, ctx);
             }
-            InventoryAction::ConfirmStop if self.stop.start(home, config, &summary, ctx) => {
+            InventoryAction::ConfirmStop | InventoryAction::ConfirmStart
+                if self.stop.start(home, config, &summary, ctx) =>
+            {
                 self.invalidate_session_views();
                 self.observation.invalidate();
             }
             InventoryAction::CheckStop if self.stop.check(home, config, &summary, ctx) => {
                 self.invalidate_session_views();
                 self.observation.invalidate();
+            }
+            InventoryAction::RequestStart => {
+                self.invalidate_session_views();
+                self.stop.prepare_start(&summary, config, ctx);
             }
             _ => {}
         }
@@ -407,7 +417,11 @@ impl HorizonApp {
             }
             if matches!(
                 action,
-                InventoryAction::RequestStop | InventoryAction::ConfirmStop | InventoryAction::CheckStop
+                InventoryAction::RequestStop
+                    | InventoryAction::ConfirmStop
+                    | InventoryAction::CheckStop
+                    | InventoryAction::RequestStart
+                    | InventoryAction::ConfirmStart
             ) {
                 self.remote_environments.stop_action(
                     action,
