@@ -225,10 +225,11 @@ impl RetainedAzure {
         Ok(())
     }
 
-    /// The production observer: the CLI credential pinned to the profile's subscription
-    /// and the Azure client over it. Both are lazy; no token is requested or persisted
-    /// here, and a missing CLI login surfaces as an unverified observation. Callers
-    /// reach this only through [`azure_with`], after admission.
+    /// The shared production Azure client: the CLI credential pinned to the profile's
+    /// subscription and the client over it. Both are lazy; no token is requested or
+    /// persisted here, and a missing CLI login surfaces as an unverified operation. The
+    /// admitted Stop paths (`stop_with`, `azure_with`) and the configured Start path reach
+    /// this only after admission.
     pub(in crate::remote_workspace) fn client(
         store: &CloudWorkflowStore,
         profile: &AzureProfile,
