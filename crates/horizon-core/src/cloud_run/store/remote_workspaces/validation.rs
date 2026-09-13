@@ -167,6 +167,46 @@ pub(super) fn validate_delete_replacement(
     Ok(())
 }
 
+pub(super) fn validate_endpoint_refresh(
+    previous: &RemoteWorkspaceState,
+    next: &RemoteWorkspaceState,
+) -> Result<(), Error> {
+    use crate::{
+        cloud_run::{CloudProvider, WorkerLifetime},
+        remote_workspace::start::endpoint::refresh_phase_allowed,
+    };
+    next.validate()?;
+    if !refresh_phase_allowed(previous)
+        || previous.spec.target.provider != CloudProvider::RunPod
+        || previous.spec.target.lifetime != WorkerLifetime::Persistent
+    {
+        return Err(Error::ReplacementIdentityMismatch);
+    }
+    let mut permitted = previous.clone();
+    let runtime = permitted.runtime.as_mut().ok_or(Error::ReplacementIdentityMismatch)?;
+    if runtime.worker.is_none() {
+        return Err(Error::ReplacementIdentityMismatch);
+    }
+    let saved = runtime
+        .ssh
+        .as_mut()
+        .filter(|ssh| ssh.is_complete())
+        .ok_or(Error::ReplacementIdentityMismatch)?;
+    let observed = next
+        .runtime
+        .as_ref()
+        .and_then(|runtime| runtime.ssh.as_ref())
+        .filter(|ssh| ssh.is_complete())
+        .ok_or(Error::ReplacementIdentityMismatch)?;
+    saved.host.clone_from(&observed.host);
+    saved.port = observed.port;
+    // Everything but transport coordinates is immutable, including phase and both keys.
+    if permitted != *next {
+        return Err(Error::ReplacementIdentityMismatch);
+    }
+    Ok(())
+}
+
 /// A saved Stopped record may take explicit Start intent requested at or after the
 /// retention observation; no other phase follows a saved Stop.
 fn starts_after_stop(previous: RemoteRuntimePhase, next: RemoteRuntimePhase) -> bool {

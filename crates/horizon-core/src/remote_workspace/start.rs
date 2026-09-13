@@ -2,8 +2,10 @@
 //! reopening a view or restarting the application never invokes this operation.
 
 mod configured_azure;
+pub(crate) mod endpoint;
 
 pub use configured_azure::{ConfiguredAzureStart, ConfiguredAzureStartError, start_configured_azure_environment};
+pub use endpoint::{RemoteEndpointRefreshError, refresh_remote_worker_endpoint};
 
 use crate::{
     cloud_run::{

@@ -45,3 +45,31 @@ pub trait InteractiveWorkerStartProvider: InteractiveWorkerProvider {
     /// unverified rather than guessing. Diagnostics must redact provider output.
     fn start_worker(&self, worker: &InteractiveWorker) -> Result<InteractiveWorkerStart, Self::Error>;
 }
+
+/// Provider coordinates are candidates, never an attestation or authority to connect.
+/// The storage fingerprint compares two observations, not contents or durability.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InteractiveWorkerEndpointCandidate {
+    pub worker: InteractiveWorker,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub storage_fingerprint: super::ArtifactDigest,
+    pub network_volume: Option<super::runpod::RunPodNetworkVolumeExpectation>,
+}
+
+/// Optional read-only coordinate discovery, separate from compute Start. Currently
+/// implemented for retained `RunPod` workers; never calls initial host-key bootstrap.
+pub trait InteractiveWorkerEndpointObserver: InteractiveWorkerProvider {
+    /// Validate exact ownership, retained storage and the caller's original saved pin
+    /// before returning a running worker's candidate coordinates. Each call must be
+    /// bounded and GET-only. Absence or uncertain storage/readiness is an error.
+    /// # Errors
+    /// Rejects missing retained trust, foreign identity, absent/unready resources and
+    /// unverifiable storage. The caller must still prove original-key possession.
+    fn observe_endpoint_candidate(
+        &self,
+        worker: &InteractiveWorker,
+        saved: &super::interactive_worker::InteractiveWorkerSshEndpoint,
+    ) -> Result<InteractiveWorkerEndpointCandidate, Self::Error>;
+}
