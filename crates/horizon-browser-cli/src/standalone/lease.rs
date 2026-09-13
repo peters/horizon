@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -12,6 +12,7 @@ use super::StandaloneError;
 
 const KEEP_ALIVE_IDLE: Duration = Duration::from_secs(60);
 const KEEP_ALIVE_POLL: Duration = Duration::from_millis(100);
+const STOP_GRACE: Duration = Duration::from_secs(15);
 
 /// Recorded keep-alive host a later MCP client or `resume` can reconnect to.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -39,6 +40,39 @@ impl StandaloneHostRef {
             created_at: now_millis(),
             start_identity,
         })
+    }
+}
+
+/// Keep-alive lease published before the panel manifest can appear.
+///
+/// Dropping without [`Self::commit`] removes the lease and any orphaned
+/// manifest so a failed startup cannot leak a dead panel.
+pub(super) struct PendingLease {
+    root: PathBuf,
+    panel_id: String,
+    committed: bool,
+}
+
+impl PendingLease {
+    pub(super) fn publish(root: &Path, panel_id: String) -> Result<Self, StandaloneError> {
+        publish(root, &StandaloneHostRef::current(panel_id.clone())?)?;
+        Ok(Self {
+            root: root.to_path_buf(),
+            panel_id,
+            committed: false,
+        })
+    }
+
+    pub(super) fn commit(mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for PendingLease {
+    fn drop(&mut self) {
+        if !self.committed {
+            remove_host(&self.root, &self.panel_id);
+        }
     }
 }
 
@@ -73,6 +107,11 @@ pub(super) fn publish(root: &Path, host: &StandaloneHostRef) -> Result<(), Stand
 pub(super) fn remove(root: &Path, panel_id: &str) {
     let _ = std::fs::remove_file(lease_path_for_root(root, panel_id));
     let _ = std::fs::remove_file(stop_path_for_root(root, panel_id));
+}
+
+pub(super) fn remove_host(root: &Path, panel_id: &str) {
+    let _ = std::fs::remove_file(manifest::manifest_path_for_root(root, panel_id));
+    remove(root, panel_id);
 }
 
 pub(super) fn request_stop(root: &Path, panel_id: &str) -> Result<(), String> {
@@ -124,14 +163,30 @@ pub(super) fn stop_hosts(root: &Path, panel_id: Option<&str>) -> Result<Vec<Stri
         return Ok(Vec::new());
     }
     let mut stopped = Vec::new();
-    for host in targets {
+    for host in &targets {
         request_stop(root, &host.panel_id)?;
+        stopped.push(host.panel_id.clone());
+    }
+    wait_until_exited(&targets, STOP_GRACE);
+    for host in targets {
         if host_is_current(&host) {
             let _ = signal_terminate(host.host_pid);
         }
-        stopped.push(host.panel_id);
     }
     Ok(stopped)
+}
+
+fn wait_until_exited(hosts: &[StandaloneHostRef], grace: Duration) {
+    let deadline = Instant::now() + grace;
+    loop {
+        if hosts.iter().all(|host| !host_is_current(host)) {
+            return;
+        }
+        if Instant::now() >= deadline {
+            return;
+        }
+        std::thread::sleep(KEEP_ALIVE_POLL);
+    }
 }
 
 pub(super) fn prune_dead_at(root: &Path) -> Vec<String> {
@@ -140,8 +195,7 @@ pub(super) fn prune_dead_at(root: &Path) -> Vec<String> {
         if host_is_current(&host) {
             continue;
         }
-        let _ = std::fs::remove_file(manifest::manifest_path_for_root(root, &host.panel_id));
-        remove(root, &host.panel_id);
+        remove_host(root, &host.panel_id);
         pruned.push(host.panel_id);
     }
     pruned
@@ -409,6 +463,34 @@ mod tests {
         assert!(!first.is_empty());
         assert_eq!(first, second);
         assert!(host_is_current(&current_host("standalone-identity", 1)));
+    }
+
+    #[test]
+    fn pending_lease_is_removed_with_its_manifest_unless_committed() {
+        let home = tempfile::tempdir().unwrap_or_else(|error| panic!("home: {error}"));
+        let abandoned = "standalone-9-abandoned";
+        let pending = PendingLease::publish(home.path(), abandoned.to_string())
+            .unwrap_or_else(|error| panic!("publish pending: {error}"));
+        write_manifest(home.path(), abandoned);
+        drop(pending);
+        assert!(read_lease(home.path(), abandoned).is_none());
+        assert!(!panel_manifest_exists(home.path(), abandoned));
+
+        let kept = "standalone-9-kept";
+        PendingLease::publish(home.path(), kept.to_string())
+            .unwrap_or_else(|error| panic!("publish kept: {error}"))
+            .commit();
+        assert!(read_lease(home.path(), kept).is_some());
+    }
+
+    #[test]
+    fn stop_waits_for_graceful_exit_before_signaling() {
+        let live = current_host("standalone-9-grace", 1);
+        wait_until_exited(&[live], Duration::from_millis(20));
+        assert!(
+            process_start_identity(std::process::id()).is_some(),
+            "grace wait must not terminate the current process"
+        );
     }
 
     #[test]

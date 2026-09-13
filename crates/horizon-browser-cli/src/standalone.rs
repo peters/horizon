@@ -253,9 +253,6 @@ pub async fn serve(options: StandaloneOptions) -> Result<(), StandaloneError> {
     let root = HorizonHome::resolve().root().to_path_buf();
     lease::prune_dead_at(&root);
     let session = OwnedSession::start(options, &HorizonHome::resolve())?;
-    if options.keep_alive {
-        lease::publish(&root, &StandaloneHostRef::current(session.panel_id.clone())?)?;
-    }
     let mcp_result = serve_until_host_exit(&root, &session.panel_id, options.keep_alive).await;
     let panel_id = session.panel_id.clone();
     let stopped = session.shutdown();
@@ -286,8 +283,11 @@ async fn serve_until_host_exit(root: &Path, panel_id: &str, keep_alive: bool) ->
     tokio::pin!(stop);
     tokio::select! {
         result = &mut mcp => {
+            let stop = lease::await_stop_at(root, panel_id, lease::keep_alive_poll());
+            tokio::pin!(stop);
             tokio::select! {
                 () = interrupt => result,
+                () = stop => result,
                 _ = lease::await_keep_alive_at(
                     root,
                     panel_id,
@@ -341,6 +341,16 @@ async fn wait_for_interrupt() {
             return;
         }
     }
+    #[cfg(windows)]
+    {
+        if let Ok(mut close) = tokio::signal::windows::ctrl_close() {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = close.recv() => {}
+            }
+            return;
+        }
+    }
     let _ = tokio::signal::ctrl_c().await;
 }
 
@@ -365,7 +375,7 @@ fn start(
     );
     let mut last_error = None;
     for backend in candidates {
-        match start_backend(home, backend, options.visible) {
+        match start_backend(home, backend, options.visible, options.keep_alive) {
             Ok(session) => return Ok(session),
             Err(error) => last_error = Some(error),
         }
@@ -377,8 +387,14 @@ fn start_backend(
     home: &HorizonHome,
     backend: BackendKind,
     visible: bool,
+    keep_alive: bool,
 ) -> Result<(BrowserSession, std::path::PathBuf, String), StandaloneError> {
     let panel_id = standalone_panel_id();
+    let pending_lease = if keep_alive {
+        Some(lease::PendingLease::publish(home.root(), panel_id.clone())?)
+    } else {
+        None
+    };
     let mut browser = BrowserConfig {
         backend,
         headless: !visible,
@@ -421,6 +437,9 @@ fn start_backend(
         return Err(StandaloneError::Startup(format!(
             "could not publish standalone browser state: {error}"
         )));
+    }
+    if let Some(pending_lease) = pending_lease {
+        pending_lease.commit();
     }
     Ok((session, profile_root, panel_id))
 }
