@@ -15,6 +15,17 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+#[derive(Default, Clone)]
+pub(super) struct TestClock(Arc<Mutex<Duration>>);
+impl Clock for TestClock {
+    fn elapsed(&self) -> Duration {
+        *self.0.lock().expect("clock")
+    }
+    fn sleep(&self, duration: Duration) {
+        *self.0.lock().expect("clock") += duration;
+    }
+}
+
 #[derive(Clone)]
 struct Fake(Arc<Mutex<State>>);
 struct State {
@@ -23,12 +34,15 @@ struct State {
     volumes: VecDeque<Option<Value>>,
     calls: Vec<&'static str>,
     start_error: Option<RunPodError>,
+    clock: TestClock,
+    request_duration: Duration,
 }
 impl Transport for Fake {
     fn network_volume(&self, id: &str) -> Result<Option<ApiNetworkVolume>, RunPodError> {
         assert_eq!(id, "volume_exact");
         let mut state = self.0.lock().expect("state");
         state.calls.push("volume");
+        state.clock.sleep(state.request_duration);
         let value = state.volumes.pop_front().unwrap_or_else(|| Some(volume()));
         Ok(value.map(|value| serde_json::from_value(value).expect("volume")))
     }
@@ -48,12 +62,14 @@ impl Transport for Fake {
         assert_eq!(id, "pod_exact");
         let mut state = self.0.lock().expect("state");
         state.calls.push("get");
+        state.clock.sleep(state.request_duration);
         state.gets.pop_front().unwrap_or_else(|| Ok(state.pod.clone()))
     }
     fn start(&self, id: &str) -> Result<(), RunPodError> {
         assert_eq!(id, "pod_exact");
         let mut state = self.0.lock().expect("state");
         state.calls.push("start");
+        state.clock.sleep(state.request_duration);
         if let Some(pod) = &mut state.pod {
             pod.status = Some("RUNNING".into());
             pod.stop.runtime = Some(json!({"uptime":0}));
@@ -114,6 +130,8 @@ impl Fixture {
                 volumes: VecDeque::new(),
                 calls: Vec::new(),
                 start_error: None,
+                clock: TestClock::default(),
+                request_duration: Duration::ZERO,
             }))),
             raw,
             network,
@@ -159,6 +177,11 @@ impl Fixture {
             .into_iter()
             .map(|raw| Ok(raw.map(|raw| serde_json::from_value(raw).expect("pod"))))
             .collect();
+    }
+    fn timed(&self, request_duration: Duration) -> TestClock {
+        let mut state = self.fake.0.lock().expect("state");
+        state.request_duration = request_duration;
+        state.clock.clone()
     }
 }
 
@@ -323,9 +346,10 @@ fn ambiguous_start_is_observed_without_retry_and_pending_observation_is_bounded(
         assert_eq!(f.calls(), vec!["get", "start", "get"]);
         let f = Fixture::new(false);
         f.fake.0.lock().expect("state").start_error = error();
-        f.queued(vec![Some(f.raw.clone()); 4]);
+        f.queued(vec![Some(f.raw.clone()); 100]);
         assert_eq!(f.provider().start_worker(&f.worker), Err(RunPodError::StartUnverified));
-        assert_eq!(f.calls(), vec!["get", "start", "get", "get", "get"]);
+        assert_eq!(f.calls().iter().filter(|&&call| call == "start").count(), 1);
+        assert_eq!(f.calls().iter().filter(|&&call| call == "get").count(), 15);
     }
     let f = Fixture::new(false);
     let mut starting = f.raw.clone();
@@ -339,6 +363,70 @@ fn ambiguous_start_is_observed_without_retry_and_pending_observation_is_bounded(
         Ok(InteractiveWorkerStart::Started(_))
     ));
     assert_eq!(f.calls(), vec!["get", "get", "get"]);
+}
+
+#[test]
+fn delayed_start_is_observed_beyond_five_seconds_without_resubmission() {
+    for network in [false, true] {
+        let f = Fixture::new(network);
+        let clock = f.timed(Duration::from_secs(1));
+        let mut starting = f.raw.clone();
+        starting["status"] = json!("STARTING");
+        let mut running = starting.clone();
+        running["status"] = json!("RUNNING");
+        running["runtime"] = json!({"uptime":0});
+        let mut replies = vec![Some(f.raw.clone())];
+        replies.extend(vec![Some(starting); 7]);
+        replies.push(Some(running));
+        f.queued(replies);
+        let result = f.provider().start_with_clock(&f.worker, &clock).expect("late start");
+        assert!(matches!(result, InteractiveWorkerStart::Started(_)));
+        assert!(clock.elapsed() >= Duration::from_secs(90));
+        assert!(clock.elapsed() < TRANSITION_BOUND);
+        assert_eq!(f.calls().iter().filter(|&&call| call == "start").count(), 1);
+        assert_eq!(f.calls().iter().filter(|&&call| call == "get").count(), 9);
+        if network {
+            assert_eq!(f.calls().iter().filter(|&&call| call == "volume").count(), 9);
+        }
+    }
+}
+
+#[test]
+fn pending_transition_reserves_all_reads_and_counts_request_time_in_deadline() {
+    for network in [false, true] {
+        for request_seconds in [0, 30] {
+            let f = Fixture::new(network);
+            let clock = f.timed(Duration::from_secs(request_seconds));
+            f.queued(vec![Some(f.raw.clone()); 100]);
+            assert_eq!(
+                f.provider().start_with_clock(&f.worker, &clock),
+                Err(RunPodError::StartUnverified)
+            );
+            let expected_seconds = match (network, request_seconds) {
+                (false, 0) => 269,
+                (true, 0) => 239,
+                (false, _) => 300,
+                (true, _) => 273,
+            };
+            assert_eq!(clock.elapsed(), Duration::from_secs(expected_seconds));
+            assert!(clock.elapsed() <= TRANSITION_BOUND);
+            assert_eq!(f.calls().iter().filter(|&&call| call == "start").count(), 1);
+            assert!(f.calls().iter().filter(|&&call| call == "get").count() <= 15);
+        }
+    }
+}
+
+#[test]
+fn exhausted_admission_cannot_dispatch_and_late_running_result_cannot_succeed() {
+    for (seconds, calls) in [(271, vec!["get"]), (101, vec!["get", "start", "get"])] {
+        let f = Fixture::new(false);
+        let clock = f.timed(Duration::from_secs(seconds));
+        assert_eq!(
+            f.provider().start_with_clock(&f.worker, &clock),
+            Err(RunPodError::StartUnverified)
+        );
+        assert_eq!(f.calls(), calls);
+    }
 }
 
 #[test]
