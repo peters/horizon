@@ -433,6 +433,7 @@ pub(super) fn owned(s: &Scenario) -> AzureGroupInfo {
 pub(super) const MISMATCH: AzureError = AzureError::ResourceIdentityMismatch;
 
 mod creation;
+mod credential;
 mod instance;
 mod observation;
 mod running;

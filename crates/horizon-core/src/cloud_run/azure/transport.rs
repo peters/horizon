@@ -191,6 +191,9 @@ pub struct AzureArmHttp {
     agent: ureq::Agent,
     credential: Box<dyn AzureCredentialSource>,
     subscription_id: String,
+    /// How a poll loop waits between requests: real sleeps in production, recorded and
+    /// skipped in tests so the exact schedule is asserted without waiting it out.
+    sleeper: Box<dyn Fn(Duration) + Send + Sync>,
 }
 
 impl AzureArmHttp {
@@ -223,12 +226,20 @@ impl AzureArmHttp {
             agent,
             credential: Box::new(credential),
             subscription_id,
+            sleeper: Box::new(std::thread::sleep),
         })
     }
 
     #[cfg(test)]
     pub(crate) fn config(&self) -> &ureq::config::Config {
         self.agent.config()
+    }
+
+    /// The same transport with its poll waits routed through `sleeper`.
+    #[cfg(test)]
+    pub(crate) fn with_sleeper(mut self, sleeper: impl Fn(Duration) + Send + Sync + 'static) -> Self {
+        self.sleeper = Box::new(sleeper);
+        self
     }
 
     fn group_url(&self, name: &str, api_version: &str) -> Result<String, AzureError> {
