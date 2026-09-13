@@ -636,6 +636,9 @@ back into large multi-purpose modules.
   closed after a crash or PID reuse.
 - `variables.rs` validates bounded plan literals; `project.rs` writes optional
   JSON/CSV projections of prior structured results.
+- Browser performance acceptance for #324 is the combined G1 WebSocket fixture
+  plus G1b five-minute E24 observation, recorded in
+  [`docs/architecture/browser-performance-acceptance.md`](browser-performance-acceptance.md).
 
 ### `horizon-ui`
 
