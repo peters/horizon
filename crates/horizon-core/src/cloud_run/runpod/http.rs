@@ -6,7 +6,7 @@ const GRAPHQL_URL: &str = "https://api.runpod.io/graphql";
 const CREATE_MUTATION: &str =
     "mutation CreatePod($input: PodFindAndDeployOnDemandInput!) { podFindAndDeployOnDemand(input: $input) { id } }";
 pub(super) const RESPONSE_LIMIT_BYTES: u64 = 2 * 1024 * 1024;
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+pub(super) const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 pub(super) const PROPAGATION_BACKOFF_MS: [u64; 8] = [0, 250, 500, 1_000, 2_000, 4_000, 8_000, 16_000];
 const CAPACITY_ERROR_MARKERS: [&str; 8] = [
     "no longer any instances available",
@@ -160,6 +160,19 @@ impl Transport for RunPodHttp {
             .send_json(serde_json::json!({"action": "stop"}))
             .map_err(|_| RunPodError::RequestFailed { operation: "pod Stop" })?;
         let pod: ApiPod = decode_json(response, 200, "pod Stop")?;
+        (pod.id == pod_id)
+            .then_some(())
+            .ok_or(RunPodError::ResourceIdentityMismatch)
+    }
+    fn start(&self, pod_id: &str) -> Result<(), RunPodError> {
+        let url = format!("{}/action", Self::pod_url(pod_id)?);
+        let response = self
+            .agent
+            .post(url.as_str())
+            .header("Authorization", &self.authorization)
+            .send_json(serde_json::json!({"action": "start"}))
+            .map_err(|_| RunPodError::RequestFailed { operation: "pod Start" })?;
+        let pod: ApiPod = decode_json(response, 200, "pod Start")?;
         (pod.id == pod_id)
             .then_some(())
             .ok_or(RunPodError::ResourceIdentityMismatch)

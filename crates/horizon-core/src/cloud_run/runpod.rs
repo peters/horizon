@@ -16,6 +16,7 @@ mod interactive;
 mod models;
 mod network_attachment;
 mod network_volume;
+mod start;
 mod stop;
 #[cfg(test)]
 mod tests;
@@ -426,6 +427,9 @@ trait Transport: Send + Sync {
     fn create(&self, request: &CreatePodRequest) -> Result<ApiPod, RunPodError>;
     fn get(&self, pod_id: &str) -> Result<Option<ApiPod>, RunPodError>;
     fn stop(&self, pod_id: &str) -> Result<(), RunPodError>;
+    fn start(&self, _pod_id: &str) -> Result<(), RunPodError> {
+        Err(RunPodError::StartUnverified)
+    }
     fn delete(&self, pod_id: &str) -> Result<RunPodCleanup, RunPodError>;
 }
 #[derive(Clone, Debug, Default, Deserialize)]

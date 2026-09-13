@@ -84,7 +84,9 @@ fn classify(mut error: &RunPodError) -> Diagnostic {
         | RunPodError::StopRetentionUnverified
         | RunPodError::StopStateUnverified
         | RunPodError::StopResourceLost
-        | RunPodError::StopVerificationFailed => "unknown",
+        | RunPodError::StopVerificationFailed
+        | RunPodError::StartIdentityRequired
+        | RunPodError::StartUnverified => "unknown",
     };
     if let RunPodError::RequestFailed { operation }
     | RunPodError::UnexpectedStatus { operation, .. }

@@ -104,6 +104,20 @@ impl RunPodHostTrust {
 }
 
 impl RunPodHostKeySource for RunPodHostTrust {
+    fn retained_endpoint(&self, worker: &InteractiveWorker) -> Option<InteractiveWorkerSshEndpoint> {
+        let Mode::Retained { pod_id, lifetime, ssh } = &self.mode else {
+            return None;
+        };
+        (worker.is_valid_for(CloudProvider::RunPod)
+            && worker.identity.resource_id == *pod_id
+            && worker.identity.workflow_id == self.expected.workflow_id
+            && worker.identity.job_id == self.expected.job_id
+            && worker.target == self.expected.target
+            && worker.ssh_public_key == self.expected.ssh_public_key
+            && worker.lifetime == *lifetime)
+            .then(|| ssh.clone())
+    }
+
     fn host_key(
         &self,
         worker: &RunPodWorker,
