@@ -100,18 +100,27 @@ fn before(
     storage(&binding.parent)?;
     observe_git_base_pack(&pack.path, pack.into(), limits, cancelled)?;
     binding.layout.recheck(cancelled)?;
+    synchronize_layout(&binding.layout, cancelled, sync)?;
+    binding.verify_parent()?;
+    Ok(binding)
+}
+
+pub(super) fn synchronize_layout(
+    layout: &Layout,
+    cancelled: &impl Fn() -> bool,
+    sync: &mut impl FnMut(SyncPoint, &File) -> Result<(), Error>,
+) -> Result<(), Error> {
     for (point, files) in [
-        (SyncPoint::File, binding.layout.files().collect::<Vec<_>>()),
-        (SyncPoint::Directory, binding.layout.directories().rev().collect()),
+        (SyncPoint::File, layout.files().collect::<Vec<_>>()),
+        (SyncPoint::Directory, layout.directories().rev().collect()),
     ] {
         for file in files {
             staging::check_cancel(cancelled)?;
             sync(point, &reopen(file)?)?;
-            binding.layout.recheck(cancelled)?;
+            layout.recheck(cancelled)?;
         }
     }
-    binding.verify_parent()?;
-    Ok(binding)
+    Ok(())
 }
 
 fn after(
@@ -150,7 +159,7 @@ impl Binding {
     }
 }
 
-fn directory(path: &Path) -> Result<File, Error> {
+pub(super) fn directory(path: &Path) -> Result<File, Error> {
     let reader = SelectedRepositoryReader::open(path).map_err(|_| Error::Storage)?;
     let file = reader.root.handle().try_clone().map_err(|_| Error::Storage)?;
     let metadata = file.metadata().map_err(|_| Error::Storage)?;
