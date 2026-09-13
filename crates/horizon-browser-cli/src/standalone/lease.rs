@@ -83,7 +83,7 @@ impl PendingLease {
 impl Drop for PendingLease {
     fn drop(&mut self) {
         if !self.committed {
-            remove_host(&self.root, &self.host);
+            let _ = remove_host(&self.root, &self.host);
         }
     }
 }
@@ -131,12 +131,23 @@ pub(super) fn remove(root: &Path, panel_id: &str) {
     let _ = std::fs::remove_file(stop_path_for_root(root, panel_id));
 }
 
-fn remove_host(root: &Path, host: &StandaloneHostRef) {
+fn remove_host(root: &Path, host: &StandaloneHostRef) -> Result<(), String> {
     if profile_is_allowed(root, &host.panel_id, &host.profile_dir) {
-        let _ = std::fs::remove_dir_all(&host.profile_dir);
+        match std::fs::remove_dir_all(&host.profile_dir) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "could not remove profile {}: {error}",
+                    host.profile_dir.display()
+                ));
+            }
+        }
     }
-    let _ = std::fs::remove_file(manifest::manifest_path_for_root(root, &host.panel_id));
+    manifest::remove_in(root, &host.panel_id)
+        .map_err(|error| format!("could not remove manifest for `{}`: {error}", host.panel_id))?;
     remove(root, &host.panel_id);
+    Ok(())
 }
 
 fn profile_is_allowed(horizon_root: &Path, panel_id: &str, profile: &Path) -> bool {
@@ -221,17 +232,17 @@ pub(super) fn stop_hosts(root: &Path, panel_id: Option<&str>) -> Result<Vec<Stri
     }
     wait_until_exited(&targets, STOP_ESCALATION);
     prune_dead_at(root);
-    let survivors = targets
+    let remaining = targets
         .iter()
-        .filter(|host| host_is_current(host))
+        .filter(|host| read_lease(root, &host.panel_id).is_some() || host_liveness(host) != HostLiveness::Stale)
         .map(|host| host.panel_id.clone())
         .collect::<Vec<_>>();
-    if survivors.is_empty() {
+    if remaining.is_empty() {
         Ok(stopped)
     } else {
         Err(format!(
             "keep-alive standalone host did not stop: {}",
-            survivors.join(", ")
+            remaining.join(", ")
         ))
     }
 }
@@ -239,7 +250,7 @@ pub(super) fn stop_hosts(root: &Path, panel_id: Option<&str>) -> Result<Vec<Stri
 fn wait_until_exited(hosts: &[StandaloneHostRef], grace: Duration) {
     let deadline = Instant::now() + grace;
     loop {
-        if hosts.iter().all(|host| !host_is_current(host)) {
+        if hosts.iter().all(|host| host_liveness(host) == HostLiveness::Stale) {
             return;
         }
         if Instant::now() >= deadline {
@@ -255,8 +266,9 @@ pub(super) fn prune_dead_at(root: &Path) -> Vec<String> {
         if host_liveness(&host) != HostLiveness::Stale {
             continue;
         }
-        remove_host(root, &host);
-        pruned.push(host.panel_id);
+        if remove_host(root, &host).is_ok() {
+            pruned.push(host.panel_id);
+        }
     }
     pruned
 }
@@ -635,6 +647,27 @@ mod tests {
         assert!(read_lease(home.path(), &recorded.panel_id).is_none());
         assert!(!panel_manifest_exists(home.path(), &recorded.panel_id));
         assert!(!profile.exists());
+    }
+
+    #[test]
+    fn failed_profile_cleanup_keeps_the_lease() {
+        let home = tempfile::tempdir().unwrap_or_else(|error| panic!("home: {error}"));
+        let mut recorded = host("standalone-9-locked", 0, 1, "");
+        let profile = home.path().join("browser-profiles").join(
+            manifest::manifest_path_for_root(home.path(), &recorded.panel_id)
+                .file_stem()
+                .unwrap_or_default(),
+        );
+        std::fs::create_dir_all(profile.parent().unwrap_or_else(|| panic!("profile parent")))
+            .unwrap_or_else(|error| panic!("dir: {error}"));
+        std::fs::write(&profile, b"not a directory").unwrap_or_else(|error| panic!("blocker: {error}"));
+        recorded.profile_dir = profile;
+        publish(home.path(), &recorded).unwrap_or_else(|error| panic!("publish: {error}"));
+        write_manifest(home.path(), &recorded.panel_id);
+
+        assert!(remove_host(home.path(), &recorded).is_err());
+        assert!(read_lease(home.path(), &recorded.panel_id).is_some());
+        assert!(panel_manifest_exists(home.path(), &recorded.panel_id));
     }
 
     #[test]
