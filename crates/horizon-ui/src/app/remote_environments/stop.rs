@@ -11,8 +11,9 @@ use horizon_core::{
     remote_workspace::{
         RemoteRuntimePhase,
         stop::{
-            ConfiguredRunPodStopError, ConfiguredStopConfirmation, ConfiguredStopConfirmationError,
-            ConfiguredStopError, RemoteWorkspaceStopError, confirm_configured_remote_environment_stop,
+            ConfiguredAzureStopError, ConfiguredRunPodStopError, ConfiguredStopConfirmation,
+            ConfiguredStopConfirmationError, ConfiguredStopError, RemoteWorkspaceStopError,
+            confirm_configured_remote_environment_stop, stop_configured_azure_environment,
             stop_configured_remote_environment, stop_configured_runpod_environment,
         },
     },
@@ -67,6 +68,7 @@ enum StopError {
     SelectionChanged,
     Stop(ConfiguredStopError),
     RunPod(ConfiguredRunPodStopError),
+    Azure(ConfiguredAzureStopError),
     Check(ConfiguredStopConfirmationError),
 }
 
@@ -82,6 +84,7 @@ impl StopError {
             }
             Self::Stop(error) => error.to_string(),
             Self::RunPod(error) => error.to_string(),
+            Self::Azure(error) => error.to_string(),
             Self::Check(error) => error.to_string(),
         }
     }
@@ -104,6 +107,14 @@ impl StopState {
                     .is_some_and(|pending| pending.expected.provider == CloudProvider::RunPod) =>
             {
                 "RunPod Stop is pending. Closing this overview does not cancel it. Exiting Horizon may interrupt local coordination; refresh and Check saved Stop, never resend it."
+            }
+            Some(Operation::Stop)
+                if self
+                    .pending
+                    .as_ref()
+                    .is_some_and(|pending| pending.expected.provider == CloudProvider::Azure) =>
+            {
+                "Azure Stop is pending. Closing this overview does not cancel it. Exiting Horizon may interrupt local coordination; refresh and Check saved Stop, never resend it."
             }
             _ => "An explicitly confirmed Stop is pending. Closing this overview does not cancel it.",
         }
@@ -280,7 +291,8 @@ impl StopNotice {
             if !same_target(&expected, &saved)
                 || saved.revision < expected.revision
                 || !matches!(saved.saved_phase, Some(RemoteRuntimePhase::Stopped { .. }))
-                || (expected.provider == CloudProvider::RunPod && !valid_runpod_stop_result(&expected, &saved))
+                || (matches!(expected.provider, CloudProvider::RunPod | CloudProvider::Azure)
+                    && !valid_cloud_stop_result(&expected, &saved))
             {
                 return Err(StopError::SelectionChanged);
             }
@@ -388,25 +400,40 @@ fn check_supported(summary: &RemoteEnvironmentSummary) -> bool {
         )
 }
 
+/// A first explicit Stop: Local Docker for any retained persistent worker; `RunPod` on
+/// Linux and Azure on every platform only for a retained persistent worker whose saved
+/// identity names the same provider and which carries no Stop intent yet (existing
+/// intent is checked, never resent).
 fn supported(summary: &RemoteEnvironmentSummary) -> bool {
-    summary.lifetime == WorkerLifetime::Persistent
-        && summary.worker_identity.is_some()
-        && (summary.provider == CloudProvider::LocalDocker
-            || (cfg!(target_os = "linux")
-                && summary.provider == CloudProvider::RunPod
-                && summary
-                    .worker_identity
-                    .as_ref()
-                    .is_some_and(|identity| identity.provider == CloudProvider::RunPod)
-                && summary.saved_phase.is_some_and(|phase| {
-                    !matches!(
-                        phase,
-                        RemoteRuntimePhase::Stopping { .. } | RemoteRuntimePhase::Stopped { .. }
-                    )
-                })))
+    let Some(identity) = summary.worker_identity.as_ref() else {
+        return false;
+    };
+    if summary.lifetime != WorkerLifetime::Persistent {
+        return false;
+    }
+    let cloud = identity.provider == summary.provider
+        && summary.saved_phase.is_some_and(|phase| {
+            !matches!(
+                phase,
+                RemoteRuntimePhase::Stopping { .. } | RemoteRuntimePhase::Stopped { .. }
+            )
+        });
+    match summary.provider {
+        CloudProvider::LocalDocker => true,
+        CloudProvider::RunPod => cfg!(target_os = "linux") && cloud,
+        CloudProvider::Azure => cloud,
+    }
 }
 
+/// The `RunPod` name of the shared cloud result check, kept for its existing tests.
+#[cfg(test)]
 fn valid_runpod_stop_result(expected: &RemoteEnvironmentSummary, saved: &RemoteEnvironmentSummary) -> bool {
+    valid_cloud_stop_result(expected, saved)
+}
+
+/// A cloud Stop writes intent and then completion: exactly two revisions on the same
+/// record, with a well-ordered saved Stopped phase and nothing else changed.
+fn valid_cloud_stop_result(expected: &RemoteEnvironmentSummary, saved: &RemoteEnvironmentSummary) -> bool {
     let Some(RemoteRuntimePhase::Stopped {
         requested_at_millis,
         observed_at_millis,
@@ -437,16 +464,30 @@ fn execute(
     config: &RemoteProviderConfig,
     expected: &RemoteEnvironmentSummary,
 ) -> Result<RemoteEnvironmentSummary, StopError> {
-    if expected.provider == CloudProvider::RunPod {
-        if !supported(expected) {
-            return Err(StopError::RunPod(ConfiguredRunPodStopError::UnsupportedProvider));
+    match expected.provider {
+        CloudProvider::RunPod => {
+            if !supported(expected) {
+                return Err(StopError::RunPod(ConfiguredRunPodStopError::UnsupportedProvider));
+            }
+            let store =
+                CloudWorkflowStore::open_existing_without_migration(home).map_err(|_| StopError::StorageUnavailable)?;
+            stop_configured_runpod_environment(&store, config, expected).map_err(StopError::RunPod)
         }
-        let store =
-            CloudWorkflowStore::open_existing_without_migration(home).map_err(|_| StopError::StorageUnavailable)?;
-        return stop_configured_runpod_environment(&store, config, expected).map_err(StopError::RunPod);
+        CloudProvider::Azure => {
+            if !supported(expected) {
+                return Err(StopError::Azure(ConfiguredAzureStopError::UnsupportedProvider));
+            }
+            // Intent and completion need a writer, but a Stop must not initialize or
+            // migrate storage.
+            let store =
+                CloudWorkflowStore::open_existing_without_migration(home).map_err(|_| StopError::StorageUnavailable)?;
+            stop_configured_azure_environment(&store, config, expected).map_err(StopError::Azure)
+        }
+        CloudProvider::LocalDocker => {
+            let store = CloudWorkflowStore::open(home).map_err(|_| StopError::StorageUnavailable)?;
+            stop_configured_remote_environment(&store, config, expected).map_err(StopError::Stop)
+        }
     }
-    let store = CloudWorkflowStore::open(home).map_err(|_| StopError::StorageUnavailable)?;
-    stop_configured_remote_environment(&store, config, expected).map_err(StopError::Stop)
 }
 
 fn execute_check(

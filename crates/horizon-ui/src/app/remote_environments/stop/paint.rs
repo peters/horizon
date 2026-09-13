@@ -45,7 +45,7 @@ pub(super) fn show(
     if !supported(selected) {
         ui.label(
             RichText::new(
-                "Stop requires a retained persistent supported worker. Existing RunPod or Azure Stop intent can only be checked; timed workers are not supported, and a first Azure Stop is not offered here yet.",
+                "Stop requires a retained persistent supported worker. Existing RunPod or Azure Stop intent can only be checked, never resent; timed workers are not supported.",
             )
             .color(theme::FG_DIM()),
         );
@@ -84,7 +84,7 @@ pub(super) fn show(
                 ui.label("An unverified Azure check can mean the Azure CLI is not signed in to the profile's subscription. Sign in, then check again; nothing was sent to the worker.");
             }
         } else if !notice.succeeded {
-            ui.label(if selected.provider == CloudProvider::RunPod {
+            ui.label(if matches!(selected.provider, CloudProvider::RunPod | CloudProvider::Azure) {
                 "Refresh the saved page. If Stop intent exists, use Check saved Stop; do not send another Stop request."
             } else {
                 "Saved intent and identity may remain. Refresh the saved page before explicitly retrying."
@@ -124,6 +124,9 @@ fn confirm(ui: &mut egui::Ui, confirmation: &Confirmation, enabled: bool, action
     if selected.provider == CloudProvider::RunPod {
         ui.label("Requires the exact saved HPS attachment and public pin; no private SSH key is needed. Stop verifies retained provider metadata, not filesystem durability or a backup. No volume deletion is requested; storage may still be billed.");
         ui.label("This sends one Stop request. After uncertainty, refresh and use Check saved Stop, never resend. Closing this overview does not cancel Stop; exiting Horizon may interrupt local coordination.");
+    } else if selected.provider == CloudProvider::Azure {
+        ui.label("Deallocates the worker VM: compute billing stops, the retained data disk keeps /workspace and continues to be billed. Requires the exact named Azure profile, its immutable saved binding and the saved public pin; no private SSH key is needed. Stop verifies deallocated compute and the retained disk, not filesystem durability or a backup.");
+        ui.label("This sends one Stop request through the Azure CLI login for that subscription. After uncertainty, refresh and use Check saved Stop, never resend. Closing this overview does not cancel Stop; exiting Horizon may interrupt local coordination.");
     } else {
         ui.label("Retains this local container and its files. No checkpoint or backup is created. This does not delete the environment.");
     }
