@@ -76,7 +76,7 @@ commands accept the unbound state so that a crash between the product's create
 and the binding never strands a paid resource: `journal-group`, so B can be
 journaled as soon as it exists, and `cleanup` in an unbound mode that deletes
 only groups present in `created-groups.json` with a journaled identity absent
-from the pre-run list (it never derives a name from the manifest), so step 9
+from the pre-run list (it never derives a name from the manifest), so step 10
 stays runnable after a crash before `bind-worker`; the harness change ships a
 crash-before-bind test for exactly that sequence. *Bound*: a `bind-worker` command, run once
 by the operator after step 3, reads the product-created group, checks that it
@@ -203,9 +203,9 @@ gives A no identity today, so before the product pass A needs, in this order:
    deletes anything (the setup coordinator dispatches no compensating cleanup when a
    later step fails; it preserves the allocation for recovery and retry), so the
    removal of every group this run creates is authorized and attempted only by the
-   operator's cleanup from the controller (step 9) under the operator's own
+   operator's cleanup from the controller (step 10) under the operator's own
    credentials, never A's or the observer's;
-   a refused, failed or timed-out step 9 leaves the group for the operator, it is
+   a refused, failed or timed-out step 10 leaves the group for the operator, it is
    not a complete run. Neither subscription-wide Contributor nor
    any role with `delete` is assigned to A. The residual that Azure RBAC cannot
    remove is that the `write` actions must sit at subscription scope (the product
@@ -223,7 +223,7 @@ gives A no identity today, so before the product pass A needs, in this order:
    combined with the subscription-scope VM writes it lets a compromised A attach
    that identity to a VM of its own and pull from the registry with it; that
    identity-assignment path is disclosed on #474 with the same approval and
-   isolation requirement. Step 9's peer comparison detects only a vanished
+   isolation requirement. Step 10's peer comparison detects only a vanished
    or added peer resource or group (it compares resource IDs and group names, not
    properties or tags), so an in-place mutation of a peer would pass it; the run
    neither prevents nor fully detects that residual, and the only prevention is a
@@ -233,7 +233,7 @@ gives A no identity today, so before the product pass A needs, in this order:
    role or identity is created or assigned: the action list above with its
    justification from the product transport (file and line per action) and the
    official Azure RBAC operation reference, the exact scope of each assignment, the
-   owner of the identity, and an exact expiry and removal plan. Step 9's `cleanup`
+   owner of the identity, and an exact expiry and removal plan. Step 10's `cleanup`
    deletes resource groups only; deleting A's group removes the system-assigned
    identity but can leave its role assignments and the custom role definition
    behind, so the removal is an explicit operator step from the controller, before the manifest
@@ -417,8 +417,12 @@ back unchanged at return and after the worker lifecycle step.
      handle, so it is usually visible right after creation while Azure is still
      provisioning, and only an unconfirmed or lost Create response leaves the
      saved allocation without a worker identity and the overview at `No resource
-     identity recorded`, in which case the group ID is recorded when **Check
-     this setup** below first shows it. The remaining `worker.json` fields
+     identity recorded`, in which case the overview may never show it (recovery
+     can legitimately observe an absent worker), so the group ID is derived from
+     the recorded workflow and job identities as
+     `/subscriptions/<id>/resourceGroups/horizon-ws-<workflow>-<job>` and verified
+     with the `az group show` read below; a group that read cannot find is the
+     separate recovery outcome described there. The remaining `worker.json` fields
      (`vm_id`, `instance_id`, `host`, the attested host key) are captured only
      after that Check reports the deployment observed. The group name is
      derived from the workflow and job identities the record carries from the
@@ -452,7 +456,7 @@ back unchanged at return and after the worker lifecycle step.
      aborted run. The window between the product's create and this journal entry
      is real: if A, Horizon or the operator fails inside it, the group is neither
      journaled nor reaper-tagged. The recovery is controller-side and runs before
-     the run proceeds after any interruption of step 3, and again before step 9:
+     the run proceeds after any interruption of step 3, and again before step 10:
      `az group list --subscription <id> --query "[?starts_with(name, 'horizon-ws-')].{name:name, tags:tags}"`
      is compared with `groups.json`; a group absent from the pre-run list whose
      `horizon-workflow-id` and `horizon-job-id` tags both equal the workflow and
@@ -478,13 +482,13 @@ back unchanged at return and after the worker lifecycle step.
      `Failed` or `Canceled` deployment is terminal whether or not a VM was left
      behind (ARM can leave a partially created VM, which setup can never observe
      as its worker): record it with the time, do not continue to the baseline, do
-     not bind, tag or start anything, and go to step 9. A `Succeeded` deployment
+     not bind, tag or start anything, and go to step 10. A `Succeeded` deployment
      with an empty VM list is a mismatch, not a wait: the worker existed and is
      gone, so record it with the time and the deployment's outputs, do not
-     continue, and go to step 9 with the journaled group. A group that exists in
-     that state was journaled above and step 9 deletes it; if the group itself was never readable,
+     continue, and go to step 10 with the journaled group. A group that exists in
+     that state was journaled above and step 10 deletes it; if the group itself was never readable,
      `journal-group` has refused and appended nothing, so there is no B entry,
-     step 9 reports the worker group as unjournaled and deletes only A's group,
+     step 10 reports the worker group as unjournaled and deletes only A's group,
      and that is the correct outcome: no cleanup record is written by hand.
      Otherwise, once the VM
      exists, put it under the deadline reaper, which the
@@ -495,10 +499,10 @@ back unchanged at return and after the worker lifecycle step.
      deadline=<the manifest's cleanup_deadline_utc>` and read the two tags back with
      `az vm show --subscription <id> --ids <B's VM ID> --query tags`. The tags go on
      the VM only: the product checks its own tags as a subset, so extra VM tags are
-     tolerated, while step 9 refuses a group whose tag set changed since it was
+     tolerated, while step 10 refuses a group whose tag set changed since it was
      journaled, so the group is never retagged. This is the cost stop if A, Horizon
-     or the operator dies before step 9: the reaper deallocates B after the
-     deadline (it never deletes, so the retained disk bills until step 9 or the
+     or the operator dies before step 10: the reaper deallocates B after the
+     deadline (it never deletes, so the retained disk bills until step 10 or the
      operator removes the group). Until the harness `bind-worker` step lands and
      performs this tagging with the same read-back, it is a manual operator
      requirement and the run does not proceed without the read-back recorded.
@@ -616,7 +620,7 @@ back unchanged at return and after the worker lifecycle step.
    Because the product created B's group in step 3, journal its exact identity now
    if that was not already done: `client_off.py --manifest m.json journal-group
    --group <B's group> --created created-groups.json` (it reads the ARM ID and full
-   tag set into the journal). The journal is what authorizes step 9 to delete B:
+   tag set into the journal). The journal is what authorizes step 10 to delete B:
    retention beyond the run is not authorized, so B is deleted by this run's
    cleanup, not left for a later pass.
 4. **Off**: `client_off.py --manifest m.json --journal journal.ndjson off --worker
@@ -730,7 +734,7 @@ back unchanged at return and after the worker lifecycle step.
    only while its notice is a pending or provider-side one, at most three times
    inside the gate above; the notice `Worker is absent: retained Stop cannot be
    certified`, or an identity or observer mismatch, is terminal: retention is
-   recorded as unproven and the run proceeds to step 8 and step 9. **Start environment…**
+   recorded as unproven and the run proceeds to steps 8 to 10. **Start environment…**
    is offered only for that verified Stop or an existing Start intent. Then **Start
    environment…** → confirm (records Start intent, starts only the exact worker,
    accepts only the saved identity and pin). The result arrives as a notice and the
@@ -813,7 +817,7 @@ back unchanged at return and after the worker lifecycle step.
    check on A have reached any recorded terminal result (passed, failed within
    their bounds, or skipped and recorded as such) and before the run is reported
    finished; a failed or skipped return does not skip this step, since B may
-   still be running with the observer line in place. Step 9 deletes B
+   still be running with the observer line in place. Step 10 deletes B
    only when its journaled identity still matches and within its 20-minute bound (the
    manifest budget is validated, not metered against elapsed cost), so B can outlive
    the run when that delete is refused, fails or runs out of time, and the run's
@@ -843,12 +847,12 @@ back unchanged at return and after the worker lifecycle step.
    observer_key_path in worker.json>`, the only copy; the public half is inert
    without it) and records that, so the retained `authorized_keys` line can no
    longer be exercised by anyone, and proceeds to
-   step 9. The same destruction applies to every unproven removal: whenever this
+   step 10. The same destruction applies to every unproven removal: whenever this
    step does not pass (B running but the removal unproven, or B deallocated), the
    key is shredded before B is allowed to outlive the run, and the run records it.
-   Step 9 then deletes the group with the OS disk whose container layer holds
+   Step 10 then deletes the group with the OS disk whose container layer holds
    that line (the line lives in the running container's `authorized_keys`, never
-   on the data disk, which holds only `/workspace`). If step 9 is
+   on the data disk, which holds only `/workspace`). If step 10 is
    refused, fails or runs out of time, the residual depends on B's state, which
    the operator re-reads with the instance-view read, waiting out a transitional
    code (`PowerState/starting`, `PowerState/deallocating`, `PowerState/stopping`)
@@ -859,7 +863,13 @@ back unchanged at return and after the worker lifecycle step.
    the one out-of-product power-state mutation of B this runbook allows (the
    reaper tags and the observer-key line are the other, non-power, controller
    writes to B) and only on
-   this failure path: `az vm deallocate --subscription <id> --ids <B's VM ID>
+   this failure path, and only after re-attesting the exact B immediately
+   before it: `az vm show --subscription <id> --ids <B's VM ID> --query
+   '{vmId:vmId, tags:tags}'` must return the recorded `instance_id` and tags
+   carrying the recorded `horizon-workflow-id` and `horizon-job-id` (a same-name
+   recreation keeps the resource ID but not the `vmId`); any mismatch or
+   unreadable answer refuses the deallocation and is reported as part of the
+   residual instead. Then `az vm deallocate --subscription <id> --ids <B's VM ID>
    --no-wait`, then the instance-view read every 30 s for at most 10 minutes
    until it prints `PowerState/deallocated`; a deallocation that does not
    complete in that bound is itself reported. In every state the run is then
@@ -867,7 +877,7 @@ back unchanged at return and after the worker lifecycle step.
    group still present, and in the container layer an inert observer line that
    the entrypoint rewrites on the next container start), the group is handed to
    the lead on #474 for removal, and the run is not reported clean.
-9. **Role removal, then cleanup.** First, as the operator and while A's group
+9. **Role removal.** As the operator and while A's group
    still exists, remove A's authority exactly as prerequisite 2 records it, every
    call under `timeout 90` (the harness's own CLI bound) and the whole substep
    under 10 minutes of the 45 reserved for it and step 8: `az
@@ -879,11 +889,12 @@ back unchanged at return and after the worker lifecycle step.
    --custom-role-only true --query "[?id=='<the recorded definition ID>']"`
    printing `[]`, and record both listings with the run. When the substep's
    bound expires, or a listing is not empty, record which recorded IDs are still
-   present and continue to cleanup anyway, so that compute stops on time; the run
+   present and continue to step 10 anyway, so that compute stops on time; the run
    is then reported with A's residual authority as a finding and the remaining
    removal is handed to the lead on #474 with the exact IDs. A run
    whose listings are not empty is not reported clean even if the groups are
-   deleted. Then **cleanup**: `client_off.py --manifest m.json cleanup --groups-before groups.json
+   deleted.
+10. **Cleanup**: `client_off.py --manifest m.json cleanup --groups-before groups.json
    --resources-before resources.json --created created-groups.json`. Runs under one
    20-minute bound (every ARM call is handed what is left of it; the manifest margin
    is the return phase plus this bound). Deletes only the manifest groups that this run
@@ -900,6 +911,12 @@ back unchanged at return and after the worker lifecycle step.
    peers untouched: every resource outside the deleted groups must be exactly the set
    recorded in step 1 (a vanished peer resource, or a group recreated under its old
    name, is a finding), and the remaining group names must match the list from step 1.
+   Finally, whatever the outcome, the controller destroys A's private key
+   (`shred -u key; rm -f key.pub`) and, if step 8 has not already done so, the
+   observer's private key at the recorded `observer_key_path`: after a proven
+   absence they are unnecessary secrets, and when A's group or B could not be
+   proven absent the run records that a surviving VM may still authorize the
+   public halves, which are inert once the private halves are destroyed.
 
 ## Labelling
 
