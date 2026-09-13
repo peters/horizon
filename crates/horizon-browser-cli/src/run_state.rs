@@ -22,6 +22,7 @@ use crate::checkpoint::{
 use crate::{
     ExecutionReport, Plan, PlanStep, StepReport,
     execution_control::{BlockingIoError, BlockingIoMode, ExecutionControl, ExecutionStopReason},
+    standalone::StandaloneHostRef,
 };
 use checkpoint_artifacts::PendingCompletion;
 
@@ -30,6 +31,7 @@ const MIN_RESUME_VERSION: u32 = 4;
 const PLAN_FILE: &str = "plan.json";
 const REPORT_FILE: &str = "report.json";
 const STATE_FILE: &str = "state.json";
+const STANDALONE_FILE: &str = "standalone.json";
 const RESUME_LOCK_DIRECTORY: &str = "browser-job-locks";
 
 /// Persisted lifecycle state for one deterministic plan run.
@@ -463,11 +465,42 @@ impl DurableRun {
             RunStatus::Failed | RunStatus::Cancelled | RunStatus::TimedOut => {}
         }
         run.load_completed_reports()?;
+        if let Some(host) = run.recorded_standalone()? {
+            crate::standalone::reconnect(&host).map_err(ResumeError::StandaloneGone)?;
+        }
         let selection = select_resume(&plan, Some(&run.state.checkpoint), &run.completed_reports, policy)?;
         if selection.start_index >= plan.steps.len() && selection.skipped.is_none() {
             return Err(ResumeError::NothingToResume(job_id.to_string()));
         }
         Ok((run, plan, selection))
+    }
+
+    /// Record a live keep-alive standalone host so resume can reconnect to it.
+    ///
+    /// # Errors
+    /// Returns when the sidecar file cannot be written.
+    pub fn bind_live_standalone(&mut self) -> Result<(), RunStateError> {
+        crate::standalone::prune_dead_hosts();
+        let Some(host) = crate::standalone::live_host() else {
+            return Ok(());
+        };
+        write_private_json(&self.directory.join(STANDALONE_FILE), &host, "standalone")
+    }
+
+    /// Keep-alive host recorded for this job, if any.
+    ///
+    /// # Errors
+    /// Returns when the sidecar exists but cannot be decoded.
+    pub fn recorded_standalone(&self) -> Result<Option<StandaloneHostRef>, ResumeError> {
+        let path = self.directory.join(STANDALONE_FILE);
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let bytes = std::fs::read(&path)
+            .map_err(|source| ResumeError::Decode(format!("could not read {}: {source}", path.display())))?;
+        serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|source| ResumeError::Decode(source.to_string()))
     }
 
     /// Saved plan for this durable run.

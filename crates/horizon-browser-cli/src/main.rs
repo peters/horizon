@@ -39,7 +39,8 @@ USAGE:
     horizon-browser do "<GOAL>" [OPTIONS]
     horizon-browser run <PLAN.json|-> [--output <REPORT.json|->] [--timeout <SECONDS>]
     horizon-browser resume <JOB-ID> [--output <REPORT.json|->] [--timeout <SECONDS>] [--on-uncertain fail|skip]
-    horizon-browser mcp [--standalone|--connect] [--backend <BACKEND>] [--visible]
+    horizon-browser mcp [--standalone|--connect] [--keep-alive] [--backend <BACKEND>] [--visible]
+    horizon-browser mcp --stop [PANEL-ID]
 
 COMMANDS:
     do     Ask an optional local agent to complete a goal through Horizon MCP.
@@ -52,6 +53,9 @@ COMMANDS:
            --on-uncertain skip continues later steps after audit inspection.
     mcp    Serve the browser MCP contract over stdio. Outside Horizon it owns
            a standalone browser; --connect uses existing Horizon panels only.
+           --keep-alive leaves that browser running after MCP stdin closes so
+           a later --connect or resume can reuse it. --stop asks keep-alive
+           hosts to exit and clean up.
 
 OPTIONS:
     --backend <BACKEND>   Select a backend; prompt/MCP jobs default to auto.
@@ -82,6 +86,9 @@ enum Command {
         standalone: bool,
         options: StandaloneOptions,
     },
+    Stop {
+        panel_id: Option<String>,
+    },
     Help,
     Version,
 }
@@ -100,6 +107,7 @@ async fn main() -> ExitCode {
         }
         Ok(Command::Do(options)) => run_job(&options),
         Ok(Command::Mcp { standalone, options }) => serve_mcp(standalone, options).await,
+        Ok(Command::Stop { panel_id }) => stop_standalone(panel_id.as_deref()),
         Ok(Command::Run { plan, output, timeout }) => run(plan, output.as_deref(), timeout).await,
         Ok(Command::Resume {
             job_id,
@@ -133,7 +141,28 @@ fn initialize_tracing() {
         .try_init();
 }
 
+fn stop_standalone(panel_id: Option<&str>) -> ExitCode {
+    horizon_browser_cli::standalone::prune_dead_hosts();
+    match horizon_browser_cli::standalone::stop_hosts(panel_id) {
+        Ok(stopped) => {
+            if stopped.is_empty() {
+                eprintln!("error: no keep-alive standalone host to stop");
+                return ExitCode::FAILURE;
+            }
+            for panel in stopped {
+                println!("{panel}");
+            }
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("error: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 async fn serve_mcp(standalone: bool, options: StandaloneOptions) -> ExitCode {
+    horizon_browser_cli::standalone::prune_dead_hosts();
     let result = if standalone {
         horizon_browser_cli::standalone::serve(options)
             .await
@@ -257,12 +286,15 @@ async fn prepare_run(
             return Err(stop_exit_code(reason));
         }
     };
-    let durable = match prepared {
+    let mut durable = match prepared {
         Ok(durable) => durable,
         Err(error) => return Err(persist_preparation_failure(error, cancellation).await),
     };
     if let Err(reason) = control.check() {
         return Err(persist_stopped(&durable, reason, cancellation).await);
+    }
+    if let Err(error) = durable.bind_live_standalone() {
+        return Err(persist_failed(&durable, error.to_string(), cancellation).await);
     }
 
     Ok(PreparedRun { plan, durable, control })
@@ -623,14 +655,29 @@ fn parse_job(prompt: String, mut args: impl Iterator<Item = OsString>) -> Result
     }))
 }
 
-fn parse_mcp(mut args: impl Iterator<Item = OsString>) -> Result<Command, String> {
+fn parse_mcp(args: impl Iterator<Item = OsString>) -> Result<Command, String> {
+    let mut args = args.peekable();
     let mut standalone = std::env::var_os("HORIZON_BROWSER_ACTOR").is_none();
     let mut mode_seen = false;
     let mut backend = None;
     let mut backend_seen = false;
     let mut visible = false;
+    let mut keep_alive = false;
+    let mut stop = false;
+    let mut stop_panel = None;
     while let Some(argument) = args.next() {
         match argument.to_str() {
+            Some("--stop") if !stop => {
+                stop = true;
+                if args
+                    .peek()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|value| !value.starts_with('-'))
+                {
+                    stop_panel = args.next().and_then(|value| value.into_string().ok());
+                }
+            }
+            Some("--stop") => return Err("--stop may be specified only once".to_string()),
             Some("--standalone") if !mode_seen => {
                 standalone = true;
                 mode_seen = true;
@@ -642,6 +689,8 @@ fn parse_mcp(mut args: impl Iterator<Item = OsString>) -> Result<Command, String
             Some("--standalone" | "--connect") => {
                 return Err("choose only one of --standalone or --connect".to_string());
             }
+            Some("--keep-alive") if !keep_alive => keep_alive = true,
+            Some("--keep-alive") => return Err("--keep-alive may be specified only once".to_string()),
             Some("--backend") if !backend_seen => {
                 backend_seen = true;
                 backend = parse_backend(args.next().as_ref())?;
@@ -652,12 +701,22 @@ fn parse_mcp(mut args: impl Iterator<Item = OsString>) -> Result<Command, String
             None => return Err("mcp argument is not valid UTF-8".to_string()),
         }
     }
-    if !standalone && (backend_seen || visible) {
-        return Err("--backend and --visible require standalone MCP mode".to_string());
+    if stop {
+        if mode_seen || keep_alive || backend_seen || visible {
+            return Err("--stop cannot be combined with other MCP mode flags".to_string());
+        }
+        return Ok(Command::Stop { panel_id: stop_panel });
+    }
+    if !standalone && (backend_seen || visible || keep_alive) {
+        return Err("--backend, --visible, and --keep-alive require standalone MCP mode".to_string());
     }
     Ok(Command::Mcp {
         standalone,
-        options: StandaloneOptions { backend, visible },
+        options: StandaloneOptions {
+            backend,
+            visible,
+            keep_alive,
+        },
     })
 }
 
@@ -897,7 +956,16 @@ mod tests {
         assert!(standalone);
         assert_eq!(options.backend, Some(BackendKind::FirefoxBidi));
         assert!(options.visible);
+        assert!(!options.keep_alive);
         assert!(parse_args(["mcp", "--connect", "--visible"].map(OsString::from)).is_err());
+        assert!(parse_args(["mcp", "--connect", "--keep-alive"].map(OsString::from)).is_err());
+        let Command::Stop { panel_id } =
+            parse_args(["mcp", "--stop", "standalone-1-abc"].map(OsString::from)).expect("stop MCP")
+        else {
+            panic!("expected stop command");
+        };
+        assert_eq!(panel_id.as_deref(), Some("standalone-1-abc"));
+        assert!(parse_args(["mcp", "--stop", "--standalone"].map(OsString::from)).is_err());
     }
 
     #[test]

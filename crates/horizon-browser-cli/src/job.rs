@@ -78,6 +78,7 @@ pub fn run(options: &JobOptions) -> Result<bool, JobError> {
         crate::standalone::StandaloneOptions {
             backend: options.backend,
             visible: options.visible,
+            keep_alive: false,
         },
         browser_home.path(),
         create_private(&browser_diagnostics_path)?,

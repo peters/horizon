@@ -171,8 +171,13 @@ in-flight mutation unless `--on-uncertain skip` is set after inspecting the
 browser audit. Skip never replays the uncertain call; it continues later
 steps. A skipped step is not a successful completion, so the job cannot
 report `ok` until every plan step has a verified result. Remaining steps
-currently start a new MCP session; reconnecting the same standalone browser
-is a later slice.
+open a new MCP client. If the original run recorded a keep-alive standalone
+host, resume reconnects to that same browser; a dead host is an error and is
+never silently replaced. Start a keep-alive host with
+`horizon-browser mcp --standalone --keep-alive` so later `run`, `--connect`,
+or `resume` can reuse it. `horizon-browser mcp --stop` asks that host to exit
+and remove its profile. Crashed hosts are pruned on the next MCP or resume
+command.
 
 Every deterministic run gets one action deadline. The default is 1800 seconds;
 `--timeout` accepts 1 through 86400 whole seconds. The budget is selected after
@@ -231,10 +236,13 @@ Choose a backend or show the native window when needed:
 ```
 
 The default is headless Chromium, falling back to headless Firefox when
-Chromium is unavailable. Safari requires macOS and `--visible`. The process
-owns one isolated browser session for the lifetime of MCP stdin and removes its
-temporary profile during bounded shutdown. `--connect` instead discovers
-existing Horizon panels without starting a browser. When Horizon supplies
+Chromium is unavailable. Safari requires macOS and `--visible`. Without
+`--keep-alive`, the process owns one isolated browser session for the lifetime
+of MCP stdin and removes its temporary profile during bounded shutdown.
+`--keep-alive` keeps that session after stdin closes until idle, `--stop`, or
+the host exits, so another MCP client can reconnect without restarting the
+browser. `--connect` discovers existing Horizon or keep-alive standalone
+panels without starting a browser. When Horizon supplies
 `HORIZON_BROWSER_ACTOR`, connect mode remains the default so actor-scoped panel
 creation, visibility changes, steering, and audit continue to use Horizon's
 host lifecycle.
