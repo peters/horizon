@@ -147,14 +147,15 @@ impl DriverState {
         let Some(session) = self.session_id.clone() else {
             return;
         };
-        let _ = self.call_and_ack(
-            link,
-            event_tx,
-            frame_slot,
-            "Network.disable",
-            &serde_json::json!({}),
-            Some(session.as_str()),
-        );
+        if self
+            .disable_network_domain(link, event_tx, frame_slot, session.as_str())
+            .is_err()
+        {
+            tracing::warn!(
+                target: "browser",
+                "Chromium Network.disable failed; response-body buffers may remain until the next successful disable"
+            );
+        }
         if let Err(error) = self.call_and_ack(
             link,
             event_tx,
@@ -168,6 +169,24 @@ impl DriverState {
                 "failed to restore unbuffered Chromium network observation after capture stop: {error}"
             );
         }
+    }
+
+    fn disable_network_domain(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        session: &str,
+    ) -> Result<(), crate::cdp::CdpError> {
+        let params = serde_json::json!({});
+        if self
+            .call_and_ack(link, event_tx, frame_slot, "Network.disable", &params, Some(session))
+            .is_ok()
+        {
+            return Ok(());
+        }
+        self.call_and_ack(link, event_tx, frame_slot, "Network.disable", &params, Some(session))
+            .map(|_| ())
     }
 
     pub(super) fn handle_network_event(&mut self, event: &CdpEvent<'_>) {
