@@ -498,7 +498,11 @@ impl Driver {
         if activity {
             self.pending_classic_history_start = None;
         }
-        if self.config.browser.backend == BackendKind::SafariWebDriver && self.handle_safari_scrollbar_input(&input)? {
+        if matches!(
+            self.config.browser.backend,
+            BackendKind::SafariWebDriver | BackendKind::FirefoxBidi
+        ) && self.handle_scrollbar_input(&input)?
+        {
             return Ok(());
         }
         let (result, demand_frame) = if self.config.browser.backend == BackendKind::FirefoxBidi {

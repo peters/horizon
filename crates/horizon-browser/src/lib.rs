@@ -15,6 +15,7 @@ pub mod frames;
 pub mod input;
 mod navigation;
 mod network;
+mod page_scroll;
 mod paths;
 pub mod process;
 mod profile;

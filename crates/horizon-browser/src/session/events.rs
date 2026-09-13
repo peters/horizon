@@ -121,7 +121,7 @@ impl DriverState {
             self.flush_pending_clipboard(link);
             return;
         }
-        if self.handle_scrollbar_layout_response(id, result.as_ref(), error.is_some()) {
+        if self.handle_scrollbar_layout_response(id, result.as_ref(), error.is_some(), frame_slot, event_tx) {
             if let Some(error) = error {
                 tracing::debug!(target: "browser", "scrollbar layout request rejected: {error}");
             }
@@ -460,6 +460,8 @@ impl DriverState {
                 .params
                 .pointer("/metadata/scrollOffsetY")
                 .and_then(serde_json::Value::as_f64),
+            frame_slot,
+            event_tx,
         );
         // Ack so the stream continues: params.sessionId echoes the frame's
         // session identifier, the top-level sessionId scopes the call

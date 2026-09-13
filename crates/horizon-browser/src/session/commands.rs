@@ -8,14 +8,15 @@ use std::time::{Duration, Instant};
 use crate::cdp::CdpLink;
 use crate::frames::FrameSlot;
 use crate::input::{BrowserInputCdpExt, is_user_activity};
+use crate::page_scroll::VerticalScrollbarPress;
 use crate::process::ChromeProcess;
-use crate::{AgentAction, BrowserAuditStatus, BrowserButton, BrowserControlFailure, BrowserInput};
+use crate::{AgentAction, BrowserAuditStatus, BrowserButton, BrowserControlFailure, BrowserInput, PageScrollState};
 
 use crate::navigation::AgentActionExecution;
 
 use super::{
     BrowserCommand, BrowserEventSender, CommandReceiver, DriverState, SCROLLBAR_LAYOUT_RETRY_DELAY,
-    VIEWPORT_CAPTURE_DELAY, VIEWPORT_RETRY_DELAY, VerticalScrollbarLayout,
+    VIEWPORT_CAPTURE_DELAY, VIEWPORT_RETRY_DELAY,
 };
 
 impl DriverState {
@@ -162,7 +163,7 @@ impl DriverState {
                 Ok(false)
             }
             BrowserCommand::Input(input) => {
-                if self.handle_vertical_scrollbar_input(link, &input) {
+                if self.handle_vertical_scrollbar_input(link, event_tx, frame_slot, &input) {
                     return Ok(false);
                 }
                 // Input cannot block on a roundtrip: a detaching session
@@ -214,7 +215,13 @@ impl DriverState {
         BrowserControlFailure::new(code, message)
     }
 
-    fn handle_vertical_scrollbar_input(&mut self, link: &mut CdpLink, input: &BrowserInput) -> bool {
+    fn handle_vertical_scrollbar_input(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &FrameSlot,
+        input: &BrowserInput,
+    ) -> bool {
         match input {
             BrowserInput::MousePress {
                 x,
@@ -224,9 +231,9 @@ impl DriverState {
             } => {
                 self.vertical_scrollbar_drag = None;
                 // Avoid a synchronous layout roundtrip for ordinary page
-                // clicks. Native scrollbars are never wider than this gate;
-                // the authoritative layout metrics below make the final hit
-                // decision and protect right-aligned page content.
+                // clicks. Native and host-painted tracks are never wider than
+                // this gate; the authoritative overlay metrics below make the
+                // final hit decision and protect right-aligned page content.
                 if *x < f64::from(self.viewport_w.saturating_sub(32)) {
                     return false;
                 }
@@ -234,12 +241,12 @@ impl DriverState {
                 let Some(layout) = self.scrollbar_layout.layout else {
                     return false;
                 };
-                match vertical_scrollbar_press(layout, f64::from(self.viewport_w), *x, *y) {
-                    Some(ScrollbarPress::Drag(drag)) => {
+                match layout.vertical_press(*x, *y) {
+                    Some(VerticalScrollbarPress::Drag(drag)) => {
                         self.vertical_scrollbar_drag = Some(drag);
                     }
-                    Some(ScrollbarPress::PageTo(target)) => {
-                        self.scroll_page_to(link, target);
+                    Some(VerticalScrollbarPress::Track(target)) => {
+                        self.scroll_page_to(link, event_tx, frame_slot, target);
                     }
                     None => return false,
                 }
@@ -252,7 +259,7 @@ impl DriverState {
                     .vertical_scrollbar_drag
                     .map(|drag| drag.target_scroll_y(*y))
                     .unwrap_or_default();
-                self.scroll_page_to(link, target);
+                self.scroll_page_to(link, event_tx, frame_slot, target);
                 true
             }
             BrowserInput::MouseRelease {
@@ -262,14 +269,20 @@ impl DriverState {
             } if self.vertical_scrollbar_drag.is_some() => {
                 let drag = self.vertical_scrollbar_drag.take();
                 let target = drag.map(|drag| drag.target_scroll_y(*y)).unwrap_or_default();
-                self.scroll_page_to(link, target);
+                self.scroll_page_to(link, event_tx, frame_slot, target);
                 true
             }
             _ => false,
         }
     }
 
-    fn scroll_page_to(&mut self, link: &mut CdpLink, target: f64) {
+    fn scroll_page_to(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &FrameSlot,
+        target: f64,
+    ) {
         self.request_runtime_for_sessions(link);
         let expression = format!("window.scrollTo(window.scrollX, {target:.3})");
         let Some(session) = self.session_id.clone() else {
@@ -288,7 +301,10 @@ impl DriverState {
             .is_ok()
         {
             if let Some(layout) = self.scrollbar_layout.layout.as_mut() {
-                layout.scroll_y = target.clamp(0.0, layout.content_height - layout.client_height);
+                *layout = layout.with_scroll_y(target);
+                if frame_slot.publish_page_scroll_state(*layout) {
+                    event_tx.wake_ui();
+                }
             }
             self.schedule_scrollbar_layout_refresh(SCROLLBAR_LAYOUT_RETRY_DELAY);
         }
@@ -351,6 +367,8 @@ impl DriverState {
         id: u64,
         result: Option<&serde_json::Value>,
         rejected: bool,
+        frame_slot: &FrameSlot,
+        event_tx: &BrowserEventSender,
     ) -> bool {
         if self.scrollbar_layout.request_id != Some(id) {
             return false;
@@ -361,21 +379,34 @@ impl DriverState {
             self.schedule_scrollbar_layout_refresh(SCROLLBAR_LAYOUT_RETRY_DELAY);
             return true;
         }
-        let Some(layout) = result.and_then(VerticalScrollbarLayout::from_metrics) else {
+        let Some(layout) = result.and_then(|metrics| {
+            PageScrollState::from_chromium_layout_metrics(metrics, self.viewport_w, self.viewport_h)
+        }) else {
             self.scrollbar_layout.layout = None;
             self.schedule_scrollbar_layout_refresh(SCROLLBAR_LAYOUT_RETRY_DELAY);
             return true;
         };
         self.scrollbar_layout.layout = Some(layout);
+        if frame_slot.publish_page_scroll_state(layout) {
+            event_tx.wake_ui();
+        }
         true
     }
 
-    pub(super) fn note_screencast_scroll_offset(&mut self, scroll_y: Option<f64>) {
+    pub(super) fn note_screencast_scroll_offset(
+        &mut self,
+        scroll_y: Option<f64>,
+        frame_slot: &FrameSlot,
+        event_tx: &BrowserEventSender,
+    ) {
         let Some(scroll_y) = scroll_y.filter(|value| value.is_finite() && *value >= 0.0) else {
             return;
         };
         if let Some(layout) = self.scrollbar_layout.layout.as_mut() {
-            layout.scroll_y = scroll_y.clamp(0.0, layout.content_height - layout.client_height);
+            *layout = layout.with_scroll_y(scroll_y);
+            if frame_slot.publish_page_scroll_state(*layout) {
+                event_tx.wake_ui();
+            }
         } else {
             self.schedule_scrollbar_layout_refresh(Duration::ZERO);
         }
@@ -596,68 +627,17 @@ impl DriverState {
     }
 }
 
-enum ScrollbarPress {
-    Drag(super::VerticalScrollbarDrag),
-    PageTo(f64),
-}
-
-fn vertical_scrollbar_press(
-    layout: VerticalScrollbarLayout,
-    viewport_width: f64,
-    x: f64,
-    y: f64,
-) -> Option<ScrollbarPress> {
-    let overlay = layout.client_width >= viewport_width;
-    let scrollbar_left = if overlay {
-        (viewport_width - 8.0).max(0.0)
-    } else {
-        layout.client_width
-    };
-    if layout.content_height <= layout.client_height
-        || x < scrollbar_left
-        || x > viewport_width
-        || y < 0.0
-        || y > layout.client_height
-    {
-        return None;
-    }
-
-    let max_scroll = layout.content_height - layout.client_height;
-    let thumb_height =
-        (layout.client_height * layout.client_height / layout.content_height).clamp(18.0, layout.client_height);
-    let thumb_travel = layout.client_height - thumb_height;
-    let thumb_top = if max_scroll > 0.0 {
-        layout.scroll_y.clamp(0.0, max_scroll) / max_scroll * thumb_travel
-    } else {
-        0.0
-    };
-    if y >= thumb_top - 2.0 && y <= thumb_top + thumb_height + 2.0 {
-        return Some(ScrollbarPress::Drag(super::VerticalScrollbarDrag {
-            pointer_y: y,
-            scroll_y: layout.scroll_y,
-            max_scroll,
-            scroll_per_pointer_pixel: max_scroll / thumb_travel.max(1.0),
-        }));
-    }
-    if overlay {
-        return None;
-    }
-
-    let direction = if y < thumb_top { -1.0 } else { 1.0 };
-    Some(ScrollbarPress::PageTo(
-        (layout.scroll_y + (direction * layout.client_height)).clamp(0.0, max_scroll),
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
+    use std::sync::mpsc;
 
     use crate::frames::FrameSlot;
-    use crate::{BrowserConfig, session::BrowserSessionConfig};
+    use crate::session::{BrowserEventSender, BrowserEventWake, CommittedUrl};
+    use crate::{BrowserConfig, PageScrollState, session::BrowserSessionConfig};
 
-    use super::{DriverState, ScrollbarPress, VerticalScrollbarLayout, vertical_scrollbar_press};
+    use super::DriverState;
 
     fn driver_state() -> DriverState {
         DriverState::new(
@@ -678,11 +658,13 @@ mod tests {
         )
     }
 
-    fn scrollbar_layout(metrics: &serde_json::Value) -> VerticalScrollbarLayout {
-        let Some(layout) = VerticalScrollbarLayout::from_metrics(metrics) else {
-            panic!("test metrics should describe a valid layout");
-        };
-        layout
+    fn test_events() -> BrowserEventSender {
+        let (tx, _rx) = mpsc::channel();
+        BrowserEventSender {
+            tx,
+            wake: BrowserEventWake::default(),
+            committed_url: CommittedUrl::default(),
+        }
     }
 
     #[test]
@@ -733,10 +715,15 @@ mod tests {
     #[test]
     fn asynchronous_scrollbar_layout_response_populates_the_hit_test_cache() {
         let mut state = driver_state();
+        let events = test_events();
+        let frame_slot = FrameSlot::new();
         state.scrollbar_layout.request_id = Some(41);
         state.scrollbar_layout.refresh_at = None;
+        state.viewport_w = 1_164;
+        state.viewport_h = 608;
         let metrics = serde_json::json!({
             "cssLayoutViewport": {
+                "pageX": 0,
                 "pageY": 120,
                 "clientWidth": 1149,
                 "clientHeight": 608
@@ -744,24 +731,32 @@ mod tests {
             "cssContentSize": { "width": 1149, "height": 3000 }
         });
 
-        assert!(state.handle_scrollbar_layout_response(41, Some(&metrics), false));
+        assert!(state.handle_scrollbar_layout_response(41, Some(&metrics), false, &frame_slot, &events));
         let Some(layout) = state.scrollbar_layout.layout else {
             panic!("valid asynchronous metrics should populate the cache");
         };
-        assert!((layout.scroll_y - 120.0).abs() < f64::EPSILON);
+        assert!((layout.scroll_y - 120.0).abs() < f32::EPSILON);
+        assert!(layout.is_vertically_scrollable());
         assert_eq!(state.scrollbar_layout.request_id, None);
         assert_eq!(state.scrollbar_layout.refresh_at, None);
+        assert_eq!(frame_slot.page_scroll_state(), Some(layout));
     }
 
     #[test]
     fn invalidation_abandons_an_inflight_scrollbar_layout_request() {
         let mut state = driver_state();
+        let events = test_events();
+        let frame_slot = FrameSlot::new();
         state.scrollbar_layout.request_id = Some(41);
-        state.scrollbar_layout.layout = Some(VerticalScrollbarLayout {
-            client_width: 1149.0,
-            client_height: 608.0,
+        state.scrollbar_layout.layout = Some(PageScrollState {
+            scroll_x: 0.0,
             scroll_y: 0.0,
-            content_height: 3000.0,
+            viewport_width: 1_164.0,
+            viewport_height: 608.0,
+            client_width: 1_149.0,
+            client_height: 608.0,
+            content_width: 1_149.0,
+            content_height: 3_000.0,
         });
 
         state.invalidate_scrollbar_layout();
@@ -769,81 +764,6 @@ mod tests {
         assert_eq!(state.scrollbar_layout.request_id, None);
         assert!(state.scrollbar_layout.layout.is_none());
         assert!(state.scrollbar_layout.refresh_at.is_some());
-        assert!(!state.handle_scrollbar_layout_response(41, None, false));
-    }
-
-    #[test]
-    fn native_scrollbar_thumb_drag_maps_pointer_travel_to_page_scroll() {
-        let metrics = serde_json::json!({
-            "cssLayoutViewport": {
-                "pageY": 0,
-                "clientWidth": 1149,
-                "clientHeight": 608
-            },
-            "cssContentSize": { "width": 1149, "height": 3000 }
-        });
-        let press = vertical_scrollbar_press(scrollbar_layout(&metrics), 1164.0, 1155.0, 72.0);
-        let Some(ScrollbarPress::Drag(drag)) = press else {
-            panic!("visible scrollbar thumb should start a drag");
-        };
-
-        let target = drag.target_scroll_y(361.0);
-        assert!((target - 1_426.0).abs() < 1.0);
-    }
-
-    #[test]
-    fn overlay_scrollbar_only_claims_its_thumb() {
-        let metrics = serde_json::json!({
-            "cssLayoutViewport": {
-                "pageY": 640,
-                "clientWidth": 684,
-                "clientHeight": 508
-            },
-            "cssContentSize": { "width": 684, "height": 2618 }
-        });
-        let layout = scrollbar_layout(&metrics);
-
-        assert!(matches!(
-            vertical_scrollbar_press(layout, 684.0, 676.0, 128.0),
-            Some(ScrollbarPress::Drag(_))
-        ));
-        assert!(vertical_scrollbar_press(layout, 684.0, 676.0, 300.0).is_none());
-        assert!(vertical_scrollbar_press(layout, 684.0, 675.0, 128.0).is_none());
-    }
-
-    #[test]
-    fn native_scrollbar_track_click_pages_without_stealing_content_clicks() {
-        let metrics = serde_json::json!({
-            "cssLayoutViewport": {
-                "pageY": 0,
-                "clientWidth": 1149,
-                "clientHeight": 608
-            },
-            "cssContentSize": { "width": 1149, "height": 3000 }
-        });
-
-        let layout = scrollbar_layout(&metrics);
-        let track = vertical_scrollbar_press(layout, 1164.0, 1155.0, 300.0);
-        assert!(matches!(track, Some(ScrollbarPress::PageTo(target)) if (target - 608.0).abs() < f64::EPSILON));
-        assert!(vertical_scrollbar_press(layout, 1164.0, 1148.0, 300.0).is_none());
-        assert!(vertical_scrollbar_press(layout, 1149.0, 1148.0, 300.0).is_none());
-    }
-
-    #[test]
-    fn minimum_height_scrollbar_thumb_still_reaches_the_page_end() {
-        let metrics = serde_json::json!({
-            "cssLayoutViewport": {
-                "pageY": 0,
-                "clientWidth": 1149,
-                "clientHeight": 608
-            },
-            "cssContentSize": { "width": 1149, "height": 100_000 }
-        });
-        let press = vertical_scrollbar_press(scrollbar_layout(&metrics), 1164.0, 1155.0, 9.0);
-        let Some(ScrollbarPress::Drag(drag)) = press else {
-            panic!("minimum-height scrollbar thumb should start a drag");
-        };
-
-        assert!((drag.target_scroll_y(599.0) - 99_392.0).abs() < 1.0);
+        assert!(!state.handle_scrollbar_layout_response(41, None, false, &frame_slot, &events));
     }
 }

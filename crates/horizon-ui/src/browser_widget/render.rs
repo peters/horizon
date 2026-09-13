@@ -122,7 +122,7 @@ pub fn show_body(
     let scale = (body_rect.width() / frame_size[0]).min(body_rect.height() / frame_size[1]);
     let rect = Rect::from_center_size(body_rect.center(), vec2(frame_size[0] * scale, frame_size[1] * scale));
     paint_browser_frame(ui, rect, texture);
-    paint_webdriver_scrollbar(ui, rect, browser.frame_slot.page_scroll_state());
+    paint_page_scrollbar(ui, rect, browser.frame_slot.page_scroll_state());
 
     BodyOutput {
         image_rect: Some(rect),
@@ -152,43 +152,36 @@ fn paint_browser_frame(ui: &Ui, rect: Rect, texture: &egui::TextureHandle) {
     }));
 }
 
-fn paint_webdriver_scrollbar(ui: &Ui, image_rect: Rect, state: Option<PageScrollState>) {
+fn paint_page_scrollbar(ui: &Ui, image_rect: Rect, state: Option<PageScrollState>) {
     let Some((track, thumb)) = state.and_then(|state| vertical_scrollbar_geometry(image_rect, state)) else {
         return;
     };
     ui.painter().rect_filled(
         track,
         CornerRadius::ZERO,
-        crate::theme::alpha(crate::theme::PANEL_BG_ALT(), 220),
+        crate::theme::alpha(crate::theme::PANEL_BG_ALT(), 230),
     );
     ui.painter()
         .rect_filled(thumb.shrink(2.0), CornerRadius::same(4), crate::theme::ACCENT());
 }
 
 fn vertical_scrollbar_geometry(image_rect: Rect, state: PageScrollState) -> Option<(Rect, Rect)> {
-    if !state.is_valid() || state.content_height <= state.client_height + f32::EPSILON {
+    let overlay = state.vertical_overlay()?;
+    if state.viewport_width <= f32::EPSILON || state.viewport_height <= f32::EPSILON {
         return None;
     }
-    let scale = image_rect.width() / state.viewport_width;
-    let native_gutter = (state.viewport_width - state.client_width).max(0.0) * scale;
-    let track_width = native_gutter.clamp(8.0, 14.0).min(image_rect.width());
+    let scale_x = image_rect.width() / state.viewport_width;
+    let scale_y = image_rect.height() / state.viewport_height;
+    let track_width = (overlay.track_width * scale_x).min(image_rect.width());
     let track = Rect::from_min_max(
         pos2(image_rect.right() - track_width, image_rect.top()),
         image_rect.right_bottom(),
     );
-    let visible_fraction = (state.client_height / state.content_height).clamp(0.0, 1.0);
-    let natural_thumb_height = track.height() * visible_fraction;
-    let thumb_height = if track.height() >= 24.0 {
-        natural_thumb_height.clamp(24.0, track.height())
-    } else {
-        track.height()
-    };
-    let max_scroll = state.content_height - state.client_height;
-    let progress = (state.scroll_y / max_scroll).clamp(0.0, 1.0);
-    let thumb_top = track.top() + ((track.height() - thumb_height) * progress);
+    let thumb_height = (overlay.thumb_height * scale_y).clamp(0.0, track.height());
+    let thumb_top = track.top() + (overlay.thumb_y * scale_y);
     let thumb = Rect::from_min_max(
         pos2(track.left(), thumb_top),
-        pos2(track.right(), thumb_top + thumb_height),
+        pos2(track.right(), (thumb_top + thumb_height).min(track.bottom())),
     );
     Some((track, thumb))
 }
@@ -254,7 +247,7 @@ mod tests {
     }
 
     #[test]
-    fn webdriver_scrollbar_overlay_tracks_native_gutter_and_scroll_position() {
+    fn page_scrollbar_overlay_tracks_native_gutter_and_scroll_position() {
         let image = Rect::from_min_max(pos2(0.0, 0.0), pos2(1164.0, 608.0));
         let Some((track, top_thumb)) = vertical_scrollbar_geometry(image, scroll_state(0.0)) else {
             panic!("scrollable page should have overlay geometry");

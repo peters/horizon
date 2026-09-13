@@ -1,9 +1,10 @@
-//! Safari scrollbar gestures backed by the sampled top-level page geometry.
+//! `WebDriver` scrollbar gestures backed by the sampled top-level page geometry.
 
 use std::time::Instant;
 
 use serde_json::json;
 
+use crate::page_scroll::{VerticalScrollbarDrag, VerticalScrollbarPress};
 use crate::{BrowserButton, BrowserInput, PageScrollState};
 
 use super::Driver;
@@ -35,30 +36,11 @@ impl State {
 #[derive(Clone, Copy, Debug)]
 enum Gesture {
     Track,
-    Drag(Drag),
-}
-
-#[derive(Clone, Copy, Debug)]
-struct Drag {
-    pointer_y: f64,
-    scroll_y: f64,
-    max_scroll: f64,
-    scroll_per_pointer_pixel: f64,
-}
-
-impl Drag {
-    fn target(self, pointer_y: f64) -> f64 {
-        (self.scroll_y + ((pointer_y - self.pointer_y) * self.scroll_per_pointer_pixel)).clamp(0.0, self.max_scroll)
-    }
-}
-
-enum Press {
-    Track(f64),
-    Drag(Drag),
+    Drag(VerticalScrollbarDrag),
 }
 
 impl Driver {
-    pub(super) fn handle_safari_scrollbar_input(&mut self, input: &BrowserInput) -> Result<bool, String> {
+    pub(super) fn handle_scrollbar_input(&mut self, input: &BrowserInput) -> Result<bool, String> {
         match input {
             BrowserInput::MousePress {
                 x,
@@ -66,15 +48,15 @@ impl Driver {
                 button: BrowserButton::Left,
                 ..
             } => {
-                let Some(press) = self.scrollbar.page.and_then(|state| press(state, *x, *y)) else {
+                let Some(press) = self.scrollbar.page.and_then(|state| state.vertical_press(*x, *y)) else {
                     return Ok(false);
                 };
                 let gesture = match press {
-                    Press::Track(_) => Gesture::Track,
-                    Press::Drag(drag) => Gesture::Drag(drag),
+                    VerticalScrollbarPress::Track(_) => Gesture::Track,
+                    VerticalScrollbarPress::Drag(drag) => Gesture::Drag(drag),
                 };
                 self.scrollbar.gesture = Some(gesture);
-                if let Press::Track(target) = press {
+                if let VerticalScrollbarPress::Track(target) = press {
                     self.scroll_page_to(target)?;
                 }
                 Ok(true)
@@ -86,7 +68,7 @@ impl Driver {
                 if let Gesture::Drag(drag) = gesture
                     && buttons & 1 != 0
                 {
-                    self.scroll_page_to(drag.target(*y))?;
+                    self.scroll_page_to(drag.target_scroll_y(*y))?;
                 }
                 Ok(true)
             }
@@ -99,7 +81,7 @@ impl Driver {
                     return Ok(false);
                 };
                 if let Gesture::Drag(drag) = gesture {
-                    self.scroll_page_to(drag.target(*y))?;
+                    self.scroll_page_to(drag.target_scroll_y(*y))?;
                 }
                 Ok(true)
             }
@@ -115,56 +97,19 @@ impl Driver {
                 "args": [target],
             }),
         )?;
+        if let Some(page) = self.scrollbar.page {
+            self.scrollbar.sample(page.with_scroll_y(target));
+        }
         self.scrollbar.refresh_at = Instant::now();
         self.frames.demand();
         Ok(())
     }
 }
 
-fn press(state: PageScrollState, x: f64, y: f64) -> Option<Press> {
-    let client_width = f64::from(state.client_width);
-    let viewport_width = f64::from(state.viewport_width);
-    let client_height = f64::from(state.client_height);
-    let content_height = f64::from(state.content_height);
-    let overlay = viewport_width <= client_width;
-    let scrollbar_left = if overlay {
-        (viewport_width - 8.0).max(0.0)
-    } else {
-        client_width
-    };
-    if !state.is_valid()
-        || content_height <= client_height
-        || x < scrollbar_left
-        || x > viewport_width
-        || y < 0.0
-        || y > client_height
-    {
-        return None;
-    }
-
-    let max_scroll = content_height - client_height;
-    let thumb_height = (client_height * client_height / content_height).clamp(24.0, client_height);
-    let thumb_travel = client_height - thumb_height;
-    let scroll_y = f64::from(state.scroll_y).clamp(0.0, max_scroll);
-    let thumb_top = scroll_y / max_scroll * thumb_travel;
-    if y >= thumb_top - 2.0 && y <= thumb_top + thumb_height + 2.0 {
-        return Some(Press::Drag(Drag {
-            pointer_y: y,
-            scroll_y,
-            max_scroll,
-            scroll_per_pointer_pixel: max_scroll / thumb_travel.max(1.0),
-        }));
-    }
-    let direction = if y < thumb_top { -1.0 } else { 1.0 };
-    Some(Press::Track(
-        (scroll_y + (direction * client_height)).clamp(0.0, max_scroll),
-    ))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{Press, press};
     use crate::PageScrollState;
+    use crate::page_scroll::VerticalScrollbarPress;
 
     fn state() -> PageScrollState {
         PageScrollState {
@@ -180,27 +125,30 @@ mod tests {
     }
 
     #[test]
-    fn safari_scrollbar_track_pages_and_thumb_drag_is_absolute() {
-        let Some(Press::Track(target)) = press(state(), 1_195.0, 100.0) else {
+    fn webdriver_scrollbar_track_pages_and_thumb_drag_is_absolute() {
+        let Some(VerticalScrollbarPress::Track(target)) = state().vertical_press(1_195.0, 100.0) else {
             panic!("track should own the press");
         };
         assert!((target - 600.0).abs() < f64::EPSILON);
-        let Some(Press::Drag(drag)) = press(state(), 1_195.0, 300.0) else {
+        let Some(VerticalScrollbarPress::Drag(drag)) = state().vertical_press(1_195.0, 300.0) else {
             panic!("thumb should own the press");
         };
-        assert!((drag.target(400.0) - 1_700.0).abs() < f64::EPSILON);
+        assert!((drag.target_scroll_y(400.0) - 1_700.0).abs() < f64::EPSILON);
     }
 
     #[test]
-    fn safari_scrollbar_overlay_claims_only_its_painted_gutter() {
-        assert!(press(state(), 1_180.0, 300.0).is_none());
+    fn webdriver_scrollbar_overlay_claims_its_painted_gutter() {
+        assert!(state().vertical_press(1_180.0, 300.0).is_none());
         let mut overlay = state();
         overlay.client_width = overlay.viewport_width;
         overlay.content_width = overlay.client_width;
-        assert!(press(overlay, 1_190.0, 300.0).is_none());
-        assert!(press(overlay, 1_195.0, 300.0).is_some());
+        assert!(overlay.vertical_press(1_187.0, 300.0).is_none());
+        assert!(overlay.vertical_press(1_195.0, 300.0).is_some());
         overlay.scroll_y = 0.0;
         overlay.content_height = 100_000.0;
-        assert!(matches!(press(overlay, 1_195.0, 22.0), Some(Press::Drag(_))));
+        assert!(matches!(
+            overlay.vertical_press(1_195.0, 22.0),
+            Some(VerticalScrollbarPress::Drag(_))
+        ));
     }
 }
