@@ -671,6 +671,7 @@ impl HorizonApp {
                                 },
                             ),
                         };
+                        ui.set_max_width(crate::text::stable_tooltip_max_width(ui));
                         ui.label(tooltip);
                     });
                     PanelMicInteraction {
