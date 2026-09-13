@@ -5,7 +5,9 @@ use crate::theme;
 
 use super::RenameEditAction;
 use super::speech::MicState;
-use super::util::{format_compact_count, short_session_id, truncate_chars, usize_to_f32};
+use super::util::{format_compact_count, short_session_id, usize_to_f32};
+
+use crate::text::truncate_chars;
 
 #[derive(Clone, Copy)]
 pub(super) struct PanelChrome<'a> {
