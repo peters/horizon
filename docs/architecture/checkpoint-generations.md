@@ -1,6 +1,6 @@
 # ADR: Worker-owned repository checkpoint generations
 
-**Status:** Proposed implementation; acceptance remains open
+**Status:** One-shot operation implemented and locally validated; broader acceptance remains open
 **Date:** 2026-09-13
 **Deciders:** Repository maintainers under the approved #383/#471 delivery scope
 
@@ -67,7 +67,7 @@ destructive deletion or `RepositoryCheckpoint` watermark advancement is implied.
 
 ## Action items
 
-- [ ] Implement and prove the exact-binary one-shot operation, refusal paths,
+- [x] Implement and prove the exact-binary one-shot operation, refusal paths,
   unchanged source/earlier generations and retained response uncertainty.
 - [ ] Add periodic consumption with separate explicit enrollment and verified
   generation readback before success; measure progress with clients disconnected.
