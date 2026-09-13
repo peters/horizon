@@ -50,6 +50,7 @@ mod terminal;
 mod transcript;
 mod usage_dashboard;
 mod usage_stats;
+mod util;
 mod view;
 mod workspace;
 
