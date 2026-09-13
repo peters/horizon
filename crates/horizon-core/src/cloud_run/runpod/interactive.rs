@@ -23,6 +23,13 @@ use super::{
 /// worker identity and endpoint. An unauthenticated network key scan is not an
 /// attestation source.
 pub trait RunPodHostKeySource: Send + Sync {
+    /// Return only an already-retained pin for this exact worker, without I/O or
+    /// bootstrap. The default denies compute Start to initial-trust sources.
+    #[must_use]
+    fn retained_endpoint(&self, _worker: &InteractiveWorker) -> Option<InteractiveWorkerSshEndpoint> {
+        None
+    }
+
     #[must_use]
     fn host_key(
         &self,
@@ -48,9 +55,9 @@ where
 
 /// Adapts the exact GPU-worker lifecycle to the common interactive contract.
 pub struct RunPodInteractiveWorkerProvider {
-    client: RunPodClient,
-    profile: RunPodProfile,
-    host_keys: Box<dyn RunPodHostKeySource>,
+    pub(super) client: RunPodClient,
+    pub(super) profile: RunPodProfile,
+    pub(super) host_keys: Box<dyn RunPodHostKeySource>,
 }
 
 impl RunPodInteractiveWorkerProvider {
@@ -82,7 +89,7 @@ impl RunPodInteractiveWorkerProvider {
         }
     }
 
-    fn adapt_status(
+    pub(super) fn adapt_status(
         &self,
         status: RunPodWorkerStatus,
         target: &WorkerTarget,

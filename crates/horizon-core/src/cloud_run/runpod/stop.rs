@@ -15,13 +15,18 @@ use serde_json::Value;
 #[serde(default)]
 pub(super) struct StopMetadata {
     mounts: Value,
-    actions: Value,
-    locked: Value,
-    cloud: Value,
-    cluster: Value,
-    runtime: Value,
+    pub(super) actions: Value,
+    pub(super) locked: Value,
+    pub(super) cloud: Value,
+    pub(super) cluster: Value,
+    #[serde(default, deserialize_with = "present_runtime")]
+    pub(super) runtime: Option<Value>,
     #[serde(rename = "dataCenterId")]
     data_center_id: Value,
+}
+
+fn present_runtime<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Value>, D::Error> {
+    Value::deserialize(deserializer).map(Some)
 }
 
 impl StopMetadata {
@@ -42,7 +47,7 @@ struct Mounts {
 
 #[derive(Debug, Eq, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct PersistentMount {
+pub(super) struct PersistentMount {
     size: u32,
     path: String,
 }
@@ -53,7 +58,7 @@ struct RetainedState {
 }
 
 #[derive(Eq, PartialEq)]
-enum RetainedMount {
+pub(super) enum RetainedMount {
     Ordinary(PersistentMount),
     SelectedNetwork,
 }
@@ -137,23 +142,9 @@ impl RunPodClient {
     ) -> Result<RetainedState, RunPodError> {
         let status = status_from_resource(pod, worker, Some(ssh_public_key))?;
         let metadata = &pod.stop;
-        if metadata.cloud != "SECURE" || !metadata.cluster.is_null() {
-            return Err(RunPodError::StopRetentionUnverified);
-        }
-        let mount = if self.network_binding.is_some() {
-            self.verify_selected_volume()?;
-            self.verify_attachment(pod)?;
-            RetainedMount::SelectedNetwork
-        } else {
-            let mounts: Mounts =
-                serde_json::from_value(metadata.mounts.clone()).map_err(|_| RunPodError::StopRetentionUnverified)?;
-            if mounts.persistent.path != "/workspace" || mounts.persistent.size < profile.volume_gib {
-                return Err(RunPodError::StopRetentionUnverified);
-            }
-            RetainedMount::Ordinary(mounts.persistent)
-        };
+        let mount = self.retained_mount(pod, profile)?;
         let stopped = match status.lifecycle {
-            RunPodLifecycle::Exited if metadata.runtime.is_null() => true,
+            RunPodLifecycle::Exited if metadata.runtime.as_ref().is_none_or(Value::is_null) => true,
             RunPodLifecycle::Provisioning | RunPodLifecycle::Running
                 if metadata.locked == false
                     && metadata
@@ -166,5 +157,24 @@ impl RunPodClient {
             _ => return Err(RunPodError::StopStateUnverified),
         };
         Ok(RetainedState { mount, stopped })
+    }
+
+    pub(super) fn retained_mount(&self, pod: &ApiPod, profile: &RunPodProfile) -> Result<RetainedMount, RunPodError> {
+        let metadata = &pod.stop;
+        if metadata.cloud != "SECURE" || !metadata.cluster.is_null() {
+            return Err(RunPodError::StopRetentionUnverified);
+        }
+        Ok(if self.network_binding.is_some() {
+            self.verify_selected_volume()?;
+            self.verify_attachment(pod)?;
+            RetainedMount::SelectedNetwork
+        } else {
+            let mounts: Mounts =
+                serde_json::from_value(metadata.mounts.clone()).map_err(|_| RunPodError::StopRetentionUnverified)?;
+            if mounts.persistent.path != "/workspace" || mounts.persistent.size < profile.volume_gib {
+                return Err(RunPodError::StopRetentionUnverified);
+            }
+            RetainedMount::Ordinary(mounts.persistent)
+        })
     }
 }

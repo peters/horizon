@@ -164,6 +164,19 @@ impl Transport for RunPodHttp {
             .then_some(())
             .ok_or(RunPodError::ResourceIdentityMismatch)
     }
+    fn start(&self, pod_id: &str) -> Result<(), RunPodError> {
+        let url = format!("{}/action", Self::pod_url(pod_id)?);
+        let response = self
+            .agent
+            .post(url.as_str())
+            .header("Authorization", &self.authorization)
+            .send_json(serde_json::json!({"action": "start"}))
+            .map_err(|_| RunPodError::RequestFailed { operation: "pod Start" })?;
+        let pod: ApiPod = decode_json(response, 200, "pod Start")?;
+        (pod.id == pod_id)
+            .then_some(())
+            .ok_or(RunPodError::ResourceIdentityMismatch)
+    }
     fn delete(&self, pod_id: &str) -> Result<RunPodCleanup, RunPodError> {
         let url = Self::pod_url(pod_id)?;
         let response = self

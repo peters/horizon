@@ -210,6 +210,10 @@ pub enum RunPodError {
     StopResourceLost,
     #[error("RunPod Stop was not verified; retain identity and explicitly reconcile before retrying")]
     StopVerificationFailed,
+    #[error("RunPod Start requires a persistent worker with retained SSH trust")]
+    StartIdentityRequired,
+    #[error("RunPod Start or retained storage was not verified; retain identity and reconcile without resending")]
+    StartUnverified,
     #[error("RunPod recovered worker lease was outside the requested bound and was deleted")]
     LeaseDeadlineRejected { worker: Box<RunPodWorker> },
     #[error("RunPod recovered worker lease was outside the requested bound but cleanup failed")]
