@@ -217,6 +217,7 @@ impl RecordedAction {
         }
         if self.url_pattern.len() > MAX_URL_PATTERN_BYTES
             || self.url_pattern.is_empty()
+            || self.url_pattern.contains('@')
             || self.url_pattern != redact_url(&self.url_pattern)
         {
             return Err(RoutineError::UnredactedUrl);
@@ -235,10 +236,12 @@ impl RecordedAction {
                 if !(1..=3).contains(count) {
                     return Err(RoutineError::InvalidRecording);
                 }
+                reject_navigation(self.navigation.as_ref())?;
                 required_target(self.target.as_ref())?;
                 reject_value(self.value_source.as_ref())
             }
             RecordedKind::Fill => {
+                reject_navigation(self.navigation.as_ref())?;
                 required_target(self.target.as_ref())?;
                 let source = self.value_source.as_ref().ok_or(RoutineError::MissingValueSource)?;
                 source.validate(self.field_classification)?;
@@ -253,12 +256,14 @@ impl RecordedAction {
                 if !delta_x.is_finite() || !delta_y.is_finite() {
                     return Err(RoutineError::InvalidRecording);
                 }
+                reject_navigation(self.navigation.as_ref())?;
                 if let Some(target) = &self.target {
                     target.validate()?;
                 }
                 reject_value(self.value_source.as_ref())
             }
             RecordedKind::Wait { selector, .. } => {
+                reject_navigation(self.navigation.as_ref())?;
                 let selector = selector.trim();
                 if selector.is_empty()
                     || selector.len() > MAX_WAIT_SELECTOR_BYTES
@@ -291,6 +296,14 @@ impl RecordedAction {
 fn required_target(target: Option<&TargetFingerprint>) -> Result<(), RoutineError> {
     let target = target.ok_or(RoutineError::UndurableTarget)?;
     target.validate()
+}
+
+fn reject_navigation(navigation: Option<&NavigationTemplate>) -> Result<(), RoutineError> {
+    if navigation.is_some() {
+        Err(RoutineError::InvalidRecording)
+    } else {
+        Ok(())
+    }
 }
 
 fn reject_value(value_source: Option<&ValueSource>) -> Result<(), RoutineError> {

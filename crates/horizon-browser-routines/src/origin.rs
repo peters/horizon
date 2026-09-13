@@ -22,7 +22,7 @@ impl Origin {
     /// allowed scheme/host, contains userinfo, or has no host.
     pub fn parse(input: &str) -> Result<Self, RoutineError> {
         let url = Url::parse(input.trim()).map_err(|_| RoutineError::InvalidOrigin)?;
-        if !url.username().is_empty() || url.password().is_some() {
+        if !url.username().is_empty() || url.password().is_some() || input.contains('@') {
             return Err(RoutineError::InvalidOrigin);
         }
         let host = url.host_str().ok_or(RoutineError::InvalidOrigin)?;
