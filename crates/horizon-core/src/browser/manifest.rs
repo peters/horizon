@@ -448,6 +448,15 @@ pub fn remove(panel_local_id: &str) {
     remove_at_with_warning(&path);
 }
 
+/// Remove a manifest under an explicit Horizon home root while holding its
+/// adjacent lock, so a concurrent update cannot recreate the file after unlink.
+///
+/// # Errors
+/// Returns when the lock cannot be acquired or the file cannot be removed.
+pub fn remove_in(root: &Path, panel_local_id: &str) -> std::io::Result<()> {
+    remove_at(&manifest_path_for_root(root, panel_local_id))
+}
+
 /// Remove a live manifest within the caller's remaining shutdown budget.
 /// Returns `false` if lock acquisition or removal cannot finish in time.
 #[must_use]
@@ -867,6 +876,8 @@ mod tests {
         let back = read_at(&path).unwrap();
         assert_eq!(back, m);
         assert!(list_panels_in(&root.join("runtime").join("browsers")).contains(&"abc-123".to_string()));
+        remove_in(&root, "abc-123").unwrap();
+        assert!(read_at(&path).is_none());
         let _ = std::fs::remove_dir_all(&root);
     }
 

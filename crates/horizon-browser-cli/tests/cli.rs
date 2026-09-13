@@ -322,6 +322,65 @@ fn resume_refuses_an_uncertain_in_flight_step() {
 }
 
 #[test]
+fn resume_refuses_a_dead_standalone_host() {
+    let root = tempfile::tempdir().expect("isolated root");
+    let (plan, manifest_path) = write_blocking_plan(root.path());
+    let output = run_deadline_after_action(root.path(), &plan, &manifest_path, None);
+    assert_eq!(output.status.code(), Some(124));
+    let report: Value = serde_json::from_slice(&output.stdout).expect("deadline report");
+    let job_id = report["job_id"].as_str().expect("job id");
+    let job_dir = std::path::Path::new(report["job_dir"].as_str().expect("job directory"));
+    std::fs::write(
+        job_dir.join("standalone.json"),
+        br#"{"panel_id":"standalone-1-missing","host_pid":1}"#,
+    )
+    .expect("record dead standalone host");
+
+    let refused = run_command(root.path(), ["resume", job_id, "--on-uncertain", "skip"]);
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("gone and cannot be reconnected"),
+        "stderr: {}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+}
+
+#[test]
+fn resume_prunes_dead_hosts_without_a_sidecar() {
+    let root = tempfile::tempdir().expect("isolated root");
+    let (plan, manifest_path) = write_blocking_plan(root.path());
+    let output = run_deadline_after_action(root.path(), &plan, &manifest_path, None);
+    assert_eq!(output.status.code(), Some(124));
+    let report: Value = serde_json::from_slice(&output.stdout).expect("deadline report");
+    let job_id = report["job_id"].as_str().expect("job id");
+
+    let horizon = root.path().join(".horizon");
+    let panel_id = "standalone-9-dead";
+    let dead_manifest = manifest::manifest_path_for_root(&horizon, panel_id);
+    std::fs::create_dir_all(dead_manifest.parent().expect("browsers directory")).expect("browsers dir");
+    std::fs::write(
+        dead_manifest.with_extension("lease.json"),
+        br#"{"panel_id":"standalone-9-dead","host_pid":0}"#,
+    )
+    .expect("record dead lease");
+    manifest::write_at(
+        &dead_manifest,
+        &BrowserManifest {
+            panel_local_id: panel_id.to_string(),
+            ..BrowserManifest::default()
+        },
+    )
+    .expect("record dead manifest");
+
+    let _ = run_command(root.path(), ["resume", job_id, "--on-uncertain", "skip"]);
+    assert!(
+        !dead_manifest.with_extension("lease.json").is_file(),
+        "resume must prune dead standalone hosts even when the job has no sidecar"
+    );
+    assert!(manifest::read_at(&dead_manifest).is_none());
+}
+
+#[test]
 fn resume_skip_runs_later_steps_without_replaying_or_succeeding() {
     let root = tempfile::tempdir().expect("isolated root");
     let (plan, manifest_path) = write_blocking_plan_with_followup(root.path());

@@ -153,6 +153,9 @@ pub enum ResumeError {
     /// The original run or another resume already holds this job.
     #[error("durable job `{0}` is already running or being resumed")]
     Locked(String),
+    /// The recorded keep-alive standalone host is no longer running.
+    #[error("{0}")]
+    StandaloneGone(String),
 }
 
 impl UncertainPolicy {

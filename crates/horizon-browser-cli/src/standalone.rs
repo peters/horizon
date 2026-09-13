@@ -16,6 +16,10 @@ use horizon_core::{
 };
 use thiserror::Error;
 
+mod lease;
+
+pub use lease::StandaloneHostRef;
+
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 const FORCED_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
@@ -29,6 +33,7 @@ const HOST_INITIALIZE: &[u8] = br#"{"jsonrpc":"2.0","id":1,"method":"initialize"
 pub struct StandaloneOptions {
     pub backend: Option<BackendKind>,
     pub visible: bool,
+    pub keep_alive: bool,
 }
 
 #[derive(Debug, Error)]
@@ -46,14 +51,16 @@ pub enum StandaloneError {
 pub(crate) struct OwnedSession {
     session: Option<BrowserSession>,
     profile_root: PathBuf,
+    panel_id: String,
 }
 
 impl OwnedSession {
     pub(crate) fn start(options: StandaloneOptions, home: &HorizonHome) -> Result<Self, StandaloneError> {
-        let (session, profile_root) = start(options, home)?;
+        let (session, profile_root, panel_id) = start(options, home)?;
         Ok(Self {
             session: Some(session),
             profile_root,
+            panel_id,
         })
     }
 
@@ -243,9 +250,15 @@ impl Drop for OwnedHostProcess {
 /// Returns when no requested backend can start, MCP transport fails, or the
 /// owned browser cannot be stopped within its bounded cleanup deadline.
 pub async fn serve(options: StandaloneOptions) -> Result<(), StandaloneError> {
+    let root = HorizonHome::resolve().root().to_path_buf();
+    lease::prune_dead_at(&root);
     let session = OwnedSession::start(options, &HorizonHome::resolve())?;
-    let mcp_result = horizon_browser_mcp::serve_stdio().await;
+    let mcp_result = serve_until_host_exit(&root, &session.panel_id, options.keep_alive).await;
+    let panel_id = session.panel_id.clone();
     let stopped = session.shutdown();
+    if stopped && options.keep_alive {
+        lease::remove(&root, &panel_id);
+    }
     mcp_result?;
     if stopped {
         Ok(())
@@ -254,10 +267,97 @@ pub async fn serve(options: StandaloneOptions) -> Result<(), StandaloneError> {
     }
 }
 
+async fn serve_until_host_exit(root: &Path, panel_id: &str, keep_alive: bool) -> Result<(), StandaloneError> {
+    let mcp = horizon_browser_mcp::serve_stdio();
+    tokio::pin!(mcp);
+    let interrupt = wait_for_interrupt();
+    tokio::pin!(interrupt);
+    if !keep_alive {
+        return tokio::select! {
+            result = mcp => result.map_err(Into::into),
+            () = interrupt => Ok(()),
+        };
+    }
+
+    let stop = lease::await_stop_at(root, panel_id, lease::keep_alive_poll());
+    tokio::pin!(stop);
+    tokio::select! {
+        result = &mut mcp => {
+            let stop = lease::await_stop_at(root, panel_id, lease::keep_alive_poll());
+            tokio::pin!(stop);
+            tokio::select! {
+                () = interrupt => result,
+                () = stop => result,
+                _ = lease::await_keep_alive_at(
+                    root,
+                    panel_id,
+                    lease::keep_alive_idle(),
+                    lease::keep_alive_poll(),
+                ) => result,
+            }
+            .map_err(Into::into)
+        }
+        () = &mut interrupt => Ok(()),
+        () = stop => Ok(()),
+    }
+}
+
+/// Bind the newest live keep-alive host, if one exists.
+#[must_use]
+pub fn live_host() -> Option<StandaloneHostRef> {
+    let root = HorizonHome::resolve().root().to_path_buf();
+    lease::live_host(&root)
+}
+
+/// Reconnect to a previously recorded keep-alive host.
+///
+/// # Errors
+/// Returns when the host process or its published panel is gone.
+pub fn reconnect(host: &StandaloneHostRef) -> Result<(), String> {
+    lease::reconnect(HorizonHome::resolve().root(), host)
+}
+
+/// Ask keep-alive hosts to stop and clean up.
+///
+/// # Errors
+/// Returns when the stop signal cannot be written.
+pub fn stop_hosts(panel_id: Option<&str>) -> Result<Vec<String>, String> {
+    lease::stop_hosts(HorizonHome::resolve().root(), panel_id)
+}
+
+/// Remove keep-alive records whose host process is already dead.
+pub fn prune_dead_hosts() {
+    lease::prune_dead_at(HorizonHome::resolve().root());
+}
+
+async fn wait_for_interrupt() {
+    #[cfg(unix)]
+    {
+        if let Ok(mut terminate) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = terminate.recv() => {}
+            }
+            return;
+        }
+    }
+    #[cfg(windows)]
+    {
+        if let Ok(mut close) = tokio::signal::windows::ctrl_close() {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = close.recv() => {}
+            }
+            return;
+        }
+    }
+    let _ = tokio::signal::ctrl_c().await;
+}
+
 fn start(
     options: StandaloneOptions,
     home: &HorizonHome,
-) -> Result<(BrowserSession, std::path::PathBuf), StandaloneError> {
+) -> Result<(BrowserSession, std::path::PathBuf, String), StandaloneError> {
     if options.backend == Some(BackendKind::SafariWebDriver) && !options.visible {
         return Err(StandaloneError::Startup(
             "Safari has no headless mode; pass --visible or choose another backend".to_string(),
@@ -275,8 +375,9 @@ fn start(
     );
     let mut last_error = None;
     for backend in candidates {
-        match start_backend(home, backend, options.visible) {
+        match start_backend(home, backend, options.visible, options.keep_alive) {
             Ok(session) => return Ok(session),
+            Err(StandaloneError::Shutdown) => return Err(StandaloneError::Shutdown),
             Err(error) => last_error = Some(error),
         }
     }
@@ -287,7 +388,8 @@ fn start_backend(
     home: &HorizonHome,
     backend: BackendKind,
     visible: bool,
-) -> Result<(BrowserSession, std::path::PathBuf), StandaloneError> {
+    keep_alive: bool,
+) -> Result<(BrowserSession, std::path::PathBuf, String), StandaloneError> {
     let panel_id = standalone_panel_id();
     let mut browser = BrowserConfig {
         backend,
@@ -298,6 +400,15 @@ fn start_backend(
         browser.profile_root = Some(browser.effective_profile_root(&home.root().join("browser-profiles")));
     }
     let profile_root = browser.panel_profile_dir_with_default_root(&panel_id, &home.root().join("browser-profiles"));
+    let mut pending_lease = if keep_alive {
+        Some(lease::PendingLease::publish(
+            home.root(),
+            panel_id.clone(),
+            profile_root.clone(),
+        )?)
+    } else {
+        None
+    };
     let coordination = Arc::new(ManifestCoordination::default());
     let session = start_session(BrowserSessionConfig {
         browser,
@@ -310,9 +421,7 @@ fn start_backend(
         capture_directory: Some(profile_root.join("captures")),
     })?;
     if let Err(error) = wait_until_ready(&session) {
-        let shutdown = session.shutdown_signal().with_profile_cleanup(profile_root);
-        let _ = shutdown.wait(SHUTDOWN_TIMEOUT) || shutdown.force_cleanup(FORCED_SHUTDOWN_TIMEOUT);
-        return Err(error);
+        return Err(fail_started_session(session, profile_root, pending_lease.take(), error));
     }
     let entry = BrowserAuditEntry::new(
         new_action_id(),
@@ -326,13 +435,33 @@ fn start_backend(
     })
     .and_then(|_| coordination.record_action(&panel_id, &entry));
     if let Err(error) = publish {
-        let shutdown = session.shutdown_signal().with_profile_cleanup(profile_root);
-        let _ = shutdown.wait(SHUTDOWN_TIMEOUT) || shutdown.force_cleanup(FORCED_SHUTDOWN_TIMEOUT);
-        return Err(StandaloneError::Startup(format!(
-            "could not publish standalone browser state: {error}"
-        )));
+        return Err(fail_started_session(
+            session,
+            profile_root,
+            pending_lease.take(),
+            StandaloneError::Startup(format!("could not publish standalone browser state: {error}")),
+        ));
     }
-    Ok((session, profile_root))
+    if let Some(pending_lease) = pending_lease {
+        pending_lease.commit();
+    }
+    Ok((session, profile_root, panel_id))
+}
+
+fn fail_started_session(
+    session: BrowserSession,
+    profile_root: PathBuf,
+    pending_lease: Option<lease::PendingLease>,
+    error: StandaloneError,
+) -> StandaloneError {
+    let shutdown = session.shutdown_signal().with_profile_cleanup(profile_root);
+    if shutdown.wait(SHUTDOWN_TIMEOUT) || shutdown.force_cleanup(FORCED_SHUTDOWN_TIMEOUT) {
+        return error;
+    }
+    if let Some(pending_lease) = pending_lease {
+        pending_lease.commit();
+    }
+    StandaloneError::Shutdown
 }
 
 fn wait_until_ready(session: &BrowserSession) -> Result<(), StandaloneError> {
