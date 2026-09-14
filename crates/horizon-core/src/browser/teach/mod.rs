@@ -33,7 +33,11 @@ pub struct TeachMode {
 /// One compiled step shown in the Teach reviewer.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReviewRow {
-    pub summary: String,
+    pub action: String,
+    pub target: String,
+    pub mutation: String,
+    pub resume: String,
+    pub mcp: String,
 }
 
 impl TeachMode {
@@ -169,6 +173,10 @@ impl TeachMode {
         if !self.session.is_stopped() {
             return Err(RoutineError::TeachInactive);
         }
+        if !self.identities_reviewed {
+            self.last_error = Some("identities must be reviewed".to_string());
+            return Err(RoutineError::InvalidRecording);
+        }
         let mut compiled = match self.compile_plan(page_title) {
             Ok(compiled) => compiled,
             Err(error) => {
@@ -183,7 +191,7 @@ impl TeachMode {
                 }
             }
         }
-        let definition = match self.reviewed_definition(backend, page_title, compiled) {
+        let definition = match self.build_reviewed_definition(backend, page_title, compiled) {
             Ok(definition) => definition,
             Err(error) => {
                 self.last_error = Some(error.to_string());
@@ -198,13 +206,48 @@ impl TeachMode {
         Ok(())
     }
 
-    fn reviewed_definition(
+    fn build_reviewed_definition(
         &self,
         backend: BackendKind,
         page_title: &str,
         compiled: horizon_browser_routines::CompiledRoutine,
     ) -> Result<RoutineDefinition, RoutineError> {
         let now = rfc3339_now()?;
+        let existing = self.registry.load(self.routine_id).ok();
+        let steps: Vec<RoutineStep> = compiled
+            .steps
+            .into_iter()
+            .map(|step| RoutineStep {
+                step_id: step.step_id,
+                target_fingerprint: step.target,
+                action: step.action,
+                value_source: step.value_source,
+                mutation_class: step.mutation_class,
+                resume_policy: step.resume_policy,
+                precondition: step.precondition,
+                postcondition: step.postcondition,
+            })
+            .collect();
+        let completion_assertions = self.completion_assertions(page_title)?;
+        let (plan_version, created_at, verified_plan_version) = match existing {
+            Some(previous)
+                if previous.steps == steps
+                    && previous.completion_assertions == completion_assertions
+                    && previous.name == self.name =>
+            {
+                (
+                    previous.plan_version,
+                    previous.created_at,
+                    previous.verified_plan_version,
+                )
+            }
+            Some(previous) => (
+                previous.plan_version.saturating_add(1).max(1),
+                previous.created_at,
+                None,
+            ),
+            None => (1, now.clone(), None),
+        };
         Ok(RoutineDefinition {
             schema_version: SCHEMA_VERSION,
             routine_id: self.routine_id,
@@ -218,24 +261,11 @@ impl TeachMode {
                 allowed_origins: Vec::new(),
             },
             variables: Vec::new(),
-            steps: compiled
-                .steps
-                .into_iter()
-                .map(|step| RoutineStep {
-                    step_id: step.step_id,
-                    target_fingerprint: step.target,
-                    action: step.action,
-                    value_source: step.value_source,
-                    mutation_class: step.mutation_class,
-                    resume_policy: step.resume_policy,
-                    precondition: step.precondition,
-                    postcondition: step.postcondition,
-                })
-                .collect(),
-            completion_assertions: self.completion_assertions(page_title)?,
-            plan_version: 1,
-            verified_plan_version: None,
-            created_at: now.clone(),
+            steps,
+            completion_assertions,
+            plan_version,
+            verified_plan_version,
+            created_at,
             updated_at: now,
         })
     }
@@ -244,26 +274,14 @@ impl TeachMode {
         compile(self.session.recording(), self.completion_assertions(page_title)?)
     }
 
-    fn completion_assertions(&self, page_title: &str) -> Result<Vec<Assertion>, RoutineError> {
-        let mut assertions = Vec::new();
-        if self.use_title_outcome {
-            let title = page_title.trim();
-            if !title.is_empty() {
-                assertions.push(Assertion::Heading {
-                    value: title.chars().filter(|ch| !ch.is_control()).take(256).collect(),
-                });
-            }
-        }
+    fn completion_assertions(&self, _page_title: &str) -> Result<Vec<Assertion>, RoutineError> {
         let heading = self.completion_heading.trim();
-        if !heading.is_empty() {
-            assertions.push(Assertion::Heading {
-                value: heading.to_string(),
-            });
-        }
-        if assertions.is_empty() {
+        if heading.is_empty() {
             return Err(RoutineError::InvalidAssertion);
         }
-        Ok(assertions)
+        Ok(vec![Assertion::Heading {
+            value: heading.to_string(),
+        }])
     }
 
     pub fn ingest(&mut self, observation: TeachObservation) {
@@ -429,35 +447,54 @@ fn review_row(step: &CompiledStep) -> ReviewRow {
         .as_ref()
         .and_then(candidate_label)
         .unwrap_or_else(|| "page".to_string());
-    let mcp = step.mcp.as_ref().map_or("no MCP", |call| call.tool.as_str());
-    let mutation = format!("{:?}", step.mutation_class);
-    let resume = format!("{:?}", step.resume_policy);
+    let mcp = step
+        .mcp
+        .as_ref()
+        .map_or_else(|| "no MCP".to_string(), |call| call.tool.clone());
     ReviewRow {
-        summary: format!("{action} {target} · {mutation} · {resume} · {mcp}"),
+        action,
+        target,
+        mutation: format!("{:?}", step.mutation_class),
+        resume: format!("{:?}", step.resume_policy),
+        mcp,
     }
 }
 
 fn mark_fingerprint_reviewed(target: &mut TargetFingerprint) {
-    for candidate in &mut target.candidates {
-        match &mut candidate.identity {
-            TargetCandidate::RoleName { reviewed, .. }
-            | TargetCandidate::LabelControl { reviewed, .. }
-            | TargetCandidate::TestId { reviewed, .. }
-            | TargetCandidate::UniqueId { reviewed, .. }
-            | TargetCandidate::VisibleText { reviewed, .. }
-            | TargetCandidate::CssFallback { reviewed, .. } => *reviewed = true,
-        }
+    let Some(index) = target.selected else {
+        return;
+    };
+    let Some(candidate) = target.candidates.get_mut(index as usize) else {
+        return;
+    };
+    match &mut candidate.identity {
+        TargetCandidate::RoleName { reviewed, .. }
+        | TargetCandidate::LabelControl { reviewed, .. }
+        | TargetCandidate::TestId { reviewed, .. }
+        | TargetCandidate::UniqueId { reviewed, .. }
+        | TargetCandidate::VisibleText { reviewed, .. }
+        | TargetCandidate::CssFallback { reviewed, .. } => *reviewed = true,
     }
 }
 
 fn unique_origins(recording: &SemanticRecording) -> Vec<horizon_browser_routines::Origin> {
     let mut origins = Vec::new();
     for action in &recording.actions {
-        if !origins.contains(&action.page_origin) {
-            origins.push(action.page_origin.clone());
+        push_origin(&mut origins, &action.page_origin);
+        if let Some(target) = &action.target {
+            push_origin(&mut origins, &target.frame.origin);
+            for frame in &target.frame.chain {
+                push_origin(&mut origins, &frame.origin);
+            }
         }
     }
     origins
+}
+
+fn push_origin(origins: &mut Vec<horizon_browser_routines::Origin>, origin: &horizon_browser_routines::Origin) {
+    if !origins.contains(origin) {
+        origins.push(origin.clone());
+    }
 }
 
 fn rfc3339_now() -> Result<String, RoutineError> {
@@ -473,96 +510,4 @@ fn now_millis() -> i64 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::TeachMode;
-    use horizon_browser::{
-        RankedCandidate, TeachFingerprint, TeachFrameContext, TeachFrameLink, TeachObservation, TeachTargetCandidate,
-    };
-
-    fn fingerprint() -> TeachFingerprint {
-        TeachFingerprint {
-            candidates: vec![RankedCandidate {
-                identity: TeachTargetCandidate::RoleName {
-                    role: "button".to_string(),
-                    name: "Generate report".to_string(),
-                    reviewed: false,
-                },
-                match_count: 1,
-                unique: true,
-            }],
-            selected: Some(0),
-            frame: TeachFrameContext {
-                top_level: true,
-                origin: "https://reports.example".to_string(),
-                chain: Vec::<TeachFrameLink>::new(),
-            },
-            digest: "el-1".to_string(),
-        }
-    }
-
-    #[test]
-    fn captured_clicks_are_previewed_and_failed_observations_do_not_record() {
-        let temp = tempfile::tempdir().expect("temp");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            let mut permissions = std::fs::metadata(temp.path()).expect("meta").permissions();
-            permissions.set_mode(0o700);
-            std::fs::set_permissions(temp.path(), permissions).expect("chmod");
-        }
-        let mut teach = TeachMode::start_in(temp.path().join("routines"), "monthly").expect("start");
-        teach.ingest(TeachObservation::Captured(fingerprint()));
-        assert_eq!(teach.action_previews(), vec!["click Generate report".to_string()]);
-        teach.ingest(TeachObservation::Failed {
-            code: "cross_origin_frame".to_string(),
-            message: "frame is cross-origin".to_string(),
-        });
-        assert_eq!(teach.action_previews().len(), 1);
-        assert_eq!(teach.last_error(), Some("frame is cross-origin"));
-        teach.stop();
-        assert!(teach.is_stopped());
-        teach.resume();
-        assert!(teach.is_stopped());
-    }
-
-    #[test]
-    fn focused_text_fingerprints_are_not_recorded_as_clicks() {
-        let temp = tempfile::tempdir().expect("temp");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            let mut permissions = std::fs::metadata(temp.path()).expect("meta").permissions();
-            permissions.set_mode(0o700);
-            std::fs::set_permissions(temp.path(), permissions).expect("chmod");
-        }
-        let mut teach = TeachMode::start_in(temp.path().join("routines"), "monthly").expect("start");
-        let mut focused = fingerprint();
-        focused.candidates[0].identity = TeachTargetCandidate::RoleName {
-            role: "textbox".to_string(),
-            name: "Email".to_string(),
-            reviewed: false,
-        };
-        teach.ingest(TeachObservation::Captured(focused));
-        assert!(teach.action_previews().is_empty());
-    }
-
-    #[test]
-    fn stopped_session_compiles_and_saves_after_review() {
-        let temp = tempfile::tempdir().expect("temp");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            let mut permissions = std::fs::metadata(temp.path()).expect("meta").permissions();
-            permissions.set_mode(0o700);
-            std::fs::set_permissions(temp.path(), permissions).expect("chmod");
-        }
-        let mut teach = TeachMode::start_in(temp.path().join("routines"), "monthly").expect("start");
-        teach.ingest(TeachObservation::Captured(fingerprint()));
-        teach.stop();
-        teach.set_identities_reviewed(true);
-        let rows = teach.compile_review("Report ready").expect("compile");
-        assert_eq!(rows.len(), 1);
-        assert!(rows[0].summary.contains("click"));
-        assert!(rows[0].summary.contains("Mutating"));
-    }
-}
+mod tests;

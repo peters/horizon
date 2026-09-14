@@ -25,8 +25,19 @@ pub fn show(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: bool) -> 
         Some(Ok(rows)) => {
             for row in rows {
                 ui.add(
-                    egui::Label::new(RichText::new(row.summary).size(11.0).color(theme::FG_SOFT()))
-                        .wrap_mode(TextWrapMode::Truncate),
+                    egui::Label::new(
+                        RichText::new(format!(
+                            "{action} {target}\n{mutation} · {resume} · {mcp}",
+                            action = row.action,
+                            target = row.target,
+                            mutation = row.mutation,
+                            resume = row.resume,
+                            mcp = row.mcp
+                        ))
+                        .size(11.0)
+                        .color(theme::FG_SOFT()),
+                    )
+                    .wrap_mode(TextWrapMode::Wrap),
                 );
             }
         }
@@ -47,8 +58,9 @@ pub fn show(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: bool) -> 
             teach.set_identities_reviewed(reviewed);
             clicked = true;
         }
+        let can_save = interactive && reviewed;
         if ui
-            .add_enabled(interactive, egui::Button::new(RichText::new("Save routine").size(11.0)))
+            .add_enabled(can_save, egui::Button::new(RichText::new("Save routine").size(11.0)))
             .clicked()
         {
             if let Some(teach) = browser.teach_mut()

@@ -129,6 +129,9 @@ fn outcome_picker(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: boo
             .changed()
         {
             teach.set_use_title_outcome(use_title);
+            if use_title && teach.completion_heading().is_empty() {
+                teach.set_completion_heading(&title);
+            }
             clicked = true;
         }
     });

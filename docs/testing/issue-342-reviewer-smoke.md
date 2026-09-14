@@ -9,7 +9,7 @@ Candidate: `target/debug/horizon` from this PR. Use `--config <temp-config> --ep
 ## Review flow
 
 1. Start **Teach routine**, click one labeled control, **Stop**.
-2. Set a page title outcome (or heading) so compile can succeed.
+2. Enter a **Heading** completion assertion (the page-title checkbox only prefills that heading; it is not a title assertion).
 3. The **Review plan** section lists compiled steps: action, mutation class, resume policy, MCP tool or `no MCP`.
 4. Check **Identities reviewed**.
 5. **Save routine** persists a named routine under the private registry. A second save of the same session overwrites the same UUID.
