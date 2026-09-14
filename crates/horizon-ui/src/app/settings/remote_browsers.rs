@@ -19,28 +19,74 @@ use crate::theme;
 
 const MAX_NOTICES: usize = 8;
 
+/// Identity of one text buffer: the row plus the exact destination a value
+/// typed there would be sent to. The YAML tab can change a provider's
+/// endpoint or a binding's store and slot while a draft is pending; a draft
+/// belongs to the destination it was typed for and is scrubbed, never
+/// rebound, when that destination changes.
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+struct InputKey {
+    provider: String,
+    reference: String,
+    destination: String,
+}
+
+impl InputKey {
+    fn new(provider: &str, profile: &RemoteProviderProfile, reference: &CredentialReference) -> Self {
+        let destination = profile.credential_bindings.get(reference).map_or_else(
+            || format!("{}|unbound", profile.endpoint.origin()),
+            |binding| {
+                format!(
+                    "{}|{:?}|{}",
+                    profile.endpoint.origin(),
+                    binding.store,
+                    binding.slot.as_deref().unwrap_or_default()
+                )
+            },
+        );
+        Self {
+            provider: provider.to_string(),
+            reference: reference.as_str().to_string(),
+            destination,
+        }
+    }
+
+    fn same_row(&self, other: &Self) -> bool {
+        self.provider == other.provider && self.reference == other.reference
+    }
+}
+
 /// Per-reference text buffers for the tab. Dropped with the settings editor,
 /// and every buffer is overwritten before it goes.
 #[derive(Default)]
 pub(super) struct CredentialInputs {
-    values: BTreeMap<(String, String), String>,
+    values: BTreeMap<InputKey, String>,
     notices: Vec<WorkbenchNotice>,
 }
 
 impl CredentialInputs {
-    fn buffer(&mut self, provider: &str, reference: &CredentialReference) -> &mut String {
-        self.values
-            .entry((provider.to_string(), reference.as_str().to_string()))
-            .or_default()
+    /// The buffer for `key`. A draft the same row typed for another
+    /// destination is scrubbed first, so it can never be submitted to the
+    /// new one.
+    fn buffer(&mut self, key: &InputKey) -> &mut String {
+        let stale: Vec<InputKey> = self
+            .values
+            .keys()
+            .filter(|existing| existing.same_row(key) && *existing != key)
+            .cloned()
+            .collect();
+        for old_key in stale {
+            if let Some(mut text) = self.values.remove(&old_key) {
+                scrub_string(&mut text);
+            }
+        }
+        self.values.entry(key.clone()).or_default()
     }
 
     /// Move a typed value out of its buffer into a zeroizing copy; the
     /// buffer is scrubbed at once and the copy is wiped when it drops.
-    fn take(&mut self, provider: &str, reference: &CredentialReference) -> Zeroizing<Vec<u8>> {
-        let mut text = self
-            .values
-            .remove(&(provider.to_string(), reference.as_str().to_string()))
-            .unwrap_or_default();
+    fn take(&mut self, key: &InputKey) -> Zeroizing<Vec<u8>> {
+        let mut text = self.values.remove(key).unwrap_or_default();
         let bytes = Zeroizing::new(text.as_bytes().to_vec());
         scrub_string(&mut text);
         bytes
@@ -221,9 +267,10 @@ fn render_reference(
         );
         return;
     }
+    let key = InputKey::new(provider, profile, reference);
     ui.horizontal(|ui| {
-        password_field(ui, inputs.buffer(provider, reference), provider, reference);
-        let has_text = !inputs.buffer(provider, reference).is_empty();
+        password_field(ui, inputs.buffer(&key), provider, reference);
+        let has_text = !inputs.buffer(&key).is_empty();
         match store {
             CredentialStoreKind::Session => {
                 if ui
@@ -232,7 +279,7 @@ fn render_reference(
                 {
                     // Every outcome, including a synchronous refusal, arrives
                     // as a workbench notice for this row.
-                    let value = inputs.take(provider, reference);
+                    let value = inputs.take(&key);
                     let _ = workbench.set_session_value(provider, profile, reference, &value);
                 }
             }
@@ -242,7 +289,7 @@ fn render_reference(
                     .add_enabled(has_text && available, egui::Button::new("Save to OS store"))
                     .clicked()
                 {
-                    let value = inputs.take(provider, reference);
+                    let value = inputs.take(&key);
                     let _ = workbench.store_in_keychain(provider, profile, reference, &value);
                 }
             }
@@ -312,5 +359,60 @@ fn notice_line(kind: NoticeKind, error: Option<&RemoteCredentialError>) -> (Stri
         (NoticeKind::SessionValueCleared | NoticeKind::DeletedFromKeychain, Some(error)) => {
             (format!("Not deleted: {error}."), theme::PALETTE_RED())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use horizon_core::browser::remote::{ControlEndpoint, CredentialBinding, RemoteAdapterKind, RemoteSessionLimits};
+
+    use super::*;
+
+    fn profile(endpoint: &str, slot: &str) -> RemoteProviderProfile {
+        let mut bindings = BTreeMap::new();
+        bindings.insert(
+            CredentialReference::from("key"),
+            CredentialBinding {
+                store: CredentialStoreKind::OsKeychain,
+                slot: Some(slot.to_string()),
+            },
+        );
+        RemoteProviderProfile {
+            adapter: RemoteAdapterKind::Webdriver,
+            endpoint: ControlEndpoint::parse(endpoint).expect("endpoint"),
+            authentication: RemoteAuthentication::Bearer {
+                token_ref: CredentialReference::from("key"),
+            },
+            credential_bindings: bindings,
+            limits: RemoteSessionLimits::default(),
+        }
+    }
+
+    #[test]
+    fn a_draft_is_scrubbed_when_its_row_points_at_another_destination() {
+        let reference = CredentialReference::from("key");
+        let mut inputs = CredentialInputs::default();
+        let first = InputKey::new("grid", &profile("https://grid.example.net/wd/hub", "a"), &reference);
+        inputs.buffer(&first).push_str("typed-for-grid");
+        assert_eq!(
+            inputs.buffer(&first),
+            "typed-for-grid",
+            "same destination keeps the draft"
+        );
+
+        let moved = InputKey::new("grid", &profile("https://other.example.net/wd/hub", "a"), &reference);
+        assert!(inputs.buffer(&moved).is_empty(), "a new endpoint starts empty");
+        assert!(
+            inputs.values.keys().all(|key| key.destination != first.destination),
+            "the old destination's draft is gone"
+        );
+        assert!(inputs.take(&first).is_empty(), "and can never be submitted");
+
+        let rebound = InputKey::new("grid", &profile("https://other.example.net/wd/hub", "b"), &reference);
+        inputs.buffer(&moved).push_str("typed-for-other");
+        assert!(inputs.buffer(&rebound).is_empty(), "a new slot starts empty too");
+        assert!(inputs.take(&moved).is_empty());
     }
 }

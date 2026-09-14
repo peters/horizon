@@ -648,10 +648,26 @@ fn workbench_probes_stores_and_deletes_keychain_values_off_thread() {
         ("mirror", NoticeKind::DeletedFromKeychain),
         "and a second provider's request answers on its own row"
     );
+
     assert_eq!(
         workbench.readiness(&aliased)[1].state,
         CredentialState::Missing,
         "deleting through one reference empties the aliased row too"
+    );
+
+    // Two writes queued for one OS address stay in flight until both answer.
+    workbench
+        .store_in_keychain("grid", &aliased, &user, b"alice")
+        .expect("first write");
+    workbench
+        .store_in_keychain("grid", &aliased, &key, b"bob")
+        .expect("second write to the same address");
+    assert!(workbench.is_busy());
+    wait_until(&mut workbench, |w| !w.is_busy());
+    assert_eq!(
+        workbench.take_notices().len(),
+        2,
+        "busy stays true until every queued command has answered"
     );
 }
 

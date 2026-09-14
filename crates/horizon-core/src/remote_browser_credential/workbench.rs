@@ -121,6 +121,8 @@ pub struct CredentialWorkbench {
     /// Rows that set a session value, with the origin their value lives
     /// under, so clearing every value can tell each of them.
     session_rows: BTreeMap<Row, String>,
+    /// Commands sent to the worker whose answers have not arrived.
+    in_flight: usize,
     notices: Vec<WorkbenchNotice>,
 }
 
@@ -154,6 +156,7 @@ impl CredentialWorkbench {
             keychain_state: KeychainState::Opening,
             presence: BTreeMap::new(),
             session_rows: BTreeMap::new(),
+            in_flight: 0,
             notices: Vec::new(),
         }
     }
@@ -179,9 +182,11 @@ impl CredentialWorkbench {
                 Event::Opened(Ok(())) => self.keychain_state = KeychainState::Available,
                 Event::Opened(Err(error)) => self.keychain_state = KeychainState::Unavailable(error),
                 Event::Presence(locator, result) => {
+                    self.in_flight = self.in_flight.saturating_sub(1);
                     self.cache_presence(&locator, state_from(&result));
                 }
                 Event::Stored(locator, result, row) => {
+                    self.in_flight = self.in_flight.saturating_sub(1);
                     self.cache_presence(&locator, state_from(&result.clone().map(|()| true)));
                     self.notices.push(WorkbenchNotice::new(
                         &row.provider,
@@ -191,6 +196,7 @@ impl CredentialWorkbench {
                     ));
                 }
                 Event::Deleted(locator, result, row) => {
+                    self.in_flight = self.in_flight.saturating_sub(1);
                     self.cache_presence(&locator, state_from(&result.clone().map(|()| false)));
                     self.notices.push(WorkbenchNotice::new(
                         &row.provider,
@@ -210,6 +216,7 @@ impl CredentialWorkbench {
             self.keychain = None;
             // Nothing will answer an in-flight probe or write now; settle
             // every pending entry so the UI stops waiting for it.
+            self.in_flight = 0;
             for state in self.presence.values_mut() {
                 if *state == CredentialState::Checking {
                     *state = CredentialState::StoreUnavailable;
@@ -238,8 +245,7 @@ impl CredentialWorkbench {
     /// until the store has opened and every probe or write has answered.
     #[must_use]
     pub fn is_busy(&self) -> bool {
-        self.keychain_state == KeychainState::Opening
-            || self.presence.values().any(|state| *state == CredentialState::Checking)
+        self.keychain_state == KeychainState::Opening || self.in_flight > 0
     }
 
     fn cache_presence(&mut self, locator: &CredentialLocator, state: CredentialState) {
@@ -336,7 +342,9 @@ impl CredentialWorkbench {
                 Zeroizing::new(value.to_vec()),
                 Row::new(provider, reference),
             ))
-            .map_err(|_| RemoteCredentialError::StoreUnavailable)
+            .map_err(|_| RemoteCredentialError::StoreUnavailable)?;
+        self.in_flight += 1;
+        Ok(())
     }
 
     /// Forget a value wherever its binding says it lives.
@@ -375,6 +383,9 @@ impl CredentialWorkbench {
                             .send(Command::Delete(locator.clone(), Row::new(provider, reference)))
                             .map_err(|_| RemoteCredentialError::StoreUnavailable)
                     });
+                if result.is_ok() {
+                    self.in_flight += 1;
+                }
                 if let Err(error) = &result {
                     self.notices.push(WorkbenchNotice::new(
                         provider,
@@ -465,7 +476,10 @@ impl CredentialWorkbench {
             }
         }
         if !wanted.is_empty() {
-            commands.send(Command::Probe(wanted)).ok();
+            let count = wanted.len();
+            if commands.send(Command::Probe(wanted)).is_ok() {
+                self.in_flight += count;
+            }
         }
     }
 
