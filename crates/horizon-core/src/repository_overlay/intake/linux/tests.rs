@@ -52,7 +52,7 @@ fn data() -> (IntakeRequest, Vec<u8>) {
         sha256: bundle.manifest_sha256().clone(),
         encoded_bytes: overlay.len() as u64,
     };
-    (request, [pack.as_ref(), &overlay].concat())
+    (request, [&pack[..], &overlay[..]].concat())
 }
 
 #[test]

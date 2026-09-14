@@ -36,12 +36,20 @@ git2.workspace = true
 sha2.workspace = true
 regex.workspace = true
 atomicwrites.workspace = true
+keyring-core.workspace = true
+zeroize.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 process-wrap.workspace = true
+windows-native-keyring-store.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 flate2.workspace = true
+zbus-secret-service-keyring-store.workspace = true
+secret-service.workspace = true
 rustix.workspace = true
 tempfile.workspace = true
 

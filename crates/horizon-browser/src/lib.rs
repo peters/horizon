@@ -34,7 +34,7 @@ pub use coordination::{BrowserCoordination, CoordinationSignals, CoordinationSta
 pub use disclosure::{AutomationDisclosurePolicy, AutomationDisclosureStatus};
 pub use error::BrowserError;
 pub use frames::{FrameData, FrameMetrics, FrameSlot, PageScrollState, TeachObservation};
-pub use horizon_browser_protocol::remote::RemoteBrowserConfig;
+pub use horizon_browser_protocol::remote::{self, RemoteBrowserConfig};
 pub use horizon_browser_protocol::{
     AgentAction, BackendAvailability, BackendCapabilities, BackendKind, BrowserControlAction, BrowserVideoCapture,
     BrowserVideoCaptureOptions, BrowserVideoCaptureOverrides, BrowserVideoOperation, BrowserVideoState,

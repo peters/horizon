@@ -679,6 +679,13 @@ back into large multi-purpose modules.
   workspace metadata, or format panel/workspace domain labels, prefer adding a
   core API instead of rebuilding that logic in `horizon-ui`.
 
+- `remote_browser_credential` owns provider credentials for remote browser
+  sessions: the value-free store trait and sink, the session-only in-memory
+  store, the `keyring-core` adapter (`keyring_store`), the fake store seam, and
+  the resolver that turns bindings into one origin-bound authorization header.
+  It never serializes values, never touches the process environment, and holds
+  no transport, allocation or UI code.
+
 ### `horizon-browser-cli`
 
 - Owns deterministic browser plans, bounded execution control, durable job
