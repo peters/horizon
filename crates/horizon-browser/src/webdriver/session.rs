@@ -1,28 +1,25 @@
-use std::collections::{VecDeque, hash_map::DefaultHasher};
-use std::hash::{Hash, Hasher};
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
-use crate::challenge::{DocumentCommit, REJECTION_MESSAGE};
-use crate::disclosure::COMMON_SIGNAL_PRELOAD_FUNCTION;
 use crate::frames::FrameSlot;
 use crate::input::{is_activity, is_user_activity};
-use crate::process::{ChromeProcessControl, resolve_binary};
+use crate::process::ChromeProcessControl;
 use crate::semantic::SemanticState;
-use crate::session::{
-    BrowserCommand, BrowserEvent, BrowserEventSender, BrowserSessionConfig, CommandReceiver, publish_frame,
-};
-use crate::websocket::{JsonWsError, JsonWsLink};
-use crate::{AutomationDisclosurePolicy, BackendKind, BrowserConfig, PageScrollState};
+use crate::session::{BrowserCommand, BrowserEvent, BrowserEventSender, BrowserSessionConfig, CommandReceiver};
+use crate::websocket::JsonWsLink;
+use crate::{AutomationDisclosurePolicy, BackendKind};
 
 use super::actions::ActionState;
-use super::http::HttpError;
-use super::service::{WebDriverService, prepare_profile};
+use super::service::WebDriverService;
 
+mod bidi;
 mod coordination;
+mod frames;
+mod handshake;
 mod navigation;
 mod network;
 mod safari;
@@ -31,6 +28,9 @@ mod semantic;
 mod shutdown;
 mod wait;
 
+use bidi::{connect_bidi_with_startup_retry, discover_context, install_common_signal_preload, subscribe};
+use frames::AdaptiveFrames;
+use handshake::{NewSession, create_webdriver_session, initial_safari_input, parse_new_session_response};
 use shutdown::Completion;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
@@ -39,94 +39,12 @@ const PAGE_LOAD_TIMEOUT_MILLIS: u64 = 50_000;
 /// even when the first page is slow.
 const STARTUP_PAGE_LOAD_TIMEOUT_MILLIS: u64 = 10_000;
 const NAVIGATION_HTTP_TIMEOUT: Duration = Duration::from_millis(PAGE_LOAD_TIMEOUT_MILLIS + 5_000);
-const ACTIVE_FRAME_INTERVAL: Duration = Duration::from_millis(33);
-const ACTIVE_WINDOW: Duration = Duration::from_millis(900);
-const STATIC_CONFIRMATIONS: u8 = 3;
-const MAX_EVENT_BURST: usize = 32;
 // WebDriver input is synchronous. Taking a large batch out of the shared
 // queue prevents newer hover/wheel events from coalescing while each protocol
 // roundtrip runs, and delays frame capture until the whole batch completes.
 // Four keeps a complete physical double-click together while bounding the
 // time before Firefox can publish another frame.
 const MAX_COMMAND_BURST: usize = 4;
-const SCROLL_STATE_INTERVAL: Duration = Duration::from_millis(100);
-const PAGE_SCROLL_STATE_SCRIPT: &str = "const root = document.scrollingElement || document.documentElement; return { scroll_x: window.scrollX, scroll_y: window.scrollY, viewport_width: window.innerWidth, viewport_height: window.innerHeight, client_width: document.documentElement.clientWidth, client_height: document.documentElement.clientHeight, content_width: root.scrollWidth, content_height: root.scrollHeight };";
-
-struct AdaptiveFrames {
-    next_capture: Option<Instant>,
-    active_until: Instant,
-    last_hash: Option<u64>,
-    unchanged: u8,
-    interaction_started_at: Option<Instant>,
-}
-
-impl AdaptiveFrames {
-    fn new() -> Self {
-        let now = Instant::now();
-        Self {
-            next_capture: Some(now),
-            active_until: now + ACTIVE_WINDOW,
-            last_hash: None,
-            unchanged: 0,
-            interaction_started_at: None,
-        }
-    }
-
-    fn demand(&mut self) {
-        let now = Instant::now();
-        self.active_until = now + ACTIVE_WINDOW;
-        self.next_capture = Some(now);
-        self.unchanged = 0;
-        self.interaction_started_at.get_or_insert(now);
-    }
-
-    fn invalidate(&mut self) {
-        self.last_hash = None;
-        self.demand();
-    }
-
-    fn suspend_for_navigation(&mut self) {
-        let now = Instant::now();
-        self.last_hash = None;
-        self.unchanged = 0;
-        self.active_until = now + ACTIVE_WINDOW;
-        self.next_capture = None;
-        self.interaction_started_at.get_or_insert(now);
-    }
-
-    fn due(&self, now: Instant) -> bool {
-        self.next_capture.is_some_and(|next| now >= next)
-    }
-
-    fn completed(&mut self, encoded: &str) -> bool {
-        let mut hasher = DefaultHasher::new();
-        encoded.hash(&mut hasher);
-        let hash = hasher.finish();
-        let changed = self.last_hash != Some(hash);
-        self.last_hash = Some(hash);
-        let now = Instant::now();
-        if changed {
-            self.unchanged = 0;
-            self.active_until = now + ACTIVE_WINDOW;
-        } else {
-            self.unchanged = self.unchanged.saturating_add(1);
-        }
-        self.next_capture = if now < self.active_until || self.unchanged < STATIC_CONFIRMATIONS {
-            Some(now + ACTIVE_FRAME_INTERVAL)
-        } else {
-            None
-        };
-        changed
-    }
-
-    fn failed(&mut self) {
-        self.next_capture = Some(Instant::now() + Duration::from_millis(250));
-    }
-
-    fn published(&mut self) -> Option<Duration> {
-        self.interaction_started_at.take().map(|started| started.elapsed())
-    }
-}
 
 struct Driver {
     config: BrowserSessionConfig,
@@ -185,11 +103,6 @@ struct Driver {
 struct PendingHistoryStart {
     url: String,
     expires_at: Instant,
-}
-
-struct NewSession {
-    id: String,
-    capabilities: Value,
 }
 
 pub(crate) fn run_webdriver(
@@ -518,218 +431,6 @@ impl Driver {
         result
     }
 
-    fn capture_frame(&mut self, frame_slot: &FrameSlot, event_tx: &BrowserEventSender) {
-        frame_slot.record_capture_request();
-        let generation = self.generation;
-        let context_id = self.context_id.clone();
-        let result = if self.config.browser.backend == BackendKind::FirefoxBidi {
-            self.classic_get("screenshot")
-                .and_then(|response| {
-                    webdriver_value(&response)
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                        .ok_or_else(|| "WebDriver screenshot response had no data".to_string())
-                })
-                .map(|data| (data, false))
-        } else {
-            self.classic_get("screenshot")
-                .and_then(|response| {
-                    webdriver_value(&response)
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                        .ok_or_else(|| "WebDriver screenshot response had no data".to_string())
-                })
-                .map(|data| (data, false))
-        };
-        let (encoded, jpeg) = match result {
-            Ok(frame) => {
-                frame_slot.record_capture_completion();
-                frame
-            }
-            Err(error) => {
-                frame_slot.record_capture_failure();
-                tracing::warn!("adaptive browser screenshot failed: {error}");
-                self.frames.failed();
-                return;
-            }
-        };
-        if !capture_is_current(
-            generation,
-            self.generation,
-            context_id.as_deref(),
-            self.context_id.as_deref(),
-        ) {
-            frame_slot.record_capture_superseded();
-            self.frames.invalidate();
-            return;
-        }
-        let frame_changed = self.frames.completed(&encoded);
-        if frame_changed {
-            let seq = if jpeg {
-                frame_slot.store_base64_jpeg(&encoded)
-            } else {
-                frame_slot.store_base64_png(&encoded)
-            };
-            if let Some(seq) = seq {
-                if let Some(elapsed) = self.frames.published() {
-                    frame_slot.record_interaction_to_frame(elapsed);
-                }
-                publish_frame(event_tx, frame_slot, seq);
-            } else {
-                tracing::warn!("browser screenshot decode failed; retaining previous frame");
-            }
-        } else {
-            frame_slot.record_unchanged_frame();
-        }
-        if self.refresh_page_scroll_state(frame_slot) {
-            // A page can scroll over visually identical pixels. Wake the host
-            // even when the screenshot hash did not change so a scrollbar
-            // overlay still follows the browser's authoritative position.
-            event_tx.wake_ui();
-        }
-    }
-
-    fn refresh_page_scroll_state(&mut self, frame_slot: &FrameSlot) -> bool {
-        let now = Instant::now();
-        if now < self.scrollbar.refresh_at {
-            return false;
-        }
-        self.scrollbar.refresh_at = now + SCROLL_STATE_INTERVAL;
-        let Ok(response) = self.classic_post(
-            "execute/sync",
-            &json!({ "script": PAGE_SCROLL_STATE_SCRIPT, "args": [] }),
-        ) else {
-            return self.scrollbar.clear_sampled(frame_slot);
-        };
-        let Some(value) = webdriver_value(&response).cloned() else {
-            return self.scrollbar.clear_sampled(frame_slot);
-        };
-        let Ok(state) = serde_json::from_value::<PageScrollState>(value) else {
-            return self.scrollbar.clear_sampled(frame_slot);
-        };
-        self.scrollbar.sample(state);
-        frame_slot.publish_page_scroll_state(state)
-    }
-
-    fn call_bidi(&mut self, method: &str, params: &Value, event_tx: &BrowserEventSender) -> Result<Value, String> {
-        let link = self.bidi.as_mut().ok_or_else(|| "BiDi is unavailable".to_string())?;
-        let outcome = link.call(COMMAND_TIMEOUT, method, params);
-        for event in outcome.events {
-            self.handle_bidi_event(&event, event_tx);
-        }
-        outcome.result.map_err(|error| error.to_string())
-    }
-
-    fn drain_bidi_events(&mut self, event_tx: &BrowserEventSender) -> Result<(), String> {
-        let Some(link) = self.bidi.as_mut() else {
-            return Ok(());
-        };
-        let events = link.drain(MAX_EVENT_BURST).map_err(|error| error.to_string())?;
-        for event in events {
-            self.handle_bidi_event(&event, event_tx);
-        }
-        Ok(())
-    }
-
-    fn handle_bidi_event(&mut self, event: &Value, event_tx: &BrowserEventSender) {
-        if let Some(id) = event.get("id").and_then(Value::as_u64)
-            && self.navigate_request_id == Some(id)
-        {
-            self.handle_bidi_navigate_response(event, event_tx);
-            return;
-        }
-        if self.handle_network_bidi_event(event) {
-            return;
-        }
-        let method = event.get("method").and_then(Value::as_str).unwrap_or_default();
-        let params = event.get("params").unwrap_or(&Value::Null);
-        if let Some(context) = params.get("context").and_then(Value::as_str)
-            && self.context_id.is_none()
-        {
-            self.context_id = Some(context.to_string());
-        }
-        if !bidi_event_targets_context(method, params, self.context_id.as_deref()) {
-            return;
-        }
-        if method.ends_with("navigationStarted") {
-            if consume_pending_history_start(
-                &mut self.pending_classic_history_start,
-                params.get("url").and_then(Value::as_str),
-                Instant::now(),
-            ) {
-                return;
-            }
-            self.begin_navigation();
-            let _ = event_tx.send(BrowserEvent::Loading(true));
-            return;
-        }
-        if bidi_navigation_failed(method) {
-            let navigation = params.get("navigation").and_then(Value::as_str);
-            let url = params
-                .get("url")
-                .and_then(Value::as_str)
-                .unwrap_or("the requested page");
-            let message = format!("could not navigate to {url}");
-            if let Some(pending) = self.pending_navigation.as_ref() {
-                if !pending.correlates(navigation) {
-                    // A superseded navigation failing late must not poison the
-                    // state of the navigation that replaced it.
-                    tracing::debug!(target: "browser", navigation, "ignoring failure of a superseded navigation");
-                    return;
-                }
-                if pending.attribution_is_pending(navigation) {
-                    // The dispatch reply has not named this navigation yet.
-                    // Hold the failure without changing page-wide state; the
-                    // reply either attributes it to this action or discards it
-                    // as a late failure from the navigation it replaced.
-                    self.observe_navigation_signal(crate::navigation::NavigationSignal::Failed {
-                        message: &message,
-                        id: navigation,
-                    });
-                    return;
-                }
-            }
-            self.apply_navigation_failure_state(event_tx, &message);
-            self.observe_navigation_signal(crate::navigation::NavigationSignal::Failed {
-                message: &message,
-                id: navigation,
-            });
-            return;
-        }
-        let navigation_complete = bidi_navigation_complete(method);
-        if navigation_complete && !self.navigation_failed {
-            let committed_url = params
-                .get("url")
-                .and_then(Value::as_str)
-                .map_or_else(|| self.url.clone(), str::to_string);
-            let previous_url = self.url.clone();
-            let document_commit = self
-                .challenge_loop
-                .document_committed(&committed_url, params.get("navigation").and_then(Value::as_str));
-            if committed_url != self.url {
-                self.url = committed_url;
-                self.coordination_dirty = true;
-            }
-            if document_commit == DocumentCommit::Recovered || previous_url != self.url {
-                let _ = event_tx.send(BrowserEvent::UrlChanged(self.url.clone()));
-            }
-            if document_commit == DocumentCommit::Rejected && previous_url != self.url {
-                let _ = event_tx.send(BrowserEvent::NavigationFailed(REJECTION_MESSAGE.to_string()));
-            }
-            self.retain_frame_during_navigation = false;
-            let _ = event_tx.send(BrowserEvent::Loading(false));
-            self.frames.demand();
-            self.refresh_pending_at = Some(Instant::now() + Duration::from_millis(50));
-            self.settle_navigation_from_bidi(method, params.get("navigation").and_then(Value::as_str));
-        } else if method.ends_with("contextDestroyed") {
-            let destroyed = params.get("context").and_then(Value::as_str);
-            if destroyed == self.context_id.as_deref() {
-                self.context_id = None;
-                self.advance_generation();
-            }
-        }
-    }
-
     fn advance_generation(&mut self) {
         self.generation = self.generation.wrapping_add(1);
         self.scrollbar.reset(&self.config.frame_slot);
@@ -737,180 +438,6 @@ impl Driver {
             self.frames.invalidate();
         }
     }
-}
-
-fn initial_safari_input(
-    service: &WebDriverService,
-    session_id: &str,
-    backend: BackendKind,
-) -> Result<Option<safari::InputState>, String> {
-    if backend != BackendKind::SafariWebDriver {
-        return Ok(None);
-    }
-    let response = service
-        .http
-        .get(&format!("/session/{session_id}/window"))
-        .map_err(|error| format!("failed to read Safari window handle: {error}"))?;
-    safari::InputState::from_window_response(&response).map(Some)
-}
-
-fn create_webdriver_session(
-    service: &WebDriverService,
-    config: &BrowserSessionConfig,
-    request_bidi: bool,
-) -> Result<Value, HttpError> {
-    let capabilities = new_session_capabilities(&config.browser, &config.panel_local_id, request_bidi)
-        .map_err(|error| HttpError::InvalidResponse(format!("invalid session capabilities: {error}")))?;
-    service
-        .http
-        .post("/session", &json!({ "capabilities": { "alwaysMatch": capabilities } }))
-}
-
-fn new_session_capabilities(config: &BrowserConfig, panel_local_id: &str, request_bidi: bool) -> Result<Value, String> {
-    match config.backend {
-        BackendKind::FirefoxBidi => {
-            validate_firefox_args(&config.extra_args)?;
-            let profile = config.profile_dir(panel_local_id);
-            prepare_profile(&profile)?;
-            let mut options = Map::new();
-            let mut args = Vec::with_capacity(4 + config.extra_args.len());
-            if config.headless {
-                args.push("-headless".to_string());
-            }
-            args.extend([
-                "-no-remote".to_string(),
-                "-profile".to_string(),
-                profile.to_string_lossy().to_string(),
-            ]);
-            args.extend(config.extra_args.iter().cloned());
-            options.insert("args".to_string(), json!(args));
-            // Headless Firefox otherwise inherits GTK overlay scrollbars,
-            // which fade completely out of screenshots and leave a streamed
-            // browser panel with no visible drag target.
-            options.insert(
-                "prefs".to_string(),
-                json!({
-                    "widget.gtk.overlay-scrollbars.enabled": false,
-                    "ui.useOverlayScrollbars": 0,
-                }),
-            );
-            if let Some(command) = &config.firefox_command {
-                let binary = resolve_binary(command).map_err(|error| error.to_string())?;
-                options.insert("binary".to_string(), json!(binary));
-            }
-            Ok(json!({
-                "browserName": "firefox",
-                "webSocketUrl": true,
-                "acceptInsecureCerts": false,
-                "pageLoadStrategy": "eager",
-                "timeouts": { "pageLoad": PAGE_LOAD_TIMEOUT_MILLIS },
-                "moz:firefoxOptions": Value::Object(options),
-            }))
-        }
-        BackendKind::SafariWebDriver => {
-            let mut capabilities = Map::new();
-            capabilities.insert("browserName".to_string(), json!("safari"));
-            capabilities.insert("acceptInsecureCerts".to_string(), json!(false));
-            capabilities.insert("timeouts".to_string(), json!({ "pageLoad": PAGE_LOAD_TIMEOUT_MILLIS }));
-            if request_bidi {
-                capabilities.insert("webSocketUrl".to_string(), json!(true));
-            }
-            Ok(Value::Object(capabilities))
-        }
-        BackendKind::ChromiumCdp => Err("Chromium does not create a WebDriver session".to_string()),
-    }
-}
-
-fn validate_firefox_args(arguments: &[String]) -> Result<(), String> {
-    for argument in arguments {
-        let normalized = argument.trim_start_matches('-').to_ascii_lowercase();
-        if matches!(normalized.as_str(), "profile" | "p" | "marionette") || normalized.starts_with("remote-debugging-")
-        {
-            return Err(format!(
-                "browser.extra_args cannot override managed Firefox argument {argument:?}"
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn discover_context(link: &mut JsonWsLink) -> Option<String> {
-    let outcome = link.call(COMMAND_TIMEOUT, "browsingContext.getTree", &json!({ "maxDepth": 0 }));
-    outcome.result.ok().and_then(|result| {
-        result
-            .get("contexts")?
-            .as_array()?
-            .first()?
-            .get("context")?
-            .as_str()
-            .map(str::to_string)
-    })
-}
-
-fn connect_bidi_with_startup_retry(url: &str, stop_requested: &AtomicBool) -> Result<JsonWsLink, String> {
-    let deadline = Instant::now() + Duration::from_secs(3);
-    loop {
-        match JsonWsLink::connect(url) {
-            Ok(link) => return Ok(link),
-            Err(JsonWsError::InvalidUrl(_)) => {
-                return Err("browser returned an invalid non-loopback BiDi endpoint".to_string());
-            }
-            Err(error) => {
-                if stop_requested.load(Ordering::Acquire) || Instant::now() >= deadline {
-                    return Err(format!("failed to connect returned BiDi endpoint: {error}"));
-                }
-            }
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
-}
-
-fn subscribe(link: &mut JsonWsLink, backend: BackendKind, context_id: Option<&str>) -> Result<(), String> {
-    subscribe_bidi_events(link, &base_bidi_events(), None)?;
-    if backend == BackendKind::FirefoxBidi {
-        let context = context_id.ok_or_else(|| "Firefox BiDi returned no top-level browsing context".to_string())?;
-        subscribe_bidi_events(link, &["network.responseStarted"], Some(context))?;
-    }
-    Ok(())
-}
-
-fn subscribe_bidi_events(link: &mut JsonWsLink, events: &[&str], context: Option<&str>) -> Result<(), String> {
-    let params = bidi_subscription_params(events, context);
-    link.call(COMMAND_TIMEOUT, "session.subscribe", &params)
-        .result
-        .map(|_| ())
-        .map_err(|error| error.to_string())
-}
-
-fn bidi_subscription_params(events: &[&str], context: Option<&str>) -> Value {
-    let mut params = json!({ "events": events });
-    if let Some(context) = context {
-        params["contexts"] = json!([context]);
-    }
-    params
-}
-
-fn base_bidi_events() -> Vec<&'static str> {
-    vec![
-        "browsingContext.contextCreated",
-        "browsingContext.contextDestroyed",
-        "browsingContext.navigationStarted",
-        "browsingContext.navigationFailed",
-        "browsingContext.fragmentNavigated",
-        "browsingContext.domContentLoaded",
-        "browsingContext.load",
-    ]
-}
-
-fn install_common_signal_preload(link: &mut JsonWsLink) -> Result<(), String> {
-    link.call(
-        COMMAND_TIMEOUT,
-        "script.addPreloadScript",
-        &json!({ "functionDeclaration": COMMON_SIGNAL_PRELOAD_FUNCTION }),
-    )
-    .result
-    .map(|_| ())
-    .map_err(|error| error.to_string())
 }
 
 fn webdriver_value(response: &Value) -> Option<&Value> {
@@ -927,57 +454,8 @@ fn classic_navigation_committed(response: &Value, requested: &str, previous: &st
         })
 }
 
-fn safe_session_id(id: &str) -> bool {
-    !id.is_empty()
-        && id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-}
-
-fn parse_new_session_response(response: &Value) -> Result<NewSession, String> {
-    let value = response.get("value").unwrap_or(response);
-    let id = value
-        .get("sessionId")
-        .or_else(|| response.get("sessionId"))
-        .and_then(Value::as_str)
-        .filter(|id| safe_session_id(id))
-        .ok_or_else(|| "WebDriver returned no safe session id".to_string())?
-        .to_string();
-    let capabilities = value
-        .get("capabilities")
-        .or_else(|| response.get("capabilities"))
-        .cloned()
-        .unwrap_or(Value::Null);
-    Ok(NewSession { id, capabilities })
-}
-
 fn normalize_url(url: &str) -> &str {
     if url == "about:blank" { "" } else { url }
-}
-
-fn capture_is_current(
-    capture_generation: u64,
-    current_generation: u64,
-    capture_context: Option<&str>,
-    current_context: Option<&str>,
-) -> bool {
-    capture_generation == current_generation && capture_context == current_context
-}
-
-fn bidi_navigation_complete(method: &str) -> bool {
-    method.ends_with("domContentLoaded") || method.ends_with("fragmentNavigated") || method.ends_with("load")
-}
-
-fn bidi_navigation_failed(method: &str) -> bool {
-    method.ends_with("navigationFailed")
-}
-
-fn bidi_event_targets_context(method: &str, params: &Value, context_id: Option<&str>) -> bool {
-    let context_scoped = method.ends_with("navigationStarted")
-        || bidi_navigation_failed(method)
-        || bidi_navigation_complete(method)
-        || method.ends_with("contextDestroyed");
-    !context_scoped || params.get("context").and_then(Value::as_str) == context_id
 }
 
 fn consume_pending_history_start(pending: &mut Option<PendingHistoryStart>, url: Option<&str>, now: Instant) -> bool {
@@ -1009,11 +487,16 @@ mod tests {
         ));
     }
 
+    use super::bidi::{
+        base_bidi_events, bidi_event_targets_context, bidi_navigation_complete, bidi_navigation_failed,
+        bidi_subscription_params,
+    };
+    use super::frames::{AdaptiveFrames, capture_is_current};
+    use super::handshake::{
+        new_session_capabilities, parse_new_session_response, safe_session_id, validate_firefox_args,
+    };
     use super::{
-        AdaptiveFrames, PAGE_LOAD_TIMEOUT_MILLIS, PendingHistoryStart, base_bidi_events, bidi_event_targets_context,
-        bidi_navigation_complete, bidi_navigation_failed, bidi_subscription_params, capture_is_current,
-        classic_navigation_committed, consume_pending_history_start, new_session_capabilities,
-        parse_new_session_response, safe_session_id, validate_firefox_args,
+        PAGE_LOAD_TIMEOUT_MILLIS, PendingHistoryStart, classic_navigation_committed, consume_pending_history_start,
     };
     use crate::{BackendKind, BrowserConfig};
 
