@@ -45,7 +45,7 @@ fn main() -> eframe::Result {
     }
 
     let horizon_home = HorizonHome::resolve();
-    plugin_install::install_agent_plugins(&horizon_home);
+    let _agent_plugin_host = plugin_install::install_agent_plugins(&horizon_home);
 
     let cli_args = parse_cli_args();
     let resolved_config_path =

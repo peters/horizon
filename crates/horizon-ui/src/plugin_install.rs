@@ -168,7 +168,15 @@ impl Drop for AgentPluginHostLease {
     }
 }
 
-pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) {
+pub(crate) struct AgentPluginHostGuard;
+
+impl Drop for AgentPluginHostGuard {
+    fn drop(&mut self) {
+        release_held_agent_plugin_host();
+    }
+}
+
+pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) -> AgentPluginHostGuard {
     let user_home = user_home_dir();
     let grok_home = grok_home_dir();
     let codex_home = codex_home_dir();
@@ -179,7 +187,7 @@ pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) {
         Ok(lease) => lease,
         Err(error) => {
             tracing::warn!(%error, "failed to acquire agent plugin host lease");
-            return;
+            return AgentPluginHostGuard;
         }
     };
     lease.user_skill_dirs = user_skill_cleanup_dirs(user_home.as_deref(), grok_home.as_deref(), codex_home.as_deref());
@@ -202,6 +210,7 @@ pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) {
     }
 
     *held_agent_plugin_lease() = Some(lease);
+    AgentPluginHostGuard
 }
 
 pub(crate) fn release_held_agent_plugin_host() {
