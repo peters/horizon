@@ -62,8 +62,9 @@ fn controls(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: bool) -> 
         clicked |= name_edit.clicked();
         if !stopped {
             let pause_label = if paused { "Resume" } else { "Pause" };
+            let can_resume = interactive && !(paused && browser.handoff_reason.is_some());
             if ui
-                .add_enabled(interactive, egui::Button::new(RichText::new(pause_label).size(11.0)))
+                .add_enabled(can_resume, egui::Button::new(RichText::new(pause_label).size(11.0)))
                 .clicked()
             {
                 if paused {

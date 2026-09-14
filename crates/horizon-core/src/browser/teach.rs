@@ -16,6 +16,7 @@ use crate::horizon_home::HorizonHome;
 pub struct TeachMode {
     session: TeachSession,
     registry: RoutineRegistry,
+    root: PathBuf,
     routine_id: Uuid,
     name: String,
     next_action: u32,
@@ -38,7 +39,8 @@ impl TeachMode {
         let name = bounded_name(name);
         Ok(Self {
             session: TeachSession::start(),
-            registry: RoutineRegistry::open(root)?,
+            registry: RoutineRegistry::open(root.clone())?,
+            root,
             routine_id: Uuid::new_v4(),
             name,
             next_action: 0,
@@ -55,6 +57,7 @@ impl TeachMode {
 
     pub fn set_name(&mut self, name: &str) {
         self.name = bounded_name(name);
+        self.persist_draft();
     }
 
     #[must_use]
@@ -84,6 +87,7 @@ impl TeachMode {
 
     pub fn set_use_title_outcome(&mut self, selected: bool) {
         self.use_title_outcome = selected;
+        self.persist_draft();
     }
 
     #[must_use]
@@ -93,6 +97,7 @@ impl TeachMode {
 
     pub fn set_completion_heading(&mut self, heading: &str) {
         self.completion_heading = heading.chars().filter(|ch| !ch.is_control()).take(256).collect();
+        self.persist_draft();
     }
 
     pub fn pause(&mut self) {
@@ -114,32 +119,73 @@ impl TeachMode {
     /// # Errors
     /// Draft unlink failure.
     pub fn discard(&mut self) -> Result<(), RoutineError> {
-        self.session.discard_saved(&self.registry, self.routine_id)
+        match self.session.discard_saved(&self.registry, self.routine_id) {
+            Ok(()) => {
+                let _ = std::fs::remove_file(self.root.join(self.routine_id.to_string()).join("ui.json"));
+                Ok(())
+            }
+            Err(error) => {
+                self.last_error = Some(error.to_string());
+                Err(error)
+            }
+        }
     }
 
-    pub fn ingest(&mut self, observation: TeachObservation, page_url: Option<&str>) {
+    pub fn ingest(&mut self, observation: TeachObservation) {
         match observation {
             TeachObservation::Failed { message, .. } => {
                 self.last_error = Some(message);
             }
-            TeachObservation::Captured(fingerprint) => match recorded_click(self.next_action, &fingerprint, page_url) {
-                Ok(action) => match self.session.push(action) {
-                    Ok(()) => {
-                        self.next_action += 1;
-                        self.last_error = None;
-                        self.persist_draft();
-                    }
+            TeachObservation::Captured(fingerprint) => {
+                if fingerprint_is_focused_text(&fingerprint) {
+                    return;
+                }
+                match recorded_click(self.next_action, &fingerprint) {
+                    Ok(action) => match self.session.push(action) {
+                        Ok(()) => {
+                            self.next_action += 1;
+                            self.last_error = None;
+                            self.persist_draft();
+                        }
+                        Err(error) => self.last_error = Some(error.to_string()),
+                    },
                     Err(error) => self.last_error = Some(error.to_string()),
-                },
-                Err(error) => self.last_error = Some(error.to_string()),
-            },
+                }
+            }
         }
     }
 
     fn persist_draft(&mut self) {
         if let Err(error) = self.session.save_draft(&self.registry, self.routine_id) {
             self.last_error = Some(error.to_string());
+            return;
         }
+        if let Err(error) = self.persist_ui_state() {
+            self.last_error = Some(error.to_string());
+        }
+    }
+
+    fn persist_ui_state(&self) -> Result<(), RoutineError> {
+        let _lock = self.registry.lock(self.routine_id)?;
+        let path = self.root.join(self.routine_id.to_string()).join("ui.json");
+        let encoded = serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1,
+            "name": self.name,
+            "use_title_outcome": self.use_title_outcome,
+            "completion_heading": self.completion_heading,
+        }))
+        .map_err(|_| RoutineError::Json("malformed routine JSON".into()))?;
+        std::fs::write(&path, encoded).map_err(|_| RoutineError::Storage)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mut permissions = std::fs::metadata(&path)
+                .map_err(|_| RoutineError::Storage)?
+                .permissions();
+            permissions.set_mode(0o600);
+            std::fs::set_permissions(&path, permissions).map_err(|_| RoutineError::Storage)?;
+        }
+        Ok(())
     }
 }
 
@@ -184,17 +230,29 @@ fn candidate_label(target: &TargetFingerprint) -> Option<String> {
     }
 }
 
-fn recorded_click(
-    index: u32,
-    fingerprint: &TeachFingerprint,
-    page_url: Option<&str>,
-) -> Result<RecordedAction, RoutineError> {
+fn fingerprint_is_focused_text(fingerprint: &TeachFingerprint) -> bool {
+    fingerprint
+        .candidates
+        .iter()
+        .any(|candidate| match &candidate.identity {
+            horizon_browser::TeachTargetCandidate::RoleName { role, .. } => {
+                matches!(
+                    role.to_ascii_lowercase().as_str(),
+                    "textbox" | "searchbox" | "combobox" | "spinbutton"
+                )
+            }
+            horizon_browser::TeachTargetCandidate::LabelControl { control, .. } => {
+                let control = control.to_ascii_lowercase();
+                control.contains("input") || control.contains("textarea") || control.contains("textbox")
+            }
+            _ => false,
+        })
+}
+
+fn recorded_click(index: u32, fingerprint: &TeachFingerprint) -> Result<RecordedAction, RoutineError> {
     let target = convert_fingerprint(fingerprint)?;
     let page_origin = target.frame.origin.clone();
-    let url_pattern = match page_url {
-        Some(url) if !url.contains(['?', '#', '@']) && !url.is_empty() => url.to_string(),
-        _ => page_origin.to_string(),
-    };
+    let url_pattern = page_origin.to_string();
     Ok(RecordedAction {
         action_id: format!("a{index}"),
         recorded_at_millis: now_millis(),
@@ -261,23 +319,38 @@ mod tests {
             std::fs::set_permissions(temp.path(), permissions).expect("chmod");
         }
         let mut teach = TeachMode::start_in(temp.path().join("routines"), "monthly").expect("start");
-        teach.ingest(
-            TeachObservation::Captured(fingerprint()),
-            Some("https://reports.example/app"),
-        );
+        teach.ingest(TeachObservation::Captured(fingerprint()));
         assert_eq!(teach.action_previews(), vec!["click Generate report".to_string()]);
-        teach.ingest(
-            TeachObservation::Failed {
-                code: "cross_origin_frame".to_string(),
-                message: "frame is cross-origin".to_string(),
-            },
-            Some("https://reports.example/app"),
-        );
+        teach.ingest(TeachObservation::Failed {
+            code: "cross_origin_frame".to_string(),
+            message: "frame is cross-origin".to_string(),
+        });
         assert_eq!(teach.action_previews().len(), 1);
         assert_eq!(teach.last_error(), Some("frame is cross-origin"));
         teach.stop();
         assert!(teach.is_stopped());
         teach.resume();
         assert!(teach.is_stopped());
+    }
+
+    #[test]
+    fn focused_text_fingerprints_are_not_recorded_as_clicks() {
+        let temp = tempfile::tempdir().expect("temp");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mut permissions = std::fs::metadata(temp.path()).expect("meta").permissions();
+            permissions.set_mode(0o700);
+            std::fs::set_permissions(temp.path(), permissions).expect("chmod");
+        }
+        let mut teach = TeachMode::start_in(temp.path().join("routines"), "monthly").expect("start");
+        let mut focused = fingerprint();
+        focused.candidates[0].identity = TeachTargetCandidate::RoleName {
+            role: "textbox".to_string(),
+            name: "Email".to_string(),
+            reviewed: false,
+        };
+        teach.ingest(TeachObservation::Captured(focused));
+        assert!(teach.action_previews().is_empty());
     }
 }

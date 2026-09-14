@@ -568,10 +568,9 @@ impl BrowserPanelState {
         let Some(teach) = self.teach.as_mut() else {
             return;
         };
-        let page_url = self.url.clone();
         let mut ingested = false;
         while let Some(observation) = self.frame_slot.take_teach_observation() {
-            teach.ingest(observation, page_url.as_deref());
+            teach.ingest(observation);
             ingested = true;
         }
         if ingested {
@@ -584,9 +583,11 @@ impl BrowserPanelState {
     /// # Errors
     /// Private routine storage could not be created.
     pub fn start_teach(&mut self, name: impl Into<String>) -> Result<(), horizon_browser_routines::RoutineError> {
-        if let Some(existing) = self.teach.as_mut() {
-            existing.resume();
-            self.frame_slot.set_teach_recording(true);
+        if self.teach.as_ref().is_some_and(TeachMode::is_stopped) {
+            return Ok(());
+        }
+        if self.teach.is_some() {
+            self.resume_teach();
             return Ok(());
         }
         let teach = TeachMode::start(name)?;
@@ -612,6 +613,9 @@ impl BrowserPanelState {
     }
 
     pub fn resume_teach(&mut self) {
+        if self.handoff_reason.is_some() {
+            return;
+        }
         if let Some(teach) = self.teach.as_mut() {
             teach.resume();
         }
@@ -637,9 +641,10 @@ impl BrowserPanelState {
     /// Draft unlink failure.
     pub fn discard_teach(&mut self) -> Result<(), horizon_browser_routines::RoutineError> {
         self.frame_slot.set_teach_recording(false);
-        if let Some(mut teach) = self.teach.take() {
+        if let Some(teach) = self.teach.as_mut() {
             teach.discard()?;
         }
+        self.teach = None;
         Ok(())
     }
 

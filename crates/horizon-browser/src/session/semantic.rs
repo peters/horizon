@@ -20,6 +20,13 @@ use crate::{
 
 use super::{BrowserEventSender, DriverState};
 
+fn agent_action_blocked_during_teach(action: &BrowserControlAction) -> bool {
+    !matches!(
+        action,
+        BrowserControlAction::Snapshot { .. } | BrowserControlAction::Query { .. }
+    )
+}
+
 impl DriverState {
     pub(super) fn execute_agent_action(
         &mut self,
@@ -28,6 +35,15 @@ impl DriverState {
         frame_slot: &Arc<FrameSlot>,
         request: &AgentAction,
     ) -> (Result<BrowserControlValue, BrowserControlFailure>, bool) {
+        if frame_slot.teach_recording() && agent_action_blocked_during_teach(&request.action) {
+            return (
+                Err(BrowserControlFailure::new(
+                    "teach_recording",
+                    "Teach mode has exclusive ownership of this panel",
+                )),
+                false,
+            );
+        }
         if let Some(command) = request.action.to_command() {
             return match self.dispatch_command(link, event_tx, frame_slot, command, false) {
                 Ok(stop) => (Ok(BrowserControlValue::Accepted), stop),
@@ -304,10 +320,11 @@ impl DriverState {
             return Ok(());
         }
         let generation = frame_slot.teach_generation();
-        let expression = match point {
-            Some((x, y)) => fingerprint_at_point_expression(x, y),
-            None => fingerprint_focused_expression(),
+        let Some((x, y)) = point else {
+            let _ = fingerprint_focused_expression();
+            return Ok(());
         };
+        let expression = fingerprint_at_point_expression(x, y);
         let value = match self.evaluate_json(link, event_tx, frame_slot, &expression) {
             Ok(value) => value,
             Err(error) => {

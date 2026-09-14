@@ -44,6 +44,17 @@ impl Driver {
         request: &AgentAction,
         event_tx: &BrowserEventSender,
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
+        if self.panel_slot.teach_recording()
+            && !matches!(
+                &request.action,
+                BrowserControlAction::Snapshot { .. } | BrowserControlAction::Query { .. }
+            )
+        {
+            return Err(BrowserControlFailure::new(
+                "teach_recording",
+                "Teach mode has exclusive ownership of this panel",
+            ));
+        }
         if let Some(command) = request.action.to_command() {
             let failure_code = if matches!(command, crate::session::BrowserCommand::Input(_)) {
                 "input_failed"
@@ -247,10 +258,11 @@ impl Driver {
             return Ok(());
         }
         let generation = self.panel_slot.teach_generation();
-        let expression = match point {
-            Some((x, y)) => fingerprint_at_point_expression(x, y),
-            None => fingerprint_focused_expression(),
+        let Some((x, y)) = point else {
+            let _ = fingerprint_focused_expression();
+            return Ok(());
         };
+        let expression = fingerprint_at_point_expression(x, y);
         let value = match self.evaluate_json(&expression) {
             Ok(value) => value,
             Err(error) => {
