@@ -18,20 +18,23 @@ pub(super) struct SkillRootLease {
     live_lock: Option<std::fs::File>,
 }
 
-pub(super) fn bind_skill_roots(host_id: &OsStr, dirs: &[PathBuf]) -> io::Result<Vec<SkillRootLease>> {
+impl SkillRootLease {
+    pub(super) fn covers_skill_dir(&self, skill_dir: &Path) -> bool {
+        skill_dir.parent().is_some_and(|parent| parent == self.parent)
+    }
+}
+
+pub(super) fn bind_skill_roots(host_id: &OsStr, dirs: &[PathBuf]) -> Vec<SkillRootLease> {
     let mut leases = Vec::new();
     for parent in unique_parents(dirs) {
-        match acquire_skill_root(host_id, parent) {
+        match acquire_skill_root(host_id, parent.clone()) {
             Ok(lease) => leases.push(lease),
             Err(error) => {
-                // Drop only abandons live markers. Last-host skill cleanup
-                // needs the coordination lock held by `release_skill_roots`.
-                release_skill_roots(&mut leases);
-                return Err(error);
+                tracing::warn!(path = %parent.display(), %error, "failed to lease Horizon skill root");
             }
         }
     }
-    Ok(leases)
+    leases
 }
 
 pub(super) fn release_skill_roots(leases: &mut [SkillRootLease]) {
