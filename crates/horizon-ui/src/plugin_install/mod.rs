@@ -1,4 +1,3 @@
-use std::ffi::OsStr;
 use std::fs::{OpenOptions, TryLockError};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -6,6 +5,12 @@ use std::sync::{Mutex, PoisonError};
 
 use horizon_core::browser::manifest;
 use horizon_core::{HorizonHome, browser_mcp_executable, codex_home_dir, grok_home_dir, user_home_dir};
+
+mod user_skills;
+use user_skills::{
+    HORIZON_BROWSER_SKILL, HORIZON_NOTIFY_SKILL, SkillRootLease, bind_skill_roots, release_skill_roots,
+    remove_horizon_skill_dir,
+};
 
 struct EmbeddedFile {
     relative_path: &'static str,
@@ -52,9 +57,6 @@ const BROWSER_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
     )),
 }];
 
-const HORIZON_NOTIFY_SKILL: &str = "horizon-notify";
-const HORIZON_BROWSER_SKILL: &str = "horizon-browser";
-
 /// `$HOME`-relative skill roots that receive `horizon-notify` for the life of
 /// this Horizon process. Claude also gets it through the host plugin tree.
 /// Shared `~/.agents/skills` is not a broadcast target: each agent gets its
@@ -82,23 +84,11 @@ pub(crate) struct AgentPluginHostLease {
     host_dir: PathBuf,
     lock_path: PathBuf,
     lock_file: Option<std::fs::File>,
-    registry_dir: PathBuf,
-    registry_live_lock_path: PathBuf,
-    registry_live_lock: Option<std::fs::File>,
-    user_skill_dirs: Vec<PathBuf>,
+    skill_roots: Vec<SkillRootLease>,
 }
 
 impl AgentPluginHostLease {
-    #[cfg(test)]
     fn acquire(instance_dir: PathBuf) -> std::io::Result<Self> {
-        let registry_dir = instance_dir
-            .parent()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "agent plugin host directory has no parent"))?
-            .to_path_buf();
-        Self::acquire_with_registry(instance_dir, registry_dir)
-    }
-
-    fn acquire_with_registry(instance_dir: PathBuf, registry_dir: PathBuf) -> std::io::Result<Self> {
         let lock_path = agent_plugin_host_lock_path(&instance_dir)?;
         let plugin_root = instance_dir
             .parent()
@@ -120,83 +110,27 @@ impl AgentPluginHostLease {
             let _ = std::fs::remove_file(&lock_path);
             return Err(error);
         }
-        if let Err(error) = std::fs::create_dir_all(&registry_dir) {
-            drop(lock_file);
-            let _ = std::fs::remove_dir_all(&instance_dir);
-            let _ = std::fs::remove_file(&lock_path);
-            return Err(error);
-        }
-        let registry_live_lock_path = registry_sidecar_path(&registry_dir, &instance_dir, ".live")?;
-        let registry_live_lock = match open_lock_file(&registry_live_lock_path) {
-            Ok(file) => file,
-            Err(error) => {
-                drop(lock_file);
-                let _ = std::fs::remove_dir_all(&instance_dir);
-                let _ = std::fs::remove_file(&lock_path);
-                return Err(error);
-            }
-        };
-        match registry_live_lock.try_lock() {
-            Ok(()) => {}
-            Err(error) => {
-                drop(lock_file);
-                let _ = std::fs::remove_dir_all(&instance_dir);
-                let _ = std::fs::remove_file(&lock_path);
-                let _ = std::fs::remove_file(&registry_live_lock_path);
-                return Err(match error {
-                    TryLockError::WouldBlock => io::Error::new(
-                        io::ErrorKind::WouldBlock,
-                        format!(
-                            "user-skill lease is already active: {}",
-                            registry_live_lock_path.display()
-                        ),
-                    ),
-                    TryLockError::Error(error) => error,
-                });
-            }
-        }
         Ok(Self {
             host_dir: instance_dir,
             lock_path,
             lock_file: Some(lock_file),
-            registry_dir,
-            registry_live_lock_path,
-            registry_live_lock: Some(registry_live_lock),
-            user_skill_dirs: Vec::new(),
+            skill_roots: Vec::new(),
         })
     }
 
-    fn release_user_skills_if_last_host(&self) {
-        let _lock_file = match lock_user_skills(&self.registry_dir) {
-            Ok(lock_file) => lock_file,
-            Err(error) => {
-                tracing::warn!(%error, "failed to lock user-skill cleanup");
-                return;
-            }
-        };
-        if let Err(error) = persist_user_skill_manifest(self) {
-            tracing::warn!(%error, "failed to persist Horizon skill lease paths");
-        }
-        match another_agent_plugin_host_is_live(&self.registry_dir, &self.registry_live_lock_path) {
-            Ok(true) => {}
-            Ok(false) => {
-                let mut dirs = self.user_skill_dirs.clone();
-                match leased_skill_dirs_from_manifests(&self.registry_dir) {
-                    Ok(mut leased) => dirs.append(&mut leased),
-                    Err(error) => tracing::warn!(%error, "failed to read Horizon skill lease manifests"),
-                }
-                for dir in dirs {
-                    remove_horizon_skill_dir(&dir);
-                }
-                remove_user_skill_manifests(&self.registry_dir);
-            }
-            Err(error) => tracing::warn!(%error, "failed to inspect agent plugin hosts for skill cleanup"),
-        }
+    fn bind_user_skills(&mut self, dirs: &[PathBuf]) -> io::Result<()> {
+        let host_id = self
+            .host_dir
+            .file_name()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "agent plugin host directory has no name"))?;
+        self.skill_roots = bind_skill_roots(host_id, dirs)?;
+        Ok(())
     }
 }
 
 impl Drop for AgentPluginHostLease {
     fn drop(&mut self) {
+        release_skill_roots(&mut self.skill_roots);
         if let Err(error) = std::fs::remove_dir_all(&self.host_dir)
             && error.kind() != std::io::ErrorKind::NotFound
         {
@@ -208,17 +142,6 @@ impl Drop for AgentPluginHostLease {
         {
             tracing::warn!(path = %self.lock_path.display(), %error, "failed to remove agent plugin host lock");
         }
-        drop(self.registry_live_lock.take());
-        if let Err(error) = std::fs::remove_file(&self.registry_live_lock_path)
-            && error.kind() != std::io::ErrorKind::NotFound
-        {
-            tracing::warn!(
-                path = %self.registry_live_lock_path.display(),
-                %error,
-                "failed to remove user-skill live lock"
-            );
-        }
-        self.release_user_skills_if_last_host();
     }
 }
 
@@ -237,15 +160,17 @@ pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) -> AgentPluginHo
     let mcp_command = browser_mcp_executable().unwrap_or_else(|| PathBuf::from("horizon"));
     let host_dir = horizon_home.agent_plugin_host_dir(manifest::host_instance());
     let claude_plugin_dir = horizon_home.claude_plugin_dir_for_host(manifest::host_instance());
-    let registry_dir = canonical_user_skill_registry_dir(user_home.as_deref(), horizon_home);
-    let mut lease = match AgentPluginHostLease::acquire_with_registry(host_dir.clone(), registry_dir) {
+    let mut lease = match AgentPluginHostLease::acquire(host_dir.clone()) {
         Ok(lease) => lease,
         Err(error) => {
             tracing::warn!(%error, "failed to acquire agent plugin host lease");
             return AgentPluginHostGuard;
         }
     };
-    lease.user_skill_dirs = user_skill_cleanup_dirs(user_home.as_deref(), grok_home.as_deref(), codex_home.as_deref());
+    let user_skill_dirs = user_skill_cleanup_dirs(user_home.as_deref(), grok_home.as_deref(), codex_home.as_deref());
+    if let Err(error) = lease.bind_user_skills(&user_skill_dirs) {
+        tracing::warn!(%error, "failed to bind Horizon skill root leases");
+    }
     sync_leased_user_skills(
         &lease,
         horizon_home,
@@ -282,7 +207,7 @@ fn held_agent_plugin_lease() -> std::sync::MutexGuard<'static, Option<AgentPlugi
 }
 
 fn sync_leased_user_skills(
-    lease: &AgentPluginHostLease,
+    _lease: &AgentPluginHostLease,
     horizon_home: &HorizonHome,
     claude_plugin_dir: &Path,
     user_home: Option<&Path>,
@@ -290,16 +215,6 @@ fn sync_leased_user_skills(
     codex_home: Option<&Path>,
     mcp_command: &Path,
 ) {
-    let _guard = match lock_user_skills(&lease.registry_dir) {
-        Ok(guard) => guard,
-        Err(error) => {
-            tracing::warn!(%error, "failed to lock user-skill installation");
-            return;
-        }
-    };
-    if let Err(error) = persist_user_skill_manifest(lease) {
-        tracing::warn!(%error, "failed to persist Horizon skill lease paths");
-    }
     if let Some(home) = user_home {
         for dir in abandoned_user_skill_dirs(home) {
             remove_horizon_skill_dir(&dir);
@@ -322,30 +237,6 @@ fn sync_leased_user_skills(
 }
 
 fn agent_plugin_host_lock_path(instance_dir: &Path) -> io::Result<PathBuf> {
-    host_sidecar_path(instance_dir, ".lock")
-}
-
-fn canonical_user_skill_registry_dir(user_home: Option<&Path>, horizon_home: &HorizonHome) -> PathBuf {
-    user_home.map_or_else(
-        || horizon_home.agent_plugin_hosts_dir(),
-        |home| home.join(".horizon").join("runtime").join("agent-skill-leases"),
-    )
-}
-
-fn user_skill_manifest_path(lease: &AgentPluginHostLease) -> io::Result<PathBuf> {
-    registry_sidecar_path(&lease.registry_dir, &lease.host_dir, ".user-skills")
-}
-
-fn registry_sidecar_path(registry_dir: &Path, instance_dir: &Path, suffix: &str) -> io::Result<PathBuf> {
-    let host_name = instance_dir
-        .file_name()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "agent plugin host directory has no name"))?;
-    let mut name = host_name.to_os_string();
-    name.push(suffix);
-    Ok(registry_dir.join(name))
-}
-
-fn host_sidecar_path(instance_dir: &Path, suffix: &str) -> io::Result<PathBuf> {
     let plugin_root = instance_dir
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "agent plugin host directory has no parent"))?;
@@ -353,167 +244,8 @@ fn host_sidecar_path(instance_dir: &Path, suffix: &str) -> io::Result<PathBuf> {
         .file_name()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "agent plugin host directory has no name"))?;
     let mut name = host_name.to_os_string();
-    name.push(suffix);
+    name.push(".lock");
     Ok(plugin_root.join(name))
-}
-
-fn lock_user_skills(plugin_root: &Path) -> io::Result<std::fs::File> {
-    let lock_file = open_lock_file(&plugin_root.join(".user-skills.lock"))?;
-    lock_file.lock()?;
-    Ok(lock_file)
-}
-
-fn persist_user_skill_manifest(lease: &AgentPluginHostLease) -> io::Result<()> {
-    let path = user_skill_manifest_path(lease)?;
-    let encoded = serde_json::to_string(
-        &lease
-            .user_skill_dirs
-            .iter()
-            .map(|dir| encode_path(dir))
-            .collect::<Vec<_>>(),
-    )
-    .map_err(io::Error::other)?;
-    sync_file_if_changed(&path, &encoded)?;
-    Ok(())
-}
-
-fn encode_path(path: &Path) -> serde_json::Value {
-    if let Some(utf8) = path.to_str() {
-        return serde_json::json!({ "utf8": utf8 });
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt;
-        serde_json::json!({ "unix": path.as_os_str().as_bytes() })
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt;
-        let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
-        return serde_json::json!({ "windows": wide });
-    }
-    #[cfg(not(any(unix, windows)))]
-    serde_json::json!({ "utf8": path.to_string_lossy() })
-}
-
-fn decode_path(value: &serde_json::Value) -> io::Result<PathBuf> {
-    if let Some(utf8) = value.as_str() {
-        return Ok(PathBuf::from(utf8));
-    }
-    if let Some(utf8) = value.get("utf8").and_then(serde_json::Value::as_str) {
-        return Ok(PathBuf::from(utf8));
-    }
-    #[cfg(unix)]
-    if let Some(bytes) = value.get("unix").and_then(serde_json::Value::as_array) {
-        use std::os::unix::ffi::OsStringExt;
-        let raw = decode_u8_array(bytes)?;
-        return Ok(PathBuf::from(std::ffi::OsString::from_vec(raw)));
-    }
-    #[cfg(windows)]
-    if let Some(units) = value.get("windows").and_then(serde_json::Value::as_array) {
-        use std::os::windows::ffi::OsStringExt;
-        let raw = decode_u16_array(units)?;
-        return Ok(PathBuf::from(std::ffi::OsString::from_wide(&raw)));
-    }
-    Err(io::Error::new(
-        io::ErrorKind::InvalidData,
-        "Horizon skill lease path is not a recognized encoding",
-    ))
-}
-
-fn decode_u8_array(values: &[serde_json::Value]) -> io::Result<Vec<u8>> {
-    values
-        .iter()
-        .map(|value| {
-            let number = value
-                .as_u64()
-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "path byte is not an integer"))?;
-            u8::try_from(number).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "path byte is out of range"))
-        })
-        .collect()
-}
-
-#[cfg(windows)]
-fn decode_u16_array(values: &[serde_json::Value]) -> io::Result<Vec<u16>> {
-    values
-        .iter()
-        .map(|value| {
-            let number = value
-                .as_u64()
-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "path unit is not an integer"))?;
-            u16::try_from(number).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "path unit is out of range"))
-        })
-        .collect()
-}
-
-fn leased_skill_dirs_from_manifests(plugin_root: &Path) -> io::Result<Vec<PathBuf>> {
-    let mut dirs = Vec::new();
-    for entry in std::fs::read_dir(plugin_root)? {
-        let entry = entry?;
-        if !is_user_skill_manifest(entry.file_name().as_os_str()) {
-            continue;
-        }
-        match read_user_skill_manifest(&entry.path()) {
-            Ok(mut leased) => dirs.append(&mut leased),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => {
-                tracing::warn!(
-                    path = %entry.path().display(),
-                    %error,
-                    "failed to read Horizon skill lease manifest"
-                );
-            }
-        }
-    }
-    Ok(dirs)
-}
-
-fn read_user_skill_manifest(path: &Path) -> io::Result<Vec<PathBuf>> {
-    let encoded = std::fs::read_to_string(path)?;
-    let values: Vec<serde_json::Value> = serde_json::from_str(&encoded).map_err(io::Error::other)?;
-    values.iter().map(decode_path).collect()
-}
-
-fn remove_user_skill_manifests(plugin_root: &Path) {
-    let entries = match std::fs::read_dir(plugin_root) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return,
-        Err(error) => {
-            tracing::warn!(path = %plugin_root.display(), %error, "failed to list Horizon skill lease manifests");
-            return;
-        }
-    };
-    for entry in entries {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(error) => {
-                tracing::warn!(%error, "failed to read Horizon skill lease manifest entry");
-                continue;
-            }
-        };
-        if !is_user_skill_manifest(entry.file_name().as_os_str()) {
-            continue;
-        }
-        if let Err(error) = std::fs::remove_file(entry.path())
-            && error.kind() != io::ErrorKind::NotFound
-        {
-            tracing::warn!(
-                path = %entry.path().display(),
-                %error,
-                "failed to remove Horizon skill lease manifest"
-            );
-        }
-    }
-}
-
-fn is_user_skill_manifest(name: &OsStr) -> bool {
-    let Some(name) = name.to_str() else {
-        return false;
-    };
-    !name.starts_with('.')
-        && Path::new(name)
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("user-skills"))
 }
 
 fn open_lock_file(path: &Path) -> std::io::Result<std::fs::File> {
@@ -566,33 +298,6 @@ fn prune_stale_agent_plugin_hosts(current_instance_dir: &Path) -> std::io::Resul
         }
     }
     Ok(pruned_hosts)
-}
-
-fn another_agent_plugin_host_is_live(plugin_root: &Path, current_lock_path: &Path) -> std::io::Result<bool> {
-    for entry in std::fs::read_dir(plugin_root)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path == current_lock_path || !is_registry_live_lock(entry.file_name().as_os_str()) {
-            continue;
-        }
-        let host_lock = open_lock_file(&path)?;
-        match host_lock.try_lock() {
-            Ok(()) => {}
-            Err(TryLockError::WouldBlock) => return Ok(true),
-            Err(TryLockError::Error(error)) => return Err(error),
-        }
-    }
-    Ok(false)
-}
-
-fn is_registry_live_lock(name: &OsStr) -> bool {
-    let Some(name) = name.to_str() else {
-        return false;
-    };
-    !name.starts_with('.')
-        && Path::new(name)
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("live"))
 }
 
 fn install_agent_plugins_impl(
@@ -672,37 +377,6 @@ fn abandoned_user_skill_dirs(home: &Path) -> Vec<PathBuf> {
     dirs
 }
 
-fn is_horizon_skill_dir_name(name: &OsStr) -> bool {
-    name == HORIZON_NOTIFY_SKILL || name == HORIZON_BROWSER_SKILL
-}
-
-fn remove_horizon_skill_dir(path: &Path) {
-    let Some(name) = path.file_name() else {
-        return;
-    };
-    if !is_horizon_skill_dir_name(name) {
-        return;
-    }
-    let metadata = match std::fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
-        Err(error) => {
-            tracing::warn!(path = %path.display(), %error, "failed to inspect Horizon skill directory");
-            return;
-        }
-    };
-    let result = if metadata.is_dir() {
-        std::fs::remove_dir_all(path)
-    } else {
-        std::fs::remove_file(path)
-    };
-    if let Err(error) = result
-        && error.kind() != std::io::ErrorKind::NotFound
-    {
-        tracing::warn!(path = %path.display(), %error, "failed to remove Horizon skill directory");
-    }
-}
-
 fn provider_home(override_home: Option<&Path>, user_home: Option<&Path>, default_dir: &str) -> Option<PathBuf> {
     override_home
         .map(Path::to_path_buf)
@@ -764,7 +438,7 @@ fn sync_file_if_changed(path: &Path, content: &str) -> std::io::Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
     use horizon_core::HorizonHome;
 
@@ -939,7 +613,9 @@ mod tests {
 
         let mut lease =
             AgentPluginHostLease::acquire(horizon_home.agent_plugin_host_dir("host-a")).expect("host lease");
-        lease.user_skill_dirs = super::user_skill_cleanup_dirs(Some(&user_home), None, None);
+        lease
+            .bind_user_skills(&super::user_skill_cleanup_dirs(Some(&user_home), None, None))
+            .expect("bind user skills");
         sync_leased_user_skills(
             &lease,
             &horizon_home,
@@ -1052,7 +728,9 @@ mod tests {
 
         let host_dir = horizon_home.agent_plugin_host_dir("host-a");
         let mut lease = AgentPluginHostLease::acquire(host_dir).expect("host lease");
-        lease.user_skill_dirs = vec![skill_dir.clone()];
+        lease
+            .bind_user_skills(std::slice::from_ref(&skill_dir))
+            .expect("bind user skills");
         drop(lease);
 
         assert!(!skill_dir.exists());
@@ -1070,8 +748,12 @@ mod tests {
         let second_dir = horizon_home.agent_plugin_host_dir("host-b");
         let mut first = AgentPluginHostLease::acquire(first_dir).expect("first lease");
         let mut second = AgentPluginHostLease::acquire(second_dir).expect("second lease");
-        first.user_skill_dirs = vec![skill_dir.clone()];
-        second.user_skill_dirs = vec![skill_dir.clone()];
+        first
+            .bind_user_skills(std::slice::from_ref(&skill_dir))
+            .expect("bind first skills");
+        second
+            .bind_user_skills(std::slice::from_ref(&skill_dir))
+            .expect("bind second skills");
 
         drop(first);
         assert!(skill_dir.join("SKILL.md").is_file());
@@ -1093,50 +775,43 @@ mod tests {
             AgentPluginHostLease::acquire(horizon_home.agent_plugin_host_dir("host-a")).expect("first lease");
         let mut second =
             AgentPluginHostLease::acquire(horizon_home.agent_plugin_host_dir("host-b")).expect("second lease");
-        first.user_skill_dirs = vec![first_skill.clone()];
-        second.user_skill_dirs = vec![second_skill.clone()];
+        first
+            .bind_user_skills(std::slice::from_ref(&first_skill))
+            .expect("bind first skills");
+        second
+            .bind_user_skills(std::slice::from_ref(&second_skill))
+            .expect("bind second skills");
 
         drop(first);
-        assert!(first_skill.join("SKILL.md").is_file());
+        assert!(!first_skill.exists());
         assert!(second_skill.join("SKILL.md").is_file());
 
         drop(second);
-        assert!(!first_skill.exists());
         assert!(!second_skill.exists());
     }
 
     #[test]
-    fn user_skill_leases_coordinate_through_a_shared_registry() {
+    fn user_skill_leases_coordinate_through_the_target_skill_root() {
         let temp = tempfile::tempdir().expect("temp dir");
         let first_home = HorizonHome::from_root(temp.path().join("horizon-a"));
         let second_home = HorizonHome::from_root(temp.path().join("horizon-b"));
-        let registry = temp.path().join("shared-registry");
         let skill_dir = temp.path().join("codex/skills").join(HORIZON_NOTIFY_SKILL);
         write_skill_dir(&skill_dir, "shared");
 
-        let mut first =
-            AgentPluginHostLease::acquire_with_registry(first_home.agent_plugin_host_dir("host-a"), registry.clone())
-                .expect("first lease");
+        let mut first = AgentPluginHostLease::acquire(first_home.agent_plugin_host_dir("host-a")).expect("first lease");
         let mut second =
-            AgentPluginHostLease::acquire_with_registry(second_home.agent_plugin_host_dir("host-b"), registry)
-                .expect("second lease");
-        first.user_skill_dirs = vec![skill_dir.clone()];
-        second.user_skill_dirs = vec![skill_dir.clone()];
+            AgentPluginHostLease::acquire(second_home.agent_plugin_host_dir("host-b")).expect("second lease");
+        first
+            .bind_user_skills(std::slice::from_ref(&skill_dir))
+            .expect("bind first skills");
+        second
+            .bind_user_skills(std::slice::from_ref(&skill_dir))
+            .expect("bind second skills");
 
         drop(first);
         assert!(skill_dir.join("SKILL.md").is_file());
         drop(second);
         assert!(!skill_dir.exists());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn skill_manifest_round_trips_non_utf8_paths() {
-        use std::os::unix::ffi::OsStringExt;
-
-        let path = PathBuf::from(std::ffi::OsString::from_vec(vec![b'/', 0xff, b'x']));
-        let decoded = super::decode_path(&super::encode_path(&path)).expect("decode path");
-        assert_eq!(decoded, path);
     }
 
     #[test]
