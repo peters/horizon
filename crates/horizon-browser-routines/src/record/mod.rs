@@ -217,10 +217,15 @@ impl TeachSession {
             if recording.schema_version != SCHEMA_VERSION {
                 return Err(RoutineError::UnsupportedSchema(recording.schema_version));
             }
-        } else if let Err(error) = recording.validate()
-            && error != RoutineError::UndurableTarget
-        {
-            return Err(error);
+        } else {
+            for action in &recording.actions {
+                action.validate_payload()?;
+            }
+            if let Err(error) = recording.validate()
+                && error != RoutineError::UndurableTarget
+            {
+                return Err(error);
+            }
         }
         Ok(Self {
             recording,

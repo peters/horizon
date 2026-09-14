@@ -22,7 +22,7 @@ pub fn show(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: bool) -> 
             ui.label(RichText::new("No compiled steps").size(11.0).color(theme::FG_DIM()));
         }
         Some(Ok(rows)) => {
-            clicked |= paint_rows(ui, browser, &rows);
+            clicked |= paint_rows(ui, browser, &rows, interactive);
         }
         Some(Err(error)) => {
             ui.label(RichText::new(error.to_string()).size(10.5).color(theme::PALETTE_RED()));
@@ -57,7 +57,12 @@ pub fn show(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: bool) -> 
     clicked
 }
 
-fn paint_rows(ui: &mut Ui, browser: &mut BrowserPanelState, rows: &[horizon_core::browser::ReviewRow]) -> bool {
+fn paint_rows(
+    ui: &mut Ui,
+    browser: &mut BrowserPanelState,
+    rows: &[horizon_core::browser::ReviewRow],
+    interactive: bool,
+) -> bool {
     const PAGE_SIZE: usize = 4;
     let mut clicked = false;
     let page = browser.teach().map_or(0, horizon_core::browser::TeachMode::review_page);
@@ -65,14 +70,18 @@ fn paint_rows(ui: &mut Ui, browser: &mut BrowserPanelState, rows: &[horizon_core
     let page = page.min(pages - 1);
     let start = page.saturating_mul(PAGE_SIZE);
     ui.horizontal(|ui| {
-        if ui.add_enabled(page > 0, egui::Button::new("<")).clicked()
+        if ui
+            .add_enabled(interactive && page > 0, egui::Button::new("<"))
+            .clicked()
             && let Some(teach) = browser.teach_mut()
         {
             teach.set_review_page(page - 1);
             clicked = true;
         }
         ui.label(RichText::new(format!("{} / {pages}", page + 1)).size(11.0));
-        if ui.add_enabled(page + 1 < pages, egui::Button::new(">")).clicked()
+        if ui
+            .add_enabled(interactive && page + 1 < pages, egui::Button::new(">"))
+            .clicked()
             && let Some(teach) = browser.teach_mut()
         {
             teach.set_review_page(page + 1);
@@ -95,13 +104,18 @@ fn paint_rows(ui: &mut Ui, browser: &mut BrowserPanelState, rows: &[horizon_core
             )
             .wrap_mode(TextWrapMode::Wrap),
         );
-        clicked |= identity_picker(ui, browser, row);
+        clicked |= identity_picker(ui, browser, row, interactive);
     }
     clicked
 }
 
-fn identity_picker(ui: &mut Ui, browser: &mut BrowserPanelState, row: &horizon_core::browser::ReviewRow) -> bool {
-    if !row.candidates.iter().any(|candidate| candidate.unique) {
+fn identity_picker(
+    ui: &mut Ui,
+    browser: &mut BrowserPanelState,
+    row: &horizon_core::browser::ReviewRow,
+    interactive: bool,
+) -> bool {
+    if !interactive || !row.candidates.iter().any(|candidate| candidate.unique) {
         return false;
     }
     let mut clicked = false;
