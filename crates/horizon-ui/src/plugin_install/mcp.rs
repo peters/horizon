@@ -170,6 +170,13 @@ fn acquire_attachment(
             });
         }
     }
+    if let Err(error) = write_text_atomic(&command_sidecar_path(&live_path), command) {
+        tracing::warn!(path = %live_path.display(), %error, "failed to record Horizon browser MCP command");
+        drop(coord);
+        drop(live_lock);
+        remove_live_files(&live_path);
+        return Err(error);
+    }
     let peer_live = match live_peer_command(&live_dir, &live_path) {
         Ok(command) => command.is_some(),
         Err(error) => {
@@ -190,9 +197,6 @@ fn acquire_attachment(
             }
         }
     };
-    if attached && let Err(error) = write_text_atomic(&command_sidecar_path(&live_path), command) {
-        tracing::warn!(path = %live_path.display(), %error, "failed to record Horizon browser MCP command");
-    }
     drop(coord);
     if !attached {
         drop(live_lock);
@@ -638,8 +642,8 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        SERVER_NAME, bind_browser_mcp_attachments, durable_mcp_command, grok_managed_block, has_unmanaged_grok_server,
-        release_mcp_attachments, replace_or_append_grok_block, strip_grok_managed_block,
+        LEASES_DIR, SERVER_NAME, bind_browser_mcp_attachments, durable_mcp_command, grok_managed_block,
+        has_unmanaged_grok_server, release_mcp_attachments, replace_or_append_grok_block, strip_grok_managed_block,
     };
 
     #[test]
@@ -870,6 +874,32 @@ mod tests {
         assert!(grok.contains("/usr/bin/custom"));
         assert!(!grok.contains("/opt/horizon"));
         assert_eq!(grok.matches("[mcp_servers").count(), 1);
+    }
+
+    #[test]
+    fn sidecar_write_failure_skips_live_lease() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let home = temp.path().join("home");
+        let pi_path = home.join(".pi/agent/mcp.json");
+        let live_dir = home.join(".pi/agent").join(LEASES_DIR).join("mcp.json");
+        std::fs::create_dir_all(pi_path.parent().expect("pi parent")).expect("pi dir");
+        std::fs::create_dir_all(live_dir.join("host-a.command")).expect("block sidecar");
+        std::fs::write(&pi_path, r#"{"mcpServers":{"github":{"url":"https://example"}}}"#).expect("seed pi");
+
+        let leases = bind_browser_mcp_attachments(
+            OsStr::new("host-a"),
+            Path::new("/opt/horizon"),
+            Some(&home),
+            Some(&home.join(".grok")),
+        );
+        let pi = std::fs::read_to_string(&pi_path).expect("pi after failed sidecar");
+        assert!(pi.contains("github"));
+        assert!(!pi.contains(SERVER_NAME));
+        assert!(
+            leases.iter().all(|lease| lease.path != pi_path),
+            "pi must not stay leased without a command sidecar"
+        );
+        assert_eq!(leases.len(), 2, "grok and antigravity still bind");
     }
 
     #[test]

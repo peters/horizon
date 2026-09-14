@@ -2145,6 +2145,7 @@ dependencies = [
  "git2",
  "horizon-browser",
  "horizon-browser-routines",
+ "json-strip-comments",
  "libc",
  "process-wrap",
  "profiling",
@@ -2606,6 +2607,15 @@ dependencies = [
  "cfg-if",
  "futures-util",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "json-strip-comments"
+version = "3.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01ed659c5f428031b9c1fb7de6729af2eb491654d4bcd416a5b5b704986b9658"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]

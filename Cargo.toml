@@ -52,6 +52,9 @@ profiling = "1.0.18"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_yaml = "0.9.34"
 serde_json = "1.0.151"
+# OpenCode accepts JSONC in OPENCODE_CONFIG_CONTENT; strip comments and
+# trailing commas before serde_json merge.
+json-strip-comments = "3.1.2"
 toml = "1.1.6"
 url = "2.5.8"
 ureq = { version = "3.4.0", default-features = false, features = ["json", "rustls"] }
