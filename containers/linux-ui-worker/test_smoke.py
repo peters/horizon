@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 spec = importlib.util.spec_from_file_location("ui_smoke", Path(__file__).with_name("smoke.py"))
 smoke_module = importlib.util.module_from_spec(spec)
@@ -94,6 +94,37 @@ class SmokeTests(unittest.TestCase):
                 with self.assertRaises(FileExistsError):
                     smoke_module.main()
         self.assertEqual(sentinel.read_text(), "preserve me")
+
+    def test_candidate_snapshot_survives_concurrent_build_replacement(self):
+        binary = self.root / "build-output"
+        binary.write_text("#!/bin/sh\nprintf original")
+        candidate = smoke_module.snapshot_candidate(binary, self.root)
+        replacement = self.root / "replacement"
+        replacement.write_text("#!/bin/sh\nprintf replacement")
+        replacement.replace(binary)
+        self.assertEqual(subprocess.check_output([str(candidate)]), b"original")
+        self.assertEqual(candidate.stat().st_mode & 0o777, 0o500)
+        with candidate.open("rb") as source:
+            digest = smoke_module.hashlib.file_digest(source, "sha256").hexdigest()
+        self.assertEqual(digest, smoke_module.hashlib.sha256(b"#!/bin/sh\nprintf original").hexdigest())
+
+    def test_cleanup_only_failure_records_stage_and_removes_snapshot(self):
+        root = self.root / "cleanup-failure"
+        fake = MagicMock()
+        fake.checks = ["normal_window_close"]
+        fake.browser = None
+        fake.cleanup.return_value = False
+        with patch("sys.argv", ["smoke", "--binary", "/bin/true", "--artifacts", str(root)]), \
+                patch.object(smoke_module.shutil, "which", return_value="/unused/tool"), \
+                patch.object(smoke_module, "Smoke", return_value=fake), \
+                patch.object(smoke_module.processes, "adopt_orphans"), \
+                patch.object(smoke_module.signal, "signal"):
+            self.assertEqual(smoke_module.main(), 1)
+        result = json.loads((root / "result.json").read_text())
+        self.assertEqual(result["failed_stage"], "cleanup")
+        self.assertFalse(result["cleanup_complete"])
+        self.assertEqual(result["checks"], ["normal_window_close"])
+        self.assertFalse((root / "candidate-horizon").exists())
 
     def test_subreaper_cleans_children_after_their_leader_exits(self):
         self.assert_orphan_cleanup("sleep 30 &")

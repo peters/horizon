@@ -236,6 +236,15 @@ class Smoke:
         return clean
 
 
+def snapshot_candidate(binary, root):
+    candidate = root / "candidate-horizon"
+    # One open source descriptor survives an atomic replacement by cargo build.
+    with binary.open("rb") as source, candidate.open("xb") as target:
+        shutil.copyfileobj(source, target)
+    candidate.chmod(0o500)
+    return candidate
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True, type=Path)
@@ -256,6 +265,7 @@ def main():
             parser.error("required tool is missing: " + tool)
     root = args.artifacts.absolute()
     root.mkdir(mode=0o700, parents=False, exist_ok=False)
+    binary = snapshot_candidate(binary, root)
     with binary.open("rb") as source:
         digest = hashlib.file_digest(source, "sha256").hexdigest()
     smoke = Smoke(binary, root, args.timeout_seconds)
@@ -297,8 +307,13 @@ def main():
             result["command_diagnostic"] = "command-failure.json"
     finally:
         result["cleanup_complete"] = smoke.cleanup()
+        try:
+            binary.unlink()
+        except OSError:
+            result["cleanup_complete"] = False
         if not result["cleanup_complete"]:
             result["status"] = "failed"
+            result.setdefault("failed_stage", "cleanup")
         (root / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result))
     return 0 if result["status"] == "passed" else 1

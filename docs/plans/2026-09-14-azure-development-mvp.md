@@ -115,7 +115,7 @@ cloud resources and running user sessions must not be changed by a local rehears
   Docker smoke passed launch, terminal input, resize, input after resize and
   normal close; launch/resized screenshots were inspected after fitting the
   workspace. The `/bin/false` negative control failed as required with complete
-  cleanup. Eleven process/isolation tests pass and are wired into CI. Independent
+  cleanup. Thirteen process/isolation tests pass and are wired into CI. Independent
   review found an orphan-process cleanup edge case; subreaper/pidfd cleanup and
   two regression tests resolve it, and re-review found no remaining action items.
 - Current private evidence: `/tmp/horizon-linux-ui-evidence-20260914/run-d/`,

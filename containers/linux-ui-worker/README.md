@@ -38,6 +38,8 @@ horizon-linux-ui-smoke --binary target/debug/horizon --artifacts /tmp/ui-proof-0
 The artifacts directory must not already exist; its parent must exist. It is
 created privately and contains launch/resized PNGs, process logs, a synthetic
 terminal fixture, an isolated home/config and `result.json` with the binary hash.
+The helper snapshots the executable before hashing and launching it, so a
+concurrent build cannot change the tested candidate. Cleanup removes the snapshot.
 Inspect both images before reporting visual acceptance. Exit zero requires
 window/terminal startup, terminal input before and after a measured window resize,
 normal window-manager close and cleanup. The default active timeout is 90 seconds
