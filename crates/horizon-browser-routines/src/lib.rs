@@ -116,7 +116,7 @@ pub enum RoutineError {
     #[error("routine storage failed")]
     Storage,
     /// Teach recording is paused, discarded, or already stopped.
-    #[error("teach session is paused or discarded")]
+    #[error("teach session is paused, discarded, or stopped")]
     TeachInactive,
 }
 

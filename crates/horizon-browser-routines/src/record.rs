@@ -5,11 +5,18 @@ use crate::SCHEMA_VERSION;
 use crate::recording::{RecordedAction, RecordedKind, SemanticRecording};
 use crate::registry::{RoutineRegistry, create_private_dir, read_private_file, write_private};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TeachLifecycle {
+    Recording,
+    Paused,
+    Stopped,
+    Discarded,
+}
+
 /// Explicit Teach-mode session: grouped semantic actions, never pointer-move samples.
 pub struct TeachSession {
     recording: SemanticRecording,
-    paused: bool,
-    discarded: bool,
+    lifecycle: TeachLifecycle,
 }
 
 impl TeachSession {
@@ -21,24 +28,32 @@ impl TeachSession {
                 recording_id: Uuid::new_v4(),
                 actions: Vec::new(),
             },
-            paused: false,
-            discarded: false,
+            lifecycle: TeachLifecycle::Recording,
         }
     }
 
     pub fn pause(&mut self) {
-        self.paused = true;
+        if self.lifecycle == TeachLifecycle::Recording {
+            self.lifecycle = TeachLifecycle::Paused;
+        }
     }
 
     pub fn resume(&mut self) {
-        if !self.discarded {
-            self.paused = false;
+        if self.lifecycle == TeachLifecycle::Paused {
+            self.lifecycle = TeachLifecycle::Recording;
+        }
+    }
+
+    /// Freeze the recording for review. Resume and push are rejected; the
+    /// actions stay available for `save_draft`.
+    pub fn stop(&mut self) {
+        if self.lifecycle != TeachLifecycle::Discarded {
+            self.lifecycle = TeachLifecycle::Stopped;
         }
     }
 
     pub fn discard(&mut self) {
-        self.discarded = true;
-        self.paused = true;
+        self.lifecycle = TeachLifecycle::Discarded;
         self.recording.actions.clear();
     }
 
@@ -53,12 +68,17 @@ impl TeachSession {
 
     #[must_use]
     pub fn is_paused(&self) -> bool {
-        self.paused
+        self.lifecycle == TeachLifecycle::Paused
+    }
+
+    #[must_use]
+    pub fn is_stopped(&self) -> bool {
+        self.lifecycle == TeachLifecycle::Stopped
     }
 
     #[must_use]
     pub fn is_discarded(&self) -> bool {
-        self.discarded
+        self.lifecycle == TeachLifecycle::Discarded
     }
 
     #[must_use]
@@ -70,9 +90,9 @@ impl TeachSession {
     /// share a target and have no assertion between them are coalesced.
     ///
     /// # Errors
-    /// Paused/discarded session, invalid action, or action bound exceeded.
+    /// Paused, stopped, or discarded session, invalid action, or action bound exceeded.
     pub fn push(&mut self, action: RecordedAction) -> Result<(), RoutineError> {
-        if self.paused || self.discarded {
+        if self.lifecycle != TeachLifecycle::Recording {
             return Err(RoutineError::TeachInactive);
         }
         action.validate()?;
@@ -109,7 +129,7 @@ impl TeachSession {
     /// # Errors
     /// Discarded session or storage failure.
     pub fn save_draft(&self, registry: &RoutineRegistry, routine_id: Uuid) -> Result<(), RoutineError> {
-        if self.discarded {
+        if self.lifecycle == TeachLifecycle::Discarded {
             return Err(RoutineError::TeachInactive);
         }
         let dir = registry.directory().join(routine_id.to_string());
@@ -146,17 +166,18 @@ impl TeachSession {
         let _lock = registry.lock(routine_id)?;
         let path = dir.join("draft.json");
         let bytes = read_private_file(&path)?;
-        let recording = match SemanticRecording::from_json(
-            std::str::from_utf8(&bytes).map_err(|_| RoutineError::Json("malformed routine JSON".into()))?,
-        ) {
-            Ok(recording) => recording,
-            Err(RoutineError::InvalidRecording) => empty_recording_from_bytes(&bytes)?,
-            Err(error) => return Err(error),
-        };
+        let recording: SemanticRecording =
+            serde_json::from_slice(&bytes).map_err(|_| RoutineError::Json("malformed routine JSON".into()))?;
+        if recording.actions.is_empty() {
+            if recording.schema_version != SCHEMA_VERSION {
+                return Err(RoutineError::UnsupportedSchema(recording.schema_version));
+            }
+        } else {
+            recording.validate()?;
+        }
         Ok(Self {
             recording,
-            paused: false,
-            discarded: false,
+            lifecycle: TeachLifecycle::Recording,
         })
     }
 }
@@ -177,25 +198,6 @@ fn remove_draft(registry: &RoutineRegistry, routine_id: Uuid) -> Result<(), Rout
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(_) => Err(RoutineError::Storage),
     }
-}
-
-fn empty_recording_from_bytes(bytes: &[u8]) -> Result<SemanticRecording, RoutineError> {
-    #[derive(serde::Deserialize)]
-    struct Envelope {
-        schema_version: u32,
-        recording_id: Uuid,
-        actions: Vec<serde_json::Value>,
-    }
-    let envelope: Envelope =
-        serde_json::from_slice(bytes).map_err(|_| RoutineError::Json("malformed routine JSON".into()))?;
-    if envelope.schema_version != SCHEMA_VERSION || !envelope.actions.is_empty() {
-        return Err(RoutineError::InvalidRecording);
-    }
-    Ok(SemanticRecording {
-        schema_version: SCHEMA_VERSION,
-        recording_id: envelope.recording_id,
-        actions: Vec::new(),
-    })
 }
 
 fn can_coalesce(previous: &RecordedAction, next: &RecordedAction) -> bool {
@@ -347,6 +349,46 @@ mod tests {
             session.recording().actions[0].kind,
             RecordedKind::Scroll { delta_y: 120.0, .. }
         ));
+    }
+
+    #[test]
+    fn stop_rejects_resume_and_push_but_retains_the_recording() {
+        let mut session = TeachSession::start();
+        session.push(click("run")).expect("push");
+        session.stop();
+        assert!(session.is_stopped());
+        assert!(!session.is_paused());
+        session.resume();
+        assert!(session.is_stopped());
+        assert_eq!(session.push(click("again")), Err(RoutineError::TeachInactive));
+        assert_eq!(session.recording().actions.len(), 1);
+        let temp = tempfile::tempdir().expect("temp");
+        privatize_temp(temp.path());
+        let registry = RoutineRegistry::open(temp.path().join("routines")).expect("open");
+        session.save_draft(&registry, Uuid::from_u128(9)).expect("save stopped");
+    }
+
+    #[test]
+    fn empty_draft_rejects_unknown_fields() {
+        let temp = tempfile::tempdir().expect("temp");
+        privatize_temp(temp.path());
+        let registry = RoutineRegistry::open(temp.path().join("routines")).expect("open");
+        let session = TeachSession::start();
+        let id = Uuid::from_u128(10);
+        session.save_draft(&registry, id).expect("save");
+        let path = temp.path().join("routines").join(id.to_string()).join("draft.json");
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"schema_version":1,"recording_id":"{}","actions":[],"extra":true}}"#,
+                session.recording().recording_id
+            ),
+        )
+        .expect("overwrite");
+        assert_eq!(
+            TeachSession::load_draft(&registry, id).err(),
+            Some(RoutineError::Json("malformed routine JSON".into()))
+        );
     }
 
     #[test]
