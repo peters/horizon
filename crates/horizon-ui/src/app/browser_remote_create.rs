@@ -12,8 +12,9 @@ use horizon_core::{Board, Config};
 #[derive(Debug)]
 pub(super) struct RemoteCreatePlan {
     pub(super) request: RemoteSessionRequest,
-    /// The browser family the target drives, for the panel's capabilities
-    /// and audit; the driver runs classic `WebDriver` regardless.
+    /// The browser family the target drives (from the request), for the
+    /// panel's capabilities and audit; the driver runs classic `WebDriver`
+    /// regardless.
     pub(super) backend: BackendKind,
     pub(super) provider: String,
 }
@@ -41,7 +42,6 @@ pub(super) fn plan_remote_create(
         });
     };
     let provider = profile.provider.clone();
-    let backend = browser_family_backend(&profile.browser_name);
     let keychain = workbench.keychain_store();
     let keychain_guard = keychain
         .as_ref()
@@ -70,24 +70,14 @@ pub(super) fn plan_remote_create(
             message: error.to_string(),
         },
     })?;
+    // The builder already fixed the browser family on the request; it is
+    // the panel's backend and the family the audit records.
+    let backend = request.browser;
     Ok(RemoteCreatePlan {
         request,
         backend,
         provider,
     })
-}
-
-/// The local backend kind whose page semantics match the target's browser
-/// family. Anything that is not Safari or Firefox is treated as Chromium.
-pub(super) fn browser_family_backend(browser_name: &str) -> BackendKind {
-    let lowered = browser_name.to_ascii_lowercase();
-    if lowered.contains("safari") {
-        BackendKind::SafariWebDriver
-    } else if lowered.contains("firefox") {
-        BackendKind::FirefoxBidi
-    } else {
-        BackendKind::ChromiumCdp
-    }
 }
 
 /// Whether the provider's configured `max_sessions` is already used by live
@@ -204,14 +194,6 @@ mod tests {
         assert!(not_ready.message.contains("`key`"));
         assert!(not_ready.message.contains(&RemoteCredentialError::Missing.to_string()));
         assert!(not_ready.message.contains("Settings"));
-    }
-
-    #[test]
-    fn browser_families_map_to_the_matching_backend_kind() {
-        assert_eq!(browser_family_backend("Safari"), BackendKind::SafariWebDriver);
-        assert_eq!(browser_family_backend("firefox"), BackendKind::FirefoxBidi);
-        assert_eq!(browser_family_backend("Chrome"), BackendKind::ChromiumCdp);
-        assert_eq!(browser_family_backend("chromium"), BackendKind::ChromiumCdp);
     }
 
     #[test]
