@@ -29,6 +29,7 @@ pub struct TeachMode {
     use_title_outcome: bool,
     identities_reviewed: bool,
     backend: BackendKind,
+    review_cache: Option<Vec<ReviewRow>>,
 }
 
 /// One compiled step shown in the Teach reviewer.
@@ -40,8 +41,15 @@ pub struct ReviewRow {
     pub mutation: String,
     pub resume: String,
     pub mcp: String,
-    pub candidates: Vec<String>,
+    pub candidates: Vec<ReviewCandidate>,
     pub selected: Option<u32>,
+}
+
+/// One fingerprint candidate offered during review.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReviewCandidate {
+    pub label: String,
+    pub unique: bool,
 }
 
 impl TeachMode {
@@ -74,6 +82,7 @@ impl TeachMode {
             use_title_outcome: true,
             identities_reviewed: false,
             backend,
+            review_cache: None,
         })
     }
 
@@ -165,6 +174,7 @@ impl TeachMode {
 
     pub fn set_identities_reviewed(&mut self, reviewed: bool) {
         self.identities_reviewed = reviewed;
+        self.review_cache = None;
         self.persist_draft();
     }
 
@@ -179,11 +189,15 @@ impl TeachMode {
             let Ok(usize_index) = usize::try_from(index) else {
                 return;
             };
-            if usize_index >= target.candidates.len() {
+            let Some(candidate) = target.candidates.get(usize_index) else {
+                return;
+            };
+            if !candidate.unique {
                 return;
             }
             target.selected = Some(index);
             mark_fingerprint_reviewed(target);
+            self.review_cache = None;
             self.persist_draft();
             return;
         }
@@ -193,9 +207,21 @@ impl TeachMode {
     ///
     /// # Errors
     /// Missing outcome, empty recording, or compiler validation failure.
-    pub fn compile_review(&self, page_title: &str) -> Result<Vec<ReviewRow>, RoutineError> {
-        let compiled = self.compile_plan(page_title).ok();
-        Ok(self
+    pub fn compile_review(&mut self, page_title: &str) -> Result<Vec<ReviewRow>, RoutineError> {
+        if let Some(rows) = &self.review_cache {
+            return Ok(rows.clone());
+        }
+        if self.session.recording().actions.is_empty() {
+            self.review_cache = Some(Vec::new());
+            return Ok(Vec::new());
+        }
+        self.completion_assertions(page_title)?;
+        let compiled = match self.compile_plan(page_title) {
+            Ok(compiled) => Some(compiled),
+            Err(RoutineError::UndurableTarget) => None,
+            Err(error) => return Err(error),
+        };
+        let rows: Vec<ReviewRow> = self
             .session
             .recording()
             .actions
@@ -214,7 +240,9 @@ impl TeachMode {
                 }
                 row
             })
-            .collect())
+            .collect();
+        self.review_cache = Some(rows.clone());
+        Ok(rows)
     }
 
     /// Save a reviewed routine. Requires an explicit review.
@@ -367,6 +395,7 @@ impl TeachMode {
     }
 
     fn persist_draft(&mut self) {
+        self.review_cache = None;
         if let Err(error) = self.session.save_draft(&self.registry, self.routine_id) {
             self.last_error = Some(error.to_string());
             return;
@@ -515,11 +544,16 @@ fn review_row_from_action(action: &RecordedAction) -> ReviewRow {
         target
             .candidates
             .iter()
-            .map(|candidate| match &candidate.identity {
-                TargetCandidate::RoleName { name, .. } | TargetCandidate::UniqueId { value: name, .. } => name.clone(),
-                TargetCandidate::LabelControl { label, .. } => label.clone(),
-                TargetCandidate::TestId { value, .. } | TargetCandidate::CssFallback { value, .. } => value.clone(),
-                TargetCandidate::VisibleText { text, .. } => text.clone(),
+            .map(|candidate| ReviewCandidate {
+                unique: candidate.unique,
+                label: match &candidate.identity {
+                    TargetCandidate::RoleName { name, .. } | TargetCandidate::UniqueId { value: name, .. } => {
+                        name.clone()
+                    }
+                    TargetCandidate::LabelControl { label, .. } => label.clone(),
+                    TargetCandidate::TestId { value, .. } | TargetCandidate::CssFallback { value, .. } => value.clone(),
+                    TargetCandidate::VisibleText { text, .. } => text.clone(),
+                },
             })
             .collect()
     });

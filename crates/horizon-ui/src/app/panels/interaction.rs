@@ -197,7 +197,15 @@ impl HorizonApp {
             }
             if kind == PanelKind::Browser {
                 ui.separator();
-                if ui.button("Teach routine").clicked() {
+                let safari = self
+                    .board
+                    .panel(panel_id)
+                    .and_then(horizon_core::Panel::browser)
+                    .is_some_and(|browser| browser.backend() == horizon_core::browser::BackendKind::SafariWebDriver);
+                if safari {
+                    ui.add_enabled(false, egui::Button::new("Teach routine"))
+                        .on_hover_text("Safari cannot record Teach routines");
+                } else if ui.button("Teach routine").clicked() {
                     if let Some(panel) = self.board.panel_mut(panel_id)
                         && let Some(browser) = panel.browser_mut()
                         && let Err(error) = browser.start_teach("untitled")

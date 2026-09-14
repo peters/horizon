@@ -17,52 +17,12 @@ pub fn show(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: bool) -> 
     let mut clicked = false;
     ui.separator();
     ui.label(RichText::new("Review plan").size(12.0).strong());
-    match browser.teach().map(|teach| teach.compile_review(&title)) {
+    match browser.teach_mut().map(|teach| teach.compile_review(&title)) {
         Some(Ok(rows)) if rows.is_empty() => {
             ui.label(RichText::new("No compiled steps").size(11.0).color(theme::FG_DIM()));
         }
         Some(Ok(rows)) => {
-            egui::ScrollArea::vertical()
-                .max_height(120.0)
-                .auto_shrink([false, true])
-                .show(ui, |ui| {
-                    for row in rows {
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(format!(
-                                    "{action} {target}\n{mutation} · {resume} · {mcp}",
-                                    action = row.action,
-                                    target = row.target,
-                                    mutation = row.mutation,
-                                    resume = row.resume,
-                                    mcp = row.mcp
-                                ))
-                                .size(11.0)
-                                .color(theme::FG_SOFT()),
-                            )
-                            .wrap_mode(TextWrapMode::Wrap),
-                        );
-                        if row.candidates.len() > 1 || row.selected.is_none() && !row.candidates.is_empty() {
-                            let current = row
-                                .selected
-                                .and_then(|index| row.candidates.get(index as usize).cloned())
-                                .unwrap_or_else(|| "select identity".to_string());
-                            egui::ComboBox::from_id_salt(("teach-candidate", row.step_id.clone()))
-                                .selected_text(current)
-                                .show_ui(ui, |ui| {
-                                    for (index, label) in row.candidates.iter().enumerate() {
-                                        if let Ok(index) = u32::try_from(index)
-                                            && ui.selectable_label(row.selected == Some(index), label).clicked()
-                                            && let Some(teach) = browser.teach_mut()
-                                        {
-                                            teach.select_step_candidate(&row.step_id, index);
-                                            clicked = true;
-                                        }
-                                    }
-                                });
-                        }
-                    }
-                });
+            clicked |= paint_rows(ui, browser, &rows);
         }
         Some(Err(error)) => {
             ui.label(RichText::new(error.to_string()).size(10.5).color(theme::PALETTE_RED()));
@@ -94,5 +54,73 @@ pub fn show(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: bool) -> 
             clicked = true;
         }
     });
+    clicked
+}
+
+fn paint_rows(ui: &mut Ui, browser: &mut BrowserPanelState, rows: &[horizon_core::browser::ReviewRow]) -> bool {
+    const ROW_HEIGHT: f32 = 48.0;
+    let mut clicked = false;
+    egui::ScrollArea::vertical()
+        .max_height(120.0)
+        .auto_shrink([false, true])
+        .show_rows(ui, ROW_HEIGHT, rows.len(), |ui, range| {
+            for row in rows
+                .iter()
+                .skip(range.start)
+                .take(range.end.saturating_sub(range.start))
+            {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(format!(
+                            "{action} {target}\n{mutation} · {resume} · {mcp}",
+                            action = row.action,
+                            target = row.target,
+                            mutation = row.mutation,
+                            resume = row.resume,
+                            mcp = row.mcp
+                        ))
+                        .size(11.0)
+                        .color(theme::FG_SOFT()),
+                    )
+                    .wrap_mode(TextWrapMode::Wrap),
+                );
+                clicked |= identity_picker(ui, browser, row);
+            }
+        });
+    clicked
+}
+
+fn identity_picker(ui: &mut Ui, browser: &mut BrowserPanelState, row: &horizon_core::browser::ReviewRow) -> bool {
+    if !row.candidates.iter().any(|candidate| candidate.unique) {
+        return false;
+    }
+    let mut clicked = false;
+    let current = row
+        .selected
+        .and_then(|index| {
+            row.candidates
+                .get(index as usize)
+                .map(|candidate| candidate.label.clone())
+        })
+        .unwrap_or_else(|| "select identity".to_string());
+    egui::ComboBox::from_id_salt(("teach-candidate", row.step_id.clone()))
+        .selected_text(current)
+        .show_ui(ui, |ui| {
+            for (index, candidate) in row.candidates.iter().enumerate() {
+                if !candidate.unique {
+                    ui.add_enabled(false, egui::Button::new(&candidate.label));
+                    continue;
+                }
+                if let Ok(index) = u32::try_from(index)
+                    && ui
+                        .selectable_label(row.selected == Some(index), &candidate.label)
+                        .clicked()
+                    && let Some(teach) = browser.teach_mut()
+                {
+                    teach.select_step_candidate(&row.step_id, index);
+                    clicked = true;
+                }
+            }
+        });
     clicked
 }

@@ -100,7 +100,11 @@ impl TeachSession {
         if self.lifecycle != TeachLifecycle::Recording {
             return Err(RoutineError::TeachInactive);
         }
-        action.validate()?;
+        if let Err(error) = action.validate()
+            && error != RoutineError::UndurableTarget
+        {
+            return Err(error);
+        }
         if let Some(previous) = self.recording.actions.last_mut()
             && can_coalesce(previous, &action)
         {
@@ -108,7 +112,7 @@ impl TeachSession {
             let previous_postcondition = previous.postcondition.clone();
             coalesce_scroll(previous, action)?;
             return match self.recording.validate() {
-                Ok(()) => Ok(()),
+                Ok(()) | Err(RoutineError::UndurableTarget) => Ok(()),
                 Err(error) => {
                     if let Some(restored) = self.recording.actions.last_mut() {
                         restored.kind = previous_kind;
@@ -120,7 +124,7 @@ impl TeachSession {
         }
         self.recording.actions.push(action);
         match self.recording.validate() {
-            Ok(()) => Ok(()),
+            Ok(()) | Err(RoutineError::UndurableTarget) => Ok(()),
             Err(error) => {
                 self.recording.actions.pop();
                 Err(error)
@@ -141,16 +145,17 @@ impl TeachSession {
         create_private_dir(&dir)?;
         let _lock = registry.lock(routine_id)?;
         let path = dir.join("draft.json");
-        let encoded = if self.recording.actions.is_empty() {
-            serde_json::to_vec_pretty(&serde_json::json!({
-                "schema_version": SCHEMA_VERSION,
-                "recording_id": self.recording.recording_id,
-                "actions": []
-            }))
-            .map_err(|_| RoutineError::Json("malformed routine JSON".into()))?
-        } else {
-            self.recording.to_redacted_json()?.into_bytes()
-        };
+        let encoded =
+            if self.recording.actions.is_empty() || self.recording.validate() == Err(RoutineError::UndurableTarget) {
+                serde_json::to_vec_pretty(&serde_json::json!({
+                    "schema_version": SCHEMA_VERSION,
+                    "recording_id": self.recording.recording_id,
+                    "actions": self.recording.actions,
+                }))
+                .map_err(|_| RoutineError::Json("malformed routine JSON".into()))?
+            } else {
+                self.recording.to_redacted_json()?.into_bytes()
+            };
         write_private(&path, &encoded)
     }
 
@@ -177,8 +182,10 @@ impl TeachSession {
             if recording.schema_version != SCHEMA_VERSION {
                 return Err(RoutineError::UnsupportedSchema(recording.schema_version));
             }
-        } else {
-            recording.validate()?;
+        } else if let Err(error) = recording.validate()
+            && error != RoutineError::UndurableTarget
+        {
+            return Err(error);
         }
         Ok(Self {
             recording,
