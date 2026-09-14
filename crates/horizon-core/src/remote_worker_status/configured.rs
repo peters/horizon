@@ -277,8 +277,8 @@ pub enum ConfiguredRemotePanelStatusError {
     RunPodCredentialUnavailable,
     #[error("the configured RunPod profile or retained worker and storage binding is invalid")]
     InvalidRunPodBinding,
-    #[error("Azure task inspection admission failed: {0}")]
-    Azure(#[from] crate::remote_workspace::stop::ConfiguredStopConfirmationError),
+    #[error("the configured Azure profile or retained worker and profile binding is invalid for task inspection")]
+    InvalidAzureBinding,
     #[error(transparent)]
     Configuration(#[from] RemoteProviderConfigError),
     #[error(transparent)]

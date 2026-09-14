@@ -12,7 +12,7 @@ use crate::{
     remote_workspace::{
         RemoteRuntimePhase,
         stop::{
-            ConfiguredStopConfirmationError as BindingError,
+            ConfiguredStopConfirmationError as BindingError, RemoteWorkspaceStopError,
             configured_azure::{Bound, RetainedAzure},
         },
     },
@@ -94,4 +94,28 @@ pub(in crate::remote_worker_status) fn inspect_with<P: InteractiveWorkerProvider
     // Discard even a successful status if ownership, allocation or binding changed during I/O.
     admitted.check_current(store, &admitted.allocation)?;
     super::observation(request.panel_id, result?)
+}
+
+impl From<BindingError> for Error {
+    fn from(error: BindingError) -> Self {
+        match error {
+            BindingError::UnsupportedProvider => Self::UnsupportedProvider,
+            BindingError::CredentialUnavailable | BindingError::InvalidBinding => Self::InvalidAzureBinding,
+            BindingError::Configuration(error) => Self::Configuration(error),
+            BindingError::Stop(error) => match error {
+                RemoteWorkspaceStopError::MissingAllocation => RemoteWorkspaceRecoveryError::MissingAllocation.into(),
+                RemoteWorkspaceStopError::StateChanged => RemoteWorkspaceRecoveryError::StateChanged.into(),
+                RemoteWorkspaceStopError::ProviderMismatch => RemoteWorkspaceRecoveryError::ProviderMismatch.into(),
+                RemoteWorkspaceStopError::ManagementConflict => RemotePanelStatusError::ManagementPending.into(),
+                RemoteWorkspaceStopError::StorageUnavailable => RemotePanelStatusError::StorageUnavailable.into(),
+                RemoteWorkspaceStopError::MissingWorker
+                | RemoteWorkspaceStopError::MissingTrust
+                | RemoteWorkspaceStopError::UnsupportedLifetime
+                | RemoteWorkspaceStopError::MissingStopIntent
+                | RemoteWorkspaceStopError::InvalidTimestamp
+                | RemoteWorkspaceStopError::ProviderUnavailable
+                | RemoteWorkspaceStopError::ResourceAbsent => Self::InvalidAzureBinding,
+            },
+        }
+    }
 }

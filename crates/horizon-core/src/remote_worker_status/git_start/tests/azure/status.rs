@@ -193,9 +193,7 @@ fn azure_status_discards_client_and_query_results_after_saved_state_drift() {
         );
         assert!(matches!(
             result,
-            Err(Error::Azure(ConfiguredStopConfirmationError::Stop(
-                crate::remote_workspace::stop::RemoteWorkspaceStopError::StateChanged
-            )))
+            Err(Error::Recovery(RemoteWorkspaceRecoveryError::StateChanged))
         ));
     }
 }
@@ -216,4 +214,64 @@ fn public_dispatcher_routes_azure_to_saved_panel_admission_before_any_client() {
     );
     assert_eq!(result, Err(Error::Inspection(RemotePanelStatusError::UnknownPanel)));
     assert_eq!(fixture.current(), fixture.allocation);
+}
+
+#[test]
+fn azure_status_discards_provider_and_ssh_results_after_profile_binding_drift() {
+    for during_provider in [true, false] {
+        let fixture = AzureFixture::new(WorkerLifetime::Persistent, true, true);
+        let keys = identities(&fixture);
+        let mut provider = fixture.provider();
+        if during_provider {
+            let database = fixture.store.path().to_path_buf();
+            provider.on_inspect = Some(Box::new(move || drift_binding(&database)));
+        }
+        let result = inspect_with(
+            &fixture.store,
+            &keys,
+            &fixture.profile,
+            request(&fixture.current().workspace().environment_summary()),
+            |_| Ok(provider),
+            |provider, allocation| {
+                let recovered =
+                    crate::remote_workspace_recovery::inspect_remote_allocation(&keys, provider, allocation)?;
+                assert!(!during_provider, "provider drift must prevent SSH");
+                Ok(crate::remote_worker_status::inspect_with(
+                    &fixture.store,
+                    &recovered,
+                    "shell",
+                    crate::remote_worker_status::Inspection::Status,
+                    |_, _, _| {
+                        drift_binding(fixture.store.path());
+                        Ok(RUNNING.as_bytes().to_vec())
+                    },
+                )?)
+            },
+        );
+        assert_eq!(result, Err(Error::Recovery(RemoteWorkspaceRecoveryError::StateChanged)));
+    }
+}
+
+#[test]
+fn azure_admission_errors_describe_status_instead_of_stop() {
+    use crate::remote_workspace::stop::RemoteWorkspaceStopError as Stop;
+    for (source, expected) in [
+        (
+            Stop::ManagementConflict,
+            Error::Inspection(RemotePanelStatusError::ManagementPending),
+        ),
+        (
+            Stop::StateChanged,
+            Error::Recovery(RemoteWorkspaceRecoveryError::StateChanged),
+        ),
+        (
+            Stop::StorageUnavailable,
+            Error::Inspection(RemotePanelStatusError::StorageUnavailable),
+        ),
+        (Stop::MissingTrust, Error::InvalidAzureBinding),
+    ] {
+        let error = Error::from(ConfiguredStopConfirmationError::Stop(source));
+        assert_eq!(error, expected);
+        assert!(!error.to_string().contains("Stop"));
+    }
 }
