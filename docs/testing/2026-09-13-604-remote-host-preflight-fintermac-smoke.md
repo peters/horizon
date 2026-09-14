@@ -52,7 +52,12 @@ explicit about which steps mutate the host so the proof is not overclaimed.
    no install path. Deliver **before** the baseline so both snapshots include
    the files and the delivery itself is not part of the before/after diff.
    ```sh
-   REMOTE_DIR=$(ssh "$VM_SSH" 'mktemp -d /tmp/preflight-604.XXXXXX' | tr -d '\r')
+   REMOTE_DIR_RAW=$(ssh "$VM_SSH" 'mktemp -d /tmp/preflight-604.XXXXXX') || exit 1
+   REMOTE_DIR=$(printf '%s' "$REMOTE_DIR_RAW" | tr -d '\r')
+   case "$REMOTE_DIR" in
+     /tmp/preflight-604.*) ;;
+     *) echo "unexpected remote dir: $REMOTE_DIR" >&2; exit 1 ;;
+   esac
    scp scripts/remote-host-preflight/preflight.py "$VM_SSH":"$REMOTE_DIR/preflight.py"
    scp scripts/remote-host-preflight/executor.py "$VM_SSH":"$REMOTE_DIR/executor.py"
    ```

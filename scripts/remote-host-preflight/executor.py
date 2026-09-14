@@ -251,25 +251,31 @@ def _watchdog_execute_probe(argv, timeout):
             if len(chunks) > MAX_WATCHDOG_PAYLOAD:
                 _kill_process_group(pid)
                 raise subprocess.TimeoutExpired(argv, timeout)
-        _reap_child(pid)
+        # Do not reap here: timeout/overflow/error paths still need to
+        # killpg the reserved PID/PGID before waitpid releases it.
     finally:
         try:
             os.close(read_fd)
         except OSError:
             pass
     if not chunks:
+        _kill_process_group(pid)
         raise subprocess.TimeoutExpired(argv, timeout)
     try:
         payload = json.loads(chunks.decode("utf-8"))
     except (ValueError, UnicodeDecodeError, RecursionError) as exc:
+        _kill_process_group(pid)
         raise OSError("probe watchdog returned malformed result") from exc
     kind = payload.get("kind") if isinstance(payload, dict) else None
     if kind == "ok" and isinstance(payload.get("result"), dict):
         result = payload["result"]
         if result.get("output_exceeded"):
             _kill_process_group(pid)
+        else:
+            _reap_child(pid)
         return result
     if kind == "fnf":
+        _reap_child(pid)
         raise FileNotFoundError(argv[0] if argv else "probe")
     if kind == "timeout":
         _kill_process_group(pid)
