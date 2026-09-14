@@ -112,7 +112,7 @@ pub(super) fn check(context: &Context) -> Result<Value, Error> {
     )
     .map_err(|error| Error::Remote(error.to_string()))?;
     let status = match observed {
-        Observation::Missing => "missing",
+        Observation::Missing => return Ok(json!({"setup": "missing", "panel": receipt.panel})),
         Observation::SavedOnly(_) => "saved_only",
         Observation::Interrupted(_) => "interrupted",
         Observation::Observed(_) => "observed",

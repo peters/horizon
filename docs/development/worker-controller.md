@@ -68,17 +68,20 @@ separate from arguments. There is deliberately no asynchronous terminal-input
 submission: closing an attachment can discard queued input. Reconnect uses the
 original saved command and task identity.
 
-A create-new claim is synced before every mutation and retained after failures.
+Create, Git setup and task starts sync create-new claims before dispatch and
+retain them after failures. Lifecycle APIs use their existing durable core intent
+journal, allowing pre-dispatch failures to be corrected without a stranded claim.
 An interrupted reply is not permission to delete the claim or submit again.
 Only one controller may use a directory at a time. Keep the original directory;
 its keys, session and receipts are required for reconnect. Do not share it with a
 running desktop Horizon instance or copy it to impersonate another session.
 
 Azure lifecycle uses the same configured APIs through `management-preview`,
-`stop`, `stop-check`, `compute-start`, `delete` and `delete-check`. A mutation reads
-`{workspace, revision, action, acknowledge_data_loss}` on stdin, matching the
+`stop`, `stop-check`, `compute-start`, `delete`, `delete-retry` and `delete-check`. A mutation reads
+`{workspace, revision, resource_id, action, acknowledge_data_loss}` on stdin, matching the
 current preview; Delete requires the data-loss acknowledgement. Observation never
-resends a management request. Local Docker cleanup remains an explicitly guarded
+resends a management request. After an uncertain Delete, inspect `delete-check`
+and obtain a fresh resource/revision confirmation for `delete-retry`. Local Docker cleanup remains an explicitly guarded
 container-ID action outside this CLI. Additional saved panels are selected by an
 optional panel ID on `start`, `status` and `snapshot`. Closing the CLI leaves the
 worker running. Use an explicit exact-resource cleanup plan for paid tests.

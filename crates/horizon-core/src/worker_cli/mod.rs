@@ -34,7 +34,7 @@ pub(super) struct Intent {
 #[derive(Debug, thiserror::Error)]
 pub(super) enum Error {
     #[error(
-        "usage: horizon-worker <create|add-panel|check|git-prepare|git-install|git-status|start|status|snapshot|manifest|management-preview|stop|stop-check|compute-start|delete|delete-check> <private-new-or-existing-directory> [panel-id for start/status/snapshot]; create reads JSON, git-install reads a PAT; manifest reads repository YAML from the specified path"
+        "usage: horizon-worker <create|add-panel|check|git-prepare|git-install|git-status|start|status|snapshot|manifest|management-preview|stop|stop-check|compute-start|delete|delete-retry|delete-check> <private-new-or-existing-directory> [panel-id for start/status/snapshot]; create reads JSON, git-install reads a PAT; manifest reads repository YAML from the specified path"
     )]
     Usage,
     #[error("invalid or oversized input; no input values are echoed")]
@@ -91,6 +91,7 @@ pub fn run() -> Result<Value, Error> {
             | "stop"
             | "stop-check"
             | "compute-start"
+            | "delete-retry"
             | "delete"
             | "delete-check"
     ) {
@@ -116,7 +117,7 @@ pub fn run() -> Result<Value, Error> {
         context.receipt.panel = panel.into();
     }
     let result = match operation {
-        "management-preview" | "stop" | "stop-check" | "compute-start" | "delete" | "delete-check" => {
+        "management-preview" | "stop" | "stop-check" | "compute-start" | "delete" | "delete-retry" | "delete-check" => {
             management::run(&context, operation)
         }
         "add-panel" => panels::add(&context),

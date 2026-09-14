@@ -32,25 +32,16 @@ fn valid_name(name: &str) -> bool {
 }
 
 fn valid_environment(environment: &Environment) -> bool {
-    let Some((image, digest)) = environment.image.rsplit_once("@sha256:") else {
-        return false;
-    };
-    image.contains('/')
-        && !image.contains(char::is_whitespace)
-        && !image.contains(['@', '?', '#'])
-        && !image.contains("://")
-        && digest.len() == 64
-        && digest
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        && !environment.directory.is_empty()
-        && environment.directory.len() <= 1024
-        && !environment.directory.starts_with('/')
-        && !environment.directory.contains(['\\', '\0'])
-        && environment
-            .directory
-            .split('/')
-            .all(|part| !part.is_empty() && part != "..")
+    // Reuse the nonexecuting workspace validator for image and directory grammar.
+    // Provider admission still uses the caller's actual profile at task creation.
+    let spec = serde_json::from_value::<horizon_core::remote_workspace::RemoteWorkspaceSpec>(serde_json::json!({
+        "workspace_local_id": "manifest-validation",
+        "target": {"provider": "local_docker", "profile": "manifest-validation",
+            "image": environment.image, "disk_gib": 20, "lifetime": "persistent"},
+        "repository": {"repository": "fixture/repository", "commit": "a".repeat(40), "branch": null},
+        "working_directory": environment.directory, "generation": 0, "panels": []
+    }));
+    spec.is_ok_and(|spec| spec.validate().is_ok())
         && environment.checks.len() <= 16
         && environment.checks.iter().all(|(name, argv)| {
             valid_name(name)
@@ -123,6 +114,10 @@ mod tests {
             fixture().replace("default_environment: web", "default_environment: absent"),
             fixture().replace("apps/web", "../web"),
             fixture().replace("apps/web", "/web"),
+            fixture().replace("apps/web", "a/."),
+            fixture().replace("apps/web", "a:b"),
+            fixture().replace("apps/web", "\"a\\tb\""),
+            fixture().replace("registry.example/web", "registry.example//web"),
             fixture() + "subscription: private-account\n",
         ] {
             assert!(parse(&broken).is_err());
