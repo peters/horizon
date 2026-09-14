@@ -54,7 +54,7 @@ pub(super) fn create(root: &Path, intent: Intent) -> Result<Value, Error> {
         panel,
         intent,
     };
-    storage::write_new(
+    storage::publish_journal(
         &root.join("receipt.json"),
         &serde_json::to_vec_pretty(&receipt).map_err(|_| Error::Storage)?,
     )?;
