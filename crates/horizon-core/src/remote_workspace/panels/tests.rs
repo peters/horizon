@@ -69,6 +69,44 @@ fn abandoning_a_confirmation_saves_nothing() {
 }
 
 #[test]
+fn journaled_panel_identity_survives_reprepare_without_replacing_other_panels() {
+    let fixture = Fixture::ready();
+    let abandoned = fixture.prepare();
+    let original = abandoned.panel().clone();
+    drop(abandoned);
+    let other = fixture.prepare();
+    add_remote_shell_panel(&fixture.store, OWNER, &fixture.summary(), other).unwrap();
+    let before = fixture.current().workspace().state().clone();
+    let prepared = prepare_remote_shell_panel_with_id(
+        &fixture.store,
+        OWNER,
+        &fixture.summary(),
+        draft(),
+        uuid::Uuid::parse_str(&original.panel_local_id).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(prepared.panel(), &original);
+    add_remote_shell_panel(&fixture.store, OWNER, &fixture.summary(), prepared).unwrap();
+    let mut expected = before;
+    expected.spec.panels.push(original.clone());
+    assert_eq!(fixture.current().workspace().state(), &expected);
+    assert!(
+        prepare_remote_shell_panel_with_id(
+            &fixture.store,
+            OWNER,
+            &fixture.summary(),
+            draft(),
+            uuid::Uuid::parse_str(&original.panel_local_id).unwrap(),
+        )
+        .is_err()
+    );
+    assert!(
+        prepare_remote_shell_panel_with_id(&fixture.store, OWNER, &fixture.summary(), draft(), uuid::Uuid::nil(),)
+            .is_err()
+    );
+}
+
+#[test]
 fn stale_and_duplicate_confirmations_never_append_a_second_panel() {
     let fixture = Fixture::ready();
     let expected = fixture.summary();

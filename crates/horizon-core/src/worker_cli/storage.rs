@@ -131,3 +131,17 @@ pub(super) fn write_new(path: &Path, bytes: &[u8]) -> Result<(), Error> {
         .and_then(|parent| parent.sync_all())
         .map_err(|_| Error::Storage)
 }
+
+/// Publish a complete recoverable intent without exposing a partial final file.
+pub(super) fn publish_journal(path: &Path, bytes: &[u8]) -> Result<(), Error> {
+    let parent = path.parent().ok_or(Error::Storage)?;
+    let mut pending = tempfile::NamedTempFile::new_in(parent).map_err(|_| Error::Storage)?;
+    pending
+        .write_all(bytes)
+        .and_then(|()| pending.as_file().sync_all())
+        .map_err(|_| Error::Storage)?;
+    pending.persist_noclobber(path).map_err(|_| Error::Storage)?;
+    File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|_| Error::Storage)
+}

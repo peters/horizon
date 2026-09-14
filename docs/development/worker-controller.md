@@ -96,3 +96,17 @@ The controller was rehearsed with the cached complete Shell image on rootless
 Docker: private setup, exact Git checkout, saved synthetic task start and
 noncreating reconnect. Installed browser tools and cloud client-off acceptance
 have their own gates; controller creation alone establishes neither.
+
+Additional-panel journals are published atomically before the local database save.
+Retrying the same operation ID and exact command/directory observes its saved panel,
+or saves the original journaled panel ID after rechecking ownership, allocation and
+current revision. A changed intent or allocation is rejected. Legacy partial receipts
+can only observe a matching existing panel; they cannot recreate missing intent.
+These retries never start a remote process. Git and start claims remain conservative:
+a failure before dispatch can require manual investigation when the controller cannot
+prove whether any remote work occurred. Never remove those claims to force a retry.
+
+Status responses use structured JSON: panel `status.state` is `running`, `exited` or
+`unavailable`, with numeric `pid` and nullable `exit_status` where applicable. Git
+`submission.state` is `submitted`, `observed` or `unknown`; observed submissions include
+an `observation` object. Saved phases use their existing tagged serialization or null.

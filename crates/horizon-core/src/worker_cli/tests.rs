@@ -156,3 +156,19 @@ fn missing_setup_receipt_is_observed_without_creating_workspace_or_replaying() {
     }
     assert!(matches!(context.claim("create"), Err(Error::Claimed)));
 }
+
+#[test]
+fn incomplete_journal_publication_does_not_strand_or_overwrite_intent() {
+    use std::io::Write;
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("add-operation.json");
+    let mut interrupted = tempfile::NamedTempFile::new_in(root.path()).unwrap();
+    interrupted.write_all(b"partial").unwrap();
+    assert!(!path.exists());
+    storage::publish_journal(&path, b"complete").unwrap();
+    assert!(storage::publish_journal(&path, b"replacement").is_err());
+    assert_eq!(fs::read(&path).unwrap(), b"complete");
+    assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+    drop(interrupted);
+    assert_eq!(fs::read(path).unwrap(), b"complete");
+}

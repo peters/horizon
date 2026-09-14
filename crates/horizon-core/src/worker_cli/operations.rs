@@ -119,7 +119,7 @@ pub(super) fn check(context: &Context) -> Result<Value, Error> {
     };
     let saved = context.saved()?;
     Ok(
-        json!({"setup": status, "phase": format!("{:?}", saved.environment_summary().saved_phase),
+        json!({"setup": status, "phase": saved.environment_summary().saved_phase,
         "panel": receipt.panel, "panels": saved.state().spec.panels.iter().map(|panel| panel.panel_local_id.clone()).collect::<Vec<_>>(), "repository": receipt.intent.repository, "target": receipt.intent.target}),
     )
 }
@@ -136,9 +136,7 @@ pub(super) fn git(context: &Context, install: bool, observe: bool) -> Result<Val
     if observe {
         let result = git::inspect_configured_remote_git_setup(&store, &identities, config, request)
             .map_err(|error| Error::Remote(error.to_string()))?;
-        return Ok(
-            json!({"state": format!("{:?}", result.state), "reason": result.reason.map(|reason| format!("{reason:?}"))}),
-        );
+        return Ok(git_observation(result));
     }
     let mode = if install {
         RemoteGitCredentialMode::InstallFirst
@@ -157,7 +155,7 @@ pub(super) fn git(context: &Context, install: bool, observe: bool) -> Result<Val
     let result =
         git::submit_configured_remote_git_setup(&store, &identities, config, request, prepared, token.as_ref())
             .map_err(|error| Error::Remote(error.to_string()))?;
-    Ok(json!({"submission": format!("{:?}", result.submission)}))
+    Ok(json!({"submission": git_submission(result.submission)}))
 }
 
 pub(super) fn panel(context: &Context, start: bool) -> Result<Value, Error> {
@@ -181,7 +179,7 @@ pub(super) fn panel(context: &Context, start: bool) -> Result<Value, Error> {
             .map_err(|error| Error::Remote(error.to_string()))?
             .status
     };
-    Ok(json!({"status": format!("{result:?}")}))
+    Ok(json!({"status": panel_status(&result)}))
 }
 
 pub(super) fn terminal(context: &Context) -> Result<Value, Error> {
@@ -214,4 +212,75 @@ pub(super) fn terminal(context: &Context) -> Result<Value, Error> {
     Ok(
         json!({"terminal": terminal.last_lines_text(80), "observed_at": time::OffsetDateTime::now_utc().unix_timestamp()}),
     )
+}
+
+fn git_observation(result: git::RemoteGitObservation) -> Value {
+    use git::{RemoteGitReason as Reason, RemoteGitState as State};
+    let state = match result.state {
+        State::Absent => "Absent",
+        State::ClaimedUnknown => "ClaimedUnknown",
+        State::Complete => "Complete",
+        State::Error => "Error",
+    };
+    let reason = result.reason.map(|reason| match reason {
+        Reason::Invalid => "Invalid",
+        Reason::Unsupported => "Unsupported",
+        Reason::UnsafeRoot => "UnsafeRoot",
+        Reason::Conflict => "Conflict",
+        Reason::Storage => "Storage",
+        Reason::Git => "Git",
+        Reason::Interrupted => "Interrupted",
+        Reason::UnsupportedRepository => "UnsupportedRepository",
+    });
+    json!({"state": state, "reason": reason})
+}
+
+fn git_submission(result: git::RemoteGitSubmission) -> Value {
+    match result {
+        git::RemoteGitSubmission::Submitted => json!({"state": "submitted"}),
+        git::RemoteGitSubmission::Unknown => json!({"state": "unknown"}),
+        git::RemoteGitSubmission::Observed(observation) => {
+            json!({"state": "observed", "observation": git_observation(observation)})
+        }
+    }
+}
+
+fn panel_status(result: &panel::RemotePanelStatus) -> Value {
+    match result {
+        panel::RemotePanelStatus::Running { pid } => json!({"state": "running", "pid": pid}),
+        panel::RemotePanelStatus::Exited { pid, exit_status } => {
+            json!({"state": "exited", "pid": pid, "exit_status": exit_status})
+        }
+        panel::RemotePanelStatus::Unavailable => json!({"state": "unavailable"}),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn observations_preserve_machine_readable_fields() {
+        let observation = git::RemoteGitObservation {
+            state: git::RemoteGitState::Complete,
+            reason: None,
+        };
+        assert_eq!(
+            git_submission(git::RemoteGitSubmission::Observed(observation)),
+            json!({"state": "observed", "observation": {"state": "Complete", "reason": null}})
+        );
+        assert_eq!(
+            panel_status(&panel::RemotePanelStatus::Exited {
+                pid: 42,
+                exit_status: Some(7)
+            }),
+            json!({"state": "exited", "pid": 42, "exit_status": 7})
+        );
+        assert_eq!(
+            panel_status(&panel::RemotePanelStatus::Exited {
+                pid: 42,
+                exit_status: None
+            })["exit_status"],
+            Value::Null
+        );
+    }
 }

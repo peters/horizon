@@ -33,7 +33,7 @@ fn confirm(text: &str, workspace: &str, revision: u64, resource_id: &str, action
 }
 
 fn phase(saved: &RemoteEnvironmentSummary) -> Value {
-    json!({"revision": saved.revision, "phase": format!("{:?}", saved.saved_phase)})
+    json!({"revision": saved.revision, "phase": saved.saved_phase})
 }
 
 pub(super) fn run(context: &Context, operation: &str) -> Result<Value, Error> {
@@ -57,7 +57,13 @@ pub(super) fn run(context: &Context, operation: &str) -> Result<Value, Error> {
         "stop-check" => {
             let result = stop::confirm_configured_remote_environment_stop(&store, config, &expected)
                 .map_err(|error| Error::Remote(error.to_string()))?;
-            Ok(json!({"saved": phase(&result.saved), "observation": format!("{:?}", result.observation)}))
+            Ok(
+                json!({"saved": phase(&result.saved), "observation": match result.observation {
+                horizon_core::cloud_run::interactive_worker_stop::InteractiveWorkerStopObservation::RetainedStopped => "RetainedStopped",
+                horizon_core::cloud_run::interactive_worker_stop::InteractiveWorkerStopObservation::Pending => "Pending",
+                horizon_core::cloud_run::interactive_worker_stop::InteractiveWorkerStopObservation::Absent => "Absent",
+                }}),
+            )
         }
         "delete-check" => {
             let result = deletion::confirm_configured_remote_environment_deletion(&store, config, &expected)
@@ -81,7 +87,7 @@ pub(super) fn run(context: &Context, operation: &str) -> Result<Value, Error> {
                     .map_err(|error| Error::Remote(error.to_string())),
                 "compute-start" => start::start_configured_azure_environment(&store, config, &expected)
                     .map(|result| {
-                        json!({"saved": phase(&result.saved), "lifecycle": format!("{:?}", result.lifecycle),
+                        json!({"saved": phase(&result.saved), "lifecycle": result.lifecycle,
                         "already_running": result.already_running})
                     })
                     .map_err(|error| Error::Remote(error.to_string())),

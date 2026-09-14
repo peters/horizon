@@ -53,9 +53,28 @@ pub fn prepare_remote_shell_panel(
     expected: &RemoteEnvironmentSummary,
     draft: RemoteShellPanelDraft,
 ) -> Result<PreparedRemoteShellPanel, RemoteShellPanelError> {
+    prepare_remote_shell_panel_with_id(store, client_session_id, expected, draft, uuid::Uuid::new_v4())
+}
+
+/// Re-admit a caller-journaled Shell intent with its original panel identity.
+/// This never starts a task or restores an old workspace snapshot. The caller
+/// must bind its journal to the owning workspace and retained allocation.
+/// # Errors
+/// Rejects nil/duplicate identities and the same stale, foreign, unavailable or
+/// invalid state as [`prepare_remote_shell_panel`].
+pub fn prepare_remote_shell_panel_with_id(
+    store: &CloudWorkflowStore,
+    client_session_id: &str,
+    expected: &RemoteEnvironmentSummary,
+    draft: RemoteShellPanelDraft,
+    panel_id: uuid::Uuid,
+) -> Result<PreparedRemoteShellPanel, RemoteShellPanelError> {
+    if panel_id.is_nil() {
+        return Err(RemoteShellPanelError::InvalidIntent);
+    }
     let allocation = load_current(store, client_session_id, expected)?;
     let panel = RemotePanelBinding {
-        panel_local_id: uuid::Uuid::new_v4().to_string(),
+        panel_local_id: panel_id.to_string(),
         kind: PanelKind::Shell,
         command: Some(draft.command),
         working_directory: draft.working_directory,
