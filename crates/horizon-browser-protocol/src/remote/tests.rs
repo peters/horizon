@@ -187,6 +187,58 @@ fn authentication_references_must_be_bound_exactly() {
 }
 
 #[test]
+fn malformed_present_bindings_fail_at_definition_time() {
+    let mut config = sample();
+    config
+        .providers
+        .get_mut("device_cloud")
+        .expect("provider")
+        .credential_bindings
+        .insert(
+            CredentialReference::from("cloud-user"),
+            CredentialBinding {
+                store: CredentialStoreKind::OsKeychain,
+                slot: None,
+            },
+        );
+    assert!(matches!(
+        config
+            .validate_definition()
+            .expect_err("slot required is a definition error"),
+        RemoteConfigError::InvalidCredential {
+            problem: CredentialReferenceProblem::SlotRequired,
+            ..
+        }
+    ));
+    let mut config = sample();
+    config
+        .providers
+        .get_mut("device_cloud")
+        .expect("provider")
+        .credential_bindings
+        .get_mut(&CredentialReference::from("cloud-user"))
+        .expect("binding")
+        .slot = Some("bad slot with spaces".into());
+    assert!(matches!(
+        config.validate_definition().expect_err("malformed slot"),
+        RemoteConfigError::InvalidCredential {
+            problem: CredentialReferenceProblem::MalformedSlot,
+            ..
+        }
+    ));
+    let mut config = sample();
+    config
+        .providers
+        .get_mut("device_cloud")
+        .expect("provider")
+        .credential_bindings
+        .remove(&CredentialReference::from("cloud-key"));
+    config
+        .validate_definition()
+        .expect("a missing binding is readiness, not a definition error");
+}
+
+#[test]
 fn limits_are_bounded_per_field() {
     let mut config = sample();
     config
@@ -316,6 +368,10 @@ fn portable_export_strips_bindings_and_reports_presence() {
     let encoded = serde_json::to_string(&portable).expect("serializes");
     assert!(!encoded.contains("credential_bindings"));
     assert!(!encoded.contains("os_keychain"));
+    assert!(
+        encoded.contains("cloud-user"),
+        "authentication references stay in the portable form"
+    );
 
     let presence = config.binding_presence();
     let cloud = presence.get("device_cloud").expect("provider presence");

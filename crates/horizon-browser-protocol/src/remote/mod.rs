@@ -88,7 +88,10 @@ impl RemoteBrowserConfig {
         Ok(())
     }
 
-    /// The shareable definition: every provider and target, no bindings.
+    /// The shareable definition: every provider and target with its
+    /// authentication references, and no machine-local bindings. Presence of
+    /// values on this machine is a live query ([`Self::binding_presence`]),
+    /// not part of the portable file.
     #[must_use]
     pub fn export_portable(&self) -> Self {
         let providers = self

@@ -263,7 +263,9 @@ pub struct RemoteProviderProfile {
 }
 
 impl RemoteProviderProfile {
-    /// Structural validation that does not require bindings to exist.
+    /// Structural validation: limits, reference names, and the shape of every
+    /// binding that is present. A binding that is merely missing is not a
+    /// definition error; that is the readiness state [`Self::validate_bindings`] reports.
     pub(super) fn validate_definition(&self, provider: &str) -> Result<(), RemoteConfigError> {
         self.limits.validate(provider)?;
         for reference in self.authentication.references() {
@@ -275,29 +277,7 @@ impl RemoteProviderProfile {
                 ));
             }
         }
-        Ok(())
-    }
-
-    /// Bindings must cover exactly the references the authentication block needs.
-    pub(super) fn validate_bindings(&self, provider: &str) -> Result<(), RemoteConfigError> {
-        let required = self.authentication.references();
-        for reference in &required {
-            match self.credential_bindings.get(*reference) {
-                None => {
-                    return Err(credential_error(
-                        provider,
-                        reference,
-                        CredentialReferenceProblem::MissingBinding,
-                    ));
-                }
-                Some(binding) => {
-                    if let Some(problem) = binding.problem() {
-                        return Err(credential_error(provider, reference, problem));
-                    }
-                }
-            }
-        }
-        for reference in self.credential_bindings.keys() {
+        for (reference, binding) in &self.credential_bindings {
             if !reference.is_well_formed() {
                 return Err(credential_error(
                     provider,
@@ -305,6 +285,26 @@ impl RemoteProviderProfile {
                     CredentialReferenceProblem::MalformedReference,
                 ));
             }
+            if let Some(problem) = binding.problem() {
+                return Err(credential_error(provider, reference, problem));
+            }
+        }
+        Ok(())
+    }
+
+    /// Bindings must cover exactly the references the authentication block needs.
+    pub(super) fn validate_bindings(&self, provider: &str) -> Result<(), RemoteConfigError> {
+        let required = self.authentication.references();
+        for reference in &required {
+            if !self.credential_bindings.contains_key(*reference) {
+                return Err(credential_error(
+                    provider,
+                    reference,
+                    CredentialReferenceProblem::MissingBinding,
+                ));
+            }
+        }
+        for reference in self.credential_bindings.keys() {
             if !required.contains(&reference) {
                 return Err(credential_error(
                     provider,

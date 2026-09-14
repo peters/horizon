@@ -93,10 +93,12 @@ Rules the configuration PR enforces:
   exit. `store: os_keychain` uses the `keyring` crate with the platform features
   chosen in the routine-credential ADR, under a distinct service name for
   remote providers. No file store, no environment interpolation.
-- Exported profiles carry providers, targets and limits with binding
-  references replaced by presence markers. Import never overwrites an existing
-  provider's endpoint or rebinds an existing reference to another origin
-  without an explicit user confirmation.
+- Exported profiles carry providers, targets, limits and authentication
+  references; machine-local `credential_bindings` are stripped, and whether a
+  reference has a value on this machine is a live readiness query rather than
+  part of the file. Import never overwrites an existing provider's endpoint or
+  rebinds an existing reference to another origin without an explicit user
+  confirmation.
 - Existing files without `browser.remote` load unchanged and local backends keep
   their defaults. Parsing and readiness checks never allocate.
 

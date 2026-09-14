@@ -861,6 +861,11 @@ browser:
         let presence = unbound.browser.remote.binding_presence();
         assert_eq!(presence["grid"].values().filter(|present| !**present).count(), 1);
         let error = Config::from_yaml(
+            "browser:\n  remote:\n    providers:\n      grid:\n        endpoint: https://grid.example.net\n        authentication:\n          kind: bearer\n          token_ref: grid-token\n        credential_bindings:\n          grid-token:\n            store: os_keychain\n",
+        )
+        .expect_err("a present binding without a slot is malformed configuration");
+        assert!(error.to_string().contains("needs a slot"), "{error}");
+        let error = Config::from_yaml(
             "browser:\n  remote:\n    providers:\n      grid:\n        endpoint: https://grid.example.net\n    targets:\n      phone:\n        provider: nowhere\n        browser_name: safari\n        platform_name: iOS\n",
         )
         .expect_err("unknown provider is rejected");
