@@ -647,3 +647,42 @@ fn duplicate_os_slots_on_one_origin_are_rejected_at_definition_time() {
         .validate_definition()
         .expect("distinct origins may reuse a slot name");
 }
+
+#[test]
+fn capability_extension_values_are_checked_at_every_depth() {
+    let mut config = sample();
+    let target = config.targets.get_mut("ios_phone").expect("target");
+    target.capability_extensions.insert(
+        "vendor:options".into(),
+        serde_json::json!({"safe": {"accessKey": "hidden"}}),
+    );
+    assert!(matches!(
+        config.validate_definition().expect_err("credential two levels down"),
+        RemoteConfigError::InvalidCapabilityExtension {
+            problem: ExtensionProblem::CarriesCredential,
+            ..
+        }
+    ));
+
+    let target = config.targets.get_mut("ios_phone").expect("target");
+    target.capability_extensions.insert(
+        "vendor:options".into(),
+        serde_json::json!({"list": [{"deviceName": "iPhone"}]}),
+    );
+    assert!(matches!(
+        config
+            .validate_definition()
+            .expect_err("normalized field inside an array"),
+        RemoteConfigError::InvalidCapabilityExtension {
+            problem: ExtensionProblem::ConflictsWithNormalizedField,
+            ..
+        }
+    ));
+
+    let target = config.targets.get_mut("ios_phone").expect("target");
+    target.capability_extensions.insert(
+        "vendor:options".into(),
+        serde_json::json!({"nested": {"projectName": "horizon", "tags": ["a", {"note": "b"}]}}),
+    );
+    config.validate_definition().expect("benign nested values pass");
+}

@@ -119,17 +119,31 @@ fn extension_problem(key: &str, value: &serde_json::Value) -> Option<ExtensionPr
     if let Some(problem) = name_problem(name) {
         return Some(problem);
     }
-    if let serde_json::Value::Object(fields) = value {
-        for nested in fields.keys() {
-            if !identifier(nested, 128) {
-                return Some(ExtensionProblem::InvalidOptionKey);
+    nested_problem(value)
+}
+
+/// Every key at every depth of an extension value is checked, so a
+/// credential or a normalized field cannot hide one object or array deeper
+/// than the top level of the options.
+fn nested_problem(value: &serde_json::Value) -> Option<ExtensionProblem> {
+    match value {
+        serde_json::Value::Object(fields) => {
+            for (nested, inner) in fields {
+                if !identifier(nested, 128) {
+                    return Some(ExtensionProblem::InvalidOptionKey);
+                }
+                if let Some(problem) = name_problem(nested) {
+                    return Some(problem);
+                }
+                if let Some(problem) = nested_problem(inner) {
+                    return Some(problem);
+                }
             }
-            if let Some(problem) = name_problem(nested) {
-                return Some(problem);
-            }
+            None
         }
+        serde_json::Value::Array(items) => items.iter().find_map(nested_problem),
+        _ => None,
     }
-    None
 }
 
 fn identifier(value: &str, max_len: usize) -> bool {

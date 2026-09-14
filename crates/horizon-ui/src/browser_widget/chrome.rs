@@ -89,6 +89,24 @@ pub fn show(
     (url_focused, clicked)
 }
 
+/// Whether the backend picker may act, and the explanation shown when a
+/// remote target fixes the browser.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PickerState {
+    enabled: bool,
+    remote_hint: Option<&'static str>,
+}
+
+const REMOTE_PICKER_HINT: &str = "This panel runs at a remote device target, which fixes the browser";
+
+fn picker_state(browser: &BrowserPanelState, interactive: bool) -> PickerState {
+    let remote = browser.is_remote();
+    PickerState {
+        enabled: interactive && browser.teach().is_none() && !remote,
+        remote_hint: remote.then_some(REMOTE_PICKER_HINT),
+    }
+}
+
 fn backend_picker(
     ui: &mut Ui,
     panel_id: horizon_core::PanelId,
@@ -107,8 +125,8 @@ fn backend_picker(
             }
         },
     );
-    let remote = browser.is_remote();
-    let picker = ui.add_enabled_ui(interactive && browser.teach().is_none() && !remote, |ui| {
+    let PickerState { enabled, remote_hint } = picker_state(browser, interactive);
+    let picker = ui.add_enabled_ui(enabled, |ui| {
         egui::ComboBox::from_id_salt(("browser-backend", panel_id))
             .selected_text(selected_text)
             .width(72.0)
@@ -133,12 +151,10 @@ fn backend_picker(
                 }
             });
     });
-    if remote {
+    if let Some(hint) = remote_hint {
         // The configured target fixes the browser; the picker stays visible
         // so the family is still readable, but never actionable.
-        picker
-            .response
-            .on_hover_text("This panel runs at a remote device target, which fixes the browser");
+        picker.response.on_hover_text(hint);
     }
     if selected == previous {
         return false;
@@ -441,7 +457,60 @@ fn handoff_banner(ui: &mut Ui, browser: &mut BrowserPanelState, reason: &str, in
 
 #[cfg(test)]
 mod tests {
-    use super::{nav_widget_info, sync_url_buffer};
+    use horizon_core::browser::{BackendKind, BrowserPanelState};
+
+    use super::{PickerState, REMOTE_PICKER_HINT, backend_picker, nav_widget_info, picker_state, sync_url_buffer};
+    use crate::test_egui::DiscardTextures;
+
+    #[test]
+    fn a_remote_panel_keeps_its_family_visible_but_never_actionable() {
+        let mut remote = BrowserPanelState::restored_remote(
+            "remote-picker",
+            &horizon_core::browser::BrowserConfig {
+                backend: BackendKind::SafariWebDriver,
+                ..horizon_core::browser::BrowserConfig::default()
+            },
+            "ios_phone".to_string(),
+            None,
+        );
+        assert_eq!(
+            picker_state(&remote, true),
+            PickerState {
+                enabled: false,
+                remote_hint: Some(REMOTE_PICKER_HINT),
+            }
+        );
+        assert_eq!(
+            remote.backend(),
+            BackendKind::SafariWebDriver,
+            "the family stays readable"
+        );
+
+        // Rendered for real: the disabled picker changes nothing and the
+        // frame carries the explanation for hover.
+        let ctx = egui::Context::default();
+        let mut changed = None;
+        let _ = ctx
+            .run_ui(egui::RawInput::default(), |ui| {
+                changed = Some(backend_picker(ui, horizon_core::PanelId(1), &mut remote, true));
+            })
+            .discard_textures();
+        assert_eq!(changed, Some(false));
+        assert_eq!(remote.backend(), BackendKind::SafariWebDriver);
+
+        let local = BrowserPanelState::inert();
+        assert_eq!(
+            picker_state(&local, true),
+            PickerState {
+                enabled: true,
+                remote_hint: None,
+            }
+        );
+        assert!(
+            !picker_state(&local, false).enabled,
+            "a non-interactive view never picks"
+        );
+    }
 
     #[test]
     fn address_bar_focus_transition_preserves_the_displayed_url() {

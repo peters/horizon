@@ -360,8 +360,12 @@ impl BrowserPanelState {
     }
 
     #[must_use]
-    pub const fn backend_capabilities(&self) -> BackendCapabilities {
-        self.config.backend.capabilities()
+    pub fn backend_capabilities(&self) -> BackendCapabilities {
+        if self.is_remote() {
+            BackendCapabilities::remote_session()
+        } else {
+            self.config.backend.capabilities()
+        }
     }
 
     #[must_use]
@@ -1385,6 +1389,11 @@ mod tests {
             Some("https://example.test/".to_string()),
         );
         assert!(state.is_remote());
+        assert_eq!(
+            state.backend_capabilities(),
+            BackendCapabilities::remote_session(),
+            "a remote panel never advertises a local backend's capabilities"
+        );
         assert!(!state.can_retry(), "a request-less remote panel offers no Retry");
         assert_eq!(state.remote_target(), Some("ios_phone"));
         assert!(matches!(state.status, BrowserStatus::Stopped { code: None }));

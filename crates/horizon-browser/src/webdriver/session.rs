@@ -349,9 +349,17 @@ impl Driver {
     }
 
     fn active_capabilities(&self) -> crate::ActiveBackendCapabilities {
+        // The backend names the browser family; what the session can do is a
+        // property of where it runs, and a remote grid offers less than any
+        // local browser of that family.
+        let capabilities = if self.host.is_remote() {
+            crate::BackendCapabilities::remote_session()
+        } else {
+            self.config.browser.backend.capabilities()
+        };
         crate::ActiveBackendCapabilities {
             backend: self.config.browser.backend,
-            capabilities: self.config.browser.backend.capabilities(),
+            capabilities,
             bidi: self.bidi.is_some(),
             automation_disclosure: self
                 .config
