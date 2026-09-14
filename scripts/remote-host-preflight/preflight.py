@@ -910,7 +910,12 @@ def check_tailscale(executor, timeout):
     value = self_name or version_line.split()[0]
     detail = "tailscale %s" % version_line
     if self_name:
-        detail += " as %s (online=%s)" % (self_name, "unknown" if online is None else str(online).lower())
+        detail += " as %s" % self_name
+    if online is None:
+        if self_name:
+            detail += " (online=unknown)"
+    else:
+        detail += " (online=%s)" % str(online).lower()
     return {"id": "tailscale", "status": SUPPORTED, "value": value,
             "detail": detail + "; client-side reachability remains unverified"}
 

@@ -1208,6 +1208,14 @@ class TailscaleChecks(Harness):
         by_id = {check["id"]: check for check in report["checks"]}
         self.assertIn("<redacted>", by_id["tailscale"]["detail"])
 
+    def test_tailscale_online_without_dns_name(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["tailscale_status"] = {"stdout": json.dumps({"Self": {"Online": False}})}
+        _, report, _ = self.run_main(fixture)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertIn("online=false", by_id["tailscale"]["detail"])
+        self.assertNotIn(" as ", by_id["tailscale"]["detail"])
+
     def test_tailscale_non_boolean_online_is_unknown(self):
         fixture = dict(DEFAULT_FIXTURE)
         fixture["tailscale_status"] = {"stdout": json.dumps(

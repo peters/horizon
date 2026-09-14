@@ -85,13 +85,16 @@ explicit about which steps mutate the host so the proof is not overclaimed.
      else
        echo "docker: tool not present";
      fi;
-     SOCK="";
-     if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -S "$XDG_RUNTIME_DIR/podman/podman.sock" ]; then
-       SOCK="$XDG_RUNTIME_DIR/podman/podman.sock";
-     fi;
-     [ -z "$SOCK" ] && [ -S /run/podman/podman.sock ] && SOCK=/run/podman/podman.sock;
-     if [ -n "$SOCK" ]; then
-       podman --remote=true --url "unix://$SOCK" info --format "{{.Version.Version}}" 2>&1 | head -1;
+     PODMAN_VER="";
+     CAND="";
+     [ -n "${XDG_RUNTIME_DIR:-}" ] && CAND="$XDG_RUNTIME_DIR/podman/podman.sock";
+     for SOCK in $CAND /run/podman/podman.sock; do
+       [ -n "$SOCK" ] && [ -S "$SOCK" ] || continue;
+       VER=$(podman --remote=true --url "unix://$SOCK" info --format "{{.Version.Version}}" 2>/dev/null | head -1);
+       if [ -n "$VER" ]; then PODMAN_VER=$VER; break; fi;
+     done;
+     if [ -n "$PODMAN_VER" ]; then
+       echo "$PODMAN_VER";
      else
        echo "podman local service is not running";
      fi;
