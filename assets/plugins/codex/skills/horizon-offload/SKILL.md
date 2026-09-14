@@ -96,9 +96,11 @@ The controller accepts JSON on stdin for `create <NEW_PRIVATE_DIRECTORY>`:
   compute shutdown or disk billing limit.
 - `issue`: issue URL or task label.
 
-Prepare the full request privately, show the concrete image/profile/cost/lifetime
-when authorization is missing, then create once. The directory must be new and
-its parent must exist. The controller persists coordinates before dispatch.
+Prepare the full request privately. If existing authorization does not cover the
+allocation, obtain explicit user approval for its concrete image, profile, `disk_gib`,
+cost and lifetime before provisioning billable resources. Reuse authorization already given within
+its scope; do not ask again. Then create once. The directory must be new and its
+parent must exist. The controller persists coordinates before dispatch.
 
 Run `git-install <directory> < <protected-token-file>` once, then poll
 `git-status <directory>` until `Complete` with null reason. An already installed
