@@ -1,6 +1,7 @@
 mod bar;
 mod general;
 mod presets;
+mod remote_browsers;
 mod shortcuts;
 mod speech;
 #[cfg(test)]
@@ -11,6 +12,7 @@ mod yaml_editor;
 
 use egui::{Color32, Margin, Stroke, Vec2};
 use horizon_core::Config;
+use horizon_core::remote_browser_credential::CredentialWorkbench;
 
 use super::util::{self, atomic_write};
 use super::{HorizonApp, resolve_shortcuts};
@@ -27,6 +29,7 @@ enum SettingsTab {
     General,
     Shortcuts,
     Presets,
+    RemoteBrowsers,
     Yaml,
 }
 
@@ -36,11 +39,18 @@ impl SettingsTab {
             Self::General => "General",
             Self::Shortcuts => "Shortcuts",
             Self::Presets => "Presets",
+            Self::RemoteBrowsers => "Remote browsers",
             Self::Yaml => "YAML",
         }
     }
 
-    const ALL: [Self; 4] = [Self::General, Self::Shortcuts, Self::Presets, Self::Yaml];
+    const ALL: [Self; 5] = [
+        Self::General,
+        Self::Shortcuts,
+        Self::Presets,
+        Self::RemoteBrowsers,
+        Self::Yaml,
+    ];
 }
 
 pub(super) enum SettingsStatus {
@@ -56,6 +66,7 @@ pub(super) struct SettingsEditor {
     pub(super) status: SettingsStatus,
     active_tab: SettingsTab,
     editing_config: Option<Config>,
+    credential_inputs: remote_browsers::CredentialInputs,
 }
 
 #[derive(Clone, Copy)]
@@ -82,6 +93,7 @@ impl HorizonApp {
                 status: SettingsStatus::None,
                 active_tab: SettingsTab::General,
                 editing_config,
+                credential_inputs: remote_browsers::CredentialInputs::default(),
             });
         }
     }
@@ -139,7 +151,13 @@ impl HorizonApp {
 
         let config_path = self.config_path.display().to_string();
         if let Some(editor) = self.settings.as_mut() {
-            render_settings_panel(ui, &config_path, editor, &mut self.speech_model_info_cache);
+            render_settings_panel(
+                ui,
+                &config_path,
+                editor,
+                &mut self.speech_model_info_cache,
+                &mut self.remote_browser_credentials,
+            );
         }
     }
 
@@ -289,6 +307,7 @@ fn render_settings_panel(
     config_path: &str,
     editor: &mut SettingsEditor,
     model_info_cache: &mut speech::SpeechModelInfoCache,
+    credentials: &mut CredentialWorkbench,
 ) {
     let viewport_width = util::viewport_local_rect(ui).width();
     let default_width = settings_panel_default_width(viewport_width);
@@ -315,7 +334,7 @@ fn render_settings_panel(
                 SettingsTab::Yaml => {
                     yaml_editor::render(ui, config_path, &mut editor.buffer, available);
                 }
-                tab => render_gui_tab(ui, tab, editor, model_info_cache, available),
+                tab => render_gui_tab(ui, tab, editor, model_info_cache, credentials, available),
             }
         });
 }
@@ -325,9 +344,16 @@ fn render_gui_tab(
     tab: SettingsTab,
     editor: &mut SettingsEditor,
     model_info_cache: &mut speech::SpeechModelInfoCache,
+    credentials: &mut CredentialWorkbench,
     available: Vec2,
 ) {
-    let Some(ref mut config) = editor.editing_config else {
+    let SettingsEditor {
+        editing_config,
+        credential_inputs,
+        buffer,
+        ..
+    } = editor;
+    let Some(config) = editing_config else {
         ui.label(
             egui::RichText::new("Unable to parse current configuration")
                 .color(theme::PALETTE_RED())
@@ -344,11 +370,15 @@ fn render_gui_tab(
                 SettingsTab::General => general::render(ui, config, model_info_cache),
                 SettingsTab::Shortcuts => shortcuts::render(ui, config),
                 SettingsTab::Presets => presets::render(ui, config),
+                SettingsTab::RemoteBrowsers => {
+                    remote_browsers::render(ui, config, credentials, credential_inputs);
+                    false
+                }
                 // Yaml is handled before this function is called.
                 SettingsTab::Yaml => return,
             };
             if changed && let Ok(yaml) = config.to_yaml() {
-                editor.buffer = yaml;
+                *buffer = yaml;
             }
         });
 }

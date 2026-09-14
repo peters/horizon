@@ -37,7 +37,7 @@ mod yaml_highlight;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use egui::{Color32, Pos2, Rect, Vec2, ViewportId};
 use horizon_core::{
@@ -275,6 +275,8 @@ pub struct HorizonApp {
     browser_create_host: BrowserCreateHostState,
     settings: Option<SettingsEditor>,
     speech_model_info_cache: settings::SpeechModelInfoCache,
+    /// Session-only and OS-store provider credentials for remote browser targets.
+    remote_browser_credentials: horizon_core::remote_browser_credential::CredentialWorkbench,
     session_manager: Option<RuntimeSessionManagerState>,
     remote_environments: remote_environments::RemoteEnvironments,
     managed_install: Option<ManagedInstall>,
@@ -319,6 +321,12 @@ impl eframe::App for HorizonApp {
         let ctx = &ui.ctx().clone();
         let now = Instant::now();
         self.frame_stats.record_frame(now);
+        self.remote_browser_credentials.poll();
+        if self.remote_browser_credentials.is_busy() {
+            // Worker answers arrive off-thread; keep frames coming until the
+            // store has opened and every probe or write has reported.
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
         if let Some(delay) = self.frame_stats.idle_refresh_after(now) {
             ctx.request_repaint_after(delay);
         }

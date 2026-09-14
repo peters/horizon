@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use egui::Context;
+use horizon_core::remote_browser_credential::CredentialWorkbench;
 use horizon_core::{
     AgentSessionCatalog, AppShortcuts, Board, CanvasViewState, Config, ManagedInstall, RemoteHostCatalog, SessionStore,
     StartupDecision,
@@ -176,7 +177,7 @@ impl HorizonApp {
             remote_hosts_last_refresh: None,
             last_session_catalog_refresh: None,
             last_panel_output_at: Some(Instant::now()), browser_create_host: BrowserCreateHostState::default(),
-            settings: None,
+            settings: None, remote_browser_credentials: CredentialWorkbench::spawn_platform(),
             speech_model_info_cache: settings::SpeechModelInfoCache::new(),
             session_manager: None, remote_environments: super::remote_environments::RemoteEnvironments::default(),
             managed_install,

@@ -14,6 +14,7 @@
 mod fake;
 mod keyring_store;
 mod session;
+mod workbench;
 
 use std::fmt;
 
@@ -27,6 +28,9 @@ use zeroize::Zeroizing;
 pub use fake::FakeCredentialStore;
 pub use keyring_store::{KEYRING_SERVICE, KeyringCredentialStore, KeyringStoreAvailability};
 pub use session::SessionCredentialStore;
+pub use workbench::{
+    CredentialWorkbench, KeychainState, NoticeKind, SharedStore, StoreOpener, WorkbenchNotice, credential_destination,
+};
 
 /// Largest accepted secret. Provider keys are far smaller; the bound stops a
 /// pasted file from becoming a header.
@@ -109,6 +113,9 @@ pub enum RemoteCredentialError {
     InvalidBearerToken,
     #[error("credential store failed: {kind}")]
     Platform { kind: &'static str },
+    /// The OS store has not answered yet; try again after the next poll.
+    #[error("credential store is still being checked")]
+    Checking,
 }
 
 /// Readiness of one reference for display. Never carries a value.
@@ -118,6 +125,8 @@ pub enum CredentialState {
     Missing,
     Locked,
     StoreUnavailable,
+    /// An OS-store probe is in flight.
+    Checking,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -168,6 +177,7 @@ pub fn readiness(profile: &RemoteProviderProfile, stores: &CredentialStores<'_>)
                 Ok(true) => CredentialState::Present,
                 Ok(false) | Err(RemoteCredentialError::Missing) => CredentialState::Missing,
                 Err(RemoteCredentialError::Locked) => CredentialState::Locked,
+                Err(RemoteCredentialError::Checking) => CredentialState::Checking,
                 Err(_) => CredentialState::StoreUnavailable,
             };
             CredentialReadiness {
