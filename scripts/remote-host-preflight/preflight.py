@@ -25,6 +25,7 @@ import signal
 import subprocess
 import sys
 import time
+import unicodedata
 from datetime import datetime, timezone
 
 SCHEMA = 1
@@ -117,7 +118,7 @@ REDACTED_PATTERNS = (
         r'(?i)(?:^|[^A-Za-z0-9_-])"?[A-Za-z0-9_-]{0,64}'
         r'(?:password|passwd|secret|token|api[_-]?key)"?\s*[:=]\s*[^\n]*'
     ),
-    re.compile(r'(?i)"?authorization"?\s*:\s*[^\n]*'),
+    re.compile(r'(?i)"?authorization"?\s*[:=]\s*[^\n]*'),
     re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{8,255}"),
 )
 URI_USERINFO = re.compile(
@@ -700,10 +701,13 @@ def sysfs_device_name_ok(name):
     """True when a sysfs basename would pass the worker storage name gate."""
     if not name or os.sep in name or name in (".", ".."):
         return False
-    encoded = name.encode("utf-8")
+    try:
+        encoded = name.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
     if len(encoded) > MAX_DEVICE_NAME_BYTES:
         return False
-    if any(ord(char) < 32 or ord(char) == 127 or char in "\\:" for char in name):
+    if any(unicodedata.category(char) == "Cc" or char in "\\:" for char in name):
         return False
     if name.endswith(".") or name.endswith(" "):
         return False

@@ -61,7 +61,7 @@ invalid CLI usage (argparse; usage text only, no report — for example
   names) passes through a credential redactor (JWT-like material,
   private-key blocks, `password|token|secret|api_key` assignments redacted
   to end of line including quoted JSON keys (`"password":`, `"Authorization":`),
-  `Authorization` headers case-insensitively), truncated to
+  `Authorization` headers/`Authorization=` assignments case-insensitively), truncated to
   400 characters, including prefixed assignment keys such as
   `access_token=` / `refresh-token=` / `client_secret=`. Only the
   endpoint-selection variables `DOCKER_HOST`, `DOCKER_CONTEXT`,

@@ -366,6 +366,16 @@ class EngineFailures(Harness):
         self.assertNotIn("Bearer", detail)
         self.assertIn("<redacted>", detail)
 
+    def test_authorization_equals_bearer_is_fully_redacted(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["docker_version"] = docker_daemon_down(
+            "error: Authorization=Bearer supersecrettoken")
+        _, report, _ = self.run_main(fixture)
+        text = json.dumps(report)
+        self.assertNotIn("supersecrettoken", text)
+        self.assertNotIn("Bearer", text)
+        self.assertIn("<redacted>", text)
+
     def test_disk_selects_longest_mount_ancestor(self):
         fixture = dict(DEFAULT_FIXTURE)
         fixture["disk"] = {"stdout":
@@ -627,6 +637,8 @@ class EngineFailures(Harness):
         self.assertFalse(preflight.sysfs_device_name_ok("id_rsa"))
         self.assertFalse(preflight.sysfs_device_name_ok("foo.env"))
         self.assertTrue(preflight.sysfs_device_name_ok("a" * 255))
+        self.assertFalse(preflight.sysfs_device_name_ok("nvme\udc80n1"))
+        self.assertFalse(preflight.sysfs_device_name_ok("nvme\x85n1"))
 
     def test_overflow_kills_probe_descendants(self):
         pidfile = os.path.join(self.tmp.name, "grandchild.pid")
