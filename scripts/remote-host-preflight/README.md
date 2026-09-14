@@ -58,9 +58,11 @@ unsupported check **and no probe errors**, `2` at least one probe error
   `Authorization` headers case-insensitively), truncated to
   400 characters, including prefixed assignment keys such as
   `access_token=` / `refresh-token=` / `client_secret=`. Only the
-  endpoint-selection variables `DOCKER_HOST` and `PODMAN_CONNECTION` /
-  `PODMAN_HOST` / `CONTAINER_HOST` / `CONTAINER_CONNECTION` (presence) are
-  inspected, plus the active docker context Host from the formatted inspect
+  endpoint-selection variables `DOCKER_HOST`, `DOCKER_CONTEXT`,
+  `PODMAN_CONNECTION`, `PODMAN_HOST`, `CONTAINER_HOST`, and
+  `CONTAINER_CONNECTION` (presence) are inspected, plus `XDG_RUNTIME_DIR`
+  when locating a local Podman API socket, plus the active docker context
+  Host from the formatted inspect
   probe — never an environment dump; full engine configuration, peer
   inventories and unrelated workloads are never read or reported. `--timeout`
   must be a positive finite number.

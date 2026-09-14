@@ -41,6 +41,9 @@ DEFAULT_WORKSPACE_PATH = "/var/lib/horizon-workers"
 DEFAULT_TIMEOUT = 10.0
 MAX_TIMEOUT = 3600.0  # select/wait cannot represent 1e300-class values
 MAX_PROBE_OUTPUT_BYTES = 65536
+# json.dumps can expand one byte to `\u00XX` (6 chars). stdout+stderr plus
+# the watchdog wrapper must fit this cap or a completed probe looks like a timeout.
+MAX_WATCHDOG_PAYLOAD = MAX_PROBE_OUTPUT_BYTES * 12 + 4096
 
 # Status values, kept separate on purpose per the issue contract.
 SUPPORTED = "supported"
@@ -105,15 +108,18 @@ ENDPOINT_VARS = DOCKER_ENDPOINT_VARS + PODMAN_ENDPOINT_VARS
 # leak the credential, and whitespace-containing values are otherwise only
 # partially removed.
 REDACTED_PATTERNS = (
-    re.compile(r"eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}(?:\.[A-Za-z0-9_-]{4,})?"),  # JWT-like
+    re.compile(r"eyJ[A-Za-z0-9_-]{4,4096}\.[A-Za-z0-9_-]{4,4096}(?:\.[A-Za-z0-9_-]{4,4096})?"),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*"),
     re.compile(
-        r'(?i)"?[A-Za-z0-9_-]*(password|passwd|secret|token|api[_-]?key)"?\s*[:=]\s*[^\n]*'
+        r'(?i)(?:^|[^A-Za-z0-9_-])"?[A-Za-z0-9_-]{0,64}'
+        r'(?:password|passwd|secret|token|api[_-]?key)"?\s*[:=]\s*[^\n]*'
     ),
     re.compile(r'(?i)"?authorization"?\s*:\s*[^\n]*'),
-    re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{8,}"),
+    re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{8,255}"),
 )
-URI_USERINFO = re.compile(r"(?i)([a-z][a-z0-9+.-]*://)[^/@\s]+:[^/@\s]+@")
+URI_USERINFO = re.compile(
+    r"(?i)([a-z][a-z0-9+.-]{0,32}://)[^/@\s]{1,256}:[^/@\s]{1,256}@"
+)
 
 # Precomputed read-only facts that cannot be proven from host metadata alone.
 ALWAYS_UNVERIFIED = (
@@ -800,10 +806,30 @@ def decode_probe_output(data):
     return str(data)
 
 
+def _terminate_probe(proc):
+    """Kill the probe and its process group, then reap."""
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except OSError:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+    try:
+        proc.wait(timeout=1)
+    except (subprocess.TimeoutExpired, OSError):
+        try:
+            proc.kill()
+        except OSError:
+            pass
+
+
 def bounded_communicate(proc, timeout, max_bytes):
     """Read stdout/stderr up to max_bytes. Kill the probe if it exceeds that.
 
     Returns (stdout, stderr, overflow_or_None). Raises TimeoutExpired.
+    Overflow and timeout kill the whole process group so descendants cannot
+    outlive the bounded probe.
     """
     deadline = time.monotonic() + timeout
     buckets = {proc.stdout: bytearray(), proc.stderr: bytearray()}
@@ -815,11 +841,7 @@ def bounded_communicate(proc, timeout, max_bytes):
         while open_fds:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                proc.kill()
-                try:
-                    proc.wait(timeout=1)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
+                _terminate_probe(proc)
                 raise subprocess.TimeoutExpired(proc.args, timeout)
             ready, _, _ = select.select(open_fds, [], [], remaining)
             for fd in ready:
@@ -832,30 +854,18 @@ def bounded_communicate(proc, timeout, max_bytes):
                 buckets[fd].extend(chunk)
                 if len(buckets[proc.stdout]) + len(buckets[proc.stderr]) > max_bytes:
                     overflow = True
-                    proc.kill()
-                    try:
-                        proc.wait(timeout=1)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
+                    _terminate_probe(proc)
                     open_fds = []
                     break
         remaining = deadline - time.monotonic()
         if proc.poll() is None:
             if remaining <= 0:
-                proc.kill()
-                try:
-                    proc.wait(timeout=1)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
+                _terminate_probe(proc)
                 raise subprocess.TimeoutExpired(proc.args, timeout)
             try:
                 proc.wait(timeout=remaining)
             except subprocess.TimeoutExpired:
-                proc.kill()
-                try:
-                    proc.wait(timeout=1)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
+                _terminate_probe(proc)
                 raise subprocess.TimeoutExpired(proc.args, timeout)
         stdout = bytes(buckets[proc.stdout])
         stderr = bytes(buckets[proc.stderr])
@@ -873,7 +883,7 @@ def bounded_communicate(proc, timeout, max_bytes):
 
 def _execute_probe(argv, timeout):
     proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            shell=False)
+                            shell=False, start_new_session=True)
     stdout, stderr, overflow = bounded_communicate(proc, timeout, MAX_PROBE_OUTPUT_BYTES)
     if overflow:
         return {"exit_code": 1, "stdout": "", "stderr": overflow, "output_exceeded": True}
@@ -948,7 +958,7 @@ def _watchdog_execute_probe(argv, timeout):
             if chunk == b"":
                 break
             chunks.extend(chunk)
-            if len(chunks) > MAX_PROBE_OUTPUT_BYTES * 4:
+            if len(chunks) > MAX_WATCHDOG_PAYLOAD:
                 _kill_process_group(pid)
                 raise subprocess.TimeoutExpired(argv, timeout)
         try:

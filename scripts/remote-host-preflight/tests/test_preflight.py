@@ -12,6 +12,7 @@ import pathlib
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -549,6 +550,40 @@ class EngineFailures(Harness):
                 preflight.default_executor(
                     ["/nonexistent-horizon-preflight-probe"], 1.0)
 
+    def test_overflow_kills_probe_descendants(self):
+        pidfile = os.path.join(self.tmp.name, "grandchild.pid")
+        script = (
+            "import subprocess,sys\n"
+            "child=subprocess.Popen(['sleep','30'])\n"
+            "open(%r,'w').write(str(child.pid))\n"
+            "sys.stdout.write('x'*200000)\n"
+        ) % pidfile
+        with mock.patch.object(subprocess, "Popen", self.real_popen):
+            result = preflight.default_executor(
+                [sys.executable, "-B", "-c", script], 2.0)
+        self.assertTrue(result.get("output_exceeded"))
+        with open(pidfile, encoding="utf-8") as handle:
+            grandchild = int(handle.read().strip())
+        deadline = time.monotonic() + 2
+        alive = True
+        while time.monotonic() < deadline:
+            try:
+                os.kill(grandchild, 0)
+            except OSError:
+                alive = False
+                break
+            time.sleep(0.05)
+        self.assertFalse(alive)
+
+    def test_nul_output_does_not_timeout_watchdog(self):
+        with mock.patch.object(subprocess, "Popen", self.real_popen):
+            result = preflight.default_executor(
+                [sys.executable, "-B", "-c",
+                 "import sys; sys.stdout.buffer.write(b'\\x00'*50000)"],
+                2.0)
+        self.assertFalse(result.get("output_exceeded"))
+        self.assertEqual(result.get("exit_code"), 0)
+
     def test_podman_probe_forces_local_mode(self):
         self.assertEqual(preflight.PROBE_ARGS["podman_info"][:2], ["podman", "--remote=true"])
         fixture = dict(DEFAULT_FIXTURE)
@@ -939,6 +974,14 @@ class RedactionAndDeterminism(Harness):
         self.assertNotIn("supersecretvalue", text)
         self.assertNotIn(JWT, text)
         self.assertIn("<redacted>", text)
+
+    def test_redaction_of_nonmatching_line_is_not_quadratic(self):
+        blob = "a" * 65536
+        started = time.monotonic()
+        out = preflight.redact(blob)
+        elapsed = time.monotonic() - started
+        self.assertEqual(out, blob[:400])
+        self.assertLess(elapsed, 0.5)
 
     def test_quoted_json_diagnostics_are_redacted(self):
         blob = '{"password":"hunter2","Authorization":"Bearer supersecrettok"}'
