@@ -199,3 +199,21 @@ fn azure_status_discards_client_and_query_results_after_saved_state_drift() {
         ));
     }
 }
+
+#[test]
+fn public_dispatcher_routes_azure_to_saved_panel_admission_before_any_client() {
+    let fixture = AzureFixture::new(WorkerLifetime::Persistent, true, true);
+    let expected = fixture.current().workspace().environment_summary();
+    let result = crate::remote_worker_status::inspect_configured_remote_panel(
+        &fixture.store,
+        &identities(&fixture),
+        &fixture.config(),
+        ConfiguredRemotePanelStatusRequest {
+            expected: &expected,
+            client_session_id: OWNER,
+            panel_id: "not-a-saved-panel",
+        },
+    );
+    assert_eq!(result, Err(Error::Inspection(RemotePanelStatusError::UnknownPanel)));
+    assert_eq!(fixture.current(), fixture.allocation);
+}
