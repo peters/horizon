@@ -131,6 +131,22 @@ def _execute_probe(argv, timeout):
             "stderr": decode_probe_output(stderr)}
 
 
+def _reap_child(pid, timeout=1.0):
+    """Wait up to `timeout` seconds for an owned child. Never block forever."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            waited, _status = os.waitpid(pid, os.WNOHANG)
+        except OSError:
+            return
+        if waited == pid:
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(0.02, remaining))
+
+
 def _kill_process_group(pid):
     try:
         os.killpg(pid, signal.SIGKILL)
@@ -139,10 +155,7 @@ def _kill_process_group(pid):
             os.kill(pid, signal.SIGKILL)
         except OSError:
             pass
-    try:
-        os.waitpid(pid, os.WNOHANG)
-    except OSError:
-        pass
+    _reap_child(pid)
 
 
 def _kill_session_except_self():
@@ -238,10 +251,7 @@ def _watchdog_execute_probe(argv, timeout):
             if len(chunks) > MAX_WATCHDOG_PAYLOAD:
                 _kill_process_group(pid)
                 raise subprocess.TimeoutExpired(argv, timeout)
-        try:
-            os.waitpid(pid, os.WNOHANG)
-        except OSError:
-            pass
+        _reap_child(pid)
     finally:
         try:
             os.close(read_fd)

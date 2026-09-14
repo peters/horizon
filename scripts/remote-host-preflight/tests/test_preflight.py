@@ -1405,18 +1405,46 @@ class RedactionAndDeterminism(Harness):
         self.assertEqual(report["generated_at"], NOW)
 
     def test_argv_allowlist_enforced(self):
+        permitted = {
+            "os": ["uname", "-srm"],
+            "cores": ["nproc"],
+            "docker_version": ["docker", "version", "--format", "json"],
+            "docker_info": ["docker", "info", "--format", "{{.Driver}}"],
+            "docker_context": ["docker", "context", "inspect", "--format",
+                               "{{.Endpoints.docker.Host}}"],
+            "podman_client": ["podman", "--version"],
+            "podman_info": ["podman", "--remote=true", "--url"],
+            "podman_info_tail": ["info", "--format", "{{.Version.Version}}"],
+            "disk": ["df", "-kP"],
+            "tailscale_version": ["tailscale", "version"],
+            "tailscale_status": ["tailscale", "status", "--json", "--peers=false"],
+        }
+        helper_keys = ("podman_socket", "workspace_dir")
+        self.assertEqual(set(preflight.PROBE_ARGS), set(permitted) | set(helper_keys))
+        for key, args in permitted.items():
+            self.assertEqual(list(preflight.PROBE_ARGS[key]), args, key)
+        for key in helper_keys:
+            argv = list(preflight.PROBE_ARGS[key])
+            self.assertEqual(argv[:3], [sys.executable, "-B", "-c"], key)
+            self.assertEqual(len(argv), 4, key)
+            script = argv[3]
+            self.assertNotIn("unlink", script, key)
+            self.assertNotIn("mkdir", script, key)
+            self.assertNotIn("rmtree", script, key)
+            self.assertNotIn("Popen", script, key)
         fixture = dict(DEFAULT_FIXTURE)
         _, _, executor = self.run_main(fixture)
-        allowed = [list(args) for args in preflight.PROBE_ARGS.values()]
-        extra_keys = ("disk", "workspace_dir", "podman_info", "podman_socket")
+        allowed = [list(args) for args in permitted.values()]
+        extra_prefixes = [list(preflight.PROBE_ARGS[key]) for key in helper_keys]
+        extra_prefixes.append(list(permitted["podman_info"]))
+        extra_prefixes.append(list(permitted["disk"]))
         for argv in executor.seen:
             skipped = False
             if (len(argv) >= 3 and argv[0] == "docker" and argv[1] == "--host"
                     and argv[2].startswith("unix://")
                     and (["docker"] + argv[3:]) in allowed):
                 skipped = True
-            for key in extra_keys:
-                prefix = list(preflight.PROBE_ARGS[key])
+            for prefix in extra_prefixes:
                 if argv[:len(prefix)] == prefix and len(argv) > len(prefix):
                     skipped = True
                     break
