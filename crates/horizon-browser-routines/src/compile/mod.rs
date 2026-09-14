@@ -92,8 +92,9 @@ pub struct McpCall {
 
 /// Compile a validated recording into crate-local plan steps.
 ///
-/// Consecutive same-direction scrolls that share a target and mutation class
-/// are coalesced when no assertion sits between them. Click, fill, targeted
+/// Consecutive same-direction scrolls that share a target, page origin, URL
+/// pattern, and mutation class are coalesced when no assertion sits between
+/// them. Click, fill, targeted
 /// scroll, credential fill, and handoff stay off the MCP selector path.
 ///
 /// # Errors
@@ -119,27 +120,31 @@ pub fn compile(
         }
     }
     let mut steps = Vec::new();
-    let mut pending_scroll: Option<CompiledStep> = None;
+    let mut pending_scroll: Option<PendingScroll> = None;
     for action in &recording.actions {
         if let RecordedKind::Scroll { .. } = action.kind {
             let compiled = compile_action(action)?;
             pending_scroll = Some(match pending_scroll.take() {
-                Some(previous) if can_coalesce_scroll(&previous, &compiled) => coalesce_scroll(previous, compiled)?,
+                Some(previous) if can_coalesce_scroll(&previous, &compiled, action) => PendingScroll {
+                    page_origin: previous.page_origin,
+                    url_pattern: previous.url_pattern,
+                    step: coalesce_scroll(previous.step, compiled)?,
+                },
                 Some(previous) => {
-                    steps.push(previous);
-                    compiled
+                    steps.push(previous.step);
+                    PendingScroll::from_action(compiled, action)
                 }
-                None => compiled,
+                None => PendingScroll::from_action(compiled, action),
             });
             continue;
         }
         if let Some(scroll) = pending_scroll.take() {
-            steps.push(scroll);
+            steps.push(scroll.step);
         }
         steps.push(compile_action(action)?);
     }
     if let Some(scroll) = pending_scroll {
-        steps.push(scroll);
+        steps.push(scroll.step);
     }
     Ok(CompiledRoutine {
         steps,
@@ -192,8 +197,24 @@ fn compile_action(action: &RecordedAction) -> Result<CompiledStep, RoutineError>
     })
 }
 
-fn can_coalesce_scroll(previous: &CompiledStep, next: &CompiledStep) -> bool {
-    match (&previous.action, &next.action) {
+struct PendingScroll {
+    step: CompiledStep,
+    page_origin: crate::origin::Origin,
+    url_pattern: String,
+}
+
+impl PendingScroll {
+    fn from_action(step: CompiledStep, action: &RecordedAction) -> Self {
+        Self {
+            step,
+            page_origin: action.page_origin.clone(),
+            url_pattern: action.url_pattern.clone(),
+        }
+    }
+}
+
+fn can_coalesce_scroll(previous: &PendingScroll, next: &CompiledStep, next_action: &RecordedAction) -> bool {
+    match (&previous.step.action, &next.action) {
         (
             CompiledAction::Scroll {
                 delta_x: previous_x,
@@ -204,9 +225,11 @@ fn can_coalesce_scroll(previous: &CompiledStep, next: &CompiledStep) -> bool {
                 delta_y: next_y,
             },
         ) => {
-            previous.target == next.target
-                && previous.mutation_class == next.mutation_class
-                && previous.postcondition.is_none()
+            previous.step.target == next.target
+                && previous.page_origin == next_action.page_origin
+                && previous.url_pattern == next_action.url_pattern
+                && previous.step.mutation_class == next.mutation_class
+                && previous.step.postcondition.is_none()
                 && next.precondition.is_none()
                 && same_scroll_direction(*previous_x, *next_x)
                 && same_scroll_direction(*previous_y, *next_y)

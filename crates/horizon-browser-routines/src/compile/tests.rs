@@ -290,6 +290,32 @@ fn duplicate_action_ids_are_rejected() {
 }
 
 #[test]
+fn targetless_scrolls_do_not_coalesce_across_pages() {
+    let mut first = action(
+        "s1",
+        RecordedKind::Scroll {
+            delta_x: 0.0,
+            delta_y: 80.0,
+        },
+        None,
+    );
+    first.page_origin = Origin::parse("https://reports.example").expect("origin");
+    first.url_pattern = "https://reports.example/app".to_string();
+    let mut second = action(
+        "s2",
+        RecordedKind::Scroll {
+            delta_x: 0.0,
+            delta_y: 40.0,
+        },
+        None,
+    );
+    second.page_origin = Origin::parse("https://idp.example").expect("origin");
+    second.url_pattern = "https://idp.example/login".to_string();
+    let compiled = compile(&recording(vec![first, second]), heading()).expect("compile");
+    assert_eq!(compiled.steps.len(), 2);
+}
+
+#[test]
 fn opposite_scrolls_are_not_coalesced() {
     let first = action(
         "s1",

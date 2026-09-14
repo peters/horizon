@@ -22,6 +22,11 @@ pub struct RoutineLock {
 }
 
 impl RoutineRegistry {
+    #[must_use]
+    pub(crate) fn directory(&self) -> &Path {
+        &self.root
+    }
+
     /// # Errors
     /// Returns [`RoutineError::Storage`] when the root cannot be created privately.
     pub fn open(root: PathBuf) -> Result<Self, RoutineError> {
@@ -46,19 +51,7 @@ impl RoutineRegistry {
     /// Missing file, malformed JSON, or validation failure.
     pub fn load(&self, routine_id: Uuid) -> Result<RoutineDefinition, RoutineError> {
         let path = self.root.join(routine_id.to_string()).join("routine.json");
-        let metadata = match fs::symlink_metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == ErrorKind::NotFound => return Err(RoutineError::RoutineNotFound),
-            Err(_) => return Err(RoutineError::Storage),
-        };
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err(RoutineError::Storage);
-        }
-        let bytes = match fs::read(&path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == ErrorKind::NotFound => return Err(RoutineError::RoutineNotFound),
-            Err(_) => return Err(RoutineError::Storage),
-        };
+        let bytes = read_private_file(&path)?;
         let routine: RoutineDefinition =
             serde_json::from_slice(&bytes).map_err(|_| RoutineError::Json("malformed routine JSON".into()))?;
         if routine.routine_id != routine_id {
@@ -137,24 +130,36 @@ impl RoutineRegistry {
         create_private_dir(&dir)?;
         let path = dir.join("lock");
         let mut options = fs::OpenOptions::new();
-        options.create(true).write(true).truncate(true);
+        options.create(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed());
+        }
         #[cfg(windows)]
         {
             use std::os::windows::fs::OpenOptionsExt as _;
-            options.share_mode(0);
+            const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+            options.share_mode(0).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
         }
         let file = options.open(&path).map_err(|_| RoutineError::Storage)?;
+        let metadata = fs::symlink_metadata(&path).map_err(|_| RoutineError::Storage)?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(RoutineError::Storage);
+        }
         #[cfg(unix)]
         {
             rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)
                 .map_err(|_| RoutineError::Storage)?;
-            set_file_mode(&path, 0o600)?;
         }
+        file.set_len(0).map_err(|_| RoutineError::Storage)?;
+        #[cfg(unix)]
+        set_file_mode(&path, 0o600)?;
         Ok(RoutineLock { _file: file })
     }
 }
 
-fn create_private_dir(path: &Path) -> Result<(), RoutineError> {
+pub(crate) fn create_private_dir(path: &Path) -> Result<(), RoutineError> {
     if let Some(parent) = path.parent() {
         validate_existing_ancestors(parent)?;
     }
@@ -196,19 +201,17 @@ fn create_private_dir(path: &Path) -> Result<(), RoutineError> {
 fn validate_existing_ancestors(path: &Path) -> Result<(), RoutineError> {
     let mut current = path.to_path_buf();
     loop {
-        match fs::metadata(&current) {
-            Ok(metadata) => {
-                if !metadata.is_dir() {
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                if symlink_is_replaceable(&current, &metadata) {
                     return Err(RoutineError::Storage);
                 }
-                #[cfg(unix)]
-                {
-                    let mode = metadata.permissions().mode();
-                    if mode & 0o022 != 0 && mode & 0o1000 == 0 {
-                        return Err(RoutineError::Storage);
-                    }
+                match fs::metadata(&current) {
+                    Ok(target) => check_directory_permissions(&target)?,
+                    Err(_) => return Err(RoutineError::Storage),
                 }
             }
+            Ok(metadata) => check_directory_permissions(&metadata)?,
             Err(error) if error.kind() == ErrorKind::NotFound => {}
             Err(_) => return Err(RoutineError::Storage),
         }
@@ -223,7 +226,67 @@ fn validate_existing_ancestors(path: &Path) -> Result<(), RoutineError> {
     Ok(())
 }
 
-fn write_private(path: &Path, bytes: &[u8]) -> Result<(), RoutineError> {
+fn check_directory_permissions(metadata: &fs::Metadata) -> Result<(), RoutineError> {
+    if !metadata.is_dir() {
+        return Err(RoutineError::Storage);
+    }
+    #[cfg(unix)]
+    {
+        let mode = metadata.permissions().mode();
+        if mode & 0o022 != 0 && mode & 0o1000 == 0 {
+            return Err(RoutineError::Storage);
+        }
+    }
+    Ok(())
+}
+
+/// True when the current user can replace this symlink (owned by us, parent
+/// owned by us, or parent world-writable without sticky). System aliases such
+/// as macOS `/tmp` → `/private/tmp` stay allowed because root owns both the
+/// link and its parent.
+fn symlink_is_replaceable(path: &Path, link: &fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        let uid = rustix::process::geteuid().as_raw();
+        if link.uid() == uid {
+            return true;
+        }
+        let Some(parent) = path.parent() else {
+            return true;
+        };
+        match fs::metadata(parent) {
+            Ok(metadata) if metadata.uid() == uid => true,
+            Ok(metadata) => {
+                let mode = metadata.permissions().mode();
+                mode & 0o022 != 0 && mode & 0o1000 == 0
+            }
+            Err(_) => true,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, link);
+        true
+    }
+}
+
+pub(crate) fn read_private_file(path: &Path) -> Result<Vec<u8>, RoutineError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Err(RoutineError::RoutineNotFound),
+        Err(_) => return Err(RoutineError::Storage),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(RoutineError::Storage);
+    }
+    match fs::read(path) {
+        Ok(bytes) => Ok(bytes),
+        Err(error) if error.kind() == ErrorKind::NotFound => Err(RoutineError::RoutineNotFound),
+        Err(_) => Err(RoutineError::Storage),
+    }
+}
+
+pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> Result<(), RoutineError> {
     let mut options = fs::OpenOptions::new();
     options.create(true).truncate(true).write(true);
     #[cfg(unix)]
@@ -301,5 +364,54 @@ mod tests {
         drop(registry.lock(id).expect("lock"));
         assert!(registry.list().expect("list").is_empty());
         assert_eq!(registry.load(id), Err(RoutineError::RoutineNotFound));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_rejects_a_symlinked_ancestor() {
+        let temp = tempfile::tempdir().expect("temp");
+        privatize_temp(temp.path());
+        let real = temp.path().join("real");
+        std::fs::create_dir(&real).expect("real");
+        privatize_temp(&real);
+        let link = temp.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+        assert_eq!(
+            RoutineRegistry::open(link.join("routines")).err(),
+            Some(RoutineError::Storage)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_rejects_a_user_owned_symlink_in_sticky_tmpdir() {
+        let tmp = std::env::temp_dir();
+        let suffix = Uuid::new_v4();
+        let real = tmp.join(format!("horizon-routine-real-{suffix}"));
+        let link = tmp.join(format!("horizon-routine-link-{suffix}"));
+        std::fs::create_dir(&real).expect("real");
+        privatize_temp(&real);
+        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+        let opened = RoutineRegistry::open(link.join("routines"));
+        let _ = std::fs::remove_file(&link);
+        let _ = std::fs::remove_dir_all(&real);
+        assert_eq!(opened.err(), Some(RoutineError::Storage));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lock_does_not_follow_or_truncate_a_symlink() {
+        let temp = tempfile::tempdir().expect("temp");
+        privatize_temp(temp.path());
+        let registry = RoutineRegistry::open(temp.path().join("routines")).expect("open");
+        let id = Uuid::from_u128(13);
+        let dir = temp.path().join("routines").join(id.to_string());
+        std::fs::create_dir(&dir).expect("dir");
+        privatize_temp(&dir);
+        let victim = temp.path().join("victim");
+        std::fs::write(&victim, b"keep").expect("victim");
+        std::os::unix::fs::symlink(&victim, dir.join("lock")).expect("symlink");
+        assert_eq!(registry.lock(id).err(), Some(RoutineError::Storage));
+        assert_eq!(std::fs::read(&victim).expect("read"), b"keep");
     }
 }
