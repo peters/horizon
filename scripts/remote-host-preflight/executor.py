@@ -10,6 +10,7 @@ import os
 import select
 import signal
 import subprocess
+import sys
 import time
 
 PR_SET_CHILD_SUBREAPER = 36
@@ -327,6 +328,6 @@ def _watchdog_execute_probe(argv, timeout):
 
 
 def default_executor(argv, timeout):
-    if hasattr(os, "fork"):
+    if sys.platform.startswith("linux") and hasattr(os, "fork"):
         return _watchdog_execute_probe(argv, timeout)
     return _execute_probe(argv, timeout)

@@ -397,8 +397,8 @@ def resolve_podman_sockets(executor, timeout):
 
     Returns (paths, None) for discovered candidate sockets, ([], None) when
     none exist, or ([], error) when the helper fails or times out. A stale
-    rootless socket file can still `exists()`, so callers must probe each
-    path. `XDG_RUNTIME_DIR` may name a stale FUSE/NFS path, so `exists`
+    rootless socket file can still `lstat`, so callers must probe each
+    path. `XDG_RUNTIME_DIR` may name a stale FUSE/NFS path, so `lstat`
     stays inside the timeout-bounded subprocess.
     """
     runtime = os.environ.get("XDG_RUNTIME_DIR")
@@ -669,6 +669,8 @@ def format_seconds(timeout):
 
 def resolve_workspace_directory(executor, timeout, path):
     """Killable workspace dir + device identity, bounded by `timeout`."""
+    if not (path or "").strip():
+        return None, None, None, "workspace path is empty"
     result, error = run_probe(executor, "workspace_dir", timeout, extra_argv=[path])
     if error:
         return None, None, None, error
@@ -738,6 +740,8 @@ def workspace_directory(path):
     A workspace that exists as a regular file (or whose first existing
     ancestor is not a directory) cannot host the worker tree.
     """
+    if not (path or "").strip():
+        return None, "workspace path is empty"
     try:
         resolved = os.path.normpath(os.path.realpath(path))
     except OSError:
@@ -879,6 +883,7 @@ def check_storage_qualifier(procfs_root, sysfs_root, resolved):
     if problem:
         invalid_path = (
             problem == "workspace path is not a directory"
+            or problem == "workspace path is empty"
             or "does not exist and no ancestor is stat-able" in problem
         )
         status = UNSUPPORTED if invalid_path else ERROR
@@ -1067,6 +1072,8 @@ def main(argv=None, executor=None, now=None):
                         help="per-probe timeout in seconds (default: %(default)s)")
     parser.add_argument("--json", action="store_true", help="emit the JSON report")
     args = parser.parse_args(argv)
+    if not (args.workspace_path or "").strip():
+        parser.error("workspace path must be non-empty (use . for the current directory)")
 
     executor = executor or default_executor
     stamp = args.now if args.now is not None else now

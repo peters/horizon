@@ -707,6 +707,18 @@ class EngineFailures(Harness):
             time.sleep(0.05)
         self.assertFalse(alive)
 
+    def test_non_linux_uses_direct_executor(self):
+        import executor as execmod
+        with mock.patch.object(execmod.sys, "platform", "darwin"):
+            with mock.patch.object(execmod, "_watchdog_execute_probe") as watch:
+                with mock.patch.object(
+                        execmod, "_execute_probe",
+                        return_value={"exit_code": 0, "stdout": "", "stderr": ""}) as direct:
+                    result = execmod.default_executor(["true"], 1.0)
+        watch.assert_not_called()
+        direct.assert_called_once()
+        self.assertEqual(result["exit_code"], 0)
+
     def test_setsid_failure_does_not_run_probe(self):
         with mock.patch.object(os, "setsid", side_effect=OSError("denied")):
             with mock.patch.object(subprocess, "Popen", self.real_popen):
@@ -1509,6 +1521,11 @@ class RedactionAndDeterminism(Harness):
     def test_timeout_must_be_positive_finite(self):
         import io
         from contextlib import redirect_stderr
+        with redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as caught:
+                preflight.main(["--workspace-path", ""])
+        self.assertEqual(caught.exception.code, 3)
+
         for value in ("-1", "0", "nan", "inf", "-inf", "1e300"):
             with self.subTest(value=value):
                 with redirect_stderr(io.StringIO()):
