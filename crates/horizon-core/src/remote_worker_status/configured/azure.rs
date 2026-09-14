@@ -66,8 +66,8 @@ pub(in crate::remote_worker_status) fn inspect_with<P: InteractiveWorkerProvider
         RemoteRuntimePhase::Stopping { .. } | RemoteRuntimePhase::Starting { .. } => {
             return Err(RemotePanelStatusError::ManagementPending.into());
         }
-        RemoteRuntimePhase::Stopped { .. } => return Err(RemotePanelStatusError::WorkerUnavailable.into()),
-        _ => {}
+        RemoteRuntimePhase::Ready | RemoteRuntimePhase::Reconciling => {}
+        _ => return Err(RemotePanelStatusError::WorkerUnavailable.into()),
     }
     if !state
         .spec

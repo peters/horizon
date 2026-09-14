@@ -160,6 +160,44 @@ fn azure_status_does_not_start_stopped_or_transitioning_compute() {
     }
 }
 
+#[test]
+fn azure_status_only_inspects_ready_or_reconciling_retained_workers() {
+    for phase in [
+        RemoteRuntimePhase::Materializing,
+        RemoteRuntimePhase::Checkpointing,
+        RemoteRuntimePhase::Failed,
+        RemoteRuntimePhase::Ready,
+        RemoteRuntimePhase::Reconciling,
+    ] {
+        let fixture = AzureFixture::new(WorkerLifetime::Persistent, true, true);
+        let mut state = fixture.allocation.workspace().state().clone();
+        state.runtime.as_mut().unwrap().phase = phase;
+        fixture
+            .store
+            .replace_remote_workspace(fixture.allocation.workspace(), &state)
+            .unwrap();
+        if matches!(phase, RemoteRuntimePhase::Ready | RemoteRuntimePhase::Reconciling) {
+            assert_eq!(
+                query(&fixture, RUNNING.as_bytes()).unwrap().status,
+                RemotePanelStatus::Running { pid: 12 }
+            );
+        } else {
+            let result = inspect_with::<AzureProvider>(
+                &fixture.store,
+                &identities(&fixture),
+                &fixture.profile,
+                request(&fixture.current().workspace().environment_summary()),
+                |_| panic!("unavailable lifecycle must not create a client"),
+                |_, _| panic!("unavailable lifecycle must not query a task"),
+            );
+            assert_eq!(
+                result,
+                Err(Error::Inspection(RemotePanelStatusError::WorkerUnavailable))
+            );
+        }
+    }
+}
+
 fn change_directory(fixture: &AzureFixture) {
     let saved = fixture.current();
     let mut state = saved.workspace().state().clone();
