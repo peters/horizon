@@ -34,6 +34,7 @@ pub use coordination::{BrowserCoordination, CoordinationSignals, CoordinationSta
 pub use disclosure::{AutomationDisclosurePolicy, AutomationDisclosureStatus};
 pub use error::BrowserError;
 pub use frames::{FrameData, FrameMetrics, FrameSlot, PageScrollState, TeachObservation};
+pub use horizon_browser_protocol::remote::RemoteBrowserConfig;
 pub use horizon_browser_protocol::{
     AgentAction, BackendAvailability, BackendCapabilities, BackendKind, BrowserControlAction, BrowserVideoCapture,
     BrowserVideoCaptureOptions, BrowserVideoCaptureOverrides, BrowserVideoOperation, BrowserVideoState,
@@ -97,6 +98,10 @@ pub struct BrowserConfig {
     pub profile_root: Option<PathBuf>,
     /// Defaults for page-pixel `WebM` capture. Per-recording options may override.
     pub video: BrowserVideoCaptureOptions,
+    /// Remote device-service providers and selectable targets. Empty unless
+    /// configured; parsing never allocates a device.
+    #[serde(skip_serializing_if = "RemoteBrowserConfig::is_empty")]
+    pub remote: RemoteBrowserConfig,
 }
 
 impl Default for BrowserConfig {
@@ -114,6 +119,7 @@ impl Default for BrowserConfig {
             every_nth_frame: 1,
             profile_root: None,
             video: BrowserVideoCaptureOptions::default(),
+            remote: RemoteBrowserConfig::default(),
         }
     }
 }

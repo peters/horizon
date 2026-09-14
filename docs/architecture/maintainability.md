@@ -61,9 +61,16 @@ back into large multi-purpose modules.
   backend identifiers/capabilities, input and command values, validated agent
   actions, semantic results, bounded network records, video-capture options,
   and redacted audit entries.
-- Depends only on serialization support. It must not acquire process, socket,
-  async-runtime, image-decoder, filesystem-coordination, MCP, `horizon-core`,
-  or UI dependencies.
+- Depends only on serialization support plus `url` for endpoint
+  canonicalization. It must not acquire process, socket, async-runtime,
+  image-decoder, filesystem-coordination, MCP, `horizon-core`, or UI
+  dependencies.
+- `remote` owns the `browser.remote` configuration contract: `provider`
+  (validated control endpoint, tagged authentication, credential bindings as
+  references only, bounded limits), `target` (normalized device requirement and
+  namespaced capability extensions), `error` (identifier-only messages), and
+  the orchestrating module for validation, portable export and import. It
+  holds no credential values, transport, allocation or store access.
 - Contains no host policy. Browser launch, persistence, authentication,
   retention, steering ownership, backend input serialization, and presentation
   remain in their owning crates.
