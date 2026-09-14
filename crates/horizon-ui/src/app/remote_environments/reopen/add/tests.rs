@@ -1,4 +1,4 @@
-use super::super::{Board, InventoryAction};
+use super::super::{Board, InventoryAction, PendingReopen};
 use super::*;
 use crate::app::remote_environments::{InventoryPage, RemoteEnvironments, paint::InventoryRow};
 use crate::app::test_support::{raw_input, test_app};
@@ -514,5 +514,54 @@ fn save_failure_guidance_is_added_once_even_for_a_punctuated_cause() {
         assert_eq!(message.matches("Refresh saved panels").count(), 1);
         assert_eq!(message.matches("No retry was scheduled").count(), 1);
         assert!(!message.contains(".."));
+    }
+}
+
+#[test]
+fn invalidated_add_requests_render_their_pending_operation_and_save_uncertainty() {
+    let (_temp, app, _store, scope) = fixture();
+    for saving in [false, true] {
+        let (_tx, rx) = std::sync::mpsc::sync_channel(1);
+        let mut state = ReopenState {
+            pending: Some(PendingReopen {
+                scope: scope.clone(),
+                inspection: None,
+                start: None,
+                add: Some(PendingAdd {
+                    scope: Scope {
+                        request: scope.clone(),
+                        home: app.session_store.home().clone(),
+                    },
+                    saving,
+                }),
+                rx,
+                discard: false,
+            }),
+            ..Default::default()
+        };
+        state.invalidate();
+        let ctx = Context::default();
+        let mut action = InventoryAction::None;
+        let output = ctx
+            .run_ui(raw_input([1000.0, 900.0], None), |ui| {
+                super::super::paint::show(ui, &state, true, &mut action);
+            })
+            .discard_textures();
+        let text = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!text.contains("discarded saved-view request"));
+        if saving {
+            assert!(text.contains("earlier Shell save") && text.contains("outcome is unknown"));
+        } else {
+            assert!(text.contains("discarded Shell panel preview"));
+        }
+        assert!(state.is_pending() && matches!(action, InventoryAction::None));
     }
 }

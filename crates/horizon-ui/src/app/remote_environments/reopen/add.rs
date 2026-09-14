@@ -105,8 +105,12 @@ impl PendingAdd {
         self.saving
     }
 
-    pub(super) fn label(&self) -> &'static str {
-        if self.saving {
+    pub(super) fn label(&self, discarded: bool) -> &'static str {
+        if discarded && self.saving {
+            "Waiting for an earlier Shell save to finish. Its outcome is unknown; no retry was scheduled."
+        } else if discarded {
+            "Waiting for the discarded Shell panel preview to finish…"
+        } else if self.saving {
             "Saving the independent Shell panel…"
         } else {
             "Preparing the independent Shell panel confirmation…"
