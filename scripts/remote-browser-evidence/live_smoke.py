@@ -222,10 +222,23 @@ def shot(display: str, path: pathlib.Path) -> None:
     subprocess.run(["import", "-window", "root", str(path)], env={**os.environ, "DISPLAY": display}, check=False)
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect would resend the Basic credential to wherever it points;
+    refuse it and treat the response as the error it is."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+        return None
+
+
+OPENER = urllib.request.build_opener(NoRedirect())
+
+
 def api_get(url: str, auth: str) -> dict:
+    if not url.startswith(API + "/"):
+        raise SystemExit(f"refusing to send the credential to {url}")
     req = urllib.request.Request(url, headers={"Authorization": auth, "Accept": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with OPENER.open(req, timeout=60) as resp:
             return {"status": resp.status, "body": json.loads(resp.read().decode("utf-8") or "{}")}
     except urllib.error.HTTPError as err:
         return {"status": err.code, "body": {}}
@@ -274,7 +287,9 @@ def main() -> int:
     login, password = load_credential()
     auth = "Basic " + __import__("base64").b64encode(f"{login}:{password}".encode()).decode()
     report: dict = {"targets": {}, "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
-    previous = seed_keyring(login, password)
+    unknown = [name for name in args.targets if name not in TARGETS]
+    if unknown:
+        raise SystemExit(f"unknown targets: {', '.join(unknown)} (known: {', '.join(TARGETS)})")
     # The MCP server must resolve the same isolated Horizon home as the host,
     # so the isolation is applied to this process too: McpClient copies the
     # environment it is launched from.
@@ -286,8 +301,12 @@ def main() -> int:
     env = dict(os.environ)
     config = write_config(root, args.targets, session_names)
     log = (root / "horizon.log").open("w", encoding="utf-8")
-    app = subprocess.Popen([args.horizon, "--config", str(config), "--ephemeral"], env=env, stdout=log, stderr=log)
+    # Everything fallible before this point ran with the user's keyring
+    # untouched; from the seed on, the restoration guard is already active.
+    app = None
+    previous = seed_keyring(login, password)
     try:
+        app = subprocess.Popen([args.horizon, "--config", str(config), "--ephemeral"], env=env, stdout=log, stderr=log)
         actor = wait_for(root / "agent-actor", 90)
         host_instance = wait_for(root / "agent-host-instance", 30)
         time.sleep(3)
@@ -380,17 +399,74 @@ def main() -> int:
             report["targets"][target] = {"steps": steps}
             (root / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     finally:
-        subprocess.run(["xdotool", "search", "--name", "Horizon"], env=env, check=False, stdout=subprocess.DEVNULL)
-        app.terminate()
-        try:
-            app.wait(timeout=20)
-        except subprocess.TimeoutExpired:
-            app.kill()
+        if app is not None:
+            app.terminate()
+            try:
+                app.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                app.kill()
         log.close()
         restore_keyring(previous)
+    failures = {target: target_failures(entry["steps"]) for target, entry in report["targets"].items()}
+    for target in args.targets:
+        if target not in failures:
+            failures[target] = ["no result recorded"]
+    for target, problems in failures.items():
+        report["targets"].setdefault(target, {"steps": []})["failures"] = problems
+    report["passed"] = not any(failures.values())
     (root / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2))
-    return 0
+    return 0 if report["passed"] else 1
+
+
+def target_failures(steps: list[dict]) -> list[str]:
+    """What the flow must show for a target to count as evidence; every
+    shortfall is named, and any shortfall makes the run fail."""
+    by_step: dict[str, dict] = {}
+    for step in steps:
+        by_step.setdefault(step["step"], step)
+    problems: list[str] = []
+
+    def require(name: str) -> dict | None:
+        step = by_step.get(name)
+        if step is None:
+            problems.append(f"{name}: not reached")
+            return None
+        if step.get("is_error"):
+            problems.append(f"{name}: tool error")
+            return None
+        return step
+
+    created = require("browser_create")
+    if created and (created.get("result") or {}).get("navigation") != "committed":
+        problems.append("browser_create: first page did not commit")
+    require("browser_snapshot")
+    filled = require("fill_name")
+    if filled and filled.get("field_value") != "Horizon 628":
+        problems.append(f"fill_name: field holds {filled.get('field_value')!r}")
+    require("click_submit")
+    result = require("result_text")
+    if result and result.get("value") != "result:Horizon 628":
+        problems.append(f"result_text: {result.get('value')!r}")
+    require("drawer_open")
+    require("drawer_close")
+    frame = require("iframe_boundary")
+    if frame and not frame.get("nodes"):
+        problems.append("iframe_boundary: no iframe node")
+    require("scroll")
+    scrolled = by_step.get("scroll_y")
+    if scrolled is None or not scrolled.get("value") or float(scrolled["value"]) <= 0:
+        problems.append("scroll_y: page did not move")
+    closed = require("browser_close")
+    if closed and not (closed.get("result") or {}).get("closed"):
+        problems.append("browser_close: not closed")
+    listed = by_step.get("browser_list_after_close")
+    if listed is None or listed.get("panels"):
+        problems.append("browser_list_after_close: panel still listed")
+    proof = by_step.get("provider_release_proof")
+    if proof is None or not proof.get("terminal"):
+        problems.append("provider_release_proof: session not terminal at the provider")
+    return problems
 
 
 if __name__ == "__main__":
