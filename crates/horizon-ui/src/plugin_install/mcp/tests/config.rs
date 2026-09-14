@@ -75,6 +75,21 @@ fn grok_block_round_trips_without_clobbering_neighbors() {
 }
 
 #[test]
+fn grok_managed_block_escapes_control_characters_in_command() {
+    let command = "a\u{0000}b\u{0008}c\u{007f}/horizon";
+    let block = grok_managed_block(command);
+    let table = block.parse::<toml::Table>().expect("managed block must be valid TOML");
+    let stored = table
+        .get("mcp_servers")
+        .and_then(toml::Value::as_table)
+        .and_then(|servers| servers.get("horizon-browser"))
+        .and_then(toml::Value::as_table)
+        .and_then(|server| server.get("command"))
+        .and_then(toml::Value::as_str);
+    assert_eq!(stored, Some(command));
+}
+
+#[test]
 fn grok_leaves_quoted_horizon_browser_table_in_place() {
     let temp = tempfile::tempdir().expect("temp dir");
     let grok_home = temp.path().join("grok");

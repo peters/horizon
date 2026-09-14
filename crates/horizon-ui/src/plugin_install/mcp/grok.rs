@@ -113,17 +113,5 @@ fn grok_remainder_has_horizon_browser(rest: &str) -> bool {
 }
 
 fn toml_string(value: &str) -> String {
-    let mut encoded = String::from("\"");
-    for character in value.chars() {
-        match character {
-            '\\' => encoded.push_str("\\\\"),
-            '"' => encoded.push_str("\\\""),
-            '\n' => encoded.push_str("\\n"),
-            '\r' => encoded.push_str("\\r"),
-            '\t' => encoded.push_str("\\t"),
-            character => encoded.push(character),
-        }
-    }
-    encoded.push('"');
-    encoded
+    toml::Value::String(value.to_string()).to_string()
 }
