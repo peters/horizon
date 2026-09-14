@@ -65,6 +65,7 @@ PROBE_ARGS = {
     "docker_info": ["docker", "info", "--format", "{{.Driver}}"],
     "docker_context": ["docker", "context", "inspect", "--format",
                        "{{.Endpoints.docker.Host}}"],
+    "podman_client": ["podman", "--version"],
     "podman_info": ["podman", "--remote=true", "--url"],
     "podman_info_tail": ["info", "--format", "{{.Version.Version}}"],
     "podman_socket": [sys.executable, "-B", "-c",
@@ -97,7 +98,8 @@ PROBE_ARGS = {
 }
 
 # Probes whose absence is a finding, not a crash: the engine pair and tailscale.
-OPTIONAL_PROBES = {"docker_version", "docker_info", "docker_context", "podman_info",
+OPTIONAL_PROBES = {"docker_version", "docker_info", "docker_context",
+                   "podman_client", "podman_info",
                    "tailscale_version", "tailscale_status"}
 
 # Endpoint-selection variables inspected for locality. Presence only — never
@@ -311,14 +313,18 @@ def normalize_unix_endpoint(host):
 def docker_endpoint_reason(executor, timeout):
     """(pinned unix endpoint, None) or (None, reason).
 
-    Both `DOCKER_HOST` and the active context Host must be local unix
-    sockets. The returned endpoint is the one Docker would use (`DOCKER_HOST`
-    overrides the context) and is pinned on later `--host` probes so a
-    context change cannot contact a remote daemon.
+    `DOCKER_HOST` overrides the active context in the Docker CLI, so a
+    validated local `DOCKER_HOST` is pinned without inspecting context.
+    Context inspect runs only when `DOCKER_HOST` is unset.
     """
     host_env = os.environ.get("DOCKER_HOST")
-    if host_env and not is_local_unix_endpoint(host_env):
-        return None, "docker endpoint is remote (DOCKER_HOST=%s)" % redact(host_env)
+    if host_env:
+        if not is_local_unix_endpoint(host_env):
+            return None, "docker endpoint is remote (DOCKER_HOST=%s)" % redact(host_env)
+        pinned = normalize_unix_endpoint(host_env)
+        if not pinned:
+            return None, "docker endpoint is remote (DOCKER_HOST=%s)" % redact(host_env)
+        return pinned, None
     ctx, err = run_probe(executor, "docker_context", timeout)
     if err is not None:
         return None, "docker context inspect failed (%s)" % redact(err)
@@ -330,7 +336,7 @@ def docker_endpoint_reason(executor, timeout):
         return None, "docker context endpoint missing"
     if not is_local_unix_endpoint(ctx_host):
         return None, "docker endpoint is remote (context Host=%s)" % redact(ctx_host)
-    pinned = normalize_unix_endpoint(host_env if host_env else ctx_host)
+    pinned = normalize_unix_endpoint(ctx_host)
     if not pinned:
         return None, "docker endpoint is remote"
     return pinned, None
@@ -421,15 +427,25 @@ def check_container_engine(executor, timeout):
     if podman_note is not None:
         reasons["podman"] = podman_note
     else:
-        socket, sock_err = resolve_podman_socket(executor, timeout)
-        if sock_err:
-            reasons["podman"] = sock_err
-        elif not socket:
-            reasons["podman"] = "podman local service is not running"
+        client, client_err = run_probe(executor, "podman_client", timeout)
+        if client_err == "tool not present":
+            reasons["podman"] = "podman: tool not present"
+        elif client_err is not None:
+            reasons["podman"] = client_err
+        elif client["exit_code"] != 0:
+            reasons["podman"] = "podman present but probe failed (%s)" % (
+                redact(client.get("stderr", "")) or "exit %s" % client["exit_code"])
         else:
-            extra = ["unix://" + socket] + list(PROBE_ARGS["podman_info_tail"])
-            podman_info, pi_err = run_probe(executor, "podman_info", timeout, extra_argv=extra)
-            podman_version = parse_engine_version(podman_info, "podman")
+            socket, sock_err = resolve_podman_socket(executor, timeout)
+            if sock_err:
+                reasons["podman"] = sock_err
+            elif not socket:
+                reasons["podman"] = "podman local service is not running"
+            else:
+                extra = ["unix://" + socket] + list(PROBE_ARGS["podman_info_tail"])
+                podman_info, pi_err = run_probe(executor, "podman_info", timeout,
+                                                extra_argv=extra)
+                podman_version = parse_engine_version(podman_info, "podman")
 
     engine_ok = None
     if docker_server is not None and "docker" not in reasons:

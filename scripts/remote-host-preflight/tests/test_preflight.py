@@ -42,6 +42,10 @@ def podman_ok(version="4.9.0"):
     return {"stdout": version + "\n"}
 
 
+def podman_client_ok():
+    return {"stdout": "podman version 4.9.0\n"}
+
+
 def podman_socket_ok(path="/run/podman/podman.sock"):
     return {"stdout": path + "\n"}
 
@@ -246,6 +250,7 @@ class PreflightVerdicts(Harness):
         fixture.pop("docker_version")
         fixture.pop("docker_info")
         fixture.pop("docker_context", None)
+        fixture["podman_client"] = podman_client_ok()
         fixture["podman_socket"] = podman_socket_ok()
         fixture["podman_info"] = podman_ok()
         code, report, _ = self.run_main(fixture)
@@ -313,18 +318,34 @@ class EngineFailures(Harness):
         fixture.pop("docker_version")
         fixture.pop("docker_info")
         fixture.pop("docker_context", None)
+        fixture["podman_client"] = podman_client_ok()
         fixture["podman_info"] = podman_ok()
         code, report, executor = self.run_main(fixture)
         self.assertEqual(code, 1)
         by_id = {check["id"]: check for check in report["checks"]}
         self.assertIn("podman local service is not running", by_id["container_engine"]["detail"])
-        self.assertFalse(any(argv and argv[0] == "podman" for argv in executor.seen))
+        self.assertIn(["podman", "--version"], executor.seen)
+        self.assertFalse(any(argv and argv[0] == "podman" and "info" in argv
+                             for argv in executor.seen))
+
+    def test_podman_missing_binary_is_tool_not_present(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture.pop("docker_version")
+        fixture.pop("docker_info")
+        fixture.pop("docker_context", None)
+        code, report, executor = self.run_main(fixture)
+        self.assertEqual(code, 1)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertIn("podman: tool not present", by_id["container_engine"]["detail"])
+        self.assertFalse(any(argv and argv[0] == "podman" and "info" in argv
+                             for argv in executor.seen))
 
     def test_podman_empty_version_is_unusable(self):
         fixture = dict(DEFAULT_FIXTURE)
         fixture.pop("docker_version")
         fixture.pop("docker_info")
         fixture.pop("docker_context", None)
+        fixture["podman_client"] = podman_client_ok()
         fixture["podman_socket"] = podman_socket_ok()
         fixture["podman_info"] = {"stdout": "\n"}
         code, report, _ = self.run_main(fixture)
@@ -337,6 +358,7 @@ class EngineFailures(Harness):
         fixture.pop("docker_version")
         fixture.pop("docker_info")
         fixture.pop("docker_context", None)
+        fixture["podman_client"] = podman_client_ok()
         fixture["podman_socket"] = podman_socket_ok()
         fixture["podman_info"] = {"stdout": "4.9.0\nWARN: extra line\n"}
         code, report, _ = self.run_main(fixture)
@@ -413,16 +435,16 @@ class EngineFailures(Harness):
         self.assertNotIn(list(preflight.PROBE_ARGS["docker_version"]), executor.seen)
         self.assertNotIn(list(preflight.PROBE_ARGS["docker_info"]), executor.seen)
 
-    def test_local_docker_host_with_remote_context_is_rejected(self):
+    def test_local_docker_host_skips_context_inspect(self):
         fixture = dict(DEFAULT_FIXTURE)
-        fixture["docker_context"] = docker_context_ok(host="tcp://remote-daemon:2376")
-        with mock.patch.dict(os.environ, {"DOCKER_HOST": "unix:///var/run/docker.sock",
-                                          "DOCKER_CONTEXT": "remote"}):
+        fixture["docker_context"] = {
+            "exit_code": 1, "stdout": "", "stderr": "no context support"}
+        with mock.patch.dict(os.environ, {"DOCKER_HOST": "unix:///var/run/docker.sock"}):
             code, report, executor = self.run_main(fixture)
-        self.assertEqual(code, 1)
+        self.assertEqual(code, 0)
         by_id = {check["id"]: check for check in report["checks"]}
-        self.assertIn("context Host=", by_id["container_engine"]["detail"])
-        self.assertNotIn(list(preflight.PROBE_ARGS["docker_version"]), executor.seen)
+        self.assertEqual(by_id["container_engine"]["status"], "supported")
+        self.assertFalse(any("context" in argv for argv in executor.seen))
 
     def test_local_unix_docker_endpoint_is_accepted(self):
         fixture = dict(DEFAULT_FIXTURE)
@@ -720,6 +742,7 @@ class EngineFailures(Harness):
         fixture.pop("docker_version")
         fixture.pop("docker_info")
         fixture.pop("docker_context", None)
+        fixture["podman_client"] = podman_client_ok()
         fixture["podman_socket"] = podman_socket_ok()
         fixture["podman_info"] = podman_ok()
         _, _, executor = self.run_main(fixture)
@@ -733,25 +756,31 @@ class EngineFailures(Harness):
         fixture.pop("docker_version")
         fixture.pop("docker_info")
         fixture.pop("docker_context", None)
+        fixture["podman_client"] = podman_client_ok()
         fixture["podman_socket"] = {"timeout": True}
         code, report, executor = self.run_main(fixture)
         self.assertEqual(code, 1)
         by_id = {check["id"]: check for check in report["checks"]}
         self.assertIn("timed out", by_id["container_engine"]["detail"])
-        self.assertFalse(any(argv and argv[0] == "podman" for argv in executor.seen))
+        self.assertIn(["podman", "--version"], executor.seen)
+        self.assertFalse(any(argv and argv[0] == "podman" and "info" in argv
+                             for argv in executor.seen))
 
     def test_podman_socket_helper_rejects_unexpected_path(self):
         fixture = dict(DEFAULT_FIXTURE)
         fixture.pop("docker_version")
         fixture.pop("docker_info")
         fixture.pop("docker_context", None)
+        fixture["podman_client"] = podman_client_ok()
         fixture["podman_socket"] = {"stdout": "/tmp/evil.sock\n"}
         fixture["podman_info"] = podman_ok()
         code, report, executor = self.run_main(fixture)
         self.assertEqual(code, 1)
         by_id = {check["id"]: check for check in report["checks"]}
         self.assertIn("unexpected path", by_id["container_engine"]["detail"])
-        self.assertFalse(any(argv and argv[0] == "podman" for argv in executor.seen))
+        self.assertIn(["podman", "--version"], executor.seen)
+        self.assertFalse(any(argv and argv[0] == "podman" and "info" in argv
+                             for argv in executor.seen))
 
     def test_select_mount_point_does_not_realpath(self):
         with mock.patch.object(os.path, "realpath",
