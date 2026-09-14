@@ -242,8 +242,7 @@ def _watchdog_execute_probe(argv, timeout):
         try:
             try:
                 result = _execute_probe(argv, timeout)
-                if result.get("output_exceeded"):
-                    _kill_session_except_self()
+                _kill_session_except_self()
                 payload = {"kind": "ok", "result": result}
             except FileNotFoundError:
                 payload = {"kind": "fnf"}
