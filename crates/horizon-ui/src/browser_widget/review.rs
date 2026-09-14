@@ -58,30 +58,45 @@ pub fn show(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: bool) -> 
 }
 
 fn paint_rows(ui: &mut Ui, browser: &mut BrowserPanelState, rows: &[horizon_core::browser::ReviewRow]) -> bool {
+    const PAGE_SIZE: usize = 4;
     let mut clicked = false;
-    egui::ScrollArea::vertical()
-        .max_height(120.0)
-        .auto_shrink([false, true])
-        .show(ui, |ui| {
-            for row in rows {
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(format!(
-                            "{action} {target} · {mutation} · {resume} · {mcp}",
-                            action = row.action,
-                            target = row.target,
-                            mutation = row.mutation,
-                            resume = row.resume,
-                            mcp = row.mcp
-                        ))
-                        .size(11.0)
-                        .color(theme::FG_SOFT()),
-                    )
-                    .wrap_mode(TextWrapMode::Truncate),
-                );
-                clicked |= identity_picker(ui, browser, row);
-            }
-        });
+    let page = browser.teach().map_or(0, horizon_core::browser::TeachMode::review_page);
+    let pages = rows.len().div_ceil(PAGE_SIZE).max(1);
+    let page = page.min(pages - 1);
+    let start = page.saturating_mul(PAGE_SIZE);
+    ui.horizontal(|ui| {
+        if ui.add_enabled(page > 0, egui::Button::new("<")).clicked()
+            && let Some(teach) = browser.teach_mut()
+        {
+            teach.set_review_page(page - 1);
+            clicked = true;
+        }
+        ui.label(RichText::new(format!("{} / {pages}", page + 1)).size(11.0));
+        if ui.add_enabled(page + 1 < pages, egui::Button::new(">")).clicked()
+            && let Some(teach) = browser.teach_mut()
+        {
+            teach.set_review_page(page + 1);
+            clicked = true;
+        }
+    });
+    for row in rows.iter().skip(start).take(PAGE_SIZE) {
+        ui.add(
+            egui::Label::new(
+                RichText::new(format!(
+                    "{action} {target}\n{mutation} · {resume} · {mcp}",
+                    action = row.action,
+                    target = row.target,
+                    mutation = row.mutation,
+                    resume = row.resume,
+                    mcp = row.mcp
+                ))
+                .size(11.0)
+                .color(theme::FG_SOFT()),
+            )
+            .wrap_mode(TextWrapMode::Wrap),
+        );
+        clicked |= identity_picker(ui, browser, row);
+    }
     clicked
 }
 

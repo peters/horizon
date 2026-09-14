@@ -87,8 +87,44 @@ impl TeachSession {
         &self.recording
     }
 
-    pub fn recording_mut(&mut self) -> &mut SemanticRecording {
-        &mut self.recording
+    /// Select a unique fingerprint candidate on a stopped session.
+    ///
+    /// # Errors
+    /// Not stopped, unknown action, out-of-range index, or a non-unique candidate.
+    pub fn select_reviewed_candidate(&mut self, action_id: &str, index: u32) -> Result<(), RoutineError> {
+        if self.lifecycle != TeachLifecycle::Stopped {
+            return Err(RoutineError::TeachInactive);
+        }
+        let Some(action) = self
+            .recording
+            .actions
+            .iter_mut()
+            .find(|action| action.action_id == action_id)
+        else {
+            return Err(RoutineError::InvalidRecording);
+        };
+        let Some(target) = action.target.as_mut() else {
+            return Err(RoutineError::UndurableTarget);
+        };
+        let Ok(usize_index) = usize::try_from(index) else {
+            return Err(RoutineError::InvalidFingerprint);
+        };
+        let Some(candidate) = target.candidates.get_mut(usize_index) else {
+            return Err(RoutineError::InvalidFingerprint);
+        };
+        if !candidate.unique {
+            return Err(RoutineError::InvalidFingerprint);
+        }
+        target.selected = Some(index);
+        match &mut candidate.identity {
+            crate::fingerprint::TargetCandidate::RoleName { reviewed, .. }
+            | crate::fingerprint::TargetCandidate::LabelControl { reviewed, .. }
+            | crate::fingerprint::TargetCandidate::TestId { reviewed, .. }
+            | crate::fingerprint::TargetCandidate::UniqueId { reviewed, .. }
+            | crate::fingerprint::TargetCandidate::VisibleText { reviewed, .. }
+            | crate::fingerprint::TargetCandidate::CssFallback { reviewed, .. } => *reviewed = true,
+        }
+        Ok(())
     }
 
     /// Append one grouped semantic action. Consecutive same-direction scrolls that

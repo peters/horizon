@@ -30,6 +30,7 @@ pub struct TeachMode {
     identities_reviewed: bool,
     backend: BackendKind,
     review_cache: Option<Vec<ReviewRow>>,
+    review_page: usize,
 }
 
 /// One compiled step shown in the Teach reviewer.
@@ -83,6 +84,7 @@ impl TeachMode {
             identities_reviewed: false,
             backend,
             review_cache: None,
+            review_page: 0,
         })
     }
 
@@ -179,28 +181,21 @@ impl TeachMode {
     }
 
     pub fn select_step_candidate(&mut self, step_id: &str, index: u32) {
-        for action in &mut self.session.recording_mut().actions {
-            if action.action_id != step_id {
-                continue;
-            }
-            let Some(target) = action.target.as_mut() else {
-                return;
-            };
-            let Ok(usize_index) = usize::try_from(index) else {
-                return;
-            };
-            let Some(candidate) = target.candidates.get(usize_index) else {
-                return;
-            };
-            if !candidate.unique {
-                return;
-            }
-            target.selected = Some(index);
-            mark_fingerprint_reviewed(target);
-            self.review_cache = None;
-            self.persist_draft();
+        if let Err(error) = self.session.select_reviewed_candidate(step_id, index) {
+            self.last_error = Some(error.to_string());
             return;
         }
+        self.review_cache = None;
+        self.persist_draft();
+    }
+
+    #[must_use]
+    pub fn review_page(&self) -> usize {
+        self.review_page
+    }
+
+    pub fn set_review_page(&mut self, page: usize) {
+        self.review_page = page;
     }
 
     /// Compile the stopped recording into reviewer rows.
@@ -241,6 +236,8 @@ impl TeachMode {
                 row
             })
             .collect();
+        let pages = rows.len().div_ceil(REVIEW_PAGE_SIZE).max(1);
+        self.review_page = self.review_page.min(pages - 1);
         self.review_cache = Some(rows.clone());
         Ok(rows)
     }
@@ -431,6 +428,7 @@ impl TeachMode {
 }
 
 const MAX_NAME_BYTES: usize = 128;
+const REVIEW_PAGE_SIZE: usize = 4;
 
 fn bounded_name(name: &str) -> String {
     let trimmed = name.trim();
