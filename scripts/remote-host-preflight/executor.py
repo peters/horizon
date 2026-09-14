@@ -148,6 +148,9 @@ def _reap_child(pid, timeout=1.0):
 
 
 def _kill_process_group(pid):
+    # Descendants that called setsid/setpgid leave this group but remain
+    # in the process tree; kill them before signaling the original group.
+    _kill_descendants(pid)
     try:
         os.killpg(pid, signal.SIGKILL)
     except OSError:
