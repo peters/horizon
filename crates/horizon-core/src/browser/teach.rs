@@ -3,11 +3,15 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use horizon_browser::BackendKind;
 use horizon_browser::{TeachFingerprint, TeachObservation};
 use horizon_browser_routines::{
-    FieldClassification, MutationClass, RecordedAction, RecordedKind, RoutineError, RoutineRegistry, TargetCandidate,
-    TargetFingerprint, TeachSession,
+    Assertion, CompiledAction, CompiledStep, CredentialMode, CredentialPolicy, FieldClassification, MutationClass,
+    RecordedAction, RecordedKind, RoutineDefinition, RoutineError, RoutineRegistry, RoutineStep, SCHEMA_VERSION,
+    SemanticRecording, TargetCandidate, TargetFingerprint, TeachSession, compile,
 };
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
 use crate::horizon_home::HorizonHome;
@@ -23,6 +27,13 @@ pub struct TeachMode {
     last_error: Option<String>,
     completion_heading: String,
     use_title_outcome: bool,
+    identities_reviewed: bool,
+}
+
+/// One compiled step shown in the Teach reviewer.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReviewRow {
+    pub summary: String,
 }
 
 impl TeachMode {
@@ -47,6 +58,7 @@ impl TeachMode {
             last_error: None,
             completion_heading: String::new(),
             use_title_outcome: true,
+            identities_reviewed: false,
         })
     }
 
@@ -131,6 +143,129 @@ impl TeachMode {
         }
     }
 
+    #[must_use]
+    pub fn identities_reviewed(&self) -> bool {
+        self.identities_reviewed
+    }
+
+    pub fn set_identities_reviewed(&mut self, reviewed: bool) {
+        self.identities_reviewed = reviewed;
+        self.persist_draft();
+    }
+
+    /// Compile the stopped recording into reviewer rows.
+    ///
+    /// # Errors
+    /// Missing outcome, empty recording, or compiler validation failure.
+    pub fn compile_review(&self, page_title: &str) -> Result<Vec<ReviewRow>, RoutineError> {
+        Ok(self.compile_plan(page_title)?.steps.iter().map(review_row).collect())
+    }
+
+    /// Save a reviewed routine. Requires an explicit review.
+    ///
+    /// # Errors
+    /// Compiler or registry validation failure.
+    pub fn save_reviewed(&mut self, backend: BackendKind, page_title: &str) -> Result<(), RoutineError> {
+        if !self.session.is_stopped() {
+            return Err(RoutineError::TeachInactive);
+        }
+        let mut compiled = match self.compile_plan(page_title) {
+            Ok(compiled) => compiled,
+            Err(error) => {
+                self.last_error = Some(error.to_string());
+                return Err(error);
+            }
+        };
+        if self.identities_reviewed {
+            for step in &mut compiled.steps {
+                if let Some(target) = &mut step.target {
+                    mark_fingerprint_reviewed(target);
+                }
+            }
+        }
+        let definition = match self.reviewed_definition(backend, page_title, compiled) {
+            Ok(definition) => definition,
+            Err(error) => {
+                self.last_error = Some(error.to_string());
+                return Err(error);
+            }
+        };
+        if let Err(error) = definition.validate().and_then(|()| self.registry.save(&definition)) {
+            self.last_error = Some(error.to_string());
+            return Err(error);
+        }
+        self.last_error = None;
+        Ok(())
+    }
+
+    fn reviewed_definition(
+        &self,
+        backend: BackendKind,
+        page_title: &str,
+        compiled: horizon_browser_routines::CompiledRoutine,
+    ) -> Result<RoutineDefinition, RoutineError> {
+        let now = rfc3339_now()?;
+        Ok(RoutineDefinition {
+            schema_version: SCHEMA_VERSION,
+            routine_id: self.routine_id,
+            name: self.name.clone(),
+            backend_requirement: backend,
+            profile_id: self.routine_id,
+            allowed_origins: unique_origins(self.session.recording()),
+            credential_policy: CredentialPolicy {
+                mode: CredentialMode::None,
+                slot: None,
+                allowed_origins: Vec::new(),
+            },
+            variables: Vec::new(),
+            steps: compiled
+                .steps
+                .into_iter()
+                .map(|step| RoutineStep {
+                    step_id: step.step_id,
+                    target_fingerprint: step.target,
+                    action: step.action,
+                    value_source: step.value_source,
+                    mutation_class: step.mutation_class,
+                    resume_policy: step.resume_policy,
+                    precondition: step.precondition,
+                    postcondition: step.postcondition,
+                })
+                .collect(),
+            completion_assertions: self.completion_assertions(page_title)?,
+            plan_version: 1,
+            verified_plan_version: None,
+            created_at: now.clone(),
+            updated_at: now,
+        })
+    }
+
+    fn compile_plan(&self, page_title: &str) -> Result<horizon_browser_routines::CompiledRoutine, RoutineError> {
+        compile(self.session.recording(), self.completion_assertions(page_title)?)
+    }
+
+    fn completion_assertions(&self, page_title: &str) -> Result<Vec<Assertion>, RoutineError> {
+        let mut assertions = Vec::new();
+        if self.use_title_outcome {
+            let title = page_title.trim();
+            if !title.is_empty() {
+                assertions.push(Assertion::Heading {
+                    value: title.chars().filter(|ch| !ch.is_control()).take(256).collect(),
+                });
+            }
+        }
+        let heading = self.completion_heading.trim();
+        if !heading.is_empty() {
+            assertions.push(Assertion::Heading {
+                value: heading.to_string(),
+            });
+        }
+        if assertions.is_empty() {
+            return Err(RoutineError::InvalidAssertion);
+        }
+        Ok(assertions)
+    }
+
     pub fn ingest(&mut self, observation: TeachObservation) {
         match observation {
             TeachObservation::Failed { message, .. } => {
@@ -173,6 +308,7 @@ impl TeachMode {
             "name": self.name,
             "use_title_outcome": self.use_title_outcome,
             "completion_heading": self.completion_heading,
+            "identities_reviewed": self.identities_reviewed,
         }))
         .map_err(|_| RoutineError::Json("malformed routine JSON".into()))?;
         std::fs::write(&path, encoded).map_err(|_| RoutineError::Storage)?;
@@ -274,6 +410,62 @@ fn convert_fingerprint(fingerprint: &TeachFingerprint) -> Result<TargetFingerpri
     serde_json::from_slice(&encoded).map_err(|_| RoutineError::InvalidFingerprint)
 }
 
+fn review_row(step: &CompiledStep) -> ReviewRow {
+    let action = match &step.action {
+        CompiledAction::Click { count } if *count > 1 => format!("click ×{count}"),
+        CompiledAction::Click { .. } => "click".to_string(),
+        CompiledAction::Fill => "fill".to_string(),
+        CompiledAction::CredentialFill => "credential fill".to_string(),
+        CompiledAction::Scroll { .. } => "scroll".to_string(),
+        CompiledAction::Navigate { .. } => "navigate".to_string(),
+        CompiledAction::Wait { .. } => "wait".to_string(),
+        CompiledAction::Reload => "reload".to_string(),
+        CompiledAction::Back => "back".to_string(),
+        CompiledAction::Forward => "forward".to_string(),
+        CompiledAction::Handoff { .. } => "handoff".to_string(),
+    };
+    let target = step
+        .target
+        .as_ref()
+        .and_then(candidate_label)
+        .unwrap_or_else(|| "page".to_string());
+    let mcp = step.mcp.as_ref().map_or("no MCP", |call| call.tool.as_str());
+    let mutation = format!("{:?}", step.mutation_class);
+    let resume = format!("{:?}", step.resume_policy);
+    ReviewRow {
+        summary: format!("{action} {target} · {mutation} · {resume} · {mcp}"),
+    }
+}
+
+fn mark_fingerprint_reviewed(target: &mut TargetFingerprint) {
+    for candidate in &mut target.candidates {
+        match &mut candidate.identity {
+            TargetCandidate::RoleName { reviewed, .. }
+            | TargetCandidate::LabelControl { reviewed, .. }
+            | TargetCandidate::TestId { reviewed, .. }
+            | TargetCandidate::UniqueId { reviewed, .. }
+            | TargetCandidate::VisibleText { reviewed, .. }
+            | TargetCandidate::CssFallback { reviewed, .. } => *reviewed = true,
+        }
+    }
+}
+
+fn unique_origins(recording: &SemanticRecording) -> Vec<horizon_browser_routines::Origin> {
+    let mut origins = Vec::new();
+    for action in &recording.actions {
+        if !origins.contains(&action.page_origin) {
+            origins.push(action.page_origin.clone());
+        }
+    }
+    origins
+}
+
+fn rfc3339_now() -> Result<String, RoutineError> {
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .map_err(|_| RoutineError::InvalidRecording)
+}
+
 fn now_millis() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -352,5 +544,25 @@ mod tests {
         };
         teach.ingest(TeachObservation::Captured(focused));
         assert!(teach.action_previews().is_empty());
+    }
+
+    #[test]
+    fn stopped_session_compiles_and_saves_after_review() {
+        let temp = tempfile::tempdir().expect("temp");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mut permissions = std::fs::metadata(temp.path()).expect("meta").permissions();
+            permissions.set_mode(0o700);
+            std::fs::set_permissions(temp.path(), permissions).expect("chmod");
+        }
+        let mut teach = TeachMode::start_in(temp.path().join("routines"), "monthly").expect("start");
+        teach.ingest(TeachObservation::Captured(fingerprint()));
+        teach.stop();
+        teach.set_identities_reviewed(true);
+        let rows = teach.compile_review("Report ready").expect("compile");
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].summary.contains("click"));
+        assert!(rows[0].summary.contains("Mutating"));
     }
 }

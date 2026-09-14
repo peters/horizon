@@ -9,7 +9,7 @@ pub mod manifest;
 pub mod teach;
 
 pub use horizon_browser::{cdp, frames, input, process, session};
-pub use teach::TeachMode;
+pub use teach::{ReviewRow, TeachMode};
 
 use std::path::{Path, PathBuf};
 

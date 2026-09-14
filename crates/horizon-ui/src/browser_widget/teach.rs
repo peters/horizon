@@ -21,6 +21,7 @@ pub fn show(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: bool) -> 
             .is_some_and(horizon_core::browser::TeachMode::is_stopped)
         {
             clicked |= outcome_picker(ui, browser, interactive);
+            clicked |= crate::browser_widget::review::show(ui, browser, interactive);
         }
         if let Some(error) = browser.teach().and_then(horizon_core::browser::TeachMode::last_error) {
             ui.label(RichText::new(error).size(10.5).color(theme::PALETTE_RED()));
