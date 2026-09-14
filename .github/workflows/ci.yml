@@ -48,6 +48,8 @@ jobs:
         run: python3 -B -m unittest discover -s scripts/azure-workspace-preflight/tests -v
       - name: Verify client-off harness decisions
         run: python3 -B -m unittest discover -s scripts/azure-client-off/tests -v
+      - name: Verify remote browser spike transport rules
+        run: python3 -B -m unittest discover -s scripts/remote-browser-spike/tests -v
 
   remote-panel-sessions:
     name: Remote panel sessions
