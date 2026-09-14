@@ -34,6 +34,8 @@ pub enum ExtensionProblem {
     ConflictsWithNormalizedField,
     /// The extension would place a credential into the public capabilities map.
     CarriesCredential,
+    /// A nested option key is not a plain identifier, so it cannot be checked.
+    InvalidOptionKey,
 }
 
 impl ExtensionProblem {
@@ -43,6 +45,7 @@ impl ExtensionProblem {
             Self::NotNamespaced => "must be a namespaced `vendor:name` capability",
             Self::ConflictsWithNormalizedField => "duplicates a normalized target field (browser, platform, device)",
             Self::CarriesCredential => "would put a credential into the public capabilities map; bind it instead",
+            Self::InvalidOptionKey => "has an option key that is not a plain identifier (letters, digits, . _ -)",
         }
     }
 }

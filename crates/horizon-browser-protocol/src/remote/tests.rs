@@ -372,7 +372,53 @@ fn capability_extensions_must_be_namespaced_secret_free_and_non_conflicting() {
             serde_json::json!({"os_version": "18"}),
             ExtensionProblem::ConflictsWithNormalizedField,
         ),
+    ];
+    for (key, value, expected) in cases {
+        let mut config = sample();
+        let target = config.targets.get_mut("ios_phone").expect("target");
+        target.capability_extensions.clear();
+        target.capability_extensions.insert(key.into(), value);
+        assert_eq!(
+            config.validate().expect_err(key),
+            RemoteConfigError::InvalidCapabilityExtension {
+                target: "ios_phone".into(),
+                key: key.into(),
+                problem: expected
+            },
+            "{key}"
+        );
+    }
+}
+
+#[test]
+fn capability_extension_keys_follow_the_vendor_name_grammar() {
+    let cases = [
         (":name", serde_json::json!(1), ExtensionProblem::NotNamespaced),
+        (
+            "vendor:foo:username",
+            serde_json::json!("u"),
+            ExtensionProblem::NotNamespaced,
+        ),
+        (
+            "vendor:user name",
+            serde_json::json!("u"),
+            ExtensionProblem::NotNamespaced,
+        ),
+        (
+            "vendor:options",
+            serde_json::json!({"user name": "u"}),
+            ExtensionProblem::InvalidOptionKey,
+        ),
+        (
+            "vendor:options",
+            serde_json::json!({"username ": "u"}),
+            ExtensionProblem::InvalidOptionKey,
+        ),
+        (
+            "vendor:options",
+            serde_json::json!({"nested:username": "u"}),
+            ExtensionProblem::InvalidOptionKey,
+        ),
     ];
     for (key, value, expected) in cases {
         let mut config = sample();

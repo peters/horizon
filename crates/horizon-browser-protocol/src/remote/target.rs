@@ -105,11 +105,14 @@ impl RemoteTargetProfile {
     }
 }
 
+/// `vendor:name` with exactly one colon and identifier characters on both
+/// sides, so the credential matcher always sees the whole name.
 fn extension_problem(key: &str, value: &serde_json::Value) -> Option<ExtensionProblem> {
-    let Some((namespace, name)) = key.split_once(':') else {
+    let mut parts = key.split(':');
+    let (Some(namespace), Some(name), None) = (parts.next(), parts.next(), parts.next()) else {
         return Some(ExtensionProblem::NotNamespaced);
     };
-    if namespace.is_empty() || name.is_empty() || !printable_ascii(key, 128) {
+    if !identifier(namespace, 64) || !identifier(name, 64) {
         return Some(ExtensionProblem::NotNamespaced);
     }
     if let Some(problem) = name_problem(name) {
@@ -117,12 +120,23 @@ fn extension_problem(key: &str, value: &serde_json::Value) -> Option<ExtensionPr
     }
     if let serde_json::Value::Object(fields) = value {
         for nested in fields.keys() {
+            if !identifier(nested, 128) {
+                return Some(ExtensionProblem::InvalidOptionKey);
+            }
             if let Some(problem) = name_problem(nested) {
                 return Some(problem);
             }
         }
     }
     None
+}
+
+fn identifier(value: &str, max_len: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= max_len
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
 }
 
 fn name_problem(name: &str) -> Option<ExtensionProblem> {
