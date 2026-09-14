@@ -60,6 +60,16 @@ class NetrcAuthTest(unittest.TestCase):
             os.chmod(path, 0o400)
             self.assertTrue(spike.load_auth(path, "hub.example.net").startswith("Basic "))
 
+    def test_default_stanza_is_never_used(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "netrc")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("default login alice password s3cret\n")
+            os.chmod(path, 0o600)
+            with self.assertRaises(SystemExit) as raised:
+                spike.load_auth(path, "hub.example.net")
+            self.assertIn("no complete machine entry", str(raised.exception))
+
     def test_missing_file_is_an_actionable_exit_without_the_path_contents(self) -> None:
         with self.assertRaises(SystemExit) as raised:
             spike.load_auth("/nonexistent/netrc", "hub.example.net")
@@ -69,16 +79,27 @@ class NetrcAuthTest(unittest.TestCase):
 class TransportPolicyTest(unittest.TestCase):
     def test_plain_http_hub_is_rejected_before_any_request(self) -> None:
         with self.assertRaises(SystemExit):
-            spike.Transport("http://127.0.0.1:9/wd/hub", spike.DEFAULT_API, "Basic x")
+            spike.Transport("http://127.0.0.1:9/wd/hub", spike.DEFAULT_API, "Basic x", "Basic y")
 
     def test_userinfo_and_query_strings_are_rejected(self) -> None:
         with self.assertRaises(SystemExit):
-            spike.Transport("https://user:key@hub.example.net/wd/hub", spike.DEFAULT_API, "Basic x")
+            spike.Transport("https://user:key@hub.example.net/wd/hub", spike.DEFAULT_API, "Basic x", "Basic y")
         with self.assertRaises(SystemExit):
-            spike.Transport("https://hub.example.net/wd/hub?key=1", spike.DEFAULT_API, "Basic x")
+            spike.Transport("https://hub.example.net/wd/hub?key=1", spike.DEFAULT_API, "Basic x", "Basic y")
+
+    def test_empty_userinfo_is_rejected(self) -> None:
+        with self.assertRaises(SystemExit):
+            spike.Transport("https://@hub.example.net/wd/hub", spike.DEFAULT_API, "Basic x", "Basic y")
+
+    def test_each_origin_gets_only_its_own_credential(self) -> None:
+        transport = spike.Transport("https://hub.example.net/wd/hub", "https://api.example.net", "Basic hub", "Basic api")
+        self.assertEqual(transport.header_for("https://hub.example.net"), "Basic hub")
+        self.assertEqual(transport.header_for("https://api.example.net"), "Basic api")
+        with self.assertRaises(RuntimeError):
+            transport.header_for("https://elsewhere.example.net")
 
     def test_credentials_never_leave_the_configured_origins(self) -> None:
-        transport = spike.Transport("https://hub.example.net/wd/hub", "https://api.example.net", "Basic x")
+        transport = spike.Transport("https://hub.example.net/wd/hub", "https://api.example.net", "Basic x", "Basic y")
         with self.assertRaises(RuntimeError):
             transport.request("https://artifacts.example.net/video.mp4", "GET", None, 1)
         with self.assertRaises(RuntimeError):
@@ -101,7 +122,7 @@ class TransportPolicyTest(unittest.TestCase):
         server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         try:
-            transport = spike.Transport("https://hub.example.net/wd/hub", "https://api.example.net", "Basic x")
+            transport = spike.Transport("https://hub.example.net/wd/hub", "https://api.example.net", "Basic x", "Basic y")
             transport.hub_origin = f"http://127.0.0.1:{server.server_address[1]}"
             response = transport.request(f"{transport.hub_origin}/session", "POST", {}, 5)
             self.assertIsNone(response.get("status"))
@@ -130,7 +151,7 @@ class TransportPolicyTest(unittest.TestCase):
         try:
             handler = spike.NoRedirect()
             self.assertIsNone(handler.redirect_request(None, None, 302, "Found", {}, "https://x.test/"))
-            transport = spike.Transport("https://hub.example.net/wd/hub", "https://api.example.net", "Basic x")
+            transport = spike.Transport("https://hub.example.net/wd/hub", "https://api.example.net", "Basic x", "Basic y")
             transport.hub_origin = f"http://127.0.0.1:{server.server_address[1]}"
             response = transport.request(f"{transport.hub_origin}/session", "GET", None, 5)
             self.assertEqual(response.get("status"), 302)
@@ -153,6 +174,71 @@ class OutputDirectoryTest(unittest.TestCase):
             spike.ensure_private_directory(private)
             self.assertEqual(os.stat(private).st_mode & 0o777, 0o700)
             spike.ensure_private_directory(private)
+
+
+class ScriptedTransport:
+    """Answers requests from a script keyed by (method, path); records what was sent."""
+
+    hub = "https://hub.example.net/wd/hub"
+    api = "https://api.example.net"
+    hub_origin = "https://hub.example.net"
+    api_origin = "https://api.example.net"
+
+    def __init__(self, script: dict) -> None:
+        self.script = script
+        self.calls: list = []
+
+    def request(self, url: str, method: str, body, timeout):  # noqa: D401
+        path = url.replace(self.hub, "").replace(self.api, "")
+        self.calls.append((method, path))
+        return self.script.get((method, path), {"status": 404, "body": {"value": {"error": "unknown command"}}})
+
+
+class ReconciliationTest(unittest.TestCase):
+    def make(self, script: dict) -> "tuple[spike.Spike, ScriptedTransport]":
+        transport = ScriptedTransport(script)
+        with tempfile.TemporaryDirectory() as tmp:
+            run = spike.Spike(transport, tmp, "android", "https://fixture.test/", "build-1")  # type: ignore[arg-type]
+        return run, transport
+
+    def test_unknown_new_session_adopts_the_provider_session_and_releases_it(self) -> None:
+        script = {
+            ("POST", "/session"): {"status": None, "error": "RemoteDisconnected"},
+            ("GET", "/automate/builds.json"): {"status": 200, "body": [
+                {"automation_build": {"name": "build-1", "hashed_id": "b1"}}]},
+            ("GET", "/automate/builds/b1/sessions.json"): {"status": 200, "body": [
+                {"automation_session": {"name": "spike-android", "hashed_id": "s1", "status": "running"}}]},
+            ("DELETE", "/session/s1"): {"status": 200, "body": {"value": None}},
+            ("GET", "/automate/sessions/s1.json"): {"status": 200, "body": {"automation_session": {"status": "done"}}},
+        }
+        run, transport = self.make(script)
+        self.assertTrue(run.new_session())
+        self.assertEqual(run.session_id, "s1")
+        self.assertEqual([step.outcome for step in run.steps], ["unknown", "passed"])
+        run.release()
+        self.assertIn(("DELETE", "/session/s1"), transport.calls)
+        self.assertEqual(run.steps[-1].name, "release")
+        self.assertEqual(run.steps[-1].outcome, "passed")
+
+    def test_unknown_new_session_without_a_provider_session_records_recovery_data(self) -> None:
+        script = {
+            ("POST", "/session"): {"status": None, "error": "TimeoutError"},
+            ("GET", "/automate/builds.json"): {"status": None, "error": "URLError"},
+        }
+        run, _transport = self.make(script)
+        self.assertFalse(run.new_session())
+        self.assertIsNone(run.session_id)
+        self.assertEqual(run.steps[-1].name, "reconcile_allocation")
+        self.assertEqual(run.steps[-1].outcome, "unknown")
+        self.assertEqual(run.steps[-1].detail["recovery"]["build"], "build-1")
+
+    def test_malformed_capabilities_still_yield_a_releasable_session(self) -> None:
+        script = {
+            ("POST", "/session"): {"status": 200, "body": {"value": {"sessionId": "s9", "capabilities": ["nope"]}}},
+        }
+        run, _transport = self.make(script)
+        self.assertTrue(run.new_session())
+        self.assertEqual(run.session_id, "s9")
 
 
 class OutcomeTest(unittest.TestCase):

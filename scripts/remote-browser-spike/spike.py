@@ -62,9 +62,12 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 @dataclasses.dataclass
 class Transport:
+    """One credential per configured origin; nothing is sent anywhere else."""
+
     hub: str
     api: str
-    auth_header: str
+    hub_auth_header: str
+    api_auth_header: str
     hub_origin: str = dataclasses.field(init=False)
     api_origin: str = dataclasses.field(init=False)
 
@@ -73,18 +76,24 @@ class Transport:
             parts = urllib.parse.urlsplit(value)
             if parts.scheme != "https":
                 raise SystemExit(f"{name} must be https, got {parts.scheme}")
-            if parts.username or parts.password or parts.query:
-                raise SystemExit(f"{name} must not carry userinfo or a query string")
+            if "@" in parts.netloc or parts.query or parts.fragment:
+                raise SystemExit(f"{name} must not carry userinfo, a query string or a fragment")
         self.hub_origin = _origin(self.hub)
         self.api_origin = _origin(self.api)
         self.opener = urllib.request.build_opener(NoRedirect())
 
+    def header_for(self, origin: str) -> str:
+        if origin == self.hub_origin:
+            return self.hub_auth_header
+        if origin == self.api_origin:
+            return self.api_auth_header
+        raise RuntimeError(f"refusing to send credentials to {origin}")
+
     def request(self, url: str, method: str, body: Optional[dict], timeout: float) -> Dict[str, Any]:
         origin = _origin(url)
-        if origin not in (self.hub_origin, self.api_origin):
-            raise RuntimeError(f"refusing to send credentials to {origin}")
+        auth_header = self.header_for(origin)
         data = None if body is None else json.dumps(body).encode()
-        headers = {"Authorization": self.auth_header, "Accept": "application/json"}
+        headers = {"Authorization": auth_header, "Accept": "application/json"}
         if data is not None:
             headers["Content-Type"] = "application/json; charset=utf-8"
         req = urllib.request.Request(url, data=data, method=method, headers=headers)
@@ -142,11 +151,11 @@ def load_auth(path: str, host: str) -> str:
     if mode & 0o077:
         raise SystemExit("netrc unusable: file must not be readable or writable by group or others (chmod 600)")
     try:
-        entry = netrc.netrc(path).authenticators(host)
+        entry = netrc.netrc(path).hosts.get(host)  # exact machine entry only; never the default stanza
     except (OSError, netrc.NetrcParseError) as err:
         raise SystemExit(f"netrc unusable: {type(err).__name__}") from None
     if entry is None or not entry[0] or not entry[2]:
-        raise SystemExit(f"netrc has no complete entry for {host}")
+        raise SystemExit(f"netrc has no complete machine entry for {host}")
     token = base64.b64encode(f"{entry[0]}:{entry[2]}".encode()).decode()
     return f"Basic {token}"
 
@@ -230,17 +239,48 @@ class Spike:
         outcome, error = classify_new_session(response)
         if outcome == "unknown":
             self.record("new_session", started, "unknown", error=error, note="allocation-unknown; not retried")
-            return False
+            self.reconcile_allocation()
+            return self.session_id is not None
         if outcome == "failed":
             self.record("new_session", started, "failed", error=error, message=_message(self.value(response)))
             return False
         value = self.value(response) or {}
         self.session_id = value["sessionId"]
-        caps_out = value.get("capabilities") or {}
+        caps_out = value.get("capabilities")
+        if not isinstance(caps_out, dict):
+            caps_out = {}
         self.record("new_session", started, "passed", session_digest=_digest(self.session_id),
                     negotiated={k: caps_out.get(k) for k in ("browserName", "browserVersion", "platformName")},
                     extension_keys=sorted(k for k in caps_out if ":" in k))
         return True
+
+    def reconcile_allocation(self) -> None:
+        """Look for a session the provider may have created for this build name; adopt it so release runs."""
+        started = time.monotonic()
+        builds = self.t.request(f"{self.t.api}/automate/builds.json", "GET", None, COMMAND_TIMEOUT_SECONDS)
+        if self.is_error(builds):
+            self.record("reconcile_allocation", started, "unknown", error=self.is_error(builds),
+                        recovery={"build": self.build, "session_name": f"spike-{self.target}"})
+            return
+        build_id = next((item.get("automation_build", {}).get("hashed_id") for item in (builds.get("body") or [])
+                         if isinstance(item, dict) and item.get("automation_build", {}).get("name") == self.build), None)
+        if not build_id:
+            self.record("reconcile_allocation", started, "passed", found=False)
+            return
+        sessions = self.t.request(f"{self.t.api}/automate/builds/{build_id}/sessions.json", "GET", None,
+                                  COMMAND_TIMEOUT_SECONDS)
+        if self.is_error(sessions):
+            self.record("reconcile_allocation", started, "unknown", error=self.is_error(sessions),
+                        recovery={"build": self.build, "build_id": build_id})
+            return
+        for item in sessions.get("body") or []:
+            session = item.get("automation_session", {}) if isinstance(item, dict) else {}
+            if session.get("name") == f"spike-{self.target}" and session.get("status") not in TERMINAL_SESSION_STATUSES:
+                self.session_id = session.get("hashed_id")
+                self.record("reconcile_allocation", started, "passed", found=True,
+                            session_digest=_digest(self.session_id or ""), note="adopted for release")
+                return
+        self.record("reconcile_allocation", started, "passed", found=False)
 
     def navigate(self) -> None:
         started = time.monotonic()
@@ -486,7 +526,10 @@ class Spike:
     # --- driver -------------------------------------------------------------
     def run(self) -> Dict[str, Any]:
         print(f"target={self.target} build={self.build}", flush=True)
-        if self.new_session():
+        allocated = self.new_session()
+        if allocated and self.steps and self.steps[0].outcome == "unknown":
+            self.release()
+        elif allocated:
             try:
                 actual = self.provider_metadata("after_allocation")
                 self.verify_device(actual)
@@ -569,7 +612,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
     ensure_private_directory(args.out)
     hub_host = urllib.parse.urlsplit(args.hub).hostname or ""
-    transport = Transport(args.hub, args.api, load_auth(args.netrc, hub_host))
+    api_host = urllib.parse.urlsplit(args.api).hostname or ""
+    transport = Transport(args.hub, args.api, load_auth(args.netrc, hub_host), load_auth(args.netrc, api_host))
     report = Spike(transport, args.out, args.target, args.url, args.build).run()
     return exit_code(report["steps"])
 

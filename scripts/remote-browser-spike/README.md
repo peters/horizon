@@ -8,7 +8,7 @@ client must implement: no Selenium, Appium, provider SDK or driver binary on the
 Horizon host. It is a measurement tool, not the product path.
 
 Requirements: Python 3.9+, network access, and a netrc file holding the
-provider's automation username and access key for the hub host. The default is
+provider's automation username and access key as exact `machine` entries for both the hub host and the API host (the `default` stanza is ignored). The default is
 `~/.config/horizon-dev/browserstack.netrc` with mode 600. The script never reads
 credentials from arguments or the environment, sends them only to the configured
 hub and API origins, refuses plain HTTP, URL userinfo and query strings, and does
