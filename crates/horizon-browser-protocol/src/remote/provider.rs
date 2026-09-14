@@ -7,12 +7,20 @@ use super::error::{CredentialReferenceProblem, EndpointProblem, RemoteConfigErro
 
 /// Adapter that turns a provider profile into sessions. The generic `WebDriver`
 /// adapter is the baseline; named adapters appear only for demonstrated
-/// provider differences.
+/// provider differences. The adapter decides where a target's normalized
+/// device fields travel in the `New Session` capabilities; agents never see
+/// the difference.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RemoteAdapterKind {
+    /// Standard `WebDriver` with Appium device capabilities
+    /// (`appium:deviceName`, `appium:platformVersion`).
     #[default]
     Webdriver,
+    /// A hosted grid whose real-device request travels in a `bstack:options`
+    /// object (`deviceName`, `osVersion`, `realMobile`), as the 2026-09-14
+    /// real-device spike demonstrated.
+    Browserstack,
 }
 
 /// Validated `WebDriver` control endpoint (scheme, host, port and base path).

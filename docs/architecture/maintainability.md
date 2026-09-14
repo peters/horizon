@@ -690,6 +690,12 @@ back into large multi-purpose modules.
   no transport, allocation or UI code. `workbench` runs OS-store operations on
   a worker thread with a presence cache the UI reads, so a locked store or an
   unlock prompt never blocks the render loop.
+- `browser/remote_session.rs` turns a configured remote target into the
+  driver's `RemoteSessionRequest`: endpoint and limits from the provider,
+  `alwaysMatch` capabilities from the target (device fields placed by the
+  provider's adapter kind), and the authorization header resolved from the
+  credential stores at create time. Nothing here allocates or renders; the
+  panel keeps the request for Retry and never consults a store again.
 
 ### `horizon-browser-cli`
 

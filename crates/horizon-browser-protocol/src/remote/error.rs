@@ -36,6 +36,9 @@ pub enum ExtensionProblem {
     CarriesCredential,
     /// A nested option key is not a plain identifier, so it cannot be checked.
     InvalidOptionKey,
+    /// The adapter merges the device request into this options object, so
+    /// it must be an object.
+    NotAnObject,
 }
 
 impl ExtensionProblem {
@@ -46,6 +49,7 @@ impl ExtensionProblem {
             Self::ConflictsWithNormalizedField => "duplicates a normalized target field (browser, platform, device)",
             Self::CarriesCredential => "would put a credential into the public capabilities map; bind it instead",
             Self::InvalidOptionKey => "has an option key that is not a plain identifier (letters, digits, . _ -)",
+            Self::NotAnObject => "must be an object because the provider adapter adds the device request to it",
         }
     }
 }
@@ -58,6 +62,9 @@ pub enum CredentialReferenceProblem {
     UnusedBinding,
     SlotRequired,
     MalformedSlot,
+    /// Another binding for the same endpoint origin uses the same slot, so
+    /// both would read and overwrite one OS-store item.
+    DuplicateSlot,
 }
 
 impl CredentialReferenceProblem {
@@ -69,6 +76,7 @@ impl CredentialReferenceProblem {
             Self::UnusedBinding => "is bound but not referenced by the authentication block",
             Self::SlotRequired => "needs a slot for the OS credential store",
             Self::MalformedSlot => "has a slot that is not a valid store path",
+            Self::DuplicateSlot => "shares its OS-store slot with another binding for the same endpoint origin",
         }
     }
 }

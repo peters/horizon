@@ -206,13 +206,20 @@ fn placeholder(
     ui.vertical_centered(|ui| {
         ui.add_space(((available.height() - 90.0).max(0.0)) / 2.0);
         ui.label(egui::RichText::new(message).color(crate::theme::FG_DIM()));
+        if let Some(note) = browser.remote_status.as_deref() {
+            ui.add_space(6.0);
+            ui.label(egui::RichText::new(note).color(crate::theme::FG_SOFT()).size(12.0));
+        }
         if !browser.status.is_alive() {
             ui.add_space(12.0);
-            let retry_ready = browser.retry_ready();
+            let can_retry = browser.can_retry();
+            let retry_ready = can_retry && browser.retry_ready();
             let response = ui
                 .add_enabled(interactive && retry_ready, egui::Button::new("Retry"))
                 .on_hover_text(if !interactive {
                     "Browser controls are unavailable in this view"
+                } else if !can_retry {
+                    "This remote session ended with a previous run; create the panel again"
                 } else if retry_ready {
                     "Restart the browser"
                 } else {

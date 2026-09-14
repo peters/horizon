@@ -365,6 +365,11 @@ impl PanelState {
             session_binding: self.session_binding.clone(),
             template: self.template.clone(),
             browser_config: (self.kind == PanelKind::Browser).then(|| self.browser_config_for_restore(browser_config)),
+            remote_session: None,
+            remote_target: self
+                .browser_profile
+                .as_ref()
+                .and_then(|profile| profile.remote_target.clone()),
             transcript_root: None,
             restore_as_disconnected_snapshot: false,
             is_restore: true,
@@ -408,6 +413,10 @@ pub struct BrowserProfileState {
     /// Hidden browser panels stay live and controllable but do not render.
     #[serde(default)]
     pub hidden: bool,
+    /// Configured remote target the panel ran at. A restored remote panel
+    /// comes back stopped: its session ended with the previous run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_target: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]

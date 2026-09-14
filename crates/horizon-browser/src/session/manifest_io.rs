@@ -233,6 +233,7 @@ impl DriverState {
             target_id: self.target_id.clone().unwrap_or_default(),
             url: self.url.clone(),
             title: self.title.clone(),
+            remote_target: None,
         }
     }
 }

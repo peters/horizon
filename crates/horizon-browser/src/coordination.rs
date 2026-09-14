@@ -15,6 +15,9 @@ pub struct CoordinationState {
     pub target_id: String,
     pub url: String,
     pub title: String,
+    /// Configured remote target name when the session runs at a remote grid;
+    /// `None` for a local browser. Never a provider endpoint or credential.
+    pub remote_target: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

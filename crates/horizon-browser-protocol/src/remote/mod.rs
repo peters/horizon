@@ -21,6 +21,9 @@ pub use provider::{
 };
 pub use target::{DeviceKind, DeviceRequirement, RemoteTargetProfile};
 
+/// The options object the BrowserStack adapter adds the device request to.
+pub const BROWSERSTACK_OPTIONS_KEY: &str = "bstack:options";
+
 /// `browser.remote` in Horizon's configuration. Empty by default: nothing
 /// remote is selected, discovered or allocated unless configured.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
@@ -67,23 +70,53 @@ impl RemoteBrowserConfig {
     /// # Errors
     /// Returns the first [`RemoteConfigError`].
     pub fn validate_definition(&self) -> Result<(), RemoteConfigError> {
+        let mut slots: std::collections::BTreeSet<(String, String)> = std::collections::BTreeSet::new();
         for (name, provider) in &self.providers {
             if !provider::valid_identifier(name, 64) {
                 return Err(RemoteConfigError::InvalidProviderName { provider: name.clone() });
             }
             provider.validate_definition(name)?;
+            // The OS store addresses items by endpoint origin and slot, so two
+            // bindings with the same address would silently share one item.
+            for (reference, binding) in &provider.credential_bindings {
+                if binding.store != CredentialStoreKind::OsKeychain {
+                    continue;
+                }
+                let Some(slot) = binding.slot.clone() else {
+                    continue;
+                };
+                if !slots.insert((provider.endpoint.origin(), slot)) {
+                    return Err(RemoteConfigError::InvalidCredential {
+                        provider: name.clone(),
+                        reference: reference.as_str().to_string(),
+                        problem: CredentialReferenceProblem::DuplicateSlot,
+                    });
+                }
+            }
         }
         for (name, target) in &self.targets {
             if !provider::valid_identifier(name, 64) {
                 return Err(RemoteConfigError::InvalidTargetName { target: name.clone() });
             }
-            if !self.providers.contains_key(&target.provider) {
+            let Some(provider) = self.providers.get(&target.provider) else {
                 return Err(RemoteConfigError::UnknownProvider {
                     target: name.clone(),
                     provider: target.provider.clone(),
                 });
-            }
+            };
             target.validate(name)?;
+            if provider.adapter == RemoteAdapterKind::Browserstack
+                && target
+                    .capability_extensions
+                    .get(BROWSERSTACK_OPTIONS_KEY)
+                    .is_some_and(|value| !value.is_object())
+            {
+                return Err(RemoteConfigError::InvalidCapabilityExtension {
+                    target: name.clone(),
+                    key: BROWSERSTACK_OPTIONS_KEY.to_string(),
+                    problem: ExtensionProblem::NotAnObject,
+                });
+            }
         }
         Ok(())
     }

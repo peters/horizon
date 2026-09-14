@@ -119,6 +119,10 @@ pub struct BrowserManifest {
     pub panel_local_id: String,
     #[serde(default)]
     pub backend: horizon_browser::BackendKind,
+    /// Configured remote target name when the session runs at a remote grid.
+    /// Never an endpoint or a credential; agents see the name only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_target: Option<String>,
     /// Negotiated CDP/BiDi WebSocket endpoint, or empty for classic-only
     /// Safari. The MCP adapter uses the validated action queue instead.
     pub browser_ws: String,
@@ -678,6 +682,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
             manifest.panel_local_id = panel_local_id.to_string();
             adopt_driver_host(manifest, host_instance());
             manifest.backend = state.backend;
+            manifest.remote_target.clone_from(&state.remote_target);
             manifest.browser_ws.clone_from(&state.browser_ws);
             manifest.target_id.clone_from(&state.target_id);
             manifest.url.clone_from(&state.url);
@@ -693,6 +698,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
     fn update(&self, panel_local_id: &str, state: &horizon_browser::CoordinationState) -> std::io::Result<()> {
         driver_update(panel_local_id, |manifest| {
             manifest.backend = state.backend;
+            manifest.remote_target.clone_from(&state.remote_target);
             manifest.browser_ws.clone_from(&state.browser_ws);
             manifest.target_id.clone_from(&state.target_id);
             manifest.url.clone_from(&state.url);
@@ -864,6 +870,7 @@ mod tests {
         BrowserManifest {
             panel_local_id: id.to_string(),
             backend: horizon_browser::BackendKind::ChromiumCdp,
+            remote_target: None,
             browser_ws: "ws://127.0.0.1:1/devtools/browser/x".to_string(),
             target_id: "T1".to_string(),
             url: "https://example.com".to_string(),

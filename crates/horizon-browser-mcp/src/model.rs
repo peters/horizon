@@ -25,6 +25,10 @@ pub(crate) struct BrowserPanel {
     pub(crate) panel_id: String,
     pub(crate) backend: String,
     pub(crate) protocol: ProtocolKind,
+    /// Configured remote target the panel runs at, when it is a remote
+    /// device session; absent for a local browser. Never an endpoint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) remote_target: Option<String>,
     pub(crate) url: String,
     pub(crate) title: String,
     /// Host presentation state (shown or hidden). It says nothing about
@@ -52,13 +56,20 @@ impl BrowserPanel {
         let now = manifest::now_millis();
         let owner = value.live_owner(now).map(|owner| owner.name.clone());
         let owned_by_caller = owner.as_deref() == Some(actor);
-        let protocol = crate::controller::protocol_kind(value.backend, !value.browser_ws.is_empty());
+        let remote = value.remote_target.is_some();
+        // A remote session is classic WebDriver whatever browser it drives.
+        let protocol = if remote {
+            ProtocolKind::WebDriver
+        } else {
+            crate::controller::protocol_kind(value.backend, !value.browser_ws.is_empty())
+        };
         let user_active = value.user_is_active(now);
         let handoff_pending = value.handoff_pending().is_some();
         Self {
             panel_id: value.panel_local_id,
             backend: backend_name(value.backend).to_string(),
             protocol,
+            remote_target: value.remote_target,
             url: value.url,
             title: value.title,
             visible: !value.hidden,
@@ -68,8 +79,8 @@ impl BrowserPanel {
                 user_active,
                 handoff_pending,
             },
-            capabilities: semantic_capabilities(value.backend),
-            network_capture: NetworkCaptureCapability::for_backend(value.backend),
+            capabilities: semantic_capabilities(value.backend, remote),
+            network_capture: NetworkCaptureCapability::for_backend(value.backend, remote),
             video_capture: VideoCaptureCapability::for_backend(),
         }
     }
@@ -105,7 +116,18 @@ impl VideoCaptureCapability {
 }
 
 impl NetworkCaptureCapability {
-    fn for_backend(backend: BackendKind) -> Self {
+    fn for_backend(backend: BackendKind, remote: bool) -> Self {
+        if remote {
+            return Self {
+                supported: false,
+                transport: None,
+                websocket_frames: false,
+                http_response_body_transport: None,
+                page_instrumentation: false,
+                workflow: "Network capture is unavailable for remote device sessions, which run on classic WebDriver."
+                    .to_string(),
+            };
+        }
         let workflow = if backend == BackendKind::SafariWebDriver {
             "Network capture is unavailable for this backend.".to_string()
         } else {
@@ -739,7 +761,7 @@ fn backend_name(backend: BackendKind) -> &'static str {
     }
 }
 
-fn semantic_capabilities(backend: BackendKind) -> Vec<String> {
+fn semantic_capabilities(backend: BackendKind, remote: bool) -> Vec<String> {
     let mut capabilities = [
         "navigate", "snapshot", "query", "click", "fill", "scroll", "reload", "back", "forward", "evaluate", "wait",
         "handoff", "audit",
@@ -747,7 +769,7 @@ fn semantic_capabilities(backend: BackendKind) -> Vec<String> {
     .into_iter()
     .map(str::to_string)
     .collect::<Vec<_>>();
-    if backend != BackendKind::SafariWebDriver {
+    if backend != BackendKind::SafariWebDriver && !remote {
         capabilities.extend(
             [
                 "network_capture",
@@ -811,6 +833,45 @@ mod tests {
             count: None,
             timeout_millis: None,
         }
+    }
+
+    #[test]
+    fn remote_panels_project_classic_webdriver_without_network_capture() {
+        let manifest = BrowserManifest {
+            panel_local_id: "remote-1".to_string(),
+            backend: BackendKind::ChromiumCdp,
+            remote_target: Some("android_phone".to_string()),
+            ..BrowserManifest::default()
+        };
+        let panel = BrowserPanel::from_manifest(manifest, "agent");
+        assert_eq!(panel.remote_target.as_deref(), Some("android_phone"));
+        assert_eq!(panel.protocol, ProtocolKind::WebDriver);
+        assert!(!panel.network_capture.supported);
+        assert!(panel.network_capture.workflow.contains("remote"));
+        assert!(
+            !panel
+                .capabilities
+                .iter()
+                .any(|capability| capability == "network_capture")
+        );
+        assert!(panel.capabilities.iter().any(|capability| capability == "snapshot"));
+        assert!(panel.video_capture.supported, "screenshot-based recording still works");
+        let encoded = serde_json::to_string(&panel).expect("json");
+        assert!(encoded.contains("\"remote_target\":\"android_phone\""));
+
+        let local = BrowserPanel::from_manifest(
+            BrowserManifest {
+                panel_local_id: "local-1".to_string(),
+                backend: BackendKind::ChromiumCdp,
+                browser_ws: "ws://127.0.0.1:1/devtools".to_string(),
+                ..BrowserManifest::default()
+            },
+            "agent",
+        );
+        assert_eq!(local.remote_target, None);
+        assert_eq!(local.protocol, ProtocolKind::Cdp);
+        assert!(local.network_capture.supported);
+        assert!(!serde_json::to_string(&local).expect("json").contains("remote_target"));
     }
 
     #[test]
