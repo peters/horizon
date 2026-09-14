@@ -267,6 +267,7 @@ impl HorizonApp {
         // terminal filter, so a key-up after the switch cannot leak into a
         // new-board terminal; only stop-attribution is reset.
         self.speech_engaged_profile = None;
+        self.retire_pending_browser_closes_for_shutdown();
         self.pending_session_switch = Some(PendingSessionSwitch {
             shutdown_progress: self.board.begin_async_shutdown(),
             target: Some(session.clone()),

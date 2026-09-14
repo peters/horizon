@@ -38,19 +38,44 @@ pub(super) enum PendingCloseState {
     TimedOut,
 }
 
-/// Judge a pending close: complete once teardown reports so, timed out once
-/// the request deadline passes first.
+/// Judge a pending close. The request deadline is authoritative: a teardown
+/// first observed complete after it is reported as timed out, because the
+/// host polls only every few hundred milliseconds and the signal carries no
+/// completion time.
 pub(super) const fn pending_close_state(
     teardown_complete: bool,
     deadline_at_millis: i64,
     now_millis: i64,
 ) -> PendingCloseState {
-    if teardown_complete {
-        PendingCloseState::Complete
-    } else if now_millis > deadline_at_millis {
+    if now_millis > deadline_at_millis {
         PendingCloseState::TimedOut
+    } else if teardown_complete {
+        PendingCloseState::Complete
     } else {
         PendingCloseState::Waiting
+    }
+}
+
+/// What a completed teardown means for the caller, from the remote release
+/// the driver recorded. A local browser records nothing and is simply gone.
+pub(super) fn close_outcome(
+    release: Option<&horizon_core::browser::RemoteReleaseOutcome>,
+) -> Result<(), (&'static str, String)> {
+    use horizon_core::browser::RemoteReleaseOutcome;
+    match release {
+        None | Some(RemoteReleaseOutcome::Released | RemoteReleaseOutcome::AlreadyGone) => Ok(()),
+        Some(outcome @ RemoteReleaseOutcome::Failed { .. }) => Err((
+            "release_failed",
+            format!(
+                "browser panel closed but the provider refused to release its session ({outcome}); check the provider before allocating again"
+            ),
+        )),
+        Some(outcome @ RemoteReleaseOutcome::ReleaseUnknown { .. }) => Err((
+            "release_unknown",
+            format!(
+                "browser panel closed but the provider gave no trustworthy answer to the release ({outcome}); check the provider before allocating again"
+            ),
+        )),
     }
 }
 
@@ -183,6 +208,23 @@ impl HorizonApp {
         teardown
     }
 
+    /// Hand every pending close's teardown to the board before a shutdown
+    /// or session switch builds its progress from the board, so exit still
+    /// waits for the remote release and profile cleanup; the requests are
+    /// settled as `host_shutdown` because nothing will poll them again.
+    pub(super) fn retire_pending_browser_closes_for_shutdown(&mut self) {
+        for pending in std::mem::take(&mut self.browser_create_host.pending_closes) {
+            complete_close_failure(
+                &pending.request,
+                "host_shutdown",
+                "Horizon is shutting down; the panel is closed and its session teardown continues with the exit",
+            );
+            if let Some(signal) = pending.teardown {
+                self.board.retire_browser_shutdown_signal(signal);
+            }
+        }
+    }
+
     /// Publish every close whose teardown has completed or whose request
     /// deadline passed first. A timed-out teardown keeps being joined by the
     /// board so application exit still waits for it.
@@ -199,6 +241,14 @@ impl HorizonApp {
                 PendingCloseState::Waiting => waiting.push(pending),
                 PendingCloseState::Complete => {
                     changed = true;
+                    let release = pending
+                        .teardown
+                        .as_ref()
+                        .and_then(BrowserShutdownSignal::remote_release);
+                    if let Err((code, message)) = close_outcome(release.as_ref()) {
+                        complete_close_failure(&pending.request, code, &message);
+                        continue;
+                    }
                     match manifest::record_close_status(&pending.request, BrowserCloseAuditStatus::Completed) {
                         Ok(()) => complete_close_result(&BrowserCloseResult::closed(&pending.request)),
                         Err(error) => {
@@ -387,15 +437,38 @@ mod tests {
     }
 
     #[test]
-    fn a_close_is_reported_only_once_teardown_completed_or_the_deadline_passed() {
+    fn a_close_is_reported_only_once_teardown_completed_within_the_deadline() {
         assert_eq!(pending_close_state(false, 100, 50), PendingCloseState::Waiting);
         assert_eq!(pending_close_state(false, 100, 100), PendingCloseState::Waiting);
         assert_eq!(pending_close_state(true, 100, 50), PendingCloseState::Complete);
+        assert_eq!(pending_close_state(true, 100, 100), PendingCloseState::Complete);
         assert_eq!(
-            pending_close_state(true, 100, 500),
-            PendingCloseState::Complete,
-            "a completed teardown is reported even after the deadline"
+            pending_close_state(true, 100, 101),
+            PendingCloseState::TimedOut,
+            "the deadline is authoritative even when teardown is observed complete afterwards"
         );
         assert_eq!(pending_close_state(false, 100, 101), PendingCloseState::TimedOut);
+    }
+
+    #[test]
+    fn a_completed_teardown_is_a_close_only_when_the_release_was_established() {
+        use horizon_core::browser::RemoteReleaseOutcome;
+        assert!(close_outcome(None).is_ok(), "a local browser is simply gone");
+        assert!(close_outcome(Some(&RemoteReleaseOutcome::Released)).is_ok());
+        assert!(close_outcome(Some(&RemoteReleaseOutcome::AlreadyGone)).is_ok());
+        let failed = close_outcome(Some(&RemoteReleaseOutcome::Failed {
+            error: "unknown error".into(),
+            message: "busy".into(),
+        }))
+        .expect_err("a refused release is not a close");
+        assert_eq!(failed.0, "release_failed");
+        assert!(failed.1.contains("busy"));
+        let unknown = close_outcome(Some(&RemoteReleaseOutcome::ReleaseUnknown {
+            attempts: 3,
+            reason: "timed out".into(),
+        }))
+        .expect_err("an unanswered release is not a close");
+        assert_eq!(unknown.0, "release_unknown");
+        assert!(unknown.1.contains("3 attempts"));
     }
 }

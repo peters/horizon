@@ -71,6 +71,10 @@ impl Driver {
                 .remote()
                 .map(|host| host.label().to_string())
                 .unwrap_or_default();
+            *self
+                .remote_release
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(outcome.clone());
             let _ = event_tx.send(BrowserEvent::RemoteSession(RemoteSessionEvent::Released {
                 label,
                 outcome,

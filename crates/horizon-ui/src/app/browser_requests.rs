@@ -30,7 +30,8 @@ const STARTUP_DEADLINE_HEADROOM: Duration = Duration::from_millis(750);
 pub(super) struct BrowserCreateHostState {
     last_request_poll: Option<Instant>,
     pending: Vec<PendingBrowserCreate>,
-    /// Closes the host applied whose session teardown has not completed.
+    /// Closes the host has applied but whose session teardown has not
+    /// completed yet; each is published once its teardown signal settles.
     pub(super) pending_closes: Vec<super::browser_close_requests::PendingBrowserClose>,
     /// Board placement the manifests were last stamped for; a change
     /// re-stamps on the same frame instead of waiting for the next tick.

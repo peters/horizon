@@ -436,7 +436,10 @@ impl BrowserController {
                     }),
                 };
             }
-            if started.elapsed() >= Duration::from_millis(timeout_millis) {
+            // The host judges the deadline on its own poll and publishes a typed
+            // outcome (closed or teardown_timeout); give that result the same
+            // delivery headroom as a create so it is not overtaken here.
+            if started.elapsed() >= Duration::from_millis(timeout_millis + RESULT_DELIVERY_HEADROOM_MILLIS) {
                 return Err(ControlError::CloseTimeout {
                     action_id,
                     timeout_millis,

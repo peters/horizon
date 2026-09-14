@@ -36,6 +36,8 @@ mod navigation;
 mod network;
 mod semantic;
 mod shutdown;
+
+pub use shutdown::{DriverTeardown, RemoteReleaseReport};
 mod startup;
 mod wait;
 
@@ -143,6 +145,8 @@ pub struct BrowserSession {
     pub event_rx: mpsc::Receiver<BrowserEvent>,
     /// Resolved when the driver thread has finished tearing down Chrome.
     completion_rx: mpsc::Receiver<()>,
+    /// What a remote driver established at release; shared with its signal.
+    remote_release: shutdown::RemoteReleaseReport,
     event_wake: BrowserEventWake,
     committed_url: CommittedUrl,
     process_control: ChromeProcessControl,
@@ -203,6 +207,8 @@ pub fn start_session(config: BrowserSessionConfig) -> Result<BrowserSession, cra
         committed_url: committed_url.clone(),
     };
     let (completion_tx, completion_rx) = mpsc::channel::<()>();
+    let remote_release = shutdown::RemoteReleaseReport::default();
+    let driver_remote_release = Arc::clone(&remote_release);
     let process_control = ChromeProcessControl::default();
     let driver_process_control = process_control.clone();
     let panel_local_id = config.panel_local_id.clone();
@@ -219,7 +225,10 @@ pub fn start_session(config: BrowserSessionConfig) -> Result<BrowserSession, cra
                 &command_rx,
                 &slot,
                 &driver_stop_requested,
-                completion_tx,
+                DriverTeardown {
+                    completion: completion_tx,
+                    remote_release: driver_remote_release,
+                },
                 &driver_process_control,
             ),
             BackendKind::ChromiumCdp => run_driver(
@@ -237,7 +246,10 @@ pub fn start_session(config: BrowserSessionConfig) -> Result<BrowserSession, cra
                 &command_rx,
                 &slot,
                 &driver_stop_requested,
-                completion_tx,
+                DriverTeardown {
+                    completion: completion_tx,
+                    remote_release: driver_remote_release,
+                },
                 &driver_process_control,
             ),
         })
@@ -249,6 +261,7 @@ pub fn start_session(config: BrowserSessionConfig) -> Result<BrowserSession, cra
         video,
         event_rx,
         completion_rx,
+        remote_release,
         event_wake,
         committed_url,
         process_control,
