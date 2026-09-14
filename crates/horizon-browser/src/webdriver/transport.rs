@@ -72,7 +72,8 @@ impl ClassicTransport for HttpClient {
 /// validated upstream; this keeps a malformed suffix from ever reaching a wire.
 pub(super) fn validate_request_path(path: &str) -> Result<(), HttpError> {
     if !path.starts_with('/')
-        || path.contains(['\r', '\n', '?', '#', ' ', '\\'])
+        || !path.chars().all(|c| c.is_ascii_graphic())
+        || path.contains(['?', '#', '\\'])
         || path.contains("//")
         || path.split('/').any(|segment| segment == "..")
     {

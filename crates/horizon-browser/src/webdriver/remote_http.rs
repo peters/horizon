@@ -150,12 +150,17 @@ impl ClassicTransport for RemoteHttpClient {
         .map_err(map_transport_error)?;
         let status = response.status().as_u16();
         let mut response = response;
+        // A stalled body is still a timeout, and a truncated one is still I/O;
+        // only the size bound is an invalid response.
         let bytes = response
             .body_mut()
             .with_config()
             .limit(MAX_RESPONSE_BYTES)
             .read_to_vec()
-            .map_err(|_| HttpError::InvalidResponse("response exceeded 64 MiB or ended early".into()))?;
+            .map_err(|error| match error {
+                ureq::Error::BodyExceedsLimit(_) => HttpError::InvalidResponse("response exceeded 64 MiB".into()),
+                other => map_transport_error(other),
+            })?;
         interpret_body(status, &bytes)
     }
 }
@@ -178,30 +183,45 @@ fn configure<B>(
 }
 
 /// Split an endpoint into `(origin, base without trailing slash, is loopback http)`.
+///
+/// The endpoint is parsed as a URI first so an invalid authority or port is
+/// rejected here rather than on the first request.
 fn parse_endpoint(endpoint: &str) -> Result<(String, String, bool), HttpError> {
     let invalid = |reason: &str| HttpError::InvalidResponse(format!("invalid remote endpoint: {reason}"));
     let endpoint = endpoint.trim();
-    let (scheme, rest) = endpoint.split_once("://").ok_or_else(|| invalid("missing scheme"))?;
-    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-    let (authority, path) = rest.split_at(authority_end);
-    if authority.is_empty() || authority.contains('@') {
+    if endpoint.contains('#') {
+        return Err(invalid("fragments are not allowed"));
+    }
+    let uri: ureq::http::Uri = endpoint.parse().map_err(|_| invalid("not a valid URI"))?;
+    let scheme = uri.scheme_str().ok_or_else(|| invalid("missing scheme"))?;
+    let authority = uri.authority().ok_or_else(|| invalid("missing host"))?;
+    if authority.as_str().contains('@') {
         return Err(invalid("authority must be a host without userinfo"));
     }
-    if path.contains(['?', '#']) {
-        return Err(invalid("query strings and fragments are not allowed"));
+    if uri.query().is_some() {
+        return Err(invalid("query strings are not allowed"));
     }
-    let host = authority
-        .strip_prefix('[')
-        .and_then(|value| value.split_once(']').map(|(host, _)| host))
-        .unwrap_or_else(|| authority.rsplit_once(':').map_or(authority, |(host, _)| host));
+    let host = authority.host().trim_start_matches('[').trim_end_matches(']');
+    if host.is_empty() {
+        return Err(invalid("missing host"));
+    }
+    // `http::Uri` keeps a malformed port in the authority text without
+    // parsing it; insist that any port suffix is a real port number.
+    let port_text = authority.as_str().strip_prefix('[').map_or_else(
+        || authority.as_str().split_once(':').map(|(_, port)| port),
+        |rest| rest.split_once(']').and_then(|(_, tail)| tail.strip_prefix(':')),
+    );
+    if port_text.is_some_and(|port| port.parse::<u16>().is_err()) || authority.as_str().ends_with(':') {
+        return Err(invalid("port must be a number between 0 and 65535"));
+    }
     let loopback = host == "localhost" || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback());
     match scheme {
         "https" => {}
         "http" if loopback => {}
         _ => return Err(invalid("scheme must be https, or http for a loopback grid")),
     }
-    let origin = format!("{scheme}://{authority}").to_ascii_lowercase();
-    let base = format!("{origin}{}", path.trim_end_matches('/'));
+    let origin = format!("{scheme}://{}", authority.as_str()).to_ascii_lowercase();
+    let base = format!("{origin}{}", uri.path().trim_end_matches('/'));
     Ok((origin, base, scheme == "http"))
 }
 

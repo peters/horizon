@@ -16,6 +16,8 @@ struct Reply {
     body: Vec<u8>,
     headers: Vec<String>,
     delay: Duration,
+    /// Pause between the header block and the body, to stall a body read.
+    body_delay: Duration,
     declared_length: Option<usize>,
 }
 
@@ -26,6 +28,7 @@ impl Reply {
             body: body.to_string().into_bytes(),
             headers: vec!["Content-Type: application/json".into()],
             delay: Duration::ZERO,
+            body_delay: Duration::ZERO,
             declared_length: None,
         }
     }
@@ -57,7 +60,7 @@ impl Server {
                 let Ok((mut stream, _)) = listener.accept() else { return };
                 let mut buffer = Vec::new();
                 let mut chunk = [0u8; 4096];
-                let (head_end, mut content_length) = loop {
+                let (head_end, content_length) = loop {
                     let Ok(read) = stream.read(&mut chunk) else { return };
                     if read == 0 {
                         return;
@@ -83,7 +86,6 @@ impl Server {
                         break;
                     }
                     buffer.extend_from_slice(&chunk[..read]);
-                    content_length = content_length.min(buffer.len() - head_end);
                 }
                 let head = String::from_utf8_lossy(&buffer[..head_end]).to_string();
                 let mut lines = head.lines();
@@ -115,6 +117,8 @@ impl Server {
                 }
                 response.push_str("\r\n");
                 let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+                thread::sleep(reply.body_delay);
                 let _ = stream.write_all(&reply.body);
                 let _ = stream.flush();
             }
@@ -208,6 +212,13 @@ fn endpoint_rules_match_the_configuration_contract() {
     ] {
         assert!(RemoteHttpClient::new(endpoint, None).is_err(), "{endpoint}");
     }
+    for endpoint in [
+        "https://grid.example.net:notaport/wd/hub",
+        "https://grid.example.net:99999",
+        "https://",
+    ] {
+        assert!(RemoteHttpClient::new(endpoint, None).is_err(), "{endpoint}");
+    }
     let remote = RemoteHttpClient::new("https://Grid.Example.net:8443/wd/hub/", None).expect("https endpoint");
     assert_eq!(remote.origin(), "https://grid.example.net:8443");
     assert!(remote.config().https_only(), "non-loopback endpoints force TLS");
@@ -227,6 +238,10 @@ fn request_paths_cannot_escape_the_base() {
         "/session#f",
         "//other.host/session",
         "/a b",
+        "/session\tx",
+        "/session\u{7f}",
+        "/s\u{0}n",
+        "/sessi\u{f3}n",
     ] {
         assert!(matches!(client.get(path), Err(HttpError::InvalidResponse(_))), "{path}");
     }
@@ -259,6 +274,7 @@ fn webdriver_errors_keep_their_codes_including_expired_sessions_and_rate_limits(
             body: b"slow down".to_vec(),
             headers: vec!["Content-Type: text/plain".into()],
             delay: Duration::ZERO,
+            body_delay: Duration::ZERO,
             declared_length: None,
         },
     ]);
@@ -284,6 +300,7 @@ fn malformed_and_oversized_bodies_are_rejected_without_panics() {
             body: b"<html>not json</html>".to_vec(),
             headers: vec!["Content-Type: text/html".into()],
             delay: Duration::ZERO,
+            body_delay: Duration::ZERO,
             declared_length: None,
         },
         Reply {
@@ -291,6 +308,7 @@ fn malformed_and_oversized_bodies_are_rejected_without_panics() {
             body: vec![b' '; 1024],
             headers: vec!["Content-Type: application/json".into()],
             delay: Duration::ZERO,
+            body_delay: Duration::ZERO,
             declared_length: Some(65 * 1024 * 1024),
         },
     ]);
@@ -324,6 +342,30 @@ fn timeouts_surface_as_io_timeouts_the_navigation_classifier_recognizes() {
     let text = error.to_string();
     assert!(text.starts_with("WebDriver HTTP I/O:"), "{text}");
     assert!(text.contains("timed out"), "{text}");
+}
+
+#[test]
+fn a_stalled_body_after_headers_is_still_a_timeout() {
+    let mut reply = Reply::json(200, &json!({"value": null}));
+    reply.body_delay = Duration::from_millis(600);
+    let server = Server::start(vec![reply]);
+    let client = RemoteHttpClient::new(&server.endpoint(""), None).expect("client");
+    let error = client
+        .post_with_read_timeout(
+            "/session/abc/url",
+            &json!({"url": "https://x.test"}),
+            Duration::from_millis(100),
+        )
+        .expect_err("stalled body");
+    let text = error.to_string();
+    assert!(
+        matches!(error, HttpError::Io(ref io) if io.kind() == std::io::ErrorKind::TimedOut),
+        "{text}"
+    );
+    assert!(
+        text.starts_with("WebDriver HTTP I/O:") && text.contains("timed out"),
+        "{text}"
+    );
 }
 
 #[test]
