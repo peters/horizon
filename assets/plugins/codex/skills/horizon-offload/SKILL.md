@@ -132,6 +132,14 @@ existing matching panel.
 Then `start <directory> <panel-id>` starts the complete saved task once;
 `status` and `snapshot` accept the same optional panel ID.
 
+For environments with Rust checks, inspect the selected commit's toolchain files
+and CI configuration before saving the issue task. Qualify `rustc`, Cargo, formatting and Clippy from the actual
+worker shell; the image's minimum compiler may differ from the repository's CI
+toolchain. Install the required toolchain and components when missing, record its
+resolved version, and set `RUSTUP_TOOLCHAIN` to that version for the complete saved
+task and its checks. Reuse the retained Cargo cache with that toolchain. Do not change source
+just to accommodate warnings from a different compiler.
+
 Put the entire initial agent task in that saved command. Use noninteractive
 `codex exec` with stdin closed and the same retained `CODEX_HOME`. Record its
 exit status and result file on the worker. Pass the issue, repository instructions,
