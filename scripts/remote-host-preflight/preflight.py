@@ -1047,6 +1047,22 @@ def render_text(report):
     return "\n".join(lines)
 
 
+def parse_now(value):
+    """Require an ISO-8601 timestamp with timezone offset (Z allowed)."""
+    text = str(value).strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        stamp = datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "now must be an ISO-8601 timestamp with a timezone offset") from exc
+    if stamp.tzinfo is None:
+        raise argparse.ArgumentTypeError(
+            "now must be an ISO-8601 timestamp with a timezone offset")
+    return stamp.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def parse_timeout(value):
     """Positive finite seconds. Rejects negatives, zero, NaN and infinities."""
     try:
@@ -1078,8 +1094,8 @@ def main(argv=None, executor=None, now=None):
                         help="procfs root for synthetic testing (default: /proc)")
     parser.add_argument("--sysfs-root", default="/sys",
                         help="sysfs root for synthetic testing (default: /sys)")
-    parser.add_argument("--now", default=None,
-                        help="fixed generated_at timestamp for deterministic output")
+    parser.add_argument("--now", default=None, type=parse_now,
+                        help="fixed generated_at ISO-8601 timestamp with offset")
     parser.add_argument("--timeout", type=parse_timeout, default=DEFAULT_TIMEOUT,
                         help="per-probe timeout in seconds (default: %(default)s)")
     parser.add_argument("--json", action="store_true", help="emit the JSON report")
