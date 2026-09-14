@@ -168,16 +168,20 @@ pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) -> AgentPluginHo
         }
     };
     let user_skill_dirs = user_skill_cleanup_dirs(user_home.as_deref(), grok_home.as_deref(), codex_home.as_deref());
-    if let Err(error) = lease.bind_user_skills(&user_skill_dirs) {
-        tracing::warn!(%error, "failed to bind Horizon skill root leases");
-    }
+    let user_skills_leased = match lease.bind_user_skills(&user_skill_dirs) {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::warn!(%error, "failed to bind Horizon skill root leases");
+            false
+        }
+    };
     sync_leased_user_skills(
         &lease,
         horizon_home,
         &claude_plugin_dir,
-        user_home.as_deref(),
-        grok_home.as_deref(),
-        codex_home.as_deref(),
+        user_home.as_deref().filter(|_| user_skills_leased),
+        grok_home.as_deref().filter(|_| user_skills_leased),
+        codex_home.as_deref().filter(|_| user_skills_leased),
         &mcp_command,
     );
 

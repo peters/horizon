@@ -21,7 +21,13 @@ pub(super) struct SkillRootLease {
 pub(super) fn bind_skill_roots(host_id: &OsStr, dirs: &[PathBuf]) -> io::Result<Vec<SkillRootLease>> {
     let mut leases = Vec::new();
     for parent in unique_parents(dirs) {
-        leases.push(acquire_skill_root(host_id, parent)?);
+        match acquire_skill_root(host_id, parent) {
+            Ok(lease) => leases.push(lease),
+            Err(error) => {
+                drop(leases);
+                return Err(error);
+            }
+        }
     }
     Ok(leases)
 }
@@ -47,12 +53,28 @@ pub(super) fn release_skill_roots(leases: &mut [SkillRootLease]) {
             Ok(false) => {
                 remove_horizon_skill_dir(&lease.parent.join(HORIZON_NOTIFY_SKILL));
                 remove_horizon_skill_dir(&lease.parent.join(HORIZON_BROWSER_SKILL));
+                if let Err(error) = std::fs::remove_dir_all(&leases_dir)
+                    && error.kind() != io::ErrorKind::NotFound
+                {
+                    tracing::warn!(path = %leases_dir.display(), %error, "failed to remove skill root lease directory");
+                }
             }
             Err(error) => {
                 tracing::warn!(path = %leases_dir.display(), %error, "failed to inspect skill root leases");
             }
         }
         drop(coord);
+    }
+}
+
+impl Drop for SkillRootLease {
+    fn drop(&mut self) {
+        drop(self.live_lock.take());
+        if let Err(error) = std::fs::remove_file(&self.live_path)
+            && error.kind() != io::ErrorKind::NotFound
+        {
+            tracing::warn!(path = %self.live_path.display(), %error, "failed to drop skill root live lock");
+        }
     }
 }
 
@@ -117,7 +139,10 @@ fn another_live_host(leases_dir: &Path, current: &Path) -> io::Result<bool> {
         }
         let file = open_lock_file(&path)?;
         match file.try_lock() {
-            Ok(()) => {}
+            Ok(()) => {
+                drop(file);
+                let _ = std::fs::remove_file(&path);
+            }
             Err(TryLockError::WouldBlock) => return Ok(true),
             Err(TryLockError::Error(error)) => return Err(error),
         }
