@@ -12,11 +12,14 @@ Requirements: a Horizon binary built from the branch under test, Xvfb, openbox,
 ImageMagick's `import`, Python 3.11+ with the `gi` Secret bindings, a running
 Secret Service (gnome-keyring), and a netrc at
 `~/.config/horizon-dev/browserstack.netrc` with mode 600 holding the provider's
-automation username and access key as exact `machine` entries for the hub host
-and the API host. The credential is read from that file only, seeded into the
-Secret Service under the item Horizon's keychain adapter addresses for the run,
-and removed afterwards; it never enters arguments, the environment of the
-Horizon process, the generated config, the logs or the report.
+automation username and access key as a `machine` entry for the hub host; the
+same credential authenticates the REST status call. The credential is read from
+that file only and seeded into the Secret Service under the item Horizon's
+keychain adapter addresses for the run; afterwards the slots are restored to
+whatever they held before (or cleared). It never enters arguments, the
+environment of the Horizon process, the generated config, the logs or the
+report. The provider session is named `phase6-<target>-run-<epoch>` so the
+release proof queries exactly this run's session.
 
 ## Command
 
@@ -24,7 +27,8 @@ Horizon process, the generated config, the logs or the report.
 scripts/remote-browser-evidence/run.sh <horizon binary> --targets ios_phone android_phone
 ```
 
-`run.sh` starts Xvfb on `:99` with a window manager and hands the rest to
+`run.sh` starts Xvfb on the first free display from `:99` with a window manager,
+cleans up only the processes it started on any exit, and hands the rest to
 `live_smoke.py`, which writes an isolated Horizon home and config naming the
 targets, starts Horizon with `--ephemeral`, reads the agent identity from the
 probe the agent panel writes, and then runs per target: `browser_create` with

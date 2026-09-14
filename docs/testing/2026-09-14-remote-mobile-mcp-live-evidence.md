@@ -10,7 +10,7 @@ is the public static app at <https://peters.github.io/horizon-mobile-fixture/>
 (form, drawer, iframe, long list, viewport probe).
 
 The driver is `scripts/remote-browser-evidence/live_smoke.py` (with `run.sh`
-for the Xvfb and window-manager setup). It seeds the provider credential from a
+for a private Xvfb display and window manager). It seeds the provider credential from a
 mode-600 netrc into the Secret Service under the exact item Horizon's keychain
 adapter addresses, writes an isolated Horizon config that names the two targets,
 starts Horizon with `--ephemeral`, reads the agent panel's identity from the
@@ -62,7 +62,7 @@ dominates: both devices took more than twenty seconds from `browser_create` to a
 controllable page, which is why the create path has its own allocation timeout
 and why `browser_create` waits for readiness before returning.
 
-Sixteen MCP calls per target: `browser_create`, `browser_snapshot`, four
+Seventeen MCP calls per target: `browser_create`, `browser_snapshot`, five
 `browser_evaluate`, five `browser_act`, two `browser_wait`, `browser_query`,
 `browser_close` and `browser_list`. No call named a provider, an endpoint, a
 capability namespace or a credential; the only remote-specific input was the
@@ -117,7 +117,8 @@ scripts/remote-browser-evidence/run.sh <horizon binary> --targets ios_phone andr
 ```
 
 Requirements: a netrc at `~/.config/horizon-dev/browserstack.netrc` (mode 600)
-with the hub's machine entry, a Secret Service session (gnome-keyring), Xvfb,
+with a `machine` entry for the hub host (the same credential authenticates
+the provider's REST status call), a Secret Service session (gnome-keyring), Xvfb,
 openbox, ImageMagick's `import`, and the `gi` Secret bindings. The run directory
 lands under `~/.cache/horizon-628-spike/phase6/run-<epoch>` with `report.json`,
 `rpc-<target>.jsonl`, `horizon.log`, the generated config and the screenshots.

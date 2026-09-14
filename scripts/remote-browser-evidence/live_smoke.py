@@ -72,14 +72,14 @@ TARGETS = {
         "browser_name": "Safari",
         "platform_name": "iOS",
         "device": {"kind": "physical", "model": "iPhone 16", "os_version": "18"},
-        "capability_extensions": {"bstack:options": {"projectName": "horizon-628", "sessionName": "phase6-ios_phone"}},
+        "capability_extensions": {"bstack:options": {"projectName": "horizon-628", }},
     },
     "android_phone": {
         "provider": "browserstack",
         "browser_name": "Chrome",
         "platform_name": "Android",
         "device": {"kind": "physical", "model": "Google Pixel 9", "os_version": "16.0"},
-        "capability_extensions": {"bstack:options": {"projectName": "horizon-628", "sessionName": "phase6-android_phone"}},
+        "capability_extensions": {"bstack:options": {"projectName": "horizon-628", }},
     },
 }
 
@@ -111,21 +111,42 @@ def secret_schema():
     return Secret, schema
 
 
-def seed_keyring(login: str, password: str) -> None:
+def slot_attributes(reference: str) -> dict[str, str]:
+    return {"service": SERVICE, "username": f"{HUB_ORIGIN}|{SLOTS[reference]}"}
+
+
+def seed_keyring(login: str, password: str) -> dict[str, str | None]:
+    """Store the run's credential under Horizon's slots and hand back whatever
+    those slots held before, so the user's own binding survives the run."""
     Secret, schema = secret_schema()
+    previous = {reference: Secret.password_lookup_sync(schema, slot_attributes(reference), None) for reference in SLOTS}
     for reference, value in (("user", login), ("key", password)):
-        attrs = {"service": SERVICE, "username": f"{HUB_ORIGIN}|{SLOTS[reference]}"}
+        attrs = slot_attributes(reference)
         if not Secret.password_store_sync(schema, attrs, Secret.COLLECTION_DEFAULT, f"keyring:{attrs['username']}@{SERVICE}", value, None):
             raise SystemExit(f"could not seed the OS store for {reference}")
+    return previous
 
 
-def clear_keyring() -> None:
+def restore_keyring(previous: dict[str, str | None]) -> None:
+    """Put back the values the slots held before the run, or clear them."""
     Secret, schema = secret_schema()
-    for slot in SLOTS.values():
-        Secret.password_clear_sync(schema, {"service": SERVICE, "username": f"{HUB_ORIGIN}|{slot}"}, None)
+    for reference, value in previous.items():
+        attrs = slot_attributes(reference)
+        if value is None:
+            Secret.password_clear_sync(schema, attrs, None)
+        else:
+            Secret.password_store_sync(schema, attrs, Secret.COLLECTION_DEFAULT, f"keyring:{attrs['username']}@{SERVICE}", value, None)
 
 
-def write_config(root: pathlib.Path, targets: list[str]) -> pathlib.Path:
+def target_with_session_name(name: str, session_name: str) -> dict:
+    """The configured target with a run-unique provider session name, so the
+    release proof can query exactly this run's session."""
+    target = json.loads(json.dumps(TARGETS[name]))
+    target["capability_extensions"]["bstack:options"]["sessionName"] = session_name
+    return target
+
+
+def write_config(root: pathlib.Path, targets: list[str], session_names: dict[str, str]) -> pathlib.Path:
     actor_path = root / "agent-actor"
     host_path = root / "agent-host-instance"
     probe = (
@@ -156,7 +177,7 @@ def write_config(root: pathlib.Path, targets: list[str]) -> pathlib.Path:
                         },
                     }
                 },
-                "targets": {name: TARGETS[name] for name in targets},
+                "targets": {name: target_with_session_name(name, session_names[name]) for name in targets},
             }
         },
         "workspaces": [
@@ -241,11 +262,12 @@ def main() -> int:
     out = pathlib.Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     root = out / f"run-{int(time.time())}"
+    session_names = {name: f"phase6-{name}-{root.name}" for name in TARGETS}
     (root / "home").mkdir(parents=True)
     login, password = load_credential()
     auth = "Basic " + __import__("base64").b64encode(f"{login}:{password}".encode()).decode()
     report: dict = {"targets": {}, "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
-    seed_keyring(login, password)
+    previous = seed_keyring(login, password)
     # The MCP server must resolve the same isolated Horizon home as the host,
     # so the isolation is applied to this process too: McpClient copies the
     # environment it is launched from.
@@ -255,7 +277,7 @@ def main() -> int:
     os.environ.pop("HORIZON_BROWSER_ACTOR", None)
     os.environ.pop("HORIZON", None)
     env = dict(os.environ)
-    config = write_config(root, args.targets)
+    config = write_config(root, args.targets, session_names)
     log = (root / "horizon.log").open("w", encoding="utf-8")
     app = subprocess.Popen([args.horizon, "--config", str(config), "--ephemeral"], env=env, stdout=log, stderr=log)
     try:
@@ -347,7 +369,7 @@ def main() -> int:
             finally:
                 client.close()
             time.sleep(5)
-            steps.append({"step": "provider_release_proof", **provider_session_state(auth, f"phase6-{target}")})
+            steps.append({"step": "provider_release_proof", **provider_session_state(auth, session_names[target])})
             report["targets"][target] = {"steps": steps}
             (root / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     finally:
@@ -358,7 +380,7 @@ def main() -> int:
         except subprocess.TimeoutExpired:
             app.kill()
         log.close()
-        clear_keyring()
+        restore_keyring(previous)
     (root / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2))
     return 0
