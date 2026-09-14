@@ -71,6 +71,7 @@ fn pending(
         discard: false,
         inspection: None,
         start: None,
+        add: None,
     });
     state.repaint_context = Some(ctx.clone());
     tx

@@ -314,6 +314,9 @@ back into large multi-purpose modules.
   Its `inspection` leaf caches explicit retained-task observations in the same
   bounded worker slot, including with no local views. Labels are point-in-time;
   session, selection, config and Stop invalidation also discard late task results.
+  Its `add` leaf collects, previews and explicitly saves independent Shell intent
+  off-thread, invalidates consent with the client context and refreshes inventory;
+  it never starts tasks or creates views.
   Its `start` leaf separately previews and confirms saved Shell execution in that
   same single-flight slot. It never attaches a view or provisions a checkout.
   Late dispatched starts retain an unattributed unknown-outcome warning rather

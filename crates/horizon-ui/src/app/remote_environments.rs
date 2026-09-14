@@ -80,6 +80,7 @@ enum InventoryAction {
     ListReconnectViews,
     Reconnect(horizon_core::PanelId),
     ListReopenPanels,
+    AddShell(reopen::AddAction),
     ReopenView(usize),
     InspectTask(usize),
     PrepareTaskStart(usize),
@@ -108,10 +109,18 @@ impl RemoteEnvironments {
     }
 
     pub(super) fn invalidate_session_views(&mut self) {
+        self.invalidate_views(false);
+    }
+
+    fn invalidate_views(&mut self, inventory_refresh: bool) {
         self.setup.invalidate();
         self.repository.invalidate();
         self.reconnect.invalidate();
-        self.reopen.invalidate();
+        if inventory_refresh {
+            self.reopen.invalidate_for_inventory();
+        } else {
+            self.reopen.invalidate();
+        }
     }
 
     pub(super) fn open(&mut self, home: &HorizonHome, ctx: &Context) {
@@ -159,7 +168,7 @@ impl RemoteEnvironments {
             self.refresh_when_idle = true;
             return;
         }
-        self.invalidate_session_views();
+        self.invalidate_views(true);
         self.observation.invalidate();
         self.stop.cancel_confirmation();
         self.delete.cancel();
@@ -206,7 +215,7 @@ impl RemoteEnvironments {
     }
 
     fn accept_result(&mut self, cursor: Option<String>, result: Result<InventoryPage, LoadError>) {
-        self.invalidate_session_views();
+        self.invalidate_views(true);
         self.observation.invalidate();
         self.stop.cancel_confirmation();
         self.delete.cancel();
@@ -269,7 +278,8 @@ impl RemoteEnvironments {
             | InventoryAction::RequestStart
             | InventoryAction::ConfirmStart => {}
             InventoryAction::ListReconnectViews | InventoryAction::Reconnect(_) => self.reopen.invalidate(),
-            InventoryAction::ListReopenPanels
+            InventoryAction::AddShell(_)
+            | InventoryAction::ListReopenPanels
             | InventoryAction::ReopenView(_)
             | InventoryAction::InspectTask(_)
             | InventoryAction::PrepareTaskStart(_)

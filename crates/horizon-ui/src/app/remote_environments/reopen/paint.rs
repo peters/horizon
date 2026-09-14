@@ -14,7 +14,9 @@ pub(super) fn show(ui: &mut egui::Ui, state: &ReopenState, enabled: bool, action
         *action = InventoryAction::ListReopenPanels;
     }
     if let Some(pending) = &state.pending {
-        ui.label(if pending.discard && pending.inspection.is_some() {
+        ui.label(if let Some(add) = &pending.add {
+            add.label(pending.discard)
+        } else if pending.discard && pending.inspection.is_some() {
             "Waiting for the discarded task check to finish…"
         } else if pending.discard {
             "Waiting for the discarded saved-view request to finish…"
