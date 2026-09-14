@@ -140,12 +140,51 @@ pub struct FrameSlot {
     notification_pending: Arc<AtomicBool>,
     metrics: Arc<FrameMetricCounters>,
     active_backend: Arc<std::sync::Mutex<Option<crate::ActiveBackendCapabilities>>>,
+    teach_active: Arc<AtomicBool>,
+    teach_fingerprint: Arc<std::sync::Mutex<Option<crate::TeachFingerprint>>>,
 }
 
 impl FrameSlot {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn set_teach_recording(&self, active: bool) {
+        self.teach_active.store(active, Ordering::Release);
+        if !active {
+            *self
+                .teach_fingerprint
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        }
+    }
+
+    #[must_use]
+    pub fn teach_recording(&self) -> bool {
+        self.teach_active.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn store_teach_fingerprint(&self, fingerprint: crate::TeachFingerprint) {
+        *self
+            .teach_fingerprint
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(fingerprint);
+    }
+
+    pub(crate) fn clear_teach_fingerprint(&self) {
+        *self
+            .teach_fingerprint
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
+
+    #[must_use]
+    pub fn take_teach_fingerprint(&self) -> Option<crate::TeachFingerprint> {
+        self.teach_fingerprint
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
     }
 
     /// Decode a JPEG frame into the slot and bump `seq`.

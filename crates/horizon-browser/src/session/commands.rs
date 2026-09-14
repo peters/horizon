@@ -166,6 +166,18 @@ impl DriverState {
                 if self.handle_vertical_scrollbar_input(link, event_tx, frame_slot, &input) {
                     return Ok(false);
                 }
+                if let crate::BrowserInput::MousePress {
+                    x,
+                    y,
+                    button: crate::BrowserButton::Left,
+                    ..
+                } = &input
+                    && frame_slot.teach_recording()
+                {
+                    // Teach is the one input path that may round-trip: left-press
+                    // only, and only while the host has latched recording on.
+                    self.capture_teach_fingerprint(link, event_tx, frame_slot, Some((*x, *y)))?;
+                }
                 // Input cannot block on a roundtrip: a detaching session
                 // would otherwise stall every frame for the call timeout.
                 if input.copies_selection() {

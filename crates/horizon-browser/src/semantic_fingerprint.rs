@@ -69,6 +69,25 @@ pub enum TargetCandidate {
     },
 }
 
+impl TargetCandidate {
+    const fn is_unreviewed_css(&self) -> bool {
+        matches!(self, Self::CssFallback { reviewed: false, .. })
+    }
+
+    fn semantic_identity(&self) -> Self {
+        let mut identity = self.clone();
+        match &mut identity {
+            Self::RoleName { reviewed, .. }
+            | Self::LabelControl { reviewed, .. }
+            | Self::TestId { reviewed, .. }
+            | Self::UniqueId { reviewed, .. }
+            | Self::VisibleText { reviewed, .. }
+            | Self::CssFallback { reviewed, .. } => *reviewed = false,
+        }
+        identity
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FrameContext {
@@ -218,9 +237,9 @@ pub fn fingerprint_from_observation(
     candidates.truncate(MAX_CANDIDATES);
     let selected = candidates
         .iter()
-        .position(|candidate| candidate.unique)
+        .position(|candidate| candidate.unique && !candidate.identity.is_unreviewed_css())
         .and_then(|index| u32::try_from(index).ok());
-    let digest = bounded_digest(&observation.digest, &candidates);
+    let digest = digest_from_candidates(&candidates);
     Ok(TeachFingerprint {
         candidates,
         selected,
@@ -258,18 +277,22 @@ pub fn match_fingerprint(
     else {
         return Err(fail("needs_reteach", "fingerprint has no unique candidate"));
     };
+    if selected.identity.is_unreviewed_css() {
+        return Err(fail("needs_reteach", "css fallback requires review before replay"));
+    }
+    let selected_identity = selected.identity.semantic_identity();
     let mut hits = Vec::new();
     for (index, observation) in observations.iter().enumerate() {
         let Ok(ranked) = fingerprint_from_observation(observation) else {
             continue;
         };
-        if ranked.digest != fingerprint.digest {
+        if ranked.digest != fingerprint.digest || ranked.frame != fingerprint.frame {
             continue;
         }
         if ranked
             .candidates
             .iter()
-            .any(|candidate| candidate.identity == selected.identity && candidate.unique)
+            .any(|candidate| candidate.unique && candidate.identity.semantic_identity() == selected_identity)
         {
             hits.push(index);
         }
@@ -339,22 +362,24 @@ fn bounded_field(value: &str) -> Result<(), BrowserControlFailure> {
     Ok(())
 }
 
-fn bounded_digest(digest: &str, candidates: &[RankedCandidate]) -> String {
-    if !digest.is_empty() && digest.len() <= MAX_DIGEST_BYTES && !digest.chars().any(char::is_control) {
-        return digest.to_string();
+fn digest_from_candidates(candidates: &[RankedCandidate]) -> String {
+    for candidate in candidates {
+        let digest = match &candidate.identity {
+            TargetCandidate::RoleName { role, name, .. } => format!("{role}/{name}"),
+            TargetCandidate::LabelControl { label, control, .. } => format!("{label}/{control}"),
+            TargetCandidate::TestId { value, .. } | TargetCandidate::UniqueId { value, .. } => value.clone(),
+            TargetCandidate::VisibleText { text, context, .. } => {
+                if context.is_empty() {
+                    text.clone()
+                } else {
+                    format!("{text}/{context}")
+                }
+            }
+            TargetCandidate::CssFallback { .. } => continue,
+        };
+        return digest.chars().take(MAX_DIGEST_BYTES).collect();
     }
-    let fallback = match candidates.first() {
-        Some(RankedCandidate {
-            identity: TargetCandidate::RoleName { role, name, .. },
-            ..
-        }) => format!("{role}/{name}"),
-        Some(RankedCandidate {
-            identity: TargetCandidate::TestId { value, .. } | TargetCandidate::UniqueId { value, .. },
-            ..
-        }) => value.clone(),
-        _ => "el".to_string(),
-    };
-    fallback.chars().take(MAX_DIGEST_BYTES).collect()
+    "el".to_string()
 }
 
 fn validate_origin(origin: &str) -> Result<(), BrowserControlFailure> {
@@ -387,6 +412,25 @@ fn fail(code: &str, message: &str) -> BrowserControlFailure {
 const FINGERPRINT_FUNCTION: &str = r#"function(x, y, focused) {
     const compact = (value, limit = 512) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, limit);
     const count = (root, selector) => { try { return root.querySelectorAll(selector).length; } catch (error) { return 0; } };
+    const generatedId = (value) => {
+        if (!value) return true;
+        const hexish = value.length >= 24 && /^[0-9a-fA-F-]+$/.test(value);
+        const react = value.startsWith(':r') && value.endsWith(':');
+        const uuidish = value.length === 36 && (value.match(/-/g) || []).length === 4;
+        return hexish || react || uuidish;
+    };
+    const collect = (root) => {
+        const out = [];
+        const walk = (base) => {
+            if (!base || !base.querySelectorAll) return;
+            for (const node of base.querySelectorAll('*')) {
+                out.push(node);
+                if (node.shadowRoot) walk(node.shadowRoot);
+            }
+        };
+        walk(root);
+        return out;
+    };
     const cssPath = (element, root) => {
         if (element.id && count(root, '#' + CSS.escape(element.id)) === 1) return '#' + CSS.escape(element.id);
         const parts = [];
@@ -427,6 +471,9 @@ const FINGERPRINT_FUNCTION: &str = r#"function(x, y, focused) {
         }
         return tag;
     };
+    const nameFor = (element) => compact(element.getAttribute('aria-label') || element.getAttribute('alt') || element.getAttribute('title') ||
+        ((element.tagName === 'INPUT' && /^(button|submit|reset)$/i.test(element.getAttribute('type') || '')) ? element.value : '') ||
+        element.textContent);
     const pierceShadow = (start, px, py) => {
         let el = start;
         while (el && el.shadowRoot) {
@@ -436,50 +483,70 @@ const FINGERPRINT_FUNCTION: &str = r#"function(x, y, focused) {
         }
         return el;
     };
+    const frameName = (frame) => compact(frame.title || frame.name || frame.getAttribute('aria-label'));
     let doc = document;
     let chain = [];
+    let px = x;
+    let py = y;
     let el = focused ? (document.activeElement || document.body) : document.elementFromPoint(x, y);
-    if (!focused) {
+    if (focused) {
+        while (el && el.tagName === 'IFRAME') {
+            try {
+                const inner = el.contentDocument;
+                if (!inner) break;
+                chain.push({ origin: inner.location.origin, name: frameName(el) });
+                el = inner.activeElement || inner.body;
+                doc = inner;
+            } catch (error) { break; }
+        }
+        while (el && el.shadowRoot && el.shadowRoot.activeElement) {
+            el = el.shadowRoot.activeElement;
+        }
+    } else {
         while (el && el.tagName === 'IFRAME') {
             try {
                 const inner = el.contentDocument;
                 if (!inner) break;
                 const rect = el.getBoundingClientRect();
-                chain.push({ origin: inner.location.origin, name: compact(el.title || el.name || el.getAttribute('aria-label')) });
-                el = inner.elementFromPoint(x - rect.left, y - rect.top);
+                px -= rect.left;
+                py -= rect.top;
+                chain.push({ origin: inner.location.origin, name: frameName(el) });
+                el = inner.elementFromPoint(px, py);
                 doc = inner;
             } catch (error) { break; }
         }
-        el = pierceShadow(el, x, y);
+        el = pierceShadow(el, px, py);
     }
     if (!el || el.nodeType !== 1) return { error: { code: 'no_such_element', message: 'no element under the pointer' } };
-    const root = doc;
+    const searchRoot = (el.getRootNode && el.getRootNode() instanceof ShadowRoot) ? el.getRootNode() : doc;
     const role = roleFor(el);
-    const name = compact(el.getAttribute('aria-label') || el.getAttribute('alt') || el.getAttribute('title') ||
-        ((el.tagName === 'INPUT' && /^(button|submit|reset)$/i.test(el.getAttribute('type') || '')) ? el.value : '') ||
-        el.textContent);
+    const name = nameFor(el);
     const control = role || el.tagName.toLowerCase();
-    const label = labelFor(el, root);
+    const label = labelFor(el, searchRoot);
     const testAttr = ['data-testid', 'data-test-id', 'data-qa'].find((attr) => el.getAttribute(attr));
     const testVal = testAttr ? compact(el.getAttribute(testAttr)) : '';
     const host = el.getRootNode && el.getRootNode() instanceof ShadowRoot ? compact(el.getRootNode().host?.getAttribute('aria-label') || el.getRootNode().host?.id) : '';
     const visible = compact(el.children.length === 0 ? el.textContent : name);
     const id = compact(el.id);
-    const path = cssPath(el, root);
+    const durableId = generatedId(id) ? '' : id;
+    const path = cssPath(el, doc);
     const origin = chain.length ? chain[chain.length - 1].origin : location.origin;
-    const qRole = role && name ? '[role="' + CSS.escape(role) + '"]' : '';
+    const nodes = collect(searchRoot);
+    const roleNameMatches = role && name ? nodes.filter((node) => roleFor(node) === role && nameFor(node) === name).length : 0;
+    const labelMatches = label ? nodes.filter((node) => labelFor(node, searchRoot) === label).length : 0;
+    const textMatches = visible ? nodes.filter((node) => compact(node.children.length === 0 ? node.textContent : nameFor(node)) === visible).length : 0;
     return {
         origin, topLevel: chain.length === 0 && window === window.top, frameChain: chain,
         role, name, label, control,
         testIdAttribute: testAttr || '', testIdValue: testVal, elementId: id,
         visibleText: visible, context: host, cssPath: path,
-        digest: compact([role, name, testVal || id].filter(Boolean).join('/'), 128),
-        roleNameMatches: role && name ? count(root, qRole) : 0,
-        labelMatches: label ? 1 : 0,
-        testIdMatches: testAttr ? count(root, '[' + testAttr + '="' + CSS.escape(testVal) + '"]') : 0,
-        idMatches: id ? count(root, '#' + CSS.escape(id)) : 0,
-        textMatches: visible ? 1 : 0,
-        cssMatches: path ? 1 : 0
+        digest: compact([role, name, testVal || durableId].filter(Boolean).join('/'), 128),
+        roleNameMatches,
+        labelMatches,
+        testIdMatches: testAttr ? count(searchRoot, '[' + testAttr + '="' + CSS.escape(testVal) + '"]') : 0,
+        idMatches: durableId ? count(searchRoot, '#' + CSS.escape(durableId)) : 0,
+        textMatches,
+        cssMatches: path ? Math.max(1, count(doc, path)) : 0
     };
 }"#;
 
@@ -604,6 +671,72 @@ mod tests {
     }
 
     #[test]
+    fn match_requires_compatible_frame_context() {
+        let fingerprint = fingerprint_from_observation(&labeled_textbox()).expect("rank");
+        let mut other_frame = labeled_textbox();
+        other_frame.top_level = false;
+        other_frame.origin = "https://idp.example".to_string();
+        other_frame.frame_chain = vec![FrameLink {
+            origin: "https://idp.example".to_string(),
+            name: "login".to_string(),
+        }];
+        assert_eq!(
+            match_fingerprint(&fingerprint, &[other_frame])
+                .err()
+                .map(|error| error.code),
+            Some("needs_reteach".to_string())
+        );
+    }
+
+    #[test]
+    fn generated_ids_are_omitted_from_digest() {
+        let mut observation = labeled_textbox();
+        observation.element_id = "4f8a1c2b9d0e7a6b5c4d3e2f".to_string();
+        observation.digest = "textbox/Month/4f8a1c2b9d0e7a6b5c4d3e2f".to_string();
+        let fingerprint = fingerprint_from_observation(&observation).expect("rank");
+        assert!(!fingerprint.digest.contains("4f8a1c2b9d0e7a6b5c4d3e2f"));
+        assert_eq!(fingerprint.digest, "textbox/Month");
+    }
+
+    #[test]
+    fn reviewed_flag_is_not_part_of_replay_identity() {
+        let mut fingerprint = fingerprint_from_observation(&labeled_textbox()).expect("rank");
+        if let TargetCandidate::RoleName { reviewed, .. } = &mut fingerprint.candidates[0].identity {
+            *reviewed = true;
+        }
+        assert_eq!(match_fingerprint(&fingerprint, &[labeled_textbox()]).expect("hit"), 0);
+    }
+
+    fn css_only() -> ElementObservation {
+        ElementObservation {
+            origin: "https://reports.example".to_string(),
+            top_level: true,
+            css_path: "form > input:nth-of-type(1)".to_string(),
+            css_matches: 1,
+            digest: "el".to_string(),
+            ..ElementObservation::default()
+        }
+    }
+
+    #[test]
+    fn unreviewed_css_fallback_does_not_replay() {
+        let fingerprint = fingerprint_from_observation(&css_only()).expect("rank");
+        assert!(fingerprint.selected.is_none());
+        assert_eq!(
+            match_fingerprint(&fingerprint, &[css_only()])
+                .err()
+                .map(|error| error.code),
+            Some("needs_reteach".to_string())
+        );
+        let mut reviewed = fingerprint;
+        if let TargetCandidate::CssFallback { reviewed, .. } = &mut reviewed.candidates[0].identity {
+            *reviewed = true;
+        }
+        reviewed.selected = Some(0);
+        assert_eq!(match_fingerprint(&reviewed, &[css_only()]).expect("hit"), 0);
+    }
+
+    #[test]
     fn teach_scripts_are_absent_from_per_frame_scans() {
         let scan = scan_expression(None, 10);
         let wait = wait_scan_expression("button", 10);
@@ -615,6 +748,19 @@ mod tests {
         assert!(at_point.contains("shadowRoot"));
         assert!(at_point.contains("contentDocument"));
         assert!(at_point.contains("data-testid"));
-        assert!(fingerprint_focused_expression().contains("activeElement"));
+        assert!(at_point.contains("pierceShadow"));
+        assert!(at_point.contains("IFRAME"));
+        assert!(at_point.contains("label[for="));
+        assert!(at_point.contains("generatedId"));
+        assert!(at_point.contains("px -= rect.left"));
+        assert!(at_point.contains("collect("));
+        assert!(at_point.contains("roleFor(node) === role && nameFor(node) === name"));
+        assert!(!at_point.contains("labelMatches: label ? 1 : 0"));
+        assert!(!at_point.contains("textMatches: visible ? 1 : 0"));
+        let focused = fingerprint_focused_expression();
+        assert!(focused.contains("activeElement"));
+        assert!(focused.contains("shadowRoot.activeElement"));
+        assert!(focused.contains("inner.activeElement"));
+        assert!(!at_point.contains("MouseMove"));
     }
 }

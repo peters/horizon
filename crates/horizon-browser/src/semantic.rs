@@ -22,8 +22,6 @@ pub(crate) struct SemanticState {
     generation: u64,
     revision: u64,
     references: HashMap<String, String>,
-    teach_active: bool,
-    teach_fingerprint: Option<crate::semantic_fingerprint::TeachFingerprint>,
 }
 
 impl Default for SemanticState {
@@ -32,8 +30,6 @@ impl Default for SemanticState {
             generation: 1,
             revision: 0,
             references: HashMap::new(),
-            teach_active: false,
-            teach_fingerprint: None,
         }
     }
 }
@@ -49,30 +45,6 @@ impl SemanticState {
         self.generation = self.generation.wrapping_add(1).max(1);
         self.revision = 0;
         self.references.clear();
-        self.teach_fingerprint = None;
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn set_teach_active(&mut self, active: bool) {
-        self.teach_active = active;
-        if !active {
-            self.teach_fingerprint = None;
-        }
-    }
-
-    #[must_use]
-    pub(crate) fn teach_active(&self) -> bool {
-        self.teach_active
-    }
-
-    pub(crate) fn store_teach_fingerprint(&mut self, fingerprint: crate::semantic_fingerprint::TeachFingerprint) {
-        self.teach_fingerprint = Some(fingerprint);
-    }
-
-    #[must_use]
-    #[allow(dead_code)]
-    pub(crate) fn teach_fingerprint(&self) -> Option<&crate::semantic_fingerprint::TeachFingerprint> {
-        self.teach_fingerprint.as_ref()
     }
 
     /// Parse a scan without registering references: the page generation and
@@ -527,15 +499,13 @@ mod tests {
 
     #[test]
     fn teach_inactive_does_not_retain_or_request_fingerprints() {
-        let state = SemanticState::default();
-        assert!(!state.teach_active());
-        assert!(state.teach_fingerprint().is_none());
-        let mut enabled = SemanticState::default();
-        enabled.set_teach_active(true);
-        assert!(enabled.teach_active());
-        enabled.set_teach_active(false);
-        assert!(!enabled.teach_active());
-        assert!(enabled.teach_fingerprint().is_none());
+        let slot = crate::FrameSlot::new();
+        assert!(!slot.teach_recording());
+        assert!(slot.take_teach_fingerprint().is_none());
+        slot.set_teach_recording(true);
+        assert!(slot.teach_recording());
+        slot.set_teach_recording(false);
+        assert!(!slot.teach_recording());
         assert!(!scan_expression(None, 8).contains("elementFromPoint"));
         assert!(!wait_scan_expression("#status", 8).contains("activeElement"));
     }

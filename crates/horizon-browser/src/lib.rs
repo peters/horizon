@@ -56,7 +56,10 @@ pub use semantic::{
     AgentActionResult, BrowserActionOutcome, BrowserBounds, BrowserControlFailure, BrowserControlValue, BrowserNode,
     BrowserSnapshot, BrowserTarget, NavigationOutcome, NavigationState, SelectorState, WaitOutcome,
 };
-pub use semantic_fingerprint::{TeachFingerprint, match_fingerprint};
+pub use semantic_fingerprint::{
+    ElementObservation, FrameContext as TeachFrameContext, FrameLink as TeachFrameLink, RankedCandidate,
+    TargetCandidate as TeachTargetCandidate, TeachFingerprint, match_fingerprint,
+};
 pub use session::{
     BrowserCommand, BrowserEvent, BrowserEventWaker, BrowserSession, BrowserSessionConfig, BrowserShutdownSignal,
     CommittedUrl, start_session,

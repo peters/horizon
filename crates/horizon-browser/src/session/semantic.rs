@@ -293,24 +293,24 @@ impl DriverState {
         bounded_control_value(value)
     }
 
-    fn capture_teach_fingerprint(
+    pub(super) fn capture_teach_fingerprint(
         &mut self,
         link: &mut crate::cdp::CdpLink,
         event_tx: &BrowserEventSender,
         frame_slot: &Arc<FrameSlot>,
         point: Option<(f64, f64)>,
     ) -> Result<(), BrowserControlFailure> {
-        if !self.semantic.teach_active() {
+        if !frame_slot.teach_recording() {
             return Ok(());
         }
+        frame_slot.clear_teach_fingerprint();
         let expression = match point {
             Some((x, y)) => fingerprint_at_point_expression(x, y),
             None => fingerprint_focused_expression(),
         };
         let value = self.evaluate_json(link, event_tx, frame_slot, &expression)?;
-        if let Ok(fingerprint) = fingerprint_from_script_value(&value) {
-            self.semantic.store_teach_fingerprint(fingerprint);
-        }
+        let fingerprint = fingerprint_from_script_value(&value)?;
+        frame_slot.store_teach_fingerprint(fingerprint);
         Ok(())
     }
 

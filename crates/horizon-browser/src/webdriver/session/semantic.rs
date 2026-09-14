@@ -9,13 +9,31 @@ use crate::semantic::{
 use crate::semantic_fingerprint::{
     fingerprint_at_point_expression, fingerprint_focused_expression, fingerprint_from_script_value,
 };
-use crate::session::BrowserEventSender;
+use crate::session::{BrowserEventSender, BrowserSessionConfig};
 use crate::{
     AgentAction, BackendKind, BrowserButton, BrowserControlAction, BrowserControlFailure, BrowserControlValue,
     BrowserInput, BrowserModifiers, BrowserSnapshot,
 };
 
-use super::{Driver, webdriver_value};
+use super::super::service::WebDriverService;
+use super::{Driver, create_webdriver_session, webdriver_value};
+
+pub(super) fn create_webdriver_session_response(
+    service: &WebDriverService,
+    config: &BrowserSessionConfig,
+) -> Result<Value, String> {
+    match create_webdriver_session(service, config, true) {
+        Ok(response) => Ok(response),
+        Err(error)
+            if config.browser.backend == BackendKind::SafariWebDriver
+                && error.is_unsupported_websocket_capability() =>
+        {
+            create_webdriver_session(service, config, false)
+                .map_err(|error| format!("failed to create classic Safari WebDriver session: {error}"))
+        }
+        Err(error) => Err(format!("failed to create WebDriver session: {error}")),
+    }
+}
 
 const DOCUMENT_IDENTITY_EXPRESSION: &str =
     "JSON.stringify([String(location.href), Number(globalThis.performance?.timeOrigin || 0)])";
@@ -212,18 +230,34 @@ impl Driver {
         Ok(BrowserControlValue::Json { value })
     }
 
-    fn capture_teach_fingerprint(&mut self, point: Option<(f64, f64)>) -> Result<(), BrowserControlFailure> {
-        if !self.semantic.teach_active() {
+    pub(super) fn capture_teach_press(&mut self, input: &BrowserInput) -> Result<(), String> {
+        if let BrowserInput::MousePress {
+            x,
+            y,
+            button: BrowserButton::Left,
+            ..
+        } = input
+            && self.panel_slot.teach_recording()
+        {
+            return self
+                .capture_teach_fingerprint(Some((*x, *y)))
+                .map_err(|error| error.message.clone());
+        }
+        Ok(())
+    }
+
+    pub(super) fn capture_teach_fingerprint(&mut self, point: Option<(f64, f64)>) -> Result<(), BrowserControlFailure> {
+        if !self.panel_slot.teach_recording() {
             return Ok(());
         }
+        self.panel_slot.clear_teach_fingerprint();
         let expression = match point {
             Some((x, y)) => fingerprint_at_point_expression(x, y),
             None => fingerprint_focused_expression(),
         };
         let value = self.evaluate_json(&expression)?;
-        if let Ok(fingerprint) = fingerprint_from_script_value(&value) {
-            self.semantic.store_teach_fingerprint(fingerprint);
-        }
+        let fingerprint = fingerprint_from_script_value(&value)?;
+        self.panel_slot.store_teach_fingerprint(fingerprint);
         Ok(())
     }
 
