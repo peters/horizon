@@ -71,7 +71,11 @@ explicit about which steps mutate the host so the proof is not overclaimed.
        WS=$parent;
      done;
      df -kP "$WS" | tail -1;
-     docker info --format "{{.ServerVersion}}" 2>&1 | head -1 || echo "docker: tool not present";
+     if command -v docker >/dev/null 2>&1; then
+       docker info --format "{{.ServerVersion}}" 2>&1 | head -1;
+     else
+       echo "docker: tool not present";
+     fi;
      SOCK="";
      if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -S "$XDG_RUNTIME_DIR/podman/podman.sock" ]; then
        SOCK="$XDG_RUNTIME_DIR/podman/podman.sock";

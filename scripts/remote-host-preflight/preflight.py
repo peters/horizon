@@ -739,16 +739,40 @@ def check_tailscale(executor, timeout):
             "detail": detail + "; client-side reachability remains unverified"}
 
 
+def parsed_non_linux(os_check):
+    """True when uname was parsed and the kernel is not Linux."""
+    if os_check.get("status") != UNSUPPORTED:
+        return False
+    value = os_check.get("value")
+    return bool(value) and not str(value).startswith("Linux ")
+
+
+LINUX_ONLY_UNVERIFIED = (
+    ("container_engine", "skipped because the kernel is not Linux"),
+    ("cpu_capacity", "skipped because the kernel is not Linux"),
+    ("memory_capacity", "skipped because the kernel is not Linux"),
+    ("disk_capacity", "skipped because the kernel is not Linux"),
+    ("storage_ext4_qualifier", "skipped because the kernel is not Linux"),
+)
+
+
 def build_report(procfs_root, sysfs_root, workspace_path, timeout, executor, now):
-    checks = [
-        check_os(executor, timeout),
-        check_container_engine(executor, timeout),
-        check_capacity(executor, timeout, procfs_root),
-        check_memory(procfs_root),
-        check_disk(executor, timeout, workspace_path),
-        check_storage_qualifier(procfs_root, sysfs_root, workspace_path, executor, timeout),
-        check_tailscale(executor, timeout),
-    ]
+    os_check = check_os(executor, timeout)
+    if parsed_non_linux(os_check):
+        checks = [os_check]
+        checks.extend({"id": check_id, "status": UNVERIFIED, "value": None, "detail": detail}
+                      for check_id, detail in LINUX_ONLY_UNVERIFIED)
+        checks.append(check_tailscale(executor, timeout))
+    else:
+        checks = [
+            os_check,
+            check_container_engine(executor, timeout),
+            check_capacity(executor, timeout, procfs_root),
+            check_memory(procfs_root),
+            check_disk(executor, timeout, workspace_path),
+            check_storage_qualifier(procfs_root, sysfs_root, workspace_path, executor, timeout),
+            check_tailscale(executor, timeout),
+        ]
     checks.extend({"id": check_id, "status": UNVERIFIED, "value": None, "detail": detail}
                   for check_id, detail in ALWAYS_UNVERIFIED)
     counts = {state: 0 for state in (SUPPORTED, UNSUPPORTED, UNVERIFIED, ERROR)}
@@ -806,15 +830,29 @@ def decode_probe_output(data):
     return str(data)
 
 
-def _terminate_probe(proc):
-    """Kill the probe and its process group, then reap."""
+def _kill_descendants(pid):
+    """SIGKILL children recorded in Linux procfs, depth-first."""
+    children = []
     try:
-        os.killpg(proc.pid, signal.SIGKILL)
+        with open("/proc/%d/task/%d/children" % (pid, pid), "r", encoding="ascii") as handle:
+            children = [int(part) for part in handle.read().split() if part.isdigit()]
     except OSError:
+        children = []
+    for child in children:
+        _kill_descendants(child)
         try:
-            proc.kill()
+            os.kill(child, signal.SIGKILL)
         except OSError:
             pass
+
+
+def _terminate_probe(proc):
+    """Kill the probe and its descendants, then reap."""
+    _kill_descendants(proc.pid)
+    try:
+        proc.kill()
+    except OSError:
+        pass
     try:
         proc.wait(timeout=1)
     except (subprocess.TimeoutExpired, OSError):
@@ -882,8 +920,10 @@ def bounded_communicate(proc, timeout, max_bytes):
 
 
 def _execute_probe(argv, timeout):
+    # Stay in the watchdog session so the parent can killpg the watchdog
+    # and reap a hung PATH lookup *and* any probe that already started.
     proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            shell=False, start_new_session=True)
+                            shell=False)
     stdout, stderr, overflow = bounded_communicate(proc, timeout, MAX_PROBE_OUTPUT_BYTES)
     if overflow:
         return {"exit_code": 1, "stdout": "", "stderr": overflow, "output_exceeded": True}

@@ -253,13 +253,21 @@ class PreflightVerdicts(Harness):
     def test_darwin_unsupported(self):
         fixture = dict(DEFAULT_FIXTURE)
         fixture["os"] = os_fixture(osname="Darwin", machine="arm64")
-        code, report, _ = self.run_main(fixture)
+        code, report, executor = self.run_main(
+            fixture, meminfo_text=None, cpuinfo_text=None,
+            ext4_options=None, block_exists=False)
         self.assertEqual(code, 1)
         by_id = {check["id"]: check for check in report["checks"]}
         self.assertEqual(by_id["os_linux"]["status"], "unsupported")
         self.assertEqual(by_id["os_linux"]["value"], "Darwin 6.1.0 arm64")
         self.assertIn("arm64", by_id["os_linux"]["detail"])
         self.assertEqual(report["summary"]["verdict"], "unsupported")
+        self.assertEqual(report["summary"]["error"], 0)
+        for check_id in ("container_engine", "cpu_capacity", "memory_capacity",
+                         "disk_capacity", "storage_ext4_qualifier"):
+            self.assertEqual(by_id[check_id]["status"], "unverified", check_id)
+        self.assertFalse(any(argv and argv[0] == "docker" for argv in executor.seen))
+        self.assertFalse(any(argv and argv[0] == "df" for argv in executor.seen))
 
     def test_unsupported_architecture(self):
         for machine in ("armv7l", "riscv64", "i686"):
@@ -538,11 +546,28 @@ class EngineFailures(Harness):
         self.assertIsNotNone(proc.poll())
 
     def test_default_executor_times_out_before_hanging(self):
+        pidfile = os.path.join(self.tmp.name, "probe.pid")
+        script = (
+            "import os,time\n"
+            "open(%r,'w').write(str(os.getpid()))\n"
+            "time.sleep(5)\n"
+        ) % pidfile
         with mock.patch.object(subprocess, "Popen", self.real_popen):
             with self.assertRaises(subprocess.TimeoutExpired):
                 preflight.default_executor(
-                    [sys.executable, "-B", "-c", "import time; time.sleep(5)"],
-                    0.2)
+                    [sys.executable, "-B", "-c", script], 0.2)
+        with open(pidfile, encoding="utf-8") as handle:
+            probe_pid = int(handle.read().strip())
+        deadline = time.monotonic() + 2
+        alive = True
+        while time.monotonic() < deadline:
+            try:
+                os.kill(probe_pid, 0)
+            except OSError:
+                alive = False
+                break
+            time.sleep(0.05)
+        self.assertFalse(alive)
 
     def test_default_executor_missing_tool_is_file_not_found(self):
         with mock.patch.object(subprocess, "Popen", self.real_popen):
