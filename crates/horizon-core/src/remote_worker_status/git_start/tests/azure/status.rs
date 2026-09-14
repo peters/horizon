@@ -150,12 +150,12 @@ fn azure_status_does_not_start_stopped_or_transitioning_compute() {
             |_| panic!("no client for unavailable compute"),
             |_, _| panic!("no task query"),
         );
-        assert!(matches!(
-            result,
-            Err(Error::Inspection(
-                RemotePanelStatusError::ManagementPending | RemotePanelStatusError::WorkerUnavailable
-            ))
-        ));
+        let expected = if matches!(phase, RemoteRuntimePhase::Stopped { .. }) {
+            RemotePanelStatusError::WorkerUnavailable
+        } else {
+            RemotePanelStatusError::ManagementPending
+        };
+        assert_eq!(result, Err(Error::Inspection(expected)));
         assert_eq!(fixture.current(), current);
     }
 }
