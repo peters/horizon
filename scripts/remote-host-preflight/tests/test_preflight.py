@@ -369,6 +369,23 @@ class EngineFailures(Harness):
              "info", "--format", "{{.Version.Version}}"],
             executor.seen)
 
+    def test_unreadable_xdg_socket_does_not_hide_system_socket(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture.pop("docker_version")
+        fixture.pop("docker_info")
+        fixture.pop("docker_context", None)
+        fixture["podman_client"] = podman_client_ok()
+        fixture["podman_socket"] = {"stdout": "/run/podman/podman.sock\n"}
+        fixture["podman_info"] = podman_ok()
+        code, report, executor = self.run_main(fixture)
+        self.assertEqual(code, 0)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["container_engine"]["value"], "podman 4.9.0")
+        self.assertIn(
+            ["podman", "--remote=true", "--url", "unix:///run/podman/podman.sock",
+             "info", "--format", "{{.Version.Version}}"],
+            executor.seen)
+
     def test_podman_socket_unreadable_is_not_absent(self):
         fixture = dict(DEFAULT_FIXTURE)
         fixture.pop("docker_version")
@@ -1425,6 +1442,16 @@ class RedactionAndDeterminism(Harness):
         elapsed = time.monotonic() - started
         self.assertEqual(out, blob[:400])
         self.assertLess(elapsed, 0.5)
+
+    def test_overlong_jwt_payload_is_fully_redacted(self):
+        token = "eyJhbGciOiJIUzI1NiJ9." + ("a" * 5000) + ".sigsuffix"
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["docker_version"] = docker_daemon_down("denied token=" + token)
+        _, report, _ = self.run_main(fixture)
+        text = json.dumps(report)
+        self.assertNotIn("sigsuffix", text)
+        self.assertNotIn("a" * 50, text)
+        self.assertIn("<redacted>", text)
 
     def test_quoted_json_diagnostics_are_redacted(self):
         blob = '{"password":"hunter2","Authorization":"Bearer supersecrettok"}'

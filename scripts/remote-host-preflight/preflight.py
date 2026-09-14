@@ -86,7 +86,7 @@ PROBE_ARGS = {
                       "paths.insert(0,'/run/user/'+str(os.getuid())+'/podman/podman.sock')\n"
                       "if len(sys.argv)>1 and sys.argv[1]:\n"
                       "    paths.insert(0, os.path.join(sys.argv[1],'podman','podman.sock'))\n"
-                      "seen=set(); found=False\n"
+                      "seen=set(); found=False; unreadable=False\n"
                       "for p in paths:\n"
                       "    if p in seen: continue\n"
                       "    seen.add(p)\n"
@@ -94,9 +94,10 @@ PROBE_ARGS = {
                       "        os.lstat(p)\n"
                       "    except OSError as e:\n"
                       "        if e.errno==errno.ENOENT: continue\n"
-                      "        sys.stderr.write('unreadable\\n'); sys.exit(4)\n"
+                      "        unreadable=True; continue\n"
                       "    sys.stdout.write(p+'\\n'); found=True\n"
-                      "sys.exit(0 if found else 1)\n"],
+                      "if found: sys.exit(0)\n"
+                      "sys.exit(4 if unreadable else 1)\n"],
     "workspace_dir": [sys.executable, "-B", "-c",
                       "import errno,json,os,stat,sys\n"
                       "try:\n"
@@ -143,7 +144,7 @@ ENDPOINT_VARS = DOCKER_ENDPOINT_VARS + PODMAN_ENDPOINT_VARS
 # leak the credential, and whitespace-containing values are otherwise only
 # partially removed.
 REDACTED_PATTERNS = (
-    re.compile(r"eyJ[A-Za-z0-9_-]{4,4096}\.[A-Za-z0-9_-]{4,4096}(?:\.[A-Za-z0-9_-]{4,4096})?"),
+    re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?"),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*"),
     re.compile(
         r'(?i)(?:^|[^A-Za-z0-9_-])"?[A-Za-z0-9_-]{0,64}'
