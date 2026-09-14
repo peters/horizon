@@ -115,7 +115,7 @@ cloud resources and running user sessions must not be changed by a local rehears
   Docker smoke passed launch, terminal input, resize, input after resize and
   normal close; launch/resized screenshots were inspected after fitting the
   workspace. The `/bin/false` negative control failed as required with complete
-  cleanup. Nine process/isolation tests pass and are wired into CI. Independent
+  cleanup. Eleven process/isolation tests pass and are wired into CI. Independent
   review found an orphan-process cleanup edge case; subreaper/pidfd cleanup and
   two regression tests resolve it, and re-review found no remaining action items.
 - Current private evidence: `/tmp/horizon-linux-ui-evidence-20260914/run-d/`,
@@ -142,17 +142,22 @@ cloud resources and running user sessions must not be changed by a local rehears
 
 ## Immediate continuation
 
-1. Complete hosted review/CI for the testing image, controller and skill slices.
-2. Rebuild the full-agent base with current repository-helper sources. The first
-   separately approved image passed browser smoke but failed Git handoff because
-   its cached base predates the required Git commands; it is not qualified for
-   issue offloads. The build-context correction includes the routines dependency
-   and retains private-file exclusions. Qualify the replacement before requesting
-   publication of its new identity.
-3. Qualify authenticated agent execution on the intended Azure worker, then
-   complete issue-task, reconnect, UI and explicit lifecycle evidence. No paid
-   worker has been allocated by this implementation yet. Device login and the
-   actual Azure browser namespace policy remain integration gates.
+1. Complete hosted review/CI for the testing image (#647), controller (#649),
+   skill (#650), and focused base-image correction (#652). All local validation
+   matrices passed, including the required strict Clippy tier.
+2. The full-agent base was rebuilt with current Git helpers and its routines
+   dependency. Exact public Git preparation, saved-task execution and reconnect
+   passed. The user-approved native-only variant was published and its authenticated
+   digest pull verified. The repository manifest selects that immutable image;
+   browsers remain an optional build target. The older published browser image
+   with outdated Git helpers is not qualified for issue offloads.
+3. Continue the explicitly approved bounded Azure pilot using its original private
+   receipt. The exact native image, agent CLI and smoke helper were observed on
+   the running VM, and its compute shutdown schedule was verified. Repository
+   credential transfer and coding-agent device login have separate consent gates.
+   Record live execution, UI proof and exact cleanup in private pilot evidence;
+   worker allocation alone does not establish authenticated-agent or client-off
+   acceptance. The browser namespace policy remains a separate optional Azure lane.
 
 ## Repository manifest decision — user clarification
 
