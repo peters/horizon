@@ -45,7 +45,7 @@ fn main() -> eframe::Result {
     }
 
     let horizon_home = HorizonHome::resolve();
-    let _agent_plugin_host_lease = plugin_install::install_agent_plugins(&horizon_home);
+    let _agent_plugin_host = plugin_install::install_agent_plugins(&horizon_home);
 
     let cli_args = parse_cli_args();
     let resolved_config_path =
@@ -300,7 +300,7 @@ fn prepare_startup(session_store: &SessionStore, config: &Config, cli_args: &Cli
             },
             Err(error) => {
                 eprintln!("fatal: failed to create Horizon session: {error}");
-                std::process::exit(1);
+                plugin_install::exit_after_releasing_plugins(1);
             }
         };
     }
@@ -316,7 +316,7 @@ fn prepare_startup(session_store: &SessionStore, config: &Config, cli_args: &Cli
                 },
                 Err(create_error) => {
                     eprintln!("fatal: failed to create Horizon session: {create_error}");
-                    std::process::exit(1);
+                    plugin_install::exit_after_releasing_plugins(1);
                 }
             }
         }
