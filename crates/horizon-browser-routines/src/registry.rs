@@ -190,19 +190,16 @@ fn validate_existing_ancestors(path: &Path) -> Result<(), RoutineError> {
     let mut current = path.to_path_buf();
     loop {
         match fs::symlink_metadata(&current) {
-            Ok(metadata) if metadata.file_type().is_symlink() => return Err(RoutineError::Storage),
-            Ok(metadata) => {
-                if !metadata.is_dir() {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                if symlink_is_replaceable(&current, &metadata) {
                     return Err(RoutineError::Storage);
                 }
-                #[cfg(unix)]
-                {
-                    let mode = metadata.permissions().mode();
-                    if mode & 0o022 != 0 && mode & 0o1000 == 0 {
-                        return Err(RoutineError::Storage);
-                    }
+                match fs::metadata(&current) {
+                    Ok(target) => check_directory_permissions(&target)?,
+                    Err(_) => return Err(RoutineError::Storage),
                 }
             }
+            Ok(metadata) => check_directory_permissions(&metadata)?,
             Err(error) if error.kind() == ErrorKind::NotFound => {}
             Err(_) => return Err(RoutineError::Storage),
         }
@@ -215,6 +212,50 @@ fn validate_existing_ancestors(path: &Path) -> Result<(), RoutineError> {
         current = parent.to_path_buf();
     }
     Ok(())
+}
+
+fn check_directory_permissions(metadata: &fs::Metadata) -> Result<(), RoutineError> {
+    if !metadata.is_dir() {
+        return Err(RoutineError::Storage);
+    }
+    #[cfg(unix)]
+    {
+        let mode = metadata.permissions().mode();
+        if mode & 0o022 != 0 && mode & 0o1000 == 0 {
+            return Err(RoutineError::Storage);
+        }
+    }
+    Ok(())
+}
+
+/// True when the current user can replace this symlink (owned by us, parent
+/// owned by us, or parent world-writable without sticky). System aliases such
+/// as macOS `/tmp` → `/private/tmp` stay allowed because root owns both the
+/// link and its parent.
+fn symlink_is_replaceable(path: &Path, link: &fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        let uid = rustix::process::geteuid().as_raw();
+        if link.uid() == uid {
+            return true;
+        }
+        let Some(parent) = path.parent() else {
+            return true;
+        };
+        match fs::metadata(parent) {
+            Ok(metadata) if metadata.uid() == uid => true,
+            Ok(metadata) => {
+                let mode = metadata.permissions().mode();
+                mode & 0o022 != 0 && mode & 0o1000 == 0
+            }
+            Err(_) => true,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, link);
+        true
+    }
 }
 
 pub(crate) fn read_private_file(path: &Path) -> Result<Vec<u8>, RoutineError> {
@@ -327,5 +368,21 @@ mod tests {
             RoutineRegistry::open(link.join("routines")).err(),
             Some(RoutineError::Storage)
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_rejects_a_user_owned_symlink_in_sticky_tmpdir() {
+        let tmp = std::env::temp_dir();
+        let suffix = Uuid::new_v4();
+        let real = tmp.join(format!("horizon-routine-real-{suffix}"));
+        let link = tmp.join(format!("horizon-routine-link-{suffix}"));
+        std::fs::create_dir(&real).expect("real");
+        privatize_temp(&real);
+        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+        let opened = RoutineRegistry::open(link.join("routines"));
+        let _ = std::fs::remove_file(&link);
+        let _ = std::fs::remove_dir_all(&real);
+        assert_eq!(opened.err(), Some(RoutineError::Storage));
     }
 }
