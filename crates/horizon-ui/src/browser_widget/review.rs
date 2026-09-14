@@ -58,21 +58,16 @@ pub fn show(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: bool) -> 
 }
 
 fn paint_rows(ui: &mut Ui, browser: &mut BrowserPanelState, rows: &[horizon_core::browser::ReviewRow]) -> bool {
-    const ROW_HEIGHT: f32 = 48.0;
     let mut clicked = false;
     egui::ScrollArea::vertical()
         .max_height(120.0)
         .auto_shrink([false, true])
-        .show_rows(ui, ROW_HEIGHT, rows.len(), |ui, range| {
-            for row in rows
-                .iter()
-                .skip(range.start)
-                .take(range.end.saturating_sub(range.start))
-            {
+        .show(ui, |ui| {
+            for row in rows {
                 ui.add(
                     egui::Label::new(
                         RichText::new(format!(
-                            "{action} {target}\n{mutation} · {resume} · {mcp}",
+                            "{action} {target} · {mutation} · {resume} · {mcp}",
                             action = row.action,
                             target = row.target,
                             mutation = row.mutation,
@@ -82,7 +77,7 @@ fn paint_rows(ui: &mut Ui, browser: &mut BrowserPanelState, rows: &[horizon_core
                         .size(11.0)
                         .color(theme::FG_SOFT()),
                     )
-                    .wrap_mode(TextWrapMode::Wrap),
+                    .wrap_mode(TextWrapMode::Truncate),
                 );
                 clicked |= identity_picker(ui, browser, row);
             }

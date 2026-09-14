@@ -100,11 +100,7 @@ impl TeachSession {
         if self.lifecycle != TeachLifecycle::Recording {
             return Err(RoutineError::TeachInactive);
         }
-        if let Err(error) = action.validate()
-            && error != RoutineError::UndurableTarget
-        {
-            return Err(error);
-        }
+        action.validate_payload()?;
         if let Some(previous) = self.recording.actions.last_mut()
             && can_coalesce(previous, &action)
         {
@@ -145,6 +141,9 @@ impl TeachSession {
         create_private_dir(&dir)?;
         let _lock = registry.lock(routine_id)?;
         let path = dir.join("draft.json");
+        for action in &self.recording.actions {
+            action.validate_payload()?;
+        }
         let encoded =
             if self.recording.actions.is_empty() || self.recording.validate() == Err(RoutineError::UndurableTarget) {
                 serde_json::to_vec_pretty(&serde_json::json!({

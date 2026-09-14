@@ -471,6 +471,17 @@ fn preview_action(action: &RecordedAction) -> String {
     }
 }
 
+fn candidate_description(identity: &TargetCandidate) -> String {
+    match identity {
+        TargetCandidate::RoleName { role, name, .. } => format!("role:{role} {name}"),
+        TargetCandidate::LabelControl { label, control, .. } => format!("label:{control} {label}"),
+        TargetCandidate::TestId { attribute, value, .. } => format!("{attribute}={value}"),
+        TargetCandidate::UniqueId { value, .. } => format!("id:{value}"),
+        TargetCandidate::VisibleText { text, context, .. } => format!("text:{text} ({context})"),
+        TargetCandidate::CssFallback { value, .. } => format!("css:{value}"),
+    }
+}
+
 fn candidate_label(target: &TargetFingerprint) -> Option<String> {
     let selected = target
         .selected
@@ -546,14 +557,7 @@ fn review_row_from_action(action: &RecordedAction) -> ReviewRow {
             .iter()
             .map(|candidate| ReviewCandidate {
                 unique: candidate.unique,
-                label: match &candidate.identity {
-                    TargetCandidate::RoleName { name, .. } | TargetCandidate::UniqueId { value: name, .. } => {
-                        name.clone()
-                    }
-                    TargetCandidate::LabelControl { label, .. } => label.clone(),
-                    TargetCandidate::TestId { value, .. } | TargetCandidate::CssFallback { value, .. } => value.clone(),
-                    TargetCandidate::VisibleText { text, .. } => text.clone(),
-                },
+                label: candidate_description(&candidate.identity),
             })
             .collect()
     });
