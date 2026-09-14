@@ -105,6 +105,7 @@ impl TeachSession {
         }
         let dir = registry.directory().join(routine_id.to_string());
         create_private_dir(&dir)?;
+        let _lock = registry.lock(routine_id)?;
         let path = dir.join("draft.json");
         let encoded = if self.recording.actions.is_empty() {
             serde_json::to_vec_pretty(&serde_json::json!({
@@ -122,7 +123,19 @@ impl TeachSession {
     /// # Errors
     /// Missing or malformed draft.
     pub fn load_draft(registry: &RoutineRegistry, routine_id: Uuid) -> Result<Self, RoutineError> {
-        let path = registry.directory().join(routine_id.to_string()).join("draft.json");
+        let dir = registry.directory().join(routine_id.to_string());
+        match std::fs::symlink_metadata(&dir) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err(RoutineError::Storage);
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(RoutineError::RoutineNotFound);
+            }
+            Err(_) => return Err(RoutineError::Storage),
+        }
+        let _lock = registry.lock(routine_id)?;
+        let path = dir.join("draft.json");
         let bytes = read_private_file(&path)?;
         let recording = match SemanticRecording::from_json(
             std::str::from_utf8(&bytes).map_err(|_| RoutineError::Json("malformed routine JSON".into()))?,
@@ -359,6 +372,26 @@ mod tests {
         std::fs::write(&target, b"{}").expect("outside");
         std::fs::remove_file(&draft).expect("remove");
         std::os::unix::fs::symlink(&target, &draft).expect("symlink");
+        assert_eq!(
+            TeachSession::load_draft(&registry, id).err(),
+            Some(RoutineError::Storage)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn draft_load_rejects_symlinked_routine_directories() {
+        let temp = tempfile::tempdir().expect("temp");
+        privatize_temp(temp.path());
+        let registry = RoutineRegistry::open(temp.path().join("routines")).expect("open");
+        let mut session = TeachSession::start();
+        session.push(click("run")).expect("push");
+        let id = Uuid::from_u128(7);
+        session.save_draft(&registry, id).expect("save");
+        let real = temp.path().join("routines").join(id.to_string());
+        let outside = temp.path().join("outside-dir");
+        std::fs::rename(&real, &outside).expect("move");
+        std::os::unix::fs::symlink(&outside, &real).expect("symlink");
         assert_eq!(
             TeachSession::load_draft(&registry, id).err(),
             Some(RoutineError::Storage)
