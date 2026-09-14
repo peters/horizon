@@ -130,19 +130,31 @@ impl RoutineRegistry {
         create_private_dir(&dir)?;
         let path = dir.join("lock");
         let mut options = fs::OpenOptions::new();
-        options.create(true).write(true).truncate(true);
+        options.create(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed());
+        }
         #[cfg(windows)]
         {
             use std::os::windows::fs::OpenOptionsExt as _;
-            options.share_mode(0);
+            const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+            options.share_mode(0).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
         }
         let file = options.open(&path).map_err(|_| RoutineError::Storage)?;
+        let metadata = fs::symlink_metadata(&path).map_err(|_| RoutineError::Storage)?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(RoutineError::Storage);
+        }
         #[cfg(unix)]
         {
             rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)
                 .map_err(|_| RoutineError::Storage)?;
-            set_file_mode(&path, 0o600)?;
         }
+        file.set_len(0).map_err(|_| RoutineError::Storage)?;
+        #[cfg(unix)]
+        set_file_mode(&path, 0o600)?;
         Ok(RoutineLock { _file: file })
     }
 }
@@ -384,5 +396,22 @@ mod tests {
         let _ = std::fs::remove_file(&link);
         let _ = std::fs::remove_dir_all(&real);
         assert_eq!(opened.err(), Some(RoutineError::Storage));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lock_does_not_follow_or_truncate_a_symlink() {
+        let temp = tempfile::tempdir().expect("temp");
+        privatize_temp(temp.path());
+        let registry = RoutineRegistry::open(temp.path().join("routines")).expect("open");
+        let id = Uuid::from_u128(13);
+        let dir = temp.path().join("routines").join(id.to_string());
+        std::fs::create_dir(&dir).expect("dir");
+        privatize_temp(&dir);
+        let victim = temp.path().join("victim");
+        std::fs::write(&victim, b"keep").expect("victim");
+        std::os::unix::fs::symlink(&victim, dir.join("lock")).expect("symlink");
+        assert_eq!(registry.lock(id).err(), Some(RoutineError::Storage));
+        assert_eq!(std::fs::read(&victim).expect("read"), b"keep");
     }
 }
