@@ -46,6 +46,20 @@ class NetrcAuthTest(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 spike.load_auth(path, "other.example.net")
 
+    def test_group_or_other_readable_netrc_is_refused_before_parsing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "netrc")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("machine hub.example.net login alice password s3cret\n")
+            for mode in (0o644, 0o640, 0o660, 0o604):
+                os.chmod(path, mode)
+                with self.assertRaises(SystemExit) as raised:
+                    spike.load_auth(path, "hub.example.net")
+                self.assertIn("chmod 600", str(raised.exception))
+                self.assertNotIn("s3cret", str(raised.exception))
+            os.chmod(path, 0o400)
+            self.assertTrue(spike.load_auth(path, "hub.example.net").startswith("Basic "))
+
     def test_missing_file_is_an_actionable_exit_without_the_path_contents(self) -> None:
         with self.assertRaises(SystemExit) as raised:
             spike.load_auth("/nonexistent/netrc", "hub.example.net")

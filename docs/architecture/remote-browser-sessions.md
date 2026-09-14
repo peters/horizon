@@ -35,9 +35,10 @@ size, global timeout, Horizon user agent.
 ## Configuration contract
 
 Connection profiles, targets and limits live in the existing `browser:` section
-of `~/.horizon/config.yaml` under a new `remote` key. The schema is versioned by
-the normal config migration (current version 10 becomes 11 in the configuration
-PR) and rejects unknown keys.
+of `~/.horizon/config.yaml` under a new `remote` key. The section is additive
+and optional, so existing files need no migration step and the config version
+stays at 10 until a later phase changes an existing key. Unknown keys are
+rejected.
 
 ```yaml
 browser:
@@ -46,10 +47,12 @@ browser:
       device_cloud:
         adapter: webdriver            # generic adapter; named adapters only for demonstrated differences
         endpoint: https://grid.example.net/wd/hub
-        authentication:
-          kind: basic                 # none | basic | bearer
+        authentication:               # exactly one variant, tagged by kind
+          kind: basic                 # basic: username_ref + password_ref
           username_ref: device-cloud-user
           password_ref: device-cloud-key
+          # kind: bearer              # bearer: token_ref only
+          # kind: none                # none: no other fields allowed
         credential_bindings:
           device-cloud-user: { store: os_keychain, slot: remote-browser/device-cloud/username }
           device-cloud-key: { store: session }
@@ -64,18 +67,24 @@ browser:
         browser_name: safari
         platform_name: iOS
         device: { kind: physical, model: iPhone 16, os_version: "18" }
-        capability_extensions:
-          bstack:options: { realMobile: "true" }
+        capability_extensions:        # namespaced only; device, browser, platform and credential keys are rejected
+          appium:automationName: XCUITest
 ```
 
 Rules the configuration PR enforces:
 
+- `authentication` is a tagged variant with variant-specific fields: `none`
+  has no fields, `basic` requires `username_ref` and `password_ref`, `bearer`
+  requires `token_ref`. Unknown or cross-variant fields are rejected, and
+  every reference named by the selected variant must have a binding.
 - `endpoint` must be `https`, must not carry userinfo or a query string, and is
   the only origin that ever receives the provider credential. A loopback `http`
   endpoint is allowed only for a self-hosted local grid and is labelled as such.
-- Normalized fields (`browser_name`, `platform_name`, `device`) and
-  `capability_extensions` must not both set the same capability. Conflicts are
-  rejected at validation with the field names in the error.
+- `capability_extensions` keys must be namespaced (`vendor:name`). Keys, or
+  nested option keys, that duplicate a normalized field (browser, platform,
+  device name, OS version, real-device flag) or that carry a credential
+  (user, access key, password, token) are rejected by name; the adapter
+  derives those capabilities from the normalized fields and the bindings.
 - `device.kind: physical` is a Horizon requirement, not a WebDriver capability.
   The adapter maps it to the provider's real-device request and the lifecycle
   verifies it after allocation.

@@ -114,9 +114,20 @@ def _ms(started: float) -> int:
 
 
 def load_auth(path: str, host: str) -> str:
+    """Read one Basic credential from a private netrc file.
+
+    An explicit path bypasses Python's own ownership and mode check, so the
+    file is rejected here when any group or other permission bit is set.
+    """
+    try:
+        mode = os.stat(path).st_mode
+    except OSError as err:
+        raise SystemExit(f"netrc unusable: {type(err).__name__}") from None
+    if mode & 0o077:
+        raise SystemExit("netrc unusable: file must not be readable or writable by group or others (chmod 600)")
     try:
         entry = netrc.netrc(path).authenticators(host)
-    except (FileNotFoundError, netrc.NetrcParseError) as err:
+    except (OSError, netrc.NetrcParseError) as err:
         raise SystemExit(f"netrc unusable: {type(err).__name__}") from None
     if entry is None or not entry[0] or not entry[2]:
         raise SystemExit(f"netrc has no complete entry for {host}")
