@@ -878,6 +878,57 @@ mod tests {
     }
 
     #[test]
+    fn last_host_for_a_skill_name_does_not_wait_on_a_sibling_skill() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let horizon_home = HorizonHome::from_root(temp.path().join(".horizon"));
+        let skills = temp.path().join("shared/skills");
+        let notify = skills.join(HORIZON_NOTIFY_SKILL);
+        let browser = skills.join(HORIZON_BROWSER_SKILL);
+        write_skill_dir(&notify, "shared");
+        write_skill_dir(&browser, "codex-only");
+
+        let mut grok =
+            AgentPluginHostLease::acquire(horizon_home.agent_plugin_host_dir("grok-host")).expect("grok lease");
+        let mut codex =
+            AgentPluginHostLease::acquire(horizon_home.agent_plugin_host_dir("codex-host")).expect("codex lease");
+        grok.bind_user_skills(std::slice::from_ref(&notify))
+            .expect("bind grok notify");
+        codex
+            .bind_user_skills(&[notify.clone(), browser.clone()])
+            .expect("bind codex notify and browser");
+
+        drop(codex);
+        assert!(notify.join("SKILL.md").is_file());
+        assert!(
+            !browser.exists(),
+            "last host for horizon-browser must remove it while notify remains leased"
+        );
+
+        drop(grok);
+        assert!(!notify.exists());
+    }
+
+    #[test]
+    fn last_host_removes_cleanup_only_abandoned_roots() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let horizon_home = HorizonHome::from_root(temp.path().join(".horizon"));
+        let notify = temp.path().join("user-home/.claude/skills").join(HORIZON_NOTIFY_SKILL);
+        let abandoned = temp.path().join("user-home/.agents/skills").join(HORIZON_NOTIFY_SKILL);
+        write_skill_dir(&notify, "leased");
+        write_skill_dir(&abandoned, "stale");
+
+        let mut lease =
+            AgentPluginHostLease::acquire(horizon_home.agent_plugin_host_dir("host-a")).expect("host lease");
+        lease
+            .bind_user_skills_with_cleanup(std::slice::from_ref(&notify), std::slice::from_ref(&abandoned))
+            .expect("bind notify with abandoned cleanup-only root");
+        drop(lease);
+
+        assert!(!notify.exists());
+        assert!(!abandoned.exists());
+    }
+
+    #[test]
     fn agent_plugin_host_lease_keeps_user_skills_while_another_host_is_live() {
         let temp = tempfile::tempdir().expect("temp dir");
         let horizon_home = HorizonHome::from_root(temp.path().join(".horizon"));
