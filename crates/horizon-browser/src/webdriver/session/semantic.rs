@@ -83,7 +83,15 @@ fn click_through(transport: &dyn ClassicTransport, session: &str, selector: &str
             .map_err(|error| error.to_string())
     };
     let element = find_element_segment(&post, selector)?;
-    post(&format!("element/{element}/click"), &json!({}))?;
+    // Element Click may wait for a navigation the element triggers, so it
+    // gets the navigation-sized read timeout rather than the command default.
+    transport
+        .post_with_read_timeout(
+            &format!("{session}/element/{element}/click"),
+            &json!({}),
+            super::NAVIGATION_HTTP_TIMEOUT,
+        )
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -254,8 +262,10 @@ impl Driver {
                 &format!("/session/{}", self.session_id),
                 &selector,
             );
-            self.scrollbar.refresh_at = std::time::Instant::now();
-            self.frames.demand();
+            if !self.retain_frame_during_navigation {
+                self.scrollbar.refresh_at = std::time::Instant::now();
+                self.frames.demand();
+            }
             result.map_err(|error| BrowserControlFailure::new("input_failed", error))?;
             return Ok(BrowserControlValue::Accepted);
         }
@@ -478,6 +488,7 @@ mod tests {
     struct Scripted {
         replies: Mutex<Vec<Result<Value, String>>>,
         sent: Mutex<Vec<(String, String, Value)>>,
+        timeouts: Mutex<Vec<Duration>>,
     }
 
     impl Scripted {
@@ -485,7 +496,12 @@ mod tests {
             Self {
                 replies: Mutex::new(replies.into_iter().rev().collect()),
                 sent: Mutex::new(Vec::new()),
+                timeouts: Mutex::new(Vec::new()),
             }
+        }
+
+        fn timeouts(&self) -> Vec<Duration> {
+            self.timeouts.lock().expect("timeouts").clone()
         }
 
         fn sent(&self) -> Vec<(String, String, Value)> {
@@ -499,8 +515,9 @@ mod tests {
             method: &str,
             path: &str,
             body: Option<&Value>,
-            _read_timeout: Duration,
+            read_timeout: Duration,
         ) -> Result<Value, HttpError> {
+            self.timeouts.lock().expect("timeouts").push(read_timeout);
             self.sent.lock().expect("sent").push((
                 method.to_string(),
                 path.to_string(),
@@ -565,6 +582,14 @@ mod tests {
                     json!({})
                 ),
             ]
+        );
+        assert_eq!(
+            transport.timeouts(),
+            vec![
+                super::super::super::transport::DEFAULT_READ_TIMEOUT,
+                super::super::NAVIGATION_HTTP_TIMEOUT
+            ],
+            "the click waits as long as a navigation may take"
         );
 
         let transport = Scripted::new(vec![Err("no such element".into())]);
