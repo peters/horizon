@@ -13,6 +13,7 @@ use horizon_core::remote_browser_credential::{
     CredentialReadiness, CredentialState, CredentialWorkbench, KeychainState, NoticeKind, RemoteCredentialError,
     WorkbenchNotice,
 };
+use zeroize::Zeroizing;
 
 use crate::theme;
 
@@ -33,12 +34,14 @@ impl CredentialInputs {
             .or_default()
     }
 
-    fn take(&mut self, provider: &str, reference: &CredentialReference) -> Vec<u8> {
+    /// Move a typed value out of its buffer into a zeroizing copy; the
+    /// buffer is scrubbed at once and the copy is wiped when it drops.
+    fn take(&mut self, provider: &str, reference: &CredentialReference) -> Zeroizing<Vec<u8>> {
         let mut text = self
             .values
             .remove(&(provider.to_string(), reference.as_str().to_string()))
             .unwrap_or_default();
-        let bytes = text.as_bytes().to_vec();
+        let bytes = Zeroizing::new(text.as_bytes().to_vec());
         scrub_string(&mut text);
         bytes
     }
@@ -227,6 +230,8 @@ fn render_reference(
                     .add_enabled(has_text, egui::Button::new("Set for this session"))
                     .clicked()
                 {
+                    // Every outcome, including a synchronous refusal, arrives
+                    // as a workbench notice for this row.
                     let value = inputs.take(provider, reference);
                     let _ = workbench.set_session_value(provider, profile, reference, &value);
                 }
@@ -247,7 +252,7 @@ fn render_reference(
         }
     });
     if let Some(notice) = inputs.last_notice(provider, reference) {
-        let (text, color) = notice_line(&notice.outcome);
+        let (text, color) = notice_line(notice.kind, notice.error.as_ref());
         ui.label(egui::RichText::new(text).color(color).size(11.0));
     }
 }
@@ -291,12 +296,21 @@ fn state_badge(state: CredentialState) -> (&'static str, egui::Color32) {
     }
 }
 
-fn notice_line(outcome: &Result<NoticeKind, RemoteCredentialError>) -> (String, egui::Color32) {
-    match outcome {
-        Ok(NoticeKind::SessionValueSet) => ("Held for this session.".to_string(), theme::PALETTE_GREEN()),
-        Ok(NoticeKind::SessionValueCleared) => ("Session value cleared.".to_string(), theme::FG_DIM()),
-        Ok(NoticeKind::StoredInKeychain) => ("Saved to the OS credential store.".to_string(), theme::PALETTE_GREEN()),
-        Ok(NoticeKind::DeletedFromKeychain) => ("Deleted from the OS credential store.".to_string(), theme::FG_DIM()),
-        Err(error) => (format!("Not saved: {error}."), theme::PALETTE_RED()),
+fn notice_line(kind: NoticeKind, error: Option<&RemoteCredentialError>) -> (String, egui::Color32) {
+    match (kind, error) {
+        (NoticeKind::SessionValueSet, None) => ("Held for this session.".to_string(), theme::PALETTE_GREEN()),
+        (NoticeKind::SessionValueCleared, None) => ("Session value cleared.".to_string(), theme::FG_DIM()),
+        (NoticeKind::StoredInKeychain, None) => {
+            ("Saved to the OS credential store.".to_string(), theme::PALETTE_GREEN())
+        }
+        (NoticeKind::DeletedFromKeychain, None) => {
+            ("Deleted from the OS credential store.".to_string(), theme::FG_DIM())
+        }
+        (NoticeKind::SessionValueSet | NoticeKind::StoredInKeychain, Some(error)) => {
+            (format!("Not saved: {error}."), theme::PALETTE_RED())
+        }
+        (NoticeKind::SessionValueCleared | NoticeKind::DeletedFromKeychain, Some(error)) => {
+            (format!("Not deleted: {error}."), theme::PALETTE_RED())
+        }
     }
 }

@@ -2310,6 +2310,7 @@ dependencies = [
  "transcribe-cpp",
  "wgpu",
  "winit",
+ "zeroize",
 ]
 
 [[package]]

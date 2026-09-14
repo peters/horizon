@@ -30,20 +30,49 @@ pub enum KeychainState {
     Unavailable(RemoteCredentialError),
 }
 
-/// Value-free outcome of one store operation, for the UI to show once.
+/// Value-free outcome of one store operation, for the UI to show once. The
+/// attempted operation is kept on failure too, so a failed delete is never
+/// described as a failed save.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkbenchNotice {
     pub provider: String,
     pub reference: CredentialReference,
-    pub outcome: Result<NoticeKind, RemoteCredentialError>,
+    pub kind: NoticeKind,
+    pub error: Option<RemoteCredentialError>,
 }
 
+impl WorkbenchNotice {
+    fn new(
+        provider: &str,
+        reference: &CredentialReference,
+        kind: NoticeKind,
+        result: Result<(), RemoteCredentialError>,
+    ) -> Self {
+        Self {
+            provider: provider.to_string(),
+            reference: reference.clone(),
+            kind,
+            error: result.err(),
+        }
+    }
+}
+
+/// The operation a notice reports on.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NoticeKind {
     SessionValueSet,
     SessionValueCleared,
     StoredInKeychain,
     DeletedFromKeychain,
+}
+
+/// How the OS store addresses an item: endpoint origin plus slot. Two
+/// references bound to one slot are one item, so presence is cached per
+/// address rather than per reference.
+type OsAddress = (String, String);
+
+fn os_address(locator: &CredentialLocator) -> Option<OsAddress> {
+    locator.slot.as_ref().map(|slot| (locator.origin.clone(), slot.clone()))
 }
 
 enum Command {
@@ -70,7 +99,7 @@ pub struct CredentialWorkbench {
     session: SessionCredentialStore,
     keychain: Option<KeychainLink>,
     keychain_state: KeychainState,
-    presence: BTreeMap<CredentialLocator, CredentialState>,
+    presence: BTreeMap<OsAddress, CredentialState>,
     labels: BTreeMap<CredentialLocator, (String, CredentialReference)>,
     notices: Vec<WorkbenchNotice>,
 }
@@ -130,23 +159,39 @@ impl CredentialWorkbench {
                 Event::Opened(Ok(())) => self.keychain_state = KeychainState::Available,
                 Event::Opened(Err(error)) => self.keychain_state = KeychainState::Unavailable(error),
                 Event::Presence(locator, result) => {
-                    self.presence.insert(locator, state_from(&result));
+                    self.cache_presence(&locator, state_from(&result));
                 }
                 Event::Stored(locator, result) => {
-                    self.presence
-                        .insert(locator.clone(), state_from(&result.clone().map(|()| true)));
-                    self.notify(&locator, result.map(|()| NoticeKind::StoredInKeychain));
+                    self.cache_presence(&locator, state_from(&result.clone().map(|()| true)));
+                    self.notify(&locator, NoticeKind::StoredInKeychain, result);
                 }
                 Event::Deleted(locator, result) => {
-                    self.presence
-                        .insert(locator.clone(), state_from(&result.clone().map(|()| false)));
-                    self.notify(&locator, result.map(|()| NoticeKind::DeletedFromKeychain));
+                    self.cache_presence(&locator, state_from(&result.clone().map(|()| false)));
+                    self.notify(&locator, NoticeKind::DeletedFromKeychain, result);
                 }
             }
         }
         if disconnected {
-            self.keychain_state = KeychainState::Unavailable(RemoteCredentialError::StoreUnavailable);
+            // A worker that failed to open reports the specific reason and
+            // then exits; that reason must outlive the disconnect.
+            if !matches!(self.keychain_state, KeychainState::Unavailable(_)) {
+                self.keychain_state = KeychainState::Unavailable(RemoteCredentialError::StoreUnavailable);
+            }
             self.keychain = None;
+        }
+    }
+
+    /// Whether worker results are still expected, so the UI keeps polling
+    /// until the store has opened and every probe or write has answered.
+    #[must_use]
+    pub fn is_busy(&self) -> bool {
+        self.keychain_state == KeychainState::Opening
+            || self.presence.values().any(|state| *state == CredentialState::Checking)
+    }
+
+    fn cache_presence(&mut self, locator: &CredentialLocator, state: CredentialState) {
+        if let Some(address) = os_address(locator) {
+            self.presence.insert(address, state);
         }
     }
 
@@ -182,21 +227,44 @@ impl CredentialWorkbench {
         reference: &CredentialReference,
         value: &[u8],
     ) -> Result<(), RemoteCredentialError> {
-        let locator = self.locator(provider, profile, reference, CredentialStoreKind::Session)?;
-        let result = self.session.put(&locator, value);
-        self.notices.push(WorkbenchNotice {
-            provider: provider.to_string(),
-            reference: reference.clone(),
-            outcome: result.clone().map(|()| NoticeKind::SessionValueSet),
-        });
+        let result = self
+            .locator(provider, profile, reference, CredentialStoreKind::Session)
+            .and_then(|locator| self.session.put(&locator, value));
+        self.notices.push(WorkbenchNotice::new(
+            provider,
+            reference,
+            NoticeKind::SessionValueSet,
+            result.clone(),
+        ));
         result
     }
 
-    /// Persist a value in the OS store on the worker thread.
+    /// Persist a value in the OS store on the worker thread. A request the
+    /// worker never receives is reported as a notice, like a worker failure.
     ///
     /// # Errors
-    /// The reference must be bound to the OS store, which must be available.
+    /// The reference must be bound to the OS store, which must be available,
+    /// and the value must be non-empty and bounded.
     pub fn store_in_keychain(
+        &mut self,
+        provider: &str,
+        profile: &RemoteProviderProfile,
+        reference: &CredentialReference,
+        value: &[u8],
+    ) -> Result<(), RemoteCredentialError> {
+        let result = self.queue_store(provider, profile, reference, value);
+        if let Err(error) = &result {
+            self.notices.push(WorkbenchNotice::new(
+                provider,
+                reference,
+                NoticeKind::StoredInKeychain,
+                Err(error.clone()),
+            ));
+        }
+        result
+    }
+
+    fn queue_store(
         &mut self,
         provider: &str,
         profile: &RemoteProviderProfile,
@@ -206,7 +274,7 @@ impl CredentialWorkbench {
         super::validate_secret(value)?;
         let locator = self.locator(provider, profile, reference, CredentialStoreKind::OsKeychain)?;
         let commands = self.available_link()?.commands.clone();
-        self.presence.insert(locator.clone(), CredentialState::Checking);
+        self.cache_presence(&locator, CredentialState::Checking);
         commands
             .send(Command::Put(locator, Zeroizing::new(value.to_vec())))
             .map_err(|_| RemoteCredentialError::StoreUnavailable)
@@ -232,26 +300,55 @@ impl CredentialWorkbench {
         match binding.store {
             CredentialStoreKind::Session => {
                 let result = self.session.delete(&locator);
-                self.notices.push(WorkbenchNotice {
-                    provider: provider.to_string(),
-                    reference: reference.clone(),
-                    outcome: result.clone().map(|()| NoticeKind::SessionValueCleared),
-                });
+                self.notices.push(WorkbenchNotice::new(
+                    provider,
+                    reference,
+                    NoticeKind::SessionValueCleared,
+                    result.clone(),
+                ));
                 result
             }
             CredentialStoreKind::OsKeychain => {
-                let commands = self.available_link()?.commands.clone();
-                self.presence.insert(locator.clone(), CredentialState::Checking);
-                commands
-                    .send(Command::Delete(locator))
-                    .map_err(|_| RemoteCredentialError::StoreUnavailable)
+                let result = self
+                    .available_link()
+                    .map(|link| link.commands.clone())
+                    .and_then(|commands| {
+                        self.cache_presence(&locator, CredentialState::Checking);
+                        commands
+                            .send(Command::Delete(locator.clone()))
+                            .map_err(|_| RemoteCredentialError::StoreUnavailable)
+                    });
+                if let Err(error) = &result {
+                    self.notices.push(WorkbenchNotice::new(
+                        provider,
+                        reference,
+                        NoticeKind::DeletedFromKeychain,
+                        Err(error.clone()),
+                    ));
+                }
+                result
             }
         }
     }
 
-    /// Drop every session-only value, overwriting buffers first.
+    /// Drop every session-only value, overwriting buffers first. Each
+    /// reference that held one gets a cleared notice so its row agrees.
     pub fn clear_session(&mut self) {
+        let cleared: Vec<(String, CredentialReference)> = self
+            .labels
+            .iter()
+            .filter(|(locator, _)| self.session.contains(locator).unwrap_or(false))
+            .map(|(_, label)| label.clone())
+            .collect();
         self.session.clear();
+        for (provider, reference) in cleared {
+            self.notices.push(WorkbenchNotice::new(
+                &provider,
+                &reference,
+                NoticeKind::SessionValueCleared,
+                Ok(()),
+            ));
+        }
     }
 
     #[must_use]
@@ -294,10 +391,13 @@ impl CredentialWorkbench {
                 continue;
             }
             let locator = CredentialLocator::new(&profile.endpoint, reference, binding);
-            if !self.presence.contains_key(&locator) {
-                self.presence.insert(locator.clone(), CredentialState::Checking);
-                self.labels
-                    .insert(locator.clone(), (provider.to_string(), reference.clone()));
+            self.labels
+                .insert(locator.clone(), (provider.to_string(), reference.clone()));
+            let Some(address) = os_address(&locator) else {
+                continue;
+            };
+            if let std::collections::btree_map::Entry::Vacant(entry) = self.presence.entry(address) {
+                entry.insert(CredentialState::Checking);
                 wanted.push(locator);
             }
         }
@@ -334,13 +434,10 @@ impl CredentialWorkbench {
         }
     }
 
-    fn notify(&mut self, locator: &CredentialLocator, outcome: Result<NoticeKind, RemoteCredentialError>) {
+    fn notify(&mut self, locator: &CredentialLocator, kind: NoticeKind, result: Result<(), RemoteCredentialError>) {
         if let Some((provider, reference)) = self.labels.get(locator) {
-            self.notices.push(WorkbenchNotice {
-                provider: provider.clone(),
-                reference: reference.clone(),
-                outcome,
-            });
+            self.notices
+                .push(WorkbenchNotice::new(provider, reference, kind, result));
         }
     }
 }
@@ -356,7 +453,7 @@ fn state_from(result: &Result<bool, RemoteCredentialError>) -> CredentialState {
 
 /// Read-only view of the presence cache in store form, for [`readiness`].
 struct CachedKeychain<'a> {
-    presence: &'a BTreeMap<CredentialLocator, CredentialState>,
+    presence: &'a BTreeMap<OsAddress, CredentialState>,
     state: &'a KeychainState,
 }
 
@@ -381,7 +478,7 @@ impl RemoteCredentialStore for CachedKeychain<'_> {
             KeychainState::Opening => return Err(RemoteCredentialError::Checking),
             KeychainState::Available => {}
         }
-        match self.presence.get(locator) {
+        match os_address(locator).and_then(|address| self.presence.get(&address)) {
             Some(CredentialState::Present) => Ok(true),
             Some(CredentialState::Missing) => Ok(false),
             Some(CredentialState::Locked) => Err(RemoteCredentialError::Locked),

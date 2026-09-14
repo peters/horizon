@@ -590,8 +590,26 @@ fn workbench_probes_stores_and_deletes_keychain_values_off_thread() {
     });
     let notices = workbench.take_notices();
     assert_eq!(notices.len(), 1);
-    assert_eq!(notices[0].outcome, Ok(NoticeKind::StoredInKeychain));
+    assert_eq!(
+        (notices[0].kind, &notices[0].error),
+        (NoticeKind::StoredInKeychain, &None)
+    );
     assert_eq!(notices[0].provider, "grid");
+    assert!(!workbench.is_busy(), "no probe or write is in flight");
+
+    // Two references bound to one slot are one OS item: readiness agrees.
+    let mut aliased = profile.clone();
+    let user_slot = aliased.credential_bindings[&user].slot.clone();
+    let key = CredentialReference::from("key");
+    let key_binding = aliased.credential_bindings.get_mut(&key).expect("bound");
+    key_binding.store = CredentialStoreKind::OsKeychain;
+    key_binding.slot = user_slot;
+    let report = workbench.readiness("grid", &aliased);
+    assert_eq!(
+        (report[0].state, report[1].state),
+        (CredentialState::Present, CredentialState::Present),
+        "the aliased reference reads the same cached item"
+    );
 
     workbench
         .delete("grid", &profile, &user)
@@ -599,25 +617,52 @@ fn workbench_probes_stores_and_deletes_keychain_values_off_thread() {
     wait_until(&mut workbench, |w| {
         w.readiness("grid", &profile)[0].state == CredentialState::Missing
     });
-    assert_eq!(workbench.take_notices()[0].outcome, Ok(NoticeKind::DeletedFromKeychain));
+    let deleted = workbench.take_notices();
+    assert_eq!(
+        (deleted[0].kind, &deleted[0].error),
+        (NoticeKind::DeletedFromKeychain, &None)
+    );
+    assert_eq!(
+        workbench.readiness("grid", &aliased)[1].state,
+        CredentialState::Missing,
+        "deleting through one reference empties the aliased row too"
+    );
 }
 
 #[test]
 fn workbench_reports_an_unavailable_or_locked_store_without_values() {
     let profile = basic_profile(CredentialStoreKind::OsKeychain, CredentialStoreKind::Session);
-    let mut unavailable = CredentialWorkbench::with_opener(Box::new(|| Err(RemoteCredentialError::StoreUnavailable)));
+    let mut unavailable = CredentialWorkbench::with_opener(Box::new(|| Err(RemoteCredentialError::Locked)));
     wait_until(&mut unavailable, |w| {
         matches!(w.keychain_state(), KeychainState::Unavailable(_))
     });
+    // The worker exits after a failed open; its disconnect must not erase
+    // the specific reason it reported.
+    for _ in 0..20 {
+        unavailable.poll();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(
+        unavailable.keychain_state(),
+        &KeychainState::Unavailable(RemoteCredentialError::Locked)
+    );
+    assert!(!unavailable.is_busy());
     assert_eq!(
         unavailable.readiness("grid", &profile)[0].state,
-        CredentialState::StoreUnavailable
+        CredentialState::Locked,
+        "readiness carries the store's own reason"
     );
     assert_eq!(
         unavailable
             .store_in_keychain("grid", &profile, &CredentialReference::from("user"), b"alice")
             .expect_err("no store"),
-        RemoteCredentialError::StoreUnavailable
+        RemoteCredentialError::Locked
+    );
+    let refused = unavailable.take_notices();
+    assert_eq!(
+        (refused[0].kind, &refused[0].error),
+        (NoticeKind::StoredInKeychain, &Some(RemoteCredentialError::Locked)),
+        "a request the worker never received is still reported"
     );
     assert!(unavailable.keychain_store().is_none());
 
@@ -638,7 +683,8 @@ fn workbench_session_values_are_immediate_and_store_bound() {
         .expect("session value");
     assert_eq!(workbench.readiness("grid", &profile)[1].state, CredentialState::Present);
     assert_eq!(workbench.session_value_count(), 1);
-    assert_eq!(workbench.take_notices()[0].outcome, Ok(NoticeKind::SessionValueSet));
+    let set = workbench.take_notices();
+    assert_eq!((set[0].kind, &set[0].error), (NoticeKind::SessionValueSet, &None));
     assert_eq!(
         workbench
             .set_session_value("grid", &profile, &CredentialReference::from("user"), b"alice")
@@ -656,9 +702,20 @@ fn workbench_session_values_are_immediate_and_store_bound() {
     workbench
         .set_session_value("grid", &profile, &key, b"again")
         .expect("session value");
+    workbench.take_notices();
     workbench.clear_session();
     assert_eq!(workbench.session_value_count(), 0);
     assert!(!format!("{:?}", workbench.session_store()).contains("again"));
+    let cleared = workbench.take_notices();
+    assert_eq!(
+        cleared.len(),
+        1,
+        "every reference that held a value is told it was cleared"
+    );
+    assert_eq!(
+        (cleared[0].kind, &cleared[0].error, cleared[0].reference.as_str()),
+        (NoticeKind::SessionValueCleared, &None, "key")
+    );
 }
 
 /// Opt-in smoke against this computer's real OS store; it creates and then

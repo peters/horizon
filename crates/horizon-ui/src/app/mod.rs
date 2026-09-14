@@ -36,7 +36,7 @@ mod yaml_highlight;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use egui::{Color32, Pos2, Rect, Vec2, ViewportId};
 use horizon_core::{
@@ -321,6 +321,11 @@ impl eframe::App for HorizonApp {
         let now = Instant::now();
         self.frame_stats.record_frame(now);
         self.remote_browser_credentials.poll();
+        if self.remote_browser_credentials.is_busy() {
+            // Worker answers arrive off-thread; keep frames coming until the
+            // store has opened and every probe or write has reported.
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
         if let Some(delay) = self.frame_stats.idle_refresh_after(now) {
             ctx.request_repaint_after(delay);
         }
