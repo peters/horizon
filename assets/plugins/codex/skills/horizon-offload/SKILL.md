@@ -111,7 +111,12 @@ Save the issue task with `add-panel <directory>` using stdin JSON
 `{operation_id: <fresh UUID>, command: {program, args}, directory: <relative path>}`.
 It returns `panel`; retain that identity. The same operation UUID is never reused
 for another intent. An interrupted save has an `add-<UUID>.json` receipt containing
-the original panel ID. Inspect it and `check` instead of creating another panel.
+the original panel ID. Inspect it and `check`. Retry `add-panel` with the same
+operation UUID and exact command/directory: it observes the saved panel or completes
+the interrupted local save with the original panel ID, after checking ownership
+and allocation. This never starts a task. Do not generate a second intent or remove
+the journal to recover an interrupted save. Legacy receipts can only observe an
+existing matching panel.
 Then `start <directory> <panel-id>` starts the complete saved task once;
 `status` and `snapshot` accept the same optional panel ID.
 
