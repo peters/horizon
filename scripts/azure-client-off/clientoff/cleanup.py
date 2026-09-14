@@ -4,7 +4,8 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, List, Optional
 from .az import Az
-from .manifest import ARM, CLEANUP_BOUND_SECONDS, CLI_STEP_SECONDS, GROUP_RE, RUN_ID_RE, UUID_RE, same_id
+from .manifest import (ARM, CLEANUP_BOUND_SECONDS, CLI_STEP_SECONDS, GROUP_RE, RUN_ID_RE, UUID_RE, WORKER_GROUP_RE,
+                       is_bound, same_id)
 
 
 def group_list(value: Any) -> Optional[List[str]]:
@@ -45,9 +46,22 @@ def run_bound(record: Dict[str, Any], manifest: Dict[str, Any]) -> bool:
         return bool(RUN_ID_RE.fullmatch(run_id)) and tags.get("run_id") == run_id \
             and name.casefold() == f"horizon-client-{run_id}"
     if name.casefold() == str(manifest["worker_group"]).casefold():
-        workflow, job = str(tags.get("horizon-workflow-id", "")), str(tags.get("horizon-job-id", ""))
-        return bool(UUID_RE.fullmatch(workflow) and UUID_RE.fullmatch(job)) and name.casefold() == f"horizon-ws-{workflow}-{job}"
+        return worker_record_bound(record)
+    # Before the binding the manifest names no worker group; a journaled group is then
+    # ours only through the adapter tags its own name is derived from.
+    if not is_bound(manifest) and WORKER_GROUP_RE.fullmatch(name):
+        return worker_record_bound(record)
     return False
+
+
+def worker_record_bound(record: Dict[str, Any]) -> bool:
+    """Whether a journaled record is an adapter worker group: its name is derived from
+    the `horizon-workflow-id` and `horizon-job-id` tags it carries."""
+    tags, name = record.get("tags"), str(record.get("name", ""))
+    if not isinstance(tags, dict):
+        return False
+    workflow, job = str(tags.get("horizon-workflow-id", "")), str(tags.get("horizon-job-id", ""))
+    return bool(UUID_RE.fullmatch(workflow) and UUID_RE.fullmatch(job)) and name.casefold() == f"horizon-ws-{workflow}-{job}"
 
 
 def resource_ids(value: Any) -> Optional[List[str]]:
@@ -99,11 +113,16 @@ def cleanup_targets(manifest: Dict[str, Any], before: Any, created: Any) -> Dict
     this run, and never one that existed before the run. Malformed inputs refuse
     everything. Pure, so the refusal is testable; the returned records carry the
     identity to re-check."""
-    wanted = [manifest["client_group"], manifest["worker_group"]]
+    wanted = [manifest["client_group"]] + ([manifest["worker_group"]] if is_bound(manifest) else [])
     before, records = group_list(before), journal_records(created)
     if before is None or records is None:
         return {"delete": [], "refused": wanted, "malformed": True}
     pre_existing = {name.casefold() for name in before}
+    if not is_bound(manifest):
+        # Unbound mode: the journal alone authorizes B's deletion, and only a record
+        # whose adapter tags derive its own name; a name is never taken from the manifest.
+        wanted += sorted(record["name"] for record in records.values()
+                         if WORKER_GROUP_RE.fullmatch(record["name"]) and worker_record_bound(record))
     refused = [group for group in wanted if group.casefold() in pre_existing or group.casefold() not in records
                or not run_bound(records[group.casefold()], manifest)]
     return {"delete": [records[group.casefold()] for group in wanted if group not in refused], "refused": refused}

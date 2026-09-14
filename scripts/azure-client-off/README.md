@@ -21,10 +21,15 @@ labelling rules.
   a resource inventory recorded before the run, and the whole phase runs under one
   20-minute bound).
 - `client_off.py`: the command line: `validate`, `observer-key-line`,
-  `install-observer-key`, `journal-group`, `off`, `return`, `remove-observer-key`,
+  `install-observer-key`, `journal-group`, `bind-worker` (binds the product-created
+  worker group into a manifest frozen with `worker_group: "unbound"`: adapter tags,
+  pre-run absence, the descriptor's manifest digest, reaper tags on B's VM with a
+  read-back, the journal entry, then `worker_group`), `off`, `return`,
+  `remove-observer-key` (bound to its own 35-minute wall clock),
   `cleanup` (`--groups-before` and `--resources-before`, the group names and ARM
-  resource IDs recorded before the run), `verdict`, driven by a frozen manifest that
-  carries a `run_id` drawn when it was frozen
+  resource IDs recorded before the run; with an unbound manifest it deletes A and
+  every journaled adapter worker group absent before the run), `verdict`, driven by
+  a frozen manifest that carries a `run_id` drawn when it was frozen
   (`head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n'`); `--dry-run` never issues
   a mutating call and returns the journaled plan instead of waiting for a state it
   never caused.
@@ -37,10 +42,15 @@ labelling rules.
   the reaper tags and the run identity under one 30-minute bound, every local file
   reserved before the first cloud call and every create reconciled by reading the
   exact resource back, and copies the exact Horizon build after checking its
-  provenance.
+  provenance. `--with-azure-cli` installs the Azure CLI from Microsoft's repository
+  during cloud-init (no login) and `--assign-identity` gives the exact VM a
+  system-assigned identity (no role assignment); the descriptor records both and the
+  digest of the unbound manifest that `bind-worker` later compares against.
 - `tests/`: deterministic coverage of the manifest gates, the verdict logic, the
-  cleanup authorization, the `az` client, the observer channel and the mutation
-  phases, run with `python3 -B -m unittest discover -s scripts/azure-client-off/tests -v`
+  cleanup authorization, the `az` client, the observer channel, the mutation phases,
+  the unbound and bound manifest states with `bind-worker` and its crash-before-bind
+  cleanup, and `provision-client.sh` against a scripted control plane, run with
+  `python3 -B -m unittest discover -s scripts/azure-client-off/tests -v`
   and in CI (`Azure harness tests` job).
 
 No `az login`, provider registration or extension install happens anywhere here.

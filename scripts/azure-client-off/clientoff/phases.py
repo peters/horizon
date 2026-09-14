@@ -8,7 +8,8 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from .az import Az
 from .manifest import (AFTER_OFF_MINUTES, CLI_STEP_SECONDS, CLIENT_VM_NAME, INSTANCE_ID_RE, OFF_SETUP_MINUTES,
-                       INSTALL_RECONCILE_SECONDS, RETURN_RESERVE_MINUTES, RUN_COMMAND_SECONDS, required_minutes,
+                       INSTALL_RECONCILE_SECONDS, REMOVE_BOUND_SECONDS, RETURN_RESERVE_MINUTES, RUN_COMMAND_SECONDS,
+                       required_minutes,
                        RUN_ID_RE, SAMPLE_SECONDS, client_tags, image_ref_digest, parse_utc, routable, same_group, same_id,
                        utc_now)
 from .observer import (OBSERVATION_MIN_SECONDS, OBSERVATION_SECONDS, derived_public_key, observer_authorized_line,
@@ -471,7 +472,11 @@ def phase_remove_observer(az: Az, manifest: Dict[str, Any], worker: Dict[str, An
                           directory: str, reader: Optional[Callable[..., Dict[str, Optional[int]]]] = None) -> Dict[str, Any]:
     """Remove the observer key from B once the acceptance is over: the run's private key
     must not keep a reading channel into a worker that outlives the run. Removal is
-    reconciled: it passes only once the forced reader no longer answers."""
+    reconciled: it passes only once the forced reader no longer answers. The whole phase
+    runs under one wall-clock bound (it may run after the manifest deadline, like
+    cleanup): every call is handed what is left of it and none starts past it."""
+    if az.deadline is None:
+        az.deadline = time.monotonic() + REMOVE_BOUND_SECONDS
     reader = reader or read_observations
     problems = validate_worker(worker)
     if problems:

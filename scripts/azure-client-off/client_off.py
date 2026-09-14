@@ -30,8 +30,9 @@ from typing import Any, List, Optional
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from clientoff.az import Az  # noqa: E402
+from clientoff.bind import bind_worker  # noqa: E402
 from clientoff.cleanup import identity_record, journal_records, phase_cleanup  # noqa: E402
-from clientoff.manifest import TOOL_VERSION, validate_manifest  # noqa: E402
+from clientoff.manifest import TOOL_VERSION, is_bound, manifest_digest, validate_manifest  # noqa: E402
 from clientoff.observer import observer_authorized_line  # noqa: E402
 from clientoff.phases import phase_install_observer, phase_off, phase_remove_observer, phase_return  # noqa: E402
 from clientoff.verdict import verdict_from_records  # noqa: E402
@@ -43,6 +44,16 @@ def load_json(path: str) -> Any:
             return json.load(handle)
     except (OSError, json.JSONDecodeError) as error:
         return {"__unreadable__": type(error).__name__}
+
+
+def write_json_atomic(path: str, value: Any) -> None:
+    """Atomic replace: a record that authorizes a cleanup is never left half-written."""
+    temporary = f"{path}.tmp"
+    with open(temporary, "w", encoding="utf-8") as handle:
+        json.dump(value, handle, indent=2, sort_keys=True)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -59,6 +70,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     journal = sub.add_parser("journal-group", help="append a group's ARM identity and tags to the creation journal")
     journal.add_argument("--group", required=True)
     journal.add_argument("--created", required=True, help="JSON array file to append to (created if absent)")
+    bind = sub.add_parser("bind-worker", help="bind the product-created worker group into the unbound manifest, once")
+    bind.add_argument("--group", required=True, help="B's group as the saved record names it: horizon-ws-<workflow>-<job>")
+    bind.add_argument("--groups-before", required=True, help="JSON list of group names recorded before the run")
+    bind.add_argument("--created", required=True, help="creation journal to append B to (created if absent)")
+    bind.add_argument("--client", required=True, help="provision-client.sh output JSON (carries the unbound manifest digest)")
+    bind.add_argument("--out", help="where to write the bound manifest (default: the manifest path itself)")
     off = sub.add_parser("off", help="deallocate A only and observe B for the declared interval")
     off.add_argument("--client", required=True, help="provision-client.sh output JSON (exact A identity)")
     off.add_argument("--worker", required=True,
@@ -97,7 +114,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(json.dumps({"runnable": False, "problems": problems}, indent=2))
         return 2
     if args.command == "validate":
-        print(json.dumps({"runnable": True, "tool_version": TOOL_VERSION}, indent=2))
+        print(json.dumps({"runnable": True, "tool_version": TOOL_VERSION, "bound": is_bound(manifest),
+                          "unbound_manifest_sha256": manifest_digest(manifest)}, indent=2))
         return 0
     if args.command == "observer-key-line":
         try:
@@ -134,16 +152,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         if record["name"].casefold() in records:
             print(json.dumps({"passed": False, "findings": [f"{record['name']} is already journaled; the journal is append-only"]}, indent=2))
             return 1
-        existing = [*existing, record]
-        # Atomic replace: the only cleanup authorization is never left half-written.
-        temporary = f"{args.created}.tmp"
-        with open(temporary, "w", encoding="utf-8") as handle:
-            json.dump(existing, handle, indent=2, sort_keys=True)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, args.created)
+        write_json_atomic(args.created, [*existing, record])
         print(json.dumps({"passed": True, "journaled": record}, indent=2))
         return 0
+    if args.command == "bind-worker":
+        created: Any = load_json(args.created) if os.path.exists(args.created) else []
+        result = bind_worker(az, manifest, args.group, load_json(args.groups_before), created, load_json(args.client))
+        if result.get("passed"):
+            # The journal is the only cleanup authorization: it is written before the
+            # manifest, so a crash between the two leaves B deletable, never stranded.
+            write_json_atomic(args.created, result.pop("journal"))
+            write_json_atomic(args.out or args.manifest, result.pop("manifest"))
+        result["az_calls"] = az.journal
+        print(json.dumps(result, indent=2))
+        return 0 if result.get("passed") else 1
     if args.command in ("off", "return"):
         client = load_json(args.client)
     if args.command == "install-observer-key":

@@ -39,6 +39,7 @@ case "$*" in
     esac
     echo '{"id":"'"$(cat "$dir/group_id")"'","name":"'"$(cat "$dir/group")"'","location":"northeurope","tags":'"$tags"'}' ;;
   "vm create"*)
+    prev=""; for arg in "$@"; do [ "$prev" = "--custom-data" ] && cp "$arg" "$dir/cloud-init.yaml"; prev=$arg; done
     case "$scenario" in
       success|mismatched-vm|cased-vm-id|foreign-vm-id|lost-create) echo '{}' ;;
       lost-vm-create) exit 124 ;;   # ARM accepted the create; the CLI lost the answer
@@ -120,7 +121,7 @@ class ProvisionScriptTests(unittest.TestCase):
         for name, value in (("deadline", deadline), ("sha", self.manifest["client_sha"]), ("digest", digest)):
             (self.fake_dir / name).write_text(value, encoding="utf-8")
 
-    def run_script(self, scenario, seconds=12, fake_jq=False, fake_ssh=False, cidr="52.174.10.0/24", window=None):
+    def run_script(self, scenario, seconds=12, fake_jq=False, fake_ssh=False, cidr="52.174.10.0/24", window=None, extra=()):
         (self.fake_dir / "scenario").write_text(scenario, encoding="utf-8")
         # Each run starts with a fresh call log and fresh visibility counters.
         for stale in self.fake_dir.glob("count.*"):
@@ -142,7 +143,7 @@ class ProvisionScriptTests(unittest.TestCase):
         completed = subprocess.run(["bash", str(HARNESS / "provision-client.sh"), "--manifest", f"{self.directory}/m.json",
                                     "--ssh-private-key", self.key, "--horizon-binary", self.binary,
                                     "--build-record", f"{self.directory}/record.json", "--ssh-source-cidr", cidr,
-                                    "--out", str(workdir / "client.json")],
+                                    "--out", str(workdir / "client.json"), *extra],
                                    cwd=workdir, env=env, capture_output=True, text=True, timeout=int(seconds) + 90 if str(seconds).isdigit() else 60,
                                    check=False)
         return completed, workdir
@@ -199,9 +200,22 @@ class ProvisionScriptTests(unittest.TestCase):
         self.assertFalse(any(c.startswith("vm create") for c in self.calls()), "no paid VM without a creation record")
 
     def test_the_whole_path_ends_in_a_descriptor_that_names_the_exact_client(self):
-        completed, workdir = self.run_script("success", seconds=200, fake_ssh=True)
+        completed, workdir = self.run_script("success", seconds=200, fake_ssh=True,
+                                             extra=("--assign-identity", "--with-azure-cli"))
         self.assertEqual(completed.returncode, 0, completed.stderr[-1500:])
         descriptor = json.loads((workdir / "client.json").read_text(encoding="utf-8"))
+        # A product pass needs A to authenticate itself: the exact VM gets a
+        # system-assigned identity (no role assignment here) and the Azure CLI from
+        # Microsoft's repository (no login), and the descriptor records the unbound
+        # manifest digest that bind-worker compares against later.
+        from harness_fixtures import client_off
+        self.assertEqual(descriptor["manifest_sha256"], client_off.manifest_digest(self.manifest))
+        self.assertTrue(descriptor["system_assigned_identity"] and descriptor["azure_cli_installed"])
+        self.assertIn("--assign-identity", next(c for c in self.calls() if c.startswith("vm create")).split())
+        cloud_init = (self.fake_dir / "cloud-init.yaml").read_text(encoding="utf-8")
+        self.assertIn("packages.microsoft.com/repos/azure-cli/", cloud_init)
+        self.assertIn("apt-get, install, -y, azure-cli", cloud_init)
+        self.assertNotIn("az login", cloud_init, "provisioning never logs A in")
         self.assertEqual((descriptor["client_group"], descriptor["client_group_id"], descriptor["run_id"], descriptor["client_host"]),
                          (GROUP, GROUP_ID, RUN_ID, "52.174.10.9"))
         self.assertEqual(descriptor["client_vm_id"], f"{GROUP_ID}/providers/Microsoft.Compute/virtualMachines/client")
@@ -235,6 +249,10 @@ class ProvisionScriptTests(unittest.TestCase):
         completed, workdir = self.run_script("cased-vm-id", seconds=200, fake_ssh=True)
         self.assertEqual(completed.returncode, 0, completed.stderr[-800:])
         descriptor = json.loads((workdir / "client.json").read_text(encoding="utf-8"))
+        # Without the flags the VM is created exactly as before and the descriptor says so.
+        self.assertFalse(descriptor["system_assigned_identity"] or descriptor["azure_cli_installed"])
+        self.assertNotIn("--assign-identity", next(c for c in self.calls() if c.startswith("vm create")).split())
+        self.assertNotIn("azure-cli", (self.fake_dir / "cloud-init.yaml").read_text(encoding="utf-8"))
         self.assertEqual(descriptor["client_vm_id"].casefold(), f"{GROUP_ID}/providers/Microsoft.Compute/virtualMachines/client".casefold())
         completed, workdir = self.run_script("foreign-vm-id", seconds=200, fake_ssh=True)
         self.assertNotEqual(completed.returncode, 0)
