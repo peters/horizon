@@ -35,7 +35,8 @@ unsupported check **and no probe errors**, `2` at least one probe error
 | Check | Source | Meaning |
 | --- | --- | --- |
 | `os_linux` | `uname -srm` | Linux kernel on `x86_64` or `aarch64` (release + arch in the report). A failed or truncated `uname` is an **error**, not a rejection; only a parsed non-Linux kernel is `unsupported` |
-| `container_engine` | `docker version --format json` / `docker context inspect --format '{{.Endpoints.docker.Host}}'` / `docker info --format '{{.Driver}}'` / `podman --remote=true --url unix://<existing-socket> info --format '{{.Version.Version}}'` | a usable engine is present **and reachable by the current user on this host**: the endpoint must be a local unix socket (`DOCKER_HOST` and the active docker context Host; named podman/`CONTAINER_*` connections are rejected). After that check, `docker version` and `docker info` are pinned with `--host unix://...` so a later context change cannot contact a remote daemon. Podman socket discovery (`/run/podman/podman.sock` and `$XDG_RUNTIME_DIR/podman/podman.sock`) runs in a killable helper so a stale FUSE/NFS `XDG_RUNTIME_DIR` cannot block the main process. The engine is then queried only through that existing socket via `--remote=true --url unix://...` (never local `podman info`, which would initialize rootless runtime state). The docker server OS must be present and `linux`, and for docker the storage driver is reported or explicitly marked `unverified` with the reason. Engine probes request only those fields |
+| `container_engine` | `docker version --format json` / `docker context inspect --format '{{.Endpoints.docker.Host}}'` / `podman --remote=true --url unix://<existing-socket> info --format '{{.Version.Version}}'` | a usable engine is present **and reachable by the current user on this host**: the endpoint must be a local unix socket (`DOCKER_HOST` and the active docker context Host; named podman/`CONTAINER_*` connections are rejected). After that check, `docker version` and `docker info` are pinned with `--host unix://...` so a later context change cannot contact a remote daemon. Podman socket discovery (`/run/podman/podman.sock` and `$XDG_RUNTIME_DIR/podman/podman.sock`) runs in a killable helper so a stale FUSE/NFS `XDG_RUNTIME_DIR` cannot block the main process. The engine is then queried only through that existing socket via `--remote=true --url unix://...` (never local `podman info`, which would initialize rootless runtime state). The docker server OS must be present and `linux`. Engine probes request only those fields |
+| `container_storage_driver` | `docker info --format '{{.Driver}}'` (pinned `--host`) | docker storage driver when the engine is docker; `unverified` if that probe fails, if the engine is podman, or if no engine is usable |
 | `cpu_capacity` | `nproc`, fallback `/proc/cpuinfo` | at least the 4-core reference baseline. The cpuinfo fallback is used only when it contains at least one `processor` record; otherwise the report is incomplete |
 | `memory_capacity` | `/proc/meminfo` `MemTotal` | at least the 16 GiB reference baseline minus 512 MiB (MemTotal excludes kernel-reserved pages; an unreadable `MemTotal` is an **error**, not a rejection) |
 | `disk_capacity` | `df -kP PATH` | at least 20 GiB free on the mount that will hold the workspace. `PATH` is the nearest existing workspace ancestor (one extra argv element, no shell); unrelated mounts are not queried. The **longest mount-point ancestor** of the resolved path is selected; a malformed free value on that mount is an **error** |
@@ -45,11 +46,14 @@ unsupported check **and no probe errors**, `2` at least one probe error
 
 ## Read-only guarantees
 
-- Every subprocess call is one of the fixed argv vectors in `PROBE_ARGS`
-  (`shell=False`, per-probe timeout). The tests enforce this allowlist, so a
-  regression that interpolates host values into probe arguments fails CI.
-- Direct file reads are limited to fixed paths under `--procfs-root` /
-  `--sysfs-root`.
+- Subprocess argv is an allowlist of command *shapes* from `PROBE_ARGS`
+  (`shell=False`, per-probe timeout). Extra words after the binary (validated
+  docker `--host`, workspace path, XDG runtime dir, podman socket URL) are
+  inserted/appended as single argv elements, never through a shell. Tests
+  enforce those shapes.
+- Host-fact file reads are limited to `--procfs-root` / `--sysfs-root`. The
+  watchdog also reads `/proc/<pid>/task/<pid>/children` (and `/proc` PIDs)
+  only to reap probe descendants on timeout or overflow.
 - The report contains only fixed fields. Any host-provided text that is
   surfaced (error excerpts, daemon-provided version strings, Tailscale DNS
   names) passes through a credential redactor (JWT-like material,

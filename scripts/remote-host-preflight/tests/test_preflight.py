@@ -224,6 +224,8 @@ class PreflightVerdicts(Harness):
         by_id = {check["id"]: check for check in report["checks"]}
         self.assertEqual(by_id["os_linux"]["status"], "supported")
         self.assertEqual(by_id["container_engine"]["value"], "docker 26.1.4")
+        self.assertEqual(by_id["container_storage_driver"]["status"], "supported")
+        self.assertEqual(by_id["container_storage_driver"]["value"], "overlay2")
         self.assertEqual(by_id["storage_ext4_qualifier"]["value"], "nvme0n1p2")
         self.assertEqual(by_id["tailscale"]["value"], "vm.example.ts.net")
 
@@ -265,7 +267,8 @@ class PreflightVerdicts(Harness):
         self.assertIn("arm64", by_id["os_linux"]["detail"])
         self.assertEqual(report["summary"]["verdict"], "unsupported")
         self.assertEqual(report["summary"]["error"], 0)
-        for check_id in ("container_engine", "cpu_capacity", "memory_capacity",
+        for check_id in ("container_engine", "container_storage_driver",
+                         "cpu_capacity", "memory_capacity",
                          "disk_capacity", "storage_ext4_qualifier"):
             self.assertEqual(by_id[check_id]["status"], "unverified", check_id)
         self.assertFalse(any(argv and argv[0] == "docker" for argv in executor.seen))
@@ -505,7 +508,7 @@ class EngineFailures(Harness):
                 self.assertEqual(code, 0, label)
                 by_id = {check["id"]: check for check in report["checks"]}
                 self.assertEqual(by_id["container_engine"]["status"], "supported", label)
-                self.assertIn("storage driver unverified", by_id["container_engine"]["detail"], label)
+                self.assertEqual(by_id["container_storage_driver"]["status"], "unverified", label)
 
     def test_engine_version_strings_are_redacted(self):
         fixture = dict(DEFAULT_FIXTURE)
@@ -576,6 +579,43 @@ class EngineFailures(Harness):
             with self.assertRaises(FileNotFoundError):
                 preflight.default_executor(
                     ["/nonexistent-horizon-preflight-probe"], 1.0)
+
+    def test_timeout_kills_child_that_inherited_stdout(self):
+        pidfile = os.path.join(self.tmp.name, "orphan.pid")
+        script = (
+            "import os,time\n"
+            "child=os.fork()\n"
+            "if child==0:\n"
+            "    open(%r,'w').write(str(os.getpid()))\n"
+            "    time.sleep(30)\n"
+            "    os._exit(0)\n"
+            "os._exit(0)\n"
+        ) % pidfile
+        with mock.patch.object(subprocess, "Popen", self.real_popen):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                preflight.default_executor(
+                    [sys.executable, "-B", "-c", script], 0.4)
+        deadline = time.monotonic() + 2
+        grandchild = None
+        while time.monotonic() < deadline:
+            if os.path.exists(pidfile):
+                with open(pidfile, encoding="utf-8") as handle:
+                    text = handle.read().strip()
+                if text.isdigit():
+                    grandchild = int(text)
+                    break
+            time.sleep(0.05)
+        self.assertIsNotNone(grandchild)
+        alive = True
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            try:
+                os.kill(grandchild, 0)
+            except OSError:
+                alive = False
+                break
+            time.sleep(0.05)
+        self.assertFalse(alive)
 
     def test_overflow_kills_probe_descendants(self):
         pidfile = os.path.join(self.tmp.name, "grandchild.pid")
@@ -1151,6 +1191,16 @@ class RedactionAndDeterminism(Harness):
             executor.seen)
         self.assertNotIn(list(preflight.PROBE_ARGS["docker_version"]), executor.seen)
         self.assertNotIn(list(preflight.PROBE_ARGS["docker_info"]), executor.seen)
+
+    def test_docker_host_pin_is_not_redacted(self):
+        socket = "unix:///tmp/client_secret=supersecretvalue/docker.sock"
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["docker_context"] = docker_context_ok(host=socket)
+        _, report, executor = self.run_main(fixture)
+        self.assertIn(
+            ["docker", "--host", socket, "version", "--format", "json"],
+            executor.seen)
+        self.assertNotIn("supersecretvalue", json.dumps(report))
 
     def test_workspace_resolution_timeout_is_bounded(self):
         fixture = dict(DEFAULT_FIXTURE)

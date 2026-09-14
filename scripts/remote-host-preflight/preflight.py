@@ -275,10 +275,14 @@ def is_local_unix_endpoint(host):
 
 
 def docker_context_host(probe):
-    """Active-context docker Host from the `--format` template, or None."""
+    """Raw active-context docker Host from the `--format` template, or None.
+
+    Keep this unredacted: `redact()` can rewrite a valid socket path such as
+    `unix:///tmp/client_secret=value/docker.sock`. Redact only in diagnostics.
+    """
     if probe is None or probe["exit_code"] != 0:
         return None
-    host = redact(str(probe.get("stdout", "")).strip())
+    host = str(probe.get("stdout", "")).strip()
     return host or None
 
 
@@ -314,7 +318,7 @@ def docker_endpoint_reason(executor, timeout):
     if not ctx_host:
         return None, "docker context endpoint missing"
     if not is_local_unix_endpoint(ctx_host):
-        return None, "docker endpoint is remote (context Host=%s)" % ctx_host
+        return None, "docker endpoint is remote (context Host=%s)" % redact(ctx_host)
     pinned = normalize_unix_endpoint(host_env if host_env else ctx_host)
     if not pinned:
         return None, "docker endpoint is remote"
@@ -433,8 +437,12 @@ def check_container_engine(executor, timeout):
                 detail_bits.append(engine_failure_bit(name, probe, err, timeout))
             else:
                 detail_bits.append("%s: %s" % (name, reason))
-        return {"id": "container_engine", "status": UNSUPPORTED, "value": None,
-                "detail": "no usable container engine: %s" % "; ".join(detail_bits)}
+        return (
+            {"id": "container_engine", "status": UNSUPPORTED, "value": None,
+             "detail": "no usable container engine: %s" % "; ".join(detail_bits)},
+            {"id": "container_storage_driver", "status": UNVERIFIED, "value": None,
+             "detail": "no usable container engine"},
+        )
 
     engine_version = docker_server if engine_ok == "docker" else podman_version
     detail = "usable engine: %s %s" % (engine_ok, engine_version)
@@ -455,11 +463,19 @@ def check_container_engine(executor, timeout):
             if driver is None:
                 reason = "docker info --format Driver was empty"
         if driver:
-            detail += "; storage driver %s" % driver
+            driver_check = {"id": "container_storage_driver", "status": SUPPORTED,
+                            "value": driver, "detail": "docker storage driver %s" % driver}
         else:
-            detail += "; storage driver unverified (docker info: %s)" % reason
-    return {"id": "container_engine", "status": SUPPORTED, "value": "%s %s" % (engine_ok, engine_version),
-            "detail": detail}
+            driver_check = {"id": "container_storage_driver", "status": UNVERIFIED,
+                            "value": None, "detail": "docker info: %s" % reason}
+    else:
+        driver_check = {"id": "container_storage_driver", "status": UNVERIFIED,
+                        "value": None, "detail": "podman storage driver is not probed"}
+    return (
+        {"id": "container_engine", "status": SUPPORTED,
+         "value": "%s %s" % (engine_ok, engine_version), "detail": detail},
+        driver_check,
+    )
 
 
 def read_procfs(procfs_root, name):
@@ -773,6 +789,7 @@ def parsed_non_linux(os_check):
 
 LINUX_ONLY_UNVERIFIED = (
     ("container_engine", "skipped because the kernel is not Linux"),
+    ("container_storage_driver", "skipped because the kernel is not Linux"),
     ("cpu_capacity", "skipped because the kernel is not Linux"),
     ("memory_capacity", "skipped because the kernel is not Linux"),
     ("disk_capacity", "skipped because the kernel is not Linux"),
@@ -788,9 +805,11 @@ def build_report(procfs_root, sysfs_root, workspace_path, timeout, executor, now
                       for check_id, detail in LINUX_ONLY_UNVERIFIED)
         checks.append(check_tailscale(executor, timeout))
     else:
+        engine_check, driver_check = check_container_engine(executor, timeout)
         checks = [
             os_check,
-            check_container_engine(executor, timeout),
+            engine_check,
+            driver_check,
             check_capacity(executor, timeout, procfs_root),
             check_memory(procfs_root),
             check_disk(executor, timeout, workspace_path),
@@ -970,6 +989,30 @@ def _kill_process_group(pid):
         pass
 
 
+def _kill_session_except_self():
+    """SIGKILL other members of this process group (orphans holding pipes)."""
+    me = os.getpid()
+    try:
+        pgid = os.getpgrp()
+    except OSError:
+        return
+    try:
+        names = os.listdir("/proc")
+    except OSError:
+        return
+    for name in names:
+        if not name.isdigit():
+            continue
+        pid = int(name)
+        if pid == me:
+            continue
+        try:
+            if os.getpgid(pid) == pgid:
+                os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+
+
 def _watchdog_execute_probe(argv, timeout):
     """Run the probe in a child so PATH lookup / `Popen` cannot hang the checker.
 
@@ -991,6 +1034,7 @@ def _watchdog_execute_probe(argv, timeout):
             except FileNotFoundError:
                 payload = {"kind": "fnf"}
             except subprocess.TimeoutExpired:
+                _kill_session_except_self()
                 payload = {"kind": "timeout"}
             except OSError as exc:
                 payload = {"kind": "os", "detail": str(redact(exc))}
@@ -1046,6 +1090,7 @@ def _watchdog_execute_probe(argv, timeout):
     if kind == "fnf":
         raise FileNotFoundError(argv[0] if argv else "probe")
     if kind == "timeout":
+        _kill_process_group(pid)
         raise subprocess.TimeoutExpired(argv, timeout)
     raise OSError(payload.get("detail", "probe could not run") if isinstance(payload, dict)
                   else "probe could not run")
