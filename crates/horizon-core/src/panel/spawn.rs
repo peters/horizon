@@ -561,6 +561,11 @@ pub(super) fn agent_env(kind: PanelKind, local_id: &str) -> HashMap<String, Stri
         // and history meter remain usable instead of hiding it in a fullscreen buffer.
         env.insert("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN".to_string(), "1".to_string());
     }
+    if kind == PanelKind::OpenCode
+        && let Some(overlay) = horizon_opencode_mcp_overlay()
+    {
+        env.insert("OPENCODE_CONFIG_CONTENT".to_string(), overlay);
+    }
     env
 }
 
@@ -594,6 +599,24 @@ fn horizon_codex_mcp_args() -> Vec<String> {
         "-c".to_string(),
         "mcp_servers.horizon-browser.default_tools_approval_mode=\"approve\"".to_string(),
     ]
+}
+
+fn horizon_opencode_mcp_overlay() -> Option<String> {
+    let command = crate::browser_mcp_executable()?.into_os_string().into_string().ok()?;
+    serde_json::to_string(&serde_json::json!({
+        "mcp": {
+            "horizon-browser": {
+                "type": "local",
+                "command": [command, "--browser-mcp"],
+                "enabled": true,
+                "environment": {
+                    "HORIZON_BROWSER_ACTOR": "{env:HORIZON_BROWSER_ACTOR}",
+                    "HORIZON_BROWSER_HOST_INSTANCE": "{env:HORIZON_BROWSER_HOST_INSTANCE}",
+                }
+            }
+        }
+    }))
+    .ok()
 }
 
 fn horizon_claude_plugin_args() -> Vec<String> {
@@ -712,6 +735,17 @@ mod tests {
         assert!(command.contains("/opt/custom-codex --custom-flag"));
         assert!(!command.contains("mcp_servers.horizon-browser"));
         assert!(!command.contains("--browser-mcp"));
+    }
+
+    #[test]
+    fn default_opencode_launch_injects_horizon_browser_mcp_overlay() {
+        let env = agent_env(PanelKind::OpenCode, "oc-panel");
+        let overlay = env.get("OPENCODE_CONFIG_CONTENT").expect("OpenCode MCP overlay");
+        assert!(overlay.contains("horizon-browser"));
+        assert!(overlay.contains("--browser-mcp"));
+        assert!(overlay.contains("{env:HORIZON_BROWSER_HOST_INSTANCE}"));
+        assert!(!agent_env(PanelKind::Pi, "pi-panel").contains_key("OPENCODE_CONFIG_CONTENT"));
+        assert!(!agent_env(PanelKind::Grok, "grok-panel").contains_key("OPENCODE_CONFIG_CONTENT"));
     }
 
     #[test]

@@ -6,7 +6,9 @@ use std::sync::{Mutex, PoisonError};
 use horizon_core::browser::manifest;
 use horizon_core::{HorizonHome, browser_mcp_executable, codex_home_dir, grok_home_dir, user_home_dir};
 
+mod mcp;
 mod user_skills;
+use mcp::{McpAttachmentLease, bind_browser_mcp_attachments, release_mcp_attachments};
 use user_skills::{
     HORIZON_BROWSER_SKILL, HORIZON_NOTIFY_SKILL, SkillRootLease, bind_skill_roots, release_skill_roots,
     remove_horizon_skill_dir,
@@ -69,6 +71,17 @@ const NOTIFY_SKILL_ROOTS: &[&[&str]] = &[
     &[".pi", "agent", "skills"],
 ];
 
+/// `$HOME`-relative skill roots that receive `horizon-browser` for the life of
+/// this Horizon process, matching the agents that get a leased browser MCP
+/// attachment (`OpenCode`, Antigravity, Pi). Grok uses `$GROK_HOME/skills`.
+/// Claude and Codex already receive the skill through the host plugin / Codex
+/// home. `KiloCode` is still notify-only.
+const BROWSER_SKILL_ROOTS: &[&[&str]] = &[
+    &[".config", "opencode", "skills"],
+    &[".gemini", "antigravity-cli", "skills"],
+    &[".pi", "agent", "skills"],
+];
+
 /// Leftover Horizon-owned notify dirs from older installers. Removed on start
 /// and when the last Horizon host exits.
 const ABANDONED_NOTIFY_SKILL_ROOTS: &[&[&str]] = &[&[".agents", "skills"], &[".gemini", "skills"]];
@@ -85,6 +98,7 @@ pub(crate) struct AgentPluginHostLease {
     lock_path: PathBuf,
     lock_file: Option<std::fs::File>,
     skill_roots: Vec<SkillRootLease>,
+    mcp_attachments: Vec<McpAttachmentLease>,
 }
 
 impl AgentPluginHostLease {
@@ -115,6 +129,7 @@ impl AgentPluginHostLease {
             lock_path,
             lock_file: Some(lock_file),
             skill_roots: Vec::new(),
+            mcp_attachments: Vec::new(),
         })
     }
 
@@ -135,10 +150,19 @@ impl AgentPluginHostLease {
     fn covers_skill_dir(&self, skill_dir: &Path) -> bool {
         self.skill_roots.iter().any(|root| root.covers_skill_dir(skill_dir))
     }
+
+    fn bind_browser_mcp(&mut self, mcp_command: &Path, user_home: Option<&Path>, grok_home: Option<&Path>) {
+        let Some(host_id) = self.host_dir.file_name() else {
+            tracing::warn!("agent plugin host directory has no name; skipping MCP attach");
+            return;
+        };
+        self.mcp_attachments = bind_browser_mcp_attachments(host_id, mcp_command, user_home, grok_home);
+    }
 }
 
 impl Drop for AgentPluginHostLease {
     fn drop(&mut self) {
+        release_mcp_attachments(&mut self.mcp_attachments);
         release_skill_roots(&mut self.skill_roots);
         if let Err(error) = std::fs::remove_dir_all(&self.host_dir)
             && error.kind() != std::io::ErrorKind::NotFound
@@ -181,6 +205,11 @@ pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) -> AgentPluginHo
     if let Err(error) = lease.bind_user_skills_with_cleanup(&user_skill_dirs, &extra_cleanup) {
         tracing::warn!(%error, "failed to bind Horizon skill root leases");
     }
+    lease.bind_browser_mcp(
+        &mcp_command,
+        user_home.as_deref(),
+        provider_home(grok_home.as_deref(), user_home.as_deref(), ".grok").as_deref(),
+    );
     sync_leased_user_skills(
         &lease,
         horizon_home,
@@ -338,12 +367,23 @@ fn install_agent_plugins_impl(
             }
             updated_files += sync_plugin_files(&dir, NOTIFY_SKILL_FILES)?;
         }
+        for skill_root in BROWSER_SKILL_ROOTS {
+            let dir = user_skill_dir(home, skill_root, HORIZON_BROWSER_SKILL);
+            if !skill_dir_is_leased(lease, &dir) {
+                continue;
+            }
+            updated_files += sync_plugin_files(&dir, BROWSER_SKILL_FILES)?;
+        }
     }
 
     if let Some(grok_root) = provider_home(grok_home, user_home, ".grok") {
-        let dir = grok_root.join("skills").join(HORIZON_NOTIFY_SKILL);
-        if skill_dir_is_leased(lease, &dir) {
-            updated_files += sync_plugin_files(&dir, NOTIFY_SKILL_FILES)?;
+        let notify_dir = grok_root.join("skills").join(HORIZON_NOTIFY_SKILL);
+        let browser_dir = grok_root.join("skills").join(HORIZON_BROWSER_SKILL);
+        if skill_dir_is_leased(lease, &notify_dir) {
+            updated_files += sync_plugin_files(&notify_dir, NOTIFY_SKILL_FILES)?;
+        }
+        if skill_dir_is_leased(lease, &browser_dir) {
+            updated_files += sync_plugin_files(&browser_dir, BROWSER_SKILL_FILES)?;
         }
     }
     if let Some(codex_root) = provider_home(codex_home, user_home, ".codex") {
@@ -374,9 +414,13 @@ fn user_skill_lease_dirs(
         for skill_root in NOTIFY_SKILL_ROOTS {
             dirs.push(user_skill_dir(home, skill_root, HORIZON_NOTIFY_SKILL));
         }
+        for skill_root in BROWSER_SKILL_ROOTS {
+            dirs.push(user_skill_dir(home, skill_root, HORIZON_BROWSER_SKILL));
+        }
     }
     if let Some(grok_root) = provider_home(grok_home, user_home, ".grok") {
         dirs.push(grok_root.join("skills").join(HORIZON_NOTIFY_SKILL));
+        dirs.push(grok_root.join("skills").join(HORIZON_BROWSER_SKILL));
     }
     if let Some(codex_root) = provider_home(codex_home, user_home, ".codex") {
         dirs.push(codex_root.join("skills").join(HORIZON_NOTIFY_SKILL));
@@ -493,8 +537,11 @@ mod tests {
         assert!(!dirs.contains(&home.join(".agents/skills/horizon-notify")));
         assert!(!dirs.contains(&home.join(".agents/skills/horizon-browser")));
         assert!(!dirs.contains(&home.join(".gemini/skills/horizon-notify")));
+        assert!(dirs.contains(&home.join(".config/opencode/skills/horizon-browser")));
+        assert!(dirs.contains(&home.join(".gemini/antigravity-cli/skills/horizon-browser")));
+        assert!(dirs.contains(&home.join(".pi/agent/skills/horizon-browser")));
+        assert!(dirs.contains(&home.join(".grok/skills/horizon-browser")));
         assert!(!dirs.contains(&home.join(".kilocode/skills/horizon-browser")));
-        assert!(!dirs.contains(&home.join(".grok/skills/horizon-browser")));
         assert!(abandoned.contains(&home.join(".agents/skills/horizon-notify")));
         assert!(abandoned.contains(&home.join(".agents/skills/horizon-browser")));
         assert!(abandoned.contains(&home.join(".gemini/skills/horizon-notify")));
@@ -591,6 +638,26 @@ mod tests {
                 .expect("codex browser skill should fall back to ~/.codex"),
             BROWSER_SKILL_FILES[0].content,
         );
+        assert_eq!(
+            std::fs::read_to_string(user_home.join(".grok/skills/horizon-browser/SKILL.md"))
+                .expect("grok browser skill should be leased with MCP attach"),
+            BROWSER_SKILL_FILES[0].content,
+        );
+        assert_eq!(
+            std::fs::read_to_string(user_home.join(".config/opencode/skills/horizon-browser/SKILL.md"))
+                .expect("opencode browser skill should be leased with MCP attach"),
+            BROWSER_SKILL_FILES[0].content,
+        );
+        assert_eq!(
+            std::fs::read_to_string(user_home.join(".pi/agent/skills/horizon-browser/SKILL.md"))
+                .expect("pi browser skill should be leased with MCP attach"),
+            BROWSER_SKILL_FILES[0].content,
+        );
+        assert_eq!(
+            std::fs::read_to_string(user_home.join(".gemini/antigravity-cli/skills/horizon-browser/SKILL.md"))
+                .expect("antigravity browser skill should be leased with MCP attach"),
+            BROWSER_SKILL_FILES[0].content,
+        );
         assert!(
             !user_home.join(".agents/skills/horizon-notify/SKILL.md").exists(),
             "notify skill must not broadcast through ~/.agents/skills"
@@ -605,10 +672,6 @@ mod tests {
         );
         assert!(
             !user_home.join(".kilocode/skills/horizon-browser/SKILL.md").exists(),
-            "browser MCP skill must not be exported to agents without Horizon MCP injection"
-        );
-        assert!(
-            !user_home.join(".grok/skills/horizon-browser/SKILL.md").exists(),
             "browser MCP skill must not be exported to agents without Horizon MCP injection"
         );
         assert_eq!(
@@ -693,8 +756,17 @@ mod tests {
                 .expect("notify skill should be installed under GROK_HOME"),
             NOTIFY_SKILL_FILES[0].content,
         );
+        assert_eq!(
+            std::fs::read_to_string(grok_home.join("skills/horizon-browser/SKILL.md"))
+                .expect("browser skill should be installed under GROK_HOME"),
+            BROWSER_SKILL_FILES[0].content,
+        );
         assert!(
             !user_home.join(".grok/skills/horizon-notify/SKILL.md").exists(),
+            "GROK_HOME must replace ~/.grok rather than writing both"
+        );
+        assert!(
+            !user_home.join(".grok/skills/horizon-browser/SKILL.md").exists(),
             "GROK_HOME must replace ~/.grok rather than writing both"
         );
     }
@@ -750,6 +822,31 @@ mod tests {
 
         assert!(!host_dir.exists());
         assert!(!lock_path.exists());
+    }
+
+    #[test]
+    fn last_host_lease_detaches_browser_mcp_attachments() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let horizon_home = HorizonHome::from_root(temp.path().join(".horizon"));
+        let user_home = temp.path().join("user-home");
+        let grok_home = user_home.join(".grok");
+        let mut lease =
+            AgentPluginHostLease::acquire(horizon_home.agent_plugin_host_dir("host-a")).expect("host lease");
+        lease.bind_browser_mcp(Path::new("/opt/horizon"), Some(&user_home), Some(&grok_home));
+
+        assert!(user_home.join(".pi/agent/mcp.json").is_file());
+        assert!(user_home.join(".gemini/config/mcp_config.json").is_file());
+        assert!(grok_home.join("config.toml").is_file());
+        assert!(!user_home.join(".config/opencode/opencode.json").exists());
+
+        drop(lease);
+
+        let pi = std::fs::read_to_string(user_home.join(".pi/agent/mcp.json")).expect("pi after last host");
+        assert!(!pi.contains("horizon-browser"));
+        let antigravity = std::fs::read_to_string(user_home.join(".gemini/config/mcp_config.json"))
+            .expect("antigravity after last host");
+        assert!(!antigravity.contains("horizon-browser"));
+        assert!(!grok_home.join("config.toml").exists());
     }
 
     #[test]
