@@ -17,11 +17,28 @@ pub use horizon_browser_protocol::{
 const MAX_CONTROL_RESULT_BYTES: usize = 1024 * 1024;
 const MAX_NODE_STRING_BYTES: usize = 2 * 1024;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum TeachCapture {
+    Click { x: f64, y: f64 },
+    Focused,
+}
+
+impl TeachCapture {
+    #[must_use]
+    pub(crate) fn point(self) -> Option<(f64, f64)> {
+        match self {
+            Self::Click { x, y } => Some((x, y)),
+            Self::Focused => None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct SemanticState {
     generation: u64,
     revision: u64,
     references: HashMap<String, String>,
+    teach_text_gesture: bool,
 }
 
 impl Default for SemanticState {
@@ -30,6 +47,7 @@ impl Default for SemanticState {
             generation: 1,
             revision: 0,
             references: HashMap::new(),
+            teach_text_gesture: false,
         }
     }
 }
@@ -45,6 +63,35 @@ impl SemanticState {
         self.generation = self.generation.wrapping_add(1).max(1);
         self.revision = 0;
         self.references.clear();
+        self.teach_text_gesture = false;
+    }
+
+    /// `Some(Click)` for a left press, `Some(Focused)` for the start of a
+    /// text-edit gesture, `None` when Teach should not evaluate.
+    pub(crate) fn teach_capture_point(&mut self, input: &crate::BrowserInput) -> Option<TeachCapture> {
+        match input {
+            crate::BrowserInput::MousePress {
+                x,
+                y,
+                button: crate::BrowserButton::Left,
+                ..
+            } => {
+                self.teach_text_gesture = false;
+                Some(TeachCapture::Click { x: *x, y: *y })
+            }
+            crate::BrowserInput::InsertText { text } if !text.is_empty() => self.start_text_capture(),
+            crate::BrowserInput::KeyDown { text: Some(text), .. } if !text.is_empty() => self.start_text_capture(),
+            _ => None,
+        }
+    }
+
+    fn start_text_capture(&mut self) -> Option<TeachCapture> {
+        if self.teach_text_gesture {
+            None
+        } else {
+            self.teach_text_gesture = true;
+            Some(TeachCapture::Focused)
+        }
     }
 
     /// Parse a scan without registering references: the page generation and
@@ -508,6 +555,33 @@ mod tests {
         assert!(!slot.teach_recording());
         assert!(!scan_expression(None, 8).contains("elementFromPoint"));
         assert!(!wait_scan_expression("#status", 8).contains("activeElement"));
+    }
+
+    #[test]
+    fn teach_text_gesture_captures_once_until_the_next_click() {
+        let mut state = SemanticState::default();
+        let press = crate::BrowserInput::MousePress {
+            x: 12.0,
+            y: 40.0,
+            button: crate::BrowserButton::Left,
+            click_count: 1,
+            buttons: 1,
+            modifiers: crate::BrowserModifiers::none(),
+        };
+        assert_eq!(
+            state.teach_capture_point(&press),
+            Some(TeachCapture::Click { x: 12.0, y: 40.0 })
+        );
+        let insert = crate::BrowserInput::InsertText {
+            text: "month".to_string(),
+        };
+        assert_eq!(state.teach_capture_point(&insert), Some(TeachCapture::Focused));
+        assert_eq!(state.teach_capture_point(&insert), None);
+        assert_eq!(
+            state.teach_capture_point(&press),
+            Some(TeachCapture::Click { x: 12.0, y: 40.0 })
+        );
+        assert_eq!(state.teach_capture_point(&insert), Some(TeachCapture::Focused));
     }
 
     #[test]

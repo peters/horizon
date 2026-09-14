@@ -303,14 +303,14 @@ impl DriverState {
         if !frame_slot.teach_recording() {
             return Ok(());
         }
-        frame_slot.clear_teach_fingerprint();
+        let generation = frame_slot.teach_generation();
         let expression = match point {
             Some((x, y)) => fingerprint_at_point_expression(x, y),
             None => fingerprint_focused_expression(),
         };
         let value = self.evaluate_json(link, event_tx, frame_slot, &expression)?;
         let fingerprint = fingerprint_from_script_value(&value)?;
-        frame_slot.store_teach_fingerprint(fingerprint);
+        frame_slot.store_teach_fingerprint(fingerprint, generation);
         Ok(())
     }
 

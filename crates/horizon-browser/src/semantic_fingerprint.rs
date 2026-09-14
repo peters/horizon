@@ -383,15 +383,32 @@ fn digest_from_candidates(candidates: &[RankedCandidate]) -> String {
 }
 
 fn validate_origin(origin: &str) -> Result<(), BrowserControlFailure> {
-    if origin.contains('@') || origin.contains('?') || origin.contains('#') {
+    let origin = origin.trim();
+    if origin.is_empty() || origin.len() > MAX_FIELD_BYTES || origin.contains('@') {
         return Err(fail("invalid_fingerprint", "frame origin is not an exact origin"));
     }
-    let https = origin.starts_with("https://");
-    let loopback = origin.starts_with("http://127.0.0.1") || origin.starts_with("http://localhost");
-    if (https || loopback) && origin.len() <= MAX_FIELD_BYTES {
-        Ok(())
-    } else {
-        Err(fail("invalid_fingerprint", "frame origin is not an exact origin"))
+    let Some((scheme, rest)) = origin.split_once("://") else {
+        return Err(fail("invalid_fingerprint", "frame origin is not an exact origin"));
+    };
+    if rest.is_empty() || rest.contains('/') || rest.contains('?') || rest.contains('#') {
+        return Err(fail("invalid_fingerprint", "frame origin is not an exact origin"));
+    }
+    let host = match rest.rsplit_once(':') {
+        Some((host, port)) if !port.is_empty() && port.chars().all(|ch| ch.is_ascii_digit()) => host,
+        _ => rest,
+    };
+    let host = host
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .unwrap_or(host);
+    if host.is_empty() {
+        return Err(fail("invalid_fingerprint", "frame origin is not an exact origin"));
+    }
+    let loopback = host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "::1";
+    match scheme {
+        "https" => Ok(()),
+        "http" if loopback => Ok(()),
+        _ => Err(fail("invalid_fingerprint", "frame origin is not an exact origin")),
     }
 }
 
@@ -459,9 +476,12 @@ const FINGERPRINT_FUNCTION: &str = r#"function(x, y, focused) {
         const tag = element.tagName.toLowerCase();
         if (tag === 'a' && element.hasAttribute('href')) return 'link';
         if (tag === 'button') return 'button';
-        if (tag === 'textarea' || element.isContentEditable) return 'textbox';
+        if (tag === 'textarea') return 'textbox';
         if (tag === 'select') return 'combobox';
+        if (tag === 'img') return 'img';
         if (tag === 'iframe') return 'iframe';
+        if (/^h[1-6]$/.test(tag)) return 'heading';
+        if (tag === 'li') return 'listitem';
         if (tag === 'input') {
             const type = (element.getAttribute('type') || 'text').toLowerCase();
             if (type === 'checkbox') return 'checkbox';
@@ -469,7 +489,8 @@ const FINGERPRINT_FUNCTION: &str = r#"function(x, y, focused) {
             if (type === 'button' || type === 'submit' || type === 'reset') return 'button';
             return 'textbox';
         }
-        return tag;
+        if (element.isContentEditable) return 'textbox';
+        return '';
     };
     const nameFor = (element) => compact(element.getAttribute('aria-label') || element.getAttribute('alt') || element.getAttribute('title') ||
         ((element.tagName === 'INPUT' && /^(button|submit|reset)$/i.test(element.getAttribute('type') || '')) ? element.value : '') ||
@@ -484,6 +505,14 @@ const FINGERPRINT_FUNCTION: &str = r#"function(x, y, focused) {
         return el;
     };
     const frameName = (frame) => compact(frame.title || frame.name || frame.getAttribute('aria-label'));
+    const crossOriginFrame = (frame) => {
+        let frameOrigin = '';
+        try {
+            const src = frame.getAttribute('src');
+            if (src) frameOrigin = new URL(src, location.href).origin;
+        } catch (error) {}
+        return { error: { code: 'cross_origin_frame', message: 'target is inside a cross-origin frame', origin: frameOrigin } };
+    };
     let doc = document;
     let chain = [];
     let px = x;
@@ -493,11 +522,11 @@ const FINGERPRINT_FUNCTION: &str = r#"function(x, y, focused) {
         while (el && el.tagName === 'IFRAME') {
             try {
                 const inner = el.contentDocument;
-                if (!inner) break;
+                if (!inner) return crossOriginFrame(el);
                 chain.push({ origin: inner.location.origin, name: frameName(el) });
                 el = inner.activeElement || inner.body;
                 doc = inner;
-            } catch (error) { break; }
+            } catch (error) { return crossOriginFrame(el); }
         }
         while (el && el.shadowRoot && el.shadowRoot.activeElement) {
             el = el.shadowRoot.activeElement;
@@ -506,14 +535,14 @@ const FINGERPRINT_FUNCTION: &str = r#"function(x, y, focused) {
         while (el && el.tagName === 'IFRAME') {
             try {
                 const inner = el.contentDocument;
-                if (!inner) break;
+                if (!inner) return crossOriginFrame(el);
                 const rect = el.getBoundingClientRect();
                 px -= rect.left;
                 py -= rect.top;
                 chain.push({ origin: inner.location.origin, name: frameName(el) });
                 el = inner.elementFromPoint(px, py);
                 doc = inner;
-            } catch (error) { break; }
+            } catch (error) { return crossOriginFrame(el); }
         }
         el = pierceShadow(el, px, py);
     }
@@ -555,6 +584,7 @@ mod tests {
     use super::{
         ElementObservation, FrameLink, TargetCandidate, fingerprint_at_point_expression,
         fingerprint_focused_expression, fingerprint_from_observation, is_dynamic_id, match_fingerprint,
+        validate_origin,
     };
     use crate::semantic::{scan_expression, wait_scan_expression};
 
@@ -761,6 +791,21 @@ mod tests {
         assert!(focused.contains("activeElement"));
         assert!(focused.contains("shadowRoot.activeElement"));
         assert!(focused.contains("inner.activeElement"));
+        assert!(at_point.contains("cross_origin_frame"));
+        assert!(at_point.contains("return '';"));
+        assert!(!at_point.contains("return tag;"));
         assert!(!at_point.contains("MouseMove"));
+    }
+
+    #[test]
+    fn exact_origin_rejects_path_and_localhost_prefix() {
+        assert!(validate_origin("https://reports.example").is_ok());
+        assert!(validate_origin("http://127.0.0.1:8080").is_ok());
+        assert!(validate_origin("http://localhost").is_ok());
+        assert!(validate_origin("http://[::1]").is_ok());
+        assert!(validate_origin("https://example.com/path").is_err());
+        assert!(validate_origin("http://localhost.evil.example").is_err());
+        assert!(validate_origin("https://user:name@example.com").is_err());
+        assert!(validate_origin("http://example.test").is_err());
     }
 }

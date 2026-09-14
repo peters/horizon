@@ -494,7 +494,7 @@ impl Driver {
         if self.handle_scrollbar_input(&input)? {
             return Ok(());
         }
-        self.capture_teach_press(&input)?;
+        self.capture_teach_input(&input);
         let (result, demand_frame) = if self.config.browser.backend == BackendKind::FirefoxBidi {
             let mut payload = self.actions.payload(input);
             payload["context"] = json!(self.context_id);

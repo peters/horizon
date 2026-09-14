@@ -5,8 +5,11 @@
 //! an `Arc` for texture upload. No frame payload ever crosses the mpsc
 //! channel.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+const MAX_TEACH_FINGERPRINTS: usize = 32;
 
 use base64::Engine;
 use zune_jpeg::JpegDecoder;
@@ -141,7 +144,8 @@ pub struct FrameSlot {
     metrics: Arc<FrameMetricCounters>,
     active_backend: Arc<std::sync::Mutex<Option<crate::ActiveBackendCapabilities>>>,
     teach_active: Arc<AtomicBool>,
-    teach_fingerprint: Arc<std::sync::Mutex<Option<crate::TeachFingerprint>>>,
+    teach_generation: Arc<AtomicU64>,
+    teach_fingerprints: Arc<std::sync::Mutex<VecDeque<crate::TeachFingerprint>>>,
 }
 
 impl FrameSlot {
@@ -151,13 +155,12 @@ impl FrameSlot {
     }
 
     pub fn set_teach_recording(&self, active: bool) {
+        self.teach_generation.fetch_add(1, Ordering::AcqRel);
         self.teach_active.store(active, Ordering::Release);
-        if !active {
-            *self
-                .teach_fingerprint
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-        }
+        self.teach_fingerprints
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
     }
 
     #[must_use]
@@ -165,26 +168,31 @@ impl FrameSlot {
         self.teach_active.load(Ordering::Acquire)
     }
 
-    pub(crate) fn store_teach_fingerprint(&self, fingerprint: crate::TeachFingerprint) {
-        *self
-            .teach_fingerprint
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(fingerprint);
+    #[must_use]
+    pub(crate) fn teach_generation(&self) -> u64 {
+        self.teach_generation.load(Ordering::Acquire)
     }
 
-    pub(crate) fn clear_teach_fingerprint(&self) {
-        *self
-            .teach_fingerprint
+    pub(crate) fn store_teach_fingerprint(&self, fingerprint: crate::TeachFingerprint, generation: u64) {
+        if !self.teach_recording() || self.teach_generation() != generation {
+            return;
+        }
+        let mut queued = self
+            .teach_fingerprints
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if queued.len() >= MAX_TEACH_FINGERPRINTS {
+            queued.pop_front();
+        }
+        queued.push_back(fingerprint);
     }
 
     #[must_use]
     pub fn take_teach_fingerprint(&self) -> Option<crate::TeachFingerprint> {
-        self.teach_fingerprint
+        self.teach_fingerprints
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
+            .pop_front()
     }
 
     /// Decode a JPEG frame into the slot and bump `seq`.
@@ -732,5 +740,43 @@ mod tests {
         assert_eq!(metrics.interaction_frame_samples, 1);
         assert_eq!(metrics.interaction_frame_total_us, 125);
         assert_eq!(metrics.interaction_frame_max_us, 125);
+    }
+
+    fn sample_fingerprint(digest: &str) -> crate::TeachFingerprint {
+        crate::TeachFingerprint {
+            candidates: vec![crate::RankedCandidate {
+                identity: crate::TeachTargetCandidate::RoleName {
+                    role: "button".to_string(),
+                    name: "Go".to_string(),
+                    reviewed: false,
+                },
+                match_count: 1,
+                unique: true,
+            }],
+            selected: Some(0),
+            frame: crate::TeachFrameContext {
+                top_level: true,
+                origin: "https://reports.example".to_string(),
+                chain: Vec::new(),
+            },
+            digest: digest.to_string(),
+        }
+    }
+
+    #[test]
+    fn teach_queue_keeps_order_and_drops_stale_generations() {
+        let slot = FrameSlot::new();
+        slot.set_teach_recording(true);
+        let generation = slot.teach_generation();
+        slot.store_teach_fingerprint(sample_fingerprint("one"), generation);
+        slot.store_teach_fingerprint(sample_fingerprint("two"), generation);
+        assert_eq!(slot.take_teach_fingerprint().expect("one").digest, "one");
+        slot.set_teach_recording(false);
+        slot.store_teach_fingerprint(sample_fingerprint("late"), generation);
+        assert!(slot.take_teach_fingerprint().is_none());
+        slot.set_teach_recording(true);
+        let next = slot.teach_generation();
+        slot.store_teach_fingerprint(sample_fingerprint("fresh"), next);
+        assert_eq!(slot.take_teach_fingerprint().expect("fresh").digest, "fresh");
     }
 }

@@ -230,34 +230,30 @@ impl Driver {
         Ok(BrowserControlValue::Json { value })
     }
 
-    pub(super) fn capture_teach_press(&mut self, input: &BrowserInput) -> Result<(), String> {
-        if let BrowserInput::MousePress {
-            x,
-            y,
-            button: BrowserButton::Left,
-            ..
-        } = input
-            && self.panel_slot.teach_recording()
-        {
-            return self
-                .capture_teach_fingerprint(Some((*x, *y)))
-                .map_err(|error| error.message.clone());
+    pub(super) fn capture_teach_input(&mut self, input: &BrowserInput) {
+        if !self.panel_slot.teach_recording() {
+            return;
         }
-        Ok(())
+        let Some(capture) = self.semantic.teach_capture_point(input) else {
+            return;
+        };
+        if let Err(error) = self.capture_teach_fingerprint(capture.point()) {
+            tracing::warn!(target: "browser", "teach fingerprint failed: {}", error.message);
+        }
     }
 
     pub(super) fn capture_teach_fingerprint(&mut self, point: Option<(f64, f64)>) -> Result<(), BrowserControlFailure> {
         if !self.panel_slot.teach_recording() {
             return Ok(());
         }
-        self.panel_slot.clear_teach_fingerprint();
+        let generation = self.panel_slot.teach_generation();
         let expression = match point {
             Some((x, y)) => fingerprint_at_point_expression(x, y),
             None => fingerprint_focused_expression(),
         };
         let value = self.evaluate_json(&expression)?;
         let fingerprint = fingerprint_from_script_value(&value)?;
-        self.panel_slot.store_teach_fingerprint(fingerprint);
+        self.panel_slot.store_teach_fingerprint(fingerprint, generation);
         Ok(())
     }
 
