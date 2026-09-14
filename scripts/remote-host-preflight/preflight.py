@@ -13,7 +13,9 @@ Read-only guarantees:
 - host-fact file-content reads are limited to `--procfs-root` / `--sysfs-root`
 - the workspace helper may `realpath`/`stat` the workspace path and its
   ancestors (metadata only; `EACCES` is an error, not a walk-up)
-- a killable helper may `os.path.exists` the two Podman socket candidates;
+- a killable helper may `lstat` the three Podman socket candidates
+  (`$XDG_RUNTIME_DIR/podman/podman.sock`, `/run/user/<uid>/podman/podman.sock`,
+  `/run/podman/podman.sock`; `EACCES` is unreadable, not absent);
   the watchdog reads `/proc` PIDs and `/proc/<pid>/task/<pid>/children`
   only to reap probe descendants
 - no writes, no installation, no image pull/run, no daemon or socket changes,

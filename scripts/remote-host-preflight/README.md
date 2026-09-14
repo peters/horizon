@@ -56,8 +56,9 @@ invalid CLI usage (argparse; usage text only, no report — for example
 - Host-fact file-content reads are limited to `--procfs-root` / `--sysfs-root`.
   The workspace helper may `realpath`/`stat` the workspace path and its
   ancestors (metadata only; `EACCES` is an error, not a walk-up). A
-  killable helper may `os.path.exists` the two Podman socket candidates
-  (`$XDG_RUNTIME_DIR/podman/podman.sock`, `/run/podman/podman.sock`). The
+  killable helper may `lstat` the three Podman socket candidates
+  (`$XDG_RUNTIME_DIR/podman/podman.sock`, `/run/user/<uid>/podman/podman.sock`,
+  `/run/podman/podman.sock`; `EACCES` is unreadable, not absent). The
   watchdog also reads `/proc/<pid>/task/<pid>/children` (and `/proc` PIDs)
   only to reap probe descendants on timeout or overflow.
 - The report contains only fixed fields. Any host-provided text that is

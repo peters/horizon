@@ -99,7 +99,8 @@ explicit about which steps mutate the host so the proof is not overclaimed.
      PODMAN_VER="";
      CAND="";
      [ -n "${XDG_RUNTIME_DIR:-}" ] && CAND="$XDG_RUNTIME_DIR/podman/podman.sock";
-     for SOCK in $CAND /run/podman/podman.sock; do
+     UID_SOCK="/run/user/$(id -u)/podman/podman.sock";
+     for SOCK in $CAND $UID_SOCK /run/podman/podman.sock; do
        [ -n "$SOCK" ] && [ -S "$SOCK" ] || continue;
        VER=$(podman --remote=true --url "unix://$SOCK" info --format "{{.Version.Version}}" 2>/dev/null | head -1);
        if [ -n "$VER" ]; then PODMAN_VER=$VER; break; fi;
