@@ -1,6 +1,9 @@
 //! Explicit saved-panel loading, inert views and separately confirmed task execution.
 
+mod add;
 mod inspection;
+
+pub(super) use add::Action as AddAction;
 mod paint;
 mod start;
 
@@ -19,6 +22,9 @@ pub(super) struct ReopenState {
     repaint_context: Option<Context>,
     start: start::StartState,
     start_outcome_unknown: bool,
+    add: add::AddState,
+    add_notice: Option<String>,
+    refresh_inventory: bool,
 }
 
 struct CachedCatalog {
@@ -40,10 +46,13 @@ struct PendingReopen {
     discard: bool,
     inspection: Option<String>,
     start: Option<start::PendingStart>,
+    add: Option<add::PendingAdd>,
 }
 
 enum Completion {
     Catalog(Box<RemoteViewCatalog>),
+    PanelPreview(Box<horizon_core::remote_workspace::panels::PreparedRemoteShellPanel>),
+    PanelAdded(Box<horizon_core::remote_workspace::panels::AddedRemoteShellPanel>),
     View(Box<PreparedRemoteViewReopen>),
     Inspection(horizon_core::remote_worker_status::RemotePanelObservation),
     StartPreview(Box<horizon_core::remote_worker_status::PreparedRemoteGitStart>),
@@ -94,7 +103,8 @@ impl ReopenState {
 
     pub(super) fn invalidate(&mut self) {
         self.start = start::StartState::default();
-        let changed = self.catalog.take().is_some()
+        let changed = self.add.cancel()
+            | self.catalog.take().is_some()
             | self.notice.take().is_some()
             | self.pending.as_ref().is_some_and(|pending| !pending.discard);
         if let Some(pending) = &mut self.pending {
@@ -116,6 +126,7 @@ impl ReopenState {
             return;
         }
         self.start = start::StartState::default();
+        self.add.cancel();
         let scope = match RequestScope::current(client) {
             Ok(scope) => scope,
             Err(message) => {
@@ -196,6 +207,7 @@ impl ReopenState {
                     discard: false,
                     inspection: None,
                     start: None,
+                    add: None,
                 });
             }
             Err(_) => self.notice = Some(worker_failure().into()),
@@ -212,7 +224,9 @@ impl ReopenState {
                 return None;
             }
             Err(TryRecvError::Disconnected) => {
-                Err(if matches!(&pending.start, Some(start::PendingStart::Execute(_))) {
+                Err(if pending.add.as_ref().is_some_and(add::PendingAdd::saving) {
+                    "The Shell save outcome is unknown. Refresh saved panels before another addition. No retry was scheduled."
+                } else if matches!(&pending.start, Some(start::PendingStart::Execute(_))) {
                     "The start worker ended without a response. The remote outcome is unknown. No retry was scheduled."
                 } else {
                     worker_failure()
@@ -221,7 +235,14 @@ impl ReopenState {
             }
         };
         ctx.request_repaint();
-        if pending.discard || !pending.scope.matches(client) {
+        if pending.discard
+            || !pending.scope.matches(client)
+            || pending.add.as_ref().is_some_and(|add| !add.matches(client))
+        {
+            if pending.add.as_ref().is_some_and(add::PendingAdd::saving) {
+                self.add_notice = Some("An earlier Shell save lost its context. Its outcome is unknown. Refresh that environment before another addition; no retry was scheduled.".into());
+                self.refresh_inventory = true;
+            }
             if matches!(&pending.start, Some(start::PendingStart::Execute(_))) {
                 self.start_outcome_unknown = true;
             }
@@ -231,6 +252,10 @@ impl ReopenState {
                 task_checked = matches!(&result, Ok(Completion::Inspection(_))),
                 "Discarding a stale remote view reopening result"
             );
+            return None;
+        }
+        if let Some(add) = pending.add {
+            self.accept_add(&add, result);
             return None;
         }
         if let Some(panel) = pending.inspection {
@@ -277,7 +302,13 @@ impl ReopenState {
                 Err(error) => self.notice = Some(error.to_string()),
             },
             Err(message) => self.notice = Some(message),
-            Ok(Completion::Inspection(_) | Completion::StartPreview(_) | Completion::Started(_)) => {
+            Ok(
+                Completion::Inspection(_)
+                | Completion::StartPreview(_)
+                | Completion::Started(_)
+                | Completion::PanelPreview(_)
+                | Completion::PanelAdded(_),
+            ) => {
                 self.notice = Some("The task result did not match its request. Check the task again.".into());
             }
         }
@@ -317,8 +348,18 @@ impl super::HorizonApp {
             && !state.observation.is_pending()
             && !state.stop.is_pending()
             && !state.reconnect.is_pending()
+            && !state.delete.is_pending()
+            && !state.endpoint.is_pending()
+            && !state.repository.is_pending()
         {
+            if !matches!(action, InventoryAction::None | InventoryAction::AddShell(_)) {
+                state.reopen.add.cancel();
+            }
             match action {
+                InventoryAction::AddShell(action) => {
+                    state.stop.cancel_confirmation();
+                    state.reopen.add_action(action, &client, ctx);
+                }
                 InventoryAction::ListReopenPanels => {
                     state.stop.cancel_confirmation();
                     state.reopen.load(&client, ctx);
@@ -348,7 +389,15 @@ impl super::HorizonApp {
                 _ => {}
             }
         }
-        if state.reopen.drain(&client, &mut self.board, ctx).is_some() {
+        let adopted = state.reopen.drain(&client, &mut self.board, ctx).is_some();
+        if std::mem::take(&mut state.reopen.refresh_inventory) && state.open {
+            if state.pending.is_some() {
+                state.refresh_when_idle = true;
+            } else {
+                state.start_load(self.session_store.home(), ctx, state.page_cursor.clone());
+            }
+        }
+        if adopted {
             state.reconnect.invalidate();
             self.mark_runtime_dirty();
         }

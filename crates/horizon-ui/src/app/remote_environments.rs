@@ -80,6 +80,7 @@ enum InventoryAction {
     ListReconnectViews,
     Reconnect(horizon_core::PanelId),
     ListReopenPanels,
+    AddShell(reopen::AddAction),
     ReopenView(usize),
     InspectTask(usize),
     PrepareTaskStart(usize),
@@ -269,7 +270,8 @@ impl RemoteEnvironments {
             | InventoryAction::RequestStart
             | InventoryAction::ConfirmStart => {}
             InventoryAction::ListReconnectViews | InventoryAction::Reconnect(_) => self.reopen.invalidate(),
-            InventoryAction::ListReopenPanels
+            InventoryAction::AddShell(_)
+            | InventoryAction::ListReopenPanels
             | InventoryAction::ReopenView(_)
             | InventoryAction::InspectTask(_)
             | InventoryAction::PrepareTaskStart(_)

@@ -18,6 +18,8 @@ pub(super) fn show(ui: &mut egui::Ui, state: &ReopenState, enabled: bool, action
             "Waiting for the discarded task check to finish…"
         } else if pending.discard {
             "Waiting for the discarded saved-view request to finish…"
+        } else if let Some(add) = &pending.add {
+            add.label()
         } else if let Some(start) = &pending.start {
             start.label()
         } else if pending.inspection.is_some() {
