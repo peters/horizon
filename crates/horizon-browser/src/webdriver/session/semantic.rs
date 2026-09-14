@@ -64,6 +64,44 @@ fn send_keys_through(
             .post(&format!("{session}/{suffix}"), body)
             .map_err(|error| error.to_string())
     };
+    let element = find_element_segment(&post, selector)?;
+    post(&format!("element/{element}/clear"), &json!({}))?;
+    post(&format!("element/{element}/value"), &json!({ "text": text }))?;
+    Ok(())
+}
+
+/// Click the element `selector` matches through the W3C Find Element and
+/// Element Click commands under `session`, so the driver, not a pointer
+/// action aimed at a viewport coordinate, decides where the tap lands. On
+/// a real iOS device a pointer action at the element's page rectangle can
+/// hit the element above it (the Safari toolbar shifts the mapping); the
+/// driver's own element click does not.
+fn click_through(transport: &dyn ClassicTransport, session: &str, selector: &str) -> Result<(), String> {
+    let post = |suffix: &str, body: &Value| {
+        transport
+            .post(&format!("{session}/{suffix}"), body)
+            .map_err(|error| error.to_string())
+    };
+    let element = find_element_segment(&post, selector)?;
+    // Element Click may wait for a navigation the element triggers, so it
+    // gets the navigation-sized read timeout rather than the command default.
+    transport
+        .post_with_read_timeout(
+            &format!("{session}/element/{element}/click"),
+            &json!({}),
+            super::NAVIGATION_HTTP_TIMEOUT,
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+/// Find Element by CSS selector, returning the reference as one encoded
+/// route segment; a reference that cannot form a route is refused here
+/// rather than on the wire.
+fn find_element_segment(
+    post: &dyn Fn(&str, &Value) -> Result<Value, String>,
+    selector: &str,
+) -> Result<String, String> {
     let found = post("element", &json!({ "using": "css selector", "value": selector }))?;
     let element = element_reference(&found).ok_or_else(|| "WebDriver returned no element reference".to_string())?;
     if element.contains(['/', '%', '\\']) || element == "." || element == ".." {
@@ -75,10 +113,7 @@ fn send_keys_through(
             element.len()
         ));
     }
-    let element = encode_path_segment(element);
-    post(&format!("element/{element}/clear"), &json!({}))?;
-    post(&format!("element/{element}/value"), &json!({ "text": text }))?;
-    Ok(())
+    Ok(encode_path_segment(element))
 }
 
 const DOCUMENT_IDENTITY_EXPRESSION: &str =
@@ -216,6 +251,24 @@ impl Driver {
         let value = self.evaluate_json(&target_rect_expression(&selector, false))?;
         let (x, y) = parse_target_rect(&value)?;
         self.capture_teach_fingerprint(Some((x, y)))?;
+        if self.host.is_remote() && count == 1 {
+            // A pointer action at (x, y) landed on the element above the
+            // target on a real iPhone (2026-09-14 live run: the submit
+            // click raised the keyboard for the field instead); Element
+            // Click lets the remote driver place the tap itself.
+            self.pending_classic_history_start = None;
+            let result = click_through(
+                self.host.transport(),
+                &format!("/session/{}", self.session_id),
+                &selector,
+            );
+            if !self.retain_frame_during_navigation {
+                self.scrollbar.refresh_at = std::time::Instant::now();
+                self.frames.demand();
+            }
+            result.map_err(|error| BrowserControlFailure::new("input_failed", error))?;
+            return Ok(BrowserControlValue::Accepted);
+        }
         self.perform_click(x, y, count, event_tx)
             .map_err(|error| BrowserControlFailure::new("input_failed", error))?;
         Ok(BrowserControlValue::Accepted)
@@ -428,13 +481,14 @@ mod tests {
 
     use super::super::super::http::HttpError;
     use super::super::super::transport::ClassicTransport;
-    use super::{element_reference, send_keys_through};
+    use super::{click_through, element_reference, send_keys_through};
 
     /// Answers each command with the next scripted reply and records what
     /// was sent.
     struct Scripted {
         replies: Mutex<Vec<Result<Value, String>>>,
         sent: Mutex<Vec<(String, String, Value)>>,
+        timeouts: Mutex<Vec<Duration>>,
     }
 
     impl Scripted {
@@ -442,7 +496,12 @@ mod tests {
             Self {
                 replies: Mutex::new(replies.into_iter().rev().collect()),
                 sent: Mutex::new(Vec::new()),
+                timeouts: Mutex::new(Vec::new()),
             }
+        }
+
+        fn timeouts(&self) -> Vec<Duration> {
+            self.timeouts.lock().expect("timeouts").clone()
         }
 
         fn sent(&self) -> Vec<(String, String, Value)> {
@@ -456,8 +515,9 @@ mod tests {
             method: &str,
             path: &str,
             body: Option<&Value>,
-            _read_timeout: Duration,
+            read_timeout: Duration,
         ) -> Result<Value, HttpError> {
+            self.timeouts.lock().expect("timeouts").push(read_timeout);
             self.sent.lock().expect("sent").push((
                 method.to_string(),
                 path.to_string(),
@@ -499,6 +559,48 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[test]
+    fn a_click_finds_the_element_and_clicks_it_through_the_driver() {
+        let transport = Scripted::new(vec![
+            Ok(json!({"value": {"element-6066-11e4-a52e-4f735466cecf": "node 7"}})),
+            Ok(json!({"value": null})),
+        ]);
+        click_through(&transport, "/session/s1", "#submit").expect("click");
+        assert_eq!(
+            transport.sent(),
+            vec![
+                (
+                    "POST".to_string(),
+                    "/session/s1/element".to_string(),
+                    json!({"using": "css selector", "value": "#submit"})
+                ),
+                (
+                    "POST".to_string(),
+                    "/session/s1/element/node%207/click".to_string(),
+                    json!({})
+                ),
+            ]
+        );
+        assert_eq!(
+            transport.timeouts(),
+            vec![
+                super::super::super::transport::DEFAULT_READ_TIMEOUT,
+                super::super::NAVIGATION_HTTP_TIMEOUT
+            ],
+            "the click waits as long as a navigation may take"
+        );
+
+        let transport = Scripted::new(vec![Err("no such element".into())]);
+        let error = click_through(&transport, "/session/s1", "#missing").expect_err("not found");
+        assert!(error.contains("no such element"), "{error}");
+        assert_eq!(transport.sent().len(), 1, "nothing follows a failed Find Element");
+
+        let transport = Scripted::new(vec![Ok(json!({"value": {"ELEMENT": "a/b"}}))]);
+        let error = click_through(&transport, "/session/s1", "#x").expect_err("unroutable");
+        assert!(error.contains("cannot form a route"), "{error}");
+        assert_eq!(transport.sent().len(), 1);
     }
 
     #[test]
