@@ -119,6 +119,9 @@ fn outcome_picker(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: boo
         return false;
     };
     let mut clicked = false;
+    if teach.use_title_outcome() && teach.completion_heading().is_empty() && !title.is_empty() {
+        teach.set_completion_heading(&title);
+    }
     ui.horizontal(|ui| {
         let mut use_title = teach.use_title_outcome();
         if ui

@@ -590,7 +590,7 @@ impl BrowserPanelState {
             self.resume_teach();
             return Ok(());
         }
-        let teach = TeachMode::start(name)?;
+        let teach = TeachMode::start(name, self.backend())?;
         self.frame_slot.set_teach_recording(true);
         self.teach = Some(teach);
         Ok(())

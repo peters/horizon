@@ -35,7 +35,12 @@ fn captured_clicks_are_previewed_and_failed_observations_do_not_record() {
         permissions.set_mode(0o700);
         std::fs::set_permissions(temp.path(), permissions).expect("chmod");
     }
-    let mut teach = TeachMode::start_in(temp.path().join("routines"), "monthly").expect("start");
+    let mut teach = TeachMode::start_in(
+        temp.path().join("routines"),
+        "monthly",
+        horizon_browser::BackendKind::ChromiumCdp,
+    )
+    .expect("start");
     teach.ingest(TeachObservation::Captured(fingerprint()));
     assert_eq!(teach.action_previews(), vec!["click Generate report".to_string()]);
     teach.ingest(TeachObservation::Failed {
@@ -60,7 +65,12 @@ fn focused_text_fingerprints_are_not_recorded_as_clicks() {
         permissions.set_mode(0o700);
         std::fs::set_permissions(temp.path(), permissions).expect("chmod");
     }
-    let mut teach = TeachMode::start_in(temp.path().join("routines"), "monthly").expect("start");
+    let mut teach = TeachMode::start_in(
+        temp.path().join("routines"),
+        "monthly",
+        horizon_browser::BackendKind::ChromiumCdp,
+    )
+    .expect("start");
     let mut focused = fingerprint();
     focused.candidates[0].identity = TeachTargetCandidate::RoleName {
         role: "textbox".to_string(),
@@ -81,14 +91,16 @@ fn stopped_session_compiles_and_saves_after_review() {
         permissions.set_mode(0o700);
         std::fs::set_permissions(temp.path(), permissions).expect("chmod");
     }
-    let mut teach = TeachMode::start_in(temp.path().join("routines"), "monthly").expect("start");
+    let mut teach = TeachMode::start_in(
+        temp.path().join("routines"),
+        "monthly",
+        horizon_browser::BackendKind::ChromiumCdp,
+    )
+    .expect("start");
     teach.ingest(TeachObservation::Captured(fingerprint()));
     teach.stop();
     teach.set_completion_heading("Report ready");
-    assert_eq!(
-        teach.save_reviewed(horizon_browser::BackendKind::ChromiumCdp, "ignored"),
-        Err(RoutineError::InvalidRecording)
-    );
+    assert_eq!(teach.save_reviewed("ignored"), Err(RoutineError::InvalidRecording));
     teach.set_identities_reviewed(true);
     let rows = teach.compile_review("ignored").expect("compile");
     assert_eq!(rows.len(), 1);
@@ -96,7 +108,7 @@ fn stopped_session_compiles_and_saves_after_review() {
     assert_eq!(rows[0].mutation, "Mutating");
     let compiled = teach.compile_plan("ignored").expect("plan");
     let definition = teach
-        .build_reviewed_definition(horizon_browser::BackendKind::ChromiumCdp, "ignored", compiled)
+        .build_reviewed_definition("ignored", compiled)
         .expect("definition");
     definition.validate().expect("valid");
     let encoded = serde_json::to_vec(&definition).expect("encode");

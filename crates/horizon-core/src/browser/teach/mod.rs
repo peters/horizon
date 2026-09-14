@@ -28,6 +28,7 @@ pub struct TeachMode {
     completion_heading: String,
     use_title_outcome: bool,
     identities_reviewed: bool,
+    backend: BackendKind,
 }
 
 /// One compiled step shown in the Teach reviewer.
@@ -45,12 +46,18 @@ impl TeachMode {
     ///
     /// # Errors
     /// Private registry storage failure.
-    pub fn start(name: impl Into<String>) -> Result<Self, RoutineError> {
+    pub fn start(name: impl Into<String>, backend: BackendKind) -> Result<Self, RoutineError> {
+        if backend == BackendKind::SafariWebDriver {
+            return Err(RoutineError::InvalidRecording);
+        }
         let root = HorizonHome::resolve().root().join("browser-routines");
-        Self::start_in(root, &name.into())
+        Self::start_in(root, &name.into(), backend)
     }
 
-    fn start_in(root: PathBuf, name: &str) -> Result<Self, RoutineError> {
+    fn start_in(root: PathBuf, name: &str, backend: BackendKind) -> Result<Self, RoutineError> {
+        if backend == BackendKind::SafariWebDriver {
+            return Err(RoutineError::InvalidRecording);
+        }
         let name = bounded_name(name);
         Ok(Self {
             session: TeachSession::start(),
@@ -63,6 +70,7 @@ impl TeachMode {
             completion_heading: String::new(),
             use_title_outcome: true,
             identities_reviewed: false,
+            backend,
         })
     }
 
@@ -169,7 +177,7 @@ impl TeachMode {
     ///
     /// # Errors
     /// Compiler or registry validation failure.
-    pub fn save_reviewed(&mut self, backend: BackendKind, page_title: &str) -> Result<(), RoutineError> {
+    pub fn save_reviewed(&mut self, page_title: &str) -> Result<(), RoutineError> {
         if !self.session.is_stopped() {
             return Err(RoutineError::TeachInactive);
         }
@@ -184,14 +192,17 @@ impl TeachMode {
                 return Err(error);
             }
         };
-        if self.identities_reviewed {
-            for step in &mut compiled.steps {
-                if let Some(target) = &mut step.target {
-                    mark_fingerprint_reviewed(target);
-                }
+        for step in &mut compiled.steps {
+            let Some(target) = step.target.as_mut() else {
+                continue;
+            };
+            if target.selected.is_none() {
+                self.last_error = Some("target has no selected identity".to_string());
+                return Err(RoutineError::UndurableTarget);
             }
+            mark_fingerprint_reviewed(target);
         }
-        let definition = match self.build_reviewed_definition(backend, page_title, compiled) {
+        let definition = match self.build_reviewed_definition(page_title, compiled) {
             Ok(definition) => definition,
             Err(error) => {
                 self.last_error = Some(error.to_string());
@@ -208,7 +219,6 @@ impl TeachMode {
 
     fn build_reviewed_definition(
         &self,
-        backend: BackendKind,
         page_title: &str,
         compiled: horizon_browser_routines::CompiledRoutine,
     ) -> Result<RoutineDefinition, RoutineError> {
@@ -252,7 +262,7 @@ impl TeachMode {
             schema_version: SCHEMA_VERSION,
             routine_id: self.routine_id,
             name: self.name.clone(),
-            backend_requirement: backend,
+            backend_requirement: self.backend,
             profile_id: self.routine_id,
             allowed_origins: unique_origins(self.session.recording()),
             credential_policy: CredentialPolicy {
@@ -343,12 +353,24 @@ impl TeachMode {
     }
 }
 
+const MAX_NAME_BYTES: usize = 128;
+
 fn bounded_name(name: &str) -> String {
     let trimmed = name.trim();
     if trimmed.is_empty() {
+        return "untitled".to_string();
+    }
+    let mut bounded = String::new();
+    for ch in trimmed.chars().filter(|ch| !ch.is_control()) {
+        if bounded.len() + ch.len_utf8() > MAX_NAME_BYTES {
+            break;
+        }
+        bounded.push(ch);
+    }
+    if bounded.is_empty() {
         "untitled".to_string()
     } else {
-        trimmed.chars().filter(|ch| !ch.is_control()).take(64).collect()
+        bounded
     }
 }
 

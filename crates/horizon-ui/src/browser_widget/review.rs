@@ -14,7 +14,6 @@ pub fn show(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: bool) -> 
         return false;
     }
     let title = browser.title.clone();
-    let backend = browser.backend();
     let mut clicked = false;
     ui.separator();
     ui.label(RichText::new("Review plan").size(12.0).strong());
@@ -23,23 +22,28 @@ pub fn show(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: bool) -> 
             ui.label(RichText::new("No compiled steps").size(11.0).color(theme::FG_DIM()));
         }
         Some(Ok(rows)) => {
-            for row in rows {
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(format!(
-                            "{action} {target}\n{mutation} · {resume} · {mcp}",
-                            action = row.action,
-                            target = row.target,
-                            mutation = row.mutation,
-                            resume = row.resume,
-                            mcp = row.mcp
-                        ))
-                        .size(11.0)
-                        .color(theme::FG_SOFT()),
-                    )
-                    .wrap_mode(TextWrapMode::Wrap),
-                );
-            }
+            egui::ScrollArea::vertical()
+                .max_height(120.0)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    for row in rows {
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(format!(
+                                    "{action} {target}\n{mutation} · {resume} · {mcp}",
+                                    action = row.action,
+                                    target = row.target,
+                                    mutation = row.mutation,
+                                    resume = row.resume,
+                                    mcp = row.mcp
+                                ))
+                                .size(11.0)
+                                .color(theme::FG_SOFT()),
+                            )
+                            .wrap_mode(TextWrapMode::Wrap),
+                        );
+                    }
+                });
         }
         Some(Err(error)) => {
             ui.label(RichText::new(error.to_string()).size(10.5).color(theme::PALETTE_RED()));
@@ -64,7 +68,7 @@ pub fn show(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: bool) -> 
             .clicked()
         {
             if let Some(teach) = browser.teach_mut()
-                && let Err(error) = teach.save_reviewed(backend, &title)
+                && let Err(error) = teach.save_reviewed(&title)
             {
                 tracing::warn!(target: "browser", "teach save failed: {error}");
             }
