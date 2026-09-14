@@ -62,7 +62,10 @@ pub(super) fn input(limit: u64) -> Result<String, Error> {
 }
 
 pub fn run() -> Result<Value, Error> {
-    let mut args = std::env::args_os().skip(1);
+    run_with_args(std::env::args_os().skip(1))
+}
+
+fn run_with_args(mut args: impl Iterator<Item = std::ffi::OsString>) -> Result<Value, Error> {
     let operation = args.next().ok_or(Error::Usage)?;
     let root = PathBuf::from(args.next().ok_or(Error::Usage)?);
     let selected_panel = args.next();

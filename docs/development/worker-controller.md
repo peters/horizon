@@ -35,8 +35,10 @@ mapping-entry default. The agent selects the requested environment, declared
 default or sole entry. Multiple selected environments use independent task
 receipts; service dependencies running together require separate orchestration.
 
-Read the file from the exact Git commit, locally or through GitHub. Keep the
-selected environment and manifest provenance with the task request. Subscription,
+Read the file from the exact Git commit, locally or through GitHub. Record the
+manifest path and commit, selected environment and resolved values in separate
+private handoff evidence. Do not add provenance fields to the create JSON; the
+controller receipt stores the resolved execution intent. Subscription,
 region, profile, cost authority and credentials stay in user settings. Repository
 commands remain subject to task authorization; parsing does not execute them.
 

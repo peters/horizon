@@ -2,6 +2,79 @@ use super::{Error, storage};
 use std::{fs, os::unix::fs::PermissionsExt};
 
 #[test]
+fn invalid_command_arguments_never_reach_storage_or_dispatch() {
+    let directory = tempfile::tempdir().unwrap();
+    let missing = directory.path().join("never-created");
+    let path = missing.to_str().unwrap();
+    for arguments in [
+        vec![],
+        vec!["create"],
+        vec!["unknown", path],
+        vec!["create", path, "panel"],
+        vec!["manifest", path, "panel"],
+        vec!["delete", path, "panel"],
+        vec!["check", path, "panel"],
+        vec!["status", path, "panel", "extra"],
+    ] {
+        let result = super::run_with_args(arguments.into_iter().map(Into::into));
+        assert!(matches!(result, Err(Error::Usage)));
+        assert!(!missing.exists());
+    }
+    for operation in ["start", "status", "snapshot"] {
+        let result = super::run_with_args([operation, path, "panel"].into_iter().map(Into::into));
+        assert!(matches!(result, Err(Error::Storage)));
+        assert!(!missing.exists());
+    }
+}
+
+#[test]
+fn failed_creation_retains_identity_and_prevents_a_second_creation() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("task");
+    let socket = directory.path().join("missing.sock");
+    let expiry = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis()
+        + 300_000;
+    let request = serde_json::json!({
+        "config": {"local_docker": [{"name": "fixture", "docker_host": format!("unix://{}", socket.display())}]},
+        "target": {"provider": "local_docker", "profile": "fixture",
+            "image": format!("registry.example/worker@sha256:{}", "a".repeat(64)),
+            "disk_gib": 20, "lifetime": "persistent"},
+        "repository": {"repository": "fixture/repository", "commit": "a".repeat(40), "branch": "test/fixture"},
+        "command": {"program": "/bin/false", "args": []}, "working_directory": ".",
+        "setup_expires_at_millis": expiry, "issue": "fixture"
+    });
+    let intent = || serde_json::from_value(request.clone()).unwrap();
+    assert!(matches!(
+        super::operations::create(&root, intent()),
+        Err(Error::Remote(_))
+    ));
+    let receipt = fs::read(root.join("receipt.json")).unwrap();
+    let claim = fs::read(root.join("create.claimed")).unwrap();
+    let context = storage::Context::open(&root).unwrap();
+    let identity = (context.receipt.session.clone(), context.receipt.workspace.clone());
+    // The original failed allocation is inspectable; observations never retry create.
+    let _ = super::operations::check(&context);
+    assert_eq!(fs::read(root.join("receipt.json")).unwrap(), receipt);
+    assert_eq!(fs::read(root.join("create.claimed")).unwrap(), claim);
+    drop(context);
+    assert!(matches!(
+        super::operations::create(&root, intent()),
+        Err(Error::Storage)
+    ));
+    assert_eq!(fs::read(root.join("receipt.json")).unwrap(), receipt);
+    let reopened = storage::Context::open(&root).unwrap();
+    assert_eq!(
+        (reopened.receipt.session.clone(), reopened.receipt.workspace.clone()),
+        identity
+    );
+    assert!(!root.join("git.claimed").exists());
+    assert!(!socket.exists());
+}
+
+#[test]
 fn durable_claim_is_never_overwritten_after_an_uncertain_dispatch() {
     let root = tempfile::tempdir().unwrap();
     let claim = root.path().join("start.claimed");
