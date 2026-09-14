@@ -145,6 +145,10 @@ back into large multi-purpose modules.
   panels, exact runtime generation, and repository checkpoint metadata.
   Its validation is pure: provider I/O, runtime-state migration, coordination,
   repository transfer, and UI integration belong in later focused modules.
+- `remote_workspace/panels.rs` prepares and confirms independent saved Shell
+  intent against the actual owning client session and allocation snapshot.
+  Confirmation appends one panel through the existing store CAS; provider calls,
+  task Start and view Reopen remain separate explicit operations.
 - `remote_provider_config.rs` owns explicit non-secret provider profiles, empty
   defaults, exact lookup and redacted validation. The main configuration delegates
   to it; local profile construction shares target-name and local-endpoint rules.
