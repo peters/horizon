@@ -281,15 +281,16 @@ mod tests {
         assert!(registry.list().expect("list").is_empty());
     }
 
+    #[cfg(unix)]
     fn privatize_temp(path: &std::path::Path) {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            let mut permissions = std::fs::metadata(path).expect("meta").permissions();
-            permissions.set_mode(0o700);
-            std::fs::set_permissions(path, permissions).expect("chmod");
-        }
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut permissions = std::fs::metadata(path).expect("meta").permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(path, permissions).expect("chmod");
     }
+
+    #[cfg(not(unix))]
+    fn privatize_temp(_path: &std::path::Path) {}
 
     #[test]
     fn lock_only_directories_are_not_listed() {
