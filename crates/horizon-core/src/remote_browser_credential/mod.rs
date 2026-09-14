@@ -249,10 +249,8 @@ pub fn resolve_authorization(
             }
             let password = fetch(profile, stores, password_ref)?;
             let joined = Zeroizing::new(format!("{}:{}", username.as_str(), password.as_str()));
-            Zeroizing::new(format!(
-                "Basic {}",
-                base64::engine::general_purpose::STANDARD.encode(joined.as_bytes())
-            ))
+            let encoded = Zeroizing::new(base64::engine::general_purpose::STANDARD.encode(joined.as_bytes()));
+            Zeroizing::new(format!("Basic {}", encoded.as_str()))
         }
         RemoteAuthentication::Bearer { token_ref } => {
             let token = fetch(profile, stores, token_ref)?;

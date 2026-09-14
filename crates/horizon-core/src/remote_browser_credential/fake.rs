@@ -2,14 +2,17 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use horizon_browser::remote::CredentialStoreKind;
+use zeroize::Zeroizing;
 
 use super::{CredentialLocator, RemoteCredentialError, RemoteCredentialStore, Sealed, SecretSink, validate_secret};
 
 /// In-memory stand-in for the OS credential store, for tests and UI previews.
-/// It can be locked to exercise the locked-store paths without a platform.
+/// It can be locked to exercise the locked-store paths without a platform, and
+/// its values are zeroized like the session store's because a preview can
+/// receive real entered values.
 #[derive(Default)]
 pub struct FakeCredentialStore {
-    entries: BTreeMap<CredentialLocator, Vec<u8>>,
+    entries: BTreeMap<CredentialLocator, Zeroizing<Vec<u8>>>,
     locked: bool,
 }
 
@@ -46,7 +49,7 @@ impl RemoteCredentialStore for FakeCredentialStore {
     fn put(&mut self, locator: &CredentialLocator, secret: &[u8]) -> Result<(), RemoteCredentialError> {
         self.guard()?;
         validate_secret(secret)?;
-        self.entries.insert(locator.clone(), secret.to_vec());
+        self.entries.insert(locator.clone(), Zeroizing::new(secret.to_vec()));
         Ok(())
     }
 
