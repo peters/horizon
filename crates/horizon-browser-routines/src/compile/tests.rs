@@ -361,6 +361,25 @@ fn overflowed_scroll_coalescing_is_rejected() {
 }
 
 #[test]
+fn oversized_literal_navigation_is_rejected() {
+    let mut navigate = action("go", RecordedKind::Navigate, None);
+    navigate.navigation = Some(NavigationTemplate {
+        origin: origin(),
+        path: vec![PathSegment {
+            source: ValueSource::Literal {
+                value: "a".repeat(9 * 1024),
+            },
+        }],
+        query: Vec::new(),
+        fragment: None,
+    });
+    assert_eq!(
+        compile(&recording(vec![navigate]), heading()),
+        Err(RoutineError::InvalidNavigation)
+    );
+}
+
+#[test]
 fn variable_named_panel_id_is_reserved() {
     let mut fill = action("month", RecordedKind::Fill, Some(unique_id("month", 1)));
     fill.value_source = Some(ValueSource::Variable {

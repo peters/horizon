@@ -13,6 +13,8 @@ use crate::recording::{
 use crate::value::ValueSource;
 
 const PANEL_VAR: &str = "panel_id";
+/// Matches `horizon-browser-protocol` `control.rs` navigation bound.
+const MAX_NAVIGATION_BYTES: usize = 8 * 1024;
 
 /// How an interrupted step may resume. Mutating steps never replay blindly.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -374,7 +376,11 @@ fn literal_navigation_url(template: &NavigationTemplate) -> Result<Option<String
     {
         url.set_fragment(Some(value));
     }
-    Ok(Some(url.into()))
+    let encoded: String = url.into();
+    if encoded.len() > MAX_NAVIGATION_BYTES {
+        return Err(RoutineError::InvalidNavigation);
+    }
+    Ok(Some(encoded))
 }
 
 #[cfg(test)]
