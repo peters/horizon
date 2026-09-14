@@ -20,6 +20,7 @@ import base64
 import dataclasses
 import datetime as _dt
 import hashlib
+import http.client
 import json
 import netrc
 import os
@@ -88,14 +89,17 @@ class Transport:
             headers["Content-Type"] = "application/json; charset=utf-8"
         req = urllib.request.Request(url, data=data, method=method, headers=headers)
         started = time.monotonic()
+        # Any failure before a complete response body is a no-status result: the
+        # caller cannot know whether the server acted, so it must not assume failure.
         try:
-            with self.opener.open(req, timeout=timeout) as resp:
-                raw = resp.read(MAX_RESPONSE_BYTES + 1)
-                status = resp.status
-        except urllib.error.HTTPError as err:
-            raw = err.read(MAX_RESPONSE_BYTES + 1)
-            status = err.code
-        except (urllib.error.URLError, TimeoutError, OSError) as err:
+            try:
+                with self.opener.open(req, timeout=timeout) as resp:
+                    raw = resp.read(MAX_RESPONSE_BYTES + 1)
+                    status = resp.status
+            except urllib.error.HTTPError as err:
+                raw = err.read(MAX_RESPONSE_BYTES + 1)
+                status = err.code
+        except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError) as err:
             return {"status": None, "error": type(err).__name__, "detail": str(err)[:200],
                     "elapsed_ms": _ms(started)}
         if len(raw) > MAX_RESPONSE_BYTES:
@@ -214,21 +218,16 @@ class Spike:
         }
         started = time.monotonic()
         response = self.t.request(f"{self.t.hub}/session", "POST", caps, ALLOCATION_TIMEOUT_SECONDS)
-        error = self.is_error(response)
-        if error in ("TimeoutError", "timeout", "URLError"):
+        outcome, error = classify_new_session(response)
+        if outcome == "unknown":
             self.record("new_session", started, "unknown", error=error, note="allocation-unknown; not retried")
             return False
-        if error:
-            value = self.value(response)
-            message = value.get("message", "")[:200] if isinstance(value, dict) else ""
-            self.record("new_session", started, "failed", error=error, message=message)
+        if outcome == "failed":
+            self.record("new_session", started, "failed", error=error, message=_message(self.value(response)))
             return False
         value = self.value(response) or {}
-        self.session_id = value.get("sessionId")
+        self.session_id = value["sessionId"]
         caps_out = value.get("capabilities") or {}
-        if not self.session_id:
-            self.record("new_session", started, "failed", error="missing_session_id")
-            return False
         self.record("new_session", started, "passed", session_digest=_digest(self.session_id),
                     negotiated={k: caps_out.get(k) for k in ("browserName", "browserVersion", "platformName")},
                     extension_keys=sorted(k for k in caps_out if ":" in k))
@@ -458,7 +457,7 @@ class Spike:
         started = time.monotonic()
         response = self.t.request(self._session_url("").rstrip("/"), "DELETE", None, RELEASE_TIMEOUT_SECONDS)
         error = self.is_error(response)
-        if error in ("TimeoutError", "timeout", "URLError"):
+        if response.get("status") is None:
             self.record("release", started, "unknown", error=error, note="release-unknown; provider cleanup unverified")
             return
         if error:
@@ -506,6 +505,26 @@ class Spike:
             json.dump(report, handle, indent=1)
         print(f"report: {path}", flush=True)
         return report
+
+
+def classify_new_session(response: Dict[str, Any]) -> "tuple[str, Optional[str]]":
+    """Allocation is ambiguous whenever there is no trustworthy result.
+
+    Only a complete HTTP response that carries a WebDriver error is a failure. A
+    transport failure (any exception, including resets and truncated bodies) or an
+    HTTP 200 without a usable session id may still have allocated a billable device,
+    so both are `unknown` and never retried.
+    """
+    if response.get("status") is None:
+        return "unknown", response.get("error") or "no_response"
+    body = response.get("body") or {}
+    value = body.get("value") if isinstance(body, dict) else None
+    if response.get("status") != 200:
+        code = value.get("error") if isinstance(value, dict) else None
+        return "failed", code or f"http_{response.get('status')}"
+    if not isinstance(value, dict) or not isinstance(value.get("sessionId"), str) or not value["sessionId"]:
+        return "unknown", "unusable_success_response"
+    return "passed", None
 
 
 def version_matches(requested: str, actual: str) -> bool:

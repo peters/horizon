@@ -84,6 +84,33 @@ class TransportPolicyTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             transport.request("https://hub.example.net.evil.test/wd/hub/status", "GET", None, 1)
 
+    def test_truncated_response_body_is_a_no_status_result(self) -> None:
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", "500")
+                self.end_headers()
+                self.wfile.write(b'{"value": {"sessionId": "abc"')
+                self.wfile.flush()
+                self.close_connection = True
+
+            def log_message(self, *_args):  # noqa: D401
+                return
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            transport = spike.Transport("https://hub.example.net/wd/hub", "https://api.example.net", "Basic x")
+            transport.hub_origin = f"http://127.0.0.1:{server.server_address[1]}"
+            response = transport.request(f"{transport.hub_origin}/session", "POST", {}, 5)
+            self.assertIsNone(response.get("status"))
+            self.assertTrue(response.get("error"))
+            self.assertEqual(spike.classify_new_session(response), ("unknown", response["error"]))
+        finally:
+            server.shutdown()
+            server.server_close()
+
     def test_redirects_are_not_followed(self) -> None:
         received: list = []
 
@@ -129,6 +156,29 @@ class OutputDirectoryTest(unittest.TestCase):
 
 
 class OutcomeTest(unittest.TestCase):
+    def test_new_session_is_unknown_unless_the_result_is_trustworthy(self) -> None:
+        unknown = [
+            {"status": None, "error": "ConnectionResetError"},
+            {"status": None, "error": "RemoteDisconnected"},
+            {"status": None, "error": "SSLError"},
+            {"status": None, "error": "TimeoutError"},
+            {"status": 200, "body": {"value": {}}},
+            {"status": 200, "body": {"value": {"sessionId": ""}}},
+            {"status": 200, "body": {"malformed": "<html>"}},
+            {"status": 200, "body": {}},
+        ]
+        for response in unknown:
+            self.assertEqual(spike.classify_new_session(response)[0], "unknown", response)
+        self.assertEqual(
+            spike.classify_new_session({"status": 500, "body": {"value": {"error": "session not created"}}}),
+            ("failed", "session not created"),
+        )
+        self.assertEqual(spike.classify_new_session({"status": 502, "body": {}}), ("failed", "http_502"))
+        self.assertEqual(
+            spike.classify_new_session({"status": 200, "body": {"value": {"sessionId": "abc", "capabilities": {}}}}),
+            ("passed", None),
+        )
+
     def test_exit_code_counts_every_recorded_step(self) -> None:
         steps = [
             {"name": "provider_metadata_release_poll", "outcome": "unknown"},
