@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib
 import ipaddress
+import json
 import re
 from typing import Any, Dict, List, Optional
 
@@ -35,6 +36,17 @@ MANIFEST_FIELDS = ("subscription_id", "location", "run_id", "client_group", "cli
 # that no other run can reuse is what makes "the exact resource" meaningful.
 CLIENT_GROUP_PREFIX = "horizon-client-"
 WORKER_GROUP_RE = re.compile(r"^horizon-ws-([0-9a-f-]{36})-([0-9a-f-]{36})$")
+# A product run cannot know B's group before the product draws the workflow and job
+# identities at setup, after A was provisioned from this manifest. Until `bind-worker`
+# writes the product-created group in, `worker_group` is this literal: A may be rented
+# and B journaled, but nothing that acts on B may start.
+UNBOUND = "unbound"
+# The commands that act on B and therefore need the bound manifest.
+BOUND_COMMANDS = ("off", "install-observer-key", "remove-observer-key", "return", "verdict")
+WORKER_VM_NAME = "worker"
+# The observer-key removal has no manifest-relative reserve (like cleanup it may run
+# after the deadline), so it is bound to its own wall clock instead.
+REMOVE_BOUND_SECONDS = 35 * 60
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VM_SIZE_RE = re.compile(r"^Standard_[A-Za-z0-9_-]{2,40}$")
 # Plain components only: no `.` or `..`, so two spellings can never alias one file.
@@ -141,12 +153,15 @@ def validate_manifest(manifest: Dict[str, Any], now: Optional[_dt.datetime] = No
     if isinstance(manifest["client_group"], str) and isinstance(manifest["run_id"], str) \
             and manifest["client_group"] != f"{CLIENT_GROUP_PREFIX}{manifest['run_id']}":
         problems.append(f"client_group must be {CLIENT_GROUP_PREFIX}<run_id>: a name no other run can reuse")
-    text("worker_group", GROUP_RE, "a valid resource group name")
-    worker_group = WORKER_GROUP_RE.fullmatch(str(manifest["worker_group"]))
-    if not worker_group or not all(UUID_RE.fullmatch(part) for part in worker_group.groups()):
-        problems.append("worker_group must be the adapter's horizon-ws-<workflow>-<job> name")
-    if same_group(manifest["client_group"], manifest["worker_group"]):
-        problems.append("client and worker must live in different exact groups")
+    if is_bound(manifest):
+        text("worker_group", GROUP_RE, "a valid resource group name")
+        worker_group = WORKER_GROUP_RE.fullmatch(str(manifest["worker_group"]))
+        if not worker_group or not all(UUID_RE.fullmatch(part) for part in worker_group.groups()):
+            problems.append(f"worker_group must be the adapter's horizon-ws-<workflow>-<job> name, or {UNBOUND} before bind-worker")
+        if same_group(manifest["client_group"], manifest["worker_group"]):
+            problems.append("client and worker must live in different exact groups")
+    elif phase in BOUND_COMMANDS:
+        problems.append(f"worker_group is {UNBOUND}: run bind-worker once the product has created B, before {phase}")
     text("client_sha", SHA_RE, "a full commit SHA")
     text("client_binary_sha256", SHA256_RE, "a SHA-256 digest")
     text("worker_image", DIGEST_RE, "a complete registry/repository@sha256 digest reference")
@@ -175,6 +190,20 @@ def validate_manifest(manifest: Dict[str, Any], now: Optional[_dt.datetime] = No
     elif type(manifest["off_minutes"]) is int and manifest["off_minutes"] * 60 <= manifest["lease_seconds"]:  # noqa: E721
         problems.append("off_minutes must exceed lease_seconds so the interval crosses the lease boundary")
     return problems
+
+
+def is_bound(manifest: Dict[str, Any]) -> bool:
+    """Whether the manifest names B's group, or still carries the `unbound` literal."""
+    return manifest.get("worker_group") != UNBOUND
+
+
+def manifest_digest(manifest: Dict[str, Any], bound: bool = False) -> str:
+    """SHA-256 of the manifest in canonical JSON. The unbound digest (the default) is
+    taken over the manifest with `worker_group` reset to `unbound`, so the value
+    provisioning records and the value `bind-worker` checks agree whether or not the
+    binding happened in between; the bound digest names the exact bound file."""
+    canonical = dict(manifest) if bound else dict(manifest, worker_group=UNBOUND)
+    return hashlib.sha256(json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def image_ref_digest(image: str) -> str:

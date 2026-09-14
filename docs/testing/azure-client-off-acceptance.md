@@ -13,7 +13,7 @@ PC, existing Horizon processes or existing workspaces.
 | Role | What it is | Owner of its paths |
 | --- | --- | --- |
 | Client A | Disposable Ubuntu VM in its own exact resource group, running the exact Horizon Linux client (built from `client_sha`) under a virtual display, with an isolated persistent client home on its OS disk (retained across deallocation) | Azure lane |
-| Worker B | Separate persistent Azure CPU worker in its own exact group, created on A through the product setup path and prepared through Prepare Repository; its Stop, saved-Stop check and compute Start are product operations; the saved-Shell task start and panel reconnect are gated for Azure until their slices land | Azure lane (product Azure paths and adapter) |
+| Worker B | Separate persistent Azure CPU worker in its own exact group, created on A through the product setup path and prepared through Prepare Repository; its Stop, saved-Stop check, compute Start, saved-Shell task start, panel reconnect and status check are product operations | Azure lane (product Azure paths and adapter) |
 | Observer C | The controller's read-only role, outside A and B: the harness's ARM reads and one pinned SSH session per sample with a key that sshd restricts (`restrict,command=`) to a forced reader of the progress and checkpoint files. C is a logical role, not a separate credential: the harness holds one `Az` client over the operator's ambient `az` login, so C's ARM reads use that login; only C's SSH channel is a distinct, restricted identity | Azure lane |
 | Operator | The operator's own Azure CLI login on the same controller, the only credential that changes anything from outside A: it provisions and later deallocates and restarts A (`provision-client.sh`, `off`, `return`), journals and reaper-tags B's product-created resources, deletes the run's groups (`cleanup`) and removes A's role assignments and custom role | Azure lane |
 
@@ -46,7 +46,7 @@ the declared cleanup deadline.
   "client_vm_size": "Standard_B2s",
   "client_sha": "<40-hex commit the client binary was built from>",
   "client_binary_sha256": "<digest of that binary, from record-client-build.sh>",
-  "worker_group": "horizon-ws-<workflow>-<job>",
+  "worker_group": "unbound",
   "worker_image": "<registry>/horizon-remote-worker-shell@sha256:<the complete Shell image digest named under Labelling>",
   "hourly_cost_micros": 41000,
   "budget_micros": 2000000,
@@ -58,38 +58,38 @@ the declared cleanup deadline.
 
 `worker_group` is the one field a product pass cannot freeze before renting: the
 product draws B's workflow and job identities when setup is submitted on A (step 3),
-after A has been provisioned from this manifest, and `validate` (which
-`provision-client.sh` runs before renting A) refuses any `worker_group` that is not
-the adapter's `horizon-ws-<workflow>-<job>` with two exact UUIDs. The harness has no
-post-setup binding step yet, so **the product pass is gated on a harness change in
-this lane**, claimed on #474 before it is written, with two explicit manifest
-states, neither of which the current harness implements (today `validate`, which
-`provision-client.sh` runs before renting A, accepts only the adapter-form
-`worker_group`, so an `unbound` manifest cannot be provisioned yet and the
-product path cannot reach the binding step until the change lands). *Unbound*
-(future): `worker_group` is the literal `unbound`; `validate` accepts it,
-`provision-client.sh` (which needs only A's fields)
-runs, and every command or phase that acts on B (`install-observer-key`, `off`,
-`return`, `verdict`, `remove-observer-key`) refuses to start, because
-`client_off.py` validates the manifest before dispatching any of them. Two
-commands accept the unbound state so that a crash between the product's create
-and the binding never strands a paid resource: `journal-group`, so B can be
-journaled as soon as it exists, and `cleanup` in an unbound mode that deletes
-only groups present in `created-groups.json` with a journaled identity absent
-from the pre-run list (it never derives a name from the manifest), so step 10
-stays runnable after a crash before `bind-worker`; the harness change ships a
-crash-before-bind test for exactly that sequence. *Bound*: a `bind-worker` command, run once
-by the operator after step 3, reads the product-created group, checks that it
-carries the adapter's `horizon-workflow-id` and `horizon-job-id` tags from which
-its `horizon-ws-<workflow>-<job>` name derives and that it is absent from the
-pre-run group list, journals it in `created-groups.json` in the same step, and
-writes the name into `worker_group`; from then on `validate` requires the adapter
-name and that every other field is unchanged since provisioning (it records a
-digest of the unbound manifest at provisioning for that comparison). A manifest
-edited by hand in either direction is not a runnable product path and is not used.
-The other fields are frozen before anything is rented.
+after A has been provisioned from this manifest. `validate` (which
+`provision-client.sh` runs before renting A) therefore accepts exactly two values for
+it, the literal `unbound` and the adapter's `horizon-ws-<workflow>-<job>` with two
+exact UUIDs, and the manifest has two matching states. The example above is frozen in
+the first one. *Unbound*: `worker_group` is the literal `unbound`; `validate`
+accepts it, `provision-client.sh` (which needs only A's fields) runs and records the
+digest of the unbound manifest in the descriptor as `manifest_sha256`, and every
+command that acts on B (`install-observer-key`, `off`, `return`, `verdict`,
+`remove-observer-key`) refuses to start, because `client_off.py` validates the
+manifest before dispatching any of them. Two commands accept the unbound state so
+that a crash between the product's create and the binding never strands a paid
+resource: `journal-group`, so B can be journaled as soon as it exists, and `cleanup`
+in an unbound mode that deletes only groups present in `created-groups.json` whose
+journaled adapter tags derive their own name and that are absent from the pre-run
+list (it never derives a name from the manifest), so step 10 stays runnable after a
+crash before `bind-worker`; the harness tests cover exactly that sequence. *Bound*:
+`bind-worker`, run once by the operator after step 3, reads the product-created
+group, requires the adapter's `horizon-workflow-id` and `horizon-job-id` tags from
+which its `horizon-ws-<workflow>-<job>` name derives, requires it to be absent from
+the pre-run group list, requires the descriptor's `manifest_sha256` to equal the
+unbound digest of the manifest being bound (nothing but `worker_group` may change
+between provisioning and binding), journals the group in `created-groups.json`
+before it writes anything to Azure (so a crash, a kill or a failing write can never
+leave a tagged worker that no record authorizes deleting), then puts B's VM under
+the deadline reaper and reads back both the reaper tags and the group's adapter
+identity, and only then writes the name into `worker_group` and prints the bound
+manifest's digest; from then on `validate`
+requires the adapter name. A manifest edited by hand in either direction is not a
+runnable product path and is not used. The other fields are frozen before anything
+is rented.
 
-With the current harness, which knows only the bound state, `client_off.py
+For the bound state, `client_off.py
 --manifest m.json validate` refuses to run anything until the
 manifest is complete: exact UUID, a fresh `run_id` with A's group named
 `horizon-client-<run_id>` and B's group the adapter's `horizon-ws-<workflow>-<job>`
@@ -134,14 +134,15 @@ during preparation).
 
 The product on A authenticates to Azure the same way the controller does: the
 subscription-pinned Azure CLI credential (`az account get-access-token --subscription
-<id>`), never a stored bearer token. `provision-client.sh` installs no Azure CLI and
-gives A no identity today, so before the product pass A needs, in this order:
+<id>`), never a stored bearer token. `provision-client.sh` installs the CLI and
+attaches the identity only when asked, and it never grants a role or logs in, so
+before the product pass A needs, in this order:
 
-1. The Azure CLI on A. `provision-client.sh` does not install it today: before the
-   product pass the script's cloud-init must be augmented with the `azure-cli` package
-   from Microsoft's repository (a harness change in this lane, no extension install);
-   a client provisioned by the current script has no CLI and the product cannot
-   authenticate on it.
+1. The Azure CLI on A. `provision-client.sh --with-azure-cli` installs the `azure-cli`
+   package from Microsoft's repository during cloud-init (no extension install, no
+   login); the readiness gate waits for cloud-init, so the install completes before A
+   counts as ready, and the descriptor records `azure_cli_installed`. A client
+   provisioned without the flag has no CLI and the product cannot authenticate on it.
 2. An identity A can log in non-interactively. The intended shape is a
    system-assigned managed identity on A with a custom role whose `Actions` are
    exactly the following operations, the ones the product paths under test send,
@@ -260,11 +261,12 @@ gives A no identity today, so before the product pass A needs, in this order:
    intended write is either recorded with its ID or verified absent. Ordering:
    a system-assigned identity exists only once A's VM exists, so step 2
    provisions A first (its launch gate needs no Azure identity and touches no
-   Azure resource; its `az vm create` attaches no identity), the operator then
-   gives A's exact VM its system-assigned identity, the one operator mutation of
-   A outside the harness phases: `az vm identity assign --subscription <id> --ids
-   <A's VM ID from client.json>` (a `--assign-identity` option for
-   `provision-client.sh` is a harness follow-up in this lane), verifies it with
+   Azure resource; with `--assign-identity` its `az vm create` attaches the
+   system-assigned identity and the descriptor records `system_assigned_identity`,
+   and without the flag the operator gives A's exact VM the identity afterwards, the
+   one operator mutation of A outside the harness phases: `az vm identity assign
+   --subscription <id> --ids <A's VM ID from client.json>`), the operator verifies
+   it with
    `az vm show --subscription <id> --ids <A's VM ID> --query identity.type -o
    tsv` printing `SystemAssigned`, and reads the principal with `az vm show
    --subscription <id> --ids <A's VM ID> --query identity.principalId -o tsv`,
@@ -316,21 +318,14 @@ gives A no identity today, so before the product pass A needs, in this order:
    field on A (stdin-only delivery to the worker) and is never written to A's disk or
    to any manifest, journal or receipt.
 
-Three product gates block the baseline and return steps below until they land
-(tracked on #474): two Azure provider paths still refused for Azure, the
-saved-Shell task start (`remote_worker_status/git_start/configured.rs` and the
-overview's saved panel Start admit Local Docker and RunPod only) and configured
-panel attachment (`remote_panel_attachment/configured.rs`, which every Reconnect
-uses), and the independent panel-addition control (tracked under #472) that the
-three-panel item needs; the harness binding change under the manifest is a
-fourth, harness-side gate. Steps marked
-**gated** below cannot be executed for an Azure worker today; a product run stops
-before the first gated step and collects no counter evidence until all four land
-(the two Azure provider paths, the independent panel addition and the harness
-binding). A
-third refused path, the provider status read (`remote_environment_observation/
-configured.rs`, the overview's **Check provider status**), is not used by this
-procedure and is tracked separately.
+One product gate blocks the baseline and return steps below until it lands: the
+independent panel-addition control (tracked under #472) that the three-panel item
+needs. The Azure provider paths this procedure drives are merged: the saved-Shell
+task start (#615), panel attachment for Reconnect (#610) and the provider status
+read (#613), each admitting Azure through the same admission as Stop and Start.
+The step marked **gated** below cannot be executed for an Azure worker today; a
+product run stops before it and collects no three-panel evidence until that
+control lands.
 
 The deterministic task this lane runs on B, for the pinned worker image: saved Shell
 panel with program `/bin/sh` and arguments (one JSON array, pasted verbatim into
@@ -378,7 +373,10 @@ back unchanged at return and after the worker lifecycle step.
    controller-loss cost stop below is the reaper.
 2. **Provision A**: `provision-client.sh --manifest m.json --ssh-private-key key
    --horizon-binary <binary from the record> --build-record client-build.json
-   --ssh-source-cidr <controller address>/32 --out client.json`. Diagnostics go to
+   --ssh-source-cidr <controller address>/32 --with-azure-cli --assign-identity
+   --out client.json`. The two flags are what a product pass needs: the Azure CLI in
+   cloud-init and the system-assigned identity on the exact VM, neither logged in nor
+   granted a role, which is the operator's step below. Diagnostics go to
    stderr and `client.json` is the exact-A descriptor the later phases take. A's Ed25519 host key is read through
    the control plane (run command inside the exact VM) before the first connection,
    and every SSH and SCP call uses the fresh client key explicitly with
@@ -480,13 +478,18 @@ back unchanged at return and after the worker lifecycle step.
      derived from the workflow and job identities the record carries from the
      moment the allocation is saved, before the deployment is sent, so it is known
      even when an accepted deployment followed by a lost observation leaves the
-     record without a worker identity yet. **gated** (harness binding): with the
-     current harness the manifest cannot be `unbound`, so this baseline cannot
-     reach `off` through the product path until the harness change described under
-     the manifest lands; then this step is `client_off.py --manifest m.json
-     bind-worker --group horizon-ws-<workflow>-<job> --groups-before groups.json
-     --created created-groups.json`, which checks the adapter tags and pre-run
-     absence, journals the group and writes `worker_group` in one step, and the
+     record without a worker identity yet. Once the deployment has produced the
+     worker VM (the product's Check reports it, or the reads below show it), bind it:
+     `client_off.py --manifest m.json bind-worker --group horizon-ws-<workflow>-<job>
+     --groups-before groups.json --created created-groups.json --client client.json`,
+     which checks the adapter tags, the pre-run absence and the descriptor's manifest
+     digest, journals the group before touching Azure, then tags B's VM for the reaper
+     and reads back both those tags and the group's adapter identity, and writes
+     `worker_group` last; before the VM exists it refuses and reports that
+     `journal-group` is still available. The order matters on the failure paths: a
+     crash after the journal leaves a deletable worker, and a refused read-back leaves
+     the group journaled and the manifest unbound, so the command can simply be run
+     again. The
      `journal-group` command below is its journaling half. The journal is
      append-only and `journal-group` refuses a group already present in it, so
      the two are alternatives, never a sequence: after `bind-worker` has run,
@@ -569,9 +572,10 @@ back unchanged at return and after the worker lifecycle step.
      journaled, so the group is never retagged. This is the cost stop if A, Horizon
      or the operator dies before step 10: the reaper deallocates B after the
      deadline (it never deletes, so the retained disk bills until step 10 or the
-     operator removes the group). Until the harness `bind-worker` step lands and
-     performs this tagging with the same read-back, it is a manual operator
-     requirement and the run does not proceed without the read-back recorded.
+     operator removes the group). `bind-worker` performs exactly this tagging with
+     the same read-back as part of the binding; the manual commands above are the
+     path for a run whose manifest was bound by hand, which is not a product pass,
+     and in every case the run does not proceed without the read-back recorded.
    - **Check this setup** until it reports the original setup as observed with a
      complete worker identity and the attested pin: the saved
      phase becomes `Reconciling` (setup recovery never writes `Ready`) and the record
@@ -629,15 +633,14 @@ back unchanged at return and after the worker lifecycle step.
      off the receipt);
      it is evidence of that preparation, not of present task readiness, which the
      later task start admits on its own.
-   - **gated** (Azure saved-Shell Start): **Show saved panels** → on the saved row
-     **Start saved Shell task…**, then the **Start saved Shell task** confirmation
-     starts the counter task defined above (optionally **Reopen view** first to open
-     its disconnected local view). Until the Azure task-start path lands, the counter
-     task for an Azure run cannot be started through the product, and the run stops
-     here.
-   - **gated** (Azure panel attachment): **Show session panels** is a local listing
-     of the board's panels and works today; **Reconnect** on one of them is the
-     attachment call and needs the Azure path.
+   - **Show saved panels** → on the saved row **Start saved Shell task…**, then the
+     **Start saved Shell task** confirmation starts the counter task defined above
+     (optionally **Reopen view** first to open its disconnected local view). The
+     confirmation is refused if the saved record moved to a Stop, Stopped or Start
+     phase since it was prepared, or if the profile binding drifted.
+   - **Show session panels** is a local listing of the board's panels; **Reconnect**
+     on one of them is the attachment call, which admits Azure under the saved
+     identity and pin and starts nothing.
    - **gated** (independent panel addition, a separate blocking product gate):
      configured setup seeds exactly one Shell intent and the overview has no control
      that adds a panel intent to an existing remote workspace. The three-panel item
@@ -648,7 +651,7 @@ back unchanged at return and after the worker lifecycle step.
      **Add independent Shell panel** control on a saved remote workspace, tracked
      under #472) lands before this run; its controls, and the three recorded panel
      identities, are written into this step when it does.
-   Only once all three product gates and the harness binding gate have landed, record worker, session and task identities, the
+   Only once the panel-addition control has landed, record worker, session and task identities, the
    starting counter and the dirty-marker hash. The task must advance its counter at
    least once per 15-second sample.
    Write `worker.json` for the observer: `vm_name`, `port`, `host_key` (the attested
@@ -745,9 +748,8 @@ back unchanged at return and after the worker lifecycle step.
    before anything else, and when the chooser does appear resume that recorded
    session from it; a different session is closed, never used. Then open **Environments**, select the same saved
    environment (same workspace, owning
-   session, generation and exact resource ID), then **Show session panels** and,
-   **gated** (Azure panel attachment), **Reconnect** to the same B and task
-   sessions: same worker identity, no additional create, no task replay, dirty bytes
+   session, generation and exact resource ID), then **Show session panels** and
+   **Reconnect** to the same B and task sessions: same worker identity, no additional create, no task replay, dirty bytes
    intact, no credential rotation. Before the worker lifecycle step, read the counter
    and the dirty marker once more over the pinned session on A described in step 7
    and record that counter value: the task keeps running after the journal's last
@@ -898,12 +900,11 @@ back unchanged at return and after the worker lifecycle step.
    `observer_key_path`; no default filename is assumed, and a key whose recorded
    path is unavailable is reported as a residual credential instead of guessed
    at), records that step 8 did not apply, and proceeds to
-   steps 9 and 10. Otherwise: `timeout 35m client_off.py --manifest m.json remove-observer-key
-   --worker worker.json --public-key observer.pub` (the phase bounds each CLI call
-   but, unlike `cleanup`, sets no whole-phase deadline, so the operator's GNU
-   `timeout` supplies the 35-minute bound the reserve assumes; a phase-level bound
-   in the harness is a follow-up in this lane; an expired bound leaves the removal
-   unproven and takes the key-destruction path below), once the return and the reconnect
+   steps 9 and 10. Otherwise: `client_off.py --manifest m.json remove-observer-key
+   --worker worker.json --public-key observer.pub` (the phase binds itself to a
+   35-minute wall clock, like cleanup's own bound, and hands every CLI call what is
+   left of it; an expired bound leaves the removal unproven and takes the
+   key-destruction path below), once the return and the reconnect
    check on A have reached any recorded terminal result (passed, failed within
    their bounds, or skipped and recorded as such) and before the run is reported
    finished; a failed or skipped return does not skip this step, since B may
@@ -1013,15 +1014,19 @@ back unchanged at return and after the worker lifecycle step.
 - A run whose B was created through the adapter's live driver instead of the
   product path is an **adapter-only rehearsal**. It exercises A, C, the off interval
   and the cleanup, and it is reported as such; it is never the #475 product pass.
-- Merged product paths as of 2026-09-13: configured setup and consent (#561),
+- Merged product paths as of 2026-09-14: configured setup and consent (#561),
   Prepare Repository (#567), Check saved Stop (#574), the first explicit Stop (#575),
-  and durable explicit Start with its configured Azure admission and overview control
-  (#576, #578, #584). Still refused for Azure and therefore open gates for this pass:
-  the saved-Shell task start and configured panel attachment (Reconnect); the
-  provider status read is also refused but not used by this procedure. Also open:
-  the Azure CLI and an approved, logged-in identity on A, the PAT for the disposable
-  repository, the independent panel-addition control for the second and third panel,
-  and the manifest's post-setup worker binding. The worker image for this run is the
+  durable explicit Start with its configured Azure admission and overview control
+  (#576, #578, #584), panel attachment for Reconnect (#610), the provider status read
+  (#613) and the saved-Shell task start (#615). Every product path this procedure
+  drives now admits Azure. Still open before the paid run: an approved, logged-in
+  identity on A, the PAT for the disposable repository, the independent
+  panel-addition control for the second and third panel, and a reaper tag that does
+  not depend on this controller surviving. `bind-worker` tags B's VM and reads the
+  tags back, which covers every run that reaches the binding; the open item is the
+  window before it, where a dead controller leaves an untagged worker, and it closes
+  when the worker deployment template carries the tags itself or a subscription
+  policy appends them (step 3). The worker image for this run is the
   lead's tested complete Shell image, exactly
   `horizonworkersa898ee.azurecr.io/horizon-remote-worker-shell@sha256:01c2ea1ed90ee3d3db7a557bfcc0138fc75248317639ce0adb031cd42d06239f`
   (source `290daba7000c4d02f8fbc9c843eea882a68bb6e5`); the older adapter image

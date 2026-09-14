@@ -62,7 +62,7 @@ nap() { # nap <seconds>: never sleep past the bound
   sleep "$(( left < $1 ? left : $1 ))"
 }
 
-manifest= private_key= binary= record= source_cidr= out=
+manifest= private_key= binary= record= source_cidr= out= assign_identity=false with_azure_cli=false
 while (($# > 0)); do
   case "$1" in
     --manifest) manifest=$2; shift 2 ;;
@@ -71,6 +71,13 @@ while (($# > 0)); do
     --build-record) record=$2; shift 2 ;;
     --ssh-source-cidr) source_cidr=$2; shift 2 ;;
     --out) out=$2; shift 2 ;;
+    # A system-assigned managed identity on the exact VM, for a product pass in which A
+    # authenticates to Azure itself. It carries no role until the operator assigns one
+    # after provisioning; this script grants nothing and logs nothing in.
+    --assign-identity) assign_identity=true; shift ;;
+    # Install the Azure CLI on A from Microsoft's package repository during cloud-init,
+    # so the product's subscription-pinned CLI credential can exist on A. No login here.
+    --with-azure-cli) with_azure_cli=true; shift ;;
     *) fail "unknown argument: $1" ;;
   esac
 done
@@ -123,7 +130,11 @@ command -v ssh-keygen >/dev/null 2>&1 || fail "required command not found: ssh-k
 # the pair check below is what reports it.
 derived=$( (timeout 15 ssh-keygen -y -P "" -f "$private_key" 2>/dev/null </dev/null || true) | awk '{print $1" "$2}')
 [ "$derived" = "$client_key" ] || fail "the .pub does not belong to the private key, or the key needs a passphrase (BatchMode cannot use it)"
-python3 -B "$(dirname "$0")/client_off.py" --manifest "$manifest" validate >/dev/null || fail "manifest is not runnable; fix it before renting"
+validation=$(python3 -B "$(dirname "$0")/client_off.py" --manifest "$manifest" validate) || fail "manifest is not runnable; fix it before renting"
+# The digest of the manifest as it is now (with its worker group unbound) goes into the
+# descriptor: bind-worker later refuses a manifest that changed in any other field.
+manifest_digest=$(jq -r .unbound_manifest_sha256 <<<"$validation")
+[[ "$manifest_digest" =~ ^[0-9a-f]{64}$ ]] || fail "the manifest digest could not be computed"
 
 sub=$(jq -r .subscription_id "$manifest"); location=$(jq -r .location "$manifest")
 group=$(jq -r .client_group "$manifest"); size=$(jq -r .client_vm_size "$manifest")
@@ -201,6 +212,22 @@ runcmd:
   - [ systemctl, enable, --now, horizon-display.service, horizon-wm.service ]
   - [ install, -d, -o, horizon, -g, horizon, -m, '0700', /home/horizon/.horizon-client-home, /home/horizon/horizon-client/$sha ]
 CLOUD
+if [ "$with_azure_cli" = true ]; then
+  # Microsoft's repository for the running Ubuntu release, keyed by the published
+  # signing key, and the package pinned to that repository. `curl`, `gnupg` and the CA
+  # bundle are installed first: the base image is not required to carry them, and
+  # cloud-init's own package_update has already refreshed the index. The readiness gate
+  # below waits for cloud-init, so the install finishes before A counts as ready.
+  # Nothing here logs in: the identity and its roles are the operator's separate step.
+  cat >>"$cloud_init" <<'CLOUD'
+  - [ apt-get, install, -y, curl, gnupg, ca-certificates ]
+  - [ install, -d, -m, '0755', /etc/apt/keyrings ]
+  - [ sh, -c, 'curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg' ]
+  - [ sh, -c, 'echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ $(. /etc/os-release && echo "$VERSION_CODENAME") main" > /etc/apt/sources.list.d/azure-cli.list' ]
+  - [ apt-get, update ]
+  - [ apt-get, install, -y, azure-cli ]
+CLOUD
+fi
 
 say "creating group $group in $location (deadline $deadline)"
 # A pending ownership record goes into the journal before the create is sent: it names
@@ -250,9 +277,11 @@ jq --argjson shown "$shown" --arg name "$group" \
   || fail "the creation journal could not be written; group $group exists (ID $(jq -r .id <<<"$shown")), its pending record stays for cleanup"
 mv "$journal.tmp" "$journal" || fail "the creation journal could not be replaced; group $group exists, its pending record stays for cleanup"
 say "creating client VM ($size), SSH admitted from $source_cidr only"
+identity_args=()
+[ "$assign_identity" = true ] && identity_args=(--assign-identity)
 create vm create -g "$group" -n client --subscription "$sub" --image Ubuntu2404 --size "$size" \
   --admin-username horizon --ssh-key-values "$client_key" --public-ip-sku Standard --nsg-rule NONE \
-  --os-disk-size-gb 32 --custom-data "$cloud_init" \
+  --os-disk-size-gb 32 --custom-data "$cloud_init" "${identity_args[@]}" \
   --tags issue=475 lane=azure-client-off purpose=horizon-azure-vm-spike "deadline=$deadline" client_sha="$sha" client_binary_sha256="$binary_sha" run_id="$run_id" >/dev/null || true
 # The create is an ambiguous mutation once sent: read the exact VM back with this run's
 # tags before going on, and fail (with the group journaled) only when it is not there.
@@ -373,8 +402,9 @@ exit 1
 GATE
 # The exact A: off and return attest this identity before any mutation.
 jq -n --arg group "$group" --arg group_id "$group_id" --arg vm_id "$vm_id" --arg instance "$instance_id" --arg run "$run_id" \
-  --arg host "$host" --arg sha "$sha" --arg digest "$binary_sha" --arg journal "$journal" \
-  '{client_group:$group, client_group_id:$group_id, client_vm_id:$vm_id, client_instance_id:$instance, run_id:$run, client_host:$host, client_sha:$sha, client_binary_sha256:$digest, client_home:"/home/horizon/.horizon-client-home", client_state_root:"/home/horizon/.horizon-client-home/.horizon", display:":99", created_journal:$journal}' \
+  --arg host "$host" --arg sha "$sha" --arg digest "$binary_sha" --arg journal "$journal" --arg manifest_digest "$manifest_digest" \
+  --argjson identity "$assign_identity" --argjson cli "$with_azure_cli" \
+  '{client_group:$group, client_group_id:$group_id, client_vm_id:$vm_id, client_instance_id:$instance, run_id:$run, client_host:$host, client_sha:$sha, client_binary_sha256:$digest, client_home:"/home/horizon/.horizon-client-home", client_state_root:"/home/horizon/.horizon-client-home/.horizon", display:":99", created_journal:$journal, manifest_sha256:$manifest_digest, system_assigned_identity:$identity, azure_cli_installed:$cli}' \
   >"$out.tmp" || fail "the client descriptor could not be written; the group is journaled for cleanup"
 mv -f "$out.tmp" "$out" || fail "the client descriptor could not be placed at $out; the group is journaled for cleanup"
 say "client descriptor written to $out"
