@@ -53,7 +53,9 @@ invalid CLI usage (argparse; usage text only, no report — for example
   docker `--host`, workspace path, XDG runtime dir, podman socket URL) are
   inserted/appended as single argv elements, never through a shell. Tests
   enforce those shapes.
-- Host-fact file reads are limited to `--procfs-root` / `--sysfs-root`. The
+- Host-fact file reads are limited to `--procfs-root` / `--sysfs-root`. A
+  killable helper may `os.path.exists` the two Podman socket candidates
+  (`$XDG_RUNTIME_DIR/podman/podman.sock`, `/run/podman/podman.sock`). The
   watchdog also reads `/proc/<pid>/task/<pid>/children` (and `/proc` PIDs)
   only to reap probe descendants on timeout or overflow.
 - The report contains only fixed fields. Any host-provided text that is

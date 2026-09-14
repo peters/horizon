@@ -149,6 +149,8 @@ class Harness(unittest.TestCase):
 
     def executor_for(self, fixture):
         seen = []
+        queues = {key: list(value) for key, value in fixture.items()
+                  if isinstance(value, list)}
 
         def executor(argv, timeout):
             seen.append(list(argv))
@@ -162,7 +164,12 @@ class Harness(unittest.TestCase):
                 if key == "podman_info" and list(argv[:len(args)]) == args and list(argv[len(args)+1:]) == list(preflight.PROBE_ARGS["podman_info_tail"]):
                     matches = True
                 if matches:
-                    entry = fixture.get(key)
+                    if key in queues:
+                        if not queues[key]:
+                            raise FileNotFoundError(argv[0])
+                        entry = queues[key].pop(0)
+                    else:
+                        entry = fixture.get(key)
                     if entry is None and key == "podman_socket":
                         return {"exit_code": 1, "stdout": "", "stderr": ""}
                     if entry is None and key == "workspace_dir":
@@ -735,6 +742,27 @@ class EngineFailures(Harness):
                 2.0)
         self.assertFalse(result.get("output_exceeded"))
         self.assertEqual(result.get("exit_code"), 0)
+
+    def test_stale_rootless_podman_socket_falls_through(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture.pop("docker_version")
+        fixture.pop("docker_info")
+        fixture.pop("docker_context", None)
+        fixture["podman_client"] = podman_client_ok()
+        fixture["podman_socket"] = {
+            "stdout": "/run/user/1000/podman/podman.sock\n/run/podman/podman.sock\n"}
+        fixture["podman_info"] = [{"stdout": "\n"}, podman_ok()]
+        with mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": "/run/user/1000"}):
+            code, report, executor = self.run_main(fixture)
+        self.assertEqual(code, 0)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["container_engine"]["value"], "podman 4.9.0")
+        info_urls = [argv[3] for argv in executor.seen
+                     if argv[:3] == ["podman", "--remote=true", "--url"]]
+        self.assertEqual(info_urls, [
+            "unix:///run/user/1000/podman/podman.sock",
+            "unix:///run/podman/podman.sock",
+        ])
 
     def test_podman_probe_forces_local_mode(self):
         self.assertEqual(preflight.PROBE_ARGS["podman_info"][:2], ["podman", "--remote=true"])

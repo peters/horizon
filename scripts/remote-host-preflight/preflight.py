@@ -11,6 +11,9 @@ unsupported or unverified.
 Read-only guarantees:
 - subprocess argv is a PROBE_ARGS shape plus optional extra words; never shell
 - host-fact file reads are limited to `--procfs-root` / `--sysfs-root`
+- a killable helper may `os.path.exists` the two Podman socket candidates;
+  the watchdog reads `/proc` PIDs and `/proc/<pid>/task/<pid>/children`
+  only to reap probe descendants
 - no writes, no installation, no image pull/run, no daemon or socket changes,
   no Tailscale state changes, no privilege escalation, no cleanup
 """
@@ -73,10 +76,11 @@ PROBE_ARGS = {
                       "paths=['/run/podman/podman.sock']\n"
                       "if len(sys.argv)>1 and sys.argv[1]:\n"
                       "    paths.insert(0, os.path.join(sys.argv[1],'podman','podman.sock'))\n"
+                      "found=False\n"
                       "for p in paths:\n"
                       "    if os.path.exists(p):\n"
-                      "        sys.stdout.write(p+'\\n'); sys.exit(0)\n"
-                      "sys.exit(1)\n"],
+                      "        sys.stdout.write(p+'\\n'); found=True\n"
+                      "sys.exit(0 if found else 1)\n"],
     "workspace_dir": [sys.executable, "-B", "-c",
                       "import os,sys\n"
                       "p=os.path.normpath(os.path.realpath(sys.argv[1]))\n"
@@ -351,25 +355,37 @@ def candidate_podman_sockets():
     return paths
 
 
-def resolve_podman_socket(executor, timeout):
-    """Existing local podman API socket via a killable helper.
+def resolve_podman_sockets(executor, timeout):
+    """Existing local podman API sockets via a killable helper.
 
-    Returns (path, None) when a candidate socket exists, (None, None) when
-    none does, or (None, error) when the helper fails or times out.
-    `XDG_RUNTIME_DIR` may name a stale FUSE/NFS path, so `exists` stays
-    inside the timeout-bounded subprocess.
+    Returns (paths, None) for discovered candidate sockets, ([], None) when
+    none exist, or ([], error) when the helper fails or times out. A stale
+    rootless socket file can still `exists()`, so callers must probe each
+    path. `XDG_RUNTIME_DIR` may name a stale FUSE/NFS path, so `exists`
+    stays inside the timeout-bounded subprocess.
     """
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     extra = [runtime] if runtime else None
     result, error = run_probe(executor, "podman_socket", timeout, extra_argv=extra)
     if error:
-        return None, error
+        return [], error
     if result["exit_code"] != 0:
-        return None, None
-    path = str(result.get("stdout", "")).splitlines()[0].strip() if result.get("stdout") else ""
-    if path not in candidate_podman_sockets():
-        return None, "podman socket helper returned an unexpected path"
-    return path, None
+        return [], None
+    allowed = candidate_podman_sockets()
+    paths = []
+    unexpected = False
+    for line in str(result.get("stdout", "")).splitlines():
+        path = line.strip()
+        if not path:
+            continue
+        if path in allowed:
+            if path not in paths:
+                paths.append(path)
+        else:
+            unexpected = True
+    if not paths:
+        return [], ("podman socket helper returned an unexpected path" if unexpected else None)
+    return paths, None
 
 
 def engine_endpoint_note(engine):
@@ -436,16 +452,24 @@ def check_container_engine(executor, timeout):
             reasons["podman"] = "podman present but probe failed (%s)" % (
                 redact(client.get("stderr", "")) or "exit %s" % client["exit_code"])
         else:
-            socket, sock_err = resolve_podman_socket(executor, timeout)
+            sockets, sock_err = resolve_podman_sockets(executor, timeout)
             if sock_err:
                 reasons["podman"] = sock_err
-            elif not socket:
+            elif not sockets:
                 reasons["podman"] = "podman local service is not running"
             else:
-                extra = ["unix://" + socket] + list(PROBE_ARGS["podman_info_tail"])
-                podman_info, pi_err = run_probe(executor, "podman_info", timeout,
-                                                extra_argv=extra)
-                podman_version = parse_engine_version(podman_info, "podman")
+                last_fail = None
+                for socket in sockets:
+                    extra = ["unix://" + socket] + list(PROBE_ARGS["podman_info_tail"])
+                    podman_info, pi_err = run_probe(executor, "podman_info", timeout,
+                                                    extra_argv=extra)
+                    podman_version = parse_engine_version(podman_info, "podman")
+                    if podman_version is not None:
+                        last_fail = None
+                        break
+                    last_fail = pi_err or "podman present but probe failed"
+                if podman_version is None:
+                    reasons["podman"] = last_fail or "podman local service is not running"
 
     engine_ok = None
     if docker_server is not None and "docker" not in reasons:
