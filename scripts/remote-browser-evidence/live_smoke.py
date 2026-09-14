@@ -20,6 +20,7 @@ import json
 import netrc
 import os
 import pathlib
+import signal
 import stat
 import subprocess
 import sys
@@ -304,6 +305,11 @@ def main() -> int:
     # Everything fallible before this point ran with the user's keyring
     # untouched; from the seed on, the restoration guard is already active.
     app = None
+    # A termination signal must unwind through the finally below so the
+    # keyring is restored and Horizon is stopped; Python's default would
+    # exit at once.
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, lambda signum, frame: (_ for _ in ()).throw(SystemExit(128 + signum)))
     previous = seed_keyring(login, password)
     try:
         app = subprocess.Popen([args.horizon, "--config", str(config), "--ephemeral"], env=env, stdout=log, stderr=log)
