@@ -209,11 +209,14 @@ impl HorizonApp {
 
     fn poll_host_requests(&mut self) -> bool {
         let mut changed = false;
+        // The create, visibility and close queues are independent: a create
+        // queue that cannot be read (one malformed request is enough) must
+        // not stop closes from being claimed or their results published.
         let requests = match manifest::list_create_requests() {
             Ok(requests) => requests,
             Err(error) => {
                 tracing::warn!(error = %error, "could not poll browser create requests");
-                return changed;
+                Vec::new()
             }
         };
         for request in requests {

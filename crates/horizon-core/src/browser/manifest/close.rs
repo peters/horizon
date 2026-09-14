@@ -67,7 +67,9 @@ pub struct BrowserCloseResult {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum BrowserCloseOutcome {
-    /// The panel is gone from the host; its session teardown has begun.
+    /// The panel is gone from the host and its session teardown has
+    /// completed; for a remote session the provider established the release
+    /// (`Released` or `AlreadyGone`). Never an asynchronous acknowledgement.
     Closed,
     Failed {
         code: String,
