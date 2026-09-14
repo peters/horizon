@@ -29,6 +29,12 @@ pub(crate) struct BrowserPanel {
     /// device session; absent for a local browser. Never an endpoint.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) remote_target: Option<String>,
+    /// The allocated remote device as the provider's own evidence describes
+    /// it (model, OS version, hardware evidence), verified against the
+    /// target's requirement before the panel became ready. This, not the
+    /// target name, is the real-device evidence. Absent for a local browser.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) remote_device: Option<String>,
     pub(crate) url: String,
     pub(crate) title: String,
     /// Host presentation state (shown or hidden). It says nothing about
@@ -70,6 +76,7 @@ impl BrowserPanel {
             backend: backend_name(value.backend).to_string(),
             protocol,
             remote_target: value.remote_target,
+            remote_device: value.remote_device,
             url: value.url,
             title: value.title,
             visible: !value.hidden,
@@ -191,7 +198,7 @@ pub(crate) struct CreateInput {
     pub(crate) url: Option<String>,
     /// Browser override. Omit this to use Horizon's configured browser backend. Not allowed together with target.
     pub(crate) backend: Option<CreateBackend>,
-    /// Configured remote target name (a key of Horizon's browser.remote.targets) to run the session at that remote target instead of a local browser. Provider-neutral: Horizon resolves the endpoint, capabilities and credentials; the panel then advertises `remote_target`, classic `WebDriver` and no network capture. Whether the target is physical hardware is the target's configuration; the allocated device is not verified yet. Omit for a local browser.
+    /// Configured remote target name (a key of Horizon's browser.remote.targets) to run the session at that remote target instead of a local browser. Provider-neutral: Horizon resolves the endpoint, capabilities and credentials; the panel then advertises `remote_target`, classic `WebDriver` and no network capture. After allocation the device is verified against the target's requirement from the provider's own evidence; a physical requirement the evidence does not confirm is refused as `remote_device_rejected` after Horizon attempts to release the session (the panel says whether the provider confirmed it), and a ready panel reports `remote_device`. Omit for a local browser.
     pub(crate) target: Option<String>,
     /// Whether the panel is shown initially (default true). Hidden panels remain live and controllable.
     pub(crate) visible: Option<bool>,
@@ -843,6 +850,7 @@ mod tests {
             panel_local_id: "remote-1".to_string(),
             backend: BackendKind::ChromiumCdp,
             remote_target: Some("android_phone".to_string()),
+            remote_device: Some("Google Pixel 9, OS 16.0, physical device".to_string()),
             ..BrowserManifest::default()
         };
         let panel = BrowserPanel::from_manifest(manifest, "agent");
@@ -860,6 +868,7 @@ mod tests {
         assert!(panel.video_capture.supported, "screenshot-based recording still works");
         let encoded = serde_json::to_string(&panel).expect("json");
         assert!(encoded.contains("\"remote_target\":\"android_phone\""));
+        assert!(encoded.contains("\"remote_device\":\"Google Pixel 9, OS 16.0, physical device\""));
 
         let local = BrowserPanel::from_manifest(
             BrowserManifest {
@@ -873,7 +882,8 @@ mod tests {
         assert_eq!(local.remote_target, None);
         assert_eq!(local.protocol, ProtocolKind::Cdp);
         assert!(local.network_capture.supported);
-        assert!(!serde_json::to_string(&local).expect("json").contains("remote_target"));
+        let local_json = serde_json::to_string(&local).expect("json");
+        assert!(!local_json.contains("remote_target") && !local_json.contains("remote_device"));
     }
 
     #[test]

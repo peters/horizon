@@ -23,6 +23,10 @@ pub use target::{DeviceKind, DeviceRequirement, RemoteTargetProfile};
 
 /// The options object the `BrowserStack` adapter adds the device request to.
 pub const BROWSERSTACK_OPTIONS_KEY: &str = "bstack:options";
+/// The hosted grid's REST origin whose session record is the device
+/// identity evidence for the `browserstack` adapter. Queried with the same
+/// authorization as the hub, never with anything from an agent.
+pub const BROWSERSTACK_SESSION_API: &str = "https://api.browserstack.com";
 
 /// `browser.remote` in Horizon's configuration. Empty by default: nothing
 /// remote is selected, discovered or allocated unless configured.

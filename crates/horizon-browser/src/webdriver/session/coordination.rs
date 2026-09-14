@@ -250,6 +250,7 @@ impl Driver {
             url: self.url.clone(),
             title: self.title.clone(),
             remote_target: self.config.remote.as_ref().map(|request| request.label.clone()),
+            remote_device: self.remote_device.clone(),
         }
     }
 

@@ -3,6 +3,7 @@
 //! release. Allocation is never retried after an ambiguous result, and no
 //! mutation is replayed.
 
+pub mod identity;
 mod watchdog;
 
 use std::fmt;
@@ -15,6 +16,8 @@ use super::http::HttpError;
 use super::remote_http::{RemoteAuthorizationHeader, RemoteHttpClient};
 use super::session::handshake::{NewSession, parse_new_session_response};
 use super::transport::ClassicTransport;
+use horizon_browser_protocol::remote::DeviceRequirement;
+use identity::{DeviceEvidenceSource, RemoteDeviceIdentity};
 use watchdog::Watchdog;
 
 /// Bounded per-attempt wait for `DELETE /session/{id}` during release.
@@ -47,6 +50,11 @@ pub struct RemoteSessionRequest {
     /// The browser family the target drives, for panel metadata, page
     /// semantics and audit. The transport is classic `WebDriver` regardless.
     pub browser: crate::BackendKind,
+    /// What the target requires of the allocated device; checked against
+    /// the provider's evidence before the session is handed to the panel.
+    pub device: DeviceRequirement,
+    /// Where that evidence comes from for this provider.
+    pub evidence: DeviceEvidenceSource,
 }
 
 impl fmt::Debug for RemoteSessionRequest {
@@ -61,6 +69,8 @@ impl fmt::Debug for RemoteSessionRequest {
             .field("label", &self.label)
             .field("provider", &self.provider)
             .field("browser", &self.browser)
+            .field("device", &self.device)
+            .field("evidence", &self.evidence)
             .finish_non_exhaustive()
     }
 }
@@ -77,6 +87,12 @@ pub enum RemoteStartFailure {
     /// The session was allocated but its lifetime watchdog could not start,
     /// so it was released at once rather than run without enforcement.
     Unenforceable { released: RemoteReleaseOutcome },
+    /// The session was allocated but the provider's evidence did not satisfy
+    /// the target's device requirement, so it was released at once.
+    IdentityRejected {
+        reason: String,
+        released: RemoteReleaseOutcome,
+    },
 }
 
 impl fmt::Display for RemoteStartFailure {
@@ -93,6 +109,10 @@ impl fmt::Display for RemoteStartFailure {
             Self::Unenforceable { released } => write!(
                 formatter,
                 "remote session released at once because its lifetime watchdog could not start ({released})"
+            ),
+            Self::IdentityRejected { reason, released } => write!(
+                formatter,
+                "remote session released at once because the allocated device did not meet the target: {reason} ({released})"
             ),
         }
     }
@@ -145,6 +165,20 @@ pub enum RemoteSessionEvent {
         label: String,
         session_digest: String,
     },
+    /// What the provider's evidence says the allocated device is; sent
+    /// after `Allocated` once the target's requirement is satisfied.
+    DeviceIdentity {
+        label: String,
+        identity: RemoteDeviceIdentity,
+    },
+    /// The provider's evidence did not satisfy the target's device
+    /// requirement, so the session was released at once. Terminal; the
+    /// slot is free only when `released` says so.
+    DeviceRejected {
+        label: String,
+        reason: String,
+        released: RemoteReleaseOutcome,
+    },
     AllocationUnknown {
         label: String,
         reason: String,
@@ -163,6 +197,14 @@ pub enum RemoteSessionEvent {
         label: String,
         outcome: RemoteReleaseOutcome,
     },
+}
+
+/// A session the provider handed out, with what its evidence says about
+/// the device.
+#[derive(Debug)]
+pub(super) struct Allocation {
+    pub(super) session: NewSession,
+    pub(super) device: RemoteDeviceIdentity,
 }
 
 /// The driver's view of a remote grid: transport plus the local watchdog,
@@ -210,11 +252,13 @@ impl RemoteHost {
     /// `WebDriver` error is `AllocationFailed`. Never retried. On success the
     /// watchdog starts, so the allocation wait counts against neither the
     /// hard lifetime nor the idle policy; a session whose watchdog cannot
-    /// start is released immediately.
+    /// start is released immediately, and so is one whose device, as the
+    /// provider's own evidence describes it, does not meet the target's
+    /// requirement.
     ///
     /// # Errors
     /// See [`RemoteStartFailure`].
-    pub(super) fn allocate(&mut self, request: &RemoteSessionRequest) -> Result<NewSession, RemoteStartFailure> {
+    pub(super) fn allocate(&mut self, request: &RemoteSessionRequest) -> Result<Allocation, RemoteStartFailure> {
         let body = json!({ "capabilities": { "alwaysMatch": request.capabilities } });
         let session = match self
             .transport
@@ -238,15 +282,41 @@ impl RemoteHost {
             self.idle_release,
             Instant::now(),
         ) {
-            Ok(watchdog) => {
-                self.watchdog = Some(watchdog);
-                Ok(session)
-            }
+            Ok(watchdog) => self.watchdog = Some(watchdog),
             Err(error) => {
                 tracing::warn!("remote session watchdog could not start: {error}");
-                Err(RemoteStartFailure::Unenforceable {
+                return Err(RemoteStartFailure::Unenforceable {
                     released: release_session(&self.transport, &session.id),
-                })
+                });
+            }
+        }
+        let device = self.device_identity(request, &session);
+        if let Err(reason) = identity::check_requirement(&request.device, &device) {
+            tracing::warn!("remote device rejected for {}: {reason}", self.label);
+            let released = self.release(&session.id);
+            return Err(RemoteStartFailure::IdentityRejected { reason, released });
+        }
+        Ok(Allocation { session, device })
+    }
+
+    /// The provider's evidence about the allocated device. A record that
+    /// cannot be fetched leaves the identity unknown, which a `physical`
+    /// requirement then refuses.
+    fn device_identity(&self, request: &RemoteSessionRequest, session: &NewSession) -> RemoteDeviceIdentity {
+        match &request.evidence {
+            DeviceEvidenceSource::Capabilities => identity::identity_from_capabilities(&session.capabilities),
+            DeviceEvidenceSource::BrowserstackSession { api_endpoint } => {
+                let authorization = request
+                    .authorization
+                    .as_ref()
+                    .and_then(|header| clone_header(header).ok());
+                match identity::fetch_session_record(api_endpoint, authorization, &session.id) {
+                    Ok(record) => identity::identity_from_session_record(&record),
+                    Err(error) => {
+                        tracing::warn!("provider session record unavailable for {}: {error}", self.label);
+                        RemoteDeviceIdentity::default()
+                    }
+                }
             }
         }
     }

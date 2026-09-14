@@ -123,6 +123,22 @@ Evidence is one of `physical`, `emulated` or `unknown`; a `physical` requirement
 that resolves to anything else releases the session and reports the unmet
 requirement instead of a ready panel.
 
+Where the evidence comes from is the adapter's business. The `browserstack`
+adapter reads the grid's own session record (`GET /automate/sessions/<id>.json`
+at `api.browserstack.com`, with the hub's authorization and no redirects): the
+record names the real device the session runs on and its resolved OS version,
+and a record that cannot be fetched leaves the identity unknown. The generic
+`webdriver` adapter reads the capabilities the endpoint echoes in its New Session
+reply (`appium:deviceName`, `appium:platformVersion`, and a real-mobile flag when
+the endpoint states one); a hosted grid that echoes nothing therefore cannot
+satisfy a `physical` requirement through that adapter. The verified identity
+reaches the manifest and the MCP panel as `remote_device`, and a rejection ends
+the create with `remote_device_rejected` after an immediate release attempt
+whose outcome the panel note states; a session that could not be allocated or
+safely started ends it with `remote_allocation_failed` (nothing held), and one
+whose allocation or cleanup got no trustworthy answer with
+`remote_allocation_unknown` (the slot stays counted).
+
 ## Session lifecycle and ownership
 
 States: `validating`, `allocating`, `connecting`, `ready`, `releasing`,

@@ -21,6 +21,36 @@ pub(super) struct RemoteLifecycle {
     /// The driver established that the provider no longer holds this
     /// session (released, already gone, or never allocated).
     release_established: bool,
+    /// The allocated device as the provider's evidence describes it, once
+    /// the driver verified it against the target.
+    device: Option<String>,
+    /// Why the remote lifecycle ended before the panel became ready, as a
+    /// typed code and a value-free message for the create result.
+    failure: Option<RemoteFailure>,
+}
+
+/// A terminal remote lifecycle failure the host reports to the agent: a
+/// typed code and fixed public text. Provider-reported detail stays in the
+/// panel note and the local log.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RemoteFailure {
+    pub code: &'static str,
+    pub message: &'static str,
+}
+
+impl RemoteFailure {
+    const DEVICE_REJECTED: Self = Self {
+        code: "remote_device_rejected",
+        message: "the allocated remote device did not meet the target's device requirement and Horizon attempted to release the session; the panel shows the failed requirement and whether the provider confirmed the release, so check it before creating again",
+    };
+    const ALLOCATION_FAILED: Self = Self {
+        code: "remote_allocation_failed",
+        message: "a remote session for the target could not be allocated or safely started and nothing is held at the provider; the panel shows the reason",
+    };
+    const ALLOCATION_UNKNOWN: Self = Self {
+        code: "remote_allocation_unknown",
+        message: "the provider gave no trustworthy answer about the remote allocation or its cleanup, so a device may still be held; check the provider before creating again",
+    };
 }
 
 impl RemoteLifecycle {
@@ -30,6 +60,8 @@ impl RemoteLifecycle {
             provider: Some(request.provider.clone()),
             request: Some(request),
             release_established: false,
+            device: None,
+            failure: None,
         }
     }
 
@@ -39,6 +71,8 @@ impl RemoteLifecycle {
             target,
             provider: None,
             release_established: false,
+            device: None,
+            failure: None,
         }
     }
 }
@@ -110,6 +144,20 @@ impl BrowserPanelState {
         self.remote.is_some()
     }
 
+    /// The allocated device as the provider's evidence describes it, once
+    /// verified; `None` before verification or for a local panel.
+    #[must_use]
+    pub fn remote_device(&self) -> Option<&str> {
+        self.remote.as_ref().and_then(|remote| remote.device.as_deref())
+    }
+
+    /// Why the remote lifecycle ended before the panel became ready, when
+    /// it did: the typed code and message the create result reports.
+    #[must_use]
+    pub fn remote_failure(&self) -> Option<&RemoteFailure> {
+        self.remote.as_ref().and_then(|remote| remote.failure.as_ref())
+    }
+
     /// Configured provider of the remote session this panel runs at.
     #[must_use]
     pub fn remote_provider(&self) -> Option<&str> {
@@ -144,6 +192,8 @@ impl BrowserPanelState {
             label: target.to_string(),
             provider: provider.to_string(),
             browser: BackendKind::ChromiumCdp,
+            device: horizon_browser::remote::DeviceRequirement::default(),
+            evidence: horizon_browser::DeviceEvidenceSource::Capabilities,
         }));
         state
     }
@@ -190,6 +240,14 @@ impl BrowserPanelState {
         }
     }
 
+    /// Feed one lifecycle event to the panel, for host tests of the typed
+    /// outcomes it derives.
+    #[doc(hidden)]
+    pub fn apply_remote_session_event_for_tests(&mut self, event: horizon_browser::RemoteSessionEvent) {
+        let mut output = BrowserDrainOutput::default();
+        self.apply_remote_session_event(event, &mut output);
+    }
+
     pub(super) fn apply_remote_session_event(
         &mut self,
         event: horizon_browser::RemoteSessionEvent,
@@ -209,16 +267,37 @@ impl BrowserPanelState {
                         | RemoteReleaseOutcome::NeverAllocated,
                     ..
                 }
+                | RemoteSessionEvent::DeviceRejected {
+                    released: RemoteReleaseOutcome::Released | RemoteReleaseOutcome::AlreadyGone,
+                    ..
+                }
         );
+        let mut device = None;
+        let mut failure = None;
         let note = match event {
             RemoteSessionEvent::Allocating { label } => format!("allocating remote device for {label}"),
             RemoteSessionEvent::Allocated { label, session_digest } => {
                 format!("remote session {session_digest} allocated for {label}")
             }
+            RemoteSessionEvent::DeviceIdentity { label, identity } => {
+                let summary = identity.summary();
+                device = Some(summary.clone());
+                format!("remote device for {label} verified: {summary}")
+            }
+            RemoteSessionEvent::DeviceRejected {
+                label,
+                reason,
+                released,
+            } => {
+                failure = Some(RemoteFailure::DEVICE_REJECTED);
+                format!("remote device for {label} rejected: {reason}; session {released}")
+            }
             RemoteSessionEvent::AllocationUnknown { label, reason } => {
+                failure = Some(RemoteFailure::ALLOCATION_UNKNOWN);
                 format!("remote allocation for {label} is unknown ({reason}); check the provider before retrying")
             }
             RemoteSessionEvent::AllocationFailed { label, reason } => {
+                failure = Some(RemoteFailure::ALLOCATION_FAILED);
                 format!("remote allocation for {label} failed: {reason}")
             }
             RemoteSessionEvent::Expired { label, reason } => match reason {
@@ -239,8 +318,16 @@ impl BrowserPanelState {
         };
         tracing::info!(target: "browser", "{note}");
         self.remote_status = Some(note);
-        if released && let Some(remote) = self.remote.as_mut() {
-            remote.release_established = true;
+        if let Some(remote) = self.remote.as_mut() {
+            if released {
+                remote.release_established = true;
+            }
+            if device.is_some() {
+                remote.device = device;
+            }
+            if failure.is_some() {
+                remote.failure = failure;
+            }
         }
         output.had_output = true;
     }
@@ -323,5 +410,90 @@ mod tests {
             state.remote_status
         );
         assert!(state.holds_remote_allocation(), "a refused retry never frees the slot");
+    }
+
+    #[test]
+    fn device_events_record_the_verified_identity_or_a_typed_rejection() {
+        use horizon_browser::{DeviceEvidence, RemoteDeviceIdentity, RemoteReleaseOutcome, RemoteSessionEvent};
+
+        let mut state = BrowserPanelState::inert_remote("ios_phone", "grid");
+        let mut output = super::super::BrowserDrainOutput::default();
+        state.apply_remote_session_event(
+            RemoteSessionEvent::DeviceIdentity {
+                label: "ios_phone".into(),
+                identity: RemoteDeviceIdentity {
+                    model: Some("iPhone 16".into()),
+                    os_version: Some("18.6".into()),
+                    hardware: Some(DeviceEvidence::Physical),
+                },
+            },
+            &mut output,
+        );
+        assert_eq!(state.remote_device(), Some("iPhone 16, OS 18.6, physical device"));
+        assert!(state.remote_failure().is_none());
+        assert!(state.holds_remote_allocation());
+
+        let mut rejected = BrowserPanelState::inert_remote("ios_phone", "grid");
+        rejected.apply_remote_session_event(
+            RemoteSessionEvent::DeviceRejected {
+                label: "ios_phone".into(),
+                reason: "device model is iPhone 15, target requires iPhone 16".into(),
+                released: RemoteReleaseOutcome::Released,
+            },
+            &mut output,
+        );
+        let failure = rejected.remote_failure().expect("typed failure");
+        assert_eq!(failure.code, "remote_device_rejected");
+        assert!(
+            !failure.message.contains("iPhone"),
+            "the public message is fixed text; the provider's detail stays in the panel note"
+        );
+        assert!(
+            rejected
+                .remote_status
+                .as_deref()
+                .is_some_and(|note| note.contains("iPhone 15")),
+            "{:?}",
+            rejected.remote_status
+        );
+        assert!(
+            !rejected.holds_remote_allocation(),
+            "a released rejection frees the slot"
+        );
+
+        let mut unreleased = BrowserPanelState::inert_remote("ios_phone", "grid");
+        unreleased.apply_remote_session_event(
+            RemoteSessionEvent::DeviceRejected {
+                label: "ios_phone".into(),
+                reason: "target requires a physical device, provider evidence: unverified hardware".into(),
+                released: RemoteReleaseOutcome::ReleaseUnknown {
+                    attempts: 3,
+                    reason: "timeout".into(),
+                },
+            },
+            &mut output,
+        );
+        assert_eq!(
+            unreleased.remote_failure().map(|f| f.code),
+            Some("remote_device_rejected")
+        );
+        assert!(
+            unreleased.holds_remote_allocation(),
+            "an unconfirmed release keeps the slot"
+        );
+
+        let mut failed = BrowserPanelState::inert_remote("ios_phone", "grid");
+        failed.apply_remote_session_event(
+            RemoteSessionEvent::AllocationFailed {
+                label: "ios_phone".into(),
+                reason: "no device available".into(),
+            },
+            &mut output,
+        );
+        assert_eq!(
+            failed.remote_failure().map(|f| f.code),
+            Some("remote_allocation_failed")
+        );
+        assert!(!failed.holds_remote_allocation());
     }
 }
