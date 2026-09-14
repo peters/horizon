@@ -796,6 +796,44 @@ class EngineFailures(Harness):
             time.sleep(0.05)
         self.assertFalse(alive)
 
+    def test_timeout_kills_orphan_after_probe_exits(self):
+        pidfile = os.path.join(self.tmp.name, "orphan-session.pid")
+        script = (
+            "import os,time\n"
+            "child=os.fork()\n"
+            "if child==0:\n"
+            "    os.setsid()\n"
+            "    open(%r,'w').write(str(os.getpid()))\n"
+            "    time.sleep(30)\n"
+            "    os._exit(0)\n"
+            "os._exit(0)\n"
+        ) % pidfile
+        with mock.patch.object(subprocess, "Popen", self.real_popen):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                preflight.default_executor(
+                    [sys.executable, "-B", "-c", script], 0.5)
+        deadline = time.monotonic() + 2
+        grandchild = None
+        while time.monotonic() < deadline:
+            if os.path.exists(pidfile):
+                with open(pidfile, encoding="utf-8") as handle:
+                    text = handle.read().strip()
+                if text.isdigit():
+                    grandchild = int(text)
+                    break
+            time.sleep(0.05)
+        self.assertIsNotNone(grandchild)
+        alive = True
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            try:
+                os.kill(grandchild, 0)
+            except OSError:
+                alive = False
+                break
+            time.sleep(0.05)
+        self.assertFalse(alive)
+
     def test_sysfs_device_name_matches_worker_gate(self):
         self.assertTrue(preflight.sysfs_device_name_ok("nvme0n1p2"))
         self.assertFalse(preflight.sysfs_device_name_ok("nvme0n1p2:0"))

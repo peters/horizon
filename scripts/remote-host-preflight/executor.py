@@ -3,12 +3,15 @@
 Process supervision only: spawn, timeout, output caps, and descendant
 reaping. Probe command selection and report rendering live in preflight.py.
 """
+import ctypes
 import json
 import os
 import select
 import signal
 import subprocess
 import time
+
+PR_SET_CHILD_SUBREAPER = 36
 
 MAX_PROBE_OUTPUT_BYTES = 65536
 MAX_WATCHDOG_PAYLOAD = MAX_PROBE_OUTPUT_BYTES * 12 + 4096
@@ -147,6 +150,26 @@ def _reap_child(pid, timeout=1.0):
         time.sleep(min(0.02, remaining))
 
 
+def _become_subreaper():
+    """Keep ownership of reparented probe descendants on Linux."""
+    libc = ctypes.CDLL("libc.so.6", use_errno=True)
+    if libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
+        err = ctypes.get_errno()
+        raise OSError(err, "prctl(PR_SET_CHILD_SUBREAPER)")
+
+
+def _watchdog_abort(write_fd, payload):
+    try:
+        os.write(write_fd, json.dumps(payload).encode("utf-8"))
+    except OSError:
+        pass
+    try:
+        os.close(write_fd)
+    except OSError:
+        pass
+    os._exit(0)
+
+
 def _kill_process_group(pid):
     # Descendants that called setsid/setpgid leave this group but remain
     # in the process tree; kill them before signaling the original group.
@@ -198,17 +221,17 @@ def _watchdog_execute_probe(argv, timeout):
         try:
             os.setsid()
         except OSError as exc:
-            payload = {"kind": "os",
-                       "detail": "could not create process session: %s" % str(exc)[:200]}
-            try:
-                os.write(write_fd, json.dumps(payload).encode("utf-8"))
-            except OSError:
-                pass
-            try:
-                os.close(write_fd)
-            except OSError:
-                pass
-            os._exit(0)
+            _watchdog_abort(write_fd, {
+                "kind": "os",
+                "detail": "could not create process session: %s" % str(exc)[:200],
+            })
+        try:
+            _become_subreaper()
+        except OSError as exc:
+            _watchdog_abort(write_fd, {
+                "kind": "os",
+                "detail": "could not become child subreaper: %s" % str(exc)[:200],
+            })
         try:
             try:
                 result = _execute_probe(argv, timeout)
