@@ -265,20 +265,26 @@ def main():
             parser.error("required tool is missing: " + tool)
     root = args.artifacts.absolute()
     root.mkdir(mode=0o700, parents=False, exist_ok=False)
-    binary = snapshot_candidate(binary, root)
-    with binary.open("rb") as source:
-        digest = hashlib.file_digest(source, "sha256").hexdigest()
-    smoke = Smoke(binary, root, args.timeout_seconds)
-    smoke.browser = args.browser
-    smoke.repository = args.repository.resolve(strict=True) if args.repository else None
-    processes.adopt_orphans()
-    smoke.supervised = True
-    result = {"version": 1, "status": "failed", "binary_sha256": digest, "checks": smoke.checks}
+    candidate = root / "candidate-horizon"
+    smoke = None
+    result = {"version": 1, "status": "failed", "binary_sha256": None, "checks": []}
+    previous_handler = None
+
     def interrupted(_number, _frame):
         raise KeyboardInterrupt
 
-    signal.signal(signal.SIGTERM, interrupted)
     try:
+        previous_handler = signal.signal(signal.SIGTERM, interrupted)
+        snapshot_candidate(binary, root)
+        with candidate.open("rb") as source:
+            result["binary_sha256"] = hashlib.file_digest(source, "sha256").hexdigest()
+        smoke = Smoke(candidate, root, args.timeout_seconds)
+        result["checks"] = smoke.checks
+        smoke.browser = args.browser
+        smoke.repository = args.repository.resolve(strict=True) if args.repository else None
+        smoke.stage = "supervisor setup"
+        processes.adopt_orphans()
+        smoke.supervised = True
         smoke.display()
         smoke.launch()
         if smoke.browser:
@@ -299,22 +305,36 @@ def main():
         smoke.screenshot("resized")
         smoke.close()
         result["status"] = "passed"
-    except (OSError, RuntimeError, subprocess.SubprocessError, TimeoutError, KeyboardInterrupt) as error:
+    except (Exception, KeyboardInterrupt) as error:
         # Child output stays in private files; never echo an inherited environment.
         result["error"] = type(error).__name__
-        result["failed_stage"] = smoke.stage
+        result["failed_stage"] = smoke.stage if smoke else "candidate snapshot"
         if (root / "command-failure.json").is_file():
             result["command_diagnostic"] = "command-failure.json"
     finally:
-        result["cleanup_complete"] = smoke.cleanup()
+        result["cleanup_complete"] = True
         try:
-            binary.unlink()
-        except OSError:
+            if smoke is not None:
+                result["cleanup_complete"] = smoke.cleanup()
+        except (Exception, KeyboardInterrupt) as error:
             result["cleanup_complete"] = False
+            result["cleanup_error"] = type(error).__name__
+        try:
+            candidate.unlink(missing_ok=True)
+            if previous_handler is not None:
+                signal.signal(signal.SIGTERM, previous_handler)
+        except (Exception, KeyboardInterrupt) as error:
+            result["cleanup_complete"] = False
+            result.setdefault("cleanup_error", type(error).__name__)
         if not result["cleanup_complete"]:
             result["status"] = "failed"
             result.setdefault("failed_stage", "cleanup")
-        (root / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+        try:
+            (root / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+        except OSError as error:
+            result["status"] = "failed"
+            result.setdefault("failed_stage", "receipt")
+            result["receipt_error"] = type(error).__name__
     print(json.dumps(result))
     return 0 if result["status"] == "passed" else 1
 

@@ -126,6 +126,29 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(result["checks"], ["normal_window_close"])
         self.assertFalse((root / "candidate-horizon").exists())
 
+    def test_supervisor_refusal_preserves_failure_receipt_and_removes_snapshot(self):
+        root = self.root / "supervisor-failure"
+        with patch("sys.argv", ["smoke", "--binary", "/bin/true", "--artifacts", str(root)]), \
+                patch.object(smoke_module.shutil, "which", return_value="/unused/tool"), \
+                patch.object(smoke_module.processes, "adopt_orphans", side_effect=OSError("denied")):
+            self.assertEqual(smoke_module.main(), 1)
+        result = json.loads((root / "result.json").read_text())
+        self.assertEqual(result["failed_stage"], "supervisor setup")
+        self.assertFalse((root / "candidate-horizon").exists())
+
+    def test_cleanup_exception_keeps_primary_failure_and_attempts_finalization(self):
+        root = self.root / "cleanup-exception"
+        with patch("sys.argv", ["smoke", "--binary", "/bin/true", "--artifacts", str(root)]), \
+                patch.object(smoke_module.shutil, "which", return_value="/unused/tool"), \
+                patch.object(smoke_module.processes, "adopt_orphans", side_effect=OSError("denied")), \
+                patch.object(smoke_module.Smoke, "cleanup", side_effect=OSError("pidfd refused")):
+            self.assertEqual(smoke_module.main(), 1)
+        result = json.loads((root / "result.json").read_text())
+        self.assertEqual(result["failed_stage"], "supervisor setup")
+        self.assertEqual(result["cleanup_error"], "OSError")
+        self.assertFalse(result["cleanup_complete"])
+        self.assertFalse((root / "candidate-horizon").exists())
+
     def test_subreaper_cleans_children_after_their_leader_exits(self):
         self.assert_orphan_cleanup("sleep 30 &")
 

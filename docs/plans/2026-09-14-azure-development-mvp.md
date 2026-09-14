@@ -115,7 +115,7 @@ cloud resources and running user sessions must not be changed by a local rehears
   Docker smoke passed launch, terminal input, resize, input after resize and
   normal close; launch/resized screenshots were inspected after fitting the
   workspace. The `/bin/false` negative control failed as required with complete
-  cleanup. Thirteen process/isolation tests pass and are wired into CI. Independent
+  cleanup. Fifteen process/isolation tests pass and are wired into CI. Independent
   review found an orphan-process cleanup edge case; subreaper/pidfd cleanup and
   two regression tests resolve it, and re-review found no remaining action items.
 - Current private evidence: `/tmp/horizon-linux-ui-evidence-20260914/run-d/`,
@@ -154,7 +154,7 @@ cloud resources and running user sessions must not be changed by a local rehears
 3. Continue the explicitly approved bounded Azure pilot using its original private
    receipt. The exact native image, agent CLI and smoke helper were observed on
    the running VM, and its compute shutdown schedule was verified. Repository
-   credential transfer and coding-agent device login have separate consent gates.
+   credential transfer was explicitly authorized and Git preparation completed. Coding-agent device login remains pending.
    Record live execution, UI proof and exact cleanup in private pilot evidence;
    worker allocation alone does not establish authenticated-agent or client-off
    acceptance. The browser namespace policy remains a separate optional Azure lane.
@@ -176,3 +176,29 @@ no local checkout exists. No current issue defines this file format; #383/#470/
 
 The user selected Codex CLI for the first worker. Authentication must be qualified
 independently of the GitHub PAT and registry managed identity.
+
+## Latest pilot findings
+
+- The native-only image passed an actual Azure source build and native UI smoke,
+  including terminal input before/after resize, normal close and cleanup. Exact
+  pinned-SSH reconnect after explicit Stop and compute-start retained the binary
+  and proof. These checks do not establish authenticated issue execution.
+- Default Azure Docker restrictions prevent the coding agent's filesystem sandbox
+  from starting. A disposable probe qualified SYS_ADMIN plus unconfined container
+  seccomp/AppArmor while retaining workspace-write enforcement: workspace writes
+  succeeded and writes to `/etc` were denied. Applying this broader container
+  policy to the live pilot requires separate explicit approval. No extra host
+  mounts or Docker socket are part of the proposed configuration.
+- The corrected local native-v5 image includes failure receipts for initialization
+  and cleanup errors, and handles termination during binary snapshotting. Native,
+  Chromium and Firefox smoke passed; all launch/resized screenshots were inspected.
+  Browser lanes used the optional cached browser image with the corrected helper.
+  Evidence: `/tmp/horizon-ui-v5-proof`; publication is not yet approved.
+- Controller recovery now atomically journals additional panel intent, preserving
+  the original panel ID across interrupted saves without replaying execution.
+  Fourteen focused tests pass; final complete validation and hosted review remain
+  gates. Git/task-start claims conservatively retain uncertain outcomes.
+- The pilot remains bounded by its approved four-hour limit. An exact-identity
+  cleanup timer is scheduled before that deadline, alongside independent Azure
+  compute auto-shutdown. The local cleanup timer depends on this client being up;
+  verify provider absence explicitly after deletion.
