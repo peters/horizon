@@ -21,7 +21,7 @@ pub use provider::{
 };
 pub use target::{DeviceKind, DeviceRequirement, RemoteTargetProfile};
 
-/// The options object the BrowserStack adapter adds the device request to.
+/// The options object the `BrowserStack` adapter adds the device request to.
 pub const BROWSERSTACK_OPTIONS_KEY: &str = "bstack:options";
 
 /// `browser.remote` in Horizon's configuration. Empty by default: nothing
