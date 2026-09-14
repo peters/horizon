@@ -11,7 +11,7 @@ use horizon_core::browser::remote::{
 };
 use horizon_core::remote_browser_credential::{
     CredentialReadiness, CredentialState, CredentialWorkbench, KeychainState, NoticeKind, RemoteCredentialError,
-    WorkbenchNotice,
+    WorkbenchNotice, credential_destination,
 };
 use zeroize::Zeroizing;
 
@@ -33,22 +33,17 @@ struct InputKey {
 
 impl InputKey {
     fn new(provider: &str, profile: &RemoteProviderProfile, reference: &CredentialReference) -> Self {
-        let destination = profile.credential_bindings.get(reference).map_or_else(
-            || format!("{}|unbound", profile.endpoint.origin()),
-            |binding| {
-                format!(
-                    "{}|{:?}|{}",
-                    profile.endpoint.origin(),
-                    binding.store,
-                    binding.slot.as_deref().unwrap_or_default()
-                )
-            },
-        );
         Self {
             provider: provider.to_string(),
             reference: reference.as_str().to_string(),
-            destination,
+            destination: credential_destination(profile, reference),
         }
+    }
+
+    fn matches_notice(&self, notice: &WorkbenchNotice) -> bool {
+        notice.provider == self.provider
+            && notice.reference.as_str() == self.reference
+            && notice.destination == self.destination
     }
 
     fn same_row(&self, other: &Self) -> bool {
@@ -98,11 +93,40 @@ impl CredentialInputs {
         self.notices.drain(..overflow);
     }
 
-    fn last_notice(&self, provider: &str, reference: &CredentialReference) -> Option<&WorkbenchNotice> {
-        self.notices
+    /// Scrub every draft whose row or destination is no longer in the parsed
+    /// configuration, so a provider removed or rebound in the YAML tab (or
+    /// by Reset) never keeps a secret that could reappear later.
+    fn retain_current(&mut self, config: &Config) {
+        let current: std::collections::BTreeSet<InputKey> = config
+            .browser
+            .remote
+            .providers
             .iter()
-            .rev()
-            .find(|notice| notice.provider == provider && &notice.reference == reference)
+            .flat_map(|(name, profile)| {
+                profile
+                    .authentication
+                    .references()
+                    .into_iter()
+                    .map(|reference| InputKey::new(name, profile, reference))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let stale: Vec<InputKey> = self
+            .values
+            .keys()
+            .filter(|key| !current.contains(*key))
+            .cloned()
+            .collect();
+        for key in stale {
+            if let Some(mut text) = self.values.remove(&key) {
+                scrub_string(&mut text);
+            }
+        }
+    }
+
+    /// The latest notice for exactly this row and destination.
+    fn last_notice(&self, key: &InputKey) -> Option<&WorkbenchNotice> {
+        self.notices.iter().rev().find(|notice| key.matches_notice(notice))
     }
 }
 
@@ -126,6 +150,7 @@ fn scrub_string(value: &mut String) {
 pub(super) fn render(ui: &mut Ui, config: &Config, workbench: &mut CredentialWorkbench, inputs: &mut CredentialInputs) {
     workbench.poll();
     inputs.absorb(workbench.take_notices());
+    inputs.retain_current(config);
     render_stores_section(ui, workbench);
     let providers = &config.browser.remote.providers;
     if providers.is_empty() {
@@ -245,6 +270,7 @@ fn render_reference(
 ) {
     let (reference, store, state) = (&entry.reference, entry.store, entry.state);
     let bound = profile.credential_bindings.contains_key(reference);
+    let key = InputKey::new(provider, profile, reference);
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new(reference.as_str())
@@ -267,7 +293,6 @@ fn render_reference(
         );
         return;
     }
-    let key = InputKey::new(provider, profile, reference);
     ui.horizontal(|ui| {
         password_field(ui, inputs.buffer(&key), provider, reference);
         let has_text = !inputs.buffer(&key).is_empty();
@@ -298,7 +323,7 @@ fn render_reference(
             let _ = workbench.delete(provider, profile, reference);
         }
     });
-    if let Some(notice) = inputs.last_notice(provider, reference) {
+    if let Some(notice) = inputs.last_notice(&key) {
         let (text, color) = notice_line(notice.kind, notice.error.as_ref());
         ui.label(egui::RichText::new(text).color(color).size(11.0));
     }
@@ -414,5 +439,40 @@ mod tests {
         inputs.buffer(&moved).push_str("typed-for-other");
         assert!(inputs.buffer(&rebound).is_empty(), "a new slot starts empty too");
         assert!(inputs.take(&moved).is_empty());
+
+        // A provider removed from the configuration loses its draft too.
+        inputs.buffer(&rebound).push_str("typed-then-removed");
+        let mut config = Config::default();
+        config.browser.remote.providers.insert(
+            "elsewhere".to_string(),
+            profile("https://third.example.net/wd/hub", "c"),
+        );
+        inputs.retain_current(&config);
+        assert!(
+            inputs.values.is_empty(),
+            "drafts for rows absent from the config are scrubbed"
+        );
+        assert!(inputs.take(&rebound).is_empty());
+    }
+
+    #[test]
+    fn a_notice_shows_only_on_the_row_and_destination_it_was_for() {
+        let reference = CredentialReference::from("key");
+        let old_profile = profile("https://grid.example.net/wd/hub", "a");
+        let old_key = InputKey::new("grid", &old_profile, &reference);
+        let mut inputs = CredentialInputs::default();
+        inputs.absorb(vec![WorkbenchNotice {
+            provider: "grid".to_string(),
+            reference: reference.clone(),
+            destination: credential_destination(&old_profile, &reference),
+            kind: NoticeKind::StoredInKeychain,
+            error: None,
+        }]);
+        assert!(inputs.last_notice(&old_key).is_some());
+        let new_key = InputKey::new("grid", &profile("https://grid.example.net/wd/hub", "b"), &reference);
+        assert!(
+            inputs.last_notice(&new_key).is_none(),
+            "an outcome for the old slot is not shown on the rebound row"
+        );
     }
 }

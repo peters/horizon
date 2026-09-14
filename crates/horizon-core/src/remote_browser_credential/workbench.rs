@@ -37,24 +37,42 @@ pub enum KeychainState {
 pub struct WorkbenchNotice {
     pub provider: String,
     pub reference: CredentialReference,
+    /// The destination the operation went to (see [`credential_destination`]),
+    /// so a row whose binding changed while an operation was pending does
+    /// not show that operation's outcome as its own.
+    pub destination: String,
     pub kind: NoticeKind,
     pub error: Option<RemoteCredentialError>,
 }
 
 impl WorkbenchNotice {
-    fn new(
-        provider: &str,
-        reference: &CredentialReference,
-        kind: NoticeKind,
-        result: Result<(), RemoteCredentialError>,
-    ) -> Self {
+    fn new(row: &Row, kind: NoticeKind, result: Result<(), RemoteCredentialError>) -> Self {
         Self {
-            provider: provider.to_string(),
-            reference: reference.clone(),
+            provider: row.provider.clone(),
+            reference: row.reference.clone(),
+            destination: row.destination.clone(),
             kind,
             error: result.err(),
         }
     }
+}
+
+/// Where a value for `reference` would go: the endpoint origin plus the
+/// binding's store and slot (`origin|store|slot`), or `origin|unbound`. The
+/// settings UI keys its drafts and matches notices by this string.
+#[must_use]
+pub fn credential_destination(profile: &RemoteProviderProfile, reference: &CredentialReference) -> String {
+    profile.credential_bindings.get(reference).map_or_else(
+        || format!("{}|unbound", profile.endpoint.origin()),
+        |binding| {
+            format!(
+                "{}|{:?}|{}",
+                profile.endpoint.origin(),
+                binding.store,
+                binding.slot.as_deref().unwrap_or_default()
+            )
+        },
+    )
 }
 
 /// The operation a notice reports on.
@@ -82,13 +100,15 @@ fn os_address(locator: &CredentialLocator) -> Option<OsAddress> {
 struct Row {
     provider: String,
     reference: CredentialReference,
+    destination: String,
 }
 
 impl Row {
-    fn new(provider: &str, reference: &CredentialReference) -> Self {
+    fn new(provider: &str, profile: &RemoteProviderProfile, reference: &CredentialReference) -> Self {
         Self {
             provider: provider.to_string(),
             reference: reference.clone(),
+            destination: credential_destination(profile, reference),
         }
     }
 }
@@ -188,22 +208,14 @@ impl CredentialWorkbench {
                 Event::Stored(locator, result, row) => {
                     self.in_flight = self.in_flight.saturating_sub(1);
                     self.cache_presence(&locator, state_from(&result.clone().map(|()| true)));
-                    self.notices.push(WorkbenchNotice::new(
-                        &row.provider,
-                        &row.reference,
-                        NoticeKind::StoredInKeychain,
-                        result,
-                    ));
+                    self.notices
+                        .push(WorkbenchNotice::new(&row, NoticeKind::StoredInKeychain, result));
                 }
                 Event::Deleted(locator, result, row) => {
                     self.in_flight = self.in_flight.saturating_sub(1);
                     self.cache_presence(&locator, state_from(&result.clone().map(|()| false)));
-                    self.notices.push(WorkbenchNotice::new(
-                        &row.provider,
-                        &row.reference,
-                        NoticeKind::DeletedFromKeychain,
-                        result,
-                    ));
+                    self.notices
+                        .push(WorkbenchNotice::new(&row, NoticeKind::DeletedFromKeychain, result));
                 }
             }
         }
@@ -286,17 +298,13 @@ impl CredentialWorkbench {
         reference: &CredentialReference,
         value: &[u8],
     ) -> Result<(), RemoteCredentialError> {
+        let row = Row::new(provider, profile, reference);
         let result = Self::locator(profile, reference, CredentialStoreKind::Session).and_then(|locator| {
-            self.session_rows
-                .insert(Row::new(provider, reference), locator.origin.clone());
+            self.session_rows.insert(row.clone(), locator.origin.clone());
             self.session.put(&locator, value)
         });
-        self.notices.push(WorkbenchNotice::new(
-            provider,
-            reference,
-            NoticeKind::SessionValueSet,
-            result.clone(),
-        ));
+        self.notices
+            .push(WorkbenchNotice::new(&row, NoticeKind::SessionValueSet, result.clone()));
         result
     }
 
@@ -316,8 +324,7 @@ impl CredentialWorkbench {
         let result = self.queue_store(provider, profile, reference, value);
         if let Err(error) = &result {
             self.notices.push(WorkbenchNotice::new(
-                provider,
-                reference,
+                &Row::new(provider, profile, reference),
                 NoticeKind::StoredInKeychain,
                 Err(error.clone()),
             ));
@@ -340,7 +347,7 @@ impl CredentialWorkbench {
             .send(Command::Put(
                 locator,
                 Zeroizing::new(value.to_vec()),
-                Row::new(provider, reference),
+                Row::new(provider, profile, reference),
             ))
             .map_err(|_| RemoteCredentialError::StoreUnavailable)?;
         self.in_flight += 1;
@@ -366,8 +373,7 @@ impl CredentialWorkbench {
             CredentialStoreKind::Session => {
                 let result = self.session.delete(&locator);
                 self.notices.push(WorkbenchNotice::new(
-                    provider,
-                    reference,
+                    &Row::new(provider, profile, reference),
                     NoticeKind::SessionValueCleared,
                     result.clone(),
                 ));
@@ -380,7 +386,7 @@ impl CredentialWorkbench {
                     .and_then(|commands| {
                         self.cache_presence(&locator, CredentialState::Checking);
                         commands
-                            .send(Command::Delete(locator.clone(), Row::new(provider, reference)))
+                            .send(Command::Delete(locator.clone(), Row::new(provider, profile, reference)))
                             .map_err(|_| RemoteCredentialError::StoreUnavailable)
                     });
                 if result.is_ok() {
@@ -388,8 +394,7 @@ impl CredentialWorkbench {
                 }
                 if let Err(error) = &result {
                     self.notices.push(WorkbenchNotice::new(
-                        provider,
-                        reference,
+                        &Row::new(provider, profile, reference),
                         NoticeKind::DeletedFromKeychain,
                         Err(error.clone()),
                     ));
@@ -418,12 +423,8 @@ impl CredentialWorkbench {
         self.session.clear();
         self.session_rows.clear();
         for row in cleared {
-            self.notices.push(WorkbenchNotice::new(
-                &row.provider,
-                &row.reference,
-                NoticeKind::SessionValueCleared,
-                Ok(()),
-            ));
+            self.notices
+                .push(WorkbenchNotice::new(&row, NoticeKind::SessionValueCleared, Ok(())));
         }
     }
 

@@ -28,7 +28,9 @@ use zeroize::Zeroizing;
 pub use fake::FakeCredentialStore;
 pub use keyring_store::{KEYRING_SERVICE, KeyringCredentialStore, KeyringStoreAvailability};
 pub use session::SessionCredentialStore;
-pub use workbench::{CredentialWorkbench, KeychainState, NoticeKind, SharedStore, StoreOpener, WorkbenchNotice};
+pub use workbench::{
+    CredentialWorkbench, KeychainState, NoticeKind, SharedStore, StoreOpener, WorkbenchNotice, credential_destination,
+};
 
 /// Largest accepted secret. Provider keys are far smaller; the bound stops a
 /// pasted file from becoming a header.
