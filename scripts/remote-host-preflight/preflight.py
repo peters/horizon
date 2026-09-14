@@ -11,8 +11,8 @@ unsupported or unverified.
 Read-only guarantees:
 - subprocess argv is a PROBE_ARGS shape plus optional extra words; never shell
 - host-fact file-content reads are limited to `--procfs-root` / `--sysfs-root`
-- the workspace helper may `realpath`/`isdir`/`lexists`/`stat` the workspace
-  path and its ancestors (metadata only)
+- the workspace helper may `realpath`/`stat` the workspace path and its
+  ancestors (metadata only; `EACCES` is an error, not a walk-up)
 - a killable helper may `os.path.exists` the two Podman socket candidates;
   the watchdog reads `/proc` PIDs and `/proc/<pid>/task/<pid>/children`
   only to reap probe descendants
@@ -30,6 +30,7 @@ import json
 import math
 import os
 import re
+import stat
 import subprocess
 import unicodedata
 from datetime import datetime, timezone
@@ -88,20 +89,28 @@ PROBE_ARGS = {
                       "        sys.stdout.write(p+'\\n'); found=True\n"
                       "sys.exit(0 if found else 1)\n"],
     "workspace_dir": [sys.executable, "-B", "-c",
-                      "import json,os,sys\n"
-                      "p=os.path.normpath(os.path.realpath(sys.argv[1]))\n"
+                      "import errno,json,os,stat,sys\n"
+                      "try:\n"
+                      "    p=os.path.normpath(os.path.realpath(sys.argv[1]))\n"
+                      "except OSError:\n"
+                      "    sys.stderr.write('unreadable\\n'); sys.exit(4)\n"
                       "c=p\n"
                       "while True:\n"
-                      "    if os.path.isdir(c):\n"
+                      "    try:\n"
                       "        st=os.stat(c)\n"
+                      "    except OSError as e:\n"
+                      "        if e.errno==errno.ENOENT:\n"
+                      "            n=os.path.dirname(c)\n"
+                      "            if n==c:\n"
+                      "                sys.stderr.write('missing\\n'); sys.exit(3)\n"
+                      "            c=n; continue\n"
+                      "        if e.errno==errno.ENOTDIR:\n"
+                      "            sys.stderr.write('not-a-directory\\n'); sys.exit(2)\n"
+                      "        sys.stderr.write('unreadable\\n'); sys.exit(4)\n"
+                      "    if stat.S_ISDIR(st.st_mode):\n"
                       "        sys.stdout.write(json.dumps({'path':c,'major':os.major(st.st_dev),'minor':os.minor(st.st_dev)})+'\\n')\n"
                       "        sys.exit(0)\n"
-                      "    if os.path.lexists(c):\n"
-                      "        sys.stderr.write('not-a-directory\\n'); sys.exit(2)\n"
-                      "    n=os.path.dirname(c)\n"
-                      "    if n==c:\n"
-                      "        sys.stderr.write('missing\\n'); sys.exit(3)\n"
-                      "    c=n\n"],
+                      "    sys.stderr.write('not-a-directory\\n'); sys.exit(2)\n"],
     "disk": ["df", "-kP"],
     "tailscale_version": ["tailscale", "version"],
     "tailscale_status": ["tailscale", "status", "--json", "--peers=false"],
@@ -656,6 +665,8 @@ def resolve_workspace_directory(executor, timeout, path):
     err = redact(result.get("stderr", "")).strip()
     if result["exit_code"] == 2 or "not-a-directory" in err:
         return None, None, None, "workspace path is not a directory"
+    if result["exit_code"] == 4 or "unreadable" in err:
+        return None, None, None, "workspace path unreadable"
     return None, None, None, ("workspace path %s does not exist and no ancestor is stat-able"
                               % redact(path))
 
@@ -702,18 +713,28 @@ def workspace_directory(path):
     A workspace that exists as a regular file (or whose first existing
     ancestor is not a directory) cannot host the worker tree.
     """
-    resolved = os.path.normpath(os.path.realpath(path))
+    try:
+        resolved = os.path.normpath(os.path.realpath(path))
+    except OSError:
+        return None, "workspace path unreadable"
     current = resolved
     while True:
-        if os.path.isdir(current):
+        try:
+            info = os.stat(current)
+        except OSError as exc:
+            if getattr(exc, "errno", None) == errno.ENOENT:
+                parent = os.path.dirname(current)
+                if parent == current:
+                    return None, ("workspace path %s does not exist and no ancestor is stat-able"
+                                  % redact(path))
+                current = parent
+                continue
+            if getattr(exc, "errno", None) == errno.ENOTDIR:
+                return None, "workspace path is not a directory"
+            return None, "workspace path unreadable"
+        if stat.S_ISDIR(info.st_mode):
             return current, None
-        if os.path.lexists(current):
-            return None, "workspace path is not a directory"
-        parent = os.path.dirname(current)
-        if parent == current:
-            return None, ("workspace path %s does not exist and no ancestor is stat-able"
-                          % redact(path))
-        current = parent
+        return None, "workspace path is not a directory"
 
 
 def nearest_existing(path):

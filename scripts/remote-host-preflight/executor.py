@@ -181,8 +181,18 @@ def _watchdog_execute_probe(argv, timeout):
         os.close(read_fd)
         try:
             os.setsid()
-        except OSError:
-            pass
+        except OSError as exc:
+            payload = {"kind": "os",
+                       "detail": "could not create process session: %s" % str(exc)[:200]}
+            try:
+                os.write(write_fd, json.dumps(payload).encode("utf-8"))
+            except OSError:
+                pass
+            try:
+                os.close(write_fd)
+            except OSError:
+                pass
+            os._exit(0)
         try:
             try:
                 result = _execute_probe(argv, timeout)

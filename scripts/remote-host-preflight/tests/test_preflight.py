@@ -657,6 +657,14 @@ class EngineFailures(Harness):
             time.sleep(0.05)
         self.assertFalse(alive)
 
+    def test_setsid_failure_does_not_run_probe(self):
+        with mock.patch.object(os, "setsid", side_effect=OSError("denied")):
+            with mock.patch.object(subprocess, "Popen", self.real_popen):
+                with self.assertRaises(OSError) as caught:
+                    preflight.default_executor(
+                        [sys.executable, "-B", "-c", "print(1)"], 1.0)
+        self.assertIn("process session", str(caught.exception))
+
     def test_default_executor_missing_tool_is_file_not_found(self):
         with mock.patch.object(subprocess, "Popen", self.real_popen):
             with self.assertRaises(FileNotFoundError):
@@ -1457,6 +1465,16 @@ class RedactionAndDeterminism(Harness):
         self.assertIsNone(problem)
         self.assertEqual(resolved, path)
         self.assertEqual((major, minor), (8, 1))
+
+    def test_workspace_unreadable_is_error(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["workspace_dir"] = {"exit_code": 4, "stderr": "unreadable\n"}
+        code, report, _ = self.run_main(fixture)
+        self.assertEqual(code, 2)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["disk_capacity"]["status"], "error")
+        self.assertEqual(by_id["storage_ext4_qualifier"]["status"], "error")
+        self.assertIn("unreadable", by_id["storage_ext4_qualifier"]["detail"])
 
     def test_workspace_resolver_malformed_output_is_error(self):
         fixture = dict(DEFAULT_FIXTURE)
