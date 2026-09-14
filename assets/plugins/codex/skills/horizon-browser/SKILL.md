@@ -30,9 +30,12 @@ local browser, pass `target` with its name and omit `backend`; Horizon
 resolves the provider and credentials from its configuration, and a
 refusal carries a typed code and at most the target, provider or credential
 reference name, never a credential value. Such a panel reports
-`remote_target`, classic WebDriver and no network capture; whether the
-target is physical hardware is its configuration, not something the call
-verifies, so do not report it as real-device evidence on its own. Set `visible: false` for background automation; use
+`remote_target`, `remote_device` (the model, OS version and hardware
+evidence the provider itself reported, verified against the target before
+the panel became ready), classic WebDriver and no network capture. A target
+that requires a physical device is refused as `remote_device_rejected`, with
+the session released, unless that evidence confirms it; cite `remote_device`,
+not the target name, as real-device evidence. Set `visible: false` for background automation; use
 `browser_visibility` to show or hide the live panel later without stopping its
 session, capture, ownership, or MCP control. Call `browser_close` on a panel
 you own when the user is done with it or a remote device session must be

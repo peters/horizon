@@ -779,18 +779,26 @@ fn browser_create_is_terminal(board: &Board, pending: &PendingBrowserCreate) -> 
         return true;
     };
     let failure = match &browser.status {
+        BrowserStatus::Error { .. } | BrowserStatus::Stopped { .. } if browser.remote_failure().is_some() => {
+            // A remote lifecycle names its own terminal outcome: the
+            // provider refused, the allocation is unknown, or the device
+            // did not meet the target.
+            browser
+                .remote_failure()
+                .map(|failure| (failure.code, failure.message.clone()))
+        }
         BrowserStatus::Error { .. } => Some((
             "backend_start_failed",
-            "the selected browser backend did not start; inspect the visible panel or local logs",
+            "the selected browser backend did not start; inspect the visible panel or local logs".to_string(),
         )),
         BrowserStatus::Stopped { .. } => Some((
             "backend_stopped",
-            "the selected browser backend stopped before it became controllable",
+            "the selected browser backend stopped before it became controllable".to_string(),
         )),
         BrowserStatus::Starting | BrowserStatus::Ready => None,
     };
     if let Some((code, message)) = failure {
-        record_and_complete_failure(pending, code, message);
+        record_and_complete_failure(pending, code, &message);
         return true;
     }
     if pending.request.deadline_at_millis < manifest::now_millis() {

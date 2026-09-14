@@ -54,6 +54,9 @@ struct Driver {
     /// Where `close` records what a remote release established, for the
     /// host's teardown signal.
     remote_release: crate::session::RemoteReleaseReport,
+    /// The allocated remote device as the provider's evidence describes
+    /// it, for coordination; `None` for a local browser.
+    remote_device: Option<String>,
     session_id: String,
     bidi: Option<JsonWsLink>,
     automation_ws: String,
@@ -236,10 +239,12 @@ impl Driver {
         event_tx: &BrowserEventSender,
         remote_release: crate::session::RemoteReleaseReport,
     ) -> Result<Self, String> {
-        let (mut host, session) = if let Some(request) = &config.remote {
-            start_remote(request, event_tx, &remote_release)?
+        let (mut host, session, remote_device) = if let Some(request) = &config.remote {
+            let (host, session, device) = start_remote(request, event_tx, &remote_release)?;
+            (host, session, Some(device.summary()))
         } else {
-            start_local(config, process_control, stop_requested)?
+            let (host, session) = start_local(config, process_control, stop_requested)?;
+            (host, session, None)
         };
         let NewSession {
             id: session_id,
@@ -259,6 +264,7 @@ impl Driver {
             config: config.clone(),
             host,
             remote_release,
+            remote_device,
             session_id,
             bidi,
             automation_ws,
@@ -483,7 +489,7 @@ fn start_remote(
     request: &super::remote::RemoteSessionRequest,
     event_tx: &BrowserEventSender,
     remote_release: &crate::session::RemoteReleaseReport,
-) -> Result<(DriverHost, NewSession), String> {
+) -> Result<(DriverHost, NewSession, super::remote::identity::RemoteDeviceIdentity), String> {
     let label = request.label.clone();
     let _ = event_tx.send(BrowserEvent::RemoteSession(RemoteSessionEvent::Allocating {
         label: label.clone(),
@@ -492,16 +498,20 @@ fn start_remote(
     // until New Session answers or the failure below says otherwise.
     *remote_release.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     let allocated = RemoteHost::connect(request).and_then(|mut host| {
-        let session = host.allocate(request)?;
-        Ok((host, session))
+        let allocation = host.allocate(request)?;
+        Ok((host, allocation))
     });
     match allocated {
-        Ok((host, session)) => {
+        Ok((host, allocation)) => {
             let _ = event_tx.send(BrowserEvent::RemoteSession(RemoteSessionEvent::Allocated {
-                label,
-                session_digest: session_digest(&session.id),
+                label: label.clone(),
+                session_digest: session_digest(&allocation.session.id),
             }));
-            Ok((DriverHost::Remote(host), session))
+            let _ = event_tx.send(BrowserEvent::RemoteSession(RemoteSessionEvent::DeviceIdentity {
+                label,
+                identity: allocation.device.clone(),
+            }));
+            Ok((DriverHost::Remote(host), allocation.session, allocation.device))
         }
         Err(failure) => {
             // Every failure ends the lifecycle with a terminal, value-free
@@ -537,6 +547,14 @@ fn start_failure_outcome(
             RemoteSessionEvent::AllocationFailed {
                 label,
                 reason: failure.to_string(),
+            },
+        ),
+        RemoteStartFailure::IdentityRejected { reason, released } => (
+            Some(released.clone()),
+            RemoteSessionEvent::DeviceRejected {
+                label,
+                reason: reason.clone(),
+                released: released.clone(),
             },
         ),
         RemoteStartFailure::Unenforceable { released } => {
@@ -687,6 +705,8 @@ mod tests {
             label: "ios".to_string(),
             provider: "grid".to_string(),
             browser: crate::BackendKind::SafariWebDriver,
+            device: horizon_browser_protocol::remote::DeviceRequirement::default(),
+            evidence: super::super::remote::identity::DeviceEvidenceSource::Capabilities,
         };
         let report =
             crate::session::RemoteReleaseReport::new(std::sync::Mutex::new(Some(RemoteReleaseOutcome::NeverAllocated)));
@@ -724,6 +744,23 @@ mod tests {
         let (established, event) = start_failure_outcome(&released, "ios".into());
         assert_eq!(established, Some(RemoteReleaseOutcome::Released));
         assert!(matches!(event, RemoteSessionEvent::AllocationFailed { .. }));
+
+        let rejected = RemoteStartFailure::IdentityRejected {
+            reason: "device model is iPhone 15, target requires iPhone 16".into(),
+            released: RemoteReleaseOutcome::Released,
+        };
+        let (established, event) = start_failure_outcome(&rejected, "ios".into());
+        assert_eq!(established, Some(RemoteReleaseOutcome::Released));
+        assert!(
+            matches!(
+                event,
+                RemoteSessionEvent::DeviceRejected {
+                    released: RemoteReleaseOutcome::Released,
+                    ..
+                }
+            ),
+            "a rejected device is its own terminal event"
+        );
 
         for outcome in [
             RemoteReleaseOutcome::ReleaseUnknown {

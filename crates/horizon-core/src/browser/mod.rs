@@ -7,6 +7,7 @@
 #[doc(hidden)]
 pub mod manifest;
 mod remote_panel;
+pub use remote_panel::RemoteFailure;
 pub mod remote_session;
 pub mod teach;
 

@@ -8,10 +8,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use horizon_browser::remote::{
-    BROWSERSTACK_OPTIONS_KEY, DeviceKind, ExtensionProblem, RemoteAdapterKind, RemoteBrowserConfig, RemoteConfigError,
-    RemoteTargetProfile,
+    BROWSERSTACK_OPTIONS_KEY, BROWSERSTACK_SESSION_API, DeviceKind, ExtensionProblem, RemoteAdapterKind,
+    RemoteBrowserConfig, RemoteConfigError, RemoteTargetProfile,
 };
-use horizon_browser::{BackendKind, RemoteAuthorizationHeader, RemoteSessionRequest};
+use horizon_browser::{BackendKind, DeviceEvidenceSource, RemoteAuthorizationHeader, RemoteSessionRequest};
 use serde_json::{Map, Value};
 
 use crate::remote_browser_credential::{CredentialStores, ResolveError, resolve_authorization};
@@ -79,7 +79,21 @@ pub fn build_remote_session_request(
         label: target_name.to_string(),
         provider: target.provider.clone(),
         browser: browser_family(&target.browser_name),
+        device: target.device.clone(),
+        evidence: evidence_source(provider.adapter),
     })
+}
+
+/// Where the driver finds the allocated device's identity for this adapter:
+/// the hosted grid's own session record, or the capabilities a standard
+/// endpoint echoes.
+fn evidence_source(adapter: RemoteAdapterKind) -> DeviceEvidenceSource {
+    match adapter {
+        RemoteAdapterKind::Webdriver => DeviceEvidenceSource::Capabilities,
+        RemoteAdapterKind::Browserstack => DeviceEvidenceSource::BrowserstackSession {
+            api_endpoint: BROWSERSTACK_SESSION_API.to_string(),
+        },
+    }
 }
 
 /// The local backend kind whose page semantics and capabilities match the
@@ -275,6 +289,13 @@ mod tests {
         );
         let debug = format!("{request:?}");
         assert!(!debug.contains("s3cret") && !debug.contains("alice"), "{debug}");
+        assert_eq!(request.device.kind, DeviceKind::Physical);
+        assert_eq!(request.device.model.as_deref(), Some("iPhone 16"));
+        assert_eq!(
+            request.evidence,
+            DeviceEvidenceSource::Capabilities,
+            "a standard endpoint is verified from the capabilities it echoes"
+        );
     }
 
     #[test]

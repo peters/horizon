@@ -18,6 +18,9 @@ pub struct CoordinationState {
     /// Configured remote target name when the session runs at a remote grid;
     /// `None` for a local browser. Never a provider endpoint or credential.
     pub remote_target: Option<String>,
+    /// The allocated remote device as the provider's evidence describes it
+    /// (model, OS version, hardware evidence); `None` for a local browser.
+    pub remote_device: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

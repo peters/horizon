@@ -56,9 +56,15 @@ shell commands, files, or other MCP servers.
   provider, capabilities and credentials and refuses with a typed reason
   (`target_unknown`, `target_invalid`, `credentials_not_ready`,
   `credentials_invalid`, `remote_session_limit_reached`) that never carries a
-  value. Such a panel reports `remote_target`, classic `WebDriver` and no
-  network capture. Whether the target is physical hardware is its
-  configuration; the allocated device is not verified yet.
+  value. After allocation the device is verified against the target's
+  requirement from the provider's own evidence (a hosted grid's session
+  record, or the capabilities a standard endpoint echoes); a physical
+  requirement the evidence does not confirm fails as
+  `remote_device_rejected` with the session released, and an allocation the
+  provider refused or left unknown fails as `remote_allocation_failed` or
+  `remote_allocation_unknown`. Such a panel reports `remote_target`,
+  `remote_device` (model, OS version, hardware evidence), classic
+  `WebDriver` and no network capture.
 - `browser_visibility` shows or hides an existing panel without stopping its
   browser, ownership lease, network capture, or MCP control.
 - `browser_close` closes a panel the caller owns in its workspace and stops

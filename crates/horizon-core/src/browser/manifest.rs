@@ -123,6 +123,11 @@ pub struct BrowserManifest {
     /// Never an endpoint or a credential; agents see the name only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_target: Option<String>,
+    /// The allocated remote device as the provider's own evidence describes
+    /// it (model, OS version, hardware evidence), verified against the
+    /// target before the panel became ready. Absent for a local browser.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_device: Option<String>,
     /// Negotiated CDP/BiDi WebSocket endpoint, or empty for classic-only
     /// Safari. The MCP adapter uses the validated action queue instead.
     pub browser_ws: String,
@@ -683,6 +688,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
             adopt_driver_host(manifest, host_instance());
             manifest.backend = state.backend;
             manifest.remote_target.clone_from(&state.remote_target);
+            manifest.remote_device.clone_from(&state.remote_device);
             manifest.browser_ws.clone_from(&state.browser_ws);
             manifest.target_id.clone_from(&state.target_id);
             manifest.url.clone_from(&state.url);
@@ -699,6 +705,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
         driver_update(panel_local_id, |manifest| {
             manifest.backend = state.backend;
             manifest.remote_target.clone_from(&state.remote_target);
+            manifest.remote_device.clone_from(&state.remote_device);
             manifest.browser_ws.clone_from(&state.browser_ws);
             manifest.target_id.clone_from(&state.target_id);
             manifest.url.clone_from(&state.url);
@@ -871,6 +878,7 @@ mod tests {
             panel_local_id: id.to_string(),
             backend: horizon_browser::BackendKind::ChromiumCdp,
             remote_target: None,
+            remote_device: None,
             browser_ws: "ws://127.0.0.1:1/devtools/browser/x".to_string(),
             target_id: "T1".to_string(),
             url: "https://example.com".to_string(),

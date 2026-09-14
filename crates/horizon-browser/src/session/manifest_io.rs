@@ -234,6 +234,7 @@ impl DriverState {
             url: self.url.clone(),
             title: self.title.clone(),
             remote_target: None,
+            remote_device: None,
         }
     }
 }

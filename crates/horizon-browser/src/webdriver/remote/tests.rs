@@ -3,9 +3,11 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 
+use super::identity::{DeviceEvidence, DeviceEvidenceSource};
 use super::{RemoteExpiry, RemoteHost, RemoteReleaseOutcome, RemoteSessionRequest, RemoteStartFailure};
 use crate::webdriver::remote_http::RemoteAuthorizationHeader;
 use crate::webdriver::test_server::{Reply, Server};
+use horizon_browser_protocol::remote::{DeviceKind, DeviceRequirement};
 
 fn request(endpoint: &str) -> RemoteSessionRequest {
     RemoteSessionRequest {
@@ -20,6 +22,12 @@ fn request(endpoint: &str) -> RemoteSessionRequest {
         label: "ios_phone".into(),
         provider: "grid".into(),
         browser: crate::BackendKind::SafariWebDriver,
+        device: DeviceRequirement {
+            kind: DeviceKind::Any,
+            model: None,
+            os_version: None,
+        },
+        evidence: DeviceEvidenceSource::Capabilities,
     }
 }
 
@@ -31,9 +39,13 @@ fn allocation_sends_one_authenticated_new_session_and_parses_the_id() {
     )]);
     let request = request(&server.endpoint("/wd/hub"));
     let mut host = RemoteHost::connect(&request).expect("connect");
-    let session = host.allocate(&request).expect("allocated");
-    assert_eq!(session.id, "abc-123");
-    assert_eq!(session.capabilities["browserName"], "safari");
+    let allocation = host.allocate(&request).expect("allocated");
+    assert_eq!(allocation.session.id, "abc-123");
+    assert_eq!(allocation.session.capabilities["browserName"], "safari");
+    assert_eq!(
+        allocation.device.hardware, None,
+        "a silent reply proves nothing about the hardware"
+    );
     let seen = server.recorded();
     assert_eq!(seen.len(), 1);
     assert_eq!(
@@ -231,4 +243,107 @@ fn release_is_verified_or_reported_unknown_after_bounded_attempts() {
         RemoteReleaseOutcome::ReleaseUnknown { attempts, .. } => assert_eq!(attempts, 3),
         other => panic!("unexpected {other:?}"),
     }
+}
+
+#[test]
+fn a_physical_requirement_is_verified_from_the_provider_record_before_the_panel_sees_the_session() {
+    let hub = Server::start(vec![allocated("real-1")]);
+    let api = Server::start(vec![Reply::json(
+        200,
+        &json!({"automation_session": {"device": "iPhone 16", "os": "ios", "os_version": "18.6", "browser": "iphone", "status": "running"}}),
+    )]);
+    let mut request = request(&hub.endpoint("/wd/hub"));
+    request.device = DeviceRequirement {
+        kind: DeviceKind::Physical,
+        model: Some("iPhone 16".into()),
+        os_version: Some("18".into()),
+    };
+    request.evidence = DeviceEvidenceSource::BrowserstackSession {
+        api_endpoint: api.endpoint(""),
+    };
+    let mut host = RemoteHost::connect(&request).expect("connect");
+    let allocation = host.allocate(&request).expect("verified");
+    assert_eq!(allocation.device.model.as_deref(), Some("iPhone 16"));
+    assert_eq!(allocation.device.os_version.as_deref(), Some("18.6"));
+    assert_eq!(allocation.device.hardware, Some(DeviceEvidence::Physical));
+    let record = api.recorded();
+    assert_eq!(record.len(), 1);
+    assert_eq!(
+        (record[0].method.as_str(), record[0].path.as_str()),
+        ("GET", "/automate/sessions/real-1.json")
+    );
+    assert_eq!(
+        record[0].authorization.as_deref(),
+        Some("Basic c2VjcmV0"),
+        "the same credential, the API origin only"
+    );
+    assert_eq!(hub.recorded().len(), 1, "no release: the device met the target");
+}
+
+#[test]
+fn a_device_that_does_not_meet_the_target_is_released_at_once() {
+    let hub = Server::start(vec![allocated("wrong-1"), Reply::json(200, &json!({"value": null}))]);
+    let api = Server::start(vec![Reply::json(
+        200,
+        &json!({"automation_session": {"device": "iPhone 15", "os_version": "17.5"}}),
+    )]);
+    let mut request = request(&hub.endpoint(""));
+    request.device = DeviceRequirement {
+        kind: DeviceKind::Physical,
+        model: Some("iPhone 16".into()),
+        os_version: None,
+    };
+    request.evidence = DeviceEvidenceSource::BrowserstackSession {
+        api_endpoint: api.endpoint(""),
+    };
+    let mut host = RemoteHost::connect(&request).expect("connect");
+    let failure = host.allocate(&request).expect_err("rejected");
+    assert_eq!(
+        failure,
+        RemoteStartFailure::IdentityRejected {
+            reason: "device model is iPhone 15, target requires iPhone 16".into(),
+            released: RemoteReleaseOutcome::Released,
+        }
+    );
+    let seen = hub.recorded();
+    assert_eq!(seen.len(), 2);
+    assert_eq!(
+        (seen[1].method.as_str(), seen[1].path.as_str()),
+        ("DELETE", "/session/wrong-1")
+    );
+    assert!(host.check_expiry().is_none());
+}
+
+#[test]
+fn an_unreachable_record_leaves_a_physical_requirement_unverified_and_released() {
+    let hub = Server::start(vec![allocated("silent-1"), Reply::json(200, &json!({"value": null}))]);
+    let api = Server::start(vec![Reply::json(503, &json!({"message": "down"}))]);
+    let mut request = request(&hub.endpoint(""));
+    request.device.kind = DeviceKind::Physical;
+    request.evidence = DeviceEvidenceSource::BrowserstackSession {
+        api_endpoint: api.endpoint(""),
+    };
+    let mut host = RemoteHost::connect(&request).expect("connect");
+    let failure = host.allocate(&request).expect_err("unverified");
+    assert!(
+        matches!(&failure, RemoteStartFailure::IdentityRejected { reason, released: RemoteReleaseOutcome::Released } if reason.contains("unverified hardware")),
+        "{failure:?}"
+    );
+    assert_eq!(hub.recorded().len(), 2, "allocation then release");
+
+    // A generic endpoint that echoes Appium capabilities verifies from them.
+    let hub = Server::start(vec![Reply::json(
+        200,
+        &json!({"value": {"sessionId": "appium-1", "capabilities": {"appium:deviceName": "Pixel 9", "appium:platformVersion": "16.0", "appium:realMobile": "true"}}}),
+    )]);
+    let mut appium = self::request(&hub.endpoint(""));
+    appium.device = DeviceRequirement {
+        kind: DeviceKind::Physical,
+        model: Some("pixel 9".into()),
+        os_version: Some("16".into()),
+    };
+    let mut host = RemoteHost::connect(&appium).expect("connect");
+    let allocation = host.allocate(&appium).expect("verified from capabilities");
+    assert_eq!(allocation.device.hardware, Some(DeviceEvidence::Physical));
+    assert_eq!(hub.recorded().len(), 1);
 }
