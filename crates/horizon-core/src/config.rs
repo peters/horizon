@@ -428,6 +428,12 @@ impl Config {
         if let Err(message) = self.browser.video.validate() {
             return Err(Error::Config(format!("browser.video: {message}")));
         }
+        // Bindings are checked at allocation time so a missing credential is a
+        // readiness state rather than a configuration that refuses to load.
+        self.browser
+            .remote
+            .validate_definition()
+            .map_err(|error| Error::Config(format!("browser.remote: {error}")))?;
         self.remote
             .validate()
             .map_err(|error| Error::Config(error.to_string()))?;
@@ -790,6 +796,82 @@ mod tests {
         assert!(error.to_string().contains("browser.video"));
         Config::from_yaml("browser:\n  video:\n    quality: 70\n    compression_level: 4\n    fps: 10\n")
             .expect("default-like video options should be accepted");
+    }
+
+    #[test]
+    fn browser_remote_section_round_trips_without_credential_values() {
+        let yaml = r#"
+browser:
+  remote:
+    providers:
+      device_cloud:
+        adapter: webdriver
+        endpoint: https://grid.example.net/wd/hub
+        authentication:
+          kind: basic
+          username_ref: device-cloud-user
+          password_ref: device-cloud-key
+        credential_bindings:
+          device-cloud-user:
+            store: os_keychain
+            slot: remote-browser/device-cloud/username
+          device-cloud-key:
+            store: session
+        limits:
+          max_sessions: 1
+          allocation_timeout_seconds: 120
+          idle_release_seconds: 180
+          max_session_seconds: 1800
+    targets:
+      ios_phone:
+        provider: device_cloud
+        browser_name: safari
+        platform_name: iOS
+        device:
+          kind: physical
+          model: iPhone 16
+          os_version: "18"
+        capability_extensions:
+          appium:automationName: XCUITest
+"#;
+        let config = Config::from_yaml(yaml).expect("remote section parses");
+        assert_eq!(
+            config.browser.backend,
+            crate::browser::BackendKind::ChromiumCdp,
+            "local defaults are untouched"
+        );
+        let target = config.browser.remote.targets.get("ios_phone").expect("target");
+        assert_eq!(target.provider, "device_cloud");
+        let encoded = config.to_yaml().expect("serializes");
+        let decoded = Config::from_yaml(&encoded).expect("re-parses");
+        assert_eq!(decoded.browser.remote, config.browser.remote);
+        assert!(!encoded.contains("password:"), "no credential value field exists");
+    }
+
+    #[test]
+    fn browser_remote_section_is_absent_by_default_and_validated_on_load() {
+        let encoded = Config::default().to_yaml().expect("serializes");
+        assert!(!encoded.contains("remote:"), "{encoded}");
+        let legacy = Config::from_yaml("browser:\n  backend: firefox\n").expect("legacy browser section loads");
+        assert!(legacy.browser.remote.is_empty());
+        let unbound = Config::from_yaml(
+            "browser:\n  remote:\n    providers:\n      grid:\n        endpoint: https://grid.example.net\n        authentication:\n          kind: bearer\n          token_ref: grid-token\n",
+        )
+        .expect("an unbound reference still loads; readiness reports it");
+        let presence = unbound.browser.remote.binding_presence();
+        assert_eq!(presence["grid"].values().filter(|present| !**present).count(), 1);
+        let error = Config::from_yaml(
+            "browser:\n  remote:\n    providers:\n      grid:\n        endpoint: https://grid.example.net\n    targets:\n      phone:\n        provider: nowhere\n        browser_name: safari\n        platform_name: iOS\n",
+        )
+        .expect_err("unknown provider is rejected");
+        let message = error.to_string();
+        assert!(message.contains("browser.remote"), "{message}");
+        assert!(message.contains("nowhere"), "{message}");
+        let error = Config::from_yaml(
+            "browser:\n  remote:\n    providers:\n      grid:\n        endpoint: https://me:pw@grid.example.net\n",
+        )
+        .expect_err("userinfo is rejected");
+        assert!(!error.to_string().contains("pw@"), "{error}");
     }
 
     #[test]

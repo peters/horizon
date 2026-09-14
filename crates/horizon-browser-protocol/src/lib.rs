@@ -10,6 +10,7 @@ mod command;
 mod control;
 pub mod input;
 mod network;
+pub mod remote;
 mod semantic;
 mod video;
 

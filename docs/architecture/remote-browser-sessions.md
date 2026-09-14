@@ -188,9 +188,10 @@ as a ready state.
 ## Phases
 
 1. This document and `scripts/remote-browser-spike/` (done in this PR).
-2. Configuration and credential bindings: schema, migration to version 11,
-   validation, import and export, session-only entry, `keyring` adapter behind
-   a fake-store seam, redacted readiness UI.
+2. Configuration and credential bindings, in three PRs: the `browser.remote`
+   schema with validation, portable export and import (`horizon-browser-protocol::remote`);
+   the session-only sink and the `keyring` adapter behind a fake-store seam;
+   then credential entry and redacted readiness in the UI.
 3. Remote transport and lifecycle: `ureq` transport, generic WebDriver session
    owner, timeouts, cancellation, limits, watchdog, ambiguous allocation and
    release handling, deterministic mock server tests.
