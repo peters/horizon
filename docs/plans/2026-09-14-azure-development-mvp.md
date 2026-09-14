@@ -1,6 +1,8 @@
 # Azure development offload MVP
 
-Status: implementation started; no end-to-end delivery claimed.
+Status: standard image published and qualified; bounded Azure pilot deleted;
+remote-produced source fix locally validated and delivered as PR #658.
+Full product acceptance and merges remain separate gates.
 Updated: 2026-09-14.
 
 ## Outcome
@@ -74,7 +76,7 @@ is already assigned to another contributor; do not duplicate that work.
 - Validate authenticated agent execution and reconnect without relying on an
   always-online client. Do not promise compatibility based on installed binaries.
 
-### 4. Image publication and one real Azure issue — pending
+### 4. Image publication complete; remote issue implemented, full cloud validation incomplete
 
 - Validate and publish the exact image digest through the approved publication
   path; add reproducible publication automation in its own slice if necessary.
@@ -95,7 +97,9 @@ Each slice is independently testable and uses a separate worktree from fresh
 limits; use focused serial PRs. Before pushing, run the full matrix in AGENTS.md
 on the exact final branch, plus applicable image/helper tests and live smoke.
 Complete independent local review and the required external review/CI gates.
-Specific merge and release/image-publication approvals remain separate; existing
+Specific merge and release approvals remain separate. The user has authorized
+future image publications to the existing private Azure ACR; do not ask again
+within that scope. Public registries and additional paid workers are not covered. Existing
 cloud resources and running user sessions must not be changed by a local rehearsal.
 
 ## Progress log
@@ -140,24 +144,28 @@ cloud resources and running user sessions must not be changed by a local rehears
   containers were removed. The local image, isolated worktree, build caches and
   private proof files remain available for continuation.
 
+## Reviewable delivery slices
+
+- [#652](https://github.com/peters/horizon/pull/652): complete repository build context.
+- [#647](https://github.com/peters/horizon/pull/647): native and browser testing image, smoke helper and this plan.
+- [#656](https://github.com/peters/horizon/pull/656): usable Rust tooling in clean worker SSH sessions.
+- [#657](https://github.com/peters/horizon/pull/657): retained Azure task-status inspection.
+- [#649](https://github.com/peters/horizon/pull/649): durable controller and monorepo image manifest, stacked on #657.
+- [#650](https://github.com/peters/horizon/pull/650): installed offload skill and one-time setup guidance.
+- [#658](https://github.com/peters/horizon/pull/658): the real offloaded font-build diagnostic fix.
+
+These are reviewable source changes; publication of the private testing image does
+not merge or release the controller or skill. Merge dependent slices in order only
+after their current-head gates pass and the user specifically authorizes the merge.
+
 ## Immediate continuation
 
-1. Complete hosted review/CI for the testing image (#647), controller (#649),
-   skill (#650), and focused base-image correction (#652). All local validation
-   matrices passed, including the required strict Clippy tier.
-2. The full-agent base was rebuilt with current Git helpers and its routines
-   dependency. Exact public Git preparation, saved-task execution and reconnect
-   passed. The user-approved native-only variant was published and its authenticated
-   digest pull verified. The repository manifest selects that immutable image;
-   browsers remain an optional build target. The older published browser image
-   with outdated Git helpers is not qualified for issue offloads.
-3. Continue the explicitly approved bounded Azure pilot using its original private
-   receipt. The exact native image, agent CLI and smoke helper were observed on
-   the running VM, and its compute shutdown schedule was verified. Repository
-   credential transfer was explicitly authorized and Git preparation completed. Coding-agent device login remains pending.
-   Record live execution, UI proof and exact cleanup in private pilot evidence;
-   worker allocation alone does not establish authenticated-agent or client-off
-   acceptance. The browser namespace policy remains a separate optional Azure lane.
+1. Settle hosted review and CI for the recovered source fix in #658. Its full local
+   matrix and isolated native smoke passed; the cloud speech lane remains incomplete.
+2. Settle hosted review and CI on each final delivery head, including the focused
+   task-status prerequisite and controller stack.
+3. Schedule the remaining product acceptance only under applicable authorization;
+   the pilot is deleted and no additional paid worker is authorized.
 
 ## Repository manifest decision — user clarification
 
@@ -169,47 +177,92 @@ issues as separate task environments. Do not select the first mapping entry
 implicitly. Multi-container service stacks need a separate orchestration contract.
 
 Azure subscription/profile, region, cost authority and credentials remain in
-private user settings. Persist the selected environment and resolved values with
-the task receipt. Fetch the manifest from GitHub at the exact source commit when
+private user settings. Persist the selected environment and resolved values in
+private handoff evidence alongside the task receipt. Fetch the manifest from GitHub at the exact source commit when
 no local checkout exists. No current issue defines this file format; #383/#470/
 #474 supply the existing Git/image/provider boundaries it must preserve.
 
 The user selected Codex CLI for the first worker. Authentication must be qualified
 independently of the GitHub PAT and registry managed identity.
 
-## Latest pilot findings
+## Current pilot findings and delivery gates
 
-- The native-only image passed an actual Azure source build and native UI smoke,
-  including terminal input before/after resize, normal close and cleanup. Exact
-  pinned-SSH reconnect after explicit Stop and compute-start retained the binary
-  and proof. These checks do not establish authenticated issue execution.
-- Default Azure Docker restrictions prevent the coding agent's filesystem sandbox
-  from starting. A disposable probe qualified SYS_ADMIN plus unconfined container
-  seccomp/AppArmor while retaining workspace-write enforcement: workspace writes
-  succeeded and writes to `/etc` were denied. Applying this broader container
-  policy to the live pilot requires separate explicit approval. No extra host
-  mounts or Docker socket are part of the proposed configuration.
-- The corrected local native-v5 image includes failure receipts for initialization
-  and cleanup errors, and handles termination during binary snapshotting. Native,
-  Chromium and Firefox smoke passed; all launch/resized screenshots were inspected.
-  Browser lanes used the optional cached browser image with the corrected helper.
-  Evidence: `/tmp/horizon-ui-v5-proof`; publication is not yet approved.
-- Controller recovery now atomically journals additional panel intent, preserving
-  the original panel ID across interrupted saves without replaying execution.
-  Fourteen focused tests pass; final complete validation and hosted review remain
-  gates. Git/task-start claims conservatively retain uncertain outcomes.
-- The pilot remains bounded by its approved four-hour limit. An exact-identity
-  cleanup timer is scheduled before that deadline, alongside independent Azure
-  compute auto-shutdown. The local cleanup timer depends on this client being up;
-  verify provider absence explicitly after deletion.
+- The standard image includes Chromium/ChromeDriver and Firefox ESR/geckodriver.
+  Published `browser-v7-toolchain-a8556969` resolves to
+  `sha256:6c8eaf6304b39b593c04367035a67cbe89f7e3f1bb5529432add43ef4d65060e`.
+  Registry manifest and authenticated digest pull were verified. Packaged native,
+  Chromium and Firefox smoke passed; launch/resize screenshots were inspected.
+  The repository manifest now selects this exact browser-capable digest.
+- `--target native` is an explicit smaller build, suitable only when browser
+  testing is outside scope. The completed pilot used its original native-v3
+  image: publishing or changing a manifest never replaces a live worker silently.
+- Native source build and UI smoke passed in the actual Azure worker. Explicit
+  Stop and compute-start retained its binary, proof bytes and pinned SSH identity.
+  Three independent saved shell tasks completed after controller disconnection.
+  This does not prove the three-panel desktop or disposable-client-off acceptance.
+- The user approved applying SYS_ADMIN and unconfined container seccomp/AppArmor
+  to the exact pilot. It was applied without additional host mounts or privileged
+  mode. A live sandbox probe allowed workspace writes and denied `/etc` writes.
+  The user completed device login; authenticated issue execution was verified.
+  This host-policy qualification must remain explicit for new worker profiles.
+- Container replacement cleared the runtime repository PAT while Git remained
+  `Complete` and retained agent login survived. Protected stdin restored the token
+  to the same explicitly authorized worker; repository API access then passed.
+  A standalone controller credential-refresh operation remains missing. The skill
+  documents this distinction and forbids deleting claims or replaying Git setup.
+- Controller recovery atomically journals panel intent and preserves its original
+  panel ID after interruption. Fourteen focused tests and the full matrix passed.
+  A disposable local run proved early start refuses without consuming a claim,
+  then starts successfully after Git readiness; duplicate starts stay refused.
+- The pilot revealed that configured status lacked Azure routing despite supporting
+  Azure start/attachment. The focused correction in #657 adds nine regression
+  tests; its earlier qualified head passed the full matrix and a live controller
+  query returning the original task's
+  running state without attachment or replay. Controller #649 is stacked on that
+  prerequisite; final lifecycle admission permits only Ready or Reconciling.
+- Clean SSH environments lost Cargo/Rustup homes and could not find the installed
+  toolchain. Correction #656 restores the homes in login and saved-task shells,
+  preserving explicit overrides and credential filtering. The published browser-v7
+  correction passed clean-shell real-tool checks and all packaged smoke lanes.
+  The repository's stable toolchain can differ from the image's minimum compiler;
+  warm caches with the selected repository toolchain before judging task latency.
+  The offload skill now performs this preflight for environments with Rust checks
+  and pins the resolved toolchain version for the complete saved task.
+- The real issue is an early build diagnostic for missing/unhydrated embedded font
+  assets, found while dogfooding the worker. The remote agent committed the four-file
+  fix. Focused reproduction/recovery checks, default workspace tests, all Clippy
+  tiers, independent review and final native smoke passed on the worker. The full
+  speech lane did not finish before cleanup; targeted passes are not a substitute.
+  A verified source-only patch was recovered to an isolated local worktree at the
+  same base. The full local matrix, independent review and isolated native smoke
+  passed before opening #658; local launch/resize screenshots were inspected. Logs,
+  screenshots, authentication and private task receipts were excluded from remote
+  recovery; the local smoke generated separate evidence.
+- Exact-resource deletion was submitted at 18:55 UTC and provider/controller
+  absence was verified before 19:00 UTC, within the approved four-hour window.
+  The pilot VM and its resource group are gone; the existing private registry and
+  pull identity were retained. Independent compute auto-shutdown was also configured.
+- Agent resume did not inherit the original writable paths, network or approval
+  settings. Restoring the original scoped options allowed execution to continue.
+  A validation subprocess also failed to survive the agent ending its turn. The
+  skill now requires explicit resume scope and either waiting for validation or
+  running long checks in a separate saved worker panel with a durable exit receipt.
 
-## Browser default clarification
+## Remaining product work
 
-The user's latest instruction supersedes the earlier native-only default: Horizon
-includes `horizon-browser`, so its standard development image must contain both
-Chromium and Firefox with their drivers. The Docker default now selects that stage;
-`--target native` remains available for explicitly narrower tasks. Rebuild and smoke
-the complete packaged default image, then request publication of that exact image.
-Update the repository manifest's default digest only after publication is verified.
-The existing native-only pilot receipt continues to identify its original image;
-changing that live worker is a separate operation, not a silent manifest update.
+Complete independent-panel UI and disposable-client-off acceptance in #474/#475,
+merge the reviewed slices only when specifically authorized, and distribute the
+controller and skill through the normal release path. Fresh Azure profiles still
+need a qualified, explicitly authorized agent sandbox policy: the pilot required a
+manual container-policy correction, so the default bootstrap is not yet proven as
+unattended setup. Add controller-supported credential refresh and safe artifact
+export, and prove a complete remote validation-to-PR run with the required compiler
+and warm caches inside its budget. The source-built controller
+is available for experimentation; existing released binaries do not gain it from
+an image publication. Monorepo environments select separate images; networked
+multi-container service orchestration is a separate contract.
+
+Retained authentication can be reused while its worker storage survives. Pilot
+deletion removed its local authentication and worker-only artifacts. The audited
+source patch was preserved; a new worker may require fresh login and explicitly
+authorized repository credential delivery.
