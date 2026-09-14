@@ -136,6 +136,7 @@ impl BrowserSession {
         self.frame_slot.release_notification();
         BrowserShutdownSignal::running(
             self.completion_rx,
+            self.remote_release,
             self.process_control,
             self.panel_local_id,
             self.coordination,
@@ -149,6 +150,7 @@ impl BrowserSession {
         self.frame_slot.release_notification();
         BrowserShutdownSignal::running(
             self.completion_rx,
+            self.remote_release,
             self.process_control,
             self.panel_local_id,
             self.coordination,
@@ -236,6 +238,7 @@ mod tests {
                 video: Arc::new(crate::VideoCaptureHandle::default()),
                 event_rx: mpsc::channel().1,
                 completion_rx,
+                remote_release: crate::session::RemoteReleaseReport::default(),
                 event_wake: BrowserEventWake::default(),
                 committed_url: CommittedUrl::default(),
                 process_control: crate::process::ChromeProcessControl::default(),

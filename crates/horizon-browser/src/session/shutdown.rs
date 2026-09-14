@@ -4,14 +4,26 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
-use crate::BrowserCoordination;
 use crate::process::ChromeProcessControl;
+use crate::{BrowserCoordination, RemoteReleaseOutcome};
+
+/// Where a remote driver records what release established, read by the
+/// host once the signal completes. Local drivers never write it.
+pub type RemoteReleaseReport = Arc<Mutex<Option<RemoteReleaseOutcome>>>;
+
+/// What a driver thread hands back when it exits: the completion sender the
+/// host's signal waits on, and the slot for a remote release outcome.
+pub struct DriverTeardown {
+    pub completion: mpsc::Sender<()>,
+    pub remote_release: RemoteReleaseReport,
+}
 
 /// Completion signal paired with an exact browser child handle. Normal paths
 /// only poll the receiver; a hard application-exit deadline can explicitly
 /// terminate and reap the owned process before removing its manifest.
 pub struct BrowserShutdownSignal {
     completion_rx: mpsc::Receiver<()>,
+    remote_release: RemoteReleaseReport,
     driver_complete: AtomicBool,
     process_complete: AtomicBool,
     process_control: ChromeProcessControl,
@@ -38,12 +50,14 @@ const PROFILE_CLEANUP_RETRY_DELAY: Duration = Duration::from_secs(1);
 impl BrowserShutdownSignal {
     pub(super) fn running(
         completion_rx: mpsc::Receiver<()>,
+        remote_release: RemoteReleaseReport,
         process_control: ChromeProcessControl,
         panel_local_id: String,
         coordination: Option<Arc<dyn BrowserCoordination>>,
     ) -> Self {
         Self {
             completion_rx,
+            remote_release,
             driver_complete: AtomicBool::new(false),
             process_complete: AtomicBool::new(false),
             process_control,
@@ -70,6 +84,7 @@ impl BrowserShutdownSignal {
         process_control.mark_registration_settled();
         Self {
             completion_rx,
+            remote_release: RemoteReleaseReport::default(),
             driver_complete: AtomicBool::new(true),
             process_complete: AtomicBool::new(true),
             process_control,
@@ -82,6 +97,18 @@ impl BrowserShutdownSignal {
     #[must_use]
     pub fn is_complete(&self) -> bool {
         self.process_is_complete() && self.profile_cleanup_is_complete()
+    }
+
+    /// What a remote driver established at the provider on the way out.
+    /// `None` for a local browser, or before the driver has released. A
+    /// completed signal with `Failed` or `ReleaseUnknown` here means the
+    /// panel is gone but the allocation may still be held.
+    #[must_use]
+    pub fn remote_release(&self) -> Option<RemoteReleaseOutcome> {
+        self.remote_release
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     #[must_use]
@@ -197,6 +224,7 @@ impl BrowserShutdownSignal {
         process_control.mark_registration_settled();
         Self {
             completion_rx,
+            remote_release: RemoteReleaseReport::default(),
             driver_complete: AtomicBool::new(false),
             process_complete: AtomicBool::new(false),
             process_control,

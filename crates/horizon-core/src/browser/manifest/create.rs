@@ -44,6 +44,25 @@ pub struct BrowserCreateRequest {
     claimed_by_pid: Option<u32>,
 }
 
+impl BrowserCreateRequest {
+    /// An unclaimed request for host tests; never written to the queue.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn for_tests(panel_local_id: &str) -> Self {
+        Self {
+            request_id: new_action_id(),
+            actor: format!("horizon:{panel_local_id}"),
+            host_instance: None,
+            url: None,
+            backend: None,
+            visible: true,
+            requested_at_millis: 0,
+            deadline_at_millis: i64::MAX,
+            claimed_by_pid: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct BrowserCreateResult {
     pub request_id: String,

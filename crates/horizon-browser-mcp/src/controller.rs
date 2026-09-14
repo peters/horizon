@@ -8,7 +8,8 @@ use horizon_browser::{
 };
 use horizon_core::browser::manifest;
 use horizon_core::browser::manifest::{
-    AgentIdentity, BrowserCreateOutcome, BrowserManifest, BrowserVisibilityOutcome, HOST_INSTANCE_ENV,
+    AgentIdentity, BrowserCloseOutcome, BrowserCreateOutcome, BrowserManifest, BrowserVisibilityOutcome,
+    HOST_INSTANCE_ENV,
 };
 use thiserror::Error;
 
@@ -101,6 +102,11 @@ pub(crate) struct VisibilityReceipt {
     pub(crate) panel: BrowserPanel,
 }
 
+pub(crate) struct CloseReceipt {
+    pub(crate) action_id: String,
+    pub(crate) panel_id: String,
+}
+
 #[derive(Debug, Error)]
 pub(crate) enum ControlError {
     #[error("{operation}: {reason}")]
@@ -132,6 +138,12 @@ pub(crate) enum ControlError {
     AdditionalPanelRequiresOptIn { panel_id: String },
     #[error("browser visibility can be changed only by an agent panel launched inside Horizon")]
     VisibilityUnavailable,
+    #[error("browser_close is available only to an agent panel launched inside Horizon")]
+    CloseUnavailable,
+    #[error(
+        "browser close request {action_id} timed out after {timeout_millis} ms; call browser_list before retrying because the panel may have closed late"
+    )]
+    CloseTimeout { action_id: String, timeout_millis: u64 },
     #[error(
         "browser visibility request {action_id} timed out after {timeout_millis} ms; call browser_panel before retrying because the change may have completed late"
     )]
@@ -388,6 +400,57 @@ impl BrowserController {
                 self.refresh_claim(panel_id)?;
                 last_heartbeat = Instant::now();
             }
+            tokio::time::sleep(RESULT_POLL_INTERVAL).await;
+        }
+    }
+
+    /// Close an owned panel in the calling agent's workspace. The host drops
+    /// the panel and answers once its session teardown has completed: a
+    /// successful result means the panel is gone and, for a remote session,
+    /// that the provider established the release; a refused or unanswered
+    /// release comes back as a typed `release_failed` / `release_unknown`
+    /// failure, and a teardown still running at the deadline as
+    /// `teardown_timeout`.
+    pub(crate) async fn close(
+        &self,
+        panel_id: &str,
+        timeout_millis: Option<u64>,
+    ) -> Result<CloseReceipt, ControlError> {
+        if !is_horizon_actor(&self.actor) {
+            return Err(ControlError::CloseUnavailable);
+        }
+        let timeout_millis = bounded_timeout(timeout_millis);
+        self.ensure_claim(panel_id)?;
+        let action_id = manifest::enqueue_close(self.identity(), panel_id, Duration::from_millis(timeout_millis))
+            .map_err(|source| self.denied(panel_id, "could not queue browser panel close", source))?;
+        let started = Instant::now();
+        loop {
+            if let Some(result) = manifest::take_close_result(&action_id, &self.actor)
+                .map_err(|source| ControlError::internal_io("could not read browser close result", source))?
+            {
+                return match result.outcome {
+                    BrowserCloseOutcome::Closed => Ok(CloseReceipt {
+                        action_id,
+                        panel_id: panel_id.to_string(),
+                    }),
+                    BrowserCloseOutcome::Failed { code, message } => Err(ControlError::Browser {
+                        action_id,
+                        code,
+                        message,
+                    }),
+                };
+            }
+            // The host judges the deadline on its own poll and publishes a typed
+            // outcome (closed or teardown_timeout); give that result the same
+            // delivery headroom as a create so it is not overtaken here.
+            if started.elapsed() >= Duration::from_millis(timeout_millis + RESULT_DELIVERY_HEADROOM_MILLIS) {
+                return Err(ControlError::CloseTimeout {
+                    action_id,
+                    timeout_millis,
+                });
+            }
+            // No ownership heartbeat while waiting: the panel is about to go,
+            // and a refreshed lease on a closed panel would only fail.
             tokio::time::sleep(RESULT_POLL_INTERVAL).await;
         }
     }

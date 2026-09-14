@@ -98,6 +98,7 @@ fn exercise_protocol(requested_version: &str, negotiated_version: &str) {
                 && instructions.contains("browser_network_watch")
                 && instructions.contains("browser_video")
                 && instructions.contains("browser_visibility")
+                && instructions.contains("browser_close")
                 && instructions.contains("allow_additional=true")
                 && instructions.contains("original panel")),
         "server instructions must teach creation and network capture workflows"
@@ -137,7 +138,7 @@ fn listed_tool<'a>(tools: &'a Value, name: &str) -> &'a Value {
 
 fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     let encoded_tools = tools.to_string();
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(15));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(16));
     let create = listed_tool(tools, "browser_create");
     assert!(
         create["description"]
@@ -171,6 +172,13 @@ fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
             .as_str()
             .is_some_and(|description| description.contains("without stopping"))
     );
+    let close = listed_tool(tools, "browser_close");
+    assert!(
+        close["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("stop its session") && description.contains("remote"))
+    );
+    assert!(close["inputSchema"].to_string().contains("panel_id"));
     let wait = listed_tool(tools, "browser_wait");
     assert!(
         wait["description"]

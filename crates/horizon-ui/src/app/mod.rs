@@ -1,6 +1,7 @@
 mod actions;
 mod attention_feed;
 mod bootstrap;
+mod browser_close_requests;
 mod browser_requests;
 mod canvas;
 mod detached_viewports;

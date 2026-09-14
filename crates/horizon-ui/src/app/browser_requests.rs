@@ -30,6 +30,9 @@ const STARTUP_DEADLINE_HEADROOM: Duration = Duration::from_millis(750);
 pub(super) struct BrowserCreateHostState {
     last_request_poll: Option<Instant>,
     pending: Vec<PendingBrowserCreate>,
+    /// Closes the host has applied but whose session teardown has not
+    /// completed yet; each is published once its teardown signal settles.
+    pub(super) pending_closes: Vec<super::browser_close_requests::PendingBrowserClose>,
     /// Board placement the manifests were last stamped for; a change
     /// re-stamps on the same frame instead of waiting for the next tick.
     stamped_placement: Option<u64>,
@@ -48,6 +51,13 @@ struct PendingBrowserCreate {
     /// User navigations the panel had seen when the create started; more
     /// means the user took the panel over before the first page committed.
     user_navigations_at_start: u32,
+}
+
+/// The panel a test wants treated as still being created.
+#[cfg(test)]
+pub(super) struct PendingBrowserCreateProbe {
+    pub(super) panel_id: PanelId,
+    pub(super) panel_local_id: String,
 }
 
 /// Whether a pending create may complete, decided from the panel's live
@@ -122,9 +132,9 @@ fn create_readiness(
 }
 
 #[derive(Clone, Copy)]
-struct ActorPanel {
-    panel_id: PanelId,
-    workspace_id: WorkspaceId,
+pub(super) struct ActorPanel {
+    pub(super) panel_id: PanelId,
+    pub(super) workspace_id: WorkspaceId,
 }
 
 enum BrowserCreateCompletion {
@@ -199,11 +209,14 @@ impl HorizonApp {
 
     fn poll_host_requests(&mut self) -> bool {
         let mut changed = false;
+        // The create, visibility and close queues are independent: a create
+        // queue that cannot be read (one malformed request is enough) must
+        // not stop closes from being claimed or their results published.
         let requests = match manifest::list_create_requests() {
             Ok(requests) => requests,
             Err(error) => {
                 tracing::warn!(error = %error, "could not poll browser create requests");
-                return changed;
+                Vec::new()
             }
         };
         for request in requests {
@@ -229,7 +242,7 @@ impl HorizonApp {
             changed = true;
             self.start_requested_browser(request, actor_panel);
         }
-        changed | self.poll_browser_visibility_requests()
+        changed | self.poll_browser_visibility_requests() | self.poll_browser_close_requests()
     }
 
     fn start_requested_browser(&mut self, request: BrowserCreateRequest, actor_panel: ActorPanel) {
@@ -442,6 +455,29 @@ impl HorizonApp {
         sync_manifest_host_state(self.host_manifest_root(), &browser_placements(&self.board))
     }
 
+    /// Whether an agent create for this panel has not completed yet.
+    pub(super) fn browser_create_is_pending(&self, panel_id: PanelId) -> bool {
+        self.browser_create_host
+            .pending
+            .iter()
+            .any(|pending| pending.panel_id == panel_id)
+    }
+
+    /// Register a create as still pending, for tests of paths that must
+    /// refuse to touch a panel while its create has not returned.
+    #[cfg(test)]
+    pub(super) fn mark_browser_create_pending_for_tests(&mut self, probe: PendingBrowserCreateProbe) {
+        self.browser_create_host.pending.push(PendingBrowserCreate {
+            request: BrowserCreateRequest::for_tests(&probe.panel_local_id),
+            panel_id: probe.panel_id,
+            panel_local_id: probe.panel_local_id,
+            backend: BackendKind::default(),
+            started_at: Instant::now(),
+            ready_since: None,
+            user_navigations_at_start: 0,
+        });
+    }
+
     fn finish_pending_browser_creates(&mut self) -> bool {
         if self.browser_create_host.pending.is_empty() {
             return false;
@@ -467,7 +503,7 @@ impl HorizonApp {
     }
 }
 
-fn actor_panel(board: &Board, actor: &str) -> Option<ActorPanel> {
+pub(super) fn actor_panel(board: &Board, actor: &str) -> Option<ActorPanel> {
     board
         .panels
         .iter()
@@ -564,7 +600,7 @@ fn placement_fingerprint(board: &Board) -> u64 {
 
 /// Requests name the host that launched the agent; a second Horizon process
 /// hosting a copy of the same session must leave them alone.
-fn launched_by_this_host(host_instance: Option<&str>) -> bool {
+pub(super) fn launched_by_this_host(host_instance: Option<&str>) -> bool {
     host_instance == Some(manifest::host_instance())
 }
 

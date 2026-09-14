@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -51,6 +51,9 @@ const MAX_COMMAND_BURST: usize = 4;
 struct Driver {
     config: BrowserSessionConfig,
     host: DriverHost,
+    /// Where `close` records what a remote release established, for the
+    /// host's teardown signal.
+    remote_release: crate::session::RemoteReleaseReport,
     session_id: String,
     bidi: Option<JsonWsLink>,
     automation_ws: String,
@@ -113,16 +116,27 @@ pub(crate) fn run_webdriver(
     command_rx: &CommandReceiver,
     frame_slot: &Arc<FrameSlot>,
     stop_requested: &Arc<AtomicBool>,
-    completion_tx: mpsc::Sender<()>,
+    teardown: crate::session::DriverTeardown,
     process_control: &ChromeProcessControl,
 ) {
+    let crate::session::DriverTeardown {
+        completion: completion_tx,
+        remote_release,
+    } = teardown;
     let _completion = Completion::new(completion_tx, process_control.clone());
     let Some(_coordination_lifetime) = crate::coordination::CoordinationLifetime::start(config) else {
         let _ = event_tx.send(BrowserEvent::Warning(crate::coordination::PREPARE_FAILURE.to_string()));
         let _ = event_tx.send(BrowserEvent::Stopped { code: None });
         return;
     };
-    let mut driver = match Driver::start(config, process_control, stop_requested, frame_slot, event_tx) {
+    let mut driver = match Driver::start(
+        config,
+        process_control,
+        stop_requested,
+        frame_slot,
+        event_tx,
+        remote_release,
+    ) {
         Ok(driver) => driver,
         Err(error) => {
             let _ = event_tx.send(BrowserEvent::Warning(error));
@@ -220,6 +234,7 @@ impl Driver {
         stop_requested: &AtomicBool,
         frame_slot: &Arc<FrameSlot>,
         event_tx: &BrowserEventSender,
+        remote_release: crate::session::RemoteReleaseReport,
     ) -> Result<Self, String> {
         let (mut host, session) = if let Some(request) = &config.remote {
             start_remote(request, event_tx)?
@@ -243,6 +258,7 @@ impl Driver {
         Ok(Self {
             config: config.clone(),
             host,
+            remote_release,
             session_id,
             bidi,
             automation_ws,
