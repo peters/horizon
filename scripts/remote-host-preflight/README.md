@@ -35,7 +35,7 @@ unsupported check **and no probe errors**, `2` at least one probe error
 | Check | Source | Meaning |
 | --- | --- | --- |
 | `os_linux` | `uname -srm` | Linux kernel on `x86_64` or `aarch64` (release + arch in the report). A failed or truncated `uname` is an **error**, not a rejection; only a parsed non-Linux kernel is `unsupported` |
-| `container_engine` | `docker version --format json` / `docker context inspect --format '{{.Endpoints.docker.Host}}'` / `docker info --format '{{.Driver}}'` / `podman --remote=true --url unix://<existing-socket> info --format '{{.Version.Version}}'` | a usable engine is present **and reachable by the current user on this host**: the endpoint must be a local unix socket (`DOCKER_HOST` and the active docker context Host; named podman/`CONTAINER_*` connections are rejected). Podman socket discovery (`/run/podman/podman.sock` and `$XDG_RUNTIME_DIR/podman/podman.sock`) runs in a killable helper so a stale FUSE/NFS `XDG_RUNTIME_DIR` cannot block the main process. The engine is then queried only through that existing socket via `--remote=true --url unix://...` (never local `podman info`, which would initialize rootless runtime state). The docker server OS must be present and `linux`, and for docker the storage driver is reported or explicitly marked `unverified` with the reason. Engine probes request only those fields |
+| `container_engine` | `docker version --format json` / `docker context inspect --format '{{.Endpoints.docker.Host}}'` / `docker info --format '{{.Driver}}'` / `podman --remote=true --url unix://<existing-socket> info --format '{{.Version.Version}}'` | a usable engine is present **and reachable by the current user on this host**: the endpoint must be a local unix socket (`DOCKER_HOST` and the active docker context Host; named podman/`CONTAINER_*` connections are rejected). After that check, `docker version` and `docker info` are pinned with `--host unix://...` so a later context change cannot contact a remote daemon. Podman socket discovery (`/run/podman/podman.sock` and `$XDG_RUNTIME_DIR/podman/podman.sock`) runs in a killable helper so a stale FUSE/NFS `XDG_RUNTIME_DIR` cannot block the main process. The engine is then queried only through that existing socket via `--remote=true --url unix://...` (never local `podman info`, which would initialize rootless runtime state). The docker server OS must be present and `linux`, and for docker the storage driver is reported or explicitly marked `unverified` with the reason. Engine probes request only those fields |
 | `cpu_capacity` | `nproc`, fallback `/proc/cpuinfo` | at least the 4-core reference baseline. The cpuinfo fallback is used only when it contains at least one `processor` record; otherwise the report is incomplete |
 | `memory_capacity` | `/proc/meminfo` `MemTotal` | at least the 16 GiB reference baseline minus 512 MiB (MemTotal excludes kernel-reserved pages; an unreadable `MemTotal` is an **error**, not a rejection) |
 | `disk_capacity` | `df -kP PATH` | at least 20 GiB free on the mount that will hold the workspace. `PATH` is the nearest existing workspace ancestor (one extra argv element, no shell); unrelated mounts are not queried. The **longest mount-point ancestor** of the resolved path is selected; a malformed free value on that mount is an **error** |
@@ -73,6 +73,8 @@ unsupported check **and no probe errors**, `2` at least one probe error
 python3 -B -m unittest discover -s scripts/remote-host-preflight/tests -v
 ```
 
-Deterministic: synthetic procfs/sysfs roots plus an injected executor with
-fixture outputs. No test invokes a real host tool; the executor additionally
-asserts every issued argv is one of the fixed probe vectors.
+Decision tests are synthetic: fixture procfs/sysfs roots plus an injected
+executor that asserts every issued argv is one of the fixed probe vectors.
+A few Linux subprocess tests restore real `Popen` to exercise watchdog
+timeout/overflow paths; those launch this host's Python interpreter and
+`sleep`, not docker/podman/df.

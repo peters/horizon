@@ -72,7 +72,11 @@ explicit about which steps mutate the host so the proof is not overclaimed.
      done;
      df -kP "$WS" | tail -1;
      if command -v docker >/dev/null 2>&1; then
-       docker info --format "{{.ServerVersion}}" 2>&1 | head -1;
+       HOST="${DOCKER_HOST:-$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null)}";
+       case "$HOST" in
+         unix://*|/*) docker --host "$HOST" info --format "{{.ServerVersion}}" 2>&1 | head -1 ;;
+         *) echo "docker endpoint is not a local unix socket" ;;
+       esac
      else
        echo "docker: tool not present";
      fi;

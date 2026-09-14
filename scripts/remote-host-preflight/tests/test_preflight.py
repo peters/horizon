@@ -153,6 +153,8 @@ class Harness(unittest.TestCase):
                 matches = list(argv) == args
                 if key in ("disk", "workspace_dir", "podman_socket") and list(argv[:len(args)]) == args and len(argv) in (len(args), len(args) + 1):
                     matches = True
+                if key in ("docker_version", "docker_info") and len(argv) == len(args) + 2 and argv[:1] == args[:1] and argv[1] == "--host" and argv[2].startswith("unix://") and argv[3:] == args[1:]:
+                    matches = True
                 if key == "podman_info" and list(argv[:len(args)]) == args and list(argv[len(args)+1:]) == list(preflight.PROBE_ARGS["podman_info_tail"]):
                     matches = True
                 if matches:
@@ -1123,6 +1125,10 @@ class RedactionAndDeterminism(Harness):
         extra_keys = ("disk", "workspace_dir", "podman_info", "podman_socket")
         for argv in executor.seen:
             skipped = False
+            if (len(argv) >= 3 and argv[0] == "docker" and argv[1] == "--host"
+                    and argv[2].startswith("unix://")
+                    and (["docker"] + argv[3:]) in allowed):
+                skipped = True
             for key in extra_keys:
                 prefix = list(preflight.PROBE_ARGS[key])
                 if argv[:len(prefix)] == prefix and len(argv) > len(prefix):
@@ -1131,6 +1137,20 @@ class RedactionAndDeterminism(Harness):
             if skipped:
                 continue
             self.assertIn(argv, allowed)
+
+    def test_docker_daemon_probes_pin_validated_host(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        _, _, executor = self.run_main(fixture)
+        self.assertIn(
+            ["docker", "--host", "unix:///var/run/docker.sock",
+             "version", "--format", "json"],
+            executor.seen)
+        self.assertIn(
+            ["docker", "--host", "unix:///var/run/docker.sock",
+             "info", "--format", "{{.Driver}}"],
+            executor.seen)
+        self.assertNotIn(list(preflight.PROBE_ARGS["docker_version"]), executor.seen)
+        self.assertNotIn(list(preflight.PROBE_ARGS["docker_info"]), executor.seen)
 
     def test_workspace_resolution_timeout_is_bounded(self):
         fixture = dict(DEFAULT_FIXTURE)

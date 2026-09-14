@@ -146,14 +146,17 @@ def redact(text):
     return out[:400]
 
 
-def run_probe(executor, key, timeout, extra_argv=None):
+def run_probe(executor, key, timeout, extra_argv=None, after_binary=None):
     """Run one fixed probe; returns (result_dict, error_string_or_None).
 
     `extra_argv` is appended as additional argv elements (never through a
     shell). The disk probe uses this for the workspace path so `df` does
-    not enumerate unrelated mounts.
+    not enumerate unrelated mounts. `after_binary` is inserted immediately
+    after argv[0] so a validated docker `--host` cannot be re-resolved.
     """
     argv = list(PROBE_ARGS[key])
+    if after_binary:
+        argv = [argv[0]] + list(after_binary) + argv[1:]
     if extra_argv:
         argv.extend(extra_argv)
     try:
@@ -279,25 +282,43 @@ def docker_context_host(probe):
     return host or None
 
 
-def docker_endpoint_reason(executor, timeout):
-    """None when the selected docker endpoint is a local unix socket.
+def normalize_unix_endpoint(host):
+    """`unix://` URL for a local socket path, or None if it is not pin-able."""
+    if not host:
+        return None
+    text = str(host).strip()
+    if not text or "\n" in text or "\r" in text or "\0" in text:
+        return None
+    if text.startswith("unix://"):
+        return text
+    if text.startswith("/"):
+        return "unix://" + text
+    return None
 
-    Both `DOCKER_HOST` and the active context (selected by `DOCKER_CONTEXT`)
-    must be local unix sockets. A local socket env var must not skip a
-    remote context, and missing inspect output fails closed.
+
+def docker_endpoint_reason(executor, timeout):
+    """(pinned unix endpoint, None) or (None, reason).
+
+    Both `DOCKER_HOST` and the active context Host must be local unix
+    sockets. The returned endpoint is the one Docker would use (`DOCKER_HOST`
+    overrides the context) and is pinned on later `--host` probes so a
+    context change cannot contact a remote daemon.
     """
     host_env = os.environ.get("DOCKER_HOST")
     if host_env and not is_local_unix_endpoint(host_env):
-        return "docker endpoint is remote (DOCKER_HOST=%s)" % redact(host_env)
+        return None, "docker endpoint is remote (DOCKER_HOST=%s)" % redact(host_env)
     ctx, err = run_probe(executor, "docker_context", timeout)
     if err is not None:
-        return "docker context inspect failed (%s)" % redact(err)
+        return None, "docker context inspect failed (%s)" % redact(err)
     ctx_host = docker_context_host(ctx)
     if not ctx_host:
-        return "docker context endpoint missing"
+        return None, "docker context endpoint missing"
     if not is_local_unix_endpoint(ctx_host):
-        return "docker endpoint is remote (context Host=%s)" % ctx_host
-    return None
+        return None, "docker endpoint is remote (context Host=%s)" % ctx_host
+    pinned = normalize_unix_endpoint(host_env if host_env else ctx_host)
+    if not pinned:
+        return None, "docker endpoint is remote"
+    return pinned, None
 
 
 def candidate_podman_sockets():
@@ -367,11 +388,13 @@ def check_container_engine(executor, timeout):
     docker_version, dv_err, docker_server = None, None, None
     podman_info, pi_err, podman_version = None, None, None
 
-    docker_note = docker_endpoint_reason(executor, timeout)
+    docker_host, docker_note = docker_endpoint_reason(executor, timeout)
     if docker_note is not None:
         reasons["docker"] = docker_note
     else:
-        docker_version, dv_err = run_probe(executor, "docker_version", timeout)
+        pin = ["--host", docker_host]
+        docker_version, dv_err = run_probe(executor, "docker_version", timeout,
+                                           after_binary=pin)
         docker_server = parse_engine_version(docker_version, "docker")
         if docker_server is not None:
             ostype = docker_server_ostype(docker_version)
@@ -420,7 +443,8 @@ def check_container_engine(executor, timeout):
     if others:
         detail += " (also found %s)" % ", ".join(others)
     if engine_ok == "docker":
-        info, err = run_probe(executor, "docker_info", timeout)
+        info, err = run_probe(executor, "docker_info", timeout,
+                              after_binary=["--host", docker_host])
         driver = None
         if err is not None:
             reason = "probe timed out" if "timed out" in err else "probe failed"
