@@ -46,6 +46,14 @@ impl RoutineRegistry {
     /// Missing file, malformed JSON, or validation failure.
     pub fn load(&self, routine_id: Uuid) -> Result<RoutineDefinition, RoutineError> {
         let path = self.root.join(routine_id.to_string()).join("routine.json");
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Err(RoutineError::RoutineNotFound),
+            Err(_) => return Err(RoutineError::Storage),
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(RoutineError::Storage);
+        }
         let bytes = match fs::read(&path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == ErrorKind::NotFound => return Err(RoutineError::RoutineNotFound),
@@ -107,9 +115,15 @@ impl RoutineRegistry {
             Ok(_) => {}
         }
         let lock = self.lock(routine_id)?;
-        let _ = fs::remove_file(dir.join("routine.json"));
+        let staging = self.root.join(format!(".{routine_id}.deleting"));
+        let rename = fs::rename(&dir, &staging);
         drop(lock);
-        match fs::remove_dir_all(&dir) {
+        match rename {
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(_) => return Err(RoutineError::Storage),
+            Ok(()) => {}
+        }
+        match fs::remove_dir_all(&staging) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
             Err(_) => Err(RoutineError::Storage),
@@ -141,6 +155,9 @@ impl RoutineRegistry {
 }
 
 fn create_private_dir(path: &Path) -> Result<(), RoutineError> {
+    if let Some(parent) = path.parent() {
+        validate_existing_ancestors(parent)?;
+    }
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => return Err(RoutineError::Storage),
         Ok(metadata) if !metadata.is_dir() => return Err(RoutineError::Storage),
@@ -149,14 +166,13 @@ fn create_private_dir(path: &Path) -> Result<(), RoutineError> {
             #[cfg(unix)]
             {
                 fs::DirBuilder::new()
-                    .recursive(true)
                     .mode(0o700)
                     .create(path)
                     .map_err(|_| RoutineError::Storage)?;
             }
             #[cfg(not(unix))]
             {
-                fs::create_dir_all(path).map_err(|_| RoutineError::Storage)?;
+                fs::create_dir(path).map_err(|_| RoutineError::Storage)?;
             }
         }
         Err(_) => return Err(RoutineError::Storage),
@@ -173,6 +189,36 @@ fn create_private_dir(path: &Path) -> Result<(), RoutineError> {
         let mut permissions = metadata.permissions();
         permissions.set_mode(0o700);
         fs::set_permissions(path, permissions).map_err(|_| RoutineError::Storage)?;
+    }
+    Ok(())
+}
+
+fn validate_existing_ancestors(path: &Path) -> Result<(), RoutineError> {
+    let mut current = path.to_path_buf();
+    loop {
+        match fs::metadata(&current) {
+            Ok(metadata) => {
+                if !metadata.is_dir() {
+                    return Err(RoutineError::Storage);
+                }
+                #[cfg(unix)]
+                {
+                    let mode = metadata.permissions().mode();
+                    if mode & 0o022 != 0 && mode & 0o1000 == 0 {
+                        return Err(RoutineError::Storage);
+                    }
+                }
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(_) => return Err(RoutineError::Storage),
+        }
+        let Some(parent) = current.parent() else {
+            break;
+        };
+        if parent == current {
+            break;
+        }
+        current = parent.to_path_buf();
     }
     Ok(())
 }
@@ -211,6 +257,7 @@ mod tests {
     #[test]
     fn save_load_list_and_delete_round_trip() {
         let temp = tempfile::tempdir().expect("temp");
+        privatize_temp(temp.path());
         let registry = RoutineRegistry::open(temp.path().join("routines")).expect("open");
         let routine = sample_definition();
         registry.save(&routine).expect("save");
@@ -234,9 +281,20 @@ mod tests {
         assert!(registry.list().expect("list").is_empty());
     }
 
+    fn privatize_temp(path: &std::path::Path) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mut permissions = std::fs::metadata(path).expect("meta").permissions();
+            permissions.set_mode(0o700);
+            std::fs::set_permissions(path, permissions).expect("chmod");
+        }
+    }
+
     #[test]
     fn lock_only_directories_are_not_listed() {
         let temp = tempfile::tempdir().expect("temp");
+        privatize_temp(temp.path());
         let registry = RoutineRegistry::open(temp.path().join("routines")).expect("open");
         let id = Uuid::from_u128(7);
         drop(registry.lock(id).expect("lock"));

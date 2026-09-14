@@ -138,6 +138,7 @@ impl RoutineDefinition {
         }
         for assertion in &self.completion_assertions {
             assertion.validate()?;
+            require_allowed_assertion(assertion, &self.allowed_origins)?;
         }
         let mut seen_steps = HashSet::new();
         for step in &self.steps {
@@ -233,6 +234,11 @@ impl RoutineStep {
             }
             CompiledAction::CredentialFill => {
                 required_target(self.target_fingerprint.as_ref(), allowed_origins)?;
+                if let Some(target) = &self.target_fingerprint
+                    && !origin_allowed(&target.frame.origin, &policy.allowed_origins)
+                {
+                    return Err(RoutineError::OriginNotAllowed);
+                }
                 match self.value_source.as_ref().ok_or(RoutineError::MissingValueSource)? {
                     ValueSource::CredentialField { slot, field } => policy.permits(*slot, *field),
                     ValueSource::Literal { .. } | ValueSource::Variable { .. } => Err(RoutineError::SecretLiteral),
@@ -290,6 +296,23 @@ fn require_allowed_target(target: &TargetFingerprint, allowed_origins: &[Origin]
 
 fn origin_allowed(origin: &Origin, allowed_origins: &[Origin]) -> bool {
     allowed_origins.iter().any(|allowed| allowed == origin)
+}
+
+fn require_allowed_assertion(assertion: &Assertion, allowed_origins: &[Origin]) -> Result<(), RoutineError> {
+    match assertion {
+        Assertion::ElementPresent { target } | Assertion::ElementAbsent { target } => {
+            require_allowed_target(target, allowed_origins)
+        }
+        Assertion::UrlPattern { value } if !value.starts_with('/') => {
+            let origin = Origin::parse(value).map_err(|_| RoutineError::InvalidAssertion)?;
+            if origin_allowed(&origin, allowed_origins) {
+                Ok(())
+            } else {
+                Err(RoutineError::OriginNotAllowed)
+            }
+        }
+        Assertion::UrlPattern { .. } | Assertion::Heading { .. } | Assertion::TextShape { .. } => Ok(()),
+    }
 }
 
 fn require_declared_variables(
