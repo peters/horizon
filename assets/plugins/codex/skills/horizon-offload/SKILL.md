@@ -162,7 +162,10 @@ inspect any surviving task-owned validation process. Resume the exact recorded
 thread in a new saved panel, preserving its working directory, explicit writable
 task paths, sandbox and approval policy. Verify those settings against the installed
 CLI; do not assume resume inherits them, select an unrelated most-recent thread,
-or duplicate an active validation command. Keep the original resource deadline.
+or duplicate an active validation command. Long validation must either finish
+before the agent exits or run as its own saved worker panel with a durable exit
+receipt; a background command inside an agent tool call is not guaranteed to
+survive the agent process. Keep the original resource deadline.
 
 Use `check`, `git-status`, `status`, and `snapshot` on the **same directory** after
 an interruption. These never create a replacement or submit the task again.
