@@ -1021,8 +1021,12 @@ back unchanged at return and after the worker lifecycle step.
   (#613) and the saved-Shell task start (#615). Every product path this procedure
   drives now admits Azure. Still open before the paid run: an approved, logged-in
   identity on A, the PAT for the disposable repository, the independent
-  panel-addition control for the second and third panel, and the reaper tags on the
-  worker deployment (or the subscription policy that appends them). The worker image for this run is the
+  panel-addition control for the second and third panel, and a reaper tag that does
+  not depend on this controller surviving. `bind-worker` tags B's VM and reads the
+  tags back, which covers every run that reaches the binding; the open item is the
+  window before it, where a dead controller leaves an untagged worker, and it closes
+  when the worker deployment template carries the tags itself or a subscription
+  policy appends them (step 3). The worker image for this run is the
   lead's tested complete Shell image, exactly
   `horizonworkersa898ee.azurecr.io/horizon-remote-worker-shell@sha256:01c2ea1ed90ee3d3db7a557bfcc0138fc75248317639ce0adb031cd42d06239f`
   (source `290daba7000c4d02f8fbc9c843eea882a68bb6e5`); the older adapter image
