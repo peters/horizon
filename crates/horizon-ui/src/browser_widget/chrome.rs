@@ -107,7 +107,7 @@ fn backend_picker(
             }
         },
     );
-    ui.add_enabled_ui(interactive, |ui| {
+    ui.add_enabled_ui(interactive && browser.teach().is_none(), |ui| {
         egui::ComboBox::from_id_salt(("browser-backend", panel_id))
             .selected_text(selected_text)
             .width(72.0)

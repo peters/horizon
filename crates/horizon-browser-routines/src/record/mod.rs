@@ -87,6 +87,10 @@ impl TeachSession {
         &self.recording
     }
 
+    pub fn recording_mut(&mut self) -> &mut SemanticRecording {
+        &mut self.recording
+    }
+
     /// Append one grouped semantic action. Consecutive same-direction scrolls that
     /// share a target and have no assertion between them are coalesced.
     ///

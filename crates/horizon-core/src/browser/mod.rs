@@ -282,7 +282,7 @@ impl BrowserPanelState {
     /// backend. The replacement starts only after the old process has been
     /// reaped, so panel switching cannot overlap profile or port ownership.
     pub fn switch_backend(&mut self, backend: BackendKind) {
-        if self.config.backend == backend {
+        if self.teach.is_some() || self.config.backend == backend {
             return;
         }
         let target = self.relaunch_target();

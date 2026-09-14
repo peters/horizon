@@ -6,9 +6,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use horizon_browser::BackendKind;
 use horizon_browser::{TeachFingerprint, TeachObservation};
 use horizon_browser_routines::{
-    Assertion, CompiledAction, CompiledStep, CredentialMode, CredentialPolicy, FieldClassification, MutationClass,
-    RecordedAction, RecordedKind, RoutineDefinition, RoutineError, RoutineRegistry, RoutineStep, SCHEMA_VERSION,
-    SemanticRecording, TargetCandidate, TargetFingerprint, TeachSession, compile,
+    Assertion, CredentialMode, CredentialPolicy, FieldClassification, MutationClass, RecordedAction, RecordedKind,
+    RoutineDefinition, RoutineError, RoutineRegistry, RoutineStep, SCHEMA_VERSION, SemanticRecording, TargetCandidate,
+    TargetFingerprint, TeachSession, compile,
 };
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -34,11 +34,14 @@ pub struct TeachMode {
 /// One compiled step shown in the Teach reviewer.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReviewRow {
+    pub step_id: String,
     pub action: String,
     pub target: String,
     pub mutation: String,
     pub resume: String,
     pub mcp: String,
+    pub candidates: Vec<String>,
+    pub selected: Option<u32>,
 }
 
 impl TeachMode {
@@ -165,12 +168,53 @@ impl TeachMode {
         self.persist_draft();
     }
 
+    pub fn select_step_candidate(&mut self, step_id: &str, index: u32) {
+        for action in &mut self.session.recording_mut().actions {
+            if action.action_id != step_id {
+                continue;
+            }
+            let Some(target) = action.target.as_mut() else {
+                return;
+            };
+            let Ok(usize_index) = usize::try_from(index) else {
+                return;
+            };
+            if usize_index >= target.candidates.len() {
+                return;
+            }
+            target.selected = Some(index);
+            mark_fingerprint_reviewed(target);
+            self.persist_draft();
+            return;
+        }
+    }
+
     /// Compile the stopped recording into reviewer rows.
     ///
     /// # Errors
     /// Missing outcome, empty recording, or compiler validation failure.
     pub fn compile_review(&self, page_title: &str) -> Result<Vec<ReviewRow>, RoutineError> {
-        Ok(self.compile_plan(page_title)?.steps.iter().map(review_row).collect())
+        let compiled = self.compile_plan(page_title).ok();
+        Ok(self
+            .session
+            .recording()
+            .actions
+            .iter()
+            .map(|action| {
+                let mut row = review_row_from_action(action);
+                if let Some(step) = compiled
+                    .as_ref()
+                    .and_then(|compiled| compiled.steps.iter().find(|step| step.step_id == action.action_id))
+                {
+                    row.mcp = step
+                        .mcp
+                        .as_ref()
+                        .map_or_else(|| "no MCP".to_string(), |call| call.tool.clone());
+                    row.resume = format!("{:?}", step.resume_policy);
+                }
+                row
+            })
+            .collect())
     }
 
     /// Save a reviewed routine. Requires an explicit review.
@@ -223,7 +267,11 @@ impl TeachMode {
         compiled: horizon_browser_routines::CompiledRoutine,
     ) -> Result<RoutineDefinition, RoutineError> {
         let now = rfc3339_now()?;
-        let existing = self.registry.load(self.routine_id).ok();
+        let existing = match self.registry.load(self.routine_id) {
+            Ok(definition) => Some(definition),
+            Err(RoutineError::RoutineNotFound) => None,
+            Err(error) => return Err(error),
+        };
         let steps: Vec<RoutineStep> = compiled
             .steps
             .into_iter()
@@ -450,35 +498,45 @@ fn convert_fingerprint(fingerprint: &TeachFingerprint) -> Result<TargetFingerpri
     serde_json::from_slice(&encoded).map_err(|_| RoutineError::InvalidFingerprint)
 }
 
-fn review_row(step: &CompiledStep) -> ReviewRow {
-    let action = match &step.action {
-        CompiledAction::Click { count } if *count > 1 => format!("click ×{count}"),
-        CompiledAction::Click { .. } => "click".to_string(),
-        CompiledAction::Fill => "fill".to_string(),
-        CompiledAction::CredentialFill => "credential fill".to_string(),
-        CompiledAction::Scroll { .. } => "scroll".to_string(),
-        CompiledAction::Navigate { .. } => "navigate".to_string(),
-        CompiledAction::Wait { .. } => "wait".to_string(),
-        CompiledAction::Reload => "reload".to_string(),
-        CompiledAction::Back => "back".to_string(),
-        CompiledAction::Forward => "forward".to_string(),
-        CompiledAction::Handoff { .. } => "handoff".to_string(),
+fn review_row_from_action(action: &RecordedAction) -> ReviewRow {
+    let kind = match &action.kind {
+        RecordedKind::Click { count } if *count > 1 => format!("click ×{count}"),
+        RecordedKind::Click { .. } => "click".to_string(),
+        RecordedKind::Fill => "fill".to_string(),
+        RecordedKind::Scroll { .. } => "scroll".to_string(),
+        RecordedKind::Navigate => "navigate".to_string(),
+        RecordedKind::Wait { .. } => "wait".to_string(),
+        RecordedKind::Reload => "reload".to_string(),
+        RecordedKind::Back => "back".to_string(),
+        RecordedKind::Forward => "forward".to_string(),
+        RecordedKind::Handoff { .. } => "handoff".to_string(),
     };
-    let target = step
+    let candidates = action.target.as_ref().map_or_else(Vec::new, |target| {
+        target
+            .candidates
+            .iter()
+            .map(|candidate| match &candidate.identity {
+                TargetCandidate::RoleName { name, .. } | TargetCandidate::UniqueId { value: name, .. } => name.clone(),
+                TargetCandidate::LabelControl { label, .. } => label.clone(),
+                TargetCandidate::TestId { value, .. } | TargetCandidate::CssFallback { value, .. } => value.clone(),
+                TargetCandidate::VisibleText { text, .. } => text.clone(),
+            })
+            .collect()
+    });
+    let target = action
         .target
         .as_ref()
         .and_then(candidate_label)
         .unwrap_or_else(|| "page".to_string());
-    let mcp = step
-        .mcp
-        .as_ref()
-        .map_or_else(|| "no MCP".to_string(), |call| call.tool.clone());
     ReviewRow {
-        action,
+        step_id: action.action_id.clone(),
+        action: kind,
         target,
-        mutation: format!("{:?}", step.mutation_class),
-        resume: format!("{:?}", step.resume_policy),
-        mcp,
+        mutation: format!("{:?}", action.mutation_class),
+        resume: "pending".to_string(),
+        mcp: "no MCP".to_string(),
+        candidates,
+        selected: action.target.as_ref().and_then(|target| target.selected),
     }
 }
 

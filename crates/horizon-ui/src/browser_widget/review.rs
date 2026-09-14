@@ -42,6 +42,25 @@ pub fn show(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: bool) -> 
                             )
                             .wrap_mode(TextWrapMode::Wrap),
                         );
+                        if row.candidates.len() > 1 || row.selected.is_none() && !row.candidates.is_empty() {
+                            let current = row
+                                .selected
+                                .and_then(|index| row.candidates.get(index as usize).cloned())
+                                .unwrap_or_else(|| "select identity".to_string());
+                            egui::ComboBox::from_id_salt(("teach-candidate", row.step_id.clone()))
+                                .selected_text(current)
+                                .show_ui(ui, |ui| {
+                                    for (index, label) in row.candidates.iter().enumerate() {
+                                        if let Ok(index) = u32::try_from(index)
+                                            && ui.selectable_label(row.selected == Some(index), label).clicked()
+                                            && let Some(teach) = browser.teach_mut()
+                                        {
+                                            teach.select_step_candidate(&row.step_id, index);
+                                            clicked = true;
+                                        }
+                                    }
+                                });
+                        }
                     }
                 });
         }
