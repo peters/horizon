@@ -344,6 +344,44 @@ class EngineFailures(Harness):
         self.assertFalse(any(argv and argv[0] == "podman" and "info" in argv
                              for argv in executor.seen))
 
+    def test_podman_uses_uid_runtime_dir_when_xdg_unset(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture.pop("docker_version")
+        fixture.pop("docker_info")
+        fixture.pop("docker_context", None)
+        fixture["podman_client"] = podman_client_ok()
+        fixture["podman_socket"] = {
+            "stdout": "/run/user/1000/podman/podman.sock\n"}
+        fixture["podman_info"] = podman_ok()
+        with mock.patch.object(os, "getuid", return_value=1000):
+            saved = os.environ.pop("XDG_RUNTIME_DIR", None)
+            try:
+                code, report, executor = self.run_main(fixture)
+            finally:
+                if saved is not None:
+                    os.environ["XDG_RUNTIME_DIR"] = saved
+        self.assertEqual(code, 0)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["container_engine"]["value"], "podman 4.9.0")
+        self.assertIn(
+            ["podman", "--remote=true", "--url",
+             "unix:///run/user/1000/podman/podman.sock",
+             "info", "--format", "{{.Version.Version}}"],
+            executor.seen)
+
+    def test_podman_socket_unreadable_is_not_absent(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture.pop("docker_version")
+        fixture.pop("docker_info")
+        fixture.pop("docker_context", None)
+        fixture["podman_client"] = podman_client_ok()
+        fixture["podman_socket"] = {"exit_code": 4, "stderr": "unreadable\n"}
+        code, report, _ = self.run_main(fixture)
+        self.assertEqual(code, 1)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertIn("unreadable", by_id["container_engine"]["detail"])
+        self.assertNotIn("not running", by_id["container_engine"]["detail"])
+
     def test_podman_missing_binary_is_tool_not_present(self):
         fixture = dict(DEFAULT_FIXTURE)
         fixture.pop("docker_version")

@@ -79,14 +79,21 @@ PROBE_ARGS = {
     "podman_info": ["podman", "--remote=true", "--url"],
     "podman_info_tail": ["info", "--format", "{{.Version.Version}}"],
     "podman_socket": [sys.executable, "-B", "-c",
-                      "import os,sys\n"
+                      "import errno,os,sys\n"
                       "paths=['/run/podman/podman.sock']\n"
+                      "paths.insert(0,'/run/user/'+str(os.getuid())+'/podman/podman.sock')\n"
                       "if len(sys.argv)>1 and sys.argv[1]:\n"
                       "    paths.insert(0, os.path.join(sys.argv[1],'podman','podman.sock'))\n"
-                      "found=False\n"
+                      "seen=set(); found=False\n"
                       "for p in paths:\n"
-                      "    if os.path.exists(p):\n"
-                      "        sys.stdout.write(p+'\\n'); found=True\n"
+                      "    if p in seen: continue\n"
+                      "    seen.add(p)\n"
+                      "    try:\n"
+                      "        os.lstat(p)\n"
+                      "    except OSError as e:\n"
+                      "        if e.errno==errno.ENOENT: continue\n"
+                      "        sys.stderr.write('unreadable\\n'); sys.exit(4)\n"
+                      "    sys.stdout.write(p+'\\n'); found=True\n"
                       "sys.exit(0 if found else 1)\n"],
     "workspace_dir": [sys.executable, "-B", "-c",
                       "import errno,json,os,stat,sys\n"
@@ -370,11 +377,17 @@ def docker_endpoint_reason(executor, timeout):
 
 def candidate_podman_sockets():
     """Fixed local socket paths. String join only — no filesystem probes."""
-    paths = ["/run/podman/podman.sock"]
+    paths = []
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     if runtime:
-        paths.insert(0, os.path.join(runtime, "podman", "podman.sock"))
-    return paths
+        paths.append(os.path.join(runtime, "podman", "podman.sock"))
+    paths.append("/run/user/%d/podman/podman.sock" % os.getuid())
+    paths.append("/run/podman/podman.sock")
+    unique = []
+    for path in paths:
+        if path not in unique:
+            unique.append(path)
+    return unique
 
 
 def resolve_podman_sockets(executor, timeout):
@@ -391,6 +404,9 @@ def resolve_podman_sockets(executor, timeout):
     result, error = run_probe(executor, "podman_socket", timeout, extra_argv=extra)
     if error:
         return [], error
+    err = redact(result.get("stderr", "")).strip()
+    if result["exit_code"] == 4 or "unreadable" in err:
+        return [], "podman socket unreadable"
     if result["exit_code"] != 0:
         return [], None
     allowed = candidate_podman_sockets()
