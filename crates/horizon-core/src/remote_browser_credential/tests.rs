@@ -332,6 +332,13 @@ fn keyring_adapter_round_trips_through_a_mock_store_and_requires_a_slot() {
     assert!(!store.contains(&user).expect("absent"));
     store.put(&user, b"alice").expect("stored");
     assert!(store.contains(&user).expect("present"));
+    let mut prefix = user.clone();
+    prefix.slot = Some("remote-browser/grid/use".into());
+    assert!(
+        !store.contains(&prefix).expect("prefix slot absent"),
+        "a loose search match must not count as presence"
+    );
+    assert_eq!(mock.reads(), 0, "presence probes never read a value");
     let keys = mock.keys();
     assert_eq!(keys.len(), 1);
     assert_eq!(keys[0].0, KEYRING_SERVICE);
@@ -339,6 +346,7 @@ fn keyring_adapter_round_trips_through_a_mock_store_and_requires_a_slot() {
     let mut capture = Capture(Vec::new());
     store.with_secret(&user, &mut capture).expect("copied into the sink");
     assert_eq!(capture.0, b"alice");
+    assert_eq!(mock.reads(), 1);
     store.delete(&user).expect("deleted");
     assert!(!store.contains(&user).expect("absent again"));
     store.delete(&user).expect("deleting twice is fine");
@@ -358,9 +366,11 @@ fn keyring_adapter_round_trips_through_a_mock_store_and_requires_a_slot() {
 type MockItems = Arc<std::sync::Mutex<std::collections::HashMap<(String, String), Vec<u8>>>>;
 
 /// In-memory keyring-core store: exercises the adapter without any platform.
+/// Counts value reads so tests can prove which operations never read one.
 #[derive(Default)]
 struct MockStore {
     items: MockItems,
+    reads: Arc<std::sync::atomic::AtomicUsize>,
     failing: bool,
 }
 
@@ -374,6 +384,14 @@ impl MockStore {
 
     fn keys(&self) -> Vec<(String, String)> {
         self.items.lock().expect("lock").keys().cloned().collect()
+    }
+
+    fn reads(&self) -> usize {
+        self.reads.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn platform_down() -> keyring_core::Error {
+        keyring_core::Error::PlatformFailure(Box::new(std::io::Error::other("down")))
     }
 }
 
@@ -399,14 +417,35 @@ impl keyring_core::api::CredentialStoreApi for MockStore {
         _modifiers: Option<&std::collections::HashMap<&str, &str>>,
     ) -> keyring_core::Result<keyring_core::Entry> {
         if self.failing {
-            return Err(keyring_core::Error::PlatformFailure(Box::new(std::io::Error::other(
-                "down",
-            ))));
+            return Err(Self::platform_down());
         }
         Ok(keyring_core::Entry::new_with_credential(Arc::new(MockCredential {
             store: Arc::clone(&self.items),
+            reads: Arc::clone(&self.reads),
             key: (service.to_string(), user.to_string()),
         })))
+    }
+
+    /// Matches loosely on purpose, like the platform searches may: the
+    /// adapter must compare specifiers exactly.
+    fn search(&self, spec: &std::collections::HashMap<&str, &str>) -> keyring_core::Result<Vec<keyring_core::Entry>> {
+        if self.failing {
+            return Err(Self::platform_down());
+        }
+        let service = spec.get("service").copied().unwrap_or_default();
+        let user = spec.get("user").copied().unwrap_or_default();
+        Ok(self
+            .keys()
+            .into_iter()
+            .filter(|key| key.0.contains(service) && key.1.contains(user))
+            .map(|key| {
+                keyring_core::Entry::new_with_credential(Arc::new(MockCredential {
+                    store: Arc::clone(&self.items),
+                    reads: Arc::clone(&self.reads),
+                    key,
+                }))
+            })
+            .collect())
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -416,6 +455,7 @@ impl keyring_core::api::CredentialStoreApi for MockStore {
 
 struct MockCredential {
     store: MockItems,
+    reads: Arc<std::sync::atomic::AtomicUsize>,
     key: (String, String),
 }
 
@@ -435,6 +475,7 @@ impl keyring_core::api::CredentialApi for MockCredential {
     }
 
     fn get_secret(&self) -> keyring_core::Result<Vec<u8>> {
+        self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.store
             .lock()
             .expect("lock")
@@ -470,12 +511,62 @@ impl keyring_core::api::CredentialApi for MockCredential {
 }
 
 #[test]
-fn keyring_locator_requires_a_slot_and_maps_platform_errors() {
+fn fake_store_addresses_items_like_the_os_adapter() {
     let profile = basic_profile(CredentialStoreKind::OsKeychain, CredentialStoreKind::Session);
     let mut slotless = locator(&profile, "user");
     slotless.slot = None;
-    let fake = FakeCredentialStore::new();
+    let mut fake = FakeCredentialStore::new();
     assert_eq!(fake.kind(), CredentialStoreKind::OsKeychain);
-    assert!(!fake.contains(&slotless).expect("fake accepts any locator"));
+    assert_eq!(
+        fake.contains(&slotless).expect_err("slot required"),
+        RemoteCredentialError::Missing
+    );
+    assert_eq!(
+        fake.put(&slotless, b"x").expect_err("slot required"),
+        RemoteCredentialError::Missing
+    );
+
+    // Two references bound to one slot are one OS item: the later write wins.
+    let user = locator(&profile, "user");
+    let mut aliased = locator(&profile, "key");
+    aliased.slot = user.slot.clone();
+    fake.put(&user, b"alice").expect("stored");
+    fake.put(&aliased, b"bob").expect("replaced through the alias");
+    let mut capture = Capture(Vec::new());
+    fake.with_secret(&user, &mut capture).expect("present");
+    assert_eq!(capture.0, b"bob");
+    fake.delete(&aliased).expect("deleted through the alias");
+    assert!(!fake.contains(&user).expect("gone for both references"));
     assert_eq!(KEYRING_SERVICE, "horizon-remote-browser");
+}
+
+/// Opt-in smoke against this computer's real OS store; it creates and then
+/// deletes one item under a unique slot. Run with `--ignored` on a desktop
+/// session where the store is unlocked.
+#[test]
+#[ignore = "touches the real OS credential store"]
+fn os_store_round_trip_smoke() {
+    let profile = basic_profile(CredentialStoreKind::OsKeychain, CredentialStoreKind::Session);
+    let mut store = KeyringCredentialStore::open().expect("OS store available");
+    let mut item = locator(&profile, "user");
+    item.slot = Some(format!("remote-browser/smoke/{}", std::process::id()));
+    assert!(!store.contains(&item).expect("probe before put"));
+    store.put(&item, b"smoke-value").expect("put");
+    assert!(store.contains(&item).expect("probe after put"));
+    let stores = CredentialStores {
+        session: &SessionCredentialStore::new(),
+        os_keychain: Some(&store),
+    };
+    let mut smoke = profile.clone();
+    smoke
+        .credential_bindings
+        .get_mut(&CredentialReference::from("user"))
+        .expect("bound")
+        .slot = item.slot.clone();
+    assert_eq!(readiness(&smoke, &stores)[0].state, CredentialState::Present);
+    let mut capture = Capture(Vec::new());
+    store.with_secret(&item, &mut capture).expect("read back");
+    assert_eq!(capture.0, b"smoke-value");
+    store.delete(&item).expect("delete");
+    assert!(!store.contains(&item).expect("probe after delete"));
 }

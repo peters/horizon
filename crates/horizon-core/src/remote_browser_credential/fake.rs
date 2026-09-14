@@ -9,10 +9,13 @@ use super::{CredentialLocator, RemoteCredentialError, RemoteCredentialStore, Sea
 /// In-memory stand-in for the OS credential store, for tests and UI previews.
 /// It can be locked to exercise the locked-store paths without a platform, and
 /// its values are zeroized like the session store's because a preview can
-/// receive real entered values.
+/// receive real entered values. Items are addressed exactly like the real
+/// adapter's, by endpoint origin and slot, so two references bound to one
+/// slot alias here as they would in the OS store and a binding without a
+/// slot is missing.
 #[derive(Default)]
 pub struct FakeCredentialStore {
-    entries: BTreeMap<CredentialLocator, Zeroizing<Vec<u8>>>,
+    entries: BTreeMap<(String, String), Zeroizing<Vec<u8>>>,
     locked: bool,
 }
 
@@ -37,6 +40,11 @@ impl FakeCredentialStore {
             Ok(())
         }
     }
+
+    fn key(locator: &CredentialLocator) -> Result<(String, String), RemoteCredentialError> {
+        let slot = locator.slot.as_deref().ok_or(RemoteCredentialError::Missing)?;
+        Ok((locator.origin.clone(), slot.to_string()))
+    }
 }
 
 impl Sealed for FakeCredentialStore {}
@@ -49,24 +57,28 @@ impl RemoteCredentialStore for FakeCredentialStore {
     fn put(&mut self, locator: &CredentialLocator, secret: &[u8]) -> Result<(), RemoteCredentialError> {
         self.guard()?;
         validate_secret(secret)?;
-        self.entries.insert(locator.clone(), Zeroizing::new(secret.to_vec()));
+        self.entries
+            .insert(Self::key(locator)?, Zeroizing::new(secret.to_vec()));
         Ok(())
     }
 
     fn delete(&mut self, locator: &CredentialLocator) -> Result<(), RemoteCredentialError> {
         self.guard()?;
-        self.entries.remove(locator);
+        self.entries.remove(&Self::key(locator)?);
         Ok(())
     }
 
     fn contains(&self, locator: &CredentialLocator) -> Result<bool, RemoteCredentialError> {
         self.guard()?;
-        Ok(self.entries.contains_key(locator))
+        Ok(self.entries.contains_key(&Self::key(locator)?))
     }
 
     fn with_secret(&self, locator: &CredentialLocator, sink: &mut dyn SecretSink) -> Result<(), RemoteCredentialError> {
         self.guard()?;
-        let value = self.entries.get(locator).ok_or(RemoteCredentialError::Missing)?;
+        let value = self
+            .entries
+            .get(&Self::key(locator)?)
+            .ok_or(RemoteCredentialError::Missing)?;
         sink.accept(value)
     }
 }
