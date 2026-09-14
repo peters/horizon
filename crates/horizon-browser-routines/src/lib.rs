@@ -1,20 +1,27 @@
 #![forbid(unsafe_code)]
 
-//! Backend-neutral Teach-mode recording protocol and draft-plan compiler.
+//! Backend-neutral Teach-mode recording protocol, draft-plan compiler,
+//! routine registry, and credential-broker interface.
 //!
-//! This crate stores semantic recordings and compiles them into crate-local
-//! plan steps. It has no browser process, MCP server, UI, filesystem registry,
-//! or durable-runner dependency. See `docs/architecture/browser-routines.md`.
+//! This crate has no browser process, MCP server, UI, or durable-runner
+//! dependency. See `docs/architecture/browser-routines.md`.
 
 mod assertion;
 mod compile;
+mod credential;
+mod definition;
 mod fingerprint;
 mod origin;
 mod recording;
+mod registry;
 mod value;
 
 pub use assertion::Assertion;
 pub use compile::{CompiledAction, CompiledRoutine, CompiledStep, McpCall, ResumePolicy, compile};
+pub use credential::{
+    CredentialBroker, CredentialExport, CredentialStore, FakeCredentialStore, FieldPresence, FillSink,
+};
+pub use definition::{CredentialMode, CredentialPolicy, RoutineDefinition, RoutineStep, RoutineVariable};
 pub use fingerprint::{
     FrameContext, FrameLink, RankedCandidate, TargetCandidate, TargetFingerprint, UniquenessEvidence,
 };
@@ -23,6 +30,7 @@ pub use recording::{
     MutationClass, NavigationTemplate, PathSegment, PauseReason, QueryComponent, RecordedAction, RecordedKind,
     SemanticRecording,
 };
+pub use registry::{RoutineLock, RoutineRegistry};
 pub use value::{CredentialFieldKind, FieldClassification, ValueSource};
 
 use thiserror::Error;
@@ -87,6 +95,21 @@ pub enum RoutineError {
     /// A recorded variable used the runner-reserved `panel_id` name.
     #[error("variable name panel_id is reserved for the routine runner")]
     ReservedVariable,
+    /// Credential slot or field is not permitted by this routine's policy.
+    #[error("credential slot or field is not bound to this routine")]
+    SlotMismatch,
+    /// The OS credential store is locked or unavailable.
+    #[error("credential store is locked")]
+    LockedStore,
+    /// No routine file exists for this UUID.
+    #[error("routine was not found")]
+    RoutineNotFound,
+    /// Fill origin is not on the credential-policy allowlist.
+    #[error("credential fill origin is not approved")]
+    OriginNotAllowed,
+    /// Private routine storage could not be created or updated.
+    #[error("routine storage failed")]
+    Storage,
 }
 
 #[cfg(test)]

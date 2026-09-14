@@ -2121,9 +2121,12 @@ dependencies = [
 name = "horizon-browser-routines"
 version = "0.2.7"
 dependencies = [
+ "atomicwrites",
  "horizon-browser-protocol",
+ "rustix 1.1.4",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.20",
  "url",
  "uuid",

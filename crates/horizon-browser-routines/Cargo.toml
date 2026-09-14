@@ -13,9 +13,16 @@ readme = "README.md"
 workspace = true
 
 [dependencies]
+atomicwrites.workspace = true
 horizon-browser-protocol.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 url.workspace = true
 uuid.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

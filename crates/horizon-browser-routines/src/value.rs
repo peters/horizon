@@ -17,7 +17,7 @@ pub enum ValueSource {
 }
 
 /// Opt-in OS-store field inside one opaque slot.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CredentialFieldKind {
     Username,

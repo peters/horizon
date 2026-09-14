@@ -1,10 +1,11 @@
 # Horizon Browser Routines
 
 `horizon-browser-routines` holds the backend-neutral Teach-mode recording
-protocol and the deterministic draft-plan compiler. The routine registry and
-credential-broker interface land in later slices. It depends on
-`horizon-browser-protocol` for the shared action model and on nothing in
-`horizon-browser`, the MCP adapter, the CLI runner, or the UI.
+protocol, the deterministic draft-plan compiler, the private routine registry,
+and the credential-broker interface (fake store in this crate; OS adapters
+land later). It depends on `horizon-browser-protocol` for the shared action
+model and on nothing in `horizon-browser`, the MCP adapter, the CLI runner, or
+the UI.
 
 This crate is an internal workspace package and is not published.
 
