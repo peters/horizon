@@ -2,6 +2,7 @@
 //! The data model is independent of provider, persistence I/O, and UI implementations.
 //! Snapshot validation is not permission to attach: fresh provider observation and lease checks remain required.
 
+pub mod panels;
 pub mod start;
 pub mod stop;
 mod summary;
