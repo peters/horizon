@@ -141,8 +141,11 @@ cancelling after allocation releases the owned session.
   when the provider reports a terminal status where such an API exists;
   otherwise the state is `released_unverified` and the documentation says so.
 - Provider idle and lifetime expiry are requested where supported and a local
-  hard-deadline watchdog always runs. Keepalive traffic never extends the local
-  lifetime or resets the user-activity idle policy.
+  hard-deadline and idle watchdog always runs on its own thread, started when
+  allocation succeeds, so a driver blocked in a long classic command cannot
+  delay release; the driver reads the settled outcome instead of deleting
+  again. Keepalive traffic never extends the local lifetime or resets the
+  user-activity idle policy.
 - Minimal private recovery metadata (endpoint origin, credential reference,
   session id, request id, deadline) is persisted for owned sessions. Session ids
   and signed artifact links are sensitive; MCP exposes a correlation id.

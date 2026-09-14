@@ -7,8 +7,7 @@ use serde_json::{Value, json};
 use crate::navigation::{AgentActionExecution, NavigationSignal, PendingNavigation};
 use crate::session::{BrowserEvent, BrowserEventSender};
 use crate::{
-    AgentAction, BackendKind, BrowserControlFailure, DEFAULT_NAVIGATION_TIMEOUT_MILLIS, NavigationWait,
-    normalize_navigation_target,
+    AgentAction, BrowserControlFailure, DEFAULT_NAVIGATION_TIMEOUT_MILLIS, NavigationWait, normalize_navigation_target,
 };
 
 use super::{
@@ -80,7 +79,7 @@ impl Driver {
             return AgentActionExecution::Done(expired);
         }
         self.supersede_pending_navigation(now);
-        if self.config.browser.backend != BackendKind::FirefoxBidi {
+        if !self.firefox_bidi() {
             return AgentActionExecution::Done(self.navigate_classic_bounded(url, &mut pending, event_tx));
         }
         let dispatch = self.dispatch_bidi_navigate(url, event_tx);
@@ -353,7 +352,7 @@ impl Driver {
     /// serviced, and page state is re-read every second until it commits.
     /// Returns whether the navigation is still running when this returns.
     pub(super) fn navigate_initial(&mut self, url: &str, event_tx: &BrowserEventSender) -> bool {
-        if self.config.browser.backend == BackendKind::FirefoxBidi {
+        if self.firefox_bidi() {
             // Firefox answers `browsingContext.navigate` only once the
             // destination responds; a synchronous call would fail a slow
             // first page at the 5 s command timeout before the loop starts.
@@ -446,7 +445,7 @@ impl Driver {
         self.supersede_pending_navigation(Instant::now());
         self.begin_navigation();
         let _ = event_tx.send(BrowserEvent::Loading(true));
-        let result = if self.config.browser.backend == BackendKind::FirefoxBidi {
+        let result = if self.firefox_bidi() {
             self.call_bidi(
                 "browsingContext.navigate",
                 &json!({ "context": self.context_id, "url": &url, "wait": "none" }),
@@ -464,7 +463,7 @@ impl Driver {
         };
         match result {
             Ok(()) => {
-                if self.config.browser.backend != BackendKind::FirefoxBidi {
+                if !self.firefox_bidi() {
                     self.retain_frame_during_navigation = false;
                     self.navigation_failed = false;
                     self.refresh_page_state(event_tx);
@@ -487,7 +486,7 @@ impl Driver {
     pub(super) fn reload(&mut self, event_tx: &BrowserEventSender) -> Result<(), String> {
         self.supersede_pending_navigation(Instant::now());
         self.begin_navigation();
-        let result = if self.config.browser.backend == BackendKind::FirefoxBidi {
+        let result = if self.firefox_bidi() {
             self.call_bidi(
                 "browsingContext.reload",
                 &json!({ "context": self.context_id, "wait": "none" }),
@@ -509,7 +508,7 @@ impl Driver {
         let result = self
             .classic_navigation_post(if delta < 0 { "back" } else { "forward" }, &json!({}))
             .map(|_| ());
-        if result.is_ok() && self.config.browser.backend == BackendKind::FirefoxBidi {
+        if result.is_ok() && self.firefox_bidi() {
             self.retain_frame_during_navigation = false;
             self.navigation_failed = false;
             self.refresh_page_state(event_tx);
@@ -535,7 +534,7 @@ impl Driver {
             let _ = events.send(BrowserEvent::Loading(false));
             return Err(error);
         }
-        if self.config.browser.backend != BackendKind::FirefoxBidi {
+        if !self.firefox_bidi() {
             self.retain_frame_during_navigation = false;
             self.navigation_failed = false;
             self.refresh_page_state(events);

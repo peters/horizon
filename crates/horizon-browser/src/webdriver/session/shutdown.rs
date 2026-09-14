@@ -3,6 +3,8 @@
 use std::sync::mpsc;
 use std::time::Instant;
 
+use crate::RemoteSessionEvent;
+
 use serde_json::Value;
 
 use crate::process::ChromeProcessControl;
@@ -33,11 +35,24 @@ impl Drop for Completion {
 
 impl Driver {
     pub(super) fn stop_for_service_exit(&mut self, event_tx: &BrowserEventSender) -> bool {
-        let Some(status) = self.host.exit_status() else {
+        let now = Instant::now();
+        let Some(exit) = self.host.exit() else {
             return false;
         };
-        self.settle_pending_wait_for_shutdown(Instant::now());
-        let _ = event_tx.send(BrowserEvent::Stopped { code: status.code() });
+        self.settle_pending_wait_for_shutdown(now);
+        if let super::super::host::HostExit::Expired(reason) = exit {
+            let label = self
+                .host
+                .remote()
+                .map(|host| host.label().to_string())
+                .unwrap_or_default();
+            let _ = event_tx.send(BrowserEvent::RemoteSession(RemoteSessionEvent::Expired {
+                label,
+                reason,
+            }));
+            self.close(event_tx);
+        }
+        let _ = event_tx.send(BrowserEvent::Stopped { code: exit.code() });
         true
     }
 
@@ -50,8 +65,17 @@ impl Driver {
             let _ = self.network.stop();
         }
         let _ = self.classic_delete("actions");
-        self.host.delete_session(&self.session_id);
-        self.host.shutdown();
+        if let Some(outcome) = self.host.release(&self.session_id) {
+            let label = self
+                .host
+                .remote()
+                .map(|host| host.label().to_string())
+                .unwrap_or_default();
+            let _ = event_tx.send(BrowserEvent::RemoteSession(RemoteSessionEvent::Released {
+                label,
+                outcome,
+            }));
+        }
     }
 
     pub(super) fn classic_delete(&self, suffix: &str) -> Result<Value, String> {

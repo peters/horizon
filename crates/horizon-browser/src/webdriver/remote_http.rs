@@ -43,7 +43,7 @@ impl RemoteAuthorizationHeader {
         Ok(Self { value })
     }
 
-    fn as_str(&self) -> &str {
+    pub(super) fn value(&self) -> &str {
         &self.value
     }
 }
@@ -142,7 +142,7 @@ impl ClassicTransport for RemoteHttpClient {
     ) -> Result<Value, HttpError> {
         let url = self.url(path)?;
         let timeout = read_timeout;
-        let authorization = self.authorization.as_ref().map(RemoteAuthorizationHeader::as_str);
+        let authorization = self.authorization.as_ref().map(RemoteAuthorizationHeader::value);
         let response = match method {
             "GET" => configure(self.agent.get(&url), timeout, authorization).call(),
             "DELETE" => configure(self.agent.delete(&url), timeout, authorization).call(),
@@ -175,8 +175,12 @@ fn configure<B>(
     timeout: Duration,
     authorization: Option<&str>,
 ) -> ureq::RequestBuilder<B> {
+    // One end-to-end bound for the call, from name resolution to the last
+    // body byte: the per-phase connect limits stay as caps underneath it, so
+    // a caller's timeout is the longest the whole request can take.
     let builder = builder
         .config()
+        .timeout_global(Some(timeout))
         .timeout_recv_response(Some(timeout))
         .timeout_recv_body(Some(timeout))
         .build()
