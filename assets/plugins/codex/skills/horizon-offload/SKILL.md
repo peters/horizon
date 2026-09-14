@@ -6,8 +6,8 @@ description: Offload repository development issues to a persistent Horizon Linux
 # Horizon issue offload
 
 Use `horizon-worker` for the persistent allocation, Git handoff, saved task start
-and observation. Discover `az`, `gh`, and the controller before asking the user to
-install anything. The first agent lane uses Codex CLI. Read the repository's
+and observation. Discover the controller, `gh`, and tooling for the selected provider
+before asking the user to install anything. The first agent lane uses Codex CLI. Read the repository's
 instructions and issue acceptance criteria before constructing the task.
 
 ## Repository environments
@@ -51,15 +51,23 @@ and an immutable image. It never guesses an ambient Docker daemon or subscriptio
 
 ## First use
 
-1. Discover the controller with `command -v horizon-worker`. During source-based
+1. The controller process itself currently runs only on Linux. On macOS or
+   Windows, use an already authorized Linux controller host; do not assume the
+   installed skill makes the binary runnable on the client platform. Discover the
+   controller with `command -v horizon-worker`. During source-based
    MVP development build it with `cargo build -p horizon-core --bin horizon-worker`
    from the reviewed controller checkout. Do not assume released Horizon binaries
    already contain this separately built command.
-2. Check `az account show` and an explicit matching profile using read-only calls.
+2. For Azure, discover `az` and check `az account show` plus an explicit matching
+   profile using read-only calls.
    Azure profile fields are `name`, `subscription_id`, `location`, `vm_size`,
    `image_pull_identity_id`, `declared_hourly_cost_micros`, `registry_login_server`
    and `disk_sku`. Reuse configured resources; provider registration, new IAM grants
-   and image publication require their own applicable authorization.
+   and image publication require their own applicable authorization. For
+   `local_docker`, use `config.local_docker: [{name, docker_host}]` with an explicit
+   authorized Unix socket such as `unix:///run/user/<uid>/docker.sock`; match
+   `target.profile` to that name and check that exact daemon. Azure tooling,
+   subscriptions and managed identities are not prerequisites for Docker-only work.
 3. Verify the selected image supports the worker SSH/repository contract, the
    chosen agent, and requested build/UI tools. Keep image-pull managed identity,
    repository PAT and coding-agent login separate. A Shell image alone cannot run
@@ -69,7 +77,7 @@ and an immutable image. It never guesses an ambient Docker daemon or subscriptio
    on the exact worker, with `CODEX_HOME` under private retained worker storage;
    check `codex login status` before another login. Never put tokens in prompts,
    command arguments, receipts or repository files. See the official
-   [headless authentication guidance](https://learn.chatgpt.com/docs/auth).
+   [headless authentication guidance](https://developers.openai.com/codex/auth).
 
 Repository credentials are runtime-only: restarting or replacing the container
 clears `/run/horizon/github-token`, even when Git preparation is still `Complete`
@@ -148,6 +156,13 @@ alone: inspect the remote Git head, changed files, tests, artifacts and PR throu
 independent reads. Resolve model/effort and sandbox options against the installed
 CLI and existing user preferences. Do not bypass sandboxing just because a worker
 is remote.
+
+If the agent process exits before completion, first confirm that it has ended and
+inspect any surviving task-owned validation process. Resume the exact recorded
+thread in a new saved panel, preserving its working directory, explicit writable
+task paths, sandbox and approval policy. Verify those settings against the installed
+CLI; do not assume resume inherits them, select an unrelated most-recent thread,
+or duplicate an active validation command. Keep the original resource deadline.
 
 Use `check`, `git-status`, `status`, and `snapshot` on the **same directory** after
 an interruption. These never create a replacement or submit the task again.
