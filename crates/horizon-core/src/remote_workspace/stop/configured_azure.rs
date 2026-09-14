@@ -130,6 +130,27 @@ impl RetainedAzure {
         profile: &AzureProfile,
         expected: &RemoteEnvironmentSummary,
     ) -> Result<Self, BindingError> {
+        Self::load_with(store, profile, expected, false)
+    }
+
+    /// The same admission for a read-only observation: pending cleanup intent stays
+    /// observable (the overview must still show such a worker) instead of being a
+    /// conflict, because nothing admitted this way may write or manage.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn load_observable(
+        store: &CloudWorkflowStore,
+        profile: &AzureProfile,
+        expected: &RemoteEnvironmentSummary,
+    ) -> Result<Self, BindingError> {
+        Self::load_with(store, profile, expected, true)
+    }
+
+    fn load_with(
+        store: &CloudWorkflowStore,
+        profile: &AzureProfile,
+        expected: &RemoteEnvironmentSummary,
+        observable: bool,
+    ) -> Result<Self, BindingError> {
         let allocation = store
             .load_remote_allocation(&expected.owning_session_id, &expected.workspace_local_id)
             .map_err(RemoteWorkspaceStopError::from)?
@@ -151,7 +172,7 @@ impl RetainedAzure {
             .runtime
             .as_ref()
             .ok_or(BindingError::InvalidBinding)?;
-        if runtime.cleanup.is_some() {
+        if runtime.cleanup.is_some() && !observable {
             return Err(RemoteWorkspaceStopError::ManagementConflict.into());
         }
         // The worker was created under one immutable profile binding; the named profile
