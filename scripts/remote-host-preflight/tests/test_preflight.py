@@ -674,6 +674,29 @@ class MalformedInputs(Harness):
         by_id = {check["id"]: check for check in report["checks"]}
         self.assertEqual(by_id["disk_capacity"]["status"], "error")
 
+    def test_df_oversized_digit_field_is_error(self):
+        huge = "9" * 5000
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["disk"] = {"stdout":
+            "Filesystem     1024-blocks      Used Available Capacity Mounted on\n"
+            "/dev/root       100000000  50000000  %s        60%% /\n" % huge}
+        code, report, _ = self.run_main(fixture)
+        self.assertEqual(code, 2)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["disk_capacity"]["status"], "error")
+        self.assertIn("malformed free value", by_id["disk_capacity"]["detail"])
+
+    def test_deeply_nested_json_is_a_parse_failure(self):
+        payload = "[" * 10000 + "]" * 10000
+        self.assertIsNone(preflight.parse_json_output({"stdout": payload}))
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["docker_version"] = {"stdout": payload}
+        fixture.pop("podman_info", None)
+        code, report, _ = self.run_main(fixture)
+        self.assertEqual(code, 1)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["container_engine"]["status"], "unsupported")
+
 
 class StorageQualifier(Harness):
     def variant(self, options):

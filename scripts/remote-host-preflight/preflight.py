@@ -172,7 +172,21 @@ def run_probe(executor, key, timeout, extra_argv=None):
 def parse_json_output(result):
     try:
         return json.loads(result.get("stdout", ""))
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):
+        return None
+
+
+def parse_nonneg_int(text):
+    """Parse a non-negative decimal integer, or None if malformed.
+
+    `str.isdigit()` is not enough: Python rejects digit strings longer than
+    its conversion limit, and that `int()` raises `ValueError`.
+    """
+    if not text or not str(text).isdigit():
+        return None
+    try:
+        return int(text)
+    except ValueError:
         return None
 
 
@@ -536,7 +550,7 @@ def check_disk(executor, timeout, workspace_path):
         fields = line.split(None, 5)
         if len(fields) >= 6:
             mounts.append(fields[5])
-            free_by_mount[fields[5]] = int(fields[3]) if fields[3].isdigit() else None
+            free_by_mount[fields[5]] = parse_nonneg_int(fields[3])
     mount = select_mount_point(mounts, target)
     if mount is None:
         return {"id": "disk_capacity", "status": ERROR, "value": None,
