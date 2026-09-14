@@ -116,11 +116,15 @@ def bind_worker(az: Az, manifest: Dict[str, Any], group: str, before: Any, creat
     deadline = str(manifest["cleanup_deadline_utc"])
     az.run(["tag", "update", "--resource-id", vm_id, "--operation", "merge", "--tags",
             f"purpose={REAPER_TAGS['purpose']}", f"deadline={deadline}"], mutating=True)
+    # The read-back proves both halves: the reaper tags this call wrote, and the
+    # adapter identity the VM carried a moment ago. A replacement or a tag rewrite
+    # between the two reads is refused rather than bound.
     shown = az.run(["vm", "show", "--ids", vm_id, "--query", "tags"])
-    if not isinstance(shown, dict) or shown.get("purpose") != REAPER_TAGS["purpose"] or shown.get("deadline") != deadline:
+    if not isinstance(shown, dict) or shown.get("purpose") != REAPER_TAGS["purpose"] or shown.get("deadline") != deadline \
+            or any(shown.get(key) != record["tags"].get(key) for key in ("horizon-workflow-id", "horizon-job-id")):
         return {"passed": False, "bound": False, "journaled": record,
-                "findings": ["the reaper tags could not be read back from the worker VM; nothing bound, retry "
-                             "(the group is journaled, so cleanup can still delete it)"]}
+                "findings": ["the worker VM did not read back with this run's reaper tags and its group's adapter "
+                             "identity; nothing bound, retry (the group is journaled, so cleanup can still delete it)"]}
     # The tags go on the VM only: the product checks its own tags as a subset, so extra
     # VM tags are tolerated, while cleanup refuses a group whose tag set changed since it
     # was journaled. The journal record is therefore ARM's group identity, untouched.

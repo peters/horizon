@@ -79,10 +79,12 @@ group, requires the adapter's `horizon-workflow-id` and `horizon-job-id` tags fr
 which its `horizon-ws-<workflow>-<job>` name derives, requires it to be absent from
 the pre-run group list, requires the descriptor's `manifest_sha256` to equal the
 unbound digest of the manifest being bound (nothing but `worker_group` may change
-between provisioning and binding), puts B's VM under the deadline reaper with a
-read-back, journals the group in `created-groups.json` (written before the manifest,
-so a crash between the two leaves B deletable), and only then writes the name into
-`worker_group` and prints the bound manifest's digest; from then on `validate`
+between provisioning and binding), journals the group in `created-groups.json`
+before it writes anything to Azure (so a crash, a kill or a failing write can never
+leave a tagged worker that no record authorizes deleting), then puts B's VM under
+the deadline reaper and reads back both the reaper tags and the group's adapter
+identity, and only then writes the name into `worker_group` and prints the bound
+manifest's digest; from then on `validate`
 requires the adapter name. A manifest edited by hand in either direction is not a
 runnable product path and is not used. The other fields are frozen before anything
 is rented.
@@ -371,7 +373,10 @@ back unchanged at return and after the worker lifecycle step.
    controller-loss cost stop below is the reaper.
 2. **Provision A**: `provision-client.sh --manifest m.json --ssh-private-key key
    --horizon-binary <binary from the record> --build-record client-build.json
-   --ssh-source-cidr <controller address>/32 --out client.json`. Diagnostics go to
+   --ssh-source-cidr <controller address>/32 --with-azure-cli --assign-identity
+   --out client.json`. The two flags are what a product pass needs: the Azure CLI in
+   cloud-init and the system-assigned identity on the exact VM, neither logged in nor
+   granted a role, which is the operator's step below. Diagnostics go to
    stderr and `client.json` is the exact-A descriptor the later phases take. A's Ed25519 host key is read through
    the control plane (run command inside the exact VM) before the first connection,
    and every SSH and SCP call uses the fresh client key explicitly with
@@ -478,9 +483,13 @@ back unchanged at return and after the worker lifecycle step.
      `client_off.py --manifest m.json bind-worker --group horizon-ws-<workflow>-<job>
      --groups-before groups.json --created created-groups.json --client client.json`,
      which checks the adapter tags, the pre-run absence and the descriptor's manifest
-     digest, tags B's VM for the reaper with a read-back, journals the group and
-     writes `worker_group` in one step; before the VM exists it refuses and reports
-     that `journal-group` is still available. The
+     digest, journals the group before touching Azure, then tags B's VM for the reaper
+     and reads back both those tags and the group's adapter identity, and writes
+     `worker_group` last; before the VM exists it refuses and reports that
+     `journal-group` is still available. The order matters on the failure paths: a
+     crash after the journal leaves a deletable worker, and a refused read-back leaves
+     the group journaled and the manifest unbound, so the command can simply be run
+     again. The
      `journal-group` command below is its journaling half. The journal is
      append-only and `journal-group` refuses a group already present in it, so
      the two are alternatives, never a sequence: after `bind-worker` has run,

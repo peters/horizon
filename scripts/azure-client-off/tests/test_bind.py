@@ -136,12 +136,18 @@ class BindWorkerTests(unittest.TestCase):
 
     def test_a_failed_read_back_still_leaves_the_group_journaled(self):
         m = unbound()
-        az = FakeAz(healthy_answers(m, tagged_after=False))
-        journals: List[Any] = []
-        result = client_off.bind_worker(az, m, B_GROUP, [], [], descriptor(m), journals.append)
-        self.assertFalse(result["passed"])
-        self.assertEqual(result["journaled"], B_JOURNALED)
-        self.assertEqual([r["name"] for r in journals[0]], [B_GROUP], "the tagged worker is deletable")
+        # The reaper tags are missing from the read-back, and, separately, the adapter
+        # identity has changed under it: a replacement is never bound.
+        drifted = healthy_answers(m)
+        drifted[f"vm show --ids {B_VM_ID} --query tags"] = {"purpose": "horizon-azure-vm-spike",
+                                                            "deadline": m["cleanup_deadline_utc"],
+                                                            "horizon-workflow-id": JOB_ID, "horizon-job-id": WORKFLOW_ID}
+        for answers in (healthy_answers(m, tagged_after=False), drifted):
+            journals: List[Any] = []
+            result = client_off.bind_worker(FakeAz(answers), m, B_GROUP, [], [], descriptor(m), journals.append)
+            self.assertFalse(result["passed"])
+            self.assertEqual(result["journaled"], B_JOURNALED)
+            self.assertEqual([r["name"] for r in journals[0]], [B_GROUP], "the tagged worker is deletable")
 
     def test_every_local_refusal_precedes_any_read_or_write(self):
         m = unbound()

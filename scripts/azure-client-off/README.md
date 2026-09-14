@@ -23,8 +23,10 @@ labelling rules.
 - `client_off.py`: the command line: `validate`, `observer-key-line`,
   `install-observer-key`, `journal-group`, `bind-worker` (binds the product-created
   worker group into a manifest frozen with `worker_group: "unbound"`: adapter tags,
-  pre-run absence, the descriptor's manifest digest, reaper tags on B's VM with a
-  read-back, the journal entry, then `worker_group`), `off`, `return`,
+  pre-run absence and the descriptor's manifest digest, then the journal entry, then
+  the reaper tags on B's VM read back together with its adapter identity, and
+  `worker_group` last, so no mutation happens before cleanup is authorized), `off`,
+  `return`,
   `remove-observer-key` (bound to its own 35-minute wall clock),
   `cleanup` (`--groups-before` and `--resources-before`, the group names and ARM
   resource IDs recorded before the run; with an unbound manifest it deletes A and
