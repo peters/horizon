@@ -226,6 +226,7 @@ impl RetainedAzure {
     }
 
     /// The immutable profile binding the allocation was admitted under.
+    #[cfg(target_os = "linux")]
     pub(crate) fn binding(&self) -> RemoteCpuProfileBinding {
         self.binding.clone()
     }
