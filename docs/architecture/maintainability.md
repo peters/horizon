@@ -87,8 +87,12 @@ back into large multi-purpose modules.
   in `session/wait.rs` and `webdriver/session/wait.rs`.
 - `webdriver/session.rs` orchestrates Firefox and Safari. Host coordination
   belongs in `webdriver/session/coordination.rs`, synchronous navigation
-  outcomes in `webdriver/session/navigation.rs`, and HTTP, action translation,
-  and service/process responsibilities stay in their existing WebDriver leaves.
+  outcomes in `webdriver/session/navigation.rs`, session creation and
+  capabilities in `webdriver/session/handshake.rs`, the BiDi link (calls,
+  event draining, subscriptions, preload) in `webdriver/session/bidi.rs`,
+  adaptive screenshot cadence and page-scroll sampling in
+  `webdriver/session/frames.rs`, and HTTP, action translation, and
+  service/process responsibilities stay in their existing WebDriver leaves.
 
 ### `horizon-core`
 
