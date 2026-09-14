@@ -28,7 +28,7 @@ fn allocation_sends_one_authenticated_new_session_and_parses_the_id() {
         &json!({"value": {"sessionId": "abc-123", "capabilities": {"browserName": "safari"}}}),
     )]);
     let request = request(&server.endpoint("/wd/hub"));
-    let host = RemoteHost::connect(&request, Instant::now()).expect("connect");
+    let mut host = RemoteHost::connect(&request).expect("connect");
     let session = host.allocate(&request).expect("allocated");
     assert_eq!(session.id, "abc-123");
     assert_eq!(session.capabilities["browserName"], "safari");
@@ -51,7 +51,7 @@ fn a_webdriver_error_is_a_failed_allocation() {
         &json!({"value": {"error": "session not created", "message": "no device available"}}),
     )]);
     let request = request(&server.endpoint(""));
-    let host = RemoteHost::connect(&request, Instant::now()).expect("connect");
+    let mut host = RemoteHost::connect(&request).expect("connect");
     assert_eq!(
         host.allocate(&request).expect_err("failed"),
         RemoteStartFailure::AllocationFailed {
@@ -68,7 +68,7 @@ fn an_ambiguous_new_session_is_unknown_and_never_retried() {
         Reply::json(200, &json!({"value": {"sessionId": "second"}})),
     ]);
     let request = request(&server.endpoint(""));
-    let host = RemoteHost::connect(&request, Instant::now()).expect("connect");
+    let mut host = RemoteHost::connect(&request).expect("connect");
     let failure = host.allocate(&request).expect_err("timed out");
     assert!(
         matches!(failure, RemoteStartFailure::AllocationUnknown { .. }),
@@ -83,7 +83,7 @@ fn an_ambiguous_new_session_is_unknown_and_never_retried() {
 fn a_success_without_a_safe_session_id_is_unknown() {
     let server = Server::start(vec![Reply::json(200, &json!({"value": {"capabilities": {}}}))]);
     let request = request(&server.endpoint(""));
-    let host = RemoteHost::connect(&request, Instant::now()).expect("connect");
+    let mut host = RemoteHost::connect(&request).expect("connect");
     assert!(matches!(
         host.allocate(&request).expect_err("no id"),
         RemoteStartFailure::AllocationUnknown { .. }
@@ -94,57 +94,104 @@ fn a_success_without_a_safe_session_id_is_unknown() {
 fn endpoint_rules_are_enforced_before_any_request() {
     let mut bad = request("https://user:key@grid.example.net/wd/hub");
     assert!(matches!(
-        RemoteHost::connect(&bad, Instant::now()).expect_err("userinfo"),
+        RemoteHost::connect(&bad).expect_err("userinfo"),
         RemoteStartFailure::InvalidEndpoint(_)
     ));
     bad.endpoint = "http://grid.example.net/wd/hub".into();
+    assert!(RemoteHost::connect(&bad).is_err(), "plain http to a remote host");
+}
+
+fn allocated(session_id: &str) -> Reply {
+    Reply::json(200, &json!({"value": {"sessionId": session_id, "capabilities": {}}}))
+}
+
+fn wait_for_expiry(host: &RemoteHost, within: Duration) -> Option<RemoteExpiry> {
+    let started = Instant::now();
+    while started.elapsed() < within {
+        if let Some(expired) = host.check_expiry() {
+            return Some(expired);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    host.check_expiry()
+}
+
+#[test]
+fn the_watchdog_releases_at_the_hard_deadline_by_itself_and_activity_never_extends_it() {
+    let server = Server::start(vec![allocated("hard-1"), Reply::json(200, &json!({"value": null}))]);
+    let mut request = request(&server.endpoint(""));
+    request.max_session = Duration::from_millis(500);
+    request.idle_release = Duration::from_millis(300);
+    let mut host = RemoteHost::connect(&request).expect("connect");
+    assert_eq!(host.check_expiry(), None, "no clock runs before a session exists");
+    host.allocate(&request).expect("allocated");
+    let started = Instant::now();
+    while host.check_expiry().is_none() && started.elapsed() < Duration::from_secs(3) {
+        host.note_activity(Instant::now());
+        std::thread::sleep(Duration::from_millis(40));
+    }
+    assert_eq!(host.check_expiry(), Some(RemoteExpiry::HardDeadline));
     assert!(
-        RemoteHost::connect(&bad, Instant::now()).is_err(),
-        "plain http to a remote host"
+        started.elapsed() >= Duration::from_millis(450),
+        "not before the deadline"
+    );
+    // The driver was never asked to release; the watchdog already did, and
+    // release hands back that settled outcome without a second delete.
+    assert_eq!(host.release("hard-1"), RemoteReleaseOutcome::Released);
+    let seen = server.recorded();
+    assert_eq!(seen.len(), 2, "one New Session and exactly one DELETE");
+    assert_eq!(
+        (seen[1].method.as_str(), seen[1].path.as_str()),
+        ("DELETE", "/session/hard-1")
     );
 }
 
 #[test]
-fn watchdog_expires_on_the_hard_deadline_or_idle_policy_and_stays_expired() {
-    let mut request = request("https://grid.example.net/wd/hub");
-    request.max_session = Duration::from_secs(100);
-    request.idle_release = Duration::from_secs(30);
-    let start = Instant::now();
-    let mut host = RemoteHost::connect(&request, start).expect("connect");
-    assert_eq!(host.check_expiry(start + Duration::from_secs(10)), None);
-    host.note_activity(start + Duration::from_secs(25));
+fn the_idle_clock_starts_when_allocation_succeeds() {
+    let server = Server::start(vec![
+        allocated("idle-1").delayed(Duration::from_millis(700)),
+        Reply::json(200, &json!({"value": null})),
+    ]);
+    let mut request = request(&server.endpoint(""));
+    request.allocation_timeout = Duration::from_secs(5);
+    request.max_session = Duration::from_secs(30);
+    request.idle_release = Duration::from_millis(400);
+    let mut host = RemoteHost::connect(&request).expect("connect");
+    host.allocate(&request)
+        .expect("allocation slower than idle_release still succeeds");
     assert_eq!(
-        host.check_expiry(start + Duration::from_secs(50)),
+        host.check_expiry(),
         None,
-        "activity resets idle"
+        "the allocation wait does not count as idling"
     );
-    assert_eq!(
-        host.check_expiry(start + Duration::from_secs(56)),
-        Some(RemoteExpiry::Idle)
-    );
-    host.note_activity(start + Duration::from_secs(57));
-    assert_eq!(
-        host.check_expiry(start + Duration::from_secs(58)),
-        Some(RemoteExpiry::Idle),
-        "sticky"
-    );
+    assert_eq!(wait_for_expiry(&host, Duration::from_secs(3)), Some(RemoteExpiry::Idle));
+    assert_eq!(host.release("idle-1"), RemoteReleaseOutcome::Released);
+    assert_eq!(server.recorded().len(), 2, "the watchdog's DELETE is the only one");
+}
 
-    let mut host = RemoteHost::connect(&request, start).expect("connect");
-    for second in (0..100).step_by(20) {
-        host.note_activity(start + Duration::from_secs(second));
-    }
-    assert_eq!(
-        host.check_expiry(start + Duration::from_secs(100)),
-        Some(RemoteExpiry::HardDeadline),
-        "activity never extends the hard lifetime"
-    );
+#[test]
+fn release_before_expiry_stops_the_watchdog_and_deletes_once() {
+    let server = Server::start(vec![
+        allocated("early-1"),
+        Reply::json(200, &json!({"value": null})),
+        Reply::json(200, &json!({"value": null})),
+    ]);
+    let mut request = request(&server.endpoint(""));
+    request.max_session = Duration::from_millis(300);
+    request.idle_release = Duration::from_millis(200);
+    let mut host = RemoteHost::connect(&request).expect("connect");
+    host.allocate(&request).expect("allocated");
+    assert_eq!(host.release("early-1"), RemoteReleaseOutcome::Released);
+    std::thread::sleep(Duration::from_millis(600));
+    assert_eq!(server.recorded().len(), 2, "no delete after the driver released");
+    assert_eq!(host.check_expiry(), None);
 }
 
 #[test]
 fn release_is_verified_or_reported_unknown_after_bounded_attempts() {
     let released = Server::start(vec![Reply::json(200, &json!({"value": null}))]);
     let first = request(&released.endpoint(""));
-    let host = RemoteHost::connect(&first, Instant::now()).expect("connect");
+    let mut host = RemoteHost::connect(&first).expect("connect");
     assert_eq!(host.release("abc"), RemoteReleaseOutcome::Released);
     assert_eq!(released.recorded()[0].path, "/session/abc");
 
@@ -152,14 +199,14 @@ fn release_is_verified_or_reported_unknown_after_bounded_attempts() {
         404,
         &json!({"value": {"error": "invalid session id", "message": "gone"}}),
     )]);
-    let host = RemoteHost::connect(&request(&gone.endpoint("")), Instant::now()).expect("connect");
+    let mut host = RemoteHost::connect(&request(&gone.endpoint(""))).expect("connect");
     assert_eq!(host.release("abc"), RemoteReleaseOutcome::AlreadyGone);
 
     let refused = Server::start(vec![Reply::json(
         500,
         &json!({"value": {"error": "unknown error", "message": "busy"}}),
     )]);
-    let host = RemoteHost::connect(&request(&refused.endpoint("")), Instant::now()).expect("connect");
+    let mut host = RemoteHost::connect(&request(&refused.endpoint(""))).expect("connect");
     assert_eq!(
         host.release("abc"),
         RemoteReleaseOutcome::Failed {
@@ -172,7 +219,7 @@ fn release_is_verified_or_reported_unknown_after_bounded_attempts() {
     let silent = Server::start(Vec::new());
     let port = silent.port;
     drop(silent);
-    let host = RemoteHost::connect(&request(&format!("http://127.0.0.1:{port}")), Instant::now()).expect("connect");
+    let mut host = RemoteHost::connect(&request(&format!("http://127.0.0.1:{port}"))).expect("connect");
     match host.release("abc") {
         RemoteReleaseOutcome::ReleaseUnknown { attempts, .. } => assert_eq!(attempts, 3),
         other => panic!("unexpected {other:?}"),

@@ -7,9 +7,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
+use crate::PageScrollState;
 use crate::frames::FrameSlot;
 use crate::session::{BrowserEventSender, publish_frame};
-use crate::{BackendKind, PageScrollState};
 
 use super::{Driver, webdriver_value};
 
@@ -100,7 +100,7 @@ impl Driver {
         frame_slot.record_capture_request();
         let generation = self.generation;
         let context_id = self.context_id.clone();
-        let result = if self.config.browser.backend == BackendKind::FirefoxBidi {
+        let result = if self.firefox_bidi() {
             self.classic_get("screenshot")
                 .and_then(|response| {
                     webdriver_value(&response)

@@ -1,6 +1,9 @@
 //! Remote session ownership: one allocation at a hosted grid, a hard
-//! lifetime and idle watchdog, and a bounded, verified release. Allocation is
-//! never retried after an ambiguous result, and no mutation is replayed.
+//! lifetime and idle watchdog on its own thread, and a bounded, verified
+//! release. Allocation is never retried after an ambiguous result, and no
+//! mutation is replayed.
+
+mod watchdog;
 
 use std::fmt;
 use std::sync::Arc;
@@ -12,6 +15,7 @@ use super::http::HttpError;
 use super::remote_http::{RemoteAuthorizationHeader, RemoteHttpClient};
 use super::session::handshake::{NewSession, parse_new_session_response};
 use super::transport::ClassicTransport;
+use watchdog::Watchdog;
 
 /// Bounded per-attempt wait for `DELETE /session/{id}` during release.
 const RELEASE_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -113,6 +117,12 @@ pub enum RemoteSessionEvent {
         label: String,
         reason: String,
     },
+    /// The provider refused, or the endpoint was rejected locally. Terminal
+    /// for the lifecycle; the reason never carries a credential.
+    AllocationFailed {
+        label: String,
+        reason: String,
+    },
     Expired {
         label: String,
         reason: RemoteExpiry,
@@ -123,14 +133,14 @@ pub enum RemoteSessionEvent {
     },
 }
 
-/// The driver's view of a remote grid: transport plus the local watchdog.
+/// The driver's view of a remote grid: transport plus the local watchdog,
+/// which starts only once a session exists.
 pub(super) struct RemoteHost {
-    transport: RemoteHttpClient,
+    transport: Arc<RemoteHttpClient>,
     label: String,
-    deadline: Instant,
+    max_session: Duration,
     idle_release: Duration,
-    last_activity: Instant,
-    expired: Option<RemoteExpiry>,
+    watchdog: Option<Watchdog>,
 }
 
 impl RemoteHost {
@@ -138,7 +148,7 @@ impl RemoteHost {
     ///
     /// # Errors
     /// [`RemoteStartFailure::InvalidEndpoint`].
-    pub(super) fn connect(request: &RemoteSessionRequest, now: Instant) -> Result<Self, RemoteStartFailure> {
+    pub(super) fn connect(request: &RemoteSessionRequest) -> Result<Self, RemoteStartFailure> {
         let authorization = match &request.authorization {
             Some(header) => Some(clone_header(header)?),
             None => None,
@@ -146,17 +156,16 @@ impl RemoteHost {
         let transport = RemoteHttpClient::new(&request.endpoint, authorization)
             .map_err(|error| RemoteStartFailure::InvalidEndpoint(error.to_string()))?;
         Ok(Self {
-            transport,
+            transport: Arc::new(transport),
             label: request.label.clone(),
-            deadline: now + request.max_session,
+            max_session: request.max_session,
             idle_release: request.idle_release,
-            last_activity: now,
-            expired: None,
+            watchdog: None,
         })
     }
 
     pub(super) fn transport(&self) -> &dyn ClassicTransport {
-        &self.transport
+        self.transport.as_ref()
     }
 
     pub(super) fn label(&self) -> &str {
@@ -165,74 +174,86 @@ impl RemoteHost {
 
     /// One New Session request under the allocation timeout. A transport
     /// failure or an unusable success is `AllocationUnknown`; only a complete
-    /// `WebDriver` error is `AllocationFailed`. Never retried.
+    /// `WebDriver` error is `AllocationFailed`. Never retried. On success the
+    /// watchdog starts, so the allocation wait counts against neither the
+    /// hard lifetime nor the idle policy.
     ///
     /// # Errors
     /// See [`RemoteStartFailure`].
-    pub(super) fn allocate(&self, request: &RemoteSessionRequest) -> Result<NewSession, RemoteStartFailure> {
+    pub(super) fn allocate(&mut self, request: &RemoteSessionRequest) -> Result<NewSession, RemoteStartFailure> {
         let body = json!({ "capabilities": { "alwaysMatch": request.capabilities } });
-        match self
+        let session = match self
             .transport
             .post_with_read_timeout("/session", &body, request.allocation_timeout)
         {
-            Ok(response) => {
-                parse_new_session_response(&response).map_err(|reason| RemoteStartFailure::AllocationUnknown { reason })
-            }
+            Ok(response) => parse_new_session_response(&response)
+                .map_err(|reason| RemoteStartFailure::AllocationUnknown { reason })?,
             Err(HttpError::WebDriver { error, message }) => {
-                Err(RemoteStartFailure::AllocationFailed { error, message })
+                return Err(RemoteStartFailure::AllocationFailed { error, message });
             }
-            Err(other) => Err(RemoteStartFailure::AllocationUnknown {
-                reason: other.to_string(),
-            }),
-        }
+            Err(other) => {
+                return Err(RemoteStartFailure::AllocationUnknown {
+                    reason: other.to_string(),
+                });
+            }
+        };
+        self.watchdog = Some(Watchdog::start(
+            Arc::clone(&self.transport),
+            session.id.clone(),
+            self.max_session,
+            self.idle_release,
+            Instant::now(),
+        ));
+        Ok(session)
     }
 
     /// A user or agent command happened. Frame polling never calls this.
     pub(super) fn note_activity(&mut self, now: Instant) {
-        self.last_activity = now;
-    }
-
-    /// Check the hard deadline and the idle policy. Sticky once expired.
-    pub(super) fn check_expiry(&mut self, now: Instant) -> Option<RemoteExpiry> {
-        if let Some(expired) = self.expired {
-            return Some(expired);
+        if let Some(watchdog) = &self.watchdog {
+            watchdog.note_activity(now);
         }
-        let expired = if now >= self.deadline {
-            Some(RemoteExpiry::HardDeadline)
-        } else if now.duration_since(self.last_activity) >= self.idle_release {
-            Some(RemoteExpiry::Idle)
-        } else {
-            None
-        };
-        self.expired = expired;
-        expired
     }
 
-    /// Delete the exact owned session with bounded retries. A `WebDriver`
-    /// answer settles the outcome on the first attempt; transport failures
-    /// are retried up to the bound, and the last reason is reported.
-    pub(super) fn release(&self, session_id: &str) -> RemoteReleaseOutcome {
-        let path = format!("/session/{session_id}");
-        let mut last_reason = String::new();
-        for attempt in 1..=RELEASE_ATTEMPTS {
-            match self.transport.request("DELETE", &path, None, RELEASE_ATTEMPT_TIMEOUT) {
-                Ok(_) => return RemoteReleaseOutcome::Released,
-                Err(HttpError::WebDriver { error, message }) => {
-                    if error == "invalid session id" {
-                        return RemoteReleaseOutcome::AlreadyGone;
-                    }
-                    return RemoteReleaseOutcome::Failed { error, message };
+    /// The watchdog's verdict: the hard deadline or the idle policy elapsed
+    /// and the session is being, or has been, released. Sticky.
+    pub(super) fn check_expiry(&self) -> Option<RemoteExpiry> {
+        self.watchdog.as_ref().and_then(Watchdog::expired)
+    }
+
+    /// Release the exact owned session. When the watchdog already released
+    /// it, its settled outcome is returned and nothing is sent again.
+    pub(super) fn release(&mut self, session_id: &str) -> RemoteReleaseOutcome {
+        if let Some(outcome) = self.watchdog.take().and_then(Watchdog::finish) {
+            return outcome;
+        }
+        release_session(&self.transport, session_id)
+    }
+}
+
+/// Delete one session with bounded retries. A `WebDriver` answer settles the
+/// outcome on the first attempt; transport failures are retried up to the
+/// bound, and the last reason is reported.
+fn release_session(transport: &RemoteHttpClient, session_id: &str) -> RemoteReleaseOutcome {
+    let path = format!("/session/{session_id}");
+    let mut last_reason = String::new();
+    for attempt in 1..=RELEASE_ATTEMPTS {
+        match transport.request("DELETE", &path, None, RELEASE_ATTEMPT_TIMEOUT) {
+            Ok(_) => return RemoteReleaseOutcome::Released,
+            Err(HttpError::WebDriver { error, message }) => {
+                if error == "invalid session id" {
+                    return RemoteReleaseOutcome::AlreadyGone;
                 }
-                Err(other) => {
-                    last_reason = other.to_string();
-                    tracing::warn!(attempt, "remote session release attempt failed: {last_reason}");
-                }
+                return RemoteReleaseOutcome::Failed { error, message };
+            }
+            Err(other) => {
+                last_reason = other.to_string();
+                tracing::warn!(attempt, "remote session release attempt failed: {last_reason}");
             }
         }
-        RemoteReleaseOutcome::ReleaseUnknown {
-            attempts: RELEASE_ATTEMPTS,
-            reason: last_reason,
-        }
+    }
+    RemoteReleaseOutcome::ReleaseUnknown {
+        attempts: RELEASE_ATTEMPTS,
+        reason: last_reason,
     }
 }
 
@@ -242,7 +263,7 @@ impl fmt::Debug for RemoteHost {
             .debug_struct("RemoteHost")
             .field("label", &self.label)
             .field("origin", &self.transport.origin())
-            .field("expired", &self.expired)
+            .field("expired", &self.check_expiry())
             .finish_non_exhaustive()
     }
 }

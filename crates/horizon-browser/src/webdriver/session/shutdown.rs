@@ -36,7 +36,7 @@ impl Drop for Completion {
 impl Driver {
     pub(super) fn stop_for_service_exit(&mut self, event_tx: &BrowserEventSender) -> bool {
         let now = Instant::now();
-        let Some(exit) = self.host.exit(now) else {
+        let Some(exit) = self.host.exit() else {
             return false;
         };
         self.settle_pending_wait_for_shutdown(now);

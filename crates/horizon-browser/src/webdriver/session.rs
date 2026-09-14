@@ -185,7 +185,7 @@ pub(crate) fn run_webdriver(
         }
         if let Err(error) = driver.drain_bidi_events(event_tx) {
             tracing::warn!(backend = ?driver.config.browser.backend, "BiDi event pump failed: {error}");
-            if driver.config.browser.backend == BackendKind::FirefoxBidi {
+            if driver.firefox_bidi() {
                 let _ = event_tx.send(BrowserEvent::Warning(format!("Firefox BiDi disconnected: {error}")));
                 break;
             }
@@ -230,55 +230,11 @@ impl Driver {
             id: session_id,
             capabilities,
         } = session;
-        // A remote grid may advertise a BiDi socket; Horizon never connects
-        // to a returned endpoint with the provider credential, so remote
-        // sessions stay on classic WebDriver.
-        let ws_url = if host.is_remote() {
-            None
-        } else {
-            capabilities.get("webSocketUrl").and_then(Value::as_str)
-        };
-        let mut bidi = match ws_url {
-            Some(url) => match connect_bidi_with_startup_retry(url, stop_requested) {
-                Ok(link) => Some(link),
-                Err(error) if config.browser.backend == BackendKind::SafariWebDriver => {
-                    tracing::warn!("Safari BiDi endpoint was unavailable; continuing with classic WebDriver: {error}");
-                    None
-                }
-                Err(error) => return Err(error),
-            },
-            None => None,
-        };
-        if config.browser.backend == BackendKind::FirefoxBidi && bidi.is_none() {
-            host.delete_session(&session_id);
-            return Err("Firefox did not return the required WebDriver BiDi webSocketUrl".to_string());
-        }
-        let mut context_id = bidi.as_mut().and_then(discover_context);
-        if config.browser.backend == BackendKind::FirefoxBidi && context_id.is_none() {
-            host.delete_session(&session_id);
-            return Err("Firefox BiDi returned no top-level browsing context".to_string());
-        }
-        if config.browser.backend == BackendKind::FirefoxBidi
-            && config.browser.automation_disclosure == AutomationDisclosurePolicy::MinimizeCommonSignals
-            && let Some(link) = bidi.as_mut()
-            && let Err(error) = install_common_signal_preload(link)
-        {
-            host.delete_session(&session_id);
-            return Err(format!(
-                "Firefox could not install pre-document automation disclosure minimization: {error}"
-            ));
-        }
-        if let Some(link) = bidi.as_mut()
-            && let Err(error) = subscribe(link, config.browser.backend, context_id.as_deref())
-        {
-            if config.browser.backend == BackendKind::FirefoxBidi {
-                host.delete_session(&session_id);
-                return Err(format!("Firefox BiDi event subscription failed: {error}"));
-            }
-            bidi = None;
-            context_id = None;
-        }
-        let automation_ws = bidi.as_ref().and(ws_url).unwrap_or_default().to_string();
+        let BidiLink {
+            bidi,
+            context_id,
+            automation_ws,
+        } = establish_bidi(config, &mut host, &session_id, &capabilities, stop_requested)?;
         let safari = if host.is_remote() {
             None
         } else {
@@ -324,6 +280,13 @@ impl Driver {
             pending_http_bodies: VecDeque::new(),
             panel_slot: Arc::clone(frame_slot),
         })
+    }
+
+    /// Whether this session drives Firefox over `BiDi`. A remote session never
+    /// does, whatever local backend is configured: every remote request is
+    /// classic `WebDriver`.
+    fn firefox_bidi(&self) -> bool {
+        firefox_bidi_mode(&self.config, &self.host)
     }
 
     fn run_command(
@@ -393,7 +356,7 @@ impl Driver {
             self.frames.demand();
             return;
         }
-        let result = if self.config.browser.backend == BackendKind::FirefoxBidi {
+        let result = if self.firefox_bidi() {
             self.call_bidi(
                 "browsingContext.setViewport",
                 &json!({
@@ -432,7 +395,7 @@ impl Driver {
             return Ok(());
         }
         self.capture_teach_input(&input);
-        let (result, demand_frame) = if self.config.browser.backend == BackendKind::FirefoxBidi {
+        let (result, demand_frame) = if self.firefox_bidi() {
             let mut payload = self.actions.payload(input);
             payload["context"] = json!(self.context_id);
             (
@@ -489,28 +452,118 @@ fn start_remote(
     request: &super::remote::RemoteSessionRequest,
     event_tx: &BrowserEventSender,
 ) -> Result<(DriverHost, NewSession), String> {
-    let host = RemoteHost::connect(request, Instant::now()).map_err(|error| error.to_string())?;
+    let label = request.label.clone();
     let _ = event_tx.send(BrowserEvent::RemoteSession(RemoteSessionEvent::Allocating {
-        label: request.label.clone(),
+        label: label.clone(),
     }));
-    match host.allocate(request) {
-        Ok(session) => {
+    let allocated = RemoteHost::connect(request).and_then(|mut host| {
+        let session = host.allocate(request)?;
+        Ok((host, session))
+    });
+    match allocated {
+        Ok((host, session)) => {
             let _ = event_tx.send(BrowserEvent::RemoteSession(RemoteSessionEvent::Allocated {
-                label: request.label.clone(),
+                label,
                 session_digest: session_digest(&session.id),
             }));
             Ok((DriverHost::Remote(host), session))
         }
         Err(failure) => {
-            if let RemoteStartFailure::AllocationUnknown { reason } = &failure {
-                let _ = event_tx.send(BrowserEvent::RemoteSession(RemoteSessionEvent::AllocationUnknown {
-                    label: request.label.clone(),
+            // Every failure ends the lifecycle with a terminal, value-free
+            // event, so the panel never stays at "allocating".
+            let event = match &failure {
+                RemoteStartFailure::AllocationUnknown { reason } => RemoteSessionEvent::AllocationUnknown {
+                    label,
                     reason: reason.clone(),
-                }));
-            }
+                },
+                RemoteStartFailure::AllocationFailed { .. } | RemoteStartFailure::InvalidEndpoint(_) => {
+                    RemoteSessionEvent::AllocationFailed {
+                        label,
+                        reason: failure.to_string(),
+                    }
+                }
+            };
+            let _ = event_tx.send(BrowserEvent::RemoteSession(event));
             Err(failure.to_string())
         }
     }
+}
+
+/// The optional `BiDi` channel a session starts with.
+struct BidiLink {
+    bidi: Option<JsonWsLink>,
+    context_id: Option<String>,
+    automation_ws: String,
+}
+
+/// Connect the `BiDi` channel a local browser advertised. A remote grid may
+/// advertise one too; Horizon never connects to a returned endpoint with the
+/// provider credential, so remote sessions stay on classic `WebDriver`
+/// whatever the local backend is.
+fn establish_bidi(
+    config: &BrowserSessionConfig,
+    host: &mut DriverHost,
+    session_id: &str,
+    capabilities: &Value,
+    stop_requested: &AtomicBool,
+) -> Result<BidiLink, String> {
+    let firefox_bidi = firefox_bidi_mode(config, host);
+    let ws_url = if host.is_remote() {
+        None
+    } else {
+        capabilities.get("webSocketUrl").and_then(Value::as_str)
+    };
+    let mut bidi = match ws_url {
+        Some(url) => match connect_bidi_with_startup_retry(url, stop_requested) {
+            Ok(link) => Some(link),
+            Err(error) if config.browser.backend == BackendKind::SafariWebDriver => {
+                tracing::warn!("Safari BiDi endpoint was unavailable; continuing with classic WebDriver: {error}");
+                None
+            }
+            Err(error) => return Err(error),
+        },
+        None => None,
+    };
+    if firefox_bidi && bidi.is_none() {
+        host.delete_session(session_id);
+        return Err("Firefox did not return the required WebDriver BiDi webSocketUrl".to_string());
+    }
+    let mut context_id = bidi.as_mut().and_then(discover_context);
+    if firefox_bidi && context_id.is_none() {
+        host.delete_session(session_id);
+        return Err("Firefox BiDi returned no top-level browsing context".to_string());
+    }
+    if firefox_bidi
+        && config.browser.automation_disclosure == AutomationDisclosurePolicy::MinimizeCommonSignals
+        && let Some(link) = bidi.as_mut()
+        && let Err(error) = install_common_signal_preload(link)
+    {
+        host.delete_session(session_id);
+        return Err(format!(
+            "Firefox could not install pre-document automation disclosure minimization: {error}"
+        ));
+    }
+    if let Some(link) = bidi.as_mut()
+        && let Err(error) = subscribe(link, config.browser.backend, context_id.as_deref())
+    {
+        if firefox_bidi {
+            host.delete_session(session_id);
+            return Err(format!("Firefox BiDi event subscription failed: {error}"));
+        }
+        bidi = None;
+        context_id = None;
+    }
+    let automation_ws = bidi.as_ref().and(ws_url).unwrap_or_default().to_string();
+    Ok(BidiLink {
+        bidi,
+        context_id,
+        automation_ws,
+    })
+}
+
+/// Firefox `BiDi` is a local-host mode only; see [`Driver::firefox_bidi`].
+fn firefox_bidi_mode(config: &BrowserSessionConfig, host: &DriverHost) -> bool {
+    config.browser.backend == BackendKind::FirefoxBidi && !host.is_remote()
 }
 
 /// Short, non-reversible correlation id for a provider session id.

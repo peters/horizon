@@ -4,7 +4,6 @@
 //! touching navigation, input, capture or teardown.
 
 use std::process::ExitStatus;
-use std::time::Instant;
 
 use super::remote::{RemoteExpiry, RemoteHost, RemoteReleaseOutcome};
 use super::service::WebDriverService;
@@ -53,15 +52,15 @@ impl DriverHost {
     }
 
     /// The reason the host is gone; `None` while it is alive.
-    pub(super) fn exit(&mut self, now: Instant) -> Option<HostExit> {
+    pub(super) fn exit(&mut self) -> Option<HostExit> {
         match self {
             Self::Local(service) => service.process.child_status().map(HostExit::Process),
-            Self::Remote(host) => host.check_expiry(now).map(HostExit::Expired),
+            Self::Remote(host) => host.check_expiry().map(HostExit::Expired),
         }
     }
 
     pub(super) fn has_exited(&mut self) -> bool {
-        self.exit(Instant::now()).is_some()
+        self.exit().is_some()
     }
 
     /// Release the session at the host. Remote hosts report what the

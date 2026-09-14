@@ -183,7 +183,7 @@ impl Driver {
         let mut payload = self
             .actions
             .click_payload(x, y, BrowserButton::Left, count, BrowserModifiers::none());
-        let result = if self.config.browser.backend == BackendKind::FirefoxBidi {
+        let result = if self.firefox_bidi() {
             payload["context"] = json!(self.context_id);
             self.call_bidi("input.performActions", &payload, event_tx).map(|_| ())
         } else {

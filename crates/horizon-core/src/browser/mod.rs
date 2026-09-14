@@ -758,6 +758,9 @@ impl BrowserPanelState {
             RemoteSessionEvent::AllocationUnknown { label, reason } => {
                 format!("remote allocation for {label} is unknown ({reason}); check the provider before retrying")
             }
+            RemoteSessionEvent::AllocationFailed { label, reason } => {
+                format!("remote allocation for {label} failed: {reason}")
+            }
             RemoteSessionEvent::Expired { label, reason } => match reason {
                 RemoteExpiry::HardDeadline => format!("remote session for {label} reached its maximum lifetime"),
                 RemoteExpiry::Idle => format!("remote session for {label} was released after idling"),
