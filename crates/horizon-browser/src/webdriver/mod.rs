@@ -1,4 +1,5 @@
 mod actions;
+mod host;
 mod http;
 mod remote_http;
 mod service;

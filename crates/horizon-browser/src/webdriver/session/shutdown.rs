@@ -33,7 +33,7 @@ impl Drop for Completion {
 
 impl Driver {
     pub(super) fn stop_for_service_exit(&mut self, event_tx: &BrowserEventSender) -> bool {
-        let Some(status) = self.service.process.child_status() else {
+        let Some(status) = self.host.exit_status() else {
             return false;
         };
         self.settle_pending_wait_for_shutdown(Instant::now());
@@ -50,13 +50,13 @@ impl Driver {
             let _ = self.network.stop();
         }
         let _ = self.classic_delete("actions");
-        let _ = self.service.http.delete(&format!("/session/{}", self.session_id));
-        let _ = self.service.process.kill();
+        self.host.delete_session(&self.session_id);
+        self.host.shutdown();
     }
 
     pub(super) fn classic_delete(&self, suffix: &str) -> Result<Value, String> {
-        self.service
-            .http
+        self.host
+            .transport()
             .delete(&self.session_path(suffix))
             .map_err(|error| error.to_string())
     }

@@ -54,23 +54,6 @@ impl HttpClient {
         self.request("GET", path, None, IO_TIMEOUT)
     }
 
-    pub(super) fn get_with_read_timeout(&self, path: &str, read_timeout: Duration) -> Result<Value, HttpError> {
-        self.request("GET", path, None, read_timeout)
-    }
-
-    pub(super) fn post(&self, path: &str, body: &Value) -> Result<Value, HttpError> {
-        self.request("POST", path, Some(body), IO_TIMEOUT)
-    }
-
-    pub(super) fn post_with_read_timeout(
-        &self,
-        path: &str,
-        body: &Value,
-        read_timeout: Duration,
-    ) -> Result<Value, HttpError> {
-        self.request("POST", path, Some(body), read_timeout)
-    }
-
     pub(super) fn delete(&self, path: &str) -> Result<Value, HttpError> {
         self.request("DELETE", path, None, IO_TIMEOUT)
     }
