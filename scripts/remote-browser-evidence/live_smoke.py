@@ -122,7 +122,14 @@ def seed_keyring(login: str, password: str) -> dict[str, str | None]:
     previous = {reference: Secret.password_lookup_sync(schema, slot_attributes(reference), None) for reference in SLOTS}
     for reference, value in (("user", login), ("key", password)):
         attrs = slot_attributes(reference)
-        if not Secret.password_store_sync(schema, attrs, Secret.COLLECTION_DEFAULT, f"keyring:{attrs['username']}@{SERVICE}", value, None):
+        try:
+            stored = Secret.password_store_sync(schema, attrs, Secret.COLLECTION_DEFAULT, f"keyring:{attrs['username']}@{SERVICE}", value, None)
+        except Exception:
+            # Seeding is all or nothing: whatever was already replaced goes back.
+            restore_keyring(previous)
+            raise
+        if not stored:
+            restore_keyring(previous)
             raise SystemExit(f"could not seed the OS store for {reference}")
     return previous
 
