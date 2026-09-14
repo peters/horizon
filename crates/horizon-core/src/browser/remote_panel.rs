@@ -197,12 +197,16 @@ impl BrowserPanelState {
     ) {
         use horizon_browser::{RemoteExpiry, RemoteReleaseOutcome, RemoteSessionEvent};
         // Only a positive answer frees the provider's slot: an allocation the
-        // provider refused, or a delete it accepted or no longer knows.
+        // provider refused (the driver reports an allocated-then-unreleased
+        // session as AllocationUnknown, never as AllocationFailed), or a
+        // delete it accepted or no longer knows.
         let released = matches!(
             &event,
             RemoteSessionEvent::AllocationFailed { .. }
                 | RemoteSessionEvent::Released {
-                    outcome: RemoteReleaseOutcome::Released | RemoteReleaseOutcome::AlreadyGone,
+                    outcome: RemoteReleaseOutcome::Released
+                        | RemoteReleaseOutcome::AlreadyGone
+                        | RemoteReleaseOutcome::NeverAllocated,
                     ..
                 }
         );
@@ -230,6 +234,7 @@ impl BrowserPanelState {
                 RemoteReleaseOutcome::Failed { error, message } => {
                     format!("remote session for {label} could not be released ({error}: {message})")
                 }
+                RemoteReleaseOutcome::NeverAllocated => format!("remote session for {label} was never allocated"),
             },
         };
         tracing::info!(target: "browser", "{note}");

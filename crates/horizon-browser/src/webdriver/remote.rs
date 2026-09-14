@@ -116,6 +116,9 @@ pub enum RemoteReleaseOutcome {
     ReleaseUnknown { attempts: u8, reason: String },
     /// The provider refused the delete.
     Failed { error: String, message: String },
+    /// The provider refused the session (or the endpoint was rejected
+    /// locally), so there was never anything to release.
+    NeverAllocated,
 }
 
 impl fmt::Display for RemoteReleaseOutcome {
@@ -127,6 +130,7 @@ impl fmt::Display for RemoteReleaseOutcome {
                 write!(formatter, "release unknown after {attempts} attempts: {reason}")
             }
             Self::Failed { error, message } => write!(formatter, "release refused ({error}): {message}"),
+            Self::NeverAllocated => formatter.write_str("never allocated"),
         }
     }
 }
