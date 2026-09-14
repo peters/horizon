@@ -59,17 +59,18 @@ const NORMALIZED_NAMES: &[&str] = &[
 
 /// Exact capability names (lowercased, separators removed) that identify a
 /// provider account, plus fragments that mark any key as secret-bearing.
-const CREDENTIAL_NAMES: &[&str] = &["user", "username", "key", "auth", "credentials"];
+const CREDENTIAL_NAMES: &[&str] = &["user", "username", "key", "credentials", "pin", "otp"];
 const CREDENTIAL_FRAGMENTS: &[&str] = &[
     "secret",
     "token",
     "password",
     "passwd",
-    "accesskey",
-    "apikey",
-    "authorization",
+    "passphrase",
+    "auth",
     "credential",
     "privatekey",
+    "apikey",
+    "accesskey",
 ];
 
 impl RemoteTargetProfile {
@@ -143,6 +144,7 @@ fn name_problem(name: &str) -> Option<ExtensionProblem> {
     let lowered = name.to_ascii_lowercase();
     let folded: String = lowered.chars().filter(|c| !matches!(c, '_' | '-' | '.')).collect();
     if CREDENTIAL_NAMES.contains(&folded.as_str())
+        || folded.ends_with("key")
         || CREDENTIAL_FRAGMENTS.iter().any(|fragment| folded.contains(fragment))
     {
         return Some(ExtensionProblem::CarriesCredential);

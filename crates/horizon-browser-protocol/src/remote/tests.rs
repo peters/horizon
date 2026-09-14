@@ -369,6 +369,26 @@ fn capability_extensions_must_be_namespaced_secret_free_and_non_conflicting() {
         ),
         (
             "vendor:options",
+            serde_json::json!({"authCode": "c"}),
+            ExtensionProblem::CarriesCredential,
+        ),
+        (
+            "vendor:options",
+            serde_json::json!({"licenseKey": "k"}),
+            ExtensionProblem::CarriesCredential,
+        ),
+        (
+            "vendor:options",
+            serde_json::json!({"oauthToken": "t"}),
+            ExtensionProblem::CarriesCredential,
+        ),
+        (
+            "vendor:passphrase",
+            serde_json::json!("p"),
+            ExtensionProblem::CarriesCredential,
+        ),
+        (
+            "vendor:options",
             serde_json::json!({"os_version": "18"}),
             ExtensionProblem::ConflictsWithNormalizedField,
         ),
