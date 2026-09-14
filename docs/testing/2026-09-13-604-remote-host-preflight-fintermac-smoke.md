@@ -45,11 +45,13 @@ explicit about which steps mutate the host so the proof is not overclaimed.
 ## Steps (run in order)
 
 1. **Deliver the checker — MUTATES the host (verification plumbing, not a tool feature):**
-   single file to `/tmp`, removed in step 5. No package manager, no service,
+   `preflight.py` plus sibling `executor.py` to `/tmp`, removed in step 5.
+   Invoke from `/tmp` so `from executor import` resolves. No package manager, no service,
    no install path. Deliver **before** the baseline so both snapshots include
    the file and the delivery itself is not part of the before/after diff.
    ```sh
    scp scripts/remote-host-preflight/preflight.py "$VM_SSH":/tmp/preflight-604.py
+   scp scripts/remote-host-preflight/executor.py "$VM_SSH":/tmp/executor.py
    ```
 
 2. **Baseline snapshot (read-only):** write the independent ground truth
@@ -114,7 +116,8 @@ explicit about which steps mutate the host so the proof is not overclaimed.
 
 4. **Post-run snapshot (read-only):** reuse `SNAPSHOT_REMOTE` from step 2
    and write `after.txt` **before** step 5. The delivered `/tmp/preflight-604.py`
-   existed in both snapshots; reports were captured locally in step 3.
+   and `/tmp/executor.py` existed in both snapshots; reports were captured
+   locally in step 3.
    Compare invariant fields (`uname`, `nproc`, `MemTotal`, engine identity,
    workspace device, ext4 options). Allow `date -u` to change and allow
    `df` Available/Capacity sampling drift — inspect that drift the same way
@@ -129,7 +132,7 @@ explicit about which steps mutate the host so the proof is not overclaimed.
 
 5. **Remove the verification copy** (the delivered checker, not host state):
    ```sh
-   ssh "$VM_SSH" 'rm -f /tmp/preflight-604.py'
+   ssh "$VM_SSH" 'rm -f /tmp/preflight-604.py /tmp/executor.py'
    ```
 
 ## Bug-hunt matrix (assert each on the real output)

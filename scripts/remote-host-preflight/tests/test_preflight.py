@@ -1237,6 +1237,22 @@ class RedactionAndDeterminism(Harness):
         self.assertNotIn("ghp_abcdefghijklmnop123", text)
         self.assertIn("<redacted>", text)
 
+    def test_username_only_uri_userinfo_is_redacted(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        with mock.patch.dict(os.environ, {"DOCKER_HOST": "tcp://supersecret@remote:2376"}):
+            _, report, _ = self.run_main(fixture)
+        text = json.dumps(report)
+        self.assertNotIn("supersecret", text)
+        self.assertIn("<redacted>", text)
+
+    def test_printable_line_strips_c1_and_bidi_controls(self):
+        raw = "ok\x9bhidden\u202eflip"
+        out = preflight.printable_line(raw)
+        self.assertNotIn("\x9b", out)
+        self.assertNotIn("\u202e", out)
+        self.assertIn("ok", out)
+        self.assertIn("hidden", out)
+
     def test_timeout_message_preserves_fractional_seconds(self):
         fixture = dict(DEFAULT_FIXTURE)
         fixture["os"] = {"timeout": True}

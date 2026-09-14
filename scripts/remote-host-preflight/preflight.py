@@ -10,7 +10,9 @@ unsupported or unverified.
 
 Read-only guarantees:
 - subprocess argv is a PROBE_ARGS shape plus optional extra words; never shell
-- host-fact file reads are limited to `--procfs-root` / `--sysfs-root`
+- host-fact file-content reads are limited to `--procfs-root` / `--sysfs-root`
+- the workspace helper may `realpath`/`isdir`/`lexists`/`stat` the workspace
+  path and its ancestors (metadata only)
 - a killable helper may `os.path.exists` the two Podman socket candidates;
   the watchdog reads `/proc` PIDs and `/proc/<pid>/task/<pid>/children`
   only to reap probe descendants
@@ -130,7 +132,7 @@ REDACTED_PATTERNS = (
     re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{8,255}"),
 )
 URI_USERINFO = re.compile(
-    r"(?i)([a-z][a-z0-9+.-]{0,32}://)[^/@\s]{1,256}:[^/@\s]{1,256}@"
+    r"(?i)([a-z][a-z0-9+.-]{0,32}://)[^/@\s]{1,256}(?::[^/@\s]{1,256})?@"
 )
 
 # Precomputed read-only facts that cannot be proven from host metadata alone.
@@ -948,16 +950,15 @@ def build_report(procfs_root, sysfs_root, workspace_path, timeout, executor, now
 
 
 def printable_line(text):
-    """One printable line: drop C0/DEL controls, collapse newlines to spaces."""
+    """One printable line: drop non-printables, collapse newlines to spaces."""
     chars = []
     for char in str(text or ""):
-        code = ord(char)
         if char in "\n\r":
             chars.append(" ")
-        elif code < 32 or code == 127:
             continue
-        else:
-            chars.append(char)
+        if unicodedata.category(char) in ("Cc", "Cf") or not char.isprintable():
+            continue
+        chars.append(char)
     return " ".join("".join(chars).split())
 
 
