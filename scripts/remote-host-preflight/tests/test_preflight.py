@@ -509,6 +509,7 @@ class EngineFailures(Harness):
             "timeout": {"docker_info": {"timeout": True}},
             "nonzero": {"docker_info": {"exit_code": 1, "stdout": "", "stderr": "denied"}},
             "no_line": {"docker_info": {"stdout": ""}},
+            "multiline": {"docker_info": {"stdout": "overlay2\nWARNING: extra\n"}},
         }
         for label, overrides in cases.items():
             with self.subTest(label=label):
@@ -1290,6 +1291,28 @@ class RedactionAndDeterminism(Harness):
             ["docker", "--host", socket, "version", "--format", "json"],
             executor.seen)
         self.assertNotIn("supersecretvalue", json.dumps(report))
+
+    def test_docker_context_nonzero_exit_is_inspect_failure(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["docker_context"] = {
+            "exit_code": 1, "stdout": "", "stderr": "permission denied"}
+        code, report, _ = self.run_main(fixture)
+        self.assertEqual(code, 1)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["container_engine"]["status"], "unsupported")
+        self.assertIn("docker context inspect failed", by_id["container_engine"]["detail"])
+        self.assertIn("permission denied", by_id["container_engine"]["detail"])
+        self.assertNotIn("endpoint missing", by_id["container_engine"]["detail"])
+
+    def test_workspace_resolver_malformed_output_is_error(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["workspace_dir"] = {"stdout": "not-a-triple\n"}
+        code, report, _ = self.run_main(fixture)
+        self.assertEqual(code, 2)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["storage_ext4_qualifier"]["status"], "error")
+        self.assertEqual(by_id["disk_capacity"]["status"], "error")
+        self.assertIn("malformed", by_id["storage_ext4_qualifier"]["detail"])
 
     def test_workspace_resolution_timeout_is_bounded(self):
         fixture = dict(DEFAULT_FIXTURE)

@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Read-only preflight for running a Horizon Linux worker on an existing host.
 
-Initial slice of #604. Probes a fixed set of read-only capabilities, issues
-only fixed argument vectors (no shell, no interpolation of host-provided
-values into probe arguments), redacts anything outside the fixed report
-fields, and classifies each prerequisite as supported, unsupported or
-unverified.
+Initial slice of #604. Probes a fixed set of read-only capabilities using
+fixed command *shapes* from PROBE_ARGS (never a shell). Validated host
+values (docker `--host`, workspace path, XDG runtime dir, podman socket
+URL) are passed as extra argv words, not interpolated into a command
+string. Report fields are redacted. Each prerequisite is supported,
+unsupported or unverified.
 
 Read-only guarantees:
-- subprocess calls use fixed argv vectors from PROBE_ARGS only; never shell
-- direct file reads are limited to fixed procfs/sysfs paths under the given roots
+- subprocess argv is a PROBE_ARGS shape plus optional extra words; never shell
+- host-fact file reads are limited to `--procfs-root` / `--sysfs-root`
 - no writes, no installation, no image pull/run, no daemon or socket changes,
   no Tailscale state changes, no privilege escalation, no cleanup
 """
@@ -321,6 +322,9 @@ def docker_endpoint_reason(executor, timeout):
     ctx, err = run_probe(executor, "docker_context", timeout)
     if err is not None:
         return None, "docker context inspect failed (%s)" % redact(err)
+    if ctx["exit_code"] != 0:
+        return None, "docker context inspect failed (%s)" % (
+            redact(ctx.get("stderr", "")) or "exit %s" % ctx["exit_code"])
     ctx_host = docker_context_host(ctx)
     if not ctx_host:
         return None, "docker context endpoint missing"
@@ -466,9 +470,15 @@ def check_container_engine(executor, timeout):
         elif info["exit_code"] != 0:
             reason = "probe failed (%s)" % (redact(info.get("stderr", "")) or "exit %s" % info["exit_code"])
         else:
-            driver = redact(str(info.get("stdout", "")).strip()) or None
-            if driver is None:
-                reason = "docker info --format Driver was empty"
+            lines = [line.strip() for line in str(info.get("stdout", "")).splitlines()
+                     if line.strip()]
+            if len(lines) != 1:
+                driver = None
+                reason = "docker info --format Driver was not a single line"
+            else:
+                driver = redact(lines[0]) or None
+                if driver is None:
+                    reason = "docker info --format Driver was empty"
         if driver:
             driver_check = {"id": "container_storage_driver", "status": SUPPORTED,
                             "value": driver, "detail": "docker storage driver %s" % driver}
@@ -761,7 +771,11 @@ def check_storage_qualifier(procfs_root, sysfs_root, workspace_path, executor, t
     _target, major, minor, problem = resolve_workspace_directory(
         executor, timeout, workspace_path)
     if problem:
-        status = ERROR if "timed out" in problem else UNSUPPORTED
+        invalid_path = (
+            problem == "workspace path is not a directory"
+            or "does not exist and no ancestor is stat-able" in problem
+        )
+        status = UNSUPPORTED if invalid_path else ERROR
         return {"id": "storage_ext4_qualifier", "status": status, "value": None,
                 "detail": problem}
     name, options, error = read_ext4_options(procfs_root, sysfs_root, major, minor)
