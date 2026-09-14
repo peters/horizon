@@ -134,8 +134,10 @@ its claim: investigate the original state rather than deleting the claim.
 ## UI proof and lifecycle
 
 Build the candidate inside the selected image to match its libc. The testing
-layer supplies `horizon-linux-ui-smoke`; run native and applicable Chromium and
-Firefox lanes using fresh artifact directories. Browser automation uses only the
+layer supplies `horizon-linux-ui-smoke`; its default image tests the native UI
+without browsers. Select the optional `browser` image target only for embedded
+browser panels or web applications, then run applicable Chromium and Firefox lanes
+using fresh artifact directories. Browser automation uses only the
 Horizon browser skill and public `browser_*` MCP tools. The Docker lane needs a
 qualified unprivileged user-namespace policy. Installed browsers alone do not
 prove they can run under an Azure worker's container policy.
@@ -148,10 +150,13 @@ client-off product acceptance gates in #474/#475.
 Closing a controller detaches; persistent workers keep running and billing.
 Use `management-preview <directory>` for the exact Azure resource, saved
 revision, profile and loss/billing scope. After applicable explicit authorization,
-`stop`, `compute-start` or `delete` reads stdin JSON with `workspace`, `revision`,
+`stop`, `compute-start`, `delete` or `delete-retry` reads stdin JSON with
+`workspace`, `revision`, `resource_id`,
 `action` and `acknowledge_data_loss` (true is required for Delete). The selected
-revision and action must match; a stale confirmation is refused. `stop-check`
-and `delete-check` observe existing intent without resending it. This CLI lifecycle
+resource, revision and action must match; a stale confirmation is refused. `stop-check`
+and `delete-check` observe existing intent without resending it. An uncertain
+Delete requires a fresh preview and explicit `delete-retry` confirmation. Lifecycle
+APIs journal their own intent; pre-dispatch failures do not strand a local claim. This CLI lifecycle
 path currently supports Azure only; local Docker rehearsals need an exact
 container-ID cleanup procedure. Verify that procedure before allocating. Pushed Git commits protect published work; retained
 worker-disk loss can destroy unpushed changes. Report the reconnect directory,
