@@ -205,7 +205,7 @@ fn rendered_start_and_direct_prepare_refuse_unsupported_saved_shapes_and_provide
         (CloudProvider::LocalDocker, PanelKind::Pi, true, false, false),
         (CloudProvider::LocalDocker, PanelKind::Shell, false, false, false),
         (CloudProvider::LocalDocker, PanelKind::Shell, true, true, false),
-        (CloudProvider::Azure, PanelKind::Shell, true, false, false),
+        (CloudProvider::Azure, PanelKind::Shell, true, false, true),
     ] {
         let temp = tempfile::tempdir().expect("fixture");
         let home = HorizonHome::from_root(temp.path().join("state"));

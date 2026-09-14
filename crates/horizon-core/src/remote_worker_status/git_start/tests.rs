@@ -11,6 +11,8 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
+mod azure;
+
 const OWNER: &str = "00000000-0000-4000-8000-000000000001";
 const RUNNING: &str = r#"{"state":"running","panel":"shell","pid":12,"exit_status":null}"#;
 

@@ -4,10 +4,13 @@ use super::{
     CloudWorkflowStore, RemoteGitTaskStartError, RemotePanelStatus, RemoteSshIdentityStore, StoredRemoteAllocation,
 };
 use crate::{
-    cloud_run::runpod::RunPodNetworkVolumeExpectation,
+    cloud_run::{RemoteCpuProfileBinding, runpod::RunPodNetworkVolumeExpectation},
     remote_provider_config::{RemoteProviderConfig, RemoteProviderConfigError},
     remote_worker_status::ConfiguredRemotePanelStatusRequest,
-    remote_workspace::RemoteEnvironmentSummary,
+    remote_workspace::{
+        RemoteEnvironmentSummary,
+        stop::{ConfiguredStopConfirmationError as BindingError, RemoteWorkspaceStopError},
+    },
     remote_workspace_recovery::RemoteWorkspaceRecoveryError,
 };
 
@@ -17,6 +20,9 @@ use crate::{
 pub struct PreparedRemoteGitStart {
     allocation: StoredRemoteAllocation,
     selection: Option<RunPodNetworkVolumeExpectation>,
+    /// The immutable CPU profile binding an Azure worker was admitted under, so a
+    /// re-prepared confirmation detects binding drift; `None` for other providers.
+    binding: Option<RemoteCpuProfileBinding>,
     config: RemoteProviderConfig,
     expected: RemoteEnvironmentSummary,
     panel: String,
@@ -144,6 +150,7 @@ fn prepare(
     let selection = store
         .load_remote_network_volume_selection(&allocation)
         .map_err(RemoteWorkspaceRecoveryError::from)?;
+    let mut binding = None;
     match saved.target.provider {
         CloudProvider::LocalDocker => {
             config.local_docker_profile(&saved.target.profile)?;
@@ -161,7 +168,17 @@ fn prepare(
                 return Err(InvalidBinding);
             }
         }
-        CloudProvider::Azure => return Err(ConfiguredRemoteGitStartError::UnsupportedProvider),
+        CloudProvider::Azure => {
+            use crate::remote_workspace::stop::configured_azure::RetainedAzure;
+            // The Stop/Start admission: named profile, persistent target under it, the
+            // immutable binding, no RunPod storage expectation, no cleanup intent, and
+            // the retained worker with its complete Azure handle and complete pin.
+            let profile = config.azure_profile(&saved.target.profile)?;
+            let admitted = RetainedAzure::load(store, profile, request.expected)?;
+            // Saved Stop, Stopped and Start phases were already refused above as pending
+            // management, so an admitted record is running compute.
+            binding = Some(admitted.binding());
+        }
     }
     let panel = state
         .spec
@@ -187,6 +204,7 @@ fn prepare(
     Ok(PreparedRemoteGitStart {
         allocation,
         selection,
+        binding,
         config: config.clone(),
         expected: request.expected.clone(),
         panel: request.panel_id.into(),
@@ -244,6 +262,16 @@ fn dispatch(
         return super::start_remote_git_shell(store, identities, &provider, allocation, &prepared.panel)
             .map_err(Into::into);
     }
+    if saved.target.provider == CloudProvider::Azure {
+        use crate::remote_workspace::stop::configured_azure::RetainedAzure;
+        let profile = prepared.config.azure_profile(&saved.target.profile)?;
+        return azure_dispatch_with(
+            store,
+            prepared,
+            |_admitted| RetainedAzure::client(store, profile),
+            |provider, allocation, panel| super::start_remote_git_shell(store, identities, provider, allocation, panel),
+        );
+    }
     let profile = prepared.config.runpod_profile(&saved.target.profile)?;
     let (worker, ssh) = allocation
         .workspace()
@@ -265,12 +293,51 @@ fn dispatch(
     super::start_remote_git_shell(store, identities, &provider, allocation, &prepared.panel).map_err(Into::into)
 }
 
+/// The Azure dispatch: the confirmation was re-prepared an instant ago, so the admission
+/// is loaded again, its binding must be the confirmed one, the lazy CLI client is built
+/// after that, and the shared one-shot start runs through the bound provider, whose
+/// inspection is fenced by the binding recheck before anything is sent over SSH.
+/// `client` and `start` are injectable so tests run the real ordering without the Azure
+/// CLI, ARM or SSH.
+#[cfg(target_os = "linux")]
+pub(super) fn azure_dispatch_with<P>(
+    store: &CloudWorkflowStore,
+    prepared: &PreparedRemoteGitStart,
+    client: impl FnOnce(&crate::remote_workspace::stop::configured_azure::RetainedAzure) -> Result<P, BindingError>,
+    start: impl FnOnce(
+        &crate::remote_workspace::stop::configured_azure::Bound<'_, P>,
+        &StoredRemoteAllocation,
+        &str,
+    ) -> Result<RemotePanelStatus, RemoteGitTaskStartError>,
+) -> Result<RemotePanelStatus, ConfiguredRemoteGitStartError>
+where
+    P: crate::cloud_run::interactive_worker::InteractiveWorkerProvider,
+{
+    use crate::remote_workspace::stop::configured_azure::{Bound, RetainedAzure};
+    let profile = prepared
+        .config
+        .azure_profile(&prepared.allocation.workspace().state().spec.target.profile)?;
+    let admitted = RetainedAzure::load(store, profile, &prepared.expected)?;
+    if admitted.allocation != prepared.allocation || Some(admitted.binding()) != prepared.binding {
+        return Err(ConfiguredRemoteGitStartError::StateChanged);
+    }
+    let provider = client(&admitted);
+    admitted.check_current(store, &admitted.allocation)?;
+    let bound = Bound::new(provider?, store, &admitted);
+    let result = start(&bound, &admitted.allocation, &prepared.panel);
+    if bound.drifted() {
+        // The fence fires at the inspection, before the start request is sent.
+        return Err(ConfiguredRemoteGitStartError::StateChanged);
+    }
+    result.map_err(Into::into)
+}
+
 /// Static diagnostics never include saved argv, private paths or provider output.
 #[derive(Debug, thiserror::Error, Eq, PartialEq)]
 pub enum ConfiguredRemoteGitStartError {
     #[error("the active client session does not own the selected environment")]
     ClientSessionMismatch,
-    #[error("confirmed task start supports only configured Local Docker and RunPod workers")]
+    #[error("confirmed task start supports only configured Local Docker, RunPod and Azure workers")]
     UnsupportedProvider,
     #[error("task start requires a persistent, valid configured worker and retained binding")]
     InvalidBinding,
@@ -300,3 +367,32 @@ impl From<RemoteGitTaskStartError> for ConfiguredRemoteGitStartError {
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests;
+
+impl From<BindingError> for ConfiguredRemoteGitStartError {
+    fn from(error: BindingError) -> Self {
+        match error {
+            BindingError::UnsupportedProvider => Self::UnsupportedProvider,
+            BindingError::CredentialUnavailable => Self::CredentialUnavailable,
+            BindingError::InvalidBinding => Self::InvalidBinding,
+            BindingError::Configuration(error) => Self::Configuration(error),
+            BindingError::Stop(error) => match error {
+                RemoteWorkspaceStopError::MissingAllocation => RemoteWorkspaceRecoveryError::MissingAllocation.into(),
+                RemoteWorkspaceStopError::ProviderMismatch => RemoteWorkspaceRecoveryError::ProviderMismatch.into(),
+                RemoteWorkspaceStopError::StorageUnavailable => RemoteWorkspaceRecoveryError::StorageUnavailable.into(),
+                RemoteWorkspaceStopError::StateChanged => Self::StateChanged,
+                RemoteWorkspaceStopError::ManagementConflict => RemoteGitTaskStartError::from(
+                    crate::remote_worker_status::RemotePanelStatusError::ManagementPending,
+                )
+                .into(),
+                RemoteWorkspaceStopError::MissingWorker | RemoteWorkspaceStopError::MissingTrust => {
+                    RemoteGitTaskStartError::MissingRetainedWorker.into()
+                }
+                RemoteWorkspaceStopError::UnsupportedLifetime
+                | RemoteWorkspaceStopError::MissingStopIntent
+                | RemoteWorkspaceStopError::InvalidTimestamp
+                | RemoteWorkspaceStopError::ProviderUnavailable
+                | RemoteWorkspaceStopError::ResourceAbsent => Self::InvalidBinding,
+            },
+        }
+    }
+}

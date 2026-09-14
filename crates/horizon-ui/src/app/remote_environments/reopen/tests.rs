@@ -17,10 +17,7 @@ fn saved_start_support_is_static_and_respects_provider_and_client_platform() {
     use horizon_core::cloud_run::CloudProvider;
     for provider in [CloudProvider::LocalDocker, CloudProvider::RunPod, CloudProvider::Azure] {
         assert!(!super::start::supported(provider, false));
-        assert_eq!(
-            super::start::supported(provider, true),
-            cfg!(target_os = "linux") && provider != CloudProvider::Azure,
-        );
+        assert_eq!(super::start::supported(provider, true), cfg!(target_os = "linux"));
     }
 }
 

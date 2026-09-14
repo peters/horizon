@@ -13,7 +13,10 @@ use horizon_core::{
 pub(super) fn supported(provider: CloudProvider, saved_shell_eligible: bool) -> bool {
     cfg!(target_os = "linux")
         && saved_shell_eligible
-        && matches!(provider, CloudProvider::LocalDocker | CloudProvider::RunPod)
+        && matches!(
+            provider,
+            CloudProvider::LocalDocker | CloudProvider::RunPod | CloudProvider::Azure
+        )
 }
 
 #[derive(Default)]
