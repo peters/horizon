@@ -5,7 +5,11 @@ use crate::{
     cloud_run::{CloudProvider, CloudWorkflowStore, local_docker::LocalDockerInteractiveWorkerProvider},
     remote_provider_config::{RemoteProviderConfig, RemoteProviderConfigError},
     remote_ssh_identity::RemoteSshIdentityStore,
-    remote_workspace::RemoteEnvironmentSummary,
+    remote_worker_status::RemotePanelStatusError,
+    remote_workspace::{
+        RemoteEnvironmentSummary,
+        stop::{ConfiguredStopConfirmationError as BindingError, RemoteWorkspaceStopError},
+    },
     remote_workspace_recovery::RemoteWorkspaceRecoveryError,
 };
 
@@ -18,7 +22,8 @@ pub struct ConfiguredRemotePanelAttachRequest<'a> {
     pub terminal: RemotePanelTerminalSize,
 }
 
-/// Explicitly connect one existing panel through its exact configured local or `RunPod` profile.
+/// Explicitly connect one existing panel through its exact configured local, `RunPod` or
+/// Azure profile.
 /// Run all storage, retained-key, provider and SSH work off the render thread.
 /// The actual active session must own the selected environment; copied references
 /// and global inventory access alone do not admit a connection. The caller must
@@ -38,7 +43,7 @@ pub fn attach_configured_remote_panel(
 ) -> Result<RemotePanelConnectionAttempt, ConfiguredRemotePanelAttachError> {
     if !matches!(
         request.expected.provider,
-        CloudProvider::LocalDocker | CloudProvider::RunPod
+        CloudProvider::LocalDocker | CloudProvider::RunPod | CloudProvider::Azure
     ) {
         return Err(ConfiguredRemotePanelAttachError::UnsupportedProvider);
     }
@@ -47,6 +52,9 @@ pub fn attach_configured_remote_panel(
     }
     if request.expected.provider == CloudProvider::RunPod {
         return attach_runpod(store, identities, config, request);
+    }
+    if request.expected.provider == CloudProvider::Azure {
+        return attach_azure(store, identities, config, request);
     }
     let profile = config.local_docker_profile(&request.expected.profile)?;
     let allocation = store
@@ -196,6 +204,127 @@ pub(super) fn runpod_with<T>(
     attach(&provider, request).map_err(Into::into)
 }
 
+/// Azure reconnection shares the Stop and Start admission: the named `remote.azure`
+/// profile, the allocation's immutable CPU profile binding, the retained worker with its
+/// complete handle and complete saved public pin, and no `RunPod` storage expectation,
+/// all before the subscription-pinned CLI credential or client exists. A record that is
+/// saved as stopping, stopped or starting is refused before the client: attachment
+/// never starts compute. The client is built lazily, the saved state is rechecked after
+/// it, and every provider observation inside the shared attachment is fenced by the
+/// binding recheck, so drift is reported as a changed state, never as a connection.
+fn attach_azure(
+    store: &CloudWorkflowStore,
+    identities: &RemoteSshIdentityStore,
+    config: &RemoteProviderConfig,
+    request: ConfiguredRemotePanelAttachRequest<'_>,
+) -> Result<RemotePanelConnectionAttempt, ConfiguredRemotePanelAttachError> {
+    #[cfg(target_os = "linux")]
+    {
+        use crate::remote_workspace::stop::configured_azure::RetainedAzure;
+        let profile = config.azure_profile(&request.expected.profile)?;
+        azure_with(
+            store,
+            identities,
+            profile,
+            request,
+            |_admitted| RetainedAzure::client(store, profile),
+            |provider, request| super::attach_remote_panel(store, identities, provider, request),
+        )
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (store, identities, config, request);
+        Err(RemotePanelAttachError::UnsupportedPlatform.into())
+    }
+}
+
+/// Admission, then the lazy client, then the shared attachment through the bound
+/// provider. `client` and `attach` are injectable so tests run the real ordering
+/// without the Azure CLI, ARM or SSH.
+#[cfg(target_os = "linux")]
+pub(super) fn azure_with<P, T>(
+    store: &CloudWorkflowStore,
+    identities: &RemoteSshIdentityStore,
+    profile: &crate::cloud_run::azure::AzureProfile,
+    request: ConfiguredRemotePanelAttachRequest<'_>,
+    client: impl FnOnce(&crate::remote_workspace::stop::configured_azure::RetainedAzure) -> Result<P, BindingError>,
+    attach: impl FnOnce(
+        &crate::remote_workspace::stop::configured_azure::Bound<'_, P>,
+        RemotePanelAttachRequest<'_>,
+    ) -> Result<T, RemotePanelAttachError>,
+) -> Result<T, ConfiguredRemotePanelAttachError>
+where
+    P: crate::cloud_run::interactive_worker::InteractiveWorkerProvider,
+{
+    use crate::{
+        PanelKind,
+        remote_workspace::{
+            RemoteRuntimePhase,
+            stop::configured_azure::{Bound, RetainedAzure},
+        },
+    };
+    let admitted = RetainedAzure::load(store, profile, request.expected)?;
+    let state = admitted.allocation.workspace().state();
+    let runtime = state
+        .runtime
+        .as_ref()
+        .ok_or(RemoteWorkspaceRecoveryError::MissingAllocation)?;
+    // Stop and Start are separate explicit operations; a saved lifecycle phase is never
+    // driven forward by a reconnection, and a stopped worker offers nothing to attach.
+    match runtime.phase {
+        RemoteRuntimePhase::Stopping { .. } | RemoteRuntimePhase::Starting { .. } => {
+            return Err(RemotePanelAttachError::from(RemotePanelStatusError::ManagementPending).into());
+        }
+        RemoteRuntimePhase::Stopped { .. } => {
+            return Err(RemotePanelAttachError::from(RemotePanelStatusError::WorkerUnavailable).into());
+        }
+        _ => {}
+    }
+    let panel = state
+        .spec
+        .panels
+        .iter()
+        .find(|panel| panel.panel_local_id == request.panel_id)
+        .ok_or(RemotePanelAttachError::from(RemotePanelStatusError::UnknownPanel))?;
+    if !matches!(panel.kind, PanelKind::Shell | PanelKind::Command)
+        || panel.command.is_none()
+        || panel.task_handoff.is_some()
+        || panel.agent_session_id.is_some()
+    {
+        return Err(RemotePanelAttachError::from(RemotePanelStatusError::UnsupportedIntent).into());
+    }
+    let expected = admitted
+        .allocation
+        .recovery_request()
+        .map_err(RemoteWorkspaceRecoveryError::from)?;
+    identities
+        .recover(expected.workflow_id, expected.job_id, &expected.ssh_public_key)
+        .map_err(RemoteWorkspaceRecoveryError::from)?;
+    // The client (and its lazy credential) is built first, then the saved state is
+    // rechecked, so drift during that step is a changed state even when the client
+    // could not be built.
+    let provider = client(&admitted);
+    admitted.check_current(store, &admitted.allocation)?;
+    let bound = Bound::new(provider?, store, &admitted);
+    let result = attach(
+        &bound,
+        RemotePanelAttachRequest {
+            allocation: &admitted.allocation,
+            panel_id: request.panel_id,
+            terminal: request.terminal,
+        },
+    );
+    if bound.drifted() {
+        return Err(RemotePanelAttachError::StateChanged.into());
+    }
+    // The attachment writes nothing, so the whole admitted snapshot (allocation, binding
+    // and storage) must still hold after it: a binding that changed during the SSH
+    // intent check or the terminal spawn drops the terminal here instead of handing it
+    // over, since a connection is never returned for a binding that no longer holds.
+    admitted.check_current(store, &admitted.allocation)?;
+    result.map_err(Into::into)
+}
+
 #[derive(Debug, thiserror::Error, Eq, PartialEq)]
 pub enum ConfiguredRemotePanelAttachError {
     #[error("panel reconnection is not yet supported for this environment's provider")]
@@ -206,6 +335,10 @@ pub enum ConfiguredRemotePanelAttachError {
     RunPodCredentialUnavailable,
     #[error("the configured RunPod profile or retained worker and storage binding is invalid")]
     InvalidRunPodBinding,
+    #[error(
+        "the configured Azure profile or retained worker, public pin, profile binding and storage binding is invalid"
+    )]
+    InvalidAzureBinding,
     #[error(transparent)]
     Configuration(#[from] RemoteProviderConfigError),
     #[error(transparent)]
@@ -215,5 +348,36 @@ pub enum ConfiguredRemotePanelAttachError {
 impl From<RemoteWorkspaceRecoveryError> for ConfiguredRemotePanelAttachError {
     fn from(error: RemoteWorkspaceRecoveryError) -> Self {
         Self::Attachment(error.into())
+    }
+}
+
+impl From<BindingError> for ConfiguredRemotePanelAttachError {
+    fn from(error: BindingError) -> Self {
+        match error {
+            BindingError::UnsupportedProvider => Self::UnsupportedProvider,
+            BindingError::CredentialUnavailable => Self::RunPodCredentialUnavailable,
+            BindingError::InvalidBinding => Self::InvalidAzureBinding,
+            BindingError::Configuration(error) => Self::Configuration(error),
+            BindingError::Stop(error) => match error {
+                RemoteWorkspaceStopError::MissingAllocation => RemoteWorkspaceRecoveryError::MissingAllocation.into(),
+                RemoteWorkspaceStopError::ProviderMismatch => RemoteWorkspaceRecoveryError::ProviderMismatch.into(),
+                RemoteWorkspaceStopError::StorageUnavailable => RemoteWorkspaceRecoveryError::StorageUnavailable.into(),
+                RemoteWorkspaceStopError::StateChanged => RemotePanelAttachError::StateChanged.into(),
+                RemoteWorkspaceStopError::UnsupportedLifetime => RemotePanelAttachError::UnsupportedLifetime.into(),
+                RemoteWorkspaceStopError::ManagementConflict => {
+                    RemotePanelAttachError::from(RemotePanelStatusError::ManagementPending).into()
+                }
+                RemoteWorkspaceStopError::MissingWorker
+                | RemoteWorkspaceStopError::MissingTrust
+                | RemoteWorkspaceStopError::ProviderUnavailable
+                | RemoteWorkspaceStopError::ResourceAbsent => {
+                    RemotePanelAttachError::from(RemotePanelStatusError::WorkerUnavailable).into()
+                }
+                // Stop-only outcomes; the attachment admission never produces them.
+                RemoteWorkspaceStopError::MissingStopIntent | RemoteWorkspaceStopError::InvalidTimestamp => {
+                    Self::InvalidAzureBinding
+                }
+            },
+        }
     }
 }

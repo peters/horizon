@@ -15,6 +15,11 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
 
+# Cache policy: every rust-cache step below sets
+# `save-if: github.ref == 'refs/heads/main'`. Pull-request runs restore from
+# main's entry but never write their own. A per-branch copy of each build
+# cache pushed the repository past GitHub's 10 GB budget, and the resulting
+# eviction of the main entries left cold jobs to time out.
 jobs:
   remote-worker-build-context:
     name: Remote worker build context
@@ -114,6 +119,8 @@ jobs:
         with:
           lfs: true
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: rustup component add clippy
       # `speech` (CPU) is the widest feature set a plain runner can build:
       # speech-cuda needs nvcc and speech-vulkan the Vulkan SDK, and their
@@ -131,6 +138,8 @@ jobs:
         with:
           lfs: true
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: rustup component add clippy
       # `--features speech` so the unwrap/expect ban also covers the speech
       # runtime code (needs the ALSA headers to build cpal on Linux).
@@ -146,6 +155,8 @@ jobs:
         with:
           lfs: true
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: rustup component add clippy
       - run: bash scripts/install-ci-ubuntu-dependencies.sh libasound2-dev pkg-config
       - name: Run pedantic audit (non-blocking)
@@ -157,7 +168,9 @@ jobs:
   rust-test:
     name: Tests (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    # Headroom for a cold cache: macOS x64 took 12 minutes of the old
+    # 15 while building the whole workspace twice (default and speech).
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -178,6 +191,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.cache_key }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Link the Swift runtime in macOS test binaries
         if: startsWith(matrix.os, 'macos-')
         run: echo "RUSTFLAGS=${RUSTFLAGS} -C link-arg=-Wl,-rpath,/usr/lib/swift" >> "$GITHUB_ENV"
@@ -193,7 +207,10 @@ jobs:
   windows-smoke:
     name: Windows test build
     runs-on: windows-latest
-    timeout-minutes: 15
+    # Headroom for a cold cache: a cacheless run passed 15 minutes while
+    # still compiling the vendored speech C++ tree, and a timed-out job
+    # skips the cache save, so the next run starts cold again.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
         with:
@@ -201,6 +218,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: windows-test-build
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test --locked --workspace --no-run
       - name: Execute durable publication regression
         run: cargo test --locked -p horizon-browser-cli --test cli run_publishes_a_complete_relative_job_when_home_is_unset -- --exact
@@ -311,6 +329,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.cache_key }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo build --locked --release
       - name: Package release asset
         shell: bash
