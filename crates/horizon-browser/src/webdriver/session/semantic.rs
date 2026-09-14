@@ -35,6 +35,20 @@ pub(super) fn create_webdriver_session_response(
     }
 }
 
+/// The W3C element identifier key in a Find Element response.
+const ELEMENT_KEY: &str = "element-6066-11e4-a52e-4f735466cecf";
+
+/// The element reference in a Find Element response, accepting the W3C key
+/// and the legacy `ELEMENT` key some grids still send.
+fn element_reference(response: &Value) -> Option<&str> {
+    let value = webdriver_value(response)?;
+    value
+        .get(ELEMENT_KEY)
+        .or_else(|| value.get("ELEMENT"))
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+}
+
 const DOCUMENT_IDENTITY_EXPRESSION: &str =
     "JSON.stringify([String(location.href), Number(globalThis.performance?.timeOrigin || 0)])";
 
@@ -209,6 +223,16 @@ impl Driver {
         let result = self.evaluate_json(&target_rect_expression(&selector, true))?;
         let _ = parse_target_rect(&result)?;
         self.capture_teach_fingerprint(None)?;
+        if self.host.is_remote() {
+            // Key actions to the focused field do not reliably produce text
+            // on a real device (iOS Safari left the field empty in the
+            // 2026-09-14 live run); Element Send Keys is the text-entry path
+            // every remote grid implements, so a fill goes through it.
+            self.classic_send_keys(&selector, value)
+                .map_err(|error| BrowserControlFailure::new("input_failed", error))?;
+            self.frames.demand();
+            return Ok(BrowserControlValue::Accepted);
+        }
         self.perform_input(
             BrowserInput::InsertText {
                 text: value.to_string(),
@@ -221,6 +245,16 @@ impl Driver {
                 .map_err(|error| BrowserControlFailure::new("input_failed", error))?;
         }
         Ok(BrowserControlValue::Accepted)
+    }
+
+    /// Replace the text of the element `selector` matches through the W3C
+    /// Find Element, Element Clear and Element Send Keys commands.
+    fn classic_send_keys(&self, selector: &str, text: &str) -> Result<(), String> {
+        let found = self.classic_post("element", &json!({ "using": "css selector", "value": selector }))?;
+        let element = element_reference(&found).ok_or_else(|| "WebDriver returned no element reference".to_string())?;
+        self.classic_post(&format!("element/{element}/clear"), &json!({}))?;
+        self.classic_post(&format!("element/{element}/value"), &json!({ "text": text }))?;
+        Ok(())
     }
 
     fn semantic_scroll(
@@ -348,5 +382,29 @@ impl Driver {
             self.advance_generation();
         }
         changed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::element_reference;
+
+    #[test]
+    fn element_references_accept_the_w3c_and_legacy_keys() {
+        assert_eq!(
+            element_reference(&json!({"value": {"element-6066-11e4-a52e-4f735466cecf": "e1"}})),
+            Some("e1")
+        );
+        assert_eq!(
+            element_reference(&json!({"value": {"ELEMENT": "legacy"}})),
+            Some("legacy")
+        );
+        assert_eq!(
+            element_reference(&json!({"value": {"element-6066-11e4-a52e-4f735466cecf": ""}})),
+            None
+        );
+        assert_eq!(element_reference(&json!({"value": null})), None);
     }
 }
