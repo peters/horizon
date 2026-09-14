@@ -15,7 +15,7 @@ use crate::{
     BrowserInput, BrowserModifiers, BrowserSnapshot,
 };
 
-use super::super::transport::ClassicTransport;
+use super::super::transport::{ClassicTransport, encode_path_segment};
 use super::{Driver, create_webdriver_session, webdriver_value};
 
 pub(super) fn create_webdriver_session_response(
@@ -33,6 +33,52 @@ pub(super) fn create_webdriver_session_response(
         }
         Err(error) => Err(format!("failed to create WebDriver session: {error}")),
     }
+}
+
+/// The W3C element identifier key in a Find Element response.
+const ELEMENT_KEY: &str = "element-6066-11e4-a52e-4f735466cecf";
+
+/// The element reference in a Find Element response, accepting the W3C key
+/// and the legacy `ELEMENT` key some grids still send.
+fn element_reference(response: &Value) -> Option<&str> {
+    let value = webdriver_value(response)?;
+    value
+        .get(ELEMENT_KEY)
+        .or_else(|| value.get("ELEMENT"))
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+}
+
+/// Replace the text of the element `selector` matches through the W3C Find
+/// Element, Element Clear and Element Send Keys commands under `session`
+/// (`/session/<id>`). The opaque element reference becomes one encoded route
+/// segment, and the first failing command ends the sequence.
+fn send_keys_through(
+    transport: &dyn ClassicTransport,
+    session: &str,
+    selector: &str,
+    text: &str,
+) -> Result<(), String> {
+    let post = |suffix: &str, body: &Value| {
+        transport
+            .post(&format!("{session}/{suffix}"), body)
+            .map_err(|error| error.to_string())
+    };
+    let found = post("element", &json!({ "using": "css selector", "value": selector }))?;
+    let element = element_reference(&found).ok_or_else(|| "WebDriver returned no element reference".to_string())?;
+    if element.contains(['/', '%', '\\']) || element == "." || element == ".." {
+        // A separator, a percent sign or a dot-only reference cannot be one
+        // route segment (the transport refuses each, since a decoding proxy
+        // could reshape the route); say why instead of failing on the wire.
+        return Err(format!(
+            "WebDriver returned an element reference that cannot form a route ({} bytes)",
+            element.len()
+        ));
+    }
+    let element = encode_path_segment(element);
+    post(&format!("element/{element}/clear"), &json!({}))?;
+    post(&format!("element/{element}/value"), &json!({ "text": text }))?;
+    Ok(())
 }
 
 const DOCUMENT_IDENTITY_EXPRESSION: &str =
@@ -209,6 +255,19 @@ impl Driver {
         let result = self.evaluate_json(&target_rect_expression(&selector, true))?;
         let _ = parse_target_rect(&result)?;
         self.capture_teach_fingerprint(None)?;
+        if self.host.is_remote() {
+            // Key actions to the focused field do not reliably produce text
+            // on a real device (iOS Safari left the field empty in the
+            // 2026-09-14 live run); Element Send Keys is the text-entry path
+            // every remote grid implements, so a fill goes through it.
+            // The page may already have changed (the field was cleared)
+            // even when a later command fails, so a frame is demanded
+            // either way, as perform_input does.
+            let result = self.classic_send_keys(&selector, value);
+            self.frames.demand();
+            result.map_err(|error| BrowserControlFailure::new("input_failed", error))?;
+            return Ok(BrowserControlValue::Accepted);
+        }
         self.perform_input(
             BrowserInput::InsertText {
                 text: value.to_string(),
@@ -221,6 +280,15 @@ impl Driver {
                 .map_err(|error| BrowserControlFailure::new("input_failed", error))?;
         }
         Ok(BrowserControlValue::Accepted)
+    }
+
+    fn classic_send_keys(&self, selector: &str, text: &str) -> Result<(), String> {
+        send_keys_through(
+            self.host.transport(),
+            &format!("/session/{}", self.session_id),
+            selector,
+            text,
+        )
     }
 
     fn semantic_scroll(
@@ -348,5 +416,131 @@ impl Driver {
             self.advance_generation();
         }
         changed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    use serde_json::{Value, json};
+
+    use super::super::super::http::HttpError;
+    use super::super::super::transport::ClassicTransport;
+    use super::{element_reference, send_keys_through};
+
+    /// Answers each command with the next scripted reply and records what
+    /// was sent.
+    struct Scripted {
+        replies: Mutex<Vec<Result<Value, String>>>,
+        sent: Mutex<Vec<(String, String, Value)>>,
+    }
+
+    impl Scripted {
+        fn new(replies: Vec<Result<Value, String>>) -> Self {
+            Self {
+                replies: Mutex::new(replies.into_iter().rev().collect()),
+                sent: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn sent(&self) -> Vec<(String, String, Value)> {
+            self.sent.lock().expect("sent").clone()
+        }
+    }
+
+    impl ClassicTransport for Scripted {
+        fn request(
+            &self,
+            method: &str,
+            path: &str,
+            body: Option<&Value>,
+            _read_timeout: Duration,
+        ) -> Result<Value, HttpError> {
+            self.sent.lock().expect("sent").push((
+                method.to_string(),
+                path.to_string(),
+                body.cloned().unwrap_or(Value::Null),
+            ));
+            match self.replies.lock().expect("replies").pop() {
+                Some(Ok(value)) => Ok(value),
+                Some(Err(message)) => Err(HttpError::InvalidResponse(message)),
+                None => Err(HttpError::InvalidResponse("unscripted command".into())),
+            }
+        }
+    }
+
+    #[test]
+    fn a_fill_finds_clears_and_sends_keys_to_one_element() {
+        let transport = Scripted::new(vec![
+            Ok(json!({"value": {"element-6066-11e4-a52e-4f735466cecf": "node 1 {a}"}})),
+            Ok(json!({"value": null})),
+            Ok(json!({"value": null})),
+        ]);
+        send_keys_through(&transport, "/session/s1", "input[name=q]", "Ada").expect("fill");
+        assert_eq!(
+            transport.sent(),
+            vec![
+                (
+                    "POST".to_string(),
+                    "/session/s1/element".to_string(),
+                    json!({"using": "css selector", "value": "input[name=q]"})
+                ),
+                (
+                    "POST".to_string(),
+                    "/session/s1/element/node%201%20%7Ba%7D/clear".to_string(),
+                    json!({})
+                ),
+                (
+                    "POST".to_string(),
+                    "/session/s1/element/node%201%20%7Ba%7D/value".to_string(),
+                    json!({"text": "Ada"})
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_failing_command_ends_the_fill_sequence() {
+        let transport = Scripted::new(vec![Ok(json!({"value": {"ELEMENT": "e1"}})), Err("stale".into())]);
+        let error = send_keys_through(&transport, "/session/s1", "#name", "x").expect_err("clear failed");
+        assert!(error.contains("stale"), "{error}");
+        let sent = transport.sent();
+        assert_eq!(sent.len(), 2, "no Send Keys after a failed Clear: {sent:?}");
+        assert_eq!(sent[1].1, "/session/s1/element/e1/clear");
+
+        let transport = Scripted::new(vec![Ok(json!({"value": {}}))]);
+        let error = send_keys_through(&transport, "/session/s1", "#name", "x").expect_err("no reference");
+        assert!(error.contains("no element reference"), "{error}");
+        assert_eq!(transport.sent().len(), 1, "nothing follows a missing reference");
+
+        for reference in ["a/b", "a%2Fb", "a\\b", "..", "."] {
+            let transport = Scripted::new(vec![Ok(json!({"value": {"ELEMENT": reference}}))]);
+            let error = send_keys_through(&transport, "/session/s1", "#name", "x").expect_err("unroutable");
+            assert!(error.contains("cannot form a route"), "{error}");
+            assert_eq!(
+                transport.sent().len(),
+                1,
+                "a reference that cannot form a route is never sent"
+            );
+        }
+    }
+
+    #[test]
+    fn element_references_accept_the_w3c_and_legacy_keys() {
+        assert_eq!(
+            element_reference(&json!({"value": {"element-6066-11e4-a52e-4f735466cecf": "e1"}})),
+            Some("e1")
+        );
+        assert_eq!(
+            element_reference(&json!({"value": {"ELEMENT": "legacy"}})),
+            Some("legacy")
+        );
+        assert_eq!(
+            element_reference(&json!({"value": {"element-6066-11e4-a52e-4f735466cecf": ""}})),
+            None
+        );
+        assert_eq!(element_reference(&json!({"value": null})), None);
     }
 }
