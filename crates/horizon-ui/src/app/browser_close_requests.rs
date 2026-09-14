@@ -30,6 +30,15 @@ pub(super) struct PendingBrowserClose {
     teardown: Option<BrowserShutdownSignal>,
 }
 
+impl PendingBrowserClose {
+    /// Whether this close may still hold an allocation at `provider`.
+    pub(super) fn holds_remote_allocation_at(&self, provider: &str) -> bool {
+        self.teardown
+            .as_ref()
+            .is_some_and(|signal| signal.remote_provider() == Some(provider) && signal.holds_remote_allocation())
+    }
+}
+
 /// Where a pending close stands at one poll.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum PendingCloseState {
@@ -58,12 +67,20 @@ pub(super) const fn pending_close_state(
 
 /// What a completed teardown means for the caller, from the remote release
 /// the driver recorded. A local browser records nothing and is simply gone.
+/// Whether a finished teardown counts as closed. A local browser, or a
+/// remote session whose release the driver established, is closed; a remote
+/// teardown that still holds an allocation is a typed failure, whatever the
+/// driver managed to report (nothing at all after an unknown allocation or a
+/// driver that died before releasing counts as unknown).
 pub(super) fn close_outcome(
+    holds_remote_allocation: bool,
     release: Option<&horizon_core::browser::RemoteReleaseOutcome>,
 ) -> Result<(), (&'static str, String)> {
     use horizon_core::browser::RemoteReleaseOutcome;
+    if !holds_remote_allocation {
+        return Ok(());
+    }
     match release {
-        None | Some(RemoteReleaseOutcome::Released | RemoteReleaseOutcome::AlreadyGone) => Ok(()),
         Some(outcome @ RemoteReleaseOutcome::Failed { .. }) => Err((
             "release_failed",
             format!(
@@ -76,6 +93,13 @@ pub(super) fn close_outcome(
                 "browser panel closed but the provider gave no trustworthy answer to the release ({outcome}); check the provider before allocating again"
             ),
         )),
+        None => Err((
+            "release_unknown",
+            "browser panel closed but its remote session's release was never established; check the provider before allocating again".to_string(),
+        )),
+        Some(RemoteReleaseOutcome::Released | RemoteReleaseOutcome::AlreadyGone | RemoteReleaseOutcome::NeverAllocated) => {
+            Ok(())
+        }
     }
 }
 
@@ -245,8 +269,17 @@ impl HorizonApp {
                         .teardown
                         .as_ref()
                         .and_then(BrowserShutdownSignal::remote_release);
-                    if let Err((code, message)) = close_outcome(release.as_ref()) {
+                    let holds = pending
+                        .teardown
+                        .as_ref()
+                        .is_some_and(BrowserShutdownSignal::holds_remote_allocation);
+                    if let Err((code, message)) = close_outcome(holds, release.as_ref()) {
                         complete_close_failure(&pending.request, code, &message);
+                        // The provider may still hold the session: the board
+                        // keeps counting it against the provider's limit.
+                        if let Some(signal) = pending.teardown {
+                            self.board.retire_browser_shutdown_signal(signal);
+                        }
                         continue;
                     }
                     match manifest::record_close_status(&pending.request, BrowserCloseAuditStatus::Completed) {
@@ -453,20 +486,30 @@ mod tests {
     #[test]
     fn a_completed_teardown_is_a_close_only_when_the_release_was_established() {
         use horizon_core::browser::RemoteReleaseOutcome;
-        assert!(close_outcome(None).is_ok(), "a local browser is simply gone");
-        assert!(close_outcome(Some(&RemoteReleaseOutcome::Released)).is_ok());
-        assert!(close_outcome(Some(&RemoteReleaseOutcome::AlreadyGone)).is_ok());
-        let failed = close_outcome(Some(&RemoteReleaseOutcome::Failed {
-            error: "unknown error".into(),
-            message: "busy".into(),
-        }))
+        assert!(close_outcome(false, None).is_ok(), "a local browser is simply gone");
+        assert!(close_outcome(false, Some(&RemoteReleaseOutcome::Released)).is_ok());
+        assert!(close_outcome(false, Some(&RemoteReleaseOutcome::AlreadyGone)).is_ok());
+        assert!(close_outcome(false, Some(&RemoteReleaseOutcome::NeverAllocated)).is_ok());
+        let never = close_outcome(true, None).expect_err("a held allocation with no report is unknown");
+        assert_eq!(never.0, "release_unknown");
+        assert!(never.1.contains("never established"), "{}", never.1);
+        let failed = close_outcome(
+            true,
+            Some(&RemoteReleaseOutcome::Failed {
+                error: "unknown error".into(),
+                message: "busy".into(),
+            }),
+        )
         .expect_err("a refused release is not a close");
         assert_eq!(failed.0, "release_failed");
         assert!(failed.1.contains("busy"));
-        let unknown = close_outcome(Some(&RemoteReleaseOutcome::ReleaseUnknown {
-            attempts: 3,
-            reason: "timed out".into(),
-        }))
+        let unknown = close_outcome(
+            true,
+            Some(&RemoteReleaseOutcome::ReleaseUnknown {
+                attempts: 3,
+                reason: "timed out".into(),
+            }),
+        )
         .expect_err("an unanswered release is not a close");
         assert_eq!(unknown.0, "release_unknown");
         assert!(unknown.1.contains("3 attempts"));

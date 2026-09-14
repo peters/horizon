@@ -51,6 +51,10 @@ pub enum BrowserAuditAction {
         destination: Option<String>,
         #[serde(default = "default_visible")]
         visible: bool,
+        /// Configured remote target the session was requested at; never an
+        /// endpoint or a credential.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        remote_target: Option<String>,
     },
     PanelVisibility {
         visible: bool,
@@ -183,6 +187,23 @@ impl BrowserAuditAction {
             backend,
             destination: destination.map(redact_url),
             visible,
+            remote_target: None,
+        }
+    }
+
+    /// A session requested at a configured remote target.
+    #[must_use]
+    pub fn remote_session_created(
+        backend: crate::BackendKind,
+        destination: Option<&str>,
+        visible: bool,
+        remote_target: &str,
+    ) -> Self {
+        Self::SessionCreated {
+            backend,
+            destination: destination.map(redact_url),
+            visible,
+            remote_target: Some(remote_target.to_string()),
         }
     }
 
@@ -496,6 +517,7 @@ mod tests {
             BrowserAuditAction::SessionCreated {
                 backend: crate::BackendKind::FirefoxBidi,
                 destination: Some("https://<redacted>@example.test/start?<redacted>#<redacted>".to_string()),
+                remote_target: None,
                 visible: false,
             }
         );

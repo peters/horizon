@@ -20,6 +20,7 @@ from typing import Any, Sequence
 TOOL_NAMES = [
     "browser_act",
     "browser_audit",
+    "browser_close",
     "browser_create",
     "browser_evaluate",
     "browser_handoff",

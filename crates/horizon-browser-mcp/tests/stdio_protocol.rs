@@ -140,6 +140,19 @@ fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     let encoded_tools = tools.to_string();
     assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(16));
     let create = listed_tool(tools, "browser_create");
+    let target = &create["inputSchema"]["properties"]["target"];
+    assert!(
+        target["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("Configured remote target name")),
+        "browser_create accepts a configured remote target name: {target}"
+    );
+    assert!(
+        !create["inputSchema"]["required"]
+            .as_array()
+            .is_some_and(|required| required.iter().any(|name| name == "target")),
+        "target stays optional"
+    );
     assert!(
         create["description"]
             .as_str()

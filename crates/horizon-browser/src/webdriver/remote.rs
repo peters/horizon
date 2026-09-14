@@ -41,6 +41,9 @@ pub struct RemoteSessionRequest {
     pub idle_release: Duration,
     /// Configured target name for display and audit.
     pub label: String,
+    /// Configured provider name, so the host can count the allocations one
+    /// provider holds until each release is established.
+    pub provider: String,
     /// The browser family the target drives, for panel metadata, page
     /// semantics and audit. The transport is classic `WebDriver` regardless.
     pub browser: crate::BackendKind,
@@ -56,6 +59,7 @@ impl fmt::Debug for RemoteSessionRequest {
             .field("max_session", &self.max_session)
             .field("idle_release", &self.idle_release)
             .field("label", &self.label)
+            .field("provider", &self.provider)
             .field("browser", &self.browser)
             .finish_non_exhaustive()
     }
@@ -112,6 +116,9 @@ pub enum RemoteReleaseOutcome {
     ReleaseUnknown { attempts: u8, reason: String },
     /// The provider refused the delete.
     Failed { error: String, message: String },
+    /// The provider refused the session (or the endpoint was rejected
+    /// locally), so there was never anything to release.
+    NeverAllocated,
 }
 
 impl fmt::Display for RemoteReleaseOutcome {
@@ -123,6 +130,7 @@ impl fmt::Display for RemoteReleaseOutcome {
                 write!(formatter, "release unknown after {attempts} attempts: {reason}")
             }
             Self::Failed { error, message } => write!(formatter, "release refused ({error}): {message}"),
+            Self::NeverAllocated => formatter.write_str("never allocated"),
         }
     }
 }

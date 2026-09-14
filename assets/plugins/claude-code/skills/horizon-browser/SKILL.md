@@ -25,7 +25,14 @@ reveal a helper panel as a workaround. Only when the user explicitly requests
 another independent browser session may you call `browser_create` with
 `allow_additional: true`. Omit `backend` to use Horizon's
 configured browser, or select `chromium`, `firefox`, or `safari` when the
-platform supports it. Set `visible: false` for background automation; use
+platform supports it. To run at a configured remote target instead of a
+local browser, pass `target` with its name and omit `backend`; Horizon
+resolves the provider and credentials from its configuration, and a
+refusal carries a typed code and at most the target, provider or credential
+reference name, never a credential value. Such a panel reports
+`remote_target`, classic WebDriver and no network capture; whether the
+target is physical hardware is its configuration, not something the call
+verifies, so do not report it as real-device evidence on its own. Set `visible: false` for background automation; use
 `browser_visibility` to show or hide the live panel later without stopping its
 session, capture, ownership, or MCP control. Call `browser_close` on a panel
 you own when the user is done with it or a remote device session must be

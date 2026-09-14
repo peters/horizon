@@ -15,7 +15,7 @@ use crate::{AutomationDisclosurePolicy, BackendKind};
 
 use super::actions::ActionState;
 use super::host::DriverHost;
-use super::remote::{RemoteHost, RemoteSessionEvent, RemoteStartFailure};
+use super::remote::{RemoteHost, RemoteReleaseOutcome, RemoteSessionEvent, RemoteStartFailure};
 use super::service::WebDriverService;
 
 mod bidi;
@@ -237,7 +237,7 @@ impl Driver {
         remote_release: crate::session::RemoteReleaseReport,
     ) -> Result<Self, String> {
         let (mut host, session) = if let Some(request) = &config.remote {
-            start_remote(request, event_tx)?
+            start_remote(request, event_tx, &remote_release)?
         } else {
             start_local(config, process_control, stop_requested)?
         };
@@ -482,11 +482,15 @@ fn start_local(
 fn start_remote(
     request: &super::remote::RemoteSessionRequest,
     event_tx: &BrowserEventSender,
+    remote_release: &crate::session::RemoteReleaseReport,
 ) -> Result<(DriverHost, NewSession), String> {
     let label = request.label.clone();
     let _ = event_tx.send(BrowserEvent::RemoteSession(RemoteSessionEvent::Allocating {
         label: label.clone(),
     }));
+    // From here the provider may hold a device: nothing is established
+    // until New Session answers or the failure below says otherwise.
+    *remote_release.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     let allocated = RemoteHost::connect(request).and_then(|mut host| {
         let session = host.allocate(request)?;
         Ok((host, session))
@@ -501,21 +505,56 @@ fn start_remote(
         }
         Err(failure) => {
             // Every failure ends the lifecycle with a terminal, value-free
-            // event, so the panel never stays at "allocating".
-            let event = match &failure {
-                RemoteStartFailure::AllocationUnknown { reason } => RemoteSessionEvent::AllocationUnknown {
-                    label,
-                    reason: reason.clone(),
-                },
-                RemoteStartFailure::AllocationFailed { .. }
-                | RemoteStartFailure::InvalidEndpoint(_)
-                | RemoteStartFailure::Unenforceable { .. } => RemoteSessionEvent::AllocationFailed {
+            // event, so the panel never stays at "allocating"; what the
+            // teardown reports decides whether the provider may still hold
+            // a device.
+            let (established, event) = start_failure_outcome(&failure, label);
+            *remote_release.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = established;
+            let _ = event_tx.send(BrowserEvent::RemoteSession(event));
+            Err(failure.to_string())
+        }
+    }
+}
+
+/// What a failed remote start established at the provider, and the event
+/// the panel sees. Only a refusal, or an immediate release the provider
+/// confirmed, frees the slot; an unknown allocation, or an allocated session
+/// whose immediate release was refused or unanswered, keeps holding it.
+fn start_failure_outcome(
+    failure: &RemoteStartFailure,
+    label: String,
+) -> (Option<RemoteReleaseOutcome>, RemoteSessionEvent) {
+    match failure {
+        RemoteStartFailure::AllocationUnknown { reason } => (
+            None,
+            RemoteSessionEvent::AllocationUnknown {
+                label,
+                reason: reason.clone(),
+            },
+        ),
+        RemoteStartFailure::AllocationFailed { .. } | RemoteStartFailure::InvalidEndpoint(_) => (
+            Some(RemoteReleaseOutcome::NeverAllocated),
+            RemoteSessionEvent::AllocationFailed {
+                label,
+                reason: failure.to_string(),
+            },
+        ),
+        RemoteStartFailure::Unenforceable { released } => {
+            let event = match released {
+                RemoteReleaseOutcome::Released
+                | RemoteReleaseOutcome::AlreadyGone
+                | RemoteReleaseOutcome::NeverAllocated => RemoteSessionEvent::AllocationFailed {
                     label,
                     reason: failure.to_string(),
                 },
+                RemoteReleaseOutcome::ReleaseUnknown { .. } | RemoteReleaseOutcome::Failed { .. } => {
+                    RemoteSessionEvent::AllocationUnknown {
+                        label,
+                        reason: failure.to_string(),
+                    }
+                }
             };
-            let _ = event_tx.send(BrowserEvent::RemoteSession(event));
-            Err(failure.to_string())
+            (Some(released.clone()), event)
         }
     }
 }
@@ -627,6 +666,87 @@ fn consume_pending_history_start(pending: &mut Option<PendingHistoryStart>, url:
 
 #[cfg(test)]
 mod tests {
+    use super::super::remote::{RemoteReleaseOutcome, RemoteSessionEvent, RemoteStartFailure};
+    use super::{start_failure_outcome, start_remote};
+
+    #[test]
+    fn a_remote_start_that_never_reaches_the_provider_establishes_never_allocated() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let event_tx = crate::session::BrowserEventSender {
+            tx,
+            wake: crate::session::BrowserEventWake::default(),
+            committed_url: crate::session::CommittedUrl::default(),
+        };
+        let request = super::super::remote::RemoteSessionRequest {
+            endpoint: "http://grid.example.net/wd/hub".to_string(),
+            authorization: None,
+            capabilities: serde_json::json!({}),
+            allocation_timeout: std::time::Duration::from_millis(100),
+            max_session: std::time::Duration::from_secs(1),
+            idle_release: std::time::Duration::from_secs(1),
+            label: "ios".to_string(),
+            provider: "grid".to_string(),
+            browser: crate::BackendKind::SafariWebDriver,
+        };
+        let report =
+            crate::session::RemoteReleaseReport::new(std::sync::Mutex::new(Some(RemoteReleaseOutcome::NeverAllocated)));
+        let error = start_remote(&request, &event_tx, &report)
+            .err()
+            .expect("plain HTTP is refused");
+        assert!(error.contains("endpoint rejected"), "{error}");
+        assert_eq!(
+            *report.lock().expect("report"),
+            Some(RemoteReleaseOutcome::NeverAllocated),
+            "no provider request was made, so nothing is held"
+        );
+    }
+
+    #[test]
+    fn only_a_refusal_or_a_confirmed_immediate_release_frees_the_slot() {
+        let refused = RemoteStartFailure::AllocationFailed {
+            error: "session not created".into(),
+            message: "no device".into(),
+        };
+        let (established, event) = start_failure_outcome(&refused, "ios".into());
+        assert_eq!(established, Some(RemoteReleaseOutcome::NeverAllocated));
+        assert!(matches!(event, RemoteSessionEvent::AllocationFailed { .. }));
+
+        let unknown = RemoteStartFailure::AllocationUnknown {
+            reason: "timeout".into(),
+        };
+        let (established, event) = start_failure_outcome(&unknown, "ios".into());
+        assert_eq!(established, None, "an unknown allocation keeps holding the slot");
+        assert!(matches!(event, RemoteSessionEvent::AllocationUnknown { .. }));
+
+        let released = RemoteStartFailure::Unenforceable {
+            released: RemoteReleaseOutcome::Released,
+        };
+        let (established, event) = start_failure_outcome(&released, "ios".into());
+        assert_eq!(established, Some(RemoteReleaseOutcome::Released));
+        assert!(matches!(event, RemoteSessionEvent::AllocationFailed { .. }));
+
+        for outcome in [
+            RemoteReleaseOutcome::ReleaseUnknown {
+                attempts: 3,
+                reason: "timeout".into(),
+            },
+            RemoteReleaseOutcome::Failed {
+                error: "unknown error".into(),
+                message: "busy".into(),
+            },
+        ] {
+            let unenforceable = RemoteStartFailure::Unenforceable {
+                released: outcome.clone(),
+            };
+            let (established, event) = start_failure_outcome(&unenforceable, "ios".into());
+            assert_eq!(established, Some(outcome), "the immediate release outcome is preserved");
+            assert!(
+                matches!(event, RemoteSessionEvent::AllocationUnknown { .. }),
+                "an unreleased allocation is reported as unknown, never as failed"
+            );
+        }
+    }
+
     #[test]
     fn only_timeouts_keep_a_bounded_classic_navigation_running() {
         use super::navigation::classic_error_is_page_load_timeout;

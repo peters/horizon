@@ -13,6 +13,7 @@ use horizon_core::browser::{BackendAvailability, BackendKind, BrowserStatus};
 use horizon_core::{Board, PanelId, PanelKind, PanelOptions, WorkspaceId, browser_actor};
 
 use super::HorizonApp;
+use super::browser_remote_create::{plan_remote_create, remote_holds, remote_session_limit_reached};
 
 const CREATE_REQUEST_POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// How long a create with an initial URL waits, after the backend is ready,
@@ -257,18 +258,46 @@ impl HorizonApp {
             );
             return;
         }
-        let backend = request.backend.unwrap_or(self.template_config.browser.backend);
-        if let BackendAvailability::UnsupportedPlatform(reason) = backend.availability() {
-            complete_failure(&request, "unsupported_platform", reason);
-            return;
-        }
-        if backend_session_limit_reached(&self.board, backend) {
-            complete_failure(
-                &request,
-                "session_limit_reached",
-                "the selected browser backend has reached its live-session limit",
-            );
-            return;
+        // A remote target is resolved before any panel exists, so a missing
+        // or locked credential, an unknown target or a full provider is
+        // reported to the agent as a typed refusal.
+        let remote = match request.target.as_deref() {
+            Some(target) => match plan_remote_create(&self.template_config, &self.remote_browser_credentials, target) {
+                Ok(plan) => Some(plan),
+                Err(refused) => {
+                    complete_failure(&request, refused.code, &refused.message);
+                    return;
+                }
+            },
+            None => None,
+        };
+        let backend = remote.as_ref().map_or_else(
+            || request.backend.unwrap_or(self.template_config.browser.backend),
+            |plan| plan.backend,
+        );
+        if let Some(plan) = &remote {
+            let holds = remote_holds(self, &plan.provider);
+            if remote_session_limit_reached(&self.template_config, &plan.provider, holds) {
+                complete_failure(
+                    &request,
+                    "remote_session_limit_reached",
+                    "the remote provider has reached its configured max_sessions; allocations count until their release is established",
+                );
+                return;
+            }
+        } else {
+            if let BackendAvailability::UnsupportedPlatform(reason) = backend.availability() {
+                complete_failure(&request, "unsupported_platform", reason);
+                return;
+            }
+            if backend_session_limit_reached(&self.board, backend) {
+                complete_failure(
+                    &request,
+                    "session_limit_reached",
+                    "the selected browser backend has reached its live-session limit",
+                );
+                return;
+            }
         }
 
         let mut browser_config = self.template_config.browser.clone();
@@ -278,6 +307,7 @@ impl HorizonApp {
             kind: PanelKind::Browser,
             visible: request.visible,
             browser_config: Some(browser_config),
+            remote_session: remote.map(|plan| plan.request),
             ..PanelOptions::default()
         };
         let panel_id = match self.board.create_panel(options, actor_panel.workspace_id) {

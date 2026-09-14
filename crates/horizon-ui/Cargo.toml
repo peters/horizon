@@ -49,4 +49,5 @@ transcribe-cpp = { workspace = true, optional = true }
 cpal = { workspace = true, optional = true }
 
 [dev-dependencies]
+horizon-browser = { workspace = true, features = ["test-support"] }
 rusqlite.workspace = true
