@@ -228,6 +228,11 @@ fn endpoint_rules_match_the_configuration_contract() {
     let named = RemoteHttpClient::new("http://LOCALHOST:4723/wd/hub", None).expect("case-insensitive localhost");
     assert!(!named.config().https_only());
     assert_eq!(named.origin(), "http://localhost:4723");
+    assert!(
+        local.config().proxy().is_none(),
+        "loopback grids never use an environment proxy"
+    );
+    assert!(named.config().proxy().is_none());
 }
 
 #[test]

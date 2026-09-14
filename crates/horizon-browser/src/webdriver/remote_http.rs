@@ -82,8 +82,13 @@ impl RemoteHttpClient {
     /// Malformed or disallowed endpoints as [`HttpError::InvalidResponse`].
     pub fn new(endpoint: &str, authorization: Option<RemoteAuthorizationHeader>) -> Result<Self, HttpError> {
         let (origin, base, loopback) = parse_endpoint(endpoint)?;
+        // A loopback grid must stay on this machine: proxy discovery from the
+        // environment could otherwise carry the plaintext request and its
+        // Authorization header to another host. Hosted HTTPS grids keep it.
+        let proxy = if loopback { None } else { ureq::Proxy::try_from_env() };
         let config = ureq::Agent::config_builder()
             .https_only(!loopback)
+            .proxy(proxy)
             .http_status_as_error(false)
             .max_redirects(0)
             .timeout_resolve(Some(CONNECT_TIMEOUT))
