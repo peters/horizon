@@ -189,7 +189,8 @@ pub(crate) fn create_private_dir(path: &Path) -> Result<(), RoutineError> {
 fn validate_existing_ancestors(path: &Path) -> Result<(), RoutineError> {
     let mut current = path.to_path_buf();
     loop {
-        match fs::metadata(&current) {
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => return Err(RoutineError::Storage),
             Ok(metadata) => {
                 if !metadata.is_dir() {
                     return Err(RoutineError::Storage);
@@ -310,5 +311,21 @@ mod tests {
         drop(registry.lock(id).expect("lock"));
         assert!(registry.list().expect("list").is_empty());
         assert_eq!(registry.load(id), Err(RoutineError::RoutineNotFound));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_rejects_a_symlinked_ancestor() {
+        let temp = tempfile::tempdir().expect("temp");
+        privatize_temp(temp.path());
+        let real = temp.path().join("real");
+        std::fs::create_dir(&real).expect("real");
+        privatize_temp(&real);
+        let link = temp.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+        assert_eq!(
+            RoutineRegistry::open(link.join("routines")).err(),
+            Some(RoutineError::Storage)
+        );
     }
 }

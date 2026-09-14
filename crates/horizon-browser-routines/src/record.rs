@@ -211,6 +211,8 @@ fn can_coalesce(previous: &RecordedAction, next: &RecordedAction) -> bool {
             },
         ) => {
             previous.target == next.target
+                && previous.page_origin == next.page_origin
+                && previous.url_pattern == next.url_pattern
                 && previous.mutation_class == next.mutation_class
                 && previous.postcondition.is_none()
                 && next.precondition.is_none()
@@ -384,6 +386,20 @@ mod tests {
         let mut session = TeachSession::start();
         session.push(scroll("s1", 80.0)).expect("s1");
         session.push(scroll("s2", -40.0)).expect("s2");
+        assert_eq!(session.recording().actions.len(), 2);
+    }
+
+    #[test]
+    fn targetless_scrolls_do_not_coalesce_across_pages() {
+        let mut session = TeachSession::start();
+        let mut first = scroll("s1", 80.0);
+        first.page_origin = Origin::parse("https://reports.example").expect("origin");
+        first.url_pattern = "https://reports.example/app".to_string();
+        let mut second = scroll("s2", 40.0);
+        second.page_origin = Origin::parse("https://idp.example").expect("origin");
+        second.url_pattern = "https://idp.example/login".to_string();
+        session.push(first).expect("s1");
+        session.push(second).expect("s2");
         assert_eq!(session.recording().actions.len(), 2);
     }
 
