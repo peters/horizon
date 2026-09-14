@@ -94,6 +94,7 @@ fn persisted_browser_profile_root_survives_other_config_changes() {
             root: Some(PathBuf::from("/profiles/used-at-launch")),
             backend: None,
             hidden: false,
+            remote_target: None,
         }),
         ..PanelState::default()
     };
@@ -197,5 +198,25 @@ fn pi_panel_state_round_trips_through_runtime_yaml() {
             .as_ref()
             .map(|binding| binding.session_id.as_str()),
         Some("pi-session-123")
+    );
+}
+
+#[test]
+fn a_persisted_remote_target_restores_as_a_stopped_remote_panel() {
+    let panel = PanelState {
+        kind: PanelKind::Browser,
+        browser_profile: Some(BrowserProfileState {
+            root: None,
+            backend: None,
+            hidden: false,
+            remote_target: Some("ios_phone".to_string()),
+        }),
+        ..PanelState::default()
+    };
+    let options = panel.to_panel_options(&crate::browser::BrowserConfig::default());
+    assert_eq!(options.remote_target.as_deref(), Some("ios_phone"));
+    assert!(
+        options.remote_session.is_none(),
+        "a restore never carries a session request: credentials are resolved per create"
     );
 }

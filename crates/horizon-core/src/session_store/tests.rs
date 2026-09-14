@@ -104,6 +104,7 @@ fn delete_session_removes_browser_profiles_from_the_saved_profile_root() {
                     root: Some(launched_profile_root.clone()),
                     backend: None,
                     hidden: false,
+                    remote_target: None,
                 }),
                 ..PanelState::default()
             }],

@@ -612,3 +612,77 @@ fn error_messages_name_identifiers_only() {
     };
     assert!(endpoint.to_string().contains("must use https"));
 }
+
+#[test]
+fn duplicate_os_slots_on_one_origin_are_rejected_at_definition_time() {
+    let mut config = sample();
+    config
+        .providers
+        .get_mut("device_cloud")
+        .expect("provider")
+        .credential_bindings
+        .insert(
+            CredentialReference::from("cloud-key"),
+            CredentialBinding {
+                store: CredentialStoreKind::OsKeychain,
+                slot: Some("remote-browser/device-cloud/username".into()),
+            },
+        );
+    assert!(matches!(
+        config
+            .validate_definition()
+            .expect_err("two bindings on one origin and slot would share one OS item"),
+        RemoteConfigError::InvalidCredential {
+            problem: CredentialReferenceProblem::DuplicateSlot,
+            ..
+        }
+    ));
+
+    // The same slot under another endpoint origin is a different OS item.
+    let mut config = sample();
+    let mut mirror = provider(&config).clone();
+    mirror.endpoint = ControlEndpoint::parse("https://mirror.example.net/wd/hub").expect("endpoint");
+    config.providers.insert("mirror".into(), mirror);
+    config
+        .validate_definition()
+        .expect("distinct origins may reuse a slot name");
+}
+
+#[test]
+fn capability_extension_values_are_checked_at_every_depth() {
+    let mut config = sample();
+    let target = config.targets.get_mut("ios_phone").expect("target");
+    target.capability_extensions.insert(
+        "vendor:options".into(),
+        serde_json::json!({"safe": {"accessKey": "hidden"}}),
+    );
+    assert!(matches!(
+        config.validate_definition().expect_err("credential two levels down"),
+        RemoteConfigError::InvalidCapabilityExtension {
+            problem: ExtensionProblem::CarriesCredential,
+            ..
+        }
+    ));
+
+    let target = config.targets.get_mut("ios_phone").expect("target");
+    target.capability_extensions.insert(
+        "vendor:options".into(),
+        serde_json::json!({"list": [{"deviceName": "iPhone"}]}),
+    );
+    assert!(matches!(
+        config
+            .validate_definition()
+            .expect_err("normalized field inside an array"),
+        RemoteConfigError::InvalidCapabilityExtension {
+            problem: ExtensionProblem::ConflictsWithNormalizedField,
+            ..
+        }
+    ));
+
+    let target = config.targets.get_mut("ios_phone").expect("target");
+    target.capability_extensions.insert(
+        "vendor:options".into(),
+        serde_json::json!({"nested": {"projectName": "horizon", "tags": ["a", {"note": "b"}]}}),
+    );
+    config.validate_definition().expect("benign nested values pass");
+}

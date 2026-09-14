@@ -41,6 +41,9 @@ pub struct RemoteSessionRequest {
     pub idle_release: Duration,
     /// Configured target name for display and audit.
     pub label: String,
+    /// The browser family the target drives, for panel metadata, page
+    /// semantics and audit. The transport is classic `WebDriver` regardless.
+    pub browser: crate::BackendKind,
 }
 
 impl fmt::Debug for RemoteSessionRequest {
@@ -53,6 +56,7 @@ impl fmt::Debug for RemoteSessionRequest {
             .field("max_session", &self.max_session)
             .field("idle_release", &self.idle_release)
             .field("label", &self.label)
+            .field("browser", &self.browser)
             .finish_non_exhaustive()
     }
 }

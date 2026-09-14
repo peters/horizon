@@ -86,8 +86,15 @@ Rules the configuration PR enforces:
   (user, access key, password, token) are rejected by name; the adapter
   derives those capabilities from the normalized fields and the bindings.
 - `device.kind: physical` is a Horizon requirement, not a WebDriver capability.
-  The adapter maps it to the provider's real-device request and the lifecycle
-  verifies it after allocation.
+  The adapter maps it to the provider's real-device request; comparing the
+  allocated device against the requirement (provider session evidence, the
+  spike's `realMobile` plus session record check) is lifecycle work that
+  follows the wiring, and until it lands the requirement only shapes the
+  request. The `webdriver` adapter sends the normalized
+  device fields as `appium:deviceName` and `appium:platformVersion`; the
+  `browserstack` adapter sends them inside `bstack:options` as `deviceName`,
+  `osVersion` and `realMobile: "true"` for a physical requirement, merged with
+  any other `bstack:options` keys the target's extensions carry.
 - `credential_bindings` hold references only. `store: session` binds a value
   entered in Horizon and held in a scoped in-memory sink until explicit clear or
   exit. `store: os_keychain` uses `keyring-core` with the native store crates

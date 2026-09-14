@@ -305,6 +305,7 @@ impl RuntimeState {
                                 root: browser.profile_root_for_persistence().map(Path::to_path_buf),
                                 backend: Some(browser.backend()),
                                 hidden: !panel.visible,
+                                remote_target: browser.remote_target().map(str::to_string),
                             }),
                             // `Some("")` is meaningful: Chrome committed its
                             // blank startup target, so restore must not fall

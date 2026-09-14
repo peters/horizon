@@ -249,6 +249,7 @@ impl Driver {
             target_id: self.context_id.clone().unwrap_or_default(),
             url: self.url.clone(),
             title: self.title.clone(),
+            remote_target: self.config.remote.as_ref().map(|request| request.label.clone()),
         }
     }
 

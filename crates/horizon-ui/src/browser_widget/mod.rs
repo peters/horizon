@@ -212,7 +212,13 @@ impl<'a> BrowserView<'a> {
                 // button or key into the replacement session.
                 *state = BrowserUiState::default();
             }
-            synchronize_viewport(ui, browser, state, &body);
+            // A fixed viewport (a remote device) never converges on the
+            // panel's size: the frame is letterboxed and scaled instead, so
+            // nothing is sent and any rendered frame is pointer-ready.
+            let fixed_viewport = !browser.backend_capabilities().viewport;
+            if !fixed_viewport {
+                synchronize_viewport(ui, browser, state, &body);
+            }
             input::handle(
                 ui,
                 browser,
@@ -224,15 +230,12 @@ impl<'a> BrowserView<'a> {
                     events,
                     interactive,
                     keyboard_target,
-                    pointer_viewport: if frame_matches_viewport(
+                    pointer_viewport: pointer_viewport_state(
+                        fixed_viewport,
                         body.frame_size,
                         body.viewport_size,
                         state.last_viewport,
-                    ) {
-                        input::PointerViewportState::Ready
-                    } else {
-                        input::PointerViewportState::AwaitingFrame
-                    },
+                    ),
                     shortcuts: self.shortcuts,
                     shortcut_bindings: self.shortcut_bindings,
                     frame_has_pointer_button: self.frame_has_pointer_button,
@@ -344,6 +347,28 @@ const fn page_keyboard_can_route(
     viewport_panel_focused && !url_focused && !other_widget_has_focus
 }
 
+/// Whether pointer events may be mapped onto the frame. An adjustable
+/// viewport must first publish a frame at the size that was sent; a fixed
+/// one (a remote device) is ready as soon as any frame rendered, since its
+/// coordinates are scaled from the frame's own size.
+fn pointer_viewport_state(
+    fixed_viewport: bool,
+    frame_size: Option<[f32; 2]>,
+    desired_viewport: Option<(u32, u32)>,
+    sent_viewport: (u32, u32),
+) -> input::PointerViewportState {
+    let ready = if fixed_viewport {
+        frame_size.is_some()
+    } else {
+        frame_matches_viewport(frame_size, desired_viewport, sent_viewport)
+    };
+    if ready {
+        input::PointerViewportState::Ready
+    } else {
+        input::PointerViewportState::AwaitingFrame
+    }
+}
+
 fn frame_matches_viewport(
     frame_size: Option<[f32; 2]>,
     desired_viewport: Option<(u32, u32)>,
@@ -379,10 +404,33 @@ mod tests {
     use egui::pos2;
     use horizon_core::browser::BackendKind;
 
+    use super::input::PointerViewportState;
     use super::{
         BrowserUiState, MAX_VIEWPORT_CONVERGENCE_RETRIES, frame_matches_viewport, page_focus_event_filter,
-        page_keyboard_can_route, viewport_command_due,
+        page_keyboard_can_route, pointer_viewport_state, viewport_command_due,
     };
+
+    #[test]
+    fn a_fixed_viewport_is_pointer_ready_once_any_frame_rendered() {
+        // A device frame that never matches the panel still takes pointer input.
+        assert!(matches!(
+            pointer_viewport_state(true, Some([393.0, 852.0]), Some((1280, 720)), (0, 0)),
+            PointerViewportState::Ready
+        ));
+        assert!(matches!(
+            pointer_viewport_state(true, None, Some((1280, 720)), (0, 0)),
+            PointerViewportState::AwaitingFrame
+        ));
+        // An adjustable viewport keeps waiting for the converged frame.
+        assert!(matches!(
+            pointer_viewport_state(false, Some([393.0, 852.0]), Some((1280, 720)), (1280, 720)),
+            PointerViewportState::AwaitingFrame
+        ));
+        assert!(matches!(
+            pointer_viewport_state(false, Some([1280.0, 720.0]), Some((1280, 720)), (1280, 720)),
+            PointerViewportState::Ready
+        ));
+    }
 
     #[test]
     fn backend_switch_resets_session_owned_viewport_and_input_caches() {

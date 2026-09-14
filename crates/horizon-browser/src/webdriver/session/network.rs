@@ -233,6 +233,14 @@ impl Driver {
         options: Option<BrowserNetworkCaptureOptions>,
         event_tx: &BrowserEventSender,
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
+        if self.host.is_remote() {
+            // Capture rides on CDP or the local Firefox BiDi bridge; a remote
+            // session has neither, whatever browser family it drives.
+            return Err(BrowserControlFailure::new(
+                "unsupported_backend",
+                "network capture is unavailable for remote device sessions, which run on classic WebDriver",
+            ));
+        }
         if self.config.browser.backend == BackendKind::SafariWebDriver {
             return Err(BrowserControlFailure::new(
                 "unsupported_backend",

@@ -80,6 +80,27 @@ pub struct BackendCapabilities {
     pub max_sessions: Option<u32>,
 }
 
+impl BackendCapabilities {
+    /// What a session at a remote grid can actually do, whatever browser
+    /// family it drives: frames are screenshots over classic `WebDriver`, the
+    /// device viewport is fixed, and nothing local (keys, IME, clipboard,
+    /// downloads, a persistent profile, disclosure minimization) exists.
+    #[must_use]
+    pub const fn remote_session() -> Self {
+        Self {
+            frame_delivery: FrameDelivery::AdaptiveScreenshot,
+            viewport: false,
+            physical_keys: false,
+            ime: false,
+            clipboard: false,
+            downloads: false,
+            persistent_profile: false,
+            automation_disclosure_minimization: false,
+            max_sessions: None,
+        }
+    }
+}
+
 /// Compile-time host support for a backend. Executable discovery remains a
 /// launch-time check because installations can change while Horizon runs.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
