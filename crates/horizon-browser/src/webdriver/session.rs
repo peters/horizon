@@ -488,6 +488,9 @@ fn start_remote(
     let _ = event_tx.send(BrowserEvent::RemoteSession(RemoteSessionEvent::Allocating {
         label: label.clone(),
     }));
+    // From here the provider may hold a device: nothing is established
+    // until New Session answers or the failure below says otherwise.
+    *remote_release.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     let allocated = RemoteHost::connect(request).and_then(|mut host| {
         let session = host.allocate(request)?;
         Ok((host, session))
@@ -664,7 +667,39 @@ fn consume_pending_history_start(pending: &mut Option<PendingHistoryStart>, url:
 #[cfg(test)]
 mod tests {
     use super::super::remote::{RemoteReleaseOutcome, RemoteSessionEvent, RemoteStartFailure};
-    use super::start_failure_outcome;
+    use super::{start_failure_outcome, start_remote};
+
+    #[test]
+    fn a_remote_start_that_never_reaches_the_provider_establishes_never_allocated() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let event_tx = crate::session::BrowserEventSender {
+            tx,
+            wake: crate::session::BrowserEventWake::default(),
+            committed_url: crate::session::CommittedUrl::default(),
+        };
+        let request = super::super::remote::RemoteSessionRequest {
+            endpoint: "http://grid.example.net/wd/hub".to_string(),
+            authorization: None,
+            capabilities: serde_json::json!({}),
+            allocation_timeout: std::time::Duration::from_millis(100),
+            max_session: std::time::Duration::from_secs(1),
+            idle_release: std::time::Duration::from_secs(1),
+            label: "ios".to_string(),
+            provider: "grid".to_string(),
+            browser: crate::BackendKind::SafariWebDriver,
+        };
+        let report =
+            crate::session::RemoteReleaseReport::new(std::sync::Mutex::new(Some(RemoteReleaseOutcome::NeverAllocated)));
+        let error = start_remote(&request, &event_tx, &report)
+            .err()
+            .expect("plain HTTP is refused");
+        assert!(error.contains("endpoint rejected"), "{error}");
+        assert_eq!(
+            *report.lock().expect("report"),
+            Some(RemoteReleaseOutcome::NeverAllocated),
+            "no provider request was made, so nothing is held"
+        );
+    }
 
     #[test]
     fn only_a_refusal_or_a_confirmed_immediate_release_frees_the_slot() {

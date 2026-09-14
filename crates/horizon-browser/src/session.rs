@@ -61,6 +61,7 @@ use crate::frames::FrameSlot;
 use crate::page_scroll::VerticalScrollbarDrag;
 use crate::process::{ChromeProcess, ChromeProcessControl};
 use crate::semantic::SemanticState;
+use crate::webdriver::RemoteReleaseOutcome;
 use crate::{ActiveBackendCapabilities, BackendKind, PageScrollState, normalize_navigation_target};
 use crate::{BrowserConfig, BrowserControlFailure};
 
@@ -209,7 +210,13 @@ pub fn start_session(config: BrowserSessionConfig) -> Result<BrowserSession, cra
         committed_url: committed_url.clone(),
     };
     let (completion_tx, completion_rx) = mpsc::channel::<()>();
-    let remote_release = shutdown::RemoteReleaseReport::default();
+    // Until the driver is about to ask the provider for a session, a remote
+    // teardown holds nothing: a failure before New Session (a coordination
+    // preflight, a rejected endpoint) must not consume the provider's slot.
+    // The driver switches the report to unknown right before that request.
+    let remote_release = shutdown::RemoteReleaseReport::new(std::sync::Mutex::new(
+        config.remote.as_ref().map(|_| RemoteReleaseOutcome::NeverAllocated),
+    ));
     let remote_provider = config.remote.as_ref().map(|request| request.provider.clone());
     let driver_remote_release = Arc::clone(&remote_release);
     let process_control = ChromeProcessControl::default();
