@@ -137,6 +137,7 @@ impl BrowserSession {
         BrowserShutdownSignal::running(
             self.completion_rx,
             self.remote_release,
+            self.remote_provider,
             self.process_control,
             self.panel_local_id,
             self.coordination,
@@ -151,6 +152,7 @@ impl BrowserSession {
         BrowserShutdownSignal::running(
             self.completion_rx,
             self.remote_release,
+            self.remote_provider,
             self.process_control,
             self.panel_local_id,
             self.coordination,
@@ -239,6 +241,7 @@ mod tests {
                 event_rx: mpsc::channel().1,
                 completion_rx,
                 remote_release: crate::session::RemoteReleaseReport::default(),
+                remote_provider: None,
                 event_wake: BrowserEventWake::default(),
                 committed_url: CommittedUrl::default(),
                 process_control: crate::process::ChromeProcessControl::default(),

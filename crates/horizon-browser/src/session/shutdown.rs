@@ -24,6 +24,7 @@ pub struct DriverTeardown {
 pub struct BrowserShutdownSignal {
     completion_rx: mpsc::Receiver<()>,
     remote_release: RemoteReleaseReport,
+    remote_provider: Option<String>,
     driver_complete: AtomicBool,
     process_complete: AtomicBool,
     process_control: ChromeProcessControl,
@@ -51,6 +52,7 @@ impl BrowserShutdownSignal {
     pub(super) fn running(
         completion_rx: mpsc::Receiver<()>,
         remote_release: RemoteReleaseReport,
+        remote_provider: Option<String>,
         process_control: ChromeProcessControl,
         panel_local_id: String,
         coordination: Option<Arc<dyn BrowserCoordination>>,
@@ -58,6 +60,7 @@ impl BrowserShutdownSignal {
         Self {
             completion_rx,
             remote_release,
+            remote_provider,
             driver_complete: AtomicBool::new(false),
             process_complete: AtomicBool::new(false),
             process_control,
@@ -85,6 +88,7 @@ impl BrowserShutdownSignal {
         Self {
             completion_rx,
             remote_release: RemoteReleaseReport::default(),
+            remote_provider: None,
             driver_complete: AtomicBool::new(true),
             process_complete: AtomicBool::new(true),
             process_control,
@@ -97,6 +101,25 @@ impl BrowserShutdownSignal {
     #[must_use]
     pub fn is_complete(&self) -> bool {
         self.process_is_complete() && self.profile_cleanup_is_complete()
+    }
+
+    /// The configured provider a remote session was allocated at, so the
+    /// host can keep counting the allocation until release is established.
+    #[must_use]
+    pub fn remote_provider(&self) -> Option<&str> {
+        self.remote_provider.as_deref()
+    }
+
+    /// Whether this teardown still holds a remote allocation: a remote
+    /// session whose release the driver has not positively established
+    /// (`Released` or `AlreadyGone`). Local browsers never hold one.
+    #[must_use]
+    pub fn holds_remote_allocation(&self) -> bool {
+        self.remote_provider.is_some()
+            && !matches!(
+                self.remote_release(),
+                Some(RemoteReleaseOutcome::Released | RemoteReleaseOutcome::AlreadyGone)
+            )
     }
 
     /// What a remote driver established at the provider on the way out.
@@ -225,6 +248,7 @@ impl BrowserShutdownSignal {
         Self {
             completion_rx,
             remote_release: RemoteReleaseReport::default(),
+            remote_provider: None,
             driver_complete: AtomicBool::new(false),
             process_complete: AtomicBool::new(false),
             process_control,

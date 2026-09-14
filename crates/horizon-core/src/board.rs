@@ -340,6 +340,25 @@ impl Board {
         ShutdownProgress::new(panel_count, completed, browser_shutdown_signals)
     }
 
+    /// Allocations `provider` may still hold on this board: live remote
+    /// panels whose release is not established, plus closed panels whose
+    /// teardown is still retired here without an established release.
+    #[must_use]
+    pub fn remote_holds(&self, provider: &str) -> usize {
+        let live = self
+            .panels
+            .iter()
+            .filter_map(|panel| panel.browser())
+            .filter(|browser| browser.remote_provider() == Some(provider) && browser.holds_remote_allocation())
+            .count();
+        let retired = self
+            .retired_browser_shutdown_signals
+            .iter()
+            .filter(|signal| signal.remote_provider() == Some(provider) && signal.holds_remote_allocation())
+            .count();
+        live + retired
+    }
+
     /// Drain pending output from all panels. Returns `true` if any panel had activity.
     #[profiling::function]
     pub fn process_output(&mut self) -> BoardProcessOutput {

@@ -30,6 +30,15 @@ pub(super) struct PendingBrowserClose {
     teardown: Option<BrowserShutdownSignal>,
 }
 
+impl PendingBrowserClose {
+    /// Whether this close may still hold an allocation at `provider`.
+    pub(super) fn holds_remote_allocation_at(&self, provider: &str) -> bool {
+        self.teardown
+            .as_ref()
+            .is_some_and(|signal| signal.remote_provider() == Some(provider) && signal.holds_remote_allocation())
+    }
+}
+
 /// Where a pending close stands at one poll.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum PendingCloseState {

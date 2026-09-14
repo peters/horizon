@@ -18,6 +18,7 @@ fn request(endpoint: &str) -> RemoteSessionRequest {
         max_session: Duration::from_mins(30),
         idle_release: Duration::from_mins(3),
         label: "ios_phone".into(),
+        provider: "grid".into(),
         browser: crate::BackendKind::SafariWebDriver,
     }
 }

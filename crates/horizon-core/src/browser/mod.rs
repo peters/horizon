@@ -6,6 +6,7 @@
 
 #[doc(hidden)]
 pub mod manifest;
+mod remote_panel;
 pub mod remote_session;
 pub mod teach;
 
@@ -114,12 +115,9 @@ pub struct BrowserPanelState {
     pub video_error: Option<String>,
     /// Latest remote-session lifecycle note (allocation, expiry, release), value-free.
     pub remote_status: Option<String>,
-    /// The request every (re)launch of a remote session uses; `None` for a
-    /// local browser. Carries the resolved authorization for this process only.
-    remote: Option<horizon_browser::RemoteSessionRequest>,
-    /// Configured remote target name. Set without `remote` for a panel
-    /// restored from a previous run, which cannot allocate again on its own.
-    remote_target: Option<String>,
+    /// The remote session this panel runs (or ran) at; `None` for a local
+    /// browser. Carries the resolved authorization for this process only.
+    remote: Option<remote_panel::RemoteLifecycle>,
     /// User-typed navigation kept as the display and retry target until the
     /// driver commits a reachable page, so the input is never discarded.
     pending_user_navigation: Option<String>,
@@ -172,7 +170,6 @@ impl BrowserPanelState {
             video_error: None,
             remote_status: None,
             remote: None,
-            remote_target: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -219,7 +216,6 @@ impl BrowserPanelState {
             video_error: None,
             remote_status: None,
             remote: None,
-            remote_target: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: profile_root_resolved,
@@ -228,80 +224,6 @@ impl BrowserPanelState {
         };
         state.launch_session(initial_url);
         Ok(state)
-    }
-
-    /// Create the state for a remote session and start allocating. The
-    /// request is kept for Retry, so a retried panel reuses the authorization
-    /// resolved at creation instead of consulting a store again. The panel's
-    /// backend is the request's browser family, not the local default, so
-    /// coordination and the MCP projection describe the device's browser.
-    ///
-    /// # Errors
-    /// Returns an error if a relative profile root cannot be resolved from
-    /// the process launch directory.
-    pub fn start_remote(
-        panel_local_id: impl Into<String>,
-        config: &BrowserConfig,
-        initial_url: Option<String>,
-        request: horizon_browser::RemoteSessionRequest,
-    ) -> crate::error::Result<Self> {
-        let panel_local_id = panel_local_id.into();
-        let mut config = config.resolved_for_launch()?;
-        let home = crate::horizon_home::HorizonHome::resolve();
-        let profile_root_resolved = retain_effective_profile_root(&mut config, &home.root().join("browser-profiles"));
-        config.backend = request.browser;
-        let initial_url = initial_url.map(|url| normalize_navigation_target(&url));
-        let mut state = Self::inert();
-        state.panel_local_id = panel_local_id;
-        state.status = BrowserStatus::Starting;
-        state.loading = true;
-        state.requested_url.clone_from(&initial_url);
-        state.persisted_config_changed = profile_root_resolved;
-        state.config = config;
-        state.remote_target = Some(request.label.clone());
-        state.remote = Some(request);
-        state.launch_session(initial_url);
-        Ok(state)
-    }
-
-    /// A remote panel restored from a previous run. Its device session ended
-    /// with that run and the credentials were resolved then, so it comes back
-    /// stopped with a note; a new session needs a new create.
-    #[must_use]
-    pub fn restored_remote(
-        panel_local_id: impl Into<String>,
-        config: &BrowserConfig,
-        remote_target: String,
-        last_url: Option<String>,
-    ) -> Self {
-        let mut state = Self::inert();
-        state.panel_local_id = panel_local_id.into();
-        state.config = config.clone();
-        state.requested_url = last_url;
-        state.remote_status = Some(format!(
-            "remote session for {remote_target} ended with the previous Horizon run; create the panel again to allocate a new one"
-        ));
-        state.remote_target = Some(remote_target);
-        state
-    }
-
-    /// Configured remote target name, when this panel runs (or ran) remotely.
-    #[must_use]
-    pub fn remote_target(&self) -> Option<&str> {
-        self.remote_target.as_deref()
-    }
-
-    /// Whether this panel drives a remote session rather than a local browser.
-    #[must_use]
-    pub fn is_remote(&self) -> bool {
-        self.remote_target.is_some()
-    }
-
-    /// Whether Retry can start a session again. A remote panel restored from
-    /// a previous run has no request to retry with: it needs a new create.
-    #[must_use]
-    pub fn can_retry(&self) -> bool {
-        self.remote.is_some() || self.remote_target.is_none()
     }
 
     /// (Re)start the driver — used for the Retry action after a failure.
@@ -392,7 +314,7 @@ impl BrowserPanelState {
 
     fn launch_session(&mut self, initial_url: Option<String>) {
         self.navigation_error = None;
-        if self.remote_target.is_some() && self.remote.is_none() {
+        if self.is_restored_remote() {
             // Restored from a previous run: no request, so no local browser
             // may be started in its place and nothing is allocated silently.
             self.pending_relaunch = None;
@@ -435,7 +357,7 @@ impl BrowserPanelState {
             coordination: Some(Arc::new(manifest::ManifestCoordination::default())),
             capture_directory: Some(capture_directory),
             video: Arc::new(horizon_browser::VideoCaptureHandle::default()),
-            remote: self.remote.clone(),
+            remote: self.remote_request(),
         };
         match session::start_session(session_config) {
             Ok(handle) => {
@@ -845,43 +767,6 @@ impl BrowserPanelState {
         output.had_output = true;
     }
 
-    fn apply_remote_session_event(
-        &mut self,
-        event: horizon_browser::RemoteSessionEvent,
-        output: &mut BrowserDrainOutput,
-    ) {
-        use horizon_browser::{RemoteExpiry, RemoteReleaseOutcome, RemoteSessionEvent};
-        let note = match event {
-            RemoteSessionEvent::Allocating { label } => format!("allocating remote device for {label}"),
-            RemoteSessionEvent::Allocated { label, session_digest } => {
-                format!("remote session {session_digest} allocated for {label}")
-            }
-            RemoteSessionEvent::AllocationUnknown { label, reason } => {
-                format!("remote allocation for {label} is unknown ({reason}); check the provider before retrying")
-            }
-            RemoteSessionEvent::AllocationFailed { label, reason } => {
-                format!("remote allocation for {label} failed: {reason}")
-            }
-            RemoteSessionEvent::Expired { label, reason } => match reason {
-                RemoteExpiry::HardDeadline => format!("remote session for {label} reached its maximum lifetime"),
-                RemoteExpiry::Idle => format!("remote session for {label} was released after idling"),
-            },
-            RemoteSessionEvent::Released { label, outcome } => match outcome {
-                RemoteReleaseOutcome::Released => format!("remote session for {label} released"),
-                RemoteReleaseOutcome::AlreadyGone => format!("remote session for {label} was already gone"),
-                RemoteReleaseOutcome::ReleaseUnknown { attempts, reason } => format!(
-                    "remote session for {label} may still be held: {attempts} release attempts failed ({reason})"
-                ),
-                RemoteReleaseOutcome::Failed { error, message } => {
-                    format!("remote session for {label} could not be released ({error}: {message})")
-                }
-            },
-        };
-        tracing::info!(target: "browser", "{note}");
-        self.remote_status = Some(note);
-        output.had_output = true;
-    }
-
     fn apply_stopped(&mut self, code: Option<i32>, output: &mut BrowserDrainOutput) {
         if let Some(session) = self.session.take() {
             self.teardown_signal = Some(Box::new((*session).completion_signal()));
@@ -1026,7 +911,6 @@ mod tests {
             video_error: None,
             remote_status: None,
             remote: None,
-            remote_target: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1071,7 +955,6 @@ mod tests {
             video_error: None,
             remote_status: None,
             remote: None,
-            remote_target: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1110,7 +993,6 @@ mod tests {
             video_error: None,
             remote_status: None,
             remote: None,
-            remote_target: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1157,7 +1039,6 @@ mod tests {
             video_error: None,
             remote_status: None,
             remote: None,
-            remote_target: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1202,7 +1083,6 @@ mod tests {
             video_error: None,
             remote_status: None,
             remote: None,
-            remote_target: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1281,7 +1161,6 @@ mod tests {
             video_error: None,
             remote_status: None,
             remote: None,
-            remote_target: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1322,7 +1201,6 @@ mod tests {
             video_error: None,
             remote_status: None,
             remote: None,
-            remote_target: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1362,7 +1240,6 @@ mod tests {
             video_error: None,
             remote_status: None,
             remote: None,
-            remote_target: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1379,48 +1256,6 @@ mod tests {
         assert_eq!(state.display_url(), "");
         assert_eq!(state.committed_url_for_persistence(), Some(""));
         assert!(output.url_changed);
-    }
-
-    #[test]
-    fn restored_remote_panels_stay_stopped_and_keep_their_target() {
-        let mut state = BrowserPanelState::restored_remote(
-            "remote-restore",
-            &BrowserConfig::default(),
-            "ios_phone".to_string(),
-            Some("https://example.test/".to_string()),
-        );
-        assert!(state.is_remote());
-        assert_eq!(
-            state.backend_capabilities(),
-            BackendCapabilities::remote_session(),
-            "a remote panel never advertises a local backend's capabilities"
-        );
-        assert!(!state.can_retry(), "a request-less remote panel offers no Retry");
-        assert_eq!(state.remote_target(), Some("ios_phone"));
-        assert!(matches!(state.status, BrowserStatus::Stopped { code: None }));
-        assert!(
-            state
-                .remote_status
-                .as_deref()
-                .is_some_and(|note| note.contains("ios_phone") && note.contains("create the panel again")),
-            "{:?}",
-            state.remote_status
-        );
-        assert_eq!(state.display_url(), "https://example.test/");
-
-        state.relaunch();
-        assert!(state.session.is_none(), "no local browser stands in for the device");
-        assert!(matches!(state.status, BrowserStatus::Stopped { code: None }));
-        assert!(!state.loading);
-
-        let backend = state.backend();
-        state.switch_backend(BackendKind::FirefoxBidi);
-        assert_eq!(
-            state.backend(),
-            backend,
-            "a remote panel's browser is fixed by its target"
-        );
-        assert!(state.session.is_none());
     }
 
     #[test]
@@ -1447,7 +1282,6 @@ mod tests {
             video_error: None,
             remote_status: None,
             remote: None,
-            remote_target: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,

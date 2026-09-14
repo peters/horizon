@@ -51,12 +51,14 @@ shell commands, files, or other MCP servers.
   sets `allow_additional: true`. Reuse the original panel for iframe, popup,
   dialog, and consent flows instead of creating a helper panel.
 - `browser_create` with `target: <name>` runs the session at a configured
-  remote device target (`browser.remote.targets` in Horizon's configuration)
-  instead of a local browser. The agent names the target only; Horizon
-  resolves the provider, capabilities and credentials and refuses with a typed
-  reason (`target_unknown`, `target_invalid`, `credentials_not_ready`,
-  `session_limit_reached`) that never carries a value. Such a panel reports
-  `remote_target`, classic `WebDriver` and no network capture.
+  remote target (`browser.remote.targets` in Horizon's configuration) instead
+  of a local browser. The agent names the target only; Horizon resolves the
+  provider, capabilities and credentials and refuses with a typed reason
+  (`target_unknown`, `target_invalid`, `credentials_not_ready`,
+  `credentials_invalid`, `remote_session_limit_reached`) that never carries a
+  value. Such a panel reports `remote_target`, classic `WebDriver` and no
+  network capture. Whether the target is physical hardware is its
+  configuration; the allocated device is not verified yet.
 - `browser_visibility` shows or hides an existing panel without stopping its
   browser, ownership lease, network capture, or MCP control.
 - `browser_close` closes a panel the caller owns in its workspace and stops

@@ -13,7 +13,7 @@ use horizon_core::browser::{BackendAvailability, BackendKind, BrowserStatus};
 use horizon_core::{Board, PanelId, PanelKind, PanelOptions, WorkspaceId, browser_actor};
 
 use super::HorizonApp;
-use super::browser_remote_create::{plan_remote_create, remote_session_limit_reached};
+use super::browser_remote_create::{plan_remote_create, remote_holds, remote_session_limit_reached};
 
 const CREATE_REQUEST_POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// How long a create with an initial URL waits, after the backend is ready,
@@ -276,11 +276,12 @@ impl HorizonApp {
             |plan| plan.backend,
         );
         if let Some(plan) = &remote {
-            if remote_session_limit_reached(&self.board, &self.template_config, &plan.provider) {
+            let holds = remote_holds(self, &plan.provider);
+            if remote_session_limit_reached(&self.template_config, &plan.provider, holds) {
                 complete_failure(
                     &request,
-                    "session_limit_reached",
-                    "the remote provider has reached its configured live-session limit",
+                    "remote_session_limit_reached",
+                    "the remote provider has reached its configured max_sessions; allocations count until their release is established",
                 );
                 return;
             }

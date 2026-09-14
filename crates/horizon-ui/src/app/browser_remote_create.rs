@@ -4,9 +4,13 @@
 //! the credential workbench, and refuses with a typed reason that never
 //! carries a credential value.
 
+use horizon_core::Config;
 use horizon_core::browser::{BackendKind, RemoteRequestError, RemoteSessionRequest, build_remote_session_request};
-use horizon_core::remote_browser_credential::{CredentialStores, CredentialWorkbench, RemoteCredentialStore};
-use horizon_core::{Board, Config};
+use horizon_core::remote_browser_credential::{
+    CredentialStores, CredentialWorkbench, RemoteCredentialError, RemoteCredentialStore,
+};
+
+use super::HorizonApp;
 
 /// Everything the host needs to open a panel at a remote target.
 #[derive(Debug)]
@@ -61,9 +65,23 @@ pub(super) fn plan_remote_create(
             code: "target_invalid",
             message: error.to_string(),
         },
+        RemoteRequestError::Credential { ref error, .. }
+            if matches!(
+                error.error,
+                RemoteCredentialError::Missing
+                    | RemoteCredentialError::Locked
+                    | RemoteCredentialError::StoreUnavailable
+                    | RemoteCredentialError::Checking
+            ) =>
+        {
+            CreateRefusal {
+                code: "credentials_not_ready",
+                message: format!("{error}; enter or unlock it in Settings > Remote browsers"),
+            }
+        }
         RemoteRequestError::Credential { .. } => CreateRefusal {
-            code: "credentials_not_ready",
-            message: format!("{error}; enter or unlock it in Settings > Remote browsers"),
+            code: "credentials_invalid",
+            message: format!("{error}; re-enter it in Settings > Remote browsers"),
         },
         RemoteRequestError::Header { .. } => CreateRefusal {
             code: "credentials_invalid",
@@ -80,31 +98,34 @@ pub(super) fn plan_remote_create(
     })
 }
 
-/// Whether the provider's configured `max_sessions` is already used by live
-/// remote panels on this board, counted through each panel's target.
-pub(super) fn remote_session_limit_reached(board: &Board, config: &Config, provider: &str) -> bool {
-    let remote = &config.browser.remote;
-    let Some(limit) = remote
+/// Whether `holds` allocations already use up the provider's configured
+/// `max_sessions`. An unknown provider has no budget.
+pub(super) fn remote_session_limit_reached(config: &Config, provider: &str, holds: usize) -> bool {
+    let Some(limit) = config
+        .browser
+        .remote
         .providers
         .get(provider)
         .map(|profile| profile.limits.max_sessions)
     else {
         return true;
     };
-    let live = board
-        .panels
+    holds >= usize::try_from(limit).unwrap_or(usize::MAX)
+}
+
+/// Allocations `provider` may still hold anywhere this host knows about:
+/// the board's live and retired remote sessions, plus closes the host is
+/// still waiting on. Each is counted until its release is established, and
+/// the provider identity travels with the session, not with the target
+/// configuration, so re-pointing a target never uncounts an allocation.
+pub(super) fn remote_holds(app: &HorizonApp, provider: &str) -> usize {
+    let pending = app
+        .browser_create_host
+        .pending_closes
         .iter()
-        .filter_map(|panel| panel.browser())
-        .filter(|browser| browser.status.is_alive())
-        .filter_map(|browser| browser.remote_target())
-        .filter(|target| {
-            remote
-                .targets
-                .get(*target)
-                .is_some_and(|profile| profile.provider == provider)
-        })
+        .filter(|pending| pending.holds_remote_allocation_at(provider))
         .count();
-    live >= usize::try_from(limit).unwrap_or(usize::MAX)
+    app.board.remote_holds(provider) + pending
 }
 
 #[cfg(test)]
@@ -197,16 +218,69 @@ mod tests {
     }
 
     #[test]
-    fn provider_limits_count_live_remote_panels_only() {
+    fn provider_limits_count_held_allocations_until_release_is_established() {
+        use horizon_core::browser::BrowserPanelState;
+        use horizon_core::{Board, Panel, PanelContent, PanelId, PanelKind, WorkspaceId};
+
         let config = config();
-        let board = Board::new();
+        let mut board = Board::new();
+        let workspace: WorkspaceId = board.create_workspace("alpha");
+        assert_eq!(board.remote_holds("grid"), 0);
+        assert!(!remote_session_limit_reached(&config, "grid", 0), "nothing held yet");
         assert!(
-            !remote_session_limit_reached(&board, &config, "grid"),
-            "nothing live yet"
-        );
-        assert!(
-            remote_session_limit_reached(&board, &config, "nowhere"),
+            remote_session_limit_reached(&config, "nowhere", 0),
             "an unknown provider has no budget"
         );
+
+        let mut push = |id: u64, state: BrowserPanelState| {
+            let panel = Panel::from_content(
+                PanelId(id),
+                workspace,
+                PanelKind::Browser,
+                PanelContent::Browser(Box::new(state)),
+            );
+            board.panels.push(panel);
+        };
+        push(9101, BrowserPanelState::inert_remote("ios_phone", "grid"));
+        push(9102, BrowserPanelState::inert_remote("pixel", "other-grid"));
+        push(
+            9103,
+            BrowserPanelState::restored_remote(
+                "restored",
+                &horizon_core::browser::BrowserConfig::default(),
+                "ios_phone".into(),
+                None,
+            ),
+        );
+        let mut released = BrowserPanelState::inert_remote("ios_phone", "grid");
+        released.mark_remote_release_established_for_tests();
+        push(9104, released);
+        let mut stopped = BrowserPanelState::inert_remote("ios_phone", "grid");
+        stopped.stop();
+        push(9105, stopped);
+        assert_eq!(
+            board.remote_holds("grid"),
+            2,
+            "one live and one stopped-but-unreleased session count; the other provider, the restored panel and the released session do not"
+        );
+        assert!(
+            remote_session_limit_reached(&config, "grid", board.remote_holds("grid")),
+            "max_sessions is 1"
+        );
+        assert_eq!(board.remote_holds("other-grid"), 1);
+    }
+
+    #[test]
+    fn malformed_credentials_are_invalid_not_merely_missing() {
+        let config = config();
+        let mut workbench = workbench();
+        let profile = &config.browser.remote.providers["grid"];
+        workbench
+            .set_session_value("grid", profile, &CredentialReference::from("key"), b"has space")
+            .expect("session value");
+        let refused = plan_remote_create(&config, &workbench, "ios_phone").expect_err("token grammar");
+        assert_eq!(refused.code, "credentials_invalid");
+        assert!(refused.message.contains("`key`"));
+        assert!(!refused.message.contains("has space"), "no value leaks");
     }
 }

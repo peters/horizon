@@ -77,6 +77,7 @@ pub fn build_remote_session_request(
         max_session: Duration::from_secs(u64::from(limits.max_session_seconds)),
         idle_release: Duration::from_secs(u64::from(limits.idle_release_seconds)),
         label: target_name.to_string(),
+        provider: target.provider.clone(),
         browser: browser_family(&target.browser_name),
     })
 }
@@ -247,6 +248,7 @@ mod tests {
         let request = build_remote_session_request(&config, "ios_phone", &stores).expect("request");
         assert_eq!(request.endpoint, "https://grid.example.net/wd/hub");
         assert_eq!(request.label, "ios_phone");
+        assert_eq!(request.provider, "grid");
         assert_eq!(
             request.browser,
             BackendKind::SafariWebDriver,

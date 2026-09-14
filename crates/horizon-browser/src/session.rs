@@ -147,6 +147,8 @@ pub struct BrowserSession {
     completion_rx: mpsc::Receiver<()>,
     /// What a remote driver established at release; shared with its signal.
     remote_release: shutdown::RemoteReleaseReport,
+    /// Configured provider of a remote session, for the host's occupancy count.
+    remote_provider: Option<String>,
     event_wake: BrowserEventWake,
     committed_url: CommittedUrl,
     process_control: ChromeProcessControl,
@@ -208,6 +210,7 @@ pub fn start_session(config: BrowserSessionConfig) -> Result<BrowserSession, cra
     };
     let (completion_tx, completion_rx) = mpsc::channel::<()>();
     let remote_release = shutdown::RemoteReleaseReport::default();
+    let remote_provider = config.remote.as_ref().map(|request| request.provider.clone());
     let driver_remote_release = Arc::clone(&remote_release);
     let process_control = ChromeProcessControl::default();
     let driver_process_control = process_control.clone();
@@ -262,6 +265,7 @@ pub fn start_session(config: BrowserSessionConfig) -> Result<BrowserSession, cra
         event_rx,
         completion_rx,
         remote_release,
+        remote_provider,
         event_wake,
         committed_url,
         process_control,
