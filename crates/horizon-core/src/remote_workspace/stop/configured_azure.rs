@@ -225,6 +225,11 @@ impl RetainedAzure {
         Ok(())
     }
 
+    /// The immutable profile binding the allocation was admitted under.
+    pub(crate) fn binding(&self) -> RemoteCpuProfileBinding {
+        self.binding.clone()
+    }
+
     /// The shared production Azure client: the CLI credential pinned to the profile's
     /// subscription and the client over it. Both are lazy; no token is requested or
     /// persisted here, and a missing CLI login surfaces as an unverified operation. The
