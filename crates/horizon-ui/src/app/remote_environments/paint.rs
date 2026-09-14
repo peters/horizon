@@ -241,7 +241,7 @@ fn render_content(ui: &mut egui::Ui, state: &mut RemoteEnvironments, action: &mu
         );
         state
             .reopen
-            .show_add(ui, views_enabled && !state.reconnect.is_pending(), action);
+            .show_add(ui, views_enabled && !state.reconnect.is_pending(), &row.summary, action);
         super::reconnect::show(
             ui,
             &state.reconnect,

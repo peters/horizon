@@ -23,7 +23,7 @@ pub(super) struct ReopenState {
     start: start::StartState,
     start_outcome_unknown: bool,
     add: add::AddState,
-    add_notice: Option<String>,
+    add_notice: Option<add::Notice>,
     refresh_inventory: bool,
 }
 
@@ -101,9 +101,16 @@ impl ReopenState {
         self.pending.is_some()
     }
 
+    pub(super) fn invalidate_for_inventory(&mut self) {
+        let notice = self.add_notice.take();
+        self.invalidate();
+        self.add_notice = notice;
+    }
+
     pub(super) fn invalidate(&mut self) {
         self.start = start::StartState::default();
-        let changed = self.add.cancel()
+        let changed = self.add_notice.take().is_some()
+            | self.add.cancel()
             | self.catalog.take().is_some()
             | self.notice.take().is_some()
             | self.pending.as_ref().is_some_and(|pending| !pending.discard);
@@ -223,25 +230,24 @@ impl ReopenState {
                 self.pending = Some(pending);
                 return None;
             }
-            Err(TryRecvError::Disconnected) => {
-                Err(if pending.add.as_ref().is_some_and(add::PendingAdd::saving) {
-                    "The Shell save outcome is unknown. Refresh saved panels before another addition. No retry was scheduled."
-                } else if matches!(&pending.start, Some(start::PendingStart::Execute(_))) {
-                    "The start worker ended without a response. The remote outcome is unknown. No retry was scheduled."
-                } else {
-                    worker_failure()
-                }
-                .into())
+            Err(TryRecvError::Disconnected) => Err(if pending.add.as_ref().is_some_and(add::PendingAdd::saving) {
+                "The Shell save outcome is unknown"
+            } else if matches!(&pending.start, Some(start::PendingStart::Execute(_))) {
+                "The start worker ended without a response. The remote outcome is unknown. No retry was scheduled."
+            } else {
+                worker_failure()
             }
+            .into()),
         };
         ctx.request_repaint();
         if pending.discard
             || !pending.scope.matches(client)
             || pending.add.as_ref().is_some_and(|add| !add.matches(client))
         {
-            if pending.add.as_ref().is_some_and(add::PendingAdd::saving) {
-                self.add_notice = Some("An earlier Shell save lost its context. Its outcome is unknown. Refresh that environment before another addition; no retry was scheduled.".into());
-                self.refresh_inventory = true;
+            if let Some(add) = &pending.add
+                && add.saving()
+            {
+                self.unknown_add_result(add);
             }
             if matches!(&pending.start, Some(start::PendingStart::Execute(_))) {
                 self.start_outcome_unknown = true;
@@ -343,6 +349,7 @@ impl super::HorizonApp {
                 .filter(|session| session.persistent)
                 .map(|session| session.session_id.as_str()),
         };
+        state.reopen.invalidate_add_notice(&client, ctx);
         if state.open
             && state.pending.is_none()
             && !state.observation.is_pending()

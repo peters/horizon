@@ -45,7 +45,47 @@ struct Scope {
     home: HorizonHome,
 }
 
+pub(super) struct Notice {
+    scope: Scope,
+    message: String,
+}
+
 impl Scope {
+    fn current(client: &ClientContext<'_>) -> Result<Self, &'static str> {
+        let owner = client
+            .owner
+            .ok_or("Open the owning persistent session before adding a Shell panel.")?;
+        let expected = client
+            .selected
+            .ok_or("Select a saved environment before adding a Shell panel.")?;
+        if owner != expected.owning_session_id {
+            return Err("This environment belongs to another session. Open that session before adding a Shell panel.");
+        }
+        Ok(Self {
+            request: RequestScope {
+                expected: expected.clone(),
+                owner: owner.into(),
+                config: client.config.clone(),
+            },
+            home: client.home.clone(),
+        })
+    }
+
+    fn same_environment(&self, expected: &super::RemoteEnvironmentSummary) -> bool {
+        let original = &self.request.expected;
+        original.owning_session_id == expected.owning_session_id
+            && original.workspace_local_id == expected.workspace_local_id
+            && original.generation == expected.generation
+            && original.worker_identity == expected.worker_identity
+    }
+
+    fn notice_matches(&self, client: &ClientContext<'_>) -> bool {
+        self.home.root() == client.home.root()
+            && client.owner == Some(self.request.owner.as_str())
+            && *client.config == self.request.config
+            && client.selected.is_some_and(|expected| self.same_environment(expected))
+    }
+
     fn matches(&self, client: &ClientContext<'_>) -> bool {
         self.home.root() == client.home.root() && self.request.matches(client)
     }
@@ -105,15 +145,12 @@ impl ReopenState {
             return;
         }
         match action {
-            Action::Open => match RequestScope::current(client) {
-                Ok(request) => {
+            Action::Open => match Scope::current(client) {
+                Ok(scope) => {
                     self.start.cancel();
                     self.add = AddState {
                         form: Some(Form::default()),
-                        scope: Some(Scope {
-                            request,
-                            home: client.home.clone(),
-                        }),
+                        scope: Some(scope),
                         confirmation: None,
                     };
                     self.add_notice = None;
@@ -180,15 +217,19 @@ impl ReopenState {
         if pending.saving {
             self.refresh_inventory = true;
             self.catalog = None;
-            self.add_notice = Some(match result {
+            let message = match result {
                 Ok(Completion::PanelAdded(added))
                     if added.environment.owning_session_id == pending.scope.request.owner
                         && added.environment.workspace_local_id == pending.scope.request.expected.workspace_local_id =>
                 {
                     "Independent Shell panel saved. Show saved panels to start its task or reopen its disconnected view.".into()
                 }
-                Err(message) => format!("{message}. Refresh saved panels before another addition. No retry was scheduled."),
+                Err(message) => format!("{}. Refresh saved panels before another addition. No retry was scheduled.", message.trim_end_matches('.')),
                 _ => "The Shell save outcome is unknown. Refresh saved panels before another addition. No retry was scheduled.".into(),
+            };
+            self.add_notice = Some(Notice {
+                scope: pending.scope.clone(),
+                message,
             });
         } else {
             match result {
@@ -208,10 +249,30 @@ impl ReopenState {
         }
     }
 
+    pub(super) fn invalidate_add_notice(&mut self, client: &ClientContext<'_>, ctx: &Context) {
+        if self
+            .add_notice
+            .as_ref()
+            .is_some_and(|notice| !notice.scope.notice_matches(client))
+        {
+            self.add_notice = None;
+            ctx.request_repaint();
+        }
+    }
+
+    pub(super) fn unknown_add_result(&mut self, pending: &PendingAdd) {
+        self.add_notice = Some(Notice {
+            scope: pending.scope.clone(),
+            message: "An earlier Shell save lost its context. Its outcome is unknown. Refresh this environment before another addition; no retry was scheduled.".into(),
+        });
+        self.refresh_inventory = true;
+    }
+
     pub(in crate::app::remote_environments) fn show_add(
         &mut self,
         ui: &mut egui::Ui,
         enabled: bool,
+        expected: &super::RemoteEnvironmentSummary,
         action: &mut super::InventoryAction,
     ) {
         if !cfg!(target_os = "linux") {
@@ -219,8 +280,10 @@ impl ReopenState {
         }
         let enabled = enabled && !self.is_pending() && cfg!(target_os = "linux");
         paint::show(ui, &mut self.add, enabled, action);
-        if let Some(notice) = &self.add_notice {
-            ui.label(notice);
+        if let Some(notice) = &self.add_notice
+            && notice.scope.same_environment(expected)
+        {
+            ui.label(&notice.message);
         }
     }
 }

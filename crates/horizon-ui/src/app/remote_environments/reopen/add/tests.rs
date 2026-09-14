@@ -150,7 +150,8 @@ fn save_consumes_exact_preview_once_preserves_existing_state_and_creates_no_view
         state.refresh_inventory
             && state
                 .add_notice
-                .as_deref()
+                .as_ref()
+                .map(|notice| notice.message.as_str())
                 .is_some_and(|text| text.contains("panel saved"))
     );
     assert!(!state.is_pending());
@@ -247,7 +248,13 @@ fn invalid_input_and_saved_revision_conflict_require_a_fresh_preview() {
         Some(updated)
     );
     assert!(state.add.confirmation.is_none() && state.refresh_inventory);
-    assert!(state.add_notice.as_deref().is_some_and(|text| text.contains("changed")));
+    assert!(
+        state
+            .add_notice
+            .as_ref()
+            .map(|notice| notice.message.as_str())
+            .is_some_and(|text| text.contains("changed"))
+    );
 }
 
 #[test]
@@ -290,8 +297,12 @@ fn lost_and_stale_save_responses_refresh_inventory_without_retry_or_false_succes
         });
         drop(tx);
         settle(&mut state, &client, &ctx);
-        let notice = state.add_notice.as_deref().expect("outcome warning");
-        assert!(notice.contains("unknown") && notice.contains("No retry") || notice.contains("no retry"));
+        let notice = state
+            .add_notice
+            .as_ref()
+            .map(|notice| notice.message.as_str())
+            .expect("outcome warning");
+        assert!(notice.contains("unknown") && (notice.contains("No retry") || notice.contains("no retry")));
         assert!(state.refresh_inventory && state.add.confirmation.is_none());
         state.add_action(Action::Confirm, &client, &ctx);
         assert!(!state.is_pending());
@@ -332,7 +343,8 @@ fn application_refreshes_saved_inventory_after_save_without_changing_the_board()
         app.remote_environments
             .reopen
             .add_notice
-            .as_deref()
+            .as_ref()
+            .map(|notice| notice.message.as_str())
             .is_some_and(|text| text.contains("saved"))
     );
 }
@@ -362,7 +374,7 @@ fn preview_renders_exact_literal_intent_and_enter_does_not_save_or_poll() {
         }
         let mut action = InventoryAction::None;
         let output = ctx
-            .run_ui(input, |ui| state.show_add(ui, true, &mut action))
+            .run_ui(input, |ui| state.show_add(ui, true, &scope.expected, &mut action))
             .discard_textures();
         assert!(matches!(action, InventoryAction::None));
         text = output
@@ -405,4 +417,102 @@ fn concurrent_inventory_load_cannot_consume_the_post_save_refresh() {
     assert!(app.remote_environments.pending.is_some());
     app.remote_reopen_action(InventoryAction::None, &ctx);
     assert!(app.remote_environments.refresh_when_idle);
+}
+
+#[test]
+fn save_notices_survive_matching_inventory_refresh_but_not_context_invalidation() {
+    let (_temp, app, _store, scope) = fixture();
+    let client = client(app.session_store.home(), &scope);
+    let ctx = Context::default();
+    for change in 0..4 {
+        let mut state = ReopenState {
+            add_notice: Some(Notice {
+                scope: Scope {
+                    request: scope.clone(),
+                    home: client.home.clone(),
+                },
+                message: "Independent Shell panel saved.".into(),
+            }),
+            ..Default::default()
+        };
+        state.invalidate_for_inventory();
+        assert!(state.add_notice.is_some());
+        state.invalidate_add_notice(&client, &ctx);
+        assert!(state.add_notice.is_some());
+        let mut changed = scope.clone();
+        match change {
+            0 => changed.owner = "foreign".into(),
+            1 => changed.expected.workspace_local_id = "different".into(),
+            2 => changed.expected.generation += 1,
+            _ => changed
+                .config
+                .local_docker
+                .push(horizon_core::cloud_run::local_docker::LocalDockerProfile {
+                    name: "different".into(),
+                    docker_host: "unix:///unused".into(),
+                }),
+        }
+        state.invalidate_add_notice(&super::tests::client(client.home, &changed), &ctx);
+        assert!(state.add_notice.is_none());
+    }
+    let mut state = ReopenState {
+        add_notice: Some(Notice {
+            scope: Scope {
+                request: scope.clone(),
+                home: client.home.clone(),
+            },
+            message: "saved".into(),
+        }),
+        ..Default::default()
+    };
+    state.invalidate();
+    assert!(state.add_notice.is_none());
+}
+
+#[test]
+fn add_scope_errors_name_the_requested_action_and_keep_the_cause_distinct() {
+    let (_temp, app, _store, scope) = fixture();
+    let base = client(app.session_store.home(), &scope);
+    for (owner, selected, expected) in [
+        (None, Some(&scope.expected), "Open the owning persistent session"),
+        (Some("foreign"), Some(&scope.expected), "belongs to another session"),
+        (Some(scope.owner.as_str()), None, "Select a saved environment"),
+    ] {
+        let mut state = ReopenState::default();
+        state.add_action(
+            Action::Open,
+            &ClientContext {
+                selected,
+                owner,
+                ..base
+            },
+            &Context::default(),
+        );
+        let message = state.notice.as_deref().expect("failure");
+        assert!(message.contains(expected) && message.contains("adding a Shell panel"));
+        assert!(!message.contains("reopening"));
+    }
+}
+
+#[test]
+fn save_failure_guidance_is_added_once_even_for_a_punctuated_cause() {
+    let (_temp, app, _store, scope) = fixture();
+    let pending = PendingAdd {
+        scope: Scope {
+            request: scope,
+            home: app.session_store.home().clone(),
+        },
+        saving: true,
+    };
+    for cause in [
+        "The Shell save outcome is unknown",
+        "The saved environment could not be safely opened for update.",
+    ] {
+        let mut state = ReopenState::default();
+        state.accept_add(&pending, Err(cause.into()));
+        let message = &state.add_notice.as_ref().expect("failure").message;
+        assert_eq!(message.matches("Refresh saved panels").count(), 1);
+        assert_eq!(message.matches("No retry was scheduled").count(), 1);
+        assert!(!message.contains(".."));
+    }
 }
