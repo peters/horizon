@@ -144,7 +144,7 @@ REDACTED_PATTERNS = (
     re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{8,255}"),
 )
 URI_USERINFO = re.compile(
-    r"(?i)([a-z][a-z0-9+.-]{0,32}://)[^/@\s]{1,256}(?::[^/@\s]{1,256})?@"
+    r"(?i)([a-z][a-z0-9+.-]{0,32}://)[^/@\s]{1,65536}(?::[^/@\s]{1,65536})?@"
 )
 
 # Precomputed read-only facts that cannot be proven from host metadata alone.

@@ -1285,6 +1285,16 @@ class RedactionAndDeterminism(Harness):
         self.assertNotIn("ghp_abcdefghijklmnop123", text)
         self.assertIn("<redacted>", text)
 
+    def test_overlong_uri_userinfo_is_redacted(self):
+        secret = "s" * 300
+        fixture = dict(DEFAULT_FIXTURE)
+        with mock.patch.dict(os.environ, {
+                "DOCKER_HOST": "tcp://user:%s@remote:2376" % secret}):
+            _, report, _ = self.run_main(fixture)
+        text = json.dumps(report)
+        self.assertNotIn(secret, text)
+        self.assertIn("<redacted>", text)
+
     def test_username_only_uri_userinfo_is_redacted(self):
         fixture = dict(DEFAULT_FIXTURE)
         with mock.patch.dict(os.environ, {"DOCKER_HOST": "tcp://supersecret@remote:2376"}):
