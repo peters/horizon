@@ -18,6 +18,7 @@ const ASSETS: &[&str] = &[
     "plugins/claude-code/skills/horizon-notify/SKILL.md",
     "plugins/codex/skills/horizon-browser/SKILL.md",
     "plugins/codex/skills/horizon-notify/SKILL.md",
+    "plugins/codex/skills/horizon-offload/SKILL.md",
 ];
 
 fn main() -> io::Result<()> {
