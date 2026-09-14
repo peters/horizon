@@ -8,7 +8,8 @@ use crate::session::BrowserSessionConfig;
 use crate::{BackendKind, BrowserConfig};
 
 use super::super::http::HttpError;
-use super::super::service::{WebDriverService, prepare_profile};
+use super::super::service::prepare_profile;
+use super::super::transport::ClassicTransport;
 use super::{PAGE_LOAD_TIMEOUT_MILLIS, safari};
 
 pub(super) struct NewSession {
@@ -17,30 +18,27 @@ pub(super) struct NewSession {
 }
 
 pub(super) fn initial_safari_input(
-    service: &WebDriverService,
+    transport: &dyn ClassicTransport,
     session_id: &str,
     backend: BackendKind,
 ) -> Result<Option<safari::InputState>, String> {
     if backend != BackendKind::SafariWebDriver {
         return Ok(None);
     }
-    let response = service
-        .http
+    let response = transport
         .get(&format!("/session/{session_id}/window"))
         .map_err(|error| format!("failed to read Safari window handle: {error}"))?;
     safari::InputState::from_window_response(&response).map(Some)
 }
 
 pub(super) fn create_webdriver_session(
-    service: &WebDriverService,
+    transport: &dyn ClassicTransport,
     config: &BrowserSessionConfig,
     request_bidi: bool,
 ) -> Result<Value, HttpError> {
     let capabilities = new_session_capabilities(&config.browser, &config.panel_local_id, request_bidi)
         .map_err(|error| HttpError::InvalidResponse(format!("invalid session capabilities: {error}")))?;
-    service
-        .http
-        .post("/session", &json!({ "capabilities": { "alwaysMatch": capabilities } }))
+    transport.post("/session", &json!({ "capabilities": { "alwaysMatch": capabilities } }))
 }
 
 pub(super) fn new_session_capabilities(

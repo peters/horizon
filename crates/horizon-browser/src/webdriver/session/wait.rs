@@ -53,7 +53,7 @@ impl Driver {
         // uncommitted navigation must not let it succeed against the old page.
         let result = run_while_backend_available(
             self,
-            |driver| driver.service.process.child_status().is_some(),
+            |driver| driver.host.has_exited(),
             |driver| driver.advance_wait(&mut pending, now, true),
         );
         let result = match result {
@@ -80,7 +80,7 @@ impl Driver {
         let observe = pending.poll_due(now);
         let result = run_while_backend_available(
             self,
-            |driver| driver.service.process.child_status().is_some(),
+            |driver| driver.host.has_exited(),
             |driver| driver.advance_wait(&mut pending, now, observe),
         );
         let result = match result {

@@ -15,20 +15,20 @@ use crate::{
     BrowserInput, BrowserModifiers, BrowserSnapshot,
 };
 
-use super::super::service::WebDriverService;
+use super::super::transport::ClassicTransport;
 use super::{Driver, create_webdriver_session, webdriver_value};
 
 pub(super) fn create_webdriver_session_response(
-    service: &WebDriverService,
+    transport: &dyn ClassicTransport,
     config: &BrowserSessionConfig,
 ) -> Result<Value, String> {
-    match create_webdriver_session(service, config, true) {
+    match create_webdriver_session(transport, config, true) {
         Ok(response) => Ok(response),
         Err(error)
             if config.browser.backend == BackendKind::SafariWebDriver
                 && error.is_unsupported_websocket_capability() =>
         {
-            create_webdriver_session(service, config, false)
+            create_webdriver_session(transport, config, false)
                 .map_err(|error| format!("failed to create classic Safari WebDriver session: {error}"))
         }
         Err(error) => Err(format!("failed to create WebDriver session: {error}")),

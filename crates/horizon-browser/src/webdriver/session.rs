@@ -14,6 +14,7 @@ use crate::websocket::JsonWsLink;
 use crate::{AutomationDisclosurePolicy, BackendKind};
 
 use super::actions::ActionState;
+use super::host::DriverHost;
 use super::service::WebDriverService;
 
 mod bidi;
@@ -48,7 +49,7 @@ const MAX_COMMAND_BURST: usize = 4;
 
 struct Driver {
     config: BrowserSessionConfig,
-    service: WebDriverService,
+    host: DriverHost,
     session_id: String,
     bidi: Option<JsonWsLink>,
     automation_ws: String,
@@ -218,10 +219,10 @@ impl Driver {
         stop_requested: &AtomicBool,
         frame_slot: &Arc<FrameSlot>,
     ) -> Result<Self, String> {
-        let service = WebDriverService::start(&config.browser, process_control, || {
+        let host = DriverHost::Local(WebDriverService::start(&config.browser, process_control, || {
             stop_requested.load(Ordering::Acquire)
-        })?;
-        let response = semantic::create_webdriver_session_response(&service, config)?;
+        })?);
+        let response = semantic::create_webdriver_session_response(host.transport(), config)?;
         let NewSession {
             id: session_id,
             capabilities,
@@ -239,12 +240,12 @@ impl Driver {
             None => None,
         };
         if config.browser.backend == BackendKind::FirefoxBidi && bidi.is_none() {
-            service.delete_session(&session_id);
+            host.delete_session(&session_id);
             return Err("Firefox did not return the required WebDriver BiDi webSocketUrl".to_string());
         }
         let mut context_id = bidi.as_mut().and_then(discover_context);
         if config.browser.backend == BackendKind::FirefoxBidi && context_id.is_none() {
-            service.delete_session(&session_id);
+            host.delete_session(&session_id);
             return Err("Firefox BiDi returned no top-level browsing context".to_string());
         }
         if config.browser.backend == BackendKind::FirefoxBidi
@@ -252,7 +253,7 @@ impl Driver {
             && let Some(link) = bidi.as_mut()
             && let Err(error) = install_common_signal_preload(link)
         {
-            service.delete_session(&session_id);
+            host.delete_session(&session_id);
             return Err(format!(
                 "Firefox could not install pre-document automation disclosure minimization: {error}"
             ));
@@ -261,17 +262,17 @@ impl Driver {
             && let Err(error) = subscribe(link, config.browser.backend, context_id.as_deref())
         {
             if config.browser.backend == BackendKind::FirefoxBidi {
-                service.delete_session(&session_id);
+                host.delete_session(&session_id);
                 return Err(format!("Firefox BiDi event subscription failed: {error}"));
             }
             bidi = None;
             context_id = None;
         }
         let automation_ws = bidi.as_ref().and(ws_url).unwrap_or_default().to_string();
-        let safari = initial_safari_input(&service, &session_id, config.browser.backend)?;
+        let safari = initial_safari_input(host.transport(), &session_id, config.browser.backend)?;
         Ok(Self {
             config: config.clone(),
-            service,
+            host,
             session_id,
             bidi,
             automation_ws,

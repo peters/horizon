@@ -545,15 +545,15 @@ impl Driver {
     }
 
     pub(super) fn classic_get(&self, suffix: &str) -> Result<Value, String> {
-        self.service
-            .http
+        self.host
+            .transport()
             .get(&self.session_path(suffix))
             .map_err(|error| error.to_string())
     }
 
     pub(super) fn classic_post(&self, suffix: &str, body: &Value) -> Result<Value, String> {
-        self.service
-            .http
+        self.host
+            .transport()
             .post(&self.session_path(suffix), body)
             .map_err(|error| error.to_string())
     }
@@ -573,15 +573,15 @@ impl Driver {
         body: &serde_json::Value,
         read_timeout: Duration,
     ) -> Result<serde_json::Value, String> {
-        self.service
-            .http
+        self.host
+            .transport()
             .post_with_read_timeout(&self.session_path(suffix), body, read_timeout)
             .map_err(|error| error.to_string())
     }
 
     fn classic_get_within(&self, suffix: &str, read_timeout: Duration) -> Result<serde_json::Value, String> {
-        self.service
-            .http
+        self.host
+            .transport()
             .get_with_read_timeout(&self.session_path(suffix), read_timeout)
             .map_err(|error| error.to_string())
     }
