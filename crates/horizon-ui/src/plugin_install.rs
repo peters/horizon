@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::fs::{OpenOptions, TryLockError};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -50,26 +51,35 @@ const BROWSER_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
     )),
 }];
 
-/// `$HOME`-relative skill roots that receive `horizon-notify`. This is the
-/// title/notify skill every built-in agent needs. Claude also gets it through
-/// the host plugin tree.
+const HORIZON_NOTIFY_SKILL: &str = "horizon-notify";
+const HORIZON_BROWSER_SKILL: &str = "horizon-browser";
+
+/// `$HOME`-relative skill roots that receive `horizon-notify` for the life of
+/// this Horizon process. Claude also gets it through the host plugin tree.
+/// Shared `~/.agents/skills` is not a broadcast target: each agent gets its
+/// private home so the skill is not visible to CLIs that never receive Horizon MCP.
 const NOTIFY_SKILL_ROOTS: &[&[&str]] = &[
-    &[".agents", "skills"],
     &[".claude", "skills"],
     &[".config", "opencode", "skills"],
-    &[".gemini", "skills"],
+    &[".gemini", "antigravity-cli", "skills"],
     &[".kilocode", "skills"],
     &[".pi", "agent", "skills"],
 ];
 
-/// Browser MCP skill stays on the agents that already had Horizon browser
-/// integration. Expanding it to Grok/Gemini/Pi/OpenCode is separate work.
-const BROWSER_SKILL_ROOTS: &[&[&str]] = &[&[".agents", "skills"], &[".kilocode", "skills"]];
+/// Leftover Horizon-owned notify dirs from older installers. Removed on start
+/// and when the last Horizon host exits.
+const ABANDONED_NOTIFY_SKILL_ROOTS: &[&[&str]] = &[&[".agents", "skills"], &[".gemini", "skills"]];
+
+/// Leftover Horizon-owned browser dirs from older installers that taught MCP
+/// workflows to agents this process does not wire to the browser server.
+const ABANDONED_BROWSER_SKILL_ROOTS: &[&[&str]] =
+    &[&[".agents", "skills"], &[".gemini", "skills"], &[".kilocode", "skills"]];
 
 pub(crate) struct AgentPluginHostLease {
     host_dir: PathBuf,
     lock_path: PathBuf,
     lock_file: Option<std::fs::File>,
+    user_skill_dirs: Vec<PathBuf>,
 }
 
 impl AgentPluginHostLease {
@@ -102,7 +112,41 @@ impl AgentPluginHostLease {
             host_dir: instance_dir,
             lock_path,
             lock_file: Some(lock_file),
+            user_skill_dirs: Vec::new(),
         })
+    }
+
+    fn release_user_skills_if_last_host(&self) {
+        if self.user_skill_dirs.is_empty() {
+            return;
+        }
+        let Some(plugin_root) = self.host_dir.parent() else {
+            return;
+        };
+        let lock_file = match open_lock_file(&plugin_root.join(".user-skills.lock")) {
+            Ok(lock_file) => lock_file,
+            Err(error) => {
+                tracing::warn!(%error, "failed to open user-skill cleanup lock");
+                return;
+            }
+        };
+        match lock_file.try_lock() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => return,
+            Err(TryLockError::Error(error)) => {
+                tracing::warn!(%error, "failed to lock user-skill cleanup");
+                return;
+            }
+        }
+        match another_agent_plugin_host_is_live(plugin_root, &self.lock_path) {
+            Ok(true) => {}
+            Ok(false) => {
+                for dir in &self.user_skill_dirs {
+                    remove_horizon_skill_dir(dir);
+                }
+            }
+            Err(error) => tracing::warn!(%error, "failed to inspect agent plugin hosts for skill cleanup"),
+        }
     }
 }
 
@@ -119,6 +163,7 @@ impl Drop for AgentPluginHostLease {
         {
             tracing::warn!(path = %self.lock_path.display(), %error, "failed to remove agent plugin host lock");
         }
+        self.release_user_skills_if_last_host();
     }
 }
 
@@ -129,13 +174,19 @@ pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) -> Option<AgentP
     let mcp_command = browser_mcp_executable().unwrap_or_else(|| PathBuf::from("horizon"));
     let host_dir = horizon_home.agent_plugin_host_dir(manifest::host_instance());
     let claude_plugin_dir = horizon_home.claude_plugin_dir_for_host(manifest::host_instance());
-    let lease = match AgentPluginHostLease::acquire(host_dir.clone()) {
+    let mut lease = match AgentPluginHostLease::acquire(host_dir.clone()) {
         Ok(lease) => lease,
         Err(error) => {
             tracing::warn!(%error, "failed to acquire agent plugin host lease");
             return None;
         }
     };
+    lease.user_skill_dirs = user_skill_cleanup_dirs(user_home.as_deref(), grok_home.as_deref(), codex_home.as_deref());
+    if let Some(home) = user_home.as_deref() {
+        for dir in abandoned_user_skill_dirs(home) {
+            remove_horizon_skill_dir(&dir);
+        }
+    }
 
     match install_agent_plugins_impl(
         horizon_home,
@@ -233,6 +284,33 @@ fn prune_stale_agent_plugin_hosts(current_instance_dir: &Path) -> std::io::Resul
     Ok(pruned_hosts)
 }
 
+fn another_agent_plugin_host_is_live(plugin_root: &Path, current_lock_path: &Path) -> std::io::Result<bool> {
+    for entry in std::fs::read_dir(plugin_root)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path == current_lock_path || !is_host_lock_file(entry.file_name().as_os_str()) {
+            continue;
+        }
+        let host_lock = open_lock_file(&path)?;
+        match host_lock.try_lock() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => return Ok(true),
+            Err(TryLockError::Error(error)) => return Err(error),
+        }
+    }
+    Ok(false)
+}
+
+fn is_host_lock_file(name: &OsStr) -> bool {
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    !name.starts_with('.')
+        && Path::new(name)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("lock"))
+}
+
 fn install_agent_plugins_impl(
     horizon_home: &HorizonHome,
     claude_plugin_dir: &Path,
@@ -253,26 +331,92 @@ fn install_agent_plugins_impl(
 
     if let Some(home) = user_home {
         for skill_root in NOTIFY_SKILL_ROOTS {
-            updated_files +=
-                sync_plugin_files(&user_skill_dir(home, skill_root, "horizon-notify"), NOTIFY_SKILL_FILES)?;
-        }
-        for skill_root in BROWSER_SKILL_ROOTS {
             updated_files += sync_plugin_files(
-                &user_skill_dir(home, skill_root, "horizon-browser"),
-                BROWSER_SKILL_FILES,
+                &user_skill_dir(home, skill_root, HORIZON_NOTIFY_SKILL),
+                NOTIFY_SKILL_FILES,
             )?;
         }
     }
 
     if let Some(grok_root) = provider_home(grok_home, user_home, ".grok") {
-        updated_files += sync_plugin_files(&grok_root.join("skills").join("horizon-notify"), NOTIFY_SKILL_FILES)?;
+        updated_files += sync_plugin_files(&grok_root.join("skills").join(HORIZON_NOTIFY_SKILL), NOTIFY_SKILL_FILES)?;
     }
     if let Some(codex_root) = provider_home(codex_home, user_home, ".codex") {
-        updated_files += sync_plugin_files(&codex_root.join("skills").join("horizon-notify"), NOTIFY_SKILL_FILES)?;
-        updated_files += sync_plugin_files(&codex_root.join("skills").join("horizon-browser"), BROWSER_SKILL_FILES)?;
+        updated_files += sync_plugin_files(
+            &codex_root.join("skills").join(HORIZON_NOTIFY_SKILL),
+            NOTIFY_SKILL_FILES,
+        )?;
+        updated_files += sync_plugin_files(
+            &codex_root.join("skills").join(HORIZON_BROWSER_SKILL),
+            BROWSER_SKILL_FILES,
+        )?;
     }
 
     Ok(updated_files)
+}
+
+fn user_skill_cleanup_dirs(
+    user_home: Option<&Path>,
+    grok_home: Option<&Path>,
+    codex_home: Option<&Path>,
+) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(home) = user_home {
+        for skill_root in NOTIFY_SKILL_ROOTS {
+            dirs.push(user_skill_dir(home, skill_root, HORIZON_NOTIFY_SKILL));
+        }
+        dirs.extend(abandoned_user_skill_dirs(home));
+    }
+    if let Some(grok_root) = provider_home(grok_home, user_home, ".grok") {
+        dirs.push(grok_root.join("skills").join(HORIZON_NOTIFY_SKILL));
+    }
+    if let Some(codex_root) = provider_home(codex_home, user_home, ".codex") {
+        dirs.push(codex_root.join("skills").join(HORIZON_NOTIFY_SKILL));
+        dirs.push(codex_root.join("skills").join(HORIZON_BROWSER_SKILL));
+    }
+    dirs
+}
+
+fn abandoned_user_skill_dirs(home: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    for skill_root in ABANDONED_NOTIFY_SKILL_ROOTS {
+        dirs.push(user_skill_dir(home, skill_root, HORIZON_NOTIFY_SKILL));
+    }
+    for skill_root in ABANDONED_BROWSER_SKILL_ROOTS {
+        dirs.push(user_skill_dir(home, skill_root, HORIZON_BROWSER_SKILL));
+    }
+    dirs
+}
+
+fn is_horizon_skill_dir_name(name: &OsStr) -> bool {
+    name == HORIZON_NOTIFY_SKILL || name == HORIZON_BROWSER_SKILL
+}
+
+fn remove_horizon_skill_dir(path: &Path) {
+    let Some(name) = path.file_name() else {
+        return;
+    };
+    if !is_horizon_skill_dir_name(name) {
+        return;
+    }
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            tracing::warn!(path = %path.display(), %error, "failed to inspect Horizon skill directory");
+            return;
+        }
+    };
+    let result = if metadata.is_dir() {
+        std::fs::remove_dir_all(path)
+    } else {
+        std::fs::remove_file(path)
+    };
+    if let Err(error) = result
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(path = %path.display(), %error, "failed to remove Horizon skill directory");
+    }
 }
 
 fn provider_home(override_home: Option<&Path>, user_home: Option<&Path>, default_dir: &str) -> Option<PathBuf> {
@@ -341,10 +485,32 @@ mod tests {
     use horizon_core::HorizonHome;
 
     use super::{
-        AgentPluginHostLease, BROWSER_SKILL_FILES, BROWSER_SKILL_ROOTS, CLAUDE_PLUGIN_FILES, EmbeddedFile,
-        NOTIFY_SKILL_FILES, NOTIFY_SKILL_ROOTS, agent_plugin_host_lock_path, install_agent_plugins_impl,
-        open_lock_file, prune_stale_agent_plugin_hosts, sync_file_if_changed, sync_plugin_files, user_skill_dir,
+        AgentPluginHostLease, BROWSER_SKILL_FILES, CLAUDE_PLUGIN_FILES, EmbeddedFile, HORIZON_BROWSER_SKILL,
+        HORIZON_NOTIFY_SKILL, NOTIFY_SKILL_FILES, NOTIFY_SKILL_ROOTS, abandoned_user_skill_dirs,
+        agent_plugin_host_lock_path, install_agent_plugins_impl, open_lock_file, prune_stale_agent_plugin_hosts,
+        sync_file_if_changed, sync_plugin_files, user_skill_cleanup_dirs, user_skill_dir,
     };
+
+    fn write_skill_dir(path: &Path, body: &str) {
+        std::fs::create_dir_all(path).expect("skill dir");
+        std::fs::write(path.join("SKILL.md"), body).expect("skill file");
+    }
+
+    #[test]
+    fn user_skill_cleanup_dirs_cover_private_homes_and_abandoned_broadcasts() {
+        let home = Path::new("/tmp/horizon-user");
+        let dirs = user_skill_cleanup_dirs(Some(home), None, None);
+
+        assert!(dirs.contains(&home.join(".claude/skills/horizon-notify")));
+        assert!(dirs.contains(&home.join(".gemini/antigravity-cli/skills/horizon-notify")));
+        assert!(dirs.contains(&home.join(".codex/skills/horizon-notify")));
+        assert!(dirs.contains(&home.join(".codex/skills/horizon-browser")));
+        assert!(dirs.contains(&home.join(".agents/skills/horizon-notify")));
+        assert!(dirs.contains(&home.join(".agents/skills/horizon-browser")));
+        assert!(dirs.contains(&home.join(".gemini/skills/horizon-notify")));
+        assert!(dirs.contains(&home.join(".kilocode/skills/horizon-browser")));
+        assert!(!dirs.contains(&home.join(".grok/skills/horizon-browser")));
+    }
 
     #[test]
     fn sync_file_if_changed_writes_missing_file() {
@@ -408,21 +574,18 @@ mod tests {
 
         assert!(updated > 0);
         for skill_root in NOTIFY_SKILL_ROOTS {
-            let notify_path = user_skill_dir(&user_home, skill_root, "horizon-notify").join("SKILL.md");
+            let notify_path = user_skill_dir(&user_home, skill_root, HORIZON_NOTIFY_SKILL).join("SKILL.md");
             assert_eq!(
                 std::fs::read_to_string(&notify_path)
                     .unwrap_or_else(|_| panic!("notify skill missing at {}", notify_path.display())),
                 NOTIFY_SKILL_FILES[0].content,
             );
         }
-        for skill_root in BROWSER_SKILL_ROOTS {
-            let browser_path = user_skill_dir(&user_home, skill_root, "horizon-browser").join("SKILL.md");
-            assert_eq!(
-                std::fs::read_to_string(&browser_path)
-                    .unwrap_or_else(|_| panic!("browser skill missing at {}", browser_path.display())),
-                BROWSER_SKILL_FILES[0].content,
-            );
-        }
+        assert_eq!(
+            std::fs::read_to_string(user_home.join(".gemini/antigravity-cli/skills/horizon-notify/SKILL.md"))
+                .expect("antigravity notify skill"),
+            NOTIFY_SKILL_FILES[0].content,
+        );
         assert_eq!(
             std::fs::read_to_string(user_home.join(".grok/skills/horizon-notify/SKILL.md"))
                 .expect("grok skill should fall back to ~/.grok"),
@@ -437,6 +600,22 @@ mod tests {
             std::fs::read_to_string(user_home.join(".codex/skills/horizon-browser/SKILL.md"))
                 .expect("codex browser skill should fall back to ~/.codex"),
             BROWSER_SKILL_FILES[0].content,
+        );
+        assert!(
+            !user_home.join(".agents/skills/horizon-notify/SKILL.md").exists(),
+            "notify skill must not broadcast through ~/.agents/skills"
+        );
+        assert!(
+            !user_home.join(".agents/skills/horizon-browser/SKILL.md").exists(),
+            "browser MCP skill must not broadcast through ~/.agents/skills"
+        );
+        assert!(
+            !user_home.join(".gemini/skills/horizon-notify/SKILL.md").exists(),
+            "notify skill must use the Antigravity CLI home, not the Gemini CLI home"
+        );
+        assert!(
+            !user_home.join(".kilocode/skills/horizon-browser/SKILL.md").exists(),
+            "browser MCP skill must not be exported to agents without Horizon MCP injection"
         );
         assert!(
             !user_home.join(".grok/skills/horizon-browser/SKILL.md").exists(),
@@ -462,6 +641,40 @@ mod tests {
             .expect("Claude MCP config should be installed");
         assert!(mcp_config.contains("/opt/horizon"));
         assert!(mcp_config.contains("--browser-mcp"));
+    }
+
+    #[test]
+    fn install_agent_plugins_removes_abandoned_broadcast_skills() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let horizon_home = HorizonHome::from_root(temp.path().join(".horizon"));
+        let user_home = temp.path().join("user-home");
+        let claude_plugin_dir = horizon_home.claude_plugin_dir_for_host("host-a");
+        for dir in abandoned_user_skill_dirs(&user_home) {
+            write_skill_dir(&dir, "stale");
+        }
+
+        for dir in abandoned_user_skill_dirs(&user_home) {
+            super::remove_horizon_skill_dir(&dir);
+        }
+        install_agent_plugins_impl(
+            &horizon_home,
+            &claude_plugin_dir,
+            Some(&user_home),
+            None,
+            None,
+            Path::new("/opt/horizon"),
+        )
+        .expect("install plugins");
+
+        for dir in abandoned_user_skill_dirs(&user_home) {
+            assert!(!dir.exists(), "abandoned skill should be removed: {}", dir.display());
+        }
+        assert!(
+            user_home
+                .join(".gemini/antigravity-cli/skills/horizon-notify/SKILL.md")
+                .is_file()
+        );
+        assert!(user_home.join(".kilocode/skills/horizon-notify/SKILL.md").is_file());
     }
 
     #[test]
@@ -542,6 +755,45 @@ mod tests {
 
         assert!(!host_dir.exists());
         assert!(!lock_path.exists());
+    }
+
+    #[test]
+    fn last_agent_plugin_host_lease_removes_user_skills() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let horizon_home = HorizonHome::from_root(temp.path().join(".horizon"));
+        let skill_dir = temp.path().join("user-home/.codex/skills").join(HORIZON_NOTIFY_SKILL);
+        write_skill_dir(&skill_dir, "leased");
+        let unrelated = temp.path().join("user-home/.codex/skills/custom-skill");
+        write_skill_dir(&unrelated, "keep");
+
+        let host_dir = horizon_home.agent_plugin_host_dir("host-a");
+        let mut lease = AgentPluginHostLease::acquire(host_dir).expect("host lease");
+        lease.user_skill_dirs = vec![skill_dir.clone()];
+        drop(lease);
+
+        assert!(!skill_dir.exists());
+        assert!(unrelated.join("SKILL.md").is_file());
+    }
+
+    #[test]
+    fn agent_plugin_host_lease_keeps_user_skills_while_another_host_is_live() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let horizon_home = HorizonHome::from_root(temp.path().join(".horizon"));
+        let skill_dir = temp.path().join("user-home/.codex/skills").join(HORIZON_BROWSER_SKILL);
+        write_skill_dir(&skill_dir, "shared");
+
+        let first_dir = horizon_home.agent_plugin_host_dir("host-a");
+        let second_dir = horizon_home.agent_plugin_host_dir("host-b");
+        let mut first = AgentPluginHostLease::acquire(first_dir).expect("first lease");
+        let mut second = AgentPluginHostLease::acquire(second_dir).expect("second lease");
+        first.user_skill_dirs = vec![skill_dir.clone()];
+        second.user_skill_dirs = vec![skill_dir.clone()];
+
+        drop(first);
+        assert!(skill_dir.join("SKILL.md").is_file());
+
+        drop(second);
+        assert!(!skill_dir.exists());
     }
 
     #[test]
