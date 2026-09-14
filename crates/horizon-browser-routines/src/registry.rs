@@ -22,6 +22,11 @@ pub struct RoutineLock {
 }
 
 impl RoutineRegistry {
+    #[must_use]
+    pub(crate) fn directory(&self) -> &Path {
+        &self.root
+    }
+
     /// # Errors
     /// Returns [`RoutineError::Storage`] when the root cannot be created privately.
     pub fn open(root: PathBuf) -> Result<Self, RoutineError> {
@@ -154,7 +159,7 @@ impl RoutineRegistry {
     }
 }
 
-fn create_private_dir(path: &Path) -> Result<(), RoutineError> {
+pub(crate) fn create_private_dir(path: &Path) -> Result<(), RoutineError> {
     if let Some(parent) = path.parent() {
         validate_existing_ancestors(parent)?;
     }
@@ -223,7 +228,7 @@ fn validate_existing_ancestors(path: &Path) -> Result<(), RoutineError> {
     Ok(())
 }
 
-fn write_private(path: &Path, bytes: &[u8]) -> Result<(), RoutineError> {
+pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> Result<(), RoutineError> {
     let mut options = fs::OpenOptions::new();
     options.create(true).truncate(true).write(true);
     #[cfg(unix)]

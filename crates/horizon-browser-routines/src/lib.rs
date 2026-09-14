@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 //! Backend-neutral Teach-mode recording protocol, draft-plan compiler,
-//! routine registry, and credential-broker interface.
+//! Teach session, routine registry, and credential-broker interface.
 //!
 //! This crate has no browser process, MCP server, UI, or durable-runner
 //! dependency. See `docs/architecture/browser-routines.md`.
@@ -12,6 +12,7 @@ mod credential;
 mod definition;
 mod fingerprint;
 mod origin;
+mod record;
 mod recording;
 mod registry;
 mod value;
@@ -26,6 +27,7 @@ pub use fingerprint::{
     FrameContext, FrameLink, RankedCandidate, TargetCandidate, TargetFingerprint, UniquenessEvidence,
 };
 pub use origin::Origin;
+pub use record::TeachSession;
 pub use recording::{
     MutationClass, NavigationTemplate, PathSegment, PauseReason, QueryComponent, RecordedAction, RecordedKind,
     SemanticRecording,
@@ -113,6 +115,9 @@ pub enum RoutineError {
     /// Private routine storage could not be created or updated.
     #[error("routine storage failed")]
     Storage,
+    /// Teach recording is paused, discarded, or already stopped.
+    #[error("teach session is paused or discarded")]
+    TeachInactive,
 }
 
 #[cfg(test)]
