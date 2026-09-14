@@ -271,7 +271,7 @@ pub(crate) struct VisibilityOutput {
 pub(crate) struct CloseInput {
     /// Stable panel id returned by `browser_list` or `browser_create`.
     pub(crate) panel_id: String,
-    /// Host coordination timeout in milliseconds (1-60000, default 15000).
+    /// How long to wait for the session teardown to complete, in milliseconds (1-60000, default 15000). A remote device release can take up to about 35 s.
     pub(crate) timeout_millis: Option<u64>,
 }
 
@@ -279,8 +279,8 @@ pub(crate) struct CloseInput {
 pub(crate) struct CloseOutput {
     pub(crate) action_id: String,
     pub(crate) panel_id: String,
-    /// The panel is gone from Horizon and its session teardown has begun;
-    /// a remote device allocation is released by that teardown.
+    /// The panel is gone from Horizon and its session teardown has
+    /// completed, so a remote device allocation has been released.
     pub(crate) closed: bool,
 }
 

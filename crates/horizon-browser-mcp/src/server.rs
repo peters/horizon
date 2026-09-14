@@ -111,7 +111,7 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_close",
-        description = "Close a browser panel you own in your workspace and stop its session. Use it when the user is done with the panel or when a remote device session must be released now; the panel disappears from browser_list and a remote allocation is released by the teardown. Read anything you still need from browser_audit first: the journal file is retained on disk, but browser_audit answers only for a live panel. It is not a way to hide a panel (use browser_visibility) and cannot close panels outside the calling agent's workspace."
+        description = "Close a browser panel you own in your workspace and stop its session. Use it when the user is done with the panel or when a remote device session must be released now; the call returns once the session teardown has completed, so the panel is gone from browser_list and a remote allocation has been released (a remote release can take up to about 35 s; a teardown_timeout error means the panel is closed but teardown was still running when timeout_millis elapsed). Read anything you still need from browser_audit first: the journal file is retained on disk, but browser_audit answers only for a live panel. It is not a way to hide a panel (use browser_visibility) and cannot close panels outside the calling agent's workspace."
     )]
     async fn browser_close(&self, Parameters(input): Parameters<CloseInput>) -> Result<Json<CloseOutput>, String> {
         let receipt = self

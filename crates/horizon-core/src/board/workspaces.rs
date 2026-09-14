@@ -183,6 +183,24 @@ impl Board {
     }
 
     pub fn close_panel(&mut self, id: PanelId) {
+        if let Some(signal) = self.close_panel_returning_teardown(id) {
+            self.retired_browser_shutdown_signals.push(signal);
+        }
+    }
+
+    /// Keep waiting on a browser teardown the caller stopped observing, so
+    /// application exit still joins it.
+    pub fn retire_browser_shutdown_signal(&mut self, signal: crate::browser::BrowserShutdownSignal) {
+        self.retired_browser_shutdown_signals.push(signal);
+    }
+
+    /// Close a panel and hand back its browser teardown signal instead of
+    /// retiring it, for callers that must report when the session is really
+    /// gone. `None` for panels without a browser. The caller polls the
+    /// signal and retires it through [`Self::retire_browser_shutdown_signal`]
+    /// once it stops observing.
+    #[must_use]
+    pub fn close_panel_returning_teardown(&mut self, id: PanelId) -> Option<crate::browser::BrowserShutdownSignal> {
         let removed_panel = self
             .panels
             .iter()
@@ -225,13 +243,14 @@ impl Board {
         // down the PTY while the `Terminal::Drop` impl detaches the thread.
         // This avoids blocking the UI thread — the child process is cleaned
         // up asynchronously in the background.
-        if let Some(mut panel) = removed_panel {
-            if let Some(browser) = panel.browser_mut() {
-                self.retired_browser_shutdown_signals.push(browser.close_permanently());
-            } else if panel.kind.is_agent() {
-                panel.request_shutdown();
-            }
+        let mut panel = removed_panel?;
+        if let Some(browser) = panel.browser_mut() {
+            return Some(browser.close_permanently());
         }
+        if panel.kind.is_agent() {
+            panel.request_shutdown();
+        }
+        None
     }
 
     pub fn close_panels_in_workspace(&mut self, workspace_id: WorkspaceId) -> Vec<PanelId> {

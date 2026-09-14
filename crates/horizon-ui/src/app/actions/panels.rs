@@ -63,11 +63,24 @@ impl HorizonApp {
     }
 
     pub(in crate::app) fn close_panel(&mut self, panel_id: PanelId) {
+        if let Some(signal) = self.close_panel_returning_teardown(panel_id) {
+            self.board.retire_browser_shutdown_signal(signal);
+        }
+    }
+
+    /// Close a panel and hand back its browser teardown signal so the caller
+    /// can report when the session is really gone; see
+    /// [`horizon_core::Board::close_panel_returning_teardown`].
+    #[must_use]
+    pub(in crate::app) fn close_panel_returning_teardown(
+        &mut self,
+        panel_id: PanelId,
+    ) -> Option<horizon_core::browser::BrowserShutdownSignal> {
         let transcript = self
             .board
             .panel(panel_id)
             .and_then(|panel| PanelTranscript::for_panel(panel.kind, self.transcript_root.clone(), &panel.local_id));
-        self.board.close_panel(panel_id);
+        let teardown = self.board.close_panel_returning_teardown(panel_id);
         self.panel_render_caches.terminal_grid_cache.remove(&panel_id);
         self.panel_render_caches.editor_preview_cache.remove(&panel_id);
         self.panel_render_caches.browser_ui_state.remove(&panel_id);
@@ -76,6 +89,7 @@ impl HorizonApp {
         {
             tracing::warn!(panel_id = panel_id.0, "failed to delete panel transcript: {error}");
         }
+        teardown
     }
 
     pub(in crate::app) fn close_workspace_panels(&mut self, workspace_id: WorkspaceId) {
