@@ -308,8 +308,20 @@ impl DriverState {
             Some((x, y)) => fingerprint_at_point_expression(x, y),
             None => fingerprint_focused_expression(),
         };
-        let value = self.evaluate_json(link, event_tx, frame_slot, &expression)?;
-        let fingerprint = fingerprint_from_script_value(&value)?;
+        let value = match self.evaluate_json(link, event_tx, frame_slot, &expression) {
+            Ok(value) => value,
+            Err(error) => {
+                frame_slot.store_teach_failure(&error.code, &error.message, generation);
+                return Err(error);
+            }
+        };
+        let fingerprint = match fingerprint_from_script_value(&value) {
+            Ok(fingerprint) => fingerprint,
+            Err(error) => {
+                frame_slot.store_teach_failure(&error.code, &error.message, generation);
+                return Err(error);
+            }
+        };
         frame_slot.store_teach_fingerprint(fingerprint, generation);
         Ok(())
     }

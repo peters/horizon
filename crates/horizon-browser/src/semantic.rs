@@ -79,6 +79,13 @@ impl SemanticState {
                 self.teach_text_gesture = false;
                 Some(TeachCapture::Click { x: *x, y: *y })
             }
+            crate::BrowserInput::KeyDown {
+                key: crate::BrowserKey::Tab | crate::BrowserKey::Escape,
+                ..
+            } => {
+                self.teach_text_gesture = false;
+                None
+            }
             crate::BrowserInput::InsertText { text } if !text.is_empty() => self.start_text_capture(),
             crate::BrowserInput::KeyDown { text: Some(text), .. } if !text.is_empty() => self.start_text_capture(),
             _ => None,
@@ -548,7 +555,7 @@ mod tests {
     fn teach_inactive_does_not_retain_or_request_fingerprints() {
         let slot = crate::FrameSlot::new();
         assert!(!slot.teach_recording());
-        assert!(slot.take_teach_fingerprint().is_none());
+        assert!(slot.take_teach_observation().is_none());
         slot.set_teach_recording(true);
         assert!(slot.teach_recording());
         slot.set_teach_recording(false);
@@ -581,6 +588,16 @@ mod tests {
             state.teach_capture_point(&press),
             Some(TeachCapture::Click { x: 12.0, y: 40.0 })
         );
+        assert_eq!(state.teach_capture_point(&insert), Some(TeachCapture::Focused));
+        let tab = crate::BrowserInput::KeyDown {
+            physical_key: None,
+            key: crate::BrowserKey::Tab,
+            text: None,
+            modifiers: crate::BrowserModifiers::none(),
+            repeat: false,
+            edit_command: None,
+        };
+        assert_eq!(state.teach_capture_point(&tab), None);
         assert_eq!(state.teach_capture_point(&insert), Some(TeachCapture::Focused));
     }
 

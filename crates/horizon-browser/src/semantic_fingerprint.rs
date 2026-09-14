@@ -168,7 +168,9 @@ pub fn fingerprint_from_observation(
     }
     for link in &observation.frame_chain {
         validate_origin(&link.origin)?;
-        bounded_field(&link.name)?;
+        if !link.name.is_empty() {
+            bounded_field(&link.name)?;
+        }
     }
     let mut candidates = Vec::new();
     push_candidate(
@@ -492,17 +494,17 @@ const FINGERPRINT_FUNCTION: &str = r#"function(x, y, focused) {
         if (element.isContentEditable) return 'textbox';
         return '';
     };
-    const nameFor = (element) => compact(element.getAttribute('aria-label') || element.getAttribute('alt') || element.getAttribute('title') ||
-        ((element.tagName === 'INPUT' && /^(button|submit|reset)$/i.test(element.getAttribute('type') || '')) ? element.value : '') ||
-        element.textContent);
-    const pierceShadow = (start, px, py) => {
-        let el = start;
-        while (el && el.shadowRoot) {
-            const inner = el.shadowRoot.elementFromPoint(px, py);
-            if (!inner || inner === el) break;
-            el = inner;
+    const nameFor = (element, root) => {
+        const direct = element.getAttribute('aria-label');
+        if (direct) return compact(direct);
+        const labelledBy = element.getAttribute('aria-labelledby');
+        if (labelledBy && root && root.getElementById) {
+            const labelled = labelledBy.split(/\s+/).map((id) => root.getElementById(id)?.textContent || '').join(' ');
+            if (compact(labelled)) return compact(labelled);
         }
-        return el;
+        return compact(element.getAttribute('alt') || element.getAttribute('title') ||
+            ((element.tagName === 'INPUT' && /^(button|submit|reset)$/i.test(element.getAttribute('type') || '')) ? element.value : '') ||
+            element.textContent);
     };
     const frameName = (frame) => compact(frame.title || frame.name || frame.getAttribute('aria-label'));
     const crossOriginFrame = (frame) => {
@@ -518,38 +520,42 @@ const FINGERPRINT_FUNCTION: &str = r#"function(x, y, focused) {
     let px = x;
     let py = y;
     let el = focused ? (document.activeElement || document.body) : document.elementFromPoint(x, y);
-    if (focused) {
-        while (el && el.tagName === 'IFRAME') {
+    while (el) {
+        if (el.tagName === 'IFRAME') {
             try {
                 const inner = el.contentDocument;
                 if (!inner) return crossOriginFrame(el);
+                if (!focused) {
+                    const rect = el.getBoundingClientRect();
+                    px -= rect.left;
+                    py -= rect.top;
+                }
                 chain.push({ origin: inner.location.origin, name: frameName(el) });
-                el = inner.activeElement || inner.body;
+                el = focused ? (inner.activeElement || inner.body) : inner.elementFromPoint(px, py);
                 doc = inner;
+                continue;
             } catch (error) { return crossOriginFrame(el); }
         }
-        while (el && el.shadowRoot && el.shadowRoot.activeElement) {
-            el = el.shadowRoot.activeElement;
+        if (focused) {
+            if (el.shadowRoot && el.shadowRoot.activeElement) {
+                el = el.shadowRoot.activeElement;
+                continue;
+            }
+            break;
         }
-    } else {
-        while (el && el.tagName === 'IFRAME') {
-            try {
-                const inner = el.contentDocument;
-                if (!inner) return crossOriginFrame(el);
-                const rect = el.getBoundingClientRect();
-                px -= rect.left;
-                py -= rect.top;
-                chain.push({ origin: inner.location.origin, name: frameName(el) });
-                el = inner.elementFromPoint(px, py);
-                doc = inner;
-            } catch (error) { return crossOriginFrame(el); }
+        if (el.shadowRoot) {
+            const inner = el.shadowRoot.elementFromPoint(px, py);
+            if (inner && inner !== el) {
+                el = inner;
+                continue;
+            }
         }
-        el = pierceShadow(el, px, py);
+        break;
     }
     if (!el || el.nodeType !== 1) return { error: { code: 'no_such_element', message: 'no element under the pointer' } };
     const searchRoot = (el.getRootNode && el.getRootNode() instanceof ShadowRoot) ? el.getRootNode() : doc;
     const role = roleFor(el);
-    const name = nameFor(el);
+    const name = nameFor(el, searchRoot);
     const control = role || el.tagName.toLowerCase();
     const label = labelFor(el, searchRoot);
     const testAttr = ['data-testid', 'data-test-id', 'data-qa'].find((attr) => el.getAttribute(attr));
@@ -561,9 +567,9 @@ const FINGERPRINT_FUNCTION: &str = r#"function(x, y, focused) {
     const path = cssPath(el, doc);
     const origin = chain.length ? chain[chain.length - 1].origin : location.origin;
     const nodes = collect(searchRoot);
-    const roleNameMatches = role && name ? nodes.filter((node) => roleFor(node) === role && nameFor(node) === name).length : 0;
+    const roleNameMatches = role && name ? nodes.filter((node) => roleFor(node) === role && nameFor(node, searchRoot) === name).length : 0;
     const labelMatches = label ? nodes.filter((node) => labelFor(node, searchRoot) === label).length : 0;
-    const textMatches = visible ? nodes.filter((node) => compact(node.children.length === 0 ? node.textContent : nameFor(node)) === visible).length : 0;
+    const textMatches = visible ? nodes.filter((node) => compact(node.children.length === 0 ? node.textContent : nameFor(node, searchRoot)) === visible).length : 0;
     return {
         origin, topLevel: chain.length === 0 && window === window.top, frameChain: chain,
         role, name, label, control,
@@ -656,6 +662,19 @@ mod tests {
                 .iter()
                 .any(|candidate| matches!(candidate.identity, TargetCandidate::UniqueId { .. }))
         );
+    }
+
+    #[test]
+    fn unnamed_same_origin_iframe_is_durable() {
+        let mut observation = labeled_textbox();
+        observation.top_level = false;
+        observation.frame_chain = vec![FrameLink {
+            origin: "https://reports.example".to_string(),
+            name: String::new(),
+        }];
+        let fingerprint = fingerprint_from_observation(&observation).expect("rank");
+        assert_eq!(fingerprint.frame.chain[0].name, "");
+        assert_eq!(fingerprint.frame.origin, "https://reports.example");
     }
 
     #[test]
@@ -778,13 +797,14 @@ mod tests {
         assert!(at_point.contains("shadowRoot"));
         assert!(at_point.contains("contentDocument"));
         assert!(at_point.contains("data-testid"));
-        assert!(at_point.contains("pierceShadow"));
         assert!(at_point.contains("IFRAME"));
+        assert!(at_point.contains("el.shadowRoot.elementFromPoint"));
         assert!(at_point.contains("label[for="));
         assert!(at_point.contains("generatedId"));
         assert!(at_point.contains("px -= rect.left"));
         assert!(at_point.contains("collect("));
-        assert!(at_point.contains("roleFor(node) === role && nameFor(node) === name"));
+        assert!(at_point.contains("roleFor(node) === role && nameFor(node, searchRoot) === name"));
+        assert!(at_point.contains("aria-labelledby"));
         assert!(!at_point.contains("labelMatches: label ? 1 : 0"));
         assert!(!at_point.contains("textMatches: visible ? 1 : 0"));
         let focused = fingerprint_focused_expression();

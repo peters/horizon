@@ -114,8 +114,8 @@ impl BrowserSession {
     }
 
     #[must_use]
-    pub fn take_teach_fingerprint(&self) -> Option<crate::TeachFingerprint> {
-        self.frame_slot.take_teach_fingerprint()
+    pub fn take_teach_observation(&self) -> Option<crate::TeachObservation> {
+        self.frame_slot.take_teach_observation()
     }
 
     pub fn set_event_waker(&self, callback: BrowserEventWaker) {

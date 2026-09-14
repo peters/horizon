@@ -33,7 +33,7 @@ pub use audit::{BrowserAuditAction, BrowserAuditActor, BrowserAuditEntry, Browse
 pub use coordination::{BrowserCoordination, CoordinationSignals, CoordinationState, HandoffRequest};
 pub use disclosure::{AutomationDisclosurePolicy, AutomationDisclosureStatus};
 pub use error::BrowserError;
-pub use frames::{FrameData, FrameMetrics, FrameSlot, PageScrollState};
+pub use frames::{FrameData, FrameMetrics, FrameSlot, PageScrollState, TeachObservation};
 pub use horizon_browser_protocol::{
     AgentAction, BackendAvailability, BackendCapabilities, BackendKind, BrowserControlAction, BrowserVideoCapture,
     BrowserVideoCaptureOptions, BrowserVideoCaptureOverrides, BrowserVideoOperation, BrowserVideoState,
