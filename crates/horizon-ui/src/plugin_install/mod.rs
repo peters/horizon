@@ -358,14 +358,14 @@ fn install_agent_plugins_impl(
         let notify_dir = codex_root.join("skills").join(HORIZON_NOTIFY_SKILL);
         let browser_dir = codex_root.join("skills").join(HORIZON_BROWSER_SKILL);
         let offload_dir = codex_root.join("skills").join(HORIZON_OFFLOAD_SKILL);
-        if skill_dir_is_leased(lease, &offload_dir) {
-            updated_files += sync_plugin_files(&offload_dir, OFFLOAD_SKILL_FILES)?;
-        }
         if skill_dir_is_leased(lease, &notify_dir) {
             updated_files += sync_plugin_files(&notify_dir, NOTIFY_SKILL_FILES)?;
         }
         if skill_dir_is_leased(lease, &browser_dir) {
             updated_files += sync_plugin_files(&browser_dir, BROWSER_SKILL_FILES)?;
+        }
+        if skill_dir_is_leased(lease, &offload_dir) {
+            updated_files += sync_plugin_files(&offload_dir, OFFLOAD_SKILL_FILES)?;
         }
     }
 

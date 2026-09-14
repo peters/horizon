@@ -71,6 +71,16 @@ and an immutable image. It never guesses an ambient Docker daemon or subscriptio
    command arguments, receipts or repository files. See the official
    [headless authentication guidance](https://learn.chatgpt.com/docs/auth).
 
+Repository credentials are runtime-only: restarting or replacing the container
+clears `/run/horizon/github-token`, even when Git preparation is still `Complete`
+and retained agent login survives. Verify repository API access with the installed
+protected `gh` helper before issue execution. A missing credential needs protected
+stdin delivery to `horizon-github-credential install` on the same authorized worker
+through its pinned SSH connection. The controller has no standalone credential
+refresh command yet; preserve its Git/start claims and never replay `git-install`
+or remove a claim to restore API access. Existing credential-transfer authority
+must cover that exact worker; otherwise obtain it before sending the credential.
+
 ## One issue, one durable task
 
 The controller accepts JSON on stdin for `create <NEW_PRIVATE_DIRECTORY>`:
