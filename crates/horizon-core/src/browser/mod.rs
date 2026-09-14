@@ -11,7 +11,7 @@ pub mod teach;
 
 pub use horizon_browser::remote;
 pub use horizon_browser::{cdp, frames, input, process, session};
-pub use remote_session::{RemoteRequestError, build_remote_session_request};
+pub use remote_session::{RemoteRequestError, browser_family, build_remote_session_request};
 pub use teach::{ReviewRow, TeachMode};
 
 use std::path::{Path, PathBuf};
@@ -231,7 +231,9 @@ impl BrowserPanelState {
 
     /// Create the state for a remote session and start allocating. The
     /// request is kept for Retry, so a retried panel reuses the authorization
-    /// resolved at creation instead of consulting a store again.
+    /// resolved at creation instead of consulting a store again. The panel's
+    /// backend is the request's browser family, not the local default, so
+    /// coordination and the MCP projection describe the device's browser.
     ///
     /// # Errors
     /// Returns an error if a relative profile root cannot be resolved from
@@ -246,6 +248,7 @@ impl BrowserPanelState {
         let mut config = config.resolved_for_launch()?;
         let home = crate::horizon_home::HorizonHome::resolve();
         let profile_root_resolved = retain_effective_profile_root(&mut config, &home.root().join("browser-profiles"));
+        config.backend = request.browser;
         let initial_url = initial_url.map(|url| normalize_navigation_target(&url));
         let mut state = Self::inert();
         state.panel_local_id = panel_local_id;

@@ -107,7 +107,8 @@ fn backend_picker(
             }
         },
     );
-    ui.add_enabled_ui(interactive && browser.teach().is_none(), |ui| {
+    let remote = browser.is_remote();
+    let picker = ui.add_enabled_ui(interactive && browser.teach().is_none() && !remote, |ui| {
         egui::ComboBox::from_id_salt(("browser-backend", panel_id))
             .selected_text(selected_text)
             .width(72.0)
@@ -132,6 +133,13 @@ fn backend_picker(
                 }
             });
     });
+    if remote {
+        // The configured target fixes the browser; the picker stays visible
+        // so the family is still readable, but never actionable.
+        picker
+            .response
+            .on_hover_text("This panel runs at a remote device target, which fixes the browser");
+    }
     if selected == previous {
         return false;
     }

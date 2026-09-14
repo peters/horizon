@@ -11,7 +11,7 @@ use horizon_browser::remote::{
     BROWSERSTACK_OPTIONS_KEY, DeviceKind, ExtensionProblem, RemoteAdapterKind, RemoteBrowserConfig, RemoteConfigError,
     RemoteTargetProfile,
 };
-use horizon_browser::{RemoteAuthorizationHeader, RemoteSessionRequest};
+use horizon_browser::{BackendKind, RemoteAuthorizationHeader, RemoteSessionRequest};
 use serde_json::{Map, Value};
 
 use crate::remote_browser_credential::{CredentialStores, ResolveError, resolve_authorization};
@@ -77,7 +77,23 @@ pub fn build_remote_session_request(
         max_session: Duration::from_secs(u64::from(limits.max_session_seconds)),
         idle_release: Duration::from_secs(u64::from(limits.idle_release_seconds)),
         label: target_name.to_string(),
+        browser: browser_family(&target.browser_name),
     })
+}
+
+/// The local backend kind whose page semantics and capabilities match the
+/// target's browser family. Anything that is not Safari or Firefox is
+/// treated as Chromium.
+#[must_use]
+pub fn browser_family(browser_name: &str) -> BackendKind {
+    let lowered = browser_name.to_ascii_lowercase();
+    if lowered.contains("safari") {
+        BackendKind::SafariWebDriver
+    } else if lowered.contains("firefox") {
+        BackendKind::FirefoxBidi
+    } else {
+        BackendKind::ChromiumCdp
+    }
 }
 
 /// `alwaysMatch` capabilities: the standard browser and platform names, the
@@ -231,6 +247,13 @@ mod tests {
         let request = build_remote_session_request(&config, "ios_phone", &stores).expect("request");
         assert_eq!(request.endpoint, "https://grid.example.net/wd/hub");
         assert_eq!(request.label, "ios_phone");
+        assert_eq!(
+            request.browser,
+            BackendKind::SafariWebDriver,
+            "the target's browser family travels with the request"
+        );
+        assert_eq!(browser_family("Chrome"), BackendKind::ChromiumCdp);
+        assert_eq!(browser_family("firefox"), BackendKind::FirefoxBidi);
         assert!(request.authorization.is_some());
         assert_eq!(request.allocation_timeout, Duration::from_mins(2));
         assert_eq!(request.idle_release, Duration::from_mins(3));
