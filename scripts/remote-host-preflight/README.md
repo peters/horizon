@@ -54,7 +54,8 @@ unsupported check **and no probe errors**, `2` at least one probe error
   surfaced (error excerpts, daemon-provided version strings, Tailscale DNS
   names) passes through a credential redactor (JWT-like material,
   private-key blocks, `password|token|secret|api_key` assignments redacted
-  to end of line, `Authorization` headers case-insensitively), truncated to
+  to end of line including quoted JSON keys (`"password":`, `"Authorization":`),
+  `Authorization` headers case-insensitively), truncated to
   400 characters, including prefixed assignment keys such as
   `access_token=` / `refresh-token=` / `client_secret=`. Only the
   endpoint-selection variables `DOCKER_HOST` and `PODMAN_CONNECTION` /

@@ -21,6 +21,7 @@ import math
 import os
 import re
 import select
+import signal
 import subprocess
 import sys
 import time
@@ -107,9 +108,9 @@ REDACTED_PATTERNS = (
     re.compile(r"eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}(?:\.[A-Za-z0-9_-]{4,})?"),  # JWT-like
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*"),
     re.compile(
-        r"(?i)[A-Za-z0-9_-]*(password|passwd|secret|token|api[_-]?key)\s*[:=]\s*[^\n]*"
+        r'(?i)"?[A-Za-z0-9_-]*(password|passwd|secret|token|api[_-]?key)"?\s*[:=]\s*[^\n]*'
     ),
-    re.compile(r"(?i)\bauthorization\s*:\s*[^\n]*"),
+    re.compile(r'(?i)"?authorization"?\s*:\s*[^\n]*'),
     re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{8,}"),
 )
 URI_USERINFO = re.compile(r"(?i)([a-z][a-z0-9+.-]*://)[^/@\s]+:[^/@\s]+@")
@@ -870,7 +871,7 @@ def bounded_communicate(proc, timeout, max_bytes):
                     pass
 
 
-def default_executor(argv, timeout):
+def _execute_probe(argv, timeout):
     proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             shell=False)
     stdout, stderr, overflow = bounded_communicate(proc, timeout, MAX_PROBE_OUTPUT_BYTES)
@@ -879,6 +880,107 @@ def default_executor(argv, timeout):
     return {"exit_code": proc.returncode,
             "stdout": decode_probe_output(stdout),
             "stderr": decode_probe_output(stderr)}
+
+
+def _kill_process_group(pid):
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except OSError:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+    try:
+        os.waitpid(pid, 0)
+    except OSError:
+        pass
+
+
+def _watchdog_execute_probe(argv, timeout):
+    """Run the probe in a child so PATH lookup / `Popen` cannot hang the checker.
+
+    The deadline starts before executable resolution. On expiry the child
+    session is killed (probe process group included).
+    """
+    read_fd, write_fd = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        os.close(read_fd)
+        try:
+            os.setsid()
+        except OSError:
+            pass
+        try:
+            try:
+                result = _execute_probe(argv, timeout)
+                payload = {"kind": "ok", "result": result}
+            except FileNotFoundError:
+                payload = {"kind": "fnf"}
+            except subprocess.TimeoutExpired:
+                payload = {"kind": "timeout"}
+            except OSError as exc:
+                payload = {"kind": "os", "detail": str(redact(exc))}
+            os.write(write_fd, json.dumps(payload).encode("utf-8"))
+        finally:
+            try:
+                os.close(write_fd)
+            except OSError:
+                pass
+            os._exit(0)
+    os.close(write_fd)
+    deadline = time.monotonic() + timeout
+    chunks = bytearray()
+    try:
+        os.set_blocking(read_fd, False)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _kill_process_group(pid)
+                raise subprocess.TimeoutExpired(argv, timeout)
+            ready, _, _ = select.select([read_fd], [], [], remaining)
+            if not ready:
+                _kill_process_group(pid)
+                raise subprocess.TimeoutExpired(argv, timeout)
+            try:
+                chunk = os.read(read_fd, 65536)
+            except BlockingIOError:
+                continue
+            if chunk == b"":
+                break
+            chunks.extend(chunk)
+            if len(chunks) > MAX_PROBE_OUTPUT_BYTES * 4:
+                _kill_process_group(pid)
+                raise subprocess.TimeoutExpired(argv, timeout)
+        try:
+            os.waitpid(pid, 0)
+        except OSError:
+            pass
+    finally:
+        try:
+            os.close(read_fd)
+        except OSError:
+            pass
+    if not chunks:
+        raise subprocess.TimeoutExpired(argv, timeout)
+    try:
+        payload = json.loads(chunks.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, RecursionError) as exc:
+        raise OSError("probe watchdog returned malformed result") from exc
+    kind = payload.get("kind") if isinstance(payload, dict) else None
+    if kind == "ok" and isinstance(payload.get("result"), dict):
+        return payload["result"]
+    if kind == "fnf":
+        raise FileNotFoundError(argv[0] if argv else "probe")
+    if kind == "timeout":
+        raise subprocess.TimeoutExpired(argv, timeout)
+    raise OSError(payload.get("detail", "probe could not run") if isinstance(payload, dict)
+                  else "probe could not run")
+
+
+def default_executor(argv, timeout):
+    if hasattr(os, "fork"):
+        return _watchdog_execute_probe(argv, timeout)
+    return _execute_probe(argv, timeout)
 
 
 def parse_timeout(value):

@@ -536,6 +536,19 @@ class EngineFailures(Harness):
         self.assertIn("exceeded", overflow)
         self.assertIsNotNone(proc.poll())
 
+    def test_default_executor_times_out_before_hanging(self):
+        with mock.patch.object(subprocess, "Popen", self.real_popen):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                preflight.default_executor(
+                    [sys.executable, "-B", "-c", "import time; time.sleep(5)"],
+                    0.2)
+
+    def test_default_executor_missing_tool_is_file_not_found(self):
+        with mock.patch.object(subprocess, "Popen", self.real_popen):
+            with self.assertRaises(FileNotFoundError):
+                preflight.default_executor(
+                    ["/nonexistent-horizon-preflight-probe"], 1.0)
+
     def test_podman_probe_forces_local_mode(self):
         self.assertEqual(preflight.PROBE_ARGS["podman_info"][:2], ["podman", "--remote=true"])
         fixture = dict(DEFAULT_FIXTURE)
@@ -925,6 +938,18 @@ class RedactionAndDeterminism(Harness):
         text = json.dumps(report)
         self.assertNotIn("supersecretvalue", text)
         self.assertNotIn(JWT, text)
+        self.assertIn("<redacted>", text)
+
+    def test_quoted_json_diagnostics_are_redacted(self):
+        blob = '{"password":"hunter2","Authorization":"Bearer supersecrettok"}'
+        self.assertNotIn("hunter2", preflight.redact(blob))
+        self.assertNotIn("supersecrettok", preflight.redact(blob))
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["docker_version"] = docker_daemon_down(blob)
+        _, report, _ = self.run_main(fixture)
+        text = json.dumps(report)
+        self.assertNotIn("hunter2", text)
+        self.assertNotIn("supersecrettok", text)
         self.assertIn("<redacted>", text)
 
     def test_github_pat_and_uri_userinfo_are_redacted(self):
