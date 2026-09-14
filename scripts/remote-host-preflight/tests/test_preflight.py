@@ -75,7 +75,7 @@ def docker_context_ok(host="unix:///var/run/docker.sock"):
 
 
 def workspace_dir_ok(path, major=259, minor=42):
-    return {"stdout": "%s\t%d\t%d\n" % (path, major, minor)}
+    return {"stdout": json.dumps({"path": path, "major": major, "minor": minor}) + "\n"}
 
 
 DEFAULT_FIXTURE = {
@@ -179,8 +179,11 @@ class Harness(unittest.TestCase):
                             return {"exit_code": code, "stdout": "", "stderr": problem}
                         st = os.stat(target)
                         return {"exit_code": 0,
-                                "stdout": "%s\t%d\t%d\n" % (
-                                    target, os.major(st.st_dev), os.minor(st.st_dev)),
+                                "stdout": json.dumps({
+                                    "path": target,
+                                    "major": os.major(st.st_dev),
+                                    "minor": os.minor(st.st_dev),
+                                }) + "\n",
                                 "stderr": ""}
                     if entry is None:
                         raise FileNotFoundError
@@ -346,6 +349,21 @@ class EngineFailures(Harness):
         self.assertIn("podman: tool not present", by_id["container_engine"]["detail"])
         self.assertFalse(any(argv and argv[0] == "podman" and "info" in argv
                              for argv in executor.seen))
+
+    def test_podman_nonzero_info_preserves_stderr(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture.pop("docker_version")
+        fixture.pop("docker_info")
+        fixture.pop("docker_context", None)
+        fixture["podman_client"] = podman_client_ok()
+        fixture["podman_socket"] = podman_socket_ok()
+        fixture["podman_info"] = {
+            "exit_code": 1, "stdout": "", "stderr": "permission denied"}
+        code, report, _ = self.run_main(fixture)
+        self.assertEqual(code, 1)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertIn("permission denied", by_id["container_engine"]["detail"])
+        self.assertNotIn("malformed version", by_id["container_engine"]["detail"])
 
     def test_podman_empty_version_is_unusable(self):
         fixture = dict(DEFAULT_FIXTURE)
@@ -937,6 +955,7 @@ class MalformedInputs(Harness):
     def test_df_oversized_digit_field_is_error(self):
         huge = "9" * (preflight.MAX_NONNEG_INT_DIGITS + 1)
         self.assertIsNone(preflight.parse_nonneg_int(huge))
+        self.assertIsNone(preflight.parse_nonneg_int("١٢٣"))
         fixture = dict(DEFAULT_FIXTURE)
         fixture["disk"] = {"stdout":
             "Filesystem     1024-blocks      Used Available Capacity Mounted on\n"
@@ -1360,6 +1379,20 @@ class RedactionAndDeterminism(Harness):
         self.assertIn("docker context inspect failed", by_id["container_engine"]["detail"])
         self.assertIn("permission denied", by_id["container_engine"]["detail"])
         self.assertNotIn("endpoint missing", by_id["container_engine"]["detail"])
+
+    def test_workspace_resolver_preserves_tab_in_path(self):
+        path = "/mnt/ws\tname"
+
+        def executor(argv, timeout):
+            return {"exit_code": 0,
+                    "stdout": json.dumps({"path": path, "major": 8, "minor": 1}) + "\n",
+                    "stderr": ""}
+
+        resolved, major, minor, problem = preflight.resolve_workspace_directory(
+            executor, 1.0, path)
+        self.assertIsNone(problem)
+        self.assertEqual(resolved, path)
+        self.assertEqual((major, minor), (8, 1))
 
     def test_workspace_resolver_malformed_output_is_error(self):
         fixture = dict(DEFAULT_FIXTURE)
