@@ -2,11 +2,23 @@
 //! panel drops its state, which stops the session and, for a remote session,
 //! releases the provider allocation through the driver's own teardown.
 
-use horizon_core::PanelKind;
 use horizon_core::browser::manifest::{self, BrowserCloseAuditStatus, BrowserCloseRequest, BrowserCloseResult};
+use horizon_core::{PanelId, PanelKind};
 
 use super::HorizonApp;
 use super::browser_requests::{ActorPanel, actor_panel, launched_by_this_host};
+
+/// Why a claimed close request is refused, as the typed result code and its
+/// message. Every path leaves the panel untouched.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct CloseRefusal {
+    pub(super) code: &'static str,
+    pub(super) message: &'static str,
+}
+
+const fn refusal(code: &'static str, message: &'static str) -> CloseRefusal {
+    CloseRefusal { code, message }
+}
 
 impl HorizonApp {
     pub(super) fn poll_browser_close_requests(&mut self) -> bool {
@@ -43,43 +55,49 @@ impl HorizonApp {
         changed
     }
 
-    fn apply_browser_close_request(&mut self, request: &BrowserCloseRequest, actor_panel: ActorPanel) -> bool {
-        if request.deadline_at_millis < manifest::now_millis() {
-            complete_close_failure(request, "request_expired", "browser close request expired");
-            return false;
+    /// Decide whether `request` may close a panel, from board state and the
+    /// live ownership the caller read from the manifest. Pure: nothing is
+    /// written, so the refusal paths are testable without a driver.
+    pub(super) fn close_target(
+        &self,
+        request: &BrowserCloseRequest,
+        actor_panel: ActorPanel,
+        owned_by_actor: bool,
+        now_millis: i64,
+    ) -> Result<PanelId, CloseRefusal> {
+        if request.deadline_at_millis < now_millis {
+            return Err(refusal("request_expired", "browser close request expired"));
         }
-        let Some(panel_id) = self.board.panel_id_by_local_id(&request.panel_local_id) else {
-            complete_close_failure(
-                request,
-                "panel_not_in_host",
-                "browser panel is not hosted by the requesting agent's Horizon instance",
-            );
-            return false;
-        };
-        let Some(panel) = self.board.panel(panel_id) else {
-            complete_close_failure(request, "panel_closed", "browser panel is not live");
-            return false;
-        };
+        let panel_id = self.board.panel_id_by_local_id(&request.panel_local_id).ok_or(refusal(
+            "panel_not_in_host",
+            "browser panel is not hosted by the requesting agent's Horizon instance",
+        ))?;
+        let panel = self
+            .board
+            .panel(panel_id)
+            .ok_or(refusal("panel_closed", "browser panel is not live"))?;
         if panel.kind != PanelKind::Browser {
-            complete_close_failure(request, "not_browser_panel", "target panel is not a browser panel");
-            return false;
+            return Err(refusal("not_browser_panel", "target panel is not a browser panel"));
         }
         if panel.workspace_id != actor_panel.workspace_id {
-            complete_close_failure(
-                request,
+            return Err(refusal(
                 "panel_outside_workspace",
                 "browser panel is outside the requesting agent's Horizon workspace",
-            );
-            return false;
+            ));
         }
         if self.browser_create_is_pending(panel_id) {
-            complete_close_failure(
-                request,
+            return Err(refusal(
                 "create_pending",
                 "browser panel is still being created; wait for browser_create to return",
-            );
-            return false;
+            ));
         }
+        if !owned_by_actor {
+            return Err(refusal("ownership_changed", "browser panel ownership changed"));
+        }
+        Ok(panel_id)
+    }
+
+    fn apply_browser_close_request(&mut self, request: &BrowserCloseRequest, actor_panel: ActorPanel) -> bool {
         let owned_by_actor = manifest::read(&request.panel_local_id)
             .and_then(|manifest| {
                 manifest
@@ -88,15 +106,32 @@ impl HorizonApp {
             })
             .as_deref()
             == Some(request.actor.as_str());
-        if !owned_by_actor {
-            complete_close_failure(request, "ownership_changed", "browser panel ownership changed");
-            return false;
+        let panel_id = match self.close_target(request, actor_panel, owned_by_actor, manifest::now_millis()) {
+            Ok(panel_id) => panel_id,
+            Err(refused) => {
+                complete_close_failure(request, refused.code, refused.message);
+                return false;
+            }
+        };
+        // Both audit entries are appended before the panel goes: a close is
+        // never reported as complete with a journal that stops at dispatched,
+        // and a journal that cannot be written refuses the close instead.
+        for status in [BrowserCloseAuditStatus::Dispatched, BrowserCloseAuditStatus::Completed] {
+            if let Err(error) = manifest::record_close_status(request, status) {
+                tracing::warn!(request_id = %request.request_id, %error, "could not audit browser close");
+                complete_close_failure(request, "audit_failed", "Horizon refused an unaudited close");
+                return false;
+            }
         }
-        if let Err(error) = manifest::record_close_status(request, BrowserCloseAuditStatus::Dispatched) {
-            tracing::warn!(request_id = %request.request_id, %error, "could not audit browser close dispatch");
-            complete_close_failure(request, "audit_failed", "Horizon refused an unaudited close");
-            return false;
-        }
+        self.close_browser_panel_for_agent(panel_id, actor_panel);
+        complete_close_result(&BrowserCloseResult::closed(request));
+        self.mark_runtime_dirty();
+        true
+    }
+
+    /// The close itself, shared with the tests: the app's own close path
+    /// (session teardown, render caches, transcript), fullscreen and focus.
+    pub(super) fn close_browser_panel_for_agent(&mut self, panel_id: PanelId, actor_panel: ActorPanel) {
         if self.fullscreen_panel == Some(panel_id) {
             self.fullscreen_panel = None;
         }
@@ -104,15 +139,6 @@ impl HorizonApp {
         if self.board.focused.is_none() {
             self.board.focus(actor_panel.panel_id);
         }
-        // The audit journal outlives the panel, so the completion is recorded
-        // after the close; a failure to record it is logged, not reverted,
-        // because the panel is already gone.
-        if let Err(error) = manifest::record_close_status(request, BrowserCloseAuditStatus::Completed) {
-            tracing::warn!(request_id = %request.request_id, %error, "could not audit browser close completion");
-        }
-        complete_close_result(&BrowserCloseResult::closed(request));
-        self.mark_runtime_dirty();
-        true
     }
 }
 
@@ -126,5 +152,132 @@ fn complete_close_failure(request: &BrowserCloseRequest, code: &str, message: &s
 fn complete_close_result(result: &BrowserCloseResult) {
     if let Err(error) = manifest::complete_close_request(result) {
         tracing::error!(request_id = %result.request_id, %error, "could not publish browser close result");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use horizon_core::browser::BrowserPanelState;
+    use horizon_core::{Panel, PanelContent, PanelOptions, WorkspaceId};
+
+    use super::*;
+    use crate::app::browser_requests::PendingBrowserCreateProbe;
+    use crate::app::test_support::test_app;
+
+    fn agent_options() -> PanelOptions {
+        let (command, args) = if cfg!(windows) {
+            ("cmd.exe", vec!["/C".to_string(), "exit 0".to_string()])
+        } else {
+            ("/bin/sh", vec!["-c".to_string(), "exit 0".to_string()])
+        };
+        PanelOptions {
+            command: Some(command.to_string()),
+            args,
+            kind: PanelKind::Codex,
+            ..PanelOptions::default()
+        }
+    }
+
+    /// A browser panel without a driver, placed in `workspace`.
+    fn inert_browser(app: &mut HorizonApp, id: u64, workspace: WorkspaceId) -> (PanelId, String) {
+        let panel = Panel::from_content(
+            PanelId(id),
+            workspace,
+            PanelKind::Browser,
+            PanelContent::Browser(Box::new(BrowserPanelState::inert())),
+        );
+        let local_id = panel.local_id.clone();
+        app.board.panels.push(panel);
+        app.board.assign_panel_to_workspace(PanelId(id), workspace);
+        (PanelId(id), local_id)
+    }
+
+    fn request(actor: &str, panel_local_id: &str, deadline_at_millis: i64) -> BrowserCloseRequest {
+        BrowserCloseRequest::for_tests(actor, panel_local_id, deadline_at_millis)
+    }
+
+    #[test]
+    fn a_claimed_close_removes_the_owned_panel_and_refocuses_the_agent() {
+        let (_temp, mut app) = test_app();
+        let alpha = app.board.create_workspace("alpha");
+        let agent_id = app.board.create_panel(agent_options(), alpha).expect("agent panel");
+        let actor_panel = ActorPanel {
+            panel_id: agent_id,
+            workspace_id: alpha,
+        };
+        let (browser_id, browser_local_id) = inert_browser(&mut app, 9001, alpha);
+        app.board.focus(browser_id);
+        let request = request("horizon:agent", &browser_local_id, i64::MAX);
+        let target = app
+            .close_target(&request, actor_panel, true, 0)
+            .expect("an owned browser panel in the agent's workspace may be closed");
+        assert_eq!(target, browser_id);
+
+        app.close_browser_panel_for_agent(target, actor_panel);
+        assert!(app.board.panel(browser_id).is_none(), "the panel is gone");
+        assert!(
+            app.board.panel_id_by_local_id(&browser_local_id).is_none(),
+            "a second close reports panel_not_in_host"
+        );
+        assert_eq!(app.board.focused, Some(agent_id), "focus returns to the agent panel");
+        assert_eq!(
+            app.close_target(&request, actor_panel, true, 0).expect_err("gone").code,
+            "panel_not_in_host"
+        );
+    }
+
+    #[test]
+    fn refusals_keep_the_panel_and_name_the_reason() {
+        let (_temp, mut app) = test_app();
+        let alpha = app.board.create_workspace("alpha");
+        let beta = app.board.create_workspace("beta");
+        let agent_id = app.board.create_panel(agent_options(), alpha).expect("agent panel");
+        let actor_panel = ActorPanel {
+            panel_id: agent_id,
+            workspace_id: alpha,
+        };
+        let (browser_id, browser_local_id) = inert_browser(&mut app, 9002, alpha);
+        let (_, elsewhere_local_id) = inert_browser(&mut app, 9003, beta);
+        let agent_local_id = app.board.panel(agent_id).expect("agent").local_id.clone();
+
+        let expired = request("horizon:agent", &browser_local_id, 0);
+        assert_eq!(
+            app.close_target(&expired, actor_panel, true, 1)
+                .expect_err("expired")
+                .code,
+            "request_expired"
+        );
+        let not_browser = request("horizon:agent", &agent_local_id, i64::MAX);
+        assert_eq!(
+            app.close_target(&not_browser, actor_panel, true, 0)
+                .expect_err("agent panel")
+                .code,
+            "not_browser_panel"
+        );
+        let other_workspace = request("horizon:agent", &elsewhere_local_id, i64::MAX);
+        assert_eq!(
+            app.close_target(&other_workspace, actor_panel, true, 0)
+                .expect_err("other workspace")
+                .code,
+            "panel_outside_workspace"
+        );
+        let unowned = request("horizon:agent", &browser_local_id, i64::MAX);
+        assert_eq!(
+            app.close_target(&unowned, actor_panel, false, 0)
+                .expect_err("ownership changed")
+                .code,
+            "ownership_changed"
+        );
+        app.mark_browser_create_pending_for_tests(PendingBrowserCreateProbe {
+            panel_id: browser_id,
+            panel_local_id: browser_local_id.clone(),
+        });
+        assert_eq!(
+            app.close_target(&unowned, actor_panel, true, 0)
+                .expect_err("create pending")
+                .code,
+            "create_pending"
+        );
+        assert!(app.board.panel(browser_id).is_some(), "every refusal leaves the panel");
     }
 }

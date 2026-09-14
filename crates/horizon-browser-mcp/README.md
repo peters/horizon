@@ -54,7 +54,9 @@ shell commands, files, or other MCP servers.
   browser, ownership lease, network capture, or MCP control.
 - `browser_close` closes a panel the caller owns in its workspace and stops
   its session; a remote device allocation is released by that teardown. The
-  panel leaves `browser_list` while its audit journal stays readable.
+  panel leaves `browser_list`; read what you need from `browser_audit` before
+  closing, because the journal file is retained on disk but `browser_audit`
+  answers only for a live panel.
 - `browser_navigate` changes the top-level page and reports a typed outcome.
   By default it returns once the document committed (`wait: commit`);
   `wait: dispatched` returns as soon as the engine handed the command to the

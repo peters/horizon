@@ -39,6 +39,23 @@ pub struct BrowserCloseRequest {
     claimed_by_pid: Option<u32>,
 }
 
+impl BrowserCloseRequest {
+    /// An unclaimed request for host tests; never written to the queue.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn for_tests(actor: &str, panel_local_id: &str, deadline_at_millis: i64) -> Self {
+        Self {
+            request_id: new_action_id(),
+            actor: actor.to_string(),
+            host_instance: None,
+            panel_local_id: panel_local_id.to_string(),
+            requested_at_millis: 0,
+            deadline_at_millis,
+            claimed_by_pid: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct BrowserCloseResult {
     pub request_id: String,

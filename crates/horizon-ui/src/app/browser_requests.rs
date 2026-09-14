@@ -50,6 +50,13 @@ struct PendingBrowserCreate {
     user_navigations_at_start: u32,
 }
 
+/// The panel a test wants treated as still being created.
+#[cfg(test)]
+pub(super) struct PendingBrowserCreateProbe {
+    pub(super) panel_id: PanelId,
+    pub(super) panel_local_id: String,
+}
+
 /// Whether a pending create may complete, decided from the panel's live
 /// browser state rather than from the manifest file's existence.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -448,6 +455,21 @@ impl HorizonApp {
             .pending
             .iter()
             .any(|pending| pending.panel_id == panel_id)
+    }
+
+    /// Register a create as still pending, for tests of paths that must
+    /// refuse to touch a panel while its create has not returned.
+    #[cfg(test)]
+    pub(super) fn mark_browser_create_pending_for_tests(&mut self, probe: PendingBrowserCreateProbe) {
+        self.browser_create_host.pending.push(PendingBrowserCreate {
+            request: BrowserCreateRequest::for_tests(&probe.panel_local_id),
+            panel_id: probe.panel_id,
+            panel_local_id: probe.panel_local_id,
+            backend: BackendKind::default(),
+            started_at: Instant::now(),
+            ready_since: None,
+            user_navigations_at_start: 0,
+        });
     }
 
     fn finish_pending_browser_creates(&mut self) -> bool {
