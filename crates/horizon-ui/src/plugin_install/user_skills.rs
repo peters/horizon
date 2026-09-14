@@ -3,7 +3,7 @@
 //! Coordination is per target `skills` directory so `CODEX_HOME` / `GROK_HOME`
 //! overrides share a lock even when `HOME` differs across Horizon processes.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs::{OpenOptions, TryLockError};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -14,6 +14,8 @@ const LEASES_DIR: &str = ".horizon-leases";
 
 pub(super) struct SkillRootLease {
     parent: PathBuf,
+    leased_names: Vec<OsString>,
+    cleanup_names: Vec<OsString>,
     live_path: PathBuf,
     live_lock: Option<std::fs::File>,
 }
@@ -21,13 +23,23 @@ pub(super) struct SkillRootLease {
 impl SkillRootLease {
     pub(super) fn covers_skill_dir(&self, skill_dir: &Path) -> bool {
         skill_dir.parent().is_some_and(|parent| parent == self.parent)
+            && skill_dir
+                .file_name()
+                .is_some_and(|name| self.leased_names.iter().any(|leased| leased == name))
     }
 }
 
-pub(super) fn bind_skill_roots(host_id: &OsStr, dirs: &[PathBuf]) -> Vec<SkillRootLease> {
+struct SkillRootSpec {
+    parent: PathBuf,
+    leased_names: Vec<OsString>,
+    cleanup_names: Vec<OsString>,
+}
+
+pub(super) fn bind_skill_roots(host_id: &OsStr, dirs: &[PathBuf], extra_cleanup: &[PathBuf]) -> Vec<SkillRootLease> {
     let mut leases = Vec::new();
-    for parent in unique_parents(dirs) {
-        match acquire_skill_root(host_id, parent.clone()) {
+    for spec in group_skill_roots(dirs, extra_cleanup) {
+        let parent = spec.parent.clone();
+        match acquire_skill_root(host_id, spec) {
             Ok(lease) => leases.push(lease),
             Err(error) => {
                 tracing::warn!(path = %parent.display(), %error, "failed to lease Horizon skill root");
@@ -56,8 +68,9 @@ pub(super) fn release_skill_roots(leases: &mut [SkillRootLease]) {
         match another_live_host(&leases_dir, &lease.live_path) {
             Ok(true) => {}
             Ok(false) => {
-                remove_horizon_skill_dir(&lease.parent.join(HORIZON_NOTIFY_SKILL));
-                remove_horizon_skill_dir(&lease.parent.join(HORIZON_BROWSER_SKILL));
+                for name in &lease.cleanup_names {
+                    remove_horizon_skill_dir(&lease.parent.join(name));
+                }
                 // Keep `.horizon-leases` and `.lock`. Unlinking the directory
                 // while this lock is held lets a starter block on the old inode,
                 // then fail to create its `.live` marker in the gone directory.
@@ -81,20 +94,53 @@ impl Drop for SkillRootLease {
     }
 }
 
-fn unique_parents(dirs: &[PathBuf]) -> Vec<PathBuf> {
-    let mut parents = Vec::new();
+fn group_skill_roots(dirs: &[PathBuf], extra_cleanup: &[PathBuf]) -> Vec<SkillRootSpec> {
+    let mut groups: Vec<SkillRootSpec> = Vec::new();
     for dir in dirs {
         let Some(parent) = dir.parent() else {
             continue;
         };
-        if !parents.iter().any(|existing| existing == parent) {
-            parents.push(parent.to_path_buf());
+        let Some(name) = dir.file_name() else {
+            continue;
+        };
+        match groups.iter_mut().find(|existing| existing.parent == parent) {
+            Some(existing) => {
+                push_unique_name(&mut existing.leased_names, name);
+                push_unique_name(&mut existing.cleanup_names, name);
+            }
+            None => groups.push(SkillRootSpec {
+                parent: parent.to_path_buf(),
+                leased_names: vec![name.to_os_string()],
+                cleanup_names: vec![name.to_os_string()],
+            }),
         }
     }
-    parents
+    for extra in extra_cleanup {
+        let Some(parent) = extra.parent() else {
+            continue;
+        };
+        let Some(name) = extra.file_name() else {
+            continue;
+        };
+        if let Some(existing) = groups.iter_mut().find(|existing| existing.parent == parent) {
+            push_unique_name(&mut existing.cleanup_names, name);
+        }
+    }
+    groups
 }
 
-fn acquire_skill_root(host_id: &OsStr, parent: PathBuf) -> io::Result<SkillRootLease> {
+fn push_unique_name(names: &mut Vec<OsString>, name: &OsStr) {
+    if !names.iter().any(|existing| existing == name) {
+        names.push(name.to_os_string());
+    }
+}
+
+fn acquire_skill_root(host_id: &OsStr, spec: SkillRootSpec) -> io::Result<SkillRootLease> {
+    let SkillRootSpec {
+        parent,
+        leased_names,
+        cleanup_names,
+    } = spec;
     let leases_dir = parent.join(LEASES_DIR);
     std::fs::create_dir_all(&leases_dir)?;
     let coord = lock_coord(&leases_dir)?;
@@ -121,6 +167,8 @@ fn acquire_skill_root(host_id: &OsStr, parent: PathBuf) -> io::Result<SkillRootL
     drop(coord);
     Ok(SkillRootLease {
         parent,
+        leased_names,
+        cleanup_names,
         live_path,
         live_lock: Some(live_lock),
     })

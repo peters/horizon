@@ -118,12 +118,17 @@ impl AgentPluginHostLease {
         })
     }
 
+    #[cfg(test)]
     fn bind_user_skills(&mut self, dirs: &[PathBuf]) -> io::Result<()> {
+        self.bind_user_skills_with_cleanup(dirs, &[])
+    }
+
+    fn bind_user_skills_with_cleanup(&mut self, dirs: &[PathBuf], extra_cleanup: &[PathBuf]) -> io::Result<()> {
         let host_id = self
             .host_dir
             .file_name()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "agent plugin host directory has no name"))?;
-        self.skill_roots = bind_skill_roots(host_id, dirs);
+        self.skill_roots = bind_skill_roots(host_id, dirs, extra_cleanup);
         Ok(())
     }
 
@@ -172,7 +177,8 @@ pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) -> AgentPluginHo
         }
     };
     let user_skill_dirs = user_skill_lease_dirs(user_home.as_deref(), grok_home.as_deref(), codex_home.as_deref());
-    if let Err(error) = lease.bind_user_skills(&user_skill_dirs) {
+    let extra_cleanup = user_home.as_deref().map(abandoned_user_skill_dirs).unwrap_or_default();
+    if let Err(error) = lease.bind_user_skills_with_cleanup(&user_skill_dirs, &extra_cleanup) {
         tracing::warn!(%error, "failed to bind Horizon skill root leases");
     }
     sync_leased_user_skills(
@@ -750,9 +756,11 @@ mod tests {
     fn last_agent_plugin_host_lease_removes_user_skills() {
         let temp = tempfile::tempdir().expect("temp dir");
         let horizon_home = HorizonHome::from_root(temp.path().join(".horizon"));
-        let skill_dir = temp.path().join("user-home/.codex/skills").join(HORIZON_NOTIFY_SKILL);
+        let skill_dir = temp.path().join("user-home/.grok/skills").join(HORIZON_NOTIFY_SKILL);
         write_skill_dir(&skill_dir, "leased");
-        let unrelated = temp.path().join("user-home/.codex/skills/custom-skill");
+        let browser = temp.path().join("user-home/.grok/skills").join(HORIZON_BROWSER_SKILL);
+        write_skill_dir(&browser, "keep");
+        let unrelated = temp.path().join("user-home/.grok/skills/custom-skill");
         write_skill_dir(&unrelated, "keep");
 
         let host_dir = horizon_home.agent_plugin_host_dir("host-a");
@@ -763,6 +771,7 @@ mod tests {
         drop(lease);
 
         assert!(!skill_dir.exists());
+        assert!(browser.join("SKILL.md").is_file());
         assert!(unrelated.join("SKILL.md").is_file());
         assert!(
             skill_dir
@@ -840,6 +849,32 @@ mod tests {
         assert!(user_home.join(".codex/skills/horizon-notify/SKILL.md").is_file());
         assert!(!user_home.join(".config/opencode/skills/horizon-notify").exists());
         assert!(!user_home.join(".agents/skills/horizon-notify").exists());
+    }
+
+    #[test]
+    fn last_host_removes_abandoned_browser_on_a_notify_root() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let horizon_home = HorizonHome::from_root(temp.path().join(".horizon"));
+        let notify = temp
+            .path()
+            .join("user-home/.kilocode/skills")
+            .join(HORIZON_NOTIFY_SKILL);
+        let browser = temp
+            .path()
+            .join("user-home/.kilocode/skills")
+            .join(HORIZON_BROWSER_SKILL);
+        write_skill_dir(&notify, "leased");
+        write_skill_dir(&browser, "abandoned");
+
+        let mut lease =
+            AgentPluginHostLease::acquire(horizon_home.agent_plugin_host_dir("host-a")).expect("host lease");
+        lease
+            .bind_user_skills_with_cleanup(std::slice::from_ref(&notify), std::slice::from_ref(&browser))
+            .expect("bind notify with abandoned browser cleanup");
+        drop(lease);
+
+        assert!(!notify.exists());
+        assert!(!browser.exists());
     }
 
     #[test]
