@@ -3,10 +3,13 @@
 Optional desktop-testing layer over the existing [remote worker](../remote-worker/README.md).
 Build tools, agent tools, SSH, retained sessions and credentials come from that
 base. This layer adds a private X11 desktop and a native Horizon smoke command.
-It also installs Chromium with Debian's matching ChromeDriver, Firefox ESR and
+The optional `browser` build target also installs Chromium with Debian's matching
+ChromeDriver, Firefox ESR and
 Mozilla geckodriver 0.37.1 (SHA-256-verified official release assets). Browser
 versions follow the Debian security repository at build time; retain the final
 image digest and build log for reproducibility. No browser profile or login is baked in.
+The default build contains no browser or browser driver. Native Horizon smoke
+requires only the virtual display, window manager and software rendering.
 It does not publish an image or create cloud resources.
 
 ## Build
@@ -68,6 +71,14 @@ docker run --rm --network none \
   --binary /candidate/horizon --artifacts /proof/run
 ```
 
+For embedded browser panels or web-app checks, build the optional variant:
+
+```bash
+docker build --target browser \
+  --build-arg WORKER_IMAGE='<registry>/horizon-remote-worker@sha256:<digest>' \
+  -t horizon-linux-ui-worker:browser containers/linux-ui-worker
+```
+
 Keep `smoke_root` for image inspection and debugging. With rootful Docker, files
 may be owned by container root; rootless Docker maps that user to the caller.
 This example proves native UI. Run the browser lane separately for each engine:
@@ -79,7 +90,7 @@ docker run --rm --network none --user 1000:1000 \
   --mount "type=bind,src=$PWD,dst=/source,readonly" \
   --mount "type=bind,src=$smoke_root/build/debug/horizon,dst=/candidate/horizon,readonly" \
   --mount "type=bind,src=$smoke_root/proof,dst=/proof" \
-  --entrypoint horizon-linux-ui-smoke horizon-linux-ui-worker:local \
+  --entrypoint horizon-linux-ui-smoke horizon-linux-ui-worker:browser \
   --binary /candidate/horizon --repository /source \
   --browser chromium --artifacts /proof/chromium --timeout-seconds 150
 # Repeat with --browser firefox and a new --artifacts directory.

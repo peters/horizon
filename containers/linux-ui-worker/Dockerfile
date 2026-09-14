@@ -1,14 +1,27 @@
 # Use a registry digest for publication; a local tag permits offline rehearsal.
 ARG WORKER_IMAGE=horizon-remote-worker:local
-FROM ${WORKER_IMAGE}
+FROM ${WORKER_IMAGE} AS native
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
         libgl1-mesa-dri libvulkan1 libxkbcommon-x11-0 mesa-vulkan-drivers \
-        chromium chromium-driver firefox-esr \
         openbox scrot wmctrl x11-utils xauth xdotool xvfb \
     && rm -rf /var/lib/apt/lists/*
 
+COPY smoke.py /usr/local/bin/horizon-linux-ui-smoke
+COPY processes.py /usr/local/bin/processes.py
+COPY browser-smoke.py /usr/local/bin/browser-smoke.py
+RUN chmod 0755 /usr/local/bin/horizon-linux-ui-smoke
+RUN useradd --uid 1000 --create-home --shell /bin/bash horizon-smoke
+
+LABEL io.horizon.worker.linux-ui-smoke="1"
+# Preserve the base worker's SSH entrypoint and runtime-only credentials.
+
+# Opt in only for embedded browser panels or web-application testing.
+FROM native AS browser
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends chromium chromium-driver firefox-esr \
+    && rm -rf /var/lib/apt/lists/*
 # Official Mozilla release assets, checked before extraction (amd64/arm64).
 RUN case "$(dpkg --print-architecture)" in \
         amd64) platform=linux64; digest=e815130ea95983e162ae91843b48d3a3ce991735635fce83a647afde21e09f7e ;; \
@@ -23,11 +36,7 @@ RUN case "$(dpkg --print-architecture)" in \
     && chromium --version && chromedriver --version \
     && firefox-esr --version && geckodriver --version
 
-COPY smoke.py /usr/local/bin/horizon-linux-ui-smoke
-COPY processes.py /usr/local/bin/processes.py
-COPY browser-smoke.py /usr/local/bin/browser-smoke.py
-RUN chmod 0755 /usr/local/bin/horizon-linux-ui-smoke
-RUN useradd --uid 1000 --create-home --shell /bin/bash horizon-smoke
+LABEL io.horizon.worker.browser-smoke="1"
 
-LABEL io.horizon.worker.linux-ui-smoke="1"
-# Preserve the base worker's SSH entrypoint and runtime-only credentials.
+# The default image contains native desktop tooling only.
+FROM native AS final

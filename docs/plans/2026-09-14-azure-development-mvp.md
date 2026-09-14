@@ -38,7 +38,9 @@ is already assigned to another contributor; do not duplicate that work.
 - User clarification: UI smoke must actually run inside the Docker worker. A
   host-side launch or screenshot does not satisfy this slice. Build the candidate
   in the worker runtime as well, avoiding host/container libc incompatibility.
-- Include Chromium/ChromeDriver and Firefox ESR/geckodriver in the testing layer.
+- Keep native desktop tooling as the default image. Offer Chromium/ChromeDriver
+  and Firefox ESR/geckodriver only through an optional browser testing target,
+  following the user's clarification that Horizon native UI does not need them.
   Prove installed versions, then qualify browser-panel interaction separately
   through the public Horizon browser MCP tools inside the worker environment.
 - Document the normal repository validation matrix and image build commands.
