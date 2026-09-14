@@ -73,7 +73,9 @@ impl ClassicTransport for HttpClient {
 pub(super) fn validate_request_path(path: &str) -> Result<(), HttpError> {
     if !path.starts_with('/')
         || !path.chars().all(|c| c.is_ascii_graphic())
-        || path.contains(['?', '#', '\\'])
+        // Classic command routes never need encoded components, and a proxy
+        // may decode `%2e%2e` after this check.
+        || path.contains(['?', '#', '\\', '%'])
         || path.contains("//")
         || path.split('/').any(|segment| segment == "..")
     {

@@ -214,7 +214,7 @@ fn parse_endpoint(endpoint: &str) -> Result<(String, String, bool), HttpError> {
     if port_text.is_some_and(|port| port.parse::<u16>().is_err()) || authority.as_str().ends_with(':') {
         return Err(invalid("port must be a number between 0 and 65535"));
     }
-    let loopback = host == "localhost" || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback());
+    let loopback = host.eq_ignore_ascii_case("localhost") || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback());
     match scheme {
         "https" => {}
         "http" if loopback => {}

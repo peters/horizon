@@ -225,6 +225,9 @@ fn endpoint_rules_match_the_configuration_contract() {
     assert_eq!(remote.config().max_redirects(), 0);
     let local = RemoteHttpClient::new("http://[::1]:4723", None).expect("loopback http");
     assert!(!local.config().https_only());
+    let named = RemoteHttpClient::new("http://LOCALHOST:4723/wd/hub", None).expect("case-insensitive localhost");
+    assert!(!named.config().https_only());
+    assert_eq!(named.origin(), "http://localhost:4723");
 }
 
 #[test]
@@ -238,6 +241,8 @@ fn request_paths_cannot_escape_the_base() {
         "/session#f",
         "//other.host/session",
         "/a b",
+        "/session/%2e%2e/%2e%2e/status",
+        "/session%2Fabc",
         "/session\tx",
         "/session\u{7f}",
         "/s\u{0}n",
