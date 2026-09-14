@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::{ErrorKind, Write as _};
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
 use atomicwrites::{AllowOverwrite, AtomicFile};
@@ -28,7 +29,9 @@ pub struct RoutineLock {
 /// inherits a copy of the descriptor until it execs, and `flock` follows the
 /// open file description, not the descriptor. The window is milliseconds; the
 /// bound keeps a genuinely held lock from stalling a caller.
+#[cfg(unix)]
 const LOCK_RETRY_WINDOW: Duration = Duration::from_millis(500);
+#[cfg(unix)]
 const LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(5);
 
 impl RoutineRegistry {
@@ -382,23 +385,32 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn lock_waits_out_a_briefly_held_lock_but_not_a_kept_one() {
+        use std::sync::mpsc;
         use std::time::{Duration, Instant};
 
         let temp = tempfile::tempdir().expect("temp");
         privatize_temp(temp.path());
-        let registry = RoutineRegistry::open(temp.path().join("routines")).expect("open");
+        let registry = std::sync::Arc::new(RoutineRegistry::open(temp.path().join("routines")).expect("open"));
         let id = Uuid::from_u128(21);
         let held = registry.lock(id).expect("first lock");
-        // Release from another thread after a moment: the caller must wait
-        // it out instead of failing on the first non-blocking attempt.
-        let release = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(60));
-            drop(held);
-        });
-        let started = Instant::now();
-        drop(registry.lock(id).expect("lock after the holder let go"));
-        assert!(started.elapsed() >= Duration::from_millis(40), "it really waited");
-        release.join().expect("release thread");
+        // The waiter announces its attempt, then locks; the test releases
+        // the held lock only after that announcement, so the waiter's first
+        // non-blocking attempt runs against a held lock and must be retried.
+        let (attempting_tx, attempting_rx) = mpsc::channel();
+        let waiter = {
+            let registry = std::sync::Arc::clone(&registry);
+            std::thread::spawn(move || {
+                attempting_tx.send(()).expect("announce");
+                registry.lock(id).map(drop)
+            })
+        };
+        attempting_rx.recv().expect("waiter announced");
+        std::thread::sleep(Duration::from_millis(50));
+        drop(held);
+        waiter
+            .join()
+            .expect("waiter thread")
+            .expect("lock acquired once the holder let go");
 
         let _kept = registry.lock(id).expect("lock again");
         let started = Instant::now();
