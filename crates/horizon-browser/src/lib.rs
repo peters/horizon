@@ -20,6 +20,7 @@ mod paths;
 pub mod process;
 mod profile;
 mod semantic;
+mod semantic_fingerprint;
 pub mod session;
 mod video;
 mod wait;
@@ -55,6 +56,7 @@ pub use semantic::{
     AgentActionResult, BrowserActionOutcome, BrowserBounds, BrowserControlFailure, BrowserControlValue, BrowserNode,
     BrowserSnapshot, BrowserTarget, NavigationOutcome, NavigationState, SelectorState, WaitOutcome,
 };
+pub use semantic_fingerprint::{TeachFingerprint, match_fingerprint};
 pub use session::{
     BrowserCommand, BrowserEvent, BrowserEventWaker, BrowserSession, BrowserSessionConfig, BrowserShutdownSignal,
     CommittedUrl, start_session,

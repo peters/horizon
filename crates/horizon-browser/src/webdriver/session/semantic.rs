@@ -6,6 +6,9 @@ use crate::semantic::{
     bounded_control_value, check_script_error, parse_target_rect, scan_expression, scroll_expression,
     target_rect_expression, wait_scan_expression,
 };
+use crate::semantic_fingerprint::{
+    fingerprint_at_point_expression, fingerprint_focused_expression, fingerprint_from_script_value,
+};
 use crate::session::BrowserEventSender;
 use crate::{
     AgentAction, BackendKind, BrowserButton, BrowserControlAction, BrowserControlFailure, BrowserControlValue,
@@ -137,6 +140,7 @@ impl Driver {
         let selector = self.semantic.resolve(target)?;
         let value = self.evaluate_json(&target_rect_expression(&selector, false))?;
         let (x, y) = parse_target_rect(&value)?;
+        self.capture_teach_fingerprint(Some((x, y)))?;
         self.perform_click(x, y, count, event_tx)
             .map_err(|error| BrowserControlFailure::new("input_failed", error))?;
         Ok(BrowserControlValue::Accepted)
@@ -175,6 +179,7 @@ impl Driver {
         let selector = self.semantic.resolve(target)?;
         let result = self.evaluate_json(&target_rect_expression(&selector, true))?;
         let _ = parse_target_rect(&result)?;
+        self.capture_teach_fingerprint(None)?;
         self.perform_input(
             BrowserInput::InsertText {
                 text: value.to_string(),
@@ -205,6 +210,21 @@ impl Driver {
     fn semantic_evaluate(&self, expression: &str) -> Result<BrowserControlValue, BrowserControlFailure> {
         let value = self.evaluate_json(expression)?;
         Ok(BrowserControlValue::Json { value })
+    }
+
+    fn capture_teach_fingerprint(&mut self, point: Option<(f64, f64)>) -> Result<(), BrowserControlFailure> {
+        if !self.semantic.teach_active() {
+            return Ok(());
+        }
+        let expression = match point {
+            Some((x, y)) => fingerprint_at_point_expression(x, y),
+            None => fingerprint_focused_expression(),
+        };
+        let value = self.evaluate_json(&expression)?;
+        if let Ok(fingerprint) = fingerprint_from_script_value(&value) {
+            self.semantic.store_teach_fingerprint(fingerprint);
+        }
+        Ok(())
     }
 
     fn evaluate_json(&self, expression: &str) -> Result<Value, BrowserControlFailure> {

@@ -10,6 +10,9 @@ use crate::semantic::{
     bounded_control_value, check_script_error, parse_target_rect, scan_expression, scroll_expression,
     target_rect_expression, wait_scan_expression,
 };
+use crate::semantic_fingerprint::{
+    fingerprint_at_point_expression, fingerprint_focused_expression, fingerprint_from_script_value,
+};
 use crate::{
     AgentAction, BrowserButton, BrowserControlAction, BrowserControlFailure, BrowserControlValue, BrowserInput,
     BrowserModifiers, BrowserSnapshot,
@@ -177,6 +180,7 @@ impl DriverState {
         let selector = self.semantic.resolve(target)?;
         let value = self.evaluate_json(link, event_tx, frame_slot, &target_rect_expression(&selector, false))?;
         let (x, y) = parse_target_rect(&value)?;
+        self.capture_teach_fingerprint(link, event_tx, frame_slot, Some((x, y)))?;
         self.interaction_started_at.get_or_insert_with(std::time::Instant::now);
         for click_count in 1..=count {
             self.send_semantic_input(link, event_tx, frame_slot, pointer_press(x, y, click_count))?;
@@ -196,6 +200,7 @@ impl DriverState {
         let selector = self.semantic.resolve(target)?;
         let result = self.evaluate_json(link, event_tx, frame_slot, &target_rect_expression(&selector, true))?;
         let _ = parse_target_rect(&result)?;
+        self.capture_teach_fingerprint(link, event_tx, frame_slot, None)?;
         self.interaction_started_at.get_or_insert_with(std::time::Instant::now);
         self.send_semantic_input(
             link,
@@ -286,6 +291,27 @@ impl DriverState {
             .ok_or_else(|| BrowserControlFailure::new("invalid_result", "CDP returned no evaluation result"))?;
         let value = remote.get("value").cloned().unwrap_or(Value::Null);
         bounded_control_value(value)
+    }
+
+    fn capture_teach_fingerprint(
+        &mut self,
+        link: &mut crate::cdp::CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        point: Option<(f64, f64)>,
+    ) -> Result<(), BrowserControlFailure> {
+        if !self.semantic.teach_active() {
+            return Ok(());
+        }
+        let expression = match point {
+            Some((x, y)) => fingerprint_at_point_expression(x, y),
+            None => fingerprint_focused_expression(),
+        };
+        let value = self.evaluate_json(link, event_tx, frame_slot, &expression)?;
+        if let Ok(fingerprint) = fingerprint_from_script_value(&value) {
+            self.semantic.store_teach_fingerprint(fingerprint);
+        }
+        Ok(())
     }
 
     fn send_semantic_input(
