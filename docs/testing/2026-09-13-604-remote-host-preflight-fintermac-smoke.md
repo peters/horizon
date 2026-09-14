@@ -82,7 +82,13 @@ explicit about which steps mutate the host so the proof is not overclaimed.
      done;
      df -kP "$WS" | tail -1;
      if command -v docker >/dev/null 2>&1; then
-       HOST="${DOCKER_HOST:-$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null)}";
+       if [ -n "${DOCKER_CONTEXT:-}" ]; then
+         HOST=$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null);
+       elif [ -n "${DOCKER_HOST:-}" ]; then
+         HOST="$DOCKER_HOST";
+       else
+         HOST=$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null);
+       fi;
        case "$HOST" in
          unix://*|/*) docker --host "$HOST" info --format "{{.ServerVersion}}" 2>&1 | head -1 ;;
          *) echo "docker endpoint is not a local unix socket" ;;
