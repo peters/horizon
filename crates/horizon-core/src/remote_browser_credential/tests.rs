@@ -567,13 +567,13 @@ fn workbench_probes_stores_and_deletes_keychain_values_off_thread() {
     let mut workbench = CredentialWorkbench::with_opener(fake_opener(false));
     assert_eq!(workbench.keychain_state(), &KeychainState::Opening);
     assert_eq!(
-        workbench.readiness("grid", &profile)[0].state,
+        workbench.readiness(&profile)[0].state,
         CredentialState::Checking,
         "before the store opens the OS value is unknown"
     );
     wait_until(&mut workbench, |w| w.keychain_state() == &KeychainState::Available);
     wait_until(&mut workbench, |w| {
-        w.readiness("grid", &profile)[0].state == CredentialState::Missing
+        w.readiness(&profile)[0].state == CredentialState::Missing
     });
     assert!(workbench.keychain_store().is_some());
 
@@ -581,12 +581,9 @@ fn workbench_probes_stores_and_deletes_keychain_values_off_thread() {
     workbench
         .store_in_keychain("grid", &profile, &user, b"alice")
         .expect("store request accepted");
-    assert_eq!(
-        workbench.readiness("grid", &profile)[0].state,
-        CredentialState::Checking
-    );
+    assert_eq!(workbench.readiness(&profile)[0].state, CredentialState::Checking);
     wait_until(&mut workbench, |w| {
-        w.readiness("grid", &profile)[0].state == CredentialState::Present
+        w.readiness(&profile)[0].state == CredentialState::Present
     });
     let notices = workbench.take_notices();
     assert_eq!(notices.len(), 1);
@@ -604,7 +601,7 @@ fn workbench_probes_stores_and_deletes_keychain_values_off_thread() {
     let key_binding = aliased.credential_bindings.get_mut(&key).expect("bound");
     key_binding.store = CredentialStoreKind::OsKeychain;
     key_binding.slot = user_slot;
-    let report = workbench.readiness("grid", &aliased);
+    let report = workbench.readiness(&aliased);
     assert_eq!(
         (report[0].state, report[1].state),
         (CredentialState::Present, CredentialState::Present),
@@ -615,15 +612,44 @@ fn workbench_probes_stores_and_deletes_keychain_values_off_thread() {
         .delete("grid", &profile, &user)
         .expect("delete request accepted");
     wait_until(&mut workbench, |w| {
-        w.readiness("grid", &profile)[0].state == CredentialState::Missing
+        w.readiness(&profile)[0].state == CredentialState::Missing
     });
     let deleted = workbench.take_notices();
     assert_eq!(
         (deleted[0].kind, &deleted[0].error),
         (NoticeKind::DeletedFromKeychain, &None)
     );
+
+    // A second provider on the same origin, reference and slot shows the
+    // same profile; the answer to the first provider's save still lands on
+    // the row that asked.
+    workbench
+        .store_in_keychain("grid", &profile, &user, b"alice")
+        .expect("store request accepted");
+    wait_until(&mut workbench, |w| !w.is_busy());
+    let stored = workbench.take_notices();
+    assert_eq!(stored.len(), 1);
     assert_eq!(
-        workbench.readiness("grid", &aliased)[1].state,
+        (
+            stored[0].provider.as_str(),
+            stored[0].reference.as_str(),
+            stored[0].kind
+        ),
+        ("grid", "user", NoticeKind::StoredInKeychain),
+        "the notice names the row that asked"
+    );
+    workbench
+        .delete("mirror", &profile, &user)
+        .expect("delete through the other provider");
+    wait_until(&mut workbench, |w| !w.is_busy());
+    let mirrored = workbench.take_notices();
+    assert_eq!(
+        (mirrored[0].provider.as_str(), mirrored[0].kind),
+        ("mirror", NoticeKind::DeletedFromKeychain),
+        "and a second provider's request answers on its own row"
+    );
+    assert_eq!(
+        workbench.readiness(&aliased)[1].state,
         CredentialState::Missing,
         "deleting through one reference empties the aliased row too"
     );
@@ -647,8 +673,18 @@ fn workbench_reports_an_unavailable_or_locked_store_without_values() {
         &KeychainState::Unavailable(RemoteCredentialError::Locked)
     );
     assert!(!unavailable.is_busy());
+
+    // A worker that dies with probes in flight must not leave the app
+    // polling for answers that will never come.
+    let mut dying = CredentialWorkbench::with_opener(fake_opener(false));
+    wait_until(&mut dying, |w| w.keychain_state() == &KeychainState::Available);
+    dying.readiness(&profile);
+    dying.simulate_worker_loss_for_tests();
+    dying.poll();
+    assert!(!dying.is_busy(), "in-flight entries settle when the worker is gone");
+    assert_eq!(dying.readiness(&profile)[0].state, CredentialState::StoreUnavailable);
     assert_eq!(
-        unavailable.readiness("grid", &profile)[0].state,
+        unavailable.readiness(&profile)[0].state,
         CredentialState::Locked,
         "readiness carries the store's own reason"
     );
@@ -669,7 +705,7 @@ fn workbench_reports_an_unavailable_or_locked_store_without_values() {
     let mut locked = CredentialWorkbench::with_opener(fake_opener(true));
     wait_until(&mut locked, |w| w.keychain_state() == &KeychainState::Available);
     wait_until(&mut locked, |w| {
-        w.readiness("grid", &profile)[0].state == CredentialState::Locked
+        w.readiness(&profile)[0].state == CredentialState::Locked
     });
 }
 
@@ -681,7 +717,7 @@ fn workbench_session_values_are_immediate_and_store_bound() {
     workbench
         .set_session_value("grid", &profile, &key, b"s3cret")
         .expect("session value");
-    assert_eq!(workbench.readiness("grid", &profile)[1].state, CredentialState::Present);
+    assert_eq!(workbench.readiness(&profile)[1].state, CredentialState::Present);
     assert_eq!(workbench.session_value_count(), 1);
     let set = workbench.take_notices();
     assert_eq!((set[0].kind, &set[0].error), (NoticeKind::SessionValueSet, &None));
@@ -698,7 +734,7 @@ fn workbench_session_values_are_immediate_and_store_bound() {
         RemoteCredentialError::StoreUnavailable
     );
     workbench.delete("grid", &profile, &key).expect("delete session value");
-    assert_eq!(workbench.readiness("grid", &profile)[1].state, CredentialState::Missing);
+    assert_eq!(workbench.readiness(&profile)[1].state, CredentialState::Missing);
     workbench
         .set_session_value("grid", &profile, &key, b"again")
         .expect("session value");

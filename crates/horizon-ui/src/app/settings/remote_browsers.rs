@@ -176,7 +176,7 @@ fn render_provider(
                     .size(11.0),
             );
         }
-        let readiness = workbench.readiness(name, profile);
+        let readiness = workbench.readiness(profile);
         if readiness.is_empty() {
             super::dim_label(ui, "No authentication configured for this provider.");
             return;
