@@ -90,9 +90,13 @@ Rules the configuration PR enforces:
   verifies it after allocation.
 - `credential_bindings` hold references only. `store: session` binds a value
   entered in Horizon and held in a scoped in-memory sink until explicit clear or
-  exit. `store: os_keychain` uses the `keyring` crate with the platform features
-  chosen in the routine-credential ADR, under a distinct service name for
-  remote providers. No file store, no environment interpolation.
+  exit. `store: os_keychain` uses `keyring-core` with the native store crates
+  the routine-credential ADR selected (macOS Keychain, Windows Credential
+  Manager, Linux Secret Service), under the distinct service name
+  `horizon-remote-browser` and items keyed by endpoint origin plus slot. The
+  `keyring` facade crate itself is not linked: its 4.x documentation directs
+  applications that choose their stores to `keyring-core`. No file store, no
+  environment interpolation.
 - Exported profiles carry providers, targets, limits and authentication
   references; machine-local `credential_bindings` are stripped, and whether a
   reference has a value on this machine is a live readiness query rather than
