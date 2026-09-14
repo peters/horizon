@@ -377,7 +377,9 @@ def main() -> int:
                 steps.append({"step": "drawer_open", "is_error": drawer.get("isError") or drawer_wait.get("isError")})
                 shot(args.display, root / f"{target}-04-drawer.png")
                 closed_drawer = raw(client, "browser_act", {"panel_id": panel_id, "action": "click", "selector": "#close-drawer"})
-                steps.append({"step": "drawer_close", "is_error": closed_drawer.get("isError")})
+                closed_wait = raw(client, "browser_wait", {"panel_id": panel_id, "selector": "#drawer", "state": "hidden", "timeout_millis": 10000})
+                steps.append({"step": "drawer_close", "is_error": closed_drawer.get("isError") or closed_wait.get("isError"),
+                              "elapsed_millis": (closed_wait.get("structuredContent") or {}).get("elapsed_millis")})
                 frame = raw(client, "browser_query", {"panel_id": panel_id, "selector": "#frame", "max_results": 1})
                 steps.append({"step": "iframe_boundary", "is_error": frame.get("isError"),
                               "nodes": (frame.get("structuredContent") or {}).get("nodes")})
@@ -390,7 +392,7 @@ def main() -> int:
                 steps.append({"step": "browser_close", "is_error": closed.get("isError"),
                               "result": closed.get("structuredContent") or closed.get("content")})
                 listed = raw(client, "browser_list", {})
-                steps.append({"step": "browser_list_after_close",
+                steps.append({"step": "browser_list_after_close", "is_error": listed.get("isError"),
                               "panels": [p.get("panel_id") for p in ((listed.get("structuredContent") or {}).get("panels") or [])]})
             finally:
                 client.close()
@@ -460,8 +462,8 @@ def target_failures(steps: list[dict]) -> list[str]:
     closed = require("browser_close")
     if closed and not (closed.get("result") or {}).get("closed"):
         problems.append("browser_close: not closed")
-    listed = by_step.get("browser_list_after_close")
-    if listed is None or listed.get("panels"):
+    listed = require("browser_list_after_close")
+    if listed and listed.get("panels"):
         problems.append("browser_list_after_close: panel still listed")
     proof = by_step.get("provider_release_proof")
     if proof is None or not proof.get("terminal"):
