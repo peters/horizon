@@ -638,6 +638,7 @@ mod tests {
             coordination: None,
             capture_directory: None,
             video: Arc::new(crate::VideoCaptureHandle::default()),
+            remote: None,
         })
         .unwrap_or_else(|error| panic!("start browser session: {error}"));
 

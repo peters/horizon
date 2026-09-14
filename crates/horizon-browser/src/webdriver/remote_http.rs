@@ -43,7 +43,7 @@ impl RemoteAuthorizationHeader {
         Ok(Self { value })
     }
 
-    fn as_str(&self) -> &str {
+    pub(super) fn value(&self) -> &str {
         &self.value
     }
 }
@@ -142,7 +142,7 @@ impl ClassicTransport for RemoteHttpClient {
     ) -> Result<Value, HttpError> {
         let url = self.url(path)?;
         let timeout = read_timeout;
-        let authorization = self.authorization.as_ref().map(RemoteAuthorizationHeader::as_str);
+        let authorization = self.authorization.as_ref().map(RemoteAuthorizationHeader::value);
         let response = match method {
             "GET" => configure(self.agent.get(&url), timeout, authorization).call(),
             "DELETE" => configure(self.agent.delete(&url), timeout, authorization).call(),

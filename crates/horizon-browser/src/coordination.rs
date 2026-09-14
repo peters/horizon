@@ -187,6 +187,7 @@ mod tests {
             coordination: Some(Arc::new(RefusingCoordination)),
             capture_directory: None,
             video: Arc::new(crate::VideoCaptureHandle::default()),
+            remote: None,
         };
 
         assert!(CoordinationLifetime::start(&config).is_none());

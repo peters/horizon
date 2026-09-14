@@ -105,6 +105,8 @@ pub enum BrowserEvent {
     },
     /// The agent owning this panel changed (`None` = no live owner).
     OwnerChanged(Option<String>),
+    /// Allocation, expiry and release facts for a remote session.
+    RemoteSession(crate::RemoteSessionEvent),
 }
 
 /// Everything the driver needs to start.
@@ -127,6 +129,9 @@ pub struct BrowserSessionConfig {
     pub capture_directory: Option<PathBuf>,
     /// Shared page-pixel recording status for the host UI and driver.
     pub video: Arc<crate::VideoCaptureHandle>,
+    /// When set, the session runs at a remote grid through the classic
+    /// `WebDriver` path instead of a local browser process.
+    pub remote: Option<crate::RemoteSessionRequest>,
 }
 
 /// The panel-side handle to a running driver.
@@ -208,6 +213,15 @@ pub fn start_session(config: BrowserSessionConfig) -> Result<BrowserSession, cra
     std::thread::Builder::new()
         .name("browser-driver".into())
         .spawn(move || match config.browser.backend {
+            _ if config.remote.is_some() => crate::webdriver::run_webdriver(
+                &config,
+                &event_tx,
+                &command_rx,
+                &slot,
+                &driver_stop_requested,
+                completion_tx,
+                &driver_process_control,
+            ),
             BackendKind::ChromiumCdp => run_driver(
                 &config,
                 &event_tx,

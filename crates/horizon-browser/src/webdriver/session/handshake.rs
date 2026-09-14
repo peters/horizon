@@ -12,9 +12,10 @@ use super::super::service::prepare_profile;
 use super::super::transport::ClassicTransport;
 use super::{PAGE_LOAD_TIMEOUT_MILLIS, safari};
 
-pub(super) struct NewSession {
-    pub(super) id: String,
-    pub(super) capabilities: Value,
+#[derive(Debug)]
+pub(in crate::webdriver) struct NewSession {
+    pub(in crate::webdriver) id: String,
+    pub(in crate::webdriver) capabilities: Value,
 }
 
 pub(super) fn initial_safari_input(
@@ -120,7 +121,7 @@ pub(super) fn safe_session_id(id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
-pub(super) fn parse_new_session_response(response: &Value) -> Result<NewSession, String> {
+pub(in crate::webdriver) fn parse_new_session_response(response: &Value) -> Result<NewSession, String> {
     let value = response.get("value").unwrap_or(response);
     let id = value
         .get("sessionId")

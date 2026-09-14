@@ -108,6 +108,8 @@ pub struct BrowserPanelState {
     pub navigation_error: Option<String>,
     /// Last page-pixel recording failure; cleared when a new recording starts.
     pub video_error: Option<String>,
+    /// Latest remote-session lifecycle note (allocation, expiry, release), value-free.
+    pub remote_status: Option<String>,
     /// User-typed navigation kept as the display and retry target until the
     /// driver commits a reachable page, so the input is never discarded.
     pending_user_navigation: Option<String>,
@@ -158,6 +160,7 @@ impl BrowserPanelState {
             host_focus_request: None,
             navigation_error: None,
             video_error: None,
+            remote_status: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -202,6 +205,7 @@ impl BrowserPanelState {
             host_focus_request: None,
             navigation_error: None,
             video_error: None,
+            remote_status: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: profile_root_resolved,
@@ -330,6 +334,7 @@ impl BrowserPanelState {
             coordination: Some(Arc::new(manifest::ManifestCoordination::default())),
             capture_directory: Some(capture_directory),
             video: Arc::new(horizon_browser::VideoCaptureHandle::default()),
+            remote: None,
         };
         match session::start_session(session_config) {
             Ok(handle) => {
@@ -685,6 +690,7 @@ impl BrowserPanelState {
                 output.had_output = true;
             }
             BrowserEvent::Stopped { code } => self.apply_stopped(code, output),
+            BrowserEvent::RemoteSession(event) => self.apply_remote_session_event(event, output),
             BrowserEvent::HandoffRequested(reason) => {
                 self.handoff_reason = Some(reason);
                 self.handoff_error = None;
@@ -735,6 +741,40 @@ impl BrowserPanelState {
         if !url.is_empty() && url != "about:blank" {
             self.pending_user_navigation = None;
         }
+        output.had_output = true;
+    }
+
+    fn apply_remote_session_event(
+        &mut self,
+        event: horizon_browser::RemoteSessionEvent,
+        output: &mut BrowserDrainOutput,
+    ) {
+        use horizon_browser::{RemoteExpiry, RemoteReleaseOutcome, RemoteSessionEvent};
+        let note = match event {
+            RemoteSessionEvent::Allocating { label } => format!("allocating remote device for {label}"),
+            RemoteSessionEvent::Allocated { label, session_digest } => {
+                format!("remote session {session_digest} allocated for {label}")
+            }
+            RemoteSessionEvent::AllocationUnknown { label, reason } => {
+                format!("remote allocation for {label} is unknown ({reason}); check the provider before retrying")
+            }
+            RemoteSessionEvent::Expired { label, reason } => match reason {
+                RemoteExpiry::HardDeadline => format!("remote session for {label} reached its maximum lifetime"),
+                RemoteExpiry::Idle => format!("remote session for {label} was released after idling"),
+            },
+            RemoteSessionEvent::Released { label, outcome } => match outcome {
+                RemoteReleaseOutcome::Released => format!("remote session for {label} released"),
+                RemoteReleaseOutcome::AlreadyGone => format!("remote session for {label} was already gone"),
+                RemoteReleaseOutcome::ReleaseUnknown { attempts, reason } => format!(
+                    "remote session for {label} may still be held: {attempts} release attempts failed ({reason})"
+                ),
+                RemoteReleaseOutcome::Failed { error, message } => {
+                    format!("remote session for {label} could not be released ({error}: {message})")
+                }
+            },
+        };
+        tracing::info!(target: "browser", "{note}");
+        self.remote_status = Some(note);
         output.had_output = true;
     }
 
@@ -880,6 +920,7 @@ mod tests {
             host_focus_request: None,
             navigation_error: None,
             video_error: None,
+            remote_status: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -922,6 +963,7 @@ mod tests {
             host_focus_request: None,
             navigation_error: None,
             video_error: None,
+            remote_status: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -958,6 +1000,7 @@ mod tests {
             host_focus_request: None,
             navigation_error: None,
             video_error: None,
+            remote_status: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1002,6 +1045,7 @@ mod tests {
             host_focus_request: None,
             navigation_error: None,
             video_error: None,
+            remote_status: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1044,6 +1088,7 @@ mod tests {
             host_focus_request: None,
             navigation_error: None,
             video_error: None,
+            remote_status: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1120,6 +1165,7 @@ mod tests {
             host_focus_request: None,
             navigation_error: None,
             video_error: None,
+            remote_status: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1158,6 +1204,7 @@ mod tests {
             host_focus_request: None,
             navigation_error: Some("stale error".to_string()),
             video_error: None,
+            remote_status: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1195,6 +1242,7 @@ mod tests {
             host_focus_request: None,
             navigation_error: None,
             video_error: None,
+            remote_status: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
@@ -1235,6 +1283,7 @@ mod tests {
             host_focus_request: None,
             navigation_error: None,
             video_error: None,
+            remote_status: None,
             pending_user_navigation: None,
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
