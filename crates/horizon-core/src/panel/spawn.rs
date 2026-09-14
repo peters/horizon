@@ -10,6 +10,8 @@ use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde_json::{Map, Value};
+
 use uuid::Uuid;
 
 use crate::agents::AgentStatus;
@@ -603,20 +605,49 @@ fn horizon_codex_mcp_args() -> Vec<String> {
 
 fn horizon_opencode_mcp_overlay() -> Option<String> {
     let command = crate::browser_mcp_executable()?.into_os_string().into_string().ok()?;
-    serde_json::to_string(&serde_json::json!({
-        "mcp": {
-            "horizon-browser": {
-                "type": "local",
-                "command": [command, "--browser-mcp"],
-                "enabled": true,
-                "environment": {
-                    "HORIZON_BROWSER_ACTOR": "{env:HORIZON_BROWSER_ACTOR}",
-                    "HORIZON_BROWSER_HOST_INSTANCE": "{env:HORIZON_BROWSER_HOST_INSTANCE}",
-                }
+    merge_opencode_mcp_overlay(std::env::var("OPENCODE_CONFIG_CONTENT").ok().as_deref(), &command)
+}
+
+fn merge_opencode_mcp_overlay(existing: Option<&str>, command: &str) -> Option<String> {
+    let mut root = match existing.map(str::trim).filter(|value| !value.is_empty()) {
+        None => Value::Object(Map::new()),
+        Some(raw) => match serde_json::from_str::<Value>(raw) {
+            Ok(Value::Object(map)) => Value::Object(map),
+            Ok(_) => {
+                tracing::warn!("OPENCODE_CONFIG_CONTENT is not a JSON object; skipping Horizon browser MCP overlay");
+                return None;
             }
+            Err(error) => {
+                tracing::warn!(%error, "OPENCODE_CONFIG_CONTENT is not valid JSON; skipping Horizon browser MCP overlay");
+                return None;
+            }
+        },
+    };
+    let object = root.as_object_mut()?;
+    match object.get("mcp") {
+        None => {
+            object.insert("mcp".to_string(), Value::Object(Map::new()));
         }
-    }))
-    .ok()
+        Some(Value::Object(_)) => {}
+        Some(_) => {
+            tracing::warn!("OPENCODE_CONFIG_CONTENT.mcp is not a JSON object; skipping Horizon browser MCP overlay");
+            return None;
+        }
+    }
+    let mcp = object.get_mut("mcp")?.as_object_mut()?;
+    mcp.insert(
+        "horizon-browser".to_string(),
+        serde_json::json!({
+            "type": "local",
+            "command": [command, "--browser-mcp"],
+            "enabled": true,
+            "environment": {
+                "HORIZON_BROWSER_ACTOR": "{env:HORIZON_BROWSER_ACTOR}",
+                "HORIZON_BROWSER_HOST_INSTANCE": "{env:HORIZON_BROWSER_HOST_INSTANCE}",
+            }
+        }),
+    );
+    serde_json::to_string(&root).ok()
 }
 
 fn horizon_claude_plugin_args() -> Vec<String> {
@@ -746,6 +777,27 @@ mod tests {
         assert!(overlay.contains("{env:HORIZON_BROWSER_HOST_INSTANCE}"));
         assert!(!agent_env(PanelKind::Pi, "pi-panel").contains_key("OPENCODE_CONFIG_CONTENT"));
         assert!(!agent_env(PanelKind::Grok, "grok-panel").contains_key("OPENCODE_CONFIG_CONTENT"));
+    }
+
+    #[test]
+    fn opencode_overlay_merges_into_existing_inline_config() {
+        let overlay = merge_opencode_mcp_overlay(
+            Some(r#"{"model":"x","mcp":{"github":{"type":"remote","url":"https://example"}}}"#),
+            "/opt/horizon",
+        )
+        .expect("merge overlay");
+        assert!(overlay.contains("\"model\":\"x\"") || overlay.contains("\"model\": \"x\""));
+        assert!(overlay.contains("github"));
+        assert!(overlay.contains("https://example"));
+        assert!(overlay.contains("horizon-browser"));
+        assert!(overlay.contains("/opt/horizon"));
+    }
+
+    #[test]
+    fn opencode_overlay_skips_non_object_inline_config() {
+        assert!(merge_opencode_mcp_overlay(Some("[1,2]"), "/opt/horizon").is_none());
+        assert!(merge_opencode_mcp_overlay(Some("not-json"), "/opt/horizon").is_none());
+        assert!(merge_opencode_mcp_overlay(Some(r#"{"mcp":[]}"#), "/opt/horizon").is_none());
     }
 
     #[test]

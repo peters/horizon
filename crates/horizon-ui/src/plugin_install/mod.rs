@@ -846,7 +846,8 @@ mod tests {
         let antigravity = std::fs::read_to_string(user_home.join(".gemini/config/mcp_config.json"))
             .expect("antigravity after last host");
         assert!(!antigravity.contains("horizon-browser"));
-        assert!(!grok_home.join("config.toml").exists());
+        let grok = std::fs::read_to_string(grok_home.join("config.toml")).unwrap_or_default();
+        assert!(!grok.contains("horizon-browser"));
     }
 
     #[test]

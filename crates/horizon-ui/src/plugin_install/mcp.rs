@@ -7,7 +7,7 @@
 
 use std::ffi::OsStr;
 use std::fs::{OpenOptions, TryLockError};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
@@ -87,18 +87,23 @@ pub(super) fn release_mcp_attachments(leases: &mut [McpAttachmentLease]) {
             }
         };
         drop(lease.live_lock.take());
-        if let Err(error) = std::fs::remove_file(&lease.live_path)
-            && error.kind() != io::ErrorKind::NotFound
-        {
-            tracing::warn!(path = %lease.live_path.display(), %error, "failed to remove MCP attachment live lock");
-        }
         let live_dir = lease.live_path.parent().unwrap_or(coord_dir.as_path());
-        match another_live_host(live_dir, &lease.live_path) {
-            Ok(true) => {}
-            Ok(false) => detach_attachment(lease),
+        let peer_command = match live_peer_command(live_dir, &lease.live_path) {
+            Ok(command) => command,
             Err(error) => {
                 tracing::warn!(path = %live_dir.display(), %error, "failed to inspect MCP attachment leases");
+                None
             }
+        };
+        remove_live_files(&lease.live_path);
+        match peer_command {
+            Some(command) if !command.is_empty() => {
+                if let Err(error) = attach_config(&lease.path, lease.kind, &command) {
+                    tracing::warn!(path = %lease.path.display(), %error, "failed to retarget Horizon browser MCP to a live host");
+                }
+            }
+            Some(_) => {}
+            None => detach_attachment(lease),
         }
         drop(coord);
     }
@@ -107,11 +112,7 @@ pub(super) fn release_mcp_attachments(leases: &mut [McpAttachmentLease]) {
 impl Drop for McpAttachmentLease {
     fn drop(&mut self) {
         drop(self.live_lock.take());
-        if let Err(error) = std::fs::remove_file(&self.live_path)
-            && error.kind() != io::ErrorKind::NotFound
-        {
-            tracing::warn!(path = %self.live_path.display(), %error, "failed to drop MCP attachment live lock");
-        }
+        remove_live_files(&self.live_path);
     }
 }
 
@@ -159,7 +160,7 @@ fn acquire_attachment(
         Ok(()) => {}
         Err(error) => {
             drop(coord);
-            let _ = std::fs::remove_file(&live_path);
+            remove_live_files(&live_path);
             return Err(match error {
                 TryLockError::WouldBlock => io::Error::new(
                     io::ErrorKind::WouldBlock,
@@ -169,12 +170,12 @@ fn acquire_attachment(
             });
         }
     }
-    let peer_live = match another_live_host(&live_dir, &live_path) {
-        Ok(live) => live,
+    let peer_live = match live_peer_command(&live_dir, &live_path) {
+        Ok(command) => command.is_some(),
         Err(error) => {
             drop(coord);
             drop(live_lock);
-            let _ = std::fs::remove_file(&live_path);
+            remove_live_files(&live_path);
             return Err(error);
         }
     };
@@ -189,10 +190,13 @@ fn acquire_attachment(
             }
         }
     };
+    if attached && let Err(error) = write_text_atomic(&command_sidecar_path(&live_path), command) {
+        tracing::warn!(path = %live_path.display(), %error, "failed to record Horizon browser MCP command");
+    }
     drop(coord);
     if !attached {
         drop(live_lock);
-        let _ = std::fs::remove_file(&live_path);
+        remove_live_files(&live_path);
         return Ok(None);
     }
     Ok(Some(McpAttachmentLease {
@@ -381,7 +385,7 @@ fn remove_grok_server(path: &Path) -> io::Result<()> {
     };
     let stripped = strip_grok_managed_block(&contents);
     if stripped.trim().is_empty() {
-        return remove_existing(path);
+        return write_text_atomic(path, "");
     }
     if stripped == contents {
         return Ok(());
@@ -447,8 +451,21 @@ fn grok_managed_span(contents: &str) -> Option<(usize, usize)> {
 }
 
 fn has_unmanaged_grok_server(contents: &str) -> bool {
-    let rest = strip_grok_managed_block(contents);
-    rest.contains("mcp_servers.horizon-browser") || rest.contains("[mcp_servers]") && rest.contains("horizon-browser")
+    grok_remainder_has_horizon_browser(&strip_grok_managed_block(contents))
+}
+
+fn grok_remainder_has_horizon_browser(rest: &str) -> bool {
+    let trimmed = rest.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let Ok(table) = trimmed.parse::<toml::Table>() else {
+        return true;
+    };
+    table
+        .get("mcp_servers")
+        .and_then(toml::Value::as_table)
+        .is_some_and(|servers| servers.contains_key(SERVER_NAME))
 }
 
 fn toml_string(value: &str) -> String {
@@ -499,12 +516,14 @@ fn lock_coord(leases_dir: &Path) -> io::Result<std::fs::File> {
     Ok(file)
 }
 
-fn another_live_host(live_dir: &Path, current: &Path) -> io::Result<bool> {
+fn live_peer_command(live_dir: &Path, current: &Path) -> io::Result<Option<String>> {
     let entries = match std::fs::read_dir(live_dir) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
+    let mut live_command = None;
+    let mut found_live = false;
     for entry in entries {
         let entry = entry?;
         let path = entry.path();
@@ -515,13 +534,45 @@ fn another_live_host(live_dir: &Path, current: &Path) -> io::Result<bool> {
         match file.try_lock() {
             Ok(()) => {
                 drop(file);
-                let _ = std::fs::remove_file(&path);
+                remove_live_files(&path);
             }
-            Err(TryLockError::WouldBlock) => return Ok(true),
+            Err(TryLockError::WouldBlock) => {
+                found_live = true;
+                if live_command.is_none() {
+                    live_command = read_command_sidecar(&path);
+                }
+            }
             Err(TryLockError::Error(error)) => return Err(error),
         }
     }
-    Ok(false)
+    if found_live {
+        Ok(Some(live_command.unwrap_or_default()))
+    } else {
+        Ok(None)
+    }
+}
+
+fn command_sidecar_path(live_path: &Path) -> PathBuf {
+    live_path.with_extension("command")
+}
+
+fn read_command_sidecar(live_path: &Path) -> Option<String> {
+    let path = command_sidecar_path(live_path);
+    let mut file = std::fs::File::open(&path).ok()?;
+    let mut command = String::new();
+    file.read_to_string(&mut command).ok()?;
+    let command = command.trim();
+    (!command.is_empty()).then(|| command.to_string())
+}
+
+fn remove_live_files(live_path: &Path) {
+    for path in [live_path, &command_sidecar_path(live_path)] {
+        if let Err(error) = std::fs::remove_file(path)
+            && error.kind() != io::ErrorKind::NotFound
+        {
+            tracing::warn!(path = %path.display(), %error, "failed to remove MCP attachment lock file");
+        }
+    }
 }
 
 fn is_live_lock(name: &OsStr) -> bool {
@@ -551,25 +602,34 @@ fn read_existing(path: &Path) -> io::Result<Option<String>> {
     }
 }
 
-fn remove_existing(path: &Path) -> io::Result<()> {
-    match std::fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error),
-    }
-}
-
 fn write_text_atomic(path: &Path, content: &str) -> io::Result<()> {
-    if std::fs::read_to_string(path).ok().as_deref() == Some(content) {
+    let destination = write_destination(path)?;
+    if std::fs::read_to_string(&destination).ok().as_deref() == Some(content) {
         return Ok(());
     }
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let parent = destination.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(parent)?;
     let mut temp_file = tempfile::NamedTempFile::new_in(parent)?;
     temp_file.write_all(content.as_bytes())?;
     temp_file.flush()?;
-    temp_file.persist(path).map_err(|error| error.error)?;
+    temp_file.persist(&destination).map_err(|error| error.error)?;
     Ok(())
+}
+
+fn write_destination(path: &Path) -> io::Result<PathBuf> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            let target = std::fs::read_link(path)?;
+            if target.is_absolute() {
+                Ok(target)
+            } else {
+                Ok(path.parent().unwrap_or_else(|| Path::new(".")).join(target))
+            }
+        }
+        Ok(_) => Ok(path.to_path_buf()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(path.to_path_buf()),
+        Err(error) => Err(error),
+    }
 }
 
 #[cfg(test)]
@@ -670,7 +730,8 @@ mod tests {
         assert!(pi.contains("github"));
         assert!(!pi.contains(SERVER_NAME));
         assert!(!home.join(".config/opencode/opencode.json").exists());
-        assert!(!home.join(".grok/config.toml").exists());
+        let grok = std::fs::read_to_string(home.join(".grok/config.toml")).unwrap_or_default();
+        assert!(!grok.contains("horizon-browser"));
     }
 
     #[test]
@@ -704,7 +765,7 @@ mod tests {
     fn live_peer_keeps_attached_mcp() {
         let temp = tempfile::tempdir().expect("temp dir");
         let home = temp.path().join("home");
-        let first = bind_browser_mcp_attachments(
+        let mut first = bind_browser_mcp_attachments(
             OsStr::new("host-a"),
             Path::new("/opt/horizon-a"),
             Some(&home),
@@ -716,12 +777,16 @@ mod tests {
             Some(&home),
             Some(&home.join(".grok")),
         );
-        release_mcp_attachments(&mut second);
-        let pi = std::fs::read_to_string(home.join(".pi/agent/mcp.json")).expect("pi");
+        let pi = std::fs::read_to_string(home.join(".pi/agent/mcp.json")).expect("pi after second attach");
         assert!(pi.contains("/opt/horizon-a"));
         assert!(!pi.contains("/opt/horizon-b"));
-        assert!(home.join(".grok/config.toml").is_file());
-        drop(first);
+        release_mcp_attachments(&mut first);
+        let pi = std::fs::read_to_string(home.join(".pi/agent/mcp.json")).expect("pi after first host exit");
+        assert!(pi.contains("/opt/horizon-b"));
+        assert!(!pi.contains("/opt/horizon-a"));
+        release_mcp_attachments(&mut second);
+        let pi = std::fs::read_to_string(home.join(".pi/agent/mcp.json")).expect("pi after last host");
+        assert!(!pi.contains(SERVER_NAME));
     }
 
     #[test]
@@ -783,6 +848,28 @@ mod tests {
         assert!(has_unmanaged_grok_server(
             "[mcp_servers]\nhorizon-browser = { command = \"/usr/bin/custom\" }\n"
         ));
+        assert!(has_unmanaged_grok_server(
+            "[mcp_servers.\"horizon-browser\"]\ncommand = \"/usr/bin/custom\"\n"
+        ));
+    }
+
+    #[test]
+    fn grok_leaves_quoted_horizon_browser_table_in_place() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let grok_home = temp.path().join("grok");
+        std::fs::create_dir_all(&grok_home).expect("grok home");
+        std::fs::write(
+            grok_home.join("config.toml"),
+            "[mcp_servers.\"horizon-browser\"]\ncommand = \"/usr/bin/custom\"\n",
+        )
+        .expect("seed quoted unmanaged");
+
+        let _leases =
+            bind_browser_mcp_attachments(OsStr::new("host-a"), Path::new("/opt/horizon"), None, Some(&grok_home));
+        let grok = std::fs::read_to_string(grok_home.join("config.toml")).expect("grok");
+        assert!(grok.contains("/usr/bin/custom"));
+        assert!(!grok.contains("/opt/horizon"));
+        assert_eq!(grok.matches("[mcp_servers").count(), 1);
     }
 
     #[test]
@@ -791,5 +878,31 @@ mod tests {
             durable_mcp_command(Path::new("/opt/horizon")),
             Path::new("/opt/horizon")
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn attach_writes_through_existing_symlinks() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let home = temp.path().join("home");
+        let store = temp.path().join("dotfiles");
+        std::fs::create_dir_all(store.join("pi")).expect("store");
+        std::fs::create_dir_all(home.join(".pi/agent")).expect("pi dir");
+        let target = store.join("pi/mcp.json");
+        std::fs::write(&target, "{\"mcpServers\":{}}\n").expect("seed target");
+        std::os::unix::fs::symlink(&target, home.join(".pi/agent/mcp.json")).expect("symlink");
+
+        let _leases = bind_browser_mcp_attachments(
+            OsStr::new("host-a"),
+            Path::new("/opt/horizon"),
+            Some(&home),
+            Some(&home.join(".grok")),
+        );
+
+        let link = home.join(".pi/agent/mcp.json");
+        assert!(std::fs::symlink_metadata(&link).expect("meta").file_type().is_symlink());
+        let body = std::fs::read_to_string(&target).expect("target");
+        assert!(body.contains("/opt/horizon"));
+        assert!(body.contains(SERVER_NAME));
     }
 }
