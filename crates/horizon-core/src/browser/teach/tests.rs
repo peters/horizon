@@ -118,3 +118,57 @@ fn stopped_session_compiles_and_saves_after_review() {
     assert_eq!(loaded.steps.len(), 1);
     assert_eq!(loaded.completion_assertions.len(), 1);
 }
+
+fn css_fingerprint() -> TeachFingerprint {
+    let mut fingerprint = fingerprint();
+    fingerprint.selected = None;
+    fingerprint.candidates[0].identity = TeachTargetCandidate::CssFallback {
+        value: "button.primary".to_string(),
+        reviewed: false,
+    };
+    fingerprint
+}
+
+fn duplicate_role_fingerprint() -> TeachFingerprint {
+    let mut fingerprint = fingerprint();
+    fingerprint.selected = None;
+    fingerprint.candidates[0].unique = false;
+    fingerprint.candidates[0].match_count = 2;
+    fingerprint
+}
+
+#[test]
+fn unique_css_fallback_can_be_selected_and_non_unique_is_rejected() {
+    let temp = tempfile::tempdir().expect("temp");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut permissions = std::fs::metadata(temp.path()).expect("meta").permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(temp.path(), permissions).expect("chmod");
+    }
+    let mut teach = TeachMode::start_in(
+        temp.path().join("routines"),
+        "monthly",
+        horizon_browser::BackendKind::ChromiumCdp,
+    )
+    .expect("start");
+    teach.ingest(TeachObservation::Captured(css_fingerprint()));
+    teach.stop();
+    teach.set_completion_heading("Report ready");
+    teach.select_step_candidate("a0", 0);
+    assert!(teach.last_error().is_none());
+    teach.set_identities_reviewed(true);
+    teach.compile_plan("ignored").expect("compile after unique css");
+
+    let mut other = TeachMode::start_in(
+        temp.path().join("other"),
+        "other",
+        horizon_browser::BackendKind::ChromiumCdp,
+    )
+    .expect("start");
+    other.ingest(TeachObservation::Captured(duplicate_role_fingerprint()));
+    other.stop();
+    other.select_step_candidate("a0", 0);
+    assert_eq!(other.last_error(), Some("target fingerprint is missing or malformed"));
+}

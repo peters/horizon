@@ -1,6 +1,7 @@
 //! Teach-mode controller owned by one browser panel.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use horizon_browser::BackendKind;
@@ -29,7 +30,7 @@ pub struct TeachMode {
     use_title_outcome: bool,
     identities_reviewed: bool,
     backend: BackendKind,
-    review_cache: Option<Vec<ReviewRow>>,
+    review_cache: Option<Arc<Vec<ReviewRow>>>,
     review_page: usize,
 }
 
@@ -202,13 +203,14 @@ impl TeachMode {
     ///
     /// # Errors
     /// Missing outcome, empty recording, or compiler validation failure.
-    pub fn compile_review(&mut self, page_title: &str) -> Result<Vec<ReviewRow>, RoutineError> {
+    pub fn compile_review(&mut self, page_title: &str) -> Result<Arc<Vec<ReviewRow>>, RoutineError> {
         if let Some(rows) = &self.review_cache {
-            return Ok(rows.clone());
+            return Ok(Arc::clone(rows));
         }
         if self.session.recording().actions.is_empty() {
-            self.review_cache = Some(Vec::new());
-            return Ok(Vec::new());
+            let rows = Arc::new(Vec::new());
+            self.review_cache = Some(Arc::clone(&rows));
+            return Ok(rows);
         }
         self.completion_assertions(page_title)?;
         let compiled = match self.compile_plan(page_title) {
@@ -238,7 +240,8 @@ impl TeachMode {
             .collect();
         let pages = rows.len().div_ceil(REVIEW_PAGE_SIZE).max(1);
         self.review_page = self.review_page.min(pages - 1);
-        self.review_cache = Some(rows.clone());
+        let rows = Arc::new(rows);
+        self.review_cache = Some(Arc::clone(&rows));
         Ok(rows)
     }
 
