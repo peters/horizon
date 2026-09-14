@@ -2144,6 +2144,7 @@ dependencies = [
  "flate2",
  "git2",
  "horizon-browser",
+ "horizon-browser-routines",
  "libc",
  "process-wrap",
  "profiling",

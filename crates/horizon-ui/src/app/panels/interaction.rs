@@ -195,6 +195,18 @@ impl HorizonApp {
                     ui.close();
                 }
             }
+            if kind == PanelKind::Browser {
+                ui.separator();
+                if ui.button("Teach routine").clicked() {
+                    if let Some(panel) = self.board.panel_mut(panel_id)
+                        && let Some(browser) = panel.browser_mut()
+                        && let Err(error) = browser.start_teach("untitled")
+                    {
+                        tracing::warn!(target: "browser", "teach start failed: {error}");
+                    }
+                    ui.close();
+                }
+            }
         });
     }
 

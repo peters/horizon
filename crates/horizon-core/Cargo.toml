@@ -17,6 +17,7 @@ workspace = true
 [dependencies]
 base64.workspace = true
 horizon-browser.workspace = true
+horizon-browser-routines.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 profiling.workspace = true
