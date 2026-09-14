@@ -145,6 +145,32 @@ fn invalid_json_is_left_untouched() {
 }
 
 #[test]
+fn failover_preserves_whitespace_in_command_paths() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let home = temp.path().join("home");
+    let mut first = bind_browser_mcp_attachments(
+        OsStr::new("host-a"),
+        Path::new("/opt/horizon-a "),
+        Some(&home),
+        Some(&home.join(".grok")),
+    );
+    let mut second = bind_browser_mcp_attachments(
+        OsStr::new("host-b"),
+        Path::new(" /opt/horizon-b"),
+        Some(&home),
+        Some(&home.join(".grok")),
+    );
+    release_mcp_attachments(&mut first);
+    let pi = std::fs::read_to_string(home.join(".pi/agent/mcp.json")).expect("pi after first host exit");
+    assert!(
+        pi.contains(" /opt/horizon-b"),
+        "failover must keep leading whitespace in the remaining host command: {pi}"
+    );
+    assert!(!pi.contains("/opt/horizon-a"));
+    release_mcp_attachments(&mut second);
+}
+
+#[test]
 fn sidecar_write_failure_skips_live_lease() {
     let temp = tempfile::tempdir().expect("temp dir");
     let home = temp.path().join("home");

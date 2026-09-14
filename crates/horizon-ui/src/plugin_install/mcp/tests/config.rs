@@ -90,6 +90,20 @@ fn grok_managed_block_escapes_control_characters_in_command() {
 }
 
 #[test]
+fn grok_leaves_inline_mcp_servers_table_untouched() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let grok_home = temp.path().join("grok");
+    std::fs::create_dir_all(&grok_home).expect("grok home");
+    let original = "mcp_servers = { github = { command = \"/usr/bin/gh\" } }\n";
+    std::fs::write(grok_home.join("config.toml"), original).expect("seed inline mcp_servers");
+
+    let _leases = bind_browser_mcp_attachments(OsStr::new("host-a"), Path::new("/opt/horizon"), None, Some(&grok_home));
+    let grok = std::fs::read_to_string(grok_home.join("config.toml")).expect("grok");
+    assert_eq!(grok, original);
+    assert!(!grok.contains("[mcp_servers.horizon-browser]"));
+}
+
+#[test]
 fn grok_leaves_quoted_horizon_browser_table_in_place() {
     let temp = tempfile::tempdir().expect("temp dir");
     let grok_home = temp.path().join("grok");
@@ -105,6 +119,38 @@ fn grok_leaves_quoted_horizon_browser_table_in_place() {
     assert!(grok.contains("/usr/bin/custom"));
     assert!(!grok.contains("/opt/horizon"));
     assert_eq!(grok.matches("[mcp_servers").count(), 1);
+}
+
+#[test]
+fn jsonc_antigravity_config_receives_horizon_browser() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let home = temp.path().join("home");
+    let path = home.join(".gemini/config/mcp_config.json");
+    std::fs::create_dir_all(path.parent().expect("antigravity parent")).expect("antigravity dir");
+    std::fs::write(
+        &path,
+        r#"{
+  // user MCP servers
+  "mcpServers": {
+    "github": {
+      "command": "/usr/bin/gh",
+    },
+  },
+}"#,
+    )
+    .expect("seed jsonc");
+
+    let _leases = bind_browser_mcp_attachments(
+        OsStr::new("host-a"),
+        Path::new("/opt/horizon"),
+        Some(&home),
+        Some(&home.join(".grok")),
+    );
+    let body = std::fs::read_to_string(path).expect("antigravity after attach");
+    assert!(body.contains("github"));
+    assert!(body.contains("/usr/bin/gh"));
+    assert!(body.contains(SERVER_NAME));
+    assert!(body.contains("/opt/horizon"));
 }
 
 #[cfg(unix)]

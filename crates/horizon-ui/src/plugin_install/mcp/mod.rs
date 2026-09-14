@@ -299,8 +299,7 @@ fn read_command_sidecar(live_path: &Path) -> Option<String> {
     let mut file = std::fs::File::open(&path).ok()?;
     let mut command = String::new();
     file.read_to_string(&mut command).ok()?;
-    let command = command.trim();
-    (!command.is_empty()).then(|| command.to_string())
+    (!command.is_empty()).then_some(command)
 }
 
 fn remove_live_files(live_path: &Path) {

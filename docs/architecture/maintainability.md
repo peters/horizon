@@ -110,8 +110,9 @@ back into large multi-purpose modules.
   `board.rs` can stay focused on production orchestration.
 - `panel.rs` owns panel models and content access; explicit restart logic lives
   in `panel/lifecycle.rs`. `panel/spawn.rs` keeps content selection and command
-  resolution, while `panel/spawn/terminal.rs` owns terminal construction,
-  transcript restoration and disconnected/failure snapshots. Remote client views
+  resolution, `panel/spawn/opencode.rs` owns the OpenCode MCP overlay, and
+  `panel/spawn/terminal.rs` owns terminal construction, transcript restoration
+  and disconnected/failure snapshots. Remote client views
   retain an execution reference independently of visual workspace membership;
   both creation and restart defer remote attachment without local task fallback.
 - `terminal.rs` should keep the terminal types and shared imports; lifecycle,

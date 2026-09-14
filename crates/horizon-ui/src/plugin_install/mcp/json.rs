@@ -82,7 +82,14 @@ fn json_server_is_unmanaged(server: Option<&Value>) -> bool {
 }
 
 fn parse_json_object(contents: &str, path: &Path) -> io::Result<Map<String, Value>> {
-    match serde_json::from_str::<Value>(contents) {
+    let mut jsonc = contents.to_string();
+    if let Err(error) = json_strip_comments::strip(&mut jsonc) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("MCP config is not valid JSONC ({}): {}", path.display(), error),
+        ));
+    }
+    match serde_json::from_str::<Value>(jsonc.trim()) {
         Ok(Value::Object(map)) => Ok(map),
         Ok(_) => Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -90,7 +97,7 @@ fn parse_json_object(contents: &str, path: &Path) -> io::Result<Map<String, Valu
         )),
         Err(error) => Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("MCP config is not valid JSON ({}): {}", path.display(), error),
+            format!("MCP config is not valid JSONC ({}): {}", path.display(), error),
         )),
     }
 }

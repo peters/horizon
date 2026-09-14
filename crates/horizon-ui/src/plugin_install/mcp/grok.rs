@@ -10,7 +10,8 @@ const GROK_TABLE: &str = "[mcp_servers.horizon-browser]";
 
 pub(super) fn upsert_server(path: &Path, command: &str) -> io::Result<()> {
     let contents = read_existing(path)?.unwrap_or_default();
-    if has_unmanaged_grok_server(&contents) {
+    if has_unmanaged_grok_server(&contents) || grok_has_closed_inline_mcp_servers(&strip_grok_managed_block(&contents))
+    {
         tracing::warn!(
             path = %path.display(),
             "leaving user-owned [mcp_servers.horizon-browser] in place"
@@ -96,6 +97,20 @@ fn grok_managed_span(contents: &str) -> Option<(usize, usize)> {
     let from_start = &contents[start..];
     let end = start + from_start.find(GROK_END)? + GROK_END.len();
     Some((start, end))
+}
+
+fn grok_has_closed_inline_mcp_servers(rest: &str) -> bool {
+    rest.lines().any(|line| {
+        let trimmed = line.trim_start();
+        let Some(after_key) = trimmed.strip_prefix("mcp_servers") else {
+            return false;
+        };
+        if after_key.starts_with('.') || after_key.starts_with('[') || after_key.starts_with('"') {
+            return false;
+        }
+        let after_key = after_key.trim_start();
+        after_key.starts_with('=') && after_key.contains('{')
+    })
 }
 
 fn grok_remainder_has_horizon_browser(rest: &str) -> bool {
