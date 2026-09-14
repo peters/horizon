@@ -4,12 +4,13 @@ The product draws B's workflow and job identities when setup is submitted on A, 
 was provisioned from the manifest. `bind-worker` closes that gap without a hand edit: it
 reads the group the operator names, requires the adapter tags its name is derived from,
 requires it to be absent from the pre-run inventory, requires the provisioning descriptor
-to carry the digest of the very manifest being bound, puts B's VM under the deadline
-reaper with a read-back, journals the group (the only cleanup authorization) and only
-then writes `worker_group`. Every refusal happens before any mutation."""
+to carry the digest of the very manifest being bound, journals the group (the only
+cleanup authorization) before it touches anything, puts B's VM under the deadline
+reaper with a read-back, and only then writes `worker_group`. Every refusal happens
+before any mutation, and the mutation happens only after B is deletable."""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .az import Az
 from .cleanup import group_list, identity_record, journal_records, worker_record_bound
@@ -64,10 +65,14 @@ def worker_vm_id(group_id: str) -> str:
     return f"{group_id}/providers/Microsoft.Compute/virtualMachines/{WORKER_VM_NAME}"
 
 
-def bind_worker(az: Az, manifest: Dict[str, Any], group: str, before: Any, created: Any, client: Any) -> Dict[str, Any]:
-    """Read, check, tag with read-back, then hand back the journal and the bound manifest
-    for the caller to write (journal first). A dry run walks every read and stops at the
-    tag write. Nothing here writes a file."""
+def bind_worker(az: Az, manifest: Dict[str, Any], group: str, before: Any, created: Any, client: Any,
+                persist_journal: Optional[Callable[[List[Dict[str, Any]]], None]] = None) -> Dict[str, Any]:
+    """Read, check, journal, tag with read-back, then hand back the bound manifest for
+    the caller to write. `persist_journal` is called with the complete journal once the
+    group and its VM are proven and before the first mutation, so a crash or a failing
+    write can never leave a tagged worker without the record that authorizes deleting
+    it; a raising callback aborts the binding untouched. A dry run walks every read and
+    journals nothing. Nothing here writes the manifest."""
     checks = bind_checks(manifest, group, before, created, client)
     if checks["problems"]:
         return {"passed": False, "bound": False, "findings": checks["problems"]}
@@ -83,6 +88,7 @@ def bind_worker(az: Az, manifest: Dict[str, Any], group: str, before: Any, creat
                 "findings": [f"group {group} is journaled under another identity or tag set; nothing bound"]}
     vm_id = worker_vm_id(record["id"])
     vm = az.run(["vm", "show", "--ids", vm_id])
+
     if not isinstance(vm, dict) or not same_id(vm.get("id"), vm_id) or not isinstance(vm.get("tags"), dict):
         return {"passed": False, "bound": False,
                 "findings": [f"the worker VM in {group} could not be read yet (the deployment may still be in flight); "
@@ -90,23 +96,34 @@ def bind_worker(az: Az, manifest: Dict[str, Any], group: str, before: Any, creat
     if any(vm["tags"].get(key) != record["tags"].get(key) for key in ("horizon-workflow-id", "horizon-job-id")):
         return {"passed": False, "bound": False,
                 "findings": [f"the worker VM in {group} does not carry the group's adapter identity; nothing bound"]}
+    journal = list(created) if journaled is not None else [*created, record]
+    if az.dry_run:
+        return {"passed": False, "dry_run": True, "bound": False, "would_bind": record["name"],
+                "findings": ["dry run: the group would be journaled, the VM tagged for the reaper and the manifest bound now"],
+                "plan": az.journal}
+    # The journal is the only authorization cleanup has for deleting B, so it is
+    # persisted before anything is written to Azure: a crash, a kill or a failing write
+    # after this point still leaves a deletable worker, never a tagged orphan.
+    if persist_journal is not None:
+        try:
+            persist_journal(journal)
+        except OSError as error:
+            return {"passed": False, "bound": False,
+                    "findings": [f"the creation journal could not be written ({type(error).__name__}); nothing tagged or bound"]}
     # The product's deployment writes worker identity tags only, and the subscription's
     # deadline reaper selects on `purpose` and `deadline`: without them a controller that
     # dies between the product's create and the run's end leaves B running unreaped.
     deadline = str(manifest["cleanup_deadline_utc"])
     az.run(["tag", "update", "--resource-id", vm_id, "--operation", "merge", "--tags",
             f"purpose={REAPER_TAGS['purpose']}", f"deadline={deadline}"], mutating=True)
-    if az.dry_run:
-        return {"passed": False, "dry_run": True, "bound": False, "would_bind": record["name"],
-                "findings": ["dry run: the VM would be tagged for the reaper and the manifest bound now"], "plan": az.journal}
     shown = az.run(["vm", "show", "--ids", vm_id, "--query", "tags"])
     if not isinstance(shown, dict) or shown.get("purpose") != REAPER_TAGS["purpose"] or shown.get("deadline") != deadline:
-        return {"passed": False, "bound": False,
-                "findings": ["the reaper tags could not be read back from the worker VM; nothing bound, retry"]}
+        return {"passed": False, "bound": False, "journaled": record,
+                "findings": ["the reaper tags could not be read back from the worker VM; nothing bound, retry "
+                             "(the group is journaled, so cleanup can still delete it)"]}
     # The tags go on the VM only: the product checks its own tags as a subset, so extra
     # VM tags are tolerated, while cleanup refuses a group whose tag set changed since it
     # was journaled. The journal record is therefore ARM's group identity, untouched.
-    journal = list(created) if journaled is not None else [*created, record]
     bound = dict(manifest, worker_group=record["name"])
     return {"passed": True, "bound": True, "worker_group": record["name"], "worker_vm_id": vm_id,
             "journaled": record, "journal": journal, "manifest": bound,

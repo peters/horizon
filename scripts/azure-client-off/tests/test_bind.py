@@ -33,8 +33,12 @@ class FakeAz:
         self.answers, self.dry_run, self.journal, self.deadline = answers, dry_run, [], None
         self.calls: List[List[str]] = []
 
+    on_call = None
+
     def run(self, args: List[str], mutating: bool = False, timeout: float = 90) -> Optional[Any]:
         self.calls.append(list(args))
+        if self.on_call is not None:
+            self.on_call(args)
         self.journal.append({"mutating": mutating, "args": list(args)})
         if self.dry_run and mutating:
             return None
@@ -88,16 +92,24 @@ class UnboundManifestTests(unittest.TestCase):
 
 
 class BindWorkerTests(unittest.TestCase):
-    def test_binding_tags_journals_and_writes_worker_group_in_that_order(self):
+    def test_binding_journals_before_the_mutation_and_writes_worker_group_last(self):
         m = unbound()
         az = FakeAz(healthy_answers(m))
+        steps: List[str] = []
+        az.on_call = lambda args: steps.append("mutate:" + " ".join(args[:2]) if False else " ".join(args[:2]))
+        journals: List[Any] = []
+
+        def persist(journal):
+            journals.append(journal)
+            steps.append("journal")
+
         result = client_off.bind_worker(az, m, B_GROUP, ["horizon-worker-registry"],
-                                        [record(m["client_group"], run_id=RUN_ID)], descriptor(m))
+                                        [record(m["client_group"], run_id=RUN_ID)], descriptor(m), persist)
         self.assertTrue(result["passed"], result)
         self.assertEqual(result["worker_group"], B_GROUP)
         self.assertEqual(result["manifest"]["worker_group"], B_GROUP)
-        self.assertEqual([r["name"] for r in result["journal"]], [m["client_group"], B_GROUP])
-        self.assertEqual(result["journal"][1], B_JOURNALED,
+        self.assertEqual([r["name"] for r in journals[0]], [m["client_group"], B_GROUP])
+        self.assertEqual(journals[0][1], B_JOURNALED,
                          "the record is ARM's identity and tag set, as journal-group writes it")
         self.assertEqual(result["bound_manifest_sha256"], client_off.manifest_digest(result["manifest"], bound=True))
         mutations = [call for call in az.journal if call["mutating"]]
@@ -105,8 +117,31 @@ class BindWorkerTests(unittest.TestCase):
         self.assertEqual(mutations[0]["args"][:6], ["tag", "update", "--resource-id", B_VM_ID, "--operation", "merge"])
         self.assertIn(f"deadline={m['cleanup_deadline_utc']}", mutations[0]["args"])
         self.assertIn("purpose=horizon-azure-vm-spike", mutations[0]["args"])
-        # The identity reads precede the write and the read-back follows it.
-        self.assertEqual([" ".join(call[:2]) for call in az.calls], ["group show", "vm show", "tag update", "vm show"])
+        # Identity reads, then the journal, then the one mutation and its read-back: a
+        # crash at any point leaves either no tag or a deletable, journaled worker.
+        self.assertEqual(steps, ["group show", "vm show", "journal", "tag update", "vm show"])
+
+    def test_a_failing_journal_write_leaves_the_worker_untagged_and_unbound(self):
+        m = unbound()
+        az = FakeAz(healthy_answers(m))
+
+        def refuse(_journal):
+            raise OSError("synthetic journal failure")
+
+        result = client_off.bind_worker(az, m, B_GROUP, [], [], descriptor(m), refuse)
+        self.assertFalse(result["passed"])
+        self.assertFalse(result["bound"])
+        self.assertTrue(any("journal could not be written" in finding for finding in result["findings"]), result)
+        self.assertEqual([call for call in az.journal if call["mutating"]], [], "nothing tagged without the record")
+
+    def test_a_failed_read_back_still_leaves_the_group_journaled(self):
+        m = unbound()
+        az = FakeAz(healthy_answers(m, tagged_after=False))
+        journals: List[Any] = []
+        result = client_off.bind_worker(az, m, B_GROUP, [], [], descriptor(m), journals.append)
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["journaled"], B_JOURNALED)
+        self.assertEqual([r["name"] for r in journals[0]], [B_GROUP], "the tagged worker is deletable")
 
     def test_every_local_refusal_precedes_any_read_or_write(self):
         m = unbound()
@@ -161,22 +196,22 @@ class BindWorkerTests(unittest.TestCase):
     def test_a_group_already_journaled_by_journal_group_binds_without_a_second_record(self):
         m = unbound()
         az = FakeAz(healthy_answers(m))
-        result = client_off.bind_worker(az, m, B_GROUP, [], [B_JOURNALED], descriptor(m))
+        journals: List[Any] = []
+        result = client_off.bind_worker(az, m, B_GROUP, [], [B_JOURNALED], descriptor(m), journals.append)
         self.assertTrue(result["passed"], result)
-        self.assertEqual(result["journal"], [B_JOURNALED], "the journal is append-only and holds B once")
+        self.assertEqual(journals[0], [B_JOURNALED], "the journal is append-only and holds B once")
 
-    def test_missing_read_back_and_dry_run_leave_the_manifest_unbound(self):
+    def test_a_dry_run_journals_nothing_tags_nothing_and_binds_nothing(self):
         m = unbound()
-        az = FakeAz(healthy_answers(m, tagged_after=False))
-        result = client_off.bind_worker(az, m, B_GROUP, [], [], descriptor(m))
-        self.assertFalse(result["passed"])
-        self.assertTrue(any("read back" in finding for finding in result["findings"]), result)
         dry = FakeAz(healthy_answers(m), dry_run=True)
-        result = client_off.bind_worker(dry, m, B_GROUP, [], [], descriptor(m))
+        journals: List[Any] = []
+        result = client_off.bind_worker(dry, m, B_GROUP, [], [], descriptor(m), journals.append)
         self.assertFalse(result["passed"])
         self.assertTrue(result["dry_run"])
         self.assertEqual(result["would_bind"], B_GROUP)
         self.assertNotIn("manifest", result)
+        self.assertEqual(journals, [])
+        self.assertEqual([call for call in dry.journal if call["mutating"]], [])
 
     def test_the_command_writes_the_journal_before_the_manifest_and_refuses_twice(self):
         m = unbound()
@@ -206,6 +241,32 @@ class BindWorkerTests(unittest.TestCase):
         self.assertEqual(cli.main(args), 1)
         self.assertEqual(client_off.validate_manifest(bound, now=client_off.utc_now(), renting=False, phase="off"), [])
         self.assertFalse(os.path.exists(paths["m.json"] + ".tmp"))
+
+
+class BindCommandPathTests(unittest.TestCase):
+    def test_an_output_that_aliases_an_input_is_refused_before_anything_is_read(self):
+        m = unbound()
+        directory = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
+        paths = {name: os.path.join(directory, name) for name in ("m.json", "groups.json", "created.json", "client.json")}
+        for name, value in (("m.json", m), ("groups.json", []),
+                            ("created.json", [record(m["client_group"], run_id=RUN_ID)]), ("client.json", descriptor(m))):
+            with open(paths[name], "w", encoding="utf-8") as handle:
+                json.dump(value, handle)
+        original = cli.Az
+        cli.Az = lambda subscription, dry_run=False: FakeAz(healthy_answers(m), dry_run=dry_run)
+        self.addCleanup(setattr, cli, "Az", original)
+        for out in (paths["created.json"], paths["created.json"] + ".tmp", paths["groups.json"], paths["client.json"]):
+            with self.subTest(out=os.path.basename(out)):
+                code = cli.main(["--manifest", paths["m.json"], "bind-worker", "--group", B_GROUP,
+                                 "--groups-before", paths["groups.json"], "--created", paths["created.json"],
+                                 "--client", paths["client.json"], "--out", out])
+                self.assertEqual(code, 2)
+        # The journal and every input survived untouched.
+        with open(paths["created.json"], encoding="utf-8") as handle:
+            self.assertEqual([r["name"] for r in json.load(handle)], [m["client_group"]])
+        with open(paths["m.json"], encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle)["worker_group"], client_off.UNBOUND)
 
 
 class UnboundCleanupTests(unittest.TestCase):

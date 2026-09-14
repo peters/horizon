@@ -156,13 +156,32 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(json.dumps({"passed": True, "journaled": record}, indent=2))
         return 0
     if args.command == "bind-worker":
+        out = args.out or args.manifest
+        # Two outputs and three inputs. An alias between any of them lets one write
+        # destroy another: an --out of created-groups.json would replace the only
+        # cleanup authorization moments after it was written. Resolved paths,
+        # temporaries included, must be distinct before anything is read or called.
+        # The one intended alias is --out on the manifest itself: binding in place.
+        writes = {"--created": (args.created, f"{args.created}.tmp"), "--out": (out, f"{out}.tmp")}
+        reads = {"--manifest": args.manifest, "--groups-before": args.groups_before, "--client": args.client}
+        if os.path.realpath(out) == os.path.realpath(args.manifest):
+            del reads["--manifest"]
+        owner: dict = {}
+        for flag, candidate in (*((f, p) for f, ps in writes.items() for p in ps), *reads.items()):
+            key = os.path.realpath(candidate)
+            if key in owner and owner[key] != flag:
+                print(json.dumps({"passed": False, "bound": False,
+                                  "findings": [f"{flag} resolves to the same path as {owner[key]}; "
+                                               "each input and output needs its own file"]}, indent=2))
+                return 2
+            owner[key] = flag
         created: Any = load_json(args.created) if os.path.exists(args.created) else []
-        result = bind_worker(az, manifest, args.group, load_json(args.groups_before), created, load_json(args.client))
+        # The journal is the only cleanup authorization, so it is written before the
+        # first mutation; the manifest follows only once the binding succeeded.
+        result = bind_worker(az, manifest, args.group, load_json(args.groups_before), created, load_json(args.client),
+                             lambda journal: write_json_atomic(args.created, journal))
         if result.get("passed"):
-            # The journal is the only cleanup authorization: it is written before the
-            # manifest, so a crash between the two leaves B deletable, never stranded.
-            write_json_atomic(args.created, result.pop("journal"))
-            write_json_atomic(args.out or args.manifest, result.pop("manifest"))
+            write_json_atomic(out, result.pop("manifest"))
         result["az_calls"] = az.journal
         print(json.dumps(result, indent=2))
         return 0 if result.get("passed") else 1

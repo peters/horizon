@@ -214,10 +214,13 @@ runcmd:
 CLOUD
 if [ "$with_azure_cli" = true ]; then
   # Microsoft's repository for the running Ubuntu release, keyed by the published
-  # signing key, and the package pinned to that repository. The readiness gate below
-  # waits for cloud-init, so the install finishes before A counts as ready. Nothing
-  # here logs in: the identity and its roles are the operator's separate step.
+  # signing key, and the package pinned to that repository. `curl`, `gnupg` and the CA
+  # bundle are installed first: the base image is not required to carry them, and
+  # cloud-init's own package_update has already refreshed the index. The readiness gate
+  # below waits for cloud-init, so the install finishes before A counts as ready.
+  # Nothing here logs in: the identity and its roles are the operator's separate step.
   cat >>"$cloud_init" <<'CLOUD'
+  - [ apt-get, install, -y, curl, gnupg, ca-certificates ]
   - [ install, -d, -m, '0755', /etc/apt/keyrings ]
   - [ sh, -c, 'curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /etc/apt/keyrings/microsoft.gpg' ]
   - [ sh, -c, 'echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ $(. /etc/os-release && echo "$VERSION_CODENAME") main" > /etc/apt/sources.list.d/azure-cli.list' ]

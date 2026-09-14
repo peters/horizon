@@ -46,7 +46,7 @@ the declared cleanup deadline.
   "client_vm_size": "Standard_B2s",
   "client_sha": "<40-hex commit the client binary was built from>",
   "client_binary_sha256": "<digest of that binary, from record-client-build.sh>",
-  "worker_group": "horizon-ws-<workflow>-<job>",
+  "worker_group": "unbound",
   "worker_image": "<registry>/horizon-remote-worker-shell@sha256:<the complete Shell image digest named under Labelling>",
   "hourly_cost_micros": 41000,
   "budget_micros": 2000000,
@@ -58,10 +58,11 @@ the declared cleanup deadline.
 
 `worker_group` is the one field a product pass cannot freeze before renting: the
 product draws B's workflow and job identities when setup is submitted on A (step 3),
-after A has been provisioned from this manifest, and `validate` (which
-`provision-client.sh` runs before renting A) refuses any `worker_group` that is not
-the adapter's `horizon-ws-<workflow>-<job>` with two exact UUIDs, so the manifest has
-two explicit states. *Unbound*: `worker_group` is the literal `unbound`; `validate`
+after A has been provisioned from this manifest. `validate` (which
+`provision-client.sh` runs before renting A) therefore accepts exactly two values for
+it, the literal `unbound` and the adapter's `horizon-ws-<workflow>-<job>` with two
+exact UUIDs, and the manifest has two matching states. The example above is frozen in
+the first one. *Unbound*: `worker_group` is the literal `unbound`; `validate`
 accepts it, `provision-client.sh` (which needs only A's fields) runs and records the
 digest of the unbound manifest in the descriptor as `manifest_sha256`, and every
 command that acts on B (`install-observer-key`, `off`, `return`, `verdict`,
@@ -131,8 +132,9 @@ during preparation).
 
 The product on A authenticates to Azure the same way the controller does: the
 subscription-pinned Azure CLI credential (`az account get-access-token --subscription
-<id>`), never a stored bearer token. `provision-client.sh` installs no Azure CLI and
-gives A no identity today, so before the product pass A needs, in this order:
+<id>`), never a stored bearer token. `provision-client.sh` installs the CLI and
+attaches the identity only when asked, and it never grants a role or logs in, so
+before the product pass A needs, in this order:
 
 1. The Azure CLI on A. `provision-client.sh --with-azure-cli` installs the `azure-cli`
    package from Microsoft's repository during cloud-init (no extension install, no
