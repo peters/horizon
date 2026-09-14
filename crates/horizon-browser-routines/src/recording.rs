@@ -264,14 +264,7 @@ impl RecordedAction {
             }
             RecordedKind::Wait { selector, .. } => {
                 reject_navigation(self.navigation.as_ref())?;
-                let selector = selector.trim();
-                if selector.is_empty()
-                    || selector.len() > MAX_WAIT_SELECTOR_BYTES
-                    || selector.chars().any(char::is_control)
-                    || selector.contains('?')
-                {
-                    return Err(RoutineError::InvalidRecording);
-                }
+                validate_wait_selector(selector)?;
                 reject_value(self.value_source.as_ref())
             }
             RecordedKind::Navigate => {
@@ -304,6 +297,18 @@ fn reject_navigation(navigation: Option<&NavigationTemplate>) -> Result<(), Rout
     } else {
         Ok(())
     }
+}
+
+pub(crate) fn validate_wait_selector(selector: &str) -> Result<(), RoutineError> {
+    let selector = selector.trim();
+    if selector.is_empty()
+        || selector.len() > MAX_WAIT_SELECTOR_BYTES
+        || selector.chars().any(char::is_control)
+        || selector.contains('?')
+    {
+        return Err(RoutineError::InvalidRecording);
+    }
+    Ok(())
 }
 
 fn reject_value(value_source: Option<&ValueSource>) -> Result<(), RoutineError> {

@@ -10,8 +10,10 @@ use crate::assertion::Assertion;
 use crate::compile::{CompiledAction, ResumePolicy};
 use crate::fingerprint::TargetFingerprint;
 use crate::origin::Origin;
-use crate::recording::MutationClass;
+use crate::recording::{MutationClass, validate_wait_selector};
 use crate::value::{CredentialFieldKind, FieldClassification, ValueSource, validate_identifier};
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 const MAX_NAME_BYTES: usize = 128;
 const MAX_STEPS: usize = 256;
@@ -107,9 +109,11 @@ impl RoutineDefinition {
         if self.steps.is_empty() || self.steps.len() > MAX_STEPS || self.variables.len() > MAX_VARIABLES {
             return Err(RoutineError::InvalidRecording);
         }
-        if self.plan_version == 0 || self.created_at.is_empty() || self.updated_at.is_empty() {
+        if self.plan_version == 0 {
             return Err(RoutineError::InvalidRecording);
         }
+        parse_timestamp(&self.created_at)?;
+        parse_timestamp(&self.updated_at)?;
         if self.completion_assertions.is_empty() {
             return Err(RoutineError::InvalidAssertion);
         }
@@ -119,11 +123,14 @@ impl RoutineDefinition {
             return Err(RoutineError::InvalidRecording);
         }
         self.credential_policy.validate()?;
-        let mut seen = HashSet::new();
+        let mut declared = HashSet::new();
         for variable in &self.variables {
             validate_identifier(&variable.name)?;
             if variable.name == "panel_id" {
                 return Err(RoutineError::ReservedVariable);
+            }
+            if !declared.insert(variable.name.as_str()) {
+                return Err(RoutineError::InvalidRecording);
             }
             if let Some(default) = &variable.default {
                 ValueSource::Literal { value: default.clone() }.validate(FieldClassification::Ordinary)?;
@@ -132,11 +139,12 @@ impl RoutineDefinition {
         for assertion in &self.completion_assertions {
             assertion.validate()?;
         }
+        let mut seen_steps = HashSet::new();
         for step in &self.steps {
-            if !seen.insert(step.step_id.as_str()) {
+            if !seen_steps.insert(step.step_id.as_str()) {
                 return Err(RoutineError::InvalidRecording);
             }
-            step.validate(&self.credential_policy, &self.allowed_origins)?;
+            step.validate(&self.credential_policy, &self.allowed_origins, &declared)?;
         }
         Ok(())
     }
@@ -175,10 +183,15 @@ impl CredentialPolicy {
 }
 
 impl RoutineStep {
-    fn validate(&self, policy: &CredentialPolicy, allowed_origins: &[Origin]) -> Result<(), RoutineError> {
+    fn validate(
+        &self,
+        policy: &CredentialPolicy,
+        allowed_origins: &[Origin],
+        declared: &HashSet<&str>,
+    ) -> Result<(), RoutineError> {
         validate_identifier(&self.step_id)?;
         if let Some(target) = &self.target_fingerprint {
-            target.validate()?;
+            require_allowed_target(target, allowed_origins)?;
         }
         if let Some(precondition) = &self.precondition {
             precondition.validate()?;
@@ -194,7 +207,8 @@ impl RoutineStep {
                 reject_target(self.target_fingerprint.as_ref())?;
                 reject_value(self.value_source.as_ref())?;
                 navigation.validate()?;
-                if !allowed_origins.iter().any(|origin| origin == &navigation.origin) {
+                require_declared_variables(navigation, declared)?;
+                if !origin_allowed(&navigation.origin, allowed_origins) {
                     return Err(RoutineError::OriginNotAllowed);
                 }
                 Ok(())
@@ -203,18 +217,22 @@ impl RoutineStep {
                 if !(1..=3).contains(count) {
                     return Err(RoutineError::InvalidRecording);
                 }
-                required_target(self.target_fingerprint.as_ref())?;
+                required_target(self.target_fingerprint.as_ref(), allowed_origins)?;
                 reject_value(self.value_source.as_ref())
             }
             CompiledAction::Fill => {
-                required_target(self.target_fingerprint.as_ref())?;
-                match self.value_source.as_ref().ok_or(RoutineError::MissingValueSource)? {
-                    ValueSource::Literal { .. } | ValueSource::Variable { .. } => Ok(()),
+                required_target(self.target_fingerprint.as_ref(), allowed_origins)?;
+                let source = self.value_source.as_ref().ok_or(RoutineError::MissingValueSource)?;
+                match source {
+                    ValueSource::Literal { .. } | ValueSource::Variable { .. } => {
+                        source.validate(FieldClassification::Ordinary)?;
+                        require_declared_source(source, declared)
+                    }
                     ValueSource::CredentialField { .. } => Err(RoutineError::CredentialFieldMismatch),
                 }
             }
             CompiledAction::CredentialFill => {
-                required_target(self.target_fingerprint.as_ref())?;
+                required_target(self.target_fingerprint.as_ref(), allowed_origins)?;
                 match self.value_source.as_ref().ok_or(RoutineError::MissingValueSource)? {
                     ValueSource::CredentialField { slot, field } => policy.permits(*slot, *field),
                     ValueSource::Literal { .. } | ValueSource::Variable { .. } => Err(RoutineError::SecretLiteral),
@@ -225,12 +243,16 @@ impl RoutineStep {
                     return Err(RoutineError::InvalidRecording);
                 }
                 if let Some(target) = &self.target_fingerprint {
-                    target.validate()?;
+                    require_allowed_target(target, allowed_origins)?;
                 }
                 reject_value(self.value_source.as_ref())
             }
-            CompiledAction::Wait { .. }
-            | CompiledAction::Reload
+            CompiledAction::Wait { selector, .. } => {
+                reject_target(self.target_fingerprint.as_ref())?;
+                reject_value(self.value_source.as_ref())?;
+                validate_wait_selector(selector)
+            }
+            CompiledAction::Reload
             | CompiledAction::Back
             | CompiledAction::Forward
             | CompiledAction::Handoff { .. } => {
@@ -248,8 +270,55 @@ fn resume_policy(class: MutationClass) -> ResumePolicy {
     }
 }
 
-fn required_target(target: Option<&TargetFingerprint>) -> Result<(), RoutineError> {
-    target.ok_or(RoutineError::UndurableTarget)?.validate()
+fn required_target(target: Option<&TargetFingerprint>, allowed_origins: &[Origin]) -> Result<(), RoutineError> {
+    require_allowed_target(target.ok_or(RoutineError::UndurableTarget)?, allowed_origins)
+}
+
+fn require_allowed_target(target: &TargetFingerprint, allowed_origins: &[Origin]) -> Result<(), RoutineError> {
+    target.validate()?;
+    if !origin_allowed(&target.frame.origin, allowed_origins)
+        || target
+            .frame
+            .chain
+            .iter()
+            .any(|frame| !origin_allowed(&frame.origin, allowed_origins))
+    {
+        return Err(RoutineError::OriginNotAllowed);
+    }
+    Ok(())
+}
+
+fn origin_allowed(origin: &Origin, allowed_origins: &[Origin]) -> bool {
+    allowed_origins.iter().any(|allowed| allowed == origin)
+}
+
+fn require_declared_variables(
+    navigation: &crate::recording::NavigationTemplate,
+    declared: &HashSet<&str>,
+) -> Result<(), RoutineError> {
+    for segment in &navigation.path {
+        require_declared_source(&segment.source, declared)?;
+    }
+    for component in navigation.query.iter().chain(navigation.fragment.iter()) {
+        require_declared_source(&component.source, declared)?;
+    }
+    Ok(())
+}
+
+fn require_declared_source(source: &ValueSource, declared: &HashSet<&str>) -> Result<(), RoutineError> {
+    match source {
+        ValueSource::Variable { name } if !declared.contains(name.as_str()) => Err(RoutineError::InvalidRecording),
+        ValueSource::Literal { .. } | ValueSource::Variable { .. } | ValueSource::CredentialField { .. } => Ok(()),
+    }
+}
+
+fn parse_timestamp(value: &str) -> Result<(), RoutineError> {
+    if value.is_empty() || value.len() > 64 || value.chars().any(char::is_control) {
+        return Err(RoutineError::InvalidRecording);
+    }
+    OffsetDateTime::parse(value, &Rfc3339)
+        .map(|_| ())
+        .map_err(|_| RoutineError::InvalidRecording)
 }
 
 fn reject_target(target: Option<&TargetFingerprint>) -> Result<(), RoutineError> {

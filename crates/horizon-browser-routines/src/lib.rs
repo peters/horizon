@@ -107,6 +107,9 @@ pub enum RoutineError {
     /// Fill origin is not on the credential-policy allowlist.
     #[error("credential fill origin is not approved")]
     OriginNotAllowed,
+    /// An approved slot has no stored secret for this field.
+    #[error("credential is not present")]
+    MissingCredential,
     /// Private routine storage could not be created or updated.
     #[error("routine storage failed")]
     Storage,

@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::Write as _;
+use std::io::{ErrorKind, Write as _};
 use std::path::{Path, PathBuf};
 
 use atomicwrites::{AllowOverwrite, AtomicFile};
@@ -9,7 +9,7 @@ use crate::RoutineError;
 use crate::definition::RoutineDefinition;
 
 #[cfg(unix)]
-use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
+use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, PermissionsExt as _};
 
 /// Private on-disk registry under `browser-routines/<uuid>/routine.json`.
 pub struct RoutineRegistry {
@@ -46,7 +46,11 @@ impl RoutineRegistry {
     /// Missing file, malformed JSON, or validation failure.
     pub fn load(&self, routine_id: Uuid) -> Result<RoutineDefinition, RoutineError> {
         let path = self.root.join(routine_id.to_string()).join("routine.json");
-        let bytes = fs::read(&path).map_err(|_| RoutineError::RoutineNotFound)?;
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Err(RoutineError::RoutineNotFound),
+            Err(_) => return Err(RoutineError::Storage),
+        };
         let routine: RoutineDefinition =
             serde_json::from_slice(&bytes).map_err(|_| RoutineError::Json("malformed routine JSON".into()))?;
         if routine.routine_id != routine_id {
@@ -63,7 +67,27 @@ impl RoutineRegistry {
         let entries = fs::read_dir(&self.root).map_err(|_| RoutineError::Storage)?;
         for entry in entries {
             let entry = entry.map_err(|_| RoutineError::Storage)?;
-            if let Ok(id) = Uuid::parse_str(&entry.file_name().to_string_lossy()) {
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            let Ok(id) = Uuid::parse_str(&name) else {
+                continue;
+            };
+            if id.to_string() != name {
+                continue;
+            }
+            let dir = entry.path();
+            let Ok(dir_meta) = fs::symlink_metadata(&dir) else {
+                continue;
+            };
+            if !dir_meta.is_dir() {
+                continue;
+            }
+            let json = dir.join("routine.json");
+            let Ok(json_meta) = fs::symlink_metadata(&json) else {
+                continue;
+            };
+            if json_meta.is_file() {
                 ids.push(id);
             }
         }
@@ -77,9 +101,17 @@ impl RoutineRegistry {
     /// I/O failure while removing files.
     pub fn delete(&self, routine_id: Uuid) -> Result<(), RoutineError> {
         let dir = self.root.join(routine_id.to_string());
+        match fs::symlink_metadata(&dir) {
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(_) => return Err(RoutineError::Storage),
+            Ok(_) => {}
+        }
+        let lock = self.lock(routine_id)?;
+        let _ = fs::remove_file(dir.join("routine.json"));
+        drop(lock);
         match fs::remove_dir_all(&dir) {
             Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
             Err(_) => Err(RoutineError::Storage),
         }
     }
@@ -90,57 +122,83 @@ impl RoutineRegistry {
         let dir = self.root.join(routine_id.to_string());
         create_private_dir(&dir)?;
         let path = dir.join("lock");
-        let file = fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&path)
-            .map_err(|_| RoutineError::Storage)?;
+        let mut options = fs::OpenOptions::new();
+        options.create(true).write(true).truncate(true);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt as _;
+            options.share_mode(0);
+        }
+        let file = options.open(&path).map_err(|_| RoutineError::Storage)?;
         #[cfg(unix)]
         {
             rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)
                 .map_err(|_| RoutineError::Storage)?;
-            let metadata = fs::metadata(&path).map_err(|_| RoutineError::Storage)?;
-            let mut permissions = metadata.permissions();
-            permissions.set_mode(0o600);
-            fs::set_permissions(&path, permissions).map_err(|_| RoutineError::Storage)?;
+            set_file_mode(&path, 0o600)?;
         }
         Ok(RoutineLock { _file: file })
     }
 }
 
 fn create_private_dir(path: &Path) -> Result<(), RoutineError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => return Err(RoutineError::Storage),
+        Ok(metadata) if !metadata.is_dir() => return Err(RoutineError::Storage),
+        Ok(_) => {}
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            #[cfg(unix)]
+            {
+                fs::DirBuilder::new()
+                    .recursive(true)
+                    .mode(0o700)
+                    .create(path)
+                    .map_err(|_| RoutineError::Storage)?;
+            }
+            #[cfg(not(unix))]
+            {
+                fs::create_dir_all(path).map_err(|_| RoutineError::Storage)?;
+            }
+        }
+        Err(_) => return Err(RoutineError::Storage),
+    }
+    let metadata = fs::symlink_metadata(path).map_err(|_| RoutineError::Storage)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(RoutineError::Storage);
+    }
     #[cfg(unix)]
     {
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(path)
-            .map_err(|_| RoutineError::Storage)?;
-        let metadata = fs::metadata(path).map_err(|_| RoutineError::Storage)?;
+        if metadata.uid() != rustix::process::geteuid().as_raw() {
+            return Err(RoutineError::Storage);
+        }
         let mut permissions = metadata.permissions();
         permissions.set_mode(0o700);
         fs::set_permissions(path, permissions).map_err(|_| RoutineError::Storage)?;
-        Ok(())
     }
-    #[cfg(not(unix))]
-    {
-        fs::create_dir_all(path).map_err(|_| RoutineError::Storage)
-    }
+    Ok(())
 }
 
 fn write_private(path: &Path, bytes: &[u8]) -> Result<(), RoutineError> {
-    let file = AtomicFile::new(path, AllowOverwrite);
-    file.write(|handle| handle.write_all(bytes))
+    let mut options = fs::OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    AtomicFile::new(path, AllowOverwrite)
+        .write_with_options(|file| file.write_all(bytes).and_then(|()| file.sync_all()), options)
         .map_err(|_| RoutineError::Storage)?;
     #[cfg(unix)]
-    {
-        let metadata = fs::metadata(path).map_err(|_| RoutineError::Storage)?;
-        let mut permissions = metadata.permissions();
-        permissions.set_mode(0o600);
-        fs::set_permissions(path, permissions).map_err(|_| RoutineError::Storage)?;
-    }
+    set_file_mode(path, 0o600)?;
     Ok(())
+}
+
+#[cfg(unix)]
+fn set_file_mode(path: &Path, mode: u32) -> Result<(), RoutineError> {
+    let metadata = fs::symlink_metadata(path).map_err(|_| RoutineError::Storage)?;
+    if metadata.file_type().is_symlink() {
+        return Err(RoutineError::Storage);
+    }
+    let mut permissions = metadata.permissions();
+    permissions.set_mode(mode);
+    fs::set_permissions(path, permissions).map_err(|_| RoutineError::Storage)
 }
 
 #[cfg(test)]
@@ -174,5 +232,15 @@ mod tests {
         registry.delete(routine.routine_id).expect("delete");
         assert_eq!(registry.load(Uuid::nil()), Err(RoutineError::RoutineNotFound));
         assert!(registry.list().expect("list").is_empty());
+    }
+
+    #[test]
+    fn lock_only_directories_are_not_listed() {
+        let temp = tempfile::tempdir().expect("temp");
+        let registry = RoutineRegistry::open(temp.path().join("routines")).expect("open");
+        let id = Uuid::from_u128(7);
+        drop(registry.lock(id).expect("lock"));
+        assert!(registry.list().expect("list").is_empty());
+        assert_eq!(registry.load(id), Err(RoutineError::RoutineNotFound));
     }
 }

@@ -76,6 +76,13 @@ fn empty_completion_assertions_are_malformed() {
 }
 
 #[test]
+fn malformed_timestamps_are_rejected() {
+    let mut routine = sample_definition();
+    routine.created_at = "not-a-time".to_string();
+    assert_eq!(routine.validate(), Err(RoutineError::InvalidRecording));
+}
+
+#[test]
 fn ready_requires_matching_verified_plan_version() {
     let mut routine = sample_definition();
     assert!(!routine.is_ready());

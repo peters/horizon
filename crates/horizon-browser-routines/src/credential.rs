@@ -198,17 +198,14 @@ impl CredentialStore for FakeCredentialStore {
         let secret = self
             .items
             .get(&(routine_id, slot, field))
-            .ok_or(RoutineError::SlotMismatch)?;
+            .ok_or(RoutineError::MissingCredential)?;
         sink.fill(field, secret)
     }
 }
 
-impl<S: fmt::Debug> fmt::Debug for CredentialBroker<S> {
+impl<S> fmt::Debug for CredentialBroker<S> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("CredentialBroker")
-            .field("store", &self.store)
-            .finish()
+        formatter.debug_struct("CredentialBroker").finish_non_exhaustive()
     }
 }
 
@@ -293,7 +290,7 @@ mod tests {
                 CredentialFieldKind::Username,
                 &mut sink,
             ),
-            Err(RoutineError::SlotMismatch)
+            Err(RoutineError::MissingCredential)
         );
         assert!(!sink.filled);
     }
