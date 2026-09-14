@@ -280,6 +280,8 @@ cargo run --release
 
 > Requires **Git LFS** for bundled assets and **Rust 1.95+**. Linux needs system headers for GPU rendering — see [AGENTS.md](AGENTS.md#prerequisites) for per-distro install commands.
 
+The build checks required embedded fonts and stops if one is missing or still a Git LFS pointer. Run `git lfs install` and `git lfs pull` from the repository root, then rebuild. If a font is still missing, restore it from a complete checkout with LFS assets; source archives must also contain the hydrated fonts.
+
 ---
 
 ## Keyboard and mouse
