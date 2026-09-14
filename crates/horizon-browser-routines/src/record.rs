@@ -3,7 +3,7 @@ use uuid::Uuid;
 use crate::RoutineError;
 use crate::SCHEMA_VERSION;
 use crate::recording::{RecordedAction, RecordedKind, SemanticRecording};
-use crate::registry::{RoutineRegistry, create_private_dir, write_private};
+use crate::registry::{RoutineRegistry, create_private_dir, read_private_file, write_private};
 
 /// Explicit Teach-mode session: grouped semantic actions, never pointer-move samples.
 pub struct TeachSession {
@@ -70,11 +70,28 @@ impl TeachSession {
         if let Some(previous) = self.recording.actions.last_mut()
             && can_coalesce(previous, &action)
         {
+            let previous_kind = previous.kind.clone();
+            let previous_postcondition = previous.postcondition.clone();
             coalesce_scroll(previous, action)?;
-            return self.recording.validate();
+            return match self.recording.validate() {
+                Ok(()) => Ok(()),
+                Err(error) => {
+                    if let Some(restored) = self.recording.actions.last_mut() {
+                        restored.kind = previous_kind;
+                        restored.postcondition = previous_postcondition;
+                    }
+                    Err(error)
+                }
+            };
         }
         self.recording.actions.push(action);
-        self.recording.validate()
+        match self.recording.validate() {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.recording.actions.pop();
+                Err(error)
+            }
+        }
     }
 
     /// Write `draft.json` under the routine directory. Empty drafts are allowed
@@ -106,7 +123,7 @@ impl TeachSession {
     /// Missing or malformed draft.
     pub fn load_draft(registry: &RoutineRegistry, routine_id: Uuid) -> Result<Self, RoutineError> {
         let path = registry.directory().join(routine_id.to_string()).join("draft.json");
-        let bytes = std::fs::read(&path).map_err(|_| RoutineError::RoutineNotFound)?;
+        let bytes = read_private_file(&path)?;
         let recording = match SemanticRecording::from_json(
             std::str::from_utf8(&bytes).map_err(|_| RoutineError::Json("malformed routine JSON".into()))?,
         ) {
@@ -256,14 +273,12 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn privatize_temp(path: &std::path::Path) {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            let mut permissions = std::fs::metadata(path).expect("meta").permissions();
-            permissions.set_mode(0o700);
-            std::fs::set_permissions(path, permissions).expect("chmod");
-        }
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut permissions = std::fs::metadata(path).expect("meta").permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(path, permissions).expect("chmod");
     }
 
     #[cfg(not(unix))]
@@ -313,6 +328,41 @@ mod tests {
         session.push(scroll("s1", 80.0)).expect("s1");
         session.push(scroll("s2", -40.0)).expect("s2");
         assert_eq!(session.recording().actions.len(), 2);
+    }
+
+    #[test]
+    fn rejected_push_does_not_leave_the_session_invalid() {
+        let mut session = TeachSession::start();
+        for index in 0..256 {
+            session.push(click(&format!("a{index}"))).expect("fill");
+        }
+        assert_eq!(session.push(click("overflow")), Err(RoutineError::InvalidRecording));
+        assert_eq!(session.recording().actions.len(), 256);
+        let temp = tempfile::tempdir().expect("temp");
+        privatize_temp(temp.path());
+        let registry = RoutineRegistry::open(temp.path().join("routines")).expect("open");
+        session.save_draft(&registry, Uuid::from_u128(5)).expect("save");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn draft_load_rejects_symlinks() {
+        let temp = tempfile::tempdir().expect("temp");
+        privatize_temp(temp.path());
+        let registry = RoutineRegistry::open(temp.path().join("routines")).expect("open");
+        let mut session = TeachSession::start();
+        session.push(click("run")).expect("push");
+        let id = Uuid::from_u128(6);
+        session.save_draft(&registry, id).expect("save");
+        let draft = temp.path().join("routines").join(id.to_string()).join("draft.json");
+        let target = temp.path().join("outside.json");
+        std::fs::write(&target, b"{}").expect("outside");
+        std::fs::remove_file(&draft).expect("remove");
+        std::os::unix::fs::symlink(&target, &draft).expect("symlink");
+        assert_eq!(
+            TeachSession::load_draft(&registry, id).err(),
+            Some(RoutineError::Storage)
+        );
     }
 
     #[test]

@@ -51,19 +51,7 @@ impl RoutineRegistry {
     /// Missing file, malformed JSON, or validation failure.
     pub fn load(&self, routine_id: Uuid) -> Result<RoutineDefinition, RoutineError> {
         let path = self.root.join(routine_id.to_string()).join("routine.json");
-        let metadata = match fs::symlink_metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == ErrorKind::NotFound => return Err(RoutineError::RoutineNotFound),
-            Err(_) => return Err(RoutineError::Storage),
-        };
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err(RoutineError::Storage);
-        }
-        let bytes = match fs::read(&path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == ErrorKind::NotFound => return Err(RoutineError::RoutineNotFound),
-            Err(_) => return Err(RoutineError::Storage),
-        };
+        let bytes = read_private_file(&path)?;
         let routine: RoutineDefinition =
             serde_json::from_slice(&bytes).map_err(|_| RoutineError::Json("malformed routine JSON".into()))?;
         if routine.routine_id != routine_id {
@@ -226,6 +214,22 @@ fn validate_existing_ancestors(path: &Path) -> Result<(), RoutineError> {
         current = parent.to_path_buf();
     }
     Ok(())
+}
+
+pub(crate) fn read_private_file(path: &Path) -> Result<Vec<u8>, RoutineError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Err(RoutineError::RoutineNotFound),
+        Err(_) => return Err(RoutineError::Storage),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(RoutineError::Storage);
+    }
+    match fs::read(path) {
+        Ok(bytes) => Ok(bytes),
+        Err(error) if error.kind() == ErrorKind::NotFound => Err(RoutineError::RoutineNotFound),
+        Err(_) => Err(RoutineError::Storage),
+    }
 }
 
 pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> Result<(), RoutineError> {
