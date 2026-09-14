@@ -917,6 +917,13 @@ class MalformedInputs(Harness):
         by_id = {check["id"]: check for check in report["checks"]}
         self.assertEqual(by_id["memory_capacity"]["status"], "error")
 
+    def test_meminfo_overflow_is_error(self):
+        huge = "MemTotal: 16777216 kB\n" + ("x" * (preflight.MAX_PROBE_OUTPUT_BYTES + 1))
+        code, report, _ = self.run_main(dict(DEFAULT_FIXTURE), meminfo_text=huge)
+        self.assertEqual(code, 2)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["memory_capacity"]["status"], "error")
+
     def test_memtotal_negative_or_wrong_unit_is_error(self):
         cases = (
             "MemTotal: -1 kB\n",

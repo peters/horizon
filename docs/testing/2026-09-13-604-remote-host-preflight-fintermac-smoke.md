@@ -45,13 +45,16 @@ explicit about which steps mutate the host so the proof is not overclaimed.
 ## Steps (run in order)
 
 1. **Deliver the checker — MUTATES the host (verification plumbing, not a tool feature):**
-   `preflight.py` plus sibling `executor.py` to `/tmp`, removed in step 5.
-   Invoke from `/tmp` so `from executor import` resolves. No package manager, no service,
+   unique remote directory from `mktemp -d`, removed in step 5. Copy
+   `preflight.py` and sibling `executor.py` there and invoke from that
+   directory so `from executor import` resolves. Do not use shared
+   `/tmp/preflight-604.py` names. No package manager, no service,
    no install path. Deliver **before** the baseline so both snapshots include
-   the file and the delivery itself is not part of the before/after diff.
+   the files and the delivery itself is not part of the before/after diff.
    ```sh
-   scp scripts/remote-host-preflight/preflight.py "$VM_SSH":/tmp/preflight-604.py
-   scp scripts/remote-host-preflight/executor.py "$VM_SSH":/tmp/executor.py
+   REMOTE_DIR=$(ssh "$VM_SSH" 'mktemp -d /tmp/preflight-604.XXXXXX' | tr -d '\r')
+   scp scripts/remote-host-preflight/preflight.py "$VM_SSH":"$REMOTE_DIR/preflight.py"
+   scp scripts/remote-host-preflight/executor.py "$VM_SSH":"$REMOTE_DIR/executor.py"
    ```
 
 2. **Baseline snapshot (read-only):** write the independent ground truth
@@ -100,12 +103,12 @@ explicit about which steps mutate the host so the proof is not overclaimed.
 
 3. **Run the preflight on the VM** (the tool run under test; fixed args, bounded probes, 10 s each). Capture reports **locally** before any VM cleanup. Assertion 9 needs two JSON runs with the same `--now`:
    ```sh
-   ssh "$VM_SSH" 'python3 -B /tmp/preflight-604.py --json --now 2026-09-13T00:00:00Z' > preflight-1.json
+   ssh "$VM_SSH" "python3 -B '$REMOTE_DIR/preflight.py' --json --now 2026-09-13T00:00:00Z" > preflight-1.json
    echo json_exit_1=$?
-   ssh "$VM_SSH" 'python3 -B /tmp/preflight-604.py --json --now 2026-09-13T00:00:00Z' > preflight-2.json
+   ssh "$VM_SSH" "python3 -B '$REMOTE_DIR/preflight.py' --json --now 2026-09-13T00:00:00Z" > preflight-2.json
    echo json_exit_2=$?
    cmp preflight-1.json preflight-2.json
-   ssh "$VM_SSH" 'python3 -B /tmp/preflight-604.py' > preflight.txt
+   ssh "$VM_SSH" "python3 -B '$REMOTE_DIR/preflight.py'" > preflight.txt
    echo human_exit=$?
    ```
    Keep `preflight-1.json`, `preflight-2.json` and `preflight.txt` as the
@@ -115,9 +118,9 @@ explicit about which steps mutate the host so the proof is not overclaimed.
    treat that as sampling, not a generated_at/probe-structure failure.
 
 4. **Post-run snapshot (read-only):** reuse `SNAPSHOT_REMOTE` from step 2
-   and write `after.txt` **before** step 5. The delivered `/tmp/preflight-604.py`
-   and `/tmp/executor.py` existed in both snapshots; reports were captured
-   locally in step 3.
+   and write `after.txt` **before** step 5. The delivered checker files under
+   `$REMOTE_DIR` existed in both snapshots; reports were captured locally in
+   step 3.
    Compare invariant fields (`uname`, `nproc`, `MemTotal`, engine identity,
    workspace device, ext4 options). Allow `date -u` to change and allow
    `df` Available/Capacity sampling drift — inspect that drift the same way
@@ -132,7 +135,7 @@ explicit about which steps mutate the host so the proof is not overclaimed.
 
 5. **Remove the verification copy** (the delivered checker, not host state):
    ```sh
-   ssh "$VM_SSH" 'rm -f /tmp/preflight-604.py /tmp/executor.py'
+   ssh "$VM_SSH" "rm -rf '$REMOTE_DIR'"
    ```
 
 ## Bug-hunt matrix (assert each on the real output)

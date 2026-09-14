@@ -553,9 +553,12 @@ def read_procfs(procfs_root, name):
     path = os.path.join(procfs_root, name)
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as handle:
-            return handle.read()
+            data = handle.read(MAX_PROBE_OUTPUT_BYTES + 1)
     except OSError:
         return None
+    if len(data) > MAX_PROBE_OUTPUT_BYTES:
+        return None
+    return data
 
 
 def check_capacity(executor, timeout, procfs_root):

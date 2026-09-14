@@ -117,7 +117,12 @@ def _execute_probe(argv, timeout):
     # and reap a hung PATH lookup *and* any probe that already started.
     proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             shell=False)
-    stdout, stderr, overflow = bounded_communicate(proc, timeout, MAX_PROBE_OUTPUT_BYTES)
+    try:
+        stdout, stderr, overflow = bounded_communicate(proc, timeout, MAX_PROBE_OUTPUT_BYTES)
+    except BaseException:
+        _terminate_probe(proc)
+        _kill_session_except_self()
+        raise
     if overflow:
         _kill_session_except_self()
         return {"exit_code": 1, "stdout": "", "stderr": overflow, "output_exceeded": True}
@@ -190,6 +195,7 @@ def _watchdog_execute_probe(argv, timeout):
                 _kill_session_except_self()
                 payload = {"kind": "timeout"}
             except OSError as exc:
+                _kill_session_except_self()
                 payload = {"kind": "os", "detail": str(exc)[:400]}
             os.write(write_fd, json.dumps(payload).encode("utf-8"))
         finally:
@@ -248,6 +254,7 @@ def _watchdog_execute_probe(argv, timeout):
     if kind == "timeout":
         _kill_process_group(pid)
         raise subprocess.TimeoutExpired(argv, timeout)
+    _kill_process_group(pid)
     raise OSError(payload.get("detail", "probe could not run") if isinstance(payload, dict)
                   else "probe could not run")
 
