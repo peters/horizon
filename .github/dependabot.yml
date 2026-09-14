@@ -8,9 +8,63 @@ updates:
     ignore:
       # wgpu is feature-only here and must stay aligned with eframe/egui-wgpu.
       - dependency-name: "wgpu"
+    # Crates that are released together arrive as one pull request. Split updates of
+    # one upstream release cost a full workspace rebuild each and can leave the tree
+    # briefly mismatched: eframe 0.36.2 and egui 0.36.2 landed as two pull requests
+    # (#618, #619) minutes apart, and surge-core has opened the same bump twice more
+    # than once (#266/#273/#287 for beta.53, #300/#317 for beta.54).
+    groups:
+      egui:
+        # One release train: egui, eframe and everything that must be built against
+        # the exact same egui version, including winit, which eframe's egui-winit
+        # pins (the same reason wgpu is ignored above).
+        patterns:
+          - "egui*"
+          - "eframe"
+          - "epaint"
+          - "ecolor"
+          - "emath"
+          - "winit"
+      serde:
+        # serde and its derive, format and schema crates release in step
+        # (serde 1.0.229 and serde_json 1.0.151 arrived the same day, #250 and #251).
+        patterns:
+          - "serde"
+          - "serde_*"
+      tokio:
+        patterns:
+          - "tokio"
+          - "tokio-*"
+      tracing:
+        patterns:
+          - "tracing"
+          - "tracing-*"
+      surge:
+        # One git dependency referenced from several manifests: without a group each
+        # reference opens its own pull request for the same tag.
+        patterns:
+          - "surge-*"
+      apple:
+        patterns:
+          - "objc2*"
+          - "core-graphics*"
+          - "core-foundation*"
+      windows:
+        patterns:
+          - "windows"
+          - "windows-*"
+      x11:
+        patterns:
+          - "x11rb*"
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "daily"
       time: "04:00"
+    groups:
+      # Workflow actions are independent of each other and of the crate graph; one
+      # pull request a day for all of them is enough.
+      github-actions:
+        patterns:
+          - "*"
