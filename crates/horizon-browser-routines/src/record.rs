@@ -42,6 +42,15 @@ impl TeachSession {
         self.recording.actions.clear();
     }
 
+    /// Clear the session and delete any persisted `draft.json` for `routine_id`.
+    ///
+    /// # Errors
+    /// Storage failure while removing the draft.
+    pub fn discard_saved(&mut self, registry: &RoutineRegistry, routine_id: Uuid) -> Result<(), RoutineError> {
+        self.discard();
+        remove_draft(registry, routine_id)
+    }
+
     #[must_use]
     pub fn is_paused(&self) -> bool {
         self.paused
@@ -149,6 +158,24 @@ impl TeachSession {
             paused: false,
             discarded: false,
         })
+    }
+}
+
+fn remove_draft(registry: &RoutineRegistry, routine_id: Uuid) -> Result<(), RoutineError> {
+    let dir = registry.directory().join(routine_id.to_string());
+    match std::fs::symlink_metadata(&dir) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err(RoutineError::Storage);
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => return Err(RoutineError::Storage),
+    }
+    let _lock = registry.lock(routine_id)?;
+    match std::fs::remove_file(dir.join("draft.json")) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(RoutineError::Storage),
     }
 }
 
@@ -332,6 +359,23 @@ mod tests {
         assert_eq!(
             session.save_draft(&registry, Uuid::nil()),
             Err(RoutineError::TeachInactive)
+        );
+    }
+
+    #[test]
+    fn discard_saved_removes_the_persisted_draft() {
+        let temp = tempfile::tempdir().expect("temp");
+        privatize_temp(temp.path());
+        let registry = RoutineRegistry::open(temp.path().join("routines")).expect("open");
+        let mut session = TeachSession::start();
+        session.push(click("run")).expect("push");
+        let id = Uuid::from_u128(8);
+        session.save_draft(&registry, id).expect("save");
+        session.discard_saved(&registry, id).expect("discard");
+        assert!(session.recording().actions.is_empty());
+        assert_eq!(
+            TeachSession::load_draft(&registry, id).err(),
+            Some(RoutineError::RoutineNotFound)
         );
     }
 
