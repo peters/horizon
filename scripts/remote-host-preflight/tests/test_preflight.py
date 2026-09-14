@@ -466,6 +466,18 @@ class EngineFailures(Harness):
         self.assertNotIn(list(preflight.PROBE_ARGS["docker_version"]), executor.seen)
         self.assertNotIn(list(preflight.PROBE_ARGS["docker_info"]), executor.seen)
 
+    def test_explicit_docker_context_beats_docker_host(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["docker_context"] = docker_context_ok(host="tcp://remote-daemon:2376")
+        with mock.patch.dict(os.environ, {
+                "DOCKER_HOST": "unix:///var/run/docker.sock",
+                "DOCKER_CONTEXT": "remote"}):
+            code, report, executor = self.run_main(fixture)
+        self.assertEqual(code, 1)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertIn("context Host=", by_id["container_engine"]["detail"])
+        self.assertTrue(any("context" in argv for argv in executor.seen))
+
     def test_local_docker_host_skips_context_inspect(self):
         fixture = dict(DEFAULT_FIXTURE)
         fixture["docker_context"] = {
@@ -1293,6 +1305,16 @@ class RedactionAndDeterminism(Harness):
             _, report, _ = self.run_main(fixture)
         text = json.dumps(report)
         self.assertNotIn(secret, text)
+        self.assertIn("<redacted>", text)
+
+    def test_uri_userinfo_above_64kib_is_redacted(self):
+        secret = "s" * 70000
+        fixture = dict(DEFAULT_FIXTURE)
+        with mock.patch.dict(os.environ, {
+                "DOCKER_HOST": "tcp://user:%s@remote:2376" % secret}):
+            _, report, _ = self.run_main(fixture)
+        text = json.dumps(report)
+        self.assertNotIn(secret[:64], text)
         self.assertIn("<redacted>", text)
 
     def test_username_only_uri_userinfo_is_redacted(self):

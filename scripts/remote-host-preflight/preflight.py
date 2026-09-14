@@ -144,7 +144,7 @@ REDACTED_PATTERNS = (
     re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{8,255}"),
 )
 URI_USERINFO = re.compile(
-    r"(?i)([a-z][a-z0-9+.-]{0,32}://)[^/@\s]{1,65536}(?::[^/@\s]{1,65536})?@"
+    r"(?i)([a-z][a-z0-9+.-]{0,32}://)[^/@\s]+(?::[^/@\s]+)?@"
 )
 
 # Precomputed read-only facts that cannot be proven from host metadata alone.
@@ -329,21 +329,8 @@ def normalize_unix_endpoint(host):
     return None
 
 
-def docker_endpoint_reason(executor, timeout):
-    """(pinned unix endpoint, None) or (None, reason).
-
-    `DOCKER_HOST` overrides the active context in the Docker CLI, so a
-    validated local `DOCKER_HOST` is pinned without inspecting context.
-    Context inspect runs only when `DOCKER_HOST` is unset.
-    """
-    host_env = os.environ.get("DOCKER_HOST")
-    if host_env:
-        if not is_local_unix_endpoint(host_env):
-            return None, "docker endpoint is remote (DOCKER_HOST=%s)" % redact(host_env)
-        pinned = normalize_unix_endpoint(host_env)
-        if not pinned:
-            return None, "docker endpoint is remote (DOCKER_HOST=%s)" % redact(host_env)
-        return pinned, None
+def inspect_docker_context(executor, timeout):
+    """Pin the active docker context Host if it is a local unix socket."""
     ctx, err = run_probe(executor, "docker_context", timeout)
     if err is not None:
         return None, "docker context inspect failed (%s)" % redact(err)
@@ -359,6 +346,26 @@ def docker_endpoint_reason(executor, timeout):
     if not pinned:
         return None, "docker endpoint is remote"
     return pinned, None
+
+
+def docker_endpoint_reason(executor, timeout):
+    """(pinned unix endpoint, None) or (None, reason).
+
+    An explicit `DOCKER_CONTEXT` is inspected first. `DOCKER_HOST` is used
+    only when no context is selected. Later `docker --host` probes pin that
+    socket so inherited endpoint variables cannot redirect them.
+    """
+    if os.environ.get("DOCKER_CONTEXT"):
+        return inspect_docker_context(executor, timeout)
+    host_env = os.environ.get("DOCKER_HOST")
+    if host_env:
+        if not is_local_unix_endpoint(host_env):
+            return None, "docker endpoint is remote (DOCKER_HOST=%s)" % redact(host_env)
+        pinned = normalize_unix_endpoint(host_env)
+        if not pinned:
+            return None, "docker endpoint is remote (DOCKER_HOST=%s)" % redact(host_env)
+        return pinned, None
+    return inspect_docker_context(executor, timeout)
 
 
 def candidate_podman_sockets():
