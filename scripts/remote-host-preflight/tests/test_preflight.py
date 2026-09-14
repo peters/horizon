@@ -617,6 +617,17 @@ class EngineFailures(Harness):
             time.sleep(0.05)
         self.assertFalse(alive)
 
+    def test_sysfs_device_name_matches_worker_gate(self):
+        self.assertTrue(preflight.sysfs_device_name_ok("nvme0n1p2"))
+        self.assertFalse(preflight.sysfs_device_name_ok("nvme0n1p2:0"))
+        self.assertFalse(preflight.sysfs_device_name_ok("nvme0n1p2."))
+        self.assertFalse(preflight.sysfs_device_name_ok("nvme0n1p2 "))
+        self.assertFalse(preflight.sysfs_device_name_ok("a" * 256))
+        self.assertFalse(preflight.sysfs_device_name_ok(".git"))
+        self.assertFalse(preflight.sysfs_device_name_ok("id_rsa"))
+        self.assertFalse(preflight.sysfs_device_name_ok("foo.env"))
+        self.assertTrue(preflight.sysfs_device_name_ok("a" * 255))
+
     def test_overflow_kills_probe_descendants(self):
         pidfile = os.path.join(self.tmp.name, "grandchild.pid")
         script = (
@@ -633,6 +644,45 @@ class EngineFailures(Harness):
             grandchild = int(handle.read().strip())
         deadline = time.monotonic() + 2
         alive = True
+        while time.monotonic() < deadline:
+            try:
+                os.kill(grandchild, 0)
+            except OSError:
+                alive = False
+                break
+            time.sleep(0.05)
+        self.assertFalse(alive)
+
+    def test_overflow_kills_child_that_inherited_stdout(self):
+        pidfile = os.path.join(self.tmp.name, "overflow-orphan.pid")
+        script = (
+            "import os,sys,time\n"
+            "child=os.fork()\n"
+            "if child==0:\n"
+            "    open(%r,'w').write(str(os.getpid()))\n"
+            "    sys.stdout.write('x'*200000)\n"
+            "    sys.stdout.flush()\n"
+            "    time.sleep(30)\n"
+            "    os._exit(0)\n"
+            "os._exit(0)\n"
+        ) % pidfile
+        with mock.patch.object(subprocess, "Popen", self.real_popen):
+            result = preflight.default_executor(
+                [sys.executable, "-B", "-c", script], 2.0)
+        self.assertTrue(result.get("output_exceeded"))
+        deadline = time.monotonic() + 2
+        grandchild = None
+        while time.monotonic() < deadline:
+            if os.path.exists(pidfile):
+                with open(pidfile, encoding="utf-8") as handle:
+                    text = handle.read().strip()
+                if text.isdigit():
+                    grandchild = int(text)
+                    break
+            time.sleep(0.05)
+        self.assertIsNotNone(grandchild)
+        alive = True
+        deadline = time.monotonic() + 2
         while time.monotonic() < deadline:
             try:
                 os.kill(grandchild, 0)
@@ -737,6 +787,18 @@ class MalformedInputs(Harness):
         self.assertEqual(by_id["cpu_capacity"]["value"], 2)
         self.assertEqual(by_id["cpu_capacity"]["status"], "unsupported")
 
+    def test_nproc_non_positive_falls_back_to_cpuinfo(self):
+        cpuinfo = "processor\t: 0\nprocessor\t: 1\nprocessor\t: 2\nprocessor\t: 3\n"
+        for value in ("0", "-1"):
+            with self.subTest(value=value):
+                fixture = dict(DEFAULT_FIXTURE)
+                fixture["cores"] = {"stdout": value + "\n"}
+                code, report, _ = self.run_main(fixture, cpuinfo_text=cpuinfo)
+                self.assertEqual(code, 0, value)
+                by_id = {check["id"]: check for check in report["checks"]}
+                self.assertEqual(by_id["cpu_capacity"]["value"], 4, value)
+                self.assertEqual(by_id["cpu_capacity"]["status"], "supported", value)
+
     def test_cpuinfo_without_processor_records_is_error(self):
         fixture = dict(DEFAULT_FIXTURE)
         fixture["cores"] = {"exit_code": 1, "stdout": "", "stderr": "nproc failed"}
@@ -761,6 +823,19 @@ class MalformedInputs(Harness):
         self.assertEqual(code, 2)
         by_id = {check["id"]: check for check in report["checks"]}
         self.assertEqual(by_id["memory_capacity"]["status"], "error")
+
+    def test_memtotal_negative_or_wrong_unit_is_error(self):
+        cases = (
+            "MemTotal: -1 kB\n",
+            "MemTotal: 16777216 bytes\n",
+            "MemTotal: 0 kB\n",
+        )
+        for text in cases:
+            with self.subTest(text=text.strip()):
+                code, report, _ = self.run_main(dict(DEFAULT_FIXTURE), meminfo_text=text)
+                self.assertEqual(code, 2)
+                by_id = {check["id"]: check for check in report["checks"]}
+                self.assertEqual(by_id["memory_capacity"]["status"], "error")
 
     def test_meminfo_absent(self):
         code, report, _ = self.run_main(dict(DEFAULT_FIXTURE), meminfo_text=None)

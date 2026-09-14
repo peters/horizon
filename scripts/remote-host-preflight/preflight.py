@@ -500,10 +500,11 @@ def check_capacity(executor, timeout, procfs_root):
     if error or result["exit_code"] != 0:
         probe_failed = True
     else:
-        try:
-            cores = int(result.get("stdout", "").strip())
-        except ValueError:
+        parsed = parse_nonneg_int(result.get("stdout", "").strip())
+        if parsed is None or parsed < 1:
             probe_failed = True
+        else:
+            cores = parsed
     if cores is None:
         cpuinfo = read_procfs(procfs_root, "cpuinfo")
         if cpuinfo:
@@ -527,10 +528,11 @@ def check_memory(procfs_root):
     total_kb = None
     for line in meminfo.splitlines():
         if line.startswith("MemTotal:"):
-            try:
-                total_kb = int(line.split()[1])
-            except (ValueError, IndexError):
-                total_kb = None
+            parts = line.split()
+            if len(parts) >= 3 and parts[2] == "kB":
+                parsed = parse_nonneg_int(parts[1])
+                if parsed is not None and parsed >= 1:
+                    total_kb = parsed
             break
     if total_kb is None:
         # An unreadable MemTotal is a probe failure (incomplete report),
@@ -664,7 +666,7 @@ def read_ext4_options(procfs_root, sysfs_root, dev_major, dev_minor):
         if getattr(exc, "errno", None) in (errno.ENOENT, errno.ENOTDIR):
             return None, None, "block device %s not resolvable via sysfs" % block_id
         return None, None, "block device %s unreadable: %s" % (block_id, redact(exc))
-    if not name or name in (".", "..") or os.sep in name:
+    if not sysfs_device_name_ok(name):
         return None, None, "sysfs reported an unsafe device name"
     options_path = os.path.join(procfs_root, "fs", "ext4", name, "options")
     try:
@@ -682,6 +684,35 @@ def read_ext4_options(procfs_root, sysfs_root, dev_major, dev_minor):
 # pass), no duplicates, no empty lines, no ASCII control bytes, no spaces,
 # exactly one data= line, 4096-byte cap, trailing newline required.
 MAX_OPTIONS_BYTES = 4096
+# storage.rs also requires name.len() <= 255 and paths::validate(name).
+MAX_DEVICE_NAME_BYTES = 255
+EXCLUDED_DEVICE_COMPONENTS = frozenset((
+    ".env", ".envrc", ".git", ".hg", ".svn", ".ssh", ".gnupg", ".aws",
+    ".azure", ".kube", ".docker", ".config", ".codex", ".claude",
+    ".claude.json", ".netrc", ".npmrc", ".pypirc", ".git-credentials",
+    "credentials.json", "auth.json", "id_rsa", "id_ed25519", ".cache",
+    "__pycache__", "node_modules", "target", ".venv", "venv",
+    ".pytest_cache", ".mypy_cache",
+))
+
+
+def sysfs_device_name_ok(name):
+    """True when a sysfs basename would pass the worker storage name gate."""
+    if not name or os.sep in name or name in (".", ".."):
+        return False
+    encoded = name.encode("utf-8")
+    if len(encoded) > MAX_DEVICE_NAME_BYTES:
+        return False
+    if any(ord(char) < 32 or ord(char) == 127 or char in "\\:" for char in name):
+        return False
+    if name.endswith(".") or name.endswith(" "):
+        return False
+    lower = name.lower()
+    if lower == ".env" or lower.startswith(".env.") or lower.endswith(".env"):
+        return False
+    if lower in EXCLUDED_DEVICE_COMPONENTS:
+        return False
+    return True
 
 
 def ext4_qualifier_problems(raw):
@@ -975,6 +1006,7 @@ def _execute_probe(argv, timeout):
                             shell=False)
     stdout, stderr, overflow = bounded_communicate(proc, timeout, MAX_PROBE_OUTPUT_BYTES)
     if overflow:
+        _kill_session_except_self()
         return {"exit_code": 1, "stdout": "", "stderr": overflow, "output_exceeded": True}
     return {"exit_code": proc.returncode,
             "stdout": decode_probe_output(stdout),
@@ -1036,6 +1068,8 @@ def _watchdog_execute_probe(argv, timeout):
         try:
             try:
                 result = _execute_probe(argv, timeout)
+                if result.get("output_exceeded"):
+                    _kill_session_except_self()
                 payload = {"kind": "ok", "result": result}
             except FileNotFoundError:
                 payload = {"kind": "fnf"}
@@ -1092,7 +1126,10 @@ def _watchdog_execute_probe(argv, timeout):
         raise OSError("probe watchdog returned malformed result") from exc
     kind = payload.get("kind") if isinstance(payload, dict) else None
     if kind == "ok" and isinstance(payload.get("result"), dict):
-        return payload["result"]
+        result = payload["result"]
+        if result.get("output_exceeded"):
+            _kill_process_group(pid)
+        return result
     if kind == "fnf":
         raise FileNotFoundError(argv[0] if argv else "probe")
     if kind == "timeout":
