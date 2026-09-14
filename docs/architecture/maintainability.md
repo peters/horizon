@@ -730,6 +730,10 @@ back into large multi-purpose modules.
   - `view`: canvas pan/zoom state, coordinate transforms, and focus-to-bounds helpers
   - `workspace`: workspace frame orchestration and rename/drag UI, with
     paint/render/toolbar helpers split into `workspace/`
+- `plugin_install/mcp/` leases process-scoped browser MCP attachments: `mod.rs`
+  coordinates live hosts, `json.rs` mutates Pi/Antigravity configs, `grok.rs`
+  owns the marked Grok TOML block, and `persist.rs` writes through symlinks.
+  Behavior tests live in `plugin_install/mcp/tests/`.
 - `input/` and `terminal_widget/` follow the same rule: split event
   translation, layout, rendering, and behavior helpers into dedicated modules
   instead of extending a single file. Browser-widget input keeps frame-level
