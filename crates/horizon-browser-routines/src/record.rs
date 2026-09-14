@@ -62,8 +62,9 @@ impl TeachSession {
     /// # Errors
     /// Storage failure while removing the draft.
     pub fn discard_saved(&mut self, registry: &RoutineRegistry, routine_id: Uuid) -> Result<(), RoutineError> {
+        remove_draft(registry, routine_id)?;
         self.discard();
-        remove_draft(registry, routine_id)
+        Ok(())
     }
 
     #[must_use]
@@ -177,7 +178,7 @@ impl TeachSession {
         }
         Ok(Self {
             recording,
-            lifecycle: TeachLifecycle::Recording,
+            lifecycle: TeachLifecycle::Paused,
         })
     }
 }
@@ -510,7 +511,42 @@ mod tests {
         session.save_draft(&registry, id).expect("save");
         let loaded = TeachSession::load_draft(&registry, id).expect("load");
         assert!(loaded.recording().actions.is_empty());
+        assert!(loaded.is_paused());
         assert_eq!(loaded.recording().recording_id, session.recording().recording_id);
+    }
+
+    #[test]
+    fn recovered_draft_stays_paused_until_resume() {
+        let temp = tempfile::tempdir().expect("temp");
+        privatize_temp(temp.path());
+        let registry = RoutineRegistry::open(temp.path().join("routines")).expect("open");
+        let mut session = TeachSession::start();
+        session.push(click("run")).expect("push");
+        let id = Uuid::from_u128(11);
+        session.save_draft(&registry, id).expect("save");
+        let mut loaded = TeachSession::load_draft(&registry, id).expect("load");
+        assert!(loaded.is_paused());
+        assert_eq!(loaded.push(click("again")), Err(RoutineError::TeachInactive));
+        loaded.resume();
+        loaded.push(click("later")).expect("resume");
+        assert_eq!(loaded.recording().actions.len(), 2);
+    }
+
+    #[test]
+    fn discard_saved_keeps_the_session_when_draft_removal_fails() {
+        let temp = tempfile::tempdir().expect("temp");
+        privatize_temp(temp.path());
+        let registry = RoutineRegistry::open(temp.path().join("routines")).expect("open");
+        let mut session = TeachSession::start();
+        session.push(click("run")).expect("push");
+        let id = Uuid::from_u128(12);
+        session.save_draft(&registry, id).expect("save");
+        let draft = temp.path().join("routines").join(id.to_string()).join("draft.json");
+        std::fs::remove_file(&draft).expect("remove");
+        std::fs::create_dir(&draft).expect("dir");
+        assert_eq!(session.discard_saved(&registry, id).err(), Some(RoutineError::Storage));
+        assert!(!session.is_discarded());
+        assert_eq!(session.recording().actions.len(), 1);
     }
 
     #[test]
