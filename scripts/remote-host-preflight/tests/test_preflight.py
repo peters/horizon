@@ -790,7 +790,8 @@ class MalformedInputs(Harness):
         self.assertEqual(by_id["disk_capacity"]["status"], "error")
 
     def test_df_oversized_digit_field_is_error(self):
-        huge = "9" * 5000
+        huge = "9" * (preflight.MAX_NONNEG_INT_DIGITS + 1)
+        self.assertIsNone(preflight.parse_nonneg_int(huge))
         fixture = dict(DEFAULT_FIXTURE)
         fixture["disk"] = {"stdout":
             "Filesystem     1024-blocks      Used Available Capacity Mounted on\n"
@@ -1121,8 +1122,9 @@ class RedactionAndDeterminism(Harness):
         for value in ("-1", "0", "nan", "inf", "-inf", "1e300"):
             with self.subTest(value=value):
                 with redirect_stderr(io.StringIO()):
-                    with self.assertRaises(SystemExit):
+                    with self.assertRaises(SystemExit) as caught:
                         preflight.main(["--timeout", value])
+                self.assertEqual(caught.exception.code, 3)
 
     def test_report_is_deterministic(self):
         import io

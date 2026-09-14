@@ -28,7 +28,9 @@ Options:
 
 Exit codes: `0` all decided prerequisites supported, `1` at least one
 unsupported check **and no probe errors**, `2` at least one probe error
-(errors take precedence; the report is still emitted).
+(errors take precedence; the JSON/text report is still emitted), `3`
+invalid CLI usage (argparse; usage text only, no report — for example
+`--timeout 0`).
 
 ## What it checks
 

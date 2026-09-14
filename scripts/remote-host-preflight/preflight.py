@@ -44,6 +44,9 @@ MAX_PROBE_OUTPUT_BYTES = 65536
 # json.dumps can expand one byte to `\u00XX` (6 chars). stdout+stderr plus
 # the watchdog wrapper must fit this cap or a completed probe looks like a timeout.
 MAX_WATCHDOG_PAYLOAD = MAX_PROBE_OUTPUT_BYTES * 12 + 4096
+# Explicit ASCII digit cap so oversized `df` fields are rejected even when
+# Python's int-string conversion limit is disabled (`PYTHONINTMAXSTRDIGITS=0`).
+MAX_NONNEG_INT_DIGITS = 20  # uint64 decimal width
 
 # Status values, kept separate on purpose per the issue contract.
 SUPPORTED = "supported"
@@ -189,13 +192,16 @@ def parse_json_output(result):
 def parse_nonneg_int(text):
     """Parse a non-negative decimal integer, or None if malformed.
 
-    `str.isdigit()` is not enough: Python rejects digit strings longer than
-    its conversion limit, and that `int()` raises `ValueError`.
+    Reject overlong digit strings before `int()` so the result does not
+    depend on Python's optional conversion limit.
     """
-    if not text or not str(text).isdigit():
+    if not text:
+        return None
+    raw = str(text)
+    if not raw.isdigit() or len(raw) > MAX_NONNEG_INT_DIGITS:
         return None
     try:
-        return int(text)
+        return int(raw)
     except ValueError:
         return None
 
@@ -1117,8 +1123,16 @@ def parse_timeout(value):
     return timeout
 
 
+class PreflightArgumentParser(argparse.ArgumentParser):
+    """Invalid CLI usage exits 3 so it is not confused with probe error 2."""
+
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        self.exit(3, "%s: error: %s\n" % (self.prog, message))
+
+
 def main(argv=None, executor=None, now=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = PreflightArgumentParser(description=__doc__)
     parser.add_argument("--workspace-path", default=DEFAULT_WORKSPACE_PATH,
                         help="intended workspace directory (default: %(default)s)")
     parser.add_argument("--procfs-root", default="/proc",
