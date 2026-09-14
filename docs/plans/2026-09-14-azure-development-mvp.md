@@ -38,9 +38,9 @@ is already assigned to another contributor; do not duplicate that work.
 - User clarification: UI smoke must actually run inside the Docker worker. A
   host-side launch or screenshot does not satisfy this slice. Build the candidate
   in the worker runtime as well, avoiding host/container libc incompatibility.
-- Keep native desktop tooling as the default image. Offer Chromium/ChromeDriver
-  and Firefox ESR/geckodriver only through an optional browser testing target,
-  following the user's clarification that Horizon native UI does not need them.
+- Latest user clarification: the standard Horizon development image must include
+  Chromium/ChromeDriver and Firefox ESR/geckodriver to smoke-test `horizon-browser`.
+  Keep the smaller native-only image available as an explicit build target.
   Prove installed versions, then qualify browser-panel interaction separately
   through the public Horizon browser MCP tools inside the worker environment.
 - Document the normal repository validation matrix and image build commands.
@@ -202,3 +202,14 @@ independently of the GitHub PAT and registry managed identity.
   cleanup timer is scheduled before that deadline, alongside independent Azure
   compute auto-shutdown. The local cleanup timer depends on this client being up;
   verify provider absence explicitly after deletion.
+
+## Browser default clarification
+
+The user's latest instruction supersedes the earlier native-only default: Horizon
+includes `horizon-browser`, so its standard development image must contain both
+Chromium and Firefox with their drivers. The Docker default now selects that stage;
+`--target native` remains available for explicitly narrower tasks. Rebuild and smoke
+the complete packaged default image, then request publication of that exact image.
+Update the repository manifest's default digest only after publication is verified.
+The existing native-only pilot receipt continues to identify its original image;
+changing that live worker is a separate operation, not a silent manifest update.

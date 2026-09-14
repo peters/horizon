@@ -17,7 +17,7 @@ RUN useradd --uid 1000 --create-home --shell /bin/bash horizon-smoke
 LABEL io.horizon.worker.linux-ui-smoke="1"
 # Preserve the base worker's SSH entrypoint and runtime-only credentials.
 
-# Opt in only for embedded browser panels or web-application testing.
+# Standard development tooling includes both horizon-browser smoke engines.
 FROM native AS browser
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends chromium chromium-driver firefox-esr \
@@ -38,5 +38,5 @@ RUN case "$(dpkg --print-architecture)" in \
 
 LABEL io.horizon.worker.browser-smoke="1"
 
-# The default image contains native desktop tooling only.
-FROM native AS final
+# Use --target native only for an explicitly smaller native-only fixture.
+FROM browser AS final
