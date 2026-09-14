@@ -55,6 +55,9 @@ pub enum BrowserAuditAction {
     PanelVisibility {
         visible: bool,
     },
+    /// The owning agent closed the panel; teardown releases any remote
+    /// allocation.
+    PanelClose,
     Navigate {
         destination: String,
     },

@@ -44,6 +44,7 @@ use crate::horizon_home::{HorizonHome, safe_local_id};
 mod agent;
 mod audit;
 mod capture;
+mod close;
 mod create;
 mod request_queue;
 mod result;
@@ -54,6 +55,10 @@ pub use agent::{claim, enqueue_action, heartbeat, release, request_handoff};
 pub use audit::{
     AuditJournal, AuditPage, AuditPageRequest, DEFAULT_AUDIT_PAGE_LIMIT, MAX_AUDIT_PAGE_LIMIT, audit_path_for_root,
     default_audit_path, page_audit, read_audit, read_audit_journal,
+};
+pub use close::{
+    BrowserCloseAuditStatus, BrowserCloseOutcome, BrowserCloseRequest, BrowserCloseResult, claim_close_request,
+    complete_close_request, enqueue_close, list_close_requests, record_close_status, take_close_result,
 };
 pub use create::{
     BrowserCreateAuditStatus, BrowserCreateOutcome, BrowserCreateRequest, BrowserCreateResult, CreateNavigation,

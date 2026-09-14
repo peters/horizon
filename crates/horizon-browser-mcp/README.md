@@ -52,6 +52,9 @@ shell commands, files, or other MCP servers.
   dialog, and consent flows instead of creating a helper panel.
 - `browser_visibility` shows or hides an existing panel without stopping its
   browser, ownership lease, network capture, or MCP control.
+- `browser_close` closes a panel the caller owns in its workspace and stops
+  its session; a remote device allocation is released by that teardown. The
+  panel leaves `browser_list` while its audit journal stays readable.
 - `browser_navigate` changes the top-level page and reports a typed outcome.
   By default it returns once the document committed (`wait: commit`);
   `wait: dispatched` returns as soon as the engine handed the command to the

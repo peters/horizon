@@ -277,6 +277,13 @@ fn horizon_agents_only_see_and_control_their_own_workspace() {
         );
         assert_outside_workspace(
             &agent.call(
+                "browser_close",
+                &json!({ "panel_id": panel_id, "timeout_millis": 1000 }),
+            ),
+            panel_id,
+        );
+        assert_outside_workspace(
+            &agent.call(
                 "browser_handoff",
                 &json!({ "panel_id": panel_id, "reason": "cross-workspace attempt" }),
             ),

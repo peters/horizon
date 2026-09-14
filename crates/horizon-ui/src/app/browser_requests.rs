@@ -122,9 +122,9 @@ fn create_readiness(
 }
 
 #[derive(Clone, Copy)]
-struct ActorPanel {
-    panel_id: PanelId,
-    workspace_id: WorkspaceId,
+pub(super) struct ActorPanel {
+    pub(super) panel_id: PanelId,
+    pub(super) workspace_id: WorkspaceId,
 }
 
 enum BrowserCreateCompletion {
@@ -229,7 +229,7 @@ impl HorizonApp {
             changed = true;
             self.start_requested_browser(request, actor_panel);
         }
-        changed | self.poll_browser_visibility_requests()
+        changed | self.poll_browser_visibility_requests() | self.poll_browser_close_requests()
     }
 
     fn start_requested_browser(&mut self, request: BrowserCreateRequest, actor_panel: ActorPanel) {
@@ -442,6 +442,14 @@ impl HorizonApp {
         sync_manifest_host_state(self.host_manifest_root(), &browser_placements(&self.board))
     }
 
+    /// Whether an agent create for this panel has not completed yet.
+    pub(super) fn browser_create_is_pending(&self, panel_id: PanelId) -> bool {
+        self.browser_create_host
+            .pending
+            .iter()
+            .any(|pending| pending.panel_id == panel_id)
+    }
+
     fn finish_pending_browser_creates(&mut self) -> bool {
         if self.browser_create_host.pending.is_empty() {
             return false;
@@ -467,7 +475,7 @@ impl HorizonApp {
     }
 }
 
-fn actor_panel(board: &Board, actor: &str) -> Option<ActorPanel> {
+pub(super) fn actor_panel(board: &Board, actor: &str) -> Option<ActorPanel> {
     board
         .panels
         .iter()
@@ -564,7 +572,7 @@ fn placement_fingerprint(board: &Board) -> u64 {
 
 /// Requests name the host that launched the agent; a second Horizon process
 /// hosting a copy of the same session must leave them alone.
-fn launched_by_this_host(host_instance: Option<&str>) -> bool {
+pub(super) fn launched_by_this_host(host_instance: Option<&str>) -> bool {
     host_instance == Some(manifest::host_instance())
 }
 
