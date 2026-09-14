@@ -778,27 +778,8 @@ fn browser_create_is_terminal(board: &Board, pending: &PendingBrowserCreate) -> 
         );
         return true;
     };
-    let failure = match &browser.status {
-        BrowserStatus::Error { .. } | BrowserStatus::Stopped { .. } if browser.remote_failure().is_some() => {
-            // A remote lifecycle names its own terminal outcome: the
-            // provider refused, the allocation is unknown, or the device
-            // did not meet the target.
-            browser
-                .remote_failure()
-                .map(|failure| (failure.code, failure.message.clone()))
-        }
-        BrowserStatus::Error { .. } => Some((
-            "backend_start_failed",
-            "the selected browser backend did not start; inspect the visible panel or local logs".to_string(),
-        )),
-        BrowserStatus::Stopped { .. } => Some((
-            "backend_stopped",
-            "the selected browser backend stopped before it became controllable".to_string(),
-        )),
-        BrowserStatus::Starting | BrowserStatus::Ready => None,
-    };
-    if let Some((code, message)) = failure {
-        record_and_complete_failure(pending, code, &message);
+    if let Some((code, message)) = terminal_create_failure(browser) {
+        record_and_complete_failure(pending, code, message);
         return true;
     }
     if pending.request.deadline_at_millis < manifest::now_millis() {
@@ -810,6 +791,30 @@ fn browser_create_is_terminal(board: &Board, pending: &PendingBrowserCreate) -> 
         return true;
     }
     false
+}
+
+/// The typed, fixed-text failure a create reports for a panel that will
+/// not become controllable. A remote lifecycle names its own terminal
+/// outcome (the provider refused, the allocation is unknown, or the device
+/// did not meet the target); provider-reported detail never reaches the
+/// result.
+fn terminal_create_failure(browser: &horizon_core::browser::BrowserPanelState) -> Option<(&'static str, &'static str)> {
+    match &browser.status {
+        BrowserStatus::Starting | BrowserStatus::Ready => None,
+        BrowserStatus::Error { .. } | BrowserStatus::Stopped { .. } => Some(browser.remote_failure().map_or_else(
+            || match &browser.status {
+                BrowserStatus::Error { .. } => (
+                    "backend_start_failed",
+                    "the selected browser backend did not start; inspect the visible panel or local logs",
+                ),
+                _ => (
+                    "backend_stopped",
+                    "the selected browser backend stopped before it became controllable",
+                ),
+            },
+            |failure| (failure.code, failure.message),
+        )),
+    }
 }
 
 fn record_and_complete_failure(pending: &PendingBrowserCreate, code: &str, message: &str) {
@@ -887,6 +892,66 @@ mod tests {
             manifest_url: manifest,
             navigation_error: None,
         }
+    }
+
+    #[test]
+    fn remote_lifecycle_failures_report_their_own_typed_codes_with_fixed_text() {
+        use horizon_core::browser::{BrowserPanelState, RemoteReleaseOutcome, RemoteSessionEvent};
+
+        let mut rejected = BrowserPanelState::inert_remote("ios_phone", "grid");
+        rejected.apply_remote_session_event_for_tests(RemoteSessionEvent::DeviceRejected {
+            label: "ios_phone".into(),
+            reason: "device model is Emulator 3000, target requires iPhone 16".into(),
+            released: RemoteReleaseOutcome::Released,
+        });
+        rejected.status = BrowserStatus::Error {
+            message: "remote session released at once".into(),
+        };
+        let (code, message) = terminal_create_failure(&rejected).expect("terminal");
+        assert_eq!(code, "remote_device_rejected");
+        assert!(
+            !message.contains("Emulator"),
+            "provider text never reaches the result: {message}"
+        );
+
+        let mut refused = BrowserPanelState::inert_remote("ios_phone", "grid");
+        refused.apply_remote_session_event_for_tests(RemoteSessionEvent::AllocationFailed {
+            label: "ios_phone".into(),
+            reason: "session not created: no device available".into(),
+        });
+        refused.status = BrowserStatus::Stopped { code: None };
+        let (code, message) = terminal_create_failure(&refused).expect("terminal");
+        assert_eq!(code, "remote_allocation_failed");
+        assert!(!message.contains("no device available"));
+
+        let mut unknown = BrowserPanelState::inert_remote("ios_phone", "grid");
+        unknown.apply_remote_session_event_for_tests(RemoteSessionEvent::AllocationUnknown {
+            label: "ios_phone".into(),
+            reason: "timed out".into(),
+        });
+        unknown.status = BrowserStatus::Error {
+            message: "unknown".into(),
+        };
+        assert_eq!(
+            terminal_create_failure(&unknown).map(|(code, _)| code),
+            Some("remote_allocation_unknown")
+        );
+
+        let mut local = BrowserPanelState::inert();
+        local.status = BrowserStatus::Error {
+            message: "chrome died".into(),
+        };
+        assert_eq!(
+            terminal_create_failure(&local).map(|(code, _)| code),
+            Some("backend_start_failed")
+        );
+        local.status = BrowserStatus::Stopped { code: Some(1) };
+        assert_eq!(
+            terminal_create_failure(&local).map(|(code, _)| code),
+            Some("backend_stopped")
+        );
+        local.status = BrowserStatus::Ready;
+        assert_eq!(terminal_create_failure(&local), None);
     }
 
     #[test]

@@ -29,11 +29,28 @@ pub(super) struct RemoteLifecycle {
     failure: Option<RemoteFailure>,
 }
 
-/// A terminal remote lifecycle failure the host reports to the agent.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// A terminal remote lifecycle failure the host reports to the agent: a
+/// typed code and fixed public text. Provider-reported detail stays in the
+/// panel note and the local log.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RemoteFailure {
     pub code: &'static str,
-    pub message: String,
+    pub message: &'static str,
+}
+
+impl RemoteFailure {
+    const DEVICE_REJECTED: Self = Self {
+        code: "remote_device_rejected",
+        message: "the allocated remote device did not meet the target's device requirement; the session was released and the panel shows which requirement failed",
+    };
+    const ALLOCATION_FAILED: Self = Self {
+        code: "remote_allocation_failed",
+        message: "the provider refused to allocate a remote session for the target; the panel shows the provider's reason",
+    };
+    const ALLOCATION_UNKNOWN: Self = Self {
+        code: "remote_allocation_unknown",
+        message: "the provider gave no trustworthy answer to the remote allocation; check the provider before creating again",
+    };
 }
 
 impl RemoteLifecycle {
@@ -223,6 +240,14 @@ impl BrowserPanelState {
         }
     }
 
+    /// Feed one lifecycle event to the panel, for host tests of the typed
+    /// outcomes it derives.
+    #[doc(hidden)]
+    pub fn apply_remote_session_event_for_tests(&mut self, event: horizon_browser::RemoteSessionEvent) {
+        let mut output = BrowserDrainOutput::default();
+        self.apply_remote_session_event(event, &mut output);
+    }
+
     pub(super) fn apply_remote_session_event(
         &mut self,
         event: horizon_browser::RemoteSessionEvent,
@@ -264,26 +289,15 @@ impl BrowserPanelState {
                 reason,
                 released,
             } => {
-                failure = Some(RemoteFailure {
-                    code: "remote_device_rejected",
-                    message: format!("the allocated device did not meet target {label}: {reason} (session {released})"),
-                });
+                failure = Some(RemoteFailure::DEVICE_REJECTED);
                 format!("remote device for {label} rejected: {reason}; session {released}")
             }
             RemoteSessionEvent::AllocationUnknown { label, reason } => {
-                failure = Some(RemoteFailure {
-                    code: "remote_allocation_unknown",
-                    message: format!(
-                        "remote allocation for {label} is unknown ({reason}); check the provider before creating again"
-                    ),
-                });
+                failure = Some(RemoteFailure::ALLOCATION_UNKNOWN);
                 format!("remote allocation for {label} is unknown ({reason}); check the provider before retrying")
             }
             RemoteSessionEvent::AllocationFailed { label, reason } => {
-                failure = Some(RemoteFailure {
-                    code: "remote_allocation_failed",
-                    message: format!("remote allocation for {label} failed: {reason}"),
-                });
+                failure = Some(RemoteFailure::ALLOCATION_FAILED);
                 format!("remote allocation for {label} failed: {reason}")
             }
             RemoteSessionEvent::Expired { label, reason } => match reason {
@@ -430,7 +444,18 @@ mod tests {
         );
         let failure = rejected.remote_failure().expect("typed failure");
         assert_eq!(failure.code, "remote_device_rejected");
-        assert!(failure.message.contains("iPhone 15") && !failure.message.contains("secret"));
+        assert!(
+            !failure.message.contains("iPhone"),
+            "the public message is fixed text; the provider's detail stays in the panel note"
+        );
+        assert!(
+            rejected
+                .remote_status
+                .as_deref()
+                .is_some_and(|note| note.contains("iPhone 15")),
+            "{:?}",
+            rejected.remote_status
+        );
         assert!(
             !rejected.holds_remote_allocation(),
             "a released rejection frees the slot"

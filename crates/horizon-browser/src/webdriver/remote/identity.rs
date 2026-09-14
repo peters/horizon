@@ -15,6 +15,21 @@ use horizon_browser_protocol::remote::{DeviceKind, DeviceRequirement};
 
 /// Bounded wait for the provider's session record.
 const RECORD_TIMEOUT: Duration = Duration::from_secs(10);
+/// Longest identity field accepted from a provider, the same bound the
+/// configured model and OS version fields have.
+const MAX_EVIDENCE_LEN: usize = 128;
+
+/// A provider-reported identity field, or `None` when it is empty, longer
+/// than a configured field may be, or carries control characters. Invalid
+/// evidence is absent evidence: it is never copied into manifests or
+/// results.
+fn evidence_text(value: &Value) -> Option<String> {
+    let text = value.as_str()?.trim();
+    if text.is_empty() || text.len() > MAX_EVIDENCE_LEN || text.chars().any(char::is_control) {
+        return None;
+    }
+    Some(text.to_string())
+}
 
 /// Where the driver looks for the allocated device's identity.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -126,10 +141,7 @@ pub fn identity_from_capabilities(capabilities: &Value) -> RemoteDeviceIdentity 
     let string = |names: &[&str]| {
         names
             .iter()
-            .find_map(|name| capabilities.get(*name).and_then(Value::as_str))
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
+            .find_map(|name| capabilities.get(*name).and_then(evidence_text))
     };
     let real_mobile = ["appium:realMobile", "realMobile", "appium:isRealMobile"]
         .iter()
@@ -162,14 +174,7 @@ pub fn identity_from_capabilities(capabilities: &Value) -> RemoteDeviceIdentity 
 #[must_use]
 pub fn identity_from_session_record(record: &Value) -> RemoteDeviceIdentity {
     let session = record.get("automation_session").unwrap_or(record);
-    let text = |name: &str| {
-        session
-            .get(name)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
-    };
+    let text = |name: &str| session.get(name).and_then(evidence_text);
     let model = text("device");
     RemoteDeviceIdentity {
         hardware: Some(if model.is_some() {
@@ -304,6 +309,22 @@ mod tests {
         let silent = identity_from_capabilities(&json!({"browserName": "safari", "platformName": "iOS"}));
         assert_eq!(silent, RemoteDeviceIdentity::default());
         assert_eq!(silent.summary(), "unverified hardware");
+
+        // Oversized or control-laden provider text is absent evidence.
+        let huge = "x".repeat(129);
+        let bad = identity_from_capabilities(&json!({
+            "appium:deviceName": huge,
+            "appium:platformVersion": "18.6\u{7}",
+        }));
+        assert_eq!(bad, RemoteDeviceIdentity::default());
+        let bad_record =
+            identity_from_session_record(&json!({"automation_session": {"device": "a\nb", "os_version": "16.0"}}));
+        assert_eq!(bad_record.model, None);
+        assert_eq!(
+            bad_record.hardware,
+            Some(DeviceEvidence::Unknown),
+            "a device name that is not evidence proves nothing"
+        );
     }
 
     #[test]
