@@ -305,11 +305,19 @@ def parse_engine_version(probe, name):
 
 
 def is_local_unix_endpoint(host):
-    """True for a unix socket URL or an absolute socket path."""
+    """True for an absolute non-root unix socket path (Horizon worker contract)."""
     if not host:
         return False
-    text = str(host)
-    return text.startswith("unix://") or (len(text) >= 2 and text[0] == "/")
+    text = str(host).strip()
+    if any(ord(char) < 32 for char in text):
+        return False
+    if text.startswith("unix://"):
+        path = text[len("unix://"):]
+    elif text.startswith("/"):
+        path = text
+    else:
+        return False
+    return len(path) > 1 and path.startswith("/")
 
 
 def docker_context_host(probe):
@@ -611,7 +619,10 @@ def check_capacity(executor, timeout, procfs_root):
     if cores is None:
         cpuinfo = read_procfs(procfs_root, "cpuinfo")
         if cpuinfo:
-            parsed = sum(1 for line in cpuinfo.splitlines() if line.startswith("processor"))
+            parsed = 0
+            for line in cpuinfo.splitlines():
+                if line.split(":", 1)[0].strip() == "processor":
+                    parsed += 1
             cores = parsed if parsed > 0 else None
     if cores is None:
         status = ERROR if probe_failed else UNSUPPORTED

@@ -504,6 +504,22 @@ class EngineFailures(Harness):
         self.assertNotIn(list(preflight.PROBE_ARGS["docker_version"]), executor.seen)
         self.assertNotIn(list(preflight.PROBE_ARGS["docker_info"]), executor.seen)
 
+    def test_empty_unix_endpoint_is_rejected(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["docker_context"] = docker_context_ok(host="unix://")
+        code, report, _ = self.run_main(fixture)
+        self.assertEqual(code, 1)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertIn("remote", by_id["container_engine"]["detail"])
+
+    def test_root_unix_endpoint_is_rejected(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["docker_context"] = docker_context_ok(host="unix:///")
+        code, report, _ = self.run_main(fixture)
+        self.assertEqual(code, 1)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertIn("remote", by_id["container_engine"]["detail"])
+
     def test_explicit_docker_context_beats_docker_host(self):
         fixture = dict(DEFAULT_FIXTURE)
         fixture["docker_context"] = docker_context_ok(host="tcp://remote-daemon:2376")
@@ -1045,6 +1061,15 @@ class MalformedInputs(Harness):
         by_id = {check["id"]: check for check in report["checks"]}
         self.assertEqual(by_id["cpu_capacity"]["value"], 2)
         self.assertEqual(by_id["cpu_capacity"]["status"], "unsupported")
+
+    def test_cpuinfo_processor_count_key_is_not_a_core(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["cores"] = {"stdout": "not-a-number\n"}
+        cpuinfo = "\n".join("processor_count: %d" % i for i in range(8)) + "\n"
+        code, report, _ = self.run_main(fixture, cpuinfo_text=cpuinfo)
+        self.assertEqual(code, 2)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["cpu_capacity"]["status"], "error")
 
     def test_nproc_non_positive_falls_back_to_cpuinfo(self):
         cpuinfo = "processor\t: 0\nprocessor\t: 1\nprocessor\t: 2\nprocessor\t: 3\n"

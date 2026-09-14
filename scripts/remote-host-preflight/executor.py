@@ -191,8 +191,9 @@ def _kill_process_group(pid):
 
 
 def _kill_session_except_self():
-    """SIGKILL other members of this process group (orphans holding pipes)."""
+    """SIGKILL adopted descendants and other members of this process group."""
     me = os.getpid()
+    _kill_descendants(me)
     try:
         pgid = os.getpgrp()
     except OSError:
