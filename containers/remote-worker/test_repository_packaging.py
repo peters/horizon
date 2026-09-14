@@ -12,7 +12,8 @@ import tarfile
 import tempfile
 
 
-CRATES = ("horizon-repository", "horizon-core", "horizon-browser", "horizon-browser-protocol")
+CRATES = ("horizon-repository", "horizon-core", "horizon-browser", "horizon-browser-protocol",
+          "horizon-browser-routines")
 WORKER_FILES = {"Dockerfile", "build-tmux.sh", "entrypoint.sh", "host-identity.py", "rust-path.sh",
                 "session.sh", "github-credentials.py", "panel-session.py", "setup-launch.py", "byte-capture.py",
                 "byte_capture_store.py", "tmux.conf", "sshd_config"}
@@ -144,6 +145,8 @@ def context_test(docker, root, fixture):
                  "crates/horizon-core/src/fixture.rs/nested/source.rs",
                  "crates/horizon-core/src/.git/hooks/fixture.rs",
                  "crates/horizon-browser/src/nested/.git/hooks/fixture.rs",
+                 "crates/horizon-browser-routines/src/private/key.pem",
+                 "crates/horizon-browser-routines/src/.git/hooks/fixture.rs",
                  "crates/horizon-ui/src/untracked.rs", "containers/remote-worker/fixture-token"):
         sentinel = context / name
         sentinel.parent.mkdir(parents=True, exist_ok=True)
