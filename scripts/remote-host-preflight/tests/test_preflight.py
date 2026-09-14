@@ -6,6 +6,7 @@ is patched to fail if any code path falls back to a real spawn. The executor
 also enforces the fixed argv allowlist, so a probe regression that interpolates
 host values into arguments fails loudly.
 """
+import errno
 import json
 import os
 import pathlib
@@ -1283,6 +1284,22 @@ class RedactionAndDeterminism(Harness):
         self.assertNotIn("\u202e", out)
         self.assertIn("ok", out)
         self.assertIn("hidden", out)
+
+    def test_format_seconds_keeps_submicrosecond_timeouts(self):
+        self.assertEqual(preflight.format_seconds(0.1), "0.1")
+        self.assertIn("e-", preflight.format_seconds(1e-9))
+        self.assertNotEqual(preflight.format_seconds(1e-9), "")
+
+    def test_sysfs_block_access_denied_is_error(self):
+        def denied(path):
+            raise OSError(errno.EACCES, "Permission denied", path)
+
+        with mock.patch.object(os, "readlink", side_effect=denied):
+            code, report, _ = self.run_main(dict(DEFAULT_FIXTURE))
+        self.assertEqual(code, 2)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["storage_ext4_qualifier"]["status"], "error")
+        self.assertIn("unreadable", by_id["storage_ext4_qualifier"]["detail"])
 
     def test_timeout_message_preserves_fractional_seconds(self):
         fixture = dict(DEFAULT_FIXTURE)

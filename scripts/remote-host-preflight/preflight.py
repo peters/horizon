@@ -629,8 +629,8 @@ def select_mount_point(mount_paths, resolved_path):
 
 
 def format_seconds(timeout):
-    """Render a timeout without rounding (0.1 stays 0.1, not 0)."""
-    return ("%.6f" % timeout).rstrip("0").rstrip(".")
+    """Render a timeout without rounding (0.1 stays 0.1, 1e-9 stays visible)."""
+    return "%.12g" % timeout
 
 
 def resolve_workspace_directory(executor, timeout, path):
@@ -732,10 +732,8 @@ def read_ext4_options(procfs_root, sysfs_root, dev_major, dev_minor):
     """
     block_id = "%d:%d" % (dev_major, dev_minor)
     block_path = os.path.join(sysfs_root, "dev", "block", block_id)
-    if not os.path.lexists(block_path):
-        return None, None, "block device %s not resolvable via sysfs" % block_id
     try:
-        name = os.path.basename(os.path.realpath(block_path))
+        name = os.path.basename(os.readlink(block_path))
     except OSError as exc:
         if getattr(exc, "errno", None) in (errno.ENOENT, errno.ENOTDIR):
             return None, None, "block device %s not resolvable via sysfs" % block_id

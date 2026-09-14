@@ -140,7 +140,7 @@ def _kill_process_group(pid):
         except OSError:
             pass
     try:
-        os.waitpid(pid, 0)
+        os.waitpid(pid, os.WNOHANG)
     except OSError:
         pass
 
@@ -229,7 +229,7 @@ def _watchdog_execute_probe(argv, timeout):
                 _kill_process_group(pid)
                 raise subprocess.TimeoutExpired(argv, timeout)
         try:
-            os.waitpid(pid, 0)
+            os.waitpid(pid, os.WNOHANG)
         except OSError:
             pass
     finally:
