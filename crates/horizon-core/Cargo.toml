@@ -37,6 +37,7 @@ sha2.workspace = true
 regex.workspace = true
 atomicwrites.workspace = true
 keyring-core.workspace = true
+zeroize.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 process-wrap.workspace = true

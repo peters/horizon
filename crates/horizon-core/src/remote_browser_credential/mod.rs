@@ -4,21 +4,25 @@
 //!
 //! Values reach the transport through [`ProviderAuthorization`], whose only
 //! exit is the header value. Stores expose presence, locked state and a
-//! sink-based copy. Nothing here serializes, logs or places a value in the
-//! process environment, so agent panels cannot inherit it.
+//! sink-based copy; both the store and sink traits are sealed, so no code
+//! outside this crate can implement a sink that captures bytes. Every
+//! intermediate buffer is a `zeroize` type that is wiped when dropped, on
+//! success and on every error path alike. Nothing here serializes, logs or
+//! places a value in the process environment, so agent panels cannot inherit
+//! it.
 
 mod fake;
 mod keyring_store;
 mod session;
 
 use std::fmt;
-use std::hint::black_box;
 
 use base64::Engine as _;
 use horizon_browser::remote::{
     ControlEndpoint, CredentialBinding, CredentialReference, CredentialStoreKind, RemoteAuthentication,
     RemoteProviderProfile,
 };
+use zeroize::Zeroizing;
 
 pub use fake::FakeCredentialStore;
 pub use keyring_store::{KEYRING_SERVICE, KeyringCredentialStore, KeyringStoreAvailability};
@@ -27,6 +31,13 @@ pub use session::SessionCredentialStore;
 /// Largest accepted secret. Provider keys are far smaller; the bound stops a
 /// pasted file from becoming a header.
 pub const MAX_SECRET_BYTES: usize = 16 * 1024;
+
+mod private {
+    /// Sealing supertrait: only this crate's stores and sinks exist.
+    pub trait Sealed {}
+}
+
+pub(crate) use private::Sealed;
 
 /// Where one bound value lives: the endpoint origin it may be sent to, the
 /// reference the configuration uses, and the OS-store slot when persisted.
@@ -48,16 +59,16 @@ impl CredentialLocator {
     }
 }
 
-/// Destination for one copy of a secret. Implementations must not retain the
-/// bytes after [`SecretSink::accept`] returns.
-pub trait SecretSink {
+/// Destination for one copy of a secret. Sealed: implementations live in this
+/// crate and must not retain the bytes after [`SecretSink::accept`] returns.
+pub trait SecretSink: Sealed {
     /// # Errors
     /// Returns a typed failure when the bytes are unusable for the sink.
     fn accept(&mut self, bytes: &[u8]) -> Result<(), RemoteCredentialError>;
 }
 
-/// Storage for bound values. No method returns secret bytes.
-pub trait RemoteCredentialStore {
+/// Storage for bound values. Sealed; no method returns secret bytes.
+pub trait RemoteCredentialStore: Sealed {
     fn kind(&self) -> CredentialStoreKind;
 
     /// # Errors
@@ -92,6 +103,10 @@ pub enum RemoteCredentialError {
     InvalidValue,
     #[error("credential value is not printable ASCII without control characters")]
     NotHeaderSafe,
+    #[error("a Basic authentication username must not contain a colon")]
+    InvalidUsername,
+    #[error("a Bearer token may only contain letters, digits, - . _ ~ + / and trailing =")]
+    InvalidBearerToken,
     #[error("credential store failed: {kind}")]
     Platform { kind: &'static str },
 }
@@ -130,6 +145,7 @@ impl CredentialStores<'_> {
 
 /// Presence of every reference a provider needs, in authentication order.
 /// Consulting stores never returns a value and never contacts the provider.
+/// A store that fails is reported as unavailable, not as a missing value.
 #[must_use]
 pub fn readiness(profile: &RemoteProviderProfile, stores: &CredentialStores<'_>) -> Vec<CredentialReadiness> {
     profile
@@ -150,9 +166,9 @@ pub fn readiness(profile: &RemoteProviderProfile, stores: &CredentialStores<'_>)
                 .and_then(|store| store.contains(&locator))
             {
                 Ok(true) => CredentialState::Present,
+                Ok(false) | Err(RemoteCredentialError::Missing) => CredentialState::Missing,
                 Err(RemoteCredentialError::Locked) => CredentialState::Locked,
-                Err(RemoteCredentialError::StoreUnavailable) => CredentialState::StoreUnavailable,
-                Ok(false) | Err(_) => CredentialState::Missing,
+                Err(_) => CredentialState::StoreUnavailable,
             };
             CredentialReadiness {
                 reference: reference.clone(),
@@ -166,10 +182,10 @@ pub fn readiness(profile: &RemoteProviderProfile, stores: &CredentialStores<'_>)
 /// Authorization header for one provider, bound to its endpoint origin.
 ///
 /// The header value is the only exit. Debug output is redacted and the buffer
-/// is overwritten on drop.
+/// is zeroized on drop.
 pub struct ProviderAuthorization {
     origin: String,
-    header: String,
+    header: Zeroizing<String>,
 }
 
 impl ProviderAuthorization {
@@ -195,12 +211,6 @@ impl fmt::Debug for ProviderAuthorization {
     }
 }
 
-impl Drop for ProviderAuthorization {
-    fn drop(&mut self) {
-        scrub_string(&mut self.header);
-    }
-}
-
 /// Which reference failed, without its value.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 #[error("credential `{}`: {error}", reference.as_str())]
@@ -211,11 +221,14 @@ pub struct ResolveError {
 
 /// Build the authorization header from bindings, or `None` for `kind: none`.
 ///
-/// Values are copied through a private sink, validated as header-safe and
-/// combined in memory; nothing is returned but the finished header.
+/// Values are copied through a private sink into zeroizing buffers, checked
+/// against the grammar of their scheme, and combined in memory; nothing is
+/// returned but the finished header, and every intermediate buffer is wiped
+/// on the success path and on every error path.
 ///
 /// # Errors
-/// The first reference that is unbound, missing, locked, unavailable or unsafe.
+/// The first reference that is unbound, missing, locked, unavailable or
+/// malformed for its scheme.
 pub fn resolve_authorization(
     profile: &RemoteProviderProfile,
     stores: &CredentialStores<'_>,
@@ -227,23 +240,29 @@ pub fn resolve_authorization(
             username_ref,
             password_ref,
         } => {
-            let mut username = fetch(profile, stores, username_ref)?;
-            let mut password = fetch(profile, stores, password_ref)?;
-            let mut joined = format!("{username}:{password}");
-            let header = format!(
+            let username = fetch(profile, stores, username_ref)?;
+            if username.contains(':') {
+                return Err(ResolveError {
+                    reference: username_ref.clone(),
+                    error: RemoteCredentialError::InvalidUsername,
+                });
+            }
+            let password = fetch(profile, stores, password_ref)?;
+            let joined = Zeroizing::new(format!("{}:{}", username.as_str(), password.as_str()));
+            Zeroizing::new(format!(
                 "Basic {}",
                 base64::engine::general_purpose::STANDARD.encode(joined.as_bytes())
-            );
-            scrub_string(&mut username);
-            scrub_string(&mut password);
-            scrub_string(&mut joined);
-            header
+            ))
         }
         RemoteAuthentication::Bearer { token_ref } => {
-            let mut token = fetch(profile, stores, token_ref)?;
-            let header = format!("Bearer {token}");
-            scrub_string(&mut token);
-            header
+            let token = fetch(profile, stores, token_ref)?;
+            if !is_token68(&token) {
+                return Err(ResolveError {
+                    reference: token_ref.clone(),
+                    error: RemoteCredentialError::InvalidBearerToken,
+                });
+            }
+            Zeroizing::new(format!("Bearer {}", token.as_str()))
         }
     };
     Ok(Some(ProviderAuthorization { origin, header }))
@@ -253,7 +272,7 @@ fn fetch(
     profile: &RemoteProviderProfile,
     stores: &CredentialStores<'_>,
     reference: &CredentialReference,
-) -> Result<String, ResolveError> {
+) -> Result<Zeroizing<String>, ResolveError> {
     let fail = |error| ResolveError {
         reference: reference.clone(),
         error,
@@ -266,14 +285,25 @@ fn fetch(
     let store = stores.store_for(binding.store).map_err(fail)?;
     let mut sink = HeaderSafeSink::default();
     store.with_secret(&locator, &mut sink).map_err(fail)?;
-    sink.value.ok_or_else(|| fail(RemoteCredentialError::Missing))
+    sink.value.take().ok_or_else(|| fail(RemoteCredentialError::Missing))
 }
 
-/// Accepts one printable-ASCII value for use inside an HTTP header.
+/// RFC 7235 `token68`: the only shape a Bearer credential may take.
+fn is_token68(token: &str) -> bool {
+    let trimmed = token.trim_end_matches('=');
+    !trimmed.is_empty()
+        && trimmed
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'+' | b'/'))
+}
+
+/// Accepts one printable-ASCII value into a zeroizing buffer.
 #[derive(Default)]
 struct HeaderSafeSink {
-    value: Option<String>,
+    value: Option<Zeroizing<String>>,
 }
+
+impl Sealed for HeaderSafeSink {}
 
 impl SecretSink for HeaderSafeSink {
     fn accept(&mut self, bytes: &[u8]) -> Result<(), RemoteCredentialError> {
@@ -281,7 +311,7 @@ impl SecretSink for HeaderSafeSink {
         if !bytes.iter().all(|byte| byte.is_ascii_graphic() || *byte == b' ') {
             return Err(RemoteCredentialError::NotHeaderSafe);
         }
-        self.value = Some(String::from_utf8_lossy(bytes).into_owned());
+        self.value = Some(Zeroizing::new(String::from_utf8_lossy(bytes).into_owned()));
         Ok(())
     }
 }
@@ -291,25 +321,6 @@ pub(crate) fn validate_secret(bytes: &[u8]) -> Result<(), RemoteCredentialError>
         return Err(RemoteCredentialError::InvalidValue);
     }
     Ok(())
-}
-
-/// Overwrite a buffer before it is freed. `black_box` keeps the writes from
-/// being optimized away without any unsafe code.
-pub(crate) fn scrub(bytes: &mut [u8]) {
-    for byte in bytes.iter_mut() {
-        *byte = 0;
-    }
-    black_box(bytes);
-}
-
-/// Overwrite a string's buffer with NUL bytes in place (capacity is kept, so
-/// the same allocation is rewritten), then empty it.
-pub(crate) fn scrub_string(value: &mut String) {
-    let len = value.len();
-    value.clear();
-    value.extend(std::iter::repeat_n('\0', len));
-    black_box(&*value);
-    value.clear();
 }
 
 #[cfg(test)]

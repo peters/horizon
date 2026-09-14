@@ -3,7 +3,7 @@ use std::fmt;
 
 use horizon_browser::remote::CredentialStoreKind;
 
-use super::{CredentialLocator, RemoteCredentialError, RemoteCredentialStore, SecretSink, validate_secret};
+use super::{CredentialLocator, RemoteCredentialError, RemoteCredentialStore, Sealed, SecretSink, validate_secret};
 
 /// In-memory stand-in for the OS credential store, for tests and UI previews.
 /// It can be locked to exercise the locked-store paths without a platform.
@@ -35,6 +35,8 @@ impl FakeCredentialStore {
         }
     }
 }
+
+impl Sealed for FakeCredentialStore {}
 
 impl RemoteCredentialStore for FakeCredentialStore {
     fn kind(&self) -> CredentialStoreKind {

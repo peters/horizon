@@ -5,6 +5,9 @@ use horizon_browser::remote::{
     RemoteAuthentication, RemoteProviderProfile, RemoteSessionLimits,
 };
 
+use std::sync::Arc;
+
+use super::keyring_store::map_error;
 use super::*;
 
 fn endpoint() -> ControlEndpoint {
@@ -194,6 +197,8 @@ fn values_must_be_bounded_and_header_safe() {
 
 struct Capture(Vec<u8>);
 
+impl super::Sealed for Capture {}
+
 impl SecretSink for Capture {
     fn accept(&mut self, bytes: &[u8]) -> Result<(), RemoteCredentialError> {
         self.0 = bytes.to_vec();
@@ -221,6 +226,247 @@ fn session_store_clears_replaces_and_deletes() {
         session.with_secret(&user, &mut capture).expect_err("cleared"),
         RemoteCredentialError::Missing
     );
+}
+
+#[test]
+fn basic_usernames_may_not_contain_colons_and_bearer_tokens_follow_token68() {
+    let profile = basic_profile(CredentialStoreKind::Session, CredentialStoreKind::Session);
+    let mut session = SessionCredentialStore::new();
+    session.put(&locator(&profile, "user"), b"alice:admin").expect("stored");
+    session.put(&locator(&profile, "key"), b"k").expect("stored");
+    let stores = CredentialStores {
+        session: &session,
+        os_keychain: None,
+    };
+    let error = resolve_authorization(&profile, &stores).expect_err("colon in username");
+    assert_eq!(error.error, RemoteCredentialError::InvalidUsername);
+    assert_eq!(error.reference.as_str(), "user");
+
+    let mut bearer = profile.clone();
+    bearer.authentication = RemoteAuthentication::Bearer {
+        token_ref: CredentialReference::from("key"),
+    };
+    for bad in [&b"tok en"[..], b"tok:en", b"tok\"en", b"=", b"==abc"] {
+        session.put(&locator(&bearer, "key"), bad).expect("stored");
+        let stores = CredentialStores {
+            session: &session,
+            os_keychain: None,
+        };
+        let error = resolve_authorization(&bearer, &stores).expect_err("bad token68");
+        assert_eq!(error.error, RemoteCredentialError::InvalidBearerToken, "{bad:?}");
+    }
+    session.put(&locator(&bearer, "key"), b"abc-._~+/=").expect("stored");
+    let stores = CredentialStores {
+        session: &session,
+        os_keychain: None,
+    };
+    assert_eq!(
+        resolve_authorization(&bearer, &stores)
+            .expect("ok")
+            .expect("header")
+            .header_value(),
+        "Bearer abc-._~+/="
+    );
+}
+
+#[test]
+fn a_failing_store_is_reported_unavailable_not_missing() {
+    let profile = basic_profile(CredentialStoreKind::OsKeychain, CredentialStoreKind::Session);
+    let session = SessionCredentialStore::new();
+    let failing = KeyringCredentialStore::with_store(Arc::new(MockStore::failing()));
+    let stores = CredentialStores {
+        session: &session,
+        os_keychain: Some(&failing),
+    };
+    assert_eq!(readiness(&profile, &stores)[0].state, CredentialState::StoreUnavailable);
+    assert_eq!(
+        resolve_authorization(&profile, &stores)
+            .expect_err("platform failure")
+            .error,
+        RemoteCredentialError::Platform {
+            kind: "platform_failure"
+        }
+    );
+}
+
+#[test]
+fn keyring_errors_map_to_value_free_states() {
+    use keyring_core::Error;
+    let boxed = || Box::new(std::io::Error::other("platform detail")) as Box<dyn std::error::Error + Send + Sync>;
+    assert_eq!(map_error(&Error::NoEntry), RemoteCredentialError::Missing);
+    assert_eq!(
+        map_error(&Error::NoStorageAccess(boxed())),
+        RemoteCredentialError::Locked
+    );
+    assert_eq!(
+        map_error(&Error::NoDefaultStore),
+        RemoteCredentialError::StoreUnavailable
+    );
+    assert_eq!(
+        map_error(&Error::NotSupportedByStore("x".into())),
+        RemoteCredentialError::StoreUnavailable
+    );
+    assert_eq!(
+        map_error(&Error::TooLong("user".into(), 1)),
+        RemoteCredentialError::InvalidValue
+    );
+    assert_eq!(
+        map_error(&Error::Invalid("a".into(), "b".into())),
+        RemoteCredentialError::InvalidValue
+    );
+    assert_eq!(
+        map_error(&Error::PlatformFailure(boxed())),
+        RemoteCredentialError::Platform {
+            kind: "platform_failure"
+        }
+    );
+    assert!(!format!("{}", map_error(&Error::PlatformFailure(boxed()))).contains("platform detail"));
+}
+
+#[test]
+fn keyring_adapter_round_trips_through_a_mock_store_and_requires_a_slot() {
+    let profile = basic_profile(CredentialStoreKind::OsKeychain, CredentialStoreKind::Session);
+    let mock = Arc::new(MockStore::default());
+    let mut store = KeyringCredentialStore::with_store(mock.clone());
+    let user = locator(&profile, "user");
+    assert!(!store.contains(&user).expect("absent"));
+    store.put(&user, b"alice").expect("stored");
+    assert!(store.contains(&user).expect("present"));
+    let keys = mock.keys();
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0].0, KEYRING_SERVICE);
+    assert_eq!(keys[0].1, "https://grid.example.net|remote-browser/grid/user");
+    let mut capture = Capture(Vec::new());
+    store.with_secret(&user, &mut capture).expect("copied into the sink");
+    assert_eq!(capture.0, b"alice");
+    store.delete(&user).expect("deleted");
+    assert!(!store.contains(&user).expect("absent again"));
+    store.delete(&user).expect("deleting twice is fine");
+
+    let mut slotless = user.clone();
+    slotless.slot = None;
+    assert_eq!(
+        store.put(&slotless, b"x").expect_err("slot required"),
+        RemoteCredentialError::Missing
+    );
+    assert_eq!(
+        store.contains(&slotless).expect_err("slot required"),
+        RemoteCredentialError::Missing
+    );
+}
+
+type MockItems = Arc<std::sync::Mutex<std::collections::HashMap<(String, String), Vec<u8>>>>;
+
+/// In-memory keyring-core store: exercises the adapter without any platform.
+#[derive(Default)]
+struct MockStore {
+    items: MockItems,
+    failing: bool,
+}
+
+impl MockStore {
+    fn failing() -> Self {
+        Self {
+            failing: true,
+            ..Self::default()
+        }
+    }
+
+    fn keys(&self) -> Vec<(String, String)> {
+        self.items.lock().expect("lock").keys().cloned().collect()
+    }
+}
+
+impl std::fmt::Debug for MockStore {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("MockStore")
+    }
+}
+
+impl keyring_core::api::CredentialStoreApi for MockStore {
+    fn vendor(&self) -> String {
+        "horizon-test".into()
+    }
+
+    fn id(&self) -> String {
+        "mock".into()
+    }
+
+    fn build(
+        &self,
+        service: &str,
+        user: &str,
+        _modifiers: Option<&std::collections::HashMap<&str, &str>>,
+    ) -> keyring_core::Result<keyring_core::Entry> {
+        if self.failing {
+            return Err(keyring_core::Error::PlatformFailure(Box::new(std::io::Error::other(
+                "down",
+            ))));
+        }
+        Ok(keyring_core::Entry::new_with_credential(Arc::new(MockCredential {
+            store: Arc::clone(&self.items),
+            key: (service.to_string(), user.to_string()),
+        })))
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+struct MockCredential {
+    store: MockItems,
+    key: (String, String),
+}
+
+impl std::fmt::Debug for MockCredential {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("MockCredential")
+    }
+}
+
+impl keyring_core::api::CredentialApi for MockCredential {
+    fn set_secret(&self, secret: &[u8]) -> keyring_core::Result<()> {
+        self.store
+            .lock()
+            .expect("lock")
+            .insert(self.key.clone(), secret.to_vec());
+        Ok(())
+    }
+
+    fn get_secret(&self) -> keyring_core::Result<Vec<u8>> {
+        self.store
+            .lock()
+            .expect("lock")
+            .get(&self.key)
+            .cloned()
+            .ok_or(keyring_core::Error::NoEntry)
+    }
+
+    fn delete_credential(&self) -> keyring_core::Result<()> {
+        self.store
+            .lock()
+            .expect("lock")
+            .remove(&self.key)
+            .map(|_| ())
+            .ok_or(keyring_core::Error::NoEntry)
+    }
+
+    fn get_credential(&self) -> keyring_core::Result<Option<Arc<keyring_core::Credential>>> {
+        if self.store.lock().expect("lock").contains_key(&self.key) {
+            Ok(None)
+        } else {
+            Err(keyring_core::Error::NoEntry)
+        }
+    }
+
+    fn get_specifiers(&self) -> Option<(String, String)> {
+        Some(self.key.clone())
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 #[test]

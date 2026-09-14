@@ -3,14 +3,16 @@ use std::fmt;
 
 use horizon_browser::remote::CredentialStoreKind;
 
-use super::{CredentialLocator, RemoteCredentialError, RemoteCredentialStore, SecretSink, scrub, validate_secret};
+use zeroize::Zeroizing;
+
+use super::{CredentialLocator, RemoteCredentialError, RemoteCredentialStore, Sealed, SecretSink, validate_secret};
 
 /// Session-only values entered in Horizon. Held in memory for this process,
-/// keyed by endpoint origin and reference, overwritten on clear and on drop.
+/// keyed by endpoint origin and reference, zeroized on replace, delete, clear and drop.
 /// Never serialized, never placed in the environment.
 #[derive(Default)]
 pub struct SessionCredentialStore {
-    values: BTreeMap<(String, String), Vec<u8>>,
+    values: BTreeMap<(String, String), Zeroizing<Vec<u8>>>,
 }
 
 impl SessionCredentialStore {
@@ -19,11 +21,9 @@ impl SessionCredentialStore {
         Self::default()
     }
 
-    /// Forget every value, overwriting each buffer first.
+    /// Forget every value; each buffer is zeroized as it drops.
     pub fn clear(&mut self) {
-        for (_, mut value) in std::mem::take(&mut self.values) {
-            scrub(&mut value);
-        }
+        self.values.clear();
     }
 
     #[must_use]
@@ -41,6 +41,8 @@ impl SessionCredentialStore {
     }
 }
 
+impl Sealed for SessionCredentialStore {}
+
 impl RemoteCredentialStore for SessionCredentialStore {
     fn kind(&self) -> CredentialStoreKind {
         CredentialStoreKind::Session
@@ -48,16 +50,12 @@ impl RemoteCredentialStore for SessionCredentialStore {
 
     fn put(&mut self, locator: &CredentialLocator, secret: &[u8]) -> Result<(), RemoteCredentialError> {
         validate_secret(secret)?;
-        if let Some(mut previous) = self.values.insert(Self::key(locator), secret.to_vec()) {
-            scrub(&mut previous);
-        }
+        self.values.insert(Self::key(locator), Zeroizing::new(secret.to_vec()));
         Ok(())
     }
 
     fn delete(&mut self, locator: &CredentialLocator) -> Result<(), RemoteCredentialError> {
-        if let Some(mut previous) = self.values.remove(&Self::key(locator)) {
-            scrub(&mut previous);
-        }
+        self.values.remove(&Self::key(locator));
         Ok(())
     }
 

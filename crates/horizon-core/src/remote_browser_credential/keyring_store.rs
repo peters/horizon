@@ -4,7 +4,9 @@ use std::sync::Arc;
 use horizon_browser::remote::CredentialStoreKind;
 use keyring_core::{CredentialStore, Entry, Error as KeyringError};
 
-use super::{CredentialLocator, RemoteCredentialError, RemoteCredentialStore, SecretSink, scrub, validate_secret};
+use zeroize::Zeroizing;
+
+use super::{CredentialLocator, RemoteCredentialError, RemoteCredentialStore, Sealed, SecretSink, validate_secret};
 
 /// Service name for every remote-provider item, distinct from any routine
 /// login items so the two features can never read each other's entries.
@@ -32,7 +34,12 @@ impl KeyringCredentialStore {
     /// [`RemoteCredentialError::StoreUnavailable`] when the platform has no
     /// store (or none is reachable), otherwise the mapped platform failure.
     pub fn open() -> Result<Self, RemoteCredentialError> {
-        platform::open().map(|store| Self { store })
+        platform::open().map(Self::with_store)
+    }
+
+    /// Wrap any keyring-core store; tests use an in-memory one.
+    pub(crate) fn with_store(store: Arc<CredentialStore>) -> Self {
+        Self { store }
     }
 
     /// Probe availability without touching any item.
@@ -54,6 +61,8 @@ impl KeyringCredentialStore {
             .map_err(|error| map_error(&error))
     }
 }
+
+impl Sealed for KeyringCredentialStore {}
 
 impl RemoteCredentialStore for KeyringCredentialStore {
     fn kind(&self) -> CredentialStoreKind {
@@ -84,10 +93,8 @@ impl RemoteCredentialStore for KeyringCredentialStore {
     }
 
     fn with_secret(&self, locator: &CredentialLocator, sink: &mut dyn SecretSink) -> Result<(), RemoteCredentialError> {
-        let mut value = self.entry(locator)?.get_secret().map_err(|error| map_error(&error))?;
-        let result = sink.accept(&value);
-        scrub(&mut value);
-        result
+        let value = Zeroizing::new(self.entry(locator)?.get_secret().map_err(|error| map_error(&error))?);
+        sink.accept(&value)
     }
 }
 
@@ -102,7 +109,7 @@ impl fmt::Debug for KeyringCredentialStore {
 
 /// Map platform errors to the typed, value-free error. The platform message
 /// stays in a local trace so diagnostics exist without reaching callers.
-fn map_error(error: &KeyringError) -> RemoteCredentialError {
+pub(super) fn map_error(error: &KeyringError) -> RemoteCredentialError {
     let kind = match error {
         KeyringError::NoEntry => return RemoteCredentialError::Missing,
         KeyringError::NoStorageAccess(_) => return RemoteCredentialError::Locked,
