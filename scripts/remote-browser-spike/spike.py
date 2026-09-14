@@ -94,10 +94,10 @@ class Transport:
         try:
             try:
                 with self.opener.open(req, timeout=timeout) as resp:
-                    raw = resp.read(MAX_RESPONSE_BYTES + 1)
+                    raw = _read_body(resp)
                     status = resp.status
             except urllib.error.HTTPError as err:
-                raw = err.read(MAX_RESPONSE_BYTES + 1)
+                raw = _read_body(err)
                 status = err.code
         except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError) as err:
             return {"status": None, "error": type(err).__name__, "detail": str(err)[:200],
@@ -109,6 +109,15 @@ class Transport:
         except ValueError:
             parsed = {"malformed": raw[:120].decode("utf-8", "replace")}
         return {"status": status, "body": parsed, "elapsed_ms": _ms(started)}
+
+
+def _read_body(response: Any) -> bytes:
+    """Read a bounded body; a body shorter than its declared length is a protocol failure."""
+    raw = response.read(MAX_RESPONSE_BYTES + 1)
+    declared = response.headers.get("Content-Length") if response.headers else None
+    if declared and declared.isdigit() and len(raw) < min(int(declared), MAX_RESPONSE_BYTES + 1):
+        raise http.client.IncompleteRead(raw, int(declared) - len(raw))
+    return raw
 
 
 def _origin(url: str) -> str:
