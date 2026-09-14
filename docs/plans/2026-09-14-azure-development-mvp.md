@@ -46,7 +46,7 @@ is already assigned to another contributor; do not duplicate that work.
   real microphone capture or browser functionality. Browser interaction must use
   Horizon's public browser MCP tools and requires a separately verified lane.
 
-### 2. Small controller entry point — pending
+### 2. Small controller entry point — implemented and locally validated, review pending
 
 - Expose a narrow, structured interface over existing core APIs for preflight,
   setup, issue-task start, status and reconnect. Keep Stop/Delete explicit.
@@ -59,7 +59,7 @@ is already assigned to another contributor; do not duplicate that work.
 - Prefer an agent launcher as a saved Shell command for the first iteration;
   introducing a new agent-panel kind is not required.
 
-### 3. Installed offload skill and onboarding — pending
+### 3. Installed offload skill and onboarding — implemented and locally validated, review pending
 
 - Package a `horizon-offload` skill through the existing plugin installation path.
 - First use checks tooling and prepares a reusable profile. Ask only for missing
@@ -140,12 +140,17 @@ cloud resources and running user sessions must not be changed by a local rehears
 
 ## Immediate continuation
 
-1. Complete review and remaining Clippy tiers, then deliver the testing-image PR.
-2. Implement a small structured controller in `feature/remote-worker-controller`
-   at `/tmp/horizon-worker-controller`, based on the same `f4caa2b4` main commit.
-   Reuse configured setup/Git/task/attachment APIs and private durable receipts.
-3. Package the offload skill, qualify authenticated agent execution and then the
-   approved Azure image/task path. No automatic merge or image publication.
+1. Complete hosted review/CI for the testing image, controller and skill slices.
+2. Rebuild the full-agent base with current repository-helper sources. The first
+   separately approved image passed browser smoke but failed Git handoff because
+   its cached base predates the required Git commands; it is not qualified for
+   issue offloads. The build-context correction includes the routines dependency
+   and retains private-file exclusions. Qualify the replacement before requesting
+   publication of its new identity.
+3. Qualify authenticated agent execution on the intended Azure worker, then
+   complete issue-task, reconnect, UI and explicit lifecycle evidence. No paid
+   worker has been allocated by this implementation yet. Device login and the
+   actual Azure browser namespace policy remain integration gates.
 
 ## Repository manifest decision — user clarification
 

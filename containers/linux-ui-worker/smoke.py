@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import select
 import shlex
@@ -58,10 +59,23 @@ class Smoke:
         return remaining
 
     def command(self, argv, check=True):
-        return subprocess.run(
-            argv, env=self.env, cwd=self.root, text=True, capture_output=True,
-            timeout=min(10, self.remaining()), check=check,
-        )
+        try:
+            return subprocess.run(
+                argv, env=self.env, cwd=self.root, text=True, capture_output=True,
+                timeout=min(10, self.remaining()), check=check,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            stderr = getattr(error, "stderr", "") or ""
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode("utf-8", errors="replace")
+            stderr = stderr.replace(str(self.root), "<artifacts>")
+            stderr = re.sub(r"(?im)(authorization|token|password|secret)(\s*[:=]\s*)[^\r\n]+", r"\1\2<redacted>", stderr)
+            stderr = re.sub(r"(https?://[^\s?]+)\?[^\s]+", r"\1?<redacted>", stderr)
+            diagnostic = {"stage": self.stage, "tool": Path(argv[0]).name,
+                          "returncode": getattr(error, "returncode", None),
+                          "error": type(error).__name__, "stderr": stderr[-2048:]}
+            (self.root / "command-failure.json").write_text(json.dumps(diagnostic, indent=2) + "\n")
+            raise
 
     def spawn(self, name, argv, **kwargs):
         log = (self.root / (name + ".log")).open("w", encoding="utf-8")
@@ -86,6 +100,7 @@ class Smoke:
             time.sleep(min(0.1, self.remaining()))
 
     def display(self):
+        self.stage = "private display"
         read_fd, write_fd = os.pipe()
         try:
             self.spawn("xvfb", [
@@ -108,6 +123,7 @@ class Smoke:
         self.checks.append("private_display")
 
     def launch(self):
+        self.stage = "candidate launch"
         script = "printf ready > terminal-ready; exec /bin/bash --noprofile --norc"
         config = {
             "version": 10,
@@ -148,17 +164,20 @@ class Smoke:
         self.checks.append("window_and_terminal_started")
 
     def screenshot(self, name):
+        self.stage = "screenshot"
         time.sleep(min(1, self.remaining()))
         self.command(["scrot", "--silent", str(self.root / (name + ".png"))])
         if (self.root / (name + ".png")).stat().st_size < 1024:
             raise RuntimeError("screenshot is unexpectedly small")
 
     def fit(self):
+        self.stage = "fit workspace"
         self.command(["xdotool", "windowactivate", "--sync", self.window])
         self.command(["xdotool", "key", "--clearmodifiers", "ctrl+shift+9"])
         time.sleep(min(1, self.remaining()))
 
     def input(self, name):
+        self.stage = "terminal input command"
         marker = "HORIZON_UI_INPUT_OK_" + name
         path = self.root / (name + ".txt")
         self.command(["xdotool", "mousemove", "--window", self.window, "400", "300", "click", "1"])
@@ -169,6 +188,7 @@ class Smoke:
         self.checks.append(name)
 
     def resize(self):
+        self.stage = "resize command"
         self.command(["xdotool", "windowsize", self.window, "1000", "700"])
 
         def resized():
@@ -179,6 +199,7 @@ class Smoke:
         self.checks.append("window_resized")
 
     def close(self):
+        self.stage = "normal window close"
         self.command(["wmctrl", "-ic", hex(int(self.window))])
         result = self.app.wait(timeout=min(15, self.remaining()))
         if result != 0:
@@ -272,6 +293,8 @@ def main():
         # Child output stays in private files; never echo an inherited environment.
         result["error"] = type(error).__name__
         result["failed_stage"] = smoke.stage
+        if (root / "command-failure.json").is_file():
+            result["command_diagnostic"] = "command-failure.json"
     finally:
         result["cleanup_complete"] = smoke.cleanup()
         if not result["cleanup_complete"]:

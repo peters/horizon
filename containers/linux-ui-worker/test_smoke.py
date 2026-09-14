@@ -2,6 +2,7 @@
 
 import importlib.util
 import os
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -37,6 +38,25 @@ class SmokeTests(unittest.TestCase):
     def test_nonzero_tool_result_is_not_success(self):
         with self.assertRaises(subprocess.CalledProcessError):
             self.smoke.command(["/bin/false"])
+
+    def test_command_failure_retains_bounded_private_diagnostics(self):
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.smoke.command(["/bin/bash", "-c", "printf 'token=synthetic-secret\\ninvalid display' >&2; exit 7"])
+        result = json.loads((self.root / "command-failure.json").read_text())
+        self.assertEqual(result["returncode"], 7)
+        self.assertEqual(result["tool"], "bash")
+        self.assertIn("invalid display", result["stderr"])
+        self.assertNotIn("synthetic-secret", result["stderr"])
+        self.assertLessEqual(len(result["stderr"]), 2048)
+
+    def test_fit_failure_reports_fit_stage_instead_of_previous_wait(self):
+        self.smoke.stage = "previous wait"
+        self.smoke.window = "123"
+        with patch.object(smoke_module.subprocess, "run", side_effect=subprocess.CalledProcessError(1, "xdotool", stderr="missing window")):
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.smoke.fit()
+        result = json.loads((self.root / "command-failure.json").read_text())
+        self.assertEqual(result["stage"], "fit workspace")
 
     def test_expired_deadline_cannot_run_another_command(self):
         self.smoke.deadline = 0
