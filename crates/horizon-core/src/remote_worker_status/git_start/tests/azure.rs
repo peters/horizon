@@ -1,6 +1,8 @@
 //! Azure saved-Shell start on real stores with a fake bound provider: the shared
 //! admission, the confirmation snapshot and the drift fences run without the Azure CLI,
 //! ARM or SSH.
+mod status;
+
 use super::*;
 use crate::{
     cloud_run::azure::{AzureDiskSku, AzureProfile, resource_group_name},
@@ -62,7 +64,7 @@ impl InteractiveWorkerProvider for AzureProvider {
 }
 
 struct AzureFixture {
-    _directory: tempfile::TempDir,
+    directory: tempfile::TempDir,
     store: CloudWorkflowStore,
     profile: AzureProfile,
     allocation: StoredRemoteAllocation,
@@ -135,7 +137,7 @@ impl AzureFixture {
             .record_remote_worker_recovery(&allocation, Some(&status))
             .expect("synthetic retained observation");
         Self {
-            _directory: directory,
+            directory,
             store,
             profile,
             allocation,

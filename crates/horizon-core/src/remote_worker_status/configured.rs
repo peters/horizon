@@ -1,5 +1,8 @@
 //! Explicit selected-panel observation without recovery persistence or attachment.
 
+#[cfg(target_os = "linux")]
+pub(super) mod azure;
+
 use super::{RemotePanelStatus, RemotePanelStatusError};
 use crate::{
     cloud_run::CloudWorkflowStore,
@@ -36,7 +39,7 @@ impl RemotePanelObservation {
     }
 }
 
-/// Check one owned saved task through its explicit local or `RunPod` provider and retained SSH pin.
+/// Check one owned saved task through its explicit local, `RunPod` or Azure provider and retained SSH pin.
 /// All storage, retained-key, provider and SSH work must run off the render thread.
 /// Requires an already recorded worker and host pin; never repairs missing identity.
 /// No key creation, recovery persistence, task startup, local view, attachment,
@@ -54,6 +57,9 @@ pub fn inspect_configured_remote_panel(
 ) -> Result<RemotePanelObservation, ConfiguredRemotePanelStatusError> {
     #[cfg(target_os = "linux")]
     {
+        if request.expected.provider == crate::cloud_run::CloudProvider::Azure {
+            return azure::inspect(store, identities, config, request);
+        }
         if request.expected.provider == crate::cloud_run::CloudProvider::RunPod {
             return runpod_with(
                 store,
@@ -271,6 +277,8 @@ pub enum ConfiguredRemotePanelStatusError {
     RunPodCredentialUnavailable,
     #[error("the configured RunPod profile or retained worker and storage binding is invalid")]
     InvalidRunPodBinding,
+    #[error("Azure task inspection admission failed: {0}")]
+    Azure(#[from] crate::remote_workspace::stop::ConfiguredStopConfirmationError),
     #[error(transparent)]
     Configuration(#[from] RemoteProviderConfigError),
     #[error(transparent)]
