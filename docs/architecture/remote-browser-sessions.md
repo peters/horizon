@@ -133,9 +133,11 @@ reply (`appium:deviceName`, `appium:platformVersion`, and a real-mobile flag whe
 the endpoint states one); a hosted grid that echoes nothing therefore cannot
 satisfy a `physical` requirement through that adapter. The verified identity
 reaches the manifest and the MCP panel as `remote_device`, and a rejection ends
-the create with `remote_device_rejected`; an allocation the provider refused or
-left unknown ends it with `remote_allocation_failed` or
-`remote_allocation_unknown`.
+the create with `remote_device_rejected` after an immediate release attempt
+whose outcome the panel note states; a session that could not be allocated or
+safely started ends it with `remote_allocation_failed` (nothing held), and one
+whose allocation or cleanup got no trustworthy answer with
+`remote_allocation_unknown` (the slot stays counted).
 
 ## Session lifecycle and ownership
 

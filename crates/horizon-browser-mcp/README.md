@@ -60,9 +60,12 @@ shell commands, files, or other MCP servers.
   requirement from the provider's own evidence (a hosted grid's session
   record, or the capabilities a standard endpoint echoes); a physical
   requirement the evidence does not confirm fails as
-  `remote_device_rejected` with the session released, and an allocation the
-  provider refused or left unknown fails as `remote_allocation_failed` or
-  `remote_allocation_unknown`. Such a panel reports `remote_target`,
+  `remote_device_rejected` after Horizon attempts to release the session
+  (the panel note says whether the provider confirmed it); a session that
+  could not be allocated or safely started fails as
+  `remote_allocation_failed` (nothing held), and one whose allocation or
+  cleanup got no trustworthy answer fails as `remote_allocation_unknown` (a
+  device may still be held; check the provider before creating again). Such a panel reports `remote_target`,
   `remote_device` (model, OS version, hardware evidence), classic
   `WebDriver` and no network capture.
 - `browser_visibility` shows or hides an existing panel without stopping its

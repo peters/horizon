@@ -198,7 +198,7 @@ pub(crate) struct CreateInput {
     pub(crate) url: Option<String>,
     /// Browser override. Omit this to use Horizon's configured browser backend. Not allowed together with target.
     pub(crate) backend: Option<CreateBackend>,
-    /// Configured remote target name (a key of Horizon's browser.remote.targets) to run the session at that remote target instead of a local browser. Provider-neutral: Horizon resolves the endpoint, capabilities and credentials; the panel then advertises `remote_target`, classic `WebDriver` and no network capture. After allocation the device is verified against the target's requirement from the provider's own evidence; a physical requirement the evidence does not confirm is refused as `remote_device_rejected` with the session released, and a ready panel reports `remote_device`. Omit for a local browser.
+    /// Configured remote target name (a key of Horizon's browser.remote.targets) to run the session at that remote target instead of a local browser. Provider-neutral: Horizon resolves the endpoint, capabilities and credentials; the panel then advertises `remote_target`, classic `WebDriver` and no network capture. After allocation the device is verified against the target's requirement from the provider's own evidence; a physical requirement the evidence does not confirm is refused as `remote_device_rejected` after Horizon attempts to release the session (the panel says whether the provider confirmed it), and a ready panel reports `remote_device`. Omit for a local browser.
     pub(crate) target: Option<String>,
     /// Whether the panel is shown initially (default true). Hidden panels remain live and controllable.
     pub(crate) visible: Option<bool>,

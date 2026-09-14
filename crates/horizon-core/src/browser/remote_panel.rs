@@ -41,15 +41,15 @@ pub struct RemoteFailure {
 impl RemoteFailure {
     const DEVICE_REJECTED: Self = Self {
         code: "remote_device_rejected",
-        message: "the allocated remote device did not meet the target's device requirement; the session was released and the panel shows which requirement failed",
+        message: "the allocated remote device did not meet the target's device requirement and Horizon attempted to release the session; the panel shows the failed requirement and whether the provider confirmed the release, so check it before creating again",
     };
     const ALLOCATION_FAILED: Self = Self {
         code: "remote_allocation_failed",
-        message: "the provider refused to allocate a remote session for the target; the panel shows the provider's reason",
+        message: "a remote session for the target could not be allocated or safely started and nothing is held at the provider; the panel shows the reason",
     };
     const ALLOCATION_UNKNOWN: Self = Self {
         code: "remote_allocation_unknown",
-        message: "the provider gave no trustworthy answer to the remote allocation; check the provider before creating again",
+        message: "the provider gave no trustworthy answer about the remote allocation or its cleanup, so a device may still be held; check the provider before creating again",
     };
 }
 
