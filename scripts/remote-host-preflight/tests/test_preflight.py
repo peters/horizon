@@ -484,6 +484,19 @@ class EngineFailures(Harness):
         by_id = {check["id"]: check for check in report["checks"]}
         self.assertEqual(by_id["container_engine"]["status"], "supported")
 
+    def test_rejected_docker_is_not_listed_as_also_found(self):
+        fixture = dict(DEFAULT_FIXTURE)
+        fixture["docker_version"] = {"stdout": json.dumps(
+            {"Server": {"Version": "26.1.4", "OSType": "windows"}})}
+        fixture["podman_client"] = podman_client_ok()
+        fixture["podman_socket"] = podman_socket_ok()
+        fixture["podman_info"] = podman_ok()
+        code, report, _ = self.run_main(fixture)
+        self.assertEqual(code, 0)
+        by_id = {check["id"]: check for check in report["checks"]}
+        self.assertEqual(by_id["container_engine"]["value"], "podman 4.9.0")
+        self.assertNotIn("also found", by_id["container_engine"]["detail"])
+
     def test_non_linux_docker_server_os_is_rejected(self):
         fixture = dict(DEFAULT_FIXTURE)
         fixture["docker_version"] = {"stdout": json.dumps(
@@ -599,6 +612,12 @@ class EngineFailures(Harness):
         by_id = {check["id"]: check for check in report["checks"]}
         self.assertEqual(by_id["os_linux"]["status"], "error")
         self.assertIsNone(by_id["os_linux"].get("value"))
+
+    def test_workspace_is_resolved_once_for_disk_and_storage(self):
+        _, _, executor = self.run_main(dict(DEFAULT_FIXTURE))
+        prefix = list(preflight.PROBE_ARGS["workspace_dir"])
+        calls = [argv for argv in executor.seen if argv[:len(prefix)] == prefix]
+        self.assertEqual(len(calls), 1)
 
     def test_workspace_helper_disables_bytecode(self):
         self.assertIn("-B", preflight.PROBE_ARGS["workspace_dir"])

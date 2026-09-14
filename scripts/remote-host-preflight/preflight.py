@@ -512,7 +512,8 @@ def check_container_engine(executor, timeout):
     engine_version = docker_server if engine_ok == "docker" else podman_version
     detail = "usable engine: %s %s" % (engine_ok, engine_version)
     found = {"docker": docker_server, "podman": podman_version}
-    others = ["%s %s" % (n, v) for n, v in found.items() if v and n != engine_ok]
+    others = ["%s %s" % (n, v) for n, v in found.items()
+              if v and n != engine_ok and n not in reasons]
     if others:
         detail += " (also found %s)" % ", ".join(others)
     if engine_ok == "docker":
@@ -659,9 +660,8 @@ def resolve_workspace_directory(executor, timeout, path):
                               % redact(path))
 
 
-def check_disk(executor, timeout, workspace_path):
-    target, _major, _minor, problem = resolve_workspace_directory(
-        executor, timeout, workspace_path)
+def check_disk(executor, timeout, resolved):
+    target, _major, _minor, problem = resolved
     if problem:
         return {"id": "disk_capacity", "status": ERROR, "value": None,
                 "detail": problem}
@@ -683,7 +683,7 @@ def check_disk(executor, timeout, workspace_path):
     mount = select_mount_point(mounts, target)
     if mount is None:
         return {"id": "disk_capacity", "status": ERROR, "value": None,
-                "detail": "df output contains no mount point covering %s" % redact(workspace_path)}
+                "detail": "df output contains no mount point covering %s" % redact(target)}
     free_kb = free_by_mount.get(mount)
     if free_kb is None:
         # A malformed free value on the *selected* entry is rejected rather
@@ -830,9 +830,8 @@ def ext4_qualifier_problems(raw):
     return problems
 
 
-def check_storage_qualifier(procfs_root, sysfs_root, workspace_path, executor, timeout):
-    _target, major, minor, problem = resolve_workspace_directory(
-        executor, timeout, workspace_path)
+def check_storage_qualifier(procfs_root, sysfs_root, resolved):
+    _target, major, minor, problem = resolved
     if problem:
         invalid_path = (
             problem == "workspace path is not a directory"
@@ -924,14 +923,15 @@ def build_report(procfs_root, sysfs_root, workspace_path, timeout, executor, now
         checks.append(check_tailscale(executor, timeout))
     else:
         engine_check, driver_check = check_container_engine(executor, timeout)
+        resolved = resolve_workspace_directory(executor, timeout, workspace_path)
         checks = [
             os_check,
             engine_check,
             driver_check,
             check_capacity(executor, timeout, procfs_root),
             check_memory(procfs_root),
-            check_disk(executor, timeout, workspace_path),
-            check_storage_qualifier(procfs_root, sysfs_root, workspace_path, executor, timeout),
+            check_disk(executor, timeout, resolved),
+            check_storage_qualifier(procfs_root, sysfs_root, resolved),
             check_tailscale(executor, timeout),
         ]
     checks.extend({"id": check_id, "status": UNVERIFIED, "value": None, "detail": detail}
