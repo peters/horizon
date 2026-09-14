@@ -219,7 +219,7 @@ mod tests {
 
     #[test]
     fn provider_limits_count_held_allocations_until_release_is_established() {
-        use horizon_core::browser::BrowserPanelState;
+        use horizon_core::browser::{BrowserPanelState, BrowserShutdownSignal, RemoteReleaseOutcome};
         use horizon_core::{Board, Panel, PanelContent, PanelId, PanelKind, WorkspaceId};
 
         let config = config();
@@ -268,6 +268,46 @@ mod tests {
             "max_sessions is 1"
         );
         assert_eq!(board.remote_holds("other-grid"), 1);
+
+        // A teardown that finished without an established release keeps
+        // counting after the board dropped it; an established one does not.
+        board.retire_browser_shutdown_signal(BrowserShutdownSignal::completed_remote_for_test(
+            "grid",
+            Some(RemoteReleaseOutcome::ReleaseUnknown {
+                attempts: 3,
+                reason: "timed out".to_string(),
+            }),
+        ));
+        board.retire_browser_shutdown_signal(BrowserShutdownSignal::completed_remote_for_test("grid", None));
+        board.retire_browser_shutdown_signal(BrowserShutdownSignal::completed_remote_for_test(
+            "grid",
+            Some(RemoteReleaseOutcome::Released),
+        ));
+        board.retire_browser_shutdown_signal(BrowserShutdownSignal::completed_remote_for_test(
+            "other-grid",
+            Some(RemoteReleaseOutcome::AlreadyGone),
+        ));
+        let before = board.remote_holds("grid");
+        let _ = board.process_output();
+        assert!(
+            !board.has_pending_browser_cleanup(),
+            "finished teardowns stop the polling"
+        );
+        assert_eq!(
+            board.remote_holds("grid"),
+            before,
+            "sweeping finished teardowns changes no count"
+        );
+        assert_eq!(
+            board.remote_holds("grid"),
+            2 + 2,
+            "unknown and unreported releases keep counting"
+        );
+        assert_eq!(
+            board.remote_holds("other-grid"),
+            1,
+            "an established release frees the slot"
+        );
     }
 
     #[test]

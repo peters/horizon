@@ -8,11 +8,16 @@ use super::{BrowserDrainOutput, BrowserPanelState, BrowserStatus, retain_effecti
 
 /// What a panel knows about the remote session it runs (or ran) at.
 pub(super) struct RemoteLifecycle {
-    /// The request every (re)launch uses. `None` for a panel restored from
-    /// a previous run, which cannot allocate again on its own.
+    /// The request the first launch consumes. A remote panel allocates
+    /// exactly once: Retry would bypass the host's provider limit, so a
+    /// stopped panel needs a new create, which goes through that check.
     request: Option<RemoteSessionRequest>,
     /// Configured remote target name.
     target: String,
+    /// Configured provider the session was (or is being) allocated at.
+    /// `None` for a panel restored from a previous run, whose session ended
+    /// with that run.
+    provider: Option<String>,
     /// The driver established that the provider no longer holds this
     /// session (released, already gone, or never allocated).
     release_established: bool,
@@ -22,6 +27,7 @@ impl RemoteLifecycle {
     fn live(request: RemoteSessionRequest) -> Self {
         Self {
             target: request.label.clone(),
+            provider: Some(request.provider.clone()),
             request: Some(request),
             release_established: false,
         }
@@ -31,6 +37,7 @@ impl RemoteLifecycle {
         Self {
             request: None,
             target,
+            provider: None,
             release_established: false,
         }
     }
@@ -38,9 +45,9 @@ impl RemoteLifecycle {
 
 impl BrowserPanelState {
     /// Create the state for a remote session and start allocating. The
-    /// request is kept for Retry, so a retried panel reuses the authorization
-    /// resolved at creation instead of consulting a store again. The panel's
-    /// backend is the request's browser family, not the local default, so
+    /// request is consumed by this one launch: the host checked the
+    /// provider's limit for it, and a Retry would not. The panel's backend
+    /// is the request's browser family, not the local default, so
     /// coordination and the MCP projection describe the device's browser.
     ///
     /// # Errors
@@ -106,10 +113,7 @@ impl BrowserPanelState {
     /// Configured provider of the remote session this panel runs at.
     #[must_use]
     pub fn remote_provider(&self) -> Option<&str> {
-        self.remote
-            .as_ref()
-            .and_then(|remote| remote.request.as_ref())
-            .map(|request| request.provider.as_str())
+        self.remote.as_ref().and_then(|remote| remote.provider.as_deref())
     }
 
     /// Whether this panel may still hold an allocation at its provider: a
@@ -120,7 +124,7 @@ impl BrowserPanelState {
     pub fn holds_remote_allocation(&self) -> bool {
         self.remote
             .as_ref()
-            .is_some_and(|remote| remote.request.is_some() && !remote.release_established)
+            .is_some_and(|remote| remote.provider.is_some() && !remote.release_established)
     }
 
     /// Driver-less remote panel for host tests: counts as holding an
@@ -152,21 +156,38 @@ impl BrowserPanelState {
         }
     }
 
-    /// Whether Retry can start a session again. A remote panel restored from
-    /// a previous run has no request to retry with: it needs a new create.
+    /// Whether Retry can start a session again. A remote panel never
+    /// retries: only a new create passes the host's provider limit and
+    /// release checks, and a retry after an unknown allocation could
+    /// duplicate a session the provider still holds.
     #[must_use]
     pub fn can_retry(&self) -> bool {
-        !self.is_restored_remote()
+        !self.is_remote()
     }
 
-    /// A remote panel restored from a previous run: known target, no request.
-    pub(super) fn is_restored_remote(&self) -> bool {
-        self.remote.as_ref().is_some_and(|remote| remote.request.is_none())
+    /// The request this launch consumes, when the panel is remote and has
+    /// not launched yet. `Err` for a remote panel with nothing to launch
+    /// with (restored, or already launched once).
+    pub(super) fn take_remote_request(&mut self) -> Result<Option<RemoteSessionRequest>, ()> {
+        match self.remote.as_mut() {
+            None => Ok(None),
+            Some(remote) => remote.request.take().map(Some).ok_or(()),
+        }
     }
 
-    /// The request the next driver start uses, when this panel is remote.
-    pub(super) fn remote_request(&self) -> Option<RemoteSessionRequest> {
-        self.remote.as_ref().and_then(|remote| remote.request.clone())
+    /// Refuse to start anything for a remote panel that has no request:
+    /// no local browser may stand in for the device and nothing may be
+    /// allocated outside the host's create path.
+    pub(super) fn refuse_remote_relaunch(&mut self) {
+        self.pending_relaunch = None;
+        self.loading = false;
+        self.status = BrowserStatus::Stopped { code: None };
+        if self.remote_status.is_none() {
+            let target = self.remote_target().unwrap_or_default();
+            self.remote_status = Some(format!(
+                "remote session for {target} cannot be retried here; create the panel again to allocate a new one"
+            ));
+        }
     }
 
     pub(super) fn apply_remote_session_event(
@@ -255,6 +276,7 @@ mod tests {
         assert!(state.session.is_none(), "no local browser stands in for the device");
         assert!(matches!(state.status, BrowserStatus::Stopped { code: None }));
         assert!(!state.loading);
+        assert!(!state.can_retry(), "a request-less remote panel offers no Retry");
 
         let backend = state.backend();
         state.switch_backend(BackendKind::FirefoxBidi);
@@ -264,5 +286,37 @@ mod tests {
             "a remote panel's browser is fixed by its target"
         );
         assert!(state.session.is_none());
+    }
+
+    #[test]
+    fn a_remote_panel_launches_once_and_never_retries() {
+        let mut state = BrowserPanelState::inert_remote("ios_phone", "grid");
+        assert!(state.is_remote());
+        assert!(!state.can_retry(), "Retry would bypass the provider limit");
+        assert_eq!(state.remote_provider(), Some("grid"));
+        assert!(state.holds_remote_allocation());
+        assert!(
+            matches!(state.take_remote_request(), Ok(Some(_))),
+            "the first launch consumes the request"
+        );
+        assert!(
+            state.take_remote_request().is_err(),
+            "nothing is left for a second launch"
+        );
+        assert_eq!(state.remote_provider(), Some("grid"), "the hold outlives the request");
+        assert!(state.holds_remote_allocation());
+
+        state.relaunch();
+        assert!(state.session.is_none(), "no session starts from Retry");
+        assert!(matches!(state.status, BrowserStatus::Stopped { code: None }));
+        assert!(
+            state
+                .remote_status
+                .as_deref()
+                .is_some_and(|note| note.contains("create the panel again")),
+            "{:?}",
+            state.remote_status
+        );
+        assert!(state.holds_remote_allocation(), "a refused retry never frees the slot");
     }
 }

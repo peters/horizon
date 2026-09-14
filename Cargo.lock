@@ -2295,6 +2295,7 @@ dependencies = [
  "eframe",
  "egui",
  "egui_commonmark",
+ "horizon-browser",
  "horizon-browser-mcp",
  "horizon-core",
  "horizon-cursor",

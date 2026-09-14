@@ -314,14 +314,10 @@ impl BrowserPanelState {
 
     fn launch_session(&mut self, initial_url: Option<String>) {
         self.navigation_error = None;
-        if self.is_restored_remote() {
-            // Restored from a previous run: no request, so no local browser
-            // may be started in its place and nothing is allocated silently.
-            self.pending_relaunch = None;
-            self.loading = false;
-            self.status = BrowserStatus::Stopped { code: None };
+        let Ok(remote) = self.take_remote_request() else {
+            self.refuse_remote_relaunch();
             return;
-        }
+        };
         self.frame_slot.clear_backend_capabilities();
         // Drop the previous driver (if any) and wait for its Chrome to be
         // gone: the replacement reuses the same profile directory, and a
@@ -330,15 +326,16 @@ impl BrowserPanelState {
             self.teardown_signal = Some(Box::new(BrowserSession::shutdown_signal(*session)));
         }
         if !self.retry_ready() {
+            debug_assert!(remote.is_none(), "a remote panel has no previous driver to wait for");
             self.pending_relaunch = Some(PendingRelaunch { initial_url });
             self.loading = true;
             self.status = BrowserStatus::Starting;
             return;
         }
-        self.start_session(initial_url);
+        self.start_session(initial_url, remote);
     }
 
-    fn start_session(&mut self, initial_url: Option<String>) {
+    fn start_session(&mut self, initial_url: Option<String>, remote: Option<RemoteSessionRequest>) {
         let browser = self.config.clone();
         let home = crate::horizon_home::HorizonHome::resolve();
         let capture_directory = profile_dir_for_home(&browser, &home, &self.panel_local_id).join("captures");
@@ -357,7 +354,7 @@ impl BrowserPanelState {
             coordination: Some(Arc::new(manifest::ManifestCoordination::default())),
             capture_directory: Some(capture_directory),
             video: Arc::new(horizon_browser::VideoCaptureHandle::default()),
-            remote: self.remote_request(),
+            remote,
         };
         match session::start_session(session_config) {
             Ok(handle) => {
@@ -386,7 +383,8 @@ impl BrowserPanelState {
         let Some(pending) = self.pending_relaunch.take() else {
             return false;
         };
-        self.start_session(pending.initial_url);
+        // A queued relaunch is always local: a remote panel launches once.
+        self.start_session(pending.initial_url, None);
         true
     }
 

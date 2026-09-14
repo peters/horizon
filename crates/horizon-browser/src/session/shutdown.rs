@@ -239,6 +239,29 @@ impl BrowserShutdownSignal {
         };
     }
 
+    /// A finished teardown of a remote session at `provider` whose driver
+    /// reported `release` (or nothing) on the way out, for host tests.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn completed_remote_for_test(provider: &str, release: Option<RemoteReleaseOutcome>) -> Self {
+        let (completion_tx, completion_rx) = mpsc::channel();
+        drop(completion_tx);
+        let process_control = ChromeProcessControl::default();
+        process_control.mark_registration_settled();
+        Self {
+            completion_rx,
+            remote_release: Arc::new(Mutex::new(release)),
+            remote_provider: Some(provider.to_string()),
+            driver_complete: AtomicBool::new(true),
+            process_complete: AtomicBool::new(true),
+            process_control,
+            panel_local_id: None,
+            coordination: None,
+            profile_cleanup: Mutex::new(ProfileCleanupState::NotRequired),
+        }
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     #[must_use]

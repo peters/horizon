@@ -98,6 +98,12 @@ pub struct Board {
     /// process is still retiring. Global shutdown must inherit these signals
     /// instead of losing them in detached cleanup work.
     retired_browser_shutdown_signals: Vec<crate::browser::BrowserShutdownSignal>,
+    /// Providers of remote sessions whose teardown finished without the
+    /// driver establishing the release. Each entry keeps counting against
+    /// that provider's `max_sessions` for the rest of this run, independent
+    /// of teardown cleanup, so a slot the provider may still hold is never
+    /// handed out again on Horizon's own authority.
+    unreleased_remote_holds: Vec<String>,
     retained_empty_workspaces: HashSet<WorkspaceId>,
     pub focused: Option<PanelId>,
     pub active_workspace: Option<WorkspaceId>,
@@ -123,6 +129,7 @@ impl Board {
             attention: Vec::new(),
             panel_attention_signals: HashMap::new(),
             retired_browser_shutdown_signals: Vec::new(),
+            unreleased_remote_holds: Vec::new(),
             retained_empty_workspaces: HashSet::new(),
             focused: None,
             active_workspace: None,
@@ -341,8 +348,9 @@ impl Board {
     }
 
     /// Allocations `provider` may still hold on this board: live remote
-    /// panels whose release is not established, plus closed panels whose
-    /// teardown is still retired here without an established release.
+    /// panels whose release is not established, closed panels whose teardown
+    /// is still retired here without an established release, and teardowns
+    /// that finished this run without ever establishing it.
     #[must_use]
     pub fn remote_holds(&self, provider: &str) -> usize {
         let live = self
@@ -356,14 +364,37 @@ impl Board {
             .iter()
             .filter(|signal| signal.remote_provider() == Some(provider) && signal.holds_remote_allocation())
             .count();
-        live + retired
+        let unreleased = self
+            .unreleased_remote_holds
+            .iter()
+            .filter(|held| held.as_str() == provider)
+            .count();
+        live + retired + unreleased
+    }
+
+    /// Drop finished teardowns, remembering the provider of any remote
+    /// session whose release was never established so it keeps counting
+    /// without keeping cleanup polling alive.
+    fn sweep_retired_browser_shutdowns(&mut self) {
+        let (complete, pending): (Vec<_>, Vec<_>) = self
+            .retired_browser_shutdown_signals
+            .drain(..)
+            .partition(crate::browser::BrowserShutdownSignal::is_complete);
+        self.retired_browser_shutdown_signals = pending;
+        for signal in complete {
+            if signal.holds_remote_allocation()
+                && let Some(provider) = signal.remote_provider()
+            {
+                tracing::warn!(target: "browser", provider, "remote session ended without an established release; it keeps counting against the provider's limit");
+                self.unreleased_remote_holds.push(provider.to_string());
+            }
+        }
     }
 
     /// Drain pending output from all panels. Returns `true` if any panel had activity.
     #[profiling::function]
     pub fn process_output(&mut self) -> BoardProcessOutput {
-        self.retired_browser_shutdown_signals
-            .retain(|signal| !signal.is_complete());
+        self.sweep_retired_browser_shutdowns();
         let mut output = BoardProcessOutput::default();
         for panel in &mut self.panels {
             let panel_output: PanelProcessOutput = panel.process_output();

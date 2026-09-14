@@ -256,6 +256,11 @@ impl HorizonApp {
                         .and_then(BrowserShutdownSignal::remote_release);
                     if let Err((code, message)) = close_outcome(release.as_ref()) {
                         complete_close_failure(&pending.request, code, &message);
+                        // The provider may still hold the session: the board
+                        // keeps counting it against the provider's limit.
+                        if let Some(signal) = pending.teardown {
+                            self.board.retire_browser_shutdown_signal(signal);
+                        }
                         continue;
                     }
                     match manifest::record_close_status(&pending.request, BrowserCloseAuditStatus::Completed) {
