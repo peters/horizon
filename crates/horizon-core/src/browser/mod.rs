@@ -8,6 +8,7 @@
 pub mod manifest;
 pub mod teach;
 
+pub use horizon_browser::remote;
 pub use horizon_browser::{cdp, frames, input, process, session};
 pub use teach::TeachMode;
 

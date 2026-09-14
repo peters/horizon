@@ -274,6 +274,8 @@ pub struct HorizonApp {
     browser_create_host: BrowserCreateHostState,
     settings: Option<SettingsEditor>,
     speech_model_info_cache: settings::SpeechModelInfoCache,
+    /// Session-only and OS-store provider credentials for remote browser targets.
+    remote_browser_credentials: horizon_core::remote_browser_credential::CredentialWorkbench,
     session_manager: Option<RuntimeSessionManagerState>,
     remote_environments: remote_environments::RemoteEnvironments,
     managed_install: Option<ManagedInstall>,
@@ -318,6 +320,7 @@ impl eframe::App for HorizonApp {
         let ctx = &ui.ctx().clone();
         let now = Instant::now();
         self.frame_stats.record_frame(now);
+        self.remote_browser_credentials.poll();
         if let Some(delay) = self.frame_stats.idle_refresh_after(now) {
             ctx.request_repaint_after(delay);
         }

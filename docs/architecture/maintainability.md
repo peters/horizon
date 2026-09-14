@@ -684,7 +684,9 @@ back into large multi-purpose modules.
   store, the `keyring-core` adapter (`keyring_store`), the fake store seam, and
   the resolver that turns bindings into one origin-bound authorization header.
   It never serializes values, never touches the process environment, and holds
-  no transport, allocation or UI code.
+  no transport, allocation or UI code. `workbench` runs OS-store operations on
+  a worker thread with a presence cache the UI reads, so a locked store or an
+  unlock prompt never blocks the render loop.
 
 ### `horizon-browser-cli`
 
@@ -757,6 +759,12 @@ back into large multi-purpose modules.
   coordination in `browser_widget/input.rs`, with independent keyboard/IME and
   pointer-capture state machines in `browser_widget/input/keyboard.rs` and
   `browser_widget/input/pointer.rs`.
+
+- `app::settings::remote_browsers` renders provider readiness and credential
+  entry for remote browser targets. It reads the editing config and the
+  app-held `CredentialWorkbench`; typed values go to the workbench only, never
+  to the YAML buffer, and its input buffers are scrubbed when the settings
+  editor closes.
 
 ## File Size Policy
 
