@@ -4,6 +4,7 @@ Process supervision only: spawn, timeout, output caps, and descendant
 reaping. Probe command selection and report rendering live in preflight.py.
 """
 import ctypes
+import ctypes.util
 import json
 import os
 import select
@@ -152,7 +153,11 @@ def _reap_child(pid, timeout=1.0):
 
 def _become_subreaper():
     """Keep ownership of reparented probe descendants on Linux."""
-    libc = ctypes.CDLL("libc.so.6", use_errno=True)
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+    except OSError:
+        lib = ctypes.util.find_library("c") or "libc.so.6"
+        libc = ctypes.CDLL(lib, use_errno=True)
     if libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
         err = ctypes.get_errno()
         raise OSError(err, "prctl(PR_SET_CHILD_SUBREAPER)")
