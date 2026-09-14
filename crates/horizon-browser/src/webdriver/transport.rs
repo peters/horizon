@@ -107,7 +107,9 @@ pub(crate) fn encode_path_segment(segment: &str) -> String {
 
 /// Every `%` starts an uppercase `%HH` escape of a byte that canonical
 /// encoding would actually escape: never an unreserved byte (a proxy may
-/// decode `%2E%2E` into `..`) and never `/` (which would split the segment).
+/// decode `%2E%2E` into `..`), never `/` (which would split the segment),
+/// and never `%` or `\\` (a decoding proxy would turn `%252F` into `%2F`
+/// for the next hop, and some servers normalize `\\` into a separator).
 fn canonically_encoded(path: &str) -> bool {
     let bytes = path.as_bytes();
     let mut index = 0;
@@ -128,7 +130,7 @@ fn canonically_encoded(path: &str) -> bool {
             let Ok(decoded) = u8::from_str_radix(text, 16) else {
                 return false;
             };
-            if is_unreserved(decoded) || decoded == b'/' {
+            if is_unreserved(decoded) || matches!(decoded, b'/' | b'%' | b'\\') {
                 return false;
             }
             index += 3;
@@ -150,10 +152,10 @@ mod tests {
     #[test]
     fn opaque_segments_encode_canonically_and_validate() {
         assert_eq!(encode_path_segment("node-6066-11e4.a_b~c"), "node-6066-11e4.a_b~c");
-        assert_eq!(encode_path_segment("a/b c%d?e#f"), "a%2Fb%20c%25d%3Fe%23f");
+        assert_eq!(encode_path_segment("a/b c%d?e#f\\"), "a%2Fb%20c%25d%3Fe%23f%5C");
         assert_eq!(encode_path_segment("\u{e9}l\u{e9}ment"), "%C3%A9l%C3%A9ment");
         assert_eq!(encode_path_segment("../x"), "..%2Fx");
-        for id in ["a b c%d?e#f", "\u{e9}l\u{e9}ment", "...", "{\"json\":1}"] {
+        for id in ["a b c?d#e", "\u{e9}l\u{e9}ment", "...", "{\"json\":1}"] {
             let path = format!("/session/s1/element/{}/clear", encode_path_segment(id));
             assert!(validate_request_path(&path).is_ok(), "{path}");
             assert_eq!(path.split('/').count(), 6, "{path} keeps one segment per component");
@@ -167,6 +169,8 @@ mod tests {
             "/session/%2E%2E/status",
             "/session/s1/element/a%2Fb/clear",
             "/session/s1/element/a%2fb/clear",
+            "/session/s1/element/%252Fstatus/clear",
+            "/session/s1/element/a%5Cb/clear",
             "/session/s1/element/a%41/clear",
             "/session/s1/element/a%/clear",
             "/session/s1/element/a%2/clear",

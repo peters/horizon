@@ -66,9 +66,10 @@ fn send_keys_through(
     };
     let found = post("element", &json!({ "using": "css selector", "value": selector }))?;
     let element = element_reference(&found).ok_or_else(|| "WebDriver returned no element reference".to_string())?;
-    if element.contains('/') || element == "." || element == ".." {
-        // A slash or a dot-only reference cannot be one route segment (the
-        // transport refuses both); say why instead of failing on the wire.
+    if element.contains(['/', '%', '\\']) || element == "." || element == ".." {
+        // A separator, a percent sign or a dot-only reference cannot be one
+        // route segment (the transport refuses each, since a decoding proxy
+        // could reshape the route); say why instead of failing on the wire.
         return Err(format!(
             "WebDriver returned an element reference that cannot form a route ({} bytes)",
             element.len()
@@ -259,9 +260,12 @@ impl Driver {
             // on a real device (iOS Safari left the field empty in the
             // 2026-09-14 live run); Element Send Keys is the text-entry path
             // every remote grid implements, so a fill goes through it.
-            self.classic_send_keys(&selector, value)
-                .map_err(|error| BrowserControlFailure::new("input_failed", error))?;
+            // The page may already have changed (the field was cleared)
+            // even when a later command fails, so a frame is demanded
+            // either way, as perform_input does.
+            let result = self.classic_send_keys(&selector, value);
             self.frames.demand();
+            result.map_err(|error| BrowserControlFailure::new("input_failed", error))?;
             return Ok(BrowserControlValue::Accepted);
         }
         self.perform_input(
@@ -511,7 +515,7 @@ mod tests {
         assert!(error.contains("no element reference"), "{error}");
         assert_eq!(transport.sent().len(), 1, "nothing follows a missing reference");
 
-        for reference in ["a/b", "..", "."] {
+        for reference in ["a/b", "a%2Fb", "a\\b", "..", "."] {
             let transport = Scripted::new(vec![Ok(json!({"value": {"ELEMENT": reference}}))]);
             let error = send_keys_through(&transport, "/session/s1", "#name", "x").expect_err("unroutable");
             assert!(error.contains("cannot form a route"), "{error}");
