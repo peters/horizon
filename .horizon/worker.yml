@@ -2,7 +2,7 @@ version: 1
 default_environment: linux
 environments:
   linux:
-    image: horizonworkersa898ee.azurecr.io/horizon-linux-ui-worker@sha256:40e92d9bbd54088dd10045ff019dac668e5af90dae22a8e50554f256b9c3e787
+    image: horizonworkersa898ee.azurecr.io/horizon-linux-ui-worker@sha256:d15cd1c1265ccd4a819da766311903f54c25375a758d3293013b0c5c26a129c4
     directory: .
     checks:
       format: [cargo, fmt, --all, --, --check]
@@ -17,4 +17,28 @@ environments:
       ui:
         - bash
         - -lc
-        - 'proof=$(mktemp -d /tmp/horizon-ui.XXXXXX) && horizon-linux-ui-smoke --binary target/debug/horizon --artifacts "$proof/run"'
+        - 'proof=$(mktemp -d /tmp/horizon-ui.XXXXXX) && horizon-linux-ui-smoke --binary "${CARGO_TARGET_DIR:-target}/debug/horizon" --artifacts "$proof/run"'
+      browser:
+        - bash
+        - -lc
+        - |
+          set -eu
+          proof=$(mktemp -d /tmp/horizon-browser.XXXXXX)
+          mkdir -p "$proof/source/scripts/browser-smoke"
+          cp "${CARGO_TARGET_DIR:-target}/debug/horizon" "$proof/candidate"
+          cp scripts/browser-smoke/mcp_gate.py "$proof/source/scripts/browser-smoke/"
+          chmod 0555 "$proof/candidate"
+          runner=$(cat <<'HORIZON_BROWSER_SMOKE'
+          set -eu
+          cd "$1"
+          trap 'rm -f "$1/candidate"' EXIT
+          for engine in chromium firefox; do
+            horizon-linux-ui-smoke --binary "$1/candidate" --repository "$1/source" --browser "$engine" --artifacts "$1/$engine" --timeout-seconds 150
+          done
+          HORIZON_BROWSER_SMOKE
+          )
+          if [ "$(id -u)" = 0 ]; then
+            chown -R horizon-smoke:horizon-smoke "$proof"
+            exec runuser -u horizon-smoke -- bash --noprofile --norc -c "$runner" -- "$proof"
+          fi
+          exec bash --noprofile --norc -c "$runner" -- "$proof"

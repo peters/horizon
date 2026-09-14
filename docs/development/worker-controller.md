@@ -110,3 +110,17 @@ Status responses use structured JSON: panel `status.state` is `running`, `exited
 `unavailable`, with numeric `pid` and nullable `exit_status` where applicable. Git
 `submission.state` is `submitted`, `observed` or `unknown`; observed submissions include
 an `observation` object. Saved phases use their existing tagged serialization or null.
+
+The repository's default image includes Chromium and Firefox with their drivers.
+The `browser` check runs both public-MCP smoke lanes. For a private root-owned
+worker checkout it stages only the candidate executable and public MCP client in
+a new private directory, then drops to `horizon-smoke`; repository and credential
+permissions stay private. The large input copy is removed after the run, while
+receipts, screenshots and logs remain available. Both UI checks respect an explicit
+`CARGO_TARGET_DIR` used for retained build caches. Container namespace policy must
+be qualified separately on the selected host.
+
+Task start inspects the worker Git receipt before claiming execution. An absent,
+incomplete or degraded checkout is refused with no start claim; after Git becomes
+`Complete` with no reason, the original task may be started normally. An already
+claimed start remains protected against replay.

@@ -169,6 +169,19 @@ pub(super) fn panel(context: &Context, start: bool) -> Result<Value, Error> {
         panel_id: &context.receipt.panel,
     };
     let result = if start {
+        let checkout = git::inspect_configured_remote_git_setup(
+            &store,
+            &identities,
+            config,
+            ConfiguredRemoteGitSetupRequest {
+                expected: &expected,
+                client_session_id: &context.receipt.session,
+            },
+        )
+        .map_err(|error| Error::Remote(error.to_string()))?;
+        if checkout.state != git::RemoteGitState::Complete || checkout.reason.is_some() {
+            return Err(Error::GitNotReady);
+        }
         let prepared = panel::prepare_configured_remote_git_start(&store, config, request)
             .map_err(|error| Error::Remote(error.to_string()))?;
         context.claim(&format!("start-{}", context.receipt.panel))?;

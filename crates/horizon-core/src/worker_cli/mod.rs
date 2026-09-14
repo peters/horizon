@@ -45,6 +45,8 @@ pub(super) enum Error {
     Claimed,
     #[error("operation failed or is unconfirmed; retain the task directory and use check/status without replay")]
     Operation,
+    #[error("Git preparation is not complete; no start was claimed; inspect git-status before starting")]
+    GitNotReady,
     #[error("remote operation failed or is unconfirmed: {0}; retain the original task directory")]
     Remote(String),
 }
