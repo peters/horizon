@@ -128,6 +128,14 @@ impl TargetCandidate {
 
 impl TargetFingerprint {
     pub(crate) fn validate(&self) -> Result<(), RoutineError> {
+        self.validate_structure()?;
+        if !self.has_durable_candidate() {
+            return Err(RoutineError::UndurableTarget);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_structure(&self) -> Result<(), RoutineError> {
         if self.candidates.is_empty() || self.candidates.len() > MAX_CANDIDATES {
             return Err(RoutineError::InvalidFingerprint);
         }
@@ -154,9 +162,6 @@ impl TargetFingerprint {
                 return Err(RoutineError::InvalidFingerprint);
             }
             candidate.identity.validate_fields()?;
-        }
-        if !self.has_durable_candidate() {
-            return Err(RoutineError::UndurableTarget);
         }
         Ok(())
     }

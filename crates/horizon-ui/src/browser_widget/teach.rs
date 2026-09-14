@@ -21,6 +21,7 @@ pub fn show(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: bool) -> 
             .is_some_and(horizon_core::browser::TeachMode::is_stopped)
         {
             clicked |= outcome_picker(ui, browser, interactive);
+            clicked |= crate::browser_widget::review::show(ui, browser, interactive);
         }
         if let Some(error) = browser.teach().and_then(horizon_core::browser::TeachMode::last_error) {
             ui.label(RichText::new(error).size(10.5).color(theme::PALETTE_RED()));
@@ -118,6 +119,9 @@ fn outcome_picker(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: boo
         return false;
     };
     let mut clicked = false;
+    if teach.use_title_outcome() && teach.completion_heading().is_empty() && !title.is_empty() {
+        teach.set_completion_heading(&title);
+    }
     ui.horizontal(|ui| {
         let mut use_title = teach.use_title_outcome();
         if ui
@@ -128,6 +132,9 @@ fn outcome_picker(ui: &mut Ui, browser: &mut BrowserPanelState, interactive: boo
             .changed()
         {
             teach.set_use_title_outcome(use_title);
+            if use_title && teach.completion_heading().is_empty() {
+                teach.set_completion_heading(&title);
+            }
             clicked = true;
         }
     });

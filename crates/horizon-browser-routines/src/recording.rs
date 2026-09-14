@@ -211,6 +211,11 @@ impl SemanticRecording {
 
 impl RecordedAction {
     pub(crate) fn validate(&self) -> Result<(), RoutineError> {
+        self.validate_payload()?;
+        self.validate_durability()
+    }
+
+    pub(crate) fn validate_payload(&self) -> Result<(), RoutineError> {
         validate_identifier(&self.action_id)?;
         if self.recorded_at_millis < 0 {
             return Err(RoutineError::InvalidRecording);
@@ -284,11 +289,25 @@ impl RecordedAction {
             }
         }
     }
+
+    fn validate_durability(&self) -> Result<(), RoutineError> {
+        match self.kind {
+            RecordedKind::Click { .. } | RecordedKind::Fill => {
+                let target = self.target.as_ref().ok_or(RoutineError::UndurableTarget)?;
+                if target.has_durable_candidate() {
+                    Ok(())
+                } else {
+                    Err(RoutineError::UndurableTarget)
+                }
+            }
+            _ => Ok(()),
+        }
+    }
 }
 
 fn required_target(target: Option<&TargetFingerprint>) -> Result<(), RoutineError> {
     let target = target.ok_or(RoutineError::UndurableTarget)?;
-    target.validate()
+    target.validate_structure()
 }
 
 fn reject_navigation(navigation: Option<&NavigationTemplate>) -> Result<(), RoutineError> {

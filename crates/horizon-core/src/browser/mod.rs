@@ -9,7 +9,7 @@ pub mod manifest;
 pub mod teach;
 
 pub use horizon_browser::{cdp, frames, input, process, session};
-pub use teach::TeachMode;
+pub use teach::{ReviewRow, TeachMode};
 
 use std::path::{Path, PathBuf};
 
@@ -286,7 +286,7 @@ impl BrowserPanelState {
     /// backend. The replacement starts only after the old process has been
     /// reaped, so panel switching cannot overlap profile or port ownership.
     pub fn switch_backend(&mut self, backend: BackendKind) {
-        if self.config.backend == backend {
+        if self.teach.is_some() || self.config.backend == backend {
             return;
         }
         let target = self.relaunch_target();
@@ -595,7 +595,7 @@ impl BrowserPanelState {
             self.resume_teach();
             return Ok(());
         }
-        let teach = TeachMode::start(name)?;
+        let teach = TeachMode::start(name, self.backend())?;
         self.frame_slot.set_teach_recording(true);
         self.teach = Some(teach);
         Ok(())

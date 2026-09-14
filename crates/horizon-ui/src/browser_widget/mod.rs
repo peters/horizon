@@ -19,6 +19,7 @@ mod chrome;
 mod ime;
 mod input;
 mod render;
+mod review;
 mod teach;
 
 use egui::{Event, Pos2, TextureHandle, Ui};
