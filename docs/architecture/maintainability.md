@@ -734,6 +734,11 @@ back into large multi-purpose modules.
   - `browser_requests`: transient host polling, panel creation, visibility
     changes for authenticated requests routed from a live agent panel, and the
     host-owned workspace stamp that keeps MCP authorization current
+  - `browser_close_requests`: the audited close queue, kept pending until the
+    panel's teardown signal settles and the remote release is established
+  - `browser_remote_create`: planning for a create that names a remote target:
+    provider, capabilities and credentials resolved before any panel exists,
+    typed refusals that carry no value, and the per-provider session limit
   - `canvas`: canvas rendering and HUD
   - `lifecycle`: frame orchestration and repaint pacing, with application-exit
     ownership and persistence sequencing in `lifecycle/shutdown.rs`

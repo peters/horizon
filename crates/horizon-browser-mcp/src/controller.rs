@@ -265,6 +265,7 @@ impl BrowserController {
         &self,
         url: Option<String>,
         backend: Option<BackendKind>,
+        target: Option<String>,
         visible: bool,
         allow_additional: bool,
         timeout_millis: Option<u64>,
@@ -281,6 +282,7 @@ impl BrowserController {
             self.identity(),
             url,
             backend,
+            target,
             visible,
             Duration::from_millis(timeout_millis),
         )

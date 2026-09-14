@@ -189,8 +189,10 @@ impl From<CreateBackend> for BackendKind {
 pub(crate) struct CreateInput {
     /// Optional first page. Bare hostnames default to HTTPS; explicit HTTP is preserved.
     pub(crate) url: Option<String>,
-    /// Browser override. Omit this to use Horizon's configured browser backend.
+    /// Browser override. Omit this to use Horizon's configured browser backend. Not allowed together with target.
     pub(crate) backend: Option<CreateBackend>,
+    /// Configured remote device target name (a key of Horizon's browser.remote.targets) to run the session on a real remote device instead of a local browser. Provider-neutral: Horizon resolves the endpoint, capabilities and credentials; the panel then advertises `remote_target`, classic `WebDriver` and no network capture. Omit for a local browser.
+    pub(crate) target: Option<String>,
     /// Whether the panel is shown initially (default true). Hidden panels remain live and controllable.
     pub(crate) visible: Option<bool>,
     /// Explicitly permit another panel when this agent already owns one. Use only for a user-requested independent session.

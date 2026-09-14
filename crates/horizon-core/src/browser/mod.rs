@@ -23,7 +23,8 @@ pub use horizon_browser::{
     BackendCapabilities, BackendKind, BrowserButton, BrowserCommand, BrowserConfig, BrowserEditCommand, BrowserEvent,
     BrowserEventWaker, BrowserInput, BrowserKey, BrowserModifiers, BrowserSession, BrowserShutdownSignal,
     BrowserVideoCapture, BrowserVideoCaptureOptions, BrowserVideoOperation, BrowserVideoState, DEFAULT_VIEWPORT,
-    FrameDelivery, FrameMetrics, FrameSlot, PageScrollState, RemoteReleaseOutcome, normalize_navigation_target,
+    FrameDelivery, FrameMetrics, FrameSlot, PageScrollState, RemoteReleaseOutcome, RemoteSessionRequest,
+    normalize_navigation_target,
 };
 const FORCED_CHROME_SHUTDOWN_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
 

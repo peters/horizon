@@ -141,6 +141,10 @@ fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(16));
     let create = listed_tool(tools, "browser_create");
     assert!(
+        create["inputSchema"].to_string().contains("\"target\""),
+        "browser_create accepts a configured remote target name"
+    );
+    assert!(
         create["description"]
             .as_str()
             .is_some_and(|description| description.contains("browser_list is empty")

@@ -36,6 +36,11 @@ pub struct BrowserCreateRequest {
     pub url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend: Option<BackendKind>,
+    /// Configured remote target name (`browser.remote.targets`) to run the
+    /// session at instead of a local browser. Provider-neutral: the host
+    /// resolves it; agents never see an endpoint or a credential.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
     #[serde(default = "default_visible")]
     pub visible: bool,
     pub requested_at_millis: i64,
@@ -55,6 +60,7 @@ impl BrowserCreateRequest {
             host_instance: None,
             url: None,
             backend: None,
+            target: None,
             visible: true,
             requested_at_millis: 0,
             deadline_at_millis: i64::MAX,
@@ -161,10 +167,46 @@ pub fn enqueue_create(
     identity: AgentIdentity<'_>,
     url: Option<String>,
     backend: Option<BackendKind>,
+    target: Option<String>,
     visible: bool,
     timeout: Duration,
 ) -> std::io::Result<String> {
-    enqueue_at(HorizonHome::resolve().root(), identity, url, backend, visible, timeout)
+    enqueue_at(
+        HorizonHome::resolve().root(),
+        identity,
+        url,
+        backend,
+        target,
+        visible,
+        timeout,
+    )
+}
+
+/// Target names follow the configuration's identifier grammar; anything else
+/// is refused before it reaches the queue, and a target fixes the browser so
+/// it cannot be combined with a backend override.
+fn validate_target(target: Option<&str>, backend: Option<BackendKind>) -> std::io::Result<()> {
+    let Some(target) = target else {
+        return Ok(());
+    };
+    let well_formed = !target.is_empty()
+        && target.len() <= 64
+        && target
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+    if !well_formed {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "remote target names use letters, digits, '.', '_' and '-' (at most 64 characters)",
+        ));
+    }
+    if backend.is_some() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "a remote target selects the browser; do not combine target with backend",
+        ));
+    }
+    Ok(())
 }
 
 fn enqueue_at(
@@ -172,11 +214,13 @@ fn enqueue_at(
     identity: AgentIdentity<'_>,
     url: Option<String>,
     backend: Option<BackendKind>,
+    target: Option<String>,
     visible: bool,
     timeout: Duration,
 ) -> std::io::Result<String> {
     let actor = identity.actor;
     super::agent::validate_actor(actor)?;
+    validate_target(target.as_deref(), backend)?;
     if !actor_is_workspace_scoped(actor) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
@@ -222,6 +266,7 @@ fn enqueue_at(
         host_instance: Some(host_instance.to_string()),
         url,
         backend,
+        target,
         visible,
         requested_at_millis,
         deadline_at_millis: requested_at_millis.saturating_add(timeout_millis),
@@ -415,7 +460,12 @@ pub fn record_create_status(
                 BrowserCreateAuditStatus::Completed => horizon_browser::BrowserAuditStatus::Completed,
                 BrowserCreateAuditStatus::Failed => horizon_browser::BrowserAuditStatus::Failed,
             },
-            BrowserAuditAction::session_created(backend, request.url.as_deref(), request.visible),
+            match request.target.as_deref() {
+                Some(target) => {
+                    BrowserAuditAction::remote_session_created(backend, request.url.as_deref(), request.visible, target)
+                }
+                None => BrowserAuditAction::session_created(backend, request.url.as_deref(), request.visible),
+            },
         ),
         panel_local_id,
     )
@@ -491,6 +541,7 @@ mod tests {
             identity,
             Some("example.test/path".to_string()),
             Some(BackendKind::FirefoxBidi),
+            None,
             false,
             Duration::from_secs(30),
         )
@@ -542,8 +593,8 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let another =
-                enqueue_at(root.path(), identity, None, None, true, Duration::from_secs(30)).expect("second request");
+            let another = enqueue_at(root.path(), identity, None, None, None, true, Duration::from_secs(30))
+                .expect("second request");
             assert_eq!(
                 std::fs::metadata(request_path(root.path(), &another))
                     .expect("request metadata")
@@ -564,6 +615,7 @@ mod tests {
                 AgentIdentity::new("external", Some("host-a")),
                 None,
                 None,
+                None,
                 true,
                 Duration::from_secs(30),
             )
@@ -575,6 +627,7 @@ mod tests {
             enqueue_at(
                 root.path(),
                 AgentIdentity::new("horizon:agent-panel", None),
+                None,
                 None,
                 None,
                 true,
@@ -590,6 +643,7 @@ mod tests {
             root.path(),
             AgentIdentity::new(actor, Some("host-a")),
             Some("http://127.0.0.1:3000".to_string()),
+            None,
             None,
             true,
             Duration::from_secs(30),
@@ -630,6 +684,7 @@ mod tests {
                     AgentIdentity::new(&actor, Some("host-a")),
                     None,
                     None,
+                    None,
                     true,
                     Duration::from_secs(30),
                 )
@@ -645,5 +700,61 @@ mod tests {
             request_count(&create_directory(&root_path)).expect("request count"),
             MAX_PENDING_REQUESTS
         );
+    }
+
+    #[test]
+    fn a_remote_target_is_validated_and_recorded_on_the_request() {
+        let root = root();
+        let identity = AgentIdentity::new("horizon:agent-panel", Some("host-a"));
+        for bad in ["", "grid/phone", "a b", &"x".repeat(65)] {
+            assert_eq!(
+                enqueue_at(
+                    root.path(),
+                    identity,
+                    None,
+                    None,
+                    Some(bad.to_string()),
+                    true,
+                    Duration::from_secs(30),
+                )
+                .expect_err("malformed target")
+                .kind(),
+                std::io::ErrorKind::InvalidInput
+            );
+        }
+        assert_eq!(
+            enqueue_at(
+                root.path(),
+                identity,
+                None,
+                Some(BackendKind::FirefoxBidi),
+                Some("ios_phone".to_string()),
+                true,
+                Duration::from_secs(30),
+            )
+            .expect_err("target and backend together")
+            .kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+        let request_id = enqueue_at(
+            root.path(),
+            identity,
+            None,
+            None,
+            Some("ios_phone".to_string()),
+            false,
+            Duration::from_secs(30),
+        )
+        .expect("enqueue with target");
+        let request = claim_at(root.path(), &request_id, "horizon:agent-panel", "host-a", 7)
+            .expect("claim")
+            .expect("request");
+        assert_eq!(request.target.as_deref(), Some("ios_phone"));
+        let legacy: BrowserCreateRequest = serde_json::from_value(serde_json::json!({
+            "request_id": "r1", "actor": "horizon:agent-panel", "visible": true,
+            "requested_at_millis": 0, "deadline_at_millis": 1
+        }))
+        .expect("older requests parse");
+        assert_eq!(legacy.target, None);
     }
 }
