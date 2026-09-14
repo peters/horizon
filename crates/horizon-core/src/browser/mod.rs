@@ -6,8 +6,10 @@
 
 #[doc(hidden)]
 pub mod manifest;
+pub mod teach;
 
 pub use horizon_browser::{cdp, frames, input, process, session};
+pub use teach::TeachMode;
 
 use std::path::{Path, PathBuf};
 
@@ -117,6 +119,7 @@ pub struct BrowserPanelState {
     /// folded into the persisted runtime state exactly once.
     persisted_config_changed: bool,
     config: BrowserConfig,
+    teach: Option<TeachMode>,
 }
 
 struct PendingRelaunch {
@@ -159,6 +162,7 @@ impl BrowserPanelState {
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
             config: BrowserConfig::default(),
+            teach: None,
         }
     }
 
@@ -202,6 +206,7 @@ impl BrowserPanelState {
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: profile_root_resolved,
             config,
+            teach: None,
         };
         state.launch_session(initial_url);
         Ok(state)
@@ -555,7 +560,92 @@ impl BrowserPanelState {
             self.apply_event(event, &mut output);
         }
         self.sync_committed_url(&mut output);
+        self.drain_teach_observations(&mut output);
         output
+    }
+
+    fn drain_teach_observations(&mut self, output: &mut BrowserDrainOutput) {
+        let Some(teach) = self.teach.as_mut() else {
+            return;
+        };
+        let mut ingested = false;
+        while let Some(observation) = self.frame_slot.take_teach_observation() {
+            teach.ingest(observation);
+            ingested = true;
+        }
+        if ingested {
+            output.had_output = true;
+        }
+    }
+
+    /// Start Teach recording on this panel.
+    ///
+    /// # Errors
+    /// Private routine storage could not be created.
+    pub fn start_teach(&mut self, name: impl Into<String>) -> Result<(), horizon_browser_routines::RoutineError> {
+        if self.teach.as_ref().is_some_and(TeachMode::is_stopped) {
+            return Ok(());
+        }
+        if self.teach.is_some() {
+            self.resume_teach();
+            return Ok(());
+        }
+        let teach = TeachMode::start(name)?;
+        self.frame_slot.set_teach_recording(true);
+        self.teach = Some(teach);
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn teach(&self) -> Option<&TeachMode> {
+        self.teach.as_ref()
+    }
+
+    pub fn teach_mut(&mut self) -> Option<&mut TeachMode> {
+        self.teach.as_mut()
+    }
+
+    pub fn pause_teach(&mut self) {
+        if let Some(teach) = self.teach.as_mut() {
+            teach.pause();
+        }
+        self.frame_slot.set_teach_recording(false);
+    }
+
+    pub fn resume_teach(&mut self) {
+        if self.handoff_reason.is_some() {
+            return;
+        }
+        if let Some(teach) = self.teach.as_mut() {
+            teach.resume();
+        }
+        if self
+            .teach
+            .as_ref()
+            .is_some_and(|teach| !teach.is_stopped() && !teach.is_paused())
+        {
+            self.frame_slot.set_teach_recording(true);
+        }
+    }
+
+    pub fn stop_teach(&mut self) {
+        if let Some(teach) = self.teach.as_mut() {
+            teach.stop();
+        }
+        self.frame_slot.set_teach_recording(false);
+    }
+
+    /// Discard the Teach session and its draft.
+    ///
+    /// # Errors
+    /// Draft unlink failure.
+    pub fn discard_teach(&mut self) -> Result<(), horizon_browser_routines::RoutineError> {
+        self.frame_slot.set_teach_recording(false);
+        if let Some(teach) = self.teach.as_mut() {
+            teach.discard()?;
+        }
+        self.teach = None;
+        Ok(())
     }
 
     fn apply_event(&mut self, event: BrowserEvent, output: &mut BrowserDrainOutput) {
@@ -599,6 +689,9 @@ impl BrowserPanelState {
                 self.handoff_reason = Some(reason);
                 self.handoff_error = None;
                 self.handoff_resolution_pending = false;
+                if self.teach.is_some() {
+                    self.pause_teach();
+                }
                 output.had_output = true;
             }
             BrowserEvent::HandoffCleared => {
@@ -791,6 +884,7 @@ mod tests {
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
             config: BrowserConfig::default(),
+            teach: None,
         };
 
         assert!(!state.submit_navigation("typed.example/page"));
@@ -832,6 +926,7 @@ mod tests {
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
             config: BrowserConfig::default(),
+            teach: None,
         };
 
         assert!(!state.retry_ready());
@@ -867,6 +962,7 @@ mod tests {
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
             config: BrowserConfig::default(),
+            teach: None,
         };
 
         state.switch_backend(BackendKind::FirefoxBidi);
@@ -910,6 +1006,7 @@ mod tests {
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
             config: BrowserConfig::default(),
+            teach: None,
         };
         let completion = std::thread::spawn(move || {
             let _ = start_rx.recv();
@@ -954,6 +1051,7 @@ mod tests {
                 command: Some("/definitely/missing/chrome".to_string()),
                 ..BrowserConfig::default()
             },
+            teach: None,
         };
 
         assert!(!state.continue_pending_relaunch());
@@ -1026,6 +1124,7 @@ mod tests {
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
             config: BrowserConfig::default(),
+            teach: None,
         };
 
         state.hand_back();
@@ -1063,6 +1162,7 @@ mod tests {
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
             config: BrowserConfig::default(),
+            teach: None,
         };
 
         let output = state.drain_events();
@@ -1099,6 +1199,7 @@ mod tests {
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
             config: BrowserConfig::default(),
+            teach: None,
         };
 
         assert_eq!(state.display_url(), "https://example.com/requested");
@@ -1138,6 +1239,7 @@ mod tests {
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
             config: BrowserConfig::default(),
+            teach: None,
         };
 
         state.clear_agent_state_for_relaunch();

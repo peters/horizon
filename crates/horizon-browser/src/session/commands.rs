@@ -162,37 +162,7 @@ impl DriverState {
                 self.set_viewport(link, event_tx, frame_slot, width, height);
                 Ok(false)
             }
-            BrowserCommand::Input(input) => {
-                if self.handle_vertical_scrollbar_input(link, event_tx, frame_slot, &input) {
-                    return Ok(false);
-                }
-                if frame_slot.teach_recording()
-                    && let Some(capture) = self.semantic.teach_capture_point(&input)
-                    && let Err(error) = self.capture_teach_fingerprint(link, event_tx, frame_slot, capture.point())
-                {
-                    tracing::warn!(
-                        target: "browser",
-                        "teach fingerprint failed: {}",
-                        error.message
-                    );
-                }
-                // Input cannot block on a roundtrip: a detaching session
-                // would otherwise stall every frame for the call timeout.
-                if input.copies_selection() {
-                    self.request_clipboard_text(link);
-                }
-                let refresh_scrollbar_layout = matches!(input, BrowserInput::Wheel { .. });
-                let (method, params) = input.cdp();
-                let session = self.session_id.clone().ok_or_else(|| {
-                    BrowserControlFailure::new("browser_unavailable", "the Chromium page session is not attached")
-                })?;
-                link.send_request(method, &params, Some(session.as_str()))
-                    .map_err(|error| BrowserControlFailure::new("input_failed", error.to_string()))?;
-                if refresh_scrollbar_layout {
-                    self.schedule_scrollbar_layout_refresh(SCROLLBAR_LAYOUT_RETRY_DELAY);
-                }
-                Ok(false)
-            }
+            BrowserCommand::Input(input) => self.dispatch_page_input(link, event_tx, frame_slot, input),
             BrowserCommand::HandoffDone => {
                 self.resolve_handoff(event_tx);
                 Ok(false)
@@ -208,6 +178,51 @@ impl DriverState {
                 Ok(false)
             }
         }
+    }
+
+    fn dispatch_page_input(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        input: BrowserInput,
+    ) -> Result<bool, BrowserControlFailure> {
+        if self.handle_vertical_scrollbar_input(link, event_tx, frame_slot, &input) {
+            return Ok(false);
+        }
+        let teach_capture = if frame_slot.teach_recording() {
+            self.semantic.teach_capture_point(&input)
+        } else {
+            None
+        };
+        if input.copies_selection() {
+            self.request_clipboard_text(link);
+        }
+        let refresh_scrollbar_layout = matches!(input, BrowserInput::Wheel { .. });
+        let (method, params) = input.cdp();
+        let session = self.session_id.clone().ok_or_else(|| {
+            BrowserControlFailure::new("browser_unavailable", "the Chromium page session is not attached")
+        })?;
+        if let Err(error) = link.send_request(method, &params, Some(session.as_str())) {
+            if teach_capture.is_some() {
+                frame_slot.store_teach_failure("input_failed", &error.to_string(), frame_slot.teach_generation());
+            }
+            return Err(BrowserControlFailure::new("input_failed", error.to_string()));
+        }
+        if let Some(capture) = teach_capture
+            && let Some(point) = capture.point()
+            && let Err(error) = self.capture_teach_fingerprint(link, event_tx, frame_slot, Some(point))
+        {
+            tracing::warn!(
+                target: "browser",
+                "teach fingerprint failed: {}",
+                error.message
+            );
+        }
+        if refresh_scrollbar_layout {
+            self.schedule_scrollbar_layout_refresh(SCROLLBAR_LAYOUT_RETRY_DELAY);
+        }
+        Ok(false)
     }
 
     fn page_command_failure(

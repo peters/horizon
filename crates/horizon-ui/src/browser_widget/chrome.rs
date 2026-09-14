@@ -85,6 +85,7 @@ pub fn show(
     if let Some(reason) = reason {
         clicked |= handoff_banner(ui, browser, &reason, interactive);
     }
+    clicked |= crate::browser_widget::teach::show(ui, browser, interactive);
     (url_focused, clicked)
 }
 

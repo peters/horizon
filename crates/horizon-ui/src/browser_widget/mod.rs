@@ -19,6 +19,7 @@ mod chrome;
 mod ime;
 mod input;
 mod render;
+mod teach;
 
 use egui::{Event, Pos2, TextureHandle, Ui};
 use horizon_core::browser::{BackendKind, BrowserButton, BrowserCommand, BrowserKey, BrowserModifiers};
