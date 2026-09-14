@@ -97,7 +97,11 @@ pub(super) fn create_root(root: &Path) -> Result<PathBuf, Error> {
         .mode(0o700)
         .create(root)
         .map_err(|_| Error::Storage)?;
-    fs::canonicalize(root).map_err(|_| Error::Storage)
+    let root = fs::canonicalize(root).map_err(|_| Error::Storage)?;
+    File::open(root.parent().ok_or(Error::Storage)?)
+        .and_then(|parent| parent.sync_all())
+        .map_err(|_| Error::Storage)?;
+    Ok(root)
 }
 
 pub(super) fn lock(root: &Path) -> Result<File, Error> {
