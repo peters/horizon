@@ -739,6 +739,45 @@ mod tests {
 
         assert!(!skill_dir.exists());
         assert!(unrelated.join("SKILL.md").is_file());
+        assert!(
+            skill_dir
+                .parent()
+                .expect("skill parent")
+                .join(".horizon-leases/.lock")
+                .is_file(),
+            "last host must keep the skill-root coordination lock"
+        );
+    }
+
+    #[test]
+    fn bind_user_skills_cleans_acquired_roots_when_a_later_root_fails() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let horizon_home = HorizonHome::from_root(temp.path().join(".horizon"));
+        let leftover = temp.path().join("codex-a/skills").join(HORIZON_NOTIFY_SKILL);
+        write_skill_dir(&leftover, "stale");
+        let blocked_parent = temp.path().join("blocked/skills");
+        std::fs::create_dir_all(blocked_parent.parent().expect("blocked parent")).expect("blocked home");
+        std::fs::write(&blocked_parent, "not a directory").expect("blocked file");
+        let blocked = blocked_parent.join(HORIZON_NOTIFY_SKILL);
+
+        let mut lease =
+            AgentPluginHostLease::acquire(horizon_home.agent_plugin_host_dir("host-a")).expect("host lease");
+        lease
+            .bind_user_skills(&[leftover.clone(), blocked])
+            .expect_err("later root must fail to lease");
+
+        assert!(
+            !leftover.exists(),
+            "bind failure must last-host-clean leftover skills on acquired roots"
+        );
+        assert!(
+            leftover
+                .parent()
+                .expect("skill parent")
+                .join(".horizon-leases/.lock")
+                .is_file(),
+            "failed bind must keep the skill-root coordination lock"
+        );
     }
 
     #[test]

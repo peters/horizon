@@ -24,7 +24,9 @@ pub(super) fn bind_skill_roots(host_id: &OsStr, dirs: &[PathBuf]) -> io::Result<
         match acquire_skill_root(host_id, parent) {
             Ok(lease) => leases.push(lease),
             Err(error) => {
-                drop(leases);
+                // Drop only abandons live markers. Last-host skill cleanup
+                // needs the coordination lock held by `release_skill_roots`.
+                release_skill_roots(&mut leases);
                 return Err(error);
             }
         }
@@ -53,11 +55,9 @@ pub(super) fn release_skill_roots(leases: &mut [SkillRootLease]) {
             Ok(false) => {
                 remove_horizon_skill_dir(&lease.parent.join(HORIZON_NOTIFY_SKILL));
                 remove_horizon_skill_dir(&lease.parent.join(HORIZON_BROWSER_SKILL));
-                if let Err(error) = std::fs::remove_dir_all(&leases_dir)
-                    && error.kind() != io::ErrorKind::NotFound
-                {
-                    tracing::warn!(path = %leases_dir.display(), %error, "failed to remove skill root lease directory");
-                }
+                // Keep `.horizon-leases` and `.lock`. Unlinking the directory
+                // while this lock is held lets a starter block on the old inode,
+                // then fail to create its `.live` marker in the gone directory.
             }
             Err(error) => {
                 tracing::warn!(path = %leases_dir.display(), %error, "failed to inspect skill root leases");
