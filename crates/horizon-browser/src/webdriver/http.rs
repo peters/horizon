@@ -10,11 +10,14 @@ const IO_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, Error)]
-pub(super) enum HttpError {
+pub enum HttpError {
     #[error("WebDriver endpoint must be loopback: {0}")]
     NonLoopback(IpAddr),
     #[error("WebDriver HTTP I/O: {0}")]
     Io(#[from] std::io::Error),
+    /// Remote transport failure by kind (TLS, connection, host lookup, ...).
+    #[error("WebDriver transport: {0}")]
+    Transport(String),
     #[error("invalid WebDriver HTTP response: {0}")]
     InvalidResponse(String),
     #[error("WebDriver JSON: {0}")]
@@ -24,7 +27,8 @@ pub(super) enum HttpError {
 }
 
 impl HttpError {
-    pub(super) fn is_unsupported_websocket_capability(&self) -> bool {
+    #[must_use]
+    pub fn is_unsupported_websocket_capability(&self) -> bool {
         let Self::WebDriver { error, message } = self else {
             return false;
         };
@@ -71,7 +75,7 @@ impl HttpClient {
         self.request("DELETE", path, None, IO_TIMEOUT)
     }
 
-    fn request(
+    pub(super) fn request(
         &self,
         method: &str,
         path: &str,
@@ -129,10 +133,16 @@ fn parse_response(response: &[u8]) -> Result<Value, HttpError> {
     } else {
         raw_body.to_vec()
     };
+    interpret_body(status, &body)
+}
+
+/// Turn a status and JSON body into the `WebDriver` result or typed error,
+/// shared by the loopback and remote transports.
+pub(super) fn interpret_body(status: u16, body: &[u8]) -> Result<Value, HttpError> {
     let value = if body.is_empty() {
         Value::Null
     } else {
-        serde_json::from_slice::<Value>(&body)?
+        serde_json::from_slice::<Value>(body)?
     };
     let payload = value.get("value").cloned().unwrap_or_else(|| value.clone());
     if !(200..300).contains(&status) || payload.get("error").is_some() {
