@@ -19,6 +19,11 @@ from unittest import mock
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import preflight  # noqa: E402
 
+
+class BytecodeContract(unittest.TestCase):
+    def test_import_disables_bytecode(self):
+        self.assertTrue(sys.dont_write_bytecode)
+
 NOW = "2026-09-13T00:00:00+00:00"
 JWT = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.c3ludA.JHQtZGF0YWxpZw"
 

@@ -20,6 +20,10 @@ Read-only guarantees:
   no Tailscale state changes, no privilege escalation, no cleanup
 """
 
+import sys
+
+sys.dont_write_bytecode = True
+
 import argparse
 import errno
 import json
@@ -27,7 +31,6 @@ import math
 import os
 import re
 import subprocess
-import sys
 import unicodedata
 from datetime import datetime, timezone
 
