@@ -1,6 +1,8 @@
 use std::fs;
 use std::io::{ErrorKind, Write as _};
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::time::{Duration, Instant};
 
 use atomicwrites::{AllowOverwrite, AtomicFile};
 use uuid::Uuid;
@@ -20,6 +22,17 @@ pub struct RoutineRegistry {
 pub struct RoutineLock {
     _file: fs::File,
 }
+
+/// How long [`RoutineRegistry::lock`] keeps retrying a lock another open
+/// description still holds. A lock this process just released can stay held
+/// for a moment when another thread forks a child at the same time: the child
+/// inherits a copy of the descriptor until it execs, and `flock` follows the
+/// open file description, not the descriptor. The window is milliseconds; the
+/// bound keeps a genuinely held lock from stalling a caller.
+#[cfg(unix)]
+const LOCK_RETRY_WINDOW: Duration = Duration::from_millis(500);
+#[cfg(unix)]
+const LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(5);
 
 impl RoutineRegistry {
     #[must_use]
@@ -148,14 +161,28 @@ impl RoutineRegistry {
             return Err(RoutineError::Storage);
         }
         #[cfg(unix)]
-        {
-            rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)
-                .map_err(|_| RoutineError::Storage)?;
-        }
+        lock_with_retry(&file)?;
         file.set_len(0).map_err(|_| RoutineError::Storage)?;
         #[cfg(unix)]
         set_file_mode(&path, 0o600)?;
         Ok(RoutineLock { _file: file })
+    }
+}
+
+/// Take the exclusive lock without blocking, retrying through the short
+/// fork-inheritance window (see [`LOCK_RETRY_WINDOW`]); a lock still held
+/// when the window closes is a storage failure, as before.
+#[cfg(unix)]
+fn lock_with_retry(file: &fs::File) -> Result<(), RoutineError> {
+    let started = Instant::now();
+    loop {
+        match rustix::fs::flock(file, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
+            Ok(()) => return Ok(()),
+            Err(rustix::io::Errno::WOULDBLOCK) if started.elapsed() < LOCK_RETRY_WINDOW => {
+                std::thread::sleep(LOCK_RETRY_INTERVAL);
+            }
+            Err(_) => return Err(RoutineError::Storage),
+        }
     }
 }
 
@@ -354,6 +381,49 @@ mod tests {
 
     #[cfg(not(unix))]
     fn privatize_temp(_path: &std::path::Path) {}
+
+    #[cfg(unix)]
+    #[test]
+    fn lock_waits_out_a_briefly_held_lock_but_not_a_kept_one() {
+        use std::sync::mpsc;
+        use std::time::{Duration, Instant};
+
+        let temp = tempfile::tempdir().expect("temp");
+        privatize_temp(temp.path());
+        let registry = std::sync::Arc::new(RoutineRegistry::open(temp.path().join("routines")).expect("open"));
+        let id = Uuid::from_u128(21);
+        let held = registry.lock(id).expect("first lock");
+        // The waiter announces its attempt, then locks; the test releases
+        // the held lock only after that announcement, so the waiter's first
+        // non-blocking attempt runs against a held lock and must be retried.
+        let (attempting_tx, attempting_rx) = mpsc::channel();
+        let waiter = {
+            let registry = std::sync::Arc::clone(&registry);
+            std::thread::spawn(move || {
+                attempting_tx.send(()).expect("announce");
+                registry.lock(id).map(drop)
+            })
+        };
+        attempting_rx.recv().expect("waiter announced");
+        std::thread::sleep(Duration::from_millis(50));
+        drop(held);
+        waiter
+            .join()
+            .expect("waiter thread")
+            .expect("lock acquired once the holder let go");
+
+        let _kept = registry.lock(id).expect("lock again");
+        let started = Instant::now();
+        assert_eq!(
+            registry.lock(id).err(),
+            Some(RoutineError::Storage),
+            "a kept lock still refuses"
+        );
+        assert!(
+            started.elapsed() >= super::LOCK_RETRY_WINDOW,
+            "after the bounded window"
+        );
+    }
 
     #[test]
     fn lock_only_directories_are_not_listed() {
