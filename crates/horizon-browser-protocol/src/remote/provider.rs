@@ -31,8 +31,11 @@ impl ControlEndpoint {
     /// # Errors
     /// Returns the [`EndpointProblem`] without echoing the input.
     pub fn parse(input: &str) -> Result<Self, EndpointProblem> {
-        let url = Url::parse(input.trim()).map_err(|_| EndpointProblem::Unparseable)?;
-        if !url.username().is_empty() || url.password().is_some() {
+        let input = input.trim();
+        let url = Url::parse(input).map_err(|_| EndpointProblem::Unparseable)?;
+        // `Url::username()` is empty for both "no userinfo" and an empty
+        // username, so look at the authority text itself.
+        if authority_has_userinfo(input) || !url.username().is_empty() || url.password().is_some() {
             return Err(EndpointProblem::Userinfo);
         }
         if url.query().is_some() {
@@ -71,6 +74,13 @@ impl ControlEndpoint {
     pub fn is_loopback_http(&self) -> bool {
         self.0.starts_with("http://")
     }
+}
+
+fn authority_has_userinfo(input: &str) -> bool {
+    input
+        .split_once("://")
+        .map(|(_, rest)| rest.split(['/', '?', '#']).next().unwrap_or(""))
+        .is_some_and(|authority| authority.contains('@'))
 }
 
 fn is_loopback_host(host: &str) -> bool {

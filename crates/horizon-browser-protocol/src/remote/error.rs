@@ -125,6 +125,11 @@ pub enum RemoteConfigError {
     ImportEndpointConflict {
         provider: String,
     },
+    /// An imported provider must not change which references are needed
+    /// while local bindings for the old shape still exist.
+    ImportAuthenticationConflict {
+        provider: String,
+    },
 }
 
 impl fmt::Display for RemoteConfigError {
@@ -205,6 +210,12 @@ impl fmt::Display for RemoteConfigError {
                 write!(
                     formatter,
                     "imported provider `{provider}` points at a different endpoint than the trusted local definition; remove the local provider first to replace it"
+                )
+            }
+            Self::ImportAuthenticationConflict { provider } => {
+                write!(
+                    formatter,
+                    "imported provider `{provider}` needs different credential references than the ones bound locally; delete the local bindings first, then import again"
                 )
             }
         }

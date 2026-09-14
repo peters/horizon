@@ -128,9 +128,11 @@ impl RemoteBrowserConfig {
     }
 
     /// Merge a portable definition. New providers and targets are added, and an
-    /// existing provider is updated only when its endpoint is unchanged so a
-    /// shared file can never redirect a trusted endpoint or the credentials
-    /// bound to it. Local bindings are kept; imported bindings are rejected.
+    /// existing provider is updated only when its endpoint is unchanged and,
+    /// while local bindings exist, its authentication references are unchanged,
+    /// so a shared file can never redirect a trusted endpoint, the credentials
+    /// bound to it, or leave bindings attached to a different authentication
+    /// shape. Local bindings are kept; imported bindings are rejected.
     ///
     /// # Errors
     /// Rejects the whole import, leaving `self` untouched, on any validation
@@ -146,6 +148,11 @@ impl RemoteBrowserConfig {
             if let Some(existing) = merged.providers.get_mut(name) {
                 if existing.endpoint != provider.endpoint {
                     return Err(RemoteConfigError::ImportEndpointConflict { provider: name.clone() });
+                }
+                if !existing.credential_bindings.is_empty()
+                    && existing.authentication.references() != provider.authentication.references()
+                {
+                    return Err(RemoteConfigError::ImportAuthenticationConflict { provider: name.clone() });
                 }
                 let bindings = std::mem::take(&mut existing.credential_bindings);
                 *existing = provider.clone();

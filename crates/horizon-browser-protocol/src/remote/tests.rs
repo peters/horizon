@@ -101,6 +101,15 @@ fn endpoint_rules_reject_credentials_in_urls_and_plain_http() {
     for (input, expected) in problems {
         assert_eq!(ControlEndpoint::parse(input).expect_err(input), expected, "{input}");
     }
+    assert_eq!(
+        ControlEndpoint::parse("https://@grid.example.net/wd/hub").expect_err("empty userinfo"),
+        EndpointProblem::Userinfo
+    );
+    assert_eq!(
+        ControlEndpoint::parse("https://:@grid.example.net/wd/hub").expect_err("empty userinfo pair"),
+        EndpointProblem::Userinfo
+    );
+    ControlEndpoint::parse("https://grid.example.net/wd/hub@path").expect("an @ in the path is not userinfo");
     let loopback = ControlEndpoint::parse("http://127.0.0.1:4723/").expect("loopback http grid");
     assert!(loopback.is_loopback_http());
     assert_eq!(loopback.as_str(), "http://127.0.0.1:4723");
@@ -338,6 +347,31 @@ fn capability_extensions_must_be_namespaced_secret_free_and_non_conflicting() {
             serde_json::json!("k"),
             ExtensionProblem::CarriesCredential,
         ),
+        (
+            "vendor:clientSecret",
+            serde_json::json!("s"),
+            ExtensionProblem::CarriesCredential,
+        ),
+        (
+            "vendor:api_token",
+            serde_json::json!("t"),
+            ExtensionProblem::CarriesCredential,
+        ),
+        (
+            "vendor:options",
+            serde_json::json!({"apiToken": "t"}),
+            ExtensionProblem::CarriesCredential,
+        ),
+        (
+            "vendor:options",
+            serde_json::json!({"private-key": "t"}),
+            ExtensionProblem::CarriesCredential,
+        ),
+        (
+            "vendor:options",
+            serde_json::json!({"os_version": "18"}),
+            ExtensionProblem::ConflictsWithNormalizedField,
+        ),
         (":name", serde_json::json!(1), ExtensionProblem::NotNamespaced),
     ];
     for (key, value, expected) in cases {
@@ -355,6 +389,25 @@ fn capability_extensions_must_be_namespaced_secret_free_and_non_conflicting() {
             "{key}"
         );
     }
+}
+
+#[test]
+fn benign_namespaced_extensions_are_accepted() {
+    let mut config = sample();
+    let target = config.targets.get_mut("ios_phone").expect("target");
+    target.capability_extensions.clear();
+    for (key, value) in [
+        ("appium:automationName", serde_json::json!("XCUITest")),
+        ("appium:hideKeyboard", serde_json::json!(true)),
+        ("appium:newCommandTimeout", serde_json::json!(60)),
+        (
+            "bstack:options",
+            serde_json::json!({"local": "false", "idleTimeout": 60, "projectName": "horizon"}),
+        ),
+    ] {
+        target.capability_extensions.insert(key.into(), value);
+    }
+    config.validate().expect("benign extensions validate");
 }
 
 #[test]
@@ -440,6 +493,40 @@ fn import_refuses_bindings_and_endpoint_changes_without_touching_local_state() {
     broken.targets.get_mut("ios_phone").expect("target").provider = "missing".into();
     assert!(local.import_portable(&broken).is_err());
     assert_eq!(local, before);
+
+    let mut reshaped = sample().export_portable();
+    reshaped
+        .providers
+        .get_mut("device_cloud")
+        .expect("provider")
+        .authentication = RemoteAuthentication::Bearer {
+        token_ref: CredentialReference::from("cloud-token"),
+    };
+    assert_eq!(
+        local
+            .import_portable(&reshaped)
+            .expect_err("authentication shape changed under local bindings"),
+        RemoteConfigError::ImportAuthenticationConflict {
+            provider: "device_cloud".into()
+        }
+    );
+    assert_eq!(local, before);
+
+    let mut unbound = sample();
+    unbound
+        .providers
+        .get_mut("device_cloud")
+        .expect("provider")
+        .credential_bindings
+        .clear();
+    let summary = unbound
+        .import_portable(&reshaped)
+        .expect("without local bindings the shape may change");
+    assert_eq!(summary.providers_updated, vec!["device_cloud".to_string()]);
+    assert!(matches!(
+        unbound.providers["device_cloud"].authentication,
+        RemoteAuthentication::Bearer { .. }
+    ));
 }
 
 #[test]

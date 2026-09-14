@@ -57,19 +57,19 @@ const NORMALIZED_NAMES: &[&str] = &[
     "device",
 ];
 
-/// Capability names that carry a credential on known grids.
-const CREDENTIAL_NAMES: &[&str] = &[
-    "user",
-    "username",
-    "key",
-    "accesskey",
-    "access_key",
-    "password",
-    "token",
-    "apikey",
-    "api_key",
+/// Exact capability names (lowercased, separators removed) that identify a
+/// provider account, plus fragments that mark any key as secret-bearing.
+const CREDENTIAL_NAMES: &[&str] = &["user", "username", "key", "auth", "credentials"];
+const CREDENTIAL_FRAGMENTS: &[&str] = &[
     "secret",
+    "token",
+    "password",
+    "passwd",
+    "accesskey",
+    "apikey",
     "authorization",
+    "credential",
+    "privatekey",
 ];
 
 impl RemoteTargetProfile {
@@ -127,10 +127,13 @@ fn extension_problem(key: &str, value: &serde_json::Value) -> Option<ExtensionPr
 
 fn name_problem(name: &str) -> Option<ExtensionProblem> {
     let lowered = name.to_ascii_lowercase();
-    if CREDENTIAL_NAMES.contains(&lowered.as_str()) {
+    let folded: String = lowered.chars().filter(|c| !matches!(c, '_' | '-' | '.')).collect();
+    if CREDENTIAL_NAMES.contains(&folded.as_str())
+        || CREDENTIAL_FRAGMENTS.iter().any(|fragment| folded.contains(fragment))
+    {
         return Some(ExtensionProblem::CarriesCredential);
     }
-    if NORMALIZED_NAMES.contains(&lowered.as_str()) {
+    if NORMALIZED_NAMES.contains(&lowered.as_str()) || NORMALIZED_NAMES.contains(&folded.as_str()) {
         return Some(ExtensionProblem::ConflictsWithNormalizedField);
     }
     None
