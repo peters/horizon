@@ -73,7 +73,7 @@ ERROR = "error"
 PROBE_ARGS = {
     "os": ["uname", "-srm"],
     "cores": ["nproc"],
-    "docker_version": ["docker", "version", "--format", "json"],
+    "docker_version": ["docker", "version", "--format", "{{json .}}"],
     "docker_info": ["docker", "info", "--format", "{{.Driver}}"],
     "docker_context": ["docker", "context", "inspect", "--format",
                        "{{.Endpoints.docker.Host}}"],

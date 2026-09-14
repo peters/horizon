@@ -1666,7 +1666,7 @@ class RedactionAndDeterminism(Harness):
         permitted = {
             "os": ["uname", "-srm"],
             "cores": ["nproc"],
-            "docker_version": ["docker", "version", "--format", "json"],
+            "docker_version": ["docker", "version", "--format", "{{json .}}"],
             "docker_info": ["docker", "info", "--format", "{{.Driver}}"],
             "docker_context": ["docker", "context", "inspect", "--format",
                                "{{.Endpoints.docker.Host}}"],
@@ -1715,7 +1715,7 @@ class RedactionAndDeterminism(Harness):
         _, _, executor = self.run_main(fixture)
         self.assertIn(
             ["docker", "--host", "unix:///var/run/docker.sock",
-             "version", "--format", "json"],
+             "version", "--format", "{{json .}}"],
             executor.seen)
         self.assertIn(
             ["docker", "--host", "unix:///var/run/docker.sock",
@@ -1730,7 +1730,7 @@ class RedactionAndDeterminism(Harness):
         fixture["docker_context"] = docker_context_ok(host=socket)
         _, report, executor = self.run_main(fixture)
         self.assertIn(
-            ["docker", "--host", socket, "version", "--format", "json"],
+            ["docker", "--host", socket, "version", "--format", "{{json .}}"],
             executor.seen)
         self.assertNotIn("supersecretvalue", json.dumps(report))
 
