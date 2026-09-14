@@ -66,6 +66,7 @@ pub use session::{
     CommittedUrl, start_session,
 };
 pub use video::VideoCaptureHandle;
+pub use webdriver::{ClassicTransport, HttpError as WebDriverHttpError, RemoteAuthorizationHeader, RemoteHttpClient};
 
 /// Default emulated viewport for a newly created browser session.
 pub const DEFAULT_VIEWPORT: (u32, u32) = (1280, 800);

@@ -100,6 +100,13 @@ back into large multi-purpose modules.
   adaptive screenshot cadence and page-scroll sampling in
   `webdriver/session/frames.rs`, and HTTP, action translation, and
   service/process responsibilities stay in their existing WebDriver leaves.
+- `webdriver/transport.rs` defines the classic command contract
+  (`ClassicTransport`) and request-path rules. `webdriver/http.rs` remains the
+  loopback-only client for local drivers; `webdriver/remote_http.rs` is the
+  separate authenticated HTTPS client for hosted grids (one credential bound
+  to one origin, no redirects, bounded bodies, `ureq` with rustls) and maps
+  failures onto the same `HttpError` shapes. Neither client knows about
+  sessions, panels or providers.
 
 ### `horizon-core`
 
