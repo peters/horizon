@@ -5,8 +5,11 @@
 //! an `Arc` for texture upload. No frame payload ever crosses the mpsc
 //! channel.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+const MAX_TEACH_FINGERPRINTS: usize = 32;
 
 use base64::Engine;
 use zune_jpeg::JpegDecoder;
@@ -140,12 +143,78 @@ pub struct FrameSlot {
     notification_pending: Arc<AtomicBool>,
     metrics: Arc<FrameMetricCounters>,
     active_backend: Arc<std::sync::Mutex<Option<crate::ActiveBackendCapabilities>>>,
+    teach_active: Arc<AtomicBool>,
+    teach_generation: Arc<AtomicU64>,
+    teach_observations: Arc<std::sync::Mutex<VecDeque<TeachObservation>>>,
+}
+
+/// One Teach capture, including failures so the recorder stays aligned.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TeachObservation {
+    Captured(crate::TeachFingerprint),
+    Failed { code: String, message: String },
 }
 
 impl FrameSlot {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn set_teach_recording(&self, active: bool) {
+        let mut queued = self
+            .teach_observations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.teach_generation.fetch_add(1, Ordering::AcqRel);
+        self.teach_active.store(active, Ordering::Release);
+        queued.clear();
+    }
+
+    #[must_use]
+    pub fn teach_recording(&self) -> bool {
+        self.teach_active.load(Ordering::Acquire)
+    }
+
+    #[must_use]
+    pub(crate) fn teach_generation(&self) -> u64 {
+        self.teach_generation.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn store_teach_fingerprint(&self, fingerprint: crate::TeachFingerprint, generation: u64) {
+        self.store_teach_observation(TeachObservation::Captured(fingerprint), generation);
+    }
+
+    pub(crate) fn store_teach_failure(&self, code: &str, message: &str, generation: u64) {
+        self.store_teach_observation(
+            TeachObservation::Failed {
+                code: code.to_string(),
+                message: message.to_string(),
+            },
+            generation,
+        );
+    }
+
+    fn store_teach_observation(&self, observation: TeachObservation, generation: u64) {
+        let mut queued = self
+            .teach_observations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !self.teach_recording() || self.teach_generation() != generation {
+            return;
+        }
+        if queued.len() >= MAX_TEACH_FINGERPRINTS {
+            queued.pop_front();
+        }
+        queued.push_back(observation);
+    }
+
+    #[must_use]
+    pub fn take_teach_observation(&self) -> Option<TeachObservation> {
+        self.teach_observations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pop_front()
     }
 
     /// Decode a JPEG frame into the slot and bump `seq`.
@@ -693,5 +762,58 @@ mod tests {
         assert_eq!(metrics.interaction_frame_samples, 1);
         assert_eq!(metrics.interaction_frame_total_us, 125);
         assert_eq!(metrics.interaction_frame_max_us, 125);
+    }
+
+    fn sample_fingerprint(digest: &str) -> crate::TeachFingerprint {
+        crate::TeachFingerprint {
+            candidates: vec![crate::RankedCandidate {
+                identity: crate::TeachTargetCandidate::RoleName {
+                    role: "button".to_string(),
+                    name: "Go".to_string(),
+                    reviewed: false,
+                },
+                match_count: 1,
+                unique: true,
+            }],
+            selected: Some(0),
+            frame: crate::TeachFrameContext {
+                top_level: true,
+                origin: "https://reports.example".to_string(),
+                chain: Vec::new(),
+            },
+            digest: digest.to_string(),
+        }
+    }
+
+    #[test]
+    fn teach_queue_keeps_order_and_drops_stale_generations() {
+        let slot = FrameSlot::new();
+        slot.set_teach_recording(true);
+        let generation = slot.teach_generation();
+        slot.store_teach_fingerprint(sample_fingerprint("one"), generation);
+        slot.store_teach_failure("undurable_target", "no durable candidate", generation);
+        slot.store_teach_fingerprint(sample_fingerprint("two"), generation);
+        assert!(matches!(
+            slot.take_teach_observation(),
+            Some(TeachObservation::Captured(fingerprint)) if fingerprint.digest == "one"
+        ));
+        assert!(matches!(
+            slot.take_teach_observation(),
+            Some(TeachObservation::Failed { code, .. }) if code == "undurable_target"
+        ));
+        assert!(matches!(
+            slot.take_teach_observation(),
+            Some(TeachObservation::Captured(fingerprint)) if fingerprint.digest == "two"
+        ));
+        slot.set_teach_recording(false);
+        slot.store_teach_fingerprint(sample_fingerprint("late"), generation);
+        assert!(slot.take_teach_observation().is_none());
+        slot.set_teach_recording(true);
+        let next = slot.teach_generation();
+        slot.store_teach_fingerprint(sample_fingerprint("fresh"), next);
+        assert!(matches!(
+            slot.take_teach_observation(),
+            Some(TeachObservation::Captured(fingerprint)) if fingerprint.digest == "fresh"
+        ));
     }
 }

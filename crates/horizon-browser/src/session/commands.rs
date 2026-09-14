@@ -166,6 +166,16 @@ impl DriverState {
                 if self.handle_vertical_scrollbar_input(link, event_tx, frame_slot, &input) {
                     return Ok(false);
                 }
+                if frame_slot.teach_recording()
+                    && let Some(capture) = self.semantic.teach_capture_point(&input)
+                    && let Err(error) = self.capture_teach_fingerprint(link, event_tx, frame_slot, capture.point())
+                {
+                    tracing::warn!(
+                        target: "browser",
+                        "teach fingerprint failed: {}",
+                        error.message
+                    );
+                }
                 // Input cannot block on a roundtrip: a detaching session
                 // would otherwise stall every frame for the call timeout.
                 if input.copies_selection() {

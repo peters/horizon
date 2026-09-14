@@ -6,13 +6,34 @@ use crate::semantic::{
     bounded_control_value, check_script_error, parse_target_rect, scan_expression, scroll_expression,
     target_rect_expression, wait_scan_expression,
 };
-use crate::session::BrowserEventSender;
+use crate::semantic_fingerprint::{
+    fingerprint_at_point_expression, fingerprint_focused_expression, fingerprint_from_script_value,
+};
+use crate::session::{BrowserEventSender, BrowserSessionConfig};
 use crate::{
     AgentAction, BackendKind, BrowserButton, BrowserControlAction, BrowserControlFailure, BrowserControlValue,
     BrowserInput, BrowserModifiers, BrowserSnapshot,
 };
 
-use super::{Driver, webdriver_value};
+use super::super::service::WebDriverService;
+use super::{Driver, create_webdriver_session, webdriver_value};
+
+pub(super) fn create_webdriver_session_response(
+    service: &WebDriverService,
+    config: &BrowserSessionConfig,
+) -> Result<Value, String> {
+    match create_webdriver_session(service, config, true) {
+        Ok(response) => Ok(response),
+        Err(error)
+            if config.browser.backend == BackendKind::SafariWebDriver
+                && error.is_unsupported_websocket_capability() =>
+        {
+            create_webdriver_session(service, config, false)
+                .map_err(|error| format!("failed to create classic Safari WebDriver session: {error}"))
+        }
+        Err(error) => Err(format!("failed to create WebDriver session: {error}")),
+    }
+}
 
 const DOCUMENT_IDENTITY_EXPRESSION: &str =
     "JSON.stringify([String(location.href), Number(globalThis.performance?.timeOrigin || 0)])";
@@ -137,6 +158,7 @@ impl Driver {
         let selector = self.semantic.resolve(target)?;
         let value = self.evaluate_json(&target_rect_expression(&selector, false))?;
         let (x, y) = parse_target_rect(&value)?;
+        self.capture_teach_fingerprint(Some((x, y)))?;
         self.perform_click(x, y, count, event_tx)
             .map_err(|error| BrowserControlFailure::new("input_failed", error))?;
         Ok(BrowserControlValue::Accepted)
@@ -175,6 +197,7 @@ impl Driver {
         let selector = self.semantic.resolve(target)?;
         let result = self.evaluate_json(&target_rect_expression(&selector, true))?;
         let _ = parse_target_rect(&result)?;
+        self.capture_teach_fingerprint(None)?;
         self.perform_input(
             BrowserInput::InsertText {
                 text: value.to_string(),
@@ -205,6 +228,47 @@ impl Driver {
     fn semantic_evaluate(&self, expression: &str) -> Result<BrowserControlValue, BrowserControlFailure> {
         let value = self.evaluate_json(expression)?;
         Ok(BrowserControlValue::Json { value })
+    }
+
+    pub(super) fn capture_teach_input(&mut self, input: &BrowserInput) {
+        if !self.panel_slot.teach_recording() {
+            return;
+        }
+        let Some(capture) = self.semantic.teach_capture_point(input) else {
+            return;
+        };
+        if let Err(error) = self.capture_teach_fingerprint(capture.point()) {
+            tracing::warn!(target: "browser", "teach fingerprint failed: {}", error.message);
+        }
+    }
+
+    pub(super) fn capture_teach_fingerprint(&mut self, point: Option<(f64, f64)>) -> Result<(), BrowserControlFailure> {
+        if !self.panel_slot.teach_recording() {
+            return Ok(());
+        }
+        let generation = self.panel_slot.teach_generation();
+        let expression = match point {
+            Some((x, y)) => fingerprint_at_point_expression(x, y),
+            None => fingerprint_focused_expression(),
+        };
+        let value = match self.evaluate_json(&expression) {
+            Ok(value) => value,
+            Err(error) => {
+                self.panel_slot
+                    .store_teach_failure(&error.code, &error.message, generation);
+                return Err(error);
+            }
+        };
+        let fingerprint = match fingerprint_from_script_value(&value) {
+            Ok(fingerprint) => fingerprint,
+            Err(error) => {
+                self.panel_slot
+                    .store_teach_failure(&error.code, &error.message, generation);
+                return Err(error);
+            }
+        };
+        self.panel_slot.store_teach_fingerprint(fingerprint, generation);
+        Ok(())
     }
 
     fn evaluate_json(&self, expression: &str) -> Result<Value, BrowserControlFailure> {

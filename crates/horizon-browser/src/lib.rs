@@ -20,6 +20,7 @@ mod paths;
 pub mod process;
 mod profile;
 mod semantic;
+mod semantic_fingerprint;
 pub mod session;
 mod video;
 mod wait;
@@ -32,7 +33,7 @@ pub use audit::{BrowserAuditAction, BrowserAuditActor, BrowserAuditEntry, Browse
 pub use coordination::{BrowserCoordination, CoordinationSignals, CoordinationState, HandoffRequest};
 pub use disclosure::{AutomationDisclosurePolicy, AutomationDisclosureStatus};
 pub use error::BrowserError;
-pub use frames::{FrameData, FrameMetrics, FrameSlot, PageScrollState};
+pub use frames::{FrameData, FrameMetrics, FrameSlot, PageScrollState, TeachObservation};
 pub use horizon_browser_protocol::{
     AgentAction, BackendAvailability, BackendCapabilities, BackendKind, BrowserControlAction, BrowserVideoCapture,
     BrowserVideoCaptureOptions, BrowserVideoCaptureOverrides, BrowserVideoOperation, BrowserVideoState,
@@ -54,6 +55,10 @@ pub use page_scroll::VerticalScrollbarOverlay;
 pub use semantic::{
     AgentActionResult, BrowserActionOutcome, BrowserBounds, BrowserControlFailure, BrowserControlValue, BrowserNode,
     BrowserSnapshot, BrowserTarget, NavigationOutcome, NavigationState, SelectorState, WaitOutcome,
+};
+pub use semantic_fingerprint::{
+    ElementObservation, FrameContext as TeachFrameContext, FrameLink as TeachFrameLink, RankedCandidate,
+    TargetCandidate as TeachTargetCandidate, TeachFingerprint, match_fingerprint,
 };
 pub use session::{
     BrowserCommand, BrowserEvent, BrowserEventWaker, BrowserSession, BrowserSessionConfig, BrowserShutdownSignal,

@@ -179,6 +179,7 @@ struct Driver {
     video: crate::video::VideoCaptureState,
     firefox_network: Option<network::FirefoxNetworkBridge>,
     pending_http_bodies: VecDeque<(String, Option<String>)>,
+    panel_slot: Arc<FrameSlot>,
 }
 
 struct PendingHistoryStart {
@@ -206,7 +207,7 @@ pub(crate) fn run_webdriver(
         let _ = event_tx.send(BrowserEvent::Stopped { code: None });
         return;
     };
-    let mut driver = match Driver::start(config, process_control, stop_requested) {
+    let mut driver = match Driver::start(config, process_control, stop_requested, frame_slot) {
         Ok(driver) => driver,
         Err(error) => {
             let _ = event_tx.send(BrowserEvent::Warning(error));
@@ -302,21 +303,12 @@ impl Driver {
         config: &BrowserSessionConfig,
         process_control: &ChromeProcessControl,
         stop_requested: &AtomicBool,
+        frame_slot: &Arc<FrameSlot>,
     ) -> Result<Self, String> {
         let service = WebDriverService::start(&config.browser, process_control, || {
             stop_requested.load(Ordering::Acquire)
         })?;
-        let response = match create_webdriver_session(&service, config, true) {
-            Ok(response) => response,
-            Err(error)
-                if config.browser.backend == BackendKind::SafariWebDriver
-                    && error.is_unsupported_websocket_capability() =>
-            {
-                create_webdriver_session(&service, config, false)
-                    .map_err(|error| format!("failed to create classic Safari WebDriver session: {error}"))?
-            }
-            Err(error) => return Err(format!("failed to create WebDriver session: {error}")),
-        };
+        let response = semantic::create_webdriver_session_response(&service, config)?;
         let NewSession {
             id: session_id,
             capabilities,
@@ -402,6 +394,7 @@ impl Driver {
             video: crate::video::VideoCaptureState::new(Arc::clone(&config.video)),
             firefox_network: None,
             pending_http_bodies: VecDeque::new(),
+            panel_slot: Arc::clone(frame_slot),
         })
     }
 
@@ -501,6 +494,7 @@ impl Driver {
         if self.handle_scrollbar_input(&input)? {
             return Ok(());
         }
+        self.capture_teach_input(&input);
         let (result, demand_frame) = if self.config.browser.backend == BackendKind::FirefoxBidi {
             let mut payload = self.actions.payload(input);
             payload["context"] = json!(self.context_id);
