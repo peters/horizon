@@ -33,6 +33,8 @@ jobs:
         run: python3 -B containers/remote-worker/test_github_credentials.py -v
       - name: Verify explicit worker token installation
         run: python3 -B containers/remote-worker/test_github_token_install.py -v
+      - name: Verify Linux UI smoke isolation and cleanup
+        run: python3 -B -m unittest discover -s containers/linux-ui-worker -v
       - name: Verify worker byte-capture guards
         run: python3 -B -W error containers/remote-worker/test_byte_capture.py -v
       - name: Verify source allowlist and excluded-file controls

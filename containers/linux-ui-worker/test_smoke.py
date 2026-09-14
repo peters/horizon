@@ -1,0 +1,104 @@
+"""Local process and isolation regressions; no Docker, display or cloud required."""
+
+import importlib.util
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+spec = importlib.util.spec_from_file_location("ui_smoke", Path(__file__).with_name("smoke.py"))
+smoke_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(smoke_module)
+
+
+class SmokeTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.smoke = smoke_module.Smoke(Path("/bin/true"), self.root, 30)
+        self.addCleanup(self.smoke.cleanup)
+
+    def test_candidate_environment_does_not_inherit_session_or_credentials(self):
+        with patch.dict(os.environ, {
+            "HORIZON": "1", "GH_TOKEN": "synthetic", "DISPLAY": ":0",
+            "CODEX_HOME": "/other/session", "LD_PRELOAD": "/other/library",
+        }):
+            environment = self.smoke.command(["/usr/bin/env"]).stdout.splitlines()
+        self.assertNotIn("HORIZON=1", environment)
+        self.assertFalse(any("synthetic" in line or "/other/" in line for line in environment))
+        self.assertFalse(any(line.startswith("DISPLAY=") for line in environment))
+        self.assertIn("HOME=" + str(self.root / "home"), environment)
+        self.assertEqual((self.root / "runtime").stat().st_mode & 0o777, 0o700)
+
+    def test_nonzero_tool_result_is_not_success(self):
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.smoke.command(["/bin/false"])
+
+    def test_expired_deadline_cannot_run_another_command(self):
+        self.smoke.deadline = 0
+        with self.assertRaises(TimeoutError):
+            self.smoke.command(["/bin/touch", str(self.root / "unexpected")])
+        self.assertFalse((self.root / "unexpected").exists())
+
+    def test_process_exit_fails_even_when_window_predicate_would_pass(self):
+        child = self.smoke.spawn("early-exit", ["/bin/false"])
+        child.wait(timeout=5)
+        with self.assertRaises(RuntimeError):
+            self.smoke.wait_for("window", lambda: True)
+
+    def test_cleanup_keeps_unrelated_process_alive(self):
+        unrelated = subprocess.Popen(["/bin/sleep", "30"])
+        try:
+            owned = self.smoke.spawn("owned", ["/bin/sleep", "30"])
+            self.assertTrue(self.smoke.cleanup())
+            self.assertIsNotNone(owned.poll())
+            self.assertIsNone(unrelated.poll())
+        finally:
+            unrelated.terminate()
+            unrelated.wait(timeout=5)
+
+    def test_forced_candidate_cleanup_cannot_count_as_normal_close(self):
+        self.smoke.app = self.smoke.spawn("candidate", ["/bin/sleep", "30"])
+        self.assertFalse(self.smoke.cleanup())
+        self.assertNotIn("normal_window_close", self.smoke.checks)
+
+    def test_existing_artifact_directory_is_not_reused(self):
+        sentinel = self.root / "existing-proof"
+        sentinel.write_text("preserve me")
+        with patch("sys.argv", ["smoke", "--binary", "/bin/true", "--artifacts", str(self.root)]):
+            with patch.object(smoke_module.shutil, "which", return_value="/unused/tool"):
+                with self.assertRaises(FileExistsError):
+                    smoke_module.main()
+        self.assertEqual(sentinel.read_text(), "preserve me")
+
+    def test_subreaper_cleans_children_after_their_leader_exits(self):
+        self.assert_orphan_cleanup("sleep 30 &")
+
+    def test_subreaper_cleans_separately_sessioned_children(self):
+        self.assert_orphan_cleanup("setsid sleep 30 &")
+
+    def assert_orphan_cleanup(self, command):
+        # A separate supervisor is essential: adoption must not affect the test
+        # runner or claim its other subprocesses as smoke-owned descendants.
+        program = """
+import subprocess
+import processes
+processes.adopt_orphans()
+parent = subprocess.Popen(['/bin/bash', '--noprofile', '--norc', '-c', COMMAND])
+parent.wait(timeout=5)
+assert processes.children(), 'fixture did not retain an orphan'
+assert processes.cleanup_descendants()
+assert not processes.children(), 'owned descendants survived cleanup'
+""".replace("COMMAND", repr(command))
+        subprocess.run(
+            [sys.executable, "-c", program], check=True,
+            cwd=Path(__file__).parent, timeout=15,
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
