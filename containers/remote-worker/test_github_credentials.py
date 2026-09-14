@@ -197,6 +197,47 @@ class CredentialsTests(unittest.TestCase):
         self.assertEqual([value, '1', []], json.loads(result.stdout))
         self.assertNotIn(TOKEN.encode(), result.stderr)
 
+    def test_ssh_environment_restores_image_homes_and_preserves_explicit_overrides(self):
+        defaults = dict(line.removeprefix('ENV ').split('=', 1)
+                        for line in (HERE / 'Dockerfile').read_text().splitlines()
+                        if line.startswith(('ENV CARGO_HOME=', 'ENV RUSTUP_HOME=')))
+        code = ('import os,json; print(json.dumps([os.environ["CARGO_HOME"],'
+                'os.environ["RUSTUP_HOME"],os.environ["PATH"].split(os.pathsep)[0]]))')
+        for supplied in ({}, {'CARGO_HOME': '', 'RUSTUP_HOME': ''},
+                         {'CARGO_HOME': str(self.root / 'cargo home'),
+                          'RUSTUP_HOME': str(self.root / 'rustup home')}):
+            expected = {name: supplied.get(name) or value for name, value in defaults.items()}
+            environment = {'PATH': '/usr/bin:/bin', **supplied}
+            commands = [
+                ['/bin/sh', str(HERE / 'session.sh'), '/usr/bin/python3', '-c', code],
+                ['/bin/sh', '-c', '. "$1"; shift; exec "$@"', 'profile-check',
+                 str(HERE / 'rust-path.sh'), '/usr/bin/python3', '-c', code],
+            ]
+            for command in commands:
+                with self.subTest(supplied=supplied, entry=command[:3]):
+                    result = subprocess.run(command, env=environment, capture_output=True,
+                                            timeout=5, check=True)
+                    self.assertEqual([expected['CARGO_HOME'], expected['RUSTUP_HOME'],
+                                      expected['CARGO_HOME'] + '/bin'], json.loads(result.stdout))
+
+    def test_both_entry_paths_execute_the_selected_cargo_from_a_clean_environment(self):
+        cargo_home = self.root / 'custom cargo home'
+        binary = cargo_home / 'bin/cargo'
+        binary.parent.mkdir(parents=True)
+        binary.write_text('#!/bin/sh\nprintf "selected cargo: %s\\n" "$1"\n')
+        binary.chmod(0o700)
+        environment = {'PATH': '/usr/bin:/bin', 'CARGO_HOME': str(cargo_home),
+                       'RUSTUP_HOME': str(self.root / 'custom rustup home')}
+        commands = [
+            ['/bin/sh', str(HERE / 'session.sh'), 'cargo', 'literal ; $(false) argument'],
+            ['/bin/sh', '-c', '. "$1"; shift; exec "$@"', 'profile-check',
+             str(HERE / 'rust-path.sh'), 'cargo', 'literal ; $(false) argument'],
+        ]
+        for command in commands:
+            result = subprocess.run(command, env=environment, capture_output=True,
+                                    timeout=5, check=True)
+            self.assertEqual(b'selected cargo: literal ; $(false) argument\n', result.stdout)
+
     def test_gh_authentication_failure_only_exits_its_child(self):
         fake = self.root / 'packaged-gh'
         fake.write_text('#!/usr/bin/python3\nimport os,sys\n'

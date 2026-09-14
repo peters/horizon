@@ -584,3 +584,11 @@ SIGKILL or host loss can bypass cleanup and leave the no-expiry test worker
 running. Retain the printed task-owned name prefix, inspect the
 exact container IDs from that run, and manually remove only those verified test
 resources. The harness does not sweep shared smoke labels or other runs.
+
+### Rust in SSH sessions
+
+Login shells and saved agent sessions restore the image's Cargo and Rustup homes
+when SSH has removed Docker environment variables. Explicit `CARGO_HOME` and
+`RUSTUP_HOME` overrides are preserved. The default homes are `/usr/local/cargo`
+and `/usr/local/rustup`; opening a fresh SSH session must not require downloading
+or selecting another toolchain.
