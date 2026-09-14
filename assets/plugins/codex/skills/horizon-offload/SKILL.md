@@ -134,10 +134,11 @@ its claim: investigate the original state rather than deleting the claim.
 ## UI proof and lifecycle
 
 Build the candidate inside the selected image to match its libc. The testing
-layer supplies `horizon-linux-ui-smoke`; its default image tests the native UI
-without browsers. Select the optional `browser` image target only for embedded
-browser panels or web applications, then run applicable Chromium and Firefox lanes
-using fresh artifact directories. Browser automation uses only the
+layer supplies `horizon-linux-ui-smoke`. The standard Horizon development image
+includes Chromium and Firefox plus their drivers, because `horizon-browser` needs
+both engines for smoke testing. Run native smoke and the applicable browser lanes
+using fresh artifact directories. Use the smaller `native` target only when browser
+testing is explicitly outside the selected task scope. Browser automation uses only the
 Horizon browser skill and public `browser_*` MCP tools. The Docker lane needs a
 qualified unprivileged user-namespace policy. Installed browsers alone do not
 prove they can run under an Azure worker's container policy.
