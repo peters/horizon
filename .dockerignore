@@ -8,6 +8,7 @@ crates/*/**
 !crates/*/Cargo.toml
 !crates/horizon-browser/src/**/*.rs
 !crates/horizon-browser-protocol/src/**/*.rs
+!crates/horizon-browser-routines/src/**/*.rs
 !crates/horizon-core/src/**/*.rs
 !crates/horizon-repository/src/**/*.rs
 crates/*/src/**/*.rs/**

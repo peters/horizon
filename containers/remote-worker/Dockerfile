@@ -167,6 +167,7 @@ RUN mkdir -p \
         crates/horizon-browser-cli/src \
         crates/horizon-browser-mcp/src \
         crates/horizon-browser-protocol/src \
+        crates/horizon-browser-routines/src \
         crates/horizon-core/src \
         crates/horizon-cursor/src \
         crates/horizon-repository/src \
@@ -178,6 +179,7 @@ RUN mkdir -p \
         crates/horizon-browser-mcp/src/lib.rs \
         crates/horizon-browser-mcp/src/main.rs \
         crates/horizon-browser-protocol/src/lib.rs \
+        crates/horizon-browser-routines/src/lib.rs \
         crates/horizon-core/src/lib.rs \
         crates/horizon-cursor/src/lib.rs \
         crates/horizon-repository/src/main.rs \
