@@ -90,17 +90,29 @@ fn grok_managed_block_escapes_control_characters_in_command() {
 }
 
 #[test]
-fn grok_leaves_inline_mcp_servers_table_untouched() {
+fn grok_merges_horizon_browser_into_inline_mcp_servers() {
     let temp = tempfile::tempdir().expect("temp dir");
     let grok_home = temp.path().join("grok");
     std::fs::create_dir_all(&grok_home).expect("grok home");
-    let original = "mcp_servers = { github = { command = \"/usr/bin/gh\" } }\n";
-    std::fs::write(grok_home.join("config.toml"), original).expect("seed inline mcp_servers");
+    std::fs::write(
+        grok_home.join("config.toml"),
+        "mcp_servers = { github = { command = \"/usr/bin/gh\" } }\n",
+    )
+    .expect("seed inline mcp_servers");
 
-    let _leases = bind_browser_mcp_attachments(OsStr::new("host-a"), Path::new("/opt/horizon"), None, Some(&grok_home));
-    let grok = std::fs::read_to_string(grok_home.join("config.toml")).expect("grok");
-    assert_eq!(grok, original);
+    let mut leases =
+        bind_browser_mcp_attachments(OsStr::new("host-a"), Path::new("/opt/horizon"), None, Some(&grok_home));
+    let grok = std::fs::read_to_string(grok_home.join("config.toml")).expect("grok after attach");
+    assert!(grok.contains("github"));
+    assert!(grok.contains("/usr/bin/gh"));
+    assert!(grok.contains(SERVER_NAME));
+    assert!(grok.contains("/opt/horizon"));
     assert!(!grok.contains("[mcp_servers.horizon-browser]"));
+    release_mcp_attachments(&mut leases);
+    let grok = std::fs::read_to_string(grok_home.join("config.toml")).expect("grok after last host");
+    assert!(grok.contains("github"));
+    assert!(grok.contains("/usr/bin/gh"));
+    assert!(!grok.contains(SERVER_NAME));
 }
 
 #[test]
