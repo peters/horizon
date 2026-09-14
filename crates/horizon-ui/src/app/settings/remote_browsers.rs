@@ -13,7 +13,7 @@ use horizon_core::remote_browser_credential::{
     CredentialReadiness, CredentialState, CredentialWorkbench, KeychainState, NoticeKind, RemoteCredentialError,
     WorkbenchNotice, credential_destination,
 };
-use zeroize::Zeroizing;
+use zeroize::{Zeroize as _, Zeroizing};
 
 use crate::theme;
 
@@ -72,7 +72,7 @@ impl CredentialInputs {
             .collect();
         for old_key in stale {
             if let Some(mut text) = self.values.remove(&old_key) {
-                scrub_string(&mut text);
+                text.zeroize();
             }
         }
         self.values.entry(key.clone()).or_default()
@@ -83,7 +83,7 @@ impl CredentialInputs {
     fn take(&mut self, key: &InputKey) -> Zeroizing<Vec<u8>> {
         let mut text = self.values.remove(key).unwrap_or_default();
         let bytes = Zeroizing::new(text.as_bytes().to_vec());
-        scrub_string(&mut text);
+        text.zeroize();
         bytes
     }
 
@@ -119,7 +119,7 @@ impl CredentialInputs {
             .collect();
         for key in stale {
             if let Some(mut text) = self.values.remove(&key) {
-                scrub_string(&mut text);
+                text.zeroize();
             }
         }
     }
@@ -133,17 +133,11 @@ impl CredentialInputs {
 impl Drop for CredentialInputs {
     fn drop(&mut self) {
         for value in self.values.values_mut() {
-            scrub_string(value);
+            // Wipes the whole backing allocation, not only the current
+            // length, so an edited-down secret leaves no suffix behind.
+            value.zeroize();
         }
     }
-}
-
-fn scrub_string(value: &mut String) {
-    let len = value.len();
-    value.clear();
-    value.extend(std::iter::repeat_n('\0', len));
-    std::hint::black_box(&*value);
-    value.clear();
 }
 
 /// Render the tab. Never returns a config change: this tab edits no YAML.
@@ -323,7 +317,9 @@ fn render_reference(
             let _ = workbench.delete(provider, profile, reference);
         }
     });
-    if let Some(notice) = inputs.last_notice(&key) {
+    if let Some(notice) = inputs.last_notice(&key)
+        && notice_agrees_with(notice, state)
+    {
         let (text, color) = notice_line(notice.kind, notice.error.as_ref());
         ui.label(egui::RichText::new(text).color(color).size(11.0));
     }
@@ -365,6 +361,20 @@ fn state_badge(state: CredentialState) -> (&'static str, egui::Color32) {
         CredentialState::Locked => ("locked", theme::PALETTE_RED()),
         CredentialState::StoreUnavailable => ("store unavailable", theme::PALETTE_RED()),
         CredentialState::Checking => ("checking", theme::FG_DIM()),
+    }
+}
+
+/// A successful notice is shown only while the row's state still reflects
+/// it: an item deleted through another row that shares the OS address turns
+/// this row `missing`, and a stale "Saved" would contradict that. Failures
+/// are always shown.
+fn notice_agrees_with(notice: &WorkbenchNotice, state: CredentialState) -> bool {
+    if notice.error.is_some() {
+        return true;
+    }
+    match notice.kind {
+        NoticeKind::SessionValueSet | NoticeKind::StoredInKeychain => state == CredentialState::Present,
+        NoticeKind::SessionValueCleared | NoticeKind::DeletedFromKeychain => state == CredentialState::Missing,
     }
 }
 
@@ -453,6 +463,51 @@ mod tests {
             "drafts for rows absent from the config are scrubbed"
         );
         assert!(inputs.take(&rebound).is_empty());
+    }
+
+    #[test]
+    fn a_successful_notice_is_shown_only_while_the_row_state_agrees() {
+        let reference = CredentialReference::from("key");
+        let profile = profile("https://grid.example.net/wd/hub", "a");
+        let saved = WorkbenchNotice {
+            provider: "grid".to_string(),
+            reference: reference.clone(),
+            destination: credential_destination(&profile, &reference),
+            kind: NoticeKind::StoredInKeychain,
+            error: None,
+        };
+        assert!(notice_agrees_with(&saved, CredentialState::Present));
+        assert!(
+            !notice_agrees_with(&saved, CredentialState::Missing),
+            "a delete through an aliased row hides the stale Saved"
+        );
+        let failed = WorkbenchNotice {
+            error: Some(RemoteCredentialError::Locked),
+            ..saved.clone()
+        };
+        assert!(
+            notice_agrees_with(&failed, CredentialState::Missing),
+            "failures always show"
+        );
+        let cleared = WorkbenchNotice {
+            kind: NoticeKind::SessionValueCleared,
+            ..saved
+        };
+        assert!(notice_agrees_with(&cleared, CredentialState::Missing));
+        assert!(!notice_agrees_with(&cleared, CredentialState::Present));
+    }
+
+    #[test]
+    fn drafts_are_wiped_including_spare_capacity() {
+        let reference = CredentialReference::from("key");
+        let mut inputs = CredentialInputs::default();
+        let key = InputKey::new("grid", &profile("https://grid.example.net/wd/hub", "a"), &reference);
+        let buffer = inputs.buffer(&key);
+        buffer.push_str("a-much-longer-secret-value");
+        buffer.truncate(4);
+        let taken = inputs.take(&key);
+        assert_eq!(&*taken, b"a-mu");
+        assert!(inputs.values.is_empty());
     }
 
     #[test]
