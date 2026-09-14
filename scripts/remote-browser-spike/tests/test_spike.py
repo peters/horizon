@@ -113,7 +113,38 @@ class TransportPolicyTest(unittest.TestCase):
             server.server_close()
 
 
+class OutputDirectoryTest(unittest.TestCase):
+    def test_existing_group_or_world_accessible_directory_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            shared = os.path.join(tmp, "shared")
+            os.makedirs(shared, mode=0o755)
+            os.chmod(shared, 0o755)
+            with self.assertRaises(SystemExit) as raised:
+                spike.ensure_private_directory(shared)
+            self.assertIn("chmod 700", str(raised.exception))
+            private = os.path.join(tmp, "private")
+            spike.ensure_private_directory(private)
+            self.assertEqual(os.stat(private).st_mode & 0o777, 0o700)
+            spike.ensure_private_directory(private)
+
+
 class OutcomeTest(unittest.TestCase):
+    def test_exit_code_counts_every_recorded_step(self) -> None:
+        steps = [
+            {"name": "provider_metadata_release_poll", "outcome": "unknown"},
+            {"name": "provider_metadata_release_poll", "outcome": "passed"},
+            {"name": "release", "outcome": "passed"},
+        ]
+        self.assertEqual(spike.exit_code(steps), 1)
+        self.assertEqual(spike.exit_code([{"name": "release", "outcome": "passed"}]), 0)
+        self.assertEqual(spike.exit_code([{"name": "orientation", "outcome": "unsupported"}]), 0)
+
+    def test_every_terminal_provider_status_counts_as_released(self) -> None:
+        for status in ("done", "completed", "passed", "failed", "timeout", "error"):
+            self.assertIn(status, spike.TERMINAL_SESSION_STATUSES)
+        self.assertNotIn("running", spike.TERMINAL_SESSION_STATUSES)
+        self.assertNotIn(None, spike.TERMINAL_SESSION_STATUSES)
+
     def test_webdriver_error_codes_are_surfaced_typed(self) -> None:
         run = spike.Spike.__new__(spike.Spike)
         self.assertEqual(run.is_error({"status": 404, "body": {"value": {"error": "unknown command"}}}), "unknown command")

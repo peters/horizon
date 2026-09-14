@@ -41,6 +41,9 @@ ALLOCATION_TIMEOUT_SECONDS = 180
 COMMAND_TIMEOUT_SECONDS = 60
 RELEASE_TIMEOUT_SECONDS = 30
 RELEASE_POLL_SECONDS = 3
+# Provider session statuses after which the device is no longer held. Release
+# verification asks whether the resource is terminal, not whether the test passed.
+TERMINAL_SESSION_STATUSES = frozenset({"done", "completed", "passed", "failed", "timeout", "error"})
 MAX_RESPONSE_BYTES = 32 * 1024 * 1024
 
 TARGETS: Dict[str, Dict[str, Any]] = {
@@ -466,10 +469,10 @@ class Spike:
         while time.monotonic() < deadline:
             meta = self.provider_metadata("release_poll")
             status = meta.get("status") if meta else None
-            if status in ("done", "completed", "passed", "failed", "timeout", "error"):
+            if status in TERMINAL_SESSION_STATUSES:
                 break
             time.sleep(RELEASE_POLL_SECONDS)
-        self.record("release", started, "passed" if status in ("done", "completed", "passed") else "unknown",
+        self.record("release", started, "passed" if status in TERMINAL_SESSION_STATUSES else "unknown",
                     provider_status=status)
 
     # --- driver -------------------------------------------------------------
@@ -536,13 +539,24 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--url", default=DEFAULT_URL)
     parser.add_argument("--build", default=_dt.datetime.now(_dt.timezone.utc).strftime("spike-%Y%m%dT%H%M%SZ"))
     args = parser.parse_args(argv)
-    os.makedirs(args.out, mode=0o700, exist_ok=True)
+    ensure_private_directory(args.out)
     hub_host = urllib.parse.urlsplit(args.hub).hostname or ""
     transport = Transport(args.hub, args.api, load_auth(args.netrc, hub_host))
     report = Spike(transport, args.out, args.target, args.url, args.build).run()
-    outcomes = {step["name"]: step["outcome"] for step in report["steps"]}
-    failed = [name for name, outcome in outcomes.items() if outcome in ("failed", "unknown")]
-    return 1 if failed else 0
+    return exit_code(report["steps"])
+
+
+def exit_code(steps: List[Dict[str, Any]]) -> int:
+    """Non-zero if any recorded step failed or ended unknown, even when a later step with the same name passed."""
+    return 1 if any(step["outcome"] in ("failed", "unknown") for step in steps) else 0
+
+
+def ensure_private_directory(path: str) -> None:
+    """Create the report directory or accept an existing one only when it is private to this user."""
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    mode = os.stat(path).st_mode
+    if mode & 0o077:
+        raise SystemExit("output directory must not be accessible by group or others (chmod 700); it receives session ids")
 
 
 if __name__ == "__main__":
