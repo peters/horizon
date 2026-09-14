@@ -75,9 +75,9 @@ impl HorizonApp {
         self.release_active_session_lease();
         if browser_outcome == BrowserShutdownOutcome::ForcedCleanupFailed {
             tracing::error!("forced browser cleanup failed; exiting after the bounded shutdown deadline");
-            std::process::exit(1);
+            crate::plugin_install::exit_after_releasing_plugins(1);
         }
-        std::process::exit(0);
+        crate::plugin_install::exit_after_releasing_plugins(0);
     }
 
     #[profiling::function]

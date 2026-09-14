@@ -402,7 +402,7 @@ impl eframe::App for HorizonApp {
         self.run_exit_cleanup();
         // macOS can leave Horizon running as a windowless app after eframe
         // has already torn down the viewport, so terminate explicitly.
-        std::process::exit(0);
+        crate::plugin_install::exit_after_releasing_plugins(0);
     }
 }
 

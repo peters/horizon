@@ -2,6 +2,7 @@ use std::ffi::OsStr;
 use std::fs::{OpenOptions, TryLockError};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 
 use horizon_core::browser::manifest;
 use horizon_core::{HorizonHome, browser_mcp_executable, codex_home_dir, grok_home_dir, user_home_dir};
@@ -74,6 +75,8 @@ const ABANDONED_NOTIFY_SKILL_ROOTS: &[&[&str]] = &[&[".agents", "skills"], &[".g
 /// workflows to agents this process does not wire to the browser server.
 const ABANDONED_BROWSER_SKILL_ROOTS: &[&[&str]] =
     &[&[".agents", "skills"], &[".gemini", "skills"], &[".kilocode", "skills"]];
+
+static HELD_AGENT_PLUGIN_LEASE: Mutex<Option<AgentPluginHostLease>> = Mutex::new(None);
 
 pub(crate) struct AgentPluginHostLease {
     host_dir: PathBuf,
@@ -165,7 +168,7 @@ impl Drop for AgentPluginHostLease {
     }
 }
 
-pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) -> Option<AgentPluginHostLease> {
+pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) {
     let user_home = user_home_dir();
     let grok_home = grok_home_dir();
     let codex_home = codex_home_dir();
@@ -176,7 +179,7 @@ pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) -> Option<AgentP
         Ok(lease) => lease,
         Err(error) => {
             tracing::warn!(%error, "failed to acquire agent plugin host lease");
-            return None;
+            return;
         }
     };
     lease.user_skill_dirs = user_skill_cleanup_dirs(user_home.as_deref(), grok_home.as_deref(), codex_home.as_deref());
@@ -198,7 +201,20 @@ pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) -> Option<AgentP
         Err(error) => tracing::warn!(%error, "failed to prune stale agent plugin hosts"),
     }
 
-    Some(lease)
+    *held_agent_plugin_lease() = Some(lease);
+}
+
+pub(crate) fn release_held_agent_plugin_host() {
+    drop(held_agent_plugin_lease().take());
+}
+
+pub(crate) fn exit_after_releasing_plugins(code: i32) -> ! {
+    release_held_agent_plugin_host();
+    std::process::exit(code);
+}
+
+fn held_agent_plugin_lease() -> std::sync::MutexGuard<'static, Option<AgentPluginHostLease>> {
+    HELD_AGENT_PLUGIN_LEASE.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 fn sync_leased_user_skills(
@@ -611,7 +627,7 @@ mod tests {
         AgentPluginHostLease, BROWSER_SKILL_FILES, CLAUDE_PLUGIN_FILES, EmbeddedFile, HORIZON_BROWSER_SKILL,
         HORIZON_NOTIFY_SKILL, NOTIFY_SKILL_FILES, NOTIFY_SKILL_ROOTS, abandoned_user_skill_dirs,
         agent_plugin_host_lock_path, install_agent_plugins_impl, open_lock_file, prune_stale_agent_plugin_hosts,
-        sync_file_if_changed, sync_plugin_files, user_skill_cleanup_dirs, user_skill_dir,
+        sync_file_if_changed, sync_leased_user_skills, sync_plugin_files, user_skill_cleanup_dirs, user_skill_dir,
     };
 
     fn write_skill_dir(path: &Path, body: &str) {
@@ -776,18 +792,18 @@ mod tests {
             write_skill_dir(&dir, "stale");
         }
 
-        for dir in abandoned_user_skill_dirs(&user_home) {
-            super::remove_horizon_skill_dir(&dir);
-        }
-        install_agent_plugins_impl(
+        let mut lease =
+            AgentPluginHostLease::acquire(horizon_home.agent_plugin_host_dir("host-a")).expect("host lease");
+        lease.user_skill_dirs = super::user_skill_cleanup_dirs(Some(&user_home), None, None);
+        sync_leased_user_skills(
+            &lease,
             &horizon_home,
             &claude_plugin_dir,
             Some(&user_home),
             None,
             None,
             Path::new("/opt/horizon"),
-        )
-        .expect("install plugins");
+        );
 
         for dir in abandoned_user_skill_dirs(&user_home) {
             assert!(!dir.exists(), "abandoned skill should be removed: {}", dir.display());
