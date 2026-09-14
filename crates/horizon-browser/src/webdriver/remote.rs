@@ -66,6 +66,9 @@ pub enum RemoteStartFailure {
     AllocationFailed { error: String, message: String },
     /// No trustworthy answer: the provider may have allocated a device.
     AllocationUnknown { reason: String },
+    /// The session was allocated but its lifetime watchdog could not start,
+    /// so it was released at once rather than run without enforcement.
+    Unenforceable { released: RemoteReleaseOutcome },
 }
 
 impl fmt::Display for RemoteStartFailure {
@@ -78,6 +81,10 @@ impl fmt::Display for RemoteStartFailure {
             Self::AllocationUnknown { reason } => write!(
                 formatter,
                 "remote allocation outcome unknown ({reason}); not retried because the provider may hold a device"
+            ),
+            Self::Unenforceable { released } => write!(
+                formatter,
+                "remote session released at once because its lifetime watchdog could not start ({released})"
             ),
         }
     }
@@ -101,6 +108,19 @@ pub enum RemoteReleaseOutcome {
     ReleaseUnknown { attempts: u8, reason: String },
     /// The provider refused the delete.
     Failed { error: String, message: String },
+}
+
+impl fmt::Display for RemoteReleaseOutcome {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Released => formatter.write_str("released"),
+            Self::AlreadyGone => formatter.write_str("already gone"),
+            Self::ReleaseUnknown { attempts, reason } => {
+                write!(formatter, "release unknown after {attempts} attempts: {reason}")
+            }
+            Self::Failed { error, message } => write!(formatter, "release refused ({error}): {message}"),
+        }
+    }
 }
 
 /// Lifecycle facts the host surfaces alongside the usual browser events.
@@ -172,11 +192,13 @@ impl RemoteHost {
         &self.label
     }
 
-    /// One New Session request under the allocation timeout. A transport
+    /// One New Session request under the allocation timeout, which bounds
+    /// the whole call from name resolution to the last body byte. A transport
     /// failure or an unusable success is `AllocationUnknown`; only a complete
     /// `WebDriver` error is `AllocationFailed`. Never retried. On success the
     /// watchdog starts, so the allocation wait counts against neither the
-    /// hard lifetime nor the idle policy.
+    /// hard lifetime nor the idle policy; a session whose watchdog cannot
+    /// start is released immediately.
     ///
     /// # Errors
     /// See [`RemoteStartFailure`].
@@ -197,14 +219,24 @@ impl RemoteHost {
                 });
             }
         };
-        self.watchdog = Some(Watchdog::start(
+        match Watchdog::start(
             Arc::clone(&self.transport),
             session.id.clone(),
             self.max_session,
             self.idle_release,
             Instant::now(),
-        ));
-        Ok(session)
+        ) {
+            Ok(watchdog) => {
+                self.watchdog = Some(watchdog);
+                Ok(session)
+            }
+            Err(error) => {
+                tracing::warn!("remote session watchdog could not start: {error}");
+                Err(RemoteStartFailure::Unenforceable {
+                    released: release_session(&self.transport, &session.id),
+                })
+            }
+        }
     }
 
     /// A user or agent command happened. Frame polling never calls this.

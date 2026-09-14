@@ -69,7 +69,12 @@ fn an_ambiguous_new_session_is_unknown_and_never_retried() {
     ]);
     let request = request(&server.endpoint(""));
     let mut host = RemoteHost::connect(&request).expect("connect");
+    let started = Instant::now();
     let failure = host.allocate(&request).expect_err("timed out");
+    assert!(
+        started.elapsed() < Duration::from_millis(800),
+        "the allocation timeout bounds the whole call"
+    );
     assert!(
         matches!(failure, RemoteStartFailure::AllocationUnknown { .. }),
         "{failure:?}"

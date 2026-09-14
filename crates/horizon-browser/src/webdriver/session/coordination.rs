@@ -172,6 +172,7 @@ impl Driver {
             return;
         }
         self.audit_agent_action(request, crate::BrowserAuditStatus::Dispatched);
+        self.note_remote_activity();
         if matches!(request.action, crate::BrowserControlAction::Navigate { .. }) {
             if let crate::navigation::AgentActionExecution::Done(result) = self.navigate_action(request, event_tx) {
                 self.complete_agent_action(request, result);

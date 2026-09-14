@@ -282,6 +282,15 @@ impl Driver {
         })
     }
 
+    /// A user or agent acted on the page: the remote idle clock restarts.
+    /// System commands (viewport, video, handoff bookkeeping) and frame
+    /// polling never count.
+    pub(super) fn note_remote_activity(&mut self) {
+        if let Some(remote) = self.host.remote() {
+            remote.note_activity(Instant::now());
+        }
+    }
+
     /// Whether this session drives Firefox over `BiDi`. A remote session never
     /// does, whatever local backend is configured: every remote request is
     /// classic `WebDriver`.
@@ -295,10 +304,8 @@ impl Driver {
         events: &BrowserEventSender,
         user: bool,
     ) -> Result<bool, String> {
-        if let Some(remote) = self.host.remote() {
-            remote.note_activity(Instant::now());
-        }
         if user && is_user_activity(&command) {
+            self.note_remote_activity();
             self.stamp_user_active();
         }
         match command {
@@ -476,12 +483,12 @@ fn start_remote(
                     label,
                     reason: reason.clone(),
                 },
-                RemoteStartFailure::AllocationFailed { .. } | RemoteStartFailure::InvalidEndpoint(_) => {
-                    RemoteSessionEvent::AllocationFailed {
-                        label,
-                        reason: failure.to_string(),
-                    }
-                }
+                RemoteStartFailure::AllocationFailed { .. }
+                | RemoteStartFailure::InvalidEndpoint(_)
+                | RemoteStartFailure::Unenforceable { .. } => RemoteSessionEvent::AllocationFailed {
+                    label,
+                    reason: failure.to_string(),
+                },
             };
             let _ = event_tx.send(BrowserEvent::RemoteSession(event));
             Err(failure.to_string())

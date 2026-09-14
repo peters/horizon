@@ -33,13 +33,17 @@ struct Shared {
 impl Watchdog {
     /// Start judging from `now`, the instant allocation succeeded; nothing
     /// that happened during allocation counts against the session.
+    ///
+    /// # Errors
+    /// The thread could not be spawned. The session then has no enforcement
+    /// and the caller must release it at once.
     pub(super) fn start(
         transport: Arc<RemoteHttpClient>,
         session_id: String,
         max_session: Duration,
         idle_release: Duration,
         now: Instant,
-    ) -> Self {
+    ) -> std::io::Result<Self> {
         let shared = Arc::new(Shared {
             deadline: now + max_session,
             idle_release,
@@ -51,12 +55,11 @@ impl Watchdog {
         let worker = Arc::clone(&shared);
         let thread = std::thread::Builder::new()
             .name("remote-session-watchdog".into())
-            .spawn(move || run(&worker, &transport, &session_id))
-            .ok();
-        if thread.is_none() {
-            tracing::warn!("remote session watchdog thread could not be spawned");
-        }
-        Self { shared, thread }
+            .spawn(move || run(&worker, &transport, &session_id))?;
+        Ok(Self {
+            shared,
+            thread: Some(thread),
+        })
     }
 
     /// A user or agent command happened; frame polling never reports here.

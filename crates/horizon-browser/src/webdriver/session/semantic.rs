@@ -304,8 +304,15 @@ impl Driver {
         bounded_control_value(value)
     }
 
+    /// Classic `WebDriver` has no navigation event stream, so a session that
+    /// runs on it alone tracks the document identity by script: Safari
+    /// locally, and every remote session whatever browser it drives.
+    fn tracks_classic_document_identity(&self) -> bool {
+        self.config.browser.backend == BackendKind::SafariWebDriver || self.host.is_remote()
+    }
+
     pub(super) fn initialize_classic_document_identity(&mut self) {
-        if self.config.browser.backend == BackendKind::SafariWebDriver {
+        if self.tracks_classic_document_identity() {
             let _ = self.refresh_classic_document_identity_within(std::time::Duration::from_secs(1));
         }
     }
@@ -314,7 +321,7 @@ impl Driver {
         &mut self,
         timeout: std::time::Duration,
     ) -> Result<bool, BrowserControlFailure> {
-        if self.config.browser.backend != BackendKind::SafariWebDriver {
+        if !self.tracks_classic_document_identity() {
             return Ok(false);
         }
         let value = self.evaluate_json_within(DOCUMENT_IDENTITY_EXPRESSION, Some(timeout))?;
@@ -326,7 +333,7 @@ impl Driver {
     }
 
     fn record_classic_document_identity(&mut self, identity: Option<String>) -> bool {
-        if self.config.browser.backend != BackendKind::SafariWebDriver {
+        if !self.tracks_classic_document_identity() {
             return false;
         }
         let Some(identity) = identity else {
