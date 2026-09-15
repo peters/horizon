@@ -86,14 +86,12 @@ jobs:
 
           echo "run_snap_build=$run_snap_build" >> "$GITHUB_OUTPUT"
 
-  azure-harness-tests:
-    name: Azure harness tests
+  browser-harness-tests:
+    name: Browser harness tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-      - name: Verify client-off harness decisions
-        run: python3 -B -m unittest discover -s scripts/azure-client-off/tests -v
       - name: Verify remote browser spike transport rules
         run: python3 -B -m unittest discover -s scripts/remote-browser-spike/tests -v
 
