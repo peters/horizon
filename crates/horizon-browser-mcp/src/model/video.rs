@@ -38,7 +38,8 @@ pub(crate) struct VideoInput {
     compression_level: Option<u32>,
     /// Target frames per second 1-30. Start only; omit to keep the host `browser.video` setting.
     fps: Option<u32>,
-    /// Longest encoded side in pixels 320-1920. Start only; omit to keep the host `browser.video` setting.
+    /// Optional maximum encoded width (320-1920). Start only; omit to record
+    /// at the content viewport width without downscaling.
     max_width: Option<u32>,
     /// Maximum `WebM` file size in bytes (minimum 4096, maximum 1073741824). Start only; omit to keep the host `browser.video` setting.
     max_file_bytes: Option<u64>,
