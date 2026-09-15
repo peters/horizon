@@ -8,8 +8,8 @@ use horizon_core::{HorizonHome, browser_mcp_executable, codex_home_dir, grok_hom
 
 mod user_skills;
 use user_skills::{
-    HORIZON_BROWSER_SKILL, HORIZON_NOTIFY_SKILL, HORIZON_OFFLOAD_SKILL, SkillRootLease, bind_skill_roots,
-    release_skill_roots, remove_horizon_skill_dir,
+    HORIZON_BROWSER_SKILL, HORIZON_NOTIFY_SKILL, SkillRootLease, bind_skill_roots, release_skill_roots,
+    remove_horizon_skill_dir,
 };
 
 struct EmbeddedFile {
@@ -54,14 +54,6 @@ const BROWSER_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
     content: include_str!(concat!(
         env!("OUT_DIR"),
         "/assets/plugins/codex/skills/horizon-browser/SKILL.md"
-    )),
-}];
-
-const OFFLOAD_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
-    relative_path: "SKILL.md",
-    content: include_str!(concat!(
-        env!("OUT_DIR"),
-        "/assets/plugins/codex/skills/horizon-offload/SKILL.md"
     )),
 }];
 
@@ -357,15 +349,11 @@ fn install_agent_plugins_impl(
     if let Some(codex_root) = provider_home(codex_home, user_home, ".codex") {
         let notify_dir = codex_root.join("skills").join(HORIZON_NOTIFY_SKILL);
         let browser_dir = codex_root.join("skills").join(HORIZON_BROWSER_SKILL);
-        let offload_dir = codex_root.join("skills").join(HORIZON_OFFLOAD_SKILL);
         if skill_dir_is_leased(lease, &notify_dir) {
             updated_files += sync_plugin_files(&notify_dir, NOTIFY_SKILL_FILES)?;
         }
         if skill_dir_is_leased(lease, &browser_dir) {
             updated_files += sync_plugin_files(&browser_dir, BROWSER_SKILL_FILES)?;
-        }
-        if skill_dir_is_leased(lease, &offload_dir) {
-            updated_files += sync_plugin_files(&offload_dir, OFFLOAD_SKILL_FILES)?;
         }
     }
 
@@ -393,7 +381,6 @@ fn user_skill_lease_dirs(
     if let Some(codex_root) = provider_home(codex_home, user_home, ".codex") {
         dirs.push(codex_root.join("skills").join(HORIZON_NOTIFY_SKILL));
         dirs.push(codex_root.join("skills").join(HORIZON_BROWSER_SKILL));
-        dirs.push(codex_root.join("skills").join(HORIZON_OFFLOAD_SKILL));
     }
     dirs
 }
@@ -476,7 +463,7 @@ mod tests {
 
     use super::{
         AgentPluginHostLease, BROWSER_SKILL_FILES, CLAUDE_PLUGIN_FILES, EmbeddedFile, HORIZON_BROWSER_SKILL,
-        HORIZON_NOTIFY_SKILL, NOTIFY_SKILL_FILES, NOTIFY_SKILL_ROOTS, OFFLOAD_SKILL_FILES, abandoned_user_skill_dirs,
+        HORIZON_NOTIFY_SKILL, NOTIFY_SKILL_FILES, NOTIFY_SKILL_ROOTS, abandoned_user_skill_dirs,
         agent_plugin_host_lock_path, install_agent_plugins_impl, open_lock_file, prune_stale_agent_plugin_hosts,
         sync_file_if_changed, sync_leased_user_skills, sync_plugin_files, user_skill_dir, user_skill_lease_dirs,
     };
@@ -1059,35 +1046,5 @@ mod tests {
 
         drop(prune_lock);
         drop(current_lease);
-    }
-    #[test]
-    fn offload_skill_is_installed_in_selected_home_and_owned_by_lease() {
-        let temp = tempfile::tempdir().expect("temporary directory");
-        let horizon_home = HorizonHome::from_root(temp.path().join("horizon"));
-        let user_home = temp.path().join("user");
-        let agent_home = temp.path().join("selected-agent");
-        let target = agent_home.join("skills/horizon-offload");
-        let mut lease =
-            AgentPluginHostLease::acquire(horizon_home.agent_plugin_host_dir("offload-test")).expect("host lease");
-        lease
-            .bind_user_skills(&user_skill_lease_dirs(Some(&user_home), None, Some(&agent_home)))
-            .expect("skill leases");
-        install_agent_plugins_impl(
-            &horizon_home,
-            &horizon_home.claude_plugin_dir_for_host("offload-test"),
-            Some(&user_home),
-            None,
-            Some(&agent_home),
-            Path::new("/opt/horizon"),
-            Some(&lease),
-        )
-        .expect("installation");
-        assert_eq!(
-            std::fs::read_to_string(target.join("SKILL.md")).expect("installed skill"),
-            OFFLOAD_SKILL_FILES[0].content
-        );
-        assert!(!user_home.join(".codex/skills/horizon-offload").exists());
-        drop(lease);
-        assert!(!target.exists());
     }
 }
