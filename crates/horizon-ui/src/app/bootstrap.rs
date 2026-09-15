@@ -179,7 +179,7 @@ impl HorizonApp {
             last_panel_output_at: Some(Instant::now()), browser_create_host: BrowserCreateHostState::default(),
             settings: None, remote_browser_credentials: CredentialWorkbench::spawn_platform(),
             speech_model_info_cache: settings::SpeechModelInfoCache::new(),
-            session_manager: None, remote_environments: super::remote_environments::RemoteEnvironments::default(),
+            session_manager: None,
             managed_install,
             surge_update_check_rx: None,
             surge_available_update: None,
