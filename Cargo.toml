@@ -109,7 +109,10 @@ transcribe-cpp = "0.2.0"
 cpal = { version = "0.18.2", features = ["pulseaudio"] }
 
 [profile.release]
-lto = true
+# Thin LTO: fat LTO's whole-program codegen dominated release builds
+# (12m48s of the 13m28s macOS arm64 Artifacts job) for a desktop app where
+# the extra optimization is not worth the CI cost. See #676.
+lto = "thin"
 strip = true
 
 [profile.profiling]
