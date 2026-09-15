@@ -184,6 +184,8 @@ cargo clippy --workspace --all-targets --features speech -- -D warnings -W clipp
   [ "$(copilot_requests)" -gt "$before" ] || { echo "the request did not register" >&2; exit 1; }
   ```
 
+  A count that does not increase is not automatically a failure: if a request is already outstanding — several repositories request Copilot automatically when the PR opens — a second POST is a legitimate no-op. Check for an existing pending request, or a review already sitting on the current head, before concluding the call was lost.
+
   Count the events rather than comparing timestamps: the PR almost always carries earlier Copilot requests, because the next rule re-requests after every push, and `created_at` has only second resolution, so a timestamp comparison can match a request made in the same second. The login filter keeps an unrelated human review request from counting.
 
   The pagination handling is fussy and worth copying exactly. `gh api --paginate` runs `--jq` once per page, so `--jq '… | length'` prints one count per page and `$before` becomes a multi-line string that `-gt` cannot compare. `--slurp` wraps the pages into one array, but `gh` rejects `--slurp` together with `--jq` (`the --slurp option is not supported with --jq or --template`), so the pages have to be piped to a standalone `jq` — and because each page is itself an array, the filter opens with `.[][]`.
