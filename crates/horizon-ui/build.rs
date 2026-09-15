@@ -1,6 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::{env, fs, io};
 
+#[path = "build/font_assets.rs"]
+mod font_assets;
+
 /// Assets that live under the workspace-root `assets/` directory and are
 /// embedded via `include_bytes!`/`include_str!` in the crate source.
 ///
@@ -22,6 +25,7 @@ fn main() -> io::Result<()> {
     emit_cuda_runtime_link_workaround();
 
     let manifest_dir = required_path_var("CARGO_MANIFEST_DIR")?;
+    font_assets::validate(&manifest_dir)?;
     let out_dir = required_path_var("OUT_DIR")?;
 
     // Candidate roots, checked in order.
