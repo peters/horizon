@@ -21,12 +21,36 @@ env:
 # cache pushed the repository past GitHub's 10 GB budget, and the resulting
 # eviction of the main entries left cold jobs to time out.
 jobs:
-  remote-worker-build-context:
-    name: Remote worker build context
+  # The small ubuntu checks share one runner instead of seven parallel
+  # one-job runners: each finishes in well under a minute, so the fan-out
+  # mostly lengthens the GitHub-hosted queue. Keep new small checks here as
+  # steps; give a check its own job only when it needs a different runner
+  # or cache. See #677.
+  repo-checks:
+    name: Repo checks
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
+    outputs:
+      run_snap_build: ${{ steps.snap-detect.outputs.run_snap_build }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          lfs: true
+          fetch-depth: 0
+      - name: Format
+        run: |
+          rustup component add rustfmt
+          cargo fmt --all -- --check
+      - name: Verify Ubuntu dependency installer
+        run: python3 -B scripts/test_install_ci_ubuntu_dependencies.py -v
+      - name: Verify GitHub release orchestration
+        run: python3 -B scripts/test_release_github.py -v
+      - name: Maintainability
+        run: ./scripts/check-maintainability.sh
+      - name: Version Sync
+        run: ./scripts/check-version-sync.sh
+      - name: Remote host identity
+        run: python3 -B containers/remote-worker/test_host_identity.py -v
       - name: Verify detached setup handoff contract
         run: python3 -B -m unittest discover -s containers/remote-worker -p 'test*setup_launch.py' -v
       - name: Verify on-demand GitHub credentials
@@ -39,6 +63,42 @@ jobs:
         run: python3 -B -W error containers/remote-worker/test_byte_capture.py -v
       - name: Verify source allowlist and excluded-file controls
         run: python3 -B containers/remote-worker/test_repository_packaging.py --docker-host unix:///var/run/docker.sock
+      - name: Install remote panel session dependencies
+        run: bash scripts/install-ci-ubuntu-dependencies.sh bison libevent-dev libncurses-dev pkg-config
+      - name: Build the pinned worker multiplexer
+        run: bash containers/remote-worker/build-tmux.sh "$RUNNER_TEMP/horizon-panel-tmux"
+      - name: Verify retained task sessions
+        run: PATH="$RUNNER_TEMP/horizon-panel-tmux/bin:$PATH" python3 -B containers/remote-worker/test_panel_sessions.py -v
+      - id: snap-detect
+        name: Detect Snap packaging changes
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "run_snap_build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "00000000000000000000000000000000000000" ]; then
+            echo "run_snap_build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          run_snap_build=false
+
+          while IFS= read -r path; do
+            case "$path" in
+              .github/workflows/ci.yml|.github/workflows/release.yml|scripts/build-surge-toolchain.sh|scripts/package-release-asset.sh|scripts/stage-surge-artifacts.sh|snap/*|packaging/linux/*|assets/icons/*)
+                run_snap_build=true
+                break
+                ;;
+            esac
+          done < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+
+          echo "run_snap_build=$run_snap_build" >> "$GITHUB_OUTPUT"
 
   azure-harness-tests:
     name: Azure harness tests
@@ -53,57 +113,6 @@ jobs:
       - name: Verify remote browser spike transport rules
         run: python3 -B -m unittest discover -s scripts/remote-browser-spike/tests -v
 
-  remote-panel-sessions:
-    name: Remote panel sessions
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v7
-      - run: bash scripts/install-ci-ubuntu-dependencies.sh bison libevent-dev libncurses-dev pkg-config
-      - name: Build the pinned worker multiplexer
-        run: bash containers/remote-worker/build-tmux.sh "$RUNNER_TEMP/horizon-panel-tmux"
-      - name: Verify retained task sessions
-        run: PATH="$RUNNER_TEMP/horizon-panel-tmux/bin:$PATH" python3 -B containers/remote-worker/test_panel_sessions.py -v
-
-  remote-host-identity:
-    name: Remote host identity
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - run: python3 -B containers/remote-worker/test_host_identity.py -v
-
-  version-sync:
-    name: Version Sync
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          lfs: true
-      - name: Verify workspace versions are aligned
-        run: ./scripts/check-version-sync.sh
-
-  fmt:
-    name: Format
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          lfs: true
-      - run: rustup component add rustfmt
-      - run: cargo fmt --all -- --check
-
-  maintainability:
-    name: Maintainability
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          lfs: true
-      - name: Verify Ubuntu dependency installer
-        run: python3 -B scripts/test_install_ci_ubuntu_dependencies.py -v
-      - name: Verify GitHub release orchestration
-        run: python3 -B scripts/test_release_github.py -v
-      - run: ./scripts/check-maintainability.sh
 
   clippy:
     name: Clippy
@@ -167,7 +176,10 @@ jobs:
     # 15 while building the whole workspace twice (default and speech).
     timeout-minutes: 25
     strategy:
-      fail-fast: false
+    # A failing OS releases the other two runners instead of holding them
+    # to the full timeout; cancelled siblings keep their logs and a re-run
+    # recovers the complete per-OS signal. See #677.
+      fail-fast: true
       matrix:
         include:
           - os: ubuntu-latest
@@ -222,51 +234,12 @@ jobs:
       # vendored C++ tree here is the point — tests are not run.
       - run: cargo test --locked --workspace --features speech --no-run
 
-  snap-build-inputs:
-    name: Snap Build Inputs
-    runs-on: ubuntu-latest
-    outputs:
-      run_snap_build: ${{ steps.detect.outputs.run_snap_build }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - id: detect
-        name: Detect Snap packaging changes
-        shell: bash
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
-          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-        run: |
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            echo "run_snap_build=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
-            echo "run_snap_build=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          run_snap_build=false
-
-          while IFS= read -r path; do
-            case "$path" in
-              .github/workflows/ci.yml|.github/workflows/release.yml|scripts/build-surge-toolchain.sh|scripts/package-release-asset.sh|scripts/stage-surge-artifacts.sh|snap/*|packaging/linux/*|assets/icons/*)
-                run_snap_build=true
-                break
-                ;;
-            esac
-          done < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
-
-          echo "run_snap_build=$run_snap_build" >> "$GITHUB_OUTPUT"
 
   snap-build:
     name: Snap Build
-    needs: snap-build-inputs
+    needs: repo-checks
     # Disabled: Snap packaging paused. Re-enable by restoring the previous
-    # condition: needs.snap-build-inputs.outputs.run_snap_build == 'true'
+    # condition: needs.repo-checks.outputs.run_snap_build == 'true'
     if: false
     runs-on: ubuntu-latest
     timeout-minutes: 45
