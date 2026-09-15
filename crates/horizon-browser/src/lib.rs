@@ -67,9 +67,9 @@ pub use session::{
 };
 pub use video::VideoCaptureHandle;
 pub use webdriver::{
-    ClassicTransport, DeviceEvidence, DeviceEvidenceSource, HttpError as WebDriverHttpError, RemoteAuthorizationHeader,
-    RemoteDeviceIdentity, RemoteExpiry, RemoteHttpClient, RemoteReleaseOutcome, RemoteSessionEvent,
-    RemoteSessionRequest, RemoteStartFailure,
+    AllocationRefusal, ClassicTransport, DeviceEvidence, DeviceEvidenceSource, HttpError as WebDriverHttpError,
+    RemoteAuthorizationHeader, RemoteDeviceIdentity, RemoteExpiry, RemoteHttpClient, RemoteReleaseOutcome,
+    RemoteSessionEvent, RemoteSessionRequest, RemoteStartFailure,
 };
 
 /// Default emulated viewport for a newly created browser session.

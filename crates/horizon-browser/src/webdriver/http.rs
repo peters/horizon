@@ -122,10 +122,31 @@ fn parse_response(response: &[u8]) -> Result<Value, HttpError> {
 /// Turn a status and JSON body into the `WebDriver` result or typed error,
 /// shared by the loopback and remote transports.
 pub(super) fn interpret_body(status: u16, body: &[u8]) -> Result<Value, HttpError> {
+    let rejected = (400..500).contains(&status);
+    let server_failure = status >= 500;
     let value = if body.is_empty() {
         Value::Null
     } else {
-        serde_json::from_slice::<Value>(body)?
+        match serde_json::from_slice::<Value>(body) {
+            Ok(value) => value,
+            // A 4xx with a body that is not JSON (an HTML login page, a
+            // plain-text rate limit) is still the server's definite answer:
+            // report it by status so the caller can classify the refusal.
+            Err(_) if rejected => {
+                return Err(HttpError::WebDriver {
+                    error: format!("http {status}"),
+                    message: printable_excerpt(body),
+                });
+            }
+            // A 5xx with a non-JSON body may come from a proxy in front of a
+            // server that did act (a device may have been created, a delete
+            // may have landed): that is a transport-level ambiguity, retried
+            // where retries are safe and never reported as a definite refusal.
+            Err(_) if server_failure => {
+                return Err(HttpError::Transport(format!("http {status}")));
+            }
+            Err(error) => return Err(error.into()),
+        }
     };
     let payload = value.get("value").cloned().unwrap_or_else(|| value.clone());
     if !(200..300).contains(&status) || payload.get("error").is_some() {
@@ -142,6 +163,19 @@ pub(super) fn interpret_body(status: u16, body: &[u8]) -> Result<Value, HttpErro
         return Err(HttpError::WebDriver { error, message });
     }
     Ok(value)
+}
+
+/// The first line of a non-JSON body, printable characters only and bounded,
+/// so an error message never carries markup or control bytes.
+fn printable_excerpt(body: &[u8]) -> String {
+    String::from_utf8_lossy(body)
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(160)
+        .collect()
 }
 
 fn decode_chunked(mut body: &[u8]) -> Result<Vec<u8>, HttpError> {

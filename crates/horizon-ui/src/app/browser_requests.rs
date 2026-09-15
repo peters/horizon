@@ -918,10 +918,11 @@ mod tests {
         refused.apply_remote_session_event_for_tests(RemoteSessionEvent::AllocationFailed {
             label: "ios_phone".into(),
             reason: "session not created: no device available".into(),
+            refusal: horizon_core::browser::AllocationRefusal::DeviceUnavailable,
         });
         refused.status = BrowserStatus::Stopped { code: None };
         let (code, message) = terminal_create_failure(&refused).expect("terminal");
-        assert_eq!(code, "remote_allocation_failed");
+        assert_eq!(code, "remote_device_unavailable");
         assert!(!message.contains("no device available"));
 
         let mut unknown = BrowserPanelState::inert_remote("ios_phone", "grid");

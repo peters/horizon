@@ -47,6 +47,28 @@ impl RemoteFailure {
         code: "remote_allocation_failed",
         message: "a remote session for the target could not be allocated or safely started and nothing is held at the provider; the panel shows the reason",
     };
+    const AUTHENTICATION_FAILED: Self = Self {
+        code: "remote_authentication_failed",
+        message: "the provider rejected the configured credential for the target's provider and nothing is held; check the credential in Settings > Remote browsers",
+    };
+    const NOT_ENTITLED: Self = Self {
+        code: "remote_not_entitled",
+        message: "the provider account is not entitled to automate on this service, so no device was allocated; the plan or product access must change before creating again",
+    };
+    const DEVICE_UNAVAILABLE: Self = Self {
+        code: "remote_device_unavailable",
+        message: "the provider had no device matching the target, or none free, and nothing is held; check the target's device fields or the provider's capacity before creating again",
+    };
+
+    /// The typed failure for a provider refusal, by what it was about.
+    const fn for_refusal(refusal: horizon_browser::AllocationRefusal) -> Self {
+        match refusal {
+            horizon_browser::AllocationRefusal::Authentication => Self::AUTHENTICATION_FAILED,
+            horizon_browser::AllocationRefusal::Entitlement => Self::NOT_ENTITLED,
+            horizon_browser::AllocationRefusal::DeviceUnavailable => Self::DEVICE_UNAVAILABLE,
+            horizon_browser::AllocationRefusal::Other => Self::ALLOCATION_FAILED,
+        }
+    }
     const ALLOCATION_UNKNOWN: Self = Self {
         code: "remote_allocation_unknown",
         message: "the provider gave no trustworthy answer about the remote allocation or its cleanup, so a device may still be held; check the provider before creating again",
@@ -296,9 +318,9 @@ impl BrowserPanelState {
                 failure = Some(RemoteFailure::ALLOCATION_UNKNOWN);
                 format!("remote allocation for {label} is unknown ({reason}); check the provider before retrying")
             }
-            RemoteSessionEvent::AllocationFailed { label, reason } => {
-                failure = Some(RemoteFailure::ALLOCATION_FAILED);
-                format!("remote allocation for {label} failed: {reason}")
+            RemoteSessionEvent::AllocationFailed { label, reason, refusal } => {
+                failure = Some(RemoteFailure::for_refusal(refusal));
+                format!("remote allocation for {label} failed ({refusal}): {reason}")
             }
             RemoteSessionEvent::Expired { label, reason } => match reason {
                 RemoteExpiry::HardDeadline => format!("remote session for {label} reached its maximum lifetime"),
@@ -487,13 +509,34 @@ mod tests {
             RemoteSessionEvent::AllocationFailed {
                 label: "ios_phone".into(),
                 reason: "no device available".into(),
+                refusal: horizon_browser::AllocationRefusal::DeviceUnavailable,
             },
             &mut output,
         );
         assert_eq!(
             failed.remote_failure().map(|f| f.code),
-            Some("remote_allocation_failed")
+            Some("remote_device_unavailable")
         );
+        for (refusal, code) in [
+            (
+                horizon_browser::AllocationRefusal::Authentication,
+                "remote_authentication_failed",
+            ),
+            (horizon_browser::AllocationRefusal::Entitlement, "remote_not_entitled"),
+            (horizon_browser::AllocationRefusal::Other, "remote_allocation_failed"),
+        ] {
+            let mut panel = BrowserPanelState::inert_remote("ios_phone", "grid");
+            panel.apply_remote_session_event(
+                RemoteSessionEvent::AllocationFailed {
+                    label: "ios_phone".into(),
+                    reason: "refused".into(),
+                    refusal,
+                },
+                &mut output,
+            );
+            assert_eq!(panel.remote_failure().map(|f| f.code), Some(code));
+            assert!(!panel.holds_remote_allocation(), "a refusal never holds a slot");
+        }
         assert!(!failed.holds_remote_allocation());
     }
 }

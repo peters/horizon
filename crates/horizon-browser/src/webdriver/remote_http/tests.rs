@@ -133,6 +133,14 @@ fn webdriver_errors_keep_their_codes_including_expired_sessions_and_rate_limits(
             body_delay: Duration::ZERO,
             declared_length: None,
         },
+        Reply {
+            status: 503,
+            body: b"<html>bad gateway</html>".to_vec(),
+            headers: vec!["Content-Type: text/html".into()],
+            delay: Duration::ZERO,
+            body_delay: Duration::ZERO,
+            declared_length: None,
+        },
     ]);
     let client = RemoteHttpClient::new(&server.endpoint(""), None).expect("client");
     match client.get("/session/gone/url").expect_err("expired") {
@@ -142,10 +150,25 @@ fn webdriver_errors_keep_their_codes_including_expired_sessions_and_rate_limits(
         }
         other => panic!("unexpected {other:?}"),
     }
-    assert!(matches!(
-        client.get("/status").expect_err("rate limited"),
-        HttpError::Json(_)
-    ));
+    match client.get("/status").expect_err("rate limited") {
+        HttpError::WebDriver { error, message } => {
+            assert_eq!(
+                error, "http 429",
+                "a 4xx with a non-JSON body is a definite answer, reported by status"
+            );
+            assert_eq!(message, "slow down");
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    match client.get("/status").expect_err("proxy failure") {
+        HttpError::Transport(kind) => {
+            assert_eq!(
+                kind, "http 503",
+                "a 5xx with a non-JSON body is ambiguous, never a refusal"
+            );
+        }
+        other => panic!("unexpected {other:?}"),
+    }
 }
 
 #[test]

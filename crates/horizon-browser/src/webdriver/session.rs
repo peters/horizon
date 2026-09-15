@@ -15,7 +15,7 @@ use crate::{AutomationDisclosurePolicy, BackendKind};
 
 use super::actions::ActionState;
 use super::host::DriverHost;
-use super::remote::{RemoteHost, RemoteReleaseOutcome, RemoteSessionEvent, RemoteStartFailure};
+use super::remote::{AllocationRefusal, RemoteHost, RemoteReleaseOutcome, RemoteSessionEvent, RemoteStartFailure};
 use super::service::WebDriverService;
 
 mod bidi;
@@ -542,11 +542,20 @@ fn start_failure_outcome(
                 reason: reason.clone(),
             },
         ),
-        RemoteStartFailure::AllocationFailed { .. } | RemoteStartFailure::InvalidEndpoint(_) => (
+        RemoteStartFailure::AllocationFailed { error, message } => (
             Some(RemoteReleaseOutcome::NeverAllocated),
             RemoteSessionEvent::AllocationFailed {
                 label,
                 reason: failure.to_string(),
+                refusal: AllocationRefusal::classify(error, message),
+            },
+        ),
+        RemoteStartFailure::InvalidEndpoint(_) => (
+            Some(RemoteReleaseOutcome::NeverAllocated),
+            RemoteSessionEvent::AllocationFailed {
+                label,
+                reason: failure.to_string(),
+                refusal: AllocationRefusal::Other,
             },
         ),
         RemoteStartFailure::IdentityRejected { reason, released } => (
@@ -564,6 +573,7 @@ fn start_failure_outcome(
                 | RemoteReleaseOutcome::NeverAllocated => RemoteSessionEvent::AllocationFailed {
                     label,
                     reason: failure.to_string(),
+                    refusal: AllocationRefusal::Other,
                 },
                 RemoteReleaseOutcome::ReleaseUnknown { .. } | RemoteReleaseOutcome::Failed { .. } => {
                     RemoteSessionEvent::AllocationUnknown {
@@ -729,7 +739,25 @@ mod tests {
         };
         let (established, event) = start_failure_outcome(&refused, "ios".into());
         assert_eq!(established, Some(RemoteReleaseOutcome::NeverAllocated));
-        assert!(matches!(event, RemoteSessionEvent::AllocationFailed { .. }));
+        assert!(matches!(
+            event,
+            RemoteSessionEvent::AllocationFailed {
+                refusal: super::super::remote::AllocationRefusal::DeviceUnavailable,
+                ..
+            }
+        ));
+        let unauthorized = RemoteStartFailure::AllocationFailed {
+            error: "Invalid username or password".into(),
+            message: "Invalid username or password".into(),
+        };
+        let (_, event) = start_failure_outcome(&unauthorized, "ios".into());
+        assert!(matches!(
+            event,
+            RemoteSessionEvent::AllocationFailed {
+                refusal: super::super::remote::AllocationRefusal::Authentication,
+                ..
+            }
+        ));
 
         let unknown = RemoteStartFailure::AllocationUnknown {
             reason: "timeout".into(),
