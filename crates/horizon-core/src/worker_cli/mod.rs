@@ -1,5 +1,6 @@
 //! One task-owned home per worker. Observation never creates or replays work.
 
+mod credentials;
 mod management;
 mod manifest;
 mod operations;
@@ -34,7 +35,7 @@ pub(super) struct Intent {
 #[derive(Debug, thiserror::Error)]
 pub(super) enum Error {
     #[error(
-        "usage: horizon-worker <create|add-panel|check|git-prepare|git-install|git-status|start|status|snapshot|manifest|management-preview|stop|stop-check|compute-start|delete|delete-retry|delete-check> <private-new-or-existing-directory> [panel-id for start/status/snapshot]; create reads JSON, git-install reads a PAT; manifest reads repository YAML from the specified path"
+        "usage: horizon-worker <create|add-panel|check|credential-install|git-prepare|git-install|git-status|start|status|snapshot|manifest|management-preview|stop|stop-check|compute-start|delete|delete-retry|delete-check> <private-new-or-existing-directory> [panel-id for start/status/snapshot]; credential-install requires an operation UUID; create reads JSON, git-install and credential-install read a PAT; manifest reads repository YAML from the specified path"
     )]
     Usage,
     #[error("invalid or oversized input; no input values are echoed")]
@@ -75,6 +76,12 @@ fn run_with_args(mut args: impl Iterator<Item = std::ffi::OsString>) -> Result<V
         return Err(Error::Usage);
     }
     let operation = operation.to_str().ok_or(Error::Usage)?;
+    if operation == "credential-install" {
+        let operation_id = credentials::operation_id(selected_panel.as_deref().ok_or(Error::Usage)?)?;
+        let context = Context::open(&root)?;
+        let result = credentials::install(&context, operation_id, std::io::stdin().lock())?;
+        return Ok(json!({"task": context.receipt.workspace, "result": result}));
+    }
     if selected_panel.is_some() && !matches!(operation, "start" | "status" | "snapshot") {
         return Err(Error::Usage);
     }

@@ -2,6 +2,9 @@
 
 #[cfg(target_os = "linux")]
 mod azure;
+mod credential;
+
+pub use credential::{install_configured_remote_git_credential, prepare_configured_remote_git_credential};
 
 use super::{RemoteGitObservation, RemoteGitSetupError, RemoteGitSubmission};
 use crate::{
@@ -269,7 +272,7 @@ fn submit_with(
 }
 
 #[cfg(target_os = "linux")]
-fn perform<P: crate::cloud_run::interactive_worker::InteractiveWorkerProvider>(
+fn perform_git<P: crate::cloud_run::interactive_worker::InteractiveWorkerProvider>(
     store: &CloudWorkflowStore,
     identities: &RemoteSshIdentityStore,
     provider: &P,
@@ -318,6 +321,28 @@ fn dispatch(
     token: Option<&RepositoryPat<'_>>,
     inspect: bool,
 ) -> Result<ConfiguredRemoteGitSubmission, ConfiguredRemoteGitSetupError> {
+    match dispatch_operation(
+        store,
+        identities,
+        config,
+        request,
+        prepared,
+        credential::Operation::Git { token, inspect },
+    )? {
+        credential::Outcome::Git(result) => Ok(result),
+        credential::Outcome::Credential(_) => Err(ConfiguredRemoteGitSetupError::OutcomeUnknown),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn dispatch_operation(
+    store: &CloudWorkflowStore,
+    identities: &RemoteSshIdentityStore,
+    config: &RemoteProviderConfig,
+    request: ConfiguredRemoteGitSetupRequest<'_>,
+    prepared: &PreparedRemoteGitSetup,
+    operation: credential::Operation<'_>,
+) -> Result<credential::Outcome, ConfiguredRemoteGitSetupError> {
     use crate::cloud_run::{
         CloudProvider,
         local_docker::LocalDockerInteractiveWorkerProvider,
@@ -335,13 +360,13 @@ fn dispatch(
     let check = || check_snapshot(store, config, request, prepared);
     if saved.target.provider == CloudProvider::Azure {
         let provider = azure::client(store, &prepared.config, &prepared.allocation)?;
-        return perform(store, identities, &provider, check, prepared, token, inspect);
+        return credential::perform(store, identities, &provider, check, prepared, operation);
     }
     if saved.target.provider == CloudProvider::LocalDocker {
         let profile = prepared.config.local_docker_profile(&saved.target.profile)?;
         let provider =
             LocalDockerInteractiveWorkerProvider::new(profile.clone(), store.clone()).map_err(|_| InvalidBinding)?;
-        return perform(store, identities, &provider, check, prepared, token, inspect);
+        return credential::perform(store, identities, &provider, check, prepared, operation);
     }
     let profile = prepared.config.runpod_profile(&saved.target.profile)?;
     let (worker, ssh) = prepared
@@ -362,12 +387,14 @@ fn dispatch(
         }
         None => RunPodInteractiveWorkerProvider::new(client, profile.clone(), trust),
     };
-    perform(store, identities, &provider, check, prepared, token, inspect)
+    credential::perform(store, identities, &provider, check, prepared, operation)
 }
 
 /// Static errors never include PATs, saved commands or remote output.
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ConfiguredRemoteGitSetupError {
+    #[error("credential installation requires a ready or reconciling saved worker")]
+    CredentialNotReady,
     #[error("the active client session does not own the selected environment")]
     ClientSessionMismatch,
     #[error("repository preparation requires a supported configured worker")]

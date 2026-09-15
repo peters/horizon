@@ -78,6 +78,30 @@ pub fn install_remote_github_credential<P: InteractiveWorkerProvider + ?Sized>(
 }
 
 #[cfg(target_os = "linux")]
+pub(crate) fn install_with_admission<P: InteractiveWorkerProvider + ?Sized>(
+    store: &CloudWorkflowStore,
+    identities: &RemoteSshIdentityStore,
+    provider: &P,
+    allocation: &StoredRemoteAllocation,
+    token: &RepositoryPat<'_>,
+    admit: impl Fn() -> Result<(), RemoteCredentialDeliveryError>,
+) -> Result<RemoteCredentialInstallation, RemoteCredentialDeliveryError> {
+    install_with(
+        store,
+        identities,
+        provider,
+        allocation,
+        token,
+        |store, recovered, token| {
+            // Provider inspection can block; recheck the configured binding immediately
+            // before the pinned transport is allowed to release any token bytes.
+            admit()?;
+            transport::install(store, recovered, token)
+        },
+    )
+}
+
+#[cfg(target_os = "linux")]
 fn install_with<P: InteractiveWorkerProvider + ?Sized>(
     store: &CloudWorkflowStore,
     identities: &RemoteSshIdentityStore,

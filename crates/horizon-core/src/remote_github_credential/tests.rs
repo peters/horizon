@@ -371,3 +371,34 @@ fn lost_reply_or_refusal_is_unknown_and_never_replayed() {
     assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.current(), before);
 }
+
+#[test]
+fn configured_admission_is_rechecked_after_provider_observation_before_transport() {
+    let fixture = Fixture::new(Some(InteractiveWorkerLifecycle::Ready));
+    let before = fixture.current();
+    let inspected = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut provider = Provider::new(&fixture);
+    let flag = inspected.clone();
+    provider.during = Some(Box::new(move || flag.store(true, Ordering::SeqCst)));
+    let result = install_with_admission(
+        &fixture.store,
+        &identities(&fixture),
+        &provider,
+        &before,
+        &token(),
+        || {
+            assert!(inspected.load(Ordering::SeqCst));
+            Err(RemoteCredentialDeliveryError::Recovery(
+                RemoteWorkspaceRecoveryError::StateChanged,
+            ))
+        },
+    );
+    assert_eq!(
+        result,
+        Err(RemoteCredentialDeliveryError::Recovery(
+            RemoteWorkspaceRecoveryError::StateChanged
+        ))
+    );
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.current(), before);
+}

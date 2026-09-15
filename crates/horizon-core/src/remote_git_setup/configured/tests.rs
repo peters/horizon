@@ -467,3 +467,135 @@ fn observation_variants_are_not_promoted_to_readiness_or_resubmitted() {
         assert_eq!(result.submission, RemoteGitSubmission::Observed(observation));
     }
 }
+
+#[test]
+fn credential_only_rejects_consent_owner_and_configuration_drift_before_identity_access() {
+    for provider in [CloudProvider::LocalDocker, CloudProvider::RunPod, CloudProvider::Azure] {
+        let f = Fixture::new(provider, false);
+        f.edit(|state| state.runtime.as_mut().unwrap().phase = crate::remote_workspace::RemoteRuntimePhase::Ready);
+        let before = f.current();
+        let expected = f.summary();
+        let token = RepositoryPat::new("synthetic_PAT").unwrap();
+        let result = install_configured_remote_git_credential(
+            &f.store,
+            &identities(&f),
+            &f.config,
+            request(&expected),
+            &preview(&f, RemoteGitCredentialMode::UseInstalled),
+            &token,
+        );
+        assert_eq!(result, Err(ConfiguredRemoteGitSetupError::CredentialConsentMismatch));
+        let mut changed = f.config.clone();
+        changed.azure[0].subscription_id = "22222222-2222-4222-8222-222222222222".into();
+        let result = install_configured_remote_git_credential(
+            &f.store,
+            &identities(&f),
+            &changed,
+            request(&expected),
+            &preview(&f, RemoteGitCredentialMode::InstallFirst),
+            &token,
+        );
+        assert!(result.is_err());
+        let result = install_configured_remote_git_credential(
+            &f.store,
+            &identities(&f),
+            &f.config,
+            ConfiguredRemoteGitSetupRequest {
+                expected: &expected,
+                client_session_id: "foreign",
+            },
+            &preview(&f, RemoteGitCredentialMode::InstallFirst),
+            &token,
+        );
+        assert_eq!(result, Err(ConfiguredRemoteGitSetupError::ClientSessionMismatch));
+        assert_eq!(f.current(), before);
+        assert!(!f.directory.path().join("missing-keys").exists());
+    }
+}
+
+#[test]
+fn credential_only_checks_bracket_single_install_and_preserve_unknown_outcomes() {
+    use ConfiguredRemoteGitSetupError as Error;
+    use std::cell::Cell;
+    for outcome in [
+        Some(RemoteCredentialInstallation::Installed),
+        Some(RemoteCredentialInstallation::Present),
+        None,
+    ] {
+        let calls = Cell::new(0);
+        let checks = Cell::new(0);
+        let result = credential::install_with(
+            || {
+                checks.set(checks.get() + 1);
+                Ok(())
+            },
+            || {
+                calls.set(calls.get() + 1);
+                outcome.ok_or(Error::OutcomeUnknown)
+            },
+        );
+        assert_eq!(result, outcome.ok_or(Error::OutcomeUnknown));
+        assert_eq!(calls.get(), 1);
+        assert_eq!(checks.get(), 2);
+    }
+    assert_eq!(
+        credential::install_with(|| Err(Error::StateChanged), || panic!("no disclosure")),
+        Err(Error::StateChanged)
+    );
+    for install_failed in [false, true] {
+        let checks = Cell::new(0);
+        let result = credential::install_with(
+            || {
+                checks.set(checks.get() + 1);
+                if checks.get() == 1 {
+                    Ok(())
+                } else {
+                    Err(Error::StateChanged)
+                }
+            },
+            || {
+                if install_failed {
+                    Err(Error::CredentialConsentMismatch)
+                } else {
+                    Ok(RemoteCredentialInstallation::Installed)
+                }
+            },
+        );
+        assert_eq!(result, Err(Error::OutcomeUnknown));
+    }
+}
+
+#[test]
+fn credential_only_saved_phase_admission_is_positive_and_precedes_dispatch() {
+    use crate::remote_workspace::RemoteRuntimePhase as Phase;
+    for phase in [
+        Phase::Ready,
+        Phase::Reconciling,
+        Phase::Materializing,
+        Phase::Checkpointing,
+        Phase::Failed,
+    ] {
+        let f = Fixture::new(CloudProvider::LocalDocker, false);
+        f.edit(|state| state.runtime.as_mut().unwrap().phase = phase);
+        let expected = f.summary();
+        let result = prepare_configured_remote_git_credential(&f.store, &f.config, request(&expected));
+        if matches!(phase, Phase::Ready | Phase::Reconciling) {
+            assert!(result.is_ok());
+        } else {
+            assert!(matches!(result, Err(ConfiguredRemoteGitSetupError::CredentialNotReady)));
+            let prepared = preview(&f, RemoteGitCredentialMode::InstallFirst);
+            assert_eq!(
+                install_configured_remote_git_credential(
+                    &f.store,
+                    &identities(&f),
+                    &f.config,
+                    request(&expected),
+                    &prepared,
+                    &RepositoryPat::new("synthetic_PAT").unwrap()
+                ),
+                Err(ConfiguredRemoteGitSetupError::CredentialNotReady)
+            );
+        }
+        assert!(!f.directory.path().join("missing-keys").exists());
+    }
+}
