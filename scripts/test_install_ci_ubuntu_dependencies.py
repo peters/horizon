@@ -176,7 +176,7 @@ class WorkflowTests(unittest.TestCase):
         jobs = dict(re.findall(r"^  ([\w-]+):\n(.*?)(?=^  [\w-]+:|\Z)", workflow, re.M | re.S))
         prefix = "bash scripts/install-ci-ubuntu-dependencies.sh "
         expected = {
-            "remote-panel-sessions": ["bison", "libevent-dev", "libncurses-dev", "pkg-config"],
+            "repo-checks": ["bison", "libevent-dev", "libncurses-dev", "pkg-config"],
             "clippy": ["libasound2-dev", "pkg-config"],
             "clippy-strict": ["libasound2-dev", "pkg-config"],
             "clippy-pedantic": ["libasound2-dev", "pkg-config"],
@@ -193,7 +193,7 @@ class WorkflowTests(unittest.TestCase):
                 else:
                     self.assertIn("runs-on: ubuntu-latest", jobs[name])
         self.assertIn(
-            "python3 -B scripts/test_install_ci_ubuntu_dependencies.py -v", jobs["maintainability"]
+            "python3 -B scripts/test_install_ci_ubuntu_dependencies.py -v", jobs["repo-checks"]
         )
 
 
