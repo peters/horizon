@@ -9,7 +9,7 @@ use std::path::Path;
 use egui::Ui;
 use horizon_core::Config;
 use horizon_core::browser::remote::{
-    CredentialReference, CredentialStoreKind, RemoteAuthentication, RemoteProviderProfile,
+    CredentialBinding, CredentialReference, CredentialStoreKind, RemoteAuthentication, RemoteProviderProfile,
 };
 use horizon_core::browser::remote_profile::{self, PORTABLE_PROFILE_FILE_NAME};
 use horizon_core::remote_browser_credential::{
@@ -231,7 +231,7 @@ pub(super) fn render(
     inputs.absorb(workbench.take_notices());
     inputs.retain_current(config);
     render_stores_section(ui, workbench);
-    let changed = render_portable_section(ui, config, portable);
+    let mut changed = render_portable_section(ui, config, portable);
     let providers = &config.browser.remote.providers;
     if providers.is_empty() {
         super::section_heading(ui, "Providers");
@@ -245,10 +245,42 @@ pub(super) fn render(
         });
         return changed;
     }
+    let mut bind = None;
     for (name, profile) in providers {
-        render_provider(ui, config, name, profile, workbench, inputs);
+        if let Some(request) = render_provider(ui, config, name, profile, workbench, inputs) {
+            bind = Some(request);
+        }
+    }
+    if let Some((provider, reference, store)) = bind {
+        changed |= bind_reference(config, &provider, &reference, store);
     }
     changed
+}
+
+/// A machine-local binding for a reference the imported profile left
+/// unbound: the session store, or the OS store under a slot derived from the
+/// provider and reference. Returns whether the editing configuration changed;
+/// the YAML buffer is re-serialised by the caller and Save writes it.
+fn bind_reference(
+    config: &mut Config,
+    provider: &str,
+    reference: &CredentialReference,
+    store: CredentialStoreKind,
+) -> bool {
+    let Some(profile) = config.browser.remote.providers.get_mut(provider) else {
+        return false;
+    };
+    if profile.credential_bindings.contains_key(reference) {
+        return false;
+    }
+    let slot = match store {
+        CredentialStoreKind::Session => None,
+        CredentialStoreKind::OsKeychain => Some(format!("remote-browser/{provider}/{}", reference.as_str())),
+    };
+    profile
+        .credential_bindings
+        .insert(reference.clone(), CredentialBinding { store, slot });
+    true
 }
 
 fn render_portable_section(ui: &mut Ui, config: &mut Config, portable: &mut PortableProfilePanel) -> bool {
@@ -332,7 +364,7 @@ fn render_provider(
     profile: &RemoteProviderProfile,
     workbench: &mut CredentialWorkbench,
     inputs: &mut CredentialInputs,
-) {
+) -> Option<(String, CredentialReference, CredentialStoreKind)> {
     super::section_heading(ui, name);
     super::section_card(ui, |ui| {
         let targets: Vec<&String> = config
@@ -374,14 +406,18 @@ fn render_provider(
         let readiness = workbench.readiness(profile);
         if readiness.is_empty() {
             super::dim_label(ui, "No authentication configured for this provider.");
-            return;
+            return None;
         }
         ui.add_space(8.0);
+        let mut bind = None;
         for entry in readiness {
-            render_reference(ui, name, profile, &entry, workbench, inputs);
+            if let Some(store) = render_reference(ui, name, profile, &entry, workbench, inputs) {
+                bind = Some((name.to_string(), entry.reference.clone(), store));
+            }
             ui.add_space(6.0);
         }
-    });
+        bind
+    })
 }
 
 fn render_reference(
@@ -391,7 +427,7 @@ fn render_reference(
     entry: &CredentialReadiness,
     workbench: &mut CredentialWorkbench,
     inputs: &mut CredentialInputs,
-) {
+) -> Option<CredentialStoreKind> {
     let (reference, store, state) = (&entry.reference, entry.store, entry.state);
     let bound = profile.credential_bindings.contains_key(reference);
     let key = InputKey::new(provider, profile, reference);
@@ -411,11 +447,23 @@ fn render_reference(
         ui.label(egui::RichText::new(state_text).color(color).size(11.0));
     });
     if !bound {
-        super::dim_label(
-            ui,
-            "Not bound on this computer. Add a credential_bindings entry for this reference in the YAML tab.",
-        );
-        return;
+        // An imported profile arrives without bindings: choose where this
+        // computer keeps the value, then the row takes it.
+        let mut chosen = None;
+        ui.horizontal(|ui| {
+            super::dim_label(ui, "Not bound on this computer. Keep the value in:");
+            if ui.small_button("This session only").clicked() {
+                chosen = Some(CredentialStoreKind::Session);
+            }
+            let available = workbench.keychain_state() == &KeychainState::Available;
+            if ui
+                .add_enabled(available, egui::Button::new("OS credential store").small())
+                .clicked()
+            {
+                chosen = Some(CredentialStoreKind::OsKeychain);
+            }
+        });
+        return chosen;
     }
     ui.horizontal(|ui| {
         password_field(ui, inputs.buffer(&key), provider, reference);
@@ -453,6 +501,7 @@ fn render_reference(
         let (text, color) = notice_line(notice.kind, notice.error.as_ref());
         ui.label(egui::RichText::new(text).color(color).size(11.0));
     }
+    None
 }
 
 fn password_field(ui: &mut Ui, buffer: &mut String, provider: &str, reference: &CredentialReference) {
@@ -612,6 +661,54 @@ mod tests {
         assert!(!panel.import(&mut second));
         let (notice, is_error) = panel.notice.clone().expect("notice");
         assert!(is_error && notice.contains("absent.yaml"), "{notice}");
+    }
+
+    #[test]
+    fn binding_an_unbound_reference_adds_a_machine_local_binding_once() {
+        let mut config = Config::default();
+        config.browser.remote = remote_with("grid", "https://grid.example.net/wd/hub");
+        let grid = config.browser.remote.providers.get_mut("grid").expect("grid");
+        grid.credential_bindings.clear();
+        let reference = CredentialReference::from("key");
+
+        assert!(bind_reference(
+            &mut config,
+            "grid",
+            &reference,
+            CredentialStoreKind::OsKeychain
+        ));
+        let binding = &config.browser.remote.providers["grid"].credential_bindings[&reference];
+        assert_eq!(binding.store, CredentialStoreKind::OsKeychain);
+        assert_eq!(binding.slot.as_deref(), Some("remote-browser/grid/key"));
+
+        // Already bound: nothing changes, whatever store is asked for.
+        assert!(!bind_reference(
+            &mut config,
+            "grid",
+            &reference,
+            CredentialStoreKind::Session
+        ));
+        assert_eq!(
+            config.browser.remote.providers["grid"].credential_bindings[&reference].store,
+            CredentialStoreKind::OsKeychain
+        );
+        assert!(!bind_reference(
+            &mut config,
+            "absent",
+            &reference,
+            CredentialStoreKind::Session
+        ));
+
+        let token = CredentialReference::from("token");
+        assert!(bind_reference(
+            &mut config,
+            "grid",
+            &token,
+            CredentialStoreKind::Session
+        ));
+        let session = &config.browser.remote.providers["grid"].credential_bindings[&token];
+        assert_eq!(session.store, CredentialStoreKind::Session);
+        assert!(session.slot.is_none());
     }
 
     #[test]

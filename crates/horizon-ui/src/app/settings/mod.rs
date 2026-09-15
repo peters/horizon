@@ -429,17 +429,19 @@ fn section_heading(ui: &mut egui::Ui, title: &str) {
     ui.add_space(6.0);
 }
 
-fn section_card(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui)) {
-    egui::Frame::default()
+fn section_card<R>(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let result = egui::Frame::default()
         .fill(theme::PANEL_BG())
         .stroke(Stroke::new(1.0_f32, theme::BORDER_SUBTLE()))
         .corner_radius(10)
         .inner_margin(Margin::same(16))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            content(ui);
-        });
+            content(ui)
+        })
+        .inner;
     ui.add_space(12.0);
+    result
 }
 
 fn dim_label(ui: &mut egui::Ui, text: &str) {
