@@ -4,10 +4,12 @@
 > after the UI validation pass is complete.
 
 Connector lines link an agent panel (Codex/Claude/Gemini/…) to each browser
-panel it currently drives. The link source is the browser manifest's live
-owner heartbeat (the same `owner` field the MCP adapter writes); a line is
-drawn only while the heartbeat is fresh (10 s TTL) and both panels are
-visible in the same viewport.
+panel it currently drives. The link source is the same in-memory owner
+snapshot the browser chrome chip renders: the driver refreshes
+`BrowserPanelState::owner` from the manifest's live owner heartbeat (10 s
+TTL) on its 250 ms signal tick, so the line and the chip cannot disagree. A
+line is drawn only while the owner is set and both panels are visible in the
+same viewport.
 
 ## Preconditions
 
@@ -77,7 +79,7 @@ while True:
    Browser 1's top edge is visible. Browser 1's chrome shows the `agent:`
    chip. **No line** for Browser 2. Screenshot.
 3. **Handoff / re-anchor.** Stop the helper, restart it with
-   `Browser 1 → Codex B`. Within ~2 s (1 s UI owner refresh) the line
+   `Browser 1 → Codex B`. Within ~1 s (driver 250 ms signal tick) the line
    re-anchors to Codex B and no longer touches Codex A. Screenshot.
 4. **Line expiry.** Stop the helper. Within ~12 s the line disappears and the
    chip clears (stale heartbeat). Screenshot.
@@ -92,7 +94,9 @@ while True:
      and visible on both sides (lines render under panels);
    - the agent and browser panels are dragged/resized live → the line
      follows continuously without flicker;
-   - the panels are dragged to touch (gap < 48 px) → the line is omitted.
+   - the panels are dragged to touch (gap < 48 px) → the line is omitted;
+   - the agent panel is dragged to partially overlap the browser panel →
+     the line is omitted (no wrapping curve), the chip still shows the owner.
    Screenshot each.
 7. **Detached workspace.** Drag the workspace to a detached window (or the
    `Detach` button). Both panels in the detached window: line renders inside
@@ -104,7 +108,8 @@ while True:
    pointer: lines scale and stay attached to panel edges.
 10. **Performance sanity.** With fan-out (step 5) active, move the pointer
     across the canvas: the HUD fps holds near the idle value (no per-frame
-    work for unrelated panels; owner reads are 1 s per browser panel).
+    work for unrelated panels; the owner is read from the same in-memory
+    field the chrome chip uses — no disk I/O).
 11. **Cleanup.** Kill the demo instance, `rm -rf $DEMO`.
 
 ## Pass criteria

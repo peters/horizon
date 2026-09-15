@@ -1,27 +1,25 @@
 //! Connector lines linking an agent panel to the browser panels it drives.
 //!
-//! The link data comes from each browser panel's manifest: while an agent's
-//! MCP adapter drives a browser it heartbeats an owner whose name is the
-//! agent panel's actor identity. A line is drawn only while that owner
-//! heartbeat is fresh and both panels are visible in the same viewport, so a
-//! handoff or an idle agent removes the line automatically.
+//! The link data is the same in-memory owner snapshot the browser chrome chip
+//! renders: while an agent's MCP adapter drives a browser it heartbeats an
+//! owner in the manifest, and the browser driver refreshes
+//! `BrowserPanelState::owner` from that heartbeat on its signal tick. Reading
+//! the same field as the chip means the line and the chip cannot disagree,
+//! and a handoff or an idle agent removes the line automatically.
 //!
-//! Lines are painted on the canvas layer after the workspace backgrounds and
-//! before the panels, so panel bodies cover the line wherever they overlap.
+//! Lines are painted on a dedicated non-interactive `Order::Background`
+//! layer created after the workspace background areas (so the translucent
+//! workspace fill and border do not cover them) but before the panels, which
+//! live in `Order::Middle` and therefore still cover the lines wherever they
+//! overlap.
 
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
 
-use egui::{Color32, Context, LayerId, Painter, Pos2, Rect, Shape, Stroke, Vec2};
-use horizon_core::browser::manifest;
+use egui::{Color32, Context, Id, LayerId, Order, Painter, Pos2, Rect, Shape, Stroke, Vec2};
 use horizon_core::{Panel, PanelId, PanelKind, WorkspaceId, browser_actor};
 
 use super::{HorizonApp, theme};
 
-/// How often a browser panel's manifest is re-read for its live owner. The
-/// owner TTL is 10 s, so a one-second cadence keeps line lifetimes honest
-/// without touching disk more than once a second per browser panel.
-const OWNER_REFRESH_INTERVAL: Duration = Duration::from_millis(1_000);
 const LINE_WIDTH: f32 = 1.5;
 const LINE_ALPHA: u8 = 150;
 const DOT_RADIUS: f32 = 3.0;
@@ -36,9 +34,9 @@ const MAX_CURVE_PULL: f32 = 260.0;
 const MIN_ANCHOR_GAP: f32 = 48.0;
 
 impl HorizonApp {
-    /// Draw one line per browser panel whose live owner is an agent panel
-    /// visible in the same viewport. Must run after the workspace
-    /// backgrounds and before the panels so the panels cover the lines.
+    /// Draw one line per browser panel whose owner is an agent panel visible
+    /// in the same viewport. Must run after the workspace backgrounds and
+    /// before the panels so the panels cover the lines.
     pub(super) fn render_browser_connector_lines(
         &mut self,
         ctx: &Context,
@@ -53,9 +51,8 @@ impl HorizonApp {
             .iter()
             .map(|(panel_id, geometry)| (*panel_id, geometry.screen_rect))
             .collect();
-        let now = Instant::now();
         let mut links: Vec<(Rect, Rect)> = Vec::new();
-        let browsers: Vec<(PanelId, String)> = self
+        let browsers: Vec<(PanelId, Option<String>)> = self
             .board
             .panels
             .iter()
@@ -64,13 +61,13 @@ impl HorizonApp {
                     && panel.visible
                     && self.connector_panel_in_scope(panel, visible_workspace)
             })
-            .map(|panel| (panel.id, panel.local_id.clone()))
+            .map(|panel| (panel.id, panel.browser().and_then(|browser| browser.owner.clone())))
             .collect();
-        for (browser_id, browser_local_id) in browsers {
+        for (browser_id, owner) in browsers {
             let Some(browser_rect) = rect_of.get(&browser_id).copied() else {
                 continue;
             };
-            let Some(actor) = self.owner_actor_for(&browser_local_id, now) else {
+            let Some(actor) = owner else {
                 continue;
             };
             let Some(agent_rect) = self
@@ -92,7 +89,12 @@ impl HorizonApp {
         if links.is_empty() {
             return;
         }
-        let painter = ctx.layer_painter(LayerId::background());
+        // A dedicated layer, first shown here (after the workspace background
+        // areas), so it paints above the workspace fill/border but below the
+        // `Order::Middle` panels.
+        let painter = ctx
+            .layer_painter(LayerId::new(Order::Background, Id::new("browser_connector_lines")))
+            .with_clip_rect(canvas_rect);
         for (agent_rect, browser_rect) in links {
             paint_connector(&painter, agent_rect, browser_rect, theme::PALETTE_CYAN());
         }
@@ -104,34 +106,21 @@ impl HorizonApp {
             None => !self.workspace_is_detached(panel.workspace_id),
         }
     }
-
-    /// The browser panel's live owner actor, refreshed at most once per
-    /// [`OWNER_REFRESH_INTERVAL`] per panel so the manifest is not re-read
-    /// every frame.
-    fn owner_actor_for(&mut self, browser_local_id: &str, now: Instant) -> Option<String> {
-        let cached = self.browser_owner_links.get(browser_local_id);
-        let stale = cached.is_none_or(|(_, fetched_at)| now.duration_since(*fetched_at) >= OWNER_REFRESH_INTERVAL);
-        if stale {
-            let actor = manifest::read(browser_local_id)
-                .and_then(|manifest| {
-                    manifest
-                        .live_owner(manifest::now_millis())
-                        .map(|owner| owner.name.clone())
-                })
-                .filter(|actor| !actor.is_empty());
-            self.browser_owner_links
-                .insert(browser_local_id.to_string(), (actor.clone(), now));
-            return actor;
-        }
-        cached.and_then(|(actor, _)| actor.clone())
-    }
 }
 
 /// Cubic-bezier anchors: each panel uses the edge that faces the other, and
 /// the control points pull outward along that edge's normal so the curve
 /// leaves and arrives perpendicular to the panel borders. `None` when the
-/// panels touch and the curve would be a hidden sliver.
+/// panels overlap (the curve would wrap around the overlap) or touch so
+/// closely that it would be a hidden sliver.
 fn connector_anchors(agent_rect: Rect, browser_rect: Rect) -> Option<(Pos2, Pos2, Pos2, Pos2)> {
+    let overlap = Rect::from_min_max(
+        agent_rect.min.max(browser_rect.min),
+        agent_rect.max.min(browser_rect.max),
+    );
+    if overlap.area() > 0.0 {
+        return None;
+    }
     let pull = ((browser_rect.center() - agent_rect.center()).length() * 0.45).clamp(MIN_CURVE_PULL, MAX_CURVE_PULL);
     let (start, c1, c2, end) = if (browser_rect.center().x - agent_rect.center().x).abs()
         >= (browser_rect.center().y - agent_rect.center().y).abs()
@@ -277,6 +266,22 @@ mod degenerate_tests {
         assert!(
             connector_anchors(rect(0.0, 0.0, 700.0, 400.0), rect(0.0, 460.0, 700.0, 400.0)).is_some(),
             "a 60 px gap still draws"
+        );
+    }
+
+    #[test]
+    fn overlapping_panels_skip_the_connector() {
+        assert!(
+            connector_anchors(rect(0.0, 0.0, 700.0, 400.0), rect(0.0, 0.0, 700.0, 400.0)).is_none(),
+            "identical rectangles must not draw a wrapping line"
+        );
+        assert!(
+            connector_anchors(rect(0.0, 0.0, 700.0, 400.0), rect(500.0, 300.0, 700.0, 400.0)).is_none(),
+            "partially overlapping rectangles must not draw a wrapping line"
+        );
+        assert!(
+            connector_anchors(rect(0.0, 0.0, 700.0, 400.0), rect(700.0, 0.0, 700.0, 400.0)).is_none(),
+            "edge-touching rectangles have no positive-area overlap but still degenerate"
         );
     }
 }
