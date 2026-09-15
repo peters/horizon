@@ -323,6 +323,22 @@ fn keyring_errors_map_to_value_free_states() {
     assert!(!format!("{}", map_error(&Error::PlatformFailure(boxed()))).contains("platform detail"));
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn locked_macos_keychain_statuses_map_to_locked() {
+    use keyring_core::Error;
+    use security_framework::base::Error as SecurityError;
+
+    for status in [-25_308, -25_293] {
+        let platform_error = SecurityError::from_code(status);
+        assert_eq!(
+            map_error(&Error::PlatformFailure(Box::new(platform_error))),
+            RemoteCredentialError::Locked,
+            "OSStatus {status}"
+        );
+    }
+}
+
 #[test]
 fn keyring_adapter_round_trips_through_a_mock_store_and_requires_a_slot() {
     let profile = basic_profile(CredentialStoreKind::OsKeychain, CredentialStoreKind::Session);

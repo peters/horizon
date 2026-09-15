@@ -142,6 +142,13 @@ fn search_probe(store: &CredentialStore, user: &str) -> Result<bool, RemoteCrede
 /// Map platform errors to the typed, value-free error. The platform message
 /// stays in a local trace so diagnostics exist without reaching callers.
 pub(super) fn map_error(error: &KeyringError) -> RemoteCredentialError {
+    #[cfg(target_os = "macos")]
+    if let KeyringError::PlatformFailure(platform_error) = error {
+        if is_locked_keychain_error(platform_error.as_ref()) {
+            return RemoteCredentialError::Locked;
+        }
+    }
+
     let kind = match error {
         KeyringError::NoEntry => return RemoteCredentialError::Missing,
         KeyringError::NoStorageAccess(_) => return RemoteCredentialError::Locked,
@@ -158,6 +165,13 @@ pub(super) fn map_error(error: &KeyringError) -> RemoteCredentialError {
     };
     tracing::warn!(kind, "OS credential store operation failed");
     RemoteCredentialError::Platform { kind }
+}
+
+#[cfg(target_os = "macos")]
+fn is_locked_keychain_error(error: &(dyn std::error::Error + 'static)) -> bool {
+    error
+        .downcast_ref::<security_framework::base::Error>()
+        .is_some_and(|error| matches!(error.code(), -25_308 | -25_293))
 }
 
 #[cfg(target_os = "linux")]

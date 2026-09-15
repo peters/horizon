@@ -58,6 +58,8 @@ zeroize = "1.9.0"
 zbus-secret-service-keyring-store = { version = "1.0.1", default-features = false, features = ["rt-async-io-crypto-rust"] }
 secret-service = { version = "5.2.0", default-features = false, features = ["rt-async-io-crypto-rust"] }
 apple-native-keyring-store = { version = "1.0.2", features = ["keychain"] }
+# Used by the macOS keychain adapter to classify locked-keychain OSStatus values.
+security-framework = "3.7.0"
 windows-native-keyring-store = "1.1.0"
 ureq = { version = "3.4.0", default-features = false, features = ["json", "rustls"] }
 time = { version = "0.3.55", features = ["formatting", "parsing"] }
