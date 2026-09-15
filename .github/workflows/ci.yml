@@ -284,9 +284,37 @@ jobs:
           name: horizon-linux-x64.snap
           path: ${{ steps.snapcraft.outputs.snap }}
 
+  # Docs/CI-only pushes to main must not pay for four release builds:
+  # gate the Artifacts matrix on the paths that can change the binary.
+  # workflow_dispatch always builds so a release can be forced on demand.
+  release-changes:
+    name: Release inputs changed
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: dorny/paths-filter@v4.0.3
+        id: filter
+        with:
+          filters: |-
+            rust:
+              - 'assets/**'
+              - 'crates/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - 'scripts/package-release-asset.sh'
+              - '.github/workflows/ci.yml'
+
   rust-artifacts:
     name: Artifacts (${{ matrix.name }})
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: always() && (github.event_name == 'workflow_dispatch' || needs.release-changes.outputs.rust == 'true')
+    needs: release-changes
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
