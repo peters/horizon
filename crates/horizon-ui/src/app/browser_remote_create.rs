@@ -195,7 +195,9 @@ pub(super) fn trim_remote_slot_leases(app: &mut HorizonApp) {
 }
 
 /// Allocations counted against the cross-instance provider identity `key`
-/// anywhere this host knows about (live, retired, unreleased, pending close).
+/// anywhere this host knows about: the board (live, retired, unreleased),
+/// pending closes, a session switch still tearing the previous board down,
+/// and holds that earlier boards left unreleased.
 pub(super) fn remote_holds_for_key(app: &HorizonApp, key: &str) -> usize {
     let pending = app
         .browser_create_host
@@ -203,7 +205,27 @@ pub(super) fn remote_holds_for_key(app: &HorizonApp, key: &str) -> usize {
         .iter()
         .filter(|pending| pending.holds_remote_allocation_for_key(key))
         .count();
-    app.board.remote_holds_for_key(key) + pending
+    let switching = app
+        .pending_session_switch
+        .as_ref()
+        .map_or(0, |switch| switch.shutdown_progress.remote_holds_for_key(key));
+    let orphaned = app
+        .browser_create_host
+        .orphaned_remote_quota_keys
+        .iter()
+        .filter(|held| held.as_str() == key)
+        .count();
+    app.board.remote_holds_for_key(key) + pending + switching + orphaned
+}
+
+impl HorizonApp {
+    /// Take over the unreleased holds of a shutdown that is ending, so their
+    /// slots stay leased after its board is gone.
+    pub(super) fn adopt_orphaned_remote_holds(&mut self, progress: &horizon_core::ShutdownProgress) {
+        self.browser_create_host
+            .orphaned_remote_quota_keys
+            .extend(progress.take_unreleased_remote_quota_keys());
+    }
 }
 
 /// Allocations `provider` may still hold anywhere this host knows about:

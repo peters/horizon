@@ -80,34 +80,83 @@ impl SlotLease {
 }
 
 /// Lease one of `max_sessions` slots for `key` under `root` (the Horizon
-/// home), trying each slot in order and taking the first that is free. One
-/// non-blocking pass: this runs on the host's frame, so it never waits. A
-/// child process forked by this or another process inherits open lock
-/// descriptors until it execs, so a slot freed a moment ago can read as
-/// held for a few milliseconds; the caller's next attempt sees it free.
+/// home). Every slot file in the key's directory counts, whatever its index:
+/// a lease taken under a larger quota (`slot-3` when the quota was four)
+/// still occupies one of the sessions after the quota is reduced to two.
+/// The scan and the grant happen under a per-key coordination lock so two
+/// acquirers cannot both count the same free slot; that lock is held for
+/// the scan only, never while a session runs. Slot locks themselves are
+/// tried without waiting: this runs on the host's frame. A child process
+/// forked by this or another process inherits open lock descriptors until
+/// it execs, so a slot freed a moment ago can read as held for a few
+/// milliseconds; the caller's next attempt sees it free.
 ///
 /// # Errors
-/// [`SlotError::Busy`] when every slot is held; [`SlotError::Io`] when the
-/// directory or a slot file cannot be created or opened.
+/// [`SlotError::Busy`] when `max_sessions` slots are already held;
+/// [`SlotError::Io`] when the directory or a slot file cannot be used.
 pub fn acquire_slot(root: &Path, key: &str, max_sessions: u32) -> Result<SlotLease, SlotError> {
     let dir = root.join(SLOTS_DIR).join(key);
     fs::create_dir_all(&dir).map_err(SlotError::Io)?;
-    for index in 0..max_sessions {
-        let path = dir.join(format!("slot-{index}.lock"));
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&path)
-            .map_err(SlotError::Io)?;
+    let coordination = open_slot_file(&dir.join("coordination.lock"))?;
+    coordination.lock().map_err(SlotError::Io)?;
+    let mut held = 0u32;
+    let mut free: Option<SlotLease> = None;
+    let mut present = std::collections::BTreeSet::new();
+    for entry in fs::read_dir(&dir).map_err(SlotError::Io)? {
+        let path = entry.map_err(SlotError::Io)?.path();
+        let Some(index) = slot_index(&path) else {
+            continue;
+        };
+        present.insert(index);
+        let file = open_slot_file(&path)?;
         match file.try_lock() {
-            Ok(()) => return Ok(SlotLease { _file: file, path }),
-            Err(std::fs::TryLockError::WouldBlock) => {}
+            Ok(()) => {
+                if free.is_none() {
+                    free = Some(SlotLease { _file: file, path });
+                }
+            }
+            Err(std::fs::TryLockError::WouldBlock) => held += 1,
             Err(std::fs::TryLockError::Error(error)) => return Err(SlotError::Io(error)),
         }
     }
-    Err(SlotError::Busy { max_sessions })
+    if held >= max_sessions {
+        return Err(SlotError::Busy { max_sessions });
+    }
+    if let Some(lease) = free {
+        return Ok(lease);
+    }
+    // At most `present.len()` indexes are taken, so the first free index is
+    // at or below that count.
+    let index = (0..=u32::try_from(present.len()).unwrap_or(u32::MAX))
+        .find(|index| !present.contains(index))
+        .unwrap_or_default();
+    let path = dir.join(format!("slot-{index}.lock"));
+    let file = open_slot_file(&path)?;
+    match file.try_lock() {
+        Ok(()) => Ok(SlotLease { _file: file, path }),
+        Err(std::fs::TryLockError::WouldBlock) => Err(SlotError::Busy { max_sessions }),
+        Err(std::fs::TryLockError::Error(error)) => Err(SlotError::Io(error)),
+    }
+}
+
+fn open_slot_file(path: &Path) -> Result<File, SlotError> {
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .map_err(SlotError::Io)
+}
+
+/// The index of a `slot-N.lock` file name, or `None` for anything else.
+fn slot_index(path: &Path) -> Option<u32> {
+    path.file_name()?
+        .to_str()?
+        .strip_prefix("slot-")?
+        .strip_suffix(".lock")?
+        .parse()
+        .ok()
 }
 
 #[cfg(test)]
@@ -197,5 +246,25 @@ mod tests {
             Err(SlotError::Busy { max_sessions: 0 }) => {}
             other => panic!("a zero quota leases nothing, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_lease_taken_under_a_larger_quota_still_counts_after_the_quota_shrinks() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let first = acquire_slot(root.path(), "k", 4).expect("slot 0");
+        let second = acquire_slot(root.path(), "k", 4).expect("slot 1");
+        let high = acquire_slot(root.path(), "k", 4).expect("slot 2");
+        assert!(high.path().ends_with("slot-2.lock"));
+        drop(first);
+        drop(second);
+        // The quota is now two: the lease on slot 2 is one of them.
+        let one_more = acquire_slot(root.path(), "k", 2).expect("one session left under the smaller quota");
+        match acquire_slot(root.path(), "k", 2) {
+            Err(SlotError::Busy { max_sessions: 2 }) => {}
+            other => panic!("the high slot and the new lease fill the quota, got {other:?}"),
+        }
+        drop(one_more);
+        drop(high);
+        assert!(acquire_slot(root.path(), "k", 2).is_ok());
     }
 }

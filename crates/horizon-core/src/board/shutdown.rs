@@ -29,6 +29,11 @@ pub struct ShutdownProgress {
     terminal_joins_completed: Arc<AtomicUsize>,
     browser_count: usize,
     browser_shutdown_signals: Arc<Mutex<Vec<BrowserShutdownSignal>>>,
+    /// Remote teardowns that finished without an established release, from
+    /// the board that started this shutdown and from signals that finish
+    /// unestablished while it runs; they keep counting against the
+    /// provider's quota until the host takes them over.
+    unreleased_remote_holds: Arc<Mutex<Vec<super::UnreleasedRemoteHold>>>,
     browsers_completed: Arc<AtomicUsize>,
     forced_browser_shutdown_status: Arc<AtomicUsize>,
 }
@@ -38,6 +43,7 @@ impl ShutdownProgress {
         panel_count: usize,
         terminal_joins_completed: Arc<AtomicUsize>,
         browser_shutdown_signals: Vec<BrowserShutdownSignal>,
+        unreleased_remote_holds: Vec<super::UnreleasedRemoteHold>,
     ) -> Self {
         let browser_count = browser_shutdown_signals.len();
         Self {
@@ -46,6 +52,7 @@ impl ShutdownProgress {
             terminal_joins_completed,
             browser_count,
             browser_shutdown_signals: Arc::new(Mutex::new(browser_shutdown_signals)),
+            unreleased_remote_holds: Arc::new(Mutex::new(unreleased_remote_holds)),
             browsers_completed: Arc::new(AtomicUsize::new(0)),
             forced_browser_shutdown_status: Arc::new(AtomicUsize::new(FORCE_NOT_STARTED)),
         }
@@ -92,14 +99,63 @@ impl ShutdownProgress {
             .browser_shutdown_signals
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut unreleased = self
+            .unreleased_remote_holds
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         signals.retain(|signal| {
             if signal.is_complete() {
                 self.browsers_completed.fetch_add(1, Ordering::Relaxed);
+                if signal.holds_remote_allocation()
+                    && let Some(provider) = signal.remote_provider()
+                {
+                    unreleased.push(super::UnreleasedRemoteHold {
+                        provider: provider.to_string(),
+                        quota_key: signal.remote_quota_key().map(str::to_string),
+                    });
+                }
                 false
             } else {
                 true
             }
         });
+    }
+
+    /// Allocations still counted against the cross-instance provider
+    /// identity `key` by this shutdown: teardowns in flight that hold one,
+    /// plus those that finished without an established release.
+    #[must_use]
+    pub fn remote_holds_for_key(&self, key: &str) -> usize {
+        self.poll_browser_shutdown_signals();
+        let in_flight = self
+            .browser_shutdown_signals
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter(|signal| signal.remote_quota_key() == Some(key) && signal.holds_remote_allocation())
+            .count();
+        let finished = self
+            .unreleased_remote_holds
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter(|held| held.quota_key.as_deref() == Some(key))
+            .count();
+        in_flight + finished
+    }
+
+    /// Hand the quota identities of every unreleased hold to the host, which
+    /// keeps counting them for the rest of the process. Teardowns still in
+    /// flight are polled first so nothing that finished unestablished is
+    /// lost; a teardown that is still running keeps its own hold.
+    #[must_use]
+    pub fn take_unreleased_remote_quota_keys(&self) -> Vec<String> {
+        self.poll_browser_shutdown_signals();
+        let mut unreleased = self
+            .unreleased_remote_holds
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unreleased.drain(..).filter_map(|held| held.quota_key).collect()
     }
 
     /// Block until every asynchronous panel teardown finishes or the timeout
@@ -240,7 +296,7 @@ mod tests {
     #[test]
     fn completion_wait_observes_async_teardown() {
         let completed = Arc::new(AtomicUsize::new(0));
-        let progress = ShutdownProgress::new(1, Arc::clone(&completed), Vec::new());
+        let progress = ShutdownProgress::new(1, Arc::clone(&completed), Vec::new(), Vec::new());
         let worker = std::thread::spawn(move || {
             completed.fetch_add(1, Ordering::Relaxed);
         });
@@ -251,7 +307,7 @@ mod tests {
 
     #[test]
     fn completion_wait_honors_timeout() {
-        let progress = ShutdownProgress::new(1, Arc::new(AtomicUsize::new(0)), Vec::new());
+        let progress = ShutdownProgress::new(1, Arc::new(AtomicUsize::new(0)), Vec::new(), Vec::new());
 
         assert!(!progress.wait_for_completion(Duration::ZERO));
     }
@@ -263,6 +319,7 @@ mod tests {
             2,
             Arc::new(AtomicUsize::new(0)),
             vec![BrowserShutdownSignal::for_test(completed_rx)],
+            Vec::new(),
         );
 
         assert!(!progress.browser_shutdown_is_complete());
@@ -280,6 +337,7 @@ mod tests {
             1,
             Arc::new(AtomicUsize::new(0)),
             vec![BrowserShutdownSignal::for_test(completed_rx)],
+            Vec::new(),
         );
 
         assert!(progress.wait_for_browser_shutdown(Duration::ZERO));
@@ -295,6 +353,7 @@ mod tests {
             1,
             Arc::new(AtomicUsize::new(0)),
             vec![BrowserShutdownSignal::for_test(completed_rx)],
+            Vec::new(),
         );
         let started = Instant::now();
 
@@ -320,5 +379,33 @@ mod tests {
             ForcedBrowserShutdownStatus::Succeeded
         );
         assert!(progress.browser_shutdown_is_complete());
+    }
+
+    #[test]
+    fn unreleased_holds_survive_the_teardowns_and_reach_the_host() {
+        use horizon_browser::RemoteReleaseOutcome;
+
+        let progress = ShutdownProgress::new(
+            2,
+            Arc::new(AtomicUsize::new(0)),
+            vec![
+                BrowserShutdownSignal::completed_remote_for_test("grid", None),
+                BrowserShutdownSignal::completed_remote_for_test("grid", Some(RemoteReleaseOutcome::Released)),
+            ],
+            vec![super::super::UnreleasedRemoteHold {
+                provider: "grid".into(),
+                quota_key: Some("grid".into()),
+            }],
+        );
+        assert_eq!(
+            progress.remote_holds_for_key("grid"),
+            2,
+            "the board's ledger entry plus the teardown that finished unestablished"
+        );
+        assert_eq!(progress.remote_holds_for_key("other"), 0);
+        assert!(progress.browser_shutdown_is_complete());
+        let handed_over = progress.take_unreleased_remote_quota_keys();
+        assert_eq!(handed_over, vec!["grid".to_string(), "grid".to_string()]);
+        assert_eq!(progress.remote_holds_for_key("grid"), 0, "handed over once");
     }
 }

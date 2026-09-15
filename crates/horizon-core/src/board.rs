@@ -115,9 +115,10 @@ pub struct Board {
 
 /// A remote teardown that finished without an established release, kept so
 /// the provider (by name and by cross-instance identity) stays counted.
-struct UnreleasedRemoteHold {
-    provider: String,
-    quota_key: Option<String>,
+#[derive(Clone, Debug)]
+pub(crate) struct UnreleasedRemoteHold {
+    pub(crate) provider: String,
+    pub(crate) quota_key: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -308,7 +309,12 @@ impl Board {
         }
         browser_shutdown_signals.append(&mut self.retired_browser_shutdown_signals);
         let browser_count = browser_shutdown_signals.len();
-        let shutdown = ShutdownProgress::new(browser_count, Arc::new(AtomicUsize::new(0)), browser_shutdown_signals);
+        let shutdown = ShutdownProgress::new(
+            browser_count,
+            Arc::new(AtomicUsize::new(0)),
+            browser_shutdown_signals,
+            std::mem::take(&mut self.unreleased_remote_holds),
+        );
         if !shutdown.wait_for_browser_shutdown(BROWSER_PANEL_SHUTDOWN_TIMEOUT) {
             tracing::warn!(
                 browser_count,
@@ -351,7 +357,14 @@ impl Board {
             browser_shutdown_signals.push(signal);
         }
 
-        ShutdownProgress::new(panel_count, completed, browser_shutdown_signals)
+        // Unreleased holds leave with the teardowns: the progress keeps
+        // counting them so a replacement board never sees the quota as free.
+        ShutdownProgress::new(
+            panel_count,
+            completed,
+            browser_shutdown_signals,
+            std::mem::take(&mut self.unreleased_remote_holds),
+        )
     }
 
     /// Allocations `provider` may still hold on this board: live remote

@@ -172,8 +172,13 @@ cancelling after allocation releases the owned session.
   lock is `max_sessions` slot files under the Horizon home
   (`remote-slots/<sha256 of endpoint and reference>/slot-N.lock`), each held
   with an exclusive advisory file lock from before New Session until the
-  release is established; the operating system frees a dead instance's slots,
-  and a host whose slot files cannot be used falls back to its own count.
+  release is established; every slot file in the identity's directory counts
+  whatever its index, so a quota reduced in configuration still counts leases
+  taken under the larger one, and the scan and grant run under a per-identity
+  coordination lock. The operating system frees a dead instance's slots, a
+  host whose slot files cannot be used falls back to its own count, and holds
+  a replaced board left unreleased stay leased by the host for the rest of the
+  process.
 - DELETE that times out is `release_unknown`, retried in a bounded way for that
   exact session id and shown as unresolved cleanup. Release is `released` only
   when the provider reports a terminal status where such an API exists;
