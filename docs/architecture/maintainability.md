@@ -739,7 +739,14 @@ back into large multi-purpose modules.
   - `browser_requests`: transient host polling, panel creation, visibility
     changes for authenticated requests routed from a live agent panel, and the
     host-owned workspace and viewport stamps that keep MCP authorization and
+  - `browser_requests`: transient host polling, panel creation, visibility
+    changes for authenticated requests routed from a live agent panel, and the
+    host-owned workspace and viewport stamps that keep MCP authorization and
     the reported emulated viewport current
+  - `browser_resize_requests`: authenticated agent-requested panel resizes
+    applied through the board, typed refusals for expired, foreign, remote, or
+    unowned panels, and the resulting viewport stamped back before the result
+    is published
   - `browser_viewport`: the panel layout size ↔ emulated CSS viewport mapping
     the host paths size and stamp with: the exact complement of the panel
     chrome the render path consumes, built from the layout constants it

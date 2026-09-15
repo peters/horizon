@@ -216,15 +216,16 @@ impl HorizonApp {
     /// Root of the Horizon home whose manifests this host stamps. Production
     /// constructs the session store from `HorizonHome::resolve()`, the same
     /// root the drivers and the MCP server use for their default paths.
-    fn host_manifest_root(&self) -> &Path {
+    pub(super) fn host_manifest_root(&self) -> &Path {
         self.session_store.home().root()
     }
 
     fn poll_host_requests(&mut self) -> bool {
         let mut changed = false;
-        // The create, visibility and close queues are independent: a create
-        // queue that cannot be read (one malformed request is enough) must
-        // not stop closes from being claimed or their results published.
+        // The create, visibility, resize and close queues are independent:
+        // a create queue that cannot be read (one malformed request is
+        // enough) must not stop closes from being claimed or their results
+        // published.
         let requests = match manifest::list_create_requests() {
             Ok(requests) => requests,
             Err(error) => {
@@ -255,7 +256,10 @@ impl HorizonApp {
             changed = true;
             self.start_requested_browser(request, actor_panel);
         }
-        changed | self.poll_browser_visibility_requests() | self.poll_browser_close_requests()
+        changed
+            | self.poll_browser_visibility_requests()
+            | self.poll_browser_resize_requests()
+            | self.poll_browser_close_requests()
     }
 
     fn start_requested_browser(&mut self, request: BrowserCreateRequest, actor_panel: ActorPanel) {
@@ -554,7 +558,7 @@ pub(super) fn actor_panel(board: &Board, actor: &str) -> Option<ActorPanel> {
 
 /// The workspace stamp for browser panels in `workspace_id`: this host plus
 /// the identities of every agent panel currently sharing that workspace.
-fn browser_workspace(board: &Board, workspace_id: WorkspaceId) -> Option<ManifestWorkspace> {
+pub(super) fn browser_workspace(board: &Board, workspace_id: WorkspaceId) -> Option<ManifestWorkspace> {
     let workspace = board.workspace(workspace_id)?;
     let actors = board
         .panels

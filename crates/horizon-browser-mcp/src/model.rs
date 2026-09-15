@@ -42,12 +42,13 @@ pub(crate) struct BrowserPanel {
     /// returned panel is already in that agent's workspace, while identities
     /// from outside Horizon see every live panel.
     pub(crate) visible: bool,
-    /// Panel width in CSS pixels, stamped by the host from the board layout.
-    /// The browser viewport follows the panel; absent on manifests from
+    /// Emulated viewport width in CSS pixels, stamped by the host as the
+    /// panel body minus the panel chrome it renders. Absent on manifests from
     /// older hosts or before the first host stamp.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) width: Option<u32>,
-    /// Panel height in CSS pixels, stamped by the host from the board layout.
+    /// Emulated viewport height in CSS pixels, stamped by the host as the
+    /// panel body minus the panel chrome it renders.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) height: Option<u32>,
     pub(crate) owner: Option<String>,
@@ -210,9 +211,9 @@ pub(crate) struct CreateInput {
     pub(crate) backend: Option<CreateBackend>,
     /// Configured remote target name (a key of Horizon's browser.remote.targets) to run the session at that remote target instead of a local browser. Provider-neutral: Horizon resolves the endpoint, capabilities and credentials; the panel then advertises `remote_target`, classic `WebDriver` and no network capture. After allocation the device is verified against the target's requirement from the provider's own evidence; a physical requirement the evidence does not confirm is refused as `remote_device_rejected` after Horizon attempts to release the session (the panel says whether the provider confirmed it), and a ready panel reports `remote_device`. Omit for a local browser.
     pub(crate) target: Option<String>,
-    /// Initial viewport width in CSS pixels (320-8000, default keeps Horizon's default panel width). The browser viewport follows the panel; a typical desktop target is 1920x1080. Not applicable to remote targets, whose devices have fixed viewports.
+    /// Initial emulated viewport width in CSS pixels (320-8000); the panel is sized to render exactly this. Omit to keep the default on this axis. A typical desktop target is 1920x1080. Not applicable to remote targets, whose devices have fixed viewports.
     pub(crate) width: Option<u32>,
-    /// Initial viewport height in CSS pixels (320-8000, default keeps Horizon's default panel height). Omit to keep the default on this axis. Not applicable to remote targets.
+    /// Initial emulated viewport height in CSS pixels (320-8000); the panel is sized to render exactly this. Omit to keep the default on this axis. Not applicable to remote targets.
     pub(crate) height: Option<u32>,
     /// Whether the panel is shown initially (default true). Hidden panels remain live and controllable.
     pub(crate) visible: Option<bool>,
@@ -309,6 +310,25 @@ pub(crate) struct VisibilityInput {
 #[derive(Debug, Serialize, JsonSchema)]
 pub(crate) struct VisibilityOutput {
     pub(crate) action_id: String,
+    pub(crate) panel: BrowserPanel,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct ResizeInput {
+    /// Stable panel id returned by `browser_list` or `browser_create`.
+    pub(crate) panel_id: String,
+    /// Emulated viewport width in CSS pixels (320-8000); the panel is resized to render exactly this, so responsive layout and backend input geometry match the requested size. A resize re-tiles the workspace grid layout, so the panel's position among its neighbours may change.
+    pub(crate) width: u32,
+    /// Emulated viewport height in CSS pixels (320-8000); the panel is resized to render exactly this.
+    pub(crate) height: u32,
+    /// Host coordination timeout in milliseconds (1-60000, default 15000).
+    pub(crate) timeout_millis: Option<u64>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub(crate) struct ResizeOutput {
+    pub(crate) action_id: String,
+    /// Updated panel state; `width` and `height` carry the applied emulated viewport (the panel body minus chrome), which is the requested size unless the workspace clamped the panel.
     pub(crate) panel: BrowserPanel,
 }
 

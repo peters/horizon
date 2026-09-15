@@ -135,6 +135,7 @@ fn exercise_protocol(requested_version: &str, negotiated_version: &str) {
                 && instructions.contains("browser_network_watch")
                 && instructions.contains("browser_video")
                 && instructions.contains("browser_visibility")
+                && instructions.contains("browser_resize")
                 && instructions.contains("browser_close")
                 && instructions.contains("allow_additional=true")
                 && instructions.contains("original panel")),
@@ -175,7 +176,7 @@ fn listed_tool<'a>(tools: &'a Value, name: &str) -> &'a Value {
 
 fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     let encoded_tools = tools.to_string();
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(16));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(17));
     let create = listed_tool(tools, "browser_create");
     let target = &create["inputSchema"]["properties"]["target"];
     assert!(
@@ -237,6 +238,17 @@ fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
             .as_str()
             .is_some_and(|description| description.contains("without stopping"))
     );
+    let resize = listed_tool(tools, "browser_resize");
+    assert!(
+        resize["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("fixed viewports")),
+        "browser_resize warns that remote panels keep their fixed device viewport"
+    );
+    assert!(resize["inputSchema"].to_string().contains("panel_id"));
+    assert!(resize["inputSchema"].to_string().contains("width"));
+    assert!(resize["inputSchema"].to_string().contains("height"));
+    assert!(resize["inputSchema"].to_string().contains("timeout_millis"));
     let close = listed_tool(tools, "browser_close");
     assert!(
         close["description"]
@@ -296,65 +308,88 @@ fn write_json(path: &std::path::Path, value: &Value) {
     std::fs::write(path, value.to_string()).expect("write runtime file");
 }
 
-#[test]
-fn an_injected_agent_roundtrips_create_size_through_the_host_queue() {
-    let home = tempfile::tempdir().expect("isolated home");
-    let root = home.path().join(".horizon");
+/// The private result file a host publishes for a queued request.
+fn result_path_for(request_path: &std::path::Path) -> std::path::PathBuf {
+    let name = request_path.file_name().expect("request name").to_string_lossy();
+    let name = name.strip_suffix(".request.json").expect("request suffix");
+    request_path.with_file_name(format!("{name}.result.json"))
+}
+
+/// The fake host side of the roundtrip: serve the create queue, then the
+/// resize queue, checking what the MCP server enqueued.
+fn fake_host_roundtrips_create_and_resize(home: &std::path::Path) {
+    let root = home.join(".horizon");
     let manifest_path = horizon_core::browser::manifest::manifest_path_for_root(&root, FAKE_PANEL);
+    // Create phase: the requested viewport travels with the request.
+    let (request_path, request) = wait_for_queue_request(&root.join("runtime/browser-create"));
+    assert_eq!(request["actor"], FAKE_ACTOR);
+    assert_eq!(request["host_instance"], FAKE_HOST);
+    assert_eq!(request["width"], 1280, "width travels in the create request");
+    assert_eq!(request["height"], 800, "height travels in the create request");
+    horizon_core::browser::manifest::write_at(
+        &manifest_path,
+        &horizon_core::browser::manifest::BrowserManifest {
+            panel_local_id: FAKE_PANEL.to_string(),
+            host: Some(FAKE_HOST.to_string()),
+            workspace: Some(horizon_core::browser::manifest::ManifestWorkspace::new(
+                FAKE_HOST,
+                "workspace-1",
+                vec![FAKE_ACTOR.to_string()],
+            )),
+            owner: Some(horizon_core::browser::manifest::ManifestOwner {
+                name: FAKE_ACTOR.to_string(),
+                tty: None,
+                updated_at: horizon_core::browser::manifest::now_millis(),
+            }),
+            viewport: Some([1280, 800]),
+            ..horizon_core::browser::manifest::BrowserManifest::default()
+        },
+    )
+    .expect("publish created panel manifest");
+    write_json(
+        &result_path_for(&request_path),
+        &json!({
+            "request_id": request["request_id"],
+            "actor": request["actor"],
+            "outcome": {
+                "status": "ready",
+                "panel_local_id": FAKE_PANEL,
+                "navigation": "not_requested",
+                "startup_millis": 3
+            }
+        }),
+    );
+    std::fs::remove_file(request_path).expect("consume create request");
+
+    // Resize phase: the host applies the size and stamps the manifest.
+    let (request_path, request) = wait_for_queue_request(&root.join("runtime/browser-resize"));
+    assert_eq!(request["actor"], FAKE_ACTOR);
+    assert_eq!(request["panel_local_id"], FAKE_PANEL);
+    assert_eq!(request["width"], 1920);
+    assert_eq!(request["height"], 1080);
+    let mut manifest = horizon_core::browser::manifest::read_at(&manifest_path).expect("created manifest");
+    manifest.viewport = Some([1920, 1080]);
+    horizon_core::browser::manifest::write_at(&manifest_path, &manifest).expect("stamp resized panel");
+    write_json(
+        &result_path_for(&request_path),
+        &json!({
+            "request_id": request["request_id"],
+            "actor": request["actor"],
+            "panel_local_id": FAKE_PANEL,
+            "outcome": { "status": "ready", "width": 1920, "height": 1080 }
+        }),
+    );
+    std::fs::remove_file(request_path).expect("consume resize request");
+}
+
+#[test]
+fn an_injected_agent_roundtrips_create_size_and_resize_through_the_host_queue() {
+    let home = tempfile::tempdir().expect("isolated home");
     let mut process = McpProcess::start_as(home.path(), FAKE_ACTOR, Some(FAKE_HOST));
     process.handshake();
 
-    let home = home.path().to_path_buf();
-    let host = std::thread::spawn(move || {
-        // Create phase: the requested viewport travels with the request.
-        let (request_path, request) = wait_for_queue_request(&home.join(".horizon/runtime/browser-create"));
-        assert_eq!(request["actor"], FAKE_ACTOR);
-        assert_eq!(request["host_instance"], FAKE_HOST);
-        assert_eq!(request["width"], 1280, "width travels in the create request");
-        assert_eq!(request["height"], 800, "height travels in the create request");
-        horizon_core::browser::manifest::write_at(
-            &manifest_path,
-            &horizon_core::browser::manifest::BrowserManifest {
-                panel_local_id: FAKE_PANEL.to_string(),
-                host: Some(FAKE_HOST.to_string()),
-                workspace: Some(horizon_core::browser::manifest::ManifestWorkspace::new(
-                    FAKE_HOST,
-                    "workspace-1",
-                    vec![FAKE_ACTOR.to_string()],
-                )),
-                owner: Some(horizon_core::browser::manifest::ManifestOwner {
-                    name: FAKE_ACTOR.to_string(),
-                    tty: None,
-                    updated_at: horizon_core::browser::manifest::now_millis(),
-                }),
-                viewport: Some([1280, 800]),
-                ..horizon_core::browser::manifest::BrowserManifest::default()
-            },
-        )
-        .expect("publish created panel manifest");
-        write_json(
-            &request_path.with_file_name(format!(
-                "{}.result.json",
-                request_path
-                    .file_name()
-                    .expect("request name")
-                    .to_string_lossy()
-                    .strip_suffix(".request.json")
-                    .expect("request suffix")
-            )),
-            &json!({
-                "request_id": request["request_id"],
-                "actor": request["actor"],
-                "outcome": {
-                    "status": "ready",
-                    "panel_local_id": FAKE_PANEL,
-                    "navigation": "not_requested",
-                    "startup_millis": 3
-                }
-            }),
-        );
-        std::fs::remove_file(request_path).expect("consume create request");
-    });
+    let home_path = home.path().to_path_buf();
+    let host = std::thread::spawn(move || fake_host_roundtrips_create_and_resize(&home_path));
 
     let create = process.send(&json!({
         "jsonrpc": "2.0",
@@ -377,17 +412,30 @@ fn an_injected_agent_roundtrips_create_size_through_the_host_queue() {
     );
     assert_eq!(create["result"]["structuredContent"]["panel"]["height"], 800);
 
-    let list = process.send(&json!({
+    let resize = process.send(&json!({
         "jsonrpc": "2.0",
         "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "browser_resize",
+            "arguments": { "panel_id": FAKE_PANEL, "width": 1920, "height": 1080 }
+        }
+    }));
+    let panel = &resize["result"]["structuredContent"]["panel"];
+    assert_eq!(panel["panel_id"], FAKE_PANEL);
+    assert_eq!(panel["width"], 1920, "the resize result carries the applied viewport");
+    assert_eq!(panel["height"], 1080);
+
+    let list = process.send(&json!({
+        "jsonrpc": "2.0",
+        "id": 4,
         "method": "tools/call",
         "params": { "name": "browser_list", "arguments": {} }
     }));
     assert_eq!(
-        list["result"]["structuredContent"]["panels"][0]["width"], 1280,
-        "browser_list keeps reporting the host-stamped viewport"
+        list["result"]["structuredContent"]["panels"][0]["width"], 1920,
+        "browser_list keeps reporting the current viewport"
     );
-    assert_eq!(list["result"]["structuredContent"]["panels"][0]["height"], 800);
 
     host.join().expect("fake host");
     process.close();
@@ -428,9 +476,48 @@ fn viewport_requests_are_refused_before_any_host_sees_them() {
         McpProcess::error_text(&small).contains("between 320 and 8000"),
         "out-of-range create sizes are refused with the bounds"
     );
+    let large = process.send(&json!({
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": {
+            "name": "browser_resize",
+            "arguments": { "panel_id": FAKE_PANEL, "width": 9000, "height": 1080 }
+        }
+    }));
+    assert!(
+        McpProcess::error_text(&large).contains("between 320 and 8000"),
+        "out-of-range resize sizes are refused with the bounds"
+    );
     assert!(
         !home.path().join(".horizon/runtime/browser-create").exists(),
         "refused requests never reach the host queue"
+    );
+    assert!(
+        !home.path().join(".horizon/runtime/browser-resize").exists(),
+        "refused requests never reach the host queue"
+    );
+    process.close();
+}
+
+#[test]
+fn an_unscoped_actor_cannot_resize_panels() {
+    let home = tempfile::tempdir().expect("isolated home");
+    let mut process = McpProcess::start(home.path());
+    process.handshake();
+    let resize = process.send(&json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "browser_resize",
+            "arguments": { "panel_id": "browser-any", "width": 1280, "height": 800 }
+        }
+    }));
+    let text = McpProcess::error_text(&resize);
+    assert!(
+        text.contains("browser_resize is available only to an agent panel launched inside Horizon"),
+        "resize, like create and visibility, is a Horizon-agent capability: {text}"
     );
     process.close();
 }

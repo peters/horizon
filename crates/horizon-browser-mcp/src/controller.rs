@@ -8,8 +8,8 @@ use horizon_browser::{
 };
 use horizon_core::browser::manifest;
 use horizon_core::browser::manifest::{
-    AgentIdentity, BrowserCloseOutcome, BrowserCreateOutcome, BrowserManifest, BrowserVisibilityOutcome,
-    HOST_INSTANCE_ENV,
+    AgentIdentity, BrowserCloseOutcome, BrowserCreateOutcome, BrowserManifest, BrowserResizeOutcome,
+    BrowserVisibilityOutcome, HOST_INSTANCE_ENV,
 };
 use thiserror::Error;
 
@@ -108,6 +108,12 @@ pub(crate) struct VisibilityReceipt {
     pub(crate) panel: BrowserPanel,
 }
 
+#[derive(Debug)]
+pub(crate) struct ResizeReceipt {
+    pub(crate) action_id: String,
+    pub(crate) panel: BrowserPanel,
+}
+
 pub(crate) struct CloseReceipt {
     pub(crate) action_id: String,
     pub(crate) panel_id: String,
@@ -144,7 +150,11 @@ pub(crate) enum ControlError {
     AdditionalPanelRequiresOptIn { panel_id: String },
     #[error("browser visibility can be changed only by an agent panel launched inside Horizon")]
     VisibilityUnavailable,
-    #[error("remote targets have a fixed device viewport: do not pass width or height to browser_create with target")]
+    #[error("browser_resize is available only to an agent panel launched inside Horizon")]
+    ResizeUnavailable,
+    #[error(
+        "remote targets have a fixed device viewport: do not pass width or height to browser_create with target, and browser_resize is unavailable for a remote panel"
+    )]
     RemoteViewportFixed,
     #[error("browser viewport dimensions must be between {min} and {max} CSS pixels per axis")]
     ViewportSizeOutOfRange { min: u32, max: u32 },
@@ -158,6 +168,10 @@ pub(crate) enum ControlError {
         "browser visibility request {action_id} timed out after {timeout_millis} ms; call browser_panel before retrying because the change may have completed late"
     )]
     VisibilityTimeout { action_id: String, timeout_millis: u64 },
+    #[error(
+        "browser resize request {action_id} timed out after {timeout_millis} ms; call browser_panel before retrying because the change may have completed late"
+    )]
+    ResizeTimeout { action_id: String, timeout_millis: u64 },
     #[error("browser action {action_id} failed ({code}): {message}")]
     Browser {
         action_id: String,
@@ -425,6 +439,95 @@ impl BrowserController {
         }
     }
 
+    /// Resize an owned panel in the calling agent's workspace so its emulated
+    /// viewport is exactly the requested size. The host sizes the panel to
+    /// render that viewport and stamps it, so the response panel's `width` and
+    /// `height` report the viewport the agent can expect. Remote panels are
+    /// refused before the queue: their devices have fixed viewports.
+    pub(crate) async fn set_size(
+        &self,
+        panel_id: &str,
+        width: u32,
+        height: u32,
+        timeout_millis: Option<u64>,
+    ) -> Result<ResizeReceipt, ControlError> {
+        if !is_horizon_actor(&self.actor) {
+            return Err(ControlError::ResizeUnavailable);
+        }
+        resize_viewport_allowed(width, height)?;
+        let timeout_millis = bounded_timeout(timeout_millis);
+        let manifest = self.authorized_manifest(panel_id)?;
+        if manifest.remote_target.is_some() {
+            return Err(ControlError::RemoteViewportFixed);
+        }
+        self.ensure_claim(panel_id)?;
+        let action_id = manifest::enqueue_resize(
+            self.identity(),
+            panel_id,
+            width,
+            height,
+            Duration::from_millis(timeout_millis),
+        )
+        .map_err(|source| self.denied(panel_id, "could not queue browser panel resize", source))?;
+        let started = Instant::now();
+        let mut last_heartbeat = started;
+        loop {
+            if let Some(result) = manifest::take_resize_result(&action_id, &self.actor)
+                .map_err(|source| ControlError::internal_io("could not read browser resize result", source))?
+            {
+                // Gate both outcomes: a failure is panel-specific data too.
+                self.refresh_claim(panel_id)?;
+                return match result.outcome {
+                    BrowserResizeOutcome::Ready {
+                        width: actual_width,
+                        height: actual_height,
+                    } => {
+                        if (actual_width, actual_height) != (width, height) {
+                            return Err(ControlError::internal_io(
+                                "could not verify browser panel resize",
+                                io::Error::new(io::ErrorKind::InvalidData, "resize result did not match request"),
+                            ));
+                        }
+                        let manifest = manifest::read(panel_id).ok_or_else(|| {
+                            ControlError::internal_io(
+                                "could not read resized browser panel",
+                                io::Error::new(io::ErrorKind::NotFound, "browser manifest disappeared"),
+                            )
+                        })?;
+                        if manifest.viewport != Some([width, height]) {
+                            return Err(ControlError::internal_io(
+                                "could not verify browser panel resize",
+                                io::Error::new(
+                                    io::ErrorKind::InvalidData,
+                                    "manifest viewport did not match the resize result",
+                                ),
+                            ));
+                        }
+                        Ok(ResizeReceipt {
+                            action_id,
+                            panel: BrowserPanel::from_manifest(manifest, &self.actor),
+                        })
+                    }
+                    BrowserResizeOutcome::Failed { code, message } => Err(ControlError::Browser {
+                        action_id,
+                        code,
+                        message,
+                    }),
+                };
+            }
+            if started.elapsed() >= Duration::from_millis(timeout_millis) {
+                return Err(ControlError::ResizeTimeout {
+                    action_id,
+                    timeout_millis,
+                });
+            }
+            if last_heartbeat.elapsed() >= HEARTBEAT_INTERVAL {
+                self.refresh_claim(panel_id)?;
+                last_heartbeat = Instant::now();
+            }
+            tokio::time::sleep(RESULT_POLL_INTERVAL).await;
+        }
+    }
     /// successful result means the panel is gone and, for a remote session,
     /// that the provider established the release; a refused or unanswered
     /// release comes back as a typed `release_failed` / `release_unknown`
@@ -680,6 +783,12 @@ fn create_viewport_allowed(target: Option<&str>, width: Option<u32>, height: Opt
     Ok(())
 }
 
+/// Whether the viewport dimensions a `browser_resize` may carry are valid.
+fn resize_viewport_allowed(width: u32, height: u32) -> Result<(), ControlError> {
+    viewport_dimension_in_bounds(width)?;
+    viewport_dimension_in_bounds(height)
+}
+
 fn viewport_dimension_in_bounds(dimension: u32) -> Result<(), ControlError> {
     if !(MIN_BROWSER_VIEWPORT..=MAX_BROWSER_VIEWPORT).contains(&dimension) {
         return Err(ControlError::ViewportSizeOutOfRange {
@@ -762,7 +871,8 @@ fn valid_actor(actor: &str) -> bool {
 }
 
 /// Only identities injected by a Horizon host may ask that host for new
-/// panels or visibility changes; they are also the workspace-scoped ones.
+/// panels, visibility changes, or size changes; they are also the
+/// workspace-scoped ones.
 fn is_horizon_actor(actor: &str) -> bool {
     manifest::actor_is_workspace_scoped(actor)
 }
@@ -822,6 +932,15 @@ mod tests {
             Err(ControlError::RemoteViewportFixed)
         ));
         assert!(create_viewport_allowed(Some("ios_phone"), None, None).is_ok());
+        assert!(resize_viewport_allowed(375, 812).is_ok());
+        assert!(matches!(
+            resize_viewport_allowed(100, 812),
+            Err(ControlError::ViewportSizeOutOfRange { .. })
+        ));
+        assert!(matches!(
+            resize_viewport_allowed(375, 9000),
+            Err(ControlError::ViewportSizeOutOfRange { .. })
+        ));
     }
 
     #[test]

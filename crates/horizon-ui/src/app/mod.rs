@@ -5,6 +5,7 @@ mod browser_close_requests;
 mod browser_connectors;
 mod browser_remote_create;
 mod browser_requests;
+mod browser_resize_requests;
 mod browser_viewport;
 mod canvas;
 mod detached_viewports;

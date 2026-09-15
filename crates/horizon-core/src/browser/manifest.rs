@@ -47,6 +47,7 @@ mod capture;
 mod close;
 mod create;
 mod request_queue;
+mod resize;
 mod result;
 mod visibility;
 mod workspace;
@@ -64,6 +65,10 @@ pub use create::{
     BrowserCreateAuditStatus, BrowserCreateOutcome, BrowserCreateRequest, BrowserCreateResult, CreateNavigation,
     claim_create_request, complete_create_request, enqueue_create, list_create_requests, record_create_status,
     take_create_result,
+};
+pub use resize::{
+    BrowserResizeAuditStatus, BrowserResizeOutcome, BrowserResizeRequest, BrowserResizeResult, claim_resize_request_in,
+    complete_resize_request_in, enqueue_resize, list_resize_requests_in, record_resize_status_in, take_resize_result,
 };
 pub use result::{action_result_path_for_root, default_action_result_path, take_action_result};
 pub use visibility::{
@@ -144,9 +149,9 @@ pub struct BrowserManifest {
     /// older hosts; workspace-scoped callers must treat both as out of scope.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<ManifestWorkspace>,
-    /// Host-owned panel size in CSS pixels, stamped from the board's layout
-    /// size on the host's placement sync. The browser viewport follows the
-    /// panel, so this is the viewport the agent can expect; absent until the
+    /// Host-owned emulated viewport in CSS pixels, stamped from the board's
+    /// layout size minus the panel chrome the render path consumes (the panel
+    /// body). This is the viewport the agent can expect; absent until the
     /// first stamp and on manifests from older hosts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub viewport: Option<[u32; 2]>,
