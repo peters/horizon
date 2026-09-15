@@ -96,13 +96,19 @@ and an immutable image. It never guesses an ambient Docker daemon or subscriptio
 
 Repository credentials are runtime-only: restarting or replacing the container
 clears `/run/horizon/github-token`, even when Git preparation is still `Complete`
-and retained agent login survives. Verify repository API access with the installed
-protected `gh` helper before issue execution. A missing credential needs protected
-stdin delivery to `horizon-github-credential install` on the same authorized worker
-through its pinned SSH connection. The controller has no standalone credential
-refresh command yet; preserve its Git/start claims and never replay `git-install`
-or remove a claim to restore API access. Existing credential-transfer authority
-must cover that exact worker; otherwise obtain it before sending the credential.
+and retained agent login survives. Include a repository-access check with the
+installed protected `gh` helper in the saved issue command before GitHub work.
+
+If the credential is missing, block new credential-dependent work and report that
+this controller cannot restore repository API access after restart. It exposes
+neither a standalone credential-refresh operation nor a supported direct SSH
+handoff for secret delivery. Preserve the original task directory, identities and
+Git/start claims; existing processes need not be interrupted. Observation and
+explicit lifecycle/cleanup remain available under their existing authority.
+Never replay `git-install`, erase claims, or put a PAT in a saved command to work
+around this limitation. A configured refresh operation using the existing pinned
+transport and core credential installer is a separate controller follow-up, not
+an available recovery step. Do not report full post-restart repository readiness.
 
 ## One issue, one durable task
 
@@ -208,6 +214,8 @@ performance. A CLI-only rehearsal does not satisfy the separate three-panel and
 client-off product acceptance gates in #474/#475.
 
 Closing a controller detaches; persistent workers keep running and billing.
+Explicit Stop/start can lose the runtime credential; this skill cannot restore
+repository API access afterward, as described above.
 Use `management-preview <directory>` for the exact Azure resource, saved
 revision, profile and loss/billing scope. After applicable explicit authorization,
 `stop`, `compute-start`, `delete` or `delete-retry` reads stdin JSON with
