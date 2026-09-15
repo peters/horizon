@@ -225,6 +225,27 @@ struct PageNetworkEvent {
     error: Option<String>,
 }
 
+/// Why a session cannot capture network traffic, when it cannot: capture
+/// rides on CDP or the local Firefox `BiDi` bridge, so a remote session has
+/// none whatever browser family it drives, and local Safari has none either.
+/// The MCP projection advertises the same answer up front; this is the
+/// refusal an agent gets if it calls the tool regardless.
+fn network_capture_refusal(remote: bool, backend: BackendKind) -> Option<BrowserControlFailure> {
+    if remote {
+        return Some(BrowserControlFailure::new(
+            "unsupported_backend",
+            "network capture is unavailable for remote device sessions, which run on classic WebDriver",
+        ));
+    }
+    if backend == BackendKind::SafariWebDriver {
+        return Some(BrowserControlFailure::new(
+            "unsupported_backend",
+            "Safari does not expose network capture through Horizon's current WebDriver transport",
+        ));
+    }
+    None
+}
+
 impl Driver {
     pub(super) fn network_action(
         &mut self,
@@ -233,19 +254,8 @@ impl Driver {
         options: Option<BrowserNetworkCaptureOptions>,
         event_tx: &BrowserEventSender,
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
-        if self.host.is_remote() {
-            // Capture rides on CDP or the local Firefox BiDi bridge; a remote
-            // session has neither, whatever browser family it drives.
-            return Err(BrowserControlFailure::new(
-                "unsupported_backend",
-                "network capture is unavailable for remote device sessions, which run on classic WebDriver",
-            ));
-        }
-        if self.config.browser.backend == BackendKind::SafariWebDriver {
-            return Err(BrowserControlFailure::new(
-                "unsupported_backend",
-                "Safari does not expose network capture through Horizon's current WebDriver transport",
-            ));
+        if let Some(refusal) = network_capture_refusal(self.host.is_remote(), self.config.browser.backend) {
+            return Err(refusal);
         }
         let capture = match operation {
             BrowserNetworkOperation::Start => {
@@ -853,6 +863,22 @@ fn u16_at(value: &Value, pointer: &str) -> Option<u16> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn remote_sessions_refuse_network_capture_before_any_bridge_is_touched() {
+        let remote = super::network_capture_refusal(true, crate::BackendKind::ChromiumCdp).expect("refused");
+        assert_eq!(remote.code, "unsupported_backend");
+        assert!(remote.message.contains("remote device sessions"), "{}", remote.message);
+        let remote_firefox = super::network_capture_refusal(true, crate::BackendKind::FirefoxBidi).expect("refused");
+        assert!(
+            remote_firefox.message.contains("remote"),
+            "the family does not matter for a remote session"
+        );
+        let safari = super::network_capture_refusal(false, crate::BackendKind::SafariWebDriver).expect("refused");
+        assert!(safari.message.contains("Safari"));
+        assert!(super::network_capture_refusal(false, crate::BackendKind::ChromiumCdp).is_none());
+        assert!(super::network_capture_refusal(false, crate::BackendKind::FirefoxBidi).is_none());
+    }
+
     use super::*;
 
     #[test]
