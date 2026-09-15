@@ -175,7 +175,14 @@ cargo clippy --workspace --all-targets --features speech -- -D warnings -W clipp
     --method POST --input - <<< '{"reviewers":["copilot-pull-request-reviewer[bot]"]}'
   ```
 
-  Every other spelling fails, and most of them fail *silently*: `gh pr create --reviewer @copilot` and `gh pr edit --add-reviewer Copilot` error with `Could not resolve user with login 'copilot'`; `Copilot` over REST or GraphQL returns HTTP 200 and requests nothing; `copilot-pull-request-reviewer` without `[bot]` is rejected as not a collaborator; and GraphQL `requestReviews` with the `copilot-swe-agent` bot id reports success while recording nothing, because that bot is the coding agent rather than the reviewer. A 200 is not proof, so confirm the request registered with `gh api repos/<owner>/<repo>/issues/<n>/timeline --jq '[.[] | select(.event == "review_requested") | .created_at]'` before you start waiting.
+  Every other spelling fails, and most of them fail *silently*: `gh pr create --reviewer @copilot` and `gh pr edit --add-reviewer Copilot` error with `Could not resolve user with login 'copilot'`; `Copilot` over REST or GraphQL returns HTTP 200 and requests nothing; `copilot-pull-request-reviewer` without `[bot]` is rejected as not a collaborator; and GraphQL `requestReviews` with the `copilot-swe-agent` bot id reports success while recording nothing, because that bot is the coding agent rather than the reviewer. A 200 is not proof, so confirm the request registered before you start waiting, filtering on the reviewer — an unrelated human review request on the same PR would otherwise look like success:
+
+  ```bash
+  gh api --paginate repos/<owner>/<repo>/issues/<n>/timeline \
+    --jq '.[] | select(.event == "review_requested" and .requested_reviewer.login == "Copilot") | .created_at'
+  ```
+
+  Mind the asymmetry: the request must name `copilot-pull-request-reviewer[bot]`, but the timeline reports the reviewer as `Copilot`.
 - A Copilot review is pinned to the commit it ran against, so re-request it after every push. Compare the review's `commit_id` with the current head (`gh api repos/<owner>/<repo>/pulls/<n>/reviews --jq '.[] | select(.user.login == "copilot-pull-request-reviewer[bot]") | .commit_id'`) before treating the review gate as met.
 - Wait for the requested Copilot review and all repository-mandated checks on the current head. Triage every actionable comment against the PR scope: fix in-scope findings on the same PR, explicitly disposition valid out-of-scope findings as follow-up candidates, and leave no actionable thread unresolved. Before every push, rerun the repository-mandated local validation for that exact head as defined by the pre-push section above. After the push, refresh the review and checks for the new head and rerun affected smoke lanes. A behavior-affecting push invalidates smoke evidence from an older head.
 - Apply repository-standard metadata only when the convention is unambiguous: assignee `@me`, `Awaiting Review` label, current milestone, and project. Otherwise report and skip the ambiguous item rather than guessing.
