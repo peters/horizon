@@ -119,7 +119,13 @@ pub fn check_requirement(requirement: &DeviceRequirement, identity: &RemoteDevic
     if actual == wanted {
         Ok(())
     } else {
-        Err(format!("target requires a {wanted}, provider evidence: {actual}"))
+        let article = match wanted {
+            DeviceEvidence::Emulated => "an",
+            DeviceEvidence::Physical | DeviceEvidence::Unknown => "a",
+        };
+        Err(format!(
+            "target requires {article} {wanted}, provider evidence: {actual}"
+        ))
     }
 }
 
@@ -279,12 +285,18 @@ mod tests {
             hardware: Some(DeviceEvidence::Emulated),
             ..RemoteDeviceIdentity::default()
         };
-        assert!(check_requirement(&requirement(DeviceKind::Physical, None, None), &emulated).is_err());
+        assert_eq!(
+            check_requirement(&requirement(DeviceKind::Physical, None, None), &emulated),
+            Err("target requires a physical device, provider evidence: emulated device".into())
+        );
         assert_eq!(
             check_requirement(&requirement(DeviceKind::Emulated, None, None), &emulated),
             Ok(())
         );
-        assert!(check_requirement(&requirement(DeviceKind::Emulated, None, None), &physical).is_err());
+        assert_eq!(
+            check_requirement(&requirement(DeviceKind::Emulated, None, None), &physical),
+            Err("target requires an emulated device, provider evidence: physical device".into())
+        );
     }
 
     #[test]
