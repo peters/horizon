@@ -45,6 +45,7 @@ windows-native-keyring-store.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 apple-native-keyring-store.workspace = true
+security-framework.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 flate2.workspace = true
