@@ -3,6 +3,7 @@
 use super::*;
 use crate::app::test_support::raw_input;
 use crate::test_egui::DiscardTextures;
+use horizon_core::cloud_run::azure::AzureContainerRuntime;
 use horizon_core::cloud_run::interactive_worker::InteractiveWorkerLifecycle;
 
 fn azure_summary(phase: RemoteRuntimePhase) -> RemoteEnvironmentSummary {
@@ -348,6 +349,7 @@ fn azure_config() -> RemoteProviderConfig {
             declared_hourly_cost_micros: 123_456,
             registry_login_server: "synthetic.azurecr.io".into(),
             disk_sku: horizon_core::cloud_run::azure::AzureDiskSku::StandardSsdLrs,
+            container_runtime: AzureContainerRuntime::Default,
         }],
         ..Default::default()
     }

@@ -5,6 +5,7 @@ use super::super::{
     submit_configured_remote_workspace, submit_with,
 };
 use super::*;
+use crate::cloud_run::azure::AzureContainerRuntime;
 use crate::{
     HorizonHome,
     cloud_run::{
@@ -49,6 +50,7 @@ impl Fixture {
                     declared_hourly_cost_micros: 100_000,
                     registry_login_server: "synthetic.azurecr.io".into(),
                     disk_sku: AzureDiskSku::StandardSsdLrs,
+                    container_runtime: AzureContainerRuntime::Default,
                 }],
                 ..Default::default()
             },

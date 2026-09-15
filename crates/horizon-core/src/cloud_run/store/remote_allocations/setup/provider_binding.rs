@@ -6,7 +6,9 @@ use super::{
 };
 use crate::cloud_run::{
     ArtifactDigest, CloudProvider, WorkerLifetime,
-    azure::{AzureDeploymentPlan, AzureDiskSku, AzureError, AzureProfile, valid_subscription_id},
+    azure::{
+        AzureContainerRuntime, AzureDeploymentPlan, AzureDiskSku, AzureError, AzureProfile, valid_subscription_id,
+    },
 };
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
@@ -42,6 +44,7 @@ impl RemoteCpuProfileBinding {
             declared_hourly_cost_micros,
             registry_login_server,
             disk_sku,
+            container_runtime,
         } = profile;
         let price = declared_hourly_cost_micros.to_be_bytes();
         let disk: &[u8] = match disk_sku {
@@ -63,6 +66,14 @@ impl RemoteCpuProfileBinding {
         ] {
             bytes.extend_from_slice(&(field.len() as u64).to_be_bytes());
             bytes.extend_from_slice(field);
+        }
+        if *container_runtime != AzureContainerRuntime::Default {
+            // Preserve the frozen legacy digest for default profiles. Explicit runtime
+            // selection is bound in a separate domain and cannot match a legacy worker.
+            let mut selected = b"horizon.remote.cpu-profile.azure.runtime.v1\0".to_vec();
+            selected.extend_from_slice(&bytes);
+            selected.extend_from_slice(container_runtime.as_str().as_bytes());
+            bytes = selected;
         }
         Ok(Self {
             subscription_id: subscription_id.clone(),

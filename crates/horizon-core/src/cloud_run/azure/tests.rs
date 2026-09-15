@@ -1,6 +1,7 @@
 use super::{
-    AzureAccessToken, AzureCliCredential, AzureDiskSku, AzureError, AzureLifecycle, AzureProfile,
-    credential::parse_cli_token, valid_identity_id, valid_location, valid_registry_login_server, valid_vm_size,
+    AzureAccessToken, AzureCliCredential, AzureContainerRuntime, AzureDiskSku, AzureError, AzureLifecycle,
+    AzureProfile, credential::parse_cli_token, valid_identity_id, valid_location, valid_registry_login_server,
+    valid_vm_size,
 };
 use crate::cloud_run::{CloudProvider, WorkerLifetime, WorkerTarget};
 mod deployment;
@@ -40,6 +41,7 @@ pub(super) fn profile() -> AzureProfile {
         declared_hourly_cost_micros: 200_000,
         registry_login_server: "example.azurecr.io".into(),
         disk_sku: AzureDiskSku::PremiumLrs,
+        container_runtime: AzureContainerRuntime::Default,
     }
 }
 

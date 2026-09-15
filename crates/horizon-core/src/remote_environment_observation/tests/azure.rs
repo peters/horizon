@@ -1,6 +1,7 @@
 //! Azure overview checks on real stores with a fake bound provider: the real ordering
 //! and drift fences run without the Azure CLI or ARM.
 use super::*;
+use crate::cloud_run::azure::AzureContainerRuntime;
 use crate::{
     cloud_run::azure::{AzureDiskSku, AzureProfile, resource_group_name},
     remote_environment_observation::configured::azure_with,
@@ -22,6 +23,7 @@ fn azure_profile() -> AzureProfile {
         declared_hourly_cost_micros: 100_000,
         registry_login_server: "synthetic.azurecr.io".into(),
         disk_sku: AzureDiskSku::StandardSsdLrs,
+        container_runtime: AzureContainerRuntime::Default,
     }
 }
 

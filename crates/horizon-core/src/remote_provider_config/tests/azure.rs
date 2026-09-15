@@ -1,4 +1,5 @@
 use super::*;
+use crate::cloud_run::azure::AzureContainerRuntime;
 use crate::{Config, cloud_run::azure::AzureDiskSku};
 
 const SUBSCRIPTION: &str = "0f0e0d0c-0b0a-4908-8706-050403020100";
@@ -16,6 +17,7 @@ fn cpu_profile(name: &str) -> AzureProfile {
         declared_hourly_cost_micros: 100_000,
         registry_login_server: "example.azurecr.io".into(),
         disk_sku: AzureDiskSku::default(),
+        container_runtime: AzureContainerRuntime::Default,
     }
 }
 

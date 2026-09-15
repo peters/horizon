@@ -110,7 +110,7 @@ fn optional(value: Option<impl ToString>) -> String {
     value.map_or_else(|| "Not set".into(), |value| value.to_string())
 }
 
-fn azure_fields(profile: &horizon_core::cloud_run::azure::AzureProfile) -> [(&'static str, String); 8] {
+fn azure_fields(profile: &horizon_core::cloud_run::azure::AzureProfile) -> [(&'static str, String); 9] {
     let horizon_core::cloud_run::azure::AzureProfile {
         name,
         subscription_id,
@@ -120,6 +120,7 @@ fn azure_fields(profile: &horizon_core::cloud_run::azure::AzureProfile) -> [(&'s
         declared_hourly_cost_micros,
         registry_login_server,
         disk_sku,
+        container_runtime,
     } = profile;
     [
         ("Azure profile", name.clone()),
@@ -133,6 +134,7 @@ fn azure_fields(profile: &horizon_core::cloud_run::azure::AzureProfile) -> [(&'s
         ),
         ("Registry", registry_login_server.clone()),
         ("Managed-disk SKU", disk_sku.as_azure_name().into()),
+        ("Container policy", container_runtime.label().into()),
     ]
 }
 

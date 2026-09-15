@@ -38,7 +38,7 @@
 use horizon_core::cloud_run::{
     CloudJobId, CloudProvider, CloudWorkflowId, WorkerLifetime, WorkerTarget,
     azure::{
-        AzureCliCredential, AzureClient, AzureDiskSku, AzureError, AzureProfile, WORKER_VM_NAME,
+        AzureCliCredential, AzureClient, AzureContainerRuntime, AzureDiskSku, AzureError, AzureProfile, WORKER_VM_NAME,
         deployment::{TAG_JOB, TAG_WORKFLOW},
         resource_group_name,
     },
@@ -565,6 +565,7 @@ fn settings() -> (AzureProfile, String) {
             .expect("HORIZON_AZURE_LIVE_HOURLY_COST_MICROS must be a whole number"),
         registry_login_server: required("HORIZON_AZURE_LIVE_REGISTRY"),
         disk_sku: AzureDiskSku::default(),
+        container_runtime: AzureContainerRuntime::Default,
     };
     (profile, subscription)
 }
