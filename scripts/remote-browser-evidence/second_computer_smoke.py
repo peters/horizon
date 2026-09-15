@@ -42,9 +42,10 @@ import pathlib
 import platform
 import queue
 import shutil
+import signal
+import stat
 import subprocess
 import sys
-import stat
 import threading
 import time
 
@@ -299,26 +300,7 @@ def host_facts() -> dict:
 
 # --- OS credential store entry on computer B -------------------------------
 
-def seed_store(login: str, password: str, keychain: str | None) -> dict:
-    """Enter the credential into this computer's OS store under Horizon's
-    items. Returns what to undo. Values reach the platform tool through the
-    environment or its own argument, never through a file or a log."""
-    system = platform.system()
-    items = {"user": login, "key": password}
-    if system == "Linux":
-        from live_smoke import seed_keyring
-
-        previous = seed_keyring(login, password)
-        return {"system": system, "previous": previous}
-    if system == "Darwin":
-        for reference, value in items.items():
-            cmd = ["security", "add-generic-password", "-U", "-s", SERVICE, "-a", keyring_user(reference), "-w", value]
-            if keychain:
-                cmd.append(keychain)
-            subprocess.run(cmd, check=True, capture_output=True)
-        return {"system": system}
-    if system == "Windows":
-        script = r"""
+WINDOWS_CRED_SCRIPT = r"""
 $ErrorActionPreference = 'Stop'
 Add-Type -TypeDefinition @"
 using System;
@@ -333,6 +315,12 @@ public class HorizonCred {
   }
   [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
   public static extern bool CredWriteW(ref CREDENTIAL cred, uint flags);
+  [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+  public static extern bool CredReadW(string target, uint type, uint flags, out IntPtr credential);
+  [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+  public static extern bool CredDeleteW(string target, uint type, uint flags);
+  [DllImport("advapi32.dll")]
+  public static extern void CredFree(IntPtr buffer);
   public static void Write(string target, string user, byte[] blob) {
     var c = new CREDENTIAL();
     c.Type = 1; c.TargetName = target; c.UserName = user; c.Persist = 2;
@@ -342,52 +330,140 @@ public class HorizonCred {
     try { if (!CredWriteW(ref c, 0)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error()); }
     finally { Marshal.FreeHGlobal(c.CredentialBlob); }
   }
+  public static string Read(string target) {
+    IntPtr p;
+    if (!CredReadW(target, 1, 0, out p)) return null;
+    try {
+      var c = (CREDENTIAL)Marshal.PtrToStructure(p, typeof(CREDENTIAL));
+      var blob = new byte[c.CredentialBlobSize];
+      if (c.CredentialBlobSize > 0) Marshal.Copy(c.CredentialBlob, blob, 0, blob.Length);
+      return Convert.ToBase64String(blob);
+    } finally { CredFree(p); }
+  }
+  public static bool Delete(string target) { return CredDeleteW(target, 1, 0); }
 }
 "@
+$mode = $env:HORIZON_SEED_MODE
 foreach ($reference in @('user', 'key')) {
   $user = [Environment]::GetEnvironmentVariable("HORIZON_SEED_USER_$reference")
-  $value = [Environment]::GetEnvironmentVariable("HORIZON_SEED_VALUE_$reference")
-  $blob = [Text.Encoding]::UTF8.GetBytes($value)
-  [HorizonCred]::Write("$user." + $env:HORIZON_SEED_SERVICE, $user, $blob)
+  $target = "$user." + $env:HORIZON_SEED_SERVICE
+  if ($mode -eq 'read') {
+    $blob = [HorizonCred]::Read($target)
+    if ($blob -eq $null) { "$reference=" } else { "$reference=$blob" }
+  } elseif ($mode -eq 'write') {
+    $value = [Environment]::GetEnvironmentVariable("HORIZON_SEED_VALUE_$reference")
+    if ($value -eq $null -or $value -eq '') { [void][HorizonCred]::Delete($target) }
+    else { [HorizonCred]::Write($target, $user, [Convert]::FromBase64String($value)) }
+  }
 }
 """
-        env = dict(os.environ)
-        env["HORIZON_SEED_SERVICE"] = SERVICE
-        for reference, value in items.items():
-            env[f"HORIZON_SEED_USER_{reference}"] = keyring_user(reference)
-            env[f"HORIZON_SEED_VALUE_{reference}"] = value
-        subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script], env=env, check=True, capture_output=True)
-        return {"system": system}
-    raise SystemExit(f"no OS store seeding for {system}")
+
+
+def _windows_items(mode: str, values: dict[str, bytes | None] | None = None) -> dict[str, bytes | None]:
+    """Read or write Horizon's two Credential Manager items. Values travel
+    to PowerShell through the environment as base64, never as arguments."""
+    env = dict(os.environ)
+    env["HORIZON_SEED_MODE"] = mode
+    env["HORIZON_SEED_SERVICE"] = SERVICE
+    for reference in BINDINGS:
+        env[f"HORIZON_SEED_USER_{reference}"] = keyring_user(reference)
+        if values is not None:
+            blob = values.get(reference)
+            env[f"HORIZON_SEED_VALUE_{reference}"] = base64.b64encode(blob).decode() if blob is not None else ""
+    proc = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", WINDOWS_CRED_SCRIPT], env=env,
+                          check=True, capture_output=True, text=True)
+    found: dict[str, bytes | None] = {}
+    for line in proc.stdout.splitlines():
+        reference, _, blob = line.strip().partition("=")
+        if reference in BINDINGS:
+            found[reference] = base64.b64decode(blob) if blob else None
+    return found
+
+
+def _macos_read(reference: str, keychain: str | None) -> bytes | None:
+    cmd = ["security", "find-generic-password", "-s", SERVICE, "-a", keyring_user(reference), "-w"]
+    if keychain:
+        cmd.append(keychain)
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    return proc.stdout.rstrip("\n").encode() if proc.returncode == 0 else None
+
+
+def _macos_write(reference: str, value: bytes | None, keychain: str | None) -> None:
+    if value is None:
+        cmd = ["security", "delete-generic-password", "-s", SERVICE, "-a", keyring_user(reference)]
+        if keychain:
+            cmd.append(keychain)
+        subprocess.run(cmd, capture_output=True, check=False)
+        return
+    cmd = ["security", "add-generic-password", "-U", "-s", SERVICE, "-a", keyring_user(reference), "-w", value.decode()]
+    if keychain:
+        cmd.append(keychain)
+    subprocess.run(cmd, check=True, capture_output=True)
+
+
+def read_items(keychain: str | None) -> dict[str, bytes | None]:
+    """What Horizon's items hold on this computer right now, per reference."""
+    system = platform.system()
+    if system == "Darwin":
+        return {reference: _macos_read(reference, keychain) for reference in BINDINGS}
+    if system == "Windows":
+        return _windows_items("read")
+    raise SystemExit(f"no OS store handling for {system}")
+
+
+def write_items(values: dict[str, bytes | None], keychain: str | None) -> None:
+    """Put `values` into Horizon's items; `None` removes an item."""
+    system = platform.system()
+    if system == "Darwin":
+        for reference, value in values.items():
+            _macos_write(reference, value, keychain)
+    elif system == "Windows":
+        _windows_items("write", values)
+    else:
+        raise SystemExit(f"no OS store handling for {system}")
+
+
+def seed_store(login: str, password: str, keychain: str | None) -> dict:
+    """Enter the credential into this computer's OS store under Horizon's
+    items and hand back what those items held before, so an already
+    configured computer gets its own values back. Seeding is all or nothing:
+    a failure part way restores what was already replaced."""
+    system = platform.system()
+    if system == "Linux":
+        from live_smoke import seed_keyring
+
+        return {"system": system, "previous": seed_keyring(login, password)}
+    previous = read_items(keychain)
+    written: dict[str, bytes | None] = {}
+    try:
+        for reference, value in (("user", login.encode()), ("key", password.encode())):
+            write_items({reference: value}, keychain)
+            written[reference] = value
+    except Exception:
+        write_items({reference: previous.get(reference) for reference in written}, keychain)
+        raise
+    return {"system": system, "previous": previous}
 
 
 def clear_store(seeded: dict, keychain: str | None) -> None:
+    """Put back what the items held before the run, or remove them."""
     system = seeded["system"]
     if system == "Linux":
         from live_smoke import restore_keyring
 
         restore_keyring(seeded["previous"])
         return
-    for reference in BINDINGS:
-        if system == "Darwin":
-            cmd = ["security", "delete-generic-password", "-s", SERVICE, "-a", keyring_user(reference)]
-            if keychain:
-                cmd.append(keychain)
-            subprocess.run(cmd, capture_output=True, check=False)
-        elif system == "Windows":
-            target = WINDOWS_TARGET.format(user=keyring_user(reference), service=SERVICE)
-            subprocess.run(["cmdkey.exe", f"/delete:{target}"], capture_output=True, check=False)
+    write_items({reference: seeded["previous"].get(reference) for reference in BINDINGS}, keychain)
 
 
-def store_has_items() -> bool | None:
-    """Presence probe after clearing, by the platform's own listing."""
+def store_has_items(keychain: str | None) -> bool | None:
+    """Presence of Horizon's items after the run, by the platform's own
+    listing, in the same keychain the run wrote to."""
     system = platform.system()
     if system == "Windows":
-        out = subprocess.run(["cmdkey.exe", "/list"], capture_output=True, text=True, check=False).stdout
-        return SERVICE in out
+        return any(value is not None for value in _windows_items("read").values())
     if system == "Darwin":
-        code = subprocess.run(["security", "find-generic-password", "-s", SERVICE], capture_output=True, check=False).returncode
-        return code == 0
+        return any(_macos_read(reference, keychain) is not None for reference in BINDINGS)
     return None
 
 
@@ -418,8 +494,14 @@ def start_horizon(horizon: pathlib.Path, config: pathlib.Path, root: pathlib.Pat
         (root / name).unlink(missing_ok=True)
     log = (root / log_name).open("a", encoding="utf-8")
     app = subprocess.Popen([str(horizon), "--config", str(config), "--ephemeral"], env=env, stdout=log, stderr=log)
-    actor = wait_for(root / "agent-actor", 120)
-    host_instance = wait_for(root / "agent-host-instance", 30)
+    try:
+        actor = wait_for(root / "agent-actor", 120)
+        host_instance = wait_for(root / "agent-host-instance", 30)
+    except BaseException:
+        # A start that never produced the identity must not leave Horizon
+        # running: the caller has no handle to it yet.
+        stop_horizon(app)
+        raise
     time.sleep(3)
     return app, actor, host_instance
 
@@ -504,6 +586,14 @@ def run(args: argparse.Namespace) -> int:
     steps.append({"step": "bind_references", **bind_references(config_path)})
     seeded = None
     app = None
+    # A termination signal must unwind through the finally below so the OS
+    # store is restored and Horizon is stopped; Python's default would exit
+    # at once. Only the signals this platform delivers to a handler.
+    restored_handlers = {}
+    for name in ("SIGTERM", "SIGHUP", "SIGBREAK"):
+        sig = getattr(signal, name, None)
+        if sig is not None:
+            restored_handlers[sig] = signal.signal(sig, lambda signum, frame: (_ for _ in ()).throw(SystemExit(128 + signum)))
     try:
         seeded = seed_store(login, password, args.keychain)
         steps.append({"step": "enter_credentials", "store": seeded["system"], "references": list(BINDINGS)})
@@ -532,7 +622,7 @@ def run(args: argparse.Namespace) -> int:
         #    refused: nothing about the value survives outside the store.
         clear_store(seeded, args.keychain)
         seeded = None
-        steps.append({"step": "credentials_removed_from_store", "store_still_lists_items": store_has_items()})
+        steps.append({"step": "credentials_removed_from_store", "store_still_lists_items": store_has_items(args.keychain)})
         app, actor, host_instance = start_horizon(horizon, config_path, root, env, "horizon-restart.log")
         client = McpClient(horizon, root / "mcp-restart.log", 200.0, actor, host_instance)
         RPC_LOG[:] = [root / "rpc-restart.jsonl"]
@@ -553,6 +643,8 @@ def run(args: argparse.Namespace) -> int:
             stop_horizon(app)
         if seeded is not None:
             clear_store(seeded, args.keychain)
+        for sig, handler in restored_handlers.items():
+            signal.signal(sig, handler)
     return finish(root, report, args.targets)
 
 

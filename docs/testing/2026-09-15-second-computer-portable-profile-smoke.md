@@ -112,6 +112,7 @@ python3 scripts/remote-browser-evidence/second_computer_smoke.py run \
 `run` reads the netrc named by `HORIZON_NETRC` (default
 `~/.config/horizon-dev/browserstack.netrc`, mode 600 on POSIX), seeds this
 computer's OS store (Secret Service, macOS Keychain with an optional
-`--keychain`, or Windows Credential Manager), and removes the items again at
-the end. Reports land under `--out` as `report.json` with `rpc-<target>.jsonl`,
+`--keychain`, or Windows Credential Manager) after recording what Horizon's
+items held, and puts that back at the end (or removes the items), also when
+the run is terminated by a signal. Reports land under `--out` as `report.json` with `rpc-<target>.jsonl`,
 `rpc-restart.jsonl`, `horizon.log` and `horizon-restart.log`.
