@@ -176,7 +176,7 @@ impl HorizonApp {
             remote_hosts_refresh_in_flight: false,
             remote_hosts_last_refresh: None,
             last_session_catalog_refresh: None,
-            last_panel_output_at: Some(Instant::now()), browser_create_host: BrowserCreateHostState::default(),
+            last_panel_output_at: Some(Instant::now()), browser_create_host: BrowserCreateHostState::default(), browser_owner_links: HashMap::new(),
             settings: None, remote_browser_credentials: CredentialWorkbench::spawn_platform(),
             speech_model_info_cache: settings::SpeechModelInfoCache::new(),
             session_manager: None, remote_environments: super::remote_environments::RemoteEnvironments::default(),

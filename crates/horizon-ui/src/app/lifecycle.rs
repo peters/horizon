@@ -289,6 +289,7 @@ impl HorizonApp {
         self.render_canvas(ui);
         let overlay_zones = self.overlay_exclusion_zones(ui);
         self.render_workspace_backgrounds(ui, &workspace_bounds, &overlay_zones);
+        self.render_browser_connector_lines(ui.ctx(), self.canvas_rect(ui.ctx()), None);
         self.render_empty_state_card(ui);
         self.handle_canvas_double_click(ui);
         self.render_panels(ui);

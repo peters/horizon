@@ -2,6 +2,7 @@ mod actions;
 mod attention_feed;
 mod bootstrap;
 mod browser_close_requests;
+mod browser_connectors;
 mod browser_remote_create;
 mod browser_requests;
 mod canvas;
@@ -274,6 +275,8 @@ pub struct HorizonApp {
     last_session_catalog_refresh: Option<Instant>,
     last_panel_output_at: Option<Instant>,
     browser_create_host: BrowserCreateHostState,
+    /// Live owner actor per browser panel local id, with the read instant.
+    browser_owner_links: HashMap<String, (Option<String>, Instant)>,
     settings: Option<SettingsEditor>,
     speech_model_info_cache: settings::SpeechModelInfoCache,
     /// Session-only and OS-store provider credentials for remote browser targets.
