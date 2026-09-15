@@ -2278,15 +2278,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "horizon-repository"
-version = "0.2.7"
-dependencies = [
- "horizon-core",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "horizon-ui"
 version = "0.2.7"
 dependencies = [

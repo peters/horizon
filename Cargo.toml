@@ -8,7 +8,6 @@ members = [
     "crates/horizon-browser-routines",
     "crates/horizon-core",
     "crates/horizon-cursor",
-    "crates/horizon-repository",
     "crates/horizon-ui",
 ]
 
