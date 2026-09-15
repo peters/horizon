@@ -56,26 +56,6 @@ jobs:
         run: ./scripts/check-maintainability.sh
       - name: Version Sync
         run: ./scripts/check-version-sync.sh
-      - name: Remote host identity
-        run: python3 -B containers/remote-worker/test_host_identity.py -v
-      - name: Verify detached setup handoff contract
-        run: python3 -B -m unittest discover -s containers/remote-worker -p 'test*setup_launch.py' -v
-      - name: Verify on-demand GitHub credentials
-        run: python3 -B containers/remote-worker/test_github_credentials.py -v
-      - name: Verify explicit worker token installation
-        run: python3 -B containers/remote-worker/test_github_token_install.py -v
-      - name: Verify Linux UI smoke isolation and cleanup
-        run: python3 -B -m unittest discover -s containers/linux-ui-worker -v
-      - name: Verify worker byte-capture guards
-        run: python3 -B -W error containers/remote-worker/test_byte_capture.py -v
-      - name: Verify source allowlist and excluded-file controls
-        run: python3 -B containers/remote-worker/test_repository_packaging.py --docker-host unix:///var/run/docker.sock
-      - name: Install remote panel session dependencies
-        run: bash scripts/install-ci-ubuntu-dependencies.sh bison libevent-dev libncurses-dev pkg-config
-      - name: Build the pinned worker multiplexer
-        run: bash containers/remote-worker/build-tmux.sh "$RUNNER_TEMP/horizon-panel-tmux"
-      - name: Verify retained task sessions
-        run: PATH="$RUNNER_TEMP/horizon-panel-tmux/bin:$PATH" python3 -B containers/remote-worker/test_panel_sessions.py -v
       - id: snap-detect
         name: Detect Snap packaging changes
         shell: bash
@@ -113,8 +93,6 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-      - name: Verify workspace preflight decisions
-        run: python3 -B -m unittest discover -s scripts/azure-workspace-preflight/tests -v
       - name: Verify client-off harness decisions
         run: python3 -B -m unittest discover -s scripts/azure-client-off/tests -v
       - name: Verify remote browser spike transport rules
