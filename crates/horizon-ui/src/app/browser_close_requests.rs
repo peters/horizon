@@ -106,6 +106,7 @@ pub(super) fn close_outcome(
 impl HorizonApp {
     pub(super) fn poll_browser_close_requests(&mut self) -> bool {
         let mut changed = self.finish_pending_browser_closes();
+        super::browser_remote_create::trim_remote_slot_leases(self);
         let requests = match manifest::list_close_requests() {
             Ok(requests) => requests,
             Err(error) => {

@@ -55,7 +55,9 @@ shell commands, files, or other MCP servers.
   of a local browser. The agent names the target only; Horizon resolves the
   provider, capabilities and credentials and refuses with a typed reason
   (`target_unknown`, `target_invalid`, `credentials_not_ready`,
-  `credentials_invalid`, `remote_session_limit_reached`) that never carries a
+  `credentials_invalid`, `remote_session_limit_reached`, the last also when
+  other Horizon instances on the same computer hold the provider's sessions)
+  that never carries a
   value. After allocation the device is verified against the target's
   requirement from the provider's own evidence (a hosted grid's session
   record, or the capabilities a standard endpoint echoes); a physical

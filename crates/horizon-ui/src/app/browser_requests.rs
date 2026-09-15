@@ -13,7 +13,7 @@ use horizon_core::browser::{BackendAvailability, BackendKind, BrowserStatus};
 use horizon_core::{Board, PanelId, PanelKind, PanelOptions, WorkspaceId, browser_actor};
 
 use super::HorizonApp;
-use super::browser_remote_create::{plan_remote_create, remote_holds, remote_session_limit_reached};
+use super::browser_remote_create::plan_remote_create;
 
 const CREATE_REQUEST_POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// How long a create with an initial URL waits, after the backend is ready,
@@ -34,6 +34,10 @@ pub(super) struct BrowserCreateHostState {
     /// Closes the host has applied but whose session teardown has not
     /// completed yet; each is published once its teardown signal settles.
     pub(super) pending_closes: Vec<super::browser_close_requests::PendingBrowserClose>,
+    /// Cross-instance provider slots this host holds, per provider name;
+    /// trimmed to the host's hold count on every poll.
+    pub(super) remote_slot_leases:
+        std::collections::BTreeMap<String, Vec<horizon_core::browser::remote_slots::SlotLease>>,
     /// Board placement the manifests were last stamped for; a change
     /// re-stamps on the same frame instead of waiting for the next tick.
     stamped_placement: Option<u64>,
@@ -276,13 +280,8 @@ impl HorizonApp {
             |plan| plan.backend,
         );
         if let Some(plan) = &remote {
-            let holds = remote_holds(self, &plan.provider);
-            if remote_session_limit_reached(&self.template_config, &plan.provider, holds) {
-                complete_failure(
-                    &request,
-                    "remote_session_limit_reached",
-                    "the remote provider has reached its configured max_sessions; allocations count until their release is established",
-                );
+            if let Err((code, message)) = self.admit_remote_create(plan) {
+                complete_failure(&request, code, message);
                 return;
             }
         } else {
