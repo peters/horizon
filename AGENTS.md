@@ -175,16 +175,31 @@ cargo clippy --workspace --all-targets --features speech -- -D warnings -W clipp
     gh api --paginate --slurp repos/<owner>/<repo>/issues/<n>/timeline \
       | jq '[.[][] | select(.event == "review_requested" and .requested_reviewer.login == "Copilot")] | length'
   }
+  copilot_pending() {
+    gh api repos/<owner>/<repo>/pulls/<n> --jq '[.requested_reviewers[].login] | index("Copilot") != null'
+  }
+  copilot_reviewed_head() {
+    head=$(gh api repos/<owner>/<repo>/pulls/<n> --jq .head.sha)
+    gh api --paginate --slurp repos/<owner>/<repo>/pulls/<n>/reviews \
+      | jq --arg h "$head" '[.[][] | select(.user.login == "copilot-pull-request-reviewer[bot]" and .commit_id == $h)] | length > 0'
+  }
 
   before=$(copilot_requests)
 
   gh api repos/<owner>/<repo>/pulls/<n>/requested_reviewers \
     --method POST --input - <<< '{"reviewers":["copilot-pull-request-reviewer[bot]"]}'
 
-  [ "$(copilot_requests)" -gt "$before" ] || { echo "the request did not register" >&2; exit 1; }
+  if [ "$(copilot_requests)" -gt "$before" ]; then
+    echo "requested"
+  elif [ "$(copilot_pending)" = "true" ] || [ "$(copilot_reviewed_head)" = "true" ]; then
+    echo "already requested, or already reviewed on this head"
+  else
+    echo "the request did not register" >&2
+    exit 1
+  fi
   ```
 
-  A count that does not increase is not automatically a failure: if a request is already outstanding — several repositories request Copilot automatically when the PR opens — a second POST is a legitimate no-op. Check for an existing pending request, or a review already sitting on the current head, before concluding the call was lost.
+  The two `elif` states are why this is not a bare `-gt` test. A count that does not increase is often legitimate: several repositories request Copilot automatically when the PR opens, so a second POST adds no event even though a review is already on its way. `requested_reviewers` is only useful as a positive signal here — the reviewer leaves that list the moment Copilot picks the request up, so an empty list proves nothing, but a non-empty one proves a request is outstanding.
 
   Count the events rather than comparing timestamps: the PR almost always carries earlier Copilot requests, because the next rule re-requests after every push, and `created_at` has only second resolution, so a timestamp comparison can match a request made in the same second. The login filter keeps an unrelated human review request from counting.
 
