@@ -123,20 +123,22 @@ impl BrowserShutdownSignal {
 
     /// Whether this teardown still holds a remote allocation: a remote
     /// session whose release the driver has not positively established
-    /// (`Released`, `AlreadyGone`, or a session the provider never
-    /// allocated). No report at all (an unknown allocation, a driver that
-    /// died before releasing) is a hold. Local browsers never hold one.
+    /// (`Released`, `AlreadyGone`, or, once the driver has finished, a
+    /// session the provider never allocated). No report at all (an unknown
+    /// allocation, a driver that died before releasing) is a hold, and so is
+    /// `NeverAllocated` while the driver is still running: that is the
+    /// report's starting value, and a driver stopped before it reached the
+    /// provider may still be about to ask. Local browsers never hold one.
     #[must_use]
     pub fn holds_remote_allocation(&self) -> bool {
-        self.remote_provider.is_some()
-            && !matches!(
-                self.remote_release(),
-                Some(
-                    RemoteReleaseOutcome::Released
-                        | RemoteReleaseOutcome::AlreadyGone
-                        | RemoteReleaseOutcome::NeverAllocated
-                )
-            )
+        if self.remote_provider.is_none() {
+            return false;
+        }
+        match self.remote_release() {
+            Some(RemoteReleaseOutcome::Released | RemoteReleaseOutcome::AlreadyGone) => false,
+            Some(RemoteReleaseOutcome::NeverAllocated) => !self.process_is_complete(),
+            _ => true,
+        }
     }
 
     /// What a remote driver established at the provider on the way out.
