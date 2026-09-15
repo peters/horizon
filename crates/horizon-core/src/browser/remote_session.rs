@@ -78,6 +78,7 @@ pub fn build_remote_session_request(
         idle_release: Duration::from_secs(u64::from(limits.idle_release_seconds)),
         label: target_name.to_string(),
         provider: target.provider.clone(),
+        quota_key: super::remote_slots::quota_key(provider),
         browser: browser_family(&target.browser_name),
         device: target.device.clone(),
         evidence: evidence_source(provider.adapter),

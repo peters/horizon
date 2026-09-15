@@ -79,15 +79,12 @@ impl SlotLease {
     }
 }
 
-/// How long a busy answer is re-checked before it counts. A child process
-/// forked by this or another process inherits open lock descriptors until it
-/// execs, so a slot freed a moment ago can read as held for a few
-/// milliseconds; a genuinely held slot stays held past this window.
-const BUSY_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
-const BUSY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(5);
-
 /// Lease one of `max_sessions` slots for `key` under `root` (the Horizon
-/// home), trying each slot in order and taking the first that is free.
+/// home), trying each slot in order and taking the first that is free. One
+/// non-blocking pass: this runs on the host's frame, so it never waits. A
+/// child process forked by this or another process inherits open lock
+/// descriptors until it execs, so a slot freed a moment ago can read as
+/// held for a few milliseconds; the caller's next attempt sees it free.
 ///
 /// # Errors
 /// [`SlotError::Busy`] when every slot is held; [`SlotError::Io`] when the
@@ -95,28 +92,22 @@ const BUSY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(5);
 pub fn acquire_slot(root: &Path, key: &str, max_sessions: u32) -> Result<SlotLease, SlotError> {
     let dir = root.join(SLOTS_DIR).join(key);
     fs::create_dir_all(&dir).map_err(SlotError::Io)?;
-    let deadline = std::time::Instant::now() + BUSY_WINDOW;
-    loop {
-        for index in 0..max_sessions {
-            let path = dir.join(format!("slot-{index}.lock"));
-            let file = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .open(&path)
-                .map_err(SlotError::Io)?;
-            match file.try_lock() {
-                Ok(()) => return Ok(SlotLease { _file: file, path }),
-                Err(std::fs::TryLockError::WouldBlock) => {}
-                Err(std::fs::TryLockError::Error(error)) => return Err(SlotError::Io(error)),
-            }
+    for index in 0..max_sessions {
+        let path = dir.join(format!("slot-{index}.lock"));
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .map_err(SlotError::Io)?;
+        match file.try_lock() {
+            Ok(()) => return Ok(SlotLease { _file: file, path }),
+            Err(std::fs::TryLockError::WouldBlock) => {}
+            Err(std::fs::TryLockError::Error(error)) => return Err(SlotError::Io(error)),
         }
-        if max_sessions == 0 || std::time::Instant::now() >= deadline {
-            return Err(SlotError::Busy { max_sessions });
-        }
-        std::thread::sleep(BUSY_INTERVAL);
     }
+    Err(SlotError::Busy { max_sessions })
 }
 
 #[cfg(test)]
@@ -189,7 +180,18 @@ mod tests {
             "another key is another quota"
         );
         drop(first);
-        let reused = acquire_slot(root.path(), "k", 2).expect("freed slot");
+        // Another test's forked child may hold the freed descriptor until it
+        // execs (the fork-inheritance window); the caller's retry sees it free.
+        let reused = (0..100)
+            .find_map(|_| match acquire_slot(root.path(), "k", 2) {
+                Ok(lease) => Some(lease),
+                Err(SlotError::Busy { .. }) => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                    None
+                }
+                Err(error) => panic!("{error}"),
+            })
+            .expect("freed slot");
         assert_eq!(reused.path().file_name().and_then(|n| n.to_str()), Some("slot-0.lock"));
         match acquire_slot(root.path(), "k", 0) {
             Err(SlotError::Busy { max_sessions: 0 }) => {}

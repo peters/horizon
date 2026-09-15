@@ -37,6 +37,14 @@ impl PendingBrowserClose {
             .as_ref()
             .is_some_and(|signal| signal.remote_provider() == Some(provider) && signal.holds_remote_allocation())
     }
+
+    /// Whether this close still holds an allocation counted against the
+    /// cross-instance provider identity `key`.
+    pub(super) fn holds_remote_allocation_for_key(&self, key: &str) -> bool {
+        self.teardown
+            .as_ref()
+            .is_some_and(|signal| signal.remote_quota_key() == Some(key) && signal.holds_remote_allocation())
+    }
 }
 
 /// Where a pending close stands at one poll.

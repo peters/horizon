@@ -158,7 +158,7 @@ impl HorizonApp {
             Ok(lease) => {
                 self.browser_create_host
                     .remote_slot_leases
-                    .entry(plan.provider.clone())
+                    .entry(plan.quota_key.clone())
                     .or_default()
                     .push(lease);
                 Ok(())
@@ -175,20 +175,35 @@ impl HorizonApp {
     }
 }
 
-/// Keep exactly as many cross-instance slot leases per provider as this host
-/// holds allocations; the rest are freed for other Horizon instances. Called
-/// on the host's poll tick after holds may have changed.
+/// Keep exactly as many cross-instance slot leases per provider identity as
+/// this host holds allocations under that identity; the rest are freed for
+/// other Horizon instances. Called on the host's poll tick after holds may
+/// have changed. The identity travels with each session, so a provider whose
+/// endpoint or credential reference was reconfigured keeps the older
+/// identity's leases until those sessions are released.
 pub(super) fn trim_remote_slot_leases(app: &mut HorizonApp) {
-    let providers: Vec<String> = app.browser_create_host.remote_slot_leases.keys().cloned().collect();
-    for provider in providers {
-        let holds = remote_holds(app, &provider);
-        if let Some(leases) = app.browser_create_host.remote_slot_leases.get_mut(&provider) {
+    let keys: Vec<String> = app.browser_create_host.remote_slot_leases.keys().cloned().collect();
+    for key in keys {
+        let holds = remote_holds_for_key(app, &key);
+        if let Some(leases) = app.browser_create_host.remote_slot_leases.get_mut(&key) {
             leases.truncate(holds);
             if leases.is_empty() {
-                app.browser_create_host.remote_slot_leases.remove(&provider);
+                app.browser_create_host.remote_slot_leases.remove(&key);
             }
         }
     }
+}
+
+/// Allocations counted against the cross-instance provider identity `key`
+/// anywhere this host knows about (live, retired, unreleased, pending close).
+pub(super) fn remote_holds_for_key(app: &HorizonApp, key: &str) -> usize {
+    let pending = app
+        .browser_create_host
+        .pending_closes
+        .iter()
+        .filter(|pending| pending.holds_remote_allocation_for_key(key))
+        .count();
+    app.board.remote_holds_for_key(key) + pending
 }
 
 /// Allocations `provider` may still hold anywhere this host knows about:
@@ -429,7 +444,7 @@ mod tests {
         assert_eq!(
             app.browser_create_host.remote_slot_leases.get("grid").map(Vec::len),
             Some(1),
-            "one hold keeps one lease"
+            "one hold keeps one lease (the test panel's quota key is its provider name)"
         );
         assert!(
             !app.browser_create_host.remote_slot_leases.contains_key("other"),

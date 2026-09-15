@@ -34,8 +34,9 @@ pub(super) struct BrowserCreateHostState {
     /// Closes the host has applied but whose session teardown has not
     /// completed yet; each is published once its teardown signal settles.
     pub(super) pending_closes: Vec<super::browser_close_requests::PendingBrowserClose>,
-    /// Cross-instance provider slots this host holds, per provider name;
-    /// trimmed to the host's hold count on every poll.
+    /// Cross-instance provider slots this host holds, per provider identity
+    /// (quota key, not the mutable provider name); trimmed to the host's
+    /// hold count for that identity on every poll.
     pub(super) remote_slot_leases:
         std::collections::BTreeMap<String, Vec<horizon_core::browser::remote_slots::SlotLease>>,
     /// Board placement the manifests were last stamped for; a change

@@ -714,6 +714,7 @@ mod tests {
             idle_release: std::time::Duration::from_secs(1),
             label: "ios".to_string(),
             provider: "grid".to_string(),
+            quota_key: "grid-key".to_string(),
             browser: crate::BackendKind::SafariWebDriver,
             device: horizon_browser_protocol::remote::DeviceRequirement::default(),
             evidence: super::super::remote::identity::DeviceEvidenceSource::Capabilities,

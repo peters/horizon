@@ -47,6 +47,11 @@ pub struct RemoteSessionRequest {
     /// Configured provider name, so the host can count the allocations one
     /// provider holds until each release is established.
     pub provider: String,
+    /// The provider identity (endpoint and credential reference, hashed)
+    /// that Horizon instances on this computer share a quota through. It
+    /// travels with the session because configuration can change under a
+    /// provider name while a session it allocated is still held.
+    pub quota_key: String,
     /// The browser family the target drives, for panel metadata, page
     /// semantics and audit. The transport is classic `WebDriver` regardless.
     pub browser: crate::BackendKind,
@@ -68,6 +73,7 @@ impl fmt::Debug for RemoteSessionRequest {
             .field("idle_release", &self.idle_release)
             .field("label", &self.label)
             .field("provider", &self.provider)
+            .field("quota_key", &self.quota_key)
             .field("browser", &self.browser)
             .field("device", &self.device)
             .field("evidence", &self.evidence)

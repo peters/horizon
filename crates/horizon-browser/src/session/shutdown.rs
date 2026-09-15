@@ -25,6 +25,7 @@ pub struct BrowserShutdownSignal {
     completion_rx: mpsc::Receiver<()>,
     remote_release: RemoteReleaseReport,
     remote_provider: Option<String>,
+    remote_quota_key: Option<String>,
     driver_complete: AtomicBool,
     process_complete: AtomicBool,
     process_control: ChromeProcessControl,
@@ -53,6 +54,7 @@ impl BrowserShutdownSignal {
         completion_rx: mpsc::Receiver<()>,
         remote_release: RemoteReleaseReport,
         remote_provider: Option<String>,
+        remote_quota_key: Option<String>,
         process_control: ChromeProcessControl,
         panel_local_id: String,
         coordination: Option<Arc<dyn BrowserCoordination>>,
@@ -61,6 +63,7 @@ impl BrowserShutdownSignal {
             completion_rx,
             remote_release,
             remote_provider,
+            remote_quota_key,
             driver_complete: AtomicBool::new(false),
             process_complete: AtomicBool::new(false),
             process_control,
@@ -89,6 +92,7 @@ impl BrowserShutdownSignal {
             completion_rx,
             remote_release: RemoteReleaseReport::default(),
             remote_provider: None,
+            remote_quota_key: None,
             driver_complete: AtomicBool::new(true),
             process_complete: AtomicBool::new(true),
             process_control,
@@ -108,6 +112,13 @@ impl BrowserShutdownSignal {
     #[must_use]
     pub fn remote_provider(&self) -> Option<&str> {
         self.remote_provider.as_deref()
+    }
+
+    /// The provider identity the allocation counts against across Horizon
+    /// instances (see the host's slot leases); `None` for a local browser.
+    #[must_use]
+    pub fn remote_quota_key(&self) -> Option<&str> {
+        self.remote_quota_key.as_deref()
     }
 
     /// Whether this teardown still holds a remote allocation: a remote
@@ -259,6 +270,7 @@ impl BrowserShutdownSignal {
             completion_rx,
             remote_release: Arc::new(Mutex::new(release)),
             remote_provider: Some(provider.to_string()),
+            remote_quota_key: Some(provider.to_string()),
             driver_complete: AtomicBool::new(true),
             process_complete: AtomicBool::new(true),
             process_control,
@@ -278,6 +290,7 @@ impl BrowserShutdownSignal {
             completion_rx,
             remote_release: RemoteReleaseReport::default(),
             remote_provider: None,
+            remote_quota_key: None,
             driver_complete: AtomicBool::new(false),
             process_complete: AtomicBool::new(false),
             process_control,
