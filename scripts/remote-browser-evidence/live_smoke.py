@@ -144,8 +144,10 @@ def seed_keyring(login: str, password: str) -> dict[str, str | None]:
         attrs = slot_attributes(reference)
         try:
             stored = Secret.password_store_sync(schema, attrs, Secret.COLLECTION_DEFAULT, f"keyring:{attrs['username']}@{SERVICE}", value, None)
-        except Exception:
-            # Seeding is all or nothing: whatever was already replaced goes back.
+        except BaseException:
+            # Seeding is all or nothing: whatever was already replaced goes
+            # back, also when a termination signal arrives as SystemExit
+            # between the two writes.
             restore_keyring(previous)
             raise
         if not stored:
