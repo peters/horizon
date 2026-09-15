@@ -494,6 +494,28 @@ mod tests {
     }
 
     #[test]
+    fn page_coordinates_follow_the_frame_size_after_an_orientation_change() {
+        // A fixed-viewport device frame is letterboxed into the same panel
+        // rectangle whatever its orientation; the page coordinate of one
+        // panel point is derived from the frame published at that moment.
+        let rect = egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(400.0, 800.0));
+        let point = egui::pos2(300.0, 450.0);
+        let portrait = to_page_coords(rect, [393.0, 852.0], point);
+        assert!(
+            (portrait.0 - 196.5).abs() < 0.01 && (portrait.1 - 426.0).abs() < 0.01,
+            "{portrait:?}"
+        );
+        let landscape = to_page_coords(rect, [852.0, 393.0], point);
+        assert!(
+            (landscape.0 - 426.0).abs() < 0.01 && (landscape.1 - 196.5).abs() < 0.01,
+            "{landscape:?}"
+        );
+        // Points outside the frame clamp to its edge rather than mapping past it.
+        let outside = to_page_coords(rect, [852.0, 393.0], egui::pos2(900.0, 1000.0));
+        assert_eq!(outside, (852.0, 393.0));
+    }
+
+    #[test]
     fn wheel_deltas_follow_the_dom_direction() {
         assert_eq!(cdp_wheel_delta(egui::vec2(2.0, 3.0), 16.0), (-32.0, -48.0));
         assert_eq!(cdp_wheel_delta(egui::vec2(-2.0, -3.0), 16.0), (32.0, 48.0));
