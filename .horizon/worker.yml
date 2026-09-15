@@ -1,0 +1,44 @@
+version: 1
+default_environment: linux
+environments:
+  linux:
+    image: horizonworkersa898ee.azurecr.io/horizon-linux-ui-worker@sha256:6c8eaf6304b39b593c04367035a67cbe89f7e3f1bb5529432add43ef4d65060e
+    directory: .
+    checks:
+      format: [cargo, fmt, --all, --, --check]
+      maintainability: [bash, scripts/check-maintainability.sh]
+      version: [bash, scripts/check-version-sync.sh]
+      test: [env, "RUSTFLAGS=-D warnings", cargo, test, --workspace]
+      speech: [env, "RUSTFLAGS=-D warnings", cargo, test, --workspace, --features, speech]
+      clippy: [cargo, clippy, --all-targets, --features, "speech,trace-profiling", --, -D, warnings]
+      clippy_strict: [cargo, clippy, --workspace, --lib, --bins, --examples, --features, speech, --, -D, warnings, -D, "clippy::unwrap_used", -D, "clippy::expect_used"]
+      clippy_advisory: [cargo, clippy, --workspace, --all-targets, --features, speech, --, -D, warnings, -W, "clippy::pedantic"]
+      build: [cargo, build, --locked, -p, horizon-ui]
+      ui:
+        - bash
+        - -lc
+        - 'proof=$(mktemp -d /tmp/horizon-ui.XXXXXX) && horizon-linux-ui-smoke --binary "${CARGO_TARGET_DIR:-target}/debug/horizon" --artifacts "$proof/run"'
+      browser:
+        - bash
+        - -lc
+        - |
+          set -eu
+          proof=$(mktemp -d /tmp/horizon-browser.XXXXXX)
+          mkdir -p "$proof/source/scripts/browser-smoke"
+          cp "${CARGO_TARGET_DIR:-target}/debug/horizon" "$proof/candidate"
+          cp scripts/browser-smoke/mcp_gate.py "$proof/source/scripts/browser-smoke/"
+          chmod 0555 "$proof/candidate"
+          runner=$(cat <<'HORIZON_BROWSER_SMOKE'
+          set -eu
+          cd "$1"
+          trap 'rm -f "$1/candidate"' EXIT
+          for engine in chromium firefox; do
+            horizon-linux-ui-smoke --binary "$1/candidate" --repository "$1/source" --browser "$engine" --artifacts "$1/$engine" --timeout-seconds 150
+          done
+          HORIZON_BROWSER_SMOKE
+          )
+          if [ "$(id -u)" = 0 ]; then
+            chown -R horizon-smoke:horizon-smoke "$proof"
+            exec runuser -u horizon-smoke -- bash --noprofile --norc -c "$runner" -- "$proof"
+          fi
+          exec bash --noprofile --norc -c "$runner" -- "$proof"
