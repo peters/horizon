@@ -21,6 +21,19 @@ environment of the Horizon process, the generated config, the logs or the
 report. The provider session is named `phase6-<target>-run-<epoch>` so the
 release proof queries exactly this run's session.
 
+## Second endpoint (optional)
+
+Apple's `safaridriver` on a Mac with an iPhone plugged in is an independent
+WebDriver implementation. Start it on the Mac (`safaridriver -p 4444`, with
+Remote Automation allowed in Safari on the Mac and enabled on the phone under
+Settings > Safari > Advanced), open a tunnel from this host
+(`ssh -N -L 4444:127.0.0.1:4444 <mac>`), and set
+`HORIZON_SAFARIDRIVER_UDID=<device udid>` (and `HORIZON_SAFARIDRIVER_ENDPOINT`
+if not `http://127.0.0.1:4444`). The script then adds a `safaridriver` provider
+(generic `webdriver` adapter, no credentials) and an `ios_safaridriver` target
+that can be named in `--targets`; its release proof opens and deletes a fresh
+session, since the driver allows one session per device.
+
 ## Command
 
 ```

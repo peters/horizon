@@ -65,6 +65,11 @@ HUB = "https://hub-cloud.browserstack.com/wd/hub"
 HUB_ORIGIN = "https://hub-cloud.browserstack.com"
 API = "https://api.browserstack.com"
 FIXTURE = "https://peters.github.io/horizon-mobile-fixture/"
+# Optional second endpoint: Apple's safaridriver on a Mac driving Safari on a
+# plugged-in iPhone, reached through an SSH tunnel (`ssh -N -L 4444:127.0.0.1:4444 <mac>`).
+# Set HORIZON_SAFARIDRIVER_UDID to the device's UDID to add the `ios_safaridriver` target.
+SAFARIDRIVER = os.environ.get("HORIZON_SAFARIDRIVER_ENDPOINT", "http://127.0.0.1:4444")
+SAFARIDRIVER_UDID = os.environ.get("HORIZON_SAFARIDRIVER_UDID")
 SERVICE = "horizon-remote-browser"
 SLOTS = {"user": "remote-browser/browserstack/user", "key": "remote-browser/browserstack/key"}
 TERMINAL = {"done", "completed", "passed", "failed", "timeout", "error"}
@@ -84,6 +89,14 @@ TARGETS = {
         "capability_extensions": {"bstack:options": {"projectName": "horizon-628", }},
     },
 }
+if SAFARIDRIVER_UDID:
+    TARGETS["ios_safaridriver"] = {
+        "provider": "safaridriver",
+        "browser_name": "Safari",
+        "platform_name": "iOS",
+        "device": {"kind": "any"},
+        "capability_extensions": {"safari:deviceUDID": SAFARIDRIVER_UDID},
+    }
 
 
 def load_credential() -> tuple[str, str]:
@@ -151,7 +164,8 @@ def target_with_session_name(name: str, session_name: str) -> dict:
     """The configured target with a run-unique provider session name, so the
     release proof can query exactly this run's session."""
     target = json.loads(json.dumps(TARGETS[name]))
-    target["capability_extensions"]["bstack:options"]["sessionName"] = session_name
+    if "bstack:options" in target["capability_extensions"]:
+        target["capability_extensions"]["bstack:options"]["sessionName"] = session_name
     return target
 
 
@@ -184,7 +198,18 @@ def write_config(root: pathlib.Path, targets: list[str], session_names: dict[str
                             "idle_release_seconds": 180,
                             "max_session_seconds": 900,
                         },
-                    }
+                    },
+                    **({"safaridriver": {
+                        "adapter": "webdriver",
+                        "endpoint": SAFARIDRIVER,
+                        "authentication": {"kind": "none"},
+                        "limits": {
+                            "max_sessions": 1,
+                            "allocation_timeout_seconds": 120,
+                            "idle_release_seconds": 180,
+                            "max_session_seconds": 900,
+                        },
+                    }} if SAFARIDRIVER_UDID else {}),
                 },
                 "targets": {name: target_with_session_name(name, session_names[name]) for name in targets},
             }
@@ -246,6 +271,27 @@ def api_get(url: str, auth: str) -> dict:
         return {"status": err.code, "body": {}}
     except (urllib.error.URLError, OSError) as err:
         return {"status": None, "error": type(err).__name__}
+
+
+def safaridriver_release_proof(udid: str) -> dict:
+    """safaridriver allows one session per device: a fresh New Session that
+    succeeds proves the previous one was released; it is deleted at once."""
+    body = json.dumps({"capabilities": {"alwaysMatch": {"browserName": "Safari", "platformName": "iOS", "safari:deviceUDID": udid}}}).encode()
+    req = urllib.request.Request(f"{SAFARIDRIVER}/session", data=body, headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with OPENER.open(req, timeout=90) as resp:
+            created = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as err:
+        return {"status": f"http {err.code}", "terminal": False, "note": "a fresh session was refused; the previous one may still be held"}
+    except (urllib.error.URLError, OSError) as err:
+        return {"status": None, "terminal": None, "note": f"safaridriver unreachable: {type(err).__name__}"}
+    session_id = (created.get("value") or {}).get("sessionId")
+    if not session_id:
+        return {"status": "no session id", "terminal": False}
+    delete = urllib.request.Request(f"{SAFARIDRIVER}/session/{session_id}", method="DELETE")
+    with OPENER.open(delete, timeout=60) as resp:
+        resp.read()
+    return {"status": "released", "terminal": True, "device": udid, "note": "a fresh session opened and was deleted, so the previous session was released"}
 
 
 def provider_session_state(auth: str, session_name: str, wait_seconds: float = 45.0) -> dict:
@@ -417,7 +463,10 @@ def main() -> int:
             finally:
                 client.close()
             time.sleep(5)
-            steps.append({"step": "provider_release_proof", **provider_session_state(auth, session_names[target])})
+            if TARGETS[target]["provider"] == "safaridriver":
+                steps.append({"step": "provider_release_proof", **safaridriver_release_proof(TARGETS[target]["capability_extensions"]["safari:deviceUDID"])})
+            else:
+                steps.append({"step": "provider_release_proof", **provider_session_state(auth, session_names[target])})
             report["targets"][target] = {"steps": steps}
             (root / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     finally:
