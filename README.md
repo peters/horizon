@@ -474,6 +474,8 @@ Provider-backed overview controls and workspace setup remain separate integratio
 | `--ephemeral` | Do not persist this run |
 | `--new-session` | Start a new saved session from the current config |
 | `--blank` | Start with an empty board (combine with `--ephemeral` for a throwaway canvas) |
+| `--export-remote-profile <path>` | Write the shareable remote browser profile (providers, targets, credential references; no credential values or bindings) and exit |
+| `--import-remote-profile <path>` | Merge a portable remote browser profile into the config file and exit; credentials are entered afterwards in Settings > Remote browsers |
 
 ---
 

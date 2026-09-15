@@ -67,6 +67,7 @@ pub(super) struct SettingsEditor {
     active_tab: SettingsTab,
     editing_config: Option<Config>,
     credential_inputs: remote_browsers::CredentialInputs,
+    portable_profile: remote_browsers::PortableProfilePanel,
 }
 
 #[derive(Clone, Copy)]
@@ -94,6 +95,7 @@ impl HorizonApp {
                 active_tab: SettingsTab::General,
                 editing_config,
                 credential_inputs: remote_browsers::CredentialInputs::default(),
+                portable_profile: remote_browsers::PortableProfilePanel::new(&self.config_path),
             });
         }
     }
@@ -350,6 +352,7 @@ fn render_gui_tab(
     let SettingsEditor {
         editing_config,
         credential_inputs,
+        portable_profile,
         buffer,
         ..
     } = editor;
@@ -371,8 +374,7 @@ fn render_gui_tab(
                 SettingsTab::Shortcuts => shortcuts::render(ui, config),
                 SettingsTab::Presets => presets::render(ui, config),
                 SettingsTab::RemoteBrowsers => {
-                    remote_browsers::render(ui, config, credentials, credential_inputs);
-                    false
+                    remote_browsers::render(ui, config, credentials, credential_inputs, portable_profile)
                 }
                 // Yaml is handled before this function is called.
                 SettingsTab::Yaml => return,

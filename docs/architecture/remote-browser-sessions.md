@@ -109,7 +109,20 @@ Rules the configuration PR enforces:
   reference has a value on this machine is a live readiness query rather than
   part of the file. Import never overwrites an existing provider's endpoint or
   rebinds an existing reference to another origin without an explicit user
-  confirmation.
+  confirmation: a conflicting file is refused whole and the local definition
+  is left as it was.
+- The portable profile is its own document, `horizon_remote_browser_profile: 1`
+  followed by a `remote` map with the same `providers` and `targets` schema as
+  `browser.remote` (`horizon_core::browser::remote_profile`). Settings > Remote
+  browsers exports and imports it from a path next to the configuration file
+  by default (`remote-browser-profile.yaml`); an import lands in the editing
+  configuration and is written by Save. The same two operations are available
+  without a window as `horizon --export-remote-profile <path>` and
+  `horizon --import-remote-profile <path>`, which rewrite the configuration
+  file atomically and exit, so a second computer reached over SSH can take a
+  profile before its owner enters credentials. Documents are bounded at 256 KiB
+  and rejected on an unknown key, another format number, any binding, or an
+  endpoint or authentication conflict with a trusted local provider.
 - Existing files without `browser.remote` load unchanged and local backends keep
   their defaults. Parsing and readiness checks never allocate.
 

@@ -1,14 +1,17 @@
-//! Remote browsers tab: provider readiness and credential entry. Values typed
-//! here go straight into the credential workbench and are never written to
-//! the YAML buffer, the config file or the process environment.
+//! Remote browsers tab: provider readiness, credential entry and the portable
+//! profile. Values typed here go straight into the credential workbench and
+//! are never written to the YAML buffer, the config file, the process
+//! environment or an exported profile.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use egui::Ui;
 use horizon_core::Config;
 use horizon_core::browser::remote::{
     CredentialReference, CredentialStoreKind, RemoteAuthentication, RemoteProviderProfile,
 };
+use horizon_core::browser::remote_profile::{self, PORTABLE_PROFILE_FILE_NAME};
 use horizon_core::remote_browser_credential::{
     CredentialReadiness, CredentialState, CredentialWorkbench, KeychainState, NoticeKind, RemoteCredentialError,
     WorkbenchNotice, credential_destination,
@@ -141,26 +144,153 @@ impl Drop for CredentialInputs {
 }
 
 /// Render the tab. Never returns a config change: this tab edits no YAML.
-pub(super) fn render(ui: &mut Ui, config: &Config, workbench: &mut CredentialWorkbench, inputs: &mut CredentialInputs) {
+/// The portable-profile row: the path the user edits and the outcome of the
+/// last export or import. Outcomes name counts and the path, never a value.
+pub(super) struct PortableProfilePanel {
+    path: String,
+    notice: Option<(String, bool)>,
+}
+
+impl PortableProfilePanel {
+    pub(super) fn new(config_path: &Path) -> Self {
+        Self {
+            path: default_portable_profile_path(config_path),
+            notice: None,
+        }
+    }
+
+    /// Write the shareable definition (bindings stripped) to the path.
+    fn export(&mut self, config: &Config) {
+        let path = Path::new(self.path.trim());
+        self.notice = Some(
+            match remote_profile::write_portable_profile(path, &config.browser.remote) {
+                Ok(()) => {
+                    let remote = &config.browser.remote;
+                    (
+                        format!(
+                            "Exported {} provider(s) and {} target(s) to {} without credentials",
+                            remote.providers.len(),
+                            remote.targets.len(),
+                            path.display()
+                        ),
+                        false,
+                    )
+                }
+                Err(error) => (format!("Export failed: {error}"), true),
+            },
+        );
+    }
+
+    /// Merge the profile at the path into the editing configuration. Returns
+    /// whether the configuration changed; the caller re-serialises it into
+    /// the YAML buffer, and Save writes it to disk.
+    fn import(&mut self, config: &mut Config) -> bool {
+        let path = Path::new(self.path.trim());
+        let outcome = remote_profile::read_portable_profile(path)
+            .and_then(|document| remote_profile::import_portable(&mut config.browser.remote, &document));
+        match outcome {
+            Ok(summary) => {
+                self.notice = Some((
+                    format!(
+                        "Imported {}: {}. Enter this computer's credentials below, then Save.",
+                        path.display(),
+                        remote_profile::summary_line(&summary)
+                    ),
+                    false,
+                ));
+                true
+            }
+            Err(error) => {
+                self.notice = Some((format!("Import failed: {error}"), true));
+                false
+            }
+        }
+    }
+}
+
+/// Where the portable profile lives unless the user types another path:
+/// next to the configuration file.
+pub(super) fn default_portable_profile_path(config_path: &Path) -> String {
+    config_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
+        .join(PORTABLE_PROFILE_FILE_NAME)
+        .display()
+        .to_string()
+}
+
+pub(super) fn render(
+    ui: &mut Ui,
+    config: &mut Config,
+    workbench: &mut CredentialWorkbench,
+    inputs: &mut CredentialInputs,
+    portable: &mut PortableProfilePanel,
+) -> bool {
     workbench.poll();
     inputs.absorb(workbench.take_notices());
     inputs.retain_current(config);
     render_stores_section(ui, workbench);
+    let changed = render_portable_section(ui, config, portable);
     let providers = &config.browser.remote.providers;
     if providers.is_empty() {
         super::section_heading(ui, "Providers");
         super::section_card(ui, |ui| {
             super::dim_label(
                 ui,
-                "No remote device services are configured. Add a browser.remote section in the YAML tab; \
-                 see docs/architecture/remote-browser-sessions.md for the schema.",
+                "No remote device services are configured. Import a portable profile above or add a \
+                 browser.remote section in the YAML tab; see docs/architecture/remote-browser-sessions.md \
+                 for the schema.",
             );
         });
-        return;
+        return changed;
     }
     for (name, profile) in providers {
         render_provider(ui, config, name, profile, workbench, inputs);
     }
+    changed
+}
+
+fn render_portable_section(ui: &mut Ui, config: &mut Config, portable: &mut PortableProfilePanel) -> bool {
+    super::section_heading(ui, "Portable profile");
+    let mut changed = false;
+    super::section_card(ui, |ui| {
+        super::dim_label(
+            ui,
+            "A portable profile carries providers, targets, limits and credential references so another \
+             computer can use the same targets. It never contains credential values, bindings or local \
+             paths; each computer enters its own credentials.",
+        );
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("File").color(theme::FG_SOFT()).size(12.0));
+            ui.add(
+                egui::TextEdit::singleline(&mut portable.path)
+                    .desired_width(ui.available_width() - 160.0)
+                    .font(egui::TextStyle::Monospace),
+            );
+            let has_path = !portable.path.trim().is_empty();
+            let has_remote = !config.browser.remote.is_empty();
+            if ui
+                .add_enabled(has_path && has_remote, egui::Button::new("Export"))
+                .clicked()
+            {
+                portable.export(config);
+            }
+            if ui.add_enabled(has_path, egui::Button::new("Import")).clicked() {
+                changed = portable.import(config);
+            }
+        });
+        if let Some((text, is_error)) = &portable.notice {
+            let color = if *is_error {
+                theme::PALETTE_RED()
+            } else {
+                theme::PALETTE_GREEN()
+            };
+            ui.label(egui::RichText::new(text).color(color).size(12.0));
+        }
+    });
+    changed
 }
 
 fn render_stores_section(ui: &mut Ui, workbench: &mut CredentialWorkbench) {
@@ -423,6 +553,85 @@ mod tests {
             credential_bindings: bindings,
             limits: RemoteSessionLimits::default(),
         }
+    }
+
+    fn remote_with(provider_name: &str, endpoint: &str) -> horizon_core::browser::remote::RemoteBrowserConfig {
+        let mut providers = BTreeMap::new();
+        providers.insert(provider_name.to_string(), profile(endpoint, "remote-browser/grid/key"));
+        horizon_core::browser::remote::RemoteBrowserConfig {
+            providers,
+            targets: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn the_portable_panel_imports_into_the_editing_config_and_exports_without_bindings() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config_path = dir.path().join("config.yaml");
+        let mut panel = PortableProfilePanel::new(&config_path);
+        assert_eq!(
+            panel.path,
+            dir.path().join(PORTABLE_PROFILE_FILE_NAME).display().to_string()
+        );
+
+        // Export from the first computer's editing config.
+        let mut first = Config::default();
+        first.browser.remote = remote_with("grid", "https://grid.example.net/wd/hub");
+        panel.export(&first);
+        let (notice, is_error) = panel.notice.clone().expect("notice");
+        assert!(!is_error, "{notice}");
+        assert!(
+            notice.starts_with("Exported 1 provider(s) and 0 target(s) to "),
+            "{notice}"
+        );
+        let document = std::fs::read_to_string(&panel.path).expect("profile");
+        assert!(!document.contains("credential_bindings"), "{document}");
+
+        // Import on the second computer: the config changes, the notice
+        // names counts, and no binding arrives.
+        let mut second = Config::default();
+        assert!(panel.import(&mut second));
+        let (notice, is_error) = panel.notice.clone().expect("notice");
+        assert!(!is_error, "{notice}");
+        assert!(notice.contains("added 1 provider(s) and 0 target(s)"), "{notice}");
+        assert!(second.browser.remote.providers["grid"].credential_bindings.is_empty());
+
+        // A conflicting import changes nothing and reports the provider only.
+        let mut trusted = Config::default();
+        trusted.browser.remote = remote_with("grid", "https://elsewhere.example.net/wd/hub");
+        let before = trusted.browser.remote.clone();
+        assert!(!panel.import(&mut trusted));
+        let (notice, is_error) = panel.notice.clone().expect("notice");
+        assert!(is_error, "{notice}");
+        assert!(notice.contains("different endpoint"), "{notice}");
+        assert!(!notice.contains("elsewhere.example.net"), "{notice}");
+        assert_eq!(trusted.browser.remote, before);
+
+        // A missing file is an error that names the path, not a panic.
+        panel.path = dir.path().join("absent.yaml").display().to_string();
+        assert!(!panel.import(&mut second));
+        let (notice, is_error) = panel.notice.clone().expect("notice");
+        assert!(is_error && notice.contains("absent.yaml"), "{notice}");
+    }
+
+    #[test]
+    fn the_portable_section_renders_for_an_empty_configuration() {
+        use crate::test_egui::DiscardTextures;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut panel = PortableProfilePanel::new(&dir.path().join("config.yaml"));
+        let mut config = Config::default();
+        let ctx = egui::Context::default();
+        let mut changed = None;
+        let _ = ctx
+            .run_ui(egui::RawInput::default(), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    changed = Some(render_portable_section(ui, &mut config, &mut panel));
+                });
+            })
+            .discard_textures();
+        assert_eq!(changed, Some(false));
+        assert!(panel.notice.is_none());
     }
 
     #[test]
