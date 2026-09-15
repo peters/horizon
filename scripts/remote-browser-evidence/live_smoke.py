@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
-"""Phase 6 evidence run for #628: a real remote device session through Horizon's
-public MCP tools only.
+"""Evidence run for #628: a real remote device session driven through Horizon's
+public MCP tools, on the hosted grid (phase 6) or on Apple's safaridriver with a
+plugged-in iPhone (phase 5, the second endpoint).
 
-The provider credential comes from the private netrc (never arguments, never the
-environment of the Horizon process) and is seeded into the Secret Service under
-the exact item Horizon's keyring adapter addresses (service `horizon-remote-browser`,
-user `<origin>|<slot>`), then removed at the end. Horizon runs headless with an
-isolated HOME; the agent panel's identity is read from the probe file it writes.
-The flow per target: browser_create {target,url}, snapshot, fill + click, query the
-result, drawer open/close, frame query, browser_close; then the provider REST API
-is asked whether the session is terminal (release proof), and a local screenshot
-of the panel is kept.
+For targets on the hosted grid the provider credential comes from the private
+netrc (never arguments, never the environment of the Horizon process) and is
+seeded into the Secret Service under the exact item Horizon's keyring adapter
+addresses (service `horizon-remote-browser`, user `<origin>|<slot>`), with the
+slots restored at the end; a run that names only the safaridriver target needs
+neither. Horizon runs headless with an isolated HOME; the agent panel's identity
+is read from the probe file it writes. The flow per target is MCP only:
+browser_create {target,url}, snapshot, fill + click, query the result, drawer
+open/close, frame query, scroll, browser_close. The release proof that follows is
+the one step outside MCP: the provider's REST API is asked whether the hosted
+grid's session is terminal, or, for safaridriver, one extra session is opened and
+deleted directly through WebDriver (the driver allows one per device). Local
+screenshots of the panel are kept.
 """
 
 from __future__ import annotations
@@ -65,6 +70,11 @@ HUB = "https://hub-cloud.browserstack.com/wd/hub"
 HUB_ORIGIN = "https://hub-cloud.browserstack.com"
 API = "https://api.browserstack.com"
 FIXTURE = "https://peters.github.io/horizon-mobile-fixture/"
+# Optional second endpoint: Apple's safaridriver on a Mac driving Safari on a
+# plugged-in iPhone, reached through an SSH tunnel (`ssh -N -L 4444:127.0.0.1:4444 <mac>`).
+# Set HORIZON_SAFARIDRIVER_UDID to the device's UDID to add the `ios_safaridriver` target.
+SAFARIDRIVER = os.environ.get("HORIZON_SAFARIDRIVER_ENDPOINT", "http://127.0.0.1:4444")
+SAFARIDRIVER_UDID = os.environ.get("HORIZON_SAFARIDRIVER_UDID")
 SERVICE = "horizon-remote-browser"
 SLOTS = {"user": "remote-browser/browserstack/user", "key": "remote-browser/browserstack/key"}
 TERMINAL = {"done", "completed", "passed", "failed", "timeout", "error"}
@@ -84,6 +94,14 @@ TARGETS = {
         "capability_extensions": {"bstack:options": {"projectName": "horizon-628", }},
     },
 }
+if SAFARIDRIVER_UDID:
+    TARGETS["ios_safaridriver"] = {
+        "provider": "safaridriver",
+        "browser_name": "Safari",
+        "platform_name": "iOS",
+        "device": {"kind": "any"},
+        "capability_extensions": {"safari:deviceUDID": SAFARIDRIVER_UDID},
+    }
 
 
 def load_credential() -> tuple[str, str]:
@@ -151,8 +169,13 @@ def target_with_session_name(name: str, session_name: str) -> dict:
     """The configured target with a run-unique provider session name, so the
     release proof can query exactly this run's session."""
     target = json.loads(json.dumps(TARGETS[name]))
-    target["capability_extensions"]["bstack:options"]["sessionName"] = session_name
+    if "bstack:options" in target["capability_extensions"]:
+        target["capability_extensions"]["bstack:options"]["sessionName"] = session_name
     return target
+
+
+def uses_browserstack(targets: list[str]) -> bool:
+    return any(TARGETS[name]["provider"] == "browserstack" for name in targets)
 
 
 def write_config(root: pathlib.Path, targets: list[str], session_names: dict[str, str]) -> pathlib.Path:
@@ -170,7 +193,7 @@ def write_config(root: pathlib.Path, targets: list[str], session_names: dict[str
         "browser": {
             "remote": {
                 "providers": {
-                    "browserstack": {
+                    **({"browserstack": {
                         "adapter": "browserstack",
                         "endpoint": HUB,
                         "authentication": {"kind": "basic", "username_ref": "user", "password_ref": "key"},
@@ -184,7 +207,18 @@ def write_config(root: pathlib.Path, targets: list[str], session_names: dict[str
                             "idle_release_seconds": 180,
                             "max_session_seconds": 900,
                         },
-                    }
+                    }} if uses_browserstack(targets) else {}),
+                    **({"safaridriver": {
+                        "adapter": "webdriver",
+                        "endpoint": SAFARIDRIVER,
+                        "authentication": {"kind": "none"},
+                        "limits": {
+                            "max_sessions": 1,
+                            "allocation_timeout_seconds": 120,
+                            "idle_release_seconds": 180,
+                            "max_session_seconds": 900,
+                        },
+                    }} if SAFARIDRIVER_UDID else {}),
                 },
                 "targets": {name: target_with_session_name(name, session_names[name]) for name in targets},
             }
@@ -248,6 +282,33 @@ def api_get(url: str, auth: str) -> dict:
         return {"status": None, "error": type(err).__name__}
 
 
+def safaridriver_release_proof(udid: str) -> dict:
+    """safaridriver allows one session per device: a fresh New Session that
+    succeeds proves the previous one was released; it is deleted at once."""
+    body = json.dumps({"capabilities": {"alwaysMatch": {"browserName": "Safari", "platformName": "iOS", "safari:deviceUDID": udid}}}).encode()
+    req = urllib.request.Request(f"{SAFARIDRIVER}/session", data=body, headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with OPENER.open(req, timeout=90) as resp:
+            created = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as err:
+        return {"status": f"http {err.code}", "terminal": False, "note": "a fresh session was refused; the previous one may still be held"}
+    except (urllib.error.URLError, OSError) as err:
+        return {"status": None, "terminal": None, "note": f"safaridriver unreachable: {type(err).__name__}"}
+    session_id = (created.get("value") or {}).get("sessionId")
+    if not session_id:
+        return {"status": "no session id", "terminal": False}
+    delete = urllib.request.Request(f"{SAFARIDRIVER}/session/{session_id}", method="DELETE")
+    try:
+        with OPENER.open(delete, timeout=60) as resp:
+            resp.read()
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError) as err:
+        # The previous session was released (a fresh one opened), but the
+        # proof session itself may still occupy the device: say so and fail.
+        return {"status": "proof session not deleted", "terminal": False, "device": udid,
+                "note": f"a fresh session opened, so the previous one was released, but deleting it failed ({type(err).__name__}); it may still hold the device"}
+    return {"status": "released", "terminal": True, "device": udid, "note": "a fresh session opened and was deleted, so the previous session was released"}
+
+
 def provider_session_state(auth: str, session_name: str, wait_seconds: float = 45.0) -> dict:
     """Release proof: the newest session named by the target must be terminal at
     the provider. The record can lag the DELETE by a few seconds, so this polls."""
@@ -286,12 +347,16 @@ def main() -> int:
     root = out / f"run-{int(time.time())}"
     session_names = {name: f"phase6-{name}-{root.name}" for name in TARGETS}
     (root / "home").mkdir(parents=True)
-    login, password = load_credential()
-    auth = "Basic " + __import__("base64").b64encode(f"{login}:{password}".encode()).decode()
     report: dict = {"targets": {}, "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     unknown = [name for name in args.targets if name not in TARGETS]
     if unknown:
         raise SystemExit(f"unknown targets: {', '.join(unknown)} (known: {', '.join(TARGETS)})")
+    # The hosted grid's credential and the keyring seeding exist only for
+    # targets that use it; a credential-free endpoint runs without either.
+    login = password = auth = None
+    if uses_browserstack(args.targets):
+        login, password = load_credential()
+        auth = "Basic " + __import__("base64").b64encode(f"{login}:{password}".encode()).decode()
     # The MCP server must resolve the same isolated Horizon home as the host,
     # so the isolation is applied to this process too: McpClient copies the
     # environment it is launched from.
@@ -311,7 +376,7 @@ def main() -> int:
     # exit at once.
     for sig in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, lambda signum, frame: (_ for _ in ()).throw(SystemExit(128 + signum)))
-    previous = seed_keyring(login, password)
+    previous = seed_keyring(login, password) if login is not None else {}
     try:
         app = subprocess.Popen([args.horizon, "--config", str(config), "--ephemeral"], env=env, stdout=log, stderr=log)
         actor = wait_for(root / "agent-actor", 90)
@@ -417,7 +482,10 @@ def main() -> int:
             finally:
                 client.close()
             time.sleep(5)
-            steps.append({"step": "provider_release_proof", **provider_session_state(auth, session_names[target])})
+            if TARGETS[target]["provider"] == "safaridriver":
+                steps.append({"step": "provider_release_proof", **safaridriver_release_proof(TARGETS[target]["capability_extensions"]["safari:deviceUDID"])})
+            else:
+                steps.append({"step": "provider_release_proof", **provider_session_state(auth, session_names[target])})
             report["targets"][target] = {"steps": steps}
             (root / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     finally:
@@ -428,7 +496,8 @@ def main() -> int:
             except subprocess.TimeoutExpired:
                 app.kill()
         log.close()
-        restore_keyring(previous)
+        if previous:
+            restore_keyring(previous)
     failures = {target: target_failures(entry["steps"]) for target, entry in report["targets"].items()}
     for target in args.targets:
         if target not in failures:
