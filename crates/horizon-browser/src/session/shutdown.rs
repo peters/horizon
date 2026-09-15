@@ -25,6 +25,7 @@ pub struct BrowserShutdownSignal {
     completion_rx: mpsc::Receiver<()>,
     remote_release: RemoteReleaseReport,
     remote_provider: Option<String>,
+    remote_quota_key: Option<String>,
     driver_complete: AtomicBool,
     process_complete: AtomicBool,
     process_control: ChromeProcessControl,
@@ -53,6 +54,7 @@ impl BrowserShutdownSignal {
         completion_rx: mpsc::Receiver<()>,
         remote_release: RemoteReleaseReport,
         remote_provider: Option<String>,
+        remote_quota_key: Option<String>,
         process_control: ChromeProcessControl,
         panel_local_id: String,
         coordination: Option<Arc<dyn BrowserCoordination>>,
@@ -61,6 +63,7 @@ impl BrowserShutdownSignal {
             completion_rx,
             remote_release,
             remote_provider,
+            remote_quota_key,
             driver_complete: AtomicBool::new(false),
             process_complete: AtomicBool::new(false),
             process_control,
@@ -89,6 +92,7 @@ impl BrowserShutdownSignal {
             completion_rx,
             remote_release: RemoteReleaseReport::default(),
             remote_provider: None,
+            remote_quota_key: None,
             driver_complete: AtomicBool::new(true),
             process_complete: AtomicBool::new(true),
             process_control,
@@ -110,22 +114,31 @@ impl BrowserShutdownSignal {
         self.remote_provider.as_deref()
     }
 
+    /// The provider identity the allocation counts against across Horizon
+    /// instances (see the host's slot leases); `None` for a local browser.
+    #[must_use]
+    pub fn remote_quota_key(&self) -> Option<&str> {
+        self.remote_quota_key.as_deref()
+    }
+
     /// Whether this teardown still holds a remote allocation: a remote
     /// session whose release the driver has not positively established
-    /// (`Released`, `AlreadyGone`, or a session the provider never
-    /// allocated). No report at all (an unknown allocation, a driver that
-    /// died before releasing) is a hold. Local browsers never hold one.
+    /// (`Released`, `AlreadyGone`, or, once the driver has finished, a
+    /// session the provider never allocated). No report at all (an unknown
+    /// allocation, a driver that died before releasing) is a hold, and so is
+    /// `NeverAllocated` while the driver is still running: that is the
+    /// report's starting value, and a driver stopped before it reached the
+    /// provider may still be about to ask. Local browsers never hold one.
     #[must_use]
     pub fn holds_remote_allocation(&self) -> bool {
-        self.remote_provider.is_some()
-            && !matches!(
-                self.remote_release(),
-                Some(
-                    RemoteReleaseOutcome::Released
-                        | RemoteReleaseOutcome::AlreadyGone
-                        | RemoteReleaseOutcome::NeverAllocated
-                )
-            )
+        if self.remote_provider.is_none() {
+            return false;
+        }
+        match self.remote_release() {
+            Some(RemoteReleaseOutcome::Released | RemoteReleaseOutcome::AlreadyGone) => false,
+            Some(RemoteReleaseOutcome::NeverAllocated) => !self.process_is_complete(),
+            _ => true,
+        }
     }
 
     /// What a remote driver established at the provider on the way out.
@@ -259,6 +272,7 @@ impl BrowserShutdownSignal {
             completion_rx,
             remote_release: Arc::new(Mutex::new(release)),
             remote_provider: Some(provider.to_string()),
+            remote_quota_key: Some(provider.to_string()),
             driver_complete: AtomicBool::new(true),
             process_complete: AtomicBool::new(true),
             process_control,
@@ -278,6 +292,7 @@ impl BrowserShutdownSignal {
             completion_rx,
             remote_release: RemoteReleaseReport::default(),
             remote_provider: None,
+            remote_quota_key: None,
             driver_complete: AtomicBool::new(false),
             process_complete: AtomicBool::new(false),
             process_control,
@@ -348,5 +363,45 @@ fn poll_profile_cleanup(cleanup: &mut ProfileCleanupState, timeout: Option<Durat
             };
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use super::{BrowserShutdownSignal, RemoteReleaseOutcome};
+
+    #[test]
+    fn never_allocated_holds_the_slot_until_the_driver_has_finished() {
+        let (tx, rx) = mpsc::channel();
+        let mut running = BrowserShutdownSignal::for_test(rx);
+        running.remote_provider = Some("grid".into());
+        running.remote_quota_key = Some("grid".into());
+        *running.remote_release.lock().expect("report") = Some(RemoteReleaseOutcome::NeverAllocated);
+        assert!(
+            running.holds_remote_allocation(),
+            "the report's starting value proves nothing while the driver may still ask the provider"
+        );
+        drop(tx);
+        assert!(
+            running.is_complete(),
+            "a dropped completion sender finishes the driver side"
+        );
+        assert!(
+            !running.holds_remote_allocation(),
+            "once the driver finished, never allocated is terminal"
+        );
+
+        let finished =
+            BrowserShutdownSignal::completed_remote_for_test("grid", Some(RemoteReleaseOutcome::NeverAllocated));
+        assert!(!finished.holds_remote_allocation());
+        let unknown = BrowserShutdownSignal::completed_remote_for_test("grid", None);
+        assert!(
+            unknown.holds_remote_allocation(),
+            "no report after completion is a hold"
+        );
+        let released = BrowserShutdownSignal::completed_remote_for_test("grid", Some(RemoteReleaseOutcome::Released));
+        assert!(!released.holds_remote_allocation());
     }
 }

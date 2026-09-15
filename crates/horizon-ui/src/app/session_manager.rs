@@ -333,6 +333,7 @@ impl HorizonApp {
         let Some(pending) = self.pending_session_switch.take() else {
             return false;
         };
+        self.adopt_orphaned_remote_holds(&pending.shutdown_progress);
         if !pending.shutdown_progress.is_complete() {
             tracing::warn!(
                 completed = pending.shutdown_progress.panels_completed(),
@@ -360,6 +361,7 @@ impl HorizonApp {
         let Some(pending) = self.pending_session_switch.take() else {
             return;
         };
+        self.adopt_orphaned_remote_holds(&pending.shutdown_progress);
         debug_assert!(pending.target.is_none());
         debug_assert!(pending.shutdown_progress.browser_shutdown_is_complete());
         // The source board remained alive specifically so this final event

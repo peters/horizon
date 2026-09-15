@@ -240,7 +240,7 @@ impl Driver {
         remote_release: crate::session::RemoteReleaseReport,
     ) -> Result<Self, String> {
         let (mut host, session, remote_device) = if let Some(request) = &config.remote {
-            let (host, session, device) = start_remote(request, event_tx, &remote_release)?;
+            let (host, session, device) = start_remote(request, event_tx, &remote_release, stop_requested)?;
             (host, session, Some(device.summary()))
         } else {
             let (host, session) = start_local(config, process_control, stop_requested)?;
@@ -489,8 +489,19 @@ fn start_remote(
     request: &super::remote::RemoteSessionRequest,
     event_tx: &BrowserEventSender,
     remote_release: &crate::session::RemoteReleaseReport,
+    stop_requested: &AtomicBool,
 ) -> Result<(DriverHost, NewSession, super::remote::identity::RemoteDeviceIdentity), String> {
     let label = request.label.clone();
+    // A panel closed before the driver got here never asks the provider:
+    // the report stays NeverAllocated and no slot is consumed.
+    if stop_requested.load(Ordering::Acquire) {
+        let _ = event_tx.send(BrowserEvent::RemoteSession(RemoteSessionEvent::AllocationFailed {
+            label,
+            reason: "the panel was closed before the remote session was requested".to_string(),
+            refusal: AllocationRefusal::Other,
+        }));
+        return Err("remote session not requested: the panel was closed first".to_string());
+    }
     let _ = event_tx.send(BrowserEvent::RemoteSession(RemoteSessionEvent::Allocating {
         label: label.clone(),
     }));
@@ -695,6 +706,8 @@ fn consume_pending_history_start(pending: &mut Option<PendingHistoryStart>, url:
 #[cfg(test)]
 mod tests {
     use super::super::remote::{RemoteReleaseOutcome, RemoteSessionEvent, RemoteStartFailure};
+    use std::sync::atomic::AtomicBool;
+
     use super::{start_failure_outcome, start_remote};
 
     #[test]
@@ -714,13 +727,15 @@ mod tests {
             idle_release: std::time::Duration::from_secs(1),
             label: "ios".to_string(),
             provider: "grid".to_string(),
+            quota_key: "grid-key".to_string(),
             browser: crate::BackendKind::SafariWebDriver,
             device: horizon_browser_protocol::remote::DeviceRequirement::default(),
             evidence: super::super::remote::identity::DeviceEvidenceSource::Capabilities,
         };
         let report =
             crate::session::RemoteReleaseReport::new(std::sync::Mutex::new(Some(RemoteReleaseOutcome::NeverAllocated)));
-        let error = start_remote(&request, &event_tx, &report)
+        let running = AtomicBool::new(false);
+        let error = start_remote(&request, &event_tx, &report, &running)
             .err()
             .expect("plain HTTP is refused");
         assert!(error.contains("endpoint rejected"), "{error}");
@@ -728,6 +743,17 @@ mod tests {
             *report.lock().expect("report"),
             Some(RemoteReleaseOutcome::NeverAllocated),
             "no provider request was made, so nothing is held"
+        );
+
+        // A panel closed before the driver reaches the provider never asks it.
+        let stopped = AtomicBool::new(true);
+        let error = start_remote(&request, &event_tx, &report, &stopped)
+            .err()
+            .expect("stopped first");
+        assert!(error.contains("closed first"), "{error}");
+        assert_eq!(
+            *report.lock().expect("report"),
+            Some(RemoteReleaseOutcome::NeverAllocated)
         );
     }
 

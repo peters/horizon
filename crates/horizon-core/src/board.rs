@@ -11,7 +11,7 @@ pub use arrangement::WorkspaceAlignment;
 pub use remote::{PreparedRemotePanelHandoff, RemotePanelHandoffError};
 pub use remote_views::{PreparedRemoteViewReopen, RemoteViewCatalog, RemoteViewReopenError, RemoteViewReopenRequest};
 use shutdown::FORCED_BROWSER_SHUTDOWN_WAIT;
-pub use shutdown::{ForcedBrowserShutdownStatus, ShutdownProgress};
+pub use shutdown::{ForcedBrowserShutdownStatus, OrphanedRemoteHold, ShutdownProgress};
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -103,7 +103,7 @@ pub struct Board {
     /// that provider's `max_sessions` for the rest of this run, independent
     /// of teardown cleanup, so a slot the provider may still hold is never
     /// handed out again on Horizon's own authority.
-    unreleased_remote_holds: Vec<String>,
+    unreleased_remote_holds: Vec<UnreleasedRemoteHold>,
     retained_empty_workspaces: HashSet<WorkspaceId>,
     pub focused: Option<PanelId>,
     pub active_workspace: Option<WorkspaceId>,
@@ -111,6 +111,14 @@ pub struct Board {
     next_panel_id: u64,
     next_workspace_id: u64,
     next_attention_id: u64,
+}
+
+/// A remote teardown that finished without an established release, kept so
+/// the provider (by name and by cross-instance identity) stays counted.
+#[derive(Clone, Debug)]
+pub(crate) struct UnreleasedRemoteHold {
+    pub(crate) provider: String,
+    pub(crate) quota_key: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -301,7 +309,12 @@ impl Board {
         }
         browser_shutdown_signals.append(&mut self.retired_browser_shutdown_signals);
         let browser_count = browser_shutdown_signals.len();
-        let shutdown = ShutdownProgress::new(browser_count, Arc::new(AtomicUsize::new(0)), browser_shutdown_signals);
+        let shutdown = ShutdownProgress::new(
+            browser_count,
+            Arc::new(AtomicUsize::new(0)),
+            browser_shutdown_signals,
+            std::mem::take(&mut self.unreleased_remote_holds),
+        );
         if !shutdown.wait_for_browser_shutdown(BROWSER_PANEL_SHUTDOWN_TIMEOUT) {
             tracing::warn!(
                 browser_count,
@@ -344,7 +357,14 @@ impl Board {
             browser_shutdown_signals.push(signal);
         }
 
-        ShutdownProgress::new(panel_count, completed, browser_shutdown_signals)
+        // Unreleased holds leave with the teardowns: the progress keeps
+        // counting them so a replacement board never sees the quota as free.
+        ShutdownProgress::new(
+            panel_count,
+            completed,
+            browser_shutdown_signals,
+            std::mem::take(&mut self.unreleased_remote_holds),
+        )
     }
 
     /// Allocations `provider` may still hold on this board: live remote
@@ -353,23 +373,48 @@ impl Board {
     /// that finished this run without ever establishing it.
     #[must_use]
     pub fn remote_holds(&self, provider: &str) -> usize {
-        let live = self
+        self.count_remote_holds(
+            |browser| browser.remote_provider() == Some(provider),
+            |signal| signal.remote_provider() == Some(provider),
+            |held| held.provider == provider,
+        )
+    }
+
+    /// Allocations counted against one provider identity shared across
+    /// Horizon instances (the quota key), whichever provider name the
+    /// configuration gives it now.
+    #[must_use]
+    pub fn remote_holds_for_key(&self, key: &str) -> usize {
+        self.count_remote_holds(
+            |browser| browser.remote_quota_key() == Some(key),
+            |signal| signal.remote_quota_key() == Some(key),
+            |held| held.quota_key.as_deref() == Some(key),
+        )
+    }
+
+    fn count_remote_holds(
+        &self,
+        live: impl Fn(&crate::browser::BrowserPanelState) -> bool,
+        retired: impl Fn(&crate::browser::BrowserShutdownSignal) -> bool,
+        unreleased: impl Fn(&UnreleasedRemoteHold) -> bool,
+    ) -> usize {
+        let live_count = self
             .panels
             .iter()
             .filter_map(|panel| panel.browser())
-            .filter(|browser| browser.remote_provider() == Some(provider) && browser.holds_remote_allocation())
+            .filter(|browser| live(browser) && browser.holds_remote_allocation())
             .count();
-        let retired = self
+        let retired_count = self
             .retired_browser_shutdown_signals
             .iter()
-            .filter(|signal| signal.remote_provider() == Some(provider) && signal.holds_remote_allocation())
+            .filter(|signal| retired(signal) && signal.holds_remote_allocation())
             .count();
-        let unreleased = self
+        let unreleased_count = self
             .unreleased_remote_holds
             .iter()
-            .filter(|held| held.as_str() == provider)
+            .filter(|held| unreleased(held))
             .count();
-        live + retired + unreleased
+        live_count + retired_count + unreleased_count
     }
 
     /// Drop finished teardowns, remembering the provider of any remote
@@ -386,7 +431,10 @@ impl Board {
                 && let Some(provider) = signal.remote_provider()
             {
                 tracing::warn!(target: "browser", provider, "remote session ended without an established release; it keeps counting against the provider's limit");
-                self.unreleased_remote_holds.push(provider.to_string());
+                self.unreleased_remote_holds.push(UnreleasedRemoteHold {
+                    provider: provider.to_string(),
+                    quota_key: signal.remote_quota_key().map(str::to_string),
+                });
             }
         }
     }

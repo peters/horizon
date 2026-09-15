@@ -150,6 +150,8 @@ pub struct BrowserSession {
     remote_release: shutdown::RemoteReleaseReport,
     /// Configured provider of a remote session, for the host's occupancy count.
     remote_provider: Option<String>,
+    /// The provider identity the allocation counts against across instances.
+    remote_quota_key: Option<String>,
     event_wake: BrowserEventWake,
     committed_url: CommittedUrl,
     process_control: ChromeProcessControl,
@@ -218,6 +220,7 @@ pub fn start_session(config: BrowserSessionConfig) -> Result<BrowserSession, cra
         config.remote.as_ref().map(|_| RemoteReleaseOutcome::NeverAllocated),
     ));
     let remote_provider = config.remote.as_ref().map(|request| request.provider.clone());
+    let remote_quota_key = config.remote.as_ref().map(|request| request.quota_key.clone());
     let driver_remote_release = Arc::clone(&remote_release);
     let process_control = ChromeProcessControl::default();
     let driver_process_control = process_control.clone();
@@ -273,6 +276,7 @@ pub fn start_session(config: BrowserSessionConfig) -> Result<BrowserSession, cra
         completion_rx,
         remote_release,
         remote_provider,
+        remote_quota_key,
         event_wake,
         committed_url,
         process_control,

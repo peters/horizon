@@ -37,6 +37,14 @@ impl PendingBrowserClose {
             .as_ref()
             .is_some_and(|signal| signal.remote_provider() == Some(provider) && signal.holds_remote_allocation())
     }
+
+    /// Whether this close still holds an allocation counted against the
+    /// cross-instance provider identity `key`.
+    pub(super) fn holds_remote_allocation_for_key(&self, key: &str) -> bool {
+        self.teardown
+            .as_ref()
+            .is_some_and(|signal| signal.remote_quota_key() == Some(key) && signal.holds_remote_allocation())
+    }
 }
 
 /// Where a pending close stands at one poll.
@@ -106,6 +114,7 @@ pub(super) fn close_outcome(
 impl HorizonApp {
     pub(super) fn poll_browser_close_requests(&mut self) -> bool {
         let mut changed = self.finish_pending_browser_closes();
+        super::browser_remote_create::trim_remote_slot_leases(self);
         let requests = match manifest::list_close_requests() {
             Ok(requests) => requests,
             Err(error) => {

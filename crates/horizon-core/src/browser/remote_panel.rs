@@ -18,6 +18,9 @@ pub(super) struct RemoteLifecycle {
     /// `None` for a panel restored from a previous run, whose session ended
     /// with that run.
     provider: Option<String>,
+    /// The provider identity the allocation counts against across Horizon
+    /// instances; kept with the session, not looked up from configuration.
+    quota_key: Option<String>,
     /// The driver established that the provider no longer holds this
     /// session (released, already gone, or never allocated).
     release_established: bool,
@@ -80,6 +83,7 @@ impl RemoteLifecycle {
         Self {
             target: request.label.clone(),
             provider: Some(request.provider.clone()),
+            quota_key: Some(request.quota_key.clone()),
             request: Some(request),
             release_established: false,
             device: None,
@@ -92,6 +96,7 @@ impl RemoteLifecycle {
             request: None,
             target,
             provider: None,
+            quota_key: None,
             release_established: false,
             device: None,
             failure: None,
@@ -180,6 +185,13 @@ impl BrowserPanelState {
         self.remote.as_ref().and_then(|remote| remote.failure.as_ref())
     }
 
+    /// The provider identity this panel's allocation counts against across
+    /// Horizon instances, when it holds one.
+    #[must_use]
+    pub fn remote_quota_key(&self) -> Option<&str> {
+        self.remote.as_ref().and_then(|remote| remote.quota_key.as_deref())
+    }
+
     /// Configured provider of the remote session this panel runs at.
     #[must_use]
     pub fn remote_provider(&self) -> Option<&str> {
@@ -213,6 +225,7 @@ impl BrowserPanelState {
             idle_release: std::time::Duration::from_secs(1),
             label: target.to_string(),
             provider: provider.to_string(),
+            quota_key: provider.to_string(),
             browser: BackendKind::ChromiumCdp,
             device: horizon_browser::remote::DeviceRequirement::default(),
             evidence: horizon_browser::DeviceEvidenceSource::Capabilities,
