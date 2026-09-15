@@ -30,6 +30,7 @@ import json
 import os
 import pathlib
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -120,31 +121,52 @@ def window_id(display: str) -> str | None:
     return out[0] if out else None
 
 
+def resize(wid: str | None, display: str, width: int, height: int) -> bool:
+    """One window resize through the window manager; a missing window or a
+    failed `xdotool` call is a phase failure, not a silent skip."""
+    if not wid:
+        return False
+    done = subprocess.run(["xdotool", "windowsize", wid, str(width), str(height)], env={**os.environ, "DISPLAY": display}, check=False)
+    return done.returncode == 0
+
+
 def run_phase(name: str, seconds: float, pid: int, client: McpClient, panel_id: str, display: str, wid: str | None) -> dict:
+    """One phase: ticks are scheduled against an absolute deadline (one per
+    second from the phase start), so every subject gets the same number of
+    actions and samples whatever each action's latency; the counts are
+    recorded so the comparison can be checked."""
     samples = [snapshot(pid)]
-    started = time.time()
+    started = time.monotonic()
+    wall_started = time.time()
     tick = 0
+    actions = 0
     errors = 0
     if name == "hidden":
         hidden = raw(client, "browser_visibility", {"panel_id": panel_id, "visible": False})
         errors += bool(hidden.get("isError"))
-    while time.time() - started < seconds:
-        time.sleep(1.0)
+    while True:
         tick += 1
+        due = started + tick
+        if due > started + seconds:
+            break
+        time.sleep(max(0.0, due - time.monotonic()))
         if name == "interaction":
             acted = raw(client, "browser_act", {"panel_id": panel_id, "action": "scroll", "delta_y": 300 if tick % 2 else -300})
+            actions += 1
             errors += bool(acted.get("isError"))
-        elif name == "resizing" and wid:
+        elif name == "resizing":
             width, height = SIZES[tick % 2]
-            subprocess.run(["xdotool", "windowsize", wid, str(width), str(height)], env={**os.environ, "DISPLAY": display}, check=False)
+            actions += 1
+            errors += not resize(wid, display, width, height)
         samples.append(snapshot(pid))
     if name == "hidden":
         shown = raw(client, "browser_visibility", {"panel_id": panel_id, "visible": True})
         errors += bool(shown.get("isError"))
-    if name == "resizing" and wid:
-        subprocess.run(["xdotool", "windowsize", wid, "1400", "900"], env={**os.environ, "DISPLAY": display}, check=False)
+    if name == "resizing":
+        errors += not resize(wid, display, 1400, 900)
     ended = time.time()
-    return {"phase": name, "started": started, "ended": ended, "actions_failed": errors, **summarise(samples)}
+    return {"phase": name, "started": wall_started, "ended": ended, "actions": actions, "actions_failed": errors,
+            "samples": len(samples), **summarise(samples)}
 
 
 def api_text(url: str, auth: str) -> str:
@@ -205,11 +227,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--horizon", required=True)
     parser.add_argument("--display", default=":99")
-    parser.add_argument("--target", default="ios_phone", choices=sorted(TARGETS))
+    # Only hosted-grid targets: the release proof and the command log below
+    # are that provider's REST API.
+    hosted = sorted(name for name, target in TARGETS.items() if target["provider"] == "browserstack")
+    parser.add_argument("--target", default="ios_phone", choices=hosted)
     parser.add_argument("--local-backend", default="chromium")
     parser.add_argument("--phase-seconds", type=float, default=20.0)
     parser.add_argument("--subjects", nargs="+", default=["remote", "local"], choices=["remote", "local"])
-    parser.add_argument("--out", default=str(pathlib.Path("~/.cache/horizon-628-spike/ui-perf").expanduser()))
+    # Not under a hidden directory: the snap-packaged Chromium used for the
+    # local comparison cannot open a profile there.
+    parser.add_argument("--out", default=str(pathlib.Path("~/horizon-628-perf").expanduser()))
     args = parser.parse_args()
     root = pathlib.Path(args.out) / f"run-{int(time.time())}"
     (root / "home").mkdir(parents=True)
@@ -227,6 +254,14 @@ def main() -> int:
     config = write_config(root, [args.target] if "remote" in args.subjects else [], session_names)
     log = (root / "horizon.log").open("w", encoding="utf-8")
     report: dict = {"started": utc_now(), "phase_seconds": args.phase_seconds, "subjects": {}}
+    # A termination signal must unwind through the finally below so the
+    # keyring is restored and Horizon is stopped; Python's default would
+    # exit at once.
+    restored_handlers = {}
+    for name in ("SIGTERM", "SIGHUP"):
+        sig = getattr(signal, name, None)
+        if sig is not None:
+            restored_handlers[sig] = signal.signal(sig, lambda signum, frame: (_ for _ in ()).throw(SystemExit(128 + signum)))
     previous = seed_keyring(login, password) if login is not None else {}
     app = None
     try:
@@ -281,6 +316,8 @@ def main() -> int:
         log.close()
         if previous:
             restore_keyring(previous)
+        for sig, handler in restored_handlers.items():
+            signal.signal(sig, handler)
     problems = []
     for label, entry in report["subjects"].items():
         if entry.get("browser_create", {}).get("is_error") or not entry.get("phases"):
@@ -292,6 +329,17 @@ def main() -> int:
             problems.append(f"{label}: not closed")
         if label == "remote" and not entry.get("provider_release_proof", {}).get("terminal"):
             problems.append("remote: provider did not report the session terminal")
+        if label == "remote":
+            # The external screenshot count is the point of the run: the
+            # session must be found and the interaction phase must show
+            # captures, or nothing was measured.
+            command_log = entry.get("provider_command_log") or {}
+            interaction = (command_log.get("per_phase") or {}).get("interaction") or {}
+            if not command_log.get("session") or not interaction.get("screenshot"):
+                problems.append("remote: provider command log missing or without interaction screenshots")
+    counts = {label: [phase["actions"] for phase in entry.get("phases", [])] for label, entry in report["subjects"].items()}
+    if len({tuple(c) for c in counts.values()}) > 1:
+        problems.append(f"subjects ran different action counts: {counts}")
     report["failures"] = problems
     report["passed"] = not problems
     (root / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
