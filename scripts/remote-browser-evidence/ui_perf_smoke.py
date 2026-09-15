@@ -262,9 +262,13 @@ def main() -> int:
         sig = getattr(signal, name, None)
         if sig is not None:
             restored_handlers[sig] = signal.signal(sig, lambda signum, frame: (_ for _ in ()).throw(SystemExit(128 + signum)))
-    previous = seed_keyring(login, password) if login is not None else {}
+    previous: dict = {}
     app = None
     try:
+        # Seeding happens under the guard, so every state after a successful
+        # write is covered by the restore below.
+        if login is not None:
+            previous = seed_keyring(login, password)
         app = subprocess.Popen([args.horizon, "--config", str(config), "--ephemeral"], env=env, stdout=log, stderr=log)
         actor = wait_for(root / "agent-actor", 90)
         host_instance = wait_for(root / "agent-host-instance", 30)
