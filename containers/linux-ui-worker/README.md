@@ -114,6 +114,46 @@ includes the public-MCP lane; `browser-result.json` records its assertions.
 
 ## Development validation
 
+### Agent filesystem sandbox
+
+Run `horizon-agent-sandbox-smoke` in a credential-free disposable container using
+the selected image, runtime policy and agent UID before the first issue offload.
+The helper uses the installed CLI's `:workspace` permission profile with an empty
+private home. It needs neither login nor network access. It proves workspace
+writes succeed, outside file creation and overwrite are denied, and outside bytes
+remain unchanged. Normal writes to both locations are checked first so Unix file
+permissions cannot produce a false sandbox pass. Each command is bounded to 30
+seconds, and only probe-owned files and descendant processes are cleaned up.
+
+```bash
+docker run --rm --network none \
+  --entrypoint horizon-agent-sandbox-smoke "$WORKER_IMAGE"
+```
+
+Require exit zero **and** JSON `passed: true`. CLI installation, version output,
+an empty success exit or an SSH-ready worker are insufficient. The tested rootless
+Docker daemon rejects the default-filter invocation because namespace creation is
+blocked. On that daemon the per-container `--security-opt seccomp=unconfined`
+setting used by the browser recipe permits the agent sandbox canary to pass,
+without additional capabilities. This is a container security policy choice, not
+an image feature or an authorization from repository YAML. It is not qualified for
+rootful Docker or Azure by this local test; do not apply it silently to an existing
+worker or change host sysctls. The provider adapters do not yet configure an agent
+sandbox runtime policy automatically.
+
+Run the probe again after changing the image, CLI, runtime policy or UID. A pass
+qualifies only the built-in filesystem profile on a temporary workspace. It does
+not qualify network isolation, custom agent profiles, real repository/toolchain
+access, authentication, browser smoke or Azure/client-off behavior. Older published
+images may lack the helper; build this image or copy the reviewed helper and
+`processes.py` into a disposable qualification fixture, keeping credentials absent.
+
+Run probe regressions with:
+
+```bash
+python3 -m unittest discover -s containers/linux-ui-worker -p 'test_agent_sandbox.py'
+```
+
 Run the complete pre-push matrix in [AGENTS.md](../../AGENTS.md) in the exact
 candidate checkout. This smoke supplements that matrix; it is not a substitute
 for Rust tests, review or issue-specific UI assertions. Keep build output and

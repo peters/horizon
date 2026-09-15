@@ -40,3 +40,5 @@ LABEL io.horizon.worker.browser-smoke="1"
 
 # Use --target native only for an explicitly smaller native-only fixture.
 FROM browser AS final
+COPY agent-sandbox-smoke.py /usr/local/bin/horizon-agent-sandbox-smoke
+RUN chmod 0755 /usr/local/bin/horizon-agent-sandbox-smoke
