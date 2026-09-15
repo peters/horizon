@@ -289,17 +289,27 @@ jobs:
   # workflow_dispatch always builds so a release can be forced on demand.
   release-changes:
     name: Release inputs changed
-    if: github.event_name == 'push'
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 3
     outputs:
-      rust: ${{ steps.filter.outputs.rust }}
+      rust: ${{ steps.force.outputs.rust || steps.filter.outputs.rust }}
     steps:
+      - name: Force release build inputs for manual runs
+        if: github.event_name == 'workflow_dispatch'
+        id: force
+        run: echo "rust=true" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        if: github.event_name == 'push'
+        with:
+          fetch-depth: 0
       - uses: dorny/paths-filter@v4.0.3
+        if: github.event_name == 'push'
         id: filter
         with:
           filters: |-
             rust:
+              - 'assets/**'
               - 'crates/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
