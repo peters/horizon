@@ -62,7 +62,7 @@ and an immutable image. It never guesses an ambient Docker daemon or subscriptio
    `worker_subscription_id` from that profile's `subscription_id`, then inspect
    `az account show --subscription "$worker_subscription_id"` using read-only calls.
    Azure profile fields are `name`, `subscription_id`, `location`, `vm_size`,
-   `image_pull_identity_id`, `declared_hourly_cost_micros`, `registry_login_server`
+   `image_pull_identity_id`, `declared_hourly_cost_micros`, `registry_login_server`,
    `disk_sku`, and optional `container_runtime`. Reuse configured resources; provider registration, new IAM grants
    and image publication require their own applicable authorization. For
    `local_docker`, use `config.local_docker: [{name, docker_host}]` with an explicit
