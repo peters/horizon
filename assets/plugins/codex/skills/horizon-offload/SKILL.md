@@ -58,8 +58,9 @@ and an immutable image. It never guesses an ambient Docker daemon or subscriptio
    MVP development build it with `cargo build -p horizon-core --bin horizon-worker`
    from the reviewed controller checkout. Do not assume released Horizon binaries
    already contain this separately built command.
-2. For Azure, discover `az` and check `az account show` plus an explicit matching
-   profile using read-only calls.
+2. For Azure, discover `az` and resolve an explicitly authorized profile. Set
+   `worker_subscription_id` from that profile's `subscription_id`, then inspect
+   `az account show --subscription "$worker_subscription_id"` using read-only calls.
    Azure profile fields are `name`, `subscription_id`, `location`, `vm_size`,
    `image_pull_identity_id`, `declared_hourly_cost_micros`, `registry_login_server`
    and `disk_sku`. Reuse configured resources; provider registration, new IAM grants
@@ -68,6 +69,20 @@ and an immutable image. It never guesses an ambient Docker daemon or subscriptio
    authorized Unix socket such as `unix:///run/user/<uid>/docker.sock`; match
    `target.profile` to that name and check that exact daemon. Azure tooling,
    subscriptions and managed identities are not prerequisites for Docker-only work.
+
+   Before every new Azure creation, preflight the controller's subscription-pinned
+   ARM token path on the same controller host and with the same CLI configuration:
+
+   ```bash
+   az account get-access-token --subscription "$worker_subscription_id" \
+     --resource https://management.azure.com/ --query expires_on \
+     --output tsv --only-show-errors
+   ```
+
+   Require success and a numeric expiry more than five minutes in the future,
+   matching the controller's refresh margin. Only the expiry is returned; never
+   print or persist the token. Account metadata alone does not prove usable login.
+   On failure, repair the login before creating a task directory or claiming creation.
 3. Verify the selected image supports the worker SSH/repository contract, the
    chosen agent, and requested build/UI tools. Keep image-pull managed identity,
    repository PAT and coding-agent login separate. A Shell image alone cannot run
@@ -107,7 +122,8 @@ The controller accepts JSON on stdin for `create <NEW_PRIVATE_DIRECTORY>`:
 Prepare the full request privately. If existing authorization does not cover the
 allocation, obtain explicit user approval for its concrete image, profile, `disk_gib`,
 cost and lifetime before provisioning billable resources. Reuse authorization already given within
-its scope; do not ask again. Then create once. The directory must be new and its
+its scope; do not ask again. After approval, run the ARM preflight above for Azure,
+then create once. The directory must be new and its
 parent must exist. The controller persists coordinates before dispatch.
 
 Run `git-install <directory> < <protected-token-file>` once, then poll
