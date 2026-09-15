@@ -80,8 +80,10 @@ configured target name.
   swipe. Recorded as scripted scroll supported, touch swipe not offered through
   the MCP contract (the phase 1 spike documents which native swipe commands each
   device accepts).
-- Modal or drawer: opened and closed on both, verified with `browser_wait` on
-  the drawer's visibility.
+- Modal or drawer: opened on both through the driver's click and verified with
+  `browser_wait` on the drawer's `open` state; closed through the driver's click
+  on the iPhone and, on the Pixel, only through a scripted click (see the
+  confirmation section and #663).
 - Iframe context: the snapshot and query expose the frame as an `iframe` node
   with its bounds; entering the frame is not part of the MCP contract (the
   documented path is `browser_handoff` on the same panel), so frame-internal
@@ -100,12 +102,54 @@ configured target name.
   reports network capture unsupported with a workflow note, and video capture
   is absent from the capability list.
 
+## Device identity confirmation (2026-09-15)
+
+After #662 the create path verifies the allocated device against the target
+from the provider's own session record. Two more runs from `main` at
+130f81cc (`run-1789430446`, then `run-1789431013` after the drawer wait below was
+corrected) showed:
+
+| Target | `browser_create` | `remote_device` on the ready panel |
+| --- | --- | --- |
+| `ios_phone` (`physical`, `iPhone 16`, `18`) | ready in 21.9 s | `iPhone 16, OS 18.5, physical device` |
+| `android_phone` (`physical`, `Google Pixel 9`, `16.0`) | ready in 22.2 s | `Google Pixel 9, OS 16.0, physical device` |
+| `ios_emulated_probe` (the same iPhone with `kind: emulated`) | refused after 19.5 s: `remote_device_rejected` | none; the panel note reads `target requires an emulated device, provider evidence: physical device; session released` |
+
+The probe is the rejection path on a real allocation: the provider handed out
+the iPhone, Horizon read its record, found physical hardware where the target
+demanded an emulator, released the session (the driver logged `session
+released`, and the provider's record for the probe reads `done` with 17 s
+billed) and failed the create with
+the typed code and its fixed public text. The two real targets pass exactly as
+before, now with the resolved OS version (`18.5` on this allocation, `18.6` on
+the previous day's) reported to the agent.
+
+The first of these runs also caught a flaw in the evidence script itself: the
+drawer-close step waited for `#drawer` to become hidden, but the fixture keeps
+the closed drawer in the layout and only toggles its `open` class, so the wait
+timed out on Android and was invalidated on iOS. The script now waits on
+`#drawer.open` (visible after opening, gone after closing), which is what the
+fixture actually changes.
+
+With that corrected, the final run passed on both devices (`remote_device`
+`iPhone 16, OS 18.6, physical device` and `Google Pixel 9, OS 16.0, physical
+device`, both sessions `done` at the provider). The iPhone closes the drawer
+through the driver's click (the wait cleared in 1.3 s), and the Pixel does not: its `browser_act click` on
+the fixed-position close button reports `completed` while the drawer stays
+open. The diagnostic in the run directory shows why: on this device the layout
+viewport is about three times the visual viewport (`innerHeight` 2317 against
+777 visible), so the button, pinned to the layout viewport's bottom, lies
+below what is on screen, and the driver's tap misses it. A scripted
+`element.click()` closes it at once. This is recorded as an explicit
+conditional result: `drawer_close.method` is `driver_click` on the iPhone and
+`scripted_click` on the Pixel, and the limitation is tracked in
+[#663](https://github.com/peters/horizon/issues/663).
+
 ## Not proven here
 
-- Requested versus actual hardware is not verified by the create path (the
-  provider resolved iOS `18` to `18.5` on the device and `18.6` in its own
-  record); the target's `kind: physical` is configuration, and the schema says
-  so.
+- Emulated hardware from a provider was not exercised: the lane account has
+  real devices only, so the rejection path was driven by an `emulated`
+  requirement against a real device rather than the reverse.
 - Only one endpoint implementation was exercised. The second, self-hosted
   Appium endpoint is a separate item.
 - The runs were on Linux; the macOS and Windows keychain smokes are separate.

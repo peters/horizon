@@ -119,7 +119,13 @@ pub fn check_requirement(requirement: &DeviceRequirement, identity: &RemoteDevic
     if actual == wanted {
         Ok(())
     } else {
-        Err(format!("target requires a {wanted}, provider evidence: {actual}"))
+        let article = match wanted {
+            DeviceEvidence::Emulated => "an",
+            DeviceEvidence::Physical | DeviceEvidence::Unknown => "a",
+        };
+        Err(format!(
+            "target requires {article} {wanted}, provider evidence: {actual}"
+        ))
     }
 }
 

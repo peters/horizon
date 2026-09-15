@@ -38,7 +38,7 @@ query, `scroll`, `browser_close`, `browser_list`, and finally the provider's
 REST status of the session. Each device allocation is billed by the provider;
 one run is roughly forty seconds of device time per target.
 
-The run exits nonzero, and `report.json` names the shortfall per target, unless every required outcome held: a committed first page, the field holding the typed value, the submitted result, the drawer, the iframe node, a moved page, `closed: true`, an empty `browser_list`, and a terminal session at the provider. The REST status call refuses redirects, so the credential is never resent elsewhere.
+The drawer-close step records its `method`: `driver_click` when the driver's tap closed the drawer, `scripted_click` when only the page's own handler did (an explicit conditional result, see peters/horizon#663). The run exits nonzero, and `report.json` names the shortfall per target, unless every required outcome held: a committed first page, the field holding the typed value, the submitted result, the drawer, the iframe node, a moved page, `closed: true`, an empty `browser_list`, and a terminal session at the provider. The REST status call refuses redirects, so the credential is never resent elsewhere.
 
 Output lands under `~/.cache/horizon-628-spike/phase6/run-<epoch>`:
 `report.json` (every step with its outcome), `rpc-<target>.jsonl` (every MCP

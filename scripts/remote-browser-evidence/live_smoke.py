@@ -379,12 +379,23 @@ def main() -> int:
                                   "value": (result.get("structuredContent") or {}).get("value")})
                 shot(args.display, root / f"{target}-03-submitted.png")
                 drawer = raw(client, "browser_act", {"panel_id": panel_id, "action": "click", "selector": "#open-drawer"})
-                drawer_wait = raw(client, "browser_wait", {"panel_id": panel_id, "selector": "#drawer", "state": "visible", "timeout_millis": 10000})
+                # The fixture opens and closes the drawer by toggling its `open`
+                # class (it keeps a box while closed), so the wait targets that state.
+                drawer_wait = raw(client, "browser_wait", {"panel_id": panel_id, "selector": "#drawer.open", "state": "visible", "timeout_millis": 10000})
                 steps.append({"step": "drawer_open", "is_error": drawer.get("isError") or drawer_wait.get("isError")})
                 shot(args.display, root / f"{target}-04-drawer.png")
                 closed_drawer = raw(client, "browser_act", {"panel_id": panel_id, "action": "click", "selector": "#close-drawer"})
-                closed_wait = raw(client, "browser_wait", {"panel_id": panel_id, "selector": "#drawer", "state": "hidden", "timeout_millis": 10000})
-                steps.append({"step": "drawer_close", "is_error": closed_drawer.get("isError") or closed_wait.get("isError"),
+                closed_wait = raw(client, "browser_wait", {"panel_id": panel_id, "selector": "#drawer.open", "state": "hidden", "timeout_millis": 5000})
+                method = "driver_click"
+                if closed_wait.get("isError") and not closed_drawer.get("isError"):
+                    # Explicit conditional result: on some devices the driver's tap
+                    # misses a fixed-position control at the bottom of an inflated
+                    # layout viewport (peters/horizon#663); a scripted click records
+                    # that the drawer closes only through the page's own handler.
+                    scripted = raw(client, "browser_evaluate", {"panel_id": panel_id, "expression": "(document.getElementById('close-drawer').click(), document.getElementById('drawer').classList.contains('open'))"})
+                    closed_wait = raw(client, "browser_wait", {"panel_id": panel_id, "selector": "#drawer.open", "state": "hidden", "timeout_millis": 5000})
+                    method = "scripted_click" if not scripted.get("isError") else "driver_click"
+                steps.append({"step": "drawer_close", "method": method, "is_error": closed_drawer.get("isError") or closed_wait.get("isError"),
                               "elapsed_millis": (closed_wait.get("structuredContent") or {}).get("elapsed_millis")})
                 frame = raw(client, "browser_query", {"panel_id": panel_id, "selector": "#frame", "max_results": 1})
                 steps.append({"step": "iframe_boundary", "is_error": frame.get("isError"),
