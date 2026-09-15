@@ -122,21 +122,28 @@ fn parse_response(response: &[u8]) -> Result<Value, HttpError> {
 /// Turn a status and JSON body into the `WebDriver` result or typed error,
 /// shared by the loopback and remote transports.
 pub(super) fn interpret_body(status: u16, body: &[u8]) -> Result<Value, HttpError> {
-    let success = (200..300).contains(&status);
+    let rejected = (400..500).contains(&status);
+    let server_failure = status >= 500;
     let value = if body.is_empty() {
         Value::Null
     } else {
         match serde_json::from_slice::<Value>(body) {
             Ok(value) => value,
-            // A failure status with a body that is not JSON (an HTML login
-            // page, a plain-text rate limit) is still the server's answer:
-            // report it by status so the caller can classify it, rather than
-            // as a decoding failure that reads as an unknown outcome.
-            Err(_) if !success => {
+            // A 4xx with a body that is not JSON (an HTML login page, a
+            // plain-text rate limit) is still the server's definite answer:
+            // report it by status so the caller can classify the refusal.
+            Err(_) if rejected => {
                 return Err(HttpError::WebDriver {
                     error: format!("http {status}"),
                     message: printable_excerpt(body),
                 });
+            }
+            // A 5xx with a non-JSON body may come from a proxy in front of a
+            // server that did act (a device may have been created, a delete
+            // may have landed): that is a transport-level ambiguity, retried
+            // where retries are safe and never reported as a definite refusal.
+            Err(_) if server_failure => {
+                return Err(HttpError::Transport(format!("http {status}")));
             }
             Err(error) => return Err(error.into()),
         }
