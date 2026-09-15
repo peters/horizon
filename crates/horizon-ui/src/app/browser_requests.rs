@@ -158,6 +158,8 @@ struct BrowserPlacement {
     local_id: String,
     visible: bool,
     workspace: ManifestWorkspace,
+    /// Board layout size the viewport stamp is derived from.
+    size: [f32; 2],
 }
 
 /// Outcome of stamping every browser manifest: whether any file changed and
@@ -312,6 +314,7 @@ impl HorizonApp {
             visible: request.visible,
             browser_config: Some(browser_config),
             remote_session: remote.map(|plan| plan.request),
+            size: requested_panel_size(&request),
             ..PanelOptions::default()
         };
         let panel_id = match self.board.create_panel(options, actor_panel.workspace_id) {
@@ -452,7 +455,7 @@ impl HorizonApp {
             );
             return false;
         }
-        if let Err(error) = publish_manifest_host_state(&request.panel_local_id, request.visible, &workspace) {
+        if let Err(error) = publish_manifest_host_state(&request.panel_local_id, request.visible, &workspace, None) {
             tracing::warn!(request_id = %request.request_id, %error, "could not update browser manifest visibility");
             complete_visibility_failure(
                 request,
@@ -470,7 +473,7 @@ impl HorizonApp {
         }
         if let Err(error) = manifest::record_visibility_status(request, BrowserVisibilityAuditStatus::Completed) {
             tracing::warn!(request_id = %request.request_id, %error, "could not audit browser visibility completion");
-            let _ = publish_manifest_host_state(&request.panel_local_id, original_visible, &workspace);
+            let _ = publish_manifest_host_state(&request.panel_local_id, original_visible, &workspace, None);
             let _ = self.board.set_panel_visible(panel_id, original_visible);
             complete_visibility_failure(request, "audit_failed", "visibility change could not be audited");
             return false;
@@ -502,7 +505,7 @@ impl HorizonApp {
     #[cfg(test)]
     pub(super) fn mark_browser_create_pending_for_tests(&mut self, probe: PendingBrowserCreateProbe) {
         self.browser_create_host.pending.push(PendingBrowserCreate {
-            request: BrowserCreateRequest::for_tests(&probe.panel_local_id),
+            request: BrowserCreateRequest::for_tests(&probe.panel_local_id, None, None),
             panel_id: probe.panel_id,
             panel_local_id: probe.panel_local_id,
             backend: BackendKind::default(),
@@ -565,6 +568,37 @@ fn browser_workspace(board: &Board, workspace_id: WorkspaceId) -> Option<Manifes
     ))
 }
 
+/// The requested initial panel size for a create: each supplied CSS pixel
+/// axis is applied, an omitted axis keeps the board's default panel size, and
+/// no size request keeps the board default entirely.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "the MCP controller caps every requested axis at 8000 CSS pixels, below f32's exact integer range"
+)]
+fn requested_panel_size(request: &BrowserCreateRequest) -> Option<[f32; 2]> {
+    if request.width.is_none() && request.height.is_none() {
+        return None;
+    }
+    Some([
+        request
+            .width
+            .map_or(horizon_core::DEFAULT_PANEL_SIZE[0], |width| width as f32),
+        request
+            .height
+            .map_or(horizon_core::DEFAULT_PANEL_SIZE[1], |height| height as f32),
+    ])
+}
+
+/// The CSS pixel viewport stamped on a manifest from a board layout size.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "board layout sizes are non-negative CSS pixels, far below u32::MAX"
+)]
+fn viewport_from_size(size: [f32; 2]) -> [u32; 2] {
+    [size[0].round().max(0.0) as u32, size[1].round().max(0.0) as u32]
+}
+
 /// The host-owned state of every browser panel on the board, in board order.
 fn browser_placements(board: &Board) -> Vec<BrowserPlacement> {
     board
@@ -576,6 +610,7 @@ fn browser_placements(board: &Board) -> Vec<BrowserPlacement> {
                 local_id: panel.local_id.clone(),
                 visible: panel.visible,
                 workspace,
+                size: panel.layout.size,
             })
         })
         .collect()
@@ -592,7 +627,13 @@ fn sync_manifest_host_state(root: &Path, placements: &[BrowserPlacement]) -> Hos
         complete: true,
     };
     for placement in placements {
-        match manifest::sync_host_state_in(root, &placement.local_id, placement.visible, &placement.workspace) {
+        match manifest::sync_host_state_in(
+            root,
+            &placement.local_id,
+            placement.visible,
+            &placement.workspace,
+            Some(viewport_from_size(placement.size)),
+        ) {
             Ok(HostStampOutcome::Written) => sync.changed = true,
             Ok(HostStampOutcome::Unchanged) => {}
             Ok(HostStampOutcome::NotOwned) => {
@@ -628,6 +669,11 @@ fn placement_fingerprint(board: &Board) -> u64 {
             .hash(&mut hasher);
         browser.hash(&mut hasher);
         (browser && panel.visible).hash(&mut hasher);
+        // A browser panel's size feeds its viewport stamp, so resizing it
+        // re-stamps on the same frame like a move or visibility flip does.
+        if browser {
+            viewport_from_size(panel.layout.size).hash(&mut hasher);
+        }
     }
     hasher.finish()
 }
@@ -709,7 +755,12 @@ fn finish_ready_browser_create(board: &Board, pending: &mut PendingBrowserCreate
         // The user moved a panel while the browser started. Keep the panel
         // where they put it and report the lost workspace instead of closing
         // it or handing an uncontrollable panel back as ready.
-        if let Err(error) = publish_manifest_host_state(&pending.panel_local_id, pending.request.visible, &workspace) {
+        if let Err(error) = publish_manifest_host_state(
+            &pending.panel_local_id,
+            pending.request.visible,
+            &workspace,
+            requested_panel_size(&pending.request).map(viewport_from_size),
+        ) {
             tracing::warn!(request_id = %pending.request.request_id, %error, "could not stamp a moved browser panel");
         }
         record_and_complete_failure(
@@ -719,13 +770,33 @@ fn finish_ready_browser_create(board: &Board, pending: &mut PendingBrowserCreate
         );
         return BrowserCreateCompletion::Completed;
     }
-    // Stamp and assign ownership in one locked transaction so no other
-    // same-workspace agent can claim the new panel in between.
+    // Stamp and assign ownership in one locked transaction, audit, and
+    // publish the result; any failure is already recorded and completed.
+    if !publish_and_audit_created_panel(pending, &workspace) {
+        return BrowserCreateCompletion::Failed;
+    }
+    complete_result(&BrowserCreateResult::ready(
+        &pending.request,
+        pending.panel_local_id.clone(),
+        navigation,
+        navigation_error,
+        startup_millis,
+    ));
+    BrowserCreateCompletion::Completed
+}
+
+/// Publish a create that just became ready: stamp the panel (with its
+/// requested size, so the response can report it) and claim ownership in one
+/// locked transaction so no other same-workspace agent can claim the new
+/// panel in between, then finish the creation audit. Records and completes a
+/// typed failure and returns `false` when either step fails.
+fn publish_and_audit_created_panel(pending: &mut PendingBrowserCreate, workspace: &ManifestWorkspace) -> bool {
     if let Err(error) = manifest::publish_requested_panel(
         &pending.panel_local_id,
         pending.request.visible,
-        &workspace,
+        workspace,
         host_identity(&pending.request.actor),
+        requested_panel_size(&pending.request).map(viewport_from_size),
     ) {
         tracing::error!(request_id = %pending.request.request_id, %error, "could not publish requested browser panel");
         let (code, message) = if error.kind() == std::io::ErrorKind::PermissionDenied {
@@ -740,7 +811,7 @@ fn finish_ready_browser_create(board: &Board, pending: &mut PendingBrowserCreate
             )
         };
         record_and_complete_failure(pending, code, message);
-        return BrowserCreateCompletion::Failed;
+        return false;
     }
     if let Err(error) = manifest::record_create_status(
         &pending.panel_local_id,
@@ -754,16 +825,9 @@ fn finish_ready_browser_create(board: &Board, pending: &mut PendingBrowserCreate
             "audit_failed",
             "Horizon could not complete the browser creation audit",
         );
-        return BrowserCreateCompletion::Failed;
+        return false;
     }
-    complete_result(&BrowserCreateResult::ready(
-        &pending.request,
-        pending.panel_local_id.clone(),
-        navigation,
-        navigation_error,
-        startup_millis,
-    ));
-    BrowserCreateCompletion::Completed
+    true
 }
 
 /// The create deadline as an `Instant`, derived from the request's wall-clock
@@ -847,8 +911,9 @@ fn publish_manifest_host_state(
     panel_local_id: &str,
     visible: bool,
     workspace: &ManifestWorkspace,
+    viewport: Option<[u32; 2]>,
 ) -> std::io::Result<()> {
-    match manifest::sync_host_state(panel_local_id, visible, workspace)? {
+    match manifest::sync_host_state(panel_local_id, visible, workspace, viewport)? {
         HostStampOutcome::Written | HostStampOutcome::Unchanged => Ok(()),
         HostStampOutcome::NotOwned => Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
@@ -1095,6 +1160,26 @@ mod tests {
     }
 
     #[test]
+    fn a_requested_viewport_size_maps_to_panel_size_with_default_axes() {
+        let both = BrowserCreateRequest::for_tests("browser-1", Some(1920), Some(1080));
+        let width_only = BrowserCreateRequest::for_tests("browser-1", Some(375), None);
+        let height_only = BrowserCreateRequest::for_tests("browser-1", None, Some(812));
+        let none = BrowserCreateRequest::for_tests("browser-1", None, None);
+        assert_eq!(requested_panel_size(&both), Some([1920.0, 1080.0]));
+        assert_eq!(
+            requested_panel_size(&width_only),
+            Some([375.0, horizon_core::DEFAULT_PANEL_SIZE[1]]),
+            "an omitted axis keeps the board default on that axis"
+        );
+        assert_eq!(
+            requested_panel_size(&height_only),
+            Some([horizon_core::DEFAULT_PANEL_SIZE[0], 812.0])
+        );
+        assert_eq!(requested_panel_size(&none), None);
+        assert_eq!(viewport_from_size([1919.6, 1079.4]), [1920, 1079]);
+    }
+
+    #[test]
     fn placement_fingerprint_follows_membership_not_unrelated_panels() {
         let mut board = Board::new();
         let alpha = board.create_workspace("alpha");
@@ -1105,6 +1190,32 @@ mod tests {
         assert_ne!(
             empty, with_agent,
             "an agent panel joining a workspace changes the stamp inputs"
+        );
+
+        // A browser panel's layout size feeds its viewport stamp, so a
+        // resize re-stamps on the same frame like a move or visibility flip.
+        let browser_panel_id = PanelId(41);
+        let parking = board.create_workspace("parking");
+        board.panels.push(horizon_core::Panel::from_content(
+            browser_panel_id,
+            parking,
+            PanelKind::Browser,
+            horizon_core::PanelContent::Browser(Box::new(horizon_core::browser::BrowserPanelState::inert())),
+        ));
+        board.assign_panel_to_workspace(browser_panel_id, alpha);
+        let with_browser = placement_fingerprint(&board);
+        assert_ne!(with_agent, with_browser, "a browser panel's size is a stamp input");
+        let _ = board.resize_panel(browser_panel_id, [640.0, 480.0]);
+        assert_ne!(
+            with_browser,
+            placement_fingerprint(&board),
+            "resizing a browser panel changes the stamp inputs"
+        );
+        board.panels.retain(|panel| panel.id != browser_panel_id);
+        assert_eq!(
+            placement_fingerprint(&board),
+            with_agent,
+            "removing the browser panel restores the fingerprint"
         );
 
         let shell_id = board
@@ -1167,22 +1278,38 @@ mod tests {
             },
         )
         .expect("write live manifest");
-        let placements = |board: &Board, visible: bool| {
+        let placements = |board: &Board, visible: bool, size: [f32; 2]| {
             vec![BrowserPlacement {
                 local_id: "browser-1".to_string(),
                 visible,
                 workspace: browser_workspace(board, alpha).expect("alpha workspace"),
+                size,
             }]
         };
 
-        let first = sync_manifest_host_state(root.path(), &placements(&board, true));
+        let first = sync_manifest_host_state(root.path(), &placements(&board, true, [1200.0, 700.0]));
         assert!(first.changed && first.complete);
         let stamped = manifest::read_at(&path).expect("stamped manifest");
         assert!(stamped.authorizes(AgentIdentity::new(&actor, Some(manifest::host_instance()))));
         assert!(!stamped.hidden);
+        assert_eq!(
+            stamped.viewport,
+            Some([1200, 700]),
+            "the viewport stamp follows the board size"
+        );
+
+        let resized = sync_manifest_host_state(root.path(), &placements(&board, true, [1920.0, 1080.0]));
+        assert!(
+            resized.changed && resized.complete,
+            "a size change re-stamps the manifest"
+        );
+        assert_eq!(
+            manifest::read_at(&path).expect("read resized").viewport,
+            Some([1920, 1080])
+        );
 
         board.assign_panel_to_workspace(agent_id, beta);
-        let moved = sync_manifest_host_state(root.path(), &placements(&board, false));
+        let moved = sync_manifest_host_state(root.path(), &placements(&board, false, [1920.0, 1080.0]));
         assert!(moved.changed && moved.complete);
         let restamped = manifest::read_at(&path).expect("re-stamped manifest");
         assert!(
@@ -1191,7 +1318,7 @@ mod tests {
         );
         assert!(restamped.hidden, "visibility follows the board");
 
-        let steady = sync_manifest_host_state(root.path(), &placements(&board, false));
+        let steady = sync_manifest_host_state(root.path(), &placements(&board, false, [1920.0, 1080.0]));
         assert!(
             !steady.changed && steady.complete,
             "an unchanged placement writes nothing"
@@ -1201,6 +1328,7 @@ mod tests {
             local_id: "not-live-yet".to_string(),
             visible: true,
             workspace: browser_workspace(&board, alpha).expect("alpha workspace"),
+            size: [1200.0, 700.0],
         }];
         let sync = sync_manifest_host_state(root.path(), &missing);
         assert!(

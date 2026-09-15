@@ -738,7 +738,8 @@ back into large multi-purpose modules.
     dispatch, picker flows, and canvas interaction helpers
   - `browser_requests`: transient host polling, panel creation, visibility
     changes for authenticated requests routed from a live agent panel, and the
-    host-owned workspace stamp that keeps MCP authorization current
+    host-owned workspace and viewport stamps that keep MCP authorization and
+    reported panel size current
   - `browser_close_requests`: the audited close queue, kept pending until the
     panel's teardown signal settles and the remote release is established
   - `browser_remote_create`: planning for a create that names a remote target:

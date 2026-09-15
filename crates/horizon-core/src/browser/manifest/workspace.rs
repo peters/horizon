@@ -181,7 +181,9 @@ impl ManifestWorkspace {
 }
 
 /// Stamp host-owned presentation and placement state on a live manifest,
-/// writing only when something differs.
+/// writing only when something differs. A `None` viewport leaves the field
+/// untouched, so a stamp that does not observe the board's size (visibility
+/// flips, publish) never clobbers it.
 ///
 /// # Errors
 /// Returns `NotFound` when the panel is not live, or another error when the
@@ -191,12 +193,14 @@ pub fn sync_host_state(
     panel_local_id: &str,
     visible: bool,
     workspace: &ManifestWorkspace,
+    viewport: Option<[u32; 2]>,
 ) -> std::io::Result<HostStampOutcome> {
     sync_host_state_at(
         &default_manifest_path(panel_local_id),
         panel_local_id,
         visible,
         workspace,
+        viewport,
     )
 }
 
@@ -210,12 +214,14 @@ pub fn sync_host_state_in(
     panel_local_id: &str,
     visible: bool,
     workspace: &ManifestWorkspace,
+    viewport: Option<[u32; 2]>,
 ) -> std::io::Result<HostStampOutcome> {
     sync_host_state_at(
         &manifest_path_for_root(root, panel_local_id),
         panel_local_id,
         visible,
         workspace,
+        viewport,
     )
 }
 
@@ -224,6 +230,7 @@ fn sync_host_state_at(
     panel_local_id: &str,
     visible: bool,
     workspace: &ManifestWorkspace,
+    viewport: Option<[u32; 2]>,
 ) -> std::io::Result<HostStampOutcome> {
     let hidden = !visible;
     // Only an absent file is "not live"; a read or parse failure propagates
@@ -237,13 +244,16 @@ fn sync_host_state_at(
     if !driver_host_matches(&current, workspace) {
         return Ok(HostStampOutcome::NotOwned);
     }
-    if current.hidden == hidden && current.workspace.as_ref() == Some(workspace) {
+    if current.hidden == hidden
+        && current.workspace.as_ref() == Some(workspace)
+        && (viewport.is_none() || current.viewport == viewport)
+    {
         return Ok(HostStampOutcome::Unchanged);
     }
     let mut outcome = HostStampOutcome::NotOwned;
     mutate_at(path, panel_local_id, false, |manifest| {
         if driver_host_matches(manifest, workspace) {
-            stamp(manifest, hidden, workspace, now_millis());
+            stamp(manifest, hidden, workspace, viewport, now_millis());
             outcome = HostStampOutcome::Written;
             true
         } else {
@@ -265,6 +275,7 @@ pub fn publish_requested_panel(
     visible: bool,
     workspace: &ManifestWorkspace,
     owner: AgentIdentity<'_>,
+    viewport: Option<[u32; 2]>,
 ) -> std::io::Result<()> {
     publish_requested_panel_at(
         &default_manifest_path(panel_local_id),
@@ -272,6 +283,7 @@ pub fn publish_requested_panel(
         visible,
         workspace,
         owner,
+        viewport,
     )
 }
 
@@ -281,12 +293,13 @@ fn publish_requested_panel_at(
     visible: bool,
     workspace: &ManifestWorkspace,
     owner: AgentIdentity<'_>,
+    viewport: Option<[u32; 2]>,
 ) -> std::io::Result<()> {
     super::agent::validate_actor(owner.actor)?;
     let now = now_millis();
     let mut outcome = Ok(());
     mutate_at(path, panel_local_id, false, |manifest| {
-        outcome = stamp_and_claim(manifest, !visible, workspace, owner, now);
+        outcome = stamp_and_claim(manifest, !visible, workspace, owner, viewport, now);
         outcome.is_ok()
     })?;
     outcome
@@ -300,6 +313,7 @@ fn stamp_and_claim(
     hidden: bool,
     workspace: &ManifestWorkspace,
     owner: AgentIdentity<'_>,
+    viewport: Option<[u32; 2]>,
     now: i64,
 ) -> std::io::Result<()> {
     require_driver_host(manifest, workspace)?;
@@ -318,7 +332,7 @@ fn stamp_and_claim(
             "browser panel already has another live owner",
         ));
     }
-    stamp(manifest, hidden, workspace, now);
+    stamp(manifest, hidden, workspace, viewport, now);
     if super::agent::try_claim_owner(manifest, owner.actor, None, now) {
         Ok(())
     } else {
@@ -329,9 +343,18 @@ fn stamp_and_claim(
     }
 }
 
-fn stamp(manifest: &mut BrowserManifest, hidden: bool, workspace: &ManifestWorkspace, now: i64) {
+fn stamp(
+    manifest: &mut BrowserManifest,
+    hidden: bool,
+    workspace: &ManifestWorkspace,
+    viewport: Option<[u32; 2]>,
+    now: i64,
+) {
     manifest.hidden = hidden;
     manifest.workspace = Some(workspace.clone());
+    if let Some(viewport) = viewport {
+        manifest.viewport = Some(viewport);
+    }
     // An owner the new placement no longer permits loses its lease and any
     // pending handoff at once: handoffs have no TTL and would otherwise block
     // the destination workspace's agents until a manual hand-back.

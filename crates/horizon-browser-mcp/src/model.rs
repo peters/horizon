@@ -42,6 +42,14 @@ pub(crate) struct BrowserPanel {
     /// returned panel is already in that agent's workspace, while identities
     /// from outside Horizon see every live panel.
     pub(crate) visible: bool,
+    /// Panel width in CSS pixels, stamped by the host from the board layout.
+    /// The browser viewport follows the panel; absent on manifests from
+    /// older hosts or before the first host stamp.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) width: Option<u32>,
+    /// Panel height in CSS pixels, stamped by the host from the board layout.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) height: Option<u32>,
     pub(crate) owner: Option<String>,
     #[serde(flatten)]
     pub(crate) agent_state: BrowserPanelAgentState,
@@ -80,6 +88,8 @@ impl BrowserPanel {
             url: value.url,
             title: value.title,
             visible: !value.hidden,
+            width: value.viewport.map(|viewport| viewport[0]),
+            height: value.viewport.map(|viewport| viewport[1]),
             owner,
             agent_state: BrowserPanelAgentState {
                 owned_by_caller,
@@ -200,6 +210,10 @@ pub(crate) struct CreateInput {
     pub(crate) backend: Option<CreateBackend>,
     /// Configured remote target name (a key of Horizon's browser.remote.targets) to run the session at that remote target instead of a local browser. Provider-neutral: Horizon resolves the endpoint, capabilities and credentials; the panel then advertises `remote_target`, classic `WebDriver` and no network capture. After allocation the device is verified against the target's requirement from the provider's own evidence; a physical requirement the evidence does not confirm is refused as `remote_device_rejected` after Horizon attempts to release the session (the panel says whether the provider confirmed it), and a ready panel reports `remote_device`. Omit for a local browser.
     pub(crate) target: Option<String>,
+    /// Initial viewport width in CSS pixels (320-8000, default keeps Horizon's default panel width). The browser viewport follows the panel; a typical desktop target is 1920x1080. Not applicable to remote targets, whose devices have fixed viewports.
+    pub(crate) width: Option<u32>,
+    /// Initial viewport height in CSS pixels (320-8000, default keeps Horizon's default panel height). Omit to keep the default on this axis. Not applicable to remote targets.
+    pub(crate) height: Option<u32>,
     /// Whether the panel is shown initially (default true). Hidden panels remain live and controllable.
     pub(crate) visible: Option<bool>,
     /// Explicitly permit another panel when this agent already owns one. Use only for a user-requested independent session.
@@ -884,6 +898,31 @@ mod tests {
         assert!(local.network_capture.supported);
         let local_json = serde_json::to_string(&local).expect("json");
         assert!(!local_json.contains("remote_target") && !local_json.contains("remote_device"));
+    }
+
+    #[test]
+    fn panels_report_the_host_stamped_viewport_and_omit_it_before_the_first_stamp() {
+        let stamped = BrowserPanel::from_manifest(
+            BrowserManifest {
+                panel_local_id: "sized-1".to_string(),
+                viewport: Some([1920, 1080]),
+                ..BrowserManifest::default()
+            },
+            "agent",
+        );
+        assert_eq!((stamped.width, stamped.height), (Some(1920), Some(1080)));
+        let stamped_json = serde_json::to_string(&stamped).expect("json");
+        assert!(stamped_json.contains("\"width\":1920") && stamped_json.contains("\"height\":1080"));
+
+        let legacy = BrowserPanel::from_manifest(
+            BrowserManifest {
+                panel_local_id: "legacy-1".to_string(),
+                ..BrowserManifest::default()
+            },
+            "agent",
+        );
+        assert_eq!((legacy.width, legacy.height), (None, None));
+        assert!(!serde_json::to_string(&legacy).expect("json").contains("\"width\""));
     }
 
     #[test]

@@ -29,6 +29,12 @@ pub(crate) const MAX_ACTION_TIMEOUT_MILLIS: u64 = 60_000;
 pub(crate) const RESULT_DELIVERY_HEADROOM_MILLIS: u64 = 5_000;
 const DEFAULT_CREATE_TIMEOUT_MILLIS: u64 = 60_000;
 const MIN_CREATE_TIMEOUT_MILLIS: u64 = 5_000;
+/// Smallest viewport dimension an agent may request, in CSS pixels per axis.
+/// Matches the board's minimum panel size, below which a panel body can no
+/// longer host usable browser chrome.
+pub(crate) const MIN_BROWSER_VIEWPORT: u32 = 320;
+/// Largest viewport dimension an agent may request, in CSS pixels per axis.
+pub(crate) const MAX_BROWSER_VIEWPORT: u32 = 8_000;
 
 #[derive(Clone, Debug)]
 pub(crate) struct BrowserController {
@@ -138,6 +144,10 @@ pub(crate) enum ControlError {
     AdditionalPanelRequiresOptIn { panel_id: String },
     #[error("browser visibility can be changed only by an agent panel launched inside Horizon")]
     VisibilityUnavailable,
+    #[error("remote targets have a fixed device viewport: do not pass width or height to browser_create with target")]
+    RemoteViewportFixed,
+    #[error("browser viewport dimensions must be between {min} and {max} CSS pixels per axis")]
+    ViewportSizeOutOfRange { min: u32, max: u32 },
     #[error("browser_close is available only to an agent panel launched inside Horizon")]
     CloseUnavailable,
     #[error(
@@ -261,11 +271,17 @@ impl BrowserController {
         ControlError::internal_io(operation, source)
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "every create knob is explicit so the tool schema and the request queue match field for field"
+    )]
     pub(crate) async fn create(
         &self,
         url: Option<String>,
         backend: Option<BackendKind>,
         target: Option<String>,
+        width: Option<u32>,
+        height: Option<u32>,
         visible: bool,
         allow_additional: bool,
         timeout_millis: Option<u64>,
@@ -274,6 +290,7 @@ impl BrowserController {
             return Err(ControlError::CreateUnavailable);
         }
         self.require_host_instance()?;
+        create_viewport_allowed(target.as_deref(), width, height)?;
         if !allow_additional && let Some(panel_id) = self.existing_actor_panel_id() {
             return Err(ControlError::AdditionalPanelRequiresOptIn { panel_id });
         }
@@ -283,6 +300,8 @@ impl BrowserController {
             url,
             backend,
             target,
+            width,
+            height,
             visible,
             Duration::from_millis(timeout_millis),
         )
@@ -406,8 +425,6 @@ impl BrowserController {
         }
     }
 
-    /// Close an owned panel in the calling agent's workspace. The host drops
-    /// the panel and answers once its session teardown has completed: a
     /// successful result means the panel is gone and, for a remote session,
     /// that the provider established the release; a refused or unanswered
     /// release comes back as a typed `release_failed` / `release_unknown`
@@ -650,6 +667,29 @@ fn bounded_create_timeout(timeout_millis: Option<u64>) -> u64 {
         .clamp(MIN_CREATE_TIMEOUT_MILLIS, MAX_ACTION_TIMEOUT_MILLIS)
 }
 
+/// Whether the viewport dimensions a `browser_create` may carry are valid:
+/// remote targets keep their fixed device viewport, and every supplied axis
+/// must stay inside the documented bounds before anything is enqueued.
+fn create_viewport_allowed(target: Option<&str>, width: Option<u32>, height: Option<u32>) -> Result<(), ControlError> {
+    if target.is_some() && (width.is_some() || height.is_some()) {
+        return Err(ControlError::RemoteViewportFixed);
+    }
+    for dimension in [width, height].into_iter().flatten() {
+        viewport_dimension_in_bounds(dimension)?;
+    }
+    Ok(())
+}
+
+fn viewport_dimension_in_bounds(dimension: u32) -> Result<(), ControlError> {
+    if !(MIN_BROWSER_VIEWPORT..=MAX_BROWSER_VIEWPORT).contains(&dimension) {
+        return Err(ControlError::ViewportSizeOutOfRange {
+            min: MIN_BROWSER_VIEWPORT,
+            max: MAX_BROWSER_VIEWPORT,
+        });
+    }
+    Ok(())
+}
+
 fn poll_action_result(panel_id: &str, action_id: &str) -> Result<Option<AgentActionResult>, ControlError> {
     manifest::take_action_result(panel_id, action_id)
         .map_err(|source| ControlError::internal_io("could not read browser action result", source))
@@ -752,6 +792,36 @@ mod tests {
         assert_eq!(bounded_create_timeout(None), DEFAULT_CREATE_TIMEOUT_MILLIS);
         assert_eq!(bounded_create_timeout(Some(0)), MIN_CREATE_TIMEOUT_MILLIS);
         assert_eq!(bounded_create_timeout(Some(u64::MAX)), MAX_ACTION_TIMEOUT_MILLIS);
+    }
+
+    #[test]
+    fn viewport_dimensions_are_bounded_and_remote_targets_stay_fixed() {
+        assert!(create_viewport_allowed(None, None, None).is_ok());
+        assert!(create_viewport_allowed(None, Some(MIN_BROWSER_VIEWPORT), Some(MAX_BROWSER_VIEWPORT)).is_ok());
+        assert!(create_viewport_allowed(None, Some(MIN_BROWSER_VIEWPORT), None).is_ok());
+        for bad in [
+            (Some(MIN_BROWSER_VIEWPORT - 1), None),
+            (None, Some(MAX_BROWSER_VIEWPORT + 1)),
+            (Some(0), Some(0)),
+        ] {
+            assert!(
+                matches!(
+                    create_viewport_allowed(None, bad.0, bad.1),
+                    Err(ControlError::ViewportSizeOutOfRange { min, max })
+                        if min == MIN_BROWSER_VIEWPORT && max == MAX_BROWSER_VIEWPORT
+                ),
+                "out-of-bounds dimensions are refused before enqueue"
+            );
+        }
+        assert!(matches!(
+            create_viewport_allowed(Some("ios_phone"), Some(1920), None),
+            Err(ControlError::RemoteViewportFixed)
+        ));
+        assert!(matches!(
+            create_viewport_allowed(Some("ios_phone"), None, Some(1080)),
+            Err(ControlError::RemoteViewportFixed)
+        ));
+        assert!(create_viewport_allowed(Some("ios_phone"), None, None).is_ok());
     }
 
     #[test]

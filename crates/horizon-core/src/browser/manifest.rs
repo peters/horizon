@@ -144,6 +144,12 @@ pub struct BrowserManifest {
     /// older hosts; workspace-scoped callers must treat both as out of scope.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<ManifestWorkspace>,
+    /// Host-owned panel size in CSS pixels, stamped from the board's layout
+    /// size on the host's placement sync. The browser viewport follows the
+    /// panel, so this is the viewport the agent can expect; absent until the
+    /// first stamp and on manifests from older hosts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub viewport: Option<[u32; 2]>,
     /// The Horizon process running this panel's browser driver, recorded at
     /// driver start. Only that host may stamp `hidden` and `workspace`, so a
     /// second host whose board carries the same persisted panel id (a copied
@@ -885,6 +891,7 @@ mod tests {
             title: "Example".to_string(),
             hidden: false,
             workspace: None,
+            viewport: None,
             host: None,
             audit_path: String::new(),
             owner: None,

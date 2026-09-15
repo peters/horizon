@@ -41,6 +41,16 @@ pub struct BrowserCreateRequest {
     /// resolves it; agents never see an endpoint or a credential.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
+    /// Initial viewport width in CSS pixels for the created panel; the panel
+    /// keeps Horizon's default width when omitted. The browser viewport
+    /// follows the panel; a typical desktop target is 1920x1080. Not
+    /// applicable to remote targets, whose devices have fixed viewports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    /// Initial viewport height in CSS pixels for the created panel; the
+    /// panel keeps Horizon's default height when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
     #[serde(default = "default_visible")]
     pub visible: bool,
     pub requested_at_millis: i64,
@@ -53,7 +63,7 @@ impl BrowserCreateRequest {
     /// An unclaimed request for host tests; never written to the queue.
     #[doc(hidden)]
     #[must_use]
-    pub fn for_tests(panel_local_id: &str) -> Self {
+    pub fn for_tests(panel_local_id: &str, width: Option<u32>, height: Option<u32>) -> Self {
         Self {
             request_id: new_action_id(),
             actor: format!("horizon:{panel_local_id}"),
@@ -61,6 +71,8 @@ impl BrowserCreateRequest {
             url: None,
             backend: None,
             target: None,
+            width,
+            height,
             visible: true,
             requested_at_millis: 0,
             deadline_at_millis: i64::MAX,
@@ -163,11 +175,17 @@ impl BrowserCreateResult {
 /// Returns an error for a non-Horizon identity, a Horizon identity without a
 /// forwarded host instance, an invalid URL, a full queue, or a private
 /// coordination filesystem failure.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the create request carries every optional launch knob as a flat, auditable field"
+)]
 pub fn enqueue_create(
     identity: AgentIdentity<'_>,
     url: Option<String>,
     backend: Option<BackendKind>,
     target: Option<String>,
+    width: Option<u32>,
+    height: Option<u32>,
     visible: bool,
     timeout: Duration,
 ) -> std::io::Result<String> {
@@ -177,6 +195,8 @@ pub fn enqueue_create(
         url,
         backend,
         target,
+        width,
+        height,
         visible,
         timeout,
     )
@@ -209,12 +229,18 @@ fn validate_target(target: Option<&str>, backend: Option<BackendKind>) -> std::i
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "root plus the flat create-request fields; matches enqueue_create"
+)]
 fn enqueue_at(
     root: &Path,
     identity: AgentIdentity<'_>,
     url: Option<String>,
     backend: Option<BackendKind>,
     target: Option<String>,
+    width: Option<u32>,
+    height: Option<u32>,
     visible: bool,
     timeout: Duration,
 ) -> std::io::Result<String> {
@@ -267,6 +293,8 @@ fn enqueue_at(
         url,
         backend,
         target,
+        width,
+        height,
         visible,
         requested_at_millis,
         deadline_at_millis: requested_at_millis.saturating_add(timeout_millis),
@@ -542,6 +570,8 @@ mod tests {
             Some("example.test/path".to_string()),
             Some(BackendKind::FirefoxBidi),
             None,
+            Some(1920),
+            Some(1080),
             false,
             Duration::from_secs(30),
         )
@@ -550,6 +580,7 @@ mod tests {
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].url.as_deref(), Some("https://example.test/path"));
         assert_eq!(requests[0].host_instance.as_deref(), Some("host-a"));
+        assert_eq!((requests[0].width, requests[0].height), (Some(1920), Some(1080)));
         assert!(!requests[0].visible);
 
         assert!(
@@ -593,8 +624,18 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let another = enqueue_at(root.path(), identity, None, None, None, true, Duration::from_secs(30))
-                .expect("second request");
+            let another = enqueue_at(
+                root.path(),
+                identity,
+                None,
+                None,
+                None,
+                None,
+                None,
+                true,
+                Duration::from_secs(30),
+            )
+            .expect("second request");
             assert_eq!(
                 std::fs::metadata(request_path(root.path(), &another))
                     .expect("request metadata")
@@ -616,6 +657,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
                 true,
                 Duration::from_secs(30),
             )
@@ -627,6 +670,8 @@ mod tests {
             enqueue_at(
                 root.path(),
                 AgentIdentity::new("horizon:agent-panel", None),
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -643,6 +688,8 @@ mod tests {
             root.path(),
             AgentIdentity::new(actor, Some("host-a")),
             Some("http://127.0.0.1:3000".to_string()),
+            None,
+            None,
             None,
             None,
             true,
@@ -685,6 +732,8 @@ mod tests {
                     None,
                     None,
                     None,
+                    None,
+                    None,
                     true,
                     Duration::from_secs(30),
                 )
@@ -714,6 +763,8 @@ mod tests {
                     None,
                     None,
                     Some(bad.to_string()),
+                    None,
+                    None,
                     true,
                     Duration::from_secs(30),
                 )
@@ -729,6 +780,8 @@ mod tests {
                 None,
                 Some(BackendKind::FirefoxBidi),
                 Some("ios_phone".to_string()),
+                None,
+                None,
                 true,
                 Duration::from_secs(30),
             )
@@ -742,6 +795,8 @@ mod tests {
             None,
             None,
             Some("ios_phone".to_string()),
+            None,
+            None,
             false,
             Duration::from_secs(30),
         )
@@ -756,5 +811,38 @@ mod tests {
         }))
         .expect("older requests parse");
         assert_eq!(legacy.target, None);
+        assert_eq!((legacy.width, legacy.height), (None, None));
+    }
+
+    #[test]
+    fn requested_viewport_dimensions_roundtrip_and_default_absent() {
+        let root = root();
+        let identity = AgentIdentity::new("horizon:agent-panel", Some("host-a"));
+        let request_id = enqueue_at(
+            root.path(),
+            identity,
+            None,
+            None,
+            None,
+            Some(375),
+            None,
+            true,
+            Duration::from_secs(30),
+        )
+        .expect("enqueue with one axis only");
+        let request = claim_at(root.path(), &request_id, "horizon:agent-panel", "host-a", 9)
+            .expect("claim")
+            .expect("request");
+        assert_eq!(
+            (request.width, request.height),
+            (Some(375), None),
+            "one axis may be omitted"
+        );
+
+        let encoded = serde_json::to_value(&request).expect("encode");
+        assert_eq!(encoded["width"], 375);
+        assert!(encoded.get("height").is_none(), "an omitted axis is not serialized");
+        let decoded: BrowserCreateRequest = serde_json::from_value(encoded).expect("roundtrip");
+        assert_eq!(decoded, request);
     }
 }
