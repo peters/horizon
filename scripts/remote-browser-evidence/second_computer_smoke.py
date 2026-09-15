@@ -440,7 +440,9 @@ def seed_store(login: str, password: str, keychain: str | None) -> dict:
         # Both items in one operation: a partial map would read as a
         # deletion of the item it omits.
         write_items({"user": login.encode(), "key": password.encode()}, keychain)
-    except Exception:
+    except BaseException:
+        # Also on a termination signal turned into SystemExit: the items go
+        # back before the exception leaves this function.
         write_items({reference: previous.get(reference) for reference in BINDINGS}, keychain)
         raise
     return {"system": system, "previous": previous}
