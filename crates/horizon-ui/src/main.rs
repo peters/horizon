@@ -47,9 +47,20 @@ fn main() -> eframe::Result {
     let horizon_home = HorizonHome::resolve();
     let _agent_plugin_host = plugin_install::install_agent_plugins(&horizon_home);
 
-    let cli_args = parse_cli_args();
+    let cli_args = match parse_cli_args(std::env::args().skip(1)) {
+        Ok(args) => args,
+        Err(problem) => {
+            eprintln!("error: {problem}");
+            eprintln!("{CLI_USAGE}");
+            plugin_install::exit_after_releasing_plugins(2);
+        }
+    };
     let resolved_config_path =
         Config::resolve_path(cli_args.config_path.as_deref()).unwrap_or_else(|| horizon_home.config_path());
+    if let Some(profile_path) = cli_args.remote_profile.as_ref() {
+        let code = run_remote_profile_command(&resolved_config_path, profile_path);
+        plugin_install::exit_after_releasing_plugins(code);
+    }
     let config = load_config_or_default(&resolved_config_path);
     let session_store = SessionStore::new(horizon_home.clone(), resolved_config_path.clone());
     let startup = prepare_startup(&session_store, &config, &cli_args);
@@ -267,6 +278,50 @@ fn startup_chooser_window_config(chooser: &StartupChooser) -> WindowConfig {
     }
 }
 
+/// `--export-remote-profile PATH` writes the shareable half of
+/// `browser.remote` (no credential bindings or values) and
+/// `--import-remote-profile PATH` merges such a file into the configuration
+/// file, so a second computer without a pointer can take a profile from the
+/// command line. Both finish without opening a window.
+fn run_remote_profile_command(config_path: &std::path::Path, command: &RemoteProfileCommand) -> i32 {
+    use horizon_core::browser::remote_profile;
+
+    match command {
+        RemoteProfileCommand::Export(path) => match remote_profile::export_portable_file_from_config(config_path, path)
+        {
+            Ok(remote) => {
+                println!(
+                    "exported {} provider(s) and {} target(s) to {} without credentials",
+                    remote.providers.len(),
+                    remote.targets.len(),
+                    path.display()
+                );
+                0
+            }
+            Err(error) => {
+                eprintln!("error: could not export the remote browser profile: {error}");
+                2
+            }
+        },
+        RemoteProfileCommand::Import(path) => match remote_profile::import_portable_file_into_config(config_path, path)
+        {
+            Ok(summary) => {
+                println!(
+                    "imported {} into {}: {}; enter this computer's credentials in Settings > Remote browsers",
+                    path.display(),
+                    config_path.display(),
+                    remote_profile::summary_line(&summary)
+                );
+                0
+            }
+            Err(error) => {
+                eprintln!("error: could not import the remote browser profile: {error}");
+                2
+            }
+        },
+    }
+}
+
 fn load_config_or_default(config_path: &std::path::Path) -> Config {
     if !config_path.exists() {
         tracing::info!("no config found at {}, using defaults", config_path.display());
@@ -345,37 +400,105 @@ fn init_tracing() {
     }
 }
 
+const CLI_USAGE: &str = "usage: horizon [--config <path>] [--ephemeral] [--new-session] [--blank]
+       horizon [--config <path>] --export-remote-profile <path>
+       horizon [--config <path>] --import-remote-profile <path>";
+
+#[derive(Debug, PartialEq, Eq)]
+enum RemoteProfileCommand {
+    Export(PathBuf),
+    Import(PathBuf),
+}
+
 struct CliArgs {
     config_path: Option<PathBuf>,
     new_session: bool,
     ephemeral: bool,
     blank: bool,
+    remote_profile: Option<RemoteProfileCommand>,
 }
 
-fn parse_cli_args() -> CliArgs {
-    let args: Vec<String> = std::env::args().collect();
+/// Parse the launch flags. The remote-profile commands take exactly one
+/// operand that is not itself a flag, and at most one of them may be given,
+/// so a typo can never fall through to an ordinary launch or run the other
+/// command.
+fn parse_cli_args(args: impl IntoIterator<Item = String>) -> Result<CliArgs, String> {
     let mut config_path = None;
     let mut new_session = false;
     let mut ephemeral = false;
     let mut blank = false;
+    let mut remote_profile: Option<RemoteProfileCommand> = None;
 
-    for (i, arg) in args.iter().enumerate() {
-        if (arg == "--config" || arg == "-c") && i + 1 < args.len() {
-            config_path = Some(PathBuf::from(&args[i + 1]));
-        } else if arg == "--new-session" {
-            new_session = true;
-        } else if arg == "--ephemeral" {
-            ephemeral = true;
-        } else if arg == "--blank" {
-            blank = true;
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
+        let mut operand = |flag: &str| -> Result<PathBuf, String> {
+            match args.next() {
+                Some(value) if !value.starts_with('-') && !value.is_empty() => Ok(PathBuf::from(value)),
+                _ => Err(format!("{flag} needs a path")),
+            }
+        };
+        match arg.as_str() {
+            "--config" | "-c" => config_path = Some(operand(&arg)?),
+            "--export-remote-profile" | "--import-remote-profile" => {
+                let path = operand(&arg)?;
+                let command = if arg == "--export-remote-profile" {
+                    RemoteProfileCommand::Export(path)
+                } else {
+                    RemoteProfileCommand::Import(path)
+                };
+                if remote_profile.replace(command).is_some() {
+                    return Err("give one of --export-remote-profile and --import-remote-profile, once".to_string());
+                }
+            }
+            "--new-session" => new_session = true,
+            "--ephemeral" => ephemeral = true,
+            "--blank" => blank = true,
+            _ => {}
         }
     }
 
-    CliArgs {
+    Ok(CliArgs {
         config_path,
         new_session,
         ephemeral,
         blank,
+        remote_profile,
+    })
+}
+
+#[cfg(test)]
+mod cli_args_tests {
+    use super::{RemoteProfileCommand, parse_cli_args};
+
+    fn parse(args: &[&str]) -> Result<super::CliArgs, String> {
+        parse_cli_args(args.iter().map(|arg| (*arg).to_string()))
+    }
+
+    #[test]
+    fn remote_profile_commands_take_one_real_operand_and_exclude_each_other() {
+        let args = parse(&["--config", "c.yaml", "--export-remote-profile", "p.yaml"]).expect("export");
+        assert_eq!(args.remote_profile, Some(RemoteProfileCommand::Export("p.yaml".into())));
+        assert_eq!(args.config_path.as_deref(), Some(std::path::Path::new("c.yaml")));
+        let args = parse(&["--import-remote-profile", "p.yaml", "--ephemeral"]).expect("import");
+        assert_eq!(args.remote_profile, Some(RemoteProfileCommand::Import("p.yaml".into())));
+        assert!(args.ephemeral);
+
+        for bad in [
+            &["--import-remote-profile"][..],
+            &["--import-remote-profile", "--ephemeral"],
+            &["--export-remote-profile", ""],
+            &["--config"],
+            &["--export-remote-profile", "a.yaml", "--import-remote-profile", "b.yaml"],
+            &["--export-remote-profile", "a.yaml", "--export-remote-profile", "b.yaml"],
+        ] {
+            assert!(parse(bad).is_err(), "{bad:?}");
+        }
+        assert!(
+            parse(&["--blank", "--new-session"])
+                .expect("plain launch")
+                .remote_profile
+                .is_none()
+        );
     }
 }
 

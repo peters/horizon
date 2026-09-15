@@ -8,6 +8,7 @@
 pub mod manifest;
 mod remote_panel;
 pub use remote_panel::RemoteFailure;
+pub mod remote_profile;
 pub mod remote_session;
 pub mod remote_slots;
 pub mod teach;

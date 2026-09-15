@@ -1,14 +1,17 @@
-//! Remote browsers tab: provider readiness and credential entry. Values typed
-//! here go straight into the credential workbench and are never written to
-//! the YAML buffer, the config file or the process environment.
+//! Remote browsers tab: provider readiness, credential entry and the portable
+//! profile. Values typed here go straight into the credential workbench and
+//! are never written to the YAML buffer, the config file, the process
+//! environment or an exported profile.
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use egui::Ui;
 use horizon_core::Config;
 use horizon_core::browser::remote::{
-    CredentialReference, CredentialStoreKind, RemoteAuthentication, RemoteProviderProfile,
+    CredentialBinding, CredentialReference, CredentialStoreKind, RemoteAuthentication, RemoteProviderProfile,
 };
+use horizon_core::browser::remote_profile::{self, PORTABLE_PROFILE_FILE_NAME};
 use horizon_core::remote_browser_credential::{
     CredentialReadiness, CredentialState, CredentialWorkbench, KeychainState, NoticeKind, RemoteCredentialError,
     WorkbenchNotice, credential_destination,
@@ -141,26 +144,189 @@ impl Drop for CredentialInputs {
 }
 
 /// Render the tab. Never returns a config change: this tab edits no YAML.
-pub(super) fn render(ui: &mut Ui, config: &Config, workbench: &mut CredentialWorkbench, inputs: &mut CredentialInputs) {
+/// The portable-profile row: the path the user edits and the outcome of the
+/// last export or import. Outcomes name counts and the path, never a value.
+pub(super) struct PortableProfilePanel {
+    config_path: PathBuf,
+    path: String,
+    notice: Option<(String, bool)>,
+}
+
+impl PortableProfilePanel {
+    pub(super) fn new(config_path: &Path) -> Self {
+        Self {
+            config_path: config_path.to_path_buf(),
+            path: default_portable_profile_path(config_path),
+            notice: None,
+        }
+    }
+
+    /// Write the shareable definition (bindings stripped) to the path. The
+    /// configuration file itself is never a destination.
+    fn export(&mut self, config: &Config) {
+        let path = Path::new(self.path.trim());
+        let outcome = remote_profile::refuse_config_path(&self.config_path, path)
+            .and_then(|()| remote_profile::write_portable_profile(path, &config.browser.remote));
+        self.notice = Some(match outcome {
+            Ok(()) => {
+                let remote = &config.browser.remote;
+                (
+                    format!(
+                        "Exported {} provider(s) and {} target(s) to {} without credentials",
+                        remote.providers.len(),
+                        remote.targets.len(),
+                        path.display()
+                    ),
+                    false,
+                )
+            }
+            Err(error) => (format!("Export failed: {error}"), true),
+        });
+    }
+
+    /// Merge the profile at the path into the editing configuration. Returns
+    /// whether the configuration changed; the caller re-serialises it into
+    /// the YAML buffer, and Save writes it to disk.
+    fn import(&mut self, config: &mut Config) -> bool {
+        let path = Path::new(self.path.trim());
+        let outcome = remote_profile::refuse_config_path(&self.config_path, path)
+            .and_then(|()| remote_profile::read_portable_profile(path))
+            .and_then(|document| remote_profile::import_portable(&mut config.browser.remote, &document));
+        match outcome {
+            Ok(summary) => {
+                self.notice = Some((
+                    format!(
+                        "Imported {}: {}. Enter this computer's credentials below, then Save.",
+                        path.display(),
+                        remote_profile::summary_line(&summary)
+                    ),
+                    false,
+                ));
+                true
+            }
+            Err(error) => {
+                self.notice = Some((format!("Import failed: {error}"), true));
+                false
+            }
+        }
+    }
+}
+
+/// Where the portable profile lives unless the user types another path:
+/// next to the configuration file.
+pub(super) fn default_portable_profile_path(config_path: &Path) -> String {
+    config_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
+        .join(PORTABLE_PROFILE_FILE_NAME)
+        .display()
+        .to_string()
+}
+
+pub(super) fn render(
+    ui: &mut Ui,
+    config: &mut Config,
+    workbench: &mut CredentialWorkbench,
+    inputs: &mut CredentialInputs,
+    portable: &mut PortableProfilePanel,
+) -> bool {
     workbench.poll();
     inputs.absorb(workbench.take_notices());
     inputs.retain_current(config);
     render_stores_section(ui, workbench);
+    let mut changed = render_portable_section(ui, config, portable);
     let providers = &config.browser.remote.providers;
     if providers.is_empty() {
         super::section_heading(ui, "Providers");
         super::section_card(ui, |ui| {
             super::dim_label(
                 ui,
-                "No remote device services are configured. Add a browser.remote section in the YAML tab; \
-                 see docs/architecture/remote-browser-sessions.md for the schema.",
+                "No remote device services are configured. Import a portable profile above or add a \
+                 browser.remote section in the YAML tab; see docs/architecture/remote-browser-sessions.md \
+                 for the schema.",
             );
         });
-        return;
+        return changed;
     }
+    let mut bind = None;
     for (name, profile) in providers {
-        render_provider(ui, config, name, profile, workbench, inputs);
+        if let Some(request) = render_provider(ui, config, name, profile, workbench, inputs) {
+            bind = Some(request);
+        }
     }
+    if let Some((provider, reference, store)) = bind {
+        changed |= bind_reference(config, &provider, &reference, store);
+    }
+    changed
+}
+
+/// A machine-local binding for a reference the imported profile left
+/// unbound: the session store, or the OS store under a slot derived from the
+/// provider and reference. Returns whether the editing configuration changed;
+/// the YAML buffer is re-serialised by the caller and Save writes it.
+fn bind_reference(
+    config: &mut Config,
+    provider: &str,
+    reference: &CredentialReference,
+    store: CredentialStoreKind,
+) -> bool {
+    let Some(profile) = config.browser.remote.providers.get_mut(provider) else {
+        return false;
+    };
+    if profile.credential_bindings.contains_key(reference) {
+        return false;
+    }
+    let slot = match store {
+        CredentialStoreKind::Session => None,
+        CredentialStoreKind::OsKeychain => Some(format!("remote-browser/{provider}/{}", reference.as_str())),
+    };
+    profile
+        .credential_bindings
+        .insert(reference.clone(), CredentialBinding { store, slot });
+    true
+}
+
+fn render_portable_section(ui: &mut Ui, config: &mut Config, portable: &mut PortableProfilePanel) -> bool {
+    super::section_heading(ui, "Portable profile");
+    let mut changed = false;
+    super::section_card(ui, |ui| {
+        super::dim_label(
+            ui,
+            "A portable profile carries providers, targets, limits and credential references so another \
+             computer can use the same targets. It never contains credential values, bindings or local \
+             paths; each computer enters its own credentials.",
+        );
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("File").color(theme::FG_SOFT()).size(12.0));
+            ui.add(
+                egui::TextEdit::singleline(&mut portable.path)
+                    .desired_width(ui.available_width() - 160.0)
+                    .font(egui::TextStyle::Monospace),
+            );
+            let has_path = !portable.path.trim().is_empty();
+            let has_remote = !config.browser.remote.is_empty();
+            if ui
+                .add_enabled(has_path && has_remote, egui::Button::new("Export"))
+                .clicked()
+            {
+                portable.export(config);
+            }
+            if ui.add_enabled(has_path, egui::Button::new("Import")).clicked() {
+                changed = portable.import(config);
+            }
+        });
+        if let Some((text, is_error)) = &portable.notice {
+            let color = if *is_error {
+                theme::PALETTE_RED()
+            } else {
+                theme::PALETTE_GREEN()
+            };
+            ui.label(egui::RichText::new(text).color(color).size(12.0));
+        }
+    });
+    changed
 }
 
 fn render_stores_section(ui: &mut Ui, workbench: &mut CredentialWorkbench) {
@@ -202,7 +368,7 @@ fn render_provider(
     profile: &RemoteProviderProfile,
     workbench: &mut CredentialWorkbench,
     inputs: &mut CredentialInputs,
-) {
+) -> Option<(String, CredentialReference, CredentialStoreKind)> {
     super::section_heading(ui, name);
     super::section_card(ui, |ui| {
         let targets: Vec<&String> = config
@@ -244,14 +410,18 @@ fn render_provider(
         let readiness = workbench.readiness(profile);
         if readiness.is_empty() {
             super::dim_label(ui, "No authentication configured for this provider.");
-            return;
+            return None;
         }
         ui.add_space(8.0);
+        let mut bind = None;
         for entry in readiness {
-            render_reference(ui, name, profile, &entry, workbench, inputs);
+            if let Some(store) = render_reference(ui, name, profile, &entry, workbench, inputs) {
+                bind = Some((name.to_string(), entry.reference.clone(), store));
+            }
             ui.add_space(6.0);
         }
-    });
+        bind
+    })
 }
 
 fn render_reference(
@@ -261,7 +431,7 @@ fn render_reference(
     entry: &CredentialReadiness,
     workbench: &mut CredentialWorkbench,
     inputs: &mut CredentialInputs,
-) {
+) -> Option<CredentialStoreKind> {
     let (reference, store, state) = (&entry.reference, entry.store, entry.state);
     let bound = profile.credential_bindings.contains_key(reference);
     let key = InputKey::new(provider, profile, reference);
@@ -281,11 +451,23 @@ fn render_reference(
         ui.label(egui::RichText::new(state_text).color(color).size(11.0));
     });
     if !bound {
-        super::dim_label(
-            ui,
-            "Not bound on this computer. Add a credential_bindings entry for this reference in the YAML tab.",
-        );
-        return;
+        // An imported profile arrives without bindings: choose where this
+        // computer keeps the value, then the row takes it.
+        let mut chosen = None;
+        ui.horizontal(|ui| {
+            super::dim_label(ui, "Not bound on this computer. Keep the value in:");
+            if ui.small_button("This session only").clicked() {
+                chosen = Some(CredentialStoreKind::Session);
+            }
+            let available = workbench.keychain_state() == &KeychainState::Available;
+            if ui
+                .add_enabled(available, egui::Button::new("OS credential store").small())
+                .clicked()
+            {
+                chosen = Some(CredentialStoreKind::OsKeychain);
+            }
+        });
+        return chosen;
     }
     ui.horizontal(|ui| {
         password_field(ui, inputs.buffer(&key), provider, reference);
@@ -323,6 +505,7 @@ fn render_reference(
         let (text, color) = notice_line(notice.kind, notice.error.as_ref());
         ui.label(egui::RichText::new(text).color(color).size(11.0));
     }
+    None
 }
 
 fn password_field(ui: &mut Ui, buffer: &mut String, provider: &str, reference: &CredentialReference) {
@@ -423,6 +606,143 @@ mod tests {
             credential_bindings: bindings,
             limits: RemoteSessionLimits::default(),
         }
+    }
+
+    fn remote_with(provider_name: &str, endpoint: &str) -> horizon_core::browser::remote::RemoteBrowserConfig {
+        let mut providers = BTreeMap::new();
+        providers.insert(provider_name.to_string(), profile(endpoint, "remote-browser/grid/key"));
+        horizon_core::browser::remote::RemoteBrowserConfig {
+            providers,
+            targets: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn the_portable_panel_imports_into_the_editing_config_and_exports_without_bindings() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config_path = dir.path().join("config.yaml");
+        let mut panel = PortableProfilePanel::new(&config_path);
+        assert_eq!(
+            panel.path,
+            dir.path().join(PORTABLE_PROFILE_FILE_NAME).display().to_string()
+        );
+
+        // Export from the first computer's editing config.
+        let mut first = Config::default();
+        first.browser.remote = remote_with("grid", "https://grid.example.net/wd/hub");
+        panel.export(&first);
+        let (notice, is_error) = panel.notice.clone().expect("notice");
+        assert!(!is_error, "{notice}");
+        assert!(
+            notice.starts_with("Exported 1 provider(s) and 0 target(s) to "),
+            "{notice}"
+        );
+        let document = std::fs::read_to_string(&panel.path).expect("profile");
+        assert!(!document.contains("credential_bindings"), "{document}");
+
+        // Import on the second computer: the config changes, the notice
+        // names counts, and no binding arrives.
+        let mut second = Config::default();
+        assert!(panel.import(&mut second));
+        let (notice, is_error) = panel.notice.clone().expect("notice");
+        assert!(!is_error, "{notice}");
+        assert!(notice.contains("added 1 provider(s) and 0 target(s)"), "{notice}");
+        assert!(second.browser.remote.providers["grid"].credential_bindings.is_empty());
+
+        // A conflicting import changes nothing and reports the provider only.
+        let mut trusted = Config::default();
+        trusted.browser.remote = remote_with("grid", "https://elsewhere.example.net/wd/hub");
+        let before = trusted.browser.remote.clone();
+        assert!(!panel.import(&mut trusted));
+        let (notice, is_error) = panel.notice.clone().expect("notice");
+        assert!(is_error, "{notice}");
+        assert!(notice.contains("different endpoint"), "{notice}");
+        assert!(!notice.contains("elsewhere.example.net"), "{notice}");
+        assert_eq!(trusted.browser.remote, before);
+
+        // A missing file is an error that names the path, not a panic.
+        panel.path = dir.path().join("absent.yaml").display().to_string();
+        assert!(!panel.import(&mut second));
+        let (notice, is_error) = panel.notice.clone().expect("notice");
+        assert!(is_error && notice.contains("absent.yaml"), "{notice}");
+
+        // The configuration file is never exported over or imported from.
+        std::fs::write(&config_path, first.to_yaml().expect("yaml")).expect("config");
+        let saved = std::fs::read_to_string(&config_path).expect("read");
+        panel.path = config_path.display().to_string();
+        panel.export(&first);
+        let (notice, is_error) = panel.notice.clone().expect("notice");
+        assert!(is_error && notice.contains("is the configuration file"), "{notice}");
+        assert!(!panel.import(&mut second));
+        assert_eq!(std::fs::read_to_string(&config_path).expect("read"), saved);
+    }
+
+    #[test]
+    fn binding_an_unbound_reference_adds_a_machine_local_binding_once() {
+        let mut config = Config::default();
+        config.browser.remote = remote_with("grid", "https://grid.example.net/wd/hub");
+        let grid = config.browser.remote.providers.get_mut("grid").expect("grid");
+        grid.credential_bindings.clear();
+        let reference = CredentialReference::from("key");
+
+        assert!(bind_reference(
+            &mut config,
+            "grid",
+            &reference,
+            CredentialStoreKind::OsKeychain
+        ));
+        let binding = &config.browser.remote.providers["grid"].credential_bindings[&reference];
+        assert_eq!(binding.store, CredentialStoreKind::OsKeychain);
+        assert_eq!(binding.slot.as_deref(), Some("remote-browser/grid/key"));
+
+        // Already bound: nothing changes, whatever store is asked for.
+        assert!(!bind_reference(
+            &mut config,
+            "grid",
+            &reference,
+            CredentialStoreKind::Session
+        ));
+        assert_eq!(
+            config.browser.remote.providers["grid"].credential_bindings[&reference].store,
+            CredentialStoreKind::OsKeychain
+        );
+        assert!(!bind_reference(
+            &mut config,
+            "absent",
+            &reference,
+            CredentialStoreKind::Session
+        ));
+
+        let token = CredentialReference::from("token");
+        assert!(bind_reference(
+            &mut config,
+            "grid",
+            &token,
+            CredentialStoreKind::Session
+        ));
+        let session = &config.browser.remote.providers["grid"].credential_bindings[&token];
+        assert_eq!(session.store, CredentialStoreKind::Session);
+        assert!(session.slot.is_none());
+    }
+
+    #[test]
+    fn the_portable_section_renders_for_an_empty_configuration() {
+        use crate::test_egui::DiscardTextures;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut panel = PortableProfilePanel::new(&dir.path().join("config.yaml"));
+        let mut config = Config::default();
+        let ctx = egui::Context::default();
+        let mut changed = None;
+        let _ = ctx
+            .run_ui(egui::RawInput::default(), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    changed = Some(render_portable_section(ui, &mut config, &mut panel));
+                });
+            })
+            .discard_textures();
+        assert_eq!(changed, Some(false));
+        assert!(panel.notice.is_none());
     }
 
     #[test]
