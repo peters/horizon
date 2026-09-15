@@ -285,12 +285,18 @@ mod tests {
             hardware: Some(DeviceEvidence::Emulated),
             ..RemoteDeviceIdentity::default()
         };
-        assert!(check_requirement(&requirement(DeviceKind::Physical, None, None), &emulated).is_err());
+        assert_eq!(
+            check_requirement(&requirement(DeviceKind::Physical, None, None), &emulated),
+            Err("target requires a physical device, provider evidence: emulated device".into())
+        );
         assert_eq!(
             check_requirement(&requirement(DeviceKind::Emulated, None, None), &emulated),
             Ok(())
         );
-        assert!(check_requirement(&requirement(DeviceKind::Emulated, None, None), &physical).is_err());
+        assert_eq!(
+            check_requirement(&requirement(DeviceKind::Emulated, None, None), &physical),
+            Err("target requires an emulated device, provider evidence: physical device".into())
+        );
     }
 
     #[test]

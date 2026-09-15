@@ -20,6 +20,7 @@ import json
 import netrc
 import os
 import pathlib
+import re
 import signal
 import stat
 import subprocess
@@ -387,7 +388,8 @@ def main() -> int:
                 closed_drawer = raw(client, "browser_act", {"panel_id": panel_id, "action": "click", "selector": "#close-drawer"})
                 closed_wait = raw(client, "browser_wait", {"panel_id": panel_id, "selector": "#drawer.open", "state": "hidden", "timeout_millis": 5000})
                 method = "driver_click"
-                if closed_wait.get("isError") and not closed_drawer.get("isError"):
+                wait_error = wait_error_code(closed_wait)
+                if wait_error == "wait_timeout" and not closed_drawer.get("isError"):
                     # Explicit conditional result: on some devices the driver's tap
                     # misses a fixed-position control at the bottom of an inflated
                     # layout viewport (peters/horizon#663); a scripted click records
@@ -396,6 +398,7 @@ def main() -> int:
                     closed_wait = raw(client, "browser_wait", {"panel_id": panel_id, "selector": "#drawer.open", "state": "hidden", "timeout_millis": 5000})
                     method = "scripted_click" if not scripted.get("isError") else "driver_click"
                 steps.append({"step": "drawer_close", "method": method, "is_error": closed_drawer.get("isError") or closed_wait.get("isError"),
+                              "wait_error": wait_error_code(closed_wait),
                               "elapsed_millis": (closed_wait.get("structuredContent") or {}).get("elapsed_millis")})
                 frame = raw(client, "browser_query", {"panel_id": panel_id, "selector": "#frame", "max_results": 1})
                 steps.append({"step": "iframe_boundary", "is_error": frame.get("isError"),
@@ -436,6 +439,16 @@ def main() -> int:
     (root / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2))
     return 0 if report["passed"] else 1
+
+
+def wait_error_code(result: dict) -> str | None:
+    """The typed code of a failed browser_wait (`wait_timeout`,
+    `wait_navigation_invalidated`, ...), or None when the wait succeeded."""
+    if not result.get("isError"):
+        return None
+    text = " ".join(item.get("text", "") for item in result.get("content") or [] if isinstance(item, dict))
+    match = re.search(r"failed \((\w+)\)", text)
+    return match.group(1) if match else "unknown"
 
 
 def target_failures(steps: list[dict]) -> list[str]:
