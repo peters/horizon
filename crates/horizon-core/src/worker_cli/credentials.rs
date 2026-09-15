@@ -7,7 +7,16 @@ use horizon_core::{
     remote_ssh_identity::RemoteSshIdentityStore,
 };
 use serde_json::{Value, json};
-use std::{io::Read, path::Path};
+use std::{fs::File, io::Read, os::fd::AsFd, path::Path};
+
+pub(super) fn unbuffered_stdin() -> Result<File, Error> {
+    // Global buffered stdin can retain token fragments outside our zeroizing storage.
+    std::io::stdin()
+        .as_fd()
+        .try_clone_to_owned()
+        .map(File::from)
+        .map_err(|_| Error::Input)
+}
 
 pub(super) fn operation_id(value: &std::ffi::OsStr) -> Result<uuid::Uuid, Error> {
     let id = uuid::Uuid::parse_str(value.to_str().ok_or(Error::Input)?).map_err(|_| Error::Input)?;

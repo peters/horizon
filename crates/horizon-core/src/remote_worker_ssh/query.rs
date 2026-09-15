@@ -116,7 +116,8 @@ pub(crate) fn exchange(
     let mut stdout = child.0.stdout.take().ok_or(Error::QueryFailed)?;
     nonblocking(stdin.as_ref().ok_or(Error::QueryFailed)?)?;
     nonblocking(&stdout)?;
-    let mut buffer = [0; 16 * 1024];
+    // Credential callers borrow their secret; erase the transport-owned copy on every exit.
+    let mut buffer = zeroize::Zeroizing::new([0; 16 * 1024]);
     let mut pending = 0..0;
     let mut input_complete = false;
     let mut written = 0;
@@ -129,7 +130,7 @@ pub(crate) fn exchange(
                 stream_input(
                     &mut stdin,
                     input,
-                    &mut buffer,
+                    &mut buffer[..],
                     &mut pending,
                     &mut input_complete,
                     &mut written,
@@ -164,7 +165,7 @@ pub(crate) fn exchange(
             stream_input(
                 &mut stdin,
                 input,
-                &mut buffer,
+                &mut buffer[..],
                 &mut pending,
                 &mut input_complete,
                 &mut written,

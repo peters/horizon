@@ -79,7 +79,7 @@ fn run_with_args(mut args: impl Iterator<Item = std::ffi::OsString>) -> Result<V
     if operation == "credential-install" {
         let operation_id = credentials::operation_id(selected_panel.as_deref().ok_or(Error::Usage)?)?;
         let context = Context::open(&root)?;
-        let result = credentials::install(&context, operation_id, std::io::stdin().lock())?;
+        let result = credentials::install(&context, operation_id, credentials::unbuffered_stdin()?)?;
         return Ok(json!({"task": context.receipt.workspace, "result": result}));
     }
     if selected_panel.is_some() && !matches!(operation, "start" | "status" | "snapshot") {

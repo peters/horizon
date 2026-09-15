@@ -86,7 +86,8 @@ An interrupted reply is not permission to delete the claim or submit again.
 Git or task claims. Supply a fresh non-nil UUID for an explicitly authorized
 credential disclosure and redirect a protected token file to stdin. The canonical
 UUID names a durable `credential-<UUID>.claimed` file; duplicate UUIDs are refused
-before stdin is read. Input is bounded and zeroized; the claim stores no token.
+before stdin is read. Controller-owned stdin and SSH input buffers are bounded
+and zeroized on return; the claim stores no token.
 Installed/Present results do not establish repository authorization or expiry.
 Existing tokens are never replaced. Retain the claim on failure or an uncertain
 reply: do not retry automatically or generate a replacement UUID to bypass it.
