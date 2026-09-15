@@ -84,6 +84,12 @@ pub struct BrowserConfig {
     /// Launch Chromium or Firefox without a native browser window. Safari
     /// ignores this because its `WebDriver` implementation is always visible.
     pub headless: bool,
+    /// Opt in to minimizing a headed Chromium window after attachment.
+    /// Requires `headless: false`; ignored by other backends. The document
+    /// stays active and reports focus even when the host panel is unfocused.
+    /// A native window can appear briefly and remains in the taskbar or Dock.
+    /// Lookup, focus emulation, or minimization failure aborts initial setup.
+    pub hide_native_window: bool,
     /// Treatment of common script-visible browser-automation signals.
     pub automation_disclosure: AutomationDisclosurePolicy,
     /// Explicit Chromium executable (absolute path or PATH name).
@@ -114,6 +120,7 @@ impl Default for BrowserConfig {
         Self {
             backend: BackendKind::ChromiumCdp,
             headless: true,
+            hide_native_window: false,
             automation_disclosure: AutomationDisclosurePolicy::default(),
             command: None,
             firefox_command: None,
@@ -224,6 +231,7 @@ mod tests {
 
         assert_eq!(config.backend, BackendKind::FirefoxBidi);
         assert!(config.headless);
+        assert!(!config.hide_native_window);
         assert_eq!(
             config.automation_disclosure,
             AutomationDisclosurePolicy::MinimizeCommonSignals

@@ -93,6 +93,9 @@ impl DriverState {
         ) {
             return false;
         }
+        if !self.hide_embedded_native_window(link, event_tx, frame_slot, session, target) {
+            return false;
+        }
         // Never expose the internal metadata-bootstrap page in a screencast.
         // Native automation-flag suppression and any UA override are already
         // active before this first caller-supplied navigation can execute
@@ -123,6 +126,99 @@ impl DriverState {
         let _ = event_tx.send(BrowserEvent::BackendReady(capabilities));
         let _ = event_tx.send(BrowserEvent::Ready);
         !self.stop_requested.load(Ordering::Acquire)
+    }
+
+    fn hide_embedded_native_window(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        session: &str,
+        target: &str,
+    ) -> bool {
+        if self.config.browser.headless || !self.config.browser.hide_native_window {
+            return true;
+        }
+        // The native window is only a backing surface. Keep the embedded
+        // document active so minimizing it cannot pause page-driven updates.
+        if !self.setup_command(
+            link,
+            event_tx,
+            frame_slot,
+            "Emulation.setFocusEmulationEnabled",
+            &serde_json::json!({ "enabled": true }),
+            Some(session),
+        ) {
+            return false;
+        }
+        let Some(info) = self.setup_command_result(
+            link,
+            event_tx,
+            frame_slot,
+            "Browser.getWindowForTarget",
+            &serde_json::json!({ "targetId": target }),
+            None,
+        ) else {
+            return false;
+        };
+        let Some(window_id) = info.get("windowId").and_then(serde_json::Value::as_u64) else {
+            return self.setup_failure(
+                event_tx,
+                frame_slot,
+                "Browser.getWindowForTarget",
+                "response omitted a valid native window id",
+            );
+        };
+        if !self.setup_command(
+            link,
+            event_tx,
+            frame_slot,
+            "Browser.setWindowBounds",
+            &hide_embedded_native_window_params(window_id),
+            None,
+        ) {
+            return false;
+        }
+        self.confirm_native_window_minimized(link, event_tx, frame_slot, window_id)
+    }
+
+    fn confirm_native_window_minimized(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        window_id: u64,
+    ) -> bool {
+        // Window managers may apply the state change after its command ack.
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            let Some(result) = self.setup_command_result(
+                link,
+                event_tx,
+                frame_slot,
+                "Browser.getWindowBounds",
+                &serde_json::json!({ "windowId": window_id }),
+                None,
+            ) else {
+                return false;
+            };
+            if result
+                .pointer("/bounds/windowState")
+                .and_then(serde_json::Value::as_str)
+                == Some("minimized")
+            {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return self.setup_failure(
+                    event_tx,
+                    frame_slot,
+                    "Browser.getWindowBounds",
+                    "native window did not become minimized",
+                );
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
     }
 
     fn resolve_main_frame_id(
@@ -406,9 +502,20 @@ fn main_frame_id_from_tree(frame_tree: &serde_json::Value) -> Option<&str> {
     frame_tree.pointer("/frameTree/frame/id")?.as_str()
 }
 
+fn hide_embedded_native_window_params(window_id: u64) -> serde_json::Value {
+    serde_json::json!({
+        "windowId": window_id,
+        "bounds": { "windowState": "minimized" }
+    })
+}
+
+#[cfg(test)]
+#[path = "lifecycle_tests.rs"]
+mod window_tests;
+
 #[cfg(test)]
 mod tests {
-    use super::main_frame_id_from_tree;
+    use super::{hide_embedded_native_window_params, main_frame_id_from_tree};
 
     #[test]
     fn frame_tree_requires_a_top_level_frame_id() {
@@ -421,5 +528,17 @@ mod tests {
 
         assert_eq!(main_frame_id_from_tree(&frame_tree), Some("main"));
         assert_eq!(main_frame_id_from_tree(&serde_json::json!({ "frameTree": {} })), None);
+    }
+
+    #[test]
+    fn embedded_native_window_minimize_keeps_browser_owned_geometry() {
+        let params = hide_embedded_native_window_params(7);
+
+        assert_eq!(params["windowId"], 7);
+        assert_eq!(params["bounds"]["windowState"], "minimized");
+        assert!(params["bounds"].get("left").is_none());
+        assert!(params["bounds"].get("top").is_none());
+        assert!(params["bounds"].get("width").is_none());
+        assert!(params["bounds"].get("height").is_none());
     }
 }
