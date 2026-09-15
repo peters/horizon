@@ -98,7 +98,6 @@ impl StaticPanelSeed {
         Panel {
             id: self.id,
             local_id: self.local_id,
-            remote_workspace: None,
             title,
             terminal_title: String::new(),
             kind,
@@ -127,9 +126,6 @@ impl StaticPanelSeed {
 }
 
 pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, mut opts: PanelOptions) -> Result<Panel> {
-    if opts.remote_workspace.is_some() {
-        return restore_failure_panel(id, workspace_id, opts, "Remote connection pending");
-    }
     let local_id = opts.local_id.clone().unwrap_or_else(new_local_id);
 
     match opts.kind {

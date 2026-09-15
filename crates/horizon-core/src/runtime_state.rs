@@ -276,7 +276,7 @@ impl RuntimeState {
 
                         PanelState {
                             local_id: panel.local_id.clone(),
-                            remote_workspace: panel.remote_workspace().cloned(),
+                            remote_workspace: None,
                             name: panel.title.clone(),
                             name_is_custom: Some(panel.name_is_custom()),
                             kind: panel.kind,
@@ -318,7 +318,7 @@ impl RuntimeState {
 
                 WorkspaceState {
                     local_id: workspace.local_id.clone(),
-                    remote_workspace: workspace.remote_workspace.clone(),
+                    remote_workspace: None,
                     name: workspace.name.clone(),
                     cwd: workspace.cwd.as_ref().map(|path| path.display().to_string()),
                     position: Some(workspace.position),
