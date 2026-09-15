@@ -204,18 +204,25 @@ impl AllocationRefusal {
         ]) {
             Self::Entitlement
         } else if has(&[
+            // Device and session-capacity phrases only: a generic "service
+            // unavailable" or "request queued" is an infrastructure answer
+            // and stays `Other`, so no false claim about devices is made.
             "could not find device",
             "no device",
             "no such device",
+            "unknown device",
             "device not available",
             "device is not available",
-            "not available",
-            "unavailable",
-            "parallel",
-            "queue",
+            "device unavailable",
+            "devices are busy",
+            "device is busy",
+            "device queue",
+            "parallel test",
+            "parallel session",
+            "parallels",
+            "all parallel",
             "currently in use",
             "no capacity",
-            "busy",
         ]) {
             Self::DeviceUnavailable
         } else {

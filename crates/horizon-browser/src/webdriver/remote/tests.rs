@@ -384,6 +384,23 @@ fn refusals_are_classified_from_the_providers_answer() {
         AllocationRefusal::classify("session not created", "capabilities rejected"),
         AllocationRefusal::Other
     );
+    // Infrastructure answers are not device answers.
+    for (error, message) in [
+        ("http 503", "Service Unavailable"),
+        ("http 429", "slow down"),
+        ("session not created", "request queued"),
+        ("unknown error", "backend temporarily unavailable"),
+    ] {
+        assert_eq!(
+            AllocationRefusal::classify(error, message),
+            AllocationRefusal::Other,
+            "{error}: {message}"
+        );
+    }
+    assert_eq!(
+        AllocationRefusal::classify("session not created", "Device unavailable: iPhone 16"),
+        AllocationRefusal::DeviceUnavailable
+    );
     assert_eq!(AllocationRefusal::Authentication.to_string(), "authentication failed");
 }
 
