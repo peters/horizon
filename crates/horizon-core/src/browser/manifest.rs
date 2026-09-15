@@ -47,6 +47,7 @@ mod capture;
 mod close;
 mod create;
 mod request_queue;
+mod resize;
 mod result;
 mod visibility;
 mod workspace;
@@ -64,6 +65,10 @@ pub use create::{
     BrowserCreateAuditStatus, BrowserCreateOutcome, BrowserCreateRequest, BrowserCreateResult, CreateNavigation,
     claim_create_request, complete_create_request, enqueue_create, list_create_requests, record_create_status,
     take_create_result,
+};
+pub use resize::{
+    BrowserResizeAuditStatus, BrowserResizeOutcome, BrowserResizeRequest, BrowserResizeResult, claim_resize_request_in,
+    complete_resize_request_in, enqueue_resize, list_resize_requests_in, record_resize_status_in, take_resize_result,
 };
 pub use result::{action_result_path_for_root, default_action_result_path, take_action_result};
 pub use visibility::{

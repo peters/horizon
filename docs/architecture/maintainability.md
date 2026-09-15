@@ -740,6 +740,10 @@ back into large multi-purpose modules.
     changes for authenticated requests routed from a live agent panel, and the
     host-owned workspace and viewport stamps that keep MCP authorization and
     reported panel size current
+  - `browser_resize_requests`: authenticated agent-requested panel resizes
+    applied through the board, typed refusals for expired, foreign, remote, or
+    unowned panels, and the resulting size stamped back before the result is
+    published
   - `browser_close_requests`: the audited close queue, kept pending until the
     panel's teardown signal settles and the remote release is established
   - `browser_remote_create`: planning for a create that names a remote target:

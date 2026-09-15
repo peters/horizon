@@ -313,6 +313,25 @@ pub(crate) struct VisibilityOutput {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct ResizeInput {
+    /// Stable panel id returned by `browser_list` or `browser_create`.
+    pub(crate) panel_id: String,
+    /// Viewport width in CSS pixels (320-8000). The browser viewport follows the panel, so responsive layout and backend input geometry match the requested size.
+    pub(crate) width: u32,
+    /// Viewport height in CSS pixels (320-8000).
+    pub(crate) height: u32,
+    /// Host coordination timeout in milliseconds (1-60000, default 15000).
+    pub(crate) timeout_millis: Option<u64>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub(crate) struct ResizeOutput {
+    pub(crate) action_id: String,
+    /// Updated panel state; `width` and `height` carry the applied size.
+    pub(crate) panel: BrowserPanel,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub(crate) struct CloseInput {
     /// Stable panel id returned by `browser_list` or `browser_create`.
     pub(crate) panel_id: String,

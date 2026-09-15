@@ -20,8 +20,8 @@ use crate::model::{
     ActInput, ActKind, ActionOutput, AuditInput, AuditOutput, BrowserListOutput, CloseInput, CloseOutput, CreateInput,
     CreateOutput, EvaluateInput, EvaluateOutput, HandoffInput, HandoffOutput, NavigateInput, NavigateOutput,
     NetworkInput, NetworkOutput, NetworkWatchInput, NetworkWatchOutput, NodeOutput, NodesOutput, PanelInput,
-    QueryInput, SnapshotInput, SnapshotOutput, VideoInput, VideoOutput, VisibilityInput, VisibilityOutput, WaitInput,
-    WaitOutput,
+    QueryInput, ResizeInput, ResizeOutput, SnapshotInput, SnapshotOutput, VideoInput, VideoOutput, VisibilityInput,
+    VisibilityOutput, WaitInput, WaitOutput,
 };
 use crate::network_watch::NetworkWatchState;
 
@@ -107,6 +107,22 @@ impl HorizonBrowserMcp {
             .await
             .map_err(|error| error.to_string())?;
         Ok(Json(VisibilityOutput {
+            action_id: receipt.action_id,
+            panel: receipt.panel,
+        }))
+    }
+
+    #[tool(
+        name = "browser_resize",
+        description = "Resize a live browser panel to an exact viewport size in CSS pixels (320-8000 per axis). The browser viewport follows the panel, so responsive layout and backend input geometry match the requested size; a typical desktop target is 1920x1080, and a mobile viewport is the device's CSS pixels. The returned panel reports the applied width and height. Unavailable for panels created with a remote target, whose devices have fixed viewports. For a Horizon-injected agent identity the panel must already be in the calling agent's workspace; resizing never moves a panel there."
+    )]
+    async fn browser_resize(&self, Parameters(input): Parameters<ResizeInput>) -> Result<Json<ResizeOutput>, String> {
+        let receipt = self
+            .controller
+            .set_size(&input.panel_id, input.width, input.height, input.timeout_millis)
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(Json(ResizeOutput {
             action_id: receipt.action_id,
             panel: receipt.panel,
         }))
@@ -397,7 +413,7 @@ impl ServerHandler for HorizonBrowserMcp {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("horizon-browser", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "MCP is the sole agent control contract for Horizon browser panels. For agent identities injected by Horizon, discovery and control are scoped to the workspace that contains the calling agent panel: browser_list shows only that workspace's panels, every other tool rejects panel ids outside it, and a panel's visible field is host presentation state rather than proof that it is in your workspace; identities from outside Horizon keep unscoped discovery. Start with browser_list; if it is empty, call browser_create in your current Horizon workspace. Reuse an existing panel for iframe, popup, dialog, and consent interactions: never create or reveal a helper panel as a workaround. If the current top-level semantic tools cannot reach embedded frame content, call browser_handoff on the original panel. Only set browser_create allow_additional=true when the user explicitly requests an independent browser session. Pass browser_create target=<configured remote target name> to run at a configured remote target; never supply endpoints, capabilities or credentials yourself. The browser viewport follows the panel: pass browser_create width/height (320-8000 CSS pixels per axis) to start at a specific viewport; each panel's width and height fields report the host-stamped size, and remote target panels keep their fixed device viewport instead. Use visible=false for a live background panel and browser_visibility to show or hide it later without stopping automation or capture. Call browser_close when the user is done with a panel you own or a remote device session must be released; it stops the session and the panel leaves browser_list. Each panel advertises navigation, DOM, steering, audit, network, and video capabilities. For WebSocket or HTTP observation, call browser_network start before browser_navigate; opt into native bounded response bodies with include_http_bodies. Prefer browser_network_watch with its returned capture_id and next_sequence for bounded event-driven monitoring, or tail the exact private NDJSON path returned by browser_network with ordinary read-only Unix tools; call browser_network stop to flush. For page-pixel recording, call browser_video start, optionally pause/resume, then stop to finalize a private WebM path; quality, compression_level, fps, max_width, and max_file_bytes are start-only. Take a fresh semantic snapshot or query before acting through refs, and verify afterward. Never use raw browser endpoints or Horizon's private runtime files.",
+                "MCP is the sole agent control contract for Horizon browser panels. For agent identities injected by Horizon, discovery and control are scoped to the workspace that contains the calling agent panel: browser_list shows only that workspace's panels, every other tool rejects panel ids outside it, and a panel's visible field is host presentation state rather than proof that it is in your workspace; identities from outside Horizon keep unscoped discovery. Start with browser_list; if it is empty, call browser_create in your current Horizon workspace. Reuse an existing panel for iframe, popup, dialog, and consent interactions: never create or reveal a helper panel as a workaround. If the current top-level semantic tools cannot reach embedded frame content, call browser_handoff on the original panel. Only set browser_create allow_additional=true when the user explicitly requests an independent browser session. Pass browser_create target=<configured remote target name> to run at a configured remote target; never supply endpoints, capabilities or credentials yourself. The browser viewport follows the panel: pass browser_create width/height (320-8000 CSS pixels per axis) to start at a specific viewport, or browser_resize later to change it; each panel's width and height fields report the host-stamped size, and remote target panels keep their fixed device viewport instead. Use visible=false for a live background panel and browser_visibility to show or hide it later without stopping automation or capture. Call browser_close when the user is done with a panel you own or a remote device session must be released; it stops the session and the panel leaves browser_list. Each panel advertises navigation, DOM, steering, audit, network, and video capabilities. For WebSocket or HTTP observation, call browser_network start before browser_navigate; opt into native bounded response bodies with include_http_bodies. Prefer browser_network_watch with its returned capture_id and next_sequence for bounded event-driven monitoring, or tail the exact private NDJSON path returned by browser_network with ordinary read-only Unix tools; call browser_network stop to flush. For page-pixel recording, call browser_video start, optionally pause/resume, then stop to finalize a private WebM path; quality, compression_level, fps, max_width, and max_file_bytes are start-only. Take a fresh semantic snapshot or query before acting through refs, and verify afterward. Never use raw browser endpoints or Horizon's private runtime files.",
             )
     }
 
@@ -517,6 +533,7 @@ mod tests {
                 "browser_network_watch",
                 "browser_panel",
                 "browser_query",
+                "browser_resize",
                 "browser_snapshot",
                 "browser_video",
                 "browser_visibility",
