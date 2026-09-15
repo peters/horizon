@@ -56,8 +56,9 @@ shell commands, files, or other MCP servers.
   provider, capabilities and credentials and refuses with a typed reason
   (`target_unknown`, `target_invalid`, `credentials_not_ready`,
   `credentials_invalid`, `remote_session_limit_reached`, the last also when
-  other Horizon instances on the same computer hold the provider's sessions)
-  that never carries a
+  other Horizon instances on the same computer hold the provider's sessions,
+  and `remote_quota_contended` when another instance was checking that quota
+  at the same moment, which is simply retried) that never carries a
   value. After allocation the device is verified against the target's
   requirement from the provider's own evidence (a hosted grid's session
   record, or the capabilities a standard endpoint echoes); a physical

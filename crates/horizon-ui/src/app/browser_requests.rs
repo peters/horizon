@@ -39,10 +39,10 @@ pub(super) struct BrowserCreateHostState {
     /// hold count for that identity on every poll.
     pub(super) remote_slot_leases:
         std::collections::BTreeMap<String, Vec<horizon_core::browser::remote_slots::SlotLease>>,
-    /// Quota identities of remote sessions whose release was never
-    /// established by a board this host has since replaced; each keeps one
-    /// slot leased for the rest of the process.
-    pub(super) orphaned_remote_quota_keys: Vec<String>,
+    /// Remote sessions whose release was never established by a board this
+    /// host has since replaced: each keeps counting against its provider's
+    /// `max_sessions` and keeps one slot leased for the rest of the process.
+    pub(super) orphaned_remote_holds: Vec<horizon_core::OrphanedRemoteHold>,
     /// Board placement the manifests were last stamped for; a change
     /// re-stamps on the same frame instead of waiting for the next tick.
     stamped_placement: Option<u64>,

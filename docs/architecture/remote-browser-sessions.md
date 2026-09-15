@@ -175,7 +175,8 @@ cancelling after allocation releases the owned session.
   release is established; every slot file in the identity's directory counts
   whatever its index, so a quota reduced in configuration still counts leases
   taken under the larger one, and the scan and grant run under a per-identity
-  coordination lock. The operating system frees a dead instance's slots, a
+  coordination lock that is tried without blocking for at most twenty
+  milliseconds (`remote_quota_contended` asks the agent to create again). The operating system frees a dead instance's slots, a
   host whose slot files cannot be used falls back to its own count, and holds
   a replaced board left unreleased stay leased by the host for the rest of the
   process.

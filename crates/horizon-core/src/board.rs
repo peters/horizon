@@ -11,7 +11,7 @@ pub use arrangement::WorkspaceAlignment;
 pub use remote::{PreparedRemotePanelHandoff, RemotePanelHandoffError};
 pub use remote_views::{PreparedRemoteViewReopen, RemoteViewCatalog, RemoteViewReopenError, RemoteViewReopenRequest};
 use shutdown::FORCED_BROWSER_SHUTDOWN_WAIT;
-pub use shutdown::{ForcedBrowserShutdownStatus, ShutdownProgress};
+pub use shutdown::{ForcedBrowserShutdownStatus, OrphanedRemoteHold, ShutdownProgress};
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;

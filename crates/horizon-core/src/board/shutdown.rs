@@ -19,6 +19,15 @@ pub enum ForcedBrowserShutdownStatus {
     Failed,
 }
 
+/// A remote hold a finished shutdown leaves behind: the configured provider
+/// name (for its `max_sessions`) and the cross-instance quota identity (for
+/// its slot lease), both kept by the host until the process ends.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OrphanedRemoteHold {
+    pub provider: String,
+    pub quota_key: Option<String>,
+}
+
 /// Tracks the progress of an asynchronous panel shutdown.
 ///
 /// Created by [`crate::Board::begin_async_shutdown`] and polled each frame to
@@ -144,18 +153,25 @@ impl ShutdownProgress {
         in_flight + finished
     }
 
-    /// Hand the quota identities of every unreleased hold to the host, which
-    /// keeps counting them for the rest of the process. Teardowns still in
-    /// flight are polled first so nothing that finished unestablished is
-    /// lost; a teardown that is still running keeps its own hold.
+    /// Hand every unreleased hold (provider name and quota identity) to the
+    /// host, which keeps counting both for the rest of the process. Teardowns
+    /// still in flight are polled first so nothing that finished
+    /// unestablished is lost; a teardown that is still running keeps its own
+    /// hold.
     #[must_use]
-    pub fn take_unreleased_remote_quota_keys(&self) -> Vec<String> {
+    pub fn take_unreleased_remote_holds(&self) -> Vec<OrphanedRemoteHold> {
         self.poll_browser_shutdown_signals();
         let mut unreleased = self
             .unreleased_remote_holds
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        unreleased.drain(..).filter_map(|held| held.quota_key).collect()
+        unreleased
+            .drain(..)
+            .map(|held| OrphanedRemoteHold {
+                provider: held.provider,
+                quota_key: held.quota_key,
+            })
+            .collect()
     }
 
     /// Block until every asynchronous panel teardown finishes or the timeout
@@ -404,8 +420,13 @@ mod tests {
         );
         assert_eq!(progress.remote_holds_for_key("other"), 0);
         assert!(progress.browser_shutdown_is_complete());
-        let handed_over = progress.take_unreleased_remote_quota_keys();
-        assert_eq!(handed_over, vec!["grid".to_string(), "grid".to_string()]);
+        let handed_over = progress.take_unreleased_remote_holds();
+        assert_eq!(handed_over.len(), 2);
+        assert!(
+            handed_over
+                .iter()
+                .all(|held| held.provider == "grid" && held.quota_key.as_deref() == Some("grid"))
+        );
         assert_eq!(progress.remote_holds_for_key("grid"), 0, "handed over once");
     }
 }

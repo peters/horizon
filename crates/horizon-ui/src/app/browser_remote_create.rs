@@ -167,6 +167,10 @@ impl HorizonApp {
                 "remote_session_limit_reached",
                 "the remote provider's configured max_sessions are held by Horizon instances on this computer; allocations count until their release is established",
             )),
+            Err(remote_slots::SlotError::Contended) => Err((
+                "remote_quota_contended",
+                "another Horizon instance on this computer was checking the same provider quota; create again",
+            )),
             Err(error) => {
                 tracing::warn!(%error, "remote provider slot files unavailable; proceeding on this host's count alone");
                 Ok(())
@@ -211,20 +215,21 @@ pub(super) fn remote_holds_for_key(app: &HorizonApp, key: &str) -> usize {
         .map_or(0, |switch| switch.shutdown_progress.remote_holds_for_key(key));
     let orphaned = app
         .browser_create_host
-        .orphaned_remote_quota_keys
+        .orphaned_remote_holds
         .iter()
-        .filter(|held| held.as_str() == key)
+        .filter(|held| held.quota_key.as_deref() == Some(key))
         .count();
     app.board.remote_holds_for_key(key) + pending + switching + orphaned
 }
 
 impl HorizonApp {
-    /// Take over the unreleased holds of a shutdown that is ending, so their
-    /// slots stay leased after its board is gone.
+    /// Take over the unreleased holds of a shutdown that is ending, so they
+    /// keep counting against their provider and their slots stay leased
+    /// after the board is gone.
     pub(super) fn adopt_orphaned_remote_holds(&mut self, progress: &horizon_core::ShutdownProgress) {
         self.browser_create_host
-            .orphaned_remote_quota_keys
-            .extend(progress.take_unreleased_remote_quota_keys());
+            .orphaned_remote_holds
+            .extend(progress.take_unreleased_remote_holds());
     }
 }
 
@@ -240,7 +245,13 @@ pub(super) fn remote_holds(app: &HorizonApp, provider: &str) -> usize {
         .iter()
         .filter(|pending| pending.holds_remote_allocation_at(provider))
         .count();
-    app.board.remote_holds(provider) + pending
+    let orphaned = app
+        .browser_create_host
+        .orphaned_remote_holds
+        .iter()
+        .filter(|held| held.provider == provider)
+        .count();
+    app.board.remote_holds(provider) + pending + orphaned
 }
 
 #[cfg(test)]

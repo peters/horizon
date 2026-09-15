@@ -40,11 +40,20 @@ pub fn quota_key(profile: &RemoteProviderProfile) -> String {
     key
 }
 
+/// How long the per-key coordination lock is retried before contention is
+/// reported. Another instance holds it for one directory scan, so this is
+/// never reached in practice; it bounds what the host's frame can wait.
+const COORDINATION_WINDOW: std::time::Duration = std::time::Duration::from_millis(20);
+const COORDINATION_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1);
+
 /// Why no slot could be leased.
 #[derive(Debug)]
 pub enum SlotError {
     /// Every slot up to `max_sessions` is held, by this or another instance.
     Busy { max_sessions: u32 },
+    /// Another instance was checking the same quota for longer than the
+    /// bounded wait; nothing was decided and the caller may try again.
+    Contended,
     /// The slot directory or a slot file could not be used.
     Io(io::Error),
 }
@@ -56,6 +65,7 @@ impl std::fmt::Display for SlotError {
                 formatter,
                 "all {max_sessions} provider sessions are held by Horizon instances on this computer"
             ),
+            Self::Contended => formatter.write_str("another Horizon instance is checking the same provider quota"),
             Self::Io(error) => write!(formatter, "provider slot files unavailable: {error}"),
         }
     }
@@ -98,7 +108,17 @@ pub fn acquire_slot(root: &Path, key: &str, max_sessions: u32) -> Result<SlotLea
     let dir = root.join(SLOTS_DIR).join(key);
     fs::create_dir_all(&dir).map_err(SlotError::Io)?;
     let coordination = open_slot_file(&dir.join("coordination.lock"))?;
-    coordination.lock().map_err(SlotError::Io)?;
+    let deadline = std::time::Instant::now() + COORDINATION_WINDOW;
+    loop {
+        match coordination.try_lock() {
+            Ok(()) => break,
+            Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(COORDINATION_INTERVAL);
+            }
+            Err(std::fs::TryLockError::WouldBlock) => return Err(SlotError::Contended),
+            Err(std::fs::TryLockError::Error(error)) => return Err(SlotError::Io(error)),
+        }
+    }
     let mut held = 0u32;
     let mut free: Option<SlotLease> = None;
     let mut present = std::collections::BTreeSet::new();
@@ -265,6 +285,26 @@ mod tests {
         }
         drop(one_more);
         drop(high);
+        assert!(acquire_slot(root.path(), "k", 2).is_ok());
+    }
+
+    #[test]
+    fn a_held_coordination_lock_reports_contention_within_the_bound() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let dir = root.path().join(super::SLOTS_DIR).join("k");
+        std::fs::create_dir_all(&dir).expect("dir");
+        let coordination = super::open_slot_file(&dir.join("coordination.lock")).expect("file");
+        coordination.lock().expect("hold the coordination lock");
+        let started = std::time::Instant::now();
+        match acquire_slot(root.path(), "k", 2) {
+            Err(SlotError::Contended) => {}
+            other => panic!("expected contention, got {other:?}"),
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(500),
+            "the wait is bounded"
+        );
+        drop(coordination);
         assert!(acquire_slot(root.path(), "k", 2).is_ok());
     }
 }
