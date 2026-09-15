@@ -794,8 +794,15 @@ mod tests {
     fn browser_video_options_must_fit_engine_range() {
         let error = Config::from_yaml("browser:\n  video:\n    fps: 0\n").expect_err("fps must be rejected");
         assert!(error.to_string().contains("browser.video"));
-        Config::from_yaml("browser:\n  video:\n    quality: 70\n    compression_level: 4\n    fps: 10\n")
-            .expect("default-like video options should be accepted");
+        let auto = Config::from_yaml("browser:\n  video:\n    quality: 90\n    compression_level: 4\n    fps: 10\n")
+            .expect("omitted max_width should be accepted as auto viewport width");
+        assert!(auto.browser.video.max_width.is_none());
+        let explicit = Config::from_yaml("browser:\n  video:\n    quality: 90\n    fps: 10\n    max_width: 1280\n")
+            .expect("explicit max_width should still be accepted");
+        assert_eq!(explicit.browser.video.max_width, Some(1280));
+        let too_wide = Config::from_yaml("browser:\n  video:\n    max_width: 4096\n")
+            .expect_err("out-of-range max_width must be rejected");
+        assert!(too_wide.to_string().contains("browser.video"));
     }
 
     #[test]

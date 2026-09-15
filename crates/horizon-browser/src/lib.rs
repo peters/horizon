@@ -39,11 +39,11 @@ pub use horizon_browser_protocol::{
     AgentAction, BackendAvailability, BackendCapabilities, BackendKind, BrowserControlAction, BrowserVideoCapture,
     BrowserVideoCaptureOptions, BrowserVideoCaptureOverrides, BrowserVideoOperation, BrowserVideoState,
     DEFAULT_CLICK_COUNT, DEFAULT_NAVIGATION_TIMEOUT_MILLIS, DEFAULT_VIDEO_COMPRESSION_LEVEL, DEFAULT_VIDEO_FPS,
-    DEFAULT_VIDEO_MAX_FILE_BYTES, DEFAULT_VIDEO_MAX_WIDTH, DEFAULT_VIDEO_QUALITY, DEFAULT_WAIT_TIMEOUT_MILLIS,
-    FrameDelivery, MAX_CLICK_COUNT, MAX_NAVIGATION_TIMEOUT_MILLIS, MAX_QUERY_RESULTS, MAX_SNAPSHOT_NODES,
-    MAX_VIDEO_COMPRESSION_LEVEL, MAX_VIDEO_FILE_BYTES, MAX_VIDEO_FPS, MAX_VIDEO_MAX_WIDTH, MAX_VIDEO_QUALITY,
-    MAX_WAIT_TIMEOUT_MILLIS, MIN_VIDEO_FILE_BYTES, MIN_VIDEO_FPS, MIN_VIDEO_MAX_WIDTH, MIN_VIDEO_QUALITY,
-    NavigationWait, normalize_navigation_target,
+    DEFAULT_VIDEO_MAX_FILE_BYTES, DEFAULT_VIDEO_QUALITY, DEFAULT_WAIT_TIMEOUT_MILLIS, FrameDelivery, MAX_CLICK_COUNT,
+    MAX_NAVIGATION_TIMEOUT_MILLIS, MAX_QUERY_RESULTS, MAX_SNAPSHOT_NODES, MAX_VIDEO_COMPRESSION_LEVEL,
+    MAX_VIDEO_FILE_BYTES, MAX_VIDEO_FPS, MAX_VIDEO_MAX_WIDTH, MAX_VIDEO_QUALITY, MAX_WAIT_TIMEOUT_MILLIS,
+    MIN_VIDEO_FILE_BYTES, MIN_VIDEO_FPS, MIN_VIDEO_MAX_WIDTH, MIN_VIDEO_QUALITY, NavigationWait,
+    normalize_navigation_target,
 };
 pub use input::{BrowserButton, BrowserEditCommand, BrowserInput, BrowserKey, BrowserModifiers};
 pub use network::{
@@ -107,7 +107,9 @@ pub struct BrowserConfig {
     /// Chromium CDP screencast sampling interval (`1` publishes every frame).
     pub every_nth_frame: u32,
     pub profile_root: Option<PathBuf>,
-    /// Defaults for page-pixel `WebM` capture. Per-recording options may override.
+    /// Defaults for page-pixel `WebM` capture. Per-recording options may
+    /// override; an omitted `max_width` records at the content viewport
+    /// width without downscaling.
     pub video: BrowserVideoCaptureOptions,
     /// Remote device-service providers and selectable targets. Empty unless
     /// configured; parsing never allocates a device.
