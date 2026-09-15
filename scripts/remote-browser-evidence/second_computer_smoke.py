@@ -412,7 +412,9 @@ def read_items(keychain: str | None) -> dict[str, bytes | None]:
 
 
 def write_items(values: dict[str, bytes | None], keychain: str | None) -> None:
-    """Put `values` into Horizon's items; `None` removes an item."""
+    """Put `values` into Horizon's items; `None` removes an item. The map
+    must name every reference: an omitted one counts as `None`."""
+    values = {reference: values.get(reference) for reference in BINDINGS}
     system = platform.system()
     if system == "Darwin":
         for reference, value in values.items():
@@ -434,13 +436,12 @@ def seed_store(login: str, password: str, keychain: str | None) -> dict:
 
         return {"system": system, "previous": seed_keyring(login, password)}
     previous = read_items(keychain)
-    written: dict[str, bytes | None] = {}
     try:
-        for reference, value in (("user", login.encode()), ("key", password.encode())):
-            write_items({reference: value}, keychain)
-            written[reference] = value
+        # Both items in one operation: a partial map would read as a
+        # deletion of the item it omits.
+        write_items({"user": login.encode(), "key": password.encode()}, keychain)
     except Exception:
-        write_items({reference: previous.get(reference) for reference in written}, keychain)
+        write_items({reference: previous.get(reference) for reference in BINDINGS}, keychain)
         raise
     return {"system": system, "previous": previous}
 
