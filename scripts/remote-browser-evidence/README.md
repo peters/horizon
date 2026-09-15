@@ -63,3 +63,22 @@ Output lands under `~/.cache/horizon-628-spike/phase6/run-<epoch>`:
 `report.json` (every step with its outcome), `rpc-<target>.jsonl` (every MCP
 request and reply), `horizon.log`, `config.json` (the generated Horizon config),
 and five panel screenshots per target.
+
+## Second computer: portable profile import and remote start
+
+`second_computer_smoke.py` has two halves. `prepare` runs on the first
+computer: it writes an isolated configuration with the hosted grid's targets
+and exports the portable profile through `horizon --export-remote-profile`,
+checking that the file carries no binding, value or local path. `run` runs on
+the second computer with that file: `horizon --import-remote-profile` into a
+fresh configuration, the machine-local `os_keychain` bindings the Settings row
+would add, the credential entered into this computer's OS store from its own
+netrc (`HORIZON_NETRC`, default `~/.config/horizon-dev/browserstack.netrc`),
+then Horizon started and one target driven through the MCP tools, closed and
+confirmed released at the provider, and finally a restart without the stored
+items that must be refused as `credentials_not_ready`. It needs only Horizon
+and Python on the second computer (the agent panel's probe is a shell or batch
+one-liner) and runs on Linux, macOS (`--keychain` names the keychain file to
+add the items to) and Windows, where it carries its own threaded MCP client
+and a `SHELL` shim for the agent panel (#688). The 2026-09-15 run is in
+`docs/testing/2026-09-15-second-computer-portable-profile-smoke.md`.
