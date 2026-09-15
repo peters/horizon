@@ -12,13 +12,16 @@
   </style>
 </head>
 <body>
-  <main><h1 id="animation-marker">CSS and canvas animation</h1><div id="box"></div><canvas id="canvas" width="800" height="300"></canvas></main>
+  <main><h1 id="animation-marker">CSS and canvas animation</h1><p id="progress">Starting animation</p><div id="box"></div><canvas id="canvas" width="800" height="300"></canvas></main>
   <script>
     const canvas = document.querySelector('#canvas');
     const context = canvas.getContext('2d');
     let frame = 0;
+    let ticks = 0;
+    setInterval(() => { ticks += 1; }, 100);
     function draw() {
       frame += 1;
+      document.querySelector("#progress").textContent = `Frames: ${frame}; ticks: ${ticks}; visibility: ${document.visibilityState}`;
       context.fillStyle = '#111827';
       context.fillRect(0, 0, 800, 300);
       context.fillStyle = '#f472b6';

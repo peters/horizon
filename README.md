@@ -530,6 +530,24 @@ browser:
 
 All executable fields are optional. Chromium and Firefox get separate directories under `profile_root`. Permanently closing the panel or deleting its saved session removes that panel's profile. Safari always uses Safari's isolated automation window and does not reuse your normal history, cookies, or preferences.
 
+Chromium and Firefox remain headless by default. To use a headed Chromium
+compositor with its native window minimized, explicitly configure:
+
+```yaml
+browser:
+  backend: chromium
+  headless: false
+  hide_native_window: true
+```
+
+This option needs a working desktop and window manager. The native window can
+appear briefly during startup and remains in the taskbar or Dock. Horizon keeps
+the embedded document active and focused so animations and timers continue,
+even when the Horizon panel is unfocused. Initial setup fails if focus emulation,
+window lookup, or confirmed minimization fails. `hide_native_window` defaults to
+`false` and is ignored for headless Chromium and other backends. It does not
+promise that websites cannot detect automation.
+
 ### Agent steering, audit, and CLI
 
 Horizon-launched Codex and Claude agents receive the bundled `horizon-browser` MCP server automatically. Agents start with `browser_list` and use `browser_create` to open a visible browser in their own workspace when none exists. They reuse that panel for iframe, popup, dialog, and consent flows. A fresh user page action pauses the agent queue for five seconds; an explicit handoff keeps it paused until you select **Done — hand back to agent**.
