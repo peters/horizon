@@ -365,3 +365,43 @@ fn poll_profile_cleanup(cleanup: &mut ProfileCleanupState, timeout: Option<Durat
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use super::{BrowserShutdownSignal, RemoteReleaseOutcome};
+
+    #[test]
+    fn never_allocated_holds_the_slot_until_the_driver_has_finished() {
+        let (tx, rx) = mpsc::channel();
+        let mut running = BrowserShutdownSignal::for_test(rx);
+        running.remote_provider = Some("grid".into());
+        running.remote_quota_key = Some("grid".into());
+        *running.remote_release.lock().expect("report") = Some(RemoteReleaseOutcome::NeverAllocated);
+        assert!(
+            running.holds_remote_allocation(),
+            "the report's starting value proves nothing while the driver may still ask the provider"
+        );
+        drop(tx);
+        assert!(
+            running.is_complete(),
+            "a dropped completion sender finishes the driver side"
+        );
+        assert!(
+            !running.holds_remote_allocation(),
+            "once the driver finished, never allocated is terminal"
+        );
+
+        let finished =
+            BrowserShutdownSignal::completed_remote_for_test("grid", Some(RemoteReleaseOutcome::NeverAllocated));
+        assert!(!finished.holds_remote_allocation());
+        let unknown = BrowserShutdownSignal::completed_remote_for_test("grid", None);
+        assert!(
+            unknown.holds_remote_allocation(),
+            "no report after completion is a hold"
+        );
+        let released = BrowserShutdownSignal::completed_remote_for_test("grid", Some(RemoteReleaseOutcome::Released));
+        assert!(!released.holds_remote_allocation());
+    }
+}
