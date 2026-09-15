@@ -12,7 +12,6 @@ use std::path::{Path, PathBuf};
 
 pub(super) const HORIZON_NOTIFY_SKILL: &str = "horizon-notify";
 pub(super) const HORIZON_BROWSER_SKILL: &str = "horizon-browser";
-pub(super) const HORIZON_OFFLOAD_SKILL: &str = "horizon-offload";
 const LEASES_DIR: &str = ".horizon-leases";
 
 pub(super) struct SkillRootLease {
@@ -208,7 +207,7 @@ pub(super) fn remove_horizon_skill_dir(path: &Path) {
     let Some(name) = path.file_name() else {
         return;
     };
-    if name != HORIZON_NOTIFY_SKILL && name != HORIZON_BROWSER_SKILL && name != HORIZON_OFFLOAD_SKILL {
+    if name != HORIZON_NOTIFY_SKILL && name != HORIZON_BROWSER_SKILL {
         return;
     }
     let metadata = match std::fs::symlink_metadata(path) {
