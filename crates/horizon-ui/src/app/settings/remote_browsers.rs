@@ -4,7 +4,7 @@
 //! environment or an exported profile.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use egui::Ui;
 use horizon_core::Config;
@@ -147,6 +147,7 @@ impl Drop for CredentialInputs {
 /// The portable-profile row: the path the user edits and the outcome of the
 /// last export or import. Outcomes name counts and the path, never a value.
 pub(super) struct PortableProfilePanel {
+    config_path: PathBuf,
     path: String,
     notice: Option<(String, bool)>,
 }
@@ -154,31 +155,33 @@ pub(super) struct PortableProfilePanel {
 impl PortableProfilePanel {
     pub(super) fn new(config_path: &Path) -> Self {
         Self {
+            config_path: config_path.to_path_buf(),
             path: default_portable_profile_path(config_path),
             notice: None,
         }
     }
 
-    /// Write the shareable definition (bindings stripped) to the path.
+    /// Write the shareable definition (bindings stripped) to the path. The
+    /// configuration file itself is never a destination.
     fn export(&mut self, config: &Config) {
         let path = Path::new(self.path.trim());
-        self.notice = Some(
-            match remote_profile::write_portable_profile(path, &config.browser.remote) {
-                Ok(()) => {
-                    let remote = &config.browser.remote;
-                    (
-                        format!(
-                            "Exported {} provider(s) and {} target(s) to {} without credentials",
-                            remote.providers.len(),
-                            remote.targets.len(),
-                            path.display()
-                        ),
-                        false,
-                    )
-                }
-                Err(error) => (format!("Export failed: {error}"), true),
-            },
-        );
+        let outcome = remote_profile::refuse_config_path(&self.config_path, path)
+            .and_then(|()| remote_profile::write_portable_profile(path, &config.browser.remote));
+        self.notice = Some(match outcome {
+            Ok(()) => {
+                let remote = &config.browser.remote;
+                (
+                    format!(
+                        "Exported {} provider(s) and {} target(s) to {} without credentials",
+                        remote.providers.len(),
+                        remote.targets.len(),
+                        path.display()
+                    ),
+                    false,
+                )
+            }
+            Err(error) => (format!("Export failed: {error}"), true),
+        });
     }
 
     /// Merge the profile at the path into the editing configuration. Returns
@@ -186,7 +189,8 @@ impl PortableProfilePanel {
     /// the YAML buffer, and Save writes it to disk.
     fn import(&mut self, config: &mut Config) -> bool {
         let path = Path::new(self.path.trim());
-        let outcome = remote_profile::read_portable_profile(path)
+        let outcome = remote_profile::refuse_config_path(&self.config_path, path)
+            .and_then(|()| remote_profile::read_portable_profile(path))
             .and_then(|document| remote_profile::import_portable(&mut config.browser.remote, &document));
         match outcome {
             Ok(summary) => {
@@ -661,6 +665,16 @@ mod tests {
         assert!(!panel.import(&mut second));
         let (notice, is_error) = panel.notice.clone().expect("notice");
         assert!(is_error && notice.contains("absent.yaml"), "{notice}");
+
+        // The configuration file is never exported over or imported from.
+        std::fs::write(&config_path, first.to_yaml().expect("yaml")).expect("config");
+        let saved = std::fs::read_to_string(&config_path).expect("read");
+        panel.path = config_path.display().to_string();
+        panel.export(&first);
+        let (notice, is_error) = panel.notice.clone().expect("notice");
+        assert!(is_error && notice.contains("is the configuration file"), "{notice}");
+        assert!(!panel.import(&mut second));
+        assert_eq!(std::fs::read_to_string(&config_path).expect("read"), saved);
     }
 
     #[test]

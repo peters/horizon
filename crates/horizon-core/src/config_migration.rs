@@ -19,6 +19,27 @@ pub const CURRENT_CONFIG_VERSION: u32 = 10;
 ///
 /// Returns an error if an unrecognised config version is encountered.
 pub fn migrate_if_needed(config: &mut Config, config_path: &Path) -> Result<bool> {
+    if !migrate_in_memory(config)? {
+        return Ok(false);
+    }
+
+    if let Err(error) = write_back(config, config_path) {
+        tracing::warn!(%error, "could not write migrated config back to disk");
+    }
+
+    Ok(true)
+}
+
+/// Run any pending migrations on `config` without touching the disk, for
+/// callers that rewrite the file themselves in one atomic step.
+///
+/// Returns `true` if a migration was applied.
+///
+/// # Errors
+///
+/// Returns an error if an unrecognised config version is encountered or the
+/// migrated configuration does not validate.
+pub fn migrate_in_memory(config: &mut Config) -> Result<bool> {
     if config.version >= CURRENT_CONFIG_VERSION {
         return Ok(false);
     }
@@ -47,10 +68,6 @@ pub fn migrate_if_needed(config: &mut Config, config_path: &Path) -> Result<bool
     config.version = CURRENT_CONFIG_VERSION;
 
     config.validate()?;
-
-    if let Err(error) = write_back(config, config_path) {
-        tracing::warn!(%error, "could not write migrated config back to disk");
-    }
 
     Ok(true)
 }

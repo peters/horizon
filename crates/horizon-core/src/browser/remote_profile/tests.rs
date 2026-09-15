@@ -8,9 +8,11 @@ use horizon_browser::remote::{
 
 use super::{
     MAX_PORTABLE_PROFILE_BYTES, RemoteProfileError, export_portable, export_portable_file_from_config, import_portable,
-    import_portable_file_into_config, parse_portable, read_portable_profile, summary_line, write_portable_profile,
+    import_portable_file_into_config, parse_portable, read_portable_profile, refuse_config_path, summary_line,
+    write_portable_profile,
 };
 use crate::config::Config;
+use crate::config_migration::CURRENT_CONFIG_VERSION;
 
 fn provider(endpoint: &str) -> RemoteProviderProfile {
     let mut bindings = BTreeMap::new();
@@ -192,6 +194,65 @@ fn profile_files_round_trip_through_a_second_configuration_file() {
         read_portable_profile(&exported_path).expect("read"),
         export_portable(&loaded.browser.remote).expect("document")
     );
+}
+
+#[test]
+fn an_older_configuration_file_is_migrated_in_memory_and_only_rewritten_by_a_successful_import() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_path = dir.path().join("config.yaml");
+    let mut config = Config {
+        version: CURRENT_CONFIG_VERSION - 1,
+        ..Config::default()
+    };
+    config.browser.remote = local();
+    let old_text = config.to_yaml().expect("yaml");
+    std::fs::write(&config_path, &old_text).expect("write");
+
+    // A conflicting profile fails without the migration reaching the disk.
+    let conflict = dir.path().join("conflict.yaml");
+    write_portable_profile(&conflict, &redirected()).expect("profile");
+    let error = import_portable_file_into_config(&config_path, &conflict).expect_err("conflict");
+    assert!(matches!(error, RemoteProfileError::Config(_)), "{error}");
+    assert_eq!(std::fs::read_to_string(&config_path).expect("read"), old_text);
+
+    // A compatible one rewrites the file once, migrated and merged.
+    let profile = dir.path().join("profile.yaml");
+    write_portable_profile(&profile, &local()).expect("profile");
+    import_portable_file_into_config(&config_path, &profile).expect("import");
+    let loaded = Config::load(Some(&config_path)).expect("load");
+    assert_eq!(loaded.version, CURRENT_CONFIG_VERSION);
+    assert!(
+        loaded.browser.remote.providers["grid"]
+            .credential_bindings
+            .contains_key(&CredentialReference::from("key"))
+    );
+}
+
+#[test]
+fn the_configuration_file_is_never_a_profile_destination_or_source() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config_path = dir.path().join("config.yaml");
+    let mut config = Config::default();
+    config.browser.remote = local();
+    let text = config.to_yaml().expect("yaml");
+    std::fs::write(&config_path, &text).expect("write");
+
+    let error = export_portable_file_from_config(&config_path, &config_path).expect_err("same file");
+    assert!(matches!(error, RemoteProfileError::IsConfigPath { .. }), "{error}");
+    let error = export_portable_file_from_config(&config_path, &dir.path().join(".").join("config.yaml"))
+        .expect_err("same file spelled differently");
+    assert!(matches!(error, RemoteProfileError::IsConfigPath { .. }), "{error}");
+    let error = import_portable_file_into_config(&config_path, &config_path).expect_err("same file");
+    assert!(matches!(error, RemoteProfileError::IsConfigPath { .. }), "{error}");
+    assert_eq!(std::fs::read_to_string(&config_path).expect("read"), text);
+
+    // Paths that do not exist yet are compared as written.
+    let absent = dir.path().join("absent").join("config.yaml");
+    assert!(matches!(
+        refuse_config_path(&absent, &absent),
+        Err(RemoteProfileError::IsConfigPath { .. })
+    ));
+    refuse_config_path(&absent, &dir.path().join("absent").join("profile.yaml")).expect("different files");
 }
 
 #[test]

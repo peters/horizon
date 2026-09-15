@@ -9,13 +9,14 @@
 //! the readiness of each reference stays a live query on that machine.
 
 use std::fmt;
-use std::io;
+use std::io::{self, Read as _};
 use std::path::{Path, PathBuf};
 
 use horizon_browser::remote::{ImportSummary, RemoteBrowserConfig, RemoteConfigError};
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
+use crate::config_migration;
 
 /// File name suggested next to the configuration file.
 pub const PORTABLE_PROFILE_FILE_NAME: &str = "remote-browser-profile.yaml";
@@ -54,6 +55,8 @@ pub enum RemoteProfileError {
     Config(RemoteConfigError),
     /// The configuration file could not be loaded or serialised.
     ConfigFile(String),
+    /// The profile path is the configuration file itself.
+    IsConfigPath { path: PathBuf },
 }
 
 impl fmt::Display for RemoteProfileError {
@@ -72,6 +75,11 @@ impl fmt::Display for RemoteProfileError {
             Self::Parse(message) => write!(formatter, "not a portable profile: {message}"),
             Self::Config(error) => write!(formatter, "{error}"),
             Self::ConfigFile(message) => write!(formatter, "configuration file: {message}"),
+            Self::IsConfigPath { path } => write!(
+                formatter,
+                "{} is the configuration file; a portable profile is a separate document",
+                path.display()
+            ),
         }
     }
 }
@@ -130,21 +138,64 @@ pub fn import_portable(remote: &mut RemoteBrowserConfig, yaml: &str) -> Result<I
     Ok(remote.import_portable(&incoming)?)
 }
 
-/// Read a portable document from `path`, bounded by
-/// [`MAX_PORTABLE_PROFILE_BYTES`].
+/// Read a portable document from `path`. At most one byte past
+/// [`MAX_PORTABLE_PROFILE_BYTES`] is ever read, whatever the file reports
+/// or grows to.
 ///
 /// # Errors
-/// I/O failures and an oversized file.
+/// I/O failures, an oversized file, and a file that is not UTF-8.
 pub fn read_portable_profile(path: &Path) -> Result<String, RemoteProfileError> {
     let io_error = |source| RemoteProfileError::Io {
         path: path.to_path_buf(),
         source,
     };
-    let bytes = std::fs::metadata(path).map_err(io_error)?.len();
-    if bytes > MAX_PORTABLE_PROFILE_BYTES {
-        return Err(RemoteProfileError::TooLarge { bytes });
+    let file = std::fs::File::open(path).map_err(io_error)?;
+    let mut bytes = Vec::new();
+    file.take(MAX_PORTABLE_PROFILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(io_error)?;
+    if bytes.len() as u64 > MAX_PORTABLE_PROFILE_BYTES {
+        return Err(RemoteProfileError::TooLarge {
+            bytes: bytes.len() as u64,
+        });
     }
-    std::fs::read_to_string(path).map_err(io_error)
+    String::from_utf8(bytes).map_err(|_| RemoteProfileError::Parse("not UTF-8".to_string()))
+}
+
+/// Refuse a profile path that names the configuration file itself: an
+/// export would replace the configuration with a profile document.
+///
+/// # Errors
+/// [`RemoteProfileError::IsConfigPath`] when both name the same file.
+pub fn refuse_config_path(config_path: &Path, profile_path: &Path) -> Result<(), RemoteProfileError> {
+    let same = if let (Ok(config), Ok(profile)) = (config_path.canonicalize(), profile_path.canonicalize()) {
+        config == profile
+    } else {
+        let absolute = |path: &Path| std::env::current_dir().map_or_else(|_| path.to_path_buf(), |cwd| cwd.join(path));
+        absolute(config_path) == absolute(profile_path)
+    };
+    if same {
+        return Err(RemoteProfileError::IsConfigPath {
+            path: profile_path.to_path_buf(),
+        });
+    }
+    Ok(())
+}
+
+/// The configuration file parsed, migrated and validated in memory: nothing
+/// is written back, so a caller can fail after this without changing the
+/// file.
+fn load_config_in_memory(config_path: &Path) -> Result<Config, RemoteProfileError> {
+    let config_error = |error: crate::error::Error| RemoteProfileError::ConfigFile(error.to_string());
+    let contents = std::fs::read_to_string(config_path).map_err(|source| RemoteProfileError::Io {
+        path: config_path.to_path_buf(),
+        source,
+    })?;
+    let mut config: Config =
+        serde_yaml::from_str(&contents).map_err(|error| RemoteProfileError::ConfigFile(error.to_string()))?;
+    config_migration::migrate_in_memory(&mut config).map_err(config_error)?;
+    config.validate().map_err(config_error)?;
+    Ok(config)
 }
 
 /// Write the portable document for `remote` to `path`, replacing the file
@@ -168,9 +219,10 @@ pub fn import_portable_file_into_config(
     config_path: &Path,
     profile_path: &Path,
 ) -> Result<ImportSummary, RemoteProfileError> {
+    refuse_config_path(config_path, profile_path)?;
     let yaml = read_portable_profile(profile_path)?;
     let mut config = if config_path.exists() {
-        Config::load(Some(config_path)).map_err(|error| RemoteProfileError::ConfigFile(error.to_string()))?
+        load_config_in_memory(config_path)?
     } else {
         Config::default()
     };
@@ -193,7 +245,8 @@ pub fn export_portable_file_from_config(
     config_path: &Path,
     profile_path: &Path,
 ) -> Result<RemoteBrowserConfig, RemoteProfileError> {
-    let config = Config::load(Some(config_path)).map_err(|error| RemoteProfileError::ConfigFile(error.to_string()))?;
+    refuse_config_path(config_path, profile_path)?;
+    let config = load_config_in_memory(config_path)?;
     write_portable_profile(profile_path, &config.browser.remote)?;
     Ok(config.browser.remote.export_portable())
 }
