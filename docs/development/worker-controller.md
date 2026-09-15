@@ -49,6 +49,7 @@ commands remain subject to task authorization; parsing does not execute them.
 | `create <new-directory>` | JSON intent on stdin; saves a private session and recovery receipt before provisioning once |
 | `check <directory>` | Recovers/observes only the original allocation |
 | `git-install <directory>` | First authorized repository PAT on stdin, then detached exact-commit Git setup |
+| `credential-install <directory> <operation-id>` | Authorized missing-token installation only; PAT on stdin, fresh non-nil UUID, no Git setup/task start |
 | `git-prepare <directory>` | Detached Git setup using existing runtime credentials |
 | `git-status <directory>` | Inspects original Git receipt; require `Complete` and null reason |
 | `start <directory>` | Starts the complete saved command once after Git readiness |
@@ -81,6 +82,20 @@ Git setup and task starts sync create-new claims before dispatch and retain them
 after failures. Lifecycle APIs use their existing durable core intent
 journal, allowing pre-dispatch failures to be corrected without a stranded claim.
 An interrupted reply is not permission to delete the claim or submit again.
+`credential-install` restores a missing runtime token after restart without changing
+Git or task claims. Supply a fresh non-nil UUID for an explicitly authorized
+credential disclosure and redirect a protected token file to stdin. The canonical
+UUID names a durable `credential-<UUID>.claimed` file; duplicate UUIDs are refused
+before stdin is read. Controller-owned stdin and SSH input buffers are bounded
+and zeroized on return; the claim stores no token.
+Installed/Present results do not establish repository authorization or expiry.
+Existing tokens are never replaced. Retain the claim on failure or an uncertain
+reply: do not retry automatically or generate a replacement UUID to bypass it.
+A new disclosure attempt requires renewed explicit authorization. Verify actual
+repository API access separately; rotation of a present expired/revoked token
+remains unsupported. No Git preparation, task replay or worker restart follows
+this operation.
+
 Only one controller may use a directory at a time. Keep the original directory;
 its keys, session and receipts are required for reconnect. Do not share it with a
 running desktop Horizon instance or copy it to impersonate another session.

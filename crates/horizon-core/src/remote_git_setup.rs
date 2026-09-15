@@ -9,6 +9,7 @@ mod transport;
 pub use configured::{
     ConfiguredRemoteGitSetupError, ConfiguredRemoteGitSetupRequest, ConfiguredRemoteGitSubmission,
     PreparedRemoteGitSetup, RemoteGitCredentialMode, inspect_configured_remote_git_setup,
+    install_configured_remote_git_credential, prepare_configured_remote_git_credential,
     prepare_configured_remote_git_setup, submit_configured_remote_git_setup,
 };
 

@@ -99,16 +99,28 @@ clears `/run/horizon/github-token`, even when Git preparation is still `Complete
 and retained agent login survives. Include a repository-access check with the
 installed protected `gh` helper in the saved issue command before GitHub work.
 
-If the credential is missing, block new credential-dependent work and report that
-this controller cannot restore repository API access after restart. It exposes
-neither a standalone credential-refresh operation nor a supported direct SSH
-handoff for secret delivery. Preserve the original task directory, identities and
-Git/start claims; existing processes need not be interrupted. Observation and
-explicit lifecycle/cleanup remain available under their existing authority.
-Never replay `git-install`, erase claims, or put a PAT in a saved command to work
-around this limitation. A configured refresh operation using the existing pinned
-transport and core credential installer is a separate controller follow-up, not
-an available recovery step. Do not report full post-restart repository readiness.
+If the credential is missing, block new credential-dependent work until an
+explicitly authorized reinstall succeeds. Use the same task directory and a fresh
+operation UUID. With `task_directory`, `operation_id` and `token_file` resolved
+from that authorized handoff, run:
+
+```sh
+horizon-worker credential-install "$task_directory" "$operation_id" < "$token_file"
+```
+
+This uses the configured provider and retained SSH pin, consumes a credential-only
+claim and never replays Git preparation or starts tasks. Reusing an operation UUID
+is refused before reading the PAT. Preserve the original directory, identities and
+all Git/start/credential claims; existing processes remain independent.
+
+`installed` or `present` is an installer result, not proof of repository permission
+or token expiry. The helper never replaces an existing token. Check repository API
+access through the protected helper before new GitHub work; denied/expired-token
+rotation is not supported by this command. An uncertain reply keeps its claim:
+inspect the original state and report uncertainty, without retrying automatically
+or generating another UUID to bypass it. Another disclosure attempt needs explicit
+renewed authorization. Never replay `git-install`, erase claims, or put a PAT in a
+saved command. Observation and authorized lifecycle/cleanup remain available.
 
 ## One issue, one durable task
 
@@ -214,8 +226,8 @@ performance. A CLI-only rehearsal does not satisfy the separate three-panel and
 client-off product acceptance gates in #474/#475.
 
 Closing a controller detaches; persistent workers keep running and billing.
-Explicit Stop/start can lose the runtime credential; this skill cannot restore
-repository API access afterward, as described above.
+Explicit Stop/start can lose the runtime credential; use the authorized
+credential-only reinstall above, then verify repository API access separately.
 Use `management-preview <directory>` for the exact Azure resource, saved
 revision, profile and loss/billing scope. After applicable explicit authorization,
 `stop`, `compute-start`, `delete` or `delete-retry` reads stdin JSON with
