@@ -169,6 +169,10 @@ def target_with_session_name(name: str, session_name: str) -> dict:
     return target
 
 
+def uses_browserstack(targets: list[str]) -> bool:
+    return any(TARGETS[name]["provider"] == "browserstack" for name in targets)
+
+
 def write_config(root: pathlib.Path, targets: list[str], session_names: dict[str, str]) -> pathlib.Path:
     actor_path = root / "agent-actor"
     host_path = root / "agent-host-instance"
@@ -184,7 +188,7 @@ def write_config(root: pathlib.Path, targets: list[str], session_names: dict[str
         "browser": {
             "remote": {
                 "providers": {
-                    "browserstack": {
+                    **({"browserstack": {
                         "adapter": "browserstack",
                         "endpoint": HUB,
                         "authentication": {"kind": "basic", "username_ref": "user", "password_ref": "key"},
@@ -198,7 +202,7 @@ def write_config(root: pathlib.Path, targets: list[str], session_names: dict[str
                             "idle_release_seconds": 180,
                             "max_session_seconds": 900,
                         },
-                    },
+                    }} if uses_browserstack(targets) else {}),
                     **({"safaridriver": {
                         "adapter": "webdriver",
                         "endpoint": SAFARIDRIVER,
@@ -289,8 +293,14 @@ def safaridriver_release_proof(udid: str) -> dict:
     if not session_id:
         return {"status": "no session id", "terminal": False}
     delete = urllib.request.Request(f"{SAFARIDRIVER}/session/{session_id}", method="DELETE")
-    with OPENER.open(delete, timeout=60) as resp:
-        resp.read()
+    try:
+        with OPENER.open(delete, timeout=60) as resp:
+            resp.read()
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError) as err:
+        # The previous session was released (a fresh one opened), but the
+        # proof session itself may still occupy the device: say so and fail.
+        return {"status": "proof session not deleted", "terminal": False, "device": udid,
+                "note": f"a fresh session opened, so the previous one was released, but deleting it failed ({type(err).__name__}); it may still hold the device"}
     return {"status": "released", "terminal": True, "device": udid, "note": "a fresh session opened and was deleted, so the previous session was released"}
 
 
@@ -332,12 +342,16 @@ def main() -> int:
     root = out / f"run-{int(time.time())}"
     session_names = {name: f"phase6-{name}-{root.name}" for name in TARGETS}
     (root / "home").mkdir(parents=True)
-    login, password = load_credential()
-    auth = "Basic " + __import__("base64").b64encode(f"{login}:{password}".encode()).decode()
     report: dict = {"targets": {}, "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     unknown = [name for name in args.targets if name not in TARGETS]
     if unknown:
         raise SystemExit(f"unknown targets: {', '.join(unknown)} (known: {', '.join(TARGETS)})")
+    # The hosted grid's credential and the keyring seeding exist only for
+    # targets that use it; a credential-free endpoint runs without either.
+    login = password = auth = None
+    if uses_browserstack(args.targets):
+        login, password = load_credential()
+        auth = "Basic " + __import__("base64").b64encode(f"{login}:{password}".encode()).decode()
     # The MCP server must resolve the same isolated Horizon home as the host,
     # so the isolation is applied to this process too: McpClient copies the
     # environment it is launched from.
@@ -357,7 +371,7 @@ def main() -> int:
     # exit at once.
     for sig in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, lambda signum, frame: (_ for _ in ()).throw(SystemExit(128 + signum)))
-    previous = seed_keyring(login, password)
+    previous = seed_keyring(login, password) if login is not None else {}
     try:
         app = subprocess.Popen([args.horizon, "--config", str(config), "--ephemeral"], env=env, stdout=log, stderr=log)
         actor = wait_for(root / "agent-actor", 90)
@@ -477,7 +491,8 @@ def main() -> int:
             except subprocess.TimeoutExpired:
                 app.kill()
         log.close()
-        restore_keyring(previous)
+        if previous:
+            restore_keyring(previous)
     failures = {target: target_failures(entry["steps"]) for target, entry in report["targets"].items()}
     for target in args.targets:
         if target not in failures:

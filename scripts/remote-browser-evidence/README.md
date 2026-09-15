@@ -3,8 +3,9 @@
 Phase 6 of [#628](https://github.com/peters/horizon/issues/628): drive a real
 remote mobile device through Horizon's public `browser_*` MCP tools only, from a
 headless Horizon on Linux, and record the result with the provider's own release
-confirmation. It is the product path end to end: nothing here talks WebDriver,
-and nothing is installed on the host beyond Horizon and the run tooling. The
+confirmation. It is the product path end to end: the flow itself never talks
+WebDriver (the one exception is the optional safaridriver lane's release proof,
+below), and nothing is installed on the host beyond Horizon and the run tooling. The
 outcome of the 2026-09-14 runs is in
 `docs/testing/2026-09-14-remote-mobile-mcp-live-evidence.md`.
 
@@ -32,7 +33,10 @@ Settings > Safari > Advanced), open a tunnel from this host
 if not `http://127.0.0.1:4444`). The script then adds a `safaridriver` provider
 (generic `webdriver` adapter, no credentials) and an `ios_safaridriver` target
 that can be named in `--targets`; its release proof opens and deletes a fresh
-session, since the driver allows one session per device.
+session directly through WebDriver, since the driver allows one session per
+device. A run that names only this target needs neither the netrc nor the
+Secret Service: the hosted grid's provider, credential and keyring seeding are
+included only when a selected target uses it.
 
 ## Command
 
@@ -47,9 +51,11 @@ targets, starts Horizon with `--ephemeral`, reads the agent identity from the
 probe the agent panel writes, and then runs per target: `browser_create` with
 `target` and the fixture URL, `browser_snapshot`, a device probe, `fill` and
 `click` with a read-back of the form result, drawer open and close, an iframe
-query, `scroll`, `browser_close`, `browser_list`, and finally the provider's
-REST status of the session. Each device allocation is billed by the provider;
-one run is roughly forty seconds of device time per target.
+query, `scroll`, `browser_close`, `browser_list`, and finally the release
+proof: the provider's REST status of the session for the hosted grid, or, for
+the safaridriver lane, one extra WebDriver session opened and deleted directly
+at the endpoint. Each hosted-grid allocation is billed by the provider; one run
+is roughly forty seconds of device time per target.
 
 The drawer-close step records its `method`: `driver_click` when the driver's tap closed the drawer, `scripted_click` when only the page's own handler did (an explicit conditional result, see peters/horizon#663). The run exits nonzero, and `report.json` names the shortfall per target, unless every required outcome held: a committed first page, the field holding the typed value, the submitted result, the drawer, the iframe node, a moved page, `closed: true`, an empty `browser_list`, and a terminal session at the provider. The REST status call refuses redirects, so the credential is never resent elsewhere.
 
