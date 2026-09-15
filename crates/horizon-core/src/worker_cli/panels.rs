@@ -223,7 +223,7 @@ mod tests {
         store
             .replace_remote_workspace(allocation.workspace(), &recovered)
             .unwrap();
-        let receipt = storage::Receipt {version:1, root:root.into(), session:session.into(),workspace:"workspace".into(),panel:"original".into(),
+        let receipt = storage::Receipt {version:1, create_dispatch_claimed:true, root:root.into(), session:session.into(),workspace:"workspace".into(),panel:"original".into(),
             intent: serde_json::from_value(json!({"config":{},"target":state.spec.target,"repository":state.spec.repository,
             "working_directory":"nested","command":{"program":"/bin/sh","args":[]},"setup_expires_at_millis":1,"issue":"fixture"})).unwrap()};
         Context::new(root, receipt, storage::lock(root).unwrap())

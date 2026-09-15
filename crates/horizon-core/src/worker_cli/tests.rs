@@ -52,13 +52,14 @@ fn failed_creation_retains_identity_and_prevents_a_second_creation() {
         Err(Error::Remote(_))
     ));
     let receipt = fs::read(root.join("receipt.json")).unwrap();
-    let claim = fs::read(root.join("create.claimed")).unwrap();
+    assert!(!root.join("create.claimed").exists());
     let context = storage::Context::open(&root).unwrap();
     let identity = (context.receipt.session.clone(), context.receipt.workspace.clone());
     // The original failed allocation is inspectable; observations never retry create.
     let _ = super::operations::check(&context);
     assert_eq!(fs::read(root.join("receipt.json")).unwrap(), receipt);
-    assert_eq!(fs::read(root.join("create.claimed")).unwrap(), claim);
+    assert!(context.receipt.create_dispatch_claimed);
+    assert!(matches!(context.claim("create"), Err(Error::Claimed)));
     drop(context);
     assert!(matches!(
         super::operations::create(&root, intent()),
@@ -134,19 +135,30 @@ fn missing_setup_receipt_is_observed_without_creating_workspace_or_replaying() {
     .unwrap();
     let receipt = storage::Receipt {
         version: 1,
+        create_dispatch_claimed: true,
         root: root.path().to_owned(),
         session: session.session_id,
         workspace: "missing-workspace".into(),
         panel: "missing-panel".into(),
         intent,
     };
-    storage::write_new(
+    storage::publish_journal(
         &root.path().join("receipt.json"),
         &serde_json::to_vec(&receipt).unwrap(),
     )
     .unwrap();
-    let context = storage::Context::new(root.path(), receipt, storage::lock(root.path()).unwrap());
-    context.claim("create").unwrap();
+    // Simulate interruption immediately after the atomic receipt/claim publication.
+    let context = storage::Context::open(root.path()).unwrap();
+    assert!(context.receipt.create_dispatch_claimed);
+    assert!(!root.path().join("create.claimed").exists());
+    assert!(matches!(context.claim("create"), Err(Error::Claimed)));
+    let mut legacy = serde_json::to_value(&receipt).unwrap();
+    legacy.as_object_mut().unwrap().remove("create_dispatch_claimed");
+    assert!(
+        !serde_json::from_value::<storage::Receipt>(legacy)
+            .unwrap()
+            .create_dispatch_claimed
+    );
     // A missing/corrupt database remains an explicit storage error, never repaired.
     assert!(super::operations::check(&context).is_err());
     horizon_core::cloud_run::CloudWorkflowStore::open(&context.home).unwrap();

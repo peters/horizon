@@ -17,6 +17,9 @@ use std::{
 #[serde(deny_unknown_fields)]
 pub(super) struct Receipt {
     pub version: u8,
+    // Atomically published with identity: dispatch may have occurred, never permission to replay.
+    #[serde(default)]
+    pub create_dispatch_claimed: bool,
     pub root: PathBuf,
     pub session: String,
     pub workspace: String,
@@ -75,6 +78,9 @@ impl Context {
     }
 
     pub fn claim(&self, operation: &str) -> Result<(), Error> {
+        if operation == "create" && self.receipt.create_dispatch_claimed {
+            return Err(Error::Claimed);
+        }
         // Keep a failed/uncertain claim: an interrupted reply cannot authorize replay.
         write_new(
             &self.receipt.root.join(format!("{operation}.claimed")),

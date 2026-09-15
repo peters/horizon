@@ -46,8 +46,19 @@ pub(super) fn create(root: &Path, intent: Intent) -> Result<Value, Error> {
         .ok_or(Error::Input)?
         .panel_local_id
         .clone();
+    let consent = match intent.target.provider {
+        CloudProvider::LocalDocker => Consent::LocalDocker {
+            image: intent.target.image.clone(),
+        },
+        CloudProvider::Azure => Consent::Azure {
+            image: intent.target.image.clone(),
+            profile: prepared.azure_profile().ok_or(Error::Input)?.clone(),
+        },
+        CloudProvider::RunPod => return Err(Error::Input),
+    };
     let receipt = Receipt {
         version: 1,
+        create_dispatch_claimed: true,
         root: root.clone(),
         session: session.session_id,
         workspace: prepared.locator().workspace_local_id.clone(),
@@ -59,17 +70,6 @@ pub(super) fn create(root: &Path, intent: Intent) -> Result<Value, Error> {
         &serde_json::to_vec_pretty(&receipt).map_err(|_| Error::Storage)?,
     )?;
     let context = Context::new(&root, receipt, lock);
-    let consent = match context.receipt.intent.target.provider {
-        CloudProvider::LocalDocker => Consent::LocalDocker {
-            image: context.receipt.intent.target.image.clone(),
-        },
-        CloudProvider::Azure => Consent::Azure {
-            image: context.receipt.intent.target.image.clone(),
-            profile: prepared.azure_profile().ok_or(Error::Input)?.clone(),
-        },
-        CloudProvider::RunPod => return Err(Error::Input),
-    };
-    context.claim("create")?;
     let attempt = setup::submit_configured_remote_workspace(
         &context.home,
         &context.receipt.intent.config,

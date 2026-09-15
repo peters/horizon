@@ -70,8 +70,15 @@ separate from arguments. There is deliberately no asynchronous terminal-input
 submission: closing an attachment can discard queued input. Reconnect uses the
 original saved command and task identity.
 
-Create, Git setup and task starts sync create-new claims before dispatch and
-retain them after failures. Lifecycle APIs use their existing durable core intent
+Create atomically publishes its identity receipt and dispatch claim together, after
+local preflight and before provisioning. There is no separate create-claim write
+that can fail after receipt publication. An interruption after publication may
+still precede provider dispatch: recovery observes the original identity and never
+retries creation. A missing worker is not proof that dispatch was never attempted.
+Legacy receipts without the embedded marker remain readable; creation recovery
+is observation-only for both formats.
+Git setup and task starts sync create-new claims before dispatch and retain them
+after failures. Lifecycle APIs use their existing durable core intent
 journal, allowing pre-dispatch failures to be corrected without a stranded claim.
 An interrupted reply is not permission to delete the claim or submit again.
 Only one controller may use a directory at a time. Keep the original directory;
