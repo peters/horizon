@@ -388,8 +388,8 @@ def main() -> int:
                 closed_drawer = raw(client, "browser_act", {"panel_id": panel_id, "action": "click", "selector": "#close-drawer"})
                 closed_wait = raw(client, "browser_wait", {"panel_id": panel_id, "selector": "#drawer.open", "state": "hidden", "timeout_millis": 5000})
                 method = "driver_click"
-                wait_error = wait_error_code(closed_wait)
-                if wait_error == "wait_timeout" and not closed_drawer.get("isError"):
+                driver_wait_error = wait_error_code(closed_wait)
+                if driver_wait_error == "wait_timeout" and not closed_drawer.get("isError"):
                     # Explicit conditional result: on some devices the driver's tap
                     # misses a fixed-position control at the bottom of an inflated
                     # layout viewport (peters/horizon#663); a scripted click records
@@ -398,7 +398,7 @@ def main() -> int:
                     closed_wait = raw(client, "browser_wait", {"panel_id": panel_id, "selector": "#drawer.open", "state": "hidden", "timeout_millis": 5000})
                     method = "scripted_click" if not scripted.get("isError") else "driver_click"
                 steps.append({"step": "drawer_close", "method": method, "is_error": closed_drawer.get("isError") or closed_wait.get("isError"),
-                              "wait_error": wait_error_code(closed_wait),
+                              "driver_wait_error": driver_wait_error, "wait_error": wait_error_code(closed_wait),
                               "elapsed_millis": (closed_wait.get("structuredContent") or {}).get("elapsed_millis")})
                 frame = raw(client, "browser_query", {"panel_id": panel_id, "selector": "#frame", "max_results": 1})
                 steps.append({"step": "iframe_boundary", "is_error": frame.get("isError"),
