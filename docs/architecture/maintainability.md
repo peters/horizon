@@ -5,6 +5,11 @@ back into large multi-purpose modules.
 
 ## Module Boundaries
 
+- `cloud_run::azure::runtime` owns the operator-selected container policy, pinned
+  security assets, mandatory daemon preflight and credential-free probe scripts.
+  The deployment renderer composes those fragments; retained policy identity stays
+  in the provider binding. UI code only presents the selected policy.
+
 - `remote_environments::endpoint` owns consent, single-flight delivery and cached
   notices for explicit saved-connection refresh; its paint leaf performs no I/O.
   Shared overview guards serialize it with Delete, Start/Stop and repository work.

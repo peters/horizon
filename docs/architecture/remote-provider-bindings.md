@@ -35,9 +35,11 @@ six network-volume metadata remains validated on legacy reads.
 
 ## Immutable record/load API
 
-`RemoteCpuProfileBinding` freezes all eight approved CPU-profile fields under an
-explicit version-one domain and byte encoding; changing a field requires a
-deliberate digest-version decision. The store records it only for an exact,
+`RemoteCpuProfileBinding` preserves the eight-field version-one encoding for
+profiles using the default container runtime. An explicit runtime selection wraps
+those frozen bytes and the runtime identifier in a separate versioned domain.
+Existing default bindings remain readable; changing runtime selection cannot
+match a retained worker. Neither path upgrades or replaces an existing container. The store records it only for an exact,
 unclaimed allocation before key reservation or first-pin intent. Exact repeats
 and read-only loads remain available after setup expiry or management intent;
 neither rewrites snapshots nor consumes a creation grant. Readers validate

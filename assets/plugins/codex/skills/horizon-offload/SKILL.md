@@ -63,7 +63,7 @@ and an immutable image. It never guesses an ambient Docker daemon or subscriptio
    `az account show --subscription "$worker_subscription_id"` using read-only calls.
    Azure profile fields are `name`, `subscription_id`, `location`, `vm_size`,
    `image_pull_identity_id`, `declared_hourly_cost_micros`, `registry_login_server`
-   and `disk_sku`. Reuse configured resources; provider registration, new IAM grants
+   `disk_sku`, and optional `container_runtime`. Reuse configured resources; provider registration, new IAM grants
    and image publication require their own applicable authorization. For
    `local_docker`, use `config.local_docker: [{name, docker_host}]` with an explicit
    authorized Unix socket such as `unix:///run/user/<uid>/docker.sock`; match
@@ -97,9 +97,13 @@ and an immutable image. It never guesses an ambient Docker daemon or subscriptio
    a custom profile, repository/toolchain access, login or browser readiness.
    An older image missing the helper needs the reviewed probe packaged or copied
    into a disposable fixture; absence is not a pass. Consult the selected image's
-   documentation for its qualified runtime policy. The current provider adapters
-   do not configure that policy automatically. A namespace failure is a setup
-   blocker: do not disable the agent sandbox or silently broaden container/host
+   documentation for its qualified runtime policy. An authorized private Azure
+   profile may explicitly select `container_runtime: workspace_sandbox_v1` for
+   a new worker. Bootstrap then installs scoped filters and runs the offline
+   probe for root and UID 1000 before exposing worker SSH; Docker also checks
+   enforcement before starting after reboot. Omission retains Docker defaults.
+   Repository YAML cannot grant this policy, and a retained worker's policy must
+   not be changed during reconnect. A namespace failure is a setup blocker: do not disable the agent sandbox or silently broaden container/host
    permissions. A rootless local result does not qualify an Azure host.
 4. Obtain the authorized repository-scoped PAT through a protected file or secret
    input. `git-install` reads it from stdin. For Codex, prefer one-time device login

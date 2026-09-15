@@ -1,6 +1,7 @@
 //! Azure reconnection admission on real stores with a fake bound provider: the real
 //! ordering and drift fences run without the Azure CLI, ARM or SSH.
 use super::*;
+use crate::cloud_run::azure::AzureContainerRuntime;
 use crate::{
     cloud_run::{
         StoredRemoteAllocation,
@@ -25,6 +26,7 @@ fn azure_profile() -> AzureProfile {
         declared_hourly_cost_micros: 100_000,
         registry_login_server: "synthetic.azurecr.io".into(),
         disk_sku: AzureDiskSku::StandardSsdLrs,
+        container_runtime: AzureContainerRuntime::Default,
     }
 }
 

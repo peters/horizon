@@ -25,6 +25,7 @@ fn profile() -> AzureProfile {
         declared_hourly_cost_micros: 100_000,
         registry_login_server: "synthetic.azurecr.io".into(),
         disk_sku: AzureDiskSku::StandardSsdLrs,
+        container_runtime: AzureContainerRuntime::Default,
     }
 }
 
@@ -150,7 +151,7 @@ fn frozen_digest_covers_every_profile_field_and_rejects_invalid_profiles() {
         "c35a8253e80b9965b2e38b95f928cbabeffbeda306a12a2c2d3b128ca305f615"
     );
     assert!(binding.matches_profile(&original).expect("match"));
-    for mode in 0..8 {
+    for mode in 0..9 {
         let mut next = original.clone();
         match mode {
             0 => next.name = "another".into(),
@@ -163,7 +164,8 @@ fn frozen_digest_covers_every_profile_field_and_rejects_invalid_profiles() {
             4 => next.image_pull_identity_id.push('2'),
             5 => next.declared_hourly_cost_micros += 1,
             6 => next.registry_login_server = "other.azurecr.io".into(),
-            _ => next.disk_sku = AzureDiskSku::PremiumLrs,
+            7 => next.disk_sku = AzureDiskSku::PremiumLrs,
+            _ => next.container_runtime = AzureContainerRuntime::WorkspaceSandboxV1,
         }
         assert!(!binding.matches_profile(&next).expect("valid different profile"));
     }
@@ -388,4 +390,28 @@ fn complete_deployment_target_is_required_before_any_binding_write() {
         assert_eq!(fixture.count(), 0);
         assert_eq!(fixture.snapshots(), before);
     }
+}
+
+#[test]
+fn explicit_runtime_binding_survives_reopen_and_refuses_policy_switches() {
+    let fixture = Fixture::new();
+    let mut selected = profile();
+    selected.container_runtime = AzureContainerRuntime::WorkspaceSandboxV1;
+    fixture
+        .store
+        .record_remote_cpu_profile_binding(&fixture.saved, &selected)
+        .expect("bind selected runtime");
+    let reader = CloudWorkflowStore::open_path(fixture.store.path()).expect("reopen");
+    let saved = reader
+        .load_remote_cpu_profile_binding(&fixture.saved)
+        .expect("load")
+        .expect("binding");
+    assert!(saved.matches_profile(&selected).expect("selected matches"));
+    assert!(!saved.matches_profile(&profile()).expect("default differs"));
+    assert!(
+        fixture
+            .store
+            .record_remote_cpu_profile_binding(&fixture.saved, &profile())
+            .is_err()
+    );
 }

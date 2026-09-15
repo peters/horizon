@@ -190,6 +190,7 @@ fn shell_safe(value: &str) -> bool {
 /// admin key required by the image is inert. The ARM run command remains the
 /// operator's path into the host.
 fn cloud_init(profile: &AzureProfile, request: &InteractiveWorkerRequest) -> String {
+    let runtime = profile.container_runtime;
     let registry = &profile.registry_login_server;
     let image = &request.target.image;
     let client_id_lookup = format!(
@@ -199,20 +200,20 @@ fn cloud_init(profile: &AzureProfile, request: &InteractiveWorkerRequest) -> Str
     format!(
         r#"#cloud-config
 package_update: true
-packages: [docker.io, iptables-persistent]
+packages: [{packages}]
 write_files:
   - path: {CLIENT_KEY_PATH}
     permissions: '0600'
     owner: root:root
     encoding: b64
     content: {key}
-  - path: /etc/systemd/system/docker.service.d/horizon-workspace.conf
+{runtime_files}  - path: /etc/systemd/system/docker.service.d/horizon-workspace.conf
     permissions: '0644'
     owner: root:root
     content: |
       [Unit]
       RequiresMountsFor={WORKSPACE_MOUNT}
-  - path: /usr/local/sbin/horizon-worker-bootstrap.sh
+{daemon_dependencies}  - path: /usr/local/sbin/horizon-worker-bootstrap.sh
     permissions: '0700'
     owner: root:root
     content: |
@@ -240,7 +241,7 @@ write_files:
       mountpoint -q {WORKSPACE_MOUNT} || mount {WORKSPACE_MOUNT}
       chown root:root {WORKSPACE_MOUNT} && chmod 0755 {WORKSPACE_MOUNT}
       systemctl enable --now docker
-      iptables -I DOCKER-USER -d 169.254.169.254 -j DROP
+{runtime_prepare}      iptables -I DOCKER-USER -d 169.254.169.254 -j DROP
       iptables -I INPUT -i docker0 -p tcp --dport 22 -j DROP
       netfilter-persistent save
       systemctl disable --now ssh.socket ssh.service
@@ -260,13 +261,19 @@ write_files:
         sleep $((attempt * 10))
       done
       docker logout {registry} >/dev/null 2>&1 || true
-      docker create --name horizon-worker --restart unless-stopped -p {SSH_PORT}:22 --mount type=bind,src={WORKSPACE_MOUNT},dst=/workspace -e "HORIZON_SSH_PUBLIC_KEY=$(cat {CLIENT_KEY_PATH})" '{image}' >/dev/null
+{runtime_qualify}      docker create --name horizon-worker --restart unless-stopped{runtime_flags} -p {SSH_PORT}:22 --mount type=bind,src={WORKSPACE_MOUNT},dst=/workspace -e "HORIZON_SSH_PUBLIC_KEY=$(cat {CLIENT_KEY_PATH})" '{image}' >/dev/null
       docker start horizon-worker >/dev/null
 runcmd:
   - [ systemctl, daemon-reload ]
   - [ bash, /usr/local/sbin/horizon-worker-bootstrap.sh ]
 "#,
         key = STANDARD.encode(&request.ssh_public_key),
+        packages = runtime.packages(),
+        runtime_files = runtime.files(),
+        daemon_dependencies = runtime.daemon_dependencies(),
+        runtime_prepare = runtime.prepare(),
+        runtime_qualify = runtime.qualify(image),
+        runtime_flags = runtime.flags(),
     )
 }
 

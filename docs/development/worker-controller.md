@@ -146,3 +146,24 @@ Task start inspects the worker Git receipt before claiming execution. An absent,
 incomplete or degraded checkout is refused with no start claim; after Git becomes
 `Complete` with no reason, the original task may be started normally. An already
 claimed start remains protected against replay.
+
+## Explicit Azure container runtime
+
+Set `container_runtime: workspace_sandbox_v1` on the authorized private Azure
+profile to enable the qualified nested filesystem-sandbox runtime for new workers.
+Omitting this field preserves Docker defaults. The repository manifest cannot
+select or broaden this host policy, and changing the private profile does not
+upgrade an existing worker: retained profile bindings reject policy drift.
+
+This policy requires Docker 29.1.3, AppArmor enforcement and kernel seccomp. Its
+pinned filters add user/mount namespace operations while retaining system write
+denials and the default capability set. A mandatory Docker pre-start check rejects
+unsupported versions, disabled enforcement or policy-file changes after reboot.
+Bootstrap runs the image's offline sandbox probe as root and UID 1000 before
+creating the SSH worker. Failed probes are removed by their owned identity; no
+credential transfer, task replay or permissive fallback occurs.
+
+The image must include `horizon-agent-sandbox-smoke`. Native UI and both browser
+engines require their separate smoke lanes. The policy does not establish agent
+login, repository authorization, custom agent-policy support or network isolation
+for development tasks. See the runtime asset notice for qualification provenance.

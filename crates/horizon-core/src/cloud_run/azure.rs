@@ -13,6 +13,7 @@ use thiserror::Error;
 mod credential;
 pub mod deployment;
 mod provider;
+mod runtime;
 #[cfg(test)]
 mod tests;
 mod transport;
@@ -20,6 +21,7 @@ mod transport;
 pub use credential::{AzureAccessToken, AzureCliCredential, AzureCredentialSource};
 pub use deployment::AzureDeploymentPlan;
 pub use provider::{AzureClient, AzureCreationFence, AzureHostKeySource, AzureRunCommandHostKeys, SSH_USERNAME};
+pub use runtime::AzureContainerRuntime;
 pub use transport::{
     AzureArmHttp, AzureDataDisk, AzureDeploymentState, AzureGroupInfo, AzureLongRunningState, AzureManagementTransport,
     AzureRunCommand, AzureVmView,
@@ -63,6 +65,9 @@ pub struct AzureProfile {
     /// Managed-disk SKU for the OS and data disks; every allowlisted size supports both.
     #[serde(default)]
     pub disk_sku: AzureDiskSku,
+    /// Operator-selected container policy; existing profiles retain Docker defaults.
+    #[serde(default)]
+    pub container_runtime: AzureContainerRuntime,
 }
 
 /// Managed-disk SKUs the adapter offers; the wire names are Azure's own.
