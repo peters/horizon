@@ -87,6 +87,20 @@ and an immutable image. It never guesses an ambient Docker daemon or subscriptio
    chosen agent, and requested build/UI tools. Keep image-pull managed identity,
    repository PAT and coding-agent login separate. A Shell image alone cannot run
    the coding agent. Never bake credentials into an image or copy ambient auth.
+
+   Before credentials or issue execution, qualify the image/runtime/UID together
+   in a disposable credential-free fixture. Where available, run
+   `horizon-agent-sandbox-smoke` and require exit zero plus JSON `passed: true`.
+   It checks the installed CLI's built-in `:workspace` filesystem profile, using
+   an empty private home, allowed workspace writes and denied outside writes.
+   Requalify after image, CLI, runtime-policy or UID changes. This does not prove
+   a custom profile, repository/toolchain access, login or browser readiness.
+   An older image missing the helper needs the reviewed probe packaged or copied
+   into a disposable fixture; absence is not a pass. Consult the selected image's
+   documentation for its qualified runtime policy. The current provider adapters
+   do not configure that policy automatically. A namespace failure is a setup
+   blocker: do not disable the agent sandbox or silently broaden container/host
+   permissions. A rootless local result does not qualify an Azure host.
 4. Obtain the authorized repository-scoped PAT through a protected file or secret
    input. `git-install` reads it from stdin. For Codex, prefer one-time device login
    on the exact worker, with `CODEX_HOME` under private retained worker storage;

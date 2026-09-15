@@ -2,9 +2,10 @@ version: 1
 default_environment: linux
 environments:
   linux:
-    image: horizonworkersa898ee.azurecr.io/horizon-linux-ui-worker@sha256:6c8eaf6304b39b593c04367035a67cbe89f7e3f1bb5529432add43ef4d65060e
+    image: horizonworkersa898ee.azurecr.io/horizon-linux-ui-worker@sha256:4b7dd61baa29de0200b5caf1063436e280a0b4b4378402af219603399d40ba04
     directory: .
     checks:
+      agent_sandbox: [horizon-agent-sandbox-smoke]
       format: [cargo, fmt, --all, --, --check]
       maintainability: [bash, scripts/check-maintainability.sh]
       version: [bash, scripts/check-version-sync.sh]
