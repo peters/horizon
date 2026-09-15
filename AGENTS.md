@@ -168,19 +168,47 @@ cargo clippy --workspace --all-targets --features speech -- -D warnings -W clipp
 - Run the full Horizon validation matrix in the exact worktree and commit that will be pushed. Complete applicable local UI smoke before opening the PR. Any required cross-machine smoke must finish on the current head before reporting the PR ready to merge.
 - Before opening the PR, review the full diff and run an independent local code review. Fix actionable in-scope findings and record valid out-of-scope findings as follow-up candidates.
 - Open PRs ready for review by default, not as drafts, unless the user explicitly requests a draft. Include reproduction details for bug fixes, runtime or platform assumptions when relevant, and screenshots, logs, or completed smoke evidence for behavior-affecting changes.
-- Every PR gets an independent Copilot review. Request it after the PR exists through the REST API, using the login `copilot-pull-request-reviewer[bot]`:
+- Every PR gets an independent Copilot review. Request it after the PR exists through the REST API, using the login `copilot-pull-request-reviewer[bot]`. The POST returns 200 whether or not it registered, so the only proof is that the PR gained a `review_requested` event — count them either side of the request:
 
   ```bash
+  copilot_requests() {
+    gh api --paginate --slurp repos/<owner>/<repo>/issues/<n>/timeline \
+      | jq '[.[][] | select(.event == "review_requested" and .requested_reviewer.login == "Copilot")] | length'
+  }
+  copilot_reviewed_head() {
+    head=$(gh api repos/<owner>/<repo>/pulls/<n> --jq .head.sha)
+    gh api --paginate --slurp repos/<owner>/<repo>/pulls/<n>/reviews \
+      | jq --arg h "$head" '[.[][] | select(.user.login == "copilot-pull-request-reviewer[bot]" and .commit_id == $h)] | length > 0'
+  }
+
+  before=$(copilot_requests)
+
   gh api repos/<owner>/<repo>/pulls/<n>/requested_reviewers \
     --method POST --input - <<< '{"reviewers":["copilot-pull-request-reviewer[bot]"]}'
+
+  if [ "$(copilot_requests)" -gt "$before" ]; then
+    echo "requested"
+  else
+    for _ in $(seq 1 30); do
+      [ "$(copilot_reviewed_head)" = "true" ] && break
+      sleep 20
+    done
+    [ "$(copilot_reviewed_head)" = "true" ] || {
+      echo "no new request registered and no review arrived within 10 minutes" >&2
+      exit 1
+    }
+  fi
   ```
 
-  Every other spelling fails, and most of them fail *silently*: `gh pr create --reviewer @copilot` and `gh pr edit --add-reviewer Copilot` error with `Could not resolve user with login 'copilot'`; `Copilot` over REST or GraphQL returns HTTP 200 and requests nothing; `copilot-pull-request-reviewer` without `[bot]` is rejected as not a collaborator; and GraphQL `requestReviews` with the `copilot-swe-agent` bot id reports success while recording nothing, because that bot is the coding agent rather than the reviewer. A 200 is not proof, so confirm the request registered before you start waiting, filtering on the reviewer — an unrelated human review request on the same PR would otherwise look like success:
+  An unchanged count is inconclusive, not a failure, which is why the else branch waits instead of exiting. Several repositories request Copilot automatically when the PR opens, so a second POST adds no event even though a review is already coming. Do not try to detect that state directly: between Copilot picking the request up and submitting, it is gone from `requested_reviewers` and not yet in `/reviews`, so every instantaneous check reads false. Waiting for the review itself is the only signal that covers the whole transition, and it is what you were going to do anyway.
 
-  ```bash
-  gh api --paginate repos/<owner>/<repo>/issues/<n>/timeline \
-    --jq '.[] | select(.event == "review_requested" and .requested_reviewer.login == "Copilot") | .created_at'
-  ```
+  Count the events rather than comparing timestamps: the PR almost always carries earlier Copilot requests, because the next rule re-requests after every push, and `created_at` has only second resolution, so a timestamp comparison can match a request made in the same second. The login filter keeps an unrelated human review request from counting.
+
+  The pagination handling is fussy and worth copying exactly. `gh api --paginate` runs `--jq` once per page, so `--jq '… | length'` prints one count per page and `$before` becomes a multi-line string that `-gt` cannot compare. `--slurp` wraps the pages into one array, but `gh` rejects `--slurp` together with `--jq` (`the --slurp option is not supported with --jq or --template`), so the pages have to be piped to a standalone `jq` — and because each page is itself an array, the filter opens with `.[][]`.
+
+  Do not substitute `requested_reviewers` for any of this — the reviewer disappears from that list as soon as Copilot picks the request up, so an empty list means nothing either way.
+
+  Every other spelling of the login fails, and most of them fail *silently*: `gh pr create --reviewer @copilot` and `gh pr edit --add-reviewer Copilot` error with `Could not resolve user with login 'copilot'`; `Copilot` over REST or GraphQL returns HTTP 200 and requests nothing; `copilot-pull-request-reviewer` without `[bot]` is rejected as not a collaborator; and GraphQL `requestReviews` with the `copilot-swe-agent` bot id reports success while recording nothing, because that bot is the coding agent rather than the reviewer.
 
   Mind the asymmetry: the request must name `copilot-pull-request-reviewer[bot]`, but the timeline reports the reviewer as `Copilot`.
 - A Copilot review is pinned to the commit it ran against, so re-request it after every push. Compare the review's `commit_id` with the current head (`gh api --paginate repos/<owner>/<repo>/pulls/<n>/reviews --jq '.[] | select(.user.login == "copilot-pull-request-reviewer[bot]") | .commit_id'`) before treating the review gate as met.
