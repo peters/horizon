@@ -135,7 +135,17 @@ satisfy a `physical` requirement through that adapter. The verified identity
 reaches the manifest and the MCP panel as `remote_device`, and a rejection ends
 the create with `remote_device_rejected` after an immediate release attempt
 whose outcome the panel note states; a session that could not be allocated or
-safely started ends it with `remote_allocation_failed` (nothing held), and one
+safely started ends it with `remote_allocation_failed` (nothing held); a refusal
+is classified from the provider's answer so the agent learns which of the
+credential (`remote_authentication_failed`), the account's automation
+entitlement (`remote_not_entitled`) or the device request
+(`remote_device_unavailable`: unknown device, none free, parallel limit) was
+refused, with a fixed public text each and the provider's own words only in the
+panel note. A failure status with a non-JSON body counts as a refusal by status
+(`http 401`, `http 403`), never as an unknown outcome, since no session was
+created. Successful allocation is its own event. A hosted grid may queue rather
+than refuse when its parallel limit is reached; that shows as a slow allocation
+bounded by the configured allocation timeout, and one
 whose allocation or cleanup got no trustworthy answer with
 `remote_allocation_unknown` (the slot stays counted).
 

@@ -155,6 +155,86 @@ impl fmt::Display for RemoteReleaseOutcome {
     }
 }
 
+/// What a provider's refusal of New Session was about, so the host can
+/// report authentication, entitlement and device availability separately
+/// from a successful allocation. Classified from the `WebDriver` error and
+/// message text (and the HTTP status the transport folds into them), never
+/// from anything an agent supplied.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AllocationRefusal {
+    /// The credential was rejected (HTTP 401 or an "invalid username or
+    /// password" style answer).
+    Authentication,
+    /// The account is not entitled to automation on this service (HTTP 403,
+    /// or an answer about access, plan or product).
+    Entitlement,
+    /// No device met the request, or none is free (an unknown device name,
+    /// a parallel or queue limit, a device that is not available).
+    DeviceUnavailable,
+    /// Refused for another reason; the message says which.
+    Other,
+}
+
+impl AllocationRefusal {
+    #[must_use]
+    pub fn classify(error: &str, message: &str) -> Self {
+        let text = format!("{error} {message}").to_ascii_lowercase();
+        let has = |needles: &[&str]| needles.iter().any(|needle| text.contains(needle));
+        if has(&[
+            "http 401",
+            "invalid username or password",
+            "unauthorized",
+            "authorization required",
+            "authentication",
+            "invalid credentials",
+            "access key",
+        ]) {
+            Self::Authentication
+        } else if has(&[
+            "http 403",
+            "forbidden",
+            "not have access",
+            "do not have access",
+            "not entitled",
+            "entitlement",
+            "your plan",
+            "upgrade",
+            "not enabled for",
+            "subscription",
+        ]) {
+            Self::Entitlement
+        } else if has(&[
+            "could not find device",
+            "no device",
+            "no such device",
+            "device not available",
+            "device is not available",
+            "not available",
+            "unavailable",
+            "parallel",
+            "queue",
+            "currently in use",
+            "no capacity",
+            "busy",
+        ]) {
+            Self::DeviceUnavailable
+        } else {
+            Self::Other
+        }
+    }
+}
+
+impl fmt::Display for AllocationRefusal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Authentication => "authentication failed",
+            Self::Entitlement => "not entitled",
+            Self::DeviceUnavailable => "device unavailable",
+            Self::Other => "refused",
+        })
+    }
+}
+
 /// Lifecycle facts the host surfaces alongside the usual browser events.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RemoteSessionEvent {
@@ -184,10 +264,13 @@ pub enum RemoteSessionEvent {
         reason: String,
     },
     /// The provider refused, or the endpoint was rejected locally. Terminal
-    /// for the lifecycle; the reason never carries a credential.
+    /// for the lifecycle; the reason never carries a credential, and the
+    /// refusal says whether it was the credential, the entitlement or the
+    /// device.
     AllocationFailed {
         label: String,
         reason: String,
+        refusal: AllocationRefusal,
     },
     Expired {
         label: String,

@@ -4,7 +4,9 @@ use std::time::{Duration, Instant};
 use serde_json::json;
 
 use super::identity::{DeviceEvidence, DeviceEvidenceSource};
-use super::{RemoteExpiry, RemoteHost, RemoteReleaseOutcome, RemoteSessionRequest, RemoteStartFailure};
+use super::{
+    AllocationRefusal, RemoteExpiry, RemoteHost, RemoteReleaseOutcome, RemoteSessionRequest, RemoteStartFailure,
+};
 use crate::webdriver::remote_http::RemoteAuthorizationHeader;
 use crate::webdriver::test_server::{Reply, Server};
 use horizon_browser_protocol::remote::{DeviceKind, DeviceRequirement};
@@ -346,4 +348,66 @@ fn an_unreachable_record_leaves_a_physical_requirement_unverified_and_released()
     let allocation = host.allocate(&appium).expect("verified from capabilities");
     assert_eq!(allocation.device.hardware, Some(DeviceEvidence::Physical));
     assert_eq!(hub.recorded().len(), 1);
+}
+
+#[test]
+fn refusals_are_classified_from_the_providers_answer() {
+    // Shapes recorded live at the hosted grid on 2026-09-15.
+    assert_eq!(
+        AllocationRefusal::classify("Invalid username or password", "Invalid username or password"),
+        AllocationRefusal::Authentication
+    );
+    assert_eq!(
+        AllocationRefusal::classify("http 401", "<html>login</html>"),
+        AllocationRefusal::Authentication
+    );
+    assert_eq!(
+        AllocationRefusal::classify(
+            "Could not find device: Nonexistent Phone 99",
+            "Could not find device: Nonexistent Phone 99"
+        ),
+        AllocationRefusal::DeviceUnavailable
+    );
+    assert_eq!(
+        AllocationRefusal::classify("session not created", "All parallel tests are currently in use"),
+        AllocationRefusal::DeviceUnavailable
+    );
+    assert_eq!(
+        AllocationRefusal::classify("http 403", "You do not have access to the Automate product"),
+        AllocationRefusal::Entitlement
+    );
+    assert_eq!(
+        AllocationRefusal::classify("session not created", "Please upgrade your plan to use real devices"),
+        AllocationRefusal::Entitlement
+    );
+    assert_eq!(
+        AllocationRefusal::classify("session not created", "capabilities rejected"),
+        AllocationRefusal::Other
+    );
+    assert_eq!(AllocationRefusal::Authentication.to_string(), "authentication failed");
+}
+
+#[test]
+fn a_rejected_credential_is_a_failed_allocation_with_nothing_held() {
+    let server = Server::start(vec![Reply::json(
+        401,
+        &json!({"value": {"error": "Invalid username or password", "message": "Invalid username or password"}, "sessionId": "", "status": 13}),
+    )]);
+    let request = request(&server.endpoint("/wd/hub"));
+    let mut host = RemoteHost::connect(&request).expect("connect");
+    let failure = host.allocate(&request).expect_err("refused");
+    match &failure {
+        RemoteStartFailure::AllocationFailed { error, message } => {
+            assert_eq!(
+                AllocationRefusal::classify(error, message),
+                AllocationRefusal::Authentication
+            );
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    assert_eq!(
+        server.recorded().len(),
+        1,
+        "no release for a session that never existed"
+    );
 }

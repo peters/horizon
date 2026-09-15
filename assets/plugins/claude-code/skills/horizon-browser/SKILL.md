@@ -36,7 +36,10 @@ the panel became ready), classic WebDriver and no network capture. A target
 that requires a physical device is refused as `remote_device_rejected` unless
 that evidence confirms it, after Horizon attempts to release the session; a
 `remote_allocation_unknown` refusal means a device may still be held, so check
-with the user before creating again. Cite `remote_device`, not the target
+with the user before creating again; `remote_authentication_failed`,
+`remote_not_entitled` and `remote_device_unavailable` say which of the
+credential, the account's automation access or the device request the provider
+refused, with nothing held. Cite `remote_device`, not the target
 name, as real-device evidence. Set `visible: false` for background automation; use
 `browser_visibility` to show or hide the live panel later without stopping its
 session, capture, ownership, or MCP control. Call `browser_close` on a panel

@@ -122,10 +122,24 @@ fn parse_response(response: &[u8]) -> Result<Value, HttpError> {
 /// Turn a status and JSON body into the `WebDriver` result or typed error,
 /// shared by the loopback and remote transports.
 pub(super) fn interpret_body(status: u16, body: &[u8]) -> Result<Value, HttpError> {
+    let success = (200..300).contains(&status);
     let value = if body.is_empty() {
         Value::Null
     } else {
-        serde_json::from_slice::<Value>(body)?
+        match serde_json::from_slice::<Value>(body) {
+            Ok(value) => value,
+            // A failure status with a body that is not JSON (an HTML login
+            // page, a plain-text rate limit) is still the server's answer:
+            // report it by status so the caller can classify it, rather than
+            // as a decoding failure that reads as an unknown outcome.
+            Err(_) if !success => {
+                return Err(HttpError::WebDriver {
+                    error: format!("http {status}"),
+                    message: printable_excerpt(body),
+                });
+            }
+            Err(error) => return Err(error.into()),
+        }
     };
     let payload = value.get("value").cloned().unwrap_or_else(|| value.clone());
     if !(200..300).contains(&status) || payload.get("error").is_some() {
@@ -142,6 +156,19 @@ pub(super) fn interpret_body(status: u16, body: &[u8]) -> Result<Value, HttpErro
         return Err(HttpError::WebDriver { error, message });
     }
     Ok(value)
+}
+
+/// The first line of a non-JSON body, printable characters only and bounded,
+/// so an error message never carries markup or control bytes.
+fn printable_excerpt(body: &[u8]) -> String {
+    String::from_utf8_lossy(body)
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(160)
+        .collect()
 }
 
 fn decode_chunked(mut body: &[u8]) -> Result<Vec<u8>, HttpError> {

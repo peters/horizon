@@ -63,7 +63,10 @@ shell commands, files, or other MCP servers.
   `remote_device_rejected` after Horizon attempts to release the session
   (the panel note says whether the provider confirmed it); a session that
   could not be allocated or safely started fails as
-  `remote_allocation_failed` (nothing held), and one whose allocation or
+  `remote_allocation_failed` (nothing held; a rejected credential is
+  `remote_authentication_failed`, an account without automation access is
+  `remote_not_entitled`, and no matching or free device is
+  `remote_device_unavailable`, all with nothing held), and one whose allocation or
   cleanup got no trustworthy answer fails as `remote_allocation_unknown` (a
   device may still be held; check the provider before creating again). Such a panel reports `remote_target`,
   `remote_device` (model, OS version, hardware evidence), classic

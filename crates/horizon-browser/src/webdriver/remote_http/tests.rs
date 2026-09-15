@@ -142,10 +142,16 @@ fn webdriver_errors_keep_their_codes_including_expired_sessions_and_rate_limits(
         }
         other => panic!("unexpected {other:?}"),
     }
-    assert!(matches!(
-        client.get("/status").expect_err("rate limited"),
-        HttpError::Json(_)
-    ));
+    match client.get("/status").expect_err("rate limited") {
+        HttpError::WebDriver { error, message } => {
+            assert_eq!(
+                error, "http 429",
+                "a failure status with a non-JSON body is reported by status"
+            );
+            assert_eq!(message, "slow down");
+        }
+        other => panic!("unexpected {other:?}"),
+    }
 }
 
 #[test]
