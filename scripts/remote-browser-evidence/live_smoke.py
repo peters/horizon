@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
-"""Phase 6 evidence run for #628: a real remote device session through Horizon's
-public MCP tools only.
+"""Evidence run for #628: a real remote device session driven through Horizon's
+public MCP tools, on the hosted grid (phase 6) or on Apple's safaridriver with a
+plugged-in iPhone (phase 5, the second endpoint).
 
-The provider credential comes from the private netrc (never arguments, never the
-environment of the Horizon process) and is seeded into the Secret Service under
-the exact item Horizon's keyring adapter addresses (service `horizon-remote-browser`,
-user `<origin>|<slot>`), then removed at the end. Horizon runs headless with an
-isolated HOME; the agent panel's identity is read from the probe file it writes.
-The flow per target: browser_create {target,url}, snapshot, fill + click, query the
-result, drawer open/close, frame query, browser_close; then the provider REST API
-is asked whether the session is terminal (release proof), and a local screenshot
-of the panel is kept.
+For targets on the hosted grid the provider credential comes from the private
+netrc (never arguments, never the environment of the Horizon process) and is
+seeded into the Secret Service under the exact item Horizon's keyring adapter
+addresses (service `horizon-remote-browser`, user `<origin>|<slot>`), with the
+slots restored at the end; a run that names only the safaridriver target needs
+neither. Horizon runs headless with an isolated HOME; the agent panel's identity
+is read from the probe file it writes. The flow per target is MCP only:
+browser_create {target,url}, snapshot, fill + click, query the result, drawer
+open/close, frame query, scroll, browser_close. The release proof that follows is
+the one step outside MCP: the provider's REST API is asked whether the hosted
+grid's session is terminal, or, for safaridriver, one extra session is opened and
+deleted directly through WebDriver (the driver allows one per device). Local
+screenshots of the panel are kept.
 """
 
 from __future__ import annotations
