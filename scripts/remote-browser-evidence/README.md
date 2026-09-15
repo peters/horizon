@@ -82,3 +82,15 @@ one-liner) and runs on Linux, macOS (`--keychain` names the keychain file to
 add the items to) and Windows, where it carries its own threaded MCP client
 and a `SHELL` shim for the agent panel (#688). The 2026-09-15 run is in
 `docs/testing/2026-09-15-second-computer-portable-profile-smoke.md`.
+## UI smoke and performance comparison
+
+`ui_perf_smoke.py` measures what a remote panel costs the UI next to a local
+Chromium panel in the same Horizon process: four phases of equal length
+(idle, a `browser_act scroll` every second, the panel hidden through
+`browser_visibility`, the window resized every second with `xdotool`), with
+the Horizon process sampled from `/proc` once a second (whole process, main
+thread, `browser-driver` thread, resident memory) and, for the remote panel,
+the provider's command log bucketed per phase as the external count of
+screenshot polling. It needs `xdotool` in addition to the requirements above
+and a run directory outside hidden folders (snap Chromium). The 2026-09-15 run
+is in `docs/testing/2026-09-15-remote-panel-ui-performance-smoke.md`.
