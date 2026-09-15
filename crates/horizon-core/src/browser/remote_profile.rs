@@ -9,8 +9,8 @@
 //! the readiness of each reference stays a live query on that machine.
 
 use std::fmt;
-use std::io::{self, Read as _};
-use std::path::{Path, PathBuf};
+use std::io::{self, Read as _, Write as _};
+use std::path::{Component, Path, PathBuf};
 
 use horizon_browser::remote::{ImportSummary, RemoteBrowserConfig, RemoteConfigError};
 use serde::{Deserialize, Serialize};
@@ -168,18 +168,46 @@ pub fn read_portable_profile(path: &Path) -> Result<String, RemoteProfileError> 
 /// # Errors
 /// [`RemoteProfileError::IsConfigPath`] when both name the same file.
 pub fn refuse_config_path(config_path: &Path, profile_path: &Path) -> Result<(), RemoteProfileError> {
-    let same = if let (Ok(config), Ok(profile)) = (config_path.canonicalize(), profile_path.canonicalize()) {
-        config == profile
-    } else {
-        let absolute = |path: &Path| std::env::current_dir().map_or_else(|_| path.to_path_buf(), |cwd| cwd.join(path));
-        absolute(config_path) == absolute(profile_path)
-    };
-    if same {
+    if normalized(config_path) == normalized(profile_path) {
         return Err(RemoteProfileError::IsConfigPath {
             path: profile_path.to_path_buf(),
         });
     }
     Ok(())
+}
+
+/// One spelling for a path that may not exist yet: the longest existing
+/// prefix is canonicalised (symlinks and, where the file system keeps it,
+/// case resolved), and the remaining components are normalised lexically,
+/// so `dir/./a`, `dir/sub/../a` and `dir/a` compare equal.
+fn normalized(path: &Path) -> PathBuf {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().map_or_else(|_| path.to_path_buf(), |cwd| cwd.join(path))
+    };
+    let components: Vec<Component<'_>> = absolute.components().collect();
+    let mut existing = components.len();
+    let mut base = None;
+    while existing > 0 {
+        let prefix: PathBuf = components[..existing].iter().collect();
+        if let Ok(canonical) = prefix.canonicalize() {
+            base = Some(canonical);
+            break;
+        }
+        existing -= 1;
+    }
+    let mut result = base.unwrap_or_default();
+    for component in &components[existing..] {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                result.pop();
+            }
+            other => result.push(other),
+        }
+    }
+    result
 }
 
 /// The configuration file parsed, migrated and validated in memory: nothing
@@ -263,22 +291,27 @@ pub fn summary_line(summary: &ImportSummary) -> String {
     )
 }
 
+/// Stage in a uniquely named file created exclusively in the destination
+/// directory (never through a pre-existing name or symlink), then persist it
+/// over the destination.
 fn write_atomically(path: &Path, contents: &str) -> Result<(), RemoteProfileError> {
     let io_error = |source| RemoteProfileError::Io {
         path: path.to_path_buf(),
         source,
     };
-    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent).map_err(io_error)?;
-    }
-    let mut file_name = path.file_name().map(std::ffi::OsStr::to_os_string).unwrap_or_default();
-    file_name.push(format!(".{}.tmp", std::process::id()));
-    let staged = path.with_file_name(file_name);
-    std::fs::write(&staged, contents).map_err(io_error)?;
-    if let Err(source) = std::fs::rename(&staged, path) {
-        let _ = std::fs::remove_file(&staged);
-        return Err(io_error(source));
-    }
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    std::fs::create_dir_all(parent).map_err(io_error)?;
+    let mut staged = tempfile::Builder::new()
+        .prefix(".remote-profile-")
+        .suffix(".tmp")
+        .tempfile_in(parent)
+        .map_err(io_error)?;
+    staged.write_all(contents.as_bytes()).map_err(io_error)?;
+    staged.flush().map_err(io_error)?;
+    staged.persist(path).map_err(|error| io_error(error.error))?;
     Ok(())
 }
 

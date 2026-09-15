@@ -246,13 +246,55 @@ fn the_configuration_file_is_never_a_profile_destination_or_source() {
     assert!(matches!(error, RemoteProfileError::IsConfigPath { .. }), "{error}");
     assert_eq!(std::fs::read_to_string(&config_path).expect("read"), text);
 
-    // Paths that do not exist yet are compared as written.
+    // Paths that do not exist yet are normalised before the comparison, so
+    // no spelling of the configuration path slips through as a destination.
     let absent = dir.path().join("absent").join("config.yaml");
-    assert!(matches!(
-        refuse_config_path(&absent, &absent),
-        Err(RemoteProfileError::IsConfigPath { .. })
-    ));
+    for alias in [
+        absent.clone(),
+        dir.path().join("absent").join(".").join("config.yaml"),
+        dir.path().join("absent").join("sub").join("..").join("config.yaml"),
+        dir.path().join(".").join("absent").join("config.yaml"),
+    ] {
+        assert!(
+            matches!(
+                refuse_config_path(&absent, &alias),
+                Err(RemoteProfileError::IsConfigPath { .. })
+            ),
+            "{}",
+            alias.display()
+        );
+    }
     refuse_config_path(&absent, &dir.path().join("absent").join("profile.yaml")).expect("different files");
+    refuse_config_path(&absent, &dir.path().join("absent2").join("config.yaml")).expect("different directories");
+}
+
+#[test]
+fn staging_never_follows_a_planted_name_and_leaves_nothing_behind() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("profile.yaml");
+    let victim = dir.path().join("victim.txt");
+    std::fs::write(&victim, "keep").expect("victim");
+    // Names of the shape an older staging scheme used, pointing at the victim.
+    #[cfg(unix)]
+    for planted in [
+        format!("profile.yaml.{}.tmp", std::process::id()),
+        ".remote-profile-x.tmp".to_string(),
+    ] {
+        std::os::unix::fs::symlink(&victim, dir.path().join(planted)).expect("symlink");
+    }
+    write_portable_profile(&target, &local()).expect("write");
+    assert_eq!(std::fs::read_to_string(&victim).expect("victim"), "keep");
+    let leftovers: Vec<String> = std::fs::read_dir(dir.path())
+        .expect("dir")
+        .map(|entry| entry.expect("entry").file_name().to_string_lossy().into_owned())
+        .filter(|name| name.to_ascii_lowercase().ends_with(".tmp") && !name.starts_with(".remote-profile-x"))
+        .filter(|name| !name.starts_with("profile.yaml."))
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+    assert_eq!(
+        read_portable_profile(&target).expect("read"),
+        export_portable(&local()).expect("document")
+    );
 }
 
 #[test]
