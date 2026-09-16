@@ -6,6 +6,10 @@ async fn main() {
         .with_writer(std::io::stderr)
         .init();
 
+    if let Err(error) = horizon_browser_control::paths::initialize_from_environment() {
+        tracing::error!(%error, "Invalid browser runtime paths");
+        std::process::exit(2);
+    }
     if let Err(error) = horizon_browser_mcp::serve_stdio().await {
         tracing::error!(%error, "Horizon browser MCP server stopped with an error");
         std::process::exit(1);

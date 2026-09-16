@@ -283,3 +283,13 @@ The CLI consumes browser coordination and runtime paths through
 core, terminal or UI packages. The existing default runtime root and agent
 authentication lookup remain unchanged. CI checks this boundary for both the CLI
 and MCP server.
+
+## Custom browser runtime directory
+
+Set `HORIZON_BROWSER_ROOT=/absolute/path/to/browser-state` to choose the
+coordination directory for discovery, ownership, queues, results, audit and
+durable browser job state. Use the same value for a host and a connecting MCP
+client. Relative paths resolve once at startup; an empty value is an error.
+Task-owned browser/agent subprocesses still use their dedicated private roots.
+The default remains `HOME/.horizon`; the override does not move Horizon's
+application configuration or terminal sessions.

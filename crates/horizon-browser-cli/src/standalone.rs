@@ -135,6 +135,7 @@ impl OwnedHostProcess {
         }
         let mut child = command
             .env("HOME", home)
+            .env(horizon_browser_control::paths::RUNTIME_ROOT_ENV, &horizon_root)
             .env("RUST_LOG", "off")
             .env_remove("HORIZON_BROWSER_ACTOR")
             .stdin(Stdio::piped())

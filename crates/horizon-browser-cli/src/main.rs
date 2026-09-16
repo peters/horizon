@@ -96,6 +96,10 @@ enum Command {
 #[tokio::main]
 async fn main() -> ExitCode {
     initialize_tracing();
+    if let Err(error) = horizon_browser_control::paths::initialize_from_environment() {
+        eprintln!("error: {error}");
+        return ExitCode::from(2);
+    }
     match parse_args(std::env::args_os().skip(1)) {
         Ok(Command::Help) => {
             print!("{HELP}");

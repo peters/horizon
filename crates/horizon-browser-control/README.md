@@ -21,5 +21,27 @@ quotas, Teach state, and panel/workspace models remain with their existing hosts
 cargo test -p horizon-browser-control
 ```
 
-This crate is not published. Configurable coordination roots and direct CLI/MCP
-consumption are separate follow-up steps in issue #693.
+This crate is not published. The standalone CLI and MCP server consume it
+directly without depending on Horizon core.
+
+## Runtime paths
+
+Hosts can call `paths::configure_runtime_root(path)` before using default-path
+coordination helpers. Configuration resolves the path to an absolute path and
+freezes it for the process. Repeating that absolute root is allowed; a different
+root or configuration after default-path use returns a typed error. Explicit
+`*_at` APIs and `BrowserRuntimePaths::from_root` remain available for independent
+instances.
+
+The standalone CLI and MCP server initialize from `HORIZON_BROWSER_ROOT` before
+discovery, pruning or serving. Relative values resolve against the startup
+directory; empty values are rejected. Without the variable they retain the
+existing `HOME/.horizon` default, including the relative fallback when HOME is
+absent. Library hosts that use legacy default helpers without initialization
+retain the existing default behavior. Application config
+and terminal sessions continue using the application home independently.
+
+Task-owned browser subprocesses and agent MCP registrations explicitly select
+their private browser root, so an inherited override cannot redirect job control
+into an unrelated runtime. The variable does not change provider credentials or
+authorization rules.

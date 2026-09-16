@@ -10,11 +10,7 @@ pub struct HorizonHome {
 impl HorizonHome {
     #[must_use]
     pub fn resolve() -> Self {
-        Self::from_root(
-            horizon_browser_control::BrowserRuntimePaths::resolve()
-                .root()
-                .to_path_buf(),
-        )
+        Self::from_root(horizon_browser_control::paths::default_horizon_root())
     }
 
     #[must_use]
