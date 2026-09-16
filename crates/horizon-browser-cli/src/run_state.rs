@@ -1084,7 +1084,7 @@ mod tests {
         let saved = Plan::from_slice(&std::fs::read(run.directory.join(PLAN_FILE)).expect("saved plan"))
             .expect("decode saved plan");
         assert_eq!(saved.variables["password"], json!("<redacted>"));
-        assert_eq!(saved.steps[0].arguments["password"], json!("<redacted>"));
+        assert_eq!(saved.steps[0].arguments["password"], json!({ "$var": "password" }));
         assert_ne!(saved, original);
         assert_eq!(original.variables["password"], json!("smoke-pass-zephyr"));
     }

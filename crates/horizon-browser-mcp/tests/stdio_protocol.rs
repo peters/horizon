@@ -299,7 +299,7 @@ fn resize_preserves_scope_user_control_and_measured_result_contract() {
         worker.join().unwrap();
         if let Some(code) = failure {
             assert_eq!(result["result"]["isError"], true);
-            assert!(result.to_string().contains(code));
+            assert!(result.to_string().contains(code), "expected {code}: {result}");
         } else {
             assert_eq!(
                 result["result"]["structuredContent"]["applied"],
@@ -342,7 +342,9 @@ fn resize_result_fixture(
                 };
                 let result_path = manifest::action_result_path_for_root(&worker_root, "panel", &action.action_id);
                 std::fs::create_dir_all(result_path.parent().unwrap()).unwrap();
-                std::fs::write(result_path, serde_json::to_vec(&result).unwrap()).unwrap();
+                let mut temporary = tempfile::NamedTempFile::new_in(result_path.parent().unwrap()).unwrap();
+                serde_json::to_writer(temporary.as_file_mut(), &result).unwrap();
+                temporary.persist(result_path).unwrap();
                 break;
             }
             assert!(std::time::Instant::now() < deadline, "resize was not enqueued");

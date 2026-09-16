@@ -3,6 +3,7 @@
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 pub const MAX_HTTP_AUTH_USERNAME_BYTES: usize = 256;
 pub const MAX_HTTP_AUTH_PASSWORD_BYTES: usize = 1_024;
@@ -123,75 +124,51 @@ fn canonical_origin(value: &str, bare_origin: bool) -> Result<String, &'static s
     if value.chars().any(char::is_control) {
         return Err("HTTP auth origin contains control characters");
     }
-    let Some((scheme, rest)) = value.split_once("://") else {
-        return Err("HTTP auth origin must be an http or https origin");
-    };
-    let scheme = scheme.to_ascii_lowercase();
-    if scheme != "http" && scheme != "https" {
+    if bare_origin {
+        let (_, rest) = value
+            .split_once("://")
+            .ok_or("HTTP auth origin must be an http or https origin")?;
+        let authority_end = rest.find(['/', '?', '#', '\\']).unwrap_or(rest.len());
+        if rest[..authority_end].contains('@') {
+            return Err("HTTP auth origin must not contain userinfo");
+        }
+        if !matches!(&rest[authority_end..], "" | "/") {
+            return Err("HTTP auth origin must not include a path, query, or fragment");
+        }
+    }
+    if authority_has_empty_port(value) {
+        return Err("HTTP auth origin port is invalid");
+    }
+    let parsed = Url::parse(value).map_err(|_| "HTTP auth origin must be an http or https origin")?;
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
         return Err("HTTP auth origin must use http or https");
     }
-    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-    let authority = &rest[..authority_end];
-    let remainder = &rest[authority_end..];
-    if bare_origin && !(remainder.is_empty() || remainder == "/") {
-        return Err("HTTP auth origin must not include a path, query, or fragment");
-    }
-    if authority.contains('@') {
+    if !parsed.username().is_empty() || parsed.password().is_some() {
         return Err("HTTP auth origin must not contain userinfo");
     }
-    let (host, port) = split_host_port(authority)?;
-    if host.is_empty() {
+    if parsed.host_str().is_none_or(str::is_empty) {
         return Err("HTTP auth origin host is missing");
     }
-    let host = canonicalize_host(host)?;
-    let default_port = if scheme == "http" { 80 } else { 443 };
-    let origin = match port {
-        Some(port) if port != default_port => format!("{scheme}://{host}:{port}"),
-        _ => format!("{scheme}://{host}"),
-    };
-    if origin.len() > MAX_HTTP_AUTH_ORIGIN_BYTES {
+    if bare_origin
+        && (!(parsed.path().is_empty() || parsed.path() == "/")
+            || parsed.query().is_some()
+            || parsed.fragment().is_some())
+    {
+        return Err("HTTP auth origin must not include a path, query, or fragment");
+    }
+    let origin = parsed.origin().ascii_serialization();
+    if origin == "null" || origin.len() > MAX_HTTP_AUTH_ORIGIN_BYTES {
         return Err("HTTP auth origin is missing or too long");
     }
     Ok(origin)
 }
 
-fn split_host_port(authority: &str) -> Result<(&str, Option<u16>), &'static str> {
-    if let Some(host) = authority.strip_prefix('[') {
-        let Some(end) = host.find(']') else {
-            return Err("HTTP auth origin host is missing");
-        };
-        let address = &authority[..=end + 1];
-        let rest = &authority[end + 2..];
-        if rest.is_empty() {
-            return Ok((address, None));
-        }
-        let Some(port) = rest.strip_prefix(':') else {
-            return Err("HTTP auth origin host is missing");
-        };
-        return parse_port(port).map(|port| (address, Some(port)));
-    }
-    match authority.rsplit_once(':') {
-        Some((host, _)) if host.contains(':') => Err("HTTP auth origin host is missing"),
-        Some((host, port)) => {
-            if host.is_empty() || port.is_empty() {
-                return Err("HTTP auth origin port is invalid");
-            }
-            parse_port(port).map(|port| (host, Some(port)))
-        }
-        None => Ok((authority, None)),
-    }
-}
-
-fn canonicalize_host(host: &str) -> Result<String, &'static str> {
-    if let Some(inner) = host.strip_prefix('[').and_then(|host| host.strip_suffix(']')) {
-        let address: std::net::Ipv6Addr = inner.parse().map_err(|_| "HTTP auth origin host is missing")?;
-        return Ok(format!("[{address}]"));
-    }
-    Ok(host.to_ascii_lowercase())
-}
-
-fn parse_port(port: &str) -> Result<u16, &'static str> {
-    port.parse().map_err(|_| "HTTP auth origin port is invalid")
+fn authority_has_empty_port(value: &str) -> bool {
+    let Some((_, rest)) = value.split_once("://") else {
+        return false;
+    };
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    rest[..authority_end].ends_with(':')
 }
 
 #[cfg(test)]
@@ -222,11 +199,24 @@ mod tests {
         );
         assert!(parse_http_auth_origin("http://[not-an-ip]").is_err());
         assert!(parse_http_auth_origin("http://user:pass@example.com").is_err());
+        assert!(parse_http_auth_origin("http://@example.com").is_err());
+        assert!(parse_http_auth_origin("http:example.com").is_err());
+        assert!(parse_http_auth_origin("http://example.com/a/..").is_err());
+        assert!(parse_http_auth_origin("http://example.com/%2e/").is_err());
         assert!(parse_http_auth_origin("http://example.com/basic-auth").is_err());
         assert!(parse_http_auth_origin("ftp://example.com").is_err());
         assert!(parse_http_auth_origin("http://example.com:abc").is_err());
         assert!(parse_http_auth_origin("http://example.com:").is_err());
         assert!(parse_http_auth_origin("http://example.com:99999").is_err());
+        assert!(parse_http_auth_origin("http://exa mple.com").is_err());
+        assert_eq!(
+            parse_http_auth_origin("http://bücher.example").expect("idna"),
+            "http://xn--bcher-kva.example"
+        );
+        assert_eq!(
+            parse_http_auth_origin("http://127.1").expect("ipv4"),
+            "http://127.0.0.1"
+        );
         assert!(request_origin("about:blank").is_none());
         let long_path = format!("http://example.com/{}", "a".repeat(800));
         assert_eq!(request_origin(&long_path).as_deref(), Some("http://example.com"));

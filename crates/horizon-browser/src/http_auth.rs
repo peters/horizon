@@ -89,7 +89,7 @@ impl HttpAuthState {
         if request_id.is_empty() || is_proxy || !scheme_is_basic_or_digest(scheme) {
             return HttpAuthDecision::Cancel;
         }
-        if self.attempted_requests.contains(request_id) {
+        if self.attempted_requests.contains(request_id) || self.attempted_requests.len() >= MAX_ATTEMPTED_REQUESTS {
             return HttpAuthDecision::Cancel;
         }
         let Some(credentials) = &self.credentials else {
@@ -145,12 +145,6 @@ impl HttpAuthState {
     }
 
     fn remember_attempt(&mut self, request_id: &str) {
-        while self.attempted_requests.len() >= MAX_ATTEMPTED_REQUESTS {
-            let Some(oldest) = self.attempted_order.pop_front() else {
-                break;
-            };
-            self.forget_request(&oldest);
-        }
         if self.attempted_requests.insert(request_id.to_string()) {
             self.attempted_order.push_back(request_id.to_string());
         }
@@ -273,7 +267,7 @@ mod tests {
     }
 
     #[test]
-    fn oldest_attempt_is_evicted_at_the_request_cap() {
+    fn active_attempt_cap_cancels_until_a_request_completes() {
         let mut state = HttpAuthState::default();
         set(&mut state, Some("http://example.test"));
         for index in 0..MAX_ATTEMPTED_REQUESTS {
@@ -287,12 +281,17 @@ mod tests {
             state.decide("req-0", "http://example.test/basic", Some("basic"), false),
             HttpAuthDecision::Cancel
         );
+        assert_eq!(
+            state.decide("req-cap", "http://example.test/basic", Some("basic"), false),
+            HttpAuthDecision::Cancel
+        );
+        assert_eq!(
+            state.decide("req-0", "http://example.test/basic", Some("basic"), false),
+            HttpAuthDecision::Cancel
+        );
+        state.forget_request("req-0");
         assert!(matches!(
             state.decide("req-cap", "http://example.test/basic", Some("basic"), false),
-            HttpAuthDecision::Provide { .. }
-        ));
-        assert!(matches!(
-            state.decide("req-0", "http://example.test/basic", Some("basic"), false),
             HttpAuthDecision::Provide { .. }
         ));
     }
