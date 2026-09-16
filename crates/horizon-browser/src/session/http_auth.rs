@@ -103,6 +103,14 @@ impl DriverState {
             tracing::warn!(target: "browser", "Chromium HTTP auth continue failed: {error}");
         }
     }
+
+    pub(super) fn forget_completed_http_auth(&mut self, event: &CdpEvent<'_>) {
+        if matches!(event.method, "Network.loadingFinished" | "Network.loadingFailed")
+            && let Some(request_id) = event.params.get("requestId").and_then(Value::as_str)
+        {
+            self.http_auth.forget_request(request_id);
+        }
+    }
 }
 
 fn continue_with_auth_params(request_id: &str, decision: &HttpAuthDecision) -> Value {
@@ -142,11 +150,12 @@ mod tests {
             "req-1",
             &HttpAuthDecision::Provide {
                 username: "smoke-user".into(),
-                password: "smoke-pass-zephyr".into(),
+                password: crate::SecretString::new("smoke-pass-zephyr"),
             },
         );
         assert_eq!(provide["authChallengeResponse"]["response"], "ProvideCredentials");
         assert_eq!(provide["authChallengeResponse"]["username"], "smoke-user");
+        assert_eq!(provide["authChallengeResponse"]["password"], "smoke-pass-zephyr");
         let cancel = continue_with_auth_params("req-1", &HttpAuthDecision::Cancel);
         assert_eq!(cancel["authChallengeResponse"]["response"], "CancelAuth");
         assert!(cancel["authChallengeResponse"].get("password").is_none());

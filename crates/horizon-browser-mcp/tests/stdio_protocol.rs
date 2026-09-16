@@ -192,7 +192,11 @@ fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     assert!(video["inputSchema"].to_string().contains("Start only"));
     let http_auth = listed_tool(tools, "browser_http_auth");
     assert!(http_auth["description"].as_str().is_some_and(|description| {
-        description.contains("Basic") && description.contains("Digest") && description.contains("password")
+        description.contains("Basic")
+            && description.contains("Digest")
+            && description.contains("password")
+            && description.contains("If you encounter HTTP authentication")
+            && description.contains("CLI run plans")
     }));
     assert!(http_auth["inputSchema"].to_string().contains("username"));
     let watch = listed_tool(tools, "browser_network_watch");

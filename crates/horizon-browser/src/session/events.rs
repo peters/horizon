@@ -197,6 +197,7 @@ impl DriverState {
             // `call_and_ack`, which re-enters `handle_message`.
             self.handle_network_event(&event);
         }
+        self.forget_completed_http_auth(&event);
         if event.method == "Fetch.authRequired" || event.method == "Fetch.requestPaused" {
             self.continue_http_auth(link, event_tx, frame_slot, &event);
             return;

@@ -1,3 +1,5 @@
+use std::fmt;
+
 use horizon_browser::{BrowserControlAction, BrowserHttpAuthOperation, SecretString};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -18,7 +20,7 @@ impl From<HttpAuthOperation> for BrowserHttpAuthOperation {
     }
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Deserialize, JsonSchema)]
 pub(crate) struct HttpAuthInput {
     /// Stable panel id returned by `browser_list`.
     pub(crate) panel_id: String,
@@ -32,6 +34,20 @@ pub(crate) struct HttpAuthInput {
     origin: Option<String>,
     /// Per-action timeout in milliseconds (1-60000).
     pub(crate) timeout_millis: Option<u64>,
+}
+
+impl fmt::Debug for HttpAuthInput {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("HttpAuthInput")
+            .field("panel_id", &self.panel_id)
+            .field("operation", &self.operation)
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "SecretString(<redacted>)"))
+            .field("origin", &self.origin)
+            .field("timeout_millis", &self.timeout_millis)
+            .finish()
+    }
 }
 
 impl HttpAuthInput {
@@ -96,6 +112,7 @@ mod tests {
             panic!("expected http auth");
         };
         assert_eq!(format!("{:?}", password.expect("password")), "SecretString(<redacted>)");
+        assert!(!format!("{set:?}").contains("smoke-pass-zephyr"));
         let clear = HttpAuthInput {
             panel_id: "panel".into(),
             operation: HttpAuthOperation::Clear,

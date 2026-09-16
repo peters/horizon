@@ -330,8 +330,12 @@ impl DurableRun {
             checkpoint: RunCheckpoint::default(),
             error: None,
         };
-        write_private_json(&staging.path().join(PLAN_FILE), plan, "plan")
-            .map_err(DurablePreparationError::unpublished)?;
+        write_private_json(
+            &staging.path().join(PLAN_FILE),
+            &crate::variables::redact_plan(plan),
+            "plan",
+        )
+        .map_err(DurablePreparationError::unpublished)?;
         write_private_json(&staging.path().join(STATE_FILE), &state, "state")
             .map_err(DurablePreparationError::unpublished)?;
         let lock_file = acquire_resume_lock_file(&lock_path)
@@ -485,6 +489,9 @@ impl DurableRun {
         let selection = select_resume(&plan, Some(&run.state.checkpoint), &run.completed_reports, policy)?;
         if selection.start_index >= plan.steps.len() && selection.skipped.is_none() {
             return Err(ResumeError::NothingToResume(job_id.to_string()));
+        }
+        if crate::variables::resume_blocked_by_http_auth_secrets(&plan, selection.start_index) {
+            return Err(ResumeError::HttpAuthCredentialsNotPersisted(job_id.to_string()));
         }
         Ok((run, plan, selection))
     }
@@ -1033,6 +1040,26 @@ mod tests {
         }
     }
 
+    fn http_auth_plan() -> Plan {
+        Plan {
+            version: 1,
+            variables: std::collections::BTreeMap::from([
+                ("username".to_string(), json!("smoke-user")),
+                ("password".to_string(), json!("smoke-pass-zephyr")),
+            ]),
+            steps: vec![PlanStep {
+                id: "credentials".to_string(),
+                tool: "browser_http_auth".to_string(),
+                arguments: serde_json::Map::from_iter([
+                    ("operation".to_string(), json!("set")),
+                    ("username".to_string(), json!({ "$var": "username" })),
+                    ("password".to_string(), json!({ "$var": "password" })),
+                ]),
+            }],
+            project: None,
+        }
+    }
+
     #[cfg(unix)]
     fn empty_report() -> ExecutionReport {
         ExecutionReport {
@@ -1045,6 +1072,21 @@ mod tests {
             observability: ObservabilitySummary::default(),
             projection: None,
         }
+    }
+
+    #[test]
+    fn durable_plan_copy_redacts_http_auth_passwords() {
+        let home = tempfile::tempdir().expect("temporary home");
+        let root = home.path().join(".horizon/browser-jobs");
+        let original = http_auth_plan();
+        let run = DurableRun::prepare_in(&root, &original, Some(30), Some(now_millis().saturating_add(30_000)))
+            .expect("prepare durable run");
+        let saved = Plan::from_slice(&std::fs::read(run.directory.join(PLAN_FILE)).expect("saved plan"))
+            .expect("decode saved plan");
+        assert_eq!(saved.variables["password"], json!("<redacted>"));
+        assert_eq!(saved.steps[0].arguments["password"], json!("<redacted>"));
+        assert_ne!(saved, original);
+        assert_eq!(original.variables["password"], json!("smoke-pass-zephyr"));
     }
 
     #[test]

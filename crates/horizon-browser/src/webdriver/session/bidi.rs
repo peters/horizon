@@ -54,6 +54,7 @@ impl Driver {
             self.continue_http_auth(event, event_tx);
             return;
         }
+        self.forget_completed_http_auth(event);
         if self.handle_network_bidi_event(event) {
             return;
         }

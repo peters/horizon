@@ -1,6 +1,6 @@
 //! Session HTTP Basic/Digest credentials and challenge decisions.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 
 use horizon_browser_protocol::{
     parse_http_auth_origin, request_origin, validate_http_auth_password, validate_http_auth_username,
@@ -14,18 +14,19 @@ const MAX_ATTEMPTED_REQUESTS: usize = 256;
 pub(crate) struct HttpAuthState {
     credentials: Option<HttpAuthCredentials>,
     attempted_requests: HashSet<String>,
+    attempted_order: VecDeque<String>,
 }
 
 #[derive(Clone, Debug)]
 struct HttpAuthCredentials {
     username: String,
-    password: String,
+    password: SecretString,
     origin: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum HttpAuthDecision {
-    Provide { username: String, password: String },
+    Provide { username: String, password: SecretString },
     Cancel,
 }
 
@@ -53,10 +54,10 @@ impl HttpAuthState {
                     .map_err(|message| BrowserControlFailure::new("invalid_action", message))?;
                 self.credentials = Some(HttpAuthCredentials {
                     username: username.to_string(),
-                    password: password.as_str().to_string(),
+                    password: password.clone(),
                     origin: origin.clone(),
                 });
-                self.attempted_requests.clear();
+                self.clear_attempts();
                 Ok((true, origin))
             }
             BrowserHttpAuthOperation::Clear => {
@@ -67,7 +68,7 @@ impl HttpAuthState {
                     ));
                 }
                 self.credentials = None;
-                self.attempted_requests.clear();
+                self.clear_attempts();
                 Ok((false, None))
             }
         }
@@ -95,14 +96,35 @@ impl HttpAuthState {
         if credentials.origin.as_ref().is_some_and(|expected| expected != &origin) {
             return HttpAuthDecision::Cancel;
         }
-        if self.attempted_requests.len() >= MAX_ATTEMPTED_REQUESTS {
-            self.attempted_requests.clear();
+        let username = credentials.username.clone();
+        let password = credentials.password.clone();
+        self.remember_attempt(request_id);
+        HttpAuthDecision::Provide { username, password }
+    }
+
+    pub(crate) fn forget_request(&mut self, request_id: &str) {
+        if self.attempted_requests.remove(request_id)
+            && let Some(index) = self.attempted_order.iter().position(|id| id == request_id)
+        {
+            self.attempted_order.remove(index);
         }
-        self.attempted_requests.insert(request_id.to_string());
-        HttpAuthDecision::Provide {
-            username: credentials.username.clone(),
-            password: credentials.password.clone(),
+    }
+
+    fn remember_attempt(&mut self, request_id: &str) {
+        while self.attempted_requests.len() >= MAX_ATTEMPTED_REQUESTS {
+            let Some(oldest) = self.attempted_order.pop_front() else {
+                break;
+            };
+            self.attempted_requests.remove(&oldest);
         }
+        if self.attempted_requests.insert(request_id.to_string()) {
+            self.attempted_order.push_back(request_id.to_string());
+        }
+    }
+
+    fn clear_attempts(&mut self) {
+        self.attempted_requests.clear();
+        self.attempted_order.clear();
     }
 }
 
@@ -141,21 +163,65 @@ mod tests {
             .expect("set");
     }
 
+    fn provide(username: &str, password: &str) -> HttpAuthDecision {
+        HttpAuthDecision::Provide {
+            username: username.to_string(),
+            password: SecretString::new(password),
+        }
+    }
+
     #[test]
     fn matching_basic_challenge_is_provided_once_per_request() {
         let mut state = HttpAuthState::default();
         set(&mut state, Some("http://127.0.0.1:8080"));
         assert_eq!(
             state.decide("req-1", "http://127.0.0.1:8080/basic-auth", Some("Basic"), false),
-            HttpAuthDecision::Provide {
-                username: "smoke-user".to_string(),
-                password: "smoke-pass-zephyr".to_string(),
-            }
+            provide("smoke-user", "smoke-pass-zephyr")
         );
         assert_eq!(
             state.decide("req-1", "http://127.0.0.1:8080/basic-auth", Some("Basic"), false),
             HttpAuthDecision::Cancel
         );
+        state.forget_request("req-1");
+        assert_eq!(
+            state.decide("req-1", "http://127.0.0.1:8080/basic-auth", Some("Basic"), false),
+            provide("smoke-user", "smoke-pass-zephyr")
+        );
+    }
+
+    #[test]
+    fn oldest_attempt_is_evicted_at_the_request_cap() {
+        let mut state = HttpAuthState::default();
+        set(&mut state, None);
+        for index in 0..MAX_ATTEMPTED_REQUESTS {
+            let request_id = format!("req-{index}");
+            assert!(matches!(
+                state.decide(&request_id, "http://example.test/basic", Some("basic"), false),
+                HttpAuthDecision::Provide { .. }
+            ));
+        }
+        assert_eq!(
+            state.decide("req-0", "http://example.test/basic", Some("basic"), false),
+            HttpAuthDecision::Cancel
+        );
+        assert!(matches!(
+            state.decide("req-cap", "http://example.test/basic", Some("basic"), false),
+            HttpAuthDecision::Provide { .. }
+        ));
+        assert!(matches!(
+            state.decide("req-0", "http://example.test/basic", Some("basic"), false),
+            HttpAuthDecision::Provide { .. }
+        ));
+    }
+
+    #[test]
+    fn debug_does_not_echo_the_password() {
+        let mut state = HttpAuthState::default();
+        set(&mut state, None);
+        let decision = state.decide("req-debug", "https://files.test/digest", Some("digest"), false);
+        let rendered = format!("{state:?}{decision:?}");
+        assert!(!rendered.contains("smoke-pass-zephyr"), "{rendered}");
+        assert!(rendered.contains("SecretString(<redacted>)"), "{rendered}");
     }
 
     #[test]

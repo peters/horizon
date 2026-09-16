@@ -100,14 +100,17 @@ shell commands, files, or other MCP servers.
   cross-origin policy prevents inspecting the frame document.
 - `browser_act` clicks, fills, scrolls, reloads, or traverses history. Set
   `count: 2` on a click for a backend-native trusted double-click.
-- `browser_http_auth` sets or clears HTTP Basic and Digest credentials on a
-  live local Chromium or Firefox panel. Call `operation: set` with `username`
-  and `password` (optional `origin` as `http://host[:port]` or
-  `https://host[:port]`) before navigating to a protected page, or set then
-  reload if the page is already open. The engine intercepts server challenges
-  and provides those credentials once per request. Passwords never enter the
-  action audit. Safari and remote device sessions return `unsupported_backend`.
-  Credentials live only in the session; `operation: clear` removes them.
+- `browser_http_auth` is how a user supplies a username and password for HTTP
+  Basic or Digest (MCP, CLI `run` plans, and prompt jobs all call this tool).
+  Call `operation: set` with the credentials the user provided (optional
+  `origin` as `http://host[:port]` or `https://host[:port]`), then navigate or
+  reload. The engine intercepts matching server challenges and provides those
+  credentials once per request. Passwords never enter the action audit or
+  Horizon config. Safari and remote device sessions return
+  `unsupported_backend`. `operation: clear` drops live-session credentials for
+  later intercepted challenges; it does not revoke Authorization values the
+  browser already cached, so open a new panel for a clean unauthenticated
+  session.
 - `browser_wait` verifies present, visible, or hidden selector state as one
   audited engine-side action: the browser driver observes the page itself at
   a fixed cadence (no repeated query actions), evaluates the condition over

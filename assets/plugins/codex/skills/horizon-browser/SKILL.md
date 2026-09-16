@@ -85,10 +85,14 @@ If a page presents HTTP Basic or Digest authentication, call
 `browser_http_auth` with `operation: set`, the username and password the user
 supplied, and optional `origin` (`http://host[:port]` or `https://host[:port]`)
 before `browser_navigate`, or set then reload if the protected page is already
-open. The engine provides those credentials to matching server challenges on
-local Chromium and Firefox. Do not put the password in `browser_evaluate` or
-audit commentary. Safari and remote sessions return `unsupported_backend`.
-Call `operation: clear` to drop the live-session credentials.
+open. If the user has not supplied credentials, ask for a username and
+password instead of guessing. The engine provides those credentials to matching
+server challenges on local Chromium and Firefox. Do not put the password in
+`browser_evaluate` or audit commentary. Safari and remote sessions return
+`unsupported_backend`. Call `operation: clear` to drop live-session credentials
+for later intercepted challenges; it does not revoke Authorization values the
+browser already cached, so open a new panel for a clean unauthenticated
+session.
 
 For HTTP or WebSocket observation, first inspect the panel's
 `network_capture` field from `browser_list` or `browser_panel`. When supported,
