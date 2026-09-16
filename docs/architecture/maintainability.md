@@ -169,8 +169,9 @@ and versioned-migration slices; their descriptions below are not available UI ac
   repository transfer, and UI integration belong in later focused modules.
 - `remote_workspace/panels.rs` prepares and confirms independent saved Shell
   intent against the actual owning client session and allocation snapshot.
-  Confirmation appends one panel through the existing store CAS; provider calls,
-  task Start and view Reopen remain separate explicit operations.
+  Confirmation appends one panel through the existing store CAS. Provider calls
+  and task Start remain separate core operations. The board API for reopening views
+  has been removed; saved v3 references still restore as inert compatibility snapshots.
 - `remote_provider_config.rs` owns explicit non-secret provider profiles, empty
   defaults, exact lookup and redacted validation. The main configuration delegates
   to it; local profile construction shares target-name and local-endpoint rules.
@@ -281,25 +282,12 @@ and versioned-migration slices; their descriptions below are not available UI ac
   local PTY. Only explicit recovery commits observations; attachment preserves saved phases.
   Its target-bound attempt rechecks snapshots before input-capable handoff; it is
   not authenticated attachment, saved Ready state or an atomic Stop/attach fence.
-  Board/UI admission and inert restore remain separate from this Linux-only API.
-- `board/remote.rs` prepares a protected, short-lived local handoff after the final
-  off-thread store fence, then consumes it into one disconnected same-owner view
-  without I/O. The actual client session and current view identity must match;
-  queued admission expires without affecting remote task lifetime. Visual rehoming
-  preserves execution identity. It does not persist transport arguments, promote
-  readiness or enable implicit restore. UI request/config/session invalidation and
-  global cross-session Open remain separate; admission is not continuous revocation.
-  Handoff synchronizes terminal grid and PTY geometry to the current view, not the
-  earlier asynchronous request. Its age bound conservatively includes store latency.
+  Board handoff/reopen admission has been removed. Inert v3 session restoration
+  remains separate from this retained Linux-only core API.
 - `remote_panel_attachment/configured.rs` admits only the actual owner session,
   exact saved selection and explicitly named local provider profile before calling
   non-creating attachment. It does not infer authority from inventory visibility or
   copied client references, and has no ambient provider or profile fallback.
-- `board/remote_views/` separates metadata-only reopen target/persistence checks
-  from off-thread owned-record lookup and inert snapshot preparation. Consuming
-  adoption uses the existing insertion/layout path without starting a process or
-  connecting. Reopening never copies executable intent or grants remote authority;
-  current-client/request invalidation and later fresh reconnect remain mandatory.
 - `repository_overlay/` owns bounded exact-base metadata for separate index and
   working-tree changes. Its `paths.rs` applies the lexical transfer exclusion policy.
   Planning performs no filesystem, Git, provider or transfer I/O; actual capture/apply

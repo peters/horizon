@@ -12,7 +12,6 @@ use std::{
 };
 
 mod azure;
-mod board;
 mod configured;
 
 const OWNER: &str = "00000000-0000-4000-8000-000000000001";

@@ -147,8 +147,14 @@ fn remote_views_never_execute_saved_commands_on_restore_or_restart() {
     let mut state = snapshot(OWNER);
     state.workspaces[0].panels[0].command = Some(program.clone());
     state.workspaces[0].panels[0].args.clone_from(&args);
-    for transcript_root in [None, Some(directory.path())] {
-        if transcript_root.is_some() {
+    let empty_transcripts = directory.path().join("empty-transcripts");
+    std::fs::create_dir(&empty_transcripts).expect("empty transcript directory");
+    for (transcript_root, has_transcript) in [
+        (None, false),
+        (Some(empty_transcripts.as_path()), false),
+        (Some(directory.path()), true),
+    ] {
+        if has_transcript {
             std::fs::write(directory.path().join("remote-panel.bin"), b"Retained remote output\r\n")
                 .expect("transcript");
         }
@@ -158,7 +164,7 @@ fn remote_views_never_execute_saved_commands_on_restore_or_restart() {
         assert!(!marker.exists());
         let content = panel.terminal().expect("snapshot terminal").last_lines_text(24);
         assert!(content.contains("Remote connection pending"));
-        assert_eq!(content.contains("Retained remote output"), transcript_root.is_some());
+        assert_eq!(content.contains("Retained remote output"), has_transcript);
         let identity = panel.id;
         assert!(
             panel
@@ -179,6 +185,17 @@ fn remote_views_never_execute_saved_commands_on_restore_or_restart() {
         );
         assert_eq!(saved.workspaces[0].panels[0].command.as_deref(), Some(program.as_str()));
         assert_eq!(saved.workspaces[0].panels[0].args, args);
+        let path = directory.path().join("saved.yaml");
+        std::fs::write(&path, saved.to_yaml().expect("serialize autosave")).expect("autosave");
+        let loaded = RuntimeState::load(&path).expect("load autosave").expect("saved state");
+        let mut reopened = Board::from_runtime_state_with_transcripts(&loaded, transcript_root).expect("reopen");
+        let panel = &mut reopened.panels[0];
+        assert!(panel.wait_for_shutdown(Duration::from_secs(2)));
+        assert!(panel.restart().is_err());
+        assert_eq!(
+            panel.remote_workspace(),
+            state.workspaces[0].panels[0].remote_workspace.as_ref()
+        );
         assert!(!marker.exists());
     }
     let mut control = Panel::spawn(
