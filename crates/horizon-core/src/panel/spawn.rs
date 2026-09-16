@@ -128,7 +128,12 @@ impl StaticPanelSeed {
 
 pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, mut opts: PanelOptions) -> Result<Panel> {
     if opts.remote_workspace.is_some() {
-        return restore_failure_panel(id, workspace_id, opts, "Remote connection pending");
+        return restore_failure_panel(
+            id,
+            workspace_id,
+            opts,
+            "Remote development has been removed; this saved view is read-only",
+        );
     }
     let local_id = opts.local_id.clone().unwrap_or_else(new_local_id);
 

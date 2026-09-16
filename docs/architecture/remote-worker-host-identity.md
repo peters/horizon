@@ -1,3 +1,5 @@
+> **Historical document — remote development removed in #693.** The worker binary, provisioning and repository-transfer APIs described below no longer exist. Commands and procedures are retained only as historical design/test evidence and must not be used as current setup instructions. Ordinary SSH terminals and remote browsers remain supported.
+
 # ADR-383: Retain the worker SSH host identity on workspace storage
 
 Status: Proposed implementation; full remote restart integration pending.
