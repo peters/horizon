@@ -137,19 +137,19 @@ enum PanelCommand {
     StartRename,
 }
 
-struct PanelFrame {
-    panel: Rect,
-    titlebar: Rect,
-    body: Rect,
-    close: Rect,
+pub(super) struct PanelFrame {
+    pub(super) panel: Rect,
+    pub(super) titlebar: Rect,
+    pub(super) body: Rect,
+    pub(super) close: Rect,
     /// Mic control slot left of the close button; only interactive/painted
     /// when speech input is enabled.
-    mic: Rect,
-    resize: Rect,
+    pub(super) mic: Rect,
+    pub(super) resize: Rect,
 }
 
 impl PanelFrame {
-    fn new(panel_rect: Rect) -> Self {
+    pub(super) fn new(panel_rect: Rect) -> Self {
         let titlebar = Rect::from_min_max(
             panel_rect.min,
             Pos2::new(panel_rect.max.x, panel_rect.min.y + PANEL_TITLEBAR_HEIGHT),

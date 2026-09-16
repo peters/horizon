@@ -14,6 +14,7 @@ use horizon_core::{Board, PanelId, PanelKind, PanelOptions, WorkspaceId, browser
 
 use super::HorizonApp;
 use super::browser_remote_create::plan_remote_create;
+use super::browser_viewport::{panel_size_for_viewport, viewport_size_from_panel_size};
 
 const CREATE_REQUEST_POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// How long a create with an initial URL waits, after the backend is ready,
@@ -568,35 +569,22 @@ fn browser_workspace(board: &Board, workspace_id: WorkspaceId) -> Option<Manifes
     ))
 }
 
-/// The requested initial panel size for a create: each supplied CSS pixel
-/// axis is applied, an omitted axis keeps the board's default panel size, and
-/// no size request keeps the board default entirely.
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "the MCP controller caps every requested axis at 8000 CSS pixels, below f32's exact integer range"
-)]
+/// The panel layout size a create request maps to: a requested axis is the
+/// viewport CSS pixels converted to the panel size that renders it, an
+/// omitted axis keeps the board's default panel size, and no size request
+/// keeps the board default entirely.
 fn requested_panel_size(request: &BrowserCreateRequest) -> Option<[f32; 2]> {
     if request.width.is_none() && request.height.is_none() {
         return None;
     }
     Some([
-        request
-            .width
-            .map_or(horizon_core::DEFAULT_PANEL_SIZE[0], |width| width as f32),
-        request
-            .height
-            .map_or(horizon_core::DEFAULT_PANEL_SIZE[1], |height| height as f32),
+        request.width.map_or(horizon_core::DEFAULT_PANEL_SIZE[0], |width| {
+            panel_size_for_viewport([width, 0])[0]
+        }),
+        request.height.map_or(horizon_core::DEFAULT_PANEL_SIZE[1], |height| {
+            panel_size_for_viewport([0, height])[1]
+        }),
     ])
-}
-
-/// The CSS pixel viewport stamped on a manifest from a board layout size.
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "board layout sizes are non-negative CSS pixels, far below u32::MAX"
-)]
-fn viewport_from_size(size: [f32; 2]) -> [u32; 2] {
-    [size[0].round().max(0.0) as u32, size[1].round().max(0.0) as u32]
 }
 
 /// The host-owned state of every browser panel on the board, in board order.
@@ -632,7 +620,7 @@ fn sync_manifest_host_state(root: &Path, placements: &[BrowserPlacement]) -> Hos
             &placement.local_id,
             placement.visible,
             &placement.workspace,
-            Some(viewport_from_size(placement.size)),
+            Some(viewport_size_from_panel_size(placement.size)),
         ) {
             Ok(HostStampOutcome::Written) => sync.changed = true,
             Ok(HostStampOutcome::Unchanged) => {}
@@ -672,7 +660,7 @@ fn placement_fingerprint(board: &Board) -> u64 {
         // A browser panel's size feeds its viewport stamp, so resizing it
         // re-stamps on the same frame like a move or visibility flip does.
         if browser {
-            viewport_from_size(panel.layout.size).hash(&mut hasher);
+            viewport_size_from_panel_size(panel.layout.size).hash(&mut hasher);
         }
     }
     hasher.finish()
@@ -759,7 +747,7 @@ fn finish_ready_browser_create(board: &Board, pending: &mut PendingBrowserCreate
             &pending.panel_local_id,
             pending.request.visible,
             &workspace,
-            requested_panel_size(&pending.request).map(viewport_from_size),
+            requested_panel_size(&pending.request).map(viewport_size_from_panel_size),
         ) {
             tracing::warn!(request_id = %pending.request.request_id, %error, "could not stamp a moved browser panel");
         }
@@ -796,7 +784,7 @@ fn publish_and_audit_created_panel(pending: &mut PendingBrowserCreate, workspace
         pending.request.visible,
         workspace,
         host_identity(&pending.request.actor),
-        requested_panel_size(&pending.request).map(viewport_from_size),
+        requested_panel_size(&pending.request).map(viewport_size_from_panel_size),
     ) {
         tracing::error!(request_id = %pending.request.request_id, %error, "could not publish requested browser panel");
         let (code, message) = if error.kind() == std::io::ErrorKind::PermissionDenied {
@@ -1160,23 +1148,44 @@ mod tests {
     }
 
     #[test]
-    fn a_requested_viewport_size_maps_to_panel_size_with_default_axes() {
+    fn a_requested_viewport_size_maps_to_a_panel_size_that_renders_it() {
         let both = BrowserCreateRequest::for_tests("browser-1", Some(1920), Some(1080));
         let width_only = BrowserCreateRequest::for_tests("browser-1", Some(375), None);
         let height_only = BrowserCreateRequest::for_tests("browser-1", None, Some(812));
         let none = BrowserCreateRequest::for_tests("browser-1", None, None);
-        assert_eq!(requested_panel_size(&both), Some([1920.0, 1080.0]));
+        assert_eq!(
+            requested_panel_size(&both),
+            Some(panel_size_for_viewport([1920, 1080])),
+            "a requested viewport is created as the panel that renders it"
+        );
         assert_eq!(
             requested_panel_size(&width_only),
-            Some([375.0, horizon_core::DEFAULT_PANEL_SIZE[1]]),
+            Some([
+                panel_size_for_viewport([375, 0])[0],
+                horizon_core::DEFAULT_PANEL_SIZE[1]
+            ]),
             "an omitted axis keeps the board default on that axis"
         );
         assert_eq!(
             requested_panel_size(&height_only),
-            Some([horizon_core::DEFAULT_PANEL_SIZE[0], 812.0])
+            Some([
+                horizon_core::DEFAULT_PANEL_SIZE[0],
+                panel_size_for_viewport([0, 812])[1]
+            ])
         );
         assert_eq!(requested_panel_size(&none), None);
-        assert_eq!(viewport_from_size([1919.6, 1079.4]), [1920, 1079]);
+        // The stamp converts the board layout size back to the viewport.
+        assert_eq!(
+            viewport_size_from_panel_size(requested_panel_size(&both).expect("sized")),
+            [1920, 1080]
+        );
+        let default_viewport = viewport_size_from_panel_size(horizon_core::DEFAULT_PANEL_SIZE);
+        assert_eq!(
+            viewport_size_from_panel_size(requested_panel_size(&width_only).expect("sized")),
+            [375, default_viewport[1]],
+            "a width-only request reports the requested viewport width and the default panel's viewport height"
+        );
+        assert_eq!(viewport_size_from_panel_size([1295.6, 891.6]), [1280, 800]);
     }
 
     #[test]
@@ -1294,8 +1303,8 @@ mod tests {
         assert!(!stamped.hidden);
         assert_eq!(
             stamped.viewport,
-            Some([1200, 700]),
-            "the viewport stamp follows the board size"
+            Some(viewport_size_from_panel_size([1200.0, 700.0])),
+            "the viewport stamp is the board size minus the panel chrome"
         );
 
         let resized = sync_manifest_host_state(root.path(), &placements(&board, true, [1920.0, 1080.0]));
@@ -1305,7 +1314,7 @@ mod tests {
         );
         assert_eq!(
             manifest::read_at(&path).expect("read resized").viewport,
-            Some([1920, 1080])
+            Some(viewport_size_from_panel_size([1920.0, 1080.0]))
         );
 
         board.assign_panel_to_workspace(agent_id, beta);

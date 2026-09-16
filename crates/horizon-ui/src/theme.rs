@@ -7,6 +7,11 @@ use alacritty_terminal::vte::ansi::{Color as TerminalColor, NamedColor, Rgb};
 use egui::{Color32, CornerRadius, Margin, Shadow, Stroke, Style, Theme, Vec2, Visuals};
 use horizon_core::AppearanceTheme;
 
+/// Base item spacing for the app style. Layout math elsewhere (the browser
+/// viewport geometry in particular) derives distances from this, so it must
+/// stay the single source of truth for the spacing the render path uses.
+pub const ITEM_SPACING: Vec2 = Vec2::new(8.0, 8.0);
+
 struct ThemePalette {
     bg: Color32,
     bg_elevated: Color32,
@@ -415,7 +420,7 @@ fn active_palette() -> &'static ThemePalette {
 
 fn style_for(theme: ResolvedTheme) -> Style {
     let mut style = Style::default();
-    style.spacing.item_spacing = Vec2::new(8.0, 8.0);
+    style.spacing.item_spacing = ITEM_SPACING;
     style.spacing.window_margin = Margin::same(0);
     style.spacing.button_padding = Vec2::new(12.0, 6.0);
     style.visuals = visuals(theme);

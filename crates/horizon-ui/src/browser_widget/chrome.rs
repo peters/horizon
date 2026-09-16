@@ -15,6 +15,16 @@ use crate::browser_widget::BrowserUiState;
 use crate::theme;
 
 const CHROME_HEIGHT: f32 = 30.0;
+/// Rendered height of the chrome row with the standard control set. The row
+/// is a min-height strip at `CHROME_HEIGHT`; with the app's embedded fonts
+/// and theme the tallest control's egui button frame (which reserves
+/// `interact_size` plus button padding around its label) renders 4 px above
+/// the min, so the row consumes 34. `app::browser_viewport` subtracts this
+/// from the panel size to reach the emulated viewport, and its render test
+/// fails if the row ever drifts from this value. Do not raise the row's
+/// min-height without re-running that test: the row's content allocation
+/// tracks the height available to it, so a taller min makes a taller row.
+pub(crate) const CHROME_ROW_HEIGHT: f32 = 34.0;
 /// The URL bar keeps at least this much width even when an owner chip is
 /// present on a narrow panel.
 const URL_MIN_WIDTH: f32 = 120.0;

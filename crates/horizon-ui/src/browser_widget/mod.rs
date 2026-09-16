@@ -15,7 +15,7 @@ const VIEWPORT_FRAME_TOLERANCE: f32 = 4.0;
 // Keep fallback focus recovery beyond the WebDriver HTTP timeout.
 const SAFARI_HOST_FOCUS_RECOVERY_SECONDS: f64 = 12.0;
 
-mod chrome;
+pub(crate) mod chrome;
 mod ime;
 mod input;
 mod render;
