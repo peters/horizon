@@ -26,8 +26,10 @@ pub(crate) struct HandoffReceipt {
 
 impl BrowserController {
     /// Ask the user to steer `panel_id`. When `wait` is true (the agent
-    /// default), block until that exact request is marked done, ownership is
-    /// lost, the panel leaves the workspace, or `timeout_millis` elapses.
+    /// default), block until the live handoff is marked done (adopting a
+    /// replacement request id if a later `browser_handoff` superseded this
+    /// one), ownership is lost, the panel leaves the workspace, or
+    /// `timeout_millis` elapses.
     pub(crate) async fn request_handoff(
         &self,
         panel_id: &str,
