@@ -5,17 +5,15 @@ back into large multi-purpose modules.
 
 ## Module Boundaries
 
+The Remote Environments modal and its toolbar action were removed in #693.
+Remote Hosts, Sessions and the Remote browsers settings tab remain. Remote-development
+core coordinators and inert v3 session references remain until the later core-removal
+and versioned-migration slices; their descriptions below are not available UI actions.
+
 - `cloud_run::azure::runtime` owns the operator-selected container policy, pinned
   security assets, mandatory daemon preflight and credential-free probe scripts.
   The deployment renderer composes those fragments; retained policy identity stays
-  in the provider binding. UI code only presents the selected policy.
-
-- `remote_environments::endpoint` owns consent, single-flight delivery and cached
-  notices for explicit saved-connection refresh; its paint leaf performs no I/O.
-  Shared overview guards serialize it with Delete, Start/Stop and repository work.
-  `start::configured_endpoint` admits the retained HPS/profile and original identity;
-  authenticated proof and coordinate-only mutation remain in the shared endpoint
-  coordinator. Closing invalidates presentation, not an in-flight operation.
+  in the provider binding. The former environment-policy UI has been removed.
 
 - Explicit retained connection refresh lives in `remote_workspace::start::endpoint`:
   its discovery contract, existing-identity admission, fixed authenticated SSH no-op
@@ -166,6 +164,7 @@ back into large multi-purpose modules.
   SQLite opening so discovery, validation, and usage reporting agree.
 - `remote_workspace/` owns the versioned remote-workspace aggregate, desired
   panels, exact runtime generation, and repository checkpoint metadata.
+  Its `summary.rs` leaf owns compact record projection independently of the removed UI.
   Its validation is pure: provider I/O, runtime-state migration, coordination,
   repository transfer, and UI integration belong in later focused modules.
 - `remote_workspace/panels.rs` prepares and confirms independent saved Shell
@@ -205,14 +204,7 @@ back into large multi-purpose modules.
   preparation, reuses shared setup/fence logic and refuses profile drift before
   non-creating recovery. Credential construction is lazy; preview has no I/O.
   This leaf does not prepare Git, deliver repository credentials, start tasks or
-  attest caller-supplied image/storage trust. UI confirmation remains a separate layer.
-  The overview's `setup` UI leaf binds transient Local Docker/RunPod/Azure CPU requests to
-  the actual home/session/config, caches exact confirmation values and consumes
-  consent once. Manual noncreating Check retains original attempt coordinates;
-  settled history never blocks inventory, repository Prepare or saved Shell Start.
-  Azure disclosure and consent use the complete frozen profile; its optional
-  billing-currency ceiling is independent of RunPod's US-cents input. No profile
-  editor, credential lookup or default provider is introduced by the form.
+  attest caller-supplied image/storage trust. Its former confirmation UI has been removed.
 - `remote_environment_observation.rs` produces overview-safe, point-in-time
   provider observations with exact snapshot checks but no private-key access or
   saved-state writes. It shares allocation observation validation with recovery;
@@ -308,24 +300,6 @@ back into large multi-purpose modules.
   adoption uses the existing insertion/layout path without starting a process or
   connecting. Reopening never copies executable intent or grants remote authority;
   current-client/request invalidation and later fresh reconnect remain mandatory.
-- UI `remote_environments/reconnect/` caches view labels on explicit interaction.
-  Its single-flight worker prepares connections off-thread; lifecycle and modal
-  actions invalidate before queued handoff adoption. Pending discarded receivers
-  retain the slot until completion. Same-owner views do not implement global Open.
-- UI `remote_environments/reopen/` explicitly loads saved panel identities and
-  prepares inert missing views off-thread. It shares lifecycle invalidation with
-  reconnect; competing actions discard queued results before either handoff drains.
-  Adoption marks reference-only runtime state dirty without starting remote tasks.
-  Its `inspection` leaf caches explicit retained-task observations in the same
-  bounded worker slot, including with no local views. Labels are point-in-time;
-  session, selection, config and Stop invalidation also discard late task results.
-  Its `add` leaf collects, previews and explicitly saves independent Shell intent
-  off-thread, invalidates consent with the client context and refreshes inventory;
-  it never starts tasks or creates views.
-  Its `start` leaf separately previews and confirms saved Shell execution in that
-  same single-flight slot. It never attaches a view or provisions a checkout.
-  Late dispatched starts retain an unattributed unknown-outcome warning rather
-  than reporting stale success or scheduling a retry.
 - `repository_overlay/` owns bounded exact-base metadata for separate index and
   working-tree changes. Its `paths.rs` applies the lexical transfer exclusion policy.
   Planning performs no filesystem, Git, provider or transfer I/O; actual capture/apply
@@ -554,16 +528,6 @@ back into large multi-purpose modules.
   dispatch never qualifies. First Delete preflights before intent;
   fresh Check/Retry bare absence stays unverified. This is a fail-closed fallback,
   not lost-reply/restart recovery acceptance; that MVP gap still needs durable context.
-- UI `remote_environments/delete` owns exact-snapshot destructive consent and one
-  background configured Delete, manual Check or separately confirmed Retry. Its
-  `result` leaf validates saved identity/revision/phase before cached presentation;
-  `paint` discloses the full Azure group or RunPod Pod scope and retained HPS billing.
-  Overview dispatch and paint exclude competing work while pending. Closure and
-  context changes discard stale presentation without cancelling/replaying requests;
-  completion wakes the UI and refreshes saved inventory when the overview is open.
-  Historical tombstones and unverified RunPod lost-response/restart outcomes are
-  never promoted to fresh provider absence. Core admission/CAS stays authoritative;
-  UI paint never accesses storage, credentials, SSH or provider endpoints.
 - `cloud_run/interactive_worker_stop.rs` is an opt-in Stop contract, separate from
   deletion and client lifetime. The local adapter's `local_docker/stop.rs` verifies
   exact ownership and disabled automatic removal before a bounded stop, then
@@ -598,26 +562,14 @@ back into large multi-purpose modules.
   the actual post-intent binding before completion. Its private provider wrapper
   exposes only Start to the shared coordinator. `ConfiguredStart` is shared with
   the backward-compatible Azure result alias; provider-specific errors and consent
-  stay separate. The overview reuses its existing single-flight confirmation flow;
-  no endpoint refresh, task replay, replacement or storage-durability claim is added.
+  stay separate. This core API no longer has a Remote Environments UI consumer;
+  it adds no endpoint refresh, task replay, replacement or storage-durability claim.
 - `remote_workspace/stop/configured.rs` admits one explicitly confirmed saved
   selection through its exact named local provider profile. It reloads the owned
   record and compares the full summary/revision before durable Stop coordination,
   returning only overview-safe metadata. It preserves persistent-only admission;
   unsupported profiles and stale selections
   gain no fallback authority; failures may require refreshing retained Stop intent.
-- The overview's `remote_environments/stop.rs` owns only confirmation, single-flight
-  background execution and cached outcome presentation; its `stop/paint.rs` collects
-  explicit actions for retained persistent local and Linux RunPod workers; timed and
-  other cloud Stop stays disabled. RunPod confirmation discloses process-memory loss,
-  metadata-only retention proof and possible continuing storage cost. Its first-Stop
-  callback uses existing-only, non-migrating storage. A separate Check saved Stop action observes existing RunPod intent in
-  the same single-flight slot, without replay or private SSH identity. Closing
-  invalidates presentation, not an admitted operation. Its completion writer uses
-  existing-only, non-migrating store admission; legacy or corrupt storage is refused
-  before configured-provider admission.
-  Completion invalidates provider observations and refreshes saved inventory while
-  keeping its target-bound result readable. All mutation remains in core coordination.
 - `cloud_run/runpod.rs` coordinates provider operations and exact ownership
   reconciliation. Its `models.rs` leaf owns profiles, persisted worker identity,
   lifecycle results and typed errors; `create_request.rs` owns serialized
@@ -752,17 +704,6 @@ back into large multi-purpose modules.
     context-menu handling and outcome application in `panels/interaction.rs`
   - `remote_hosts_overlay`: overlay state/input shell with query/filter,
     layout, and row/header paint helpers split into `remote_hosts_overlay/`
-  - `remote_environments`: single-flight saved-inventory loading and modal input
-    ownership, with cached labels and rendering in `remote_environments/paint`.
-    Shell inventory/modal tests live in the colocated `remote_environments/tests`.
-    `remote_environments/observation` owns single-flight manual provider checks,
-    event-based invalidation and cached point-in-time labels, never provider I/O
-    on the render thread or passive repaint polling.
-    `remote_environments/repository` owns explicit repository confirmation,
-    transient masked PAT input and manual receipt checks. Its paint leaf clears
-    text-edit undo history; stale mutation results retain an unattributed warning.
-    Compact record projection belongs to `horizon-core::remote_workspace::summary`;
-    the overview does not own provider actions or remote execution lifetime.
   - `sidebar`: sidebar rendering and deferred sidebar actions
   - `settings`: settings editor state and save/apply flows
   - `session`: startup bootstrap and session catalog/rebind flows, with startup
