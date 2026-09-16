@@ -12,7 +12,7 @@ use horizon_browser::AgentActionResult;
 use super::ManifestLock;
 use crate::paths::{BrowserRuntimePaths, safe_local_id};
 
-const MAX_RETAINED_RESULTS: usize = 256;
+pub(super) const MAX_RETAINED_RESULTS: usize = 256;
 const RESULT_RETENTION: Duration = Duration::from_mins(5);
 
 #[must_use]
@@ -56,17 +56,21 @@ fn remove_stale_at(root: &Path, panel_local_id: &str) -> std::io::Result<()> {
 pub(super) fn remove_stale_except_at(
     root: &Path,
     panel_local_id: &str,
-    retained_action_id: Option<&str>,
+    retained_action_ids: &[String],
     timeout: Duration,
 ) -> std::io::Result<()> {
     // `remove_owned_at_with_timeout` holds the stable panel manifest lock.
     // Every production result writer and consumer takes that lock before a
     // per-action lock, so deleting action lock paths cannot split contenders
     // across different inodes.
-    let Some(retained_action_id) = retained_action_id else {
+    let Some(first_retained) = retained_action_ids.first() else {
         return remove_stale_at(root, panel_local_id);
     };
-    let retained_path = action_result_path_for_root(root, panel_local_id, retained_action_id);
+    let retained_path = action_result_path_for_root(root, panel_local_id, first_retained);
+    let retained_paths = retained_action_ids
+        .iter()
+        .map(|action| action_result_path_for_root(root, panel_local_id, action))
+        .collect::<Vec<_>>();
     let panel_dir = retained_path.parent().ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -78,7 +82,6 @@ pub(super) fn remove_stale_except_at(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error),
     };
-    let retain_result = retained_path.try_exists()?;
     let mut result_paths = Vec::new();
     for entry in entries {
         let path = entry?.path();
@@ -101,7 +104,7 @@ pub(super) fn remove_stale_except_at(
     result_paths.dedup();
     let deadline = Instant::now() + timeout;
     for path in result_paths {
-        if retain_result && path == retained_path {
+        if retained_paths.contains(&path) && path.try_exists()? {
             continue;
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -389,7 +392,20 @@ mod tests {
 
         let coordination = super::super::ManifestCoordination::default();
         horizon_browser::BrowserCoordination::retain_action_result_on_remove(&coordination, panel_id, &action_id);
+        // A selector wait and a resize can both fail during shutdown.
+        let resize_id = new_action_id();
+        let resize_path = action_result_path_for_root(&root, panel_id, &resize_id);
+        let resize_result = AgentActionResult::failed(
+            resize_id.clone(),
+            BrowserControlFailure::new("browser_unavailable", "stopped while resizing"),
+        );
+        horizon_browser::BrowserCoordination::retain_action_result_on_remove(&coordination, panel_id, &resize_id);
+        write_at(&resize_path, &resize_result).unwrap();
         let removed = coordination.remove_at(&root, panel_id, "host-a", Duration::from_secs(1));
+        assert_eq!(
+            take_action_result_at(&root, panel_id, &resize_id).unwrap(),
+            Some(resize_result)
+        );
         assert!(removed.unwrap());
         assert!(!manifest_path.exists());
         assert!(!unrelated_result_path.exists());

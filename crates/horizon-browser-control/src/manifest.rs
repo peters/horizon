@@ -641,7 +641,7 @@ fn remove_at_with_timeout(path: &Path, timeout: Duration) -> std::io::Result<()>
 #[derive(Debug, Default)]
 pub struct ManifestCoordination {
     audit: audit::AuditSink,
-    retained_results: Mutex<BTreeMap<String, String>>,
+    retained_results: Mutex<BTreeMap<String, Vec<String>>>,
 }
 
 impl ManifestCoordination {
@@ -654,7 +654,12 @@ impl ManifestCoordination {
             .cloned();
         let path = manifest_path_for_root(root, panel_local_id);
         match remove_owned_at_with_timeout(&path, host, timeout, |remaining| {
-            result::remove_stale_except_at(root, panel_local_id, retained_action_id.as_deref(), remaining)
+            result::remove_stale_except_at(
+                root,
+                panel_local_id,
+                retained_action_id.as_deref().unwrap_or_default(),
+                remaining,
+            )
         }) {
             Ok(owned) => {
                 self.retained_results
@@ -793,10 +798,18 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
     }
 
     fn retain_action_result_on_remove(&self, panel_local_id: &str, action_id: &str) {
-        self.retained_results
+        let mut retained = self
+            .retained_results
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(panel_local_id.to_string(), action_id.to_string());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let actions = retained.entry(panel_local_id.to_string()).or_default();
+        if actions.iter().any(|existing| existing == action_id) {
+            return;
+        }
+        if actions.len() >= result::MAX_RETAINED_RESULTS {
+            actions.remove(0);
+        }
+        actions.push(action_id.to_string());
     }
 
     fn prepare_network_capture(
