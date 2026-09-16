@@ -12,7 +12,7 @@ pub enum RuntimePathError {
     EmptyRoot,
     #[error("could not resolve browser runtime root: {0}")]
     Resolve(#[from] std::io::Error),
-    #[error("browser runtime paths have already been used with a different root")]
+    #[error("browser runtime paths were already used with defaults or configured with a different root")]
     AlreadyInUse,
 }
 
