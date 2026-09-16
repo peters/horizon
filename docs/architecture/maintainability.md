@@ -81,7 +81,10 @@ and versioned-migration slices; their descriptions below are not available UI ac
 ### `horizon-browser`
 
 - Owns browser processes, CDP/WebDriver/BiDi transports, frame delivery,
-  bounded WebM page-pixel recording (`video/`), and deterministic shutdown.
+  optional WebM page-pixel recording (`video/`, enabled by `video-capture`), and
+  deterministic shutdown. Default builds omit the AV1 encoder; Horizon and its
+  CLI/MCP consumers explicitly enable recording. The standalone CI feature
+  matrix guards both configurations against host dependencies.
   It consumes and re-exports the lightweight protocol
   values, and must not depend on `horizon-core`, `horizon-ui`, a GUI toolkit,
   or an async runtime.

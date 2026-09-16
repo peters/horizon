@@ -86,6 +86,32 @@ jobs:
 
           echo "run_snap_build=$run_snap_build" >> "$GITHUB_OUTPUT"
 
+  browser-engine:
+    name: Browser engine (${{ matrix.features }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        features: [minimal, video-capture]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: browser-engine-${{ matrix.features }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Verify dependency boundary
+        run: python3 scripts/check-browser-engine-dependencies.py
+      - name: Test and lint standalone engine
+        env:
+          ENGINE_FEATURES: ${{ matrix.features }}
+        run: |
+          features=()
+          if [ "$ENGINE_FEATURES" != minimal ]; then
+            features=(--features "$ENGINE_FEATURES")
+          fi
+          cargo test --locked -p horizon-browser --no-default-features "${features[@]}"
+          cargo clippy --locked -p horizon-browser --all-targets --no-default-features "${features[@]}" -- -D warnings
+
   browser-harness-tests:
     name: Browser harness tests
     runs-on: ubuntu-latest

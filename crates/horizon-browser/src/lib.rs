@@ -22,6 +22,10 @@ mod profile;
 mod semantic;
 mod semantic_fingerprint;
 pub mod session;
+#[cfg(feature = "video-capture")]
+mod video;
+#[cfg(not(feature = "video-capture"))]
+#[path = "video_disabled.rs"]
 mod video;
 mod wait;
 mod webdriver;

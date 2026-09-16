@@ -13,6 +13,8 @@ categories = ["api-bindings", "web-programming"]
 exclude = ["tests/fixtures/**"]
 
 [features]
+default = []
+video-capture = ["dep:rav1e"]
 test-support = []
 
 [lints]
@@ -28,7 +30,7 @@ png.workspace = true
 base64.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-rav1e.workspace = true
+rav1e = { workspace = true, optional = true }
 ureq.workspace = true
 
 [target.'cfg(windows)'.dependencies]
