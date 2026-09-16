@@ -55,8 +55,8 @@ impl Driver {
         }
         let method = event.get("method").and_then(Value::as_str).unwrap_or_default();
         let params = event.get("params").unwrap_or(&Value::Null);
-        if let Some(context) = params.get("context").and_then(Value::as_str)
-            && self.context_id.is_none()
+        if self.context_id.is_none()
+            && let Some(context) = created_top_level_context(method, params)
         {
             self.context_id = Some(context.to_string());
         }
@@ -240,4 +240,45 @@ pub(super) fn bidi_event_targets_context(method: &str, params: &Value, context_i
         || bidi_navigation_complete(method)
         || method.ends_with("contextDestroyed");
     !context_scoped || params.get("context").and_then(Value::as_str) == context_id
+}
+
+fn created_top_level_context<'a>(method: &str, params: &'a Value) -> Option<&'a str> {
+    if method != "browsingContext.contextCreated" || !params.get("parent").is_some_and(Value::is_null) {
+        return None;
+    }
+    params
+        .get("context")
+        .and_then(Value::as_str)
+        .filter(|context| !context.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_created_top_level_context_can_replace_a_destroyed_binding() {
+        for (method, params) in [
+            (
+                "browsingContext.contextCreated",
+                json!({"context":"frame", "parent":"top"}),
+            ),
+            ("browsingContext.contextCreated", json!({"context":"unknown"})),
+            (
+                "browsingContext.navigationStarted",
+                json!({"context":"frame", "parent":null}),
+            ),
+            (
+                "browsingContext.contextDestroyed",
+                json!({"context":"old", "parent":null}),
+            ),
+        ] {
+            assert_eq!(created_top_level_context(method, &params), None);
+        }
+        let root = json!({"context":"replacement", "parent":null});
+        assert_eq!(
+            created_top_level_context("browsingContext.contextCreated", &root),
+            Some("replacement")
+        );
+    }
 }

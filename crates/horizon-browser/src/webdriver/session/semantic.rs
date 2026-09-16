@@ -148,6 +148,10 @@ impl Driver {
                 .map_err(|error| BrowserControlFailure::new(failure_code, error));
         }
         match &request.action {
+            BrowserControlAction::Resize { .. } => Err(BrowserControlFailure::new(
+                "invalid_action_state",
+                "resize is observed from the driver loop",
+            )),
             BrowserControlAction::Snapshot { max_nodes } => self.semantic_snapshot(*max_nodes),
             BrowserControlAction::Query { selector, max_results } => self.semantic_query(selector, *max_results),
             BrowserControlAction::WaitForSelector { .. } => Err(BrowserControlFailure::new(
@@ -408,7 +412,7 @@ impl Driver {
         self.evaluate_json_within(expression, None)
     }
 
-    fn evaluate_json_within(
+    pub(super) fn evaluate_json_within(
         &self,
         expression: &str,
         timeout: Option<std::time::Duration>,

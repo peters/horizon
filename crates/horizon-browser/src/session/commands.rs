@@ -65,6 +65,10 @@ impl DriverState {
                 continue;
             }
             self.audit_agent_action(&request, BrowserAuditStatus::Dispatched);
+            if matches!(request.action, crate::BrowserControlAction::Resize { .. }) {
+                self.begin_resize(&request, frame_slot);
+                continue;
+            }
             if matches!(request.action, crate::BrowserControlAction::Navigate { .. }) {
                 // Navigation settles from page events; a dispatch-only wait
                 // completes here, everything else stays pending.
@@ -459,7 +463,7 @@ impl DriverState {
         width: u32,
         height: u32,
     ) {
-        if !self.queue_viewport(width, height) {
+        if !self.viewport_policy.follow_host([width, height]) || !self.queue_viewport(width, height) {
             return;
         }
         self.apply_pending_viewport(link, event_tx, frame_slot);
@@ -527,7 +531,7 @@ impl DriverState {
         }
     }
 
-    fn commit_viewport(&mut self, width: u32, height: u32, event_tx: &BrowserEventSender) {
+    pub(super) fn commit_viewport(&mut self, width: u32, height: u32, event_tx: &BrowserEventSender) {
         self.viewport_w = width;
         self.viewport_h = height;
         self.pending_viewport = None;

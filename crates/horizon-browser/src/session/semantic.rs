@@ -51,6 +51,10 @@ impl DriverState {
             };
         }
         let result = match &request.action {
+            BrowserControlAction::Resize { .. } => Err(BrowserControlFailure::new(
+                "invalid_action_state",
+                "resize is observed from the driver loop",
+            )),
             BrowserControlAction::Snapshot { max_nodes } => {
                 self.semantic_snapshot(link, event_tx, frame_slot, *max_nodes)
             }
@@ -271,7 +275,7 @@ impl DriverState {
         self.evaluate_json_within(link, event_tx, frame_slot, expression, super::CALL_TIMEOUT)
     }
 
-    fn evaluate_json_within(
+    pub(super) fn evaluate_json_within(
         &mut self,
         link: &mut crate::cdp::CdpLink,
         event_tx: &BrowserEventSender,

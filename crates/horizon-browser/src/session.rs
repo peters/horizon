@@ -39,6 +39,7 @@ mod shutdown;
 
 pub use shutdown::{DriverTeardown, RemoteReleaseReport};
 mod startup;
+pub(crate) mod viewport;
 mod wait;
 
 use clipboard::ClipboardState;
@@ -380,6 +381,7 @@ fn run_loop(
         }
         state.tick_pending_navigation();
         state.tick_pending_wait(link, event_tx, frame_slot, chrome);
+        state.tick_pending_resize(link, event_tx, frame_slot);
 
         // 6. Chrome process liveness.
         if stop_for_chrome_exit(state, chrome, event_tx) {
@@ -388,6 +390,7 @@ fn run_loop(
 
         std::thread::sleep(Duration::from_millis(5));
     }
+    state.finish_pending_resize("browser_unavailable", "browser session stopped");
 }
 
 fn stop_for_chrome_exit(state: &mut DriverState, chrome: &mut ChromeProcess, event_tx: &BrowserEventSender) -> bool {
@@ -429,6 +432,8 @@ struct DriverState {
     session_id: Option<String>,
     target_id: Option<String>,
     main_frame_id: Option<String>,
+    pending_resize: Option<viewport::PendingResize>,
+    viewport_policy: viewport::ViewportPolicy,
     viewport_w: u32,
     viewport_h: u32,
     pending_viewport: Option<(u32, u32)>,
@@ -512,6 +517,8 @@ impl DriverState {
             session_id: None,
             target_id: None,
             main_frame_id: None,
+            pending_resize: None,
+            viewport_policy: viewport::ViewportPolicy::new([config.width, config.height]),
             viewport_w: config.width,
             viewport_h: config.height,
             pending_viewport: None,
