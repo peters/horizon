@@ -92,10 +92,11 @@ fn challenge_is_proxy(challenge: &Value) -> bool {
 }
 
 fn request_is_proxy(params: &Value) -> bool {
-    params
-        .pointer("/request/method")
-        .and_then(Value::as_str)
-        .is_some_and(|method| method.eq_ignore_ascii_case("CONNECT"))
+    params.pointer("/response/status").and_then(Value::as_u64) == Some(407)
+        || params
+            .pointer("/request/method")
+            .and_then(Value::as_str)
+            .is_some_and(|method| method.eq_ignore_ascii_case("CONNECT"))
 }
 
 fn continue_with_auth_params(request_id: &str, decision: &HttpAuthDecision) -> Value {
@@ -114,6 +115,15 @@ fn continue_with_auth_params(request_id: &str, decision: &HttpAuthDecision) -> V
             "action": "cancel"
         }),
     }
+}
+
+pub(super) fn firefox_http_auth_events() -> &'static [&'static str] {
+    &[
+        "network.responseStarted",
+        "network.authRequired",
+        "network.responseCompleted",
+        "network.fetchError",
+    ]
 }
 
 pub(super) fn firefox_http_auth_intercept_params(context: &str) -> Value {
@@ -146,6 +156,8 @@ mod tests {
         let intercept = firefox_http_auth_intercept_params("ctx");
         assert_eq!(intercept["phases"], json!(["authRequired"]));
         assert_eq!(intercept["contexts"], json!(["ctx"]));
+        assert!(firefox_http_auth_events().contains(&"network.responseCompleted"));
+        assert!(firefox_http_auth_events().contains(&"network.fetchError"));
     }
 
     #[test]
@@ -174,5 +186,10 @@ mod tests {
             "response": { "authChallenges": [{ "scheme": "Basic" }] }
         });
         assert_eq!(select_server_auth_challenge(&connect), (None, true));
+        let status_407 = json!({
+            "request": { "method": "GET", "url": "http://example.test/basic" },
+            "response": { "status": 407, "authChallenges": [{ "scheme": "Basic" }] }
+        });
+        assert_eq!(select_server_auth_challenge(&status_407), (None, true));
     }
 }

@@ -1,12 +1,13 @@
 //! Bounded plan literals substituted with `{"$var":"name"}`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
 
 use crate::{Plan, PlanError, PlanStep, valid_identifier};
 
 const REDACTED_SECRET: &str = "<redacted>";
+const HTTP_AUTH_SECRET_FIELDS: [&str; 2] = ["password", "username"];
 
 pub(crate) const MAX_VARIABLES: usize = 32;
 const MAX_VARIABLE_BYTES: usize = 4 * 1024;
@@ -53,21 +54,50 @@ pub(crate) fn lookup(variables: &BTreeMap<String, Value>, step: &PlanStep, name:
     })
 }
 
-/// Copy of a plan with username/password/token values replaced so durable job
-/// state does not keep HTTP auth secrets.
+/// Copy of a plan with HTTP auth username/password values replaced so durable
+/// job state does not keep those secrets. Other steps keep their variables.
 pub(crate) fn redact_plan(plan: &Plan) -> Plan {
     let mut plan = plan.clone();
-    for (name, value) in &mut plan.variables {
-        if is_secret_key(name) {
+    let secret_variables = http_auth_secret_variables(&plan);
+    for name in &secret_variables {
+        if let Some(value) = plan.variables.get_mut(name) {
             *value = Value::String(REDACTED_SECRET.to_string());
-        } else {
-            redact_value(value);
         }
     }
     for step in &mut plan.steps {
-        redact_map(&mut step.arguments);
+        if step.tool != "browser_http_auth" {
+            continue;
+        }
+        for field in HTTP_AUTH_SECRET_FIELDS {
+            if step.arguments.get(field).is_some_and(|value| !value.is_null()) {
+                step.arguments
+                    .insert(field.to_string(), Value::String(REDACTED_SECRET.to_string()));
+            }
+        }
     }
     plan
+}
+
+fn http_auth_secret_variables(plan: &Plan) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for step in &plan.steps {
+        if step.tool != "browser_http_auth" {
+            continue;
+        }
+        for field in HTTP_AUTH_SECRET_FIELDS {
+            if let Some(name) = variable_name(step.arguments.get(field)) {
+                names.insert(name.to_string());
+            }
+        }
+    }
+    names
+}
+
+fn variable_name(value: Option<&Value>) -> Option<&str> {
+    value
+        .and_then(Value::as_object)
+        .and_then(|object| object.get("$var"))
+        .and_then(Value::as_str)
 }
 
 /// True when remaining work includes `browser_http_auth` set without a usable
@@ -88,32 +118,6 @@ fn password_missing_or_redacted(arguments: &Map<String, Value>) -> bool {
         None | Some(Value::Null) => true,
         Some(Value::String(value)) => value.is_empty() || value == REDACTED_SECRET,
         Some(_) => false,
-    }
-}
-
-fn is_secret_key(key: &str) -> bool {
-    matches!(key, "password" | "token" | "username")
-}
-
-fn redact_map(values: &mut Map<String, Value>) {
-    for (key, value) in values.iter_mut() {
-        if is_secret_key(key) && !value.is_null() {
-            *value = Value::String(REDACTED_SECRET.to_string());
-        } else {
-            redact_value(value);
-        }
-    }
-}
-
-fn redact_value(value: &mut Value) {
-    match value {
-        Value::Object(values) => redact_map(values),
-        Value::Array(values) => {
-            for value in values {
-                redact_value(value);
-            }
-        }
-        _ => {}
     }
 }
 
@@ -156,7 +160,8 @@ mod tests {
             version: 1,
             variables: BTreeMap::from([
                 ("username".to_string(), json!("smoke-user")),
-                ("password".to_string(), json!("smoke-pass-zephyr")),
+                ("basic_secret".to_string(), json!("smoke-pass-zephyr")),
+                ("fill_user".to_string(), json!("visible-user")),
                 ("url".to_string(), json!("http://127.0.0.1:8080/basic-auth")),
             ]),
             steps: vec![
@@ -171,17 +176,27 @@ mod tests {
                     arguments: serde_json::Map::from_iter([
                         ("operation".to_string(), json!("set")),
                         ("username".to_string(), json!({ "$var": "username" })),
-                        ("password".to_string(), json!({ "$var": "password" })),
+                        ("password".to_string(), json!({ "$var": "basic_secret" })),
+                    ]),
+                },
+                PlanStep {
+                    id: "fill".into(),
+                    tool: "browser_act".into(),
+                    arguments: serde_json::Map::from_iter([
+                        ("kind".to_string(), json!("fill")),
+                        ("value".to_string(), json!({ "$var": "fill_user" })),
                     ]),
                 },
             ],
             project: None,
         };
         let redacted = redact_plan(&plan);
-        assert_eq!(redacted.variables["password"], json!("<redacted>"));
+        assert_eq!(redacted.variables["basic_secret"], json!("<redacted>"));
         assert_eq!(redacted.variables["username"], json!("<redacted>"));
+        assert_eq!(redacted.variables["fill_user"], json!("visible-user"));
         assert_eq!(redacted.variables["url"], json!("http://127.0.0.1:8080/basic-auth"));
         assert_eq!(redacted.steps[1].arguments["password"], json!("<redacted>"));
+        assert_eq!(redacted.steps[2].arguments["value"], json!({ "$var": "fill_user" }));
         assert!(!resume_blocked_by_http_auth_secrets(&plan, 1));
         assert!(resume_blocked_by_http_auth_secrets(&redacted, 1));
         assert!(!resume_blocked_by_http_auth_secrets(&redacted, 2));

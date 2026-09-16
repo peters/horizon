@@ -183,8 +183,7 @@ pub(super) fn subscribe(link: &mut JsonWsLink, backend: BackendKind, context_id:
     subscribe_bidi_events(link, &base_bidi_events(), None)?;
     if backend == BackendKind::FirefoxBidi {
         let context = context_id.ok_or_else(|| "Firefox BiDi returned no top-level browsing context".to_string())?;
-        subscribe_bidi_events(link, &["network.responseStarted"], Some(context))?;
-        subscribe_bidi_events(link, &["network.authRequired"], Some(context))?;
+        subscribe_bidi_events(link, super::http_auth::firefox_http_auth_events(), Some(context))?;
         link.call(
             COMMAND_TIMEOUT,
             "network.addIntercept",

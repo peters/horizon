@@ -85,24 +85,26 @@ pub fn run(options: &JobOptions) -> Result<bool, JobError> {
     )
     .map_err(|error| JobError::AgentFailed(format!("browser startup failed: {error}")))?;
 
-    let mut child = agent_command(
+    let mut prepared = agent_command(
         options,
         &job_dir,
         browser_home.path(),
         &schema_path,
         &result_path,
         artifact_name.as_deref(),
-    )?
-    .stderr(Stdio::from(create_private(&diagnostics_path)?))
-    .stdout(Stdio::piped())
-    .stdin(Stdio::null())
-    .spawn()
-    .map_err(|source| {
-        JobError::AgentFailed(format!(
-            "could not start `{}`: {source}",
-            agent_executable().to_string_lossy()
-        ))
-    })?;
+    )?;
+    let mut child = prepared
+        .command
+        .stderr(Stdio::from(create_private(&diagnostics_path)?))
+        .stdout(Stdio::piped())
+        .stdin(Stdio::null())
+        .spawn()
+        .map_err(|source| {
+            JobError::AgentFailed(format!(
+                "could not start `{}`: {source}",
+                agent_executable().to_string_lossy()
+            ))
+        })?;
     let Some(stdout) = child.stdout.take() else {
         let _ = child.kill();
         let _ = child.wait();

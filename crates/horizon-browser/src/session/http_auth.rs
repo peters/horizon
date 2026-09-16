@@ -57,6 +57,9 @@ impl DriverState {
         let Some(request_id) = event.params.get("requestId").and_then(Value::as_str) else {
             return;
         };
+        if let Some(network_id) = event.params.get("networkId").and_then(Value::as_str) {
+            self.http_auth.note_network_id(request_id, network_id);
+        }
         if let Err(error) = self.call_and_ack(
             link,
             event_tx,
@@ -79,6 +82,9 @@ impl DriverState {
         let Some(request_id) = event.params.get("requestId").and_then(Value::as_str) else {
             return;
         };
+        if let Some(network_id) = event.params.get("networkId").and_then(Value::as_str) {
+            self.http_auth.note_network_id(request_id, network_id);
+        }
         let url = event
             .params
             .pointer("/request/url")

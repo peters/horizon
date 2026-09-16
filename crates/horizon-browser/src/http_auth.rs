@@ -1,6 +1,6 @@
 //! Session HTTP Basic/Digest credentials and challenge decisions.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use horizon_browser_protocol::{
     parse_http_auth_origin, request_origin, validate_http_auth_password, validate_http_auth_username,
@@ -15,6 +15,8 @@ pub(crate) struct HttpAuthState {
     credentials: Option<HttpAuthCredentials>,
     attempted_requests: HashSet<String>,
     attempted_order: VecDeque<String>,
+    fetch_network_ids: HashMap<String, String>,
+    network_fetch_ids: HashMap<String, String>,
 }
 
 #[derive(Clone, Debug)]
@@ -102,11 +104,40 @@ impl HttpAuthState {
         HttpAuthDecision::Provide { username, password }
     }
 
-    pub(crate) fn forget_request(&mut self, request_id: &str) {
-        if self.attempted_requests.remove(request_id)
-            && let Some(index) = self.attempted_order.iter().position(|id| id == request_id)
+    pub(crate) fn note_network_id(&mut self, fetch_id: &str, network_id: &str) {
+        if fetch_id.is_empty() || network_id.is_empty() {
+            return;
+        }
+        if let Some(previous) = self
+            .fetch_network_ids
+            .insert(fetch_id.to_string(), network_id.to_string())
         {
-            self.attempted_order.remove(index);
+            self.network_fetch_ids.remove(&previous);
+        }
+        if let Some(previous) = self
+            .network_fetch_ids
+            .insert(network_id.to_string(), fetch_id.to_string())
+            && previous != fetch_id
+        {
+            self.fetch_network_ids.remove(&previous);
+        }
+    }
+
+    pub(crate) fn forget_request(&mut self, request_id: &str) {
+        let mut related = vec![request_id.to_string()];
+        if let Some(network_id) = self.fetch_network_ids.remove(request_id) {
+            self.network_fetch_ids.remove(&network_id);
+            related.push(network_id);
+        }
+        if let Some(fetch_id) = self.network_fetch_ids.remove(request_id) {
+            self.fetch_network_ids.remove(&fetch_id);
+            related.push(fetch_id);
+        }
+        for id in related {
+            self.attempted_requests.remove(&id);
+            if let Some(index) = self.attempted_order.iter().position(|stored| stored == &id) {
+                self.attempted_order.remove(index);
+            }
         }
     }
 
@@ -115,7 +146,7 @@ impl HttpAuthState {
             let Some(oldest) = self.attempted_order.pop_front() else {
                 break;
             };
-            self.attempted_requests.remove(&oldest);
+            self.forget_request(&oldest);
         }
         if self.attempted_requests.insert(request_id.to_string()) {
             self.attempted_order.push_back(request_id.to_string());
@@ -125,6 +156,8 @@ impl HttpAuthState {
     fn clear_attempts(&mut self) {
         self.attempted_requests.clear();
         self.attempted_order.clear();
+        self.fetch_network_ids.clear();
+        self.network_fetch_ids.clear();
     }
 }
 
@@ -183,6 +216,16 @@ mod tests {
             HttpAuthDecision::Cancel
         );
         state.forget_request("req-1");
+        assert_eq!(
+            state.decide("req-1", "http://127.0.0.1:8080/basic-auth", Some("Basic"), false),
+            provide("smoke-user", "smoke-pass-zephyr")
+        );
+        state.note_network_id("req-1", "net-1");
+        assert_eq!(
+            state.decide("req-1", "http://127.0.0.1:8080/basic-auth", Some("Basic"), false),
+            HttpAuthDecision::Cancel
+        );
+        state.forget_request("net-1");
         assert_eq!(
             state.decide("req-1", "http://127.0.0.1:8080/basic-auth", Some("Basic"), false),
             provide("smoke-user", "smoke-pass-zephyr")

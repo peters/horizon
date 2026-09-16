@@ -1,9 +1,15 @@
 use std::ffi::{OsStr, OsString};
 use std::fs;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::{JobError, JobOptions, io_error, write_private};
+
+pub(super) struct PreparedAgent {
+    pub command: Command,
+    _prompt: Option<tempfile::NamedTempFile>,
+}
 
 const MCP_ARGS: [&str; 2] = ["mcp", "--connect"];
 const GROK_DISALLOWED_TOOLS: &str = "web_search,web_fetch,run_terminal_cmd";
@@ -40,21 +46,24 @@ pub(super) fn agent_command(
     schema_path: &Path,
     result_path: &Path,
     artifact: Option<&Path>,
-) -> Result<Command, JobError> {
+) -> Result<PreparedAgent, JobError> {
     let executable = agent_executable();
     let prompt = agent_prompt(&options.prompt, artifact);
     let browser = std::env::current_exe().map_err(|source| io_error("could not resolve horizon-browser", &source))?;
     match agent_kind(&executable) {
         AgentKind::Grok => grok_command(&executable, job_dir, browser_home, &browser, &prompt),
-        AgentKind::Codex => Ok(codex_command(
-            &executable,
-            job_dir,
-            browser_home,
-            schema_path,
-            result_path,
-            &browser,
-            &prompt,
-        )),
+        AgentKind::Codex => Ok(PreparedAgent {
+            command: codex_command(
+                &executable,
+                job_dir,
+                browser_home,
+                schema_path,
+                result_path,
+                &browser,
+                &prompt,
+            ),
+            _prompt: None,
+        }),
     }
 }
 
@@ -213,10 +222,9 @@ fn grok_command(
     browser_home: &Path,
     browser: &Path,
     prompt: &str,
-) -> Result<Command, JobError> {
+) -> Result<PreparedAgent, JobError> {
     let grok_home = prepare_grok_home(job_dir, browser, browser_home)?;
-    let prompt_path = job_dir.join("prompt.txt");
-    write_private(&prompt_path, prompt.as_bytes())?;
+    let prompt_file = write_ephemeral_prompt(prompt)?;
     let mut command = Command::new(executable);
     command
         .args(["--cwd"])
@@ -235,12 +243,34 @@ fn grok_command(
             "streaming-json",
             "--prompt-file",
         ])
-        .arg(prompt_path)
+        .arg(prompt_file.path())
         .env("GROK_HOME", grok_home)
         .env("GROK_DISABLE_AUTOUPDATER", "1")
         .env_remove("HORIZON_BROWSER_ACTOR")
         .env("RUST_LOG", "off");
-    Ok(command)
+    Ok(PreparedAgent {
+        command,
+        _prompt: Some(prompt_file),
+    })
+}
+
+fn write_ephemeral_prompt(prompt: &str) -> Result<tempfile::NamedTempFile, JobError> {
+    let mut prompt_file = tempfile::Builder::new()
+        .prefix("horizon-browser-prompt-")
+        .tempfile()
+        .map_err(|source| io_error("could not create ephemeral agent prompt", &source))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(prompt_file.path(), fs::Permissions::from_mode(0o600))
+            .map_err(|source| io_error("could not secure ephemeral agent prompt", &source))?;
+    }
+    prompt_file
+        .write_all(prompt.as_bytes())
+        .and_then(|()| prompt_file.flush())
+        .and_then(|()| prompt_file.as_file().sync_all())
+        .map_err(|source| io_error("could not write ephemeral agent prompt", &source))?;
+    Ok(prompt_file)
 }
 
 fn prepare_grok_home(job_dir: &Path, browser: &Path, browser_home: &Path) -> Result<PathBuf, JobError> {
@@ -507,7 +537,7 @@ mod tests {
         let job = tempfile::tempdir().unwrap_or_else(|error| panic!("job dir: {error}"));
         let browser = job.path().join("horizon-browser");
         let browser_home = job.path().join("browser-home");
-        let command = grok_command(
+        let prepared = grok_command(
             OsStr::new("grok"),
             job.path(),
             &browser_home,
@@ -515,7 +545,8 @@ mod tests {
             "summarize example.com",
         )
         .unwrap_or_else(|error| panic!("command: {error}"));
-        let args = command
+        let args = prepared
+            .command
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
@@ -526,15 +557,22 @@ mod tests {
         assert!(args.contains(&"--always-approve".to_string()));
         assert!(args.contains(&"--disable-web-search".to_string()));
         assert!(!args.contains(&"--json-schema".to_string()));
-        assert_eq!(command.get_program(), OsStr::new("grok"));
+        assert_eq!(prepared.command.get_program(), OsStr::new("grok"));
         let grok_home = job.path().join("grok-home");
         assert_eq!(
-            command
+            prepared
+                .command
                 .get_envs()
                 .find_map(|(key, value)| (key == "GROK_HOME").then_some(value.map(std::ffi::OsStr::to_os_string))),
             Some(Some(grok_home.into_os_string()))
         );
-        assert!(job.path().join("prompt.txt").is_file());
+        assert!(!job.path().join("prompt.txt").is_file());
+        let prompt_path = args
+            .windows(2)
+            .find_map(|window| (window[0] == "--prompt-file").then_some(window[1].as_str()))
+            .expect("prompt file");
+        assert_ne!(Path::new(prompt_path), job.path().join("prompt.txt"));
+        assert!(Path::new(prompt_path).is_file());
     }
 
     #[test]
