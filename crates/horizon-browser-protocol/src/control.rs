@@ -5,8 +5,9 @@
 //! stays independent of that filesystem and of Horizon's panel model.
 
 use crate::{
-    BrowserCommand, BrowserInput, BrowserKey, BrowserNetworkCaptureOptions, BrowserNetworkOperation, BrowserTarget,
-    BrowserVideoCaptureOverrides, BrowserVideoOperation, SelectorState,
+    BrowserCommand, BrowserHttpAuthOperation, BrowserInput, BrowserKey, BrowserNetworkCaptureOptions,
+    BrowserNetworkOperation, BrowserTarget, BrowserVideoCaptureOverrides, BrowserVideoOperation, SecretString,
+    SelectorState, parse_http_auth_origin, validate_http_auth_password, validate_http_auth_username,
 };
 
 const MAX_NAVIGATION_BYTES: usize = 8 * 1024;
@@ -161,6 +162,16 @@ pub enum BrowserControlAction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         options: Option<BrowserVideoCaptureOverrides>,
     },
+    /// Set or clear HTTP Basic/Digest credentials for server auth challenges.
+    HttpAuth {
+        operation: BrowserHttpAuthOperation,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        username: Option<SecretString>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        password: Option<SecretString>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin: Option<SecretString>,
+    },
 }
 
 impl BrowserControlAction {
@@ -251,6 +262,12 @@ impl BrowserControlAction {
                 | BrowserVideoOperation::Status
                 | BrowserVideoOperation::Stop => Ok(()),
             },
+            Self::HttpAuth {
+                operation,
+                username,
+                password,
+                origin,
+            } => validate_http_auth(*operation, username.as_deref(), password.as_ref(), origin.as_deref()),
             Self::Reload | Self::Back | Self::Forward => Ok(()),
         }
     }
@@ -272,7 +289,8 @@ impl BrowserControlAction {
             | Self::Scroll { .. }
             | Self::Evaluate { .. }
             | Self::Network { .. }
-            | Self::Video { .. } => None,
+            | Self::Video { .. }
+            | Self::HttpAuth { .. } => None,
         }
     }
 }
@@ -450,6 +468,30 @@ fn validate_key(key: BrowserKey) -> Result<(), &'static str> {
         Err("printable key contains a control character")
     } else {
         Ok(())
+    }
+}
+
+fn validate_http_auth(
+    operation: BrowserHttpAuthOperation,
+    username: Option<&str>,
+    password: Option<&SecretString>,
+    origin: Option<&str>,
+) -> Result<(), &'static str> {
+    match operation {
+        BrowserHttpAuthOperation::Set => {
+            let username = username.ok_or("HTTP auth set requires username")?;
+            let password = password.ok_or("HTTP auth set requires password")?;
+            validate_http_auth_username(username)?;
+            validate_http_auth_password(password.as_str())?;
+            origin.map_or(Ok(()), |origin| parse_http_auth_origin(origin).map(|_| ()))
+        }
+        BrowserHttpAuthOperation::Clear => {
+            if username.is_some() || password.is_some() || origin.is_some() {
+                Err("HTTP auth clear does not accept credentials")
+            } else {
+                Ok(())
+            }
+        }
     }
 }
 
@@ -734,5 +776,83 @@ mod tests {
                 .is_ok()
             );
         }
+    }
+
+    #[test]
+    fn credential_bearing_origins_stay_redacted_in_action_debug_output() {
+        for origin in [
+            "https://user:origin-secret@example.test",
+            "https://example.test/origin-secret",
+            "https://example.test?password=origin-secret",
+        ] {
+            let action = BrowserControlAction::HttpAuth {
+                operation: crate::BrowserHttpAuthOperation::Set,
+                username: Some("user".into()),
+                password: Some("password".into()),
+                origin: Some(origin.into()),
+            };
+            assert!(action.validate().is_err());
+            let wire = serde_json::to_value(&action).expect("encode private action");
+            assert_eq!(wire["origin"], origin);
+            let decoded: BrowserControlAction = serde_json::from_value(wire).expect("decode action");
+            let envelope = AgentAction {
+                action_id: "id".into(),
+                actor: "actor".into(),
+                requested_at_millis: 0,
+                action: decoded,
+            };
+            assert!(!format!("{envelope:?}").contains("origin-secret"));
+        }
+    }
+
+    #[test]
+    fn http_auth_set_requires_credentials_and_clear_rejects_them() {
+        let set = BrowserControlAction::HttpAuth {
+            operation: crate::BrowserHttpAuthOperation::Set,
+            username: Some("smoke-user".into()),
+            password: Some(crate::SecretString::new("smoke-pass-zephyr")),
+            origin: Some("http://127.0.0.1:8080".into()),
+        };
+        assert!(set.validate().is_ok());
+        assert!(set.to_command().is_none());
+        assert!(
+            !format!("{set:?}").contains("smoke-pass-zephyr"),
+            "Debug must not echo the password: {set:?}"
+        );
+        assert!(
+            !format!("{set:?}").contains("smoke-user"),
+            "Debug must not echo the username: {set:?}"
+        );
+
+        assert!(
+            BrowserControlAction::HttpAuth {
+                operation: crate::BrowserHttpAuthOperation::Set,
+                username: None,
+                password: Some(crate::SecretString::new("x")),
+                origin: None,
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            BrowserControlAction::HttpAuth {
+                operation: crate::BrowserHttpAuthOperation::Clear,
+                username: Some("smoke-user".into()),
+                password: None,
+                origin: None,
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            BrowserControlAction::HttpAuth {
+                operation: crate::BrowserHttpAuthOperation::Clear,
+                username: None,
+                password: None,
+                origin: None,
+            }
+            .validate()
+            .is_ok()
+        );
     }
 }

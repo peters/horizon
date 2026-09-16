@@ -376,6 +376,7 @@ mod tests {
             audit_sampler: crate::audit::BrowserAuditSampler::default(),
             semantic: SemanticState::default(),
             challenge_loop: crate::challenge::ChallengeLoopDetector::default(),
+            http_auth: crate::http_auth::HttpAuthState::default(),
             network: crate::network::NetworkCaptureState::default(),
             video: crate::video::VideoCaptureState::new(Arc::clone(&config.video)),
             firefox_network: None,

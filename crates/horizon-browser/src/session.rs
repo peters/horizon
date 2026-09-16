@@ -29,6 +29,7 @@ mod command_queue;
 mod commands;
 mod events;
 mod handle;
+mod http_auth;
 mod http_bodies;
 mod lifecycle;
 mod manifest_io;
@@ -499,6 +500,7 @@ struct DriverState {
     audit_sampler: crate::audit::BrowserAuditSampler,
     semantic: SemanticState,
     challenge_loop: crate::challenge::ChallengeLoopDetector,
+    http_auth: crate::http_auth::HttpAuthState,
     network: crate::network::NetworkCaptureState,
     video: crate::video::VideoCaptureState,
     pending_http_bodies: VecDeque<http_bodies::PendingHttpBody>,
@@ -565,6 +567,7 @@ impl DriverState {
             audit_sampler: crate::audit::BrowserAuditSampler::default(),
             semantic: SemanticState::default(),
             challenge_loop: crate::challenge::ChallengeLoopDetector::default(),
+            http_auth: crate::http_auth::HttpAuthState::default(),
             network: crate::network::NetworkCaptureState::default(),
             video: crate::video::VideoCaptureState::new(Arc::clone(&config.video)),
             pending_http_bodies: VecDeque::new(),

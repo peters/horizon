@@ -124,6 +124,12 @@ fn assert_setup_refused(outcome: &SetupOutcome) {
     assert!(outcome.session.is_none());
     assert!(
         outcome
+            .commands
+            .iter()
+            .any(|command| { command["method"] == "Fetch.disable" && command["sessionId"] == "session" })
+    );
+    assert!(
+        outcome
             .events
             .iter()
             .any(|event| matches!(event, BrowserEvent::Warning(_)))

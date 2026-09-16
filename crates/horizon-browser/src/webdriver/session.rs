@@ -22,6 +22,7 @@ mod bidi;
 mod coordination;
 mod frames;
 pub(super) mod handshake;
+mod http_auth;
 pub(crate) mod native_select;
 mod navigation;
 mod network;
@@ -107,6 +108,7 @@ struct Driver {
     audit_sampler: crate::audit::BrowserAuditSampler,
     semantic: SemanticState,
     challenge_loop: crate::challenge::ChallengeLoopDetector,
+    http_auth: crate::http_auth::HttpAuthState,
     network: crate::network::NetworkCaptureState,
     video: crate::video::VideoCaptureState,
     firefox_network: Option<network::FirefoxNetworkBridge>,
@@ -330,6 +332,7 @@ impl Driver {
             audit_sampler: crate::audit::BrowserAuditSampler::default(),
             semantic: SemanticState::default(),
             challenge_loop: crate::challenge::ChallengeLoopDetector::default(),
+            http_auth: crate::http_auth::HttpAuthState::default(),
             network: crate::network::NetworkCaptureState::default(),
             video: crate::video::VideoCaptureState::new(Arc::clone(&config.video)),
             firefox_network: None,

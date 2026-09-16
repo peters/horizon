@@ -50,6 +50,11 @@ impl Driver {
             self.handle_bidi_navigate_response(event, event_tx);
             return;
         }
+        if event.get("method").and_then(Value::as_str) == Some("network.authRequired") {
+            self.continue_http_auth(event, event_tx);
+            return;
+        }
+        self.forget_completed_http_auth(event);
         if self.handle_network_bidi_event(event) {
             return;
         }
@@ -178,7 +183,15 @@ pub(super) fn subscribe(link: &mut JsonWsLink, backend: BackendKind, context_id:
     subscribe_bidi_events(link, &base_bidi_events(), None)?;
     if backend == BackendKind::FirefoxBidi {
         let context = context_id.ok_or_else(|| "Firefox BiDi returned no top-level browsing context".to_string())?;
-        subscribe_bidi_events(link, &["network.responseStarted"], Some(context))?;
+        subscribe_bidi_events(link, super::http_auth::firefox_http_auth_events(), Some(context))?;
+        link.call(
+            COMMAND_TIMEOUT,
+            "network.addIntercept",
+            &super::http_auth::firefox_http_auth_intercept_params(context),
+        )
+        .result
+        .map(|_| ())
+        .map_err(|error| format!("Firefox could not intercept HTTP authentication challenges: {error}"))?;
     }
     Ok(())
 }

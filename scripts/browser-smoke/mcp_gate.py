@@ -24,6 +24,7 @@ TOOL_NAMES = [
     "browser_create",
     "browser_evaluate",
     "browser_handoff",
+    "browser_http_auth",
     "browser_list",
     "browser_navigate",
     "browser_network",
@@ -197,6 +198,8 @@ def initialize(client: McpClient) -> list[dict[str, Any]]:
         raise AssertionError("MCP instructions do not teach the network capture workflow")
     if "browser_video start" not in result["instructions"]:
         raise AssertionError("MCP instructions do not teach the video capture workflow")
+    if "browser_http_auth" not in result["instructions"]:
+        raise AssertionError("MCP instructions do not teach HTTP Basic/Digest credentials")
     if "browser_network_watch" not in result["instructions"] or "browser_visibility" not in result["instructions"]:
         raise AssertionError("MCP instructions do not teach watch and visibility workflows")
     if "allow_additional=true" not in result["instructions"] or "original panel" not in result["instructions"]:

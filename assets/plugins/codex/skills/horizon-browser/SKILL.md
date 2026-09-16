@@ -81,6 +81,21 @@ so do not poll it in a tight loop; pick a `timeout_millis` that covers the
 expected change. Use `browser_evaluate` only when the semantic tools cannot
 answer the question.
 
+If a page presents HTTP Basic or Digest authentication, call
+`browser_http_auth` with `operation: set`, the username and password the user
+supplied, and `origin` (`http://host[:port]` or `https://host[:port]`) when
+known, before `browser_navigate`, or set then reload if the protected page is
+already open. If origin is omitted, it binds to the current page origin and
+fails when the page has none. If the user has not supplied credentials, ask for
+a username and password instead of guessing. The engine provides those
+credentials only to matching server challenges for that origin on local
+Chromium and Firefox. Do not put the password in
+`browser_evaluate` or audit commentary. Safari and remote sessions return
+`unsupported_backend`. Call `operation: clear` to drop live-session credentials
+for later intercepted challenges; it does not revoke Authorization values the
+browser already cached, so open a new panel for a clean unauthenticated
+session.
+
 For HTTP or WebSocket observation, first inspect the panel's
 `network_capture` field from `browser_list` or `browser_panel`. When supported,
 call `browser_network` with `operation: start` **before navigation** so open,

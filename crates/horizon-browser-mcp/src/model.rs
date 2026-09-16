@@ -1,8 +1,10 @@
+mod http_auth;
 mod network;
 mod viewport;
 pub(crate) use viewport::{ResizeInput, ResizeOutput};
 mod video;
 
+pub(crate) use http_auth::{HttpAuthInput, HttpAuthOutput};
 pub(crate) use network::{
     NetworkInput, NetworkOutput, NetworkWatchCaptureState, NetworkWatchDeliveryState, NetworkWatchEventKind,
     NetworkWatchInput, NetworkWatchOutput, NetworkWatchRecord,

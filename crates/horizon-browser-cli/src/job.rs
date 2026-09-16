@@ -85,24 +85,15 @@ pub fn run(options: &JobOptions) -> Result<bool, JobError> {
     )
     .map_err(|error| JobError::AgentFailed(format!("browser startup failed: {error}")))?;
 
-    let mut child = agent_command(
+    let mut prepared = agent_command(
         options,
         &job_dir,
         browser_home.path(),
         &schema_path,
         &result_path,
         artifact_name.as_deref(),
-    )?
-    .stderr(Stdio::from(create_private(&diagnostics_path)?))
-    .stdout(Stdio::piped())
-    .stdin(Stdio::null())
-    .spawn()
-    .map_err(|source| {
-        JobError::AgentFailed(format!(
-            "could not start `{}`: {source}",
-            agent_executable().to_string_lossy()
-        ))
-    })?;
+    )?;
+    let mut child = spawn_agent(&mut prepared, &diagnostics_path)?;
     let Some(stdout) = child.stdout.take() else {
         let _ = child.kill();
         let _ = child.wait();
@@ -240,6 +231,41 @@ fn authorized_artifact(prompt: &str) -> Result<Option<PathBuf>, JobError> {
         return confined.then_some(Some(path)).ok_or(JobError::Artifact(candidate));
     }
     Ok(None)
+}
+
+fn spawn_agent(prepared: &mut agent::PreparedAgent, diagnostics_path: &Path) -> Result<std::process::Child, JobError> {
+    let mut child = prepared
+        .command
+        .stderr(Stdio::from(create_private(diagnostics_path)?))
+        .stdout(Stdio::piped())
+        .stdin(if prepared.stdin_prompt.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .spawn()
+        .map_err(|source| {
+            JobError::AgentFailed(format!(
+                "could not start `{}`: {source}",
+                agent_executable().to_string_lossy()
+            ))
+        })?;
+    if let Some(prompt) = prepared.stdin_prompt.as_ref() {
+        let Some(mut stdin) = child.stdin.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(io_error(
+                "agent stdin was unavailable",
+                &std::io::Error::other("missing pipe"),
+            ));
+        };
+        if let Err(source) = stdin.write_all(prompt.as_bytes()).and_then(|()| stdin.flush()) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(io_error("could not write agent prompt", &source));
+        }
+    }
+    Ok(child)
 }
 
 fn bounded_matches<'a>(value: &'a str, word: &'a str) -> impl Iterator<Item = usize> + 'a {

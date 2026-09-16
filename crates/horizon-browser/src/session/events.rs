@@ -197,9 +197,15 @@ impl DriverState {
             // `call_and_ack`, which re-enters `handle_message`.
             self.handle_network_event(&event);
         }
+        self.forget_completed_http_auth(&event);
+        if event.method == "Fetch.authRequired" || event.method == "Fetch.requestPaused" {
+            self.continue_http_auth(link, event_tx, frame_slot, &event);
+            return;
+        }
         match event.method {
             "Target.attachedToTarget" => {
                 if self.note_clipboard_target_attachment(link, &event) {
+                    self.attach_http_auth_iframe(link, event_tx, frame_slot, &event);
                     return;
                 }
                 // Popups and agent-opened tabs must not steal the binding;
@@ -216,9 +222,14 @@ impl DriverState {
                 self.attach_setup(link, event_tx, frame_slot, session, target_id);
             }
             "Target.detachedFromTarget" => {
+                if let Some(session) = target_event_session_id(event.params, event.session_id) {
+                    self.forget_http_auth_session(session);
+                }
                 self.note_clipboard_target_detachment(&event);
                 if target_event_session_id(event.params, event.session_id) == self.session_id.as_deref() {
+                    self.retire_http_auth_session(link);
                     self.session_id = None;
+                    self.http_auth.reset_requests();
                     self.screencast_on = false;
                     self.screencast_request_id = None;
                     self.navigate_request_id = None;
@@ -239,6 +250,9 @@ impl DriverState {
             }
             "Target.targetDestroyed" => {
                 let destroyed = event.params.get("targetId").and_then(|t| t.as_str());
+                if destroyed.is_some() && destroyed == self.target_id.as_deref() {
+                    self.retire_http_auth_session(link);
+                }
                 if self.forget_destroyed_bound_target(destroyed, event_tx) {
                     // External agents discover the page through this field.
                     // Clear it synchronously so a destroyed target is not
@@ -305,6 +319,7 @@ impl DriverState {
             return false;
         }
         self.session_id = None;
+        self.http_auth.reset_requests();
         self.target_id = None;
         self.main_frame_id = None;
         self.screencast_on = false;
@@ -640,16 +655,43 @@ mod tests {
         state.target_id = Some("bound".to_string());
         state.session_id = Some("session".to_string());
         state.manifest_dirty = false;
+        state
+            .http_auth
+            .apply(
+                crate::BrowserHttpAuthOperation::Set,
+                Some("user"),
+                Some(&crate::SecretString::new("password")),
+                Some("https://example.test"),
+            )
+            .expect("set auth");
+        assert!(matches!(
+            state
+                .http_auth
+                .decide("request", "https://example.test", Some("basic"), false),
+            crate::http_auth::HttpAuthDecision::Provide { .. }
+        ));
 
         assert!(!state.forget_destroyed_bound_target(Some("popup"), &events));
         assert_eq!(state.target_id.as_deref(), Some("bound"));
         assert!(!state.manifest_dirty);
+        assert_eq!(
+            state
+                .http_auth
+                .decide("request", "https://example.test", Some("basic"), false),
+            crate::http_auth::HttpAuthDecision::Cancel
+        );
 
         assert!(state.forget_destroyed_bound_target(Some("bound"), &events));
         assert_eq!(state.target_id, None);
         assert_eq!(state.session_id, None);
         assert!(state.manifest_dirty);
         assert!(!state.pending_reattach);
+        assert!(matches!(
+            state
+                .http_auth
+                .decide("request", "https://example.test", Some("basic"), false),
+            crate::http_auth::HttpAuthDecision::Provide { .. }
+        ));
     }
 
     #[test]

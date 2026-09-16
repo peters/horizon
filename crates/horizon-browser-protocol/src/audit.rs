@@ -177,6 +177,13 @@ pub enum BrowserAuditAction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_file_bytes: Option<u64>,
     },
+    HttpAuth {
+        operation: crate::BrowserHttpAuthOperation,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        username_characters: Option<usize>,
+    },
     HandoffRequested,
     HandoffDone,
     SelectOption {
@@ -281,6 +288,18 @@ impl BrowserAuditAction {
                 fps: options.as_ref().and_then(|options| options.fps),
                 max_width: options.as_ref().and_then(|options| options.max_width),
                 max_file_bytes: options.as_ref().and_then(|options| options.max_file_bytes),
+            },
+            BrowserControlAction::HttpAuth {
+                operation,
+                username,
+                origin,
+                ..
+            } => Self::HttpAuth {
+                operation: *operation,
+                origin: origin
+                    .as_deref()
+                    .and_then(|origin| crate::parse_http_auth_origin(origin).ok()),
+                username_characters: username.as_ref().map(|username| username.as_str().chars().count()),
             },
         }
     }
@@ -612,5 +631,48 @@ mod tests {
                 count: 2,
             }
         );
+    }
+
+    #[test]
+    fn http_auth_audit_keeps_origin_and_username_length_without_the_password() {
+        let action = BrowserAuditAction::from_control(&BrowserControlAction::HttpAuth {
+            operation: crate::BrowserHttpAuthOperation::Set,
+            username: Some("smoke-user".into()),
+            password: Some(crate::SecretString::new("smoke-pass-zephyr")),
+            origin: Some("http://127.0.0.1:8080".into()),
+        });
+        assert_eq!(
+            action,
+            BrowserAuditAction::HttpAuth {
+                operation: crate::BrowserHttpAuthOperation::Set,
+                origin: Some("http://127.0.0.1:8080".into()),
+                username_characters: Some(10),
+            }
+        );
+        let json = serde_json::to_string(&action).expect("encode");
+        assert!(!json.contains("smoke-user"));
+        assert!(!json.contains("smoke-pass-zephyr"));
+        assert!(json.contains("http://127.0.0.1:8080"));
+    }
+
+    #[test]
+    fn http_auth_audit_omits_invalid_origins_and_canonicalizes_valid_ones() {
+        for (origin, expected) in [
+            ("https://user:private-password@example.test", None),
+            ("https://example.test/private-password", None),
+            ("https://example.test?password=private-password", None),
+            ("private-password", None),
+            ("HTTPS://EXAMPLE.TEST:443", Some("https://example.test")),
+        ] {
+            let audit = BrowserAuditAction::from_control(&BrowserControlAction::HttpAuth {
+                operation: crate::BrowserHttpAuthOperation::Set,
+                username: Some("user".into()),
+                password: Some(crate::SecretString::new("private-password")),
+                origin: Some(origin.into()),
+            });
+            let value = serde_json::to_value(audit).expect("audit JSON");
+            assert_eq!(value["origin"].as_str(), expected);
+            assert!(!value.to_string().contains("private-password"));
+        }
     }
 }

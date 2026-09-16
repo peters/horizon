@@ -102,6 +102,8 @@ fn exercise_protocol(requested_version: &str, negotiated_version: &str) {
                 && instructions.contains("browser_network start before browser_navigate")
                 && instructions.contains("browser_network_watch")
                 && instructions.contains("browser_video")
+                && instructions.contains("browser_http_auth")
+                && instructions.contains("browser_resize")
                 && instructions.contains("browser_visibility")
                 && instructions.contains("browser_close")
                 && instructions.contains("allow_additional=true")
@@ -143,7 +145,7 @@ fn listed_tool<'a>(tools: &'a Value, name: &str) -> &'a Value {
 
 fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     let encoded_tools = tools.to_string();
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(17));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(18));
     let resize = listed_tool(tools, "browser_resize");
     for field in ["panel_id", "width", "height", "reset", "timeout_millis"] {
         assert!(
@@ -188,6 +190,15 @@ fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
             .is_some_and(|description| description.contains("WebM") && description.contains("pause"))
     );
     assert!(video["inputSchema"].to_string().contains("Start only"));
+    let http_auth = listed_tool(tools, "browser_http_auth");
+    assert!(http_auth["description"].as_str().is_some_and(|description| {
+        description.contains("Basic")
+            && description.contains("Digest")
+            && description.contains("password")
+            && description.contains("If you encounter HTTP authentication")
+            && description.contains("CLI run plans")
+    }));
+    assert!(http_auth["inputSchema"].to_string().contains("username"));
     let watch = listed_tool(tools, "browser_network_watch");
     assert!(watch["description"].as_str().is_some_and(|description| {
         description.contains("next_sequence") && description.contains("no capture path")
@@ -288,7 +299,7 @@ fn resize_preserves_scope_user_control_and_measured_result_contract() {
         worker.join().unwrap();
         if let Some(code) = failure {
             assert_eq!(result["result"]["isError"], true);
-            assert!(result.to_string().contains(code));
+            assert!(result.to_string().contains(code), "expected {code}: {result}");
         } else {
             assert_eq!(
                 result["result"]["structuredContent"]["applied"],
@@ -331,7 +342,9 @@ fn resize_result_fixture(
                 };
                 let result_path = manifest::action_result_path_for_root(&worker_root, "panel", &action.action_id);
                 std::fs::create_dir_all(result_path.parent().unwrap()).unwrap();
-                std::fs::write(result_path, serde_json::to_vec(&result).unwrap()).unwrap();
+                let mut temporary = tempfile::NamedTempFile::new_in(result_path.parent().unwrap()).unwrap();
+                serde_json::to_writer(temporary.as_file_mut(), &result).unwrap();
+                temporary.persist(result_path).unwrap();
                 break;
             }
             assert!(std::time::Instant::now() < deadline, "resize was not enqueued");

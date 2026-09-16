@@ -135,7 +135,8 @@ impl JobTrace {
         if self.calls.len() >= MAX_TRACE_CALLS {
             return Err(call_limit_error());
         }
-        if !call.ok || !redact_arguments(&mut call.arguments) {
+        let replayable = redact_arguments(&mut call.arguments);
+        if !call.ok || !replayable {
             self.replayable = false;
         }
         let record = TraceRecord {
@@ -502,6 +503,17 @@ fn redact_arguments(arguments: &mut Map<String, Value>) -> bool {
 fn redact_map(values: &mut Map<String, Value>, replayable: &mut bool) {
     for (key, value) in values {
         match key.as_str() {
+            "origin" => {
+                if !value.is_null() {
+                    let redacted = value
+                        .as_str()
+                        .ok_or("invalid origin")
+                        .and_then(horizon_browser_protocol::parse_http_auth_origin)
+                        .unwrap_or_else(|_| "<redacted>".to_string());
+                    *replayable &= value.as_str() == Some(redacted.as_str());
+                    *value = Value::String(redacted);
+                }
+            }
             "url" => {
                 if let Some(url) = value.as_str() {
                     let redacted = redact_url(url);
@@ -511,7 +523,7 @@ fn redact_map(values: &mut Map<String, Value>, replayable: &mut bool) {
             }
             "url_patterns" => redact_url_patterns(value, replayable),
             "body" | "data" | "expression" | "headers" | "password" | "reason" | "script" | "selector" | "text"
-            | "token" | "value" => {
+            | "token" | "username" | "value" => {
                 if !value.is_null() {
                     *value = Value::String("<redacted>".to_string());
                     *replayable = false;
@@ -718,7 +730,9 @@ mod tests {
         let mut arguments = json!({
             "url":"https://example.com/path?token=secret#fragment",
             "url_patterns":["token=secret", "https://example.com/public", null],
-            "value":"private text"
+            "value":"private text",
+            "username":"smoke-user",
+            "password":"smoke-pass-zephyr"
         })
         .as_object()
         .cloned()
@@ -728,6 +742,62 @@ mod tests {
         assert_eq!(arguments["url"], "https://example.com/path?<redacted>#<redacted>");
         assert_eq!(arguments["url_patterns"], json!(["<redacted>", "<redacted>", null]));
         assert_eq!(arguments["value"], "<redacted>");
+        assert_eq!(arguments["username"], "<redacted>");
+        assert_eq!(arguments["password"], "<redacted>");
+    }
+
+    #[test]
+    fn failed_http_auth_calls_are_redacted() {
+        let directory = tempfile::tempdir().expect("job directory");
+        let mut trace = JobTrace::start(directory.path()).expect("trace");
+        trace
+            .record_line(
+                &json!({
+                    "type":"item.completed",
+                    "item":{
+                        "type":"mcp_tool_call",
+                        "server":"horizon-browser",
+                        "tool":"browser_http_auth",
+                        "arguments":{
+                            "operation":"set",
+                            "username":"smoke-user",
+                            "password":"smoke-pass-zephyr",
+                            "origin":"http://smoke-user:smoke-pass-zephyr@example.test"
+                        },
+                        "status":"failed",
+                        "error":"invalid_action",
+                        "result":{"content":[],"isError":true}
+                    }
+                })
+                .to_string(),
+            )
+            .expect("failed auth event");
+        let options = JobOptions {
+            prompt: "open protected page".to_string(),
+            backend: None,
+            visible: false,
+            json: true,
+        };
+        let artifacts = trace
+            .finish(
+                directory.path(),
+                &ReportInput {
+                    options: &options,
+                    backend: BackendKind::ChromiumCdp,
+                    ok: false,
+                    summary: "auth failed",
+                    artifact: None,
+                    browser_cleanup_ok: true,
+                },
+            )
+            .expect("report artifacts");
+        let trace_text = std::fs::read_to_string(&artifacts.trace).expect("trace");
+        let plan_text = std::fs::read_to_string(&artifacts.plan).expect("plan");
+        assert!(!trace_text.contains("smoke-pass-zephyr"), "{trace_text}");
+        assert!(!trace_text.contains("smoke-user"), "{trace_text}");
+        assert!(!plan_text.contains("smoke-pass-zephyr"), "{plan_text}");
+        assert!(!plan_text.contains("smoke-user"), "{plan_text}");
+        assert!(!artifacts.replayable);
     }
 
     #[test]
