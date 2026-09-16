@@ -15,9 +15,9 @@ use crate::config::{Config, WindowConfig};
 use crate::error::{Error, Result};
 use crate::layout::workspace_slot_width;
 use crate::panel::PanelKind;
-use crate::remote_workspace::valid_local_id;
 use crate::terminal::Terminal;
 use crate::view::CanvasViewState;
+use models::valid_local_id;
 
 pub use agent_sessions::{AgentSessionBootstrapCatalog, AgentSessionCatalog, AgentSessionRecord};
 pub use claude_live_sessions::{claude_session_transcript_exists, live_claude_session_ids};

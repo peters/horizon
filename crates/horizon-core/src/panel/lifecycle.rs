@@ -27,7 +27,7 @@ impl Panel {
     pub fn restart(&mut self) -> Result<()> {
         if self.remote_workspace.is_some() {
             return Err(Error::State(
-                "Remote connection pending. Restart cannot run this remote task locally.".into(),
+                "Remote development has been removed. Restart cannot run this retired task locally.".into(),
             ));
         }
         if let PanelContent::GitChanges(_) = &self.content {

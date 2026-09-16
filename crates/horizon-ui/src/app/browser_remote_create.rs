@@ -483,10 +483,17 @@ mod tests {
             !app.browser_create_host.remote_slot_leases.contains_key("other"),
             "a provider with no holds keeps no lease"
         );
-        assert!(
-            remote_slots::acquire_slot(slots.path(), "o", 1).is_ok(),
-            "the freed slot is available to another instance"
-        );
+        // A sibling test's fork may retain the descriptor until its child execs.
+        let _released_slot = (0..100)
+            .find_map(|_| match remote_slots::acquire_slot(slots.path(), "o", 1) {
+                Ok(lease) => Some(lease),
+                Err(remote_slots::SlotError::Busy { .. }) => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                    None
+                }
+                Err(error) => panic!("{error}"),
+            })
+            .expect("the freed slot is available to another instance");
         match remote_slots::acquire_slot(slots.path(), "g", 1) {
             Err(remote_slots::SlotError::Busy { .. }) => {}
             other => panic!("the held slot stays held: {other:?}"),

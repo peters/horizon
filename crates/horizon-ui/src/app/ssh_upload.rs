@@ -108,7 +108,7 @@ impl HorizonApp {
                 workspace_id,
                 Some(panel_id),
                 "remote",
-                "Remote connection pending. File upload cannot use this view's saved SSH settings.",
+                "Remote development has been removed. File upload is disabled for this retired view.",
                 horizon_core::AttentionSeverity::Medium,
             );
             return true;

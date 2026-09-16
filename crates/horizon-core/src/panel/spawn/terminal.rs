@@ -55,7 +55,7 @@ pub(in crate::panel) fn restore_failure_panel(
     }
     let remote_replay = opts.remote_workspace.as_ref().map(|_| {
         let (_, mut replay, _) = prepare_transcript_restore(id, opts.kind, opts.transcript_root.clone(), &local_id);
-        replay.extend_from_slice(b"\r\nRemote connection pending.\r\nThis saved view has not started its task locally.\r\nLocal Restart cannot launch a remote task.\r\n");
+        replay.extend_from_slice(b"\r\nRemote development has been removed.\r\nThis saved transcript is retained without starting its task locally.\r\nLocal Restart is disabled for this retired remote view.\r\n");
         replay
     });
     let PanelOptions {

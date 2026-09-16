@@ -1,3 +1,5 @@
+> **Historical document — remote development removed in #693.** The worker binary, provisioning and repository-transfer APIs described below no longer exist. Commands and procedures are retained only as historical design/test evidence and must not be used as current setup instructions. Ordinary SSH terminals and remote browsers remain supported.
+
 # Preparing an exact-base Git pack
 
 The Linux `repository_overlay::seed::export::prepare_git_base_pack` API prepares

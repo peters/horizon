@@ -9,7 +9,7 @@ use crate::error::{Error, Result};
 use crate::panel::{PanelKind, PanelResume};
 use crate::shortcuts::ShortcutBinding;
 
-pub const CURRENT_CONFIG_VERSION: u32 = 10;
+pub const CURRENT_CONFIG_VERSION: u32 = 11;
 
 /// Run any pending migrations on `config` and write back to disk.
 ///
@@ -56,6 +56,7 @@ pub fn migrate_in_memory(config: &mut Config) -> Result<bool> {
             7 => migrate_v7_to_v8(config),
             8 => migrate_v8_to_v9(config),
             9 => migrate_v9_to_v10(config),
+            10 => migrate_v10_to_v11(config),
             _ => {
                 return Err(Error::Config(format!(
                     "unknown config version {version}, expected 1..={CURRENT_CONFIG_VERSION}"
@@ -160,6 +161,11 @@ fn migrate_v8_to_v9(config: &mut Config) {
 fn migrate_v9_to_v10(config: &mut Config) {
     insert_missing_browser_preset(&mut config.presets);
 }
+
+/// v10 -> v11: obsolete top-level remote-development profiles are no longer
+/// part of Config and are omitted when the migrated value is serialized.
+/// Browser remote providers live under browser.remote and remain unchanged.
+fn migrate_v10_to_v11(_config: &mut Config) {}
 
 /// Remove every preset matching `should_remove`, then insert `replacement()`
 /// at the slot of the first removed preset (unless a preset named
@@ -301,6 +307,8 @@ fn write_back(config: &Config, path: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    mod remote_development;
+
     use super::*;
 
     const V1_YAML: &str = "\
@@ -398,7 +406,7 @@ presets:
         assert_eq!(config.version, CURRENT_CONFIG_VERSION);
 
         let reloaded = std::fs::read_to_string(&path).expect("read back");
-        assert!(reloaded.contains("version: 10"));
+        assert!(reloaded.contains(&format!("version: {CURRENT_CONFIG_VERSION}")));
         assert!(reloaded.contains("Ctrl+Shift+K"));
         assert!(reloaded.contains("zoom_reset: Ctrl+0"));
         assert!(reloaded.contains("appearance:"));
@@ -407,7 +415,7 @@ presets:
     #[test]
     fn serialized_config_includes_version() {
         let yaml = Config::default().to_yaml().expect("should serialize");
-        assert!(yaml.contains("version: 10"));
+        assert!(yaml.contains(&format!("version: {CURRENT_CONFIG_VERSION}")));
     }
 
     #[test]
