@@ -1,5 +1,5 @@
 use super::*;
-use crate::browser::manifest::{update_at, write_at};
+use crate::manifest::{update_at, write_at};
 
 const HOST_A: &str = "host-a";
 const HOST_B: &str = "host-b";
@@ -172,12 +172,12 @@ fn host_state_sync_writes_only_when_presentation_or_membership_changes() {
     // the panel to a workspace that no longer contains it.
     let now = now_millis();
     update_at(&path, "panel", |manifest| {
-        manifest.owner = Some(crate::browser::manifest::ManifestOwner {
+        manifest.owner = Some(crate::manifest::ManifestOwner {
             name: "horizon:agent-a".to_string(),
             tty: None,
             updated_at: now,
         });
-        manifest.handoff = Some(crate::browser::manifest::ManifestHandoff {
+        manifest.handoff = Some(crate::manifest::ManifestHandoff {
             request_id: "request-1".to_string(),
             reason: "sign in".to_string(),
             requested_at: now,

@@ -4,7 +4,7 @@ use std::fs::DirEntry;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use crate::horizon_home::safe_local_id;
+use crate::paths::safe_local_id;
 
 const MAX_RETAINED_CAPTURE_FILES: usize = 64;
 const MAX_RETAINED_CAPTURE_BYTES: u64 = 1024 * 1024 * 1024;

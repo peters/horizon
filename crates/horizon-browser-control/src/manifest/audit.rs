@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use super::ManifestLock;
 use super::request_queue;
-use crate::horizon_home::{HorizonHome, safe_local_id};
+use crate::paths::{BrowserRuntimePaths, safe_local_id};
 
 const MAX_AUDIT_SEGMENT_BYTES: u64 = 8 * 1024 * 1024;
 /// Default `browser_audit` page size when the caller omits `limit`.
@@ -171,7 +171,7 @@ pub fn audit_path_for_root(root: &Path, panel_local_id: &str) -> PathBuf {
 
 #[must_use]
 pub fn default_audit_path(panel_local_id: &str) -> PathBuf {
-    HorizonHome::resolve()
+    BrowserRuntimePaths::resolve()
         .browser_audit_dir()
         .join(format!("{}.jsonl", safe_local_id(panel_local_id)))
 }

@@ -11,7 +11,7 @@ use super::request_queue::{
 };
 use super::workspace::{AgentIdentity, OUTSIDE_WORKSPACE_MESSAGE};
 use super::{ManifestLock, actor_is_workspace_scoped};
-use crate::horizon_home::{HorizonHome, safe_local_id};
+use crate::paths::{BrowserRuntimePaths, safe_local_id};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BrowserVisibilityAuditStatus {
@@ -94,7 +94,7 @@ pub fn enqueue_visibility(
     timeout: Duration,
 ) -> std::io::Result<String> {
     enqueue_at(
-        HorizonHome::resolve().root(),
+        BrowserRuntimePaths::resolve().root(),
         identity,
         panel_local_id,
         visible,
@@ -181,7 +181,7 @@ fn enqueue_at(
 /// # Errors
 /// Returns an error when the private request directory cannot be read.
 pub fn list_visibility_requests() -> std::io::Result<Vec<BrowserVisibilityRequest>> {
-    list_at(HorizonHome::resolve().root())
+    list_at(BrowserRuntimePaths::resolve().root())
 }
 
 fn list_at(root: &Path) -> std::io::Result<Vec<BrowserVisibilityRequest>> {
@@ -221,7 +221,7 @@ pub fn claim_visibility_request(
     claimant_pid: u32,
 ) -> std::io::Result<Option<BrowserVisibilityRequest>> {
     claim_at(
-        HorizonHome::resolve().root(),
+        BrowserRuntimePaths::resolve().root(),
         request_id,
         actor,
         host_instance,
@@ -266,7 +266,7 @@ fn claim_at(
 /// # Errors
 /// Returns an error when the private result cannot be written atomically.
 pub fn complete_visibility_request(result: &BrowserVisibilityResult) -> std::io::Result<()> {
-    complete_at(HorizonHome::resolve().root(), result)
+    complete_at(BrowserRuntimePaths::resolve().root(), result)
 }
 
 fn complete_at(root: &Path, result: &BrowserVisibilityResult) -> std::io::Result<()> {
@@ -286,7 +286,7 @@ fn complete_at(root: &Path, result: &BrowserVisibilityResult) -> std::io::Result
 /// # Errors
 /// Returns an error for invalid data, identity mismatch, or filesystem failure.
 pub fn take_visibility_result(request_id: &str, actor: &str) -> std::io::Result<Option<BrowserVisibilityResult>> {
-    take_at(HorizonHome::resolve().root(), request_id, actor)
+    take_at(BrowserRuntimePaths::resolve().root(), request_id, actor)
 }
 
 fn take_at(root: &Path, request_id: &str, actor: &str) -> std::io::Result<Option<BrowserVisibilityResult>> {
@@ -323,7 +323,7 @@ pub fn record_visibility_status(
     request: &BrowserVisibilityRequest,
     status: BrowserVisibilityAuditStatus,
 ) -> std::io::Result<()> {
-    record_status_at(HorizonHome::resolve().root(), request, status)
+    record_status_at(BrowserRuntimePaths::resolve().root(), request, status)
 }
 
 fn record_status_at(
@@ -367,7 +367,7 @@ fn result_path(root: &Path, request_id: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::browser::manifest::{BrowserManifest, ManifestOwner, manifest_path_for_root, write_at};
+    use crate::manifest::{BrowserManifest, ManifestOwner, manifest_path_for_root, write_at};
 
     #[test]
     fn request_requires_live_ownership_and_is_audited() {

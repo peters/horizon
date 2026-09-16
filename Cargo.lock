@@ -2184,6 +2184,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-browser-control"
+version = "0.2.7"
+dependencies = [
+ "atomicwrites",
+ "horizon-browser",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "horizon-browser-mcp"
 version = "0.2.7"
 dependencies = [
@@ -2237,6 +2250,7 @@ dependencies = [
  "flate2",
  "git2",
  "horizon-browser",
+ "horizon-browser-control",
  "horizon-browser-routines",
  "keyring-core",
  "libc",

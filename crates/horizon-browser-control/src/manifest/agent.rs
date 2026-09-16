@@ -350,7 +350,7 @@ fn validate_reason(reason: &str) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::browser::manifest::{BrowserManifest, write_at};
+    use crate::manifest::{BrowserManifest, write_at};
 
     fn manifest(path: &Path) {
         write_at(

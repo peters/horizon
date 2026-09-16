@@ -14,7 +14,7 @@ use super::request_queue::{
 };
 use super::workspace::AgentIdentity;
 use super::{ManifestLock, actor_is_workspace_scoped};
-use crate::horizon_home::{HorizonHome, safe_local_id};
+use crate::paths::{BrowserRuntimePaths, safe_local_id};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BrowserCreateAuditStatus {
@@ -172,7 +172,7 @@ pub fn enqueue_create(
     timeout: Duration,
 ) -> std::io::Result<String> {
     enqueue_at(
-        HorizonHome::resolve().root(),
+        BrowserRuntimePaths::resolve().root(),
         identity,
         url,
         backend,
@@ -281,7 +281,7 @@ fn enqueue_at(
 /// # Errors
 /// Returns an error when the request directory cannot be read.
 pub fn list_create_requests() -> std::io::Result<Vec<BrowserCreateRequest>> {
-    list_at(HorizonHome::resolve().root())
+    list_at(BrowserRuntimePaths::resolve().root())
 }
 
 fn list_at(root: &Path) -> std::io::Result<Vec<BrowserCreateRequest>> {
@@ -331,7 +331,7 @@ pub fn claim_create_request(
     claimant_pid: u32,
 ) -> std::io::Result<Option<BrowserCreateRequest>> {
     claim_at(
-        HorizonHome::resolve().root(),
+        BrowserRuntimePaths::resolve().root(),
         request_id,
         actor,
         host_instance,
@@ -380,7 +380,7 @@ fn claim_at(
 /// # Errors
 /// Returns an error when the private result cannot be written atomically.
 pub fn complete_create_request(result: &BrowserCreateResult) -> std::io::Result<()> {
-    complete_at(HorizonHome::resolve().root(), result)
+    complete_at(BrowserRuntimePaths::resolve().root(), result)
 }
 
 fn complete_at(root: &Path, result: &BrowserCreateResult) -> std::io::Result<()> {
@@ -404,7 +404,7 @@ fn complete_at(root: &Path, result: &BrowserCreateResult) -> std::io::Result<()>
 /// Returns an error for invalid data, an actor mismatch, or filesystem
 /// failure. Invalid results are retained for diagnosis.
 pub fn take_create_result(request_id: &str, actor: &str) -> std::io::Result<Option<BrowserCreateResult>> {
-    take_at(HorizonHome::resolve().root(), request_id, actor)
+    take_at(BrowserRuntimePaths::resolve().root(), request_id, actor)
 }
 
 fn take_at(root: &Path, request_id: &str, actor: &str) -> std::io::Result<Option<BrowserCreateResult>> {
