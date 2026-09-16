@@ -117,7 +117,7 @@ selector; `Evaluate` returns a size-bounded JSON value. A new snapshot replaces
 the previous reference set, and navigation invalidates it, so callers must
 ground an action in fresh page state instead of reusing stale handles.
 
-`BrowserControlAction::Video` records page pixels already published on
+With the `video-capture` feature, `BrowserControlAction::Video` records page pixels already published on
 `FrameSlot` into a private WebM. Start/pause/resume/stop keep encoding on a
 dedicated thread; pause skips time in the file; stop finalizes Duration and
 Cues. Embedders must set `BrowserSessionConfig::capture_directory` and may
@@ -191,6 +191,19 @@ an application needing compliance-grade audit should implement the same typed
 sink with authenticated durable storage.
 
 ## Dependency policy
+
+Default builds omit AV1 video encoding and its `rav1e` dependency tree. Enable
+`video-capture` to record page pixels as WebM. Horizon, the standalone CLI, and
+the MCP server explicitly enable it to preserve their existing video behavior.
+Without the feature, video operations return a typed `capture_unavailable`
+failure without creating files or starting an encoder; frame delivery,
+screenshots, network capture, and all browser backends remain available.
+
+```sh
+cargo test -p horizon-browser --no-default-features
+cargo test -p horizon-browser --no-default-features --features video-capture
+```
+
 
 The runtime dependency set is intentionally small:
 
