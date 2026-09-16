@@ -626,6 +626,10 @@ fn horizon_codex_mcp_args() -> Vec<String> {
             .to_string(),
         "-c".to_string(),
         "mcp_servers.horizon-browser.default_tools_approval_mode=\"approve\"".to_string(),
+        "-c".to_string(),
+        // Codex defaults to a 60s MCP tool timeout. `browser_handoff` waits for a
+        // human for up to an hour; 3660s is that bound plus transport headroom.
+        "mcp_servers.horizon-browser.tool_timeout_sec=3660".to_string(),
     ]
 }
 
@@ -726,6 +730,7 @@ mod tests {
             "mcp_servers.horizon-browser.env_vars=[\"HORIZON_BROWSER_ACTOR\",\"HORIZON_BROWSER_HOST_INSTANCE\"]"
         ));
         assert!(command.contains("mcp_servers.horizon-browser.default_tools_approval_mode=\"approve\""));
+        assert!(command.contains("mcp_servers.horizon-browser.tool_timeout_sec=3660"));
         assert!(command.contains("--browser-mcp"));
         assert!(!command.contains("browser-cli"));
         #[cfg(target_os = "linux")]

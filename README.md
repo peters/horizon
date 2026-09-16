@@ -558,7 +558,7 @@ promise that websites cannot detect automation.
 
 ### Agent steering, audit, and CLI
 
-Horizon-launched Codex and Claude agents receive the bundled `horizon-browser` MCP server automatically. Agents start with `browser_list` and use `browser_create` to open a visible browser in their own workspace when none exists. They reuse that panel for iframe, popup, dialog, and consent flows. A fresh user page action pauses the agent queue for five seconds; an explicit handoff keeps it paused until you select **Done — hand back to agent**.
+Horizon-launched Codex and Claude agents receive the bundled `horizon-browser` MCP server automatically. Agents start with `browser_list` and use `browser_create` to open a visible browser in their own workspace when none exists. They reuse that panel for iframe, popup, dialog, and consent flows. A fresh user page action pauses the agent queue for five seconds; an explicit handoff keeps it paused until you select **Done — hand back to agent**. `browser_handoff` waits for that click before returning, so any MCP client — Codex, Claude, Grok, or `horizon-browser` CLI — resumes in the same turn.
 
 MCP is the only agent-facing browser contract. Audit journals live under `~/.horizon/audit/browsers/` and redact credentials, query values, and typed text (stored as a character count). See the [browser crate README](crates/horizon-browser/README.md) for backend and embedding details.
 

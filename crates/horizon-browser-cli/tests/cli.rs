@@ -826,7 +826,7 @@ fn successive_process_local_runs_release_ownership_immediately() {
     std::fs::write(
         &plan,
         format!(
-            r#"{{"version":1,"steps":[{{"id":"handoff","tool":"browser_handoff","arguments":{{"panel_id":"{panel_id}","reason":"release regression"}}}}]}}"#
+            r#"{{"version":1,"steps":[{{"id":"handoff","tool":"browser_handoff","arguments":{{"panel_id":"{panel_id}","reason":"release regression","wait":false}}}}]}}"#
         ),
     )
     .expect("write handoff plan");
@@ -849,6 +849,74 @@ fn successive_process_local_runs_release_ownership_immediately() {
             "invocation {invocation} retained its handoff"
         );
     }
+}
+
+#[test]
+fn run_waits_for_hand_back_before_finishing_a_handoff_step() {
+    let home = tempfile::tempdir().expect("isolated home");
+    let panel_id = "cli-handoff-panel";
+    let manifest_path = manifest::manifest_path_for_root(&home.path().join(".horizon"), panel_id);
+    manifest::write_at(
+        &manifest_path,
+        &BrowserManifest {
+            panel_local_id: panel_id.to_string(),
+            ..BrowserManifest::default()
+        },
+    )
+    .expect("write browser manifest");
+    let plan = home.path().join("wait-handoff-plan.json");
+    std::fs::write(
+        &plan,
+        format!(
+            r#"{{"version":1,"steps":[{{"id":"handoff","tool":"browser_handoff","arguments":{{"panel_id":"{panel_id}","reason":"cli resume"}}}}]}}"#
+        ),
+    )
+    .expect("write wait handoff plan");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
+        .args(["run", plan.to_str().expect("UTF-8 path"), "--timeout", "10"])
+        .env("HOME", home.path())
+        .env("HORIZON_BROWSER_ACTOR", "browser-cli-test")
+        .env("RUST_LOG", "off")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn waiting CLI handoff job");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Ok(bytes) = std::fs::read(&manifest_path)
+            && let Ok(mut snapshot) = serde_json::from_slice::<BrowserManifest>(&bytes)
+            && snapshot.handoff.as_ref().is_some_and(|handoff| !handoff.done)
+        {
+            snapshot.handoff.as_mut().expect("pending handoff").done = true;
+            manifest::write_at(&manifest_path, &snapshot).expect("hand the panel back");
+            break;
+        }
+        assert!(
+            child.try_wait().expect("poll CLI handoff job").is_none(),
+            "CLI handoff job exited before waiting for hand-back"
+        );
+        if Instant::now() >= deadline {
+            child.kill().expect("kill stalled CLI handoff job");
+            child.wait().expect("reap stalled CLI handoff job");
+            panic!("CLI handoff job never requested a pending handoff");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    wait_for_exit(&mut child, "CLI handoff job");
+    let output = child.wait_with_output().expect("collect CLI handoff job");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("decode CLI handoff report");
+    assert_eq!(report["ok"], true, "{report}");
+    assert_eq!(report["steps"][0]["tool"], "browser_handoff");
+    assert_eq!(report["steps"][0]["result"]["handoff_pending"], false);
 }
 
 fn run_command<const N: usize>(home: &std::path::Path, arguments: [&str; N]) -> std::process::Output {
