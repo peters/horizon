@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use horizon_browser_control::BrowserRuntimePaths;
@@ -14,12 +14,13 @@ fn independent_processes_keep_runtime_roots_isolated() {
         for name in ["first", "second"] {
             let root = directory.path().join(format!("{mode}-{name}"));
             std::fs::create_dir(&root).expect("root directory");
+            let home = test_home_path(&root, name);
             let output = Command::new(std::env::current_exe().expect("test executable"))
                 .args(["--exact", "runtime_root_child", "--nocapture"])
                 .env("BROWSER_PATH_TEST_MODE", mode)
                 .env(RUNTIME_ROOT_ENV, if mode == "empty" { "" } else { "relative-runtime" })
-                .env("HOME", &root)
-                .current_dir(&root)
+                .env("HOME", &home)
+                .current_dir(&home)
                 .output()
                 .expect("child test");
             assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
@@ -32,18 +33,30 @@ fn independent_processes_keep_runtime_roots_isolated() {
     }
 }
 
+fn test_home_path(root: &Path, name: &str) -> PathBuf {
+    #[cfg(unix)]
+    if name == "second" {
+        let alias = root.with_extension("alias");
+        std::os::unix::fs::symlink(root, &alias).expect("home symlink");
+        return alias;
+    }
+    let _ = name;
+    root.to_path_buf()
+}
+
 #[test]
 fn runtime_root_child() {
     let Ok(mode) = std::env::var("BROWSER_PATH_TEST_MODE") else {
         return;
     };
     let home = std::env::current_dir().expect("working directory");
+    let application_home = PathBuf::from(std::env::var_os("HOME").expect("home environment")).join(".horizon");
     match mode.as_str() {
         "configured" => {
             initialize_from_environment().expect("configure relative root");
             let root = home.join("relative-runtime");
             assert_eq!(BrowserRuntimePaths::resolve().root(), root);
-            assert_eq!(default_horizon_root(), home.join(".horizon"));
+            assert_eq!(default_horizon_root(), application_home);
             configure_runtime_root(&root).expect("same absolute root is idempotent");
             assert!(matches!(
                 configure_runtime_root(home.join("other")),
@@ -64,12 +77,12 @@ fn runtime_root_child() {
             std::fs::write(manifest::default_manifest_dir().join("proof"), b"isolated").expect("proof");
         }
         "late" => {
-            assert_eq!(BrowserRuntimePaths::resolve().root(), home.join(".horizon"));
+            assert_eq!(BrowserRuntimePaths::resolve().root(), application_home);
             assert!(matches!(
                 initialize_from_environment(),
                 Err(RuntimePathError::AlreadyInUse)
             ));
-            assert_eq!(BrowserRuntimePaths::resolve().root(), home.join(".horizon"));
+            assert_eq!(BrowserRuntimePaths::resolve().root(), application_home);
         }
         "empty" => {
             assert!(matches!(
