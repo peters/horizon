@@ -1,6 +1,4 @@
 use super::*;
-use crate::cloud_run::{CloudProvider, CloudWorkflowStore, GitCommitSha, GitSource, WorkerLifetime, WorkerTarget};
-use crate::remote_workspace::{RemotePanelBinding, RemoteWorkspaceSpec, RemoteWorkspaceState};
 use crate::{HorizonHome, Panel, PanelId, SessionStore, WorkspaceId};
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -163,7 +161,7 @@ fn remote_views_never_execute_saved_commands_on_restore_or_restart() {
         assert!(panel.wait_for_shutdown(Duration::from_secs(2)));
         assert!(!marker.exists());
         let content = panel.terminal().expect("snapshot terminal").last_lines_text(24);
-        assert!(content.contains("Remote connection pending"));
+        assert!(content.contains("Remote development has been removed"));
         assert_eq!(content.contains("Retained remote output"), has_transcript);
         let identity = panel.id;
         assert!(
@@ -321,7 +319,7 @@ fn incompatible_workspace_moves_and_removal_cannot_reinterpret_execution() {
 }
 
 #[test]
-fn copied_and_deleted_client_sessions_do_not_adopt_or_remove_remote_aggregates() {
+fn copied_and_deleted_legacy_client_sessions_preserve_inert_views() {
     let directory = tempfile::tempdir().expect("directory");
     let home = HorizonHome::from_root(directory.path().to_path_buf());
     let sessions = SessionStore::new(home.clone(), home.config_path());
@@ -332,10 +330,6 @@ fn copied_and_deleted_client_sessions_do_not_adopt_or_remove_remote_aggregates()
     sessions
         .save_runtime_state(&source.session_id, &state)
         .expect("save references");
-    let cloud = CloudWorkflowStore::open(&home).expect("private cloud store");
-    let original = cloud
-        .create_remote_workspace(&source.session_id, &aggregate())
-        .expect("owned aggregate");
     let bytes = std::fs::read(&source.runtime_state_path).expect("source bytes");
     std::fs::write(source.transcript_root.join("remote-panel.bin"), b"retained output").expect("transcript");
     let copy = sessions.duplicate_session(&source.session_id).expect("copy");
@@ -343,11 +337,6 @@ fn copied_and_deleted_client_sessions_do_not_adopt_or_remove_remote_aggregates()
     assert_eq!(
         copy.runtime_state.workspaces[0].remote_workspace,
         Some(reference(&source.session_id))
-    );
-    assert!(
-        cloud
-            .load_remote_workspace(&copy.session_id, "remote-environment")
-            .is_err()
     );
     let mut board = Board::from_runtime_state(&copy.runtime_state).expect("inert foreign view");
     assert!(board.panels[0].restart().is_err());
@@ -364,44 +353,6 @@ fn copied_and_deleted_client_sessions_do_not_adopt_or_remove_remote_aggregates()
     sessions
         .delete_session(&source.session_id)
         .expect("delete original client");
-    drop(cloud);
-    let reopened = CloudWorkflowStore::open(&home).expect("reopen inventory");
-    assert_eq!(
-        reopened
-            .list_remote_workspaces(&source.session_id)
-            .expect("retained inventory"),
-        vec![original]
-    );
-}
-
-fn aggregate() -> RemoteWorkspaceState {
-    RemoteWorkspaceState::new(RemoteWorkspaceSpec {
-        workspace_local_id: "remote-environment".into(),
-        target: WorkerTarget {
-            provider: CloudProvider::LocalDocker,
-            profile: "synthetic".into(),
-            image: format!("registry.example/worker@sha256:{}", "a".repeat(64)),
-            disk_gib: 20,
-            lifetime: WorkerLifetime::Persistent,
-            max_hourly_cost_micros: None,
-        },
-        repository: GitSource {
-            repository: "owner/project".into(),
-            commit: GitCommitSha::parse("b".repeat(40)).expect("commit"),
-            branch: None,
-        },
-        working_directory: ".".into(),
-        generation: 0,
-        panels: vec![RemotePanelBinding {
-            panel_local_id: "remote-panel".into(),
-            kind: PanelKind::Pi,
-            command: None,
-            working_directory: Some("src".into()),
-            task_handoff: Some("Continue synthetic task".into()),
-            agent_session_id: Some("remote-native-session".into()),
-        }],
-    })
-    .expect("aggregate")
 }
 
 #[test]

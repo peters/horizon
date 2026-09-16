@@ -7,14 +7,21 @@ use crate::board::WorkspaceLayout;
 use crate::config::{Config, TerminalConfig, WindowConfig, WorkspaceConfig};
 use crate::error::{Error, Result};
 use crate::panel::{PanelKind, PanelOptions, PanelResume};
-use crate::remote_workspace::valid_local_id;
 use crate::ssh::SshConnection;
 
 use super::{DEFAULT_COLS, DEFAULT_ROWS, new_local_id, normalize_cwd};
 
-/// A client reference, never an allocation grant or proof of ownership.
-/// Remote task kinds and agent resumes live in the separately owned aggregate;
-/// client panels are SSH transport views, not local agent sessions.
+pub(super) fn valid_local_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+/// An inert legacy client reference retained to prevent local command replay.
+/// Historical client panels were SSH transport views of a separately owned
+/// aggregate. They must never become local agent sessions after removal.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(try_from = "RemoteReferenceFields")]
 pub struct RemoteWorkspaceReference {

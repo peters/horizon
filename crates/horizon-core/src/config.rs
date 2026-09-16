@@ -6,7 +6,6 @@ use crate::config_migration::{self, CURRENT_CONFIG_VERSION};
 use crate::error::{Error, Result};
 use crate::horizon_home::HorizonHome;
 use crate::panel::{PanelKind, PanelResume};
-use crate::remote_provider_config::RemoteProviderConfig;
 use crate::shortcuts::{AppShortcuts, ShortcutBinding};
 pub use crate::speech_config::{SpeechBackend, SpeechConfig, SpeechHotkeyMode, SpeechProfile, SpeechTask};
 use crate::ssh::{SshConnection, discover_ssh_hosts};
@@ -37,8 +36,6 @@ pub struct Config {
     pub features: FeaturesConfig,
     #[serde(default)]
     pub browser: crate::browser::BrowserConfig,
-    #[serde(default, skip_serializing_if = "RemoteProviderConfig::is_empty")]
-    pub remote: RemoteProviderConfig,
     #[serde(default = "default_presets")]
     pub presets: Vec<PresetConfig>,
     #[serde(default)]
@@ -62,7 +59,6 @@ impl Default for Config {
             overlays: OverlaysConfig::default(),
             features: FeaturesConfig::default(),
             browser: crate::browser::BrowserConfig::default(),
-            remote: RemoteProviderConfig::default(),
             presets: default_presets(),
             workspaces: Vec::new(),
         }
@@ -434,9 +430,6 @@ impl Config {
             .remote
             .validate_definition()
             .map_err(|error| Error::Config(format!("browser.remote: {error}")))?;
-        self.remote
-            .validate()
-            .map_err(|error| Error::Config(error.to_string()))?;
         let shortcuts = self.shortcuts.resolve()?;
         crate::speech_config::validate_speech(&self.features.speech, &shortcuts)?;
         validate_ssh_connections(&self.presets, &self.workspaces)?;

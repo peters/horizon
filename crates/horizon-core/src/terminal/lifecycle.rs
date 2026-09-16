@@ -14,11 +14,6 @@ impl Terminal {
         Self::spawn_guarded(options, TerminalSshTrust::default())
     }
 
-    #[cfg(target_os = "linux")]
-    pub(crate) fn spawn_with_ssh_trust(options: TerminalSpawnOptions, trust: Arc<std::fs::File>) -> Result<Self> {
-        Self::spawn_guarded(options, TerminalSshTrust { _file: Some(trust) })
-    }
-
     fn spawn_guarded(options: TerminalSpawnOptions, trust: TerminalSshTrust) -> Result<Self> {
         let rows = options.rows.max(1);
         let cols = options.cols.max(2);
