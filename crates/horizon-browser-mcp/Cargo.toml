@@ -18,7 +18,7 @@ workspace = true
 
 [dependencies]
 horizon-browser = { workspace = true, features = ["video-capture"] }
-horizon-core.workspace = true
+horizon-browser-control.workspace = true
 rmcp.workspace = true
 schemars.workspace = true
 serde.workspace = true

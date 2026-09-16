@@ -1,5 +1,5 @@
 use horizon_browser::{BrowserControlAction, BrowserControlValue};
-use horizon_core::browser::manifest::AuditPageRequest;
+use horizon_browser_control::manifest::AuditPageRequest;
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
     handler::server::{

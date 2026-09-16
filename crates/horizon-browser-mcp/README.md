@@ -190,9 +190,13 @@ export is private, bounded, filtered, and excluded from the action audit.
 
 ## Dependency boundary
 
-`horizon-browser-mcp` is Horizon-specific and depends on `horizon-core` for
-host coordination. The reusable browser engine stays in the separately
-publishable `horizon-browser` crate, which does not depend on Horizon, egui,
-Tokio, or MCP. A future standalone application can implement
-`BrowserCoordination` with its own storage and expose this MCP shape or another
-host adapter without pulling Horizon's UI into the engine.
+`horizon-browser-mcp` uses `horizon-browser-control` for filesystem discovery,
+workspace authorization, ownership, handoff, action queues, results, and audit.
+It has no dependency on Horizon core, terminal state, or UI. The same stdio
+server can control compatible standalone browser hosts and embedded Horizon
+panels, with the existing actor/host scoping rules preserved.
+
+The browser engine remains in `horizon-browser`; it does not depend on this
+server or an async runtime. The MCP adapter owns Tokio and protocol transport.
+The default coordination root remains `HOME/.horizon`; configurable runtime
+roots are a separate follow-up in #693.

@@ -55,6 +55,8 @@ jobs:
         run: ./scripts/check-maintainability.sh
       - name: Version Sync
         run: ./scripts/check-version-sync.sh
+      - name: Browser client dependency boundary
+        run: python3 scripts/check-browser-client-dependencies.py
       - id: snap-detect
         name: Detect Snap packaging changes
         shell: bash

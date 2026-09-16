@@ -13,7 +13,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
-use horizon_core::browser::manifest::{
+use horizon_browser_control::manifest::{
     BrowserManifest, ManifestOwner, ManifestWorkspace, manifest_path_for_root, read_at, write_at,
 };
 use serde_json::{Value, json};
