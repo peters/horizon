@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use atomicwrites::{AllowOverwrite, AtomicFile, DisallowOverwrite, OverwriteBehavior};
-use horizon_core::HorizonHome;
+use horizon_browser_control::BrowserRuntimePaths;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
@@ -242,7 +242,7 @@ impl DurableRun {
         execution_timeout_seconds: u64,
         deadline_at_millis: u64,
     ) -> Result<Self, DurablePreparationError> {
-        let horizon_root = HorizonHome::resolve().root().to_path_buf();
+        let horizon_root = BrowserRuntimePaths::resolve().root().to_path_buf();
         let job_root = horizon_root.join("browser-jobs");
         let lock_root = horizon_root.join(RESUME_LOCK_DIRECTORY);
         Self::prepare_cancellable_in(
@@ -429,7 +429,7 @@ impl DurableRun {
     /// # Errors
     /// Returns when the id is invalid, the job is missing, or state cannot be read.
     pub fn open(job_id: &str) -> Result<Self, ResumeError> {
-        let horizon_root = HorizonHome::resolve().root().to_path_buf();
+        let horizon_root = BrowserRuntimePaths::resolve().root().to_path_buf();
         let job_root = horizon_root.join("browser-jobs");
         let lock_root = horizon_root.join(RESUME_LOCK_DIRECTORY);
         Self::open_in_with_lock_root(&job_root, &lock_root, job_id)

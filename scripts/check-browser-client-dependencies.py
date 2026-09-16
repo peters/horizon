@@ -6,7 +6,7 @@ import subprocess
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-CLIENTS = ("horizon-browser-mcp",)
+CLIENTS = ("horizon-browser-mcp", "horizon-browser-cli")
 FORBIDDEN = {"horizon-core", "horizon-ui", "horizon-repository", "alacritty_terminal", "eframe", "egui", "winit"}
 
 

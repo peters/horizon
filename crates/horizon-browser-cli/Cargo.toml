@@ -21,7 +21,7 @@ atomicwrites.workspace = true
 horizon-browser = { workspace = true, features = ["video-capture"] }
 horizon-browser-mcp.workspace = true
 horizon-browser-protocol.workspace = true
-horizon-core.workspace = true
+horizon-browser-control.workspace = true
 rmcp = { workspace = true, features = ["client"] }
 serde.workspace = true
 serde_json.workspace = true

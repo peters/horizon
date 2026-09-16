@@ -2,7 +2,7 @@ use std::io::{BufRead as _, BufReader, Write as _};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use horizon_core::browser::manifest::{self, BrowserManifest};
+use horizon_browser_control::manifest::{self, BrowserManifest};
 use serde_json::{Value, json};
 
 const DEADLINE_TEST_TIMEOUT_SECONDS: u64 = 3;

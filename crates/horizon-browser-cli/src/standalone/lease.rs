@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use atomicwrites::{AllowOverwrite, AtomicFile};
 use serde::{Deserialize, Serialize};
 
-use horizon_core::browser::manifest;
+use horizon_browser_control::manifest;
 
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
@@ -531,7 +531,7 @@ pub(crate) const fn keep_alive_poll() -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use horizon_core::browser::manifest::BrowserManifest;
+    use horizon_browser_control::manifest::BrowserManifest;
 
     fn write_manifest(root: &Path, panel_id: &str) {
         manifest::write_at(
