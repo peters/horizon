@@ -115,7 +115,7 @@ fn workspace_commands(shortcuts: &AppShortcuts, primary_label: &str) -> Vec<Comm
             CommandId::AlignWorkspacesHorizontally,
             "Align Workspaces",
             shortcuts.align_workspaces_horizontally.display_label(primary_label),
-            &["arrange", "horizontal", "layout", "row"],
+            &["arrange", "horizontal", "layout", "row", "sidebar", "order", "organize"],
         ),
     ]
 }

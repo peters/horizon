@@ -51,8 +51,9 @@ fn translated_workspace_frame_is_finite(
 
 impl Board {
     /// Align the selected workspaces side by side in a horizontal row,
-    /// sorted by their current x position, with consistent vertical
-    /// alignment and [`WORKSPACE_GAP`] spacing between frames. Returns the
+    /// preserving the caller-provided order, with consistent vertical
+    /// alignment and [`WORKSPACE_GAP`] spacing between frames. The first
+    /// workspace stays put and becomes the left end of the row. Returns the
     /// alignment anchor and whether any positions changed, or `None` when
     /// fewer than two selected workspaces exist or their geometry is invalid.
     pub fn align_workspaces_horizontally(&mut self, workspace_ids: &[WorkspaceId]) -> Option<WorkspaceAlignment> {
@@ -61,7 +62,7 @@ impl Board {
         }
 
         let bounds_map = self.workspace_bounds_map();
-        let mut entries: Vec<(WorkspaceId, [f32; 4])> = workspace_ids
+        let entries: Vec<(WorkspaceId, [f32; 4])> = workspace_ids
             .iter()
             .filter_map(|workspace_id| {
                 let workspace = self.workspace(*workspace_id)?;
@@ -114,8 +115,6 @@ impl Board {
             );
             return None;
         }
-
-        entries.sort_by(|left, right| left.1[0].total_cmp(&right.1[0]));
 
         let leftmost_workspace = entries[0].0;
         let anchor_y = entries[0].1[1];

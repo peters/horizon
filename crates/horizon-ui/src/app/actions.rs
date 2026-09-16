@@ -73,6 +73,7 @@ fn update_workspace_cwd(workspace: Option<&mut horizon_core::Workspace>, path: O
     }
 }
 
+/// Align attached workspaces into a horizontal row in sidebar order.
 pub(super) fn align_attached_workspaces(
     board: &mut horizon_core::Board,
     detached_workspaces: &BTreeMap<String, DetachedWorkspaceViewportState>,
@@ -453,6 +454,32 @@ mod tests {
                 .zip(detached_position)
                 .all(|(current, original)| (current - original).abs() <= f32::EPSILON)
         }));
+    }
+
+    #[test]
+    fn align_attached_workspaces_follows_sidebar_order_not_spatial_x() {
+        let mut board = Board::new();
+        let first = board.create_workspace("first");
+        let second = board.create_workspace("second");
+        let third = board.create_workspace("third");
+        board.move_workspace(first, [900.0, 400.0]);
+        board.move_workspace(second, [100.0, 50.0]);
+        board.move_workspace(third, [500.0, 250.0]);
+
+        let alignment = align_attached_workspaces(&mut board, &BTreeMap::new()).expect("attached workspaces");
+
+        assert_eq!(alignment.leftmost_workspace, first);
+        assert!(alignment.positions_changed);
+
+        let first_position = board.workspace(first).expect("first").position;
+        let second_position = board.workspace(second).expect("second").position;
+        let third_position = board.workspace(third).expect("third").position;
+
+        assert!((first_position[0] - 900.0).abs() <= f32::EPSILON);
+        assert!(second_position[0] > first_position[0]);
+        assert!(third_position[0] > second_position[0]);
+        assert!((first_position[1] - second_position[1]).abs() <= f32::EPSILON);
+        assert!((second_position[1] - third_position[1]).abs() <= f32::EPSILON);
     }
 
     #[test]

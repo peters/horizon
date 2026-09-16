@@ -180,7 +180,7 @@ A built-in **git status panel** watches the workspace repo. See changed files, i
 <td>
 
 ### Session Persistence
-Close Horizon, come back tomorrow. Sessions, panel layouts, canvas pan/zoom, and terminal history restore as you left them. **Ctrl+Shift+J** switches boards. An opt-in setting can line attached workspaces into a horizontal row after restore.
+Close Horizon, come back tomorrow. Sessions, panel layouts, canvas pan/zoom, and terminal history restore as you left them. **Ctrl+Shift+J** switches boards. An opt-in setting can line attached workspaces into a horizontal row in sidebar order after restore.
 
 </td>
 <td>
@@ -299,7 +299,7 @@ Most app shortcuts use **Ctrl+Shift** so they do not steal shell chords (Ctrl+C,
 | **Ctrl+Shift+B** | Toggle sidebar |
 | **Ctrl+Shift+U** | Toggle HUD |
 | **Ctrl+Shift+M** | Toggle minimap |
-| **Ctrl+Shift+A** | Align visible attached workspaces into a horizontal row |
+| **Ctrl+Shift+A** | Align visible attached workspaces into a horizontal row in sidebar order |
 | **Ctrl+Shift+,** | Open settings editor |
 | **Ctrl+Shift+F** | Focus the terminal search bar |
 | **Ctrl+0** | Reset canvas zoom to 100% |
@@ -435,7 +435,7 @@ features:
   sidebar_accordion: true
 ```
 
-`features.organize_workspaces_on_session_load` defaults to `false`. When enabled, Horizon performs the same horizontal alignment as **Ctrl+Shift+A** whenever a restored session is ready, both at startup and after an in-app session switch; detached workspaces are unchanged. A short **Preparing session view…** overlay blocks root-window input while restored window geometry settles. The default-disabled path does not show this overlay. Changing the setting in the live editor takes effect when a session is next loaded.
+`features.organize_workspaces_on_session_load` defaults to `false`. When enabled, Horizon performs the same horizontal alignment as **Ctrl+Shift+A** (sidebar order, left to right) whenever a restored session is ready, both at startup and after an in-app session switch; detached workspaces are unchanged. A short **Preparing session view…** overlay blocks root-window input while restored window geometry settles. The default-disabled path does not show this overlay. Changing the setting in the live editor takes effect when a session is next loaded.
 
 `features.sidebar_accordion` defaults to `false`. When enabled, only the active workspace lists panels in the sidebar; other workspaces collapse to a name, accent, and panel count. Enable it from Settings → General → Features or by setting the flag in `config.yaml`. Like other General feature toggles, the Settings editor applies the change immediately as a live preview; save to persist it, or close/revert without saving to restore the previous value.
 

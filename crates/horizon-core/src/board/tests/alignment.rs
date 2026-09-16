@@ -69,13 +69,94 @@ fn align_workspaces_horizontally_arranges_in_row() {
     let third_position = board.workspace(third_workspace).expect("third").position;
     let second_position = board.workspace(second_workspace).expect("second").position;
 
-    assert!((first_position[1] - third_position[1]).abs() <= f32::EPSILON);
-    assert!((third_position[1] - second_position[1]).abs() <= f32::EPSILON);
-    assert!(third_position[0] > first_position[0], "third should be right of first");
+    assert!((first_position[1] - second_position[1]).abs() <= f32::EPSILON);
+    assert!((second_position[1] - third_position[1]).abs() <= f32::EPSILON);
     assert!(
-        second_position[0] > third_position[0],
-        "second should be right of third"
+        second_position[0] > first_position[0],
+        "second should be right of first"
     );
+    assert!(
+        third_position[0] > second_position[0],
+        "third should be right of second"
+    );
+}
+
+#[test]
+fn align_workspaces_horizontally_preserves_caller_order_not_spatial_x() {
+    let mut board = Board::new();
+    let first_workspace = board.create_workspace("first");
+    let second_workspace = board.create_workspace("second");
+    let third_workspace = board.create_workspace("third");
+
+    board.move_workspace(first_workspace, [800.0, 400.0]);
+    board.move_workspace(second_workspace, [100.0, 50.0]);
+    board.move_workspace(third_workspace, [400.0, 200.0]);
+
+    let alignment = board
+        .align_workspaces_horizontally(&[first_workspace, second_workspace, third_workspace])
+        .expect("aligned workspaces");
+
+    assert_eq!(alignment.leftmost_workspace, first_workspace);
+    assert!(alignment.positions_changed);
+
+    let first_position = board.workspace(first_workspace).expect("first").position;
+    let second_position = board.workspace(second_workspace).expect("second").position;
+    let third_position = board.workspace(third_workspace).expect("third").position;
+
+    assert!(
+        vec2_eq(first_position, [800.0, 400.0]),
+        "first workspace should stay put as the row anchor"
+    );
+    assert!((second_position[1] - first_position[1]).abs() <= f32::EPSILON);
+    assert!((third_position[1] - first_position[1]).abs() <= f32::EPSILON);
+    assert!(
+        second_position[0] > first_position[0],
+        "caller order places second to the right of first even though second started further left"
+    );
+    assert!(
+        third_position[0] > second_position[0],
+        "caller order places third to the right of second"
+    );
+
+    let positions_after_first_alignment: Vec<_> = board.workspaces.iter().map(|workspace| workspace.position).collect();
+    let second_alignment = board
+        .align_workspaces_horizontally(&[first_workspace, second_workspace, third_workspace])
+        .expect("second alignment");
+    assert!(!second_alignment.positions_changed);
+    assert_eq!(
+        board
+            .workspaces
+            .iter()
+            .map(|workspace| workspace.position)
+            .collect::<Vec<_>>(),
+        positions_after_first_alignment
+    );
+}
+
+#[test]
+fn align_workspaces_horizontally_uses_slice_order_not_board_order() {
+    let mut board = Board::new();
+    let first_workspace = board.create_workspace("first");
+    let second_workspace = board.create_workspace("second");
+    board.move_workspace(first_workspace, [100.0, 200.0]);
+    board.move_workspace(second_workspace, [500.0, 80.0]);
+
+    let alignment = board
+        .align_workspaces_horizontally(&[second_workspace, first_workspace])
+        .expect("aligned workspaces");
+
+    assert_eq!(alignment.leftmost_workspace, second_workspace);
+    assert!(alignment.positions_changed);
+
+    let first_position = board.workspace(first_workspace).expect("first").position;
+    let second_position = board.workspace(second_workspace).expect("second").position;
+
+    assert!(
+        vec2_eq(second_position, [500.0, 80.0]),
+        "first id in the slice should stay put even when it is not first on the board"
+    );
+    assert!(first_position[0] > second_position[0]);
+    assert!((first_position[1] - second_position[1]).abs() <= f32::EPSILON);
 }
 
 #[test]

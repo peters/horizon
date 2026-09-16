@@ -606,6 +606,9 @@ fn startup_organization_precedes_one_immediate_initial_pan() {
 
 #[test]
 fn initial_pan_uses_the_row_head_selected_by_core_alignment() {
+    // origin-left is first in sidebar order. Its panel is then moved so the
+    // visual frame sits to the right of frame-left. Alignment must still pick
+    // origin-left as the row head, not the spatially leftmost frame.
     let runtime_state = RuntimeState {
         canvas_view: None,
         active_workspace_local_id: Some("origin-left".to_string()),
@@ -668,26 +671,26 @@ fn initial_pan_uses_the_row_head_selected_by_core_alignment() {
 
     run_frame_at_configured_size(&ctx, &mut app);
 
-    let (pos, size) = workspace_frame(&app, "frame-left");
-    let (origin_left_pos, _size) = workspace_frame(&app, "origin-left");
-    assert!(pos.x < origin_left_pos.x);
-    assert!((pos.y - origin_left_pos.y).abs() <= POSITION_TOLERANCE);
+    let (pos, size) = workspace_frame(&app, "origin-left");
+    let (frame_left_pos, _size) = workspace_frame(&app, "frame-left");
+    assert!(pos.x < frame_left_pos.x);
+    assert!((pos.y - frame_left_pos.y).abs() <= POSITION_TOLERANCE);
     let canvas_rect = app.canvas_rect(&ctx);
     let mapped = app.canvas_to_screen(canvas_rect, Pos2::new(pos.x, pos.y + size.y * 0.5));
-    let origin_left_frame = workspace_frame(&app, "origin-left");
-    let origin_left_mapped = app.canvas_to_screen(canvas_rect, origin_left_frame.0);
+    let frame_left_frame = workspace_frame(&app, "frame-left");
+    let frame_left_mapped = app.canvas_to_screen(canvas_rect, frame_left_frame.0);
     assert!(
         (mapped.x - (canvas_rect.min.x + 40.0)).abs() <= POSITION_TOLERANCE,
-        "expected the core-selected frame-left row head x anchor {}, got {}; origin-left maps to {}; positions: frame-left={:?}, origin-left={:?}",
+        "expected the core-selected origin-left row head x anchor {}, got {}; frame-left maps to {}; positions: origin-left={:?}, frame-left={:?}",
         canvas_rect.min.x + 40.0,
         mapped.x,
-        origin_left_mapped.x,
-        workspace_position(&app, "frame-left"),
+        frame_left_mapped.x,
         workspace_position(&app, "origin-left"),
+        workspace_position(&app, "frame-left"),
     );
     assert!(
         (mapped.y - canvas_rect.center().y).abs() <= POSITION_TOLERANCE,
-        "expected frame-left center y anchor {}, got {}",
+        "expected origin-left center y anchor {}, got {}",
         canvas_rect.center().y,
         mapped.y
     );
