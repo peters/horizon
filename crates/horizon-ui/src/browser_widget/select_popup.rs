@@ -17,6 +17,9 @@ pub(super) struct SelectPopupUi {
     pub(super) highlight: usize,
     pub(super) typeahead: String,
     pub(super) typeahead_at: f64,
+    /// Last highlight passed to `scroll_to_me`. Re-requesting every frame
+    /// fights mouse-wheel browsing of a long list.
+    scrolled_highlight: Option<usize>,
 }
 
 #[derive(Clone, Copy)]
@@ -86,6 +89,7 @@ pub(super) fn sync_ui_state(state: &mut Option<SelectPopupUi>, popup: Option<&Na
         Some(open) if open.css_path == popup.css_path => {
             if open.highlight >= popup.options.len() {
                 open.highlight = selected;
+                open.scrolled_highlight = None;
             }
         }
         _ => {
@@ -94,6 +98,7 @@ pub(super) fn sync_ui_state(state: &mut Option<SelectPopupUi>, popup: Option<&Na
                 highlight: selected,
                 typeahead: String::new(),
                 typeahead_at: 0.0,
+                scrolled_highlight: None,
             });
         }
     }
@@ -207,7 +212,7 @@ pub(super) fn show(
     image_rect: Rect,
     frame_size: [f32; 2],
     popup: &NativeSelectPopup,
-    highlight: usize,
+    open: &mut SelectPopupUi,
 ) -> Option<SelectMenuLayout> {
     let layout = menu_layout(image_rect, frame_size, popup)?;
     paint_menu_frame(ui, layout.menu);
@@ -229,9 +234,10 @@ pub(super) fn show(
                                 paint_group_header(ui, inner.width(), group);
                             }
                         }
-                        let response = paint_option_row(ui, inner.width(), option, row == highlight);
-                        if row == highlight {
+                        let response = paint_option_row(ui, inner.width(), option, row == open.highlight);
+                        if row == open.highlight && open.scrolled_highlight != Some(open.highlight) {
                             response.scroll_to_me(Some(egui::Align::Center));
+                            open.scrolled_highlight = Some(open.highlight);
                         }
                         if response.clicked() && !option.disabled {
                             browser.send(BrowserCommand::NativeSelectChoose { index: option.index });

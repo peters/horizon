@@ -235,6 +235,7 @@ impl<'a> BrowserView<'a> {
                 input::InputFlags {
                     events,
                     interactive,
+                    panel_focused: is_focused,
                     keyboard_target,
                     pointer_viewport: pointer_viewport_state(
                         fixed_viewport,

@@ -16,6 +16,7 @@ pub(super) use pointer::cancel_pointer_capture;
 pub(crate) struct InputFlags<'a> {
     pub(crate) events: &'a [Event],
     pub(crate) interactive: bool,
+    pub(crate) panel_focused: bool,
     pub(crate) keyboard_target: KeyboardTarget,
     pub(crate) pointer_viewport: PointerViewportState,
     pub(crate) shortcuts: &'a AppShortcuts,
@@ -78,7 +79,7 @@ pub fn handle(
         state.pointer_modifiers = keyboard::key_modifiers(ui);
         return;
     }
-    if matches!(flags.keyboard_target, KeyboardTarget::Url) {
+    if !flags.panel_focused || matches!(flags.keyboard_target, KeyboardTarget::Url) {
         dismiss_native_select_once(browser, state);
     }
     if matches!(flags.pointer_viewport, PointerViewportState::Ready)
