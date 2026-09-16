@@ -30,7 +30,7 @@ pub(crate) struct HttpAuthInput {
     username: Option<String>,
     /// Password for HTTP Basic or Digest. Set only. Never written to Horizon's audit log.
     password: Option<String>,
-    /// Optional `http://host[:port]` or `https://host[:port]` origin that may use the credentials. Set only.
+    /// `http://host[:port]` or `https://host[:port]` origin that may use the credentials. Set only. Omit to bind to the current page origin.
     origin: Option<String>,
     /// Per-action timeout in milliseconds (1-60000).
     pub(crate) timeout_millis: Option<u64>,

@@ -102,10 +102,10 @@ shell commands, files, or other MCP servers.
   `count: 2` on a click for a backend-native trusted double-click.
 - `browser_http_auth` is how a user supplies a username and password for HTTP
   Basic or Digest (MCP, CLI `run` plans, and prompt jobs all call this tool).
-  Call `operation: set` with the credentials the user provided (optional
-  `origin` as `http://host[:port]` or `https://host[:port]`), then navigate or
-  reload. The engine intercepts matching server challenges and provides those
-  credentials once per request. Passwords never enter the action audit or
+  Call `operation: set` with the credentials the user provided. Pass `origin`
+  as `http://host[:port]` or `https://host[:port]` when known; if omitted, the
+  current page origin is used, and set fails when the page has none. The engine
+  provides those credentials only to matching server challenges for that origin. Passwords never enter the action audit or
   Horizon config. Safari and remote device sessions return
   `unsupported_backend`. `operation: clear` drops live-session credentials for
   later intercepted challenges; it does not revoke Authorization values the

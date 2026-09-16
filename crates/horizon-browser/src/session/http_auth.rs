@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use crate::cdp::{CdpEvent, CdpLink};
 use crate::frames::FrameSlot;
-use crate::http_auth::HttpAuthDecision;
+use crate::http_auth::{HttpAuthDecision, bind_http_auth_origin};
 use crate::{BrowserControlAction, BrowserControlFailure, BrowserControlValue};
 
 use super::{BrowserEventSender, DriverState};
@@ -27,6 +27,11 @@ impl DriverState {
                 "invalid_action_state",
                 "HTTP auth action was not dispatched",
             ));
+        };
+        let origin = if matches!(*operation, crate::BrowserHttpAuthOperation::Set) {
+            Some(bind_http_auth_origin(origin.as_deref(), &self.url)?)
+        } else {
+            None
         };
         self.http_auth
             .apply(*operation, username.as_deref(), password.as_ref(), origin.as_deref())?;

@@ -128,6 +128,12 @@ def origin_of(base_url: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
+def other_loopback_url(base_url: str) -> str:
+    if "127.0.0.1" in base_url:
+        return base_url.replace("127.0.0.1", "localhost", 1)
+    return base_url.replace("localhost", "127.0.0.1", 1)
+
+
 def set_http_auth(
     client: mcp_gate.McpClient,
     panel_id: str,
@@ -224,11 +230,21 @@ def exercise(client: mcp_gate.McpClient, args: Any) -> dict[str, Any]:
     navigate(client, panel_id, f"{args.base_url}/digest-auth")
     digest = wait_for_marker(client, panel_id, "authenticated-digest-zephyr")
 
+    other_url = other_loopback_url(args.base_url)
+    if other_url == args.base_url:
+        raise AssertionError(f"could not derive a distinct loopback origin from {args.base_url}")
+    other = navigate(client, panel_id, f"{other_url}/basic-auth")
+    if marker_text(client, panel_id) != "":
+        raise AssertionError(f"origin-scoped credentials authenticated a different origin: {other}")
+
     cleared, _ = client.call(
         "browser_http_auth",
         {"panel_id": panel_id, "operation": "clear", "timeout_millis": 15_000},
     )
     assert cleared is not None and cleared.get("active") is False
+    cleared_other = navigate(client, panel_id, f"{other_url}/digest-auth")
+    if marker_text(client, panel_id) != "":
+        raise AssertionError(f"cleared credentials authenticated a distinct origin: {cleared_other}")
 
     audit, _ = client.call("browser_audit", {"panel_id": panel_id, "limit": 200})
     assert audit is not None
@@ -250,6 +266,7 @@ def exercise(client: mcp_gate.McpClient, args: Any) -> dict[str, Any]:
         "panel_id": panel_id,
         "wrong_credentials_rejected": True,
         "anonymous_rejected": True,
+        "cross_origin_rejected": True,
         "cleared": True,
         "set_action_id": wrong.get("action_id"),
     }

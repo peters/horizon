@@ -23,7 +23,7 @@ pub(crate) struct HttpAuthState {
 struct HttpAuthCredentials {
     username: String,
     password: SecretString,
-    origin: Option<String>,
+    origin: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -51,8 +51,8 @@ impl HttpAuthState {
                 validate_http_auth_password(password.as_str())
                     .map_err(|message| BrowserControlFailure::new("invalid_action", message))?;
                 let origin = origin
-                    .map(parse_http_auth_origin)
-                    .transpose()
+                    .ok_or_else(|| BrowserControlFailure::new("invalid_action", "HTTP auth set requires origin"))?;
+                let origin = parse_http_auth_origin(origin)
                     .map_err(|message| BrowserControlFailure::new("invalid_action", message))?;
                 self.credentials = Some(HttpAuthCredentials {
                     username: username.to_string(),
@@ -60,7 +60,7 @@ impl HttpAuthState {
                     origin: origin.clone(),
                 });
                 self.clear_attempts();
-                Ok((true, origin))
+                Ok((true, Some(origin)))
             }
             BrowserHttpAuthOperation::Clear => {
                 if username.is_some() || password.is_some() || origin.is_some() {
@@ -95,7 +95,7 @@ impl HttpAuthState {
         let Some(origin) = request_origin(url) else {
             return HttpAuthDecision::Cancel;
         };
-        if credentials.origin.as_ref().is_some_and(|expected| expected != &origin) {
+        if credentials.origin != origin {
             return HttpAuthDecision::Cancel;
         }
         let username = credentials.username.clone();
@@ -177,6 +177,20 @@ pub(crate) fn http_auth_refusal(remote: bool, backend: BackendKind) -> Option<Br
     None
 }
 
+pub(crate) fn bind_http_auth_origin(origin: Option<&str>, page_url: &str) -> Result<String, BrowserControlFailure> {
+    match origin {
+        Some(origin) => {
+            parse_http_auth_origin(origin).map_err(|message| BrowserControlFailure::new("invalid_action", message))
+        }
+        None => request_origin(page_url).ok_or_else(|| {
+            BrowserControlFailure::new(
+                "invalid_action",
+                "HTTP auth set requires origin when the current page has none",
+            )
+        }),
+    }
+}
+
 pub(crate) fn scheme_is_basic_or_digest(scheme: Option<&str>) -> bool {
     scheme.is_some_and(|scheme| scheme.eq_ignore_ascii_case("basic") || scheme.eq_ignore_ascii_case("digest"))
 }
@@ -201,6 +215,29 @@ mod tests {
             username: username.to_string(),
             password: SecretString::new(password),
         }
+    }
+
+    #[test]
+    fn set_without_origin_is_rejected() {
+        let mut state = HttpAuthState::default();
+        assert!(
+            state
+                .apply(
+                    BrowserHttpAuthOperation::Set,
+                    Some("smoke-user"),
+                    Some(&SecretString::new("smoke-pass-zephyr")),
+                    None,
+                )
+                .is_err()
+        );
+        assert_eq!(
+            bind_http_auth_origin(None, "about:blank").expect_err("blank").code,
+            "invalid_action"
+        );
+        assert_eq!(
+            bind_http_auth_origin(None, "http://127.0.0.1:8080/basic-auth").expect("page"),
+            "http://127.0.0.1:8080"
+        );
     }
 
     #[test]
@@ -235,7 +272,7 @@ mod tests {
     #[test]
     fn oldest_attempt_is_evicted_at_the_request_cap() {
         let mut state = HttpAuthState::default();
-        set(&mut state, None);
+        set(&mut state, Some("http://example.test"));
         for index in 0..MAX_ATTEMPTED_REQUESTS {
             let request_id = format!("req-{index}");
             assert!(matches!(
@@ -260,7 +297,7 @@ mod tests {
     #[test]
     fn debug_does_not_echo_the_password() {
         let mut state = HttpAuthState::default();
-        set(&mut state, None);
+        set(&mut state, Some("https://files.test"));
         let decision = state.decide("req-debug", "https://files.test/digest", Some("digest"), false);
         let rendered = format!("{state:?}{decision:?}");
         assert!(!rendered.contains("smoke-pass-zephyr"), "{rendered}");
@@ -290,11 +327,15 @@ mod tests {
     }
 
     #[test]
-    fn omitted_origin_matches_any_http_origin() {
+    fn credentials_are_not_provided_to_a_different_origin() {
         let mut state = HttpAuthState::default();
-        set(&mut state, None);
-        assert!(matches!(
+        set(&mut state, Some("http://127.0.0.1:8080"));
+        assert_eq!(
             state.decide("req-5", "https://files.test/digest", Some("digest"), false),
+            HttpAuthDecision::Cancel
+        );
+        assert!(matches!(
+            state.decide("req-6", "http://127.0.0.1:8080/digest", Some("digest"), false),
             HttpAuthDecision::Provide { .. }
         ));
     }

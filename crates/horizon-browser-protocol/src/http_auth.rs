@@ -123,11 +123,7 @@ fn canonical_origin(value: &str, bare_origin: bool) -> Result<String, &'static s
     if host.is_empty() {
         return Err("HTTP auth origin host is missing");
     }
-    let host = if host.starts_with('[') {
-        host.to_string()
-    } else {
-        host.to_ascii_lowercase()
-    };
+    let host = canonicalize_host(host)?;
     let default_port = if scheme == "http" { 80 } else { 443 };
     let origin = match port {
         Some(port) if port != default_port => format!("{scheme}://{host}:{port}"),
@@ -166,6 +162,14 @@ fn split_host_port(authority: &str) -> Result<(&str, Option<u16>), &'static str>
     }
 }
 
+fn canonicalize_host(host: &str) -> Result<String, &'static str> {
+    if let Some(inner) = host.strip_prefix('[').and_then(|host| host.strip_suffix(']')) {
+        let address: std::net::Ipv6Addr = inner.parse().map_err(|_| "HTTP auth origin host is missing")?;
+        return Ok(format!("[{address}]"));
+    }
+    Ok(host.to_ascii_lowercase())
+}
+
 fn parse_port(port: &str) -> Result<u16, &'static str> {
     port.parse().map_err(|_| "HTTP auth origin port is invalid")
 }
@@ -192,6 +196,11 @@ mod tests {
             request_origin("http://[::1]:8080/digest-auth").expect("ipv6"),
             "http://[::1]:8080"
         );
+        assert_eq!(
+            parse_http_auth_origin("http://[0:0:0:0:0:0:0:1]:8080").expect("canonical ipv6"),
+            "http://[::1]:8080"
+        );
+        assert!(parse_http_auth_origin("http://[not-an-ip]").is_err());
         assert!(parse_http_auth_origin("http://user:pass@example.com").is_err());
         assert!(parse_http_auth_origin("http://example.com/basic-auth").is_err());
         assert!(parse_http_auth_origin("ftp://example.com").is_err());

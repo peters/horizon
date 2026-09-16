@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 
-use crate::http_auth::{HttpAuthDecision, http_auth_refusal, scheme_is_basic_or_digest};
+use crate::http_auth::{HttpAuthDecision, bind_http_auth_origin, http_auth_refusal, scheme_is_basic_or_digest};
 use crate::session::BrowserEventSender;
 use crate::{BrowserControlAction, BrowserControlFailure, BrowserControlValue};
 
@@ -28,6 +28,11 @@ impl Driver {
         if let Some(refusal) = http_auth_refusal(self.host.is_remote(), self.config.browser.backend) {
             return Err(refusal);
         }
+        let origin = if matches!(*operation, crate::BrowserHttpAuthOperation::Set) {
+            Some(bind_http_auth_origin(origin.as_deref(), &self.url)?)
+        } else {
+            None
+        };
         self.http_auth
             .apply(*operation, username.as_deref(), password.as_ref(), origin.as_deref())?;
         Ok(BrowserControlValue::Accepted)

@@ -83,11 +83,13 @@ answer the question.
 
 If a page presents HTTP Basic or Digest authentication, call
 `browser_http_auth` with `operation: set`, the username and password the user
-supplied, and optional `origin` (`http://host[:port]` or `https://host[:port]`)
-before `browser_navigate`, or set then reload if the protected page is already
-open. If the user has not supplied credentials, ask for a username and
-password instead of guessing. The engine provides those credentials to matching
-server challenges on local Chromium and Firefox. Do not put the password in
+supplied, and `origin` (`http://host[:port]` or `https://host[:port]`) when
+known, before `browser_navigate`, or set then reload if the protected page is
+already open. If origin is omitted, it binds to the current page origin and
+fails when the page has none. If the user has not supplied credentials, ask for
+a username and password instead of guessing. The engine provides those
+credentials only to matching server challenges for that origin on local
+Chromium and Firefox. Do not put the password in
 `browser_evaluate` or audit commentary. Safari and remote sessions return
 `unsupported_backend`. Call `operation: clear` to drop live-session credentials
 for later intercepted challenges; it does not revoke Authorization values the
