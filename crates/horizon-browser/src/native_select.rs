@@ -102,6 +102,23 @@ impl NativeSelectPopup {
             .map(|option| option.index)
     }
 
+    /// Row in `options` for the live `selectedIndex`, not the raw HTML index.
+    /// Windowed probes can omit the first N options, so the selected HTML
+    /// index is not a valid highlight into this vec.
+    #[must_use]
+    pub fn selected_row(&self) -> usize {
+        self.options
+            .iter()
+            .position(|option| option.selected)
+            .or_else(|| {
+                self.options
+                    .iter()
+                    .position(|option| i32::try_from(option.index).ok() == Some(self.selected_index))
+            })
+            .unwrap_or(0)
+    }
+
+    /// Next enabled row in `options` after `current` (a row in this vec).
     #[must_use]
     pub fn step_from(&self, current: i32, delta: i32) -> i32 {
         if self.options.is_empty() {
@@ -121,7 +138,7 @@ impl NativeSelectPopup {
                 break;
             };
             if !option.disabled {
-                return i32::try_from(option.index).unwrap_or(index);
+                return index;
             }
         }
         start
@@ -266,7 +283,13 @@ const PROBE_FUNCTION: &str = r"function(x, y, focused) {
     };
     const collect = (el) => {
         const options = [];
-        for (let i = 0; i < el.options.length && options.length < MAX_OPTIONS; i += 1) {
+        const total = el.options.length;
+        let start = 0;
+        if (total > MAX_OPTIONS) {
+            const selected = Math.max(0, el.selectedIndex);
+            start = Math.max(0, Math.min(selected - Math.floor(MAX_OPTIONS / 2), total - MAX_OPTIONS));
+        }
+        for (let i = start; i < total && options.length < MAX_OPTIONS; i += 1) {
             const node = el.options[i];
             const parent = node.parentElement;
             const groupDisabled = parent && parent.tagName === 'OPTGROUP' && parent.disabled;
@@ -419,10 +442,33 @@ mod tests {
     #[test]
     fn arrow_step_skips_disabled_options_and_wraps() {
         let popup = parse_probe(&popup_json()).expect("popup");
+        assert_eq!(popup.selected_row(), 1);
         assert_eq!(popup.step_from(1, 1), 3);
         assert_eq!(popup.step_from(3, 1), 0);
         assert_eq!(popup.step_from(0, -1), 3);
         assert_eq!(popup.step_from(3, -1), 1);
+    }
+
+    #[test]
+    fn selected_row_follows_html_index_inside_a_windowed_option_list() {
+        let popup = parse_probe(&json!({
+            "kind": "popup",
+            "cssPath": "#native-long",
+            "name": "native-long",
+            "selectedIndex": 550,
+            "bounds": { "x": 10.0, "y": 20.0, "width": 80.0, "height": 22.0 },
+            "options": [
+                { "index": 548, "value": "548", "label": "Item 548", "group": "", "disabled": false, "selected": false },
+                { "index": 549, "value": "549", "label": "Item 549", "group": "", "disabled": true, "selected": false },
+                { "index": 550, "value": "550", "label": "Item 550", "group": "", "disabled": false, "selected": true },
+                { "index": 551, "value": "551", "label": "Item 551", "group": "", "disabled": false, "selected": false }
+            ]
+        }))
+        .expect("popup");
+        assert_eq!(popup.selected_row(), 2);
+        assert_eq!(popup.step_from(2, 1), 3);
+        assert_eq!(popup.step_from(2, -1), 0);
+        assert_eq!(popup.option(550).map(|option| option.value.as_str()), Some("550"));
     }
 
     #[test]

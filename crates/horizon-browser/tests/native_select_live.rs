@@ -10,8 +10,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use horizon_browser::{
-    BrowserButton, BrowserCommand, BrowserConfig, BrowserEvent, BrowserInput, BrowserModifiers, BrowserSession,
-    BrowserSessionConfig, FrameSlot, NativeSelectPopup, start_session,
+    BackendKind, BrowserButton, BrowserCommand, BrowserConfig, BrowserEvent, BrowserInput, BrowserModifiers,
+    BrowserSession, BrowserSessionConfig, FrameSlot, NativeSelectPopup, start_session,
 };
 
 const FIXTURE: &str = r#"<!doctype html><title>select live</title>
@@ -24,6 +24,16 @@ const FIXTURE: &str = r#"<!doctype html><title>select live</title>
 #[test]
 #[ignore = "requires a local Chromium browser"]
 fn chromium_click_on_a_native_select_publishes_a_host_popup() {
+    run_native_select_live(BackendKind::ChromiumCdp);
+}
+
+#[test]
+#[ignore = "requires a local Firefox browser and geckodriver"]
+fn firefox_click_on_a_native_select_publishes_a_host_popup() {
+    run_native_select_live(BackendKind::FirefoxBidi);
+}
+
+fn run_native_select_live(backend: BackendKind) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind fixture");
     let addr = listener.local_addr().expect("addr");
     thread::spawn(move || serve_fixture(&listener));
@@ -32,6 +42,7 @@ fn chromium_click_on_a_native_select_publishes_a_host_popup() {
     let frame_slot = Arc::new(FrameSlot::new());
     let session = start_session(BrowserSessionConfig {
         browser: BrowserConfig {
+            backend,
             profile_root: Some(temp.path().join("profiles")),
             ..BrowserConfig::default()
         },

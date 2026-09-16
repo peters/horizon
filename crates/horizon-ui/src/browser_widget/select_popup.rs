@@ -81,17 +81,17 @@ pub(super) fn sync_ui_state(state: &mut Option<SelectPopupUi>, popup: Option<&Na
         *state = None;
         return;
     };
-    let selected = usize::try_from(popup.selected_index.max(0)).unwrap_or(0);
+    let selected = popup.selected_row();
     match state {
         Some(open) if open.css_path == popup.css_path => {
             if open.highlight >= popup.options.len() {
-                open.highlight = selected.min(popup.options.len().saturating_sub(1));
+                open.highlight = selected;
             }
         }
         _ => {
             *state = Some(SelectPopupUi {
                 css_path: popup.css_path.clone(),
-                highlight: selected.min(popup.options.len().saturating_sub(1)),
+                highlight: selected,
                 typeahead: String::new(),
                 typeahead_at: 0.0,
             });
@@ -300,7 +300,7 @@ fn paint_option_row(ui: &mut Ui, width: f32, option: &NativeSelectOption, highli
 mod tests {
     use horizon_core::browser::{BrowserBounds, NativeSelectOption, NativeSelectPopup};
 
-    use super::{MAX_MENU_HEIGHT, menu_layout};
+    use super::{MAX_MENU_HEIGHT, menu_layout, sync_ui_state};
     use egui::{Rect, pos2};
 
     fn popup_at(y: f64, option_count: usize) -> NativeSelectPopup {
@@ -340,5 +340,33 @@ mod tests {
         let control_top = 270.0_f32;
         assert!(edge.menu.bottom() <= control_top + 22.0 + 1.0);
         assert!(edge.menu.top() < control_top);
+    }
+
+    #[test]
+    fn sync_ui_state_highlights_the_selected_row_inside_a_windowed_list() {
+        let popup = NativeSelectPopup {
+            css_path: "#native-long".to_string(),
+            name: "native-long".to_string(),
+            selected_index: 550,
+            bounds: BrowserBounds {
+                x: 20.0,
+                y: 40.0,
+                width: 80.0,
+                height: 22.0,
+            },
+            options: (548u32..552)
+                .map(|index| NativeSelectOption {
+                    index,
+                    value: index.to_string(),
+                    label: format!("Item {index}"),
+                    group: None,
+                    disabled: false,
+                    selected: index == 550,
+                })
+                .collect(),
+        };
+        let mut state = None;
+        sync_ui_state(&mut state, Some(&popup));
+        assert_eq!(state.expect("open").highlight, 2);
     }
 }
