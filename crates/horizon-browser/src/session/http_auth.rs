@@ -12,6 +12,15 @@ use crate::{BrowserControlAction, BrowserControlFailure, BrowserControlValue};
 use super::{BrowserEventSender, DriverState};
 
 impl DriverState {
+    pub(super) fn retire_http_auth_session(&mut self, link: &mut CdpLink) {
+        if let Some(session) = self.session_id.as_deref()
+            && let Err(error) = link.send_request("Fetch.disable", &json!({}), Some(session))
+        {
+            tracing::warn!(target: "browser", "Chromium could not retire authentication interception: {error}");
+        }
+        self.http_auth.reset_requests();
+    }
+
     pub(super) fn http_auth_action(
         &mut self,
         link: &mut CdpLink,
@@ -82,7 +91,11 @@ impl DriverState {
         let Some(request_id) = event.params.get("requestId").and_then(Value::as_str) else {
             return;
         };
-        if let Some(network_id) = event.params.get("networkId").and_then(Value::as_str) {
+        if event
+            .session_id
+            .is_some_and(|session| Some(session) == self.session_id.as_deref())
+            && let Some(network_id) = event.params.get("networkId").and_then(Value::as_str)
+        {
             self.http_auth.note_network_id(request_id, network_id);
         }
         if let Err(error) = self.call_and_ack(
@@ -107,6 +120,29 @@ impl DriverState {
         let Some(request_id) = event.params.get("requestId").and_then(Value::as_str) else {
             return;
         };
+        let decision = self.http_auth_challenge_decision(event, request_id);
+        let params = continue_with_auth_params(request_id, &decision);
+        if let Err(error) = self.call_and_ack(
+            link,
+            event_tx,
+            frame_slot,
+            "Fetch.continueWithAuth",
+            &params,
+            event.session_id,
+        ) {
+            tracing::warn!(target: "browser", "Chromium HTTP auth continue failed: {error}");
+        }
+    }
+
+    fn http_auth_challenge_decision(&mut self, event: &CdpEvent<'_>, request_id: &str) -> HttpAuthDecision {
+        // A replaced session can still deliver paused requests. Release them
+        // without credentials or mutations to the current session's retry guard.
+        if event
+            .session_id
+            .is_none_or(|session| Some(session) != self.session_id.as_deref())
+        {
+            return HttpAuthDecision::Cancel;
+        }
         if let Some(network_id) = event.params.get("networkId").and_then(Value::as_str) {
             self.http_auth.note_network_id(request_id, network_id);
         }
@@ -121,18 +157,7 @@ impl DriverState {
             .pointer("/authChallenge/source")
             .and_then(Value::as_str)
             .is_some_and(|source| source.eq_ignore_ascii_case("Proxy"));
-        let decision = self.http_auth.decide(request_id, url, scheme, is_proxy);
-        let params = continue_with_auth_params(request_id, &decision);
-        if let Err(error) = self.call_and_ack(
-            link,
-            event_tx,
-            frame_slot,
-            "Fetch.continueWithAuth",
-            &params,
-            event.session_id,
-        ) {
-            tracing::warn!(target: "browser", "Chromium HTTP auth continue failed: {error}");
-        }
+        self.http_auth.decide(request_id, url, scheme, is_proxy)
     }
 
     pub(super) fn forget_completed_http_auth(&mut self, event: &CdpEvent<'_>) {
@@ -174,6 +199,68 @@ pub(super) fn fetch_enable_params() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stale_session_challenges_do_not_use_credentials_or_consume_current_request_ids() {
+        let config = super::super::BrowserSessionConfig {
+            browser: crate::BrowserConfig::default(),
+            panel_local_id: "auth-test".into(),
+            initial_url: None,
+            width: 800,
+            height: 600,
+            frame_slot: Arc::default(),
+            coordination: None,
+            capture_directory: None,
+            video: Arc::default(),
+            remote: None,
+        };
+        let mut state = DriverState::new(
+            &config,
+            "ws://127.0.0.1/test",
+            None,
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        );
+        state.session_id = Some("current".into());
+        state
+            .http_auth
+            .apply(
+                crate::BrowserHttpAuthOperation::Set,
+                Some("user"),
+                Some(&crate::SecretString::new("password")),
+                Some("https://example.test"),
+            )
+            .expect("set auth");
+        let params = json!({
+            "requestId": "request",
+            "networkId": "network",
+            "request": { "url": "https://example.test/basic" },
+            "authChallenge": { "scheme": "basic", "source": "Server" },
+        });
+        let mut event = CdpEvent {
+            method: "Fetch.authRequired",
+            params: &params,
+            session_id: Some("old"),
+        };
+        assert_eq!(
+            state.http_auth_challenge_decision(&event, "request"),
+            HttpAuthDecision::Cancel
+        );
+        event.session_id = Some("current");
+        assert!(matches!(
+            state.http_auth_challenge_decision(&event, "request"),
+            HttpAuthDecision::Provide { .. }
+        ));
+        event.session_id = Some("old");
+        assert_eq!(
+            state.http_auth_challenge_decision(&event, "request"),
+            HttpAuthDecision::Cancel
+        );
+        event.session_id = Some("current");
+        assert_eq!(
+            state.http_auth_challenge_decision(&event, "request"),
+            HttpAuthDecision::Cancel
+        );
+    }
 
     #[test]
     fn chromium_continue_payloads_cover_provide_and_cancel() {

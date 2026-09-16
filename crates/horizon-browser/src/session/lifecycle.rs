@@ -34,6 +34,7 @@ impl DriverState {
         target: &str,
     ) -> bool {
         if self.session_id.as_deref() != Some(session) {
+            self.http_auth.reset_requests();
             self.reset_clipboard_tracking();
             self.invalidate_scrollbar_layout(event_tx);
             self.reset_runtime_enable_state();
@@ -175,6 +176,7 @@ impl DriverState {
         };
         let Some(window_id) = info.get("windowId").and_then(serde_json::Value::as_u64) else {
             return self.setup_failure(
+                link,
                 event_tx,
                 frame_slot,
                 "Browser.getWindowForTarget",
@@ -223,6 +225,7 @@ impl DriverState {
             }
             if Instant::now() >= deadline {
                 return self.setup_failure(
+                    link,
                     event_tx,
                     frame_slot,
                     "Browser.getWindowBounds",
@@ -252,6 +255,7 @@ impl DriverState {
         };
         let Some(frame_id) = main_frame_id_from_tree(&frame_tree).map(str::to_string) else {
             return self.setup_failure(
+                link,
                 event_tx,
                 frame_slot,
                 "Page.getFrameTree",
@@ -294,11 +298,12 @@ impl DriverState {
         };
         let needs_user_agent_override = match chromium_user_agent_needs_override(&version) {
             Ok(value) => value,
-            Err(error) => return self.setup_failure(event_tx, frame_slot, "Browser.getVersion", error),
+            Err(error) => return self.setup_failure(link, event_tx, frame_slot, "Browser.getVersion", error),
         };
         let user_agent_metadata = if needs_user_agent_override {
             let Some(metadata) = self.native_user_agent_metadata.as_ref() else {
                 return self.setup_failure(
+                    link,
                     event_tx,
                     frame_slot,
                     "Browser.getVersion",
@@ -311,7 +316,9 @@ impl DriverState {
         };
         let user_agent_override = match chromium_user_agent_override(&version, user_agent_metadata) {
             Ok(value) => value,
-            Err(error) => return self.setup_failure(event_tx, frame_slot, "Emulation.setUserAgentOverride", error),
+            Err(error) => {
+                return self.setup_failure(link, event_tx, frame_slot, "Emulation.setUserAgentOverride", error);
+            }
         };
         if let Some(params) = user_agent_override
             && !self.setup_command(
@@ -354,7 +361,7 @@ impl DriverState {
             Ok(result) => (!self.stop_requested.load(Ordering::Acquire)).then_some(result),
             Err(_) if self.stop_requested.load(Ordering::Acquire) => None,
             Err(error) => {
-                self.setup_failure(event_tx, frame_slot, method, &error.to_string());
+                self.setup_failure(link, event_tx, frame_slot, method, &error.to_string());
                 None
             }
         }
@@ -362,11 +369,13 @@ impl DriverState {
 
     fn setup_failure(
         &mut self,
+        link: &mut CdpLink,
         event_tx: &BrowserEventSender,
         frame_slot: &FrameSlot,
         method: &str,
         error: &str,
     ) -> bool {
+        self.retire_http_auth_session(link);
         self.session_id = None;
         self.screencast_on = false;
         self.invalidate_scrollbar_layout(event_tx);
@@ -479,6 +488,7 @@ impl DriverState {
             self.pending_reattach = false;
             if let Some(target) = self.target_id.clone() {
                 self.reattach_in_flight = true;
+                self.retire_http_auth_session(link);
                 self.session_id = None;
                 self.invalidate_scrollbar_layout(event_tx);
                 match link.send_request(

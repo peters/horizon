@@ -39,6 +39,12 @@ impl HttpAuthState {
         self.credentials.is_some()
     }
 
+    pub(crate) fn reset_requests(&mut self) {
+        self.attempted_requests.clear();
+        self.fetch_network_ids.clear();
+        self.network_fetch_ids.clear();
+    }
+
     pub(crate) fn apply(
         &mut self,
         operation: BrowserHttpAuthOperation,
@@ -309,6 +315,34 @@ mod tests {
             state.decide("fetch", "http://example.test/basic", Some("basic"), false),
             HttpAuthDecision::Provide { .. }
         ));
+    }
+
+    #[test]
+    fn session_reset_reclaims_request_capacity_and_preserves_credentials() {
+        let mut state = HttpAuthState::default();
+        set(&mut state, Some("http://example.test"));
+        for index in 0..MAX_ATTEMPTED_REQUESTS {
+            let request = format!("fetch-{index}");
+            state.note_network_id(&request, &format!("network-{index}"));
+            assert!(matches!(
+                state.decide(&request, "http://example.test/basic", Some("basic"), false),
+                HttpAuthDecision::Provide { .. }
+            ));
+        }
+        state.reset_requests();
+        assert!(state.has_credentials());
+        assert!(state.attempted_requests.is_empty());
+        assert!(state.fetch_network_ids.is_empty());
+        assert!(state.network_fetch_ids.is_empty());
+        assert_eq!(
+            state.decide("fetch-0", "http://example.test/basic", Some("basic"), false),
+            provide("smoke-user", "smoke-pass-zephyr")
+        );
+        state.forget_request("network-0");
+        assert_eq!(
+            state.decide("fetch-0", "http://example.test/basic", Some("basic"), false),
+            HttpAuthDecision::Cancel
+        );
     }
 
     #[test]
