@@ -15,7 +15,6 @@ mod minimap;
 mod panel_chrome;
 mod panels;
 mod persistence;
-mod remote_environments;
 mod remote_hosts;
 mod root_chrome;
 mod root_viewport;
@@ -280,7 +279,6 @@ pub struct HorizonApp {
     /// Session-only and OS-store provider credentials for remote browser targets.
     remote_browser_credentials: horizon_core::remote_browser_credential::CredentialWorkbench,
     session_manager: Option<RuntimeSessionManagerState>,
-    remote_environments: remote_environments::RemoteEnvironments,
     managed_install: Option<ManagedInstall>,
     surge_update_check_rx: Option<Receiver<UpdateCheckMessage>>,
     surge_available_update: Option<AvailableUpdate>,
@@ -359,7 +357,6 @@ impl eframe::App for HorizonApp {
             return;
         }
 
-        let inventory_interaction = self.render_remote_environments(ctx);
         let block_root_interaction = self.root_viewport_stabilization_blocks_interaction();
         let root_viewport_is_stable = self.poll_root_viewport_stabilizer(ctx);
         if block_root_interaction {
@@ -367,7 +364,7 @@ impl eframe::App for HorizonApp {
         }
 
         let (workspace_count_before, panel_count_before) = (self.board.workspaces.len(), self.board.panels.len());
-        let had_panel_output = self.process_frame_inputs(ctx, inventory_interaction.is_some());
+        let had_panel_output = self.process_frame_inputs(ctx);
         self.apply_panel_transitions();
         self.normalize_workspace_state(ctx);
         self.apply_pending_workspace_changes();
@@ -381,7 +378,7 @@ impl eframe::App for HorizonApp {
                 self.seed_initial_pan(ctx, aligned_leftmost_workspace, preserve_restored_selection);
             }
         }
-        self.render_active_view(ui, block_root_interaction || inventory_interaction.is_some());
+        self.render_active_view(ui, block_root_interaction);
         if block_root_interaction {
             Self::render_root_viewport_stabilizing_overlay(ctx);
         }
@@ -389,9 +386,6 @@ impl eframe::App for HorizonApp {
         self.finalize_frame(ctx, had_panel_output, workspace_count_before, panel_count_before);
         // Last, after every phase that can move or hide a panel this frame.
         self.restamp_browser_manifests_for_placement();
-        if let Some(input) = inventory_interaction {
-            Self::restore_remote_environment_input(ctx, input);
-        }
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {

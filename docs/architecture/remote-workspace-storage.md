@@ -1,6 +1,8 @@
 # ADR-383: Session-owned remote records in the control-plane database
 
-Status: Accepted record/allocation storage boundary; product integration pending.
+Status: Historical remote-development decision. The Remote Environments UI was
+removed in #693; the core record/allocation storage remains pending its removal
+and versioned compatibility migration. This ADR does not describe current UI actions.
 Date: 2026-09-05 (Europe/Oslo; 2026-09-04 UTC)
 Deciders: Repository maintainer through the issue and reviewed implementation PRs.
 
@@ -28,8 +30,8 @@ record-storage API alone.
 The owning local session below scopes client records and prevents accidental
 copy/adoption. It is not a compute lifetime lease. Remote task supervision,
 repository durability, and checkpointing must not rely on that PC's database or
-event loop remaining available. A dedicated Remote Environments overview will
-expose reconnect and explicit stop/kill or manual cleanup/delete actions.
+event loop remaining available. The former Remote Environments overview exposed
+reconnect and explicit lifecycle actions; that UI has now been removed.
 
 The image permits an unset expiry for persistent execution and retains a bounded
 watchdog only for explicitly time-limited jobs. Provider-neutral targets and
@@ -122,8 +124,9 @@ transaction so accepted writes cannot make recovery exceed its budget.
 All record operations run synchronously off the render thread. This storage
 boundary exposes no automatic retention or record-deletion API.
 
-The Remote Environments inventory reads across every owning session without
+The retained core inventory API reads across every owning session without
 consulting local session files or filtering unattached, failed, or expired records.
+Its former Remote Environments UI consumer has been removed.
 Keyset pages contain at most 16 validated snapshots (64 MiB serialized maximum).
 The continuation probe reads only the identity index, not a seventeenth snapshot.
 Each page is a consistent read; refresh from the beginning to see new identities
