@@ -179,6 +179,10 @@ pub enum BrowserAuditAction {
     },
     HandoffRequested,
     HandoffDone,
+    SelectOption {
+        index: u32,
+    },
+    SelectDismiss,
     Stop,
 }
 
@@ -304,6 +308,8 @@ impl BrowserAuditAction {
                 max_file_bytes: options.as_ref().and_then(|options| options.max_file_bytes),
             },
             BrowserCommand::HandoffDone => Self::HandoffDone,
+            BrowserCommand::NativeSelectChoose { index } => Self::SelectOption { index: *index },
+            BrowserCommand::NativeSelectDismiss => Self::SelectDismiss,
             BrowserCommand::Stop => Self::Stop,
         }
     }

@@ -123,6 +123,14 @@ pub fn show_body(
     let rect = Rect::from_center_size(body_rect.center(), vec2(frame_size[0] * scale, frame_size[1] * scale));
     paint_browser_frame(ui, rect, texture);
     paint_page_scrollbar(ui, rect, browser.frame_slot.page_scroll_state());
+    let popup = browser.frame_slot.native_select_popup();
+    if popup.is_none() {
+        state.select_popup_dismissed = false;
+    }
+    super::select_popup::sync_ui_state(&mut state.select_popup, popup.as_deref());
+    if let (Some(popup), Some(open)) = (popup.as_deref(), state.select_popup.as_mut()) {
+        let _ = super::select_popup::show(ui, browser, rect, frame_size, popup, open);
+    }
 
     BodyOutput {
         image_rect: Some(rect),

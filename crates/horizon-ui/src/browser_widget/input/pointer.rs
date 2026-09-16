@@ -83,6 +83,9 @@ pub(super) fn events(
                 pos, button, pressed, ..
             } => {
                 flush_pending_move(browser, &mut pending_move);
+                if overlay_blocks_pointer(browser, frame, transform(*pos)) && *pressed {
+                    continue;
+                }
                 replay_button_event(
                     browser,
                     state,
@@ -102,11 +105,15 @@ pub(super) fn events(
                 );
             }
             Event::PointerMoved(pos) => {
+                let local = transform(*pos);
+                if overlay_blocks_pointer(browser, frame, local) {
+                    continue;
+                }
                 handle_pointer_moved(
                     browser,
                     state,
                     frame,
-                    transform(*pos),
+                    local,
                     &mut event_buttons,
                     event_modifiers,
                     &mut pending_move,
@@ -120,6 +127,9 @@ pub(super) fn events(
             }
             Event::MouseWheel { unit, delta, .. } => {
                 flush_pending_move(browser, &mut pending_move);
+                if wheel_pos.is_some_and(|pos| overlay_blocks_pointer(browser, frame, pos)) {
+                    continue;
+                }
                 if let Some(p) = wheel_pos {
                     let scale = match *unit {
                         egui::MouseWheelUnit::Point => 1.0,
@@ -460,6 +470,14 @@ fn egui_button(button: PointerButton) -> Option<BrowserButton> {
         PointerButton::Secondary => Some(BrowserButton::Right),
         _ => None,
     }
+}
+
+fn overlay_blocks_pointer(browser: &BrowserPanelState, frame: PointerFrame, pos: egui::Pos2) -> bool {
+    let Some(popup) = browser.frame_slot.native_select_popup() else {
+        return false;
+    };
+    super::super::select_popup::menu_layout(frame.rect, frame.frame_size, &popup)
+        .is_some_and(|layout| layout.contains(pos))
 }
 
 fn to_page_coords(rect: egui::Rect, frame_size: [f32; 2], pos: egui::Pos2) -> (f64, f64) {

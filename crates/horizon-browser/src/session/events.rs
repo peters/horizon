@@ -111,6 +111,9 @@ impl DriverState {
         if self.handle_clipboard_response(id, result.as_ref(), error.as_ref(), event_tx) {
             return;
         }
+        if self.handle_native_select_response(id, result.as_ref(), error.as_ref(), event_tx, link) {
+            return;
+        }
         if self.handle_navigate_response(event_tx, id, result.as_ref(), error.as_ref()) {
             return;
         }
@@ -119,6 +122,7 @@ impl DriverState {
         }
         if self.handle_runtime_enable_response(id, error.as_ref()) {
             self.flush_pending_clipboard(link);
+            self.flush_native_select_probe(link);
             return;
         }
         if self.handle_scrollbar_layout_response(id, result.as_ref(), error.is_some(), frame_slot, event_tx) {

@@ -20,6 +20,7 @@ mod ime;
 mod input;
 mod render;
 mod review;
+mod select_popup;
 mod teach;
 
 use egui::{Event, Pos2, TextureHandle, Ui};
@@ -80,6 +81,10 @@ pub struct BrowserUiState {
     /// fullscreen flag, so remember the preceding frame for input filtering.
     fullscreen_active_last_frame: bool,
     host_focus_requested_at: Option<f64>,
+    /// Highlight and typeahead for an open host-owned native `<select>` menu.
+    select_popup: Option<select_popup::SelectPopupUi>,
+    /// True after a blur dismiss was queued so we do not spam Escape.
+    select_popup_dismissed: bool,
 }
 
 impl BrowserUiState {
@@ -230,6 +235,7 @@ impl<'a> BrowserView<'a> {
                 input::InputFlags {
                     events,
                     interactive,
+                    panel_focused: is_focused,
                     keyboard_target,
                     pointer_viewport: pointer_viewport_state(
                         fixed_viewport,

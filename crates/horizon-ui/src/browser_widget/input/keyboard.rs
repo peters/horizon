@@ -31,12 +31,13 @@ pub(super) fn events(
         state.ime_composing,
     );
     state.ime_composing = ime_composing;
+    let now = ui.input(|input| input.time);
     for (event_index, event) in events.iter().enumerate() {
         match event {
             Event::Text(text) if !text.is_empty() => {
                 let shortcut_text = take_matching_single_char(text, &mut shortcut_chars);
                 let duplicate_key_text = take_matching_single_char(text, &mut key_chars);
-                if !shortcut_text && !duplicate_key_text {
+                if !shortcut_text && !duplicate_key_text && browser.frame_slot.native_select_popup().is_none() {
                     browser.send(BrowserCommand::Input(BrowserInput::InsertText { text: text.clone() }));
                 }
             }
@@ -44,7 +45,9 @@ pub(super) fn events(
             // bar consumes its own copy while focused). Both paste and IME
             // commits reach the page as one CDP insertText operation.
             Event::Ime(egui::ImeEvent::Commit(text)) | Event::Paste(text) if !text.is_empty() => {
-                browser.send(BrowserCommand::Input(BrowserInput::InsertText { text: text.clone() }));
+                if browser.frame_slot.native_select_popup().is_none() {
+                    browser.send(BrowserCommand::Input(BrowserInput::InsertText { text: text.clone() }));
+                }
             }
             Event::Copy => send_clipboard_shortcut(
                 browser,
@@ -78,6 +81,7 @@ pub(super) fn events(
                     modifiers: *modifiers,
                     key_text: key_texts[event_index],
                     app_shortcut: shortcut_presses[event_index],
+                    now,
                 },
             ),
             _ => {}
@@ -122,6 +126,7 @@ pub(super) fn browser_shortcut_events(
                         shortcut_bindings,
                         exit_fullscreen_shortcut_active,
                     ),
+                    now: 0.0,
                 },
             );
         }
@@ -285,6 +290,7 @@ struct BrowserKeyEvent {
     modifiers: Modifiers,
     key_text: Option<char>,
     app_shortcut: bool,
+    now: f64,
 }
 
 fn handle_key_event(browser: &BrowserPanelState, state: &mut BrowserUiState, event: BrowserKeyEvent) {
@@ -296,11 +302,28 @@ fn handle_key_event(browser: &BrowserPanelState, state: &mut BrowserUiState, eve
         modifiers,
         key_text,
         app_shortcut,
+        now,
     } = event;
     if key == Key::Enter && state.url_submit_enter_pending {
         if !pressed {
             state.url_submit_enter_pending = false;
         }
+        return;
+    }
+    if let Some(popup) = browser.frame_slot.native_select_popup()
+        && super::super::select_popup::handle_key(
+            browser,
+            &mut state.select_popup,
+            &popup,
+            super::super::select_popup::SelectPopupKey {
+                key,
+                pressed,
+                modifiers,
+                now,
+                text: key_text,
+            },
+        )
+    {
         return;
     }
     let reload_shortcut = is_reload_shortcut(key, modifiers);

@@ -22,6 +22,7 @@ mod bidi;
 mod coordination;
 mod frames;
 pub(super) mod handshake;
+pub(crate) mod native_select;
 mod navigation;
 mod network;
 mod safari;
@@ -111,6 +112,7 @@ struct Driver {
     firefox_network: Option<network::FirefoxNetworkBridge>,
     pending_http_bodies: VecDeque<(String, Option<String>)>,
     panel_slot: Arc<FrameSlot>,
+    native_select: native_select::NativeSelectState,
 }
 
 struct PendingHistoryStart {
@@ -333,6 +335,7 @@ impl Driver {
             firefox_network: None,
             pending_http_bodies: VecDeque::new(),
             panel_slot: Arc::clone(frame_slot),
+            native_select: native_select::NativeSelectState::default(),
         })
     }
 
@@ -374,6 +377,14 @@ impl Driver {
                 Ok(false)
             }
             BrowserCommand::Input(input) => self.perform_input(input, events).map(|()| false),
+            BrowserCommand::NativeSelectChoose { index } => {
+                self.apply_native_select_choice(events, index).map(|()| false)
+            }
+            BrowserCommand::NativeSelectDismiss => {
+                self.dismiss_native_select(events);
+                self.send_escape_to_page(events);
+                Ok(false)
+            }
             BrowserCommand::HandoffDone => {
                 self.resolve_handoff(events);
                 Ok(false)
@@ -466,6 +477,7 @@ impl Driver {
             return Ok(());
         }
         self.capture_teach_input(&input);
+        let probe_input = input.clone();
         let (result, demand_frame) = if self.firefox_bidi() {
             let mut payload = self.actions.payload(input);
             payload["context"] = json!(self.context_id);
@@ -486,12 +498,17 @@ impl Driver {
             self.scrollbar.refresh_at = Instant::now();
             self.frames.demand();
         }
+        if result.is_ok() {
+            self.note_native_select_input(&probe_input, event_tx)?;
+        }
         result
     }
 
     fn advance_generation(&mut self) {
         self.generation = self.generation.wrapping_add(1);
         self.scrollbar.reset(&self.config.frame_slot);
+        let _ = self.panel_slot.clear_native_select_popup();
+        self.native_select = native_select::NativeSelectState::default();
         if !self.retain_frame_during_navigation {
             self.frames.invalidate();
         }

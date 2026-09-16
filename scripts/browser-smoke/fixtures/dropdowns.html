@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Horizon dropdown fixture</title>
+  <style>
+    body { font-family: sans-serif; margin: 16px; background: #fff; color: #111; }
+    section { margin: 24px 0; padding: 12px; border: 1px solid #ccc; }
+    label { display: block; margin-bottom: 6px; font-weight: 600; }
+    select, button, input { font-size: 16px; }
+    #log { white-space: pre-wrap; font-family: monospace; min-height: 4em; background: #f4f4f4; padding: 8px; }
+    .combo { position: relative; width: 220px; }
+    .combo-list { display: none; position: absolute; left: 0; right: 0; background: #fff; border: 1px solid #333; z-index: 10; }
+    .combo.open .combo-list { display: block; }
+    .combo-list div { padding: 6px 8px; cursor: pointer; }
+    .combo-list div[aria-selected="true"] { background: #def; }
+    #edge-wrap { position: relative; height: 80px; }
+    #edge-select { position: absolute; right: 8px; top: 8px; width: 140px; }
+  </style>
+</head>
+<body>
+  <h1>Dropdown fixture</h1>
+  <p>Native and custom controls for Horizon issue 714.</p>
+
+  <section>
+    <label for="native-single">Native single-select</label>
+    <select id="native-single">
+      <option value="alpha">Alpha</option>
+      <option value="bravo" selected>Bravo</option>
+      <option value="charlie">Charlie</option>
+    </select>
+    <p>value=<span id="native-single-value">bravo</span></p>
+  </section>
+
+  <section>
+    <label for="native-grouped">Grouped / disabled</label>
+    <select id="native-grouped">
+      <optgroup label="Enabled">
+        <option value="one">One</option>
+        <option value="two">Two</option>
+      </optgroup>
+      <optgroup label="Disabled group" disabled>
+        <option value="nope">Nope</option>
+      </optgroup>
+    </select>
+  </section>
+
+  <section>
+    <label for="native-long">Long scrollable select</label>
+    <select id="native-long">
+      <option value="0">Item 0</option>
+      <option value="1">Item 1</option>
+      <option value="2">Item 2</option>
+      <option value="3">Item 3</option>
+      <option value="4">Item 4</option>
+      <option value="5">Item 5</option>
+      <option value="6">Item 6</option>
+      <option value="7">Item 7</option>
+      <option value="8">Item 8</option>
+      <option value="9">Item 9</option>
+      <option value="10">Item 10</option>
+      <option value="11">Item 11</option>
+      <option value="12">Item 12</option>
+      <option value="13">Item 13</option>
+      <option value="14">Item 14</option>
+      <option value="15">Item 15</option>
+      <option value="16">Item 16</option>
+      <option value="17">Item 17</option>
+      <option value="18">Item 18</option>
+      <option value="19">Item 19</option>
+    </select>
+  </section>
+
+  <section>
+    <label for="native-multi">Multiple select / listbox</label>
+    <select id="native-multi" multiple size="4">
+      <option value="red">Red</option>
+      <option value="green">Green</option>
+      <option value="blue">Blue</option>
+      <option value="gold">Gold</option>
+    </select>
+  </section>
+
+  <section>
+    <label for="combo-button">Custom DOM combobox</label>
+    <div class="combo" id="combo">
+      <button type="button" id="combo-button" aria-haspopup="listbox" aria-expanded="false">Choose fruit</button>
+      <div class="combo-list" id="combo-list" role="listbox">
+        <div role="option" data-value="apple">Apple</div>
+        <div role="option" data-value="pear">Pear</div>
+        <div role="option" data-value="plum">Plum</div>
+      </div>
+    </div>
+    <p>value=<span id="combo-value"></span></p>
+  </section>
+
+  <section>
+    <label for="edge-select">Near-edge native select</label>
+    <div id="edge-wrap">
+      <select id="edge-select">
+        <option value="left">Left</option>
+        <option value="right">Right</option>
+      </select>
+    </div>
+  </section>
+
+  <section>
+    <div id="log">events:</div>
+  </section>
+
+  <script>
+    const logEl = document.getElementById("log");
+    const events = [];
+    function record(msg) {
+      events.push(msg);
+      logEl.textContent = "events:\n" + events.join("\n");
+      document.title = "dd:" + events.length + ":" + events[events.length - 1];
+    }
+    function wireSelect(id) {
+      const el = document.getElementById(id);
+      el.addEventListener("focus", () => record(id + ":focus"));
+      el.addEventListener("click", (e) => record(id + ":click trusted=" + e.isTrusted));
+      el.addEventListener("input", (e) => record(id + ":input value=" + el.value + " trusted=" + e.isTrusted));
+      el.addEventListener("change", (e) => {
+        record(id + ":change value=" + el.value + " trusted=" + e.isTrusted);
+        const out = document.getElementById(id + "-value");
+        if (out) out.textContent = el.value;
+      });
+    }
+    ["native-single", "native-grouped", "native-long", "native-multi", "edge-select"].forEach(wireSelect);
+
+    const combo = document.getElementById("combo");
+    const comboBtn = document.getElementById("combo-button");
+    const comboVal = document.getElementById("combo-value");
+    comboBtn.addEventListener("click", (e) => {
+      const open = !combo.classList.contains("open");
+      combo.classList.toggle("open", open);
+      comboBtn.setAttribute("aria-expanded", String(open));
+      record("combo:toggle open=" + open + " trusted=" + e.isTrusted);
+    });
+    document.getElementById("combo-list").addEventListener("click", (e) => {
+      const option = e.target.closest("[data-value]");
+      if (!option) return;
+      comboVal.textContent = option.dataset.value;
+      combo.classList.remove("open");
+      comboBtn.setAttribute("aria-expanded", "false");
+      comboBtn.textContent = option.textContent;
+      record("combo:change value=" + option.dataset.value + " trusted=" + e.isTrusted);
+    });
+    document.addEventListener("click", (e) => {
+      if (!combo.contains(e.target) && combo.classList.contains("open")) {
+        combo.classList.remove("open");
+        comboBtn.setAttribute("aria-expanded", "false");
+        record("combo:dismiss");
+      }
+    });
+  </script>
+</body>
+</html>

@@ -117,6 +117,8 @@ impl DriverState {
                 | BrowserCommand::Forward
                 | BrowserCommand::SetViewport { .. }
                 | BrowserCommand::Input(_)
+                | BrowserCommand::NativeSelectChoose { .. }
+                | BrowserCommand::NativeSelectDismiss
         ) {
             self.interaction_started_at.get_or_insert_with(Instant::now);
         }
@@ -167,6 +169,15 @@ impl DriverState {
                 Ok(false)
             }
             BrowserCommand::Input(input) => self.dispatch_page_input(link, event_tx, frame_slot, input),
+            BrowserCommand::NativeSelectChoose { index } => {
+                self.apply_native_select_choice(link, event_tx, frame_slot, index);
+                Ok(false)
+            }
+            BrowserCommand::NativeSelectDismiss => {
+                self.dismiss_native_select(event_tx);
+                self.send_escape_to_page(link);
+                Ok(false)
+            }
             BrowserCommand::HandoffDone => {
                 self.resolve_handoff(event_tx);
                 Ok(false)
@@ -203,6 +214,7 @@ impl DriverState {
             self.request_clipboard_text(link);
         }
         let refresh_scrollbar_layout = matches!(input, BrowserInput::Wheel { .. });
+        let probe_input = input.clone();
         let (method, params) = input.cdp();
         let session = self.session_id.clone().ok_or_else(|| {
             BrowserControlFailure::new("browser_unavailable", "the Chromium page session is not attached")
@@ -213,6 +225,7 @@ impl DriverState {
             }
             return Err(BrowserControlFailure::new("input_failed", error.to_string()));
         }
+        self.note_native_select_input(link, event_tx, frame_slot, &probe_input);
         if let Some(capture) = teach_capture
             && let Some(point) = capture.point()
             && let Err(error) = self.capture_teach_fingerprint(link, event_tx, frame_slot, Some(point))
@@ -357,6 +370,7 @@ impl DriverState {
         self.scrollbar_layout.request_id = None;
         self.scrollbar_layout.refresh_at = Some(Instant::now());
         Self::clear_published_scrollbar(&self.config.frame_slot, event_tx);
+        self.dismiss_native_select(event_tx);
     }
 
     fn clear_published_scrollbar(frame_slot: &FrameSlot, event_tx: &BrowserEventSender) {

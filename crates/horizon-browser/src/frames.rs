@@ -14,6 +14,8 @@ const MAX_TEACH_FINGERPRINTS: usize = 32;
 use base64::Engine;
 use zune_jpeg::JpegDecoder;
 
+use crate::native_select::NativeSelectPopup;
+
 const MAX_RETIRED_FRAMES: usize = 2;
 
 /// A single decoded frame (RGB8, top-down, tightly packed).
@@ -125,6 +127,7 @@ impl FrameData {
 pub struct FrameSlotInner {
     data: Option<Arc<FrameData>>,
     page_scroll_state: Option<PageScrollState>,
+    native_select_popup: Option<Arc<NativeSelectPopup>>,
     /// Reused base64 decode target for both screencast and screenshot frames.
     encoded_buffer: Vec<u8>,
     /// Reused decode target so steady-state frames do not allocate.
@@ -397,6 +400,7 @@ impl FrameSlot {
             retain_frame_buffer(&mut inner, data);
         }
         inner.page_scroll_state = None;
+        inner.native_select_popup = None;
     }
 
     #[cfg(test)]
@@ -437,6 +441,30 @@ impl FrameSlot {
     pub(crate) fn clear_page_scroll_state(&self) -> bool {
         let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         inner.page_scroll_state.take().is_some()
+    }
+
+    /// Open native `<select>` popup the host should paint and operate.
+    #[must_use]
+    pub fn native_select_popup(&self) -> Option<Arc<NativeSelectPopup>> {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .native_select_popup
+            .clone()
+    }
+
+    pub(crate) fn publish_native_select_popup(&self, popup: NativeSelectPopup) -> bool {
+        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if inner.native_select_popup.as_deref() == Some(&popup) {
+            return false;
+        }
+        inner.native_select_popup = Some(Arc::new(popup));
+        true
+    }
+
+    pub(crate) fn clear_native_select_popup(&self) -> bool {
+        let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        inner.native_select_popup.take().is_some()
     }
 
     /// Claim the single outstanding UI wake-up for this slot. Further
@@ -759,6 +787,31 @@ mod tests {
         assert!(!slot.clear_page_scroll_state());
         slot.clear();
         assert!(slot.page_scroll_state().is_none());
+        assert!(slot.native_select_popup().is_none());
+    }
+
+    #[test]
+    fn native_select_popup_publishes_until_cleared_with_the_session_frame() {
+        let slot = FrameSlot::new();
+        let popup = crate::native_select::parse_probe(&serde_json::json!({
+            "kind": "popup",
+            "cssPath": "#city",
+            "name": "city",
+            "selectedIndex": 0,
+            "bounds": { "x": 8.0, "y": 12.0, "width": 64.0, "height": 20.0 },
+            "options": [
+                { "index": 0, "value": "oslo", "label": "Oslo", "group": "", "disabled": false, "selected": true }
+            ]
+        }))
+        .expect("popup");
+
+        assert!(slot.publish_native_select_popup(popup.clone()));
+        assert_eq!(slot.native_select_popup().as_deref(), Some(&popup));
+        assert!(!slot.publish_native_select_popup(popup));
+        assert!(slot.clear_native_select_popup());
+        assert!(slot.native_select_popup().is_none());
+        slot.clear();
+        assert!(slot.native_select_popup().is_none());
     }
 
     #[test]

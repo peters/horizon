@@ -13,6 +13,7 @@ mod disclosure;
 mod error;
 pub mod frames;
 pub mod input;
+mod native_select;
 mod navigation;
 mod network;
 mod page_scroll;
@@ -50,6 +51,7 @@ pub use horizon_browser_protocol::{
     normalize_navigation_target,
 };
 pub use input::{BrowserButton, BrowserEditCommand, BrowserInput, BrowserKey, BrowserModifiers};
+pub use native_select::{NativeSelectOption, NativeSelectPopup};
 pub use network::{
     BrowserNetworkCapture, BrowserNetworkCaptureOptions, BrowserNetworkConnection, BrowserNetworkConnectionState,
     BrowserNetworkDirection, BrowserNetworkEventKind, BrowserNetworkFrameOptions, BrowserNetworkOperation,
