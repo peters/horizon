@@ -5,7 +5,7 @@ mod pointer;
 
 use egui::{Event, Ui};
 use horizon_core::AppShortcuts;
-use horizon_core::browser::BrowserPanelState;
+use horizon_core::browser::{BrowserCommand, BrowserPanelState};
 
 use crate::browser_widget::BrowserUiState;
 
@@ -48,6 +48,13 @@ pub(crate) enum ShortcutOwner {
     Page,
 }
 
+fn dismiss_native_select_once(browser: &BrowserPanelState, state: &mut BrowserUiState) {
+    if browser.frame_slot.native_select_popup().is_some() && !state.select_popup_dismissed {
+        browser.send(BrowserCommand::NativeSelectDismiss);
+        state.select_popup_dismissed = true;
+    }
+}
+
 pub fn handle(
     ui: &mut Ui,
     browser: &mut BrowserPanelState,
@@ -67,8 +74,12 @@ pub fn handle(
     }
     if !flags.interactive {
         pointer::cancel_pointer_capture(browser, state, body, frame_size);
+        dismiss_native_select_once(browser, state);
         state.pointer_modifiers = keyboard::key_modifiers(ui);
         return;
+    }
+    if matches!(flags.keyboard_target, KeyboardTarget::Url) {
+        dismiss_native_select_once(browser, state);
     }
     if matches!(flags.pointer_viewport, PointerViewportState::Ready)
         && let (Some(rect), Some(frame_size)) = (body, frame_size)

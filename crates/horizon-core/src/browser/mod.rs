@@ -24,11 +24,11 @@ use std::sync::Arc;
 
 pub use horizon_browser::{
     ActiveBackendCapabilities, AllocationRefusal, AutomationDisclosurePolicy, AutomationDisclosureStatus,
-    BackendAvailability, BackendCapabilities, BackendKind, BrowserButton, BrowserCommand, BrowserConfig,
+    BackendAvailability, BackendCapabilities, BackendKind, BrowserBounds, BrowserButton, BrowserCommand, BrowserConfig,
     BrowserEditCommand, BrowserEvent, BrowserEventWaker, BrowserInput, BrowserKey, BrowserModifiers, BrowserSession,
     BrowserShutdownSignal, BrowserVideoCapture, BrowserVideoCaptureOptions, BrowserVideoOperation, BrowserVideoState,
-    DEFAULT_VIEWPORT, FrameDelivery, FrameMetrics, FrameSlot, PageScrollState, RemoteReleaseOutcome,
-    RemoteSessionEvent, RemoteSessionRequest, normalize_navigation_target,
+    DEFAULT_VIEWPORT, FrameDelivery, FrameMetrics, FrameSlot, NativeSelectOption, NativeSelectPopup, PageScrollState,
+    RemoteReleaseOutcome, RemoteSessionEvent, RemoteSessionRequest, normalize_navigation_target,
 };
 const FORCED_CHROME_SHUTDOWN_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
 

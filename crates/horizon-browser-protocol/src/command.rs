@@ -19,5 +19,11 @@ pub enum BrowserCommand {
     },
     /// The user finished steering and handed control back to the agent.
     HandoffDone,
+    /// Choose an option from the host-owned native `<select>` overlay.
+    NativeSelectChoose {
+        index: u32,
+    },
+    /// Dismiss the host-owned native `<select>` overlay without changing value.
+    NativeSelectDismiss,
     Stop,
 }

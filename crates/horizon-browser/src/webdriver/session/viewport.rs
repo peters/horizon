@@ -381,6 +381,7 @@ mod tests {
             firefox_network: None,
             pending_http_bodies: VecDeque::new(),
             panel_slot: Arc::clone(frame_slot),
+            native_select: super::super::native_select::NativeSelectState::default(),
         }
     }
 

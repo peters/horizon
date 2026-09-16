@@ -435,6 +435,8 @@ impl Driver {
         // every later wait paused.
         self.classic_refresh = None;
         self.scrollbar.reset(&self.config.frame_slot);
+        let _ = self.panel_slot.clear_native_select_popup();
+        self.native_select = super::native_select::NativeSelectState::default();
         self.frames.suspend_for_navigation();
     }
 

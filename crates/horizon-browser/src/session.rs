@@ -32,6 +32,7 @@ mod handle;
 mod http_bodies;
 mod lifecycle;
 mod manifest_io;
+mod native_select;
 mod navigation;
 mod network;
 mod semantic;
@@ -48,6 +49,7 @@ use command_queue::CommandSender;
 pub(crate) use handle::{BrowserEventSender, BrowserEventWake, publish_frame};
 pub use handle::{BrowserEventWaker, CommittedUrl};
 pub use horizon_browser_protocol::BrowserCommand;
+use native_select::NativeSelectState;
 pub use shutdown::BrowserShutdownSignal;
 use startup::run_driver;
 
@@ -464,6 +466,7 @@ struct DriverState {
     /// In-flight `Page.startScreencast` request, for the same reason.
     screencast_request_id: Option<u64>,
     clipboard: ClipboardState,
+    native_select: NativeSelectState,
     url: String,
     title: String,
     initial_navigated: bool,
@@ -536,6 +539,7 @@ impl DriverState {
             navigate_request_id: None,
             screencast_request_id: None,
             clipboard: ClipboardState::default(),
+            native_select: NativeSelectState::default(),
             // The requested initial URL is not committed state. Chrome starts
             // at about:blank and navigation may fail or be cancelled.
             url: String::new(),
