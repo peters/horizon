@@ -8,6 +8,7 @@
 mod audit;
 mod command;
 mod control;
+mod http_auth;
 pub mod input;
 mod network;
 pub mod remote;
@@ -22,6 +23,10 @@ pub use control::{
     AgentAction, BrowserControlAction, DEFAULT_CLICK_COUNT, DEFAULT_NAVIGATION_TIMEOUT_MILLIS,
     DEFAULT_WAIT_TIMEOUT_MILLIS, MAX_CLICK_COUNT, MAX_NAVIGATION_TIMEOUT_MILLIS, MAX_QUERY_RESULTS, MAX_SNAPSHOT_NODES,
     MAX_WAIT_TIMEOUT_MILLIS, NavigationWait, normalize_navigation_target,
+};
+pub use http_auth::{
+    BrowserHttpAuthOperation, MAX_HTTP_AUTH_ORIGIN_BYTES, MAX_HTTP_AUTH_PASSWORD_BYTES, MAX_HTTP_AUTH_USERNAME_BYTES,
+    SecretString, parse_http_auth_origin, request_origin, validate_http_auth_password, validate_http_auth_username,
 };
 pub use input::{BrowserButton, BrowserEditCommand, BrowserInput, BrowserKey, BrowserModifiers};
 pub use network::{

@@ -85,6 +85,7 @@ impl DriverState {
             BrowserControlAction::Video { operation, options } => {
                 self.video_action(frame_slot, &request.action_id, *operation, options.as_ref())
             }
+            BrowserControlAction::HttpAuth { .. } => self.http_auth_action(&request.action),
             BrowserControlAction::Navigate { .. }
             | BrowserControlAction::Reload
             | BrowserControlAction::Back

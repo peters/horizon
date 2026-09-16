@@ -1042,6 +1042,7 @@ mod tests {
                 "network-watch",
                 include_str!("../examples/network-watch.json").as_bytes(),
             ),
+            ("http-auth", include_str!("../examples/http-auth.json").as_bytes()),
         ] {
             Plan::from_slice(bytes).unwrap_or_else(|error| panic!("{name}: {error}"));
         }

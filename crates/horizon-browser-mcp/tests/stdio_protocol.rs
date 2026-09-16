@@ -102,6 +102,8 @@ fn exercise_protocol(requested_version: &str, negotiated_version: &str) {
                 && instructions.contains("browser_network start before browser_navigate")
                 && instructions.contains("browser_network_watch")
                 && instructions.contains("browser_video")
+                && instructions.contains("browser_http_auth")
+                && instructions.contains("browser_resize")
                 && instructions.contains("browser_visibility")
                 && instructions.contains("browser_close")
                 && instructions.contains("allow_additional=true")
@@ -143,7 +145,7 @@ fn listed_tool<'a>(tools: &'a Value, name: &str) -> &'a Value {
 
 fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     let encoded_tools = tools.to_string();
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(17));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(18));
     let resize = listed_tool(tools, "browser_resize");
     for field in ["panel_id", "width", "height", "reset", "timeout_millis"] {
         assert!(
@@ -188,6 +190,11 @@ fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
             .is_some_and(|description| description.contains("WebM") && description.contains("pause"))
     );
     assert!(video["inputSchema"].to_string().contains("Start only"));
+    let http_auth = listed_tool(tools, "browser_http_auth");
+    assert!(http_auth["description"].as_str().is_some_and(|description| {
+        description.contains("Basic") && description.contains("Digest") && description.contains("password")
+    }));
+    assert!(http_auth["inputSchema"].to_string().contains("username"));
     let watch = listed_tool(tools, "browser_network_watch");
     assert!(watch["description"].as_str().is_some_and(|description| {
         description.contains("next_sequence") && description.contains("no capture path")

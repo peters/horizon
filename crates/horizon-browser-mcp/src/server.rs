@@ -18,10 +18,10 @@ use rmcp::{
 use crate::controller::{BrowserController, MAX_ACTION_TIMEOUT_MILLIS};
 use crate::model::{
     ActInput, ActKind, ActionOutput, AuditInput, AuditOutput, BrowserListOutput, CloseInput, CloseOutput, CreateInput,
-    CreateOutput, EvaluateInput, EvaluateOutput, HandoffInput, HandoffOutput, NavigateInput, NavigateOutput,
-    NetworkInput, NetworkOutput, NetworkWatchInput, NetworkWatchOutput, NodeOutput, NodesOutput, PanelInput,
-    QueryInput, ResizeInput, ResizeOutput, SnapshotInput, SnapshotOutput, VideoInput, VideoOutput, VisibilityInput,
-    VisibilityOutput, WaitInput, WaitOutput,
+    CreateOutput, EvaluateInput, EvaluateOutput, HandoffInput, HandoffOutput, HttpAuthInput, HttpAuthOutput,
+    NavigateInput, NavigateOutput, NetworkInput, NetworkOutput, NetworkWatchInput, NetworkWatchOutput, NodeOutput,
+    NodesOutput, PanelInput, QueryInput, ResizeInput, ResizeOutput, SnapshotInput, SnapshotOutput, VideoInput,
+    VideoOutput, VisibilityInput, VisibilityOutput, WaitInput, WaitOutput,
 };
 use crate::network_watch::NetworkWatchState;
 
@@ -314,6 +314,26 @@ impl HorizonBrowserMcp {
     }
 
     #[tool(
+        name = "browser_http_auth",
+        description = "Set or clear HTTP Basic and Digest credentials for a live local Chromium or Firefox panel. Call set with username and password, and optional origin (http://host[:port] or https://host[:port]), before navigating to a protected page. When the page or a subresource presents a server Basic or Digest challenge, the engine provides those credentials once per request; a failed attempt is cancelled instead of looping. If you encounter HTTP authentication, set credentials then navigate or reload. Passwords are never written to the action audit. Safari and remote device sessions return unsupported_backend. Clear removes the live-session credentials. Credentials are not persisted."
+    )]
+    async fn browser_http_auth(
+        &self,
+        Parameters(input): Parameters<HttpAuthInput>,
+    ) -> Result<Json<HttpAuthOutput>, String> {
+        let action = input.build_action()?;
+        let receipt = self
+            .controller
+            .execute(&input.panel_id, action, input.timeout_millis)
+            .await
+            .map_err(|error| error.to_string())?;
+        if !matches!(receipt.value, BrowserControlValue::Accepted) {
+            return Err("browser returned an unexpected HTTP auth result".to_string());
+        }
+        Ok(Json(input.output(receipt.action_id)))
+    }
+
+    #[tool(
         name = "browser_video",
         description = "Start, pause, resume, inspect, or stop a bounded WebM recording of the panel's page pixels. Start-only options: quality (1-100), compression_level (0-10), fps (1-30), max_width (320-1920, caps the longest encoded side), max_file_bytes (4096-1073741824). Omitted options keep host browser.video settings; host defaults are quality 90 and source-frame sizing with codec alignment, bounded by a 3840-pixel longest side and 8294400 pixels; larger frames are downscaled proportionally. Pause skips time in the file; stop finalizes a private .webm path. Works on Chromium, Firefox, and Safari because it samples the existing decoded frame slot. Page pixels never enter audit."
     )]
@@ -410,7 +430,7 @@ impl ServerHandler for HorizonBrowserMcp {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("horizon-browser", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "MCP is the sole agent control contract for Horizon browser panels. For agent identities injected by Horizon, discovery and control are scoped to the workspace that contains the calling agent panel: browser_list shows only that workspace's panels, every other tool rejects panel ids outside it, and a panel's visible field is host presentation state rather than proof that it is in your workspace; identities from outside Horizon keep unscoped discovery. Start with browser_list; if it is empty, call browser_create in your current Horizon workspace. Reuse an existing panel for iframe, popup, dialog, and consent interactions: never create or reveal a helper panel as a workaround. If the current top-level semantic tools cannot reach embedded frame content, call browser_handoff on the original panel. Only set browser_create allow_additional=true when the user explicitly requests an independent browser session. Pass browser_create target=<configured remote target name> to run at a configured remote target; never supply endpoints, capabilities or credentials yourself. Use visible=false for a live background panel and browser_visibility to show or hide it later without stopping automation or capture. Call browser_close when the user is done with a panel you own or a remote device session must be released; it stops the session and the panel leaves browser_list. Each panel advertises navigation, DOM, steering, audit, network, and video capabilities. Use browser_resize width and height to pin a supported local content viewport in CSS pixels; reset=true resumes panel sizing. Check its measured applied dimensions. Navigation preserves the pin; video max_width does not change it. For WebSocket or HTTP observation, call browser_network start before browser_navigate; opt into native bounded response bodies with include_http_bodies. Prefer browser_network_watch with its returned capture_id and next_sequence for bounded event-driven monitoring, or tail the exact private NDJSON path returned by browser_network with ordinary read-only Unix tools; call browser_network stop to flush. For page-pixel recording, call browser_video start, optionally pause/resume, then stop to finalize a private WebM path; quality, compression_level, fps, max_width, and max_file_bytes are start-only. Take a fresh semantic snapshot or query before acting through refs, and verify afterward. Never use raw browser endpoints or Horizon's private runtime files.",
+                "MCP is the sole agent control contract for Horizon browser panels. For agent identities injected by Horizon, discovery and control are scoped to the workspace that contains the calling agent panel: browser_list shows only that workspace's panels, every other tool rejects panel ids outside it, and a panel's visible field is host presentation state rather than proof that it is in your workspace; identities from outside Horizon keep unscoped discovery. Start with browser_list; if it is empty, call browser_create in your current Horizon workspace. Reuse an existing panel for iframe, popup, dialog, and consent interactions: never create or reveal a helper panel as a workaround. If the current top-level semantic tools cannot reach embedded frame content, call browser_handoff on the original panel. Only set browser_create allow_additional=true when the user explicitly requests an independent browser session. Pass browser_create target=<configured remote target name> to run at a configured remote target; never supply endpoints, capabilities or credentials yourself. Use visible=false for a live background panel and browser_visibility to show or hide it later without stopping automation or capture. Call browser_close when the user is done with a panel you own or a remote device session must be released; it stops the session and the panel leaves browser_list. Each panel advertises navigation, DOM, steering, audit, network, and video capabilities. Use browser_resize width and height to pin a supported local content viewport in CSS pixels; reset=true resumes panel sizing. Check its measured applied dimensions. Navigation preserves the pin; video max_width does not change it. For HTTP Basic or Digest, call browser_http_auth set with username and password (optional origin) before browser_navigate, or set then reload if a protected page was already opened; Safari and remote sessions return unsupported_backend. For WebSocket or HTTP observation, call browser_network start before browser_navigate; opt into native bounded response bodies with include_http_bodies. Prefer browser_network_watch with its returned capture_id and next_sequence for bounded event-driven monitoring, or tail the exact private NDJSON path returned by browser_network with ordinary read-only Unix tools; call browser_network stop to flush. For page-pixel recording, call browser_video start, optionally pause/resume, then stop to finalize a private WebM path; quality, compression_level, fps, max_width, and max_file_bytes are start-only. Take a fresh semantic snapshot or query before acting through refs, and verify afterward. Never use raw browser endpoints or Horizon's private runtime files.",
             )
     }
 
@@ -524,6 +544,7 @@ mod tests {
                 "browser_create",
                 "browser_evaluate",
                 "browser_handoff",
+                "browser_http_auth",
                 "browser_list",
                 "browser_navigate",
                 "browser_network",

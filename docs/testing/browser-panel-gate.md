@@ -38,6 +38,7 @@ cumulative.
 | Browser config schema, defaults, migration, discovery paths | Auto-discovery plus explicit-path launch, persistence/migration, and update this runner's generated config |
 | MCP schemas or public tool behavior | MCP contract on all supported backends and bundled-agent discovery; update MCP README and skill together |
 | Network events, HTTP response bodies, WebSocket capture/watch, NDJSON writer, capture directory, or retention | High-rate network fixture through MCP on Chromium and Firefox; E24 live-data correctness probe on both when body capture changes and the market is open; Safari unsupported response; cursor/filter/timeout/stop/gap/truncation/drop/lifecycle/audit checks; age/count/aggregate-byte retention probe; hidden capture; normal close during capture; permanent profile cleanup |
+| HTTP Basic/Digest credentials (`browser_http_auth`, challenge intercept) | Unattended `scripts/browser-smoke/http_auth_smoke.py` on Chromium and Firefox; fixture self-check; anonymous and wrong-password rejection; Basic and Digest success markers through public MCP; audit redaction |
 | Dependency, feature, packaging, or public crate boundary | Repository gate, rustdoc, clean package dry-run, macOS and Windows cross-target checks |
 | Release/support claim or broad browser refactor | Full Linux and full macOS gates on the exact candidate head; Windows follow-up where support is claimed |
 
@@ -88,7 +89,7 @@ The reusable runner:
   commit (use `--allow-dirty` only for an explicitly provisional diagnosis);
 - serves the committed fixtures on a random loopback port;
 - launches the exact Horizon binary with an agent panel and no Browser panel;
-- invokes only the fourteen public `browser_*` MCP tools;
+- invokes only the eighteen public `browser_*` MCP tools;
 - proves empty discovery followed by an audited hidden `browser_create` in the
   requesting agent's workspace whose result already reports the committed
   first page (`navigation: committed`, `startup_millis`) and is queryable

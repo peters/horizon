@@ -31,9 +31,11 @@ redacted audit trail. The agent adapter is outside the engine and deterministic
 `run` remains model-free.
 
 Through that contract an agent or plan can navigate; snapshot or query the DOM;
-click, fill, scroll, wait, and evaluate; show or hide an actor-owned panel; read
-the audit trail; and capture or cursor-watch bounded HTTP/WebSocket traffic on
-supported backends.
+click, fill, scroll, wait, and evaluate; supply HTTP Basic or Digest
+credentials with `browser_http_auth` when a page challenges; show or hide an
+actor-owned panel; read the audit trail; and capture or cursor-watch bounded
+HTTP/WebSocket traffic on supported backends. A checked `run` plan can pass
+username and password through plan variables; reports redact those fields.
 
 ## Prompt-first jobs
 
@@ -157,6 +159,7 @@ horizon-browser run crates/horizon-browser-cli/examples/navigate.json
 horizon-browser run crates/horizon-browser-cli/examples/extract.json
 horizon-browser run crates/horizon-browser-cli/examples/interact.json
 horizon-browser run crates/horizon-browser-cli/examples/network-watch.json
+horizon-browser run crates/horizon-browser-cli/examples/http-auth.json
 ```
 
 The report is JSON with top-level `job_id`, `job_dir`, `state_path`, `ok`,

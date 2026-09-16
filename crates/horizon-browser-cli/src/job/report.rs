@@ -511,7 +511,7 @@ fn redact_map(values: &mut Map<String, Value>, replayable: &mut bool) {
             }
             "url_patterns" => redact_url_patterns(value, replayable),
             "body" | "data" | "expression" | "headers" | "password" | "reason" | "script" | "selector" | "text"
-            | "token" | "value" => {
+            | "token" | "username" | "value" => {
                 if !value.is_null() {
                     *value = Value::String("<redacted>".to_string());
                     *replayable = false;
@@ -718,7 +718,9 @@ mod tests {
         let mut arguments = json!({
             "url":"https://example.com/path?token=secret#fragment",
             "url_patterns":["token=secret", "https://example.com/public", null],
-            "value":"private text"
+            "value":"private text",
+            "username":"smoke-user",
+            "password":"smoke-pass-zephyr"
         })
         .as_object()
         .cloned()
@@ -728,6 +730,8 @@ mod tests {
         assert_eq!(arguments["url"], "https://example.com/path?<redacted>#<redacted>");
         assert_eq!(arguments["url_patterns"], json!(["<redacted>", "<redacted>", null]));
         assert_eq!(arguments["value"], "<redacted>");
+        assert_eq!(arguments["username"], "<redacted>");
+        assert_eq!(arguments["password"], "<redacted>");
     }
 
     #[test]

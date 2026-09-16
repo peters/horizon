@@ -197,6 +197,10 @@ impl DriverState {
             // `call_and_ack`, which re-enters `handle_message`.
             self.handle_network_event(&event);
         }
+        if event.method == "Fetch.authRequired" || event.method == "Fetch.requestPaused" {
+            self.continue_http_auth(link, event_tx, frame_slot, &event);
+            return;
+        }
         match event.method {
             "Target.attachedToTarget" => {
                 if self.note_clipboard_target_attachment(link, &event) {

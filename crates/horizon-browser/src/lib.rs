@@ -12,6 +12,7 @@ mod coordination;
 mod disclosure;
 mod error;
 pub mod frames;
+mod http_auth;
 pub mod input;
 mod native_select;
 mod navigation;
@@ -41,13 +42,13 @@ pub use error::BrowserError;
 pub use frames::{FrameData, FrameMetrics, FrameSlot, PageScrollState, TeachObservation};
 pub use horizon_browser_protocol::remote::{self, RemoteBrowserConfig};
 pub use horizon_browser_protocol::{
-    AgentAction, BackendAvailability, BackendCapabilities, BackendKind, BrowserControlAction, BrowserVideoCapture,
-    BrowserVideoCaptureOptions, BrowserVideoCaptureOverrides, BrowserVideoOperation, BrowserVideoState,
-    DEFAULT_CLICK_COUNT, DEFAULT_NAVIGATION_TIMEOUT_MILLIS, DEFAULT_VIDEO_COMPRESSION_LEVEL, DEFAULT_VIDEO_FPS,
-    DEFAULT_VIDEO_MAX_FILE_BYTES, DEFAULT_VIDEO_QUALITY, DEFAULT_WAIT_TIMEOUT_MILLIS, FrameDelivery, MAX_CLICK_COUNT,
-    MAX_NAVIGATION_TIMEOUT_MILLIS, MAX_QUERY_RESULTS, MAX_SNAPSHOT_NODES, MAX_VIDEO_COMPRESSION_LEVEL,
+    AgentAction, BackendAvailability, BackendCapabilities, BackendKind, BrowserControlAction, BrowserHttpAuthOperation,
+    BrowserVideoCapture, BrowserVideoCaptureOptions, BrowserVideoCaptureOverrides, BrowserVideoOperation,
+    BrowserVideoState, DEFAULT_CLICK_COUNT, DEFAULT_NAVIGATION_TIMEOUT_MILLIS, DEFAULT_VIDEO_COMPRESSION_LEVEL,
+    DEFAULT_VIDEO_FPS, DEFAULT_VIDEO_MAX_FILE_BYTES, DEFAULT_VIDEO_QUALITY, DEFAULT_WAIT_TIMEOUT_MILLIS, FrameDelivery,
+    MAX_CLICK_COUNT, MAX_NAVIGATION_TIMEOUT_MILLIS, MAX_QUERY_RESULTS, MAX_SNAPSHOT_NODES, MAX_VIDEO_COMPRESSION_LEVEL,
     MAX_VIDEO_FILE_BYTES, MAX_VIDEO_FPS, MAX_VIDEO_MAX_WIDTH, MAX_VIDEO_QUALITY, MAX_WAIT_TIMEOUT_MILLIS,
-    MIN_VIDEO_FILE_BYTES, MIN_VIDEO_FPS, MIN_VIDEO_MAX_WIDTH, MIN_VIDEO_QUALITY, NavigationWait,
+    MIN_VIDEO_FILE_BYTES, MIN_VIDEO_FPS, MIN_VIDEO_MAX_WIDTH, MIN_VIDEO_QUALITY, NavigationWait, SecretString,
     normalize_navigation_target,
 };
 pub use input::{BrowserButton, BrowserEditCommand, BrowserInput, BrowserKey, BrowserModifiers};
