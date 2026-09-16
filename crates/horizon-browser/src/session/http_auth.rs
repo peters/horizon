@@ -93,24 +93,43 @@ impl DriverState {
         } else {
             None
         };
+        let previous = self.http_auth.configuration();
         self.http_auth
             .apply(*operation, username.as_deref(), password.as_ref(), origin.as_deref())?;
-        let (method, params) = if self.http_auth.should_intercept() {
-            ("Fetch.enable", fetch_enable_params())
-        } else {
-            ("Fetch.disable", json!({}))
-        };
-        if let Err(error) = self.update_http_auth_sessions(link, event_tx, frame_slot, method, &params) {
-            let _ = self
-                .http_auth
-                .apply(crate::BrowserHttpAuthOperation::Clear, None, None, None);
-            self.disable_http_auth_interception(link);
+        if let Err(error) = self.reconcile_http_auth_sessions(link, event_tx, frame_slot) {
+            self.http_auth.restore_configuration(previous);
+            if let Err(rollback_error) = self.reconcile_http_auth_sessions(link, event_tx, frame_slot) {
+                let _ = self
+                    .http_auth
+                    .apply(crate::BrowserHttpAuthOperation::Clear, None, None, None);
+                self.disable_http_auth_interception(link);
+                return Err(BrowserControlFailure::new(
+                    "auth_protocol",
+                    format!(
+                        "Chromium authentication setup failed: {error}; restoring interception also failed: {rollback_error}; credentials were cleared"
+                    ),
+                ));
+            }
             return Err(BrowserControlFailure::new(
                 "auth_protocol",
                 format!("Chromium could not update authentication interception: {error}"),
             ));
         }
         Ok(BrowserControlValue::Accepted)
+    }
+
+    fn reconcile_http_auth_sessions(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+    ) -> Result<(), crate::cdp::CdpError> {
+        let (method, params) = if self.http_auth.should_intercept() {
+            ("Fetch.enable", fetch_enable_params())
+        } else {
+            ("Fetch.disable", json!({}))
+        };
+        self.update_http_auth_sessions(link, event_tx, frame_slot, method, &params)
     }
 
     fn update_http_auth_sessions(
@@ -325,6 +344,63 @@ mod tests {
             )
             .expect("set auth");
         state
+    }
+
+    #[test]
+    fn failed_first_set_restores_disabled_interception() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind mock");
+        let address = listener.local_addr().expect("address");
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept");
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .expect("timeout");
+            let mut socket = tungstenite::accept(stream).expect("handshake");
+            for (index, method) in ["Fetch.enable", "Fetch.disable"].into_iter().enumerate() {
+                let message = socket.read().expect("command");
+                let command: Value = serde_json::from_str(message.to_text().expect("text")).expect("JSON");
+                assert_eq!(command["method"], method);
+                assert_eq!(command["sessionId"], "current");
+                let response = if index == 0 {
+                    json!({ "id": command["id"], "error": {"code": -32000, "message": "mock failure"} })
+                } else {
+                    json!({ "id": command["id"], "result": {} })
+                };
+                socket
+                    .send(tungstenite::Message::Text(response.to_string().into()))
+                    .expect("respond");
+            }
+        });
+        let mut state = authenticated_state();
+        state.http_auth = crate::http_auth::HttpAuthState::default();
+        let mut link = CdpLink::connect(&format!("ws://{address}")).expect("connect");
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let events = BrowserEventSender {
+            tx,
+            wake: super::super::BrowserEventWake::default(),
+            committed_url: super::super::CommittedUrl::default(),
+        };
+        let result = state.http_auth_action(
+            &mut link,
+            &events,
+            &Arc::default(),
+            &BrowserControlAction::HttpAuth {
+                operation: crate::BrowserHttpAuthOperation::Set,
+                username: Some("user".into()),
+                password: Some("password".into()),
+                origin: Some("https://example.test".into()),
+            },
+        );
+        assert!(result.is_err());
+        assert!(!state.http_auth.should_intercept());
+        assert_eq!(
+            state
+                .http_auth
+                .decide("new", "https://example.test", Some("basic"), false),
+            HttpAuthDecision::Cancel
+        );
+        drop(link);
+        server.join().expect("mock completed");
     }
 
     #[test]

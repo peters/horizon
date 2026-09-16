@@ -12,11 +12,16 @@ const MAX_ATTEMPTED_REQUESTS: usize = 256;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct HttpAuthState {
-    credentials: Option<HttpAuthCredentials>,
-    interception_requested: bool,
+    configuration: HttpAuthConfiguration,
     attempted_requests: HashSet<String>,
     fetch_network_ids: HashMap<String, String>,
     network_fetch_ids: HashMap<String, HashSet<String>>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct HttpAuthConfiguration {
+    credentials: Option<HttpAuthCredentials>,
+    interception_requested: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -36,10 +41,18 @@ pub(crate) enum HttpAuthDecision {
 }
 
 impl HttpAuthState {
+    pub(crate) fn configuration(&self) -> HttpAuthConfiguration {
+        self.configuration.clone()
+    }
+
+    pub(crate) fn restore_configuration(&mut self, configuration: HttpAuthConfiguration) {
+        self.configuration = configuration;
+    }
+
     pub(crate) fn should_intercept(&self) -> bool {
         // Clearing credentials must still cancel challenges instead of leaving
         // subframe requests waiting on a native authentication prompt.
-        self.interception_requested
+        self.configuration.interception_requested
     }
 
     pub(crate) fn reset_requests(&mut self) {
@@ -75,12 +88,12 @@ impl HttpAuthState {
                     .ok_or_else(|| BrowserControlFailure::new("invalid_action", "HTTP auth set requires origin"))?;
                 let origin = parse_http_auth_origin(origin)
                     .map_err(|message| BrowserControlFailure::new("invalid_action", message))?;
-                self.credentials = Some(HttpAuthCredentials {
+                self.configuration.credentials = Some(HttpAuthCredentials {
                     username: SecretString::new(username),
                     password: password.clone(),
                     origin: origin.clone(),
                 });
-                self.interception_requested = true;
+                self.configuration.interception_requested = true;
                 Ok((true, Some(origin)))
             }
             BrowserHttpAuthOperation::Clear => {
@@ -90,7 +103,7 @@ impl HttpAuthState {
                         "HTTP auth clear does not accept credentials",
                     ));
                 }
-                self.credentials = None;
+                self.configuration.credentials = None;
                 Ok((false, None))
             }
         }
@@ -109,7 +122,7 @@ impl HttpAuthState {
         if self.attempted_requests.contains(request_id) || self.attempted_requests.len() >= MAX_ATTEMPTED_REQUESTS {
             return HttpAuthDecision::Cancel;
         }
-        let Some(credentials) = &self.credentials else {
+        let Some(credentials) = &self.configuration.credentials else {
             return HttpAuthDecision::Cancel;
         };
         let Some(origin) = request_origin(url) else {
@@ -277,6 +290,41 @@ mod tests {
     }
 
     #[test]
+    fn configuration_rollback_preserves_request_progress_and_restores_the_interception_flag() {
+        let mut state = HttpAuthState::default();
+        let empty = state.configuration();
+        set(&mut state, Some("http://example.test"));
+        assert!(matches!(
+            state.decide("active", "http://example.test/basic", Some("basic"), false),
+            HttpAuthDecision::Provide { .. }
+        ));
+        state.restore_configuration(empty);
+        assert!(!state.should_intercept());
+        assert!(state.configuration.credentials.is_none());
+        set(&mut state, Some("http://example.test"));
+        assert_eq!(
+            state.decide("active", "http://example.test/basic", Some("basic"), false),
+            HttpAuthDecision::Cancel
+        );
+        let configured = state.configuration();
+        state
+            .apply(
+                BrowserHttpAuthOperation::Set,
+                Some("new-user"),
+                Some(&SecretString::new("new-password")),
+                Some("https://other.test"),
+            )
+            .expect("replace");
+        state.forget_request("active");
+        state.restore_configuration(configured);
+        assert!(state.should_intercept());
+        assert_eq!(
+            state.decide("active", "http://example.test/basic", Some("basic"), false),
+            provide("smoke-user", "smoke-pass-zephyr")
+        );
+    }
+
+    #[test]
     fn redirect_completion_releases_all_hops_without_reopening_active_attempts() {
         let mut state = HttpAuthState::default();
         set(&mut state, Some("http://example.test"));
@@ -375,10 +423,10 @@ mod tests {
         state
             .apply(BrowserHttpAuthOperation::Clear, None, None, None)
             .expect("clear");
-        assert!(state.credentials.is_none());
+        assert!(state.configuration.credentials.is_none());
         assert!(state.should_intercept());
         set(&mut state, Some("http://example.test"));
-        assert!(state.credentials.is_some());
+        assert!(state.configuration.credentials.is_some());
         assert_eq!(
             state.decide("fetch", "http://example.test/basic", Some("basic"), false),
             HttpAuthDecision::Cancel
@@ -403,7 +451,7 @@ mod tests {
             ));
         }
         state.reset_requests();
-        assert!(state.credentials.is_some());
+        assert!(state.configuration.credentials.is_some());
         assert!(state.attempted_requests.is_empty());
         assert!(state.fetch_network_ids.is_empty());
         assert!(state.network_fetch_ids.is_empty());

@@ -44,7 +44,7 @@ impl fmt::Debug for HttpAuthInput {
             .field("operation", &self.operation)
             .field("username", &self.username.as_ref().map(|_| "SecretString(<redacted>)"))
             .field("password", &self.password.as_ref().map(|_| "SecretString(<redacted>)"))
-            .field("origin", &self.origin)
+            .field("origin", &self.origin.as_ref().map(|_| "SecretString(<redacted>)"))
             .field("timeout_millis", &self.timeout_millis)
             .finish()
     }
@@ -64,7 +64,7 @@ impl HttpAuthInput {
             operation: self.operation.into(),
             username: self.username.clone().map(SecretString::new),
             password: self.password.clone().map(SecretString::new),
-            origin: self.origin.clone(),
+            origin: self.origin.clone().map(SecretString::new),
         })
     }
 
@@ -97,6 +97,19 @@ pub(crate) struct HttpAuthOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debug_omits_rejected_credential_bearing_origins() {
+        let input: HttpAuthInput = serde_json::from_value(serde_json::json!({
+            "panel_id": "panel", "operation": "set", "username": "user", "password": "password",
+            "origin": "https://user:origin-secret@example.test"
+        }))
+        .expect("decode input");
+        assert!(!format!("{input:?}").contains("origin-secret"));
+        let action = input.build_action().expect("build action");
+        assert!(action.validate().is_err());
+        assert!(!format!("{action:?}").contains("origin-secret"));
+    }
 
     #[test]
     fn set_requires_username_and_password_and_clear_rejects_them() {

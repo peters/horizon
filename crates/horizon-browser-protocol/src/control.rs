@@ -170,7 +170,7 @@ pub enum BrowserControlAction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         password: Option<SecretString>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        origin: Option<String>,
+        origin: Option<SecretString>,
     },
 }
 
@@ -775,6 +775,33 @@ mod tests {
                 .validate()
                 .is_ok()
             );
+        }
+    }
+
+    #[test]
+    fn credential_bearing_origins_stay_redacted_in_action_debug_output() {
+        for origin in [
+            "https://user:origin-secret@example.test",
+            "https://example.test/origin-secret",
+            "https://example.test?password=origin-secret",
+        ] {
+            let action = BrowserControlAction::HttpAuth {
+                operation: crate::BrowserHttpAuthOperation::Set,
+                username: Some("user".into()),
+                password: Some("password".into()),
+                origin: Some(origin.into()),
+            };
+            assert!(action.validate().is_err());
+            let wire = serde_json::to_value(&action).expect("encode private action");
+            assert_eq!(wire["origin"], origin);
+            let decoded: BrowserControlAction = serde_json::from_value(wire).expect("decode action");
+            let envelope = AgentAction {
+                action_id: "id".into(),
+                actor: "actor".into(),
+                requested_at_millis: 0,
+                action: decoded,
+            };
+            assert!(!format!("{envelope:?}").contains("origin-secret"));
         }
     }
 

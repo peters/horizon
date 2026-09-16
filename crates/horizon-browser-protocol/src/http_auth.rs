@@ -17,7 +17,7 @@ pub enum BrowserHttpAuthOperation {
     Clear,
 }
 
-/// Password bytes that serialize for the private action queue but never
+/// Credential-bearing input that serializes for the private action queue but never
 /// display in `Debug` output.
 #[derive(Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(transparent)]
