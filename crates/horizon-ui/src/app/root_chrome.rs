@@ -96,7 +96,6 @@ pub(super) fn root_toolbar_layout(viewport: Rect, show_update: bool) -> RootTool
     let states = [
         (true, ToolbarAction::SECONDARY.len(), true),
         (false, ToolbarAction::SECONDARY.len(), true),
-        (false, 1_usize, true),
         (false, 0_usize, true),
         (false, 1_usize, false),
         (false, 0_usize, false),
