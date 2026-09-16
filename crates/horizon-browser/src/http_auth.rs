@@ -16,7 +16,7 @@ pub(crate) struct HttpAuthState {
     interception_requested: bool,
     attempted_requests: HashSet<String>,
     fetch_network_ids: HashMap<String, String>,
-    network_fetch_ids: HashMap<String, String>,
+    network_fetch_ids: HashMap<String, HashSet<String>>,
 }
 
 #[derive(Clone, Debug)]
@@ -131,30 +131,35 @@ impl HttpAuthState {
         if let Some(previous) = self
             .fetch_network_ids
             .insert(fetch_id.to_string(), network_id.to_string())
+            && previous != network_id
         {
-            self.network_fetch_ids.remove(&previous);
+            self.unlink_fetch_id(&previous, fetch_id);
         }
-        if let Some(previous) = self
-            .network_fetch_ids
-            .insert(network_id.to_string(), fetch_id.to_string())
-            && previous != fetch_id
-        {
-            self.fetch_network_ids.remove(&previous);
-        }
+        self.network_fetch_ids
+            .entry(network_id.to_string())
+            .or_default()
+            .insert(fetch_id.to_string());
     }
 
     pub(crate) fn forget_request(&mut self, request_id: &str) {
-        let mut related = vec![request_id.to_string()];
         if let Some(network_id) = self.fetch_network_ids.remove(request_id) {
-            self.network_fetch_ids.remove(&network_id);
-            related.push(network_id);
+            self.unlink_fetch_id(&network_id, request_id);
         }
-        if let Some(fetch_id) = self.network_fetch_ids.remove(request_id) {
-            self.fetch_network_ids.remove(&fetch_id);
-            related.push(fetch_id);
+        if let Some(fetch_ids) = self.network_fetch_ids.remove(request_id) {
+            for fetch_id in fetch_ids {
+                self.fetch_network_ids.remove(&fetch_id);
+                self.attempted_requests.remove(&fetch_id);
+            }
         }
-        for id in related {
-            self.attempted_requests.remove(&id);
+        self.attempted_requests.remove(request_id);
+    }
+
+    fn unlink_fetch_id(&mut self, network_id: &str, fetch_id: &str) {
+        if let Some(fetch_ids) = self.network_fetch_ids.get_mut(network_id) {
+            fetch_ids.remove(fetch_id);
+            if fetch_ids.is_empty() {
+                self.network_fetch_ids.remove(network_id);
+            }
         }
     }
 
@@ -269,6 +274,57 @@ mod tests {
             state.decide("req-1", "http://127.0.0.1:8080/basic-auth", Some("Basic"), false),
             provide("smoke-user", "smoke-pass-zephyr")
         );
+    }
+
+    #[test]
+    fn redirect_completion_releases_all_hops_without_reopening_active_attempts() {
+        let mut state = HttpAuthState::default();
+        set(&mut state, Some("http://example.test"));
+        for index in 0..=MAX_ATTEMPTED_REQUESTS {
+            let network = format!("network-{index}");
+            let first = format!("first-{index}");
+            let second = format!("second-{index}");
+            for fetch in [&first, &second] {
+                state.note_network_id(fetch, &network);
+                assert!(matches!(
+                    state.decide(fetch, "http://example.test/basic", Some("basic"), false),
+                    HttpAuthDecision::Provide { .. }
+                ));
+            }
+            state.note_network_id(&first, &network);
+            assert_eq!(
+                state.decide(&first, "http://example.test/basic", Some("basic"), false),
+                HttpAuthDecision::Cancel
+            );
+            state.forget_request(&network);
+            assert!(state.attempted_requests.is_empty());
+            assert!(state.fetch_network_ids.is_empty());
+            assert!(state.network_fetch_ids.is_empty());
+        }
+    }
+
+    #[test]
+    fn remapping_one_fetch_id_preserves_other_hops_and_the_active_retry_guard() {
+        let mut state = HttpAuthState::default();
+        set(&mut state, Some("http://example.test"));
+        for fetch in ["first", "second"] {
+            state.note_network_id(fetch, "old-network");
+            assert!(matches!(
+                state.decide(fetch, "http://example.test/basic", Some("basic"), false),
+                HttpAuthDecision::Provide { .. }
+            ));
+        }
+        state.note_network_id("first", "new-network");
+        state.forget_request("old-network");
+        assert_eq!(state.attempted_requests, HashSet::from(["first".to_string()]));
+        assert_eq!(
+            state.decide("first", "http://example.test/basic", Some("basic"), false),
+            HttpAuthDecision::Cancel
+        );
+        state.forget_request("new-network");
+        assert!(state.attempted_requests.is_empty());
+        assert!(state.fetch_network_ids.is_empty());
+        assert!(state.network_fetch_ids.is_empty());
     }
 
     #[test]
