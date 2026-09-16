@@ -523,12 +523,16 @@ browser:
   every_nth_frame: 1             # Chromium screencast sampling
   profile_root: ~/.horizon/browser-profiles
   video:
-    quality: 70                  # WebM visual quality, 1–100
+    quality: 90                  # WebM visual quality, 1–100
     compression_level: 4         # 0 fastest/largest … 10 slowest/smallest
     fps: 10                      # encoded frames per second, 1–30
-    max_width: 1280              # longest encoded side, 320–1920
     max_file_bytes: 536870912    # stop ingest at this WebM size
 ```
+
+Recordings default to source-frame dimensions with codec-block alignment. Set
+`browser.video.max_width` (320–1920) to cap the longest encoded side without
+upscaling. Omitted per-recording options keep the host settings, including any
+explicit cap. These encoding options do not change the page viewport.
 
 All executable fields are optional. Chromium and Firefox get separate directories under `profile_root`. Permanently closing the panel or deleting its saved session removes that panel's profile. Safari always uses Safari's isolated automation window and does not reuse your normal history, cookies, or preferences.
 
