@@ -196,8 +196,8 @@ impl DriverState {
             // after this drain returns. `tick_http_response_bodies` uses
             // `call_and_ack`, which re-enters `handle_message`.
             self.handle_network_event(&event);
-            self.forget_completed_http_auth(&event);
         }
+        self.forget_completed_http_auth(&event);
         if event.method == "Fetch.authRequired" || event.method == "Fetch.requestPaused" {
             self.continue_http_auth(link, event_tx, frame_slot, &event);
             return;
@@ -205,6 +205,7 @@ impl DriverState {
         match event.method {
             "Target.attachedToTarget" => {
                 if self.note_clipboard_target_attachment(link, &event) {
+                    self.attach_http_auth_iframe(link, event_tx, frame_slot, &event);
                     return;
                 }
                 // Popups and agent-opened tabs must not steal the binding;
@@ -221,8 +222,12 @@ impl DriverState {
                 self.attach_setup(link, event_tx, frame_slot, session, target_id);
             }
             "Target.detachedFromTarget" => {
+                if let Some(session) = target_event_session_id(event.params, event.session_id) {
+                    self.forget_http_auth_session(session);
+                }
                 self.note_clipboard_target_detachment(&event);
                 if target_event_session_id(event.params, event.session_id) == self.session_id.as_deref() {
+                    self.retire_http_auth_session(link);
                     self.session_id = None;
                     self.http_auth.reset_requests();
                     self.screencast_on = false;
@@ -245,6 +250,9 @@ impl DriverState {
             }
             "Target.targetDestroyed" => {
                 let destroyed = event.params.get("targetId").and_then(|t| t.as_str());
+                if destroyed.is_some() && destroyed == self.target_id.as_deref() {
+                    self.retire_http_auth_session(link);
+                }
                 if self.forget_destroyed_bound_target(destroyed, event_tx) {
                     // External agents discover the page through this field.
                     // Clear it synchronously so a destroyed target is not

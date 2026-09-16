@@ -12,13 +12,58 @@ use crate::{BrowserControlAction, BrowserControlFailure, BrowserControlValue};
 use super::{BrowserEventSender, DriverState};
 
 impl DriverState {
-    pub(super) fn retire_http_auth_session(&mut self, link: &mut CdpLink) {
-        if let Some(session) = self.session_id.as_deref()
-            && let Err(error) = link.send_request("Fetch.disable", &json!({}), Some(session))
-        {
-            tracing::warn!(target: "browser", "Chromium could not retire authentication interception: {error}");
+    fn http_auth_sessions(&self) -> Vec<String> {
+        self.session_id
+            .iter()
+            .chain(self.clipboard.iframe_sessions.iter())
+            .cloned()
+            .collect()
+    }
+
+    fn is_http_auth_session(&self, session: &str) -> bool {
+        self.session_id.is_some()
+            && (self.session_id.as_deref() == Some(session) || self.clipboard.iframe_sessions.contains(session))
+    }
+
+    fn disable_http_auth_interception(&self, link: &mut CdpLink) {
+        for session in self.http_auth_sessions() {
+            if let Err(error) = link.send_request("Fetch.disable", &json!({}), Some(&session)) {
+                tracing::warn!(target: "browser", "Chromium could not retire authentication interception: {error}");
+            }
         }
+    }
+
+    pub(super) fn retire_http_auth_session(&mut self, link: &mut CdpLink) {
+        self.disable_http_auth_interception(link);
         self.http_auth.reset_requests();
+    }
+
+    pub(super) fn attach_http_auth_iframe(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        event: &CdpEvent<'_>,
+    ) {
+        let Some(session) = super::clipboard::target_event_session_id(event.params, event.session_id) else {
+            return;
+        };
+        if !self.http_auth.should_intercept() || !self.is_http_auth_session(session) {
+            return;
+        }
+        for (method, params) in [("Network.enable", json!({})), ("Fetch.enable", fetch_enable_params())] {
+            if !self.is_http_auth_session(session) {
+                break;
+            }
+            if let Err(error) = self.call_and_ack(link, event_tx, frame_slot, method, &params, Some(session)) {
+                tracing::warn!(target: "browser", "Chromium iframe authentication setup failed: {error}");
+                break;
+            }
+        }
+    }
+
+    pub(super) fn forget_http_auth_session(&mut self, session: &str) {
+        self.http_auth.forget_requests_with_prefix(&request_scope(session));
     }
 
     pub(super) fn http_auth_action(
@@ -40,7 +85,7 @@ impl DriverState {
                 "HTTP auth action was not dispatched",
             ));
         };
-        let session = self.session_id.clone().ok_or_else(|| {
+        self.session_id.as_ref().ok_or_else(|| {
             BrowserControlFailure::new("browser_unavailable", "the Chromium page session is not attached")
         })?;
         let origin = if matches!(*operation, crate::BrowserHttpAuthOperation::Set) {
@@ -50,21 +95,51 @@ impl DriverState {
         };
         self.http_auth
             .apply(*operation, username.as_deref(), password.as_ref(), origin.as_deref())?;
-        let (method, params) = if self.http_auth.has_credentials() {
+        let (method, params) = if self.http_auth.should_intercept() {
             ("Fetch.enable", fetch_enable_params())
         } else {
             ("Fetch.disable", json!({}))
         };
-        if let Err(error) = self.call_and_ack(link, event_tx, frame_slot, method, &params, Some(&session)) {
+        if let Err(error) = self.update_http_auth_sessions(link, event_tx, frame_slot, method, &params) {
             let _ = self
                 .http_auth
                 .apply(crate::BrowserHttpAuthOperation::Clear, None, None, None);
+            self.disable_http_auth_interception(link);
             return Err(BrowserControlFailure::new(
                 "auth_protocol",
                 format!("Chromium could not update authentication interception: {error}"),
             ));
         }
         Ok(BrowserControlValue::Accepted)
+    }
+
+    fn update_http_auth_sessions(
+        &mut self,
+        link: &mut CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
+        method: &str,
+        params: &Value,
+    ) -> Result<(), crate::cdp::CdpError> {
+        for session in self.http_auth_sessions() {
+            let commands = [("Network.enable", json!({})), (method, params.clone())];
+            for (command, arguments) in commands {
+                if command == "Network.enable"
+                    && (method == "Fetch.disable" || self.session_id.as_deref() == Some(&session))
+                {
+                    continue;
+                }
+                if !self.is_http_auth_session(&session) {
+                    break;
+                }
+                if let Err(error) = self.call_and_ack(link, event_tx, frame_slot, command, &arguments, Some(&session))
+                    && self.is_http_auth_session(&session)
+                {
+                    return Err(error);
+                }
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn continue_http_auth(
@@ -91,12 +166,15 @@ impl DriverState {
         let Some(request_id) = event.params.get("requestId").and_then(Value::as_str) else {
             return;
         };
-        if event
-            .session_id
-            .is_some_and(|session| Some(session) == self.session_id.as_deref())
+        if let Some(session) = event.session_id.filter(|session| self.is_http_auth_session(session))
             && let Some(network_id) = event.params.get("networkId").and_then(Value::as_str)
+            && !request_id.is_empty()
+            && !network_id.is_empty()
         {
-            self.http_auth.note_network_id(request_id, network_id);
+            self.http_auth.note_network_id(
+                &scoped_request(session, request_id),
+                &scoped_request(session, network_id),
+            );
         }
         if let Err(error) = self.call_and_ack(
             link,
@@ -137,14 +215,21 @@ impl DriverState {
     fn http_auth_challenge_decision(&mut self, event: &CdpEvent<'_>, request_id: &str) -> HttpAuthDecision {
         // A replaced session can still deliver paused requests. Release them
         // without credentials or mutations to the current session's retry guard.
-        if event
-            .session_id
-            .is_none_or(|session| Some(session) != self.session_id.as_deref())
-        {
+        let Some(session) = event.session_id.filter(|session| self.is_http_auth_session(session)) else {
+            return HttpAuthDecision::Cancel;
+        };
+        if request_id.is_empty() {
             return HttpAuthDecision::Cancel;
         }
-        if let Some(network_id) = event.params.get("networkId").and_then(Value::as_str) {
-            self.http_auth.note_network_id(request_id, network_id);
+        let request_id = scoped_request(session, request_id);
+        if let Some(network_id) = event
+            .params
+            .get("networkId")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+        {
+            self.http_auth
+                .note_network_id(&request_id, &scoped_request(session, network_id));
         }
         let url = event
             .params
@@ -157,16 +242,26 @@ impl DriverState {
             .pointer("/authChallenge/source")
             .and_then(Value::as_str)
             .is_some_and(|source| source.eq_ignore_ascii_case("Proxy"));
-        self.http_auth.decide(request_id, url, scheme, is_proxy)
+        self.http_auth.decide(&request_id, url, scheme, is_proxy)
     }
 
     pub(super) fn forget_completed_http_auth(&mut self, event: &CdpEvent<'_>) {
         if matches!(event.method, "Network.loadingFinished" | "Network.loadingFailed")
+            && let Some(session) = event.session_id.filter(|session| self.is_http_auth_session(session))
             && let Some(request_id) = event.params.get("requestId").and_then(Value::as_str)
+            && !request_id.is_empty()
         {
-            self.http_auth.forget_request(request_id);
+            self.http_auth.forget_request(&scoped_request(session, request_id));
         }
     }
+}
+
+fn request_scope(session: &str) -> String {
+    format!("{}:{session}:", session.len())
+}
+
+fn scoped_request(session: &str, request: &str) -> String {
+    format!("{}{request}", request_scope(session))
 }
 
 fn continue_with_auth_params(request_id: &str, decision: &HttpAuthDecision) -> Value {
@@ -200,8 +295,7 @@ pub(super) fn fetch_enable_params() -> Value {
 mod tests {
     use super::*;
 
-    #[test]
-    fn stale_session_challenges_do_not_use_credentials_or_consume_current_request_ids() {
+    fn authenticated_state() -> DriverState {
         let config = super::super::BrowserSessionConfig {
             browser: crate::BrowserConfig::default(),
             panel_local_id: "auth-test".into(),
@@ -230,6 +324,12 @@ mod tests {
                 Some("https://example.test"),
             )
             .expect("set auth");
+        state
+    }
+
+    #[test]
+    fn stale_session_challenges_do_not_use_credentials_or_consume_current_request_ids() {
+        let mut state = authenticated_state();
         let params = json!({
             "requestId": "request",
             "networkId": "network",
@@ -258,6 +358,63 @@ mod tests {
         event.session_id = Some("current");
         assert_eq!(
             state.http_auth_challenge_decision(&event, "request"),
+            HttpAuthDecision::Cancel
+        );
+    }
+
+    #[test]
+    fn iframe_attempts_and_completion_are_scoped_to_their_session() {
+        let mut state = authenticated_state();
+        state.clipboard.iframe_sessions.insert("child".into());
+        let params = json!({
+            "networkId": "network",
+            "request": { "url": "https://example.test/basic" },
+            "authChallenge": { "scheme": "basic", "source": "Server" },
+        });
+        for session in ["current", "child"] {
+            let event = CdpEvent {
+                method: "Fetch.authRequired",
+                params: &params,
+                session_id: Some(session),
+            };
+            assert_eq!(state.http_auth_challenge_decision(&event, ""), HttpAuthDecision::Cancel);
+            assert!(matches!(
+                state.http_auth_challenge_decision(&event, "request"),
+                HttpAuthDecision::Provide { .. }
+            ));
+        }
+        let completed = json!({ "requestId": "network" });
+        state.forget_completed_http_auth(&CdpEvent {
+            method: "Network.loadingFinished",
+            params: &completed,
+            session_id: Some("child"),
+        });
+        let child = CdpEvent {
+            method: "Fetch.authRequired",
+            params: &params,
+            session_id: Some("child"),
+        };
+        assert!(matches!(
+            state.http_auth_challenge_decision(&child, "request"),
+            HttpAuthDecision::Provide { .. }
+        ));
+        state.forget_http_auth_session("child");
+        state.clipboard.iframe_sessions.remove("child");
+        assert_eq!(
+            state.http_auth_challenge_decision(&child, "request"),
+            HttpAuthDecision::Cancel
+        );
+        state.clipboard.iframe_sessions.insert("child".into());
+        assert!(matches!(
+            state.http_auth_challenge_decision(&child, "request"),
+            HttpAuthDecision::Provide { .. }
+        ));
+        let parent = CdpEvent {
+            session_id: Some("current"),
+            ..child
+        };
+        assert_eq!(
+            state.http_auth_challenge_decision(&parent, "request"),
             HttpAuthDecision::Cancel
         );
     }

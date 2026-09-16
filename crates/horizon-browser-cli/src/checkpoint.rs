@@ -156,10 +156,9 @@ pub enum ResumeError {
     /// The recorded keep-alive standalone host is no longer running.
     #[error("{0}")]
     StandaloneGone(String),
-    /// Remaining work includes `browser_http_auth` set, but durable state
-    /// does not keep the password.
+    /// Remaining work needs credentials intentionally omitted from durable state.
     #[error(
-        "durable job `{0}` cannot resume remaining HTTP auth: credentials are not stored in job state; re-run the plan with username and password"
+        "durable job `{0}` cannot resume remaining work that requires HTTP auth credentials: credentials are not stored in job state; re-run the plan with username and password"
     )]
     HttpAuthCredentialsNotPersisted(String),
 }

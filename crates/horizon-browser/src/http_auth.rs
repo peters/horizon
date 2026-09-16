@@ -13,6 +13,7 @@ const MAX_ATTEMPTED_REQUESTS: usize = 256;
 #[derive(Clone, Debug, Default)]
 pub(crate) struct HttpAuthState {
     credentials: Option<HttpAuthCredentials>,
+    interception_requested: bool,
     attempted_requests: HashSet<String>,
     fetch_network_ids: HashMap<String, String>,
     network_fetch_ids: HashMap<String, String>,
@@ -35,14 +36,22 @@ pub(crate) enum HttpAuthDecision {
 }
 
 impl HttpAuthState {
-    pub(crate) fn has_credentials(&self) -> bool {
-        self.credentials.is_some()
+    pub(crate) fn should_intercept(&self) -> bool {
+        // Clearing credentials must still cancel challenges instead of leaving
+        // subframe requests waiting on a native authentication prompt.
+        self.interception_requested
     }
 
     pub(crate) fn reset_requests(&mut self) {
         self.attempted_requests.clear();
         self.fetch_network_ids.clear();
         self.network_fetch_ids.clear();
+    }
+
+    pub(crate) fn forget_requests_with_prefix(&mut self, prefix: &str) {
+        self.attempted_requests.retain(|id| !id.starts_with(prefix));
+        self.fetch_network_ids.retain(|id, _| !id.starts_with(prefix));
+        self.network_fetch_ids.retain(|id, _| !id.starts_with(prefix));
     }
 
     pub(crate) fn apply(
@@ -71,6 +80,7 @@ impl HttpAuthState {
                     password: password.clone(),
                     origin: origin.clone(),
                 });
+                self.interception_requested = true;
                 Ok((true, Some(origin)))
             }
             BrowserHttpAuthOperation::Clear => {
@@ -294,7 +304,13 @@ mod tests {
     #[test]
     fn credential_updates_preserve_inflight_attempts_and_completion_links() {
         let mut state = HttpAuthState::default();
+        assert!(!state.should_intercept());
+        state
+            .apply(BrowserHttpAuthOperation::Clear, None, None, None)
+            .expect("clear unused auth");
+        assert!(!state.should_intercept());
         set(&mut state, Some("http://example.test"));
+        assert!(state.should_intercept());
         state.note_network_id("fetch", "network");
         assert!(matches!(
             state.decide("fetch", "http://example.test/basic", Some("basic"), false),
@@ -303,9 +319,10 @@ mod tests {
         state
             .apply(BrowserHttpAuthOperation::Clear, None, None, None)
             .expect("clear");
-        assert!(!state.has_credentials());
+        assert!(state.credentials.is_none());
+        assert!(state.should_intercept());
         set(&mut state, Some("http://example.test"));
-        assert!(state.has_credentials());
+        assert!(state.credentials.is_some());
         assert_eq!(
             state.decide("fetch", "http://example.test/basic", Some("basic"), false),
             HttpAuthDecision::Cancel
@@ -330,7 +347,7 @@ mod tests {
             ));
         }
         state.reset_requests();
-        assert!(state.has_credentials());
+        assert!(state.credentials.is_some());
         assert!(state.attempted_requests.is_empty());
         assert!(state.fetch_network_ids.is_empty());
         assert!(state.network_fetch_ids.is_empty());

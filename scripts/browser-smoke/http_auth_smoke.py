@@ -280,7 +280,10 @@ def exercise(client: mcp_gate.McpClient, args: Any) -> dict[str, Any]:
     if any("password" in json.dumps(entry) and AUTH_PASSWORD in json.dumps(entry) for entry in http_auth_entries):
         raise AssertionError("HTTP auth audit leaked a password")
 
+    client.call("browser_close", {"panel_id": panel_id})
+    iframe_results = exercise_iframe(client, args)
     return {
+        **iframe_results,
         "backend": args.backend,
         "basic_marker": basic,
         "digest_marker": digest,
@@ -294,6 +297,66 @@ def exercise(client: mcp_gate.McpClient, args: Any) -> dict[str, Any]:
         "reenabled_after_clear": True,
         "set_action_id": wrong.get("action_id"),
     }
+
+
+def exercise_iframe(client: mcp_gate.McpClient, args: Any) -> dict[str, Any]:
+    created, _ = client.call("browser_create", {
+        "url": f"{args.base_url}/index.html", "backend": args.backend,
+        "visible": False, "timeout_millis": 45_000,
+    })
+    assert created is not None
+    panel_id = created["panel"]["panel_id"]
+    child_url = other_loopback_url(args.base_url)
+
+    def evaluate(expression: str) -> Any:
+        result, _ = client.call("browser_evaluate", {"panel_id": panel_id, "expression": expression})
+        assert result is not None
+        return result.get("value")
+
+    def wait_value(expression: str) -> Any:
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            value = evaluate(expression)
+            if value:
+                return value
+            time.sleep(0.2)
+        raise AssertionError(f"iframe auth timed out: {expression}")
+
+    def load_child() -> None:
+        evaluate("(()=>{window.authReady=false; window.authResult=null; "
+                 "document.getElementById('auth-child')?.remove(); "
+                 "const frame=document.createElement('iframe'); frame.id='auth-child'; frame.src="
+                 + json.dumps(child_url + "/auth-child.html") + ";document.body.appendChild(frame);return true;})()")
+        wait_value("window.authReady")
+
+    def fetch_child(scheme: str, success: bool) -> None:
+        evaluate("(()=>{window.authResult=null;document.getElementById('auth-child').contentWindow.postMessage("
+                 + json.dumps({"authScheme": scheme}) + ", '*');return true;})()")
+        result = wait_value("window.authResult")
+        marker = f"authenticated-{scheme}-zephyr"
+        if success:
+            assert result["status"] == 200 and marker in result["authResult"], result
+        else:
+            assert marker not in result["authResult"] and result["status"] != 200, result
+
+    evaluate("(()=>{addEventListener('message',event=>{if(event.origin!==" + json.dumps(origin_of(child_url))
+             + ")return;if(event.data.authReady)window.authReady=true;"
+             "if(event.data.authResult)window.authResult=event.data;});return true;})()")
+    load_child()
+    set_http_auth(client, panel_id, WRONG_PASSWORD, origin_of(child_url))
+    fetch_child("basic", False)
+    client.call("browser_http_auth", {"panel_id": panel_id, "operation": "clear"})
+    fetch_child("digest", False)
+    load_child()
+    fetch_child("digest", False)
+    set_http_auth(client, panel_id, AUTH_PASSWORD, origin_of(args.base_url))
+    fetch_child("basic", False)
+    set_http_auth(client, panel_id, AUTH_PASSWORD, origin_of(child_url))
+    fetch_child("basic", True)
+    load_child()
+    fetch_child("digest", True)
+    client.call("browser_close", {"panel_id": panel_id})
+    return {"iframe_basic": True, "iframe_digest": True, "iframe_denials": True, "iframe_reattach": True}
 
 
 def main(argv: list[str] | None = None) -> int:

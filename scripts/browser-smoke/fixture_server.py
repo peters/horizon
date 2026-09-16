@@ -70,6 +70,26 @@ class SmokeHandler(http.server.SimpleHTTPRequestHandler):
         if path == "/digest-auth":
             self._serve_digest_auth()
             return
+        if path == "/auth-child.html":
+            body = b"""<!doctype html><title>Authentication child frame</title><script>
+addEventListener('message', async event => {
+  if (!['basic', 'digest'].includes(event.data.authScheme)) return;
+  try {
+    const response = await fetch('/' + event.data.authScheme + '-auth');
+    const body = await response.text();
+    parent.postMessage({authResult: body, status: response.status}, '*');
+  } catch (error) {
+    parent.postMessage({authResult: String(error), status: 0}, '*');
+  }
+});
+parent.postMessage({authReady: true}, '*');
+</script>"""
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         super().do_GET()
 
     def _serve_basic_auth(self) -> None:

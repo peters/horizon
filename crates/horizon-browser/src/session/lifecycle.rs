@@ -34,7 +34,7 @@ impl DriverState {
         target: &str,
     ) -> bool {
         if self.session_id.as_deref() != Some(session) {
-            self.http_auth.reset_requests();
+            self.retire_http_auth_session(link);
             self.reset_clipboard_tracking();
             self.invalidate_scrollbar_layout(event_tx);
             self.reset_runtime_enable_state();
@@ -78,7 +78,7 @@ impl DriverState {
         ) {
             return false;
         }
-        if self.http_auth.has_credentials()
+        if self.http_auth.should_intercept()
             && !self.setup_command(
                 link,
                 event_tx,
