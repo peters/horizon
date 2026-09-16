@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/horizon-browser",
     "crates/horizon-browser-cli",
+    "crates/horizon-browser-control",
     "crates/horizon-browser-mcp",
     "crates/horizon-browser-protocol",
     "crates/horizon-browser-routines",
@@ -29,6 +30,7 @@ struct_excessive_bools = "allow"
 
 [workspace.dependencies]
 horizon-browser = { path = "crates/horizon-browser", version = "0.2.7" }
+horizon-browser-control = { path = "crates/horizon-browser-control", version = "0.2.7" }
 horizon-browser-mcp = { path = "crates/horizon-browser-mcp", version = "0.2.7" }
 horizon-browser-protocol = { path = "crates/horizon-browser-protocol", version = "0.2.7" }
 horizon-browser-routines = { path = "crates/horizon-browser-routines", version = "0.2.7" }

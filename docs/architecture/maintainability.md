@@ -114,6 +114,19 @@ and versioned-migration slices; their descriptions below are not available UI ac
   failures onto the same `HttpError` shapes. Neither client knows about
   sessions, panels or providers.
 
+### `horizon-browser-control`
+
+- Owns filesystem browser discovery, ownership leases, handoff, action/result
+  queues, host-routed create/close/visibility requests, workspace authorization,
+  and redacted audit storage. The `manifest/` leaves preserve the existing
+  transaction and retention boundaries.
+- `paths.rs` owns the shared default coordination root and canonical identifier
+  encoding. Core keeps its app-specific paths while using that same resolver and
+  encoder. Explicit path constructors do not override global coordination APIs.
+- Depends on the browser engine and small filesystem/serialization helpers.
+  It must not depend on core, UI, terminal state, MCP, or agent runtimes. Provider
+  credentials, device quotas, Teach, and host panel state stay outside this crate.
+
 ### `horizon-core`
 
 - Owns board state, workspace metadata, panel lifecycle, persistence
@@ -138,14 +151,9 @@ and versioned-migration slices; their descriptions below are not available UI ac
   event handling, resize policy, selection logic, and content helpers belong in
   `terminal/` leaf modules.
 - `browser/mod.rs` maps engine sessions/events into Horizon panel state and
-  retry/teardown behavior. Locked live coordination stays in
-  `browser/manifest.rs`, with agent-side lease/action helpers in
-  `browser/manifest/agent.rs`, bounded host-routed panel creation in
-  `browser/manifest/create.rs`, visibility requests in
-  `browser/manifest/visibility.rs`, their shared private queue primitives in
-  `browser/manifest/request_queue.rs`, host-stamped workspace membership that
-  scopes MCP discovery and control in `browser/manifest/workspace.rs`, and
-  append-only audit storage in `browser/manifest/audit.rs`.
+  retry/teardown behavior. `browser/manifest.rs` reexports the shared
+  `horizon-browser-control::manifest` implementation so existing host callers
+  retain identical types, locks, and process identity.
 - `runtime_state.rs` should stay focused on persisted board/window orchestration.
   Persisted workspace, panel, template, and session-binding models live in
   `runtime_state/models.rs`, with board/workspace and panel persistence tests in

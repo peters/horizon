@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
+pub(crate) use horizon_browser_control::paths::safe_local_id;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HorizonHome {
@@ -10,10 +10,11 @@ pub struct HorizonHome {
 impl HorizonHome {
     #[must_use]
     pub fn resolve() -> Self {
-        let root = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .map_or_else(|| PathBuf::from(".horizon"), |home| home.join(".horizon"));
-        Self { root }
+        Self::from_root(
+            horizon_browser_control::BrowserRuntimePaths::resolve()
+                .root()
+                .to_path_buf(),
+        )
     }
 
     #[must_use]
@@ -155,22 +156,6 @@ fn browser_mcp_executable_for_process(process_id: u32, current_executable: Optio
     let _ = process_id;
 
     current_executable
-}
-
-#[must_use]
-pub(crate) fn safe_local_id(local_id: &str) -> String {
-    // Always encode the exact UTF-8 bytes. Keeping an apparently safe ID
-    // verbatim would make identifiers that differ only by case collide on
-    // default macOS and Windows filesystems. The lowercase hexadecimal
-    // alphabet itself has no case variants, and the '%' prefix keeps the
-    // empty identifier distinct.
-    let mut encoded = String::with_capacity(1 + local_id.len() * 2);
-    encoded.push('%');
-    for byte in local_id.bytes() {
-        encoded.push(char::from(LOWER_HEX[usize::from(byte >> 4)]));
-        encoded.push(char::from(LOWER_HEX[usize::from(byte & 0x0f)]));
-    }
-    encoded
 }
 
 #[cfg(test)]

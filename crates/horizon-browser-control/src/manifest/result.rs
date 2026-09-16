@@ -10,7 +10,7 @@ use atomicwrites::{AllowOverwrite, AtomicFile};
 use horizon_browser::AgentActionResult;
 
 use super::ManifestLock;
-use crate::horizon_home::{HorizonHome, safe_local_id};
+use crate::paths::{BrowserRuntimePaths, safe_local_id};
 
 const MAX_RETAINED_RESULTS: usize = 256;
 const RESULT_RETENTION: Duration = Duration::from_mins(5);
@@ -25,7 +25,7 @@ pub fn action_result_path_for_root(root: &Path, panel_local_id: &str, action_id:
 
 #[must_use]
 pub fn default_action_result_path(panel_local_id: &str, action_id: &str) -> PathBuf {
-    action_result_path_for_root(HorizonHome::resolve().root(), panel_local_id, action_id)
+    action_result_path_for_root(BrowserRuntimePaths::resolve().root(), panel_local_id, action_id)
 }
 
 pub(super) fn write(panel_local_id: &str, result: &AgentActionResult) -> std::io::Result<()> {
@@ -35,7 +35,7 @@ pub(super) fn write(panel_local_id: &str, result: &AgentActionResult) -> std::io
 }
 
 pub(super) fn remove_stale(panel_local_id: &str) -> std::io::Result<()> {
-    let root = HorizonHome::resolve();
+    let root = BrowserRuntimePaths::resolve();
     let manifest_path = super::manifest_path_for_root(root.root(), panel_local_id);
     let _manifest_lock = ManifestLock::acquire(&manifest_path)?;
     remove_stale_at(root.root(), panel_local_id)
@@ -229,7 +229,7 @@ fn prune_results_at(
 /// Returns an I/O or invalid-data error. An invalid result is retained for
 /// diagnosis instead of being silently discarded.
 pub fn take_action_result(panel_local_id: &str, action_id: &str) -> std::io::Result<Option<AgentActionResult>> {
-    take_action_result_at(HorizonHome::resolve().root(), panel_local_id, action_id)
+    take_action_result_at(BrowserRuntimePaths::resolve().root(), panel_local_id, action_id)
 }
 
 fn take_action_result_at(

@@ -14,7 +14,7 @@ use super::request_queue::{
 };
 use super::workspace::{AgentIdentity, OUTSIDE_WORKSPACE_MESSAGE};
 use super::{ManifestLock, actor_is_workspace_scoped};
-use crate::horizon_home::{HorizonHome, safe_local_id};
+use crate::paths::{BrowserRuntimePaths, safe_local_id};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BrowserCloseAuditStatus {
@@ -111,7 +111,7 @@ impl BrowserCloseResult {
 /// panel, when the private queue is full, or when coordination storage
 /// cannot be updated.
 pub fn enqueue_close(identity: AgentIdentity<'_>, panel_local_id: &str, timeout: Duration) -> std::io::Result<String> {
-    enqueue_at(HorizonHome::resolve().root(), identity, panel_local_id, timeout)
+    enqueue_at(BrowserRuntimePaths::resolve().root(), identity, panel_local_id, timeout)
 }
 
 fn enqueue_at(
@@ -191,7 +191,7 @@ fn enqueue_at(
 /// # Errors
 /// Returns an error when the private request directory cannot be read.
 pub fn list_close_requests() -> std::io::Result<Vec<BrowserCloseRequest>> {
-    list_at(HorizonHome::resolve().root())
+    list_at(BrowserRuntimePaths::resolve().root())
 }
 
 fn list_at(root: &Path) -> std::io::Result<Vec<BrowserCloseRequest>> {
@@ -231,7 +231,7 @@ pub fn claim_close_request(
     claimant_pid: u32,
 ) -> std::io::Result<Option<BrowserCloseRequest>> {
     claim_at(
-        HorizonHome::resolve().root(),
+        BrowserRuntimePaths::resolve().root(),
         request_id,
         actor,
         host_instance,
@@ -276,7 +276,7 @@ fn claim_at(
 /// # Errors
 /// Returns an error when the private result cannot be written atomically.
 pub fn complete_close_request(result: &BrowserCloseResult) -> std::io::Result<()> {
-    complete_at(HorizonHome::resolve().root(), result)
+    complete_at(BrowserRuntimePaths::resolve().root(), result)
 }
 
 fn complete_at(root: &Path, result: &BrowserCloseResult) -> std::io::Result<()> {
@@ -296,7 +296,7 @@ fn complete_at(root: &Path, result: &BrowserCloseResult) -> std::io::Result<()> 
 /// # Errors
 /// Returns an error for invalid data, identity mismatch, or filesystem failure.
 pub fn take_close_result(request_id: &str, actor: &str) -> std::io::Result<Option<BrowserCloseResult>> {
-    take_at(HorizonHome::resolve().root(), request_id, actor)
+    take_at(BrowserRuntimePaths::resolve().root(), request_id, actor)
 }
 
 fn take_at(root: &Path, request_id: &str, actor: &str) -> std::io::Result<Option<BrowserCloseResult>> {
@@ -330,7 +330,7 @@ fn take_at(root: &Path, request_id: &str, actor: &str) -> std::io::Result<Option
 /// # Errors
 /// Returns an error for invalid identity or audit storage failure.
 pub fn record_close_status(request: &BrowserCloseRequest, status: BrowserCloseAuditStatus) -> std::io::Result<()> {
-    record_status_at(HorizonHome::resolve().root(), request, status)
+    record_status_at(BrowserRuntimePaths::resolve().root(), request, status)
 }
 
 fn record_status_at(
@@ -372,7 +372,7 @@ fn result_path(root: &Path, request_id: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::browser::manifest::{BrowserManifest, ManifestOwner, manifest_path_for_root, write_at};
+    use crate::manifest::{BrowserManifest, ManifestOwner, manifest_path_for_root, write_at};
 
     #[test]
     fn request_requires_live_ownership_and_is_audited() {

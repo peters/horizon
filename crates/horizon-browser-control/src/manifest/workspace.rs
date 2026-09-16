@@ -23,7 +23,7 @@ use super::{
     BrowserManifest, ManifestLock, audit, default_manifest_path, manifest_path_for_root, mutate_at, now_millis,
     read_at, try_read_at,
 };
-use crate::horizon_home::HorizonHome;
+use crate::paths::BrowserRuntimePaths;
 
 /// Error text shared by every locked transaction that refuses an identity
 /// outside the panel's workspace.
@@ -142,7 +142,7 @@ pub fn read_audit_journal_for(
     panel_local_id: &str,
     identity: AgentIdentity<'_>,
 ) -> std::io::Result<audit::AuditJournal> {
-    read_audit_journal_for_at(HorizonHome::resolve().root(), panel_local_id, identity)
+    read_audit_journal_for_at(BrowserRuntimePaths::resolve().root(), panel_local_id, identity)
 }
 
 fn read_audit_journal_for_at(
