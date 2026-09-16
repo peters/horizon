@@ -64,6 +64,8 @@ struct Driver {
     safari: Option<safari::InputState>,
     actions: ActionState,
     frames: AdaptiveFrames,
+    pending_resize: Option<crate::session::viewport::PendingResize>,
+    viewport_policy: crate::session::viewport::ViewportPolicy,
     scrollbar: scrollbar::State,
     url: String,
     title: String,
@@ -181,7 +183,7 @@ pub(crate) fn run_webdriver(
         if stop {
             break;
         }
-        if driver.stop_for_service_exit(event_tx) {
+        if driver.finish_if_service_exited(event_tx) {
             return;
         }
         driver.tick_safari_input(event_tx);
@@ -195,8 +197,8 @@ pub(crate) fn run_webdriver(
             driver.tick_pending_wait(stop_requested);
             driver.tick_classic_timeout_restore();
             driver.tick_page_state_refresh(event_tx);
-            driver.service_agent_request(&request, event_tx, stop_requested);
-            if driver.stop_for_service_exit(event_tx) {
+            driver.service_browser_request(&request, event_tx, stop_requested);
+            if driver.finish_if_service_exited(event_tx) {
                 return;
             }
         }
@@ -219,18 +221,41 @@ pub(crate) fn run_webdriver(
         driver.tick_page_state_refresh(event_tx);
         driver.tick_pending_navigation();
         driver.tick_pending_wait(stop_requested);
+        driver.tick_pending_resize(event_tx, stop_requested);
         driver.write_coordination(false);
-        if driver.stop_for_service_exit(event_tx) {
+        if driver.finish_if_service_exited(event_tx) {
             return;
         }
         std::thread::sleep(Duration::from_millis(5));
     }
+    driver.finish_pending_resize("browser_unavailable", "browser session stopped");
     driver.settle_pending_wait_for_shutdown(Instant::now());
     driver.close(event_tx);
     let _ = event_tx.send(BrowserEvent::Stopped { code: None });
 }
 
 impl Driver {
+    fn service_browser_request(
+        &mut self,
+        request: &crate::AgentAction,
+        events: &BrowserEventSender,
+        stop: &AtomicBool,
+    ) {
+        if matches!(request.action, crate::BrowserControlAction::Resize { .. }) {
+            self.begin_resize(request);
+        } else {
+            self.service_agent_request(request, events, stop);
+        }
+    }
+
+    fn finish_if_service_exited(&mut self, events: &BrowserEventSender) -> bool {
+        if !self.stop_for_service_exit(events) {
+            return false;
+        }
+        self.finish_pending_resize("browser_unavailable", "browser session stopped");
+        true
+    }
+
     fn start(
         config: &BrowserSessionConfig,
         process_control: &ChromeProcessControl,
@@ -272,6 +297,8 @@ impl Driver {
             safari,
             actions: ActionState::default(),
             frames: AdaptiveFrames::new(),
+            pending_resize: None,
+            viewport_policy: crate::session::viewport::ViewportPolicy::new([config.width, config.height]),
             scrollbar: scrollbar::State::new(),
             url: String::new(),
             title: String::new(),
@@ -336,7 +363,9 @@ impl Driver {
             BrowserCommand::Back => self.traverse(-1, events).map(|()| false),
             BrowserCommand::Forward => self.traverse(1, events).map(|()| false),
             BrowserCommand::SetViewport { width, height } => {
-                self.set_viewport(width, height, events);
+                if self.viewport_policy.follow_host([width, height]) {
+                    self.set_viewport(width, height, events);
+                }
                 Ok(false)
             }
             BrowserCommand::Input(input) => self.perform_input(input, events).map(|()| false),

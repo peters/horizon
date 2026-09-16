@@ -45,6 +45,9 @@ pub enum BrowserAuditStatus {
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BrowserAuditAction {
+    Resize {
+        viewport: Option<[u32; 2]>,
+    },
     SessionCreated {
         backend: crate::BackendKind,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -210,6 +213,7 @@ impl BrowserAuditAction {
     #[must_use]
     pub fn from_control(action: &BrowserControlAction) -> Self {
         match action {
+            BrowserControlAction::Resize { viewport, .. } => Self::Resize { viewport: *viewport },
             BrowserControlAction::Navigate { url, .. } => Self::Navigate {
                 destination: redact_url(url),
             },

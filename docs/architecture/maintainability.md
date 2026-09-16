@@ -52,6 +52,10 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   Selector waits follow the same shape: the backend-neutral `PendingWait`
   state machine lives in `wait.rs`, and each driver's observation loop glue
   in `session/wait.rs` and `webdriver/session/wait.rs`.
+  `session/viewport.rs` owns explicit CSS viewport policy and bounded resize
+  observation. Host sizes are remembered while pinned; reset resumes the latest
+  host size. Each backend observes from its driver loop, and `FrameSlot` exposes
+  the explicit target so renderers can gate pointer input on matching frames.
 - `webdriver/session.rs` orchestrates Firefox and Safari. Host coordination
   belongs in `webdriver/session/coordination.rs`, synchronous navigation
   outcomes in `webdriver/session/navigation.rs`, session creation and

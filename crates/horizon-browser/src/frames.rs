@@ -139,6 +139,7 @@ pub struct FrameSlotInner {
 /// Lock-guarded handoff of the newest decoded frame.
 #[derive(Clone, Default, Debug)]
 pub struct FrameSlot {
+    viewport_override: Arc<std::sync::Mutex<Option<[u32; 2]>>>,
     inner: Arc<std::sync::Mutex<FrameSlotInner>>,
     notification_pending: Arc<AtomicBool>,
     metrics: Arc<FrameMetricCounters>,
@@ -477,7 +478,25 @@ impl FrameSlot {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(capabilities);
     }
 
+    /// Explicit content viewport accepted by the backend, independent of host
+    /// layout. A renderer must wait for a matching frame before mapping input.
+    #[must_use]
+    pub fn viewport_override(&self) -> Option<[u32; 2]> {
+        *self
+            .viewport_override
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    pub(crate) fn set_viewport_override(&self, viewport: Option<[u32; 2]>) {
+        *self
+            .viewport_override
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = viewport;
+    }
+
     pub fn clear_backend_capabilities(&self) {
+        self.set_viewport_override(None);
         *self
             .active_backend
             .lock()
