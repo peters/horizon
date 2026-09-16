@@ -1,6 +1,6 @@
 //! Session HTTP Basic/Digest credentials and challenge decisions.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 
 use horizon_browser_protocol::{
     parse_http_auth_origin, request_origin, validate_http_auth_password, validate_http_auth_username,
@@ -14,7 +14,6 @@ const MAX_ATTEMPTED_REQUESTS: usize = 256;
 pub(crate) struct HttpAuthState {
     credentials: Option<HttpAuthCredentials>,
     attempted_requests: HashSet<String>,
-    attempted_order: VecDeque<String>,
     fetch_network_ids: HashMap<String, String>,
     network_fetch_ids: HashMap<String, String>,
 }
@@ -138,21 +137,15 @@ impl HttpAuthState {
         }
         for id in related {
             self.attempted_requests.remove(&id);
-            if let Some(index) = self.attempted_order.iter().position(|stored| stored == &id) {
-                self.attempted_order.remove(index);
-            }
         }
     }
 
     fn remember_attempt(&mut self, request_id: &str) {
-        if self.attempted_requests.insert(request_id.to_string()) {
-            self.attempted_order.push_back(request_id.to_string());
-        }
+        self.attempted_requests.insert(request_id.to_string());
     }
 
     fn clear_attempts(&mut self) {
         self.attempted_requests.clear();
-        self.attempted_order.clear();
         self.fetch_network_ids.clear();
         self.network_fetch_ids.clear();
     }

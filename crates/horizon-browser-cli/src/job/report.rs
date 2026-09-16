@@ -504,10 +504,13 @@ fn redact_map(values: &mut Map<String, Value>, replayable: &mut bool) {
     for (key, value) in values {
         match key.as_str() {
             "origin" => {
-                if let Some(origin) = value.as_str() {
-                    let redacted = horizon_browser_protocol::parse_http_auth_origin(origin)
+                if !value.is_null() {
+                    let redacted = value
+                        .as_str()
+                        .ok_or("invalid origin")
+                        .and_then(horizon_browser_protocol::parse_http_auth_origin)
                         .unwrap_or_else(|_| "<redacted>".to_string());
-                    *replayable &= redacted == origin;
+                    *replayable &= value.as_str() == Some(redacted.as_str());
                     *value = Value::String(redacted);
                 }
             }

@@ -2,6 +2,7 @@
 
 mod checkpoint_artifacts;
 
+use std::collections::BTreeSet;
 use std::fs::OpenOptions;
 use std::io::Write as _;
 #[cfg(unix)]
@@ -66,6 +67,9 @@ pub struct RunState {
     /// Verified completions and any in-flight or skipped uncertain step.
     #[serde(default, skip_serializing_if = "RunCheckpoint::is_empty")]
     pub checkpoint: RunCheckpoint,
+    /// Names of variables removed from the saved plan as HTTP auth secrets.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub redacted_auth_variables: BTreeSet<String>,
     /// Private initialization, plan-execution, or MCP shutdown error.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -328,6 +332,7 @@ impl DurableRun {
             report_file: None,
             completed_steps: 0,
             checkpoint: RunCheckpoint::default(),
+            redacted_auth_variables: crate::variables::http_auth_secret_variables(plan),
             error: None,
         };
         write_private_json(
@@ -490,7 +495,11 @@ impl DurableRun {
         if selection.start_index >= plan.steps.len() && selection.skipped.is_none() {
             return Err(ResumeError::NothingToResume(job_id.to_string()));
         }
-        if crate::variables::resume_blocked_by_http_auth_secrets(&plan, selection.start_index) {
+        if crate::variables::resume_blocked_by_http_auth_secrets(
+            &plan,
+            selection.start_index,
+            &run.state.redacted_auth_variables,
+        ) {
             return Err(ResumeError::HttpAuthCredentialsNotPersisted(job_id.to_string()));
         }
         Ok((run, plan, selection))
@@ -1020,7 +1029,7 @@ fn now_millis() -> u64 {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::*;
     use crate::checkpoint::{CheckpointStore, IntentStatus, ResumeError, UncertainPolicy, select_resume};
@@ -1087,6 +1096,39 @@ mod tests {
         assert_eq!(saved.steps[0].arguments["password"], json!({ "$var": "password" }));
         assert_ne!(saved, original);
         assert_eq!(original.variables["password"], json!("smoke-pass-zephyr"));
+    }
+
+    #[test]
+    fn saved_secret_provenance_blocks_reuse_after_skipping_malformed_auth() {
+        let home = tempfile::tempdir().expect("temporary home");
+        let root = home.path().join("browser-jobs");
+        let mut original = http_auth_plan();
+        original.steps[0]
+            .arguments
+            .insert("password".into(), json!([{"$var":"password"}]));
+        original.steps.push(PlanStep {
+            id: "reuse".into(),
+            tool: "browser_act".into(),
+            arguments: serde_json::Map::from_iter([("value".into(), json!({"$var":"password"}))]),
+        });
+        let run = DurableRun::prepare_in(&root, &original, None, None).expect("prepare");
+        let saved = run.load_plan().expect("saved plan");
+        let encoded = std::fs::read(&run.state_path).expect("saved state");
+        let state: RunState = serde_json::from_slice(&encoded).expect("decode state");
+        assert!(state.redacted_auth_variables.contains("password"));
+        assert_eq!(saved.steps[0].arguments["password"], json!("<redacted>"));
+        assert!(crate::variables::resume_blocked_by_http_auth_secrets(
+            &saved,
+            1,
+            &state.redacted_auth_variables,
+        ));
+        let mut legacy: Value = serde_json::from_slice(&encoded).expect("state json");
+        legacy
+            .as_object_mut()
+            .expect("state object")
+            .remove("redacted_auth_variables");
+        let legacy: RunState = serde_json::from_value(legacy).expect("legacy state");
+        assert!(legacy.redacted_auth_variables.is_empty());
     }
 
     #[test]

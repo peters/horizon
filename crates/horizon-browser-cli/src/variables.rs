@@ -69,55 +69,92 @@ pub(crate) fn redact_plan(plan: &Plan) -> Plan {
             continue;
         }
         for field in HTTP_AUTH_SECRET_FIELDS {
-            if matches!(step.arguments.get(field), Some(Value::String(_))) {
-                step.arguments
-                    .insert(field.to_string(), Value::String(REDACTED_SECRET.to_string()));
+            if let Some(value) = step.arguments.get_mut(field) {
+                redact_credential_literal(value);
             }
         }
-        if let Some(Value::String(origin)) = step.arguments.get_mut("origin")
-            && horizon_browser_protocol::parse_http_auth_origin(origin).is_err()
+        if let Some(origin) = step.arguments.get_mut("origin")
+            && !valid_origin_value(origin)
         {
-            *origin = REDACTED_SECRET.to_string();
+            redact_credential_literal(origin);
         }
     }
     plan
 }
 
-fn http_auth_secret_variables(plan: &Plan) -> BTreeSet<String> {
+pub(crate) fn http_auth_secret_variables(plan: &Plan) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
     for step in &plan.steps {
         if step.tool != "browser_http_auth" {
             continue;
         }
         for field in HTTP_AUTH_SECRET_FIELDS {
-            if let Some(name) = variable_name(step.arguments.get(field)) {
-                names.insert(name.to_string());
+            if let Some(value) = step.arguments.get(field) {
+                collect_variable_names(value, &mut names);
             }
         }
-        if let Some(name) = variable_name(step.arguments.get("origin"))
-            && let Some(Value::String(origin)) = plan.variables.get(name)
-            && horizon_browser_protocol::parse_http_auth_origin(origin).is_err()
-        {
-            names.insert(name.to_string());
+        if let Some(origin) = step.arguments.get("origin") {
+            let mut origin_variables = BTreeSet::new();
+            collect_variable_names(origin, &mut origin_variables);
+            names.extend(
+                origin_variables
+                    .into_iter()
+                    .filter(|name| plan.variables.get(name).is_some_and(|value| !valid_origin_value(value))),
+            );
         }
     }
     names
 }
 
-fn variable_name(value: Option<&Value>) -> Option<&str> {
+fn valid_origin_value(value: &Value) -> bool {
     value
-        .and_then(Value::as_object)
-        .and_then(|object| object.get("$var"))
-        .and_then(Value::as_str)
+        .as_str()
+        .is_some_and(|origin| horizon_browser_protocol::parse_http_auth_origin(origin).is_ok())
+}
+
+fn redact_credential_literal(value: &mut Value) {
+    let placeholder = value.as_object().is_some_and(|object| {
+        object.len() == 1
+            && ["$var", "$ref"]
+                .iter()
+                .any(|key| object.get(*key).is_some_and(Value::is_string))
+    });
+    if !value.is_null() && !placeholder {
+        *value = Value::String(REDACTED_SECRET.to_string());
+    }
+}
+
+fn collect_variable_names(value: &Value, names: &mut BTreeSet<String>) {
+    match value {
+        Value::Object(object) => {
+            if let Some(name) = object.get("$var").and_then(Value::as_str) {
+                names.insert(name.to_string());
+            }
+            for value in object.values() {
+                collect_variable_names(value, names);
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                collect_variable_names(value, names);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// True when remaining work would replay a redacted HTTP auth secret.
 #[must_use]
-pub(crate) fn resume_blocked_by_http_auth_secrets(plan: &Plan, start_index: usize) -> bool {
-    let secret_variables = http_auth_secret_variables(plan)
+pub(crate) fn resume_blocked_by_http_auth_secrets(
+    plan: &Plan,
+    start_index: usize,
+    persisted_secret_variables: &BTreeSet<String>,
+) -> bool {
+    let mut secret_variables: BTreeSet<String> = http_auth_secret_variables(plan)
         .into_iter()
         .filter(|name| plan.variables.get(name).and_then(Value::as_str) == Some(REDACTED_SECRET))
         .collect();
+    secret_variables.extend(persisted_secret_variables.iter().cloned());
     plan.steps.get(start_index..).is_some_and(|steps| {
         steps.iter().any(|step| {
             remaining_http_auth_cannot_resume(step)
@@ -130,15 +167,7 @@ pub(crate) fn resume_blocked_by_http_auth_secrets(plan: &Plan, start_index: usiz
 }
 
 fn remaining_http_auth_cannot_resume(step: &PlanStep) -> bool {
-    step.tool == "browser_http_auth"
-        && step.arguments.get("operation").and_then(Value::as_str) != Some("clear")
-        && HTTP_AUTH_SECRET_FIELDS
-            .iter()
-            .any(|field| match step.arguments.get(*field) {
-                None | Some(Value::Null) => true,
-                Some(Value::String(value)) => value == REDACTED_SECRET || (*field == "username" && value.is_empty()),
-                Some(_) => false,
-            })
+    step.tool == "browser_http_auth" && step.arguments.get("operation").and_then(Value::as_str) != Some("clear")
 }
 
 fn value_references_variables(value: &Value, names: &BTreeSet<String>) -> bool {
@@ -198,7 +227,11 @@ mod tests {
             }],
             project: None,
         };
-        assert!(!resume_blocked_by_http_auth_secrets(&redact_plan(&plan), 0));
+        assert!(!resume_blocked_by_http_auth_secrets(
+            &redact_plan(&plan),
+            0,
+            &BTreeSet::new()
+        ));
     }
 
     #[test]
@@ -213,6 +246,58 @@ mod tests {
             ]),
         };
         assert!(remaining_http_auth_cannot_resume(&step));
+    }
+
+    #[test]
+    fn only_literal_clear_auth_steps_can_resume() {
+        let mut step = PlanStep {
+            id: "auth".into(),
+            tool: "browser_http_auth".into(),
+            arguments: Map::from_iter([
+                ("operation".into(), json!("set")),
+                ("username".into(), json!({"$ref": "previous#/username"})),
+                ("password".into(), json!({"$ref": "previous#/password"})),
+            ]),
+        };
+        assert!(remaining_http_auth_cannot_resume(&step));
+        step.arguments.clear();
+        step.arguments.insert("operation".into(), json!({"$var": "operation"}));
+        assert!(remaining_http_auth_cannot_resume(&step));
+        step.arguments.insert("operation".into(), json!("clear"));
+        assert!(!remaining_http_auth_cannot_resume(&step));
+    }
+
+    #[test]
+    fn malformed_credential_literals_and_nested_variables_are_redacted() {
+        for value in [
+            json!({"literal": "secret"}),
+            json!(["secret"]),
+            json!(123),
+            json!(false),
+        ] {
+            let mut plan = Plan {
+                version: 1,
+                variables: BTreeMap::from([("secret".into(), json!("nested-secret"))]),
+                steps: vec![PlanStep {
+                    id: "auth".into(),
+                    tool: "browser_http_auth".into(),
+                    arguments: Map::from_iter([
+                        ("username".into(), value.clone()),
+                        ("password".into(), value.clone()),
+                        ("origin".into(), value),
+                    ]),
+                }],
+                project: None,
+            };
+            let saved = redact_plan(&plan);
+            for field in ["username", "password", "origin"] {
+                assert_eq!(saved.steps[0].arguments[field], json!(REDACTED_SECRET));
+            }
+            plan.steps[0]
+                .arguments
+                .insert("password".into(), json!([{"$var": "secret"}]));
+            assert_eq!(redact_plan(&plan).variables["secret"], json!(REDACTED_SECRET));
+        }
     }
 
     #[test]
@@ -237,7 +322,7 @@ mod tests {
             };
             let saved = redact_plan(&plan);
             assert_eq!(saved.variables["site"], json!(REDACTED_SECRET));
-            assert!(resume_blocked_by_http_auth_secrets(&saved, 1));
+            assert!(resume_blocked_by_http_auth_secrets(&saved, 1, &BTreeSet::new()));
             plan.variables.clear();
             plan.steps[0].arguments.insert("origin".into(), json!(origin));
             assert_eq!(redact_plan(&plan).steps[0].arguments["origin"], json!(REDACTED_SECRET));
@@ -301,14 +386,14 @@ mod tests {
         );
         assert_eq!(redacted.steps[2].arguments["value"], json!({ "$var": "basic_secret" }));
         assert_eq!(redacted.steps[3].arguments["value"], json!({ "$var": "fill_user" }));
-        assert!(!resume_blocked_by_http_auth_secrets(&plan, 1));
-        assert!(resume_blocked_by_http_auth_secrets(&redacted, 1));
-        assert!(resume_blocked_by_http_auth_secrets(&redacted, 2));
-        assert!(!resume_blocked_by_http_auth_secrets(&redacted, 3));
+        assert!(resume_blocked_by_http_auth_secrets(&plan, 1, &BTreeSet::new()));
+        assert!(resume_blocked_by_http_auth_secrets(&redacted, 1, &BTreeSet::new()));
+        assert!(resume_blocked_by_http_auth_secrets(&redacted, 2, &BTreeSet::new()));
+        assert!(!resume_blocked_by_http_auth_secrets(&redacted, 3, &BTreeSet::new()));
         let mut substituted = redacted.clone();
         substituted.steps[1]
             .arguments
             .insert("operation".to_string(), json!({ "$var": "op" }));
-        assert!(resume_blocked_by_http_auth_secrets(&substituted, 1));
+        assert!(resume_blocked_by_http_auth_secrets(&substituted, 1, &BTreeSet::new()));
     }
 }
