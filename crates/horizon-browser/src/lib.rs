@@ -113,7 +113,8 @@ pub struct BrowserConfig {
     pub profile_root: Option<PathBuf>,
     /// Defaults for page-pixel `WebM` capture. Per-recording options may
     /// override individual fields. An omitted host `max_width` uses source-frame
-    /// dimensions with codec-block alignment; explicit values cap the longest side.
+    /// dimensions with codec-block alignment and automatic safety limits;
+    /// explicit values cap the longest side.
     pub video: BrowserVideoCaptureOptions,
     /// Remote device-service providers and selectable targets. Empty unless
     /// configured; parsing never allocates a device.

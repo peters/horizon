@@ -41,7 +41,8 @@ pub struct BrowserVideoCaptureOptions {
     pub compression_level: u32,
     pub fps: u32,
     /// Maximum encoded longest side (320-1920). `None` uses source-frame
-    /// dimensions apart from codec-block alignment.
+    /// dimensions with codec-block alignment, bounded by a 3840-pixel longest
+    /// side and 8,294,400 pixels; larger frames are downscaled proportionally.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_width: Option<u32>,
     pub max_file_bytes: u64,
@@ -101,7 +102,7 @@ impl BrowserVideoCaptureOptions {
 }
 
 /// Start-only overrides. Omitted fields keep the host defaults, where
-/// `max_width: None` means source-frame sizing with codec-block alignment.
+/// `max_width: None` means source-frame sizing subject to automatic safety limits.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 pub struct BrowserVideoCaptureOverrides {
     #[serde(default, skip_serializing_if = "Option::is_none")]

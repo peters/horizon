@@ -39,7 +39,8 @@ pub(crate) struct VideoInput {
     /// Target frames per second 1-30. Start only; omit to keep the host `browser.video` setting.
     fps: Option<u32>,
     /// Longest encoded side in pixels (320-1920). Start only; omit to keep
-    /// the host setting, which defaults to source-frame sizing with codec alignment.
+    /// the host setting, which defaults to source-frame sizing with codec alignment,
+    /// bounded by a 3840-pixel longest side and 8,294,400 pixels.
     max_width: Option<u32>,
     /// Maximum `WebM` file size in bytes (minimum 4096, maximum 1073741824). Start only; omit to keep the host `browser.video` setting.
     max_file_bytes: Option<u64>,

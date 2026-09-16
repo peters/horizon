@@ -104,7 +104,9 @@ with `operation: start`. Optional start-only knobs: `quality` (1-100),
 `compression_level` (0-10, higher is slower/smaller), `fps` (1-30),
 `max_width` (320-1920, caps the longest encoded side), `max_file_bytes`.
 Omitted options keep the host `browser.video` settings. The host defaults are
-quality 90 and source-frame sizing with codec-block alignment; an explicit
+quality 90 and source-frame sizing with codec-block alignment, bounded by a
+3840-pixel longest side and 8,294,400 pixels (4K); larger frames are downscaled
+proportionally. An explicit
 host size cap remains active when a recording omits `max_width`. These
 encoding settings do not resize the page viewport. Pause skips time in the file;
 resume continues the same WebM; stop finalizes a private `.webm` path.

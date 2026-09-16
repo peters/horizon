@@ -529,7 +529,9 @@ browser:
     max_file_bytes: 536870912    # stop ingest at this WebM size
 ```
 
-Recordings default to source-frame dimensions with codec-block alignment. Set
+Recordings default to source-frame dimensions with codec-block alignment, bounded
+by a 3840-pixel longest side and 8,294,400 pixels (4K) to limit encoder memory and
+work. Larger sources are downscaled proportionally. Set
 `browser.video.max_width` (320–1920) to cap the longest encoded side without
 upscaling. Omitted per-recording options keep the host settings, including any
 explicit cap. These encoding options do not change the page viewport.
