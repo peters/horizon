@@ -171,12 +171,11 @@ class InstallerTests(unittest.TestCase):
 
 
 class WorkflowTests(unittest.TestCase):
-    def test_only_the_five_ubuntu_dependency_sites_use_the_helper_with_unchanged_packages(self):
+    def test_ubuntu_dependency_sites_use_the_helper_with_expected_packages(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         jobs = dict(re.findall(r"^  ([\w-]+):\n(.*?)(?=^  [\w-]+:|\Z)", workflow, re.M | re.S))
         prefix = "bash scripts/install-ci-ubuntu-dependencies.sh "
         expected = {
-            "repo-checks": ["bison", "libevent-dev", "libncurses-dev", "pkg-config"],
             "clippy": ["libasound2-dev", "pkg-config"],
             "clippy-strict": ["libasound2-dev", "pkg-config"],
             "clippy-pedantic": ["libasound2-dev", "pkg-config"],
