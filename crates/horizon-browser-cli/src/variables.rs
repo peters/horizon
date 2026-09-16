@@ -110,15 +110,19 @@ pub(crate) fn resume_blocked_by_http_auth_secrets(plan: &Plan, start_index: usiz
         .collect::<BTreeSet<_>>();
     plan.steps.get(start_index..).is_some_and(|steps| {
         steps.iter().any(|step| {
-            (step.tool == "browser_http_auth"
-                && step.arguments.get("operation").and_then(Value::as_str) == Some("set")
-                && password_missing_or_redacted(&step.arguments))
+            remaining_http_auth_cannot_resume(step)
                 || step
                     .arguments
                     .values()
                     .any(|value| value_references_variables(value, &redacted_variables))
         })
     })
+}
+
+fn remaining_http_auth_cannot_resume(step: &PlanStep) -> bool {
+    step.tool == "browser_http_auth"
+        && step.arguments.get("operation").and_then(Value::as_str) != Some("clear")
+        && password_missing_or_redacted(&step.arguments)
 }
 
 fn value_references_variables(value: &Value, names: &BTreeSet<&str>) -> bool {
@@ -232,5 +236,10 @@ mod tests {
         assert!(resume_blocked_by_http_auth_secrets(&redacted, 1));
         assert!(resume_blocked_by_http_auth_secrets(&redacted, 2));
         assert!(!resume_blocked_by_http_auth_secrets(&redacted, 3));
+        let mut substituted = redacted.clone();
+        substituted.steps[1]
+            .arguments
+            .insert("operation".to_string(), json!({ "$var": "op" }));
+        assert!(resume_blocked_by_http_auth_secrets(&substituted, 1));
     }
 }

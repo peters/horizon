@@ -8,6 +8,7 @@ use super::{JobError, JobOptions, io_error, write_private};
 
 pub(super) struct PreparedAgent {
     pub command: Command,
+    pub stdin_prompt: Option<String>,
     _prompt: Option<tempfile::NamedTempFile>,
 }
 
@@ -53,15 +54,8 @@ pub(super) fn agent_command(
     match agent_kind(&executable) {
         AgentKind::Grok => grok_command(&executable, job_dir, browser_home, &browser, &prompt),
         AgentKind::Codex => Ok(PreparedAgent {
-            command: codex_command(
-                &executable,
-                job_dir,
-                browser_home,
-                schema_path,
-                result_path,
-                &browser,
-                &prompt,
-            ),
+            command: codex_command(&executable, job_dir, browser_home, schema_path, result_path, &browser),
+            stdin_prompt: Some(prompt),
             _prompt: None,
         }),
     }
@@ -159,7 +153,6 @@ fn codex_command(
     schema_path: &Path,
     result_path: &Path,
     browser: &Path,
-    prompt: &str,
 ) -> Command {
     let command_config = format!(
         "mcp_servers.horizon-browser.command={}",
@@ -210,7 +203,7 @@ fn codex_command(
             "-c",
             "mcp_servers.horizon-browser.default_tools_approval_mode=\"approve\"",
         ])
-        .arg(prompt)
+        .arg("-")
         .env_remove("HORIZON_BROWSER_ACTOR")
         .env("RUST_LOG", "off");
     command
@@ -250,6 +243,7 @@ fn grok_command(
         .env("RUST_LOG", "off");
     Ok(PreparedAgent {
         command,
+        stdin_prompt: None,
         _prompt: Some(prompt_file),
     })
 }
@@ -487,7 +481,6 @@ mod tests {
             &schema,
             &result,
             &browser,
-            "summarize example.com",
         );
         let args = command
             .get_args()
@@ -509,6 +502,8 @@ mod tests {
             args.iter()
                 .any(|arg| arg.contains(&format!("HORIZON_BROWSER_ROOT={expected_root}")))
         );
+        assert_eq!(args.last().map(String::as_str), Some("-"));
+        assert!(!args.iter().any(|arg| arg.contains("summarize example.com")));
     }
 
     #[test]

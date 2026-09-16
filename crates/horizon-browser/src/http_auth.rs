@@ -21,14 +21,17 @@ pub(crate) struct HttpAuthState {
 
 #[derive(Clone, Debug)]
 struct HttpAuthCredentials {
-    username: String,
+    username: SecretString,
     password: SecretString,
     origin: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum HttpAuthDecision {
-    Provide { username: String, password: SecretString },
+    Provide {
+        username: SecretString,
+        password: SecretString,
+    },
     Cancel,
 }
 
@@ -55,7 +58,7 @@ impl HttpAuthState {
                 let origin = parse_http_auth_origin(origin)
                     .map_err(|message| BrowserControlFailure::new("invalid_action", message))?;
                 self.credentials = Some(HttpAuthCredentials {
-                    username: username.to_string(),
+                    username: SecretString::new(username),
                     password: password.clone(),
                     origin: origin.clone(),
                 });
@@ -212,7 +215,7 @@ mod tests {
 
     fn provide(username: &str, password: &str) -> HttpAuthDecision {
         HttpAuthDecision::Provide {
-            username: username.to_string(),
+            username: SecretString::new(username),
             password: SecretString::new(password),
         }
     }
@@ -301,6 +304,7 @@ mod tests {
         let decision = state.decide("req-debug", "https://files.test/digest", Some("digest"), false);
         let rendered = format!("{state:?}{decision:?}");
         assert!(!rendered.contains("smoke-pass-zephyr"), "{rendered}");
+        assert!(!rendered.contains("smoke-user"), "{rendered}");
         assert!(rendered.contains("SecretString(<redacted>)"), "{rendered}");
     }
 

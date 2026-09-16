@@ -40,6 +40,26 @@ impl fmt::Debug for SecretString {
     }
 }
 
+impl From<String> for SecretString {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl From<&str> for SecretString {
+    fn from(value: &str) -> Self {
+        Self(value.to_string())
+    }
+}
+
+impl std::ops::Deref for SecretString {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
 /// Validate a username supplied with [`BrowserHttpAuthOperation::Set`].
 ///
 /// # Errors

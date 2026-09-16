@@ -42,7 +42,7 @@ impl fmt::Debug for HttpAuthInput {
             .debug_struct("HttpAuthInput")
             .field("panel_id", &self.panel_id)
             .field("operation", &self.operation)
-            .field("username", &self.username)
+            .field("username", &self.username.as_ref().map(|_| "SecretString(<redacted>)"))
             .field("password", &self.password.as_ref().map(|_| "SecretString(<redacted>)"))
             .field("origin", &self.origin)
             .field("timeout_millis", &self.timeout_millis)
@@ -62,7 +62,7 @@ impl HttpAuthInput {
         }
         Ok(BrowserControlAction::HttpAuth {
             operation: self.operation.into(),
-            username: self.username.clone(),
+            username: self.username.clone().map(SecretString::new),
             password: self.password.clone().map(SecretString::new),
             origin: self.origin.clone(),
         })
@@ -113,6 +113,7 @@ mod tests {
         };
         assert_eq!(format!("{:?}", password.expect("password")), "SecretString(<redacted>)");
         assert!(!format!("{set:?}").contains("smoke-pass-zephyr"));
+        assert!(!format!("{set:?}").contains("smoke-user"));
         let clear = HttpAuthInput {
             panel_id: "panel".into(),
             operation: HttpAuthOperation::Clear,

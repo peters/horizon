@@ -166,7 +166,7 @@ pub enum BrowserControlAction {
     HttpAuth {
         operation: BrowserHttpAuthOperation,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        username: Option<String>,
+        username: Option<SecretString>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         password: Option<SecretString>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -791,6 +791,10 @@ mod tests {
         assert!(
             !format!("{set:?}").contains("smoke-pass-zephyr"),
             "Debug must not echo the password: {set:?}"
+        );
+        assert!(
+            !format!("{set:?}").contains("smoke-user"),
+            "Debug must not echo the username: {set:?}"
         );
 
         assert!(

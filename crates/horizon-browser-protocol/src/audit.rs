@@ -297,7 +297,7 @@ impl BrowserAuditAction {
             } => Self::HttpAuth {
                 operation: *operation,
                 origin: origin.clone(),
-                username_characters: username.as_ref().map(|username| username.chars().count()),
+                username_characters: username.as_ref().map(|username| username.as_str().chars().count()),
             },
         }
     }
