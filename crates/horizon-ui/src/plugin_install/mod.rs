@@ -8,8 +8,8 @@ use horizon_core::{HorizonHome, browser_mcp_executable, codex_home_dir, grok_hom
 
 mod user_skills;
 use user_skills::{
-    HORIZON_BROWSER_SKILL, HORIZON_NOTIFY_SKILL, SkillRootLease, bind_skill_roots, release_skill_roots,
-    remove_horizon_skill_dir,
+    HORIZON_BROWSER_SKILL, HORIZON_NOTIFY_SKILL, RETIRED_OFFLOAD_SKILL, SkillRootLease, bind_skill_roots,
+    release_skill_roots, remove_horizon_skill_dir,
 };
 
 struct EmbeddedFile {
@@ -177,7 +177,7 @@ pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) -> AgentPluginHo
         }
     };
     let user_skill_dirs = user_skill_lease_dirs(user_home.as_deref(), grok_home.as_deref(), codex_home.as_deref());
-    let extra_cleanup = user_home.as_deref().map(abandoned_user_skill_dirs).unwrap_or_default();
+    let extra_cleanup = user_skill_cleanup_dirs(user_home.as_deref(), codex_home.as_deref());
     if let Err(error) = lease.bind_user_skills_with_cleanup(&user_skill_dirs, &extra_cleanup) {
         tracing::warn!(%error, "failed to bind Horizon skill root leases");
     }
@@ -385,6 +385,14 @@ fn user_skill_lease_dirs(
     dirs
 }
 
+fn user_skill_cleanup_dirs(user_home: Option<&Path>, codex_home: Option<&Path>) -> Vec<PathBuf> {
+    let mut dirs = user_home.map(abandoned_user_skill_dirs).unwrap_or_default();
+    if let Some(root) = provider_home(codex_home, user_home, ".codex") {
+        dirs.push(root.join("skills").join(RETIRED_OFFLOAD_SKILL));
+    }
+    dirs
+}
+
 fn abandoned_user_skill_dirs(home: &Path) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     for skill_root in ABANDONED_NOTIFY_SKILL_ROOTS {
@@ -454,6 +462,9 @@ fn sync_file_if_changed(path: &Path, content: &str) -> std::io::Result<bool> {
     temp_file.persist(path).map_err(|error| error.error)?;
     Ok(true)
 }
+
+#[cfg(test)]
+mod retired_skill_tests;
 
 #[cfg(test)]
 mod tests {
