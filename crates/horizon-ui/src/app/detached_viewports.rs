@@ -654,19 +654,22 @@ mod tests {
     }
 
     fn assert_attached_workspaces_form_organized_row(app: &mut super::HorizonApp) {
-        let mut frames: Vec<_> = app
+        let frames: Vec<_> = app
             .board
             .workspaces
             .iter()
             .filter(|workspace| !app.workspace_is_detached(workspace.id))
             .map(|workspace| workspace_frame(app, workspace.id))
             .collect();
-        frames.sort_by(|left, right| left[0].total_cmp(&right[0]));
 
         for pair in frames.windows(2) {
             assert!(
                 (pair[0][1] - pair[1][1]).abs() <= POSITION_TOLERANCE,
                 "expected aligned frame tops, got {pair:?}"
+            );
+            assert!(
+                pair[0][0] < pair[1][0],
+                "expected sidebar order left-to-right, got {pair:?}"
             );
             assert!(
                 !frames_overlap(pair[0], pair[1]),

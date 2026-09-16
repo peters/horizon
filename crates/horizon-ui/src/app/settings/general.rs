@@ -127,7 +127,7 @@ fn render_features_section(
             .changed();
         super::dim_label(
             ui,
-            "Align attached workspaces horizontally whenever a session loads, including at startup. Detached workspaces are unchanged.",
+            "Align attached workspaces horizontally in sidebar order whenever a session loads, including at startup. Detached workspaces are unchanged.",
         );
 
         ui.add_space(10.0);
