@@ -127,7 +127,7 @@ impl FrameData {
 pub struct FrameSlotInner {
     data: Option<Arc<FrameData>>,
     page_scroll_state: Option<PageScrollState>,
-    native_select_popup: Option<NativeSelectPopup>,
+    native_select_popup: Option<Arc<NativeSelectPopup>>,
     /// Reused base64 decode target for both screencast and screenshot frames.
     encoded_buffer: Vec<u8>,
     /// Reused decode target so steady-state frames do not allocate.
@@ -445,7 +445,7 @@ impl FrameSlot {
 
     /// Open native `<select>` popup the host should paint and operate.
     #[must_use]
-    pub fn native_select_popup(&self) -> Option<NativeSelectPopup> {
+    pub fn native_select_popup(&self) -> Option<Arc<NativeSelectPopup>> {
         self.inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -455,10 +455,10 @@ impl FrameSlot {
 
     pub(crate) fn publish_native_select_popup(&self, popup: NativeSelectPopup) -> bool {
         let mut inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if inner.native_select_popup.as_ref() == Some(&popup) {
+        if inner.native_select_popup.as_deref() == Some(&popup) {
             return false;
         }
-        inner.native_select_popup = Some(popup);
+        inner.native_select_popup = Some(Arc::new(popup));
         true
     }
 
@@ -806,7 +806,7 @@ mod tests {
         .expect("popup");
 
         assert!(slot.publish_native_select_popup(popup.clone()));
-        assert_eq!(slot.native_select_popup(), Some(popup.clone()));
+        assert_eq!(slot.native_select_popup().as_deref(), Some(&popup));
         assert!(!slot.publish_native_select_popup(popup));
         assert!(slot.clear_native_select_popup());
         assert!(slot.native_select_popup().is_none());

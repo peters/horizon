@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::BrowserBounds;
 
-const MAX_OPTIONS: usize = 256;
+const MAX_OPTIONS: usize = 512;
 const MAX_LABEL_CHARS: usize = 256;
 const MAX_PATH_CHARS: usize = 512;
 
@@ -220,7 +220,7 @@ fn json_string(value: &str) -> String {
 }
 
 const PROBE_FUNCTION: &str = r"function(x, y, focused) {
-    const MAX_OPTIONS = 256;
+    const MAX_OPTIONS = 512;
     const compact = (value, limit) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, limit || 256);
     const cssPath = (element, doc) => {
         if (element.id && /^[A-Za-z][\w-]*$/.test(element.id)
@@ -328,10 +328,15 @@ const APPLY_FUNCTION: &str = r"function(cssPath, index) {
             const match = root.querySelector(cssPath);
             if (match && match.tagName === 'SELECT') return match;
         } catch (error) {}
-        const frames = root.querySelectorAll ? root.querySelectorAll('iframe') : [];
-        for (const frame of frames) {
+        const nodes = root.querySelectorAll ? root.querySelectorAll('*') : [];
+        for (const node of nodes) {
+            if (node.shadowRoot) {
+                const shadowed = find(node.shadowRoot);
+                if (shadowed) return shadowed;
+            }
+            if (node.tagName !== 'IFRAME') continue;
             try {
-                const inner = frame.contentDocument;
+                const inner = node.contentDocument;
                 if (!inner) continue;
                 const found = find(inner);
                 if (found) return found;

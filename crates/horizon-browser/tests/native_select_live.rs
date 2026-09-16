@@ -10,8 +10,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use horizon_browser::{
-    BrowserButton, BrowserCommand, BrowserConfig, BrowserEvent, BrowserInput, BrowserModifiers, BrowserSessionConfig,
-    FrameSlot, start_session,
+    BrowserButton, BrowserCommand, BrowserConfig, BrowserEvent, BrowserInput, BrowserModifiers, BrowserSession,
+    BrowserSessionConfig, FrameSlot, NativeSelectPopup, start_session,
 };
 
 const FIXTURE: &str = r#"<!doctype html><title>select live</title>
@@ -26,20 +26,7 @@ const FIXTURE: &str = r#"<!doctype html><title>select live</title>
 fn chromium_click_on_a_native_select_publishes_a_host_popup() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind fixture");
     let addr = listener.local_addr().expect("addr");
-    thread::spawn(move || {
-        listener.set_nonblocking(false).ok();
-        while let Ok((mut stream, _)) = listener.accept() {
-            let mut buf = [0_u8; 2048];
-            let _ = stream.read(&mut buf);
-            let body = FIXTURE.as_bytes();
-            let _ = write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                body.len()
-            );
-            let _ = stream.write_all(body);
-        }
-    });
+    thread::spawn(move || serve_fixture(&listener));
 
     let temp = tempfile::tempdir().expect("temp");
     let frame_slot = Arc::new(FrameSlot::new());
@@ -60,6 +47,49 @@ fn chromium_click_on_a_native_select_publishes_a_host_popup() {
     })
     .expect("start");
 
+    wait_until_loaded(&session, &frame_slot);
+    click_select(&session);
+    let popup = wait_for_popup(&session, &frame_slot).expect("native select popup should be published");
+    assert_eq!(popup.css_path, "#native-single");
+    assert_eq!(popup.options.len(), 3);
+    assert_eq!(popup.options[1].value, "bravo");
+    assert!(popup.options[1].selected);
+
+    assert!(session.send(BrowserCommand::NativeSelectChoose { index: 2 }));
+    wait_until(&session, Duration::from_secs(5), || {
+        frame_slot.native_select_popup().is_none()
+    });
+    assert!(
+        frame_slot.native_select_popup().is_none(),
+        "overlay should close after choose"
+    );
+    click_select(&session);
+    let reopened = wait_for_popup(&session, &frame_slot).expect("reopening after choose should publish the popup");
+    let selected = reopened
+        .options
+        .iter()
+        .find(|option| option.selected)
+        .expect("selected option");
+    assert_eq!(selected.value, "charlie");
+    assert!(session.send(BrowserCommand::Stop));
+}
+
+fn serve_fixture(listener: &TcpListener) {
+    listener.set_nonblocking(false).ok();
+    while let Ok((mut stream, _)) = listener.accept() {
+        let mut buf = [0_u8; 2048];
+        let _ = stream.read(&mut buf);
+        let body = FIXTURE.as_bytes();
+        let _ = write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        let _ = stream.write_all(body);
+    }
+}
+
+fn wait_until_loaded(session: &BrowserSession, frame_slot: &FrameSlot) {
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut loaded = false;
     while Instant::now() < deadline {
@@ -71,13 +101,15 @@ fn chromium_click_on_a_native_select_publishes_a_host_popup() {
             }
         }
         if loaded && frame_slot.latest().is_some() {
-            break;
+            thread::sleep(Duration::from_millis(400));
+            return;
         }
         thread::sleep(Duration::from_millis(50));
     }
-    assert!(loaded, "fixture page did not load");
-    thread::sleep(Duration::from_millis(400));
+    panic!("fixture page did not load");
+}
 
+fn click_select(session: &BrowserSession) {
     assert!(session.send(BrowserCommand::Input(BrowserInput::MousePress {
         x: 80.0,
         y: 34.0,
@@ -94,35 +126,27 @@ fn chromium_click_on_a_native_select_publishes_a_host_popup() {
         buttons: 0,
         modifiers: BrowserModifiers::none(),
     })));
+}
 
-    let popup_deadline = Instant::now() + Duration::from_secs(5);
-    let mut popup = None;
-    while Instant::now() < popup_deadline {
-        popup = frame_slot.native_select_popup();
-        if popup.is_some() {
-            break;
+fn wait_for_popup(session: &BrowserSession, frame_slot: &FrameSlot) -> Option<Arc<NativeSelectPopup>> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if let Some(popup) = frame_slot.native_select_popup() {
+            return Some(popup);
         }
         let _ = session.event_rx.try_recv();
         thread::sleep(Duration::from_millis(50));
     }
-    let popup = popup.expect("native select popup should be published");
-    assert_eq!(popup.css_path, "#native-single");
-    assert_eq!(popup.options.len(), 3);
-    assert_eq!(popup.options[1].value, "bravo");
-    assert!(popup.options[1].selected);
+    None
+}
 
-    assert!(session.send(BrowserCommand::NativeSelectChoose { index: 2 }));
-    let applied_deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < applied_deadline {
-        if frame_slot.native_select_popup().is_none() {
-            break;
+fn wait_until(session: &BrowserSession, timeout: Duration, predicate: impl Fn() -> bool) {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if predicate() {
+            return;
         }
         let _ = session.event_rx.try_recv();
         thread::sleep(Duration::from_millis(50));
     }
-    assert!(
-        frame_slot.native_select_popup().is_none(),
-        "overlay should close after choose"
-    );
-    assert!(session.send(BrowserCommand::Stop));
 }

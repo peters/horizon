@@ -56,9 +56,11 @@ pub(super) fn menu_layout(
     let rows = popup.options.len().max(1);
     #[allow(clippy::cast_precision_loss)]
     let content_height = OPTION_HEIGHT * rows as f32;
-    let height = (content_height + MENU_PADDING * 2.0).min(MAX_MENU_HEIGHT);
-    let width = control.width().max(168.0).min(image_rect.width().max(168.0));
-    let mut left = control.left();
+    let height = (content_height + MENU_PADDING * 2.0)
+        .min(MAX_MENU_HEIGHT)
+        .min(image_rect.height());
+    let width = control.width().max(168.0).min(image_rect.width());
+    let mut left = control.left().max(image_rect.left());
     if left + width > image_rect.right() {
         left = (image_rect.right() - width).max(image_rect.left());
     }
@@ -227,7 +229,11 @@ pub(super) fn show(
                                 paint_group_header(ui, inner.width(), group);
                             }
                         }
-                        if paint_option_row(ui, inner.width(), option, row == highlight).clicked() && !option.disabled {
+                        let response = paint_option_row(ui, inner.width(), option, row == highlight);
+                        if row == highlight {
+                            response.scroll_to_me(Some(egui::Align::Center));
+                        }
+                        if response.clicked() && !option.disabled {
                             browser.send(BrowserCommand::NativeSelectChoose { index: option.index });
                         }
                     }
