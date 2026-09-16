@@ -161,8 +161,9 @@ fn codex_command(
         serde_json::to_string(&MCP_ARGS).unwrap_or_default()
     );
     let env_config = format!(
-        "mcp_servers.horizon-browser.env={{HOME={},RUST_LOG=\"off\"}}",
-        serde_json::to_string(&browser_home.to_string_lossy()).unwrap_or_default()
+        "mcp_servers.horizon-browser.env={{HOME={},HORIZON_BROWSER_ROOT={},RUST_LOG=\"off\"}}",
+        serde_json::to_string(&browser_home.to_string_lossy()).unwrap_or_default(),
+        serde_json::to_string(&browser_home.join(".horizon").to_string_lossy()).unwrap_or_default()
     );
     let mut command = Command::new(executable);
     command
@@ -304,13 +305,14 @@ fn grok_config(browser: &Path, browser_home: &Path) -> String {
             "[mcp_servers.horizon-browser]\n",
             "command = {command}\n",
             "args = [\"mcp\", \"--connect\"]\n",
-            "env = {{ HOME = {home}, RUST_LOG = \"off\" }}\n",
+            "env = {{ HOME = {home}, HORIZON_BROWSER_ROOT = {root}, RUST_LOG = \"off\" }}\n",
             "enabled = true\n",
             "startup_timeout_sec = 45\n",
             "tool_timeout_sec = 60\n"
         ),
         command = toml_string(&browser.to_string_lossy()),
         home = toml_string(&browser_home.to_string_lossy()),
+        root = toml_string(&browser_home.join(".horizon").to_string_lossy()),
     )
 }
 
@@ -457,6 +459,12 @@ mod tests {
         assert!(args.contains(&"--output-schema".to_string()));
         assert!(args.contains(&"--output-last-message".to_string()));
         assert!(!args.contains(&"--output-format".to_string()));
+        let expected_root = serde_json::to_string(&browser_home.join(".horizon").to_string_lossy())
+            .unwrap_or_else(|error| panic!("encode runtime root: {error}"));
+        assert!(
+            args.iter()
+                .any(|arg| arg.contains(&format!("HORIZON_BROWSER_ROOT={expected_root}")))
+        );
     }
 
     #[test]
@@ -473,6 +481,10 @@ mod tests {
         assert!(config.contains("--connect"));
         assert!(config.contains(&browser.to_string_lossy().replace('\\', "\\\\")));
         assert!(config.contains("horizon-browser"));
+        assert!(config.contains(&format!(
+            "HORIZON_BROWSER_ROOT = {}",
+            toml_string(&browser_home.join(".horizon").to_string_lossy())
+        )));
         assert!(!config.contains("web_search"));
     }
 
