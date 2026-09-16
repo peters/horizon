@@ -14,6 +14,7 @@ them as performance guarantees.
 | --- | --- | --- |
 | `horizon-browser` | allow-listed (`publish = ["crates-io"]`) | Embeddable engine: process ownership, CDP/WebDriver/BiDi, frames, commands |
 | `horizon-browser-protocol` | unpublished (`publish = false`) | Backend-neutral serialized values; re-exported by the engine |
+| `horizon-browser-control` | unpublished | Reusable ownership, manifests, queues, and discovery |
 | `horizon-browser-mcp` | unpublished | Stdio MCP adapter for live Horizon panels |
 | `horizon-browser-cli` | unpublished | `horizon-browser` binary: plans, prompt jobs, standalone MCP |
 | `horizon-core` / `horizon-ui` | unpublished | Horizon product, not the reusable engine |
@@ -50,7 +51,30 @@ Do not run `cargo publish` from packaging, CI, or this issue.
 
 ## Compile graph
 
-Measured on Linux x86_64 on 2026-09-13 at `ee29a162` with cached Cargo sources
+### Current dependency boundary
+
+Measured on Linux x86_64 on 2026-09-16 at `7af7d206` after CLI/MCP decoupling
+for #693. Counts use `cargo tree --locked -p <package> -e normal --prefix
+none --format '{p}'`, deduplicating package name/version pairs and excluding
+the selected root package. Build and development edges are excluded.
+
+| Package | Unique normal dependency packages |
+| --- | ---: |
+| `horizon-browser-protocol` | 40 |
+| `horizon-browser` (default features) | 92 |
+| `horizon-browser-control` | 101 |
+| `horizon-browser-mcp` | 178 |
+| `horizon-browser-cli` | 183 |
+
+None of these graphs includes `horizon-core` or `horizon-ui`. CLI and MCP use
+the reusable browser-control crate; Horizon supplies product integration.
+Video encoding is optional in the engine and explicitly enabled by its
+full-feature consumers. The historical timings and sizes below have not been
+remeasured here and do not describe these dependency graphs.
+
+### Historical baseline before decoupling
+
+The following measurements were taken on Linux x86_64 on 2026-09-13 at `ee29a162` with cached Cargo sources
 and a **separate empty target directory** for each `cargo check`. `%M` is GNU
 `time` peak RSS in KiB.
 
@@ -64,15 +88,15 @@ and a **separate empty target directory** for each `cargo check`. `%M` is GNU
 Compared with the 2026-08-29 protocol README baseline (14 packages / 3.57 s /
 288552 KiB for protocol; 61 packages / 4.90 s / 354844 KiB for the engine),
 the protocol graph stayed small. The engine graph grew with later capture
-work (including WebM). MCP and CLI pull in `horizon-core` and are not
-embedder compile costs.
+work (including WebM). At that baseline, MCP and CLI pulled in `horizon-core`;
+those counts are superseded by the current graph above.
 
 A protocol-only client still does not compile `tungstenite`, `png`,
 `zune-jpeg`, `rmcp`, `tokio`, `horizon-core`, or `horizon-ui`.
 
 ## Release binary and process cost
 
-Measured on the same Linux x86_64 host, `cargo build --release -p
+Historical measurements at `ee29a162` on the same Linux x86_64 host, `cargo build --release -p
 horizon-browser-cli --locked`, binary `target/release/horizon-browser`.
 
 | Metric | Value |
@@ -90,7 +114,7 @@ on #324, not this packaging record.
 
 ## Package inspection
 
-On this head:
+At the historical `ee29a162` baseline:
 
 - `cargo package -p horizon-browser-protocol --locked` succeeds. The archive
   is README, `Cargo.toml`, `Cargo.lock`, `src/*.rs`, plus Cargo-generated
