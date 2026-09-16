@@ -10,9 +10,9 @@ use horizon_browser::{
     BackendKind, BrowserAuditAction, BrowserAuditActor, BrowserAuditEntry, BrowserAuditStatus, BrowserConfig,
     BrowserCoordination, BrowserEvent, BrowserSession, BrowserSessionConfig, FrameSlot, new_action_id, start_session,
 };
-use horizon_core::{
-    HorizonHome,
-    browser::manifest::{self, ManifestCoordination},
+use horizon_browser_control::{
+    BrowserRuntimePaths,
+    manifest::{self, ManifestCoordination},
 };
 use thiserror::Error;
 
@@ -55,7 +55,7 @@ pub(crate) struct OwnedSession {
 }
 
 impl OwnedSession {
-    pub(crate) fn start(options: StandaloneOptions, home: &HorizonHome) -> Result<Self, StandaloneError> {
+    pub(crate) fn start(options: StandaloneOptions, home: &BrowserRuntimePaths) -> Result<Self, StandaloneError> {
         let (session, profile_root, panel_id) = start(options, home)?;
         Ok(Self {
             session: Some(session),
@@ -250,9 +250,9 @@ impl Drop for OwnedHostProcess {
 /// Returns when no requested backend can start, MCP transport fails, or the
 /// owned browser cannot be stopped within its bounded cleanup deadline.
 pub async fn serve(options: StandaloneOptions) -> Result<(), StandaloneError> {
-    let root = HorizonHome::resolve().root().to_path_buf();
+    let root = BrowserRuntimePaths::resolve().root().to_path_buf();
     lease::prune_dead_at(&root);
-    let session = OwnedSession::start(options, &HorizonHome::resolve())?;
+    let session = OwnedSession::start(options, &BrowserRuntimePaths::resolve())?;
     let mcp_result = serve_until_host_exit(&root, &session.panel_id, options.keep_alive).await;
     let panel_id = session.panel_id.clone();
     let stopped = session.shutdown();
@@ -305,7 +305,7 @@ async fn serve_until_host_exit(root: &Path, panel_id: &str, keep_alive: bool) ->
 /// Bind the newest live keep-alive host, if one exists.
 #[must_use]
 pub fn live_host() -> Option<StandaloneHostRef> {
-    let root = HorizonHome::resolve().root().to_path_buf();
+    let root = BrowserRuntimePaths::resolve().root().to_path_buf();
     lease::live_host(&root)
 }
 
@@ -314,7 +314,7 @@ pub fn live_host() -> Option<StandaloneHostRef> {
 /// # Errors
 /// Returns when the host process or its published panel is gone.
 pub fn reconnect(host: &StandaloneHostRef) -> Result<(), String> {
-    lease::reconnect(HorizonHome::resolve().root(), host)
+    lease::reconnect(BrowserRuntimePaths::resolve().root(), host)
 }
 
 /// Ask keep-alive hosts to stop and clean up.
@@ -322,12 +322,12 @@ pub fn reconnect(host: &StandaloneHostRef) -> Result<(), String> {
 /// # Errors
 /// Returns when the stop signal cannot be written.
 pub fn stop_hosts(panel_id: Option<&str>) -> Result<Vec<String>, String> {
-    lease::stop_hosts(HorizonHome::resolve().root(), panel_id)
+    lease::stop_hosts(BrowserRuntimePaths::resolve().root(), panel_id)
 }
 
 /// Remove keep-alive records whose host process is already dead.
 pub fn prune_dead_hosts() {
-    lease::prune_dead_at(HorizonHome::resolve().root());
+    lease::prune_dead_at(BrowserRuntimePaths::resolve().root());
 }
 
 async fn wait_for_interrupt() {
@@ -356,7 +356,7 @@ async fn wait_for_interrupt() {
 
 fn start(
     options: StandaloneOptions,
-    home: &HorizonHome,
+    home: &BrowserRuntimePaths,
 ) -> Result<(BrowserSession, std::path::PathBuf, String), StandaloneError> {
     if options.backend == Some(BackendKind::SafariWebDriver) && !options.visible {
         return Err(StandaloneError::Startup(
@@ -385,7 +385,7 @@ fn start(
 }
 
 fn start_backend(
-    home: &HorizonHome,
+    home: &BrowserRuntimePaths,
     backend: BackendKind,
     visible: bool,
     keep_alive: bool,
@@ -592,7 +592,7 @@ mod tests {
         let stale = "standalone-42-before";
         manifest::write_at(
             &manifest::manifest_path_for_root(home.path(), stale),
-            &horizon_core::browser::manifest::BrowserManifest {
+            &horizon_browser_control::manifest::BrowserManifest {
                 panel_local_id: stale.to_string(),
                 ..Default::default()
             },
@@ -605,7 +605,7 @@ mod tests {
         let unrelated = "standalone-7-after";
         manifest::write_at(
             &manifest::manifest_path_for_root(home.path(), unrelated),
-            &horizon_core::browser::manifest::BrowserManifest {
+            &horizon_browser_control::manifest::BrowserManifest {
                 panel_local_id: unrelated.to_string(),
                 ..Default::default()
             },
@@ -616,7 +616,7 @@ mod tests {
         let current = "standalone-42-after";
         manifest::write_at(
             &manifest::manifest_path_for_root(home.path(), current),
-            &horizon_core::browser::manifest::BrowserManifest {
+            &horizon_browser_control::manifest::BrowserManifest {
                 panel_local_id: current.to_string(),
                 backend: BackendKind::FirefoxBidi,
                 ..Default::default()

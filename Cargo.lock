@@ -2169,9 +2169,9 @@ version = "0.2.7"
 dependencies = [
  "atomicwrites",
  "horizon-browser",
+ "horizon-browser-control",
  "horizon-browser-mcp",
  "horizon-browser-protocol",
- "horizon-core",
  "rmcp",
  "serde",
  "serde_json",

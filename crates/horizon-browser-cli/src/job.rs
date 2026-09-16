@@ -6,7 +6,7 @@ use std::time::SystemTime;
 
 use atomicwrites::{AllowOverwrite, AtomicFile};
 use horizon_browser::BackendKind;
-use horizon_core::HorizonHome;
+use horizon_browser_control::BrowserRuntimePaths;
 use serde::Deserialize;
 use serde_json::json;
 use thiserror::Error;
@@ -362,7 +362,7 @@ fn create_job_dir() -> Result<PathBuf, JobError> {
     let nanos = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
-    let path = HorizonHome::resolve()
+    let path = BrowserRuntimePaths::resolve()
         .root()
         .join("browser-jobs")
         .join(format!("job-{}-{nanos:x}", std::process::id()));

@@ -3,8 +3,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use horizon_core::grok_home_dir;
-
 use super::{JobError, JobOptions, io_error, write_private};
 
 const MCP_ARGS: [&str; 2] = ["mcp", "--connect"];
@@ -272,6 +270,19 @@ fn pin_job_dir_as_project_root(job_dir: &Path) {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status();
+}
+
+fn grok_home_dir() -> Option<PathBuf> {
+    let env_path = |name| {
+        std::env::var_os(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    env_path("GROK_HOME").or_else(|| {
+        env_path("HOME")
+            .or_else(|| env_path("USERPROFILE"))
+            .map(|home| home.join(".grok"))
+    })
 }
 
 fn user_grok_auth() -> Option<PathBuf> {

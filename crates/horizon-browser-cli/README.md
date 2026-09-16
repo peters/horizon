@@ -13,7 +13,7 @@ modes:
 
 The crate is intentionally thin and is not published. Browser actions, schemas,
 ownership, redacted audit, and backend behavior remain in
-`horizon-browser-mcp`, `horizon-core`, and the publishable `horizon-browser`
+`horizon-browser-mcp`, `horizon-browser-control`, and the publishable `horizon-browser`
 engine. Binary size, CLI cold start, and semver expectations are recorded in
 [`docs/architecture/browser-packaging.md`](../../docs/architecture/browser-packaging.md).
 
@@ -275,3 +275,11 @@ This is a local process using MCP over stdin/stdout, not a TCP or public network
 listener. Both modes share the same private Horizon coordination state and MCP
 tool schemas; the standalone host does not introduce another browser action
 API.
+
+## Dependency boundary
+
+The CLI consumes browser coordination and runtime paths through
+`horizon-browser-control`. Its normal/build dependency graph contains no Horizon
+core, terminal or UI packages. The existing default runtime root and agent
+authentication lookup remain unchanged. CI checks this boundary for both the CLI
+and MCP server.
