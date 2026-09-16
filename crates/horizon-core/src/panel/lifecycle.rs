@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use crate::editor::{MarkdownEditor, PanelContent};
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::runtime_state::claude_session_transcript_exists;
 use crate::ssh::SshConnectionStatus;
 use crate::terminal::{Terminal, TerminalSpawnOptions};
@@ -25,6 +25,11 @@ impl Panel {
     /// Returns an error if a terminal cannot be spawned or a file-backed
     /// editor cannot be reopened.
     pub fn restart(&mut self) -> Result<()> {
+        if self.remote_workspace.is_some() {
+            return Err(Error::State(
+                "Remote connection pending. Restart cannot run this remote task locally.".into(),
+            ));
+        }
         if let PanelContent::GitChanges(_) = &self.content {
             return Ok(());
         }

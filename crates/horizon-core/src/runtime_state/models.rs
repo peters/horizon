@@ -361,6 +361,7 @@ impl PanelState {
             size: self.size,
             visible: self.browser_profile.as_ref().is_none_or(|profile| !profile.hidden),
             local_id: Some(self.local_id.clone()),
+            remote_workspace: self.remote_workspace.clone(),
             session_binding: self.session_binding.clone(),
             template: self.template.clone(),
             browser_config: (self.kind == PanelKind::Browser).then(|| self.browser_config_for_restore(browser_config)),

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::board::WorkspaceLayout;
 use crate::panel::PanelId;
-use crate::runtime_state::{WorkspaceTemplateRef, new_local_id};
+use crate::runtime_state::{RemoteWorkspaceReference, WorkspaceTemplateRef, new_local_id};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct WorkspaceId(pub u64);
@@ -12,6 +12,7 @@ pub struct WorkspaceId(pub u64);
 pub struct Workspace {
     pub id: WorkspaceId,
     pub local_id: String,
+    pub remote_workspace: Option<RemoteWorkspaceReference>,
     pub name: String,
     pub color_idx: usize,
     pub panels: Vec<PanelId>,
@@ -42,6 +43,7 @@ impl Workspace {
         Self {
             id,
             local_id: new_local_id(),
+            remote_workspace: None,
             name,
             color_idx,
             panels: Vec::new(),

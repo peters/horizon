@@ -1,8 +1,9 @@
 use super::*;
 use crate::cloud_run::{CloudProvider, CloudWorkflowStore, GitCommitSha, GitSource, WorkerLifetime, WorkerTarget};
 use crate::remote_workspace::{RemotePanelBinding, RemoteWorkspaceSpec, RemoteWorkspaceState};
-use crate::{HorizonHome, SessionStore};
+use crate::{HorizonHome, Panel, PanelId, SessionStore, WorkspaceId};
 use serde_json::{Value, json};
+use std::time::Duration;
 
 const OWNER: &str = "11111111-1111-4111-8111-111111111111";
 
@@ -26,6 +27,29 @@ fn snapshot(owner: &str) -> RuntimeState {
             ..WorkspaceState::default()
         }],
         ..RuntimeState::default()
+    }
+}
+
+fn marker_command(path: &Path) -> (String, Vec<String>) {
+    if cfg!(windows) {
+        (
+            "cmd.exe".into(),
+            vec![
+                "/D".into(),
+                "/C".into(),
+                format!("echo unexpected>\"{}\"", path.display()),
+            ],
+        )
+    } else {
+        (
+            "/bin/sh".into(),
+            vec![
+                "-c".into(),
+                ": > \"$1\"".into(),
+                "marker".into(),
+                path.display().to_string(),
+            ],
+        )
     }
 }
 
@@ -116,6 +140,80 @@ fn invalid_snapshots() -> Vec<RuntimeState> {
 }
 
 #[test]
+fn remote_views_never_execute_saved_commands_on_restore_or_restart() {
+    let directory = tempfile::tempdir().expect("directory");
+    let marker = directory.path().join("must-not-run");
+    let (program, args) = marker_command(&marker);
+    let mut state = snapshot(OWNER);
+    state.workspaces[0].panels[0].command = Some(program.clone());
+    state.workspaces[0].panels[0].args.clone_from(&args);
+    let empty_transcripts = directory.path().join("empty-transcripts");
+    std::fs::create_dir(&empty_transcripts).expect("empty transcript directory");
+    for (transcript_root, has_transcript) in [
+        (None, false),
+        (Some(empty_transcripts.as_path()), false),
+        (Some(directory.path()), true),
+    ] {
+        if has_transcript {
+            std::fs::write(directory.path().join("remote-panel.bin"), b"Retained remote output\r\n")
+                .expect("transcript");
+        }
+        let mut board = Board::from_runtime_state_with_transcripts(&state, transcript_root).expect("deferred board");
+        let panel = &mut board.panels[0];
+        assert!(panel.wait_for_shutdown(Duration::from_secs(2)));
+        assert!(!marker.exists());
+        let content = panel.terminal().expect("snapshot terminal").last_lines_text(24);
+        assert!(content.contains("Remote connection pending"));
+        assert_eq!(content.contains("Retained remote output"), has_transcript);
+        let identity = panel.id;
+        assert!(
+            panel
+                .restart()
+                .expect_err("remote restart blocked")
+                .to_string()
+                .contains("locally")
+        );
+        assert!(board.restart_panel(identity).is_err());
+        let saved = RuntimeState::from_board(&board, WindowConfig::default(), CanvasViewState::default());
+        assert_eq!(
+            saved.workspaces[0].remote_workspace,
+            state.workspaces[0].remote_workspace
+        );
+        assert_eq!(
+            saved.workspaces[0].panels[0].remote_workspace,
+            state.workspaces[0].panels[0].remote_workspace
+        );
+        assert_eq!(saved.workspaces[0].panels[0].command.as_deref(), Some(program.as_str()));
+        assert_eq!(saved.workspaces[0].panels[0].args, args);
+        let path = directory.path().join("saved.yaml");
+        std::fs::write(&path, saved.to_yaml().expect("serialize autosave")).expect("autosave");
+        let loaded = RuntimeState::load(&path).expect("load autosave").expect("saved state");
+        let mut reopened = Board::from_runtime_state_with_transcripts(&loaded, transcript_root).expect("reopen");
+        let panel = &mut reopened.panels[0];
+        assert!(panel.wait_for_shutdown(Duration::from_secs(2)));
+        assert!(panel.restart().is_err());
+        assert_eq!(
+            panel.remote_workspace(),
+            state.workspaces[0].panels[0].remote_workspace.as_ref()
+        );
+        assert!(!marker.exists());
+    }
+    let mut control = Panel::spawn(
+        PanelId(9),
+        WorkspaceId(9),
+        PanelOptions {
+            kind: PanelKind::Ssh,
+            command: Some(program),
+            args,
+            ..PanelOptions::default()
+        },
+    )
+    .expect("ordinary SSH command positive control");
+    assert!(control.wait_for_shutdown(Duration::from_secs(2)));
+    assert!(marker.exists(), "the same unguarded saved command really executes");
+}
+
+#[test]
 fn remote_views_reject_local_content_factories_and_agent_bindings() {
     for kind in [
         PanelKind::Shell,
@@ -136,6 +234,8 @@ fn remote_views_reject_local_content_factories_and_agent_bindings() {
         state.workspaces[0].panels[0].kind = kind;
         assert!(state.to_yaml().is_err());
         assert!(Board::from_runtime_state(&state).is_err());
+        let options = state.workspaces[0].panels[0].to_panel_options(&state.browser);
+        assert!(Panel::spawn(PanelId(1), WorkspaceId(1), options).is_err());
     }
     let mut state = snapshot(OWNER);
     assert!(!state.needs_agent_binding_bootstrap());
@@ -151,6 +251,73 @@ fn remote_views_reject_local_content_factories_and_agent_bindings() {
         None,
     ));
     assert!(state.to_yaml().is_err());
+}
+
+#[test]
+fn moving_or_closing_views_preserves_remote_identity_and_empty_workspaces() {
+    let mut board = Board::from_runtime_state(&snapshot(OWNER)).expect("board");
+    let remote_id = board.workspaces[0].id;
+    let panel_id = board.panels[0].id;
+    let local_id = board.create_workspace("Local");
+    board.assign_panel_to_workspace(panel_id, local_id);
+    assert_eq!(
+        board.panel(panel_id).expect("moved").remote_workspace(),
+        Some(&reference(OWNER))
+    );
+    board.remove_empty_workspaces();
+    assert!(board.workspace(remote_id).is_some());
+    let detached = vec![DetachedWorkspaceState {
+        workspace_local_id: "remote-view".into(),
+        window: WindowConfig::default(),
+    }];
+    let saved = RuntimeState::from_board_with_detached_workspaces(
+        &board,
+        WindowConfig::default(),
+        CanvasViewState::default(),
+        detached,
+    );
+    assert!(saved.to_yaml().is_ok());
+    assert_eq!(saved.detached_workspaces[0].workspace_local_id, "remote-view");
+    let mut restored = Board::from_runtime_state(&saved).expect("moved reference restored");
+    assert!(restored.panels[0].restart().is_err());
+    board.assign_panel_to_workspace(panel_id, remote_id);
+    board.close_panel(panel_id);
+    board.remove_empty_workspaces();
+    assert!(board.panels.is_empty());
+    assert_eq!(
+        board
+            .workspace(remote_id)
+            .expect("empty remote view retained")
+            .remote_workspace,
+        Some(reference(OWNER))
+    );
+}
+
+#[test]
+fn incompatible_workspace_moves_and_removal_cannot_reinterpret_execution() {
+    let mut state = snapshot(OWNER);
+    let mut other = snapshot("22222222-2222-4222-8222-222222222222").workspaces.remove(0);
+    other.local_id = "other-view".into();
+    other.panels.clear();
+    state.workspaces.push(other);
+    let mut board = Board::from_runtime_state(&state).expect("board");
+    let source = board.workspaces[0].id;
+    let target = board.workspaces[1].id;
+    let panel = board.panels[0].id;
+    board.assign_panel_to_workspace(panel, target);
+    assert_eq!(board.panel(panel).expect("panel").workspace_id, source);
+    board.remove_workspace(source);
+    assert!(board.workspace(source).is_some());
+    assert!(board.create_panel(PanelOptions::default(), source).is_err());
+    let local = board.create_workspace("Local destination");
+    board.remove_workspace(source);
+    assert!(board.workspace(source).is_none());
+    assert_eq!(board.panel(panel).expect("relocated").workspace_id, local);
+    assert_eq!(
+        board.panel(panel).expect("relocated").remote_workspace(),
+        Some(&reference(OWNER))
+    );
+    assert!(board.restart_panel(panel).is_err());
 }
 
 #[test]
@@ -182,7 +349,8 @@ fn copied_and_deleted_client_sessions_do_not_adopt_or_remove_remote_aggregates()
             .load_remote_workspace(&copy.session_id, "remote-environment")
             .is_err()
     );
-    let mut board = Board::from_runtime_state(&copy.runtime_state).expect("foreign view");
+    let mut board = Board::from_runtime_state(&copy.runtime_state).expect("inert foreign view");
+    assert!(board.panels[0].restart().is_err());
     board.shutdown_terminal_panels();
     assert_eq!(
         std::fs::read(&source.runtime_state_path).expect("unchanged source"),
@@ -268,4 +436,34 @@ fn rejected_remote_session_operations_preserve_saved_files() {
         assert_eq!(std::fs::read(home.session_index_path()).expect("retained index"), index);
         std::fs::write(&session.runtime_state_path, &original).expect("restore test fixture");
     }
+}
+
+#[test]
+fn new_remote_ssh_views_inherit_workspace_identity_without_starting_tasks() {
+    let directory = tempfile::tempdir().expect("directory");
+    let marker = directory.path().join("must-not-start");
+    let (program, args) = marker_command(&marker);
+    let mut state = snapshot(OWNER);
+    state.workspaces[0].panels.clear();
+    let mut board = Board::from_runtime_state(&state).expect("empty remote board");
+    let workspace = board.workspaces[0].id;
+    let panel_id = board
+        .create_panel(
+            PanelOptions {
+                kind: PanelKind::Ssh,
+                command: Some(program),
+                args,
+                ..PanelOptions::default()
+            },
+            workspace,
+        )
+        .expect("new deferred view");
+    let panel = board.panel_mut(panel_id).expect("panel");
+    assert!(panel.wait_for_shutdown(Duration::from_secs(2)));
+    assert_eq!(panel.remote_workspace(), Some(&reference(OWNER)));
+    assert!(!marker.exists());
+    assert!(panel.restart().is_err());
+    let saved = RuntimeState::from_board(&board, WindowConfig::default(), CanvasViewState::default());
+    assert!(saved.to_yaml().is_ok());
+    assert_eq!(saved.workspaces[0].panels[0].remote_workspace, Some(reference(OWNER)));
 }

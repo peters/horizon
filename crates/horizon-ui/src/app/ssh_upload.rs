@@ -98,6 +98,21 @@ impl HorizonApp {
         dropped: &[egui::DroppedFileHandle],
         viewport_id: ViewportId,
     ) -> bool {
+        if let Some(workspace_id) = self
+            .board
+            .panel(panel_id)
+            .filter(|panel| panel.remote_workspace().is_some())
+            .map(|panel| panel.workspace_id)
+        {
+            self.board.create_attention(
+                workspace_id,
+                Some(panel_id),
+                "remote",
+                "Remote connection pending. File upload cannot use this view's saved SSH settings.",
+                horizon_core::AttentionSeverity::Medium,
+            );
+            return true;
+        }
         let Some((panel_kind, host_label, connection)) = self.board.panel(panel_id).map(|panel| {
             (
                 panel.kind,
@@ -475,6 +490,76 @@ mod tests {
     use crate::app::ssh_upload::worker::LocalUploadFile;
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn remote_file_drops_do_not_probe_saved_ssh_metadata_in_owner_or_copied_sessions() {
+        use crate::app::test_support::{dropped_file, test_app};
+        use horizon_core::{
+            Board, CanvasViewState, PanelKind, PanelOptions, RemoteWorkspaceReference, RuntimeState, SshConnection,
+            WindowConfig,
+        };
+
+        let (directory, mut app) = test_app();
+        let source = app
+            .session_store
+            .create_session_from_runtime(RuntimeState::default())
+            .expect("source");
+        let workspace = app.board.create_workspace("Remote reference");
+        let marker = directory.path().join("unexpected-proxy-command");
+        let connection = SshConnection {
+            host: "unverified.example.invalid".into(),
+            extra_args: vec![
+                "-o".into(),
+                format!("ProxyCommand=printf unexpected > '{}'", marker.display()),
+            ],
+            ..SshConnection::default()
+        };
+        app.board
+            .create_panel(
+                PanelOptions {
+                    kind: PanelKind::Ssh,
+                    local_id: Some("remote-panel".into()),
+                    remote_workspace: Some(
+                        RemoteWorkspaceReference::new(source.session_id.clone(), "remote-environment".into())
+                            .expect("reference"),
+                    ),
+                    ssh_connection: Some(connection.clone()),
+                    ..PanelOptions::default()
+                },
+                workspace,
+            )
+            .expect("deferred view");
+        let state = RuntimeState::from_board(&app.board, WindowConfig::default(), CanvasViewState::default());
+        app.session_store
+            .save_runtime_state(&source.session_id, &state)
+            .expect("save source");
+        let source = app
+            .session_store
+            .resume_session(&source.session_id)
+            .expect("resume source");
+        let copy = app
+            .session_store
+            .duplicate_session(&source.session_id)
+            .expect("copy client");
+        assert_ne!(source.session_id, copy.session_id);
+        let upload = directory.path().join("synthetic-upload.txt");
+        std::fs::write(&upload, b"synthetic upload").expect("upload fixture");
+        for session in [source, copy] {
+            app.activate_persistent_session(&session);
+            app.board = Board::from_runtime_state(&session.runtime_state).expect("restore view");
+            let panel = &app.board.panels[0];
+            assert_eq!(panel.ssh_connection.as_ref(), Some(&connection));
+            let panel_id = panel.id;
+            assert!(app.maybe_start_ssh_file_drop(panel_id, &[dropped_file(upload.clone())], egui::ViewportId::ROOT));
+            assert!(
+                app.ssh_upload_flow.is_none(),
+                "no preparation worker or transport may be constructed"
+            );
+            assert!(app.board.unresolved_attention_for_panel(panel_id).is_some());
+            assert!(app.board.restart_panel(panel_id).is_err());
+            assert!(!marker.exists());
+        }
+    }
 
     #[test]
     fn parent_remote_path_preserves_root() {
