@@ -30,6 +30,7 @@ TOOL_NAMES = [
     "browser_network_watch",
     "browser_panel",
     "browser_query",
+    "browser_resize",
     "browser_snapshot",
     "browser_video",
     "browser_visibility",
@@ -1127,6 +1128,47 @@ def exercise_capture_retention(
     }
 
 
+def exercise_viewport(
+    client: McpClient, panel_id: str, url: str, action_ids: list[str]
+) -> None:
+    """Measured CSS sizing survives navigation and is explicitly released."""
+    expression = (
+        '({width:innerWidth,height:innerHeight,'
+        'phone:matchMedia("(max-width:500px)").matches})'
+    )
+    baseline = record_action(
+        client, "browser_evaluate",
+        {"panel_id": panel_id, "expression": "({width:innerWidth,height:innerHeight})"}, action_ids,
+    )["value"]
+    for width, height in [(1440, 900), (820, 1180), (390, 844)]:
+        size = {"width": width, "height": height}
+        resized = record_action(
+            client, "browser_resize", {"panel_id": panel_id, **size}, action_ids
+        )
+        if resized["requested"] != size or resized["applied"] != size:
+            raise AssertionError(resized)
+        for navigate in [False, True]:
+            if navigate:
+                record_action(
+                    client, "browser_navigate", {"panel_id": panel_id, "url": url}, action_ids
+                )
+            observed = record_action(
+                client, "browser_evaluate",
+                {"panel_id": panel_id, "expression": expression}, action_ids,
+            )["value"]
+            if observed != {**size, "phone": width <= 500}:
+                raise AssertionError(observed)
+    released = record_action(
+        client, "browser_resize", {"panel_id": panel_id, "reset": True}, action_ids
+    )
+    measured = record_action(
+        client, "browser_evaluate",
+        {"panel_id": panel_id, "expression": "({width:innerWidth,height:innerHeight})"}, action_ids,
+    )["value"]
+    if released["requested"] is not None or released["applied"] != measured or measured != baseline:
+        raise AssertionError({"released": released, "measured": measured})
+
+
 def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
     initialize(client)
     panel, create_action_id = create_panel(client, args)
@@ -1141,7 +1183,7 @@ def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
         raise AssertionError(panel)
     detail, _ = client.call("browser_panel", {"panel_id": panel_id})
     assert detail is not None
-    expected_capabilities = CAPABILITIES + ([] if args.backend == "safari" else NETWORK_CAPABILITIES)
+    expected_capabilities = CAPABILITIES + ([] if args.backend == "safari" else ["resize"] + NETWORK_CAPABILITIES)
     if detail["capabilities"] != expected_capabilities:
         raise AssertionError(detail)
     network_capability = detail["network_capture"]
@@ -1168,6 +1210,8 @@ def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
         raise AssertionError(video_capability)
 
     action_ids: list[str] = [create_action_id]
+    if "resize" in detail["capabilities"]:
+        exercise_viewport(client, panel_id, f"{args.base_url}/index.html", action_ids)
     failed_ids: list[str] = []
     record_action(client, "browser_snapshot", {"panel_id": panel_id, "max_nodes": 25}, action_ids)
     shown = record_action(
