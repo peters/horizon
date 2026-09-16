@@ -9,17 +9,18 @@ pub(super) struct YuvFrame {
     pub v: Vec<u8>,
 }
 
+/// Target size for one encode: the source frame aligned down to codec
+/// blocks, downscaled only when an explicit `max_width` cap is exceeded.
+/// `None` preserves source dimensions apart from codec-block alignment.
 #[must_use]
-pub(super) fn encode_size(src_width: u32, src_height: u32, max_width: u32) -> (u32, u32) {
-    let max_width = max_width.max(MIN_ALIGN);
+pub(super) fn encode_size(src_width: u32, src_height: u32, max_width: Option<u32>) -> (u32, u32) {
     let longest = src_width.max(src_height).max(1);
-    let (width, height) = if longest > max_width {
-        (
+    let (width, height) = match max_width.map(|value| value.max(MIN_ALIGN)) {
+        Some(max_width) if longest > max_width => (
             src_width.saturating_mul(max_width) / longest,
             src_height.saturating_mul(max_width) / longest,
-        )
-    } else {
-        (src_width, src_height)
+        ),
+        _ => (src_width, src_height),
     };
     (align_down(width), align_down(height))
 }
@@ -111,13 +112,31 @@ mod tests {
 
     #[test]
     fn encode_size_aligns_and_respects_max_width() {
-        assert_eq!(encode_size(1280, 800, 1280), (1280, 800));
-        let (width, height) = encode_size(1920, 1080, 1280);
+        assert_eq!(encode_size(1280, 800, Some(1280)), (1280, 800));
+        let (width, height) = encode_size(1920, 1080, Some(1280));
         assert!(width <= 1280);
         assert_eq!(width % 8, 0);
         assert_eq!(height % 8, 0);
         assert!(width >= MIN_ALIGN);
         assert!(height >= MIN_ALIGN);
+    }
+
+    #[test]
+    fn encode_size_auto_keeps_a_wide_viewport_frame_undownscaled() {
+        // A 1554-wide content viewport must encode at its own width (aligned
+        // down to the 8-pixel codec block), not below it.
+        assert_eq!(encode_size(1554, 862, None), (1552, 856));
+        assert_eq!(encode_size(802, 1280, None), (800, 1280));
+    }
+
+    #[test]
+    fn encode_size_explicit_cap_downscales_and_never_upscales() {
+        let (width, height) = encode_size(1554, 862, Some(1280));
+        assert_eq!(width, 1280);
+        assert_eq!(height % 8, 0);
+        assert!(height <= 862);
+        assert_eq!(encode_size(1554, 862, Some(1920)), (1552, 856));
+        assert_eq!(encode_size(802, 1280, Some(640)), (400, 640));
     }
 
     #[test]

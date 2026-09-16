@@ -761,8 +761,13 @@ mod tests {
     use crate::frames::FrameSlot;
 
     fn solid_rgb(red: u8, green: u8, blue: u8) -> Vec<u8> {
-        let mut rgb = Vec::with_capacity(64 * 64 * 3);
-        for _ in 0..(64 * 64) {
+        sized_solid_rgb(64, 64, red, green, blue)
+    }
+
+    fn sized_solid_rgb(width: u32, height: u32, red: u8, green: u8, blue: u8) -> Vec<u8> {
+        let pixels = usize::try_from(width.saturating_mul(height)).unwrap_or(0);
+        let mut rgb = Vec::with_capacity(pixels.saturating_mul(3));
+        for _ in 0..pixels {
             rgb.extend_from_slice(&[red, green, blue]);
         }
         rgb
@@ -777,7 +782,7 @@ mod tests {
         let options = BrowserVideoCaptureOptions {
             fps: 5,
             compression_level: 0,
-            max_width: 320,
+            max_width: Some(320),
             max_file_bytes: 4 * 1024 * 1024,
             ..BrowserVideoCaptureOptions::default()
         };
@@ -815,7 +820,7 @@ mod tests {
         let options = BrowserVideoCaptureOptions {
             fps: 5,
             compression_level: 0,
-            max_width: 320,
+            max_width: Some(320),
             max_file_bytes: 4 * 1024 * 1024,
             ..BrowserVideoCaptureOptions::default()
         };
@@ -843,5 +848,47 @@ mod tests {
             capture.elapsed_millis,
             wall
         );
+    }
+
+    #[test]
+    fn auto_max_width_encodes_at_the_source_frame_size() {
+        let root = tempfile::tempdir().unwrap_or_else(|error| panic!("tempdir failed: {error}"));
+        let slot = Arc::new(FrameSlot::new());
+        slot.store_test_rgb(1554, 64, sized_solid_rgb(1554, 64, 200, 30, 30));
+        let handle = Arc::new(VideoCaptureHandle::default());
+        let options = BrowserVideoCaptureOptions {
+            fps: 5,
+            compression_level: 0,
+            max_width: None,
+            max_file_bytes: 4 * 1024 * 1024,
+            ..BrowserVideoCaptureOptions::default()
+        };
+        let thread = EncoderThread::start(
+            root.path(),
+            "auto-width",
+            Arc::clone(&slot),
+            options,
+            Arc::clone(&handle),
+        )
+        .unwrap_or_else(|error| panic!("start encoder: {error}"));
+        let ready = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < ready {
+            if handle.snapshot().is_some_and(|capture| capture.frames_encoded >= 1) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let capture = handle.snapshot().unwrap_or_else(|| panic!("capture missing"));
+        assert_eq!(
+            capture.width, 1552,
+            "auto mode must encode at the source frame width (1554 aligned down), not a fixed 1280 cap"
+        );
+        assert_eq!(capture.height, 64);
+        let finished = thread
+            .finish()
+            .unwrap_or_else(|error| panic!("finish encoder: {error}"));
+        assert!(finished.frames_encoded > 0, "auto-sized capture must encode a frame");
+        assert!(!finished.encoder_failed);
+        assert!(std::fs::metadata(&finished.path).unwrap().len() > 0);
     }
 }

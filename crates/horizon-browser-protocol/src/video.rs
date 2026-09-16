@@ -2,10 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const DEFAULT_VIDEO_QUALITY: u32 = 70;
+pub const DEFAULT_VIDEO_QUALITY: u32 = 90;
 pub const DEFAULT_VIDEO_COMPRESSION_LEVEL: u32 = 4;
 pub const DEFAULT_VIDEO_FPS: u32 = 10;
-pub const DEFAULT_VIDEO_MAX_WIDTH: u32 = 1280;
 pub const DEFAULT_VIDEO_MAX_FILE_BYTES: u64 = 512 * 1024 * 1024;
 pub const MIN_VIDEO_QUALITY: u32 = 1;
 pub const MAX_VIDEO_QUALITY: u32 = 100;
@@ -41,7 +40,10 @@ pub struct BrowserVideoCaptureOptions {
     pub quality: u32,
     pub compression_level: u32,
     pub fps: u32,
-    pub max_width: u32,
+    /// Maximum encoded longest side (320-1920). `None` uses source-frame
+    /// dimensions apart from codec-block alignment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_width: Option<u32>,
     pub max_file_bytes: u64,
 }
 
@@ -51,7 +53,7 @@ impl Default for BrowserVideoCaptureOptions {
             quality: DEFAULT_VIDEO_QUALITY,
             compression_level: DEFAULT_VIDEO_COMPRESSION_LEVEL,
             fps: DEFAULT_VIDEO_FPS,
-            max_width: DEFAULT_VIDEO_MAX_WIDTH,
+            max_width: None,
             max_file_bytes: DEFAULT_VIDEO_MAX_FILE_BYTES,
         }
     }
@@ -62,7 +64,7 @@ impl BrowserVideoCaptureOptions {
         quality: u32,
         compression_level: u32,
         fps: u32,
-        max_width: u32,
+        max_width: Option<u32>,
         max_file_bytes: u64,
     ) -> Result<(), &'static str> {
         if !(MIN_VIDEO_QUALITY..=MAX_VIDEO_QUALITY).contains(&quality) {
@@ -74,7 +76,9 @@ impl BrowserVideoCaptureOptions {
         if !(MIN_VIDEO_FPS..=MAX_VIDEO_FPS).contains(&fps) {
             return Err("video fps must be between 1 and 30");
         }
-        if !(MIN_VIDEO_MAX_WIDTH..=MAX_VIDEO_MAX_WIDTH).contains(&max_width) {
+        if let Some(max_width) = max_width
+            && !(MIN_VIDEO_MAX_WIDTH..=MAX_VIDEO_MAX_WIDTH).contains(&max_width)
+        {
             return Err("video max width must be between 320 and 1920");
         }
         if !(MIN_VIDEO_FILE_BYTES..=MAX_VIDEO_FILE_BYTES).contains(&max_file_bytes) {
@@ -96,7 +100,8 @@ impl BrowserVideoCaptureOptions {
     }
 }
 
-/// Start-only overrides. Omitted fields keep the host's `browser.video` defaults.
+/// Start-only overrides. Omitted fields keep the host defaults, where
+/// `max_width: None` means source-frame sizing with codec-block alignment.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 pub struct BrowserVideoCaptureOverrides {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -128,7 +133,7 @@ impl BrowserVideoCaptureOverrides {
             self.quality.unwrap_or(DEFAULT_VIDEO_QUALITY),
             self.compression_level.unwrap_or(DEFAULT_VIDEO_COMPRESSION_LEVEL),
             self.fps.unwrap_or(DEFAULT_VIDEO_FPS),
-            self.max_width.unwrap_or(DEFAULT_VIDEO_MAX_WIDTH),
+            self.max_width,
             self.max_file_bytes.unwrap_or(DEFAULT_VIDEO_MAX_FILE_BYTES),
         )
     }
@@ -145,7 +150,7 @@ impl BrowserVideoCaptureOverrides {
             base.fps = fps;
         }
         if let Some(max_width) = self.max_width {
-            base.max_width = max_width;
+            base.max_width = Some(max_width);
         }
         if let Some(max_file_bytes) = self.max_file_bytes {
             base.max_file_bytes = max_file_bytes;
@@ -190,8 +195,70 @@ mod tests {
     }
 
     #[test]
-    fn default_options_are_valid() {
-        assert!(BrowserVideoCaptureOptions::default().validate().is_ok());
+    fn default_options_are_valid_and_record_at_viewport_width() {
+        let options = BrowserVideoCaptureOptions::default();
+        assert!(options.max_width.is_none());
+        assert_eq!(options.quality, DEFAULT_VIDEO_QUALITY);
+        assert!(options.validate().is_ok());
+    }
+
+    #[test]
+    fn explicit_max_width_keeps_the_engine_range_contract() {
+        assert!(
+            BrowserVideoCaptureOptions {
+                max_width: Some(319),
+                ..BrowserVideoCaptureOptions::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            BrowserVideoCaptureOptions {
+                max_width: Some(1921),
+                ..BrowserVideoCaptureOptions::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            BrowserVideoCaptureOptions {
+                max_width: Some(320),
+                ..BrowserVideoCaptureOptions::default()
+            }
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            BrowserVideoCaptureOptions {
+                max_width: Some(1920),
+                ..BrowserVideoCaptureOptions::default()
+            }
+            .validate()
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn overrides_validate_only_provided_fields_and_keep_an_omitted_width() {
+        assert!(
+            BrowserVideoCaptureOverrides {
+                max_width: Some(16),
+                ..BrowserVideoCaptureOverrides::default()
+            }
+            .validate()
+            .is_err()
+        );
+        let overlay = BrowserVideoCaptureOverrides {
+            quality: Some(DEFAULT_VIDEO_QUALITY),
+            ..BrowserVideoCaptureOverrides::default()
+        };
+        assert!(overlay.validate().is_ok());
+        let merged = overlay.apply_to(BrowserVideoCaptureOptions {
+            max_width: Some(1280),
+            ..BrowserVideoCaptureOptions::default()
+        });
+        assert_eq!(merged.max_width, Some(1280));
+        assert_eq!(merged.quality, DEFAULT_VIDEO_QUALITY);
     }
 
     #[test]
@@ -222,7 +289,7 @@ mod tests {
         );
         assert!(
             BrowserVideoCaptureOptions {
-                max_width: 16,
+                max_width: Some(16),
                 ..BrowserVideoCaptureOptions::default()
             }
             .validate()
