@@ -599,6 +599,12 @@ pub(crate) struct HandoffInput {
     pub(crate) panel_id: String,
     /// Short user-facing explanation of why steering is needed.
     pub(crate) reason: String,
+    /// When false, return as soon as the handoff is requested. Default true
+    /// waits until the user hands the panel back.
+    pub(crate) wait: Option<bool>,
+    /// How long to wait for hand-back when `wait` is true (1000-3600000 ms,
+    /// default 900000). Ignored when `wait` is false.
+    pub(crate) timeout_millis: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -751,6 +757,8 @@ pub(crate) struct HandoffOutput {
     pub(crate) panel_id: String,
     pub(crate) request_id: String,
     pub(crate) handoff_pending: bool,
+    /// Time from the request until this result. Near zero when `wait` is false.
+    pub(crate) elapsed_millis: u64,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

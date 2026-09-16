@@ -360,17 +360,27 @@ impl HorizonBrowserMcp {
 
     #[tool(
         name = "browser_handoff",
-        description = "Pause agent actions and ask the user to steer the panel. Poll browser_list until handoff_pending is false before resuming."
+        description = "Pause agent actions and ask the user to steer the panel. Waits until they select Done — hand back to agent, then returns handoff_pending=false so you can take a fresh snapshot and continue. Do not poll browser_list for that signal. timeout_millis is 1000-3600000 (default 900000). Set wait=false only to request steering without blocking."
     )]
-    fn browser_handoff(&self, Parameters(input): Parameters<HandoffInput>) -> Result<Json<HandoffOutput>, String> {
-        let request_id = self
+    async fn browser_handoff(
+        &self,
+        Parameters(input): Parameters<HandoffInput>,
+    ) -> Result<Json<HandoffOutput>, String> {
+        let receipt = self
             .controller
-            .request_handoff(&input.panel_id, &input.reason)
+            .request_handoff(
+                &input.panel_id,
+                &input.reason,
+                input.wait.unwrap_or(true),
+                input.timeout_millis,
+            )
+            .await
             .map_err(|error| error.to_string())?;
         Ok(Json(HandoffOutput {
-            panel_id: input.panel_id,
-            request_id,
-            handoff_pending: true,
+            panel_id: receipt.panel_id,
+            request_id: receipt.request_id,
+            handoff_pending: receipt.handoff_pending,
+            elapsed_millis: receipt.elapsed_millis,
         }))
     }
 
@@ -430,7 +440,7 @@ impl ServerHandler for HorizonBrowserMcp {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("horizon-browser", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "MCP is the sole agent control contract for Horizon browser panels. For agent identities injected by Horizon, discovery and control are scoped to the workspace that contains the calling agent panel: browser_list shows only that workspace's panels, every other tool rejects panel ids outside it, and a panel's visible field is host presentation state rather than proof that it is in your workspace; identities from outside Horizon keep unscoped discovery. Start with browser_list; if it is empty, call browser_create in your current Horizon workspace. Reuse an existing panel for iframe, popup, dialog, and consent interactions: never create or reveal a helper panel as a workaround. If the current top-level semantic tools cannot reach embedded frame content, call browser_handoff on the original panel. Only set browser_create allow_additional=true when the user explicitly requests an independent browser session. Pass browser_create target=<configured remote target name> to run at a configured remote target; never supply endpoints, capabilities or credentials yourself. Use visible=false for a live background panel and browser_visibility to show or hide it later without stopping automation or capture. Call browser_close when the user is done with a panel you own or a remote device session must be released; it stops the session and the panel leaves browser_list. Each panel advertises navigation, DOM, steering, audit, network, and video capabilities. Use browser_resize width and height to pin a supported local content viewport in CSS pixels; reset=true resumes panel sizing. Check its measured applied dimensions. Navigation preserves the pin; video max_width does not change it. If you encounter HTTP Basic or Digest authentication, call browser_http_auth set with the username and password the user provided (optional origin) before browser_navigate, or set then reload if a protected page was already opened; Safari and remote sessions return unsupported_backend. For WebSocket or HTTP observation, call browser_network start before browser_navigate; opt into native bounded response bodies with include_http_bodies. Prefer browser_network_watch with its returned capture_id and next_sequence for bounded event-driven monitoring, or tail the exact private NDJSON path returned by browser_network with ordinary read-only Unix tools; call browser_network stop to flush. For page-pixel recording, call browser_video start, optionally pause/resume, then stop to finalize a private WebM path; quality, compression_level, fps, max_width, and max_file_bytes are start-only. Take a fresh semantic snapshot or query before acting through refs, and verify afterward. Never use raw browser endpoints or Horizon's private runtime files.",
+                "MCP is the sole agent control contract for Horizon browser panels. For agent identities injected by Horizon, discovery and control are scoped to the workspace that contains the calling agent panel: browser_list shows only that workspace's panels, every other tool rejects panel ids outside it, and a panel's visible field is host presentation state rather than proof that it is in your workspace; identities from outside Horizon keep unscoped discovery. Start with browser_list; if it is empty, call browser_create in your current Horizon workspace. Reuse an existing panel for iframe, popup, dialog, and consent interactions: never create or reveal a helper panel as a workaround. If the current top-level semantic tools cannot reach embedded frame content, call browser_handoff on the original panel; it waits until they select Done — hand back to agent. Only set browser_create allow_additional=true when the user explicitly requests an independent browser session. Pass browser_create target=<configured remote target name> to run at a configured remote target; never supply endpoints, capabilities or credentials yourself. Use visible=false for a live background panel and browser_visibility to show or hide it later without stopping automation or capture. Call browser_close when the user is done with a panel you own or a remote device session must be released; it stops the session and the panel leaves browser_list. Each panel advertises navigation, DOM, steering, audit, network, and video capabilities. Use browser_resize width and height to pin a supported local content viewport in CSS pixels; reset=true resumes panel sizing. Check its measured applied dimensions. Navigation preserves the pin; video max_width does not change it. If you encounter HTTP Basic or Digest authentication, call browser_http_auth set with the username and password the user provided (optional origin) before browser_navigate, or set then reload if a protected page was already opened; Safari and remote sessions return unsupported_backend. For WebSocket or HTTP observation, call browser_network start before browser_navigate; opt into native bounded response bodies with include_http_bodies. Prefer browser_network_watch with its returned capture_id and next_sequence for bounded event-driven monitoring, or tail the exact private NDJSON path returned by browser_network with ordinary read-only Unix tools; call browser_network stop to flush. For page-pixel recording, call browser_video start, optionally pause/resume, then stop to finalize a private WebM path; quality, compression_level, fps, max_width, and max_file_bytes are start-only. Take a fresh semantic snapshot or query before acting through refs, and verify afterward. Never use raw browser endpoints or Horizon's private runtime files.",
             )
     }
 
@@ -565,6 +575,8 @@ mod tests {
         assert!(schemas.contains("next_event_id"));
         assert!(schemas.contains("older_records_dropped"));
         assert!(schemas.contains("cursor_lost"));
+        assert!(schemas.contains("Done — hand back to agent"));
+        assert!(schemas.contains("wait"));
         assert!(!schemas.contains("browser_ws"));
         assert!(!schemas.contains("manifest_path"));
         assert!(!schemas.contains("cdp_endpoint"));

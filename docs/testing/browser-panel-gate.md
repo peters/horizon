@@ -146,8 +146,10 @@ python3 scripts/browser-smoke/run.py \
 Use `--chromium-command`, `--firefox-command`, `--geckodriver-command`, or
 `--safaridriver-command` only when auto-discovery is ambiguous. The runner
 prints the exact candidate PID and artifact root. Scope every screenshot and
-native action to that PID. It pauses at MCP handoff until the tester clicks
-**Done — hand back to agent** in that exact window.
+native action to that PID. It starts a blocking `browser_handoff` (the Codex/Claude resume path) and
+pauses until the tester clicks **Done — hand back to agent** in that exact
+window; the tool must return `handoff_pending: false` before the agent
+continues.
 
 Use `--skip-handoff` only when handoff is outside the selected gate. Use
 `--ephemeral` for focused non-persistence work. To test restore, omit
@@ -533,9 +535,10 @@ Run once per host OS after the semantic gate:
    launch receives the transient `horizon-browser` stdio MCP registration,
    stable `HORIZON_BROWSER_ACTOR`, and the launching host's
    `HORIZON_BROWSER_HOST_INSTANCE`, and both variables are forwarded to the
-   stdio MCP child. The default Codex registration sets only this MCP server's
-   tool approval mode to `approve`, so browser calls proceed without repeated
-   operator prompts while unrelated tool approvals keep their normal policy; a
+   stdio MCP child. The default Codex registration sets this MCP server's
+   tool approval mode to `approve` and `tool_timeout_sec` to 3600, so browser
+   calls proceed without repeated operator prompts and `browser_handoff` can
+   wait for a human; unrelated tool approvals keep their normal policy. A
    custom agent command remains unchanged. Prove the forwarding with a real
    in-panel `browser_create`, not only by testing a synthetic MCP process with
    an actor injected directly.

@@ -15,6 +15,8 @@ use thiserror::Error;
 
 use crate::model::{BrowserPanel, ProtocolKind};
 
+mod handoff;
+
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
 const RESULT_POLL_INTERVAL: Duration = Duration::from_millis(20);
 pub(crate) const DEFAULT_ACTION_TIMEOUT_MILLIS: u64 = 15_000;
@@ -32,7 +34,7 @@ const MIN_CREATE_TIMEOUT_MILLIS: u64 = 5_000;
 
 #[derive(Clone, Debug)]
 pub(crate) struct BrowserController {
-    actor: String,
+    pub(super) actor: String,
     /// The Horizon host process that injected `actor`, when its launcher
     /// forwarded it. Workspace stamps only match identities from that host.
     host_instance: Option<String>,
@@ -148,6 +150,10 @@ pub(crate) enum ControlError {
         "browser visibility request {action_id} timed out after {timeout_millis} ms; call browser_panel before retrying because the change may have completed late"
     )]
     VisibilityTimeout { action_id: String, timeout_millis: u64 },
+    #[error(
+        "browser handoff {request_id} timed out after {timeout_millis} ms; call browser_panel to see if the user is still steering, then call browser_handoff again to keep waiting"
+    )]
+    HandoffTimeout { request_id: String, timeout_millis: u64 },
     #[error("browser action {action_id} failed ({code}): {message}")]
     Browser {
         action_id: String,
@@ -533,12 +539,6 @@ impl BrowserController {
             }
             tokio::time::sleep(RESULT_POLL_INTERVAL).await;
         }
-    }
-
-    pub(crate) fn request_handoff(&self, panel_id: &str, reason: &str) -> Result<String, ControlError> {
-        self.ensure_claim(panel_id)?;
-        manifest::request_handoff(panel_id, self.identity(), reason)
-            .map_err(|source| self.denied(panel_id, "could not request browser handoff", source))
     }
 
     pub(crate) fn read_audit_page(

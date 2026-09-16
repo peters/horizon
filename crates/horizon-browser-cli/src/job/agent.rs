@@ -199,7 +199,7 @@ fn codex_command(
             "-c",
             "mcp_servers.horizon-browser.startup_timeout_sec=45",
             "-c",
-            "mcp_servers.horizon-browser.tool_timeout_sec=60",
+            "mcp_servers.horizon-browser.tool_timeout_sec=3600",
             "-c",
             "mcp_servers.horizon-browser.default_tools_approval_mode=\"approve\"",
         ])
@@ -332,7 +332,7 @@ fn grok_config(browser: &Path, browser_home: &Path) -> String {
             "env = {{ HOME = {home}, HORIZON_BROWSER_ROOT = {root}, RUST_LOG = \"off\" }}\n",
             "enabled = true\n",
             "startup_timeout_sec = 45\n",
-            "tool_timeout_sec = 60\n"
+            "tool_timeout_sec = 3600\n"
         ),
         command = toml_string(&browser.to_string_lossy()),
         home = toml_string(&browser_home.to_string_lossy()),
@@ -495,6 +495,7 @@ mod tests {
         ]));
         assert!(args.contains(&"--output-schema".to_string()));
         assert!(args.contains(&"--output-last-message".to_string()));
+        assert!(args.contains(&"mcp_servers.horizon-browser.tool_timeout_sec=3600".to_string()));
         assert!(!args.contains(&"--output-format".to_string()));
         let expected_root = serde_json::to_string(&browser_home.join(".horizon").to_string_lossy())
             .unwrap_or_else(|error| panic!("encode runtime root: {error}"));
@@ -520,6 +521,7 @@ mod tests {
         assert!(config.contains("--connect"));
         assert!(config.contains(&browser.to_string_lossy().replace('\\', "\\\\")));
         assert!(config.contains("horizon-browser"));
+        assert!(config.contains("tool_timeout_sec = 3600\n"));
         assert!(config.contains(&format!(
             "HORIZON_BROWSER_ROOT = {}",
             toml_string(&browser_home.join(".horizon").to_string_lossy())

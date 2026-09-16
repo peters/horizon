@@ -136,7 +136,8 @@ shell commands, files, or other MCP servers.
   delivery. It accepts no file path, excludes payloads by default, reports
   sequence gaps and capture health explicitly, and wakes on a matching record,
   capture stop, capture replacement, or timeout.
-- `browser_handoff` pauses automation so the user can steer.
+- `browser_handoff` pauses automation so the user can steer, and waits until
+  they hand the panel back (`handoff_pending: false`) unless `wait` is false.
 - `browser_audit` returns a bounded page of redacted ordered action records.
   The default page is the newest matching entries (`limit` 1-500, default 100).
   Set `from_start` to iterate from the oldest retained match, then reuse

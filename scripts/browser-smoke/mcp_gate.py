@@ -204,6 +204,8 @@ def initialize(client: McpClient) -> list[dict[str, Any]]:
         raise AssertionError("MCP instructions do not teach watch and visibility workflows")
     if "allow_additional=true" not in result["instructions"] or "original panel" not in result["instructions"]:
         raise AssertionError("MCP instructions do not prevent accidental helper panels")
+    if "hand back" not in result["instructions"]:
+        raise AssertionError("MCP instructions do not teach that browser_handoff waits for hand-back")
     client.notify("notifications/initialized")
 
     tools = client.request("tools/list")["result"]["tools"]
@@ -235,6 +237,14 @@ def initialize(client: McpClient) -> list[dict[str, Any]]:
     visibility = next(tool for tool in tools if tool["name"] == "browser_visibility")
     if "without stopping" not in visibility["description"]:
         raise AssertionError("browser_visibility is not self-discovering")
+    handoff = next(tool for tool in tools if tool["name"] == "browser_handoff")
+    properties = handoff["inputSchema"]["properties"]
+    if (
+        "hand back" not in handoff["description"]
+        or "wait" not in properties
+        or "timeout_millis" not in properties
+    ):
+        raise AssertionError("browser_handoff is not self-discovering")
     return tools
 
 
@@ -1471,12 +1481,48 @@ def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
     wait_outcomes["audit_entries_per_wait"] = verify_wait_audit(audit_records, wait_outcomes)
     handoff_request = None
     if args.handoff:
-        handoff, _ = client.call(
-            "browser_handoff",
-            {"panel_id": panel_id, "reason": f"Complete the visible {args.backend} hand-back gate"},
+        waiter_log = args.log.with_name(f"{args.log.stem}-handoff{args.log.suffix}")
+        waiter = McpClient(
+            args.horizon,
+            waiter_log,
+            args.handoff_timeout,
+            args.actor,
+            args.host_instance,
         )
-        assert handoff is not None and handoff["handoff_pending"] is True
-        handoff_request = handoff["request_id"]
+        initialize(waiter)
+        pending: dict[str, Any] = {}
+
+        def wait_for_hand_back() -> None:
+            try:
+                result, error = waiter.call(
+                    "browser_handoff",
+                    {
+                        "panel_id": panel_id,
+                        "reason": f"Complete the visible {args.backend} hand-back gate",
+                    },
+                )
+                pending["result"] = result
+                pending["error"] = error
+            except BaseException as error:  # Preserve worker failures for the main smoke thread.
+                pending["error"] = error
+            finally:
+                waiter.close()
+
+        waiter_thread = threading.Thread(target=wait_for_hand_back, daemon=True)
+        waiter_thread.start()
+        deadline = time.monotonic() + min(args.handoff_timeout, 30)
+        current = None
+        while time.monotonic() < deadline:
+            current, _ = client.call("browser_panel", {"panel_id": panel_id})
+            assert current is not None
+            if current["handoff_pending"]:
+                break
+            if "error" in pending:
+                raise AssertionError(f"blocking browser_handoff failed early: {pending['error']}")
+            time.sleep(0.1)
+        else:
+            raise AssertionError("blocking browser_handoff never became pending")
+        handoff_request = current.get("request_id")
         _, blocked = client.call(
             "browser_act",
             {"panel_id": panel_id, "action": "reload"},
@@ -1495,52 +1541,52 @@ def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
             ),
             flush=True,
         )
-        deadline = time.monotonic() + args.handoff_timeout
-        while time.monotonic() < deadline:
-            current, _ = client.call("browser_panel", {"panel_id": panel_id})
-            assert current is not None
-            if not current["handoff_pending"]:
-                record_action(client, "browser_snapshot", {"panel_id": panel_id}, action_ids)
-                handoff_entries = verify_audit(
-                    client,
-                    panel_id,
-                    action_ids,
-                    failed_ids,
-                    double_click_id,
-                )
-                requested_indexes = [
-                    index
-                    for index, entry in enumerate(handoff_entries)
-                    if entry["action_id"] == handoff_request
-                    and entry["status"] == "dispatched"
-                    and entry["action"].get("type") == "handoff_requested"
-                ]
-                if len(requested_indexes) != 1:
-                    raise AssertionError("handoff request was not audited exactly once")
-                done_indexes = [
-                    index
-                    for index, entry in enumerate(handoff_entries)
-                    if index > requested_indexes[0]
-                    and entry["status"] == "dispatched"
-                    and entry["actor"].get("type") == "user"
-                    and entry["action"].get("type") == "handoff_done"
-                ]
-                if len(done_indexes) != 1:
-                    raise AssertionError("handoff completion was not audited exactly once")
-                if not any(
-                    index > requested_indexes[0]
-                    and index < done_indexes[0]
-                    and entry["status"] == "rejected"
-                    and entry["actor"].get("type") == "agent"
-                    and entry["action"].get("type") == "reload"
-                    for index, entry in enumerate(handoff_entries)
-                ):
-                    raise AssertionError("the MCP action blocked during handoff was not audited")
-                audit_entries = len(handoff_entries)
-                break
-            time.sleep(0.25)
-        else:
+        waiter_thread.join(timeout=args.handoff_timeout)
+        if waiter_thread.is_alive():
             raise AssertionError("handoff remained pending")
+        if isinstance(pending.get("error"), BaseException):
+            raise pending["error"]
+        handoff = pending.get("result")
+        if handoff is None or handoff.get("handoff_pending") is not False:
+            raise AssertionError(f"blocking browser_handoff did not resume: {pending}")
+        handoff_request = handoff["request_id"]
+        record_action(client, "browser_snapshot", {"panel_id": panel_id}, action_ids)
+        handoff_entries = verify_audit(
+            client,
+            panel_id,
+            action_ids,
+            failed_ids,
+            double_click_id,
+        )
+        requested_indexes = [
+            index
+            for index, entry in enumerate(handoff_entries)
+            if entry["action_id"] == handoff_request
+            and entry["status"] == "dispatched"
+            and entry["action"].get("type") == "handoff_requested"
+        ]
+        if len(requested_indexes) != 1:
+            raise AssertionError("handoff request was not audited exactly once")
+        done_indexes = [
+            index
+            for index, entry in enumerate(handoff_entries)
+            if index > requested_indexes[0]
+            and entry["status"] == "dispatched"
+            and entry["actor"].get("type") == "user"
+            and entry["action"].get("type") == "handoff_done"
+        ]
+        if len(done_indexes) != 1:
+            raise AssertionError("handoff completion was not audited exactly once")
+        if not any(
+            index > requested_indexes[0]
+            and index < done_indexes[0]
+            and entry["status"] == "rejected"
+            and entry["actor"].get("type") == "agent"
+            and entry["action"].get("type") == "reload"
+            for index, entry in enumerate(handoff_entries)
+        ):
+            raise AssertionError("the MCP action blocked during handoff was not audited")
+        audit_entries = len(handoff_entries)
 
     return {
         "audit_entries": audit_entries,

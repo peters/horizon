@@ -140,8 +140,12 @@ advertises both distinctions. Safari network capture is currently unsupported.
 Do not describe Firefox WebSocket instrumentation as undetectable.
 
 When the user must steer, call `browser_handoff` with a concise reason and stop
-issuing actions. Poll `browser_list` until `handoff_pending` becomes false,
-then take a fresh snapshot before continuing. Use `browser_audit` to review the
+issuing actions. The call itself waits until the user selects **Done — hand back
+to agent** (or `timeout_millis` elapses, default 15 minutes), then this turn
+continues. When it returns `handoff_pending: false`, take a fresh snapshot
+before continuing. Do not poll `browser_list` for that signal. Set `wait: false`
+only when a script must request steering without blocking. Use `browser_audit`
+to review the
 redacted ordered action history or to verify a specific action id. The default
 page is the newest matching records (`limit` 1-500, default 100). To iterate
 every retained record, call with `from_start: true` and reuse `next_event_id`

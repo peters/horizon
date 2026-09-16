@@ -319,7 +319,7 @@ fn horizon_agents_only_see_and_control_their_own_workspace() {
     assert_eq!(same["structuredContent"]["owned_by_caller"], false);
     let handoff = agent.call(
         "browser_handoff",
-        &json!({ "panel_id": SAME_WORKSPACE_PANEL, "reason": "please sign in" }),
+        &json!({ "panel_id": SAME_WORKSPACE_PANEL, "reason": "please sign in", "wait": false }),
     );
     assert_eq!(handoff["isError"], false, "{handoff}");
     assert_eq!(handoff["structuredContent"]["handoff_pending"], true);
@@ -368,7 +368,7 @@ fn panel_moves_change_authorization_without_restarting_the_server() {
     assert_eq!(panel["isError"], false, "{panel}");
     let handoff = agent.call(
         "browser_handoff",
-        &json!({ "panel_id": OTHER_WORKSPACE_PANEL, "reason": "now shared" }),
+        &json!({ "panel_id": OTHER_WORKSPACE_PANEL, "reason": "now shared", "wait": false }),
     );
     assert_eq!(
         handoff["isError"], false,
@@ -452,4 +452,78 @@ fn a_horizon_identity_without_a_host_instance_fails_closed_with_a_clear_error() 
     assert!(read_manifest(home.path(), SAME_WORKSPACE_PANEL).owner.is_none());
 
     unbound.close();
+}
+
+fn mark_handoff_done(home: &Path, panel_id: &str) {
+    let path = manifest_path_for_root(&horizon_root(home), panel_id);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let mut snapshot = read_at(&path).expect("read handoff manifest");
+        if snapshot.handoff.as_ref().is_some_and(|handoff| !handoff.done) {
+            snapshot.handoff.as_mut().expect("pending handoff").done = true;
+            write_at(&path, &snapshot).expect("acknowledge handoff");
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "handoff request never appeared on {panel_id}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn browser_handoff_waits_until_the_user_hands_the_panel_back() {
+    let home = tempfile::tempdir().expect("isolated home");
+    seed_home(home.path());
+    let mut agent = McpProcess::start(home.path(), AGENT_A, Some(HOST_A));
+    let home_path = home.path().to_path_buf();
+    let worker = std::thread::spawn(move || mark_handoff_done(&home_path, SAME_WORKSPACE_PANEL));
+
+    let handoff = agent.call(
+        "browser_handoff",
+        &json!({ "panel_id": SAME_WORKSPACE_PANEL, "reason": "please sign in" }),
+    );
+    worker.join().expect("acknowledge handoff");
+    assert_eq!(handoff["isError"], false, "{handoff}");
+    assert_eq!(handoff["structuredContent"]["handoff_pending"], false);
+    assert_eq!(handoff["structuredContent"]["panel_id"], SAME_WORKSPACE_PANEL);
+    assert!(
+        handoff["structuredContent"]["request_id"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty()),
+        "{handoff}"
+    );
+    let listed = agent.call("browser_list", &json!({}));
+    assert_eq!(listed["structuredContent"]["panels"][0]["handoff_pending"], false);
+    agent.close();
+}
+
+#[test]
+fn browser_handoff_times_out_when_the_user_never_hands_back() {
+    let home = tempfile::tempdir().expect("isolated home");
+    seed_home(home.path());
+    let mut agent = McpProcess::start(home.path(), AGENT_A, Some(HOST_A));
+    let handoff = agent.call(
+        "browser_handoff",
+        &json!({
+            "panel_id": SAME_WORKSPACE_PANEL,
+            "reason": "please sign in",
+            "timeout_millis": 1000
+        }),
+    );
+    assert_eq!(handoff["isError"], true, "{handoff}");
+    let text = handoff["content"][0]["text"].as_str().unwrap_or_default();
+    assert!(
+        text.contains("timed out after 1000 ms") && text.contains("still steering"),
+        "{text}"
+    );
+    assert!(
+        read_manifest(home.path(), SAME_WORKSPACE_PANEL)
+            .handoff
+            .as_ref()
+            .is_some_and(|handoff| !handoff.done),
+        "a timed-out wait must leave the request pending so a later hand-back still works"
+    );
+    agent.close();
 }
