@@ -44,9 +44,9 @@ cargo test -p horizon-ui plugin_install -- --nocapture
 cargo test -p horizon-browser-cli successive_process_local_runs run_waits_for_hand_back grok_home_contains_only -- --nocapture
 ```
 
-Expected: Codex launch args include `tool_timeout_sec=3600`. Claude plugin
-`.mcp.json` includes `"timeout": 3600000`. Grok CLI job `config.toml` includes
-`tool_timeout_sec = 3600`. A CLI `run` of `browser_handoff` (default wait)
+Expected: Codex launch args include `tool_timeout_sec=3660`. Claude plugin
+`.mcp.json` includes `"timeout": 3660000`. Grok CLI job `config.toml` includes
+`tool_timeout_sec = 3660`. A CLI `run` of `browser_handoff` (default wait)
 blocks until `done` is set, then reports `handoff_pending: false`. Plans that
 must not block pass `"wait": false`.
 
@@ -103,7 +103,7 @@ Create a default Codex panel in an isolated session. From
 - `mcp_servers.horizon-browser.args=["--browser-mcp"]`
 - `mcp_servers.horizon-browser.env_vars=["HORIZON_BROWSER_ACTOR","HORIZON_BROWSER_HOST_INSTANCE"]`
 - `mcp_servers.horizon-browser.default_tools_approval_mode="approve"`
-- `mcp_servers.horizon-browser.tool_timeout_sec=3600`
+- `mcp_servers.horizon-browser.tool_timeout_sec=3660`
 
 A 60-second tool timeout here is a fail: Codex would kill `browser_handoff`
 before the user can hand back.
@@ -113,7 +113,7 @@ Custom Codex commands must still **not** receive this registration.
 ### B2. Claude plugin MCP config
 
 Isolated boot must write the host plugin dir `.mcp.json` with
-`--browser-mcp` and `"timeout": 3600000`. The bundled `horizon-browser`
+`--browser-mcp` and `"timeout": 3660000`. The bundled `horizon-browser`
 skill must tell the model that `browser_handoff` **waits** and not to poll
 `browser_list` for hand-back. Confirm the skill on disk matches
 `assets/plugins/claude-code/skills/horizon-browser/SKILL.md` (and the Codex
@@ -181,7 +181,7 @@ Requires `grok` on PATH (the CLI prefers it over Codex) and a working login.
 Horizon Grok **TUI panels** do not receive browser MCP injection; the Grok
 path this product already ships is `horizon-browser "<goal>"`, which writes
 an isolated `GROK_HOME` with `horizon-browser` MCP and
-`tool_timeout_sec = 3600`.
+`tool_timeout_sec = 3660`.
 
 1. Isolated temp `HOME`. Launch a live Horizon with a visible browser panel
    (same isolation as A2) **or** reuse the MCP gate window.
@@ -203,7 +203,7 @@ an isolated `GROK_HOME` with `horizon-browser` MCP and
    timeout).
 6. Optional 90-second hold before Done: still resumes.
 
-Proof: job `GROK_HOME/config.toml` contains `tool_timeout_sec = 3600`,
+Proof: job `GROK_HOME/config.toml` contains `tool_timeout_sec = 3660`,
 the blocking wait, Done, and a successful report.
 
 ## Pass / fail

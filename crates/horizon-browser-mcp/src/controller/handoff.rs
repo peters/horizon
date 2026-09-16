@@ -4,15 +4,18 @@ use std::time::{Duration, Instant};
 
 use horizon_browser_control::manifest;
 
-use super::{BrowserController, ControlError, HEARTBEAT_INTERVAL, RESULT_POLL_INTERVAL};
+use super::{BrowserController, ControlError, HEARTBEAT_INTERVAL};
 
 /// Default wait for a human to finish steering (sign-in, 2FA, a consent
-/// dialog). Every MCP client Horizon launches (Codex, Claude, Grok CLI, the
-/// plan runner) must keep its tool timeout at least this large or it kills
-/// the call first.
+/// dialog). Injected MCP clients (Codex, Claude, Grok CLI) keep a tool
+/// timeout above [`MAX_HANDOFF_TIMEOUT_MILLIS`] so transport can still
+/// deliver this result.
 pub(crate) const DEFAULT_HANDOFF_TIMEOUT_MILLIS: u64 = 900_000;
 pub(crate) const MIN_HANDOFF_TIMEOUT_MILLIS: u64 = 1_000;
 pub(crate) const MAX_HANDOFF_TIMEOUT_MILLIS: u64 = 3_600_000;
+/// Match the driver's coordination cadence. A 20 ms action-result poll would
+/// reread the manifest tens of thousands of times during a human handoff.
+const HANDOFF_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 pub(crate) struct HandoffReceipt {
     pub(crate) panel_id: String,
@@ -95,7 +98,7 @@ impl BrowserController {
                 self.refresh_claim(panel_id)?;
                 last_heartbeat = Instant::now();
             }
-            tokio::time::sleep(RESULT_POLL_INTERVAL).await;
+            tokio::time::sleep(HANDOFF_POLL_INTERVAL).await;
         }
     }
 }

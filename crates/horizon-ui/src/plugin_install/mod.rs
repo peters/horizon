@@ -431,8 +431,8 @@ fn claude_mcp_config(command: &Path) -> std::io::Result<String> {
             "command": command,
             "args": ["--browser-mcp"],
             // Per-server timeout is also Claude Code's idle-abort floor.
-            // `browser_handoff` waits for a human, up to an hour.
-            "timeout": 3_600_000
+            // One hour of handoff wait plus 60s to deliver the result.
+            "timeout": 3_660_000
         }
     }))
     .map_err(std::io::Error::other)
@@ -645,7 +645,7 @@ mod tests {
             .expect("Claude MCP config should be installed");
         assert!(mcp_config.contains("/opt/horizon"));
         assert!(mcp_config.contains("--browser-mcp"));
-        assert!(mcp_config.contains("3600000"));
+        assert!(mcp_config.contains("3660000"));
     }
 
     #[test]

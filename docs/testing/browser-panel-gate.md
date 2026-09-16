@@ -536,7 +536,7 @@ Run once per host OS after the semantic gate:
    stable `HORIZON_BROWSER_ACTOR`, and the launching host's
    `HORIZON_BROWSER_HOST_INSTANCE`, and both variables are forwarded to the
    stdio MCP child. The default Codex registration sets this MCP server's
-   tool approval mode to `approve` and `tool_timeout_sec` to 3600, so browser
+   tool approval mode to `approve` and `tool_timeout_sec` to 3660, so browser
    calls proceed without repeated operator prompts and `browser_handoff` can
    wait for a human; unrelated tool approvals keep their normal policy. A
    custom agent command remains unchanged. Prove the forwarding with a real

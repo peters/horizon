@@ -525,5 +525,8 @@ fn browser_handoff_times_out_when_the_user_never_hands_back() {
             .is_some_and(|handoff| !handoff.done),
         "a timed-out wait must leave the request pending so a later hand-back still works"
     );
+    // Process-local MCP shutdown still calls release() and clears a pending
+    // handoff on purpose: a finished CLI job must not leave a stuck banner.
+    // This injected-actor path is the live Codex/Claude/Grok lease.
     agent.close();
 }
