@@ -102,7 +102,13 @@ path. Call `operation: stop` to flush the capture.
 For page-pixel recording, inspect `video_capture` then call `browser_video`
 with `operation: start`. Optional start-only knobs: `quality` (1-100),
 `compression_level` (0-10, higher is slower/smaller), `fps` (1-30),
-`max_width` (320-1920), `max_file_bytes`. Pause skips time in the file;
+`max_width` (320-1920, caps the longest encoded side), `max_file_bytes`.
+Omitted options keep the host `browser.video` settings. The host defaults are
+quality 90 and source-frame sizing with codec-block alignment, bounded by a
+3840-pixel longest side and 8,294,400 pixels (4K); larger frames are downscaled
+proportionally. An explicit
+host size cap remains active when a recording omits `max_width`. These
+encoding settings do not resize the page viewport. Pause skips time in the file;
 resume continues the same WebM; stop finalizes a private `.webm` path.
 Page pixels never enter the action audit. The recording samples the existing
 decoded frame slot on Chromium, Firefox, and Safari.

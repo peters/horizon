@@ -1,6 +1,8 @@
 //! RGB8 page frames to 4:2:0 YUV at a locked encode size.
 
 const MIN_ALIGN: u32 = 16;
+const MAX_AUTO_SIDE: u32 = 3840;
+const MAX_AUTO_PIXELS: u64 = 3840 * 2160;
 
 #[derive(Debug)]
 pub(super) struct YuvFrame {
@@ -9,19 +11,29 @@ pub(super) struct YuvFrame {
     pub v: Vec<u8>,
 }
 
+/// Source-frame size subject to an explicit longest-side cap or automatic
+/// safety limits, then aligned down to codec blocks.
 #[must_use]
-pub(super) fn encode_size(src_width: u32, src_height: u32, max_width: u32) -> (u32, u32) {
-    let max_width = max_width.max(MIN_ALIGN);
+pub(super) fn encode_size(src_width: u32, src_height: u32, max_width: Option<u32>) -> (u32, u32) {
     let longest = src_width.max(src_height).max(1);
-    let (width, height) = if longest > max_width {
+    let cap = max_width.unwrap_or(MAX_AUTO_SIDE).max(MIN_ALIGN);
+    let (mut width, mut height) = if longest > cap {
         (
-            src_width.saturating_mul(max_width) / longest,
-            src_height.saturating_mul(max_width) / longest,
+            u64::from(src_width) * u64::from(cap) / u64::from(longest),
+            u64::from(src_height) * u64::from(cap) / u64::from(longest),
         )
     } else {
-        (src_width, src_height)
+        (u64::from(src_width), u64::from(src_height))
     };
-    (align_down(width), align_down(height))
+    if max_width.is_none() && width * height > MAX_AUTO_PIXELS {
+        let bounded_width = (MAX_AUTO_PIXELS * width / height).isqrt();
+        height = height * bounded_width / width;
+        width = bounded_width;
+    }
+    (
+        align_down(u32::try_from(width).unwrap_or(cap)),
+        align_down(u32::try_from(height).unwrap_or(cap)),
+    )
 }
 
 fn align_down(value: u32) -> u32 {
@@ -111,13 +123,48 @@ mod tests {
 
     #[test]
     fn encode_size_aligns_and_respects_max_width() {
-        assert_eq!(encode_size(1280, 800, 1280), (1280, 800));
-        let (width, height) = encode_size(1920, 1080, 1280);
+        assert_eq!(encode_size(1280, 800, Some(1280)), (1280, 800));
+        let (width, height) = encode_size(1920, 1080, Some(1280));
         assert!(width <= 1280);
         assert_eq!(width % 8, 0);
         assert_eq!(height % 8, 0);
         assert!(width >= MIN_ALIGN);
         assert!(height >= MIN_ALIGN);
+    }
+
+    #[test]
+    fn encode_size_auto_keeps_a_wide_viewport_frame_undownscaled() {
+        // A 1554-wide content viewport must encode at its own width (aligned
+        // down to the 8-pixel codec block), not below it.
+        assert_eq!(encode_size(1554, 862, None), (1552, 856));
+        assert_eq!(encode_size(802, 1280, None), (800, 1280));
+    }
+
+    #[test]
+    fn encode_size_explicit_cap_downscales_and_never_upscales() {
+        let (width, height) = encode_size(1554, 862, Some(1280));
+        assert_eq!(width, 1280);
+        assert_eq!(height % 8, 0);
+        assert!(height <= 862);
+        assert_eq!(encode_size(1554, 862, Some(1920)), (1552, 856));
+        assert_eq!(encode_size(802, 1280, Some(640)), (400, 640));
+    }
+
+    #[test]
+    fn automatic_size_bounds_large_sources_and_preserves_4k() {
+        assert_eq!(encode_size(3840, 2160, None), (3840, 2160));
+        assert_eq!(encode_size(2160, 3840, None), (2160, 3840));
+        assert_eq!(encode_size(8000, 8000, None), (2880, 2880));
+        assert_eq!(encode_size(8000, 1000, None), (3840, 480));
+        assert_eq!(encode_size(1000, 8000, None), (480, 3840));
+        assert_eq!(encode_size(8000, 8000, Some(1920)), (1920, 1920));
+        for (width, height) in [(8000, 8000), (8000, 1), (1, 8000), (0, 0), (u32::MAX, u32::MAX)] {
+            let (width, height) = encode_size(width, height, None);
+            assert!(width.max(height) <= MAX_AUTO_SIDE);
+            assert!(u64::from(width) * u64::from(height) <= MAX_AUTO_PIXELS);
+            assert_eq!(width % 8, 0);
+            assert_eq!(height % 8, 0);
+        }
     }
 
     #[test]
