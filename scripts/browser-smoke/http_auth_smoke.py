@@ -63,6 +63,8 @@ def close_candidate(candidate: subprocess.Popen[Any]) -> str:
     if candidate.poll() is not None:
         return "already_exited"
     if platform.system() == "Linux":
+        from Xlib import display, protocol
+
         windows = subprocess.run(
             ["xdotool", "search", "--onlyvisible", "--pid", str(candidate.pid)],
             stdout=subprocess.PIPE,
@@ -71,9 +73,19 @@ def close_candidate(candidate: subprocess.Popen[Any]) -> str:
             check=False,
         ).stdout.split()
         if windows:
-            subprocess.run(["xdotool", "windowactivate", "--sync", windows[0]], check=False)
-            subprocess.run(["xdotool", "key", "alt+F4"], check=False)
-            return "linux_alt_f4"
+            connection = display.Display()
+            try:
+                window = connection.create_resource_object("window", int(windows[0]))
+                message = protocol.event.ClientMessage(
+                    window=window,
+                    client_type=connection.intern_atom("WM_PROTOCOLS"),
+                    data=(32, [connection.intern_atom("WM_DELETE_WINDOW"), 0, 0, 0, 0]),
+                )
+                window.send_event(message, event_mask=0)
+                connection.flush()
+            finally:
+                connection.close()
+            return "linux_wm_delete"
     elif platform.system() == "Darwin":
         script = (
             'tell application "System Events" to tell '
@@ -172,11 +184,18 @@ def marker_text(client: mcp_gate.McpClient, panel_id: str) -> str:
     return ""
 
 
-def navigate(client: mcp_gate.McpClient, panel_id: str, url: str) -> dict[str, Any]:
-    result, _ = client.call(
-        "browser_navigate",
-        {"panel_id": panel_id, "url": url, "timeout_millis": 15_000},
-    )
+def navigate(
+    client: mcp_gate.McpClient, panel_id: str, url: str, *, expect_denied: bool = False
+) -> dict[str, Any]:
+    try:
+        result, _ = client.call(
+            "browser_navigate",
+            {"panel_id": panel_id, "url": url, "timeout_millis": 15_000},
+        )
+    except AssertionError as error:
+        if expect_denied and "navigation_failed" in str(error) and "net::ERR_INVALID_AUTH_CREDENTIALS" in str(error):
+            return {"authentication_rejected": True}
+        raise
     assert result is not None
     return result
 
@@ -215,12 +234,12 @@ def exercise(client: mcp_gate.McpClient, args: Any) -> dict[str, Any]:
     panel_id = created["panel"]["panel_id"]
     origin = origin_of(args.base_url)
 
-    anonymous = navigate(client, panel_id, f"{args.base_url}/basic-auth")
+    anonymous = navigate(client, panel_id, f"{args.base_url}/basic-auth", expect_denied=True)
     if marker_text(client, panel_id) != "":
         raise AssertionError(f"anonymous Basic navigation reached the protected marker: {anonymous}")
 
     wrong = set_http_auth(client, panel_id, WRONG_PASSWORD, origin)
-    navigate(client, panel_id, f"{args.base_url}/basic-auth")
+    navigate(client, panel_id, f"{args.base_url}/basic-auth", expect_denied=True)
     if marker_text(client, panel_id) != "":
         raise AssertionError("wrong Basic credentials reached the protected marker")
 
@@ -233,7 +252,7 @@ def exercise(client: mcp_gate.McpClient, args: Any) -> dict[str, Any]:
     other_url = other_loopback_url(args.base_url)
     if other_url == args.base_url:
         raise AssertionError(f"could not derive a distinct loopback origin from {args.base_url}")
-    other = navigate(client, panel_id, f"{other_url}/basic-auth")
+    other = navigate(client, panel_id, f"{other_url}/basic-auth", expect_denied=True)
     if marker_text(client, panel_id) != "":
         raise AssertionError(f"origin-scoped credentials authenticated a different origin: {other}")
 
@@ -242,9 +261,13 @@ def exercise(client: mcp_gate.McpClient, args: Any) -> dict[str, Any]:
         {"panel_id": panel_id, "operation": "clear", "timeout_millis": 15_000},
     )
     assert cleared is not None and cleared.get("active") is False
-    cleared_other = navigate(client, panel_id, f"{other_url}/digest-auth")
+    cleared_other = navigate(client, panel_id, f"{other_url}/digest-auth", expect_denied=True)
     if marker_text(client, panel_id) != "":
         raise AssertionError(f"cleared credentials authenticated a distinct origin: {cleared_other}")
+
+    set_http_auth(client, panel_id, AUTH_PASSWORD, origin_of(other_url))
+    navigate(client, panel_id, f"{other_url}/digest-auth")
+    wait_for_marker(client, panel_id, "authenticated-digest-zephyr")
 
     audit, _ = client.call("browser_audit", {"panel_id": panel_id, "limit": 200})
     assert audit is not None
@@ -268,6 +291,7 @@ def exercise(client: mcp_gate.McpClient, args: Any) -> dict[str, Any]:
         "anonymous_rejected": True,
         "cross_origin_rejected": True,
         "cleared": True,
+        "reenabled_after_clear": True,
         "set_action_id": wrong.get("action_id"),
     }
 
@@ -275,6 +299,11 @@ def exercise(client: mcp_gate.McpClient, args: Any) -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     args = browser_smoke.parse_args(argv)
     browser_smoke.validate_platform(args.backend)
+    if platform.system() == "Linux":
+        try:
+            import Xlib  # noqa: F401 — verify shutdown support before launching
+        except ImportError as error:
+            raise SystemExit("HTTP auth smoke requires python-xlib (Debian/Ubuntu: python3-xlib)") from error
     if args.backend not in {"chromium", "firefox"}:
         raise SystemExit("HTTP auth smoke covers Chromium and Firefox")
     repo_root = Path(__file__).resolve().parents[2]

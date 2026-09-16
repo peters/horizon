@@ -349,7 +349,10 @@ and interaction script for comparisons.
 ## Full Linux gate
 
 Prerequisites: debug build, Chromium, Firefox, geckodriver, Xvfb, a lightweight
-window manager, `xdotool`, and a screenshot tool. Prefer a task-owned display.
+window manager, `xdotool`, and a screenshot tool. The HTTP auth smoke additionally
+uses `python-xlib` (`python3-xlib` on Debian/Ubuntu) to send `WM_DELETE_WINDOW`
+directly to its candidate, avoiding focus-dependent keyboard shortcuts.
+Prefer a task-owned display.
 Choose an unused display number rather than copying this example blindly:
 
 ```bash

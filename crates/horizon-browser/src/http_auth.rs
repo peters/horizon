@@ -35,6 +35,10 @@ pub(crate) enum HttpAuthDecision {
 }
 
 impl HttpAuthState {
+    pub(crate) fn has_credentials(&self) -> bool {
+        self.credentials.is_some()
+    }
+
     pub(crate) fn apply(
         &mut self,
         operation: BrowserHttpAuthOperation,
@@ -61,7 +65,6 @@ impl HttpAuthState {
                     password: password.clone(),
                     origin: origin.clone(),
                 });
-                self.clear_attempts();
                 Ok((true, Some(origin)))
             }
             BrowserHttpAuthOperation::Clear => {
@@ -72,7 +75,6 @@ impl HttpAuthState {
                     ));
                 }
                 self.credentials = None;
-                self.clear_attempts();
                 Ok((false, None))
             }
         }
@@ -142,12 +144,6 @@ impl HttpAuthState {
 
     fn remember_attempt(&mut self, request_id: &str) {
         self.attempted_requests.insert(request_id.to_string());
-    }
-
-    fn clear_attempts(&mut self) {
-        self.attempted_requests.clear();
-        self.fetch_network_ids.clear();
-        self.network_fetch_ids.clear();
     }
 }
 
@@ -285,6 +281,32 @@ mod tests {
         state.forget_request("req-0");
         assert!(matches!(
             state.decide("req-cap", "http://example.test/basic", Some("basic"), false),
+            HttpAuthDecision::Provide { .. }
+        ));
+    }
+
+    #[test]
+    fn credential_updates_preserve_inflight_attempts_and_completion_links() {
+        let mut state = HttpAuthState::default();
+        set(&mut state, Some("http://example.test"));
+        state.note_network_id("fetch", "network");
+        assert!(matches!(
+            state.decide("fetch", "http://example.test/basic", Some("basic"), false),
+            HttpAuthDecision::Provide { .. }
+        ));
+        state
+            .apply(BrowserHttpAuthOperation::Clear, None, None, None)
+            .expect("clear");
+        assert!(!state.has_credentials());
+        set(&mut state, Some("http://example.test"));
+        assert!(state.has_credentials());
+        assert_eq!(
+            state.decide("fetch", "http://example.test/basic", Some("basic"), false),
+            HttpAuthDecision::Cancel
+        );
+        state.forget_request("network");
+        assert!(matches!(
+            state.decide("fetch", "http://example.test/basic", Some("basic"), false),
             HttpAuthDecision::Provide { .. }
         ));
     }

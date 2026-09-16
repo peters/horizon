@@ -14,6 +14,9 @@ use super::{BrowserEventSender, DriverState};
 impl DriverState {
     pub(super) fn http_auth_action(
         &mut self,
+        link: &mut CdpLink,
+        event_tx: &BrowserEventSender,
+        frame_slot: &Arc<FrameSlot>,
         action: &BrowserControlAction,
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
         let BrowserControlAction::HttpAuth {
@@ -28,6 +31,9 @@ impl DriverState {
                 "HTTP auth action was not dispatched",
             ));
         };
+        let session = self.session_id.clone().ok_or_else(|| {
+            BrowserControlFailure::new("browser_unavailable", "the Chromium page session is not attached")
+        })?;
         let origin = if matches!(*operation, crate::BrowserHttpAuthOperation::Set) {
             Some(bind_http_auth_origin(origin.as_deref(), &self.url)?)
         } else {
@@ -35,6 +41,20 @@ impl DriverState {
         };
         self.http_auth
             .apply(*operation, username.as_deref(), password.as_ref(), origin.as_deref())?;
+        let (method, params) = if self.http_auth.has_credentials() {
+            ("Fetch.enable", fetch_enable_params())
+        } else {
+            ("Fetch.disable", json!({}))
+        };
+        if let Err(error) = self.call_and_ack(link, event_tx, frame_slot, method, &params, Some(&session)) {
+            let _ = self
+                .http_auth
+                .apply(crate::BrowserHttpAuthOperation::Clear, None, None, None);
+            return Err(BrowserControlFailure::new(
+                "auth_protocol",
+                format!("Chromium could not update authentication interception: {error}"),
+            ));
+        }
         Ok(BrowserControlValue::Accepted)
     }
 

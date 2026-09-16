@@ -77,14 +77,16 @@ impl DriverState {
         ) {
             return false;
         }
-        if !self.setup_command(
-            link,
-            event_tx,
-            frame_slot,
-            "Fetch.enable",
-            &super::http_auth::fetch_enable_params(),
-            Some(session),
-        ) {
+        if self.http_auth.has_credentials()
+            && !self.setup_command(
+                link,
+                event_tx,
+                frame_slot,
+                "Fetch.enable",
+                &super::http_auth::fetch_enable_params(),
+                Some(session),
+            )
+        {
             return false;
         }
         self.restore_network_capture(link, event_tx, frame_slot, session);
