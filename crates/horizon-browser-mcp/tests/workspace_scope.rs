@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use horizon_browser_control::manifest::{
-    BrowserManifest, ManifestOwner, ManifestWorkspace, manifest_path_for_root, read_at, write_at,
+    BrowserManifest, ManifestHandoff, ManifestOwner, ManifestWorkspace, manifest_path_for_root, read_at, write_at,
 };
 use serde_json::{Value, json};
 
@@ -482,7 +482,11 @@ fn browser_handoff_waits_until_the_user_hands_the_panel_back() {
 
     let handoff = agent.call(
         "browser_handoff",
-        &json!({ "panel_id": SAME_WORKSPACE_PANEL, "reason": "please sign in" }),
+        &json!({
+            "panel_id": SAME_WORKSPACE_PANEL,
+            "reason": "please sign in",
+            "timeout_millis": 5000
+        }),
     );
     worker.join().expect("acknowledge handoff");
     assert_eq!(handoff["isError"], false, "{handoff}");
@@ -496,6 +500,47 @@ fn browser_handoff_waits_until_the_user_hands_the_panel_back() {
     );
     let listed = agent.call("browser_list", &json!({}));
     assert_eq!(listed["structuredContent"]["panels"][0]["handoff_pending"], false);
+    agent.close();
+}
+
+#[test]
+fn browser_handoff_returns_the_replacement_request_id() {
+    let home = tempfile::tempdir().expect("isolated home");
+    seed_home(home.path());
+    let mut agent = McpProcess::start(home.path(), AGENT_A, Some(HOST_A));
+    let home_path = home.path().to_path_buf();
+    let worker = std::thread::spawn(move || {
+        let path = manifest_path_for_root(&horizon_root(&home_path), SAME_WORKSPACE_PANEL);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let mut snapshot = read_at(&path).expect("read handoff manifest");
+            if snapshot.handoff.as_ref().is_some_and(|handoff| !handoff.done) {
+                snapshot.handoff = Some(ManifestHandoff {
+                    request_id: "replacement-request".to_string(),
+                    reason: "updated reason".to_string(),
+                    requested_at: snapshot.handoff.as_ref().map_or(0, |handoff| handoff.requested_at),
+                    done: true,
+                });
+                write_at(&path, &snapshot).expect("replace and complete handoff");
+                return;
+            }
+            assert!(std::time::Instant::now() < deadline, "handoff request never appeared");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    });
+
+    let handoff = agent.call(
+        "browser_handoff",
+        &json!({
+            "panel_id": SAME_WORKSPACE_PANEL,
+            "reason": "please sign in",
+            "timeout_millis": 5000
+        }),
+    );
+    worker.join().expect("replace handoff");
+    assert_eq!(handoff["isError"], false, "{handoff}");
+    assert_eq!(handoff["structuredContent"]["handoff_pending"], false);
+    assert_eq!(handoff["structuredContent"]["request_id"], "replacement-request");
     agent.close();
 }
 

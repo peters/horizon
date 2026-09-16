@@ -61,22 +61,22 @@ impl BrowserController {
         let timeout_millis = bounded_handoff_timeout(timeout_millis);
         let timeout = Duration::from_millis(timeout_millis);
         let mut last_heartbeat = started;
+        let mut request_id = request_id;
         loop {
             let snapshot = self.authorized_manifest(panel_id)?;
-            if snapshot.handoff_pending().is_none() {
-                if let Err(refresh_error) = self.refresh_claim(panel_id) {
-                    // Hand-back already cleared the request; a missing panel
-                    // after that is still a completed handoff for the caller.
-                    if !refresh_error.is_missing_panel() {
-                        return Err(refresh_error);
+            match snapshot.handoff.as_ref() {
+                Some(handoff) if !handoff.done => {
+                    if !handoff.request_id.is_empty() {
+                        request_id.clone_from(&handoff.request_id);
                     }
                 }
-                return Ok(HandoffReceipt {
-                    panel_id: panel_id.to_string(),
-                    request_id,
-                    handoff_pending: false,
-                    elapsed_millis: elapsed_millis(started),
-                });
+                Some(handoff) => {
+                    if !handoff.request_id.is_empty() {
+                        request_id.clone_from(&handoff.request_id);
+                    }
+                    return self.finish_handoff(panel_id, request_id, started);
+                }
+                None => return self.finish_handoff(panel_id, request_id, started),
             }
             let now = manifest::now_millis();
             if snapshot.live_owner(now).is_none_or(|owner| owner.name != self.actor) {
@@ -100,6 +100,25 @@ impl BrowserController {
             }
             tokio::time::sleep(HANDOFF_POLL_INTERVAL).await;
         }
+    }
+
+    fn finish_handoff(
+        &self,
+        panel_id: &str,
+        request_id: String,
+        started: Instant,
+    ) -> Result<HandoffReceipt, ControlError> {
+        if let Err(refresh_error) = self.refresh_claim(panel_id)
+            && !refresh_error.is_missing_panel()
+        {
+            return Err(refresh_error);
+        }
+        Ok(HandoffReceipt {
+            panel_id: panel_id.to_string(),
+            request_id,
+            handoff_pending: false,
+            elapsed_millis: elapsed_millis(started),
+        })
     }
 }
 
