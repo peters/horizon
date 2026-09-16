@@ -234,6 +234,9 @@ impl Driver {
 
     pub(super) fn tick_pending_resize(&mut self, events: &BrowserEventSender, stop: &std::sync::atomic::AtomicBool) {
         let Some(mut pending) = self.pending_resize.take() else {
+            if !stop.load(std::sync::atomic::Ordering::Acquire) {
+                self.restore_viewport_binding(events);
+            }
             return;
         };
         match self.advance_resize(&mut pending, events, stop) {
@@ -247,6 +250,49 @@ impl Driver {
                 self.complete_agent_action(&pending.request, Err(error));
             }
         }
+    }
+
+    fn restore_viewport_binding(&mut self, events: &BrowserEventSender) {
+        let Some(target) = self
+            .viewport_policy
+            .rebind_target(self.viewport_context.as_deref(), self.context_id.as_deref())
+        else {
+            return;
+        };
+        if let Err(error) = self.apply_explicit_viewport(target, std::time::Duration::from_millis(100), events) {
+            tracing::debug!("viewport restoration pending: {}", error.message);
+        }
+    }
+
+    fn apply_explicit_viewport(
+        &mut self,
+        [width, height]: [u32; 2],
+        timeout: std::time::Duration,
+        events: &BrowserEventSender,
+    ) -> Result<(), BrowserControlFailure> {
+        let context = self.context_id.clone();
+        let link = self
+            .bidi
+            .as_mut()
+            .ok_or_else(|| BrowserControlFailure::new("viewport_unsupported", "Firefox BiDi is unavailable"))?;
+        let outcome = link.call(
+            timeout,
+            "browsingContext.setViewport",
+            &json!({
+                "context": context, "viewport": { "width": width, "height": height },
+            }),
+        );
+        for event in outcome.events {
+            self.handle_bidi_event(&event, events);
+        }
+        outcome
+            .result
+            .map_err(|error| BrowserControlFailure::new("viewport_failed", error.to_string()))?;
+        // Events drained during the command may bind a different context.
+        self.viewport_context = context;
+        self.advance_generation();
+        self.frames.demand();
+        Ok(())
     }
 
     fn advance_resize(
@@ -264,7 +310,7 @@ impl Driver {
                     .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(5)),
             stop.load(std::sync::atomic::Ordering::Acquire) || self.host.has_exited(),
         )?;
-        if !pending.poll_due() {
+        if !pending.poll_due() || self.context_id.is_none() {
             return Ok(None);
         }
         let target = self.viewport_policy.target(pending.requested);
@@ -273,29 +319,15 @@ impl Driver {
             pending.target = target;
         }
         if pending.bound_session.is_none() || pending.bound_session != self.context_id {
-            let link = self
-                .bidi
-                .as_mut()
-                .ok_or_else(|| BrowserControlFailure::new("viewport_unsupported", "Firefox BiDi is unavailable"))?;
-            let [width, height] = target;
-            let outcome = link.call(
-                pending.budget()?,
-                "browsingContext.setViewport",
-                &json!({
-                    "context": self.context_id, "viewport": { "width": width, "height": height },
-                }),
-            );
-            for event in outcome.events {
-                self.handle_bidi_event(&event, events);
+            let context = self.context_id.clone();
+            let result = self.apply_explicit_viewport(target, pending.budget()?, events);
+            if result.is_err() && context != self.context_id {
+                return Ok(None);
             }
-            outcome
-                .result
-                .map_err(|error| BrowserControlFailure::new("viewport_failed", error.to_string()))?;
+            result?;
             self.viewport_policy.commit(pending.requested);
             self.panel_slot.set_viewport_override(pending.requested);
-            self.advance_generation();
-            self.frames.demand();
-            pending.bound_session.clone_from(&self.context_id);
+            pending.bound_session = context;
             return Ok(None);
         }
         let Ok(value) = self.evaluate_json_within(crate::session::viewport::MEASURE_VIEWPORT, Some(pending.budget()?))

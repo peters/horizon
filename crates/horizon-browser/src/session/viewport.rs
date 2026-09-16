@@ -37,6 +37,10 @@ impl ViewportPolicy {
         requested.unwrap_or(self.host)
     }
 
+    pub(crate) fn rebind_target(self, bound: Option<&str>, current: Option<&str>) -> Option<[u32; 2]> {
+        self.explicit.filter(|_| current.is_some() && bound != current)
+    }
+
     pub(crate) fn commit(&mut self, requested: Option<[u32; 2]>) {
         self.explicit = requested;
     }
@@ -230,7 +234,7 @@ impl DriverState {
                     .is_some_and(|at| at.elapsed() < super::USER_ACTIVE_TTL),
             self.stop_requested.load(std::sync::atomic::Ordering::Acquire),
         )?;
-        if !pending.poll_due() {
+        if !pending.poll_due() || self.session_id.is_none() {
             return Ok(None);
         }
         let target = self.viewport_policy.target(pending.requested);
@@ -241,15 +245,19 @@ impl DriverState {
         if pending.bound_session.is_none() || pending.bound_session != self.session_id {
             let bound_session = self.session_id.clone();
             let [width, height] = pending.target;
-            self.send_page_command_within(
+            let result = self.send_page_command_within(
                 link,
                 event_tx,
                 frame_slot,
                 "Emulation.setDeviceMetricsOverride",
                 &Self::viewport_override_params(width, height),
                 pending.budget()?,
-            )
-            .map_err(|error| BrowserControlFailure::new("viewport_failed", error.to_string()))?;
+            );
+            if result.is_err() && self.session_id != bound_session {
+                return Ok(None);
+            }
+            result.map_err(|error| BrowserControlFailure::new("viewport_failed", error.to_string()))?;
+            pending.measured_epoch = None;
             self.viewport_policy.commit(pending.requested);
             frame_slot.set_viewport_override(pending.requested);
             self.commit_viewport(width, height, event_tx);
@@ -311,6 +319,19 @@ mod tests {
         assert_eq!(first.target(None), [900, 600]);
         first.commit(None);
         assert!(first.follow_host([1024, 768]));
+    }
+
+    #[test]
+    fn committed_pin_rebinds_after_acknowledgement_and_stops_after_reset() {
+        let mut policy = ViewportPolicy::new([900, 600]);
+        policy.commit(Some([390, 844]));
+        assert_eq!(policy.rebind_target(Some("first"), None), None);
+        assert_eq!(policy.rebind_target(Some("first"), Some("first")), None);
+        assert_eq!(policy.rebind_target(Some("first"), Some("rebound")), Some([390, 844]));
+        assert!(!policy.follow_host([800, 700]));
+        assert_eq!(policy.rebind_target(None, Some("rebound")), Some([390, 844]));
+        policy.commit(None);
+        assert_eq!(policy.rebind_target(Some("first"), Some("rebound")), None);
     }
 
     #[test]
@@ -447,6 +468,13 @@ mod tests {
                 assert!(!state.viewport_policy.follow_host([900, 600]));
                 // A recovered binding must receive the pin before any
                 // measurement can acknowledge it, even after host repaint.
+                state.session_id = None;
+                pending.next_poll = Instant::now();
+                assert_eq!(
+                    state.advance_resize(&mut link, &events, &slot, &mut pending).unwrap(),
+                    None
+                );
+                assert_eq!(pending.bound_session.as_deref(), Some("first"));
                 state.session_id = Some("rebound".into());
                 for epoch in 1..=3 {
                     pending.next_poll = Instant::now();
