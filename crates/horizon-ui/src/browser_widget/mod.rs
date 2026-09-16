@@ -218,7 +218,7 @@ impl<'a> BrowserView<'a> {
             let fixed_viewport = !browser.backend_capabilities().viewport;
             let explicit_viewport = explicit_viewport(browser);
             if !fixed_viewport {
-                synchronize_viewport(ui, browser, state, &body, explicit_viewport.is_some());
+                synchronize_viewport(ui, browser, state, &body, explicit_viewport);
             }
             input::handle(
                 ui,
@@ -289,16 +289,21 @@ fn synchronize_viewport(
     browser: &horizon_core::browser::BrowserPanelState,
     state: &mut BrowserUiState,
     body: &render::BodyOutput,
-    pinned: bool,
+    explicit_viewport: Option<(u32, u32)>,
 ) {
     // Follow panel resizes/fullscreen with the emulated viewport so responsive
     // layout and backend input geometry match what is on screen. Retry at a
     // bounded rate until a matching frame is actually published; a protocol
     // acknowledgement alone is not proof that input coordinates converged.
+    if let Some(target) = explicit_viewport
+        && !frame_matches_viewport(body.frame_size, Some(target), target)
+    {
+        input::cancel_pointer_capture(browser, state, body.image_rect, body.frame_size);
+    }
     let Some(viewport) = body.viewport_size else {
         return;
     };
-    if pinned {
+    if explicit_viewport.is_some() {
         // Remember changed host geometry for reset, but the intentional
         // letterboxing must not trigger retries or interrupt pointer drags.
         if viewport != state.last_viewport
@@ -478,8 +483,38 @@ mod tests {
                     body_clicked: false,
                     keyboard_focus_id: None,
                 };
-                super::synchronize_viewport(ui, &browser, &mut state, &body, true);
+                super::synchronize_viewport(ui, &browser, &mut state, &body, Some((390, 844)));
                 assert!(state.captured_clicks[0].is_some());
+            }
+        });
+        let _ = output.discard_textures();
+    }
+
+    #[test]
+    fn changing_a_pin_cancels_a_drag_before_a_release_can_be_dropped() {
+        use crate::test_egui::DiscardTextures;
+        let context = egui::Context::default();
+        let browser = horizon_core::browser::BrowserPanelState::inert();
+        let output = context.run_ui(egui::RawInput::default(), |ui| {
+            for frame_size in [None, Some([390.0, 844.0])] {
+                let mut state = BrowserUiState::default();
+                state.captured_clicks[0] = Some(super::BrowserPointerClick {
+                    button: horizon_core::browser::BrowserButton::Left,
+                    position: egui::Pos2::ZERO,
+                    time: 0.0,
+                    count: 1,
+                });
+                let body = super::render::BodyOutput {
+                    image_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(390.0, 844.0))),
+                    frame_size,
+                    viewport_size: Some((900, 600)),
+                    pointer_target: true,
+                    retry_clicked: false,
+                    body_clicked: false,
+                    keyboard_focus_id: None,
+                };
+                super::synchronize_viewport(ui, &browser, &mut state, &body, Some((820, 1180)));
+                assert!(state.captured_clicks.iter().all(Option::is_none));
             }
         });
         let _ = output.discard_textures();
