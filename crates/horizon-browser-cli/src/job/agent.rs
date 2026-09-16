@@ -273,14 +273,22 @@ fn pin_job_dir_as_project_root(job_dir: &Path) {
 }
 
 fn grok_home_dir() -> Option<PathBuf> {
-    let env_path = |name| {
-        std::env::var_os(name)
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-    };
-    env_path("GROK_HOME").or_else(|| {
-        env_path("HOME")
-            .or_else(|| env_path("USERPROFILE"))
+    grok_home_from_env(
+        std::env::var_os("GROK_HOME"),
+        std::env::var_os("HOME"),
+        std::env::var_os("USERPROFILE"),
+    )
+}
+
+fn grok_home_from_env(
+    grok_home: Option<OsString>,
+    home: Option<OsString>,
+    user_profile: Option<OsString>,
+) -> Option<PathBuf> {
+    let env_path = |value: Option<OsString>| value.filter(|value| !value.is_empty()).map(PathBuf::from);
+    env_path(grok_home).or_else(|| {
+        env_path(home)
+            .or_else(|| env_path(user_profile))
             .map(|home| home.join(".grok"))
     })
 }
@@ -325,6 +333,48 @@ fn toml_string(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authentication_home_honors_override_then_home_then_user_profile() {
+        for (override_value, home, profile, expected) in [
+            (
+                Some("override"),
+                Some("home"),
+                Some("profile"),
+                PathBuf::from("override"),
+            ),
+            (None, Some("home"), Some("profile"), PathBuf::from("home").join(".grok")),
+            (
+                Some(""),
+                Some("home"),
+                Some("profile"),
+                PathBuf::from("home").join(".grok"),
+            ),
+            (None, None, Some("profile"), PathBuf::from("profile").join(".grok")),
+            (
+                Some(""),
+                Some(""),
+                Some("profile"),
+                PathBuf::from("profile").join(".grok"),
+            ),
+        ] {
+            assert_eq!(
+                grok_home_from_env(
+                    override_value.map(OsString::from),
+                    home.map(OsString::from),
+                    profile.map(OsString::from)
+                ),
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn authentication_home_requires_a_nonempty_location() {
+        for value in [None, Some(OsString::new())] {
+            assert_eq!(grok_home_from_env(value.clone(), value.clone(), value), None);
+        }
+    }
 
     #[test]
     fn adapter_kind_follows_the_executable_basename() {
