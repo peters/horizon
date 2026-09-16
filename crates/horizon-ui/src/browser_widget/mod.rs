@@ -216,8 +216,9 @@ impl<'a> BrowserView<'a> {
             // panel's size: the frame is letterboxed and scaled instead, so
             // nothing is sent and any rendered frame is pointer-ready.
             let fixed_viewport = !browser.backend_capabilities().viewport;
+            let explicit_viewport = explicit_viewport(browser);
             if !fixed_viewport {
-                synchronize_viewport(ui, browser, state, &body);
+                synchronize_viewport(ui, browser, state, &body, explicit_viewport.is_some());
             }
             input::handle(
                 ui,
@@ -233,8 +234,8 @@ impl<'a> BrowserView<'a> {
                     pointer_viewport: pointer_viewport_state(
                         fixed_viewport,
                         body.frame_size,
-                        body.viewport_size,
-                        state.last_viewport,
+                        explicit_viewport.or(body.viewport_size),
+                        explicit_viewport.unwrap_or(state.last_viewport),
                     ),
                     shortcuts: self.shortcuts,
                     shortcut_bindings: self.shortcut_bindings,
@@ -276,11 +277,19 @@ fn restore_host_focus(ui: &Ui, state: &mut BrowserUiState, request: Option<bool>
     }
 }
 
+fn explicit_viewport(browser: &horizon_core::browser::BrowserPanelState) -> Option<(u32, u32)> {
+    browser
+        .frame_slot
+        .viewport_override()
+        .map(|[width, height]| (width, height))
+}
+
 fn synchronize_viewport(
     ui: &Ui,
     browser: &horizon_core::browser::BrowserPanelState,
     state: &mut BrowserUiState,
     body: &render::BodyOutput,
+    pinned: bool,
 ) {
     // Follow panel resizes/fullscreen with the emulated viewport so responsive
     // layout and backend input geometry match what is on screen. Retry at a
@@ -289,6 +298,20 @@ fn synchronize_viewport(
     let Some(viewport) = body.viewport_size else {
         return;
     };
+    if pinned {
+        // Remember changed host geometry for reset, but the intentional
+        // letterboxing must not trigger retries or interrupt pointer drags.
+        if viewport != state.last_viewport
+            && browser.try_send(BrowserCommand::SetViewport {
+                width: viewport.0,
+                height: viewport.1,
+            })
+        {
+            state.last_viewport = viewport;
+        }
+        state.viewport_retry_count = 0;
+        return;
+    }
     let now = ui.input(|input| input.time);
     let frame_matches = frame_matches_viewport(body.frame_size, Some(viewport), state.last_viewport);
     // Keep the retry count cumulative for this target. A forced exact-size
@@ -429,6 +452,52 @@ mod tests {
         assert!(matches!(
             pointer_viewport_state(false, Some([1280.0, 720.0]), Some((1280, 720)), (1280, 720)),
             PointerViewportState::Ready
+        ));
+    }
+
+    #[test]
+    fn pinned_host_layout_updates_do_not_cancel_an_active_page_drag() {
+        use crate::test_egui::DiscardTextures;
+        let context = egui::Context::default();
+        let browser = horizon_core::browser::BrowserPanelState::inert();
+        let mut state = super::BrowserUiState::default();
+        state.captured_clicks[0] = Some(super::BrowserPointerClick {
+            button: horizon_core::browser::BrowserButton::Left,
+            position: egui::Pos2::ZERO,
+            time: 0.0,
+            count: 1,
+        });
+        let output = context.run_ui(egui::RawInput::default(), |ui| {
+            for viewport_size in [Some((1280, 800)), Some((900, 600)), Some((900, 600))] {
+                let body = super::render::BodyOutput {
+                    image_rect: None,
+                    frame_size: Some([390.0, 844.0]),
+                    viewport_size,
+                    pointer_target: true,
+                    retry_clicked: false,
+                    body_clicked: false,
+                    keyboard_focus_id: None,
+                };
+                super::synchronize_viewport(ui, &browser, &mut state, &body, true);
+                assert!(state.captured_clicks[0].is_some());
+            }
+        });
+        let _ = output.discard_textures();
+    }
+
+    #[test]
+    fn pinned_viewport_rejects_old_frames_then_allows_scaled_pointer_input() {
+        assert!(matches!(
+            pointer_viewport_state(false, Some([1280.0, 800.0]), Some((390, 844)), (390, 844)),
+            PointerViewportState::AwaitingFrame
+        ));
+        assert!(matches!(
+            pointer_viewport_state(false, Some([390.0, 844.0]), Some((390, 844)), (390, 844)),
+            PointerViewportState::Ready
+        ));
+        assert!(matches!(
+            pointer_viewport_state(false, Some([390.0, 844.0]), Some((1280, 800)), (1280, 800)),
+            PointerViewportState::AwaitingFrame
         ));
     }
 

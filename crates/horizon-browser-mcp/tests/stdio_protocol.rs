@@ -11,9 +11,14 @@ struct McpProcess {
 
 impl McpProcess {
     fn start(home: &std::path::Path) -> Self {
+        Self::start_as(home, "protocol-smoke")
+    }
+
+    fn start_as(home: &std::path::Path, actor: &str) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-browser-mcp"))
             .env("HOME", home)
-            .env("HORIZON_BROWSER_ACTOR", "protocol-smoke")
+            .env("HORIZON_BROWSER_ACTOR", actor)
+            .env("HORIZON_BROWSER_HOST_INSTANCE", "test-host")
             .env("RUST_LOG", "off")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -138,7 +143,15 @@ fn listed_tool<'a>(tools: &'a Value, name: &str) -> &'a Value {
 
 fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     let encoded_tools = tools.to_string();
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(16));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(17));
+    let resize = listed_tool(tools, "browser_resize");
+    for field in ["panel_id", "width", "height", "reset", "timeout_millis"] {
+        assert!(
+            resize["inputSchema"]["properties"].get(field).is_some(),
+            "resize schema lacks {field}"
+        );
+    }
+    assert!(resize["description"].as_str().unwrap().contains("CSS pixels"));
     let create = listed_tool(tools, "browser_create");
     let target = &create["inputSchema"]["properties"]["target"];
     assert!(
@@ -207,4 +220,122 @@ fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     assert!(audit["inputSchema"].to_string().contains("after_event_id"));
     assert!(!encoded_tools.contains("browser_ws"));
     assert!(!encoded_tools.contains("manifest_path"));
+}
+
+#[test]
+fn resize_preserves_scope_user_control_and_measured_result_contract() {
+    use horizon_browser_control::manifest::{self, BrowserManifest, ManifestOwner, ManifestWorkspace};
+    let home = tempfile::tempdir().unwrap();
+    let root = home.path().join(".horizon");
+    let path = manifest::manifest_path_for_root(&root, "panel");
+    let actor = "horizon:resize-test";
+    let baseline = BrowserManifest {
+        panel_local_id: "panel".into(),
+        browser_ws: "private-endpoint".into(),
+        host: Some("test-host".into()),
+        workspace: Some(ManifestWorkspace {
+            host_instance: "test-host".into(),
+            local_id: "workspace".into(),
+            actors: vec![actor.into()],
+        }),
+        updated_at: manifest::now_millis(),
+        ..BrowserManifest::default()
+    };
+    let mut process = McpProcess::start_as(home.path(), actor);
+    process.send(&json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}));
+    process.notify(&json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
+    for scenario in ["workspace", "owner", "user", "handoff"] {
+        let mut panel = baseline.clone();
+        match scenario {
+            "workspace" => panel.workspace.as_mut().unwrap().actors.clear(),
+            "owner" => {
+                panel.owner = Some(ManifestOwner {
+                    name: "other".into(),
+                    tty: None,
+                    updated_at: manifest::now_millis(),
+                });
+            }
+            "user" => {
+                panel.user_active = true;
+                panel.user_active_at = manifest::now_millis();
+            }
+            "handoff" => {
+                panel.handoff = Some(manifest::ManifestHandoff {
+                    request_id: "handoff".into(),
+                    reason: "user turn".into(),
+                    requested_at: manifest::now_millis(),
+                    done: false,
+                });
+            }
+            _ => unreachable!(),
+        }
+        manifest::write_at(&path, &panel).unwrap();
+        let result=process.send(&json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"browser_resize","arguments":{"panel_id":"panel","width":390,"height":844}}}));
+        assert_eq!(result["result"]["isError"], true, "{scenario}: {result}");
+        assert!(manifest::read_at(&path).unwrap().actions.is_empty());
+    }
+    for failure in [
+        None,
+        Some("viewport_failed"),
+        Some("remote_viewport_fixed"),
+        Some("viewport_unsupported"),
+    ] {
+        manifest::write_at(&path, &baseline).unwrap();
+        let worker_path = path.clone();
+        let worker_root = root.clone();
+        let worker = resize_result_fixture(worker_path, worker_root, failure);
+        let result=process.send(&json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"browser_resize","arguments":{"panel_id":"panel","width":390,"height":844}}}));
+        worker.join().unwrap();
+        if let Some(code) = failure {
+            assert_eq!(result["result"]["isError"], true);
+            assert!(result.to_string().contains(code));
+        } else {
+            assert_eq!(
+                result["result"]["structuredContent"]["applied"],
+                json!({"width":390,"height":844})
+            );
+        }
+    }
+    process.close();
+}
+
+fn resize_result_fixture(
+    worker_path: std::path::PathBuf,
+    worker_root: std::path::PathBuf,
+    failure: Option<&'static str>,
+) -> std::thread::JoinHandle<()> {
+    use horizon_browser_control::manifest;
+    std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if let Some(action) = manifest::read_at(&worker_path).and_then(|panel| panel.actions.into_iter().next()) {
+                assert!(matches!(
+                    action.action,
+                    horizon_browser::BrowserControlAction::Resize {
+                        viewport: Some([390, 844]),
+                        ..
+                    }
+                ));
+                let result = match failure {
+                    Some(code) => horizon_browser::AgentActionResult::failed(
+                        action.action_id.clone(),
+                        horizon_browser::BrowserControlFailure::new(code, "fixture refusal"),
+                    ),
+                    None => horizon_browser::AgentActionResult::completed(
+                        action.action_id.clone(),
+                        horizon_browser::BrowserControlValue::Viewport {
+                            requested: Some([390, 844]),
+                            applied: [390, 844],
+                        },
+                    ),
+                };
+                let result_path = manifest::action_result_path_for_root(&worker_root, "panel", &action.action_id);
+                std::fs::create_dir_all(result_path.parent().unwrap()).unwrap();
+                std::fs::write(result_path, serde_json::to_vec(&result).unwrap()).unwrap();
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "resize was not enqueued");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    })
 }

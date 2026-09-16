@@ -126,3 +126,16 @@ page is the newest matching records (`limit` 1-500, default 100). To iterate
 every retained record, call with `from_start: true` and reuse `next_event_id`
 as `after_event_id` until `has_more` is false. Treat `cursor_lost`,
 `malformed_records`, and `older_records_dropped` as explicit loss.
+
+For responsive layouts, inspect the panel's `resize` capability, then call
+`browser_resize` with `panel_id`, `width` and `height` (320-8000 CSS pixels per
+axis). Chromium and local Firefox support this; Safari returns
+`viewport_unsupported` and remote devices return `remote_viewport_fixed`.
+The result contains `requested` and browser-measured `applied` width/height.
+The pin survives host layout, visibility changes and navigation in that live
+session; the canvas panel letterboxes it. Call `browser_resize` with
+`reset: true` and no dimensions to resume the latest host panel size; its
+`requested` is null and `applied` is measured too. Session replacement/restart
+clears the pin. A timeout/failure may follow a backend mutation: inspect the
+page or retry rather than assuming no change. `browser_video` max_width and
+codec alignment affect encoding only. Reacquire semantic refs after resizing.

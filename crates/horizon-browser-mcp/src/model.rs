@@ -1,4 +1,6 @@
 mod network;
+mod viewport;
+pub(crate) use viewport::{ResizeInput, ResizeOutput};
 mod video;
 
 pub(crate) use network::{
@@ -779,6 +781,7 @@ fn semantic_capabilities(backend: BackendKind, remote: bool) -> Vec<String> {
     .map(str::to_string)
     .collect::<Vec<_>>();
     if backend != BackendKind::SafariWebDriver && !remote {
+        capabilities.push("resize".to_string());
         capabilities.extend(
             [
                 "network_capture",
@@ -862,7 +865,7 @@ mod tests {
             !panel
                 .capabilities
                 .iter()
-                .any(|capability| capability == "network_capture")
+                .any(|capability| capability == "network_capture" || capability == "resize")
         );
         assert!(panel.capabilities.iter().any(|capability| capability == "snapshot"));
         assert!(panel.video_capture.supported, "screenshot-based recording still works");
