@@ -28,6 +28,7 @@ mod safari;
 mod scrollbar;
 mod semantic;
 mod shutdown;
+mod viewport;
 mod wait;
 
 use bidi::{connect_bidi_with_startup_retry, discover_context, install_common_signal_preload, subscribe};
@@ -67,6 +68,7 @@ struct Driver {
     pending_resize: Option<crate::session::viewport::PendingResize>,
     viewport_policy: crate::session::viewport::ViewportPolicy,
     viewport_context: Option<String>,
+    viewport_restore_at: Instant,
     scrollbar: scrollbar::State,
     url: String,
     title: String,
@@ -301,6 +303,7 @@ impl Driver {
             pending_resize: None,
             viewport_policy: crate::session::viewport::ViewportPolicy::new([config.width, config.height]),
             viewport_context: None,
+            viewport_restore_at: Instant::now(),
             scrollbar: scrollbar::State::new(),
             url: String::new(),
             title: String::new(),
