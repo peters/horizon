@@ -2201,7 +2201,7 @@ name = "horizon-browser-mcp"
 version = "0.2.7"
 dependencies = [
  "horizon-browser",
- "horizon-core",
+ "horizon-browser-control",
  "rmcp",
  "schemars",
  "serde",

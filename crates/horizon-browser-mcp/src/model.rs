@@ -8,7 +8,7 @@ pub(crate) use network::{
 pub(crate) use video::{VideoInput, VideoOutput};
 
 use horizon_browser::{BackendKind, BrowserBounds, BrowserNode, BrowserSnapshot, BrowserTarget};
-use horizon_core::browser::manifest::{self, BrowserManifest};
+use horizon_browser_control::manifest::{self, BrowserManifest};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -234,14 +234,14 @@ pub(crate) enum CreateNavigationState {
     Superseded,
 }
 
-impl From<horizon_core::browser::manifest::CreateNavigation> for CreateNavigationState {
-    fn from(navigation: horizon_core::browser::manifest::CreateNavigation) -> Self {
+impl From<horizon_browser_control::manifest::CreateNavigation> for CreateNavigationState {
+    fn from(navigation: horizon_browser_control::manifest::CreateNavigation) -> Self {
         match navigation {
-            horizon_core::browser::manifest::CreateNavigation::NotRequested => Self::NotRequested,
-            horizon_core::browser::manifest::CreateNavigation::Committed => Self::Committed,
-            horizon_core::browser::manifest::CreateNavigation::Pending => Self::Pending,
-            horizon_core::browser::manifest::CreateNavigation::Failed => Self::Failed,
-            horizon_core::browser::manifest::CreateNavigation::Superseded => Self::Superseded,
+            horizon_browser_control::manifest::CreateNavigation::NotRequested => Self::NotRequested,
+            horizon_browser_control::manifest::CreateNavigation::Committed => Self::Committed,
+            horizon_browser_control::manifest::CreateNavigation::Pending => Self::Pending,
+            horizon_browser_control::manifest::CreateNavigation::Failed => Self::Failed,
+            horizon_browser_control::manifest::CreateNavigation::Superseded => Self::Superseded,
         }
     }
 }
@@ -251,7 +251,7 @@ impl CreateNavigationState {
     /// state means the host did not record it, so a requested `url` is
     /// conservatively `pending`, never `not_requested`.
     pub(crate) fn resolve(
-        recorded: Option<horizon_core::browser::manifest::CreateNavigation>,
+        recorded: Option<horizon_browser_control::manifest::CreateNavigation>,
         url_requested: bool,
     ) -> Self {
         recorded.map_or(

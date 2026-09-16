@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 use horizon_browser::{
     AgentActionResult, BackendKind, BrowserActionOutcome, BrowserControlAction, BrowserControlValue,
 };
-use horizon_core::browser::manifest;
-use horizon_core::browser::manifest::{
+use horizon_browser_control::manifest;
+use horizon_browser_control::manifest::{
     AgentIdentity, BrowserCloseOutcome, BrowserCreateOutcome, BrowserManifest, BrowserVisibilityOutcome,
     HOST_INSTANCE_ENV,
 };
@@ -91,7 +91,7 @@ pub(crate) struct CreateReceipt {
     pub(crate) action_id: String,
     pub(crate) panel: BrowserPanel,
     /// `None` when the host predates startup readiness.
-    pub(crate) navigation: Option<horizon_core::browser::manifest::CreateNavigation>,
+    pub(crate) navigation: Option<horizon_browser_control::manifest::CreateNavigation>,
     pub(crate) navigation_error: Option<String>,
     pub(crate) startup_millis: u64,
 }
