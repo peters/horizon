@@ -57,9 +57,6 @@ impl Panel {
         let rows = terminal.rows();
         let cols = terminal.cols();
 
-        // Graceful shutdown of the old terminal.
-        super::work_resume::shutdown_for_restart(terminal)?;
-
         // A pre-assigned Claude binding may not have a transcript yet (panel
         // never received a message); resuming it would fail, so relaunch
         // fresh under the same session id instead.
@@ -97,7 +94,14 @@ impl Panel {
             return Err(Error::State("The saved conversation is no longer available.".into()));
         }
         let mut env = agent_env(self.kind, &self.local_id, self.launch_command.is_none());
-        let work = self.prepare_restart_work(&program, &mut launch_args, &mut env, work_brief.as_deref())?;
+        let owned = self.preflight_restart_work(&program, &launch_args, &env, work_brief.as_deref())?;
+        // Refuse unusable continuation targets while the existing terminal is
+        // still available. Register the replacement owner only after teardown.
+        super::work_resume::shutdown_for_restart(
+            self.terminal_mut()
+                .ok_or_else(|| Error::State("No terminal to restart".into()))?,
+        )?;
+        let work = self.prepare_restart_work(owned.as_deref(), &mut launch_args, &mut env, work_brief.as_deref())?;
         self.content = PanelContent::Terminal(Terminal::spawn(TerminalSpawnOptions {
             program,
             args: launch_args,
