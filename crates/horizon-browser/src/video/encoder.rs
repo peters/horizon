@@ -786,11 +786,14 @@ mod tests {
             max_file_bytes: 4 * 1024 * 1024,
             ..BrowserVideoCaptureOptions::default()
         };
+        let test_started = Instant::now();
         let thread = EncoderThread::start(root.path(), "pause-ts", Arc::clone(&slot), options, Arc::clone(&handle))
             .unwrap_or_else(|error| panic!("start encoder: {error}"));
         let ready = Instant::now() + Duration::from_secs(5);
         while Instant::now() < ready {
-            if handle.snapshot().is_some_and(|capture| capture.frames_encoded >= 1) {
+            if test_started.elapsed() >= Duration::from_millis(600)
+                && handle.snapshot().is_some_and(|capture| capture.frames_encoded >= 1)
+            {
                 break;
             }
             std::thread::sleep(Duration::from_millis(20));
@@ -799,9 +802,12 @@ mod tests {
             .checked_sub(Duration::from_millis(400))
             .unwrap_or_else(Instant::now);
         assert!(thread.request_pause(requested_at), "encoder did not acknowledge pause");
+        // Pause acknowledges before the loop publishes elapsed time. A second
+        // idempotent command fences that publication without a timing sleep.
+        assert!(thread.request_pause(requested_at), "pause publication barrier failed");
         let capture = handle.snapshot().unwrap_or_else(|| panic!("paused capture missing"));
         assert_eq!(capture.state, BrowserVideoState::Paused);
-        let wall = u64::try_from(system_now_millis().saturating_sub(capture.started_at_millis).max(0)).unwrap_or(0);
+        let wall = u64::try_from(test_started.elapsed().as_millis()).unwrap_or(0);
         assert!(
             wall.saturating_sub(capture.elapsed_millis) >= 200,
             "elapsed should freeze at the backdated pause request (elapsed={} wall={})",
