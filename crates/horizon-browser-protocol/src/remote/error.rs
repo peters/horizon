@@ -79,7 +79,7 @@ impl CredentialReferenceProblem {
             Self::SlotRequired => "needs a slot for this credential store",
             Self::MalformedSlot => "has a slot that is not a valid store path",
             Self::MalformedVariable => {
-                "has an environment variable name that is not a valid identifier (letters, digits, _)"
+                "needs a 1-128 character environment variable name starting with an ASCII letter or _, followed by ASCII letters, digits, or _"
             }
             Self::DuplicateSlot => "shares its OS-store slot with another binding for the same endpoint origin",
         }

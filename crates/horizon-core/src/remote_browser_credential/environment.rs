@@ -257,6 +257,68 @@ mod tests {
     }
 
     #[test]
+    fn launch_environment_bindings_are_loaded_and_unused_snapshots_are_dropped() {
+        const CHILD: &str = "HORIZON_TEST_ENV_CREDENTIAL_CHILD";
+        let Ok(suffix) = std::env::var(CHILD) else {
+            let suffix = std::process::id().to_string();
+            let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+                .args([
+                    "--exact",
+                    "remote_browser_credential::environment::tests::launch_environment_bindings_are_loaded_and_unused_snapshots_are_dropped",
+                ])
+                .env(CHILD, &suffix)
+                .env(format!("HORIZON_TEST_REMOTE_USER_{suffix}"), "alice")
+                .env(format!("HORIZON_TEST_REMOTE_KEY_{suffix}"), "s3cret-key")
+                .output()
+                .expect("isolated launch environment");
+            assert!(output.status.success(), "{output:?}");
+            return;
+        };
+        let mut profile = environment_profile();
+        for (reference, name) in [("user", "USER"), ("key", "KEY")] {
+            profile
+                .credential_bindings
+                .get_mut(&CredentialReference::from(reference))
+                .expect("binding")
+                .slot = Some(format!("HORIZON_TEST_REMOTE_{name}_{suffix}"));
+        }
+        let mut remote = RemoteBrowserConfig::default();
+        remote.providers.insert("grid".into(), profile.clone());
+        let mut workbench = CredentialWorkbench::with_opener(Box::new(|| {
+            Ok(Box::new(FakeCredentialStore::new()) as Box<dyn RemoteCredentialStore + Send>)
+        }));
+        workbench.load_environment_bindings(&remote);
+        let stores = CredentialStores {
+            session: workbench.session_store(),
+            os_keychain: None,
+            environment: Some(workbench.environment_store()),
+        };
+        assert_eq!(
+            resolve_authorization(&profile, &stores)
+                .expect("launch variables resolve")
+                .expect("basic header")
+                .header_value(),
+            "Basic YWxpY2U6czNjcmV0LWtleQ=="
+        );
+        remote.providers.clear();
+        workbench.load_environment_bindings(&remote);
+        assert!(
+            workbench
+                .readiness(&profile)
+                .iter()
+                .all(|entry| entry.state == CredentialState::Missing)
+        );
+        remote.providers.insert("grid".into(), profile.clone());
+        workbench.load_environment_bindings(&remote);
+        assert!(
+            workbench
+                .readiness(&profile)
+                .iter()
+                .all(|entry| entry.state == CredentialState::Present)
+        );
+    }
+
+    #[test]
     fn workbench_reports_each_missing_environment_reference() {
         let mut profile = environment_profile();
         let user_var = format!("HORIZON_TEST_REMOTE_BROWSER_USER_{}", std::process::id());
