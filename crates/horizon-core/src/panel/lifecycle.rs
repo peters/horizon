@@ -95,15 +95,15 @@ impl Panel {
         }
 
         let mut env = agent_env(self.kind, &self.local_id, self.launch_command.is_none());
-        let work_owner = crate::agent_work::WorkLaunch {
+        let work_launch = crate::agent_work::WorkLaunch {
             panel: &self.local_id,
             kind: self.kind,
             policy: &self.work_resume,
             cwd: self.launch_cwd.as_deref(),
             session_id: self.session_binding.as_ref().map(|binding| binding.session_id.as_str()),
             default_command: self.launch_command.is_none(),
-        }
-        .attach(&mut launch_args, &mut env);
+        };
+        let work_owner = work_launch.attach_launch(&program, self.launch_args.is_empty(), &mut launch_args, &mut env);
         self.content = PanelContent::Terminal(Terminal::spawn(TerminalSpawnOptions {
             program,
             args: launch_args,
