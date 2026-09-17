@@ -265,13 +265,24 @@ fn competing_session(session: &str, owned_pid: Option<u32>) -> Option<bool> {
             continue;
         }
         let pid = u32::try_from(value.get("pid")?.as_u64()?).ok().filter(|pid| *pid > 0)?;
-        if Some(pid) != owned_pid
-            && (!cfg!(target_os = "linux") || std::path::Path::new(&format!("/proc/{pid}")).try_exists().ok()?)
-        {
+        if Some(pid) != owned_pid && process_may_be_alive(pid) {
             return Some(true);
         }
     }
     Some(false)
+}
+
+#[cfg(unix)]
+fn process_may_be_alive(pid: u32) -> bool {
+    i32::try_from(pid)
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+        .is_none_or(|pid| rustix::process::test_kill_process(pid) != Err(rustix::io::Errno::SRCH))
+}
+
+#[cfg(not(unix))]
+fn process_may_be_alive(_pid: u32) -> bool {
+    true
 }
 
 fn saved_claude_history(session_id: &str) -> Option<()> {
@@ -300,11 +311,14 @@ fn saved_claude_history(session_id: &str) -> Option<()> {
     let mut line = Vec::new();
     let mut remaining = MAX_PREFIX_BYTES;
     // Initial mode and file-history rows are metadata, not resumable messages.
-    for _ in 0..128 {
+    for index in 0..128 {
         line.clear();
         let bytes = u64::try_from(reader.read_until(b'\n', &mut line).ok()?).ok()?;
         remaining = remaining.checked_sub(bytes)?;
         let value: serde_json::Value = serde_json::from_slice(&line).ok()?;
+        if index == 0 && value.get("isSidechain").and_then(serde_json::Value::as_bool) == Some(true) {
+            return None;
+        }
         if value.get("sessionId").is_some_and(|id| id.as_str() != Some(session_id)) {
             return None;
         }

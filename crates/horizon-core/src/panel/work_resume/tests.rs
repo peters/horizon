@@ -121,6 +121,7 @@ fn exercise_confirmed_restart() {
         "{invalid}\n".into(),
         "{}\n".into(),
         valid.replace("fixture-session", "other-session"),
+        valid.replacen('{', "{\"isSidechain\":true,", 1),
     ] {
         std::fs::write(&transcript, valid).expect("restore valid history");
         assert_refusal_preserves_process(&mut panel, &home, "saved conversation", || {
@@ -132,6 +133,7 @@ fn exercise_confirmed_restart() {
     panel.request_work_resume().expect("confirm repaired history");
     panel.restart().expect("resume repaired history");
     let args = wait_for_launch(&home, 5);
+    assert!(home.join(".claude/sessions/owned-stale.json").is_file());
     assert_eq!(&args[..2], ["--resume", "fixture-session"]);
     assert_eq!(
         args.iter()
@@ -210,7 +212,7 @@ fn exercise_competing_session(panel: &mut Panel, home: &std::path::Path) {
         .owned_process_id()
         .expect("owned live process");
     std::fs::write(
-        directory.join(format!("{pid}.json")),
+        directory.join("owned-stale.json"),
         serde_json::json!({"sessionId":"fixture-session", "pid":pid}).to_string(),
     )
     .expect("own registry entry");
