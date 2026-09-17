@@ -77,40 +77,59 @@ impl Panel {
         terminal.work_continuation.requested_session.get_or_insert(session_id);
         Ok(())
     }
-    pub(super) fn prepare_restart_work(
+    pub(super) fn preflight_restart_work(
         &self,
         program: &str,
-        args: &mut Vec<String>,
-        env: &mut std::collections::HashMap<String, String>,
+        args: &[String],
+        env: &std::collections::HashMap<String, String>,
         brief: Option<&str>,
-    ) -> Result<RestartWork> {
-        let work_launch = crate::agent_work::WorkLaunch {
-            panel: &self.local_id,
-            kind: self.kind,
-            policy: &self.work_resume,
-            cwd: self.launch_cwd.as_deref(),
-            session_id: self.session_binding.as_ref().map(|binding| binding.session_id.as_str()),
-            default_command: self.launch_command.is_none(),
-        };
+    ) -> Result<Option<String>> {
         let owned = self
             .launch_args
             .is_empty()
-            .then(|| work_launch.owned_command(program, args, env))
+            .then(|| self.work_launch().owned_command(program, args, env))
             .flatten();
         if brief.is_some() && owned.is_none() {
             return Err(Error::State(
                 "The launch no longer resolves to an owned executable. Continue from its terminal.".into(),
             ));
         }
-        let work_owner = work_launch.attach(owned.as_deref(), args, env);
-        let work_state = self.prepare_work_process(args, owned.as_deref());
         if let Some(brief) = brief {
-            self.append_requested_work(args, brief)?;
+            self.append_work_brief(&mut args.to_vec(), brief)?;
+        }
+        Ok(owned)
+    }
+
+    pub(super) fn prepare_restart_work(
+        &self,
+        owned: Option<&str>,
+        args: &mut Vec<String>,
+        env: &mut std::collections::HashMap<String, String>,
+        brief: Option<&str>,
+    ) -> Result<RestartWork> {
+        if brief.is_some() {
+            self.check_work_session_exit()?;
+        }
+        let work_owner = self.work_launch().attach(owned, args, env);
+        let work_state = self.prepare_work_process(args, owned);
+        if let Some(brief) = brief {
+            self.append_work_brief(args, brief)?;
         }
         Ok(RestartWork {
             owner: work_owner,
             state: work_state,
         })
+    }
+
+    fn work_launch(&self) -> crate::agent_work::WorkLaunch<'_> {
+        crate::agent_work::WorkLaunch {
+            panel: &self.local_id,
+            kind: self.kind,
+            policy: &self.work_resume,
+            cwd: self.launch_cwd.as_deref(),
+            session_id: self.session_binding.as_ref().map(|binding| binding.session_id.as_str()),
+            default_command: self.launch_command.is_none(),
+        }
     }
 
     pub(super) fn prepare_work_process(&self, args: &mut [String], owned: Option<&str>) -> WorkContinuation {
@@ -145,7 +164,7 @@ impl Panel {
         Ok(Some("The user selected Resume work in Horizon for this conversation. Re-read the latest user request and current conversation, then continue only the work already authorized. Re-verify the working tree, tool side effects, and background processes; interrupted tools may have partially completed. This does not answer pending questions or grant tool permissions. Ask the user if approval or a decision is still needed.".into()))
     }
 
-    pub(super) fn append_requested_work(&self, args: &mut Vec<String>, brief: &str) -> Result<()> {
+    fn check_work_session_exit(&self) -> Result<()> {
         if self.kind == PanelKind::Claude
             && self
                 .session_binding
@@ -156,6 +175,10 @@ impl Panel {
                 "This conversation is still open in another process.".into(),
             ));
         }
+        Ok(())
+    }
+
+    fn append_work_brief(&self, args: &mut Vec<String>, brief: &str) -> Result<()> {
         if !crate::agent_work::append_seed(self.kind, args, brief) {
             return Err(Error::State(
                 "This launch cannot accept a continuation prompt. Continue from its terminal.".into(),
@@ -213,6 +236,7 @@ while :; do read -r -t 1 || :; done
         )
         .expect("fixture executable");
         std::fs::set_permissions(&provider, std::fs::Permissions::from_mode(0o700)).expect("executable permission");
+        std::fs::copy(&provider, bin.join("claude")).expect("second disposable provider");
         // Re-exec isolates HOME, PATH and SHELL from concurrent tests and ensures
         // the ordinary launch resolver can only find our disposable provider.
         let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
@@ -240,7 +264,7 @@ while :; do read -r -t 1 || :; done
             String::from_utf8_lossy(&output.stderr)
         );
         let launches = std::fs::read_to_string(home.path().join("launches")).expect("test child executed");
-        assert_eq!(launches.lines().count(), 3);
+        assert_eq!(launches.lines().count(), 4);
         assert!(
             !home.path().join("overlap").exists(),
             "replacement started before previous process exited"
@@ -249,30 +273,12 @@ while :; do read -r -t 1 || :; done
 
     fn exercise_confirmed_restart() {
         let home = std::path::PathBuf::from(std::env::var_os("HOME").expect("fixture home"));
-        let mut panel = Panel::spawn(
-            PanelId(1),
-            WorkspaceId(1),
-            PanelOptions {
-                kind: PanelKind::Pi,
-                cwd: Some(home.clone()),
-                local_id: Some("manual-restart-fixture".into()),
-                is_restore: true,
-                work_resume: ResumePolicy {
-                    enabled: true,
-                    ..Default::default()
-                },
-                session_binding: Some(AgentSessionBinding::new(
-                    PanelKind::Pi,
-                    "fixture-session".into(),
-                    None,
-                    None,
-                    None,
-                )),
-                ..Default::default()
-            },
-        )
-        .expect("restored disposable provider");
+        let mut panel = restored_provider(&home, PanelKind::Pi);
         assert_eq!(wait_for_launch(&home, 1), ["--session", "fixture-session"]);
+        assert_refusal_preserves_process(&mut panel, &home, "owned executable", || {
+            std::fs::write(home.join(".bashrc"), "pi() { :; }").expect("replace executable resolution");
+        });
+        std::fs::write(home.join(".bashrc"), "").expect("restore executable resolution");
         panel.request_work_resume().expect("confirm offered continuation");
         panel.restart().expect("confirmed restart");
         let args = wait_for_launch(&home, 2);
@@ -284,6 +290,78 @@ while :; do read -r -t 1 || :; done
         panel.restart().expect("ordinary restart after continuation");
         assert_eq!(wait_for_launch(&home, 3), ["--session", "fixture-session"]);
         shutdown_for_restart(panel.terminal_mut().expect("terminal")).expect("close disposable provider");
+
+        let mut panel = restored_provider(&home, PanelKind::Claude);
+        let _ = wait_for_launch(&home, 4);
+        let project = home.join(".claude/projects/fixture");
+        std::fs::create_dir_all(&project).expect("transcript directory");
+        let transcript = project.join("fixture-session.jsonl");
+        std::fs::write(&transcript, "{}").expect("saved transcript");
+        assert!(crate::runtime_state::claude_session_transcript_exists(
+            "fixture-session"
+        ));
+        assert_refusal_preserves_process(&mut panel, &home, "saved conversation", || {
+            std::fs::remove_file(transcript).expect("remove transcript after confirmation");
+        });
+        shutdown_for_restart(panel.terminal_mut().expect("terminal")).expect("close missing-history provider");
+    }
+
+    fn assert_refusal_preserves_process(
+        panel: &mut Panel,
+        home: &std::path::Path,
+        reason: &str,
+        invalidate: impl FnOnce(),
+    ) {
+        let original_pid = std::fs::read_to_string(home.join("provider.pid")).expect("original PID");
+        let launches = std::fs::read(home.join("launches")).expect("original launches");
+        panel
+            .request_work_resume()
+            .expect("confirm before target becomes unavailable");
+        invalidate();
+        let error = panel.restart().expect_err("unavailable continuation must be refused");
+        assert!(error.to_string().contains(reason), "unexpected refusal: {error}");
+        assert!(
+            std::process::Command::new("/bin/bash")
+                .args(["-c", "kill -0 \"$1\"", "fixture-probe", original_pid.trim()])
+                .status()
+                .expect("probe original process")
+                .success(),
+            "refused continuation shut down the original process"
+        );
+        assert_eq!(std::fs::read(home.join("launches")).expect("launches"), launches);
+        assert!(panel.terminal().expect("terminal").pending_work_resume().is_some());
+        assert!(
+            panel
+                .requested_work_brief()
+                .expect("refused authorization consumed")
+                .is_none()
+        );
+    }
+
+    fn restored_provider(home: &std::path::Path, kind: PanelKind) -> Panel {
+        Panel::spawn(
+            PanelId(1),
+            WorkspaceId(1),
+            PanelOptions {
+                kind,
+                cwd: Some(home.to_path_buf()),
+                local_id: Some("manual-restart-fixture".into()),
+                is_restore: true,
+                work_resume: ResumePolicy {
+                    enabled: true,
+                    ..Default::default()
+                },
+                session_binding: Some(AgentSessionBinding::new(
+                    kind,
+                    "fixture-session".into(),
+                    None,
+                    None,
+                    None,
+                )),
+                ..Default::default()
+            },
+        )
+        .expect("restored disposable provider")
     }
 
     fn wait_for_launch(home: &std::path::Path, expected: usize) -> Vec<String> {
