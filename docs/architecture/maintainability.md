@@ -131,13 +131,17 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   `runtime_state/binding_bootstrap.rs`; provider-specific session-store parsing
   belongs in focused leaves such as `runtime_state/agent_sessions/codex.rs`.
 - `agent_work/` keeps restart-work evidence separate from conversation binding.
+  `command.rs` verifies external executable ownership with a bounded shell probe; functions and aliases keep their ordinary launch.
   `ledger.rs` correlates lifecycle events by prompt; `transcript.rs` reads bounded
   provider tails without retaining their content; `policy.rs` makes conservative
   restart decisions from explicit evidence. `store.rs` owns bounded, private,
   atomic metadata writes and one-shot handoff claims. The UI's internal
   `--agent-work-hook` command records events before initializing plugins or the
   GUI; the dedicated opt-in plugin is leased with the owning host. These
-  primitives do not launch turns.
+  primitives do not launch turns. `lifecycle.rs` attaches opted-in launch
+  identities and prepares/seals handoffs; `repository.rs` fingerprints repository
+  contents. Terminal shutdown workers own cancellation and PTY exit, keeping
+  filesystem work outside the UI shutdown path.
 - `local_store.rs` centralizes agent-store environment paths and read-only
   SQLite opening so discovery, validation, and usage reporting agree.
 - Shared domain helpers belong here when both core and UI need them.

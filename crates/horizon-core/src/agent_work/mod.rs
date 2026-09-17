@@ -1,10 +1,15 @@
 //! Conservative evidence for continuing work after a host restart.
 //! Reading a conversation is not permission to start another turn.
 
+mod command;
 mod ledger;
+mod lifecycle;
 mod policy;
+mod repository;
 mod store;
 mod transcript;
+
+pub(crate) use lifecycle::{WorkLaunch, WorkOwner};
 
 pub use ledger::{HookEvent, TurnLedger};
 pub use policy::{AskReason, RestartDecision, RestartEvidence, ResumePolicy, SuspendRecord};
@@ -22,3 +27,10 @@ pub const HOOK_COMMAND: &str = "\"${HORIZON_WORK_EXECUTABLE}\" --agent-work-hook
 #[cfg(windows)]
 pub const HOOK_COMMAND: &str = "& \"$env:HORIZON_WORK_EXECUTABLE\" --agent-work-hook";
 pub const HOOK_SHELL: &str = if cfg!(windows) { "powershell" } else { "bash" };
+pub(crate) const WORK_ENV_KEYS: [&str; 5] = [
+    WORK_ROOT_ENV,
+    WORK_PANEL_ENV,
+    WORK_OWNER_ENV,
+    WORK_KIND_ENV,
+    WORK_EXECUTABLE_ENV,
+];

@@ -593,6 +593,10 @@ fn default_shell() -> String {
 
 pub(super) fn agent_env(kind: PanelKind, local_id: &str, uses_default_command: bool) -> HashMap<String, String> {
     let mut env = HashMap::new();
+    // Nested launches must not inherit another panel's work-hook identity.
+    for key in crate::agent_work::WORK_ENV_KEYS {
+        env.insert(key.to_owned(), String::new());
+    }
     if kind.is_agent() {
         env.insert("HORIZON".to_string(), "1".to_string());
         env.insert("HORIZON_BROWSER_ACTOR".to_string(), browser_actor(local_id));
@@ -730,7 +734,11 @@ mod tests {
             env.get(crate::browser::manifest::HOST_INSTANCE_ENV).map(String::as_str),
             Some(crate::browser::manifest::host_instance())
         );
-        assert!(agent_env(PanelKind::Shell, "panel-42", true).is_empty());
+        let shell_env = agent_env(PanelKind::Shell, "panel-42", true);
+        for key in crate::agent_work::WORK_ENV_KEYS {
+            assert_eq!(shell_env.get(key).map(String::as_str), Some(""));
+        }
+        assert!(!shell_env.contains_key("HORIZON_BROWSER_ACTOR"));
         assert_eq!(browser_actor(&"x".repeat(512)).len(), 24);
     }
 

@@ -67,6 +67,7 @@ impl Terminal {
         let event_loop_handle = Some(event_loop.spawn());
 
         let mut terminal = Self {
+            work_owner: None,
             term,
             event_sender,
             event_rx,
@@ -92,6 +93,9 @@ impl Terminal {
     }
 
     pub fn write_input(&self, bytes: &[u8]) {
+        if let Some(owner) = &self.work_owner {
+            owner.note_input(bytes);
+        }
         if bytes.is_empty() {
             return;
         }
@@ -149,6 +153,41 @@ impl Terminal {
     pub fn shutdown_with_timeout(&mut self, timeout: Duration) -> bool {
         self.request_shutdown();
         self.wait_for_shutdown(timeout)
+    }
+
+    /// Preparation, cancellation and final evidence stay inside the existing
+    /// asynchronous shutdown budget; the UI never waits for repository I/O.
+    pub(crate) fn begin_work_shutdown(&mut self, completed: &Arc<AtomicUsize>) -> bool {
+        if self.work_owner.is_none() || self.event_loop_handle.is_none() {
+            return false;
+        }
+        let Some(owner) = self.work_owner.clone() else {
+            return false;
+        };
+        let Some(handle) = self.event_loop_handle.take() else {
+            return false;
+        };
+        let sender = self.event_sender.clone();
+        let done = Arc::clone(completed);
+        std::thread::spawn(move || {
+            let prepared = owner.prepare_suspend();
+            if prepared {
+                let _ = sender.send(Msg::Input(Cow::Borrowed(b"\x1b")));
+                // Separate Input and Shutdown dispatch so the event loop can
+                // flush cancellation instead of dropping queued input on exit.
+                std::thread::sleep(Duration::from_millis(250));
+            }
+            let _ = sender.send(Msg::Shutdown);
+            if let Ok(joined) = handle.join() {
+                // Drop the PTY on this worker, before sealing the transcript.
+                drop(joined);
+                if prepared {
+                    owner.finish_suspend();
+                }
+            }
+            done.fetch_add(1, Ordering::Relaxed);
+        });
+        true
     }
 
     /// Spawns a background thread to join the event-loop handle, incrementing
