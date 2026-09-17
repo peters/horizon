@@ -575,3 +575,127 @@ fn browser_handoff_times_out_when_the_user_never_hands_back() {
     // This injected-actor path is the live Codex/Claude/Grok lease.
     agent.close();
 }
+
+#[test]
+fn browser_handoff_resume_preserves_a_concurrent_hand_back() {
+    let home = tempfile::tempdir().expect("isolated home");
+    seed_home(home.path());
+    let mut agent = McpProcess::start(home.path(), AGENT_A, Some(HOST_A));
+    let first = agent.call(
+        "browser_handoff",
+        &json!({ "panel_id": SAME_WORKSPACE_PANEL, "reason": "sign in", "wait": false }),
+    );
+    let request_id = first["structuredContent"]["request_id"].as_str().expect("request id");
+    let panel = agent.call("browser_panel", &json!({ "panel_id": SAME_WORKSPACE_PANEL }));
+    assert_eq!(panel["structuredContent"]["handoff_pending"], true);
+    // The user clicks Done after the agent's status read but before its retry.
+    mark_handoff_done(home.path(), SAME_WORKSPACE_PANEL);
+    let resumed = agent.call(
+        "browser_handoff",
+        &json!({
+            "panel_id": SAME_WORKSPACE_PANEL, "reason": "sign in",
+            "resume_request_id": request_id, "timeout_millis": 1000
+        }),
+    );
+    assert_eq!(resumed["isError"], false, "{resumed}");
+    assert_eq!(resumed["structuredContent"]["handoff_pending"], false);
+    assert_eq!(resumed["structuredContent"]["request_id"], request_id);
+    let snapshot = read_manifest(home.path(), SAME_WORKSPACE_PANEL);
+    assert!(snapshot.handoff.as_ref().expect("existing handoff").done);
+
+    // A deliberate subsequent handoff must still create a fresh request.
+    let next = agent.call(
+        "browser_handoff",
+        &json!({ "panel_id": SAME_WORKSPACE_PANEL, "reason": "sign in", "wait": false }),
+    );
+    assert_eq!(next["structuredContent"]["handoff_pending"], true);
+    assert_ne!(next["structuredContent"]["request_id"], request_id);
+    agent.close();
+}
+
+#[test]
+fn browser_handoff_resume_keeps_the_existing_pending_request() {
+    let home = tempfile::tempdir().expect("isolated home");
+    seed_home(home.path());
+    let mut agent = McpProcess::start(home.path(), AGENT_A, Some(HOST_A));
+    let expired = agent.call(
+        "browser_handoff",
+        &json!({ "panel_id": SAME_WORKSPACE_PANEL, "reason": "sign in", "timeout_millis": 1000 }),
+    );
+    assert_eq!(expired["isError"], true);
+    let original = read_manifest(home.path(), SAME_WORKSPACE_PANEL)
+        .handoff
+        .expect("pending handoff");
+    // Model reasoning between a timeout and renewal can outlive the short lease.
+    let path = manifest_path_for_root(&home.path().join(".horizon"), SAME_WORKSPACE_PANEL);
+    let mut snapshot = read_at(&path).expect("manifest");
+    snapshot.owner.as_mut().expect("recorded owner").updated_at = 0;
+    write_at(&path, &snapshot).expect("expire the lease without changing owner");
+    let resumed = agent.call(
+        "browser_handoff",
+        &json!({
+            "panel_id": SAME_WORKSPACE_PANEL, "reason": "different retry text",
+            "resume_request_id": original.request_id, "timeout_millis": 1000
+        }),
+    );
+    assert_eq!(resumed["isError"], true);
+    assert!(
+        resumed["content"][0]["text"]
+            .as_str()
+            .expect("timeout")
+            .contains("timed out after 1000 ms")
+    );
+    assert!(
+        read_at(&path)
+            .expect("manifest")
+            .owner
+            .expect("renewed owner")
+            .updated_at
+            > 0
+    );
+    let pending = read_manifest(home.path(), SAME_WORKSPACE_PANEL)
+        .handoff
+        .expect("pending handoff");
+    assert_eq!(pending.request_id, original.request_id);
+    assert_eq!(pending.requested_at, original.requested_at);
+    assert_eq!(pending.reason, original.reason);
+    assert!(!pending.done);
+    agent.close();
+}
+
+#[test]
+fn browser_handoff_resume_rejects_stale_request_and_lost_ownership() {
+    let home = tempfile::tempdir().expect("isolated home");
+    seed_home(home.path());
+    let mut agent = McpProcess::start(home.path(), AGENT_A, Some(HOST_A));
+    let first = agent.call(
+        "browser_handoff",
+        &json!({ "panel_id": SAME_WORKSPACE_PANEL, "reason": "sign in", "wait": false }),
+    );
+    let request_id = first["structuredContent"]["request_id"].as_str().expect("request id");
+    let nonblocking = agent.call(
+        "browser_handoff",
+        &json!({
+            "panel_id": SAME_WORKSPACE_PANEL, "reason": "sign in",
+            "resume_request_id": request_id, "wait": false
+        }),
+    );
+    assert_eq!(nonblocking["isError"], true);
+    let stale = agent.call(
+        "browser_handoff",
+        &json!({ "panel_id": SAME_WORKSPACE_PANEL, "reason": "sign in", "resume_request_id": "stale" }),
+    );
+    assert_eq!(stale["isError"], true);
+    let path = manifest_path_for_root(&home.path().join(".horizon"), SAME_WORKSPACE_PANEL);
+    let mut snapshot = read_at(&path).expect("manifest");
+    snapshot.owner = None;
+    snapshot.handoff.as_mut().expect("handoff").done = true;
+    write_at(&path, &snapshot).expect("lose ownership during handoff");
+    let lost = agent.call(
+        "browser_handoff",
+        &json!({ "panel_id": SAME_WORKSPACE_PANEL, "reason": "sign in", "resume_request_id": request_id }),
+    );
+    assert_eq!(lost["isError"], true, "{lost}");
+    assert!(read_at(&path).expect("manifest").owner.is_none());
+    agent.close();
+}

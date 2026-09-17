@@ -36,8 +36,26 @@ impl BrowserController {
         reason: &str,
         wait: bool,
         timeout_millis: Option<u64>,
+        resume_request_id: Option<&str>,
     ) -> Result<HandoffReceipt, ControlError> {
         let started = Instant::now();
+        if let Some(request_id) = resume_request_id {
+            if !wait {
+                return Err(ControlError::internal_io(
+                    "cannot resume browser handoff",
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "resume_request_id requires wait=true (the default)",
+                    ),
+                ));
+            }
+            self.authorized_manifest(panel_id)?;
+            manifest::resume_handoff(panel_id, self.identity(), request_id)
+                .map_err(|source| self.denied(panel_id, "could not resume browser handoff", source))?;
+            return self
+                .wait_for_handoff(panel_id, request_id.to_string(), started, timeout_millis)
+                .await;
+        }
         self.ensure_claim(panel_id)?;
         let request_id = manifest::request_handoff(panel_id, self.identity(), reason)
             .map_err(|source| self.denied(panel_id, "could not request browser handoff", source))?;
@@ -66,6 +84,16 @@ impl BrowserController {
         let mut request_id = request_id;
         loop {
             let snapshot = self.authorized_manifest(panel_id)?;
+            let now = manifest::now_millis();
+            if snapshot.live_owner(now).is_none_or(|owner| owner.name != self.actor) {
+                return Err(ControlError::internal_io(
+                    "lost browser ownership while waiting for hand-back",
+                    std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "agent does not have a live ownership claim",
+                    ),
+                ));
+            }
             match snapshot.handoff.as_ref() {
                 Some(handoff) if !handoff.done => {
                     if !handoff.request_id.is_empty() {
@@ -79,16 +107,6 @@ impl BrowserController {
                     return self.finish_handoff(panel_id, request_id, started);
                 }
                 None => return self.finish_handoff(panel_id, request_id, started),
-            }
-            let now = manifest::now_millis();
-            if snapshot.live_owner(now).is_none_or(|owner| owner.name != self.actor) {
-                return Err(ControlError::internal_io(
-                    "lost browser ownership while waiting for hand-back",
-                    std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
-                        "agent does not have a live ownership claim",
-                    ),
-                ));
             }
             if started.elapsed() >= timeout {
                 return Err(ControlError::HandoffTimeout {

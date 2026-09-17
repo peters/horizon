@@ -51,7 +51,7 @@ mod result;
 mod visibility;
 mod workspace;
 
-pub use agent::{claim, enqueue_action, heartbeat, release, request_handoff};
+pub use agent::{claim, enqueue_action, heartbeat, release, request_handoff, resume_handoff};
 pub use audit::{
     AuditJournal, AuditPage, AuditPageRequest, DEFAULT_AUDIT_PAGE_LIMIT, MAX_AUDIT_PAGE_LIMIT, audit_path_for_root,
     default_audit_path, page_audit, read_audit, read_audit_journal,

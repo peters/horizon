@@ -138,6 +138,14 @@ shell commands, files, or other MCP servers.
   capture stop, capture replacement, or timeout.
 - `browser_handoff` pauses automation so the user can steer, and waits until
   they hand the panel back (`handoff_pending: false`) unless `wait` is false.
+  Keep the agent turn active, including while its client yields a running tool.
+  Omit `timeout_millis` for the default 15-minute human wait. After a timeout,
+  inspect `browser_panel`; while still pending, retry with the
+  timeout's `resume_request_id` and the default timeout. This waits on the
+  existing request without undoing a concurrent Done click. A stale id is
+  rejected, and `resume_request_id` requires `wait: true` (the default).
+  If handoff completed, take a fresh snapshot and continue; stop on cancellation,
+  closure, lost ownership, or an unrecoverable connection failure.
 - `browser_audit` returns a bounded page of redacted ordered action records.
   The default page is the newest matching entries (`limit` 1-500, default 100).
   Set `from_start` to iterate from the oldest retained match, then reuse

@@ -151,7 +151,7 @@ pub(crate) enum ControlError {
     )]
     VisibilityTimeout { action_id: String, timeout_millis: u64 },
     #[error(
-        "browser handoff {request_id} timed out after {timeout_millis} ms; call browser_panel to see if the user is still steering, then call browser_handoff again to keep waiting"
+        "browser handoff {request_id} timed out after {timeout_millis} ms; the user may be still steering. Keep this turn active and call browser_panel once: if handoff_pending is true, call browser_handoff again with resume_request_id={request_id} and timeout_millis omitted for the default human wait. If handoff completed, take a fresh snapshot and continue. Stop on cancellation, panel closure, lost ownership, or an unrecoverable connection failure. Do not end the turn with a final waiting message"
     )]
     HandoffTimeout { request_id: String, timeout_millis: u64 },
     #[error("browser action {action_id} failed ({code}): {message}")]
