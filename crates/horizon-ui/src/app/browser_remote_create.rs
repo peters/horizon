@@ -164,6 +164,7 @@ impl HorizonApp {
         owner: &str,
         workspace: &str,
     ) -> Result<(), (&'static str, &'static str)> {
+        self.browser_create_host.remote_allocations.poll();
         let holds = remote_holds(self, &plan.provider);
         if remote_session_limit_reached(&self.template_config, &plan.provider, holds) {
             return Err((
@@ -337,6 +338,39 @@ mod tests {
         assert_eq!(plan.request.endpoint, "https://grid.example.net/wd/hub");
         assert!(plan.request.authorization.is_some());
         assert!(!format!("{:?}", plan.request).contains("tok-en"));
+    }
+
+    #[test]
+    fn a_cancelled_admission_frees_its_lease_before_the_next_create_in_the_batch() {
+        let (_temp, mut app) = crate::app::test_support::test_app();
+        app.template_config = config();
+        let mut credentials = workbench();
+        credentials
+            .set_session_value(
+                "grid",
+                &app.template_config.browser.remote.providers["grid"],
+                &CredentialReference::from("key"),
+                b"fixture-token",
+            )
+            .expect("credential");
+        let first = plan_remote_create(&app.template_config, &credentials, "ios_phone").expect("first plan");
+        app.admit_remote_create(&first, "owner", "workspace")
+            .expect("first admission");
+        first.request.recovery.cancel_before_launch();
+        assert!(matches!(
+            remote_slots::acquire_slot(app.session_store.home().root(), &first.quota_key, 1),
+            Err(remote_slots::SlotError::Busy { .. })
+        ));
+        let second = plan_remote_create(&app.template_config, &credentials, "ios_phone").expect("second plan");
+        app.admit_remote_create(&second, "owner", "workspace")
+            .expect("same-batch admission without a host poll");
+        assert!(
+            matches!(
+                remote_slots::acquire_slot(app.session_store.home().root(), &second.quota_key, 1),
+                Err(remote_slots::SlotError::Busy { .. })
+            ),
+            "the new allocation keeps its lease"
+        );
     }
 
     #[test]
