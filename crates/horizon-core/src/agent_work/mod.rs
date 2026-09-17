@@ -12,7 +12,7 @@ mod store;
 mod transcript;
 
 pub use startup::resume_brief;
-pub(crate) use startup::{RestoreBudget, WorkContinuation};
+pub(crate) use startup::{RestoreBudget, WorkContinuation, configured_resume_limit};
 
 pub(crate) use lifecycle::{WorkLaunch, WorkOwner};
 

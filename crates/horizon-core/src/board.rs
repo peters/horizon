@@ -169,7 +169,7 @@ impl Board {
     ///
     /// Returns an error if the runtime state cannot be restored.
     pub fn from_runtime_state_with_transcripts(state: &RuntimeState, transcript_root: Option<&Path>) -> Result<Self> {
-        Self::from_runtime_state_with_resume_limit(state, transcript_root, 3)
+        Self::from_runtime_state_with_resume_limit(state, transcript_root, crate::agent_work::configured_resume_limit())
     }
 
     /// Restore with a maximum number of unattended work continuations.
