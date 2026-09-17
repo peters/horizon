@@ -214,7 +214,7 @@ impl SharedBrowserSession {
         state.pages += 1;
         let lifecycle = Arc::new(PageLifecycle {
             state: Arc::clone(&self.state),
-            target: Mutex::new(initial_target),
+            target: Mutex::new(initial_target.into_iter().collect()),
             closing: AtomicBool::new(false),
             released: AtomicBool::new(false),
             last_page: AtomicBool::new(false),
@@ -277,7 +277,7 @@ impl ProcessLifecycle for StartupLifecycle {
 
 pub(crate) struct PageLifecycle {
     state: Arc<Mutex<SharedState>>,
-    target: Mutex<Option<String>>,
+    target: Mutex<Vec<String>>,
     closing: AtomicBool,
     released: AtomicBool,
     last_page: AtomicBool,
@@ -294,15 +294,18 @@ impl PageLifecycle {
             return !self.last_page.load(Ordering::Acquire) || self.process.is_reaped();
         }
         let mut target = self.target.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some((_, id)) = connection.as_ref() {
-            *target = Some((*id).to_string());
+        if let Some((_, id)) = connection.as_ref()
+            && !target.iter().any(|registered| registered == id)
+        {
+            target.push((*id).to_string());
         }
-        if let Some(id) = target.as_deref() {
+        target.retain(|id| {
             let closed = connection.as_mut().is_some_and(|(link, _)| close_target(link, id));
             let closed = closed || CdpLink::connect(&state.endpoint).is_ok_and(|mut link| close_target(&mut link, id));
-            if !closed && !self.process.is_reaped() {
-                return false;
-            }
+            !closed && !self.process.is_reaped()
+        });
+        if !target.is_empty() {
+            return false;
         }
         state.pages -= 1;
         let last = state.pages == 0 && self.drivers.load(Ordering::Acquire) == 1;
@@ -410,13 +413,26 @@ impl DriverProcess {
                 .target
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone(),
+                .first()
+                .cloned(),
         }
     }
 
     pub(super) fn register_target(&self, target: &str) {
         if let Self::Shared(page) = self {
-            *page.target.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(target.to_string());
+            let mut targets = page.target.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !targets.iter().any(|registered| registered == target) {
+                targets.push(target.to_string());
+            }
+        }
+    }
+
+    pub(super) fn forget_closed_target(&self, target: &str) {
+        if let Self::Shared(page) = self {
+            page.target
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .retain(|registered| registered != target);
         }
     }
 

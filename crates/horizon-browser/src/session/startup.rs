@@ -247,7 +247,7 @@ fn initialize_target(
         return None;
     }
     let native_user_agent_metadata =
-        match prepare_disclosure_metadata(&mut link, stop_requested, config.browser.automation_disclosure) {
+        match prepare_disclosure_metadata(&mut link, &chrome, stop_requested, config.browser.automation_disclosure) {
             Ok(metadata) => metadata,
             Err(error) => {
                 let _ = event_tx.send(BrowserEvent::Warning(format!(
@@ -295,6 +295,7 @@ fn initialize_target(
 
 fn prepare_disclosure_metadata(
     link: &mut CdpLink,
+    chrome: &DriverProcess,
     stop_requested: &AtomicBool,
     policy: AutomationDisclosurePolicy,
 ) -> Result<Option<serde_json::Value>, String> {
@@ -322,6 +323,7 @@ fn prepare_disclosure_metadata(
         .ok_or_else(|| "Target.createTarget omitted targetId".to_string())?
         .to_string();
 
+    chrome.register_target(&target_id);
     let metadata = read_disclosure_metadata_from_target(link, stop_requested, &target_id);
     let close_result = link
         .call_and_drain(
@@ -340,6 +342,9 @@ fn prepare_disclosure_metadata(
                 .then_some(())
                 .ok_or_else(|| "Target.closeTarget did not close the disclosure target".to_string())
         });
+    if close_result.is_ok() {
+        chrome.forget_closed_target(&target_id);
+    }
     match (metadata, close_result) {
         (Ok(metadata), Ok(())) => Ok(Some(metadata)),
         (Err(error), _) | (Ok(_), Err(error)) => Err(error),

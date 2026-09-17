@@ -24,7 +24,7 @@ fn pages() -> (
     let page = || {
         DriverProcess::Shared(Arc::new(PageLifecycle {
             state: Arc::clone(&group.state),
-            target: Mutex::new(None),
+            target: Mutex::new(Vec::new()),
             closing: false.into(),
             released: false.into(),
             last_page: false.into(),
@@ -137,7 +137,7 @@ fn last_page_waits_for_a_pending_driver_before_closing_browser() {
     group.state.lock().expect("state").pages = 1;
     let page = Arc::new(PageLifecycle {
         state: Arc::clone(&group.state),
-        target: Mutex::new(None),
+        target: Mutex::new(Vec::new()),
         closing: false.into(),
         released: false.into(),
         last_page: false.into(),
@@ -353,7 +353,7 @@ fn emergency_deadline_never_waits_for_a_page_transport_or_target_lock() {
     drop(target_guard);
     // The target-lock assertion above is the only stalled operation. Avoid
     // starting a real network retry during the synthetic fixture's teardown.
-    *page.target.lock().expect("target") = None;
+    page.target.lock().expect("target").clear();
     drop(left);
     drop(first);
     drop(right);
@@ -481,4 +481,58 @@ fn initial_target_claim_preserves_empty_startup_fallback() {
         server.join().expect("server"),
         ["Target.getTargets", "Target.createTarget"]
     );
+}
+
+#[test]
+fn failed_auxiliary_target_close_keeps_ownership_until_retry_succeeds() {
+    let (group, first, second, mut left, right) = pages();
+    left.register_target("main");
+    left.register_target("disclosure");
+    let DriverProcess::Shared(page) = &left else {
+        panic!("shared page");
+    };
+    let page = Arc::clone(page);
+    let child = Arc::new(UnreapedProcess(false.into()));
+    assert!(!page.process.delegate(child.clone()));
+    let listener = TcpListener::bind("127.0.0.1:0").expect("fixture");
+    let address = listener.local_addr().expect("address");
+    let server = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("accept");
+        stream.set_read_timeout(Some(Duration::from_secs(3))).expect("timeout");
+        let mut socket = tungstenite::accept(stream).expect("handshake");
+        for result in [
+            json!({"success":true}),
+            json!({"success":false}),
+            json!({"targetInfos":[{"targetId":"disclosure"}]}),
+        ] {
+            let Message::Text(text) = socket.read().expect("command") else {
+                panic!("text");
+            };
+            let command: Value = serde_json::from_str(&text).expect("json");
+            socket
+                .send(Message::Text(
+                    json!({"id":command["id"],"result":result}).to_string().into(),
+                ))
+                .expect("reply");
+        }
+    });
+    let mut link = CdpLink::connect(&format!("ws://{address}/")).expect("link");
+    left.close_page(&mut link, "main");
+    server.join().expect("server");
+    assert_eq!(*page.target.lock().expect("owned targets"), ["disclosure"]);
+    assert!(!page.is_reaped());
+    assert!(!page.terminate(Duration::ZERO));
+    assert_eq!(group.state.lock().expect("state").pages, 2);
+    let (mut retry, retry_server) = connection();
+    assert!(page.release(Some((&mut retry, "disclosure"))));
+    assert!(page.target.lock().expect("targets").is_empty());
+    drop(retry);
+    let commands = retry_server.join().expect("retry server");
+    assert_eq!(commands.len(), 1);
+    assert_eq!(commands[0]["params"]["targetId"], "disclosure");
+    assert!(!child.is_reaped(), "the sibling process remains alive");
+    drop(left);
+    drop(first);
+    drop(right);
+    drop(second);
 }
