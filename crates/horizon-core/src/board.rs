@@ -332,7 +332,13 @@ impl Board {
         let mut browser_shutdown_signals = Vec::new();
 
         for panel in &mut self.panels {
-            panel.request_shutdown();
+            if let Some(terminal) = panel.terminal_mut()
+                && terminal.begin_work_shutdown(&completed)
+            {
+                panel_count += 1;
+            } else {
+                panel.request_shutdown();
+            }
         }
 
         for panel in &mut self.panels {

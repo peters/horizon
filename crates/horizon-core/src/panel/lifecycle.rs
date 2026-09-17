@@ -68,7 +68,7 @@ impl Panel {
             && self.session_binding.as_ref().is_some_and(|binding| {
                 self.kind != PanelKind::Claude || claude_session_transcript_exists(&binding.session_id)
             });
-        let (program, launch_args) = resolve_launch_command(
+        let (program, mut launch_args) = resolve_launch_command(
             self.launch_command.clone(),
             self.launch_args.clone(),
             self.ssh_connection.clone(),
@@ -94,7 +94,16 @@ impl Panel {
             );
         }
 
-        let env = agent_env(self.kind, &self.local_id, self.launch_command.is_none());
+        let mut env = agent_env(self.kind, &self.local_id, self.launch_command.is_none());
+        let work_owner = crate::agent_work::WorkLaunch {
+            panel: &self.local_id,
+            kind: self.kind,
+            policy: &self.work_resume,
+            cwd: self.launch_cwd.as_deref(),
+            session_id: self.session_binding.as_ref().map(|binding| binding.session_id.as_str()),
+            default_command: self.launch_command.is_none(),
+        }
+        .attach(&mut launch_args, &mut env);
         self.content = PanelContent::Terminal(Terminal::spawn(TerminalSpawnOptions {
             program,
             args: launch_args,
@@ -110,6 +119,9 @@ impl Panel {
             kitty_keyboard: kitty_keyboard_for_kind(self.kind),
         })?);
 
+        if let Some(terminal) = self.terminal_mut() {
+            terminal.work_owner = work_owner;
+        }
         self.launched_at_millis = current_unix_millis();
         self.ssh_status = if self.kind == PanelKind::Ssh {
             Some(SshConnectionStatus::Connecting)
