@@ -481,6 +481,7 @@ fn restored_empty_workspaces_are_removed_during_cleanup() {
                     ssh_connection: None,
                     rows: 24,
                     cols: 80,
+                    work_resume: crate::agent_work::ResumePolicy::default(),
                     resume: PanelResume::Fresh,
                     position: Some([640.0, 40.0]),
                     size: None,
@@ -528,6 +529,7 @@ fn restored_workspace_layout_is_preserved_after_panel_recreation() {
                     ssh_connection: None,
                     rows: 24,
                     cols: 80,
+                    work_resume: crate::agent_work::ResumePolicy::default(),
                     resume: PanelResume::Fresh,
                     position: Some([20.0, 60.0]),
                     size: Some([320.0, 220.0]),
@@ -549,6 +551,7 @@ fn restored_workspace_layout_is_preserved_after_panel_recreation() {
                     ssh_connection: None,
                     rows: 24,
                     cols: 80,
+                    work_resume: crate::agent_work::ResumePolicy::default(),
                     resume: PanelResume::Fresh,
                     position: Some([360.0, 60.0]),
                     size: Some([320.0, 220.0]),
@@ -598,6 +601,7 @@ fn persisted_ssh_panels_restore_as_disconnected_snapshots() {
                 }),
                 rows: 24,
                 cols: 80,
+                work_resume: crate::agent_work::ResumePolicy::default(),
                 resume: PanelResume::Fresh,
                 position: Some([0.0, 40.0]),
                 size: None,
@@ -624,6 +628,10 @@ fn persisted_ssh_panels_restore_as_disconnected_snapshots() {
 #[test]
 fn runtime_restore_keeps_remaining_panels_when_one_spawn_fails() {
     let invalid_command = "bad\0codex";
+    let work_resume = crate::agent_work::ResumePolicy {
+        enabled: true,
+        max_downtime_seconds: 60,
+    };
     let state = RuntimeState {
         active_workspace_local_id: Some("workspace".to_string()),
         focused_panel_local_id: Some("broken-codex".to_string()),
@@ -648,6 +656,7 @@ fn runtime_restore_keeps_remaining_panels_when_one_spawn_fails() {
                     ssh_connection: None,
                     rows: 24,
                     cols: 80,
+                    work_resume: crate::agent_work::ResumePolicy::default(),
                     resume: PanelResume::Fresh,
                     position: Some([0.0, 40.0]),
                     size: Some([320.0, 220.0]),
@@ -669,6 +678,7 @@ fn runtime_restore_keeps_remaining_panels_when_one_spawn_fails() {
                     ssh_connection: None,
                     rows: 24,
                     cols: 80,
+                    work_resume: work_resume.clone(),
                     resume: PanelResume::Fresh,
                     position: Some([360.0, 40.0]),
                     size: Some([320.0, 220.0]),
@@ -692,6 +702,7 @@ fn runtime_restore_keeps_remaining_panels_when_one_spawn_fails() {
         .expect("failed panel placeholder");
     let failed_panel = board.panel(failed_panel_id).expect("failed panel");
     assert_eq!(failed_panel.kind, PanelKind::Codex);
+    assert_eq!(failed_panel.work_resume, work_resume);
     assert_eq!(failed_panel.launch_command.as_deref(), Some(invalid_command));
     assert_eq!(failed_panel.launch_args, vec!["--no-alt-screen".to_string()]);
     assert_eq!(board.focused, Some(failed_panel_id));
@@ -711,6 +722,7 @@ fn runtime_restore_keeps_remaining_panels_when_one_spawn_fails() {
         .expect("saved failed panel");
     assert_eq!(saved_failed_panel.command.as_deref(), Some(invalid_command));
     assert_eq!(saved_failed_panel.kind, PanelKind::Codex);
+    assert_eq!(saved_failed_panel.work_resume, work_resume);
 
     board.shutdown_terminal_panels();
 }

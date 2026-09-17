@@ -297,3 +297,47 @@ fn copying_a_standalone_browser_preserves_its_profile_owner_identity() {
     );
     assert_eq!(state.focused_panel_local_id.as_deref(), Some(panel.local_id.as_str()));
 }
+
+#[test]
+fn work_continuation_is_opt_in_and_independent_of_conversation_restore() {
+    let legacy: PanelState = serde_yaml::from_str("kind: claude\nresume: last\n").expect("legacy panel");
+    assert!(!legacy.work_resume.enabled);
+    assert_eq!(legacy.work_resume.max_downtime_seconds, 3 * 60 * 60);
+    assert_eq!(legacy.resume, PanelResume::Last);
+    let mut panel = legacy;
+    panel.work_resume.enabled = true;
+    panel.work_resume.max_downtime_seconds = 60;
+    let yaml = serde_yaml::to_string(&panel).expect("serialize");
+    let restored: PanelState = serde_yaml::from_str(&yaml).expect("restore");
+    assert_eq!(restored.work_resume, panel.work_resume);
+    assert_eq!(restored.resume, PanelResume::Last);
+    let options = restored.to_panel_options(&crate::browser::BrowserConfig::default());
+    assert_eq!(options.work_resume, restored.work_resume);
+}
+
+#[test]
+fn board_snapshot_preserves_the_panel_work_policy() {
+    let mut board = crate::Board::new();
+    let workspace = board.create_workspace("work");
+    let panel_id = board
+        .create_panel(
+            PanelOptions {
+                kind: PanelKind::Shell,
+                command: Some(if cfg!(windows) { "cmd.exe" } else { "/bin/sh" }.into()),
+                args: vec![if cfg!(windows) { "/C" } else { "-c" }.into(), "exit".into()],
+                work_resume: crate::agent_work::ResumePolicy {
+                    enabled: true,
+                    max_downtime_seconds: 60,
+                },
+                ..PanelOptions::default()
+            },
+            workspace,
+        )
+        .expect("panel");
+    let panel = board.panel(panel_id).expect("panel exists");
+    assert!(panel.work_resume.enabled);
+    assert_eq!(panel.work_resume.max_downtime_seconds, 60);
+    let state = RuntimeState::from_board(&board, WindowConfig::default(), CanvasViewState::default());
+    assert!(state.workspaces[0].panels[0].work_resume.enabled);
+    board.shutdown_terminal_panels();
+}

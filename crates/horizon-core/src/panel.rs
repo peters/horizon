@@ -8,6 +8,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use crate::agent_definition;
+use crate::agent_work::ResumePolicy;
 use crate::agents::{AGENT_WORKING_SCAN_ROWS, AgentStatus, is_agent_working_line};
 use crate::editor::{MarkdownEditor, PanelContent};
 use crate::error::Result;
@@ -141,6 +142,7 @@ pub struct PanelOptions {
     pub cols: u16,
     pub kind: PanelKind,
     pub resume: PanelResume,
+    pub work_resume: ResumePolicy,
     pub position: Option<[f32; 2]>,
     pub size: Option<[f32; 2]>,
     /// Whether the panel participates in layout, rendering, and input.
@@ -180,6 +182,7 @@ impl Default for PanelOptions {
             cols: 80,
             kind: PanelKind::default(),
             resume: PanelResume::default(),
+            work_resume: ResumePolicy::default(),
             position: None,
             size: None,
             visible: true,
@@ -206,6 +209,7 @@ pub struct Panel {
     pub terminal_title: String,
     pub kind: PanelKind,
     pub resume: PanelResume,
+    pub work_resume: ResumePolicy,
     pub layout: PanelLayout,
     pub visible: bool,
     pub workspace_id: WorkspaceId,
@@ -344,6 +348,7 @@ impl Panel {
             terminal_title: String::new(),
             kind,
             resume: PanelResume::Fresh,
+            work_resume: ResumePolicy::default(),
             layout: PanelLayout::default(),
             visible: true,
             workspace_id,
@@ -722,6 +727,7 @@ mod tests {
             terminal_title: terminal_title.to_string(),
             kind: PanelKind::Usage,
             resume: PanelResume::Fresh,
+            work_resume: crate::agent_work::ResumePolicy::default(),
             layout: PanelLayout::default(),
             visible: true,
             workspace_id: WorkspaceId(1),
