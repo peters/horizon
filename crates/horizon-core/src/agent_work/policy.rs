@@ -82,6 +82,30 @@ pub struct RestartEvidence<'a> {
 }
 
 impl RestartEvidence<'_> {
+    fn without_handoff(&self, transcript: &TranscriptSnapshot) -> RestartDecision {
+        if self.ledger.is_some_and(|ledger| {
+            ledger.session_id == self.session_id
+                && (ledger.deliberate_exit
+                    || matches!(
+                        ledger.state,
+                        TurnState::Finished | TurnState::Failed | TurnState::Interrupted
+                    ))
+        }) {
+            return RestartDecision::NotResumable;
+        }
+        if self
+            .ledger
+            .is_some_and(|ledger| ledger.session_id == self.session_id && ledger.state == TurnState::Blocked)
+        {
+            return RestartDecision::Ask(AskReason::WaitingForUser);
+        }
+        match (transcript.state, self.stale_live_session) {
+            (TurnState::Working, true) => RestartDecision::Ask(AskReason::UncleanShutdown),
+            (TurnState::Blocked, _) => RestartDecision::Ask(AskReason::WaitingForUser),
+            _ => RestartDecision::NotResumable,
+        }
+    }
+
     /// Fail closed on identity drift, completed/interrupted work, or a changed
     /// transcript. Only a fully attested clean shutdown can auto-continue.
     #[must_use]
@@ -99,21 +123,7 @@ impl RestartEvidence<'_> {
             return RestartDecision::NotResumable;
         }
         let Some(record) = self.handoff else {
-            if self.ledger.is_some_and(|ledger| {
-                ledger.session_id == self.session_id
-                    && (ledger.deliberate_exit
-                        || matches!(
-                            ledger.state,
-                            TurnState::Finished | TurnState::Failed | TurnState::Interrupted
-                        ))
-            }) {
-                return RestartDecision::NotResumable;
-            }
-            return match (transcript.state, self.stale_live_session) {
-                (TurnState::Working, true) => RestartDecision::Ask(AskReason::UncleanShutdown),
-                (TurnState::Blocked, _) => RestartDecision::Ask(AskReason::WaitingForUser),
-                _ => RestartDecision::NotResumable,
-            };
+            return self.without_handoff(transcript);
         };
         if record.kind != self.kind
             || record.panel_local_id != self.panel_local_id

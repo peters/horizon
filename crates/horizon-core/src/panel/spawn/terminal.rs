@@ -188,7 +188,7 @@ pub(super) fn spawn_terminal(
         session_id: session_binding.as_ref().map(|binding| binding.session_id.as_str()),
         default_command: saved_command.is_none(),
     };
-    let work_owner = work_launch.attach_launch(&program, saved_args.is_empty(), &mut launch_args, &mut env);
+    let work_plan = work_launch.start(&program, is_restore, saved_args.is_empty(), &mut launch_args, &mut env);
     let panel_args = TerminalPanelBuildArgs {
         id,
         local_id,
@@ -225,7 +225,8 @@ pub(super) fn spawn_terminal(
         env,
         kitty_keyboard: kitty_keyboard_for_kind(kind),
     })?;
-    terminal.work_owner = work_owner;
+    terminal.work_owner = work_plan.owner;
+    terminal.work_continuation = work_plan.state;
     tracing::info!("created panel '{}' (id={})", panel_args.title, panel_args.id.0);
     Ok(build_terminal_panel(panel_args, terminal, initial_ssh_status))
 }

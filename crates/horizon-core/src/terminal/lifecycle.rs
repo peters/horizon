@@ -68,6 +68,7 @@ impl Terminal {
 
         let mut terminal = Self {
             work_owner: None,
+            work_continuation: crate::agent_work::WorkContinuation::default(),
             term,
             event_sender,
             event_rx,
@@ -92,10 +93,20 @@ impl Terminal {
         Ok(terminal)
     }
 
+    #[must_use]
+    pub fn pending_work_resume(&self) -> Option<crate::agent_work::AskReason> {
+        self.work_continuation.pending()
+    }
+
     pub fn write_input(&self, bytes: &[u8]) {
+        self.work_continuation.note_input(bytes);
         if let Some(owner) = &self.work_owner {
             owner.note_input(bytes);
         }
+        self.write_protocol(bytes);
+    }
+
+    pub(super) fn write_protocol(&self, bytes: &[u8]) {
         if bytes.is_empty() {
             return;
         }
