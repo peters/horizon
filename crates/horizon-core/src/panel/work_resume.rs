@@ -111,7 +111,7 @@ impl Panel {
             .as_ref()
             .ok_or_else(|| Error::State("Missing conversation identity".into()))?;
         let exists = if self.kind == PanelKind::Claude {
-            crate::runtime_state::claude_session_transcript_exists(&binding.session_id)
+            saved_claude_history(&binding.session_id).is_some()
         } else {
             // Scope discovery to this provider and preserve the confirmed exact
             // ID; bootstrap aliases must never silently retarget a continuation.
@@ -226,6 +226,52 @@ impl Panel {
         }
         Ok(())
     }
+}
+
+fn saved_claude_history(session_id: &str) -> Option<()> {
+    use std::io::{BufRead, BufReader, Read};
+
+    const MAX_PREFIX_BYTES: u64 = 1024 * 1024;
+    if session_id.is_empty()
+        || !session_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return None;
+    }
+    let projects = crate::local_store::user_home_dir()?.join(".claude/projects");
+    let mut transcript = None;
+    for (index, entry) in std::fs::read_dir(projects).ok()?.enumerate() {
+        if index >= 4096 {
+            return None;
+        }
+        let path = entry.ok()?.path().join(format!("{session_id}.jsonl"));
+        if path.is_file() && transcript.replace(path).is_some() {
+            return None;
+        }
+    }
+    let mut reader = BufReader::new(std::fs::File::open(transcript?).ok()?.take(MAX_PREFIX_BYTES + 1));
+    let mut line = Vec::new();
+    let mut remaining = MAX_PREFIX_BYTES;
+    // Initial mode and file-history rows are metadata, not resumable messages.
+    for _ in 0..128 {
+        line.clear();
+        let bytes = u64::try_from(reader.read_until(b'\n', &mut line).ok()?).ok()?;
+        remaining = remaining.checked_sub(bytes)?;
+        let value: serde_json::Value = serde_json::from_slice(&line).ok()?;
+        if value.get("sessionId").is_some_and(|id| id.as_str() != Some(session_id)) {
+            return None;
+        }
+        if matches!(value.get("type")?.as_str()?, "user" | "assistant") {
+            return (value.get("sessionId")?.as_str()? == session_id
+                && value
+                    .get("message")?
+                    .get("content")
+                    .is_some_and(|content| content.is_string() || content.is_array()))
+            .then_some(());
+        }
+    }
+    None
 }
 
 fn saved_session_backing_exists(session: &crate::runtime_state::AgentSessionRecord) -> bool {
@@ -390,7 +436,7 @@ while :; do read -r -t 1 || :; done
             String::from_utf8_lossy(&output.stderr)
         );
         let launches = std::fs::read_to_string(home.path().join("launches")).expect("test child executed");
-        assert_eq!(launches.lines().count(), 4);
+        assert_eq!(launches.lines().count(), 5);
         assert!(
             !home.path().join("overlap").exists(),
             "replacement started before previous process exited"
@@ -429,14 +475,42 @@ while :; do read -r -t 1 || :; done
         let project = home.join(".claude/projects/fixture");
         std::fs::create_dir_all(&project).expect("transcript directory");
         let transcript = project.join("fixture-session.jsonl");
-        std::fs::write(&transcript, "{}").expect("saved transcript");
+        let valid = concat!(
+            "{\"type\":\"mode\",\"sessionId\":\"fixture-session\",\"mode\":\"normal\"}\n",
+            "{\"type\":\"file-history-snapshot\",\"snapshot\":{}}\n",
+            "{\"type\":\"user\",\"sessionId\":\"fixture-session\",\"message\":{\"role\":\"user\",\"content\":\"Fixture request\"}}\n"
+        );
+        std::fs::write(&transcript, valid).expect("saved transcript");
+        panel.check_saved_work_session().expect("metadata-prefixed history");
         assert!(crate::runtime_state::claude_session_transcript_exists(
             "fixture-session"
         ));
         assert_refusal_preserves_process(&mut panel, &home, "saved conversation", || {
-            std::fs::remove_file(transcript).expect("remove transcript after confirmation");
+            std::fs::remove_file(&transcript).expect("remove transcript after confirmation");
         });
-        shutdown_for_restart(panel.terminal_mut().expect("terminal")).expect("close missing-history provider");
+        for invalid in [
+            String::new(),
+            "{invalid}\n".into(),
+            "{}\n".into(),
+            valid.replace("fixture-session", "other-session"),
+        ] {
+            std::fs::write(&transcript, valid).expect("restore valid history");
+            assert_refusal_preserves_process(&mut panel, &home, "saved conversation", || {
+                std::fs::write(&transcript, invalid).expect("invalidate history after confirmation");
+            });
+        }
+        std::fs::write(&transcript, valid).expect("repair history");
+        panel.request_work_resume().expect("confirm repaired history");
+        panel.restart().expect("resume repaired history");
+        let args = wait_for_launch(&home, 5);
+        assert_eq!(&args[..2], ["--resume", "fixture-session"]);
+        assert_eq!(
+            args.iter()
+                .filter(|arg| arg.starts_with("The user selected Resume work"))
+                .count(),
+            1
+        );
+        shutdown_for_restart(panel.terminal_mut().expect("terminal")).expect("close repaired-history provider");
     }
 
     fn write_pi_session(home: &std::path::Path) -> std::path::PathBuf {
