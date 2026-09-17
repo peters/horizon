@@ -105,9 +105,11 @@ impl WorkStore {
             .as_ref()
             .map_or(0, |record| record.ledger.generation)
             .saturating_add(1);
-        let keep = previous
-            .as_ref()
-            .is_some_and(|record| record.kind == kind && Some(record.ledger.session_id.as_str()) == session_id);
+        let keep = previous.as_ref().is_some_and(|record| {
+            record.kind == kind
+                && Some(record.ledger.session_id.as_str()) == session_id
+                && self.check_health(panel, &record.owner_token).is_ok()
+        });
         let mut record = if keep { previous } else { None }.unwrap_or_else(|| StoredWork {
             version: SCHEMA_VERSION,
             panel_local_id: panel.to_owned(),
@@ -155,9 +157,16 @@ impl WorkStore {
         {
             return Err(invalid("lifecycle event belongs to a different panel process"));
         }
+        let before_ledger = record.ledger.clone();
+        let metadata_changed = record.cwd != input.cwd || record.transcript_path != input.transcript_path;
         record.cwd.clone_from(&input.cwd);
         record.transcript_path.clone_from(&input.transcript_path);
         record.ledger.apply(&input.event, now);
+        let mut comparable = record.ledger.clone();
+        comparable.updated_at_millis = before_ledger.updated_at_millis;
+        if !metadata_changed && comparable == before_ledger {
+            return Ok(());
+        }
         self.write(&record)
     }
 
@@ -225,6 +234,14 @@ impl WorkStore {
         let Some(mut current) = self.read(&expected.panel_local_id)? else {
             return Ok(false);
         };
+        if current.handoff.as_ref().is_some_and(|handoff| {
+            handoff.kind != current.kind
+                || handoff.session_id != current.ledger.session_id
+                || Some(handoff.prompt_id.as_str()) != current.ledger.prompt_id.as_deref()
+                || handoff.generation != current.ledger.generation
+        }) {
+            return Ok(false);
+        }
         if current.consumed
             || current.handoff.is_none()
             || current.handoff != expected.handoff
@@ -258,15 +275,30 @@ impl WorkStore {
     /// # Errors
     /// Returns an I/O error; only this launch's pre-created health file is touched.
     pub fn invalidate(&self, panel: &str, owner: &str) -> io::Result<()> {
-        let file = OpenOptions::new()
+        if let Ok(file) = OpenOptions::new()
             .write(true)
             .truncate(true)
-            .open(self.health_path(panel, owner)?)?;
-        file.sync_all()
+            .open(self.health_path(panel, owner)?)
+        {
+            file.sync_all()
+        } else {
+            // If the health marker is inaccessible, remove this owner's
+            // record under the normal lock instead. A delayed old hook
+            // must never remove a newer launch's record.
+            let _lock = self.lock(panel)?;
+            if self.read_raw(panel)?.is_some_and(|record| record.owner_token == owner) {
+                fs::remove_file(self.record_path(panel)?)?;
+                #[cfg(unix)]
+                File::open(&self.root)?.sync_all()?;
+            }
+            Ok(())
+        }
     }
 
     fn check_health(&self, panel: &str, owner: &str) -> io::Result<()> {
         let path = self.health_path(panel, owner)?;
+        // A marker that can no longer be invalidated cannot authorize work.
+        let _writable = OpenOptions::new().write(true).open(&path)?;
         if fs::metadata(&path)?.len() != 1 || fs::read(path)? != b"1" {
             return Err(invalid("launch evidence was invalidated by a failed hook"));
         }

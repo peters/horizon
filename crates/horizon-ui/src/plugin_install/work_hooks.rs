@@ -1,7 +1,7 @@
 use std::io;
 use std::path::Path;
 
-use horizon_core::agent_work::HOOK_COMMAND;
+use horizon_core::agent_work::{HOOK_COMMAND, HOOK_SHELL};
 use serde_json::json;
 
 /// This plugin is attached only to opted-in panels. Its command uses a quoted
@@ -28,7 +28,7 @@ pub(super) fn install(directory: &Path) -> io::Result<()> {
         hooks.insert(
             event.into(),
             json!([{"hooks": [{
-                "type": "command", "command": HOOK_COMMAND, "timeout": 3
+                "type": "command", "command": HOOK_COMMAND, "shell": HOOK_SHELL, "timeout": 3
             }]}]),
         );
     }
