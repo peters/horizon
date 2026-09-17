@@ -319,6 +319,63 @@ fn crash_and_permission_evidence_ask_without_a_handoff() {
 
 #[test]
 #[cfg(target_os = "linux")]
+fn uncertain_registry_asks_for_unfinished_work_without_overriding_vetoes() {
+    let _budget = RestoreBudget::new(5);
+    for registry in ["missing", "malformed", "reused"] {
+        for veto in [
+            None,
+            Some("Stop"),
+            Some("StopFailure"),
+            Some("Interrupt"),
+            Some("SessionEnd"),
+        ] {
+            let mut fixture = Fixture::new();
+            let sessions = fixture.home.path().join(".claude/sessions");
+            match registry {
+                "missing" => std::fs::remove_dir(&sessions).expect("missing registry"),
+                "malformed" => std::fs::write(sessions.join("invalid.json"), "{").expect("malformed registry"),
+                _ => std::fs::write(
+                    sessions.join("reused.json"),
+                    format!(r#"{{"sessionId":"session","pid":{}}}"#, std::process::id()),
+                )
+                .expect("unrelated live process"),
+            }
+            if let Some(veto) = veto {
+                fixture.input.event.hook_event_name = veto.into();
+                fixture.input.event.reason = Some("prompt_input_exit".into());
+                fixture
+                    .store
+                    .apply_hook(
+                        "panel",
+                        PanelKind::Claude,
+                        "owner",
+                        &fixture.input,
+                        current_unix_millis(),
+                    )
+                    .expect("terminal event");
+            }
+            let expected = if veto.is_some() {
+                RestartDecision::NotResumable
+            } else {
+                RestartDecision::Ask(AskReason::MissingEvidence)
+            };
+            assert_eq!(fixture.inspect(), (expected, None), "{registry}, {veto:?}");
+            let record = fixture.store.read("panel").expect("read").expect("record");
+            assert!(!record.consumed);
+            assert!(record.handoff.is_none());
+            for terminal in [
+                r#"{"type":"user","message":{"content":"[Request interrupted by user]"}}"#,
+                r#"{"type":"assistant","message":{"stop_reason":"end_turn","content":[]}}"#,
+            ] {
+                std::fs::write(&fixture.input.transcript_path, format!("{terminal}\n")).expect("terminal transcript");
+                assert_eq!(fixture.inspect(), (RestartDecision::NotResumable, None));
+            }
+        }
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
 fn missing_registry_and_repository_changes_downgrade_clean_work() {
     let _budget = RestoreBudget::new(1);
     let mut fixture = Fixture::new();

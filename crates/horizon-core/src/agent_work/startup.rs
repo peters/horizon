@@ -191,11 +191,15 @@ fn inspect_at(
         transcript: Some(&transcript),
         repo_fingerprint: fingerprint.as_deref(),
         session_live_elsewhere: false,
-        stale_live_session: live == Some(super::discovery::Presence::Stale),
+        // An unreadable registry cannot prove that an unfinished session exited
+        // cleanly. Keep it on the manual path through the same policy vetoes.
+        stale_live_session: live != Some(super::discovery::Presence::Absent),
         now_millis: now,
     };
     let mut decision = evidence.classify(REMAINING.get());
-    if decision == RestartDecision::Resume && (!cfg!(target_os = "linux") || live.is_none()) {
+    if (decision == RestartDecision::Resume && (!cfg!(target_os = "linux") || live.is_none()))
+        || (decision == RestartDecision::Ask(AskReason::UncleanShutdown) && live.is_none())
+    {
         decision = RestartDecision::Ask(AskReason::MissingEvidence);
     }
     let seed = if decision == RestartDecision::Resume {
