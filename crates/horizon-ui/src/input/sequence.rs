@@ -4,7 +4,7 @@ use std::fmt::Write;
 use alacritty_terminal::term::TermMode;
 use egui::{Key, Modifiers};
 
-use super::keyboard::{KeyExt, base_key_text, control_modifier, is_control_character};
+use super::keyboard::{KeyExt, KeyIdentity, base_key_text, control_modifier, is_control_character};
 
 #[derive(Clone, Copy)]
 pub(super) struct SequenceRequest<'a> {
@@ -45,11 +45,18 @@ pub(super) fn build_sequence(request: SequenceRequest<'_>) -> Option<Vec<u8>> {
         modifiers: sequence_modifiers,
     };
 
-    let sequence_base = builder
-        .try_build_named_kitty(key)
-        .or_else(|| builder.try_build_named_normal(key, associated_text.is_some()))
-        .or_else(|| builder.try_build_control_char_or_modifier(key))
-        .or_else(|| builder.try_build_textual(key, physical_key, key_without_modifiers_text, text, associated_text));
+    let sequence_base = if KeyIdentity::new(key, physical_key, key_without_modifiers_text)
+        .remapped_text()
+        .is_some()
+    {
+        builder.try_build_textual(key, physical_key, key_without_modifiers_text, text, associated_text)
+    } else {
+        builder
+            .try_build_named_kitty(key)
+            .or_else(|| builder.try_build_named_normal(key, associated_text.is_some()))
+            .or_else(|| builder.try_build_control_char_or_modifier(key))
+            .or_else(|| builder.try_build_textual(key, physical_key, key_without_modifiers_text, text, associated_text))
+    };
 
     let SequenceBase { payload, terminator } = sequence_base?;
     let mut payload = format!("\x1b[{payload}");

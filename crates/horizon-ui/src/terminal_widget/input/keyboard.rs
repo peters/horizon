@@ -354,6 +354,31 @@ mod tests {
     use horizon_core::{PanelKind, SshConnectionStatus};
 
     #[test]
+    fn remapped_function_key_emits_only_logical_unicode() {
+        let events = [
+            key_event(Key::F19, Some(Key::F19), Some("æ"), true, false, Modifiers::NONE),
+            text_event("æ"),
+            key_event(Key::F19, Some(Key::F19), Some("æ"), false, false, Modifiers::NONE),
+        ];
+        assert_eq!(forward_bytes(&events, TermMode::NONE), "æ".as_bytes());
+        assert_eq!(forward_bytes(&events, TermMode::REPORT_ALL_KEYS_AS_ESC), b"\x1b[230u");
+        assert_eq!(
+            forward_bytes(&events, TermMode::REPORT_ALL_KEYS_AS_ESC | TermMode::REPORT_EVENT_TYPES),
+            b"\x1b[230u\x1b[230;1:3u"
+        );
+    }
+
+    #[test]
+    fn genuine_function_key_retains_modified_and_kitty_sequences() {
+        let events = [key_event(Key::F19, Some(Key::F19), None, true, false, Modifiers::CTRL)];
+        assert_eq!(forward_bytes(&events, TermMode::NONE), b"\x1b[33;5~");
+        assert_eq!(
+            forward_bytes(&events, TermMode::REPORT_ALL_KEYS_AS_ESC),
+            b"\x1b[57382;5u"
+        );
+    }
+
+    #[test]
     fn disconnected_ssh_panels_request_reconnect_from_local_shortcut() {
         assert!(disconnected_ssh_reconnect_requested(
             PanelKind::Ssh,
