@@ -2,7 +2,7 @@
 mod dispatch;
 mod mcp;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use dispatch::Dispatcher;
+use dispatch::{Command, Dispatcher};
 use serde_json::{Value, json};
 use std::{
     io::{Read, Write},
@@ -27,7 +27,7 @@ async fn run() -> Result<u8, String> {
     let first = args.next().unwrap_or_default();
     if first == "--help" || first.is_empty() {
         println!(
-            "horizon-device --target FILE doctor|screenshot [OUTPUT.png]|act JSON|mcp\nJSON may be '-' to read up to 64 KiB from stdin.\nTarget JSON: {{\"id\":\"lab\",\"endpoint\":{{\"kind\":\"local_x11\",\"display\":\":99\"}}}}\nUse a private directory for FILE; cooperating CLI/MCP commands share FILE's .lock sibling.\nNo default display, application launching, or remote management."
+            "horizon-device --target FILE doctor|screenshot [OUTPUT] [--options JSON]|act JSON|mcp\nJSON may be '-' to read up to 64 KiB from stdin.\nTarget JSON: {{\"id\":\"lab\",\"endpoint\":{{\"kind\":\"local_x11\",\"display\":\":99\"}}}}\nUse a private directory for FILE; cooperating CLI/MCP commands share FILE's .lock sibling.\nNo default display, application launching, or remote management."
         );
         return Ok(0);
     }
@@ -45,33 +45,41 @@ async fn run() -> Result<u8, String> {
         }
         return Ok(mcp::serve(dispatcher).await);
     }
-    let mut extra = args.next();
+    let mut output = None;
+    let request = match command.as_str() {
+        "act" => Command::Act(
+            serde_json::from_str(&read_json(args.next().ok_or("act requires JSON")?)?)
+                .map_err(|error| format!("invalid action: {error}"))?,
+        ),
+        "doctor" => Command::Doctor,
+        "screenshot" => {
+            let mut options = horizon_device::CaptureOptions::default();
+            if let Some(first) = args.next() {
+                let option_flag = if first == "--options" {
+                    Some(first)
+                } else {
+                    output = Some(first);
+                    args.next()
+                };
+                if let Some(flag) = option_flag {
+                    if flag != "--options" {
+                        return Err("expected --options JSON after output path".into());
+                    }
+                    options = serde_json::from_str(&read_json(args.next().ok_or("missing capture options")?)?)
+                        .map_err(|error| format!("invalid capture options: {error}"))?;
+                }
+            }
+            Command::Screenshot(options)
+        }
+        _ => return Err("expected doctor, screenshot, act, or mcp".into()),
+    };
     if args.next().is_some() {
         return Err("unexpected arguments".into());
     }
-    let request = match command.as_str() {
-        "act" => {
-            let mut text = extra.take().ok_or("act requires JSON")?;
-            if text == "-" {
-                text.clear();
-                std::io::stdin()
-                    .take(65537)
-                    .read_to_string(&mut text)
-                    .map_err(|e| e.to_string())?;
-            }
-            if text.len() > 65536 {
-                return Err("request exceeds 64 KiB".into());
-            }
-            Some(serde_json::from_str(&text).map_err(|e| format!("invalid action: {e}"))?)
-        }
-        "doctor" if extra.is_none() => None,
-        "screenshot" => None,
-        _ => return Err("expected doctor, screenshot, act, or mcp".into()),
-    };
-    let mut value = dispatcher.call(&command, request);
+    let mut value = dispatcher.call(request);
     if command == "screenshot"
         && value["ok"] == true
-        && let Some(path) = extra
+        && let Some(path) = output
     {
         let encoded = value["result"]["image_base64"].as_str().ok_or("missing image")?;
         let image = STANDARD.decode(encoded).map_err(|e| e.to_string())?;
@@ -94,4 +102,18 @@ async fn run() -> Result<u8, String> {
     }
     println!("{value}");
     Ok(u8::from(value["ok"] != true))
+}
+
+fn read_json(mut text: String) -> Result<String, String> {
+    if text == "-" {
+        text.clear();
+        std::io::stdin()
+            .take(65537)
+            .read_to_string(&mut text)
+            .map_err(|error| error.to_string())?;
+    }
+    if text.len() > 65536 {
+        return Err("request exceeds 64 KiB".into());
+    }
+    Ok(text)
 }

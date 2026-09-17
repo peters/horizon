@@ -50,6 +50,7 @@ fn input_is_bounded_and_releases_buttons_and_modifiers() -> Result<(), Box<dyn s
     device.act(&request)?;
     assert_eq!(u16::from(connection.query_pointer(root)?.reply()?.mask) & 0x1f00, 0);
     delayed_text_receiver_preserves_unicode(&target)?;
+    capture_options_keep_original_geometry(&target)?;
     Ok(())
 }
 
@@ -149,6 +150,58 @@ fn delayed_text_receiver_preserves_unicode(target: &Target) -> Result<(), Box<dy
     assert_eq!(
         received, expected,
         "temporary key mappings survived delayed consumption"
+    );
+    Ok(())
+}
+
+fn capture_options_keep_original_geometry(target: &Target) -> Result<(), Box<dyn std::error::Error>> {
+    use horizon_device::{CaptureOptions, ImageDimensions, ImageFormat, Region};
+    let mut device = Device::connect(target)?;
+    let baseline = device.screenshot()?;
+    let region = Region {
+        x: baseline.geometry.width - 2,
+        y: baseline.geometry.height - 2,
+        width: 2,
+        height: 2,
+    };
+    for format in [ImageFormat::Png, ImageFormat::Jpeg] {
+        let observation = device.screenshot_with(&CaptureOptions {
+            region: Some(region),
+            output: Some(ImageDimensions { width: 4, height: 4 }),
+            format,
+            quality: None,
+        })?;
+        assert_eq!(observation.geometry, baseline.geometry);
+        assert_eq!(observation.source_region, region);
+        assert_eq!(observation.image_dimensions, ImageDimensions { width: 4, height: 4 });
+        let point = observation.surface_point(&Point { x: 3, y: 3 })?;
+        assert_eq!(
+            (point.x, point.y),
+            (
+                i32::try_from(baseline.geometry.width - 1)?,
+                i32::try_from(baseline.geometry.height - 1)?
+            )
+        );
+        let mut stale = observation.geometry;
+        stale.revision.push_str("stale");
+        assert!(matches!(
+            device.act(&ActRequest {
+                geometry: stale,
+                action: Action::Click {
+                    at: point,
+                    button: horizon_device::Button::Left
+                }
+            }),
+            Err(DeviceError::StaleGeometry)
+        ));
+    }
+    assert!(
+        device
+            .screenshot_with(&CaptureOptions {
+                region: Some(Region { width: 3, ..region }),
+                ..Default::default()
+            })
+            .is_err()
     );
     Ok(())
 }

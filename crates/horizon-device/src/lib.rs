@@ -2,6 +2,7 @@
 //! Device observation and bounded input. The initial backend is local Linux X11.
 //! No GUI, model provider, application lifecycle, or transport is required.
 
+mod capture;
 mod model;
 #[cfg(target_os = "linux")]
 mod x11;
@@ -38,7 +39,7 @@ pub type Result<T> = std::result::Result<T, DeviceError>;
 /// in public requests. Backends must validate before sending any input.
 trait Backend {
     fn doctor(&self) -> Result<Readiness>;
-    fn screenshot(&self) -> Result<Observation>;
+    fn screenshot(&self, options: &CaptureOptions) -> Result<Observation>;
     fn act(&mut self, request: &ActRequest) -> Result<ActionReceipt>;
 }
 
@@ -73,7 +74,14 @@ impl Device {
     /// # Errors
     /// Returns an error for unavailable capture, unsupported formats, or geometry changes.
     pub fn screenshot(&self) -> Result<Observation> {
-        self.backend.screenshot()
+        self.screenshot_with(&CaptureOptions::default())
+    }
+    /// Capture a bounded crop and optional scaled PNG/JPEG image.
+    ///
+    /// # Errors
+    /// Rejects invalid capture options before reading pixels.
+    pub fn screenshot_with(&self, options: &CaptureOptions) -> Result<Observation> {
+        self.backend.screenshot(options)
     }
     /// # Errors
     /// Rejects invalid/stale requests before input; partial input returns indeterminate.

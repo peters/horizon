@@ -18,7 +18,7 @@ impl Backend for Fake {
     fn doctor(&self) -> Result<Readiness> {
         Err(DeviceError::Unsupported("fixture".into()))
     }
-    fn screenshot(&self) -> Result<Observation> {
+    fn screenshot(&self, _options: &CaptureOptions) -> Result<Observation> {
         Err(DeviceError::Unsupported("fixture".into()))
     }
     fn act(&mut self, request: &ActRequest) -> Result<ActionReceipt> {

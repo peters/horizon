@@ -43,6 +43,79 @@ fn cooperating_process_lock_prevents_backend_access() -> Result<(), Box<dyn std:
 }
 
 #[test]
+fn capture_options_cli_syntax_is_validated_before_backend_access() -> Result<(), Box<dyn std::error::Error>> {
+    use std::{io::Write, process::Stdio};
+    let dir = tempfile::tempdir()?;
+    let target = dir.path().join("target.json");
+    // A backend-independent sentinel: valid syntax reaches config parsing.
+    std::fs::write(&target, "deliberately invalid target")?;
+    let output = dir.path().join("image.png");
+    let path = output.to_str().ok_or("non-UTF8 test path")?;
+    let run = |args: &[&str], input: &str| -> Result<std::process::Output, Box<dyn std::error::Error>> {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-device"))
+            .arg("--target")
+            .arg(&target)
+            .arg("screenshot")
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()?;
+        let mut stdin = child.stdin.take().ok_or("missing stdin")?;
+        if args.last() == Some(&"-") {
+            stdin.write_all(input.as_bytes())?;
+        }
+        drop(stdin);
+        Ok(child.wait_with_output()?)
+    };
+    for args in [
+        vec![],
+        vec![path],
+        vec!["--options", "{}"],
+        vec![path, "--options", "{}"],
+        vec!["--options", "-"],
+        vec![path, "--options", "-"],
+    ] {
+        let response = run(&args, r#"{"format":"jpeg","quality":75}"#)?;
+        assert_eq!(response.status.code(), Some(1), "{args:?}");
+        let body: Value = serde_json::from_slice(&response.stdout)?;
+        assert_eq!(body["ok"], false);
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("invalid target config"))
+        );
+        assert!(!output.exists());
+    }
+    for (args, input) in [
+        (vec!["--options"], ""),
+        (vec!["--options", "not-json"], ""),
+        (vec!["--options", "{}", "extra"], ""),
+        (vec![path, "--options"], ""),
+        (vec![path, "--unknown", "{}"], ""),
+        (vec![path, "--options", "{}", "extra"], ""),
+        (vec!["--options", "-"], "not-json"),
+        (vec![path, "--options", "-"], r#"{"unknown":true}"#),
+    ] {
+        let response = run(&args, input)?;
+        assert_eq!(response.status.code(), Some(2), "{args:?}");
+        let body: Value = serde_json::from_slice(&response.stdout)?;
+        assert_eq!(body["ok"], false);
+        assert_eq!(body["error"]["code"], "invalid_request");
+        assert!(
+            !body["error"]["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("invalid target config"))
+        );
+        assert!(!output.exists());
+    }
+    let oversized = run(&["--options", "-"], &" ".repeat(65_537))?;
+    assert_eq!(oversized.status.code(), Some(2));
+    let body: Value = serde_json::from_slice(&oversized.stdout)?;
+    assert_eq!(body["error"]["message"], "request exceeds 64 KiB");
+    Ok(())
+}
+
+#[test]
 fn mcp_startup_errors_leave_stdout_as_protocol_only() -> Result<(), Box<dyn std::error::Error>> {
     let output = Command::new(env!("CARGO_BIN_EXE_horizon-device"))
         .args(["--target", "unused.json", "mcp"])
