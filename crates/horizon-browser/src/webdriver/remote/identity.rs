@@ -64,8 +64,11 @@ impl fmt::Display for DeviceEvidence {
 /// The allocated device as the provider's evidence describes it.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RemoteDeviceIdentity {
-    pub model: Option<String>,
-    pub os_version: Option<String>,
+    pub browser_name: Option<Box<str>>,
+    pub browser_version: Option<Box<str>>,
+    pub os_name: Option<Box<str>>,
+    pub model: Option<Box<str>>,
+    pub os_version: Option<Box<str>>,
     pub hardware: Option<DeviceEvidence>,
 }
 
@@ -76,7 +79,7 @@ impl RemoteDeviceIdentity {
     pub fn summary(&self) -> String {
         let mut parts = Vec::new();
         if let Some(model) = &self.model {
-            parts.push(model.clone());
+            parts.push(model.to_string());
         }
         if let Some(version) = &self.os_version {
             parts.push(format!("OS {version}"));
@@ -162,8 +165,11 @@ pub fn identity_from_capabilities(capabilities: &Value) -> RemoteDeviceIdentity 
             _ => None,
         });
     RemoteDeviceIdentity {
-        model: string(&["appium:deviceName", "deviceName"]),
-        os_version: string(&["appium:platformVersion", "platformVersion"]),
+        browser_name: string(&["browserName"]).map(String::into_boxed_str),
+        browser_version: string(&["browserVersion", "version"]).map(String::into_boxed_str),
+        os_name: string(&["platformName", "platform"]).map(String::into_boxed_str),
+        model: string(&["appium:deviceName", "deviceName"]).map(String::into_boxed_str),
+        os_version: string(&["appium:platformVersion", "platformVersion"]).map(String::into_boxed_str),
         hardware: real_mobile.map(|real| {
             if real {
                 DeviceEvidence::Physical
@@ -181,14 +187,17 @@ pub fn identity_from_capabilities(capabilities: &Value) -> RemoteDeviceIdentity 
 pub fn identity_from_session_record(record: &Value) -> RemoteDeviceIdentity {
     let session = record.get("automation_session").unwrap_or(record);
     let text = |name: &str| session.get(name).and_then(evidence_text);
-    let model = text("device");
+    let model = text("device").map(String::into_boxed_str);
     RemoteDeviceIdentity {
+        browser_name: text("browser").map(String::into_boxed_str),
+        browser_version: text("browser_version").map(String::into_boxed_str),
+        os_name: text("os").map(String::into_boxed_str),
         hardware: Some(if model.is_some() {
             DeviceEvidence::Physical
         } else {
             DeviceEvidence::Unknown
         }),
-        os_version: text("os_version"),
+        os_version: text("os_version").map(String::into_boxed_str),
         model,
     }
 }
@@ -247,6 +256,7 @@ mod tests {
             model: Some("iPhone 16".into()),
             os_version: Some("18.6".into()),
             hardware: Some(DeviceEvidence::Physical),
+            ..RemoteDeviceIdentity::default()
         };
         assert_eq!(
             check_requirement(
@@ -266,6 +276,7 @@ mod tests {
             model: None,
             os_version: None,
             hardware: None,
+            ..RemoteDeviceIdentity::default()
         };
         let error =
             check_requirement(&requirement(DeviceKind::Physical, None, None), &unknown).expect_err("unverified");
@@ -313,13 +324,17 @@ mod tests {
                 model: Some("Pixel 9".into()),
                 os_version: Some("16.0".into()),
                 hardware: Some(DeviceEvidence::Physical),
+                browser_name: Some("chrome".into()),
+                ..RemoteDeviceIdentity::default()
             }
         );
         let bare = identity_from_capabilities(&json!({"deviceName": " emulator-5554 ", "realMobile": false}));
         assert_eq!(bare.model.as_deref(), Some("emulator-5554"));
         assert_eq!(bare.hardware, Some(DeviceEvidence::Emulated));
         let silent = identity_from_capabilities(&json!({"browserName": "safari", "platformName": "iOS"}));
-        assert_eq!(silent, RemoteDeviceIdentity::default());
+        assert_eq!(silent.browser_name.as_deref(), Some("safari"));
+        assert_eq!(silent.os_name.as_deref(), Some("iOS"));
+        assert_eq!(silent.model, None);
         assert_eq!(silent.summary(), "unverified hardware");
 
         // Oversized or control-laden provider text is absent evidence.
@@ -337,6 +352,24 @@ mod tests {
             Some(DeviceEvidence::Unknown),
             "a device name that is not evidence proves nothing"
         );
+    }
+
+    #[test]
+    fn session_records_preserve_browser_and_platform_without_desktop_hardware_claims() {
+        let identity = identity_from_session_record(&json!({"automation_session": {
+            "browser": "edge", "browser_version": "152", "os": "Windows", "os_version": "10", "device": null
+        }}));
+        assert_eq!(identity.browser_name.as_deref(), Some("edge"));
+        assert_eq!(identity.browser_version.as_deref(), Some("152"));
+        assert_eq!(identity.os_name.as_deref(), Some("Windows"));
+        assert_eq!(identity.os_version.as_deref(), Some("10"));
+        assert_eq!(identity.hardware, Some(DeviceEvidence::Unknown));
+        let invalid = identity_from_session_record(&json!({
+            "browser": "bad\nname", "browser_version": "x".repeat(129), "os": "   "
+        }));
+        assert_eq!(invalid.browser_name, None);
+        assert_eq!(invalid.browser_version, None);
+        assert_eq!(invalid.os_name, None);
     }
 
     #[test]

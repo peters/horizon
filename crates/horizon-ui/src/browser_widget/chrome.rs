@@ -29,6 +29,9 @@ pub fn show(
     state: &mut BrowserUiState,
     interactive: bool,
 ) -> (bool, bool) {
+    if let Some(identity) = browser.remote_identity_display() {
+        remote_identity_header(ui, identity);
+    }
     let chrome_row = ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         ui.set_min_height(CHROME_HEIGHT);
@@ -89,6 +92,20 @@ pub fn show(
     (url_focused, clicked)
 }
 
+fn remote_identity_header(ui: &mut Ui, identity: &horizon_core::browser::RemoteIdentityDisplay) {
+    // A dedicated row keeps the hover target usable at the minimum panel width.
+    ui.add_sized(
+        vec2(ui.available_width(), CHROME_HEIGHT),
+        egui::Label::new(identity.label())
+            .wrap_mode(TextWrapMode::Truncate)
+            .show_tooltip_when_elided(false),
+    )
+    .on_hover_ui(|ui| {
+        ui.set_max_width(crate::text::stable_tooltip_max_width(ui));
+        ui.add(egui::Label::new(identity.tooltip()).wrap());
+    });
+}
+
 /// Whether the backend picker may act, and the explanation shown when a
 /// remote target fixes the browser.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -113,6 +130,9 @@ fn backend_picker(
     browser: &mut BrowserPanelState,
     interactive: bool,
 ) -> bool {
+    if browser.is_remote() {
+        return false;
+    }
     let previous = browser.backend();
     let mut selected = previous;
     let selected_text = browser.active_backend_capabilities().map_or_else(
@@ -463,7 +483,7 @@ mod tests {
     use crate::test_egui::DiscardTextures;
 
     #[test]
-    fn a_remote_panel_keeps_its_family_visible_but_never_actionable() {
+    fn a_remote_panel_shows_session_state_without_changing_its_backend() {
         let mut remote = BrowserPanelState::restored_remote(
             "remote-picker",
             &horizon_core::browser::BrowserConfig {
@@ -483,11 +503,10 @@ mod tests {
         assert_eq!(
             remote.backend(),
             BackendKind::SafariWebDriver,
-            "the family stays readable"
+            "the backend family is unchanged"
         );
 
-        // Rendered for real: the disabled picker changes nothing and the
-        // frame carries the explanation for hover.
+        // The remote identity label leaves the backend unchanged.
         let ctx = egui::Context::default();
         let mut changed = None;
         let _ = ctx
@@ -510,6 +529,54 @@ mod tests {
             !picker_state(&local, false).enabled,
             "a non-interactive view never picks"
         );
+    }
+
+    #[test]
+    fn long_remote_identity_is_single_line_truncated_with_room_for_the_url() {
+        let mut remote = BrowserPanelState::inert_remote("target", "provider");
+        remote.apply_remote_session_event_for_tests(horizon_browser::RemoteSessionEvent::DeviceIdentity {
+            label: "target".into(),
+            identity: horizon_browser::RemoteDeviceIdentity {
+                browser_name: Some("safari".into()),
+                model: Some("iPhone 16 Pro Max with a very long provider-reported device name".into()),
+                os_name: Some("iOS".into()),
+                os_version: Some("18.5".into()),
+                ..horizon_browser::RemoteDeviceIdentity::default()
+            },
+        });
+        remote.owner = Some("Test owner".into());
+        for width in [320.0, 360.0, 500.0] {
+            let ctx = egui::Context::default();
+            let mut state = crate::browser_widget::BrowserUiState::default();
+            let output = ctx
+                .run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 180.0))),
+                        ..egui::RawInput::default()
+                    },
+                    |ui| {
+                        super::show(ui, horizon_core::PanelId(1), &mut remote, &mut state, true);
+                        assert!(ui.min_rect().right() <= width);
+                    },
+                )
+                .discard_textures();
+            let text = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.job.text.starts_with("Remote browser") => Some(text),
+                    _ => None,
+                })
+                .expect("identity text");
+            assert_eq!(text.galley.rows.len(), 1);
+            assert!(text.galley.elided, "long identity must elide at width {width}");
+            assert!(text.galley.size().x > 200.0, "identity remains readable and hoverable");
+            let bounds = text.visual_bounding_rect();
+            assert!(
+                bounds.left() >= 0.0 && bounds.right() <= width,
+                "width={width}, bounds={bounds:?}"
+            );
+        }
     }
 
     #[test]

@@ -6,6 +6,8 @@
 
 #[doc(hidden)]
 pub mod manifest;
+mod remote_identity;
+pub use remote_identity::RemoteIdentityDisplay;
 mod remote_panel;
 pub use remote_panel::RemoteFailure;
 pub mod remote_profile;
@@ -530,6 +532,7 @@ impl BrowserPanelState {
     /// over the stopping driver and undrained frame notifications are
     /// released.
     pub fn stop(&mut self) {
+        self.clear_remote_identity();
         // A queued Retry must not survive an explicit stop: drain_events
         // would otherwise relaunch Chrome after the caller stopped it.
         self.pending_relaunch = None;
@@ -545,6 +548,7 @@ impl BrowserPanelState {
     /// the app-shutdown paths join on it so exit cannot outrun the profile
     /// lock.
     pub fn request_shutdown(&mut self) {
+        self.clear_remote_identity();
         self.pending_relaunch = None;
         if let Some(session) = self.session.take() {
             self.teardown_signal = Some(Box::new((*session).shutdown_signal()));
@@ -809,6 +813,7 @@ impl BrowserPanelState {
     }
 
     fn apply_stopped(&mut self, code: Option<i32>, output: &mut BrowserDrainOutput) {
+        self.clear_remote_identity();
         if let Some(session) = self.session.take() {
             self.teardown_signal = Some(Box::new((*session).completion_signal()));
         }
