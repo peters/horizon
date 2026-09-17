@@ -38,7 +38,10 @@ pub(super) fn session_presence(home: &Path, session: &str) -> io::Result<Presenc
             .and_then(serde_json::Value::as_u64)
             .filter(|pid| *pid > 0)
             .ok_or_else(|| io::Error::other("missing process identity"))?;
-        if !cfg!(target_os = "linux") || Path::new("/proc").join(pid.to_string()).exists() {
+        if !cfg!(target_os = "linux") {
+            return Err(io::Error::other("process liveness is not verified on this platform"));
+        }
+        if Path::new("/proc").join(pid.to_string()).exists() {
             return Ok(Presence::Live);
         }
         result = Presence::Stale;
@@ -96,7 +99,11 @@ mod tests {
             format!(r#"{{"sessionId":"session","pid":{}}}"#, std::process::id()),
         )
         .expect("entry");
-        assert_eq!(session_presence(temp.path(), "session").expect("live"), Presence::Live);
+        if cfg!(target_os = "linux") {
+            assert_eq!(session_presence(temp.path(), "session").expect("live"), Presence::Live);
+        } else {
+            assert!(session_presence(temp.path(), "session").is_err());
+        }
         std::fs::remove_file(dir.join("live.json")).expect("remove");
         std::fs::write(dir.join("bad.json"), "broken").expect("entry");
         assert!(session_presence(temp.path(), "session").is_err());
