@@ -174,16 +174,21 @@ pub(super) fn spawn_terminal(
     let ResolvedTerminalLaunch {
         session_binding,
         program,
-        launch_args,
+        mut launch_args,
     } = resolved_launch;
     let has_custom_name = name_is_custom.unwrap_or_else(|| name.is_some());
     let title = name.unwrap_or_else(|| default_terminal_title(id, saved_ssh_connection.as_ref()));
-    let initial_ssh_status = if kind == PanelKind::Ssh {
-        Some(SshConnectionStatus::Connecting)
-    } else {
-        None
-    };
-    let env = agent_env(kind, &local_id, saved_command.is_none());
+    let initial_ssh_status = (kind == PanelKind::Ssh).then_some(SshConnectionStatus::Connecting);
+    let mut env = agent_env(kind, &local_id, saved_command.is_none());
+    let work_owner = crate::agent_work::WorkLaunch {
+        panel: &local_id,
+        kind,
+        policy: &work_resume,
+        cwd: saved_cwd.as_deref(),
+        session_id: session_binding.as_ref().map(|binding| binding.session_id.as_str()),
+        default_command: saved_command.is_none(),
+    }
+    .attach(&mut launch_args, &mut env);
     let panel_args = TerminalPanelBuildArgs {
         id,
         local_id,
@@ -206,7 +211,7 @@ pub(super) fn spawn_terminal(
     if restore_as_disconnected_snapshot && panel_args.kind == PanelKind::Ssh && had_persisted_transcript_state {
         return spawn_disconnected_ssh_snapshot_panel(panel_args, rows, cols, replay_bytes);
     }
-    let terminal = Terminal::spawn(TerminalSpawnOptions {
+    let mut terminal = Terminal::spawn(TerminalSpawnOptions {
         program,
         args: launch_args,
         cwd,
@@ -220,6 +225,7 @@ pub(super) fn spawn_terminal(
         env,
         kitty_keyboard: kitty_keyboard_for_kind(kind),
     })?;
+    terminal.work_owner = work_owner;
     tracing::info!("created panel '{}' (id={})", panel_args.title, panel_args.id.0);
     Ok(build_terminal_panel(panel_args, terminal, initial_ssh_status))
 }

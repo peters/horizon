@@ -137,7 +137,10 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   atomic metadata writes and one-shot handoff claims. The UI's internal
   `--agent-work-hook` command records events before initializing plugins or the
   GUI; the dedicated opt-in plugin is leased with the owning host. These
-  primitives do not launch turns.
+  primitives do not launch turns. `lifecycle.rs` attaches opted-in launch
+  identities and prepares/seals handoffs; `repository.rs` fingerprints repository
+  contents. Terminal shutdown workers own cancellation and PTY exit, keeping
+  filesystem work outside the UI shutdown path.
 - `local_store.rs` centralizes agent-store environment paths and read-only
   SQLite opening so discovery, validation, and usage reporting agree.
 - Shared domain helpers belong here when both core and UI need them.
