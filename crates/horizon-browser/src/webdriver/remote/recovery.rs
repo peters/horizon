@@ -95,6 +95,17 @@ impl PartialEq for RemoteAllocation {
 impl Eq for RemoteAllocation {}
 
 impl RemoteAllocation {
+    /// Construct an unresolved exact allocation for host integration fixtures.
+    /// # Errors
+    /// The fixture endpoint is invalid.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn unresolved_for_test(endpoint: &str, session: &str) -> Result<Self, crate::WebDriverHttpError> {
+        let allocation = Self::default();
+        allocation.identify(Arc::new(RemoteHttpClient::new(endpoint, None)?), session.to_string());
+        allocation.finish(None);
+        Ok(allocation)
+    }
+
     /// Called inside the coordinator's manifest publication transaction.
     pub fn mark_published(&self) {
         let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);

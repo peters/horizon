@@ -48,10 +48,52 @@ impl RecoveryRequest {
     }
 }
 
+/// A recovery queue bound to one private coordination root.
+pub struct RecoveryQueue {
+    root: PathBuf,
+}
+
+impl Default for RecoveryQueue {
+    fn default() -> Self {
+        Self::new(BrowserRuntimePaths::resolve().root().to_path_buf())
+    }
+}
+
+impl RecoveryQueue {
+    #[must_use]
+    pub fn new(root: PathBuf) -> Self {
+        Self { root }
+    }
+
+    /// # Errors
+    /// Invalid identity, unavailable storage, or a full queue.
+    pub fn enqueue(&self, identity: AgentIdentity<'_>, reference: Option<String>) -> std::io::Result<String> {
+        enqueue_at(&self.root, identity, reference)
+    }
+
+    /// # Errors
+    /// Unavailable or malformed queue storage.
+    pub fn claim(&self, host: &str) -> std::io::Result<Vec<RecoveryRequest>> {
+        claim_at(&self.root, host)
+    }
+
+    /// # Errors
+    /// Unavailable storage or a mismatched request identity.
+    pub fn complete(&self, result: &RecoveryResult) -> std::io::Result<()> {
+        complete_at(&self.root, result)
+    }
+
+    /// # Errors
+    /// Unavailable storage or a mismatched result identity.
+    pub fn take(&self, identity: AgentIdentity<'_>, request_id: &str) -> std::io::Result<Option<RecoveryResult>> {
+        take_at(&self.root, identity, request_id)
+    }
+}
+
 /// # Errors
 /// Invalid host identity, a full queue, or unavailable private storage.
 pub fn enqueue_recovery(identity: AgentIdentity<'_>, reference: Option<String>) -> std::io::Result<String> {
-    enqueue_at(BrowserRuntimePaths::resolve().root(), identity, reference)
+    RecoveryQueue::default().enqueue(identity, reference)
 }
 
 fn enqueue_at(root: &Path, identity: AgentIdentity<'_>, reference: Option<String>) -> std::io::Result<String> {
@@ -95,7 +137,7 @@ fn enqueue_at(root: &Path, identity: AgentIdentity<'_>, reference: Option<String
 /// # Errors
 /// Unavailable or malformed queue storage.
 pub fn claim_recovery_requests(host: &str) -> std::io::Result<Vec<RecoveryRequest>> {
-    claim_at(BrowserRuntimePaths::resolve().root(), host)
+    RecoveryQueue::default().claim(host)
 }
 
 fn claim_at(root: &Path, host: &str) -> std::io::Result<Vec<RecoveryRequest>> {
@@ -130,7 +172,7 @@ fn claim_at(root: &Path, host: &str) -> std::io::Result<Vec<RecoveryRequest>> {
 /// # Errors
 /// Private result storage is unavailable.
 pub fn complete_recovery(result: &RecoveryResult) -> std::io::Result<()> {
-    complete_at(BrowserRuntimePaths::resolve().root(), result)
+    RecoveryQueue::default().complete(result)
 }
 
 fn complete_at(root: &Path, result: &RecoveryResult) -> std::io::Result<()> {
@@ -153,7 +195,7 @@ fn complete_at(root: &Path, result: &RecoveryResult) -> std::io::Result<()> {
 /// # Errors
 /// Result storage is unavailable or does not match the caller's identity.
 pub fn take_recovery_result(identity: AgentIdentity<'_>, request_id: &str) -> std::io::Result<Option<RecoveryResult>> {
-    take_at(BrowserRuntimePaths::resolve().root(), identity, request_id)
+    RecoveryQueue::default().take(identity, request_id)
 }
 
 fn take_at(root: &Path, identity: AgentIdentity<'_>, request_id: &str) -> std::io::Result<Option<RecoveryResult>> {
