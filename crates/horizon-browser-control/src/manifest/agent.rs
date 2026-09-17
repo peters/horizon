@@ -85,6 +85,39 @@ fn heartbeat_locked(manifest: &mut BrowserManifest, identity: AgentIdentity<'_>,
     }
 }
 
+/// Renew only the recorded owner of an existing handoff after a wait timeout.
+/// A lease may expire while the model reads the timeout; the owner and request
+/// must still match under the manifest lock. Never reset the user's Done flag.
+///
+/// # Errors
+/// Returns `PermissionDenied` when ownership, request, or workspace changed.
+pub fn resume_handoff(panel_local_id: &str, identity: AgentIdentity<'_>, request_id: &str) -> std::io::Result<()> {
+    validate_actor(identity.actor)?;
+    let mut outcome = Ok(());
+    update(panel_local_id, |manifest| {
+        outcome = permit(manifest, identity).and_then(|()| {
+            if manifest.owner.as_ref().is_none_or(|owner| owner.name != identity.actor)
+                || manifest
+                    .handoff
+                    .as_ref()
+                    .is_none_or(|handoff| handoff.request_id != request_id)
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "handoff owner or request changed; inspect browser_panel before continuing",
+                ));
+            }
+            let now = now_millis();
+            if let Some(owner) = manifest.owner.as_mut() {
+                owner.updated_at = now;
+            }
+            manifest.updated_at = now;
+            Ok(())
+        });
+    })?;
+    outcome
+}
+
 /// Release a panel only when `agent_name` is still its recorded owner.
 ///
 /// This is the clean-shutdown counterpart to the heartbeat TTL. A mismatched

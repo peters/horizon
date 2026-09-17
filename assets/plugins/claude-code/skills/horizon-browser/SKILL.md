@@ -139,13 +139,30 @@ instrumentation because standard BiDi does not expose them; the panel
 advertises both distinctions. Safari network capture is currently unsupported.
 Do not describe Firefox WebSocket instrumentation as undetectable.
 
-When the user must steer, call `browser_handoff` with a concise reason and stop
-issuing actions. The call itself waits until the user selects **Done — hand back
-to agent** (or `timeout_millis` elapses, default 15 minutes), then this turn
-continues. When it returns `handoff_pending: false`, take a fresh snapshot
-before continuing. Do not poll `browser_list` for that signal. Set `wait: false`
-only when a script must request steering without blocking. Use `browser_audit`
-to review the
+When the user must steer, announce what they need to do in a progress message,
+then call `browser_handoff` with a concise reason. Keep this turn active until
+the user selects **Done — hand back to agent**. Omit `timeout_millis` for the
+15-minute human wait; do not substitute a short page-action timeout such as
+60000 ms. Leave `wait` true (the default) and stop issuing page actions while
+the user steers. Set `wait: false` only for an explicitly nonblocking script.
+
+A yielded or backgrounded tool invocation is still running: keep awaiting that
+same invocation using the client's wait mechanism until its result arrives.
+Do not send a final response saying you are waiting: ending the turn leaves no
+pending call for the Done button to resume.
+
+If the handoff times out, call `browser_panel` once. If `handoff_pending` is
+still true, call blocking `browser_handoff` again
+with `resume_request_id` from the timeout and the default timeout. This resumes
+that request without undoing a concurrent Done click; it renews an expired lease
+only if the recorded owner and request still match. Keep waiting in this turn.
+If handoff completed,
+or the call returns `handoff_pending: false`, take a fresh snapshot and resume
+the task without requiring another chat message. Stop on explicit cancellation,
+panel closure, lost ownership, or an unrecoverable connection failure and report
+the actual condition. Do not poll `browser_list` for hand-back.
+
+Use `browser_audit` to review the
 redacted ordered action history or to verify a specific action id. The default
 page is the newest matching records (`limit` 1-500, default 100). To iterate
 every retained record, call with `from_start: true` and reuse `next_event_id`
