@@ -43,10 +43,8 @@ impl PresetConfig {
 
     #[must_use]
     pub fn requires_workspace_cwd(&self) -> bool {
-        // Browser panels never receive a cwd (Chrome is launched from the
-        // Horizon process), so a cwd-less workspace must not trigger a
-        // directory picker for them.
-        !matches!(self.kind, PanelKind::Ssh | PanelKind::Browser)
+        // Browser and device viewers do not need a working directory.
+        !matches!(self.kind, PanelKind::Ssh | PanelKind::Browser | PanelKind::Device)
     }
 }
 

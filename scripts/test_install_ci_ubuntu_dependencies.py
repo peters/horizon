@@ -176,7 +176,7 @@ class WorkflowTests(unittest.TestCase):
         jobs = dict(re.findall(r"^  ([\w-]+):\n(.*?)(?=^  [\w-]+:|\Z)", workflow, re.M | re.S))
         prefix = "bash scripts/install-ci-ubuntu-dependencies.sh "
         expected = {
-            "device": ["libxkbcommon-dev", "pkg-config", "xvfb", "xauth"],
+            "device": ["libxkbcommon-dev", "libwayland-dev", "pkg-config", "xvfb", "xauth"],
             "clippy": ["libasound2-dev", "pkg-config"],
             "clippy-strict": ["libasound2-dev", "pkg-config"],
             "clippy-pedantic": ["libasound2-dev", "pkg-config"],

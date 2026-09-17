@@ -197,3 +197,55 @@ at its original provider. Active, unidentified, or uncertain sessions retain
 their holds. Repeated reconciliation is safe; never infer release from an
 empty panel list or account-wide session counts. The user can also reconcile
 in Settings > Remote browsers.
+
+## Isolated native application testing
+
+For native application work, use a task-owned virtual desktop observed through a
+read-only noVNC page in Horizon. Keep browser interactions on these public
+`browser_*` tools; use explicitly configured device CLI/MCP tools only for input
+into the native test desktop. A native Device panel is a read-only Rust VNC
+viewer, not a browser and not a device-input API. noVNC provides the outer test
+view; it is not required by the native panel itself.
+
+Run independent applications in parallel when requested, with a separate unused
+display, private application configuration/home, expiring device target, loopback
+VNC/web ports, and owned process tree for each fixture. Record which exact target
+and process each agent owns. Keep input and screenshot geometry scoped to that
+target; never reuse another fixture's coordinates or fall back to the developer's
+desktop. A request for independent test viewers permits the corresponding
+`browser_create` calls with `allow_additional: true`; it does not permit unrelated
+helper sessions. The Horizon source checkout's `scripts/device-smoke/README.md`
+describes its fixture and optional project-local device registration. Other native
+applications need equivalent isolation supplied by their own test launcher.
+
+Build the intended checkout to completion before launching. Avoid sharing a
+Cargo target directory between different source trees during qualification.
+Copy candidate executables into a new task-owned directory, record their hashes,
+and launch those frozen copies. Verify the executable and hash of the actual
+application child; the fixture's recorded launcher PID may be `bwrap`. Preserve
+existing application processes. A later rebuild does not update an already
+running process; close only the owned candidate normally before replacing it.
+
+Inspect outer noVNC page readiness with `browser_snapshot` or `browser_query`.
+Observe native pixels with `device_screenshot` and recorded `browser_video`
+frames; drive the native target through `device_doctor`, `device_screenshot` and
+`device_act`, or their CLI counterparts. Check actual application output after input: a dispatched action
+is not an assertion. For a nested native-panel test, keep the viewer fixture and
+the viewed target fixture distinct, with separate device targets. Exercise view
+resize, Fit and detach without expecting the read-only image to forward input.
+
+Use existing `browser_resize` for the outer browser viewport and `browser_video`
+encoding options for evidence quality. These do not resize the native desktop,
+change native VNC frame quality, or provide native screenshot cropping. Native
+frame sizing and quality controls are follow-up work; use only capabilities the
+connected tools actually expose.
+
+Record a short representative flow with `browser_video`, stop it, and copy the
+returned WebM export to private evidence **before `browser_close`** removes its
+profile and capture exports. Inspect representative frames and correlate them
+with the frozen candidate hash and observed result. Keep internal application
+names, scenarios, screenshots, recordings and operational identifiers local;
+public examples use only generic Horizon fixtures and synthetic content. Close
+only owned browser panels and test applications, then stop their owned fixtures
+and verify target expiry and child cleanup. Parallel work must not interrupt the
+developer's desktop or another agent's fixture.

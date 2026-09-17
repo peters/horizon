@@ -1,3 +1,4 @@
+mod device;
 mod terminal;
 
 pub(super) use terminal::restore_failure_panel;
@@ -152,6 +153,12 @@ pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, mut opts: Pane
         PanelKind::Usage => {
             let seed = StaticPanelSeed::from_options(id, workspace_id, local_id, &mut opts);
             Ok(spawn_usage(seed))
+        }
+        PanelKind::Device => {
+            let command = opts.command.take();
+            let is_restore = opts.is_restore;
+            let seed = StaticPanelSeed::from_options(id, workspace_id, local_id, &mut opts);
+            device::spawn_device(seed, command.as_deref(), is_restore)
         }
         PanelKind::Browser => {
             let command = opts.command.take();
@@ -377,7 +384,7 @@ pub(super) fn resolve_launch_command(
     launch: AgentLaunchContext<'_>,
 ) -> (String, Vec<String>) {
     match kind {
-        PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage | PanelKind::Browser => {
+        PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage | PanelKind::Browser | PanelKind::Device => {
             (String::new(), Vec::new())
         }
         PanelKind::Shell => {
@@ -672,7 +679,7 @@ pub(super) fn scrollback_limit_for_kind(kind: PanelKind) -> usize {
     } else {
         match kind {
             PanelKind::Shell | PanelKind::Ssh | PanelKind::Command => DEFAULT_PANEL_SCROLLBACK_LIMIT,
-            PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage | PanelKind::Browser => 0,
+            PanelKind::Editor | PanelKind::GitChanges | PanelKind::Usage | PanelKind::Browser | PanelKind::Device => 0,
             PanelKind::Codex
             | PanelKind::Claude
             | PanelKind::OpenCode

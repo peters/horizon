@@ -57,6 +57,7 @@ pub enum PanelKind {
     GitChanges,
     Usage,
     Browser,
+    Device,
 }
 
 impl PanelKind {
@@ -70,7 +71,7 @@ impl PanelKind {
     /// panels insert at the caret; browser panels dispatch through CDP.
     #[must_use]
     pub const fn accepts_text_input(self) -> bool {
-        !matches!(self, Self::GitChanges | Self::Usage)
+        !matches!(self, Self::GitChanges | Self::Usage | Self::Device)
     }
 
     #[must_use]
@@ -97,6 +98,7 @@ impl PanelKind {
             Self::GitChanges => "Git Changes",
             Self::Usage => "Usage",
             Self::Browser => "Browser",
+            Self::Device => "Device",
             Self::Codex | Self::Claude | Self::OpenCode | Self::Gemini | Self::KiloCode | Self::Pi | Self::Grok => {
                 unreachable!()
             }
@@ -314,6 +316,12 @@ impl Panel {
     /// Mutable accessor for the browser content.
     pub fn browser_mut(&mut self) -> Option<&mut crate::browser::BrowserPanelState> {
         self.content.browser_mut()
+    }
+
+    /// The read-only device viewer target, when this is a device panel.
+    #[must_use]
+    pub fn device(&self) -> Option<&crate::DevicePanelState> {
+        self.content.device()
     }
 
     /// Convenience accessor for the git changes content (if this panel holds one).
@@ -539,7 +547,7 @@ impl Panel {
         match &mut self.content {
             PanelContent::Terminal(terminal) => terminal.request_shutdown(),
             PanelContent::Editor(editor) => editor.save_if_dirty(),
-            PanelContent::GitChanges(_) | PanelContent::Usage(_) => {}
+            PanelContent::GitChanges(_) | PanelContent::Usage(_) | PanelContent::Device(_) => {}
             PanelContent::Browser(browser) => browser.request_shutdown(),
         }
     }
@@ -563,7 +571,7 @@ impl Panel {
                 editor.save_if_dirty();
                 true
             }
-            PanelContent::GitChanges(_) | PanelContent::Usage(_) => true,
+            PanelContent::GitChanges(_) | PanelContent::Usage(_) | PanelContent::Device(_) => true,
             PanelContent::Browser(browser) => browser.shutdown_with_timeout(timeout),
         }
     }
@@ -576,7 +584,7 @@ impl Panel {
                 editor.save_if_dirty();
                 true
             }
-            PanelContent::GitChanges(_) | PanelContent::Usage(_) => true,
+            PanelContent::GitChanges(_) | PanelContent::Usage(_) | PanelContent::Device(_) => true,
             PanelContent::Browser(browser) => browser.shutdown_with_timeout(timeout),
         }
     }

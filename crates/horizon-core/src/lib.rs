@@ -7,6 +7,7 @@ mod board;
 pub mod browser;
 mod config;
 mod config_migration;
+mod device;
 pub mod dir_search;
 mod editor;
 mod error;
@@ -53,6 +54,7 @@ pub use config::{
     SpeechBackend, SpeechConfig, SpeechHotkeyMode, SpeechProfile, SpeechTask, TerminalConfig, WindowConfig,
     WorkspaceConfig,
 };
+pub use device::{DevicePanelState, DeviceViewTarget};
 pub use editor::{MarkdownEditor, PanelContent, PreviewMode};
 pub use error::{Error, Result};
 pub use git_changes::DiffViewer;

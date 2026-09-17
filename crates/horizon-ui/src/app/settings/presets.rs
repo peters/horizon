@@ -3,7 +3,7 @@ use horizon_core::{Config, PanelKind, PanelResume, PresetConfig};
 
 use crate::theme;
 
-const ALL_KINDS: [PanelKind; 14] = [
+const ALL_KINDS: [PanelKind; 15] = [
     PanelKind::Shell,
     PanelKind::Ssh,
     PanelKind::Codex,
@@ -18,6 +18,7 @@ const ALL_KINDS: [PanelKind; 14] = [
     PanelKind::GitChanges,
     PanelKind::Usage,
     PanelKind::Browser,
+    PanelKind::Device,
 ];
 
 /// Render the Presets settings tab.  Returns `true` when the preset list
@@ -143,6 +144,22 @@ fn render_preset_card(ui: &mut Ui, index: usize, preset: &mut PresetConfig, remo
             });
 
             // SSH validation error
+            if preset.kind == PanelKind::Device {
+                ui.horizontal(|ui| {
+                    ui.label("VNC address");
+                    let address = preset.command.get_or_insert_default();
+                    changed |= ui
+                        .add(egui::TextEdit::singleline(address).hint_text("127.0.0.1:5900"))
+                        .changed();
+                });
+                if horizon_core::DeviceViewTarget::parse(preset.command.as_deref().unwrap_or_default()).is_err() {
+                    ui.colored_label(
+                        theme::PALETTE_RED(),
+                        "Enter a loopback IP and port for the local device.",
+                    );
+                }
+            }
+
             if preset.kind == PanelKind::Ssh
                 && let Some(ref conn) = preset.ssh_connection
                 && !conn.is_valid()
@@ -160,6 +177,11 @@ fn render_preset_card(ui: &mut Ui, index: usize, preset: &mut PresetConfig, remo
 }
 
 fn preset_has_error(preset: &PresetConfig) -> bool {
+    if preset.kind == PanelKind::Device
+        && horizon_core::DeviceViewTarget::parse(preset.command.as_deref().unwrap_or_default()).is_err()
+    {
+        return true;
+    }
     if preset.name.trim().is_empty() {
         return true;
     }

@@ -234,6 +234,7 @@ struct PanelBodyContext<'a> {
     terminal_selection_drag: &'a mut TerminalSelectionDragState,
     terminal_grid_cache: Option<&'a mut TerminalGridCache>,
     browser_ui_state: Option<&'a mut crate::browser_widget::BrowserUiState>,
+    device_ui_state: Option<&'a mut crate::device_widget::DeviceUiState>,
     browser_shortcuts: Option<&'a AppShortcuts>,
     browser_shortcut_bindings: &'a [ShortcutBinding],
     browser_frame_has_pointer_button: bool,
@@ -255,6 +256,12 @@ fn show_panel_body_contents(
         ),
         PanelKind::GitChanges => GitChangesView::new(panel).show(ui, is_focused),
         PanelKind::Usage => UsageDashboardView::new(panel).show(ui, is_focused),
+        PanelKind::Device => {
+            if let (Some(state), Some(device)) = (body_context.device_ui_state, panel.device()) {
+                state.show(ui, device, interactive);
+            }
+            false
+        }
         PanelKind::Browser => {
             let (Some(state), Some(shortcuts)) = (body_context.browser_ui_state, body_context.browser_shortcuts) else {
                 ui.centered_and_justified(|ui| ui.label("Browser state unavailable"));
@@ -424,6 +431,8 @@ impl HorizonApp {
                             } else {
                                 None
                             };
+                            let device_state = (panel.kind == PanelKind::Device)
+                                .then(|| self.panel_render_caches.device_ui_state.entry(panel_id).or_default());
                             show_panel_body_contents(
                                 ui,
                                 panel,
@@ -440,6 +449,7 @@ impl HorizonApp {
                                     terminal_selection_drag: &mut self.terminal_selection_drag,
                                     terminal_grid_cache: None,
                                     browser_ui_state: browser_state,
+                                    device_ui_state: device_state,
                                     browser_shortcuts: browser_shortcuts.as_ref(),
                                     browser_shortcut_bindings: &all_shortcut_bindings,
                                     browser_frame_has_pointer_button: frame_has_pointer_button,
@@ -798,6 +808,7 @@ impl HorizonApp {
                         let editor_preview_cache = &mut self.panel_render_caches.editor_preview_cache;
                         let terminal_grid_cache = &mut self.panel_render_caches.terminal_grid_cache;
                         let browser_ui_state = &mut self.panel_render_caches.browser_ui_state;
+                        let device_ui_state = &mut self.panel_render_caches.device_ui_state;
                         let terminal_selection_drag = &mut self.terminal_selection_drag;
                         if let Some(panel) = board.panel_mut(panel_id) {
                             let preview_cache = if panel.kind == PanelKind::Editor {
@@ -815,6 +826,8 @@ impl HorizonApp {
                             } else {
                                 None
                             };
+                            let device_state =
+                                (panel.kind == PanelKind::Device).then(|| device_ui_state.entry(panel_id).or_default());
                             if show_panel_body_contents(
                                 ui,
                                 panel,
@@ -831,6 +844,7 @@ impl HorizonApp {
                                     terminal_selection_drag,
                                     terminal_grid_cache: grid_cache,
                                     browser_ui_state: browser_state,
+                                    device_ui_state: device_state,
                                     browser_shortcuts: browser_shortcuts.as_ref(),
                                     browser_shortcut_bindings,
                                     browser_frame_has_pointer_button: scope.frame_has_pointer_button,

@@ -23,6 +23,23 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   caller responsibilities. Future device adapters must advertise explicit
   capabilities; no viewer renderer or remote manager belongs in the library.
 
+### Native Device panels
+
+- `horizon-core::device` owns the validated local VNC target and panel state;
+  `panel::spawn::device` creates a panel without a PTY. Existing command metadata
+  persists the target. Restored panels require manual reconnect.
+- `horizon-ui::device_widget` owns only read-only presentation. `frame` validates
+  and composites decoded rectangles; `session` owns a cancellable socket/decoder
+  worker and a single latest-frame slot. Panel/workspace/session cleanup drops
+  the worker. Viewer input never reaches the target.
+- The native decoder is a narrowly patched Git dependency pinned by full commit
+  in `Cargo.toml`. Its fork retains licenses, provenance and qualification limits.
+  It is excluded from the publishable `horizon-device` control package. The
+  standalone crate's screenshot/action contract remains independent of viewing.
+- Isolated Linux fixtures and noVNC recording live in `scripts/device-smoke`.
+  They are development prerequisites; no recorder or remote manager is added
+  to the product.
+
 ### `horizon-browser-protocol`
 
 - Owns the small serialized contract shared by browser engines and clients:

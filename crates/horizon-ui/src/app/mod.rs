@@ -184,6 +184,7 @@ struct SpeechNotice {
 pub struct PanelRenderCaches {
     pub(crate) terminal_grid_cache: HashMap<PanelId, TerminalGridCache>,
     pub(crate) browser_ui_state: HashMap<PanelId, crate::browser_widget::BrowserUiState>,
+    pub(crate) device_ui_state: HashMap<PanelId, crate::device_widget::DeviceUiState>,
     pub(crate) editor_preview_cache: HashMap<PanelId, MarkdownPreviewCache>,
 }
 
