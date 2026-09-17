@@ -7,7 +7,7 @@ const source = fs.readFileSync(path.join(__dirname, '../../crates/horizon-browse
 
 function probe(options = {}) {
     let now = 0, result, scrolls = 0;
-    const timers = [];
+    const timers = [], hitPoints = [];
     const viewport = {offsetLeft:20, offsetTop:172, width:300, height:434, scale:1};
     let rect = {left:30, top:200, right:130, bottom:220, width:100, height:20};
     const element = {
@@ -22,7 +22,14 @@ function probe(options = {}) {
     const context = {
         document: {
             querySelector: () => options.stale && now >= 100 ? null : element,
-            elementFromPoint: () => options.obscured || (options.nestedClip && scrolls === 0) ? {} : element,
+            elementFromPoint: (x, y) => {
+                hitPoints.push([x, y]);
+                const current = options.rect ? options.rect(now) : rect;
+                const inside = x >= current.left && x < current.right && y >= current.top && y < current.bottom
+                    && x >= viewport.offsetLeft && x < viewport.offsetLeft + viewport.width
+                    && y >= viewport.offsetTop && y < viewport.offsetTop + viewport.height;
+                return inside && !options.obscured && !(options.nestedClip && scrolls === 0) ? element : {};
+            },
         },
         window: {visualViewport:viewport},
         getComputedStyle: () => ({display:options.hidden ? 'none' : 'block', visibility:'visible'}),
@@ -38,16 +45,24 @@ function probe(options = {}) {
         if (options.viewport) Object.assign(viewport, options.viewport(now));
         callback();
     }
-    return {result, elapsed:now, scrolls};
+    return {result, elapsed:now, scrolls, hitPoints};
 }
 
 test('already visible keyboard-open targets settle without scrolling', () => {
-    const {result, elapsed, scrolls} = probe();
+    const {result, elapsed, scrolls, hitPoints} = probe();
     assert.equal(result.x, 80);
     assert.equal(result.y, 210);
     assert.equal(result.offset_y, 172);
+    assert.deepEqual(hitPoints, [[80, 210]]);
     assert.equal(scrolls, 0);
     assert.ok(elapsed >= 150);
+});
+
+test('fractional viewport offsets hit-test the rounded native point in layout coordinates', () => {
+    const {result, hitPoints} = probe({viewport:() => ({offsetLeft:20.4, offsetTop:172.4})});
+    assert.deepEqual(hitPoints, [[80.4, 210.4]]);
+    assert.equal(Math.round(result.x - result.offset_x), 60);
+    assert.equal(Math.round(result.y - result.offset_y), 38);
 });
 
 test('offscreen targets are scrolled once, then remeasured', () => {

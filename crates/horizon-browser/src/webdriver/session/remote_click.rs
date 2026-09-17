@@ -1,4 +1,4 @@
-//! Android Chromium pointer input uses the visual viewport's CSS origin.
+//! The validated remote Android Chrome pointer path uses the visual viewport's CSS origin.
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -90,6 +90,8 @@ mod tests {
             (true, "iOS", "safari", false),
             (true, "Windows", "chrome", false),
             (true, "Android", "firefox", false),
+            (true, "Android", "chromium", false),
+            (true, "Android", "MicrosoftEdge", false),
             (true, "", "chrome", false),
         ] {
             assert_eq!(
