@@ -163,7 +163,7 @@ fn shutdown_delegation_does_not_reap_a_live_sibling() {
         panic!("shared page");
     };
     let control = ChromeProcessControl::default();
-    control.delegate(page.clone());
+    assert!(!control.delegate(page.clone()));
     assert!(!control.is_reaped());
     assert!(!control.terminate(Duration::ZERO));
     drop(left);
@@ -209,7 +209,7 @@ fn failed_startup_retains_exact_control_and_refuses_profile_reuse_until_reaped()
     let panel = ChromeProcessControl::default();
     let child = Arc::new(UnreapedProcess(false.into()));
     let result = group.acquire_with(&reservation.stop, &panel, |control| {
-        control.delegate(child.clone());
+        assert!(!control.delegate(child.clone()));
         assert!(!panel.is_reaped(), "panel tracks the child before startup returns");
         Err("injected startup failure with failed reap".into())
     });
@@ -237,7 +237,7 @@ fn refused_close_remains_pending_and_does_not_release_live_sibling() {
     };
     let page = Arc::clone(page);
     let child = Arc::new(UnreapedProcess(false.into()));
-    page.process.delegate(child.clone());
+    assert!(!page.process.delegate(child.clone()));
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let address = listener.local_addr().expect("address");
     let server = std::thread::spawn(move || {
@@ -358,4 +358,53 @@ fn emergency_deadline_never_waits_for_a_page_transport_or_target_lock() {
     drop(first);
     drop(right);
     drop(second);
+}
+
+#[test]
+fn profile_retirement_prevents_a_late_reservation_from_launching() {
+    let group = SharedBrowserSession::new("profile".into());
+    assert!(group.is_idle());
+    assert!(group.retire_profile_for_cleanup());
+    let pending = group.clone().reserve(Arc::new(false.into()));
+    let result = group.acquire_with(&AtomicBool::new(false), &ChromeProcessControl::default(), |_| {
+        panic!("retired profile must never launch")
+    });
+    assert!(result.is_err());
+    assert!(group.retire_profile_for_cleanup());
+    drop(pending);
+}
+
+#[test]
+fn profile_retirement_waits_for_an_existing_reservation() {
+    let group = SharedBrowserSession::new("profile".into());
+    let pending = group.clone().reserve(Arc::new(false.into()));
+    assert!(!group.retire_profile_for_cleanup());
+    drop(pending);
+    assert!(group.retire_profile_for_cleanup());
+}
+
+#[test]
+fn pending_force_is_forwarded_to_startup_child_control() {
+    let group = SharedBrowserSession::new("profile".into());
+    let pending = group.clone().reserve(Arc::new(false.into()));
+    let panel = ChromeProcessControl::default();
+    assert!(!panel.terminate(Duration::ZERO));
+    let result = group.acquire_with(&AtomicBool::new(false), &panel, |control| {
+        assert!(
+            control.delegate(Arc::new(UnreapedProcess(true.into()))),
+            "pending startup force must reach the exact child control"
+        );
+        Ok(None)
+    });
+    assert!(result.is_ok());
+    drop(pending);
+}
+
+#[test]
+fn force_during_startup_is_retained_when_the_page_delegate_replaces_it() {
+    let control = ChromeProcessControl::default();
+    let startup = Arc::new(UnreapedProcess(false.into()));
+    assert!(!control.delegate(startup));
+    assert!(!control.terminate(Duration::ZERO));
+    assert!(control.delegate(Arc::new(UnreapedProcess(true.into()))));
 }

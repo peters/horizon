@@ -41,11 +41,13 @@ struct ChromeProcessControlState {
 }
 
 impl ChromeProcessControl {
-    pub(crate) fn delegate(&self, lifecycle: Arc<dyn ProcessLifecycle>) {
-        self.inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .delegate = Some(lifecycle);
+    /// Returns whether the caller must forward a pending force request after
+    /// releasing any lifecycle lock it holds.
+    #[must_use]
+    pub(crate) fn delegate(&self, lifecycle: Arc<dyn ProcessLifecycle>) -> bool {
+        let mut state = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.delegate = Some(lifecycle);
+        state.force_requested
     }
 
     pub(super) fn register(&self, child: &Arc<Mutex<ProcessChild>>) {
@@ -130,11 +132,11 @@ impl ChromeProcessControl {
                 tracing::warn!("timed out waiting for browser process-control state");
                 return false;
             };
+            state.force_requested = true;
             if let Some(delegate) = state.delegate.clone() {
                 drop(state);
                 return delegate.terminate(deadline.saturating_duration_since(Instant::now()));
             }
-            state.force_requested = true;
             if let Some(child) = state.child.clone() {
                 break child;
             }

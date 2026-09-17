@@ -24,6 +24,7 @@ struct SharedState {
     endpoint: String,
     pages: usize,
     retiring: bool,
+    profile_retired: bool,
 }
 
 impl SharedState {
@@ -90,6 +91,22 @@ impl SharedBrowserSession {
         self.drivers.load(Ordering::Acquire) == 0 && state.pages == 0 && state.control.is_reaped()
     }
 
+    /// Permanently prevent new page acquisition before profile removal begins.
+    #[must_use]
+    pub fn retire_profile_for_cleanup(&self) -> bool {
+        let Ok(mut state) = self.state.try_lock() else {
+            return false;
+        };
+        if state.profile_retired {
+            return true;
+        }
+        if self.drivers.load(Ordering::Acquire) != 0 || state.pages != 0 || !state.control.is_reaped() {
+            return false;
+        }
+        state.profile_retired = true;
+        true
+    }
+
     pub(super) fn reserve(self, stop: Arc<AtomicBool>) -> SharedDriverReservation {
         {
             let mut stops = self.stops.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -118,6 +135,9 @@ impl SharedBrowserSession {
         start: impl FnOnce(&ChromeProcessControl) -> Result<Option<(ChromeProcess, String)>, String>,
     ) -> Result<Option<(DriverProcess, String)>, String> {
         let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.profile_retired {
+            return Err("shared browser profile has been retired for deletion".into());
+        }
         if stop.load(Ordering::Acquire) {
             return Ok(None);
         }
@@ -134,7 +154,9 @@ impl SharedBrowserSession {
             }
             state.process = None;
             state.control = ChromeProcessControl::default();
-            panel_control.delegate(Arc::new(StartupLifecycle(state.control.clone())));
+            if panel_control.delegate(Arc::new(StartupLifecycle(state.control.clone()))) {
+                let _ = state.control.terminate(Duration::ZERO);
+            }
             state.retiring = true;
             let started = start(&state.control);
             state.control.mark_registration_settled();
@@ -162,8 +184,12 @@ impl SharedBrowserSession {
             drivers: Arc::clone(&self.drivers),
             stops: Arc::clone(&self.stops),
         });
-        panel_control.delegate(lifecycle.clone());
+        let force_requested = panel_control.delegate(lifecycle.clone());
         let endpoint = state.endpoint.clone();
+        drop(state);
+        if force_requested {
+            let _ = panel_control.terminate(Duration::from_secs(1));
+        }
         Ok(Some((DriverProcess::Shared(lifecycle), endpoint)))
     }
 }

@@ -245,7 +245,11 @@ impl BrowserShutdownSignal {
     }
 
     fn profile_cleanup_is_complete(&self) -> bool {
-        if self.shared_profile.as_ref().is_some_and(|group| !group.is_idle()) {
+        if self
+            .shared_profile
+            .as_ref()
+            .is_some_and(|group| !group.retire_profile_for_cleanup())
+        {
             return false;
         }
         let mut cleanup = self
@@ -257,7 +261,11 @@ impl BrowserShutdownSignal {
 
     fn wait_for_profile_cleanup(&self, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
-        while self.shared_profile.as_ref().is_some_and(|group| !group.is_idle()) {
+        while self
+            .shared_profile
+            .as_ref()
+            .is_some_and(|group| !group.retire_profile_for_cleanup())
+        {
             if Instant::now() >= deadline {
                 return false;
             }
