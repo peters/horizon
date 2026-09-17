@@ -169,10 +169,22 @@ fn inspect_at(
         .map(|r| r.transcript_path.clone())
         .or_else(|| super::discovery::transcript(home, session))?;
     let transcript = TranscriptSnapshot::read(&transcript_path, launch.kind).ok()?;
-    // A handoff belongs to its recorded turn. A later question is independent
-    // evidence for manual review, even after that handoff has been consumed.
-    let waiting_for_user = transcript.state == TurnState::Blocked;
-    if !waiting_for_user && record.as_ref().is_some_and(|record| record.consumed) {
+    // Consumption prevents replaying the recorded turn, but a changed unfinished
+    // transcript can still need manual review on this and subsequent restarts.
+    let waiting_for_user = transcript.state == TurnState::Blocked
+        || (transcript.state == TurnState::Working
+            && record
+                .as_ref()
+                .is_some_and(|record| record.ledger.state == TurnState::Blocked));
+    let changed_handoff_work = record.as_ref().is_some_and(|record| {
+        matches!(transcript.state, TurnState::Working | TurnState::Blocked)
+            && record
+                .handoff
+                .as_ref()
+                .and_then(|handoff| handoff.final_transcript.as_ref())
+                .is_some_and(|saved| saved != &transcript)
+    });
+    if !changed_handoff_work && record.as_ref().is_some_and(|record| record.consumed) {
         return Some((RestartDecision::NotResumable, None));
     }
     let fingerprint = super::repository::fingerprint(&cwd);
@@ -185,7 +197,7 @@ fn inspect_at(
         policy: launch.policy,
         handoff: record
             .as_ref()
-            .filter(|_| !waiting_for_user)
+            .filter(|_| !waiting_for_user && !changed_handoff_work)
             .and_then(|r| r.handoff.as_ref()),
         ledger: record.as_ref().map(|r| &r.ledger),
         transcript: Some(&transcript),
@@ -193,12 +205,12 @@ fn inspect_at(
         session_live_elsewhere: false,
         // An unreadable registry cannot prove that an unfinished session exited
         // cleanly. Keep it on the manual path through the same policy vetoes.
-        stale_live_session: live != Some(super::discovery::Presence::Absent),
+        stale_live_session: changed_handoff_work || live != Some(super::discovery::Presence::Absent),
         now_millis: now,
     };
     let mut decision = evidence.classify(REMAINING.get());
     if (decision == RestartDecision::Resume && (!cfg!(target_os = "linux") || live.is_none()))
-        || (decision == RestartDecision::Ask(AskReason::UncleanShutdown) && live.is_none())
+        || (decision == RestartDecision::Ask(AskReason::UncleanShutdown) && (live.is_none() || changed_handoff_work))
     {
         decision = RestartDecision::Ask(AskReason::MissingEvidence);
     }

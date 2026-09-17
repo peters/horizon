@@ -248,6 +248,124 @@ fn a_later_question_is_manual_even_when_an_old_handoff_remains() {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn record_later_tool_permission(fixture: &mut Fixture) {
+    fixture.input.event.prompt_id = Some("later-tool-prompt".into());
+    fixture.input.event.tool_name = Some("Bash".into());
+    fixture.input.event.tool_use_id = Some("unapproved-tool".into());
+    for event in ["UserPromptSubmit", "PermissionRequest"] {
+        fixture.input.event.hook_event_name = event.into();
+        fixture
+            .store
+            .apply_hook(
+                "panel",
+                PanelKind::Claude,
+                "owner",
+                &fixture.input,
+                current_unix_millis(),
+            )
+            .expect("later permission");
+    }
+    writeln!(
+        std::fs::OpenOptions::new().append(true).open(&fixture.input.transcript_path).expect("transcript"),
+        r#"{{"type":"assistant","message":{{"stop_reason":"tool_use","content":[{{"type":"tool_use","name":"Bash"}}]}}}}"#
+    ).expect("pending tool");
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn later_tool_permission_remains_manual_across_repeated_restores() {
+    let _budget = RestoreBudget::new(5);
+    for consumed in [false, true] {
+        let mut fixture = Fixture::new();
+        fixture.seal();
+        if consumed {
+            assert_eq!(fixture.inspect().0, RestartDecision::Resume);
+            assert_eq!(fixture.inspect(), (RestartDecision::NotResumable, None));
+        }
+        let previous = fixture.store.read("panel").expect("read").expect("record");
+        record_later_tool_permission(&mut fixture);
+        assert_eq!(
+            fixture.inspect(),
+            (RestartDecision::Ask(AskReason::WaitingForUser), None)
+        );
+        for _ in 0..3 {
+            fixture.input.event.hook_event_name = "SessionStart".into();
+            fixture.input.event.source = Some("resume".into());
+            fixture
+                .store
+                .apply_hook(
+                    "panel",
+                    PanelKind::Claude,
+                    "owner",
+                    &fixture.input,
+                    current_unix_millis(),
+                )
+                .expect("restore");
+            assert_eq!(
+                fixture.inspect(),
+                (RestartDecision::Ask(AskReason::MissingEvidence), None)
+            );
+            let record = fixture.store.read("panel").expect("read").expect("record");
+            assert_eq!(record.consumed, consumed);
+            assert_eq!(record.handoff, previous.handoff);
+        }
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn changed_consumed_work_does_not_override_terminal_evidence() {
+    let _budget = RestoreBudget::new(5);
+    let mut fixture = Fixture::new();
+    fixture.seal();
+    assert_eq!(fixture.inspect().0, RestartDecision::Resume);
+    for veto in ["Stop", "StopFailure", "SessionEnd", "Interrupt"] {
+        record_later_tool_permission(&mut fixture);
+        // Remove the pending permission before the explicit Interrupt so that
+        // this covers the ledger's interrupted-state veto independently.
+        fixture.input.event.hook_event_name = "UserPromptSubmit".into();
+        fixture
+            .store
+            .apply_hook(
+                "panel",
+                PanelKind::Claude,
+                "owner",
+                &fixture.input,
+                current_unix_millis(),
+            )
+            .expect("fresh turn");
+        fixture.input.event.hook_event_name = veto.into();
+        fixture.input.event.reason = Some("prompt_input_exit".into());
+        fixture
+            .store
+            .apply_hook(
+                "panel",
+                PanelKind::Claude,
+                "owner",
+                &fixture.input,
+                current_unix_millis(),
+            )
+            .expect("veto");
+        assert_eq!(fixture.inspect(), (RestartDecision::NotResumable, None));
+    }
+    for terminal in [
+        r#"{"type":"user","message":{"content":"[Request interrupted by user]"}}"#,
+        r#"{"type":"assistant","message":{"stop_reason":"end_turn","content":[]}}"#,
+    ] {
+        record_later_tool_permission(&mut fixture);
+        writeln!(
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&fixture.input.transcript_path)
+                .expect("transcript"),
+            "{terminal}"
+        )
+        .expect("terminal message");
+        assert_eq!(fixture.inspect(), (RestartDecision::NotResumable, None));
+    }
+}
+
 #[test]
 #[cfg(target_os = "linux")]
 fn later_questions_do_not_override_completion_exit_or_transcript_interrupts() {
