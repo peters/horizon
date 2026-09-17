@@ -253,6 +253,12 @@ impl Driver {
         event_tx: &BrowserEventSender,
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
         let selector = self.semantic.resolve(target)?;
+        if self.remote_android_chromium && count == 1 {
+            let (x, y) = self.remote_click_point(&selector)?;
+            self.perform_click(x, y, count, event_tx)
+                .map_err(|error| BrowserControlFailure::new("input_failed", error))?;
+            return Ok(BrowserControlValue::Accepted);
+        }
         let value = self.evaluate_json(&target_rect_expression(&selector, false))?;
         let (x, y) = parse_target_rect(&value)?;
         self.capture_teach_fingerprint(Some((x, y)))?;
@@ -287,6 +293,9 @@ impl Driver {
         let mut payload = self
             .actions
             .click_payload(x, y, BrowserButton::Left, count, BrowserModifiers::none());
+        if self.remote_android_chromium && count == 1 {
+            super::remote_click::use_touch_pointer(&mut payload);
+        }
         let result = if self.firefox_bidi() {
             payload["context"] = json!(self.context_id);
             self.call_bidi("input.performActions", &payload, event_tx).map(|_| ())

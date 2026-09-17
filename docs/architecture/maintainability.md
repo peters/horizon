@@ -319,3 +319,9 @@ module (bounded exact-session WebDriver and provider reporting evidence), core's
 `browser/remote_recovery` (scope and exact lease ownership), the browser control
 `manifest/recovery` queue, and the UI's `app/browser_recovery` dispatch and
 `settings/remote_recovery` presentation. Network work does not run on the UI thread.
+
+Remote Android Chromium single taps use `webdriver/session/remote_click` for
+bounded geometry settling and visual-viewport conversion, plus native touch
+input. Its JavaScript preflight performs geometry checks and scrolling only;
+Safari, desktop and multi-click paths retain their existing native dispatch.
+The geometry fixtures run in the browser-engine CI tier.

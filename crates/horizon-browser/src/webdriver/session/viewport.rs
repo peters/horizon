@@ -342,6 +342,7 @@ mod tests {
             host,
             remote_release,
             remote_device,
+            remote_android_chromium: false,
             session_id,
             bidi,
             automation_ws,
