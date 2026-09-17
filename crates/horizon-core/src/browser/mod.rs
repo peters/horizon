@@ -11,6 +11,7 @@ pub use remote_panel::RemoteFailure;
 pub mod remote_profile;
 pub mod remote_session;
 pub mod remote_slots;
+mod shared_session;
 pub mod teach;
 
 pub use horizon_browser::remote;
@@ -132,6 +133,7 @@ pub struct BrowserPanelState {
     /// folded into the persisted runtime state exactly once.
     persisted_config_changed: bool,
     config: BrowserConfig,
+    shared_session: Option<Arc<shared_session::ProfileSession>>,
     teach: Option<TeachMode>,
 }
 
@@ -177,6 +179,7 @@ impl BrowserPanelState {
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: false,
             config: BrowserConfig::default(),
+            shared_session: None,
             teach: None,
         }
     }
@@ -192,11 +195,25 @@ impl BrowserPanelState {
         config: &BrowserConfig,
         initial_url: Option<String>,
     ) -> crate::error::Result<Self> {
-        let panel_local_id = panel_local_id.into();
+        Self::start_with_session(panel_local_id.into(), config, initial_url, None)
+    }
+
+    /// Restore a profile group or create an isolated browser panel.
+    ///
+    /// # Errors
+    /// Invalid launch paths cannot be resolved.
+    pub fn start_with_session(
+        panel_local_id: String,
+        config: &BrowserConfig,
+        initial_url: Option<String>,
+        session_id: Option<&str>,
+    ) -> crate::error::Result<Self> {
         let mut config = config.resolved_for_launch()?;
         let home = crate::horizon_home::HorizonHome::resolve();
         let profile_root_resolved = retain_effective_profile_root(&mut config, &home.root().join("browser-profiles"));
         let initial_url = initial_url.map(|url| normalize_navigation_target(&url));
+        let shared_session = matches!(config.backend, BackendKind::ChromiumCdp | BackendKind::FirefoxBidi)
+            .then(|| shared_session::acquire(&config, session_id.unwrap_or(&panel_local_id)));
         let mut state = Self {
             status: BrowserStatus::Starting,
             url: None,
@@ -208,7 +225,7 @@ impl BrowserPanelState {
             teardown_signal: None,
             pending_relaunch: None,
             requested_url: initial_url.clone(),
-            panel_local_id: panel_local_id.clone(),
+            panel_local_id,
             owner: None,
             handoff_reason: None,
             handoff_error: None,
@@ -223,6 +240,7 @@ impl BrowserPanelState {
             user_navigations: std::sync::atomic::AtomicU32::new(0),
             persisted_config_changed: profile_root_resolved,
             config,
+            shared_session,
             teach: None,
         };
         state.launch_session(initial_url);
@@ -307,8 +325,19 @@ impl BrowserPanelState {
             // A remote session's browser is fixed by its target.
             return;
         }
+        if self.shared_session.as_ref().is_some_and(|session| {
+            shared_session::has_shared_members(&self.config, session) || session.profile_id() != self.panel_local_id
+        }) {
+            self.navigation_error = Some("Shared browser panels must keep the same backend".into());
+            return;
+        }
         let target = self.relaunch_target();
         self.config.backend = backend;
+        self.shared_session = if matches!(backend, BackendKind::ChromiumCdp | BackendKind::FirefoxBidi) {
+            Some(shared_session::acquire(&self.config, &self.panel_local_id))
+        } else {
+            None
+        };
         self.persisted_config_changed = true;
         self.frame_slot.clear();
         self.frame_slot.clear_backend_capabilities();
@@ -341,7 +370,7 @@ impl BrowserPanelState {
     fn start_session(&mut self, initial_url: Option<String>, remote: Option<RemoteSessionRequest>) {
         let browser = self.config.clone();
         let home = crate::horizon_home::HorizonHome::resolve();
-        let capture_directory = profile_dir_for_home(&browser, &home, &self.panel_local_id).join("captures");
+        let capture_directory = self.capture_directory(&home);
         let session_config = session::BrowserSessionConfig {
             browser,
             panel_local_id: self.panel_local_id.clone(),
@@ -359,7 +388,12 @@ impl BrowserPanelState {
             video: Arc::new(horizon_browser::VideoCaptureHandle::default()),
             remote,
         };
-        match session::start_session(session_config) {
+        let started = if let Some(group) = &self.shared_session {
+            session::start_shared_session(session_config, group.as_ref().clone())
+        } else {
+            session::start_session(session_config)
+        };
+        match started {
             Ok(handle) => {
                 self.committed_url = handle.committed_url();
                 // The pending submission is only cleared once the session
@@ -543,15 +577,21 @@ impl BrowserPanelState {
     #[must_use = "profile cleanup only starts when the returned signal is polled or waited on"]
     pub(crate) fn close_permanently(&mut self) -> BrowserShutdownSignal {
         self.request_shutdown();
-        let profile_dir = profile_dir_for_home(
-            &self.config,
-            &crate::horizon_home::HorizonHome::resolve(),
-            &self.panel_local_id,
-        );
-        if let Some(signal) = self.take_shutdown_signal() {
-            signal.with_profile_cleanup(profile_dir)
+        let profile_id = self.shared_profile_id().unwrap_or(&self.panel_local_id).to_string();
+        let group = self.shared_session.take();
+        let last_panel = group.as_ref().is_none_or(|group| Arc::strong_count(group) == 1);
+        let profile_dir = profile_dir_for_home(&self.config, &crate::horizon_home::HorizonHome::resolve(), &profile_id);
+        let signal = self
+            .take_shutdown_signal()
+            .unwrap_or_else(BrowserShutdownSignal::completed);
+        if !last_panel {
+            return signal;
+        }
+        let signal = signal.with_profile_cleanup(profile_dir);
+        if let Some(group) = group {
+            signal.with_shared_profile_cleanup(group)
         } else {
-            BrowserShutdownSignal::completed_with_profile_cleanup(profile_dir)
+            signal
         }
     }
 
@@ -917,6 +957,7 @@ mod tests {
             persisted_config_changed: false,
             config: BrowserConfig::default(),
             teach: None,
+            shared_session: None,
         };
 
         assert!(!state.submit_navigation("typed.example/page"));
@@ -961,6 +1002,7 @@ mod tests {
             persisted_config_changed: false,
             config: BrowserConfig::default(),
             teach: None,
+            shared_session: None,
         };
 
         assert!(!state.retry_ready());
@@ -999,6 +1041,7 @@ mod tests {
             persisted_config_changed: false,
             config: BrowserConfig::default(),
             teach: None,
+            shared_session: None,
         };
 
         state.switch_backend(BackendKind::FirefoxBidi);
@@ -1045,6 +1088,7 @@ mod tests {
             persisted_config_changed: false,
             config: BrowserConfig::default(),
             teach: None,
+            shared_session: None,
         };
         let completion = std::thread::spawn(move || {
             let _ = start_rx.recv();
@@ -1092,6 +1136,7 @@ mod tests {
                 ..BrowserConfig::default()
             },
             teach: None,
+            shared_session: None,
         };
 
         assert!(!state.continue_pending_relaunch());
@@ -1167,6 +1212,7 @@ mod tests {
             persisted_config_changed: false,
             config: BrowserConfig::default(),
             teach: None,
+            shared_session: None,
         };
 
         state.hand_back();
@@ -1207,6 +1253,7 @@ mod tests {
             persisted_config_changed: false,
             config: BrowserConfig::default(),
             teach: None,
+            shared_session: None,
         };
 
         let output = state.drain_events();
@@ -1246,6 +1293,7 @@ mod tests {
             persisted_config_changed: false,
             config: BrowserConfig::default(),
             teach: None,
+            shared_session: None,
         };
 
         assert_eq!(state.display_url(), "https://example.com/requested");
@@ -1288,6 +1336,7 @@ mod tests {
             persisted_config_changed: false,
             config: BrowserConfig::default(),
             teach: None,
+            shared_session: None,
         };
 
         state.clear_agent_state_for_relaunch();
