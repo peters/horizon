@@ -277,6 +277,10 @@ impl HorizonApp {
             tracing::info!("speech configuration changed; speech system rebuilt");
             self.sync_speech_global_hotkeys();
         }
+        if self.template_config.browser.remote != config.browser.remote {
+            self.remote_browser_credentials
+                .load_environment_bindings(&config.browser.remote);
+        }
         self.template_config = config.clone();
         self.shortcuts = resolve_shortcuts(config);
         self.action_commands_cache =

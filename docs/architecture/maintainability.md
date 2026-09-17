@@ -139,12 +139,13 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
 
 - `remote_browser_credential` owns provider credentials for remote browser
   sessions: the value-free store trait and sink, the session-only in-memory
-  store, the `keyring-core` adapter (`keyring_store`), the fake store seam, and
-  the resolver that turns bindings into one origin-bound authorization header.
-  It never serializes values, never touches the process environment, and holds
-  no transport, allocation or UI code. `workbench` runs OS-store operations on
-  a worker thread with a presence cache the UI reads, so a locked store or an
-  unlock prompt never blocks the render loop.
+  store, the launch-time environment snapshot (`environment`), the `keyring-core`
+  adapter (`keyring_store`), the fake store seam,
+  and the resolver that turns bindings into one origin-bound authorization
+  header. It never serializes values, never writes a secret back into the
+  process environment, and holds no transport, allocation or UI code. `workbench`
+  runs OS-store operations on a worker thread with a presence cache the UI
+  reads, so a locked store or an unlock prompt never blocks the render loop.
 - `browser/remote_session.rs` turns a configured remote target into the
   driver's `RemoteSessionRequest`: endpoint and limits from the provider,
   `alwaysMatch` capabilities from the target (device fields placed by the

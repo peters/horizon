@@ -8,9 +8,10 @@
 //! outside this crate can implement a sink that captures bytes. Every
 //! intermediate buffer is a `zeroize` type that is wiped when dropped, on
 //! success and on every error path alike. Nothing here serializes, logs or
-//! places a value in the process environment, so agent panels cannot inherit
-//! it.
+//! writes a value into the process environment. Environment-backed bindings
+//! are read at capture; normal child-process environment inheritance is unchanged.
 
+mod environment;
 mod fake;
 mod keyring_store;
 mod session;
@@ -25,6 +26,7 @@ use horizon_browser::remote::{
 };
 use zeroize::Zeroizing;
 
+pub use environment::EnvironmentCredentialStore;
 pub use fake::FakeCredentialStore;
 pub use keyring_store::{KEYRING_SERVICE, KeyringCredentialStore, KeyringStoreAvailability};
 pub use session::SessionCredentialStore;
@@ -137,10 +139,13 @@ pub struct CredentialReadiness {
 }
 
 /// The stores a resolver may consult. The OS store is optional because a
-/// computer without one must still run session-only credentials.
+/// computer without one must still run session-only credentials. The
+/// environment store is optional so tests can omit it; production always
+/// supplies the launch snapshot. There is no implicit fallback between stores.
 pub struct CredentialStores<'a> {
     pub session: &'a dyn RemoteCredentialStore,
     pub os_keychain: Option<&'a dyn RemoteCredentialStore>,
+    pub environment: Option<&'a dyn RemoteCredentialStore>,
 }
 
 impl CredentialStores<'_> {
@@ -148,6 +153,7 @@ impl CredentialStores<'_> {
         match kind {
             CredentialStoreKind::Session => Ok(self.session),
             CredentialStoreKind::OsKeychain => self.os_keychain.ok_or(RemoteCredentialError::StoreUnavailable),
+            CredentialStoreKind::Environment => self.environment.ok_or(RemoteCredentialError::StoreUnavailable),
         }
     }
 }
@@ -222,11 +228,28 @@ impl fmt::Debug for ProviderAuthorization {
 }
 
 /// Which reference failed, without its value.
-#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
-#[error("credential `{}`: {error}", reference.as_str())]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolveError {
     pub reference: CredentialReference,
+    /// Environment variable name when the binding is environment-backed.
+    pub variable: Option<String>,
     pub error: RemoteCredentialError,
+}
+
+impl fmt::Display for ResolveError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "credential `{}`", self.reference.as_str())?;
+        if let Some(variable) = &self.variable {
+            write!(formatter, " (environment variable `{variable}`)")?;
+        }
+        write!(formatter, ": {}", self.error)
+    }
+}
+
+impl std::error::Error for ResolveError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
+    }
 }
 
 /// Build the authorization header from bindings, or `None` for `kind: none`.
@@ -254,6 +277,7 @@ pub fn resolve_authorization(
             if username.contains(':') {
                 return Err(ResolveError {
                     reference: username_ref.clone(),
+                    variable: variable_name(profile, username_ref),
                     error: RemoteCredentialError::InvalidUsername,
                 });
             }
@@ -267,6 +291,7 @@ pub fn resolve_authorization(
             if !is_token68(&token) {
                 return Err(ResolveError {
                     reference: token_ref.clone(),
+                    variable: variable_name(profile, token_ref),
                     error: RemoteCredentialError::InvalidBearerToken,
                 });
             }
@@ -281,19 +306,28 @@ fn fetch(
     stores: &CredentialStores<'_>,
     reference: &CredentialReference,
 ) -> Result<Zeroizing<String>, ResolveError> {
+    let binding = profile.credential_bindings.get(reference);
     let fail = |error| ResolveError {
         reference: reference.clone(),
+        variable: binding
+            .and_then(CredentialBinding::environment_variable)
+            .map(str::to_string),
         error,
     };
-    let binding = profile
-        .credential_bindings
-        .get(reference)
-        .ok_or_else(|| fail(RemoteCredentialError::Missing))?;
+    let binding = binding.ok_or_else(|| fail(RemoteCredentialError::Missing))?;
     let locator = CredentialLocator::new(&profile.endpoint, reference, binding);
     let store = stores.store_for(binding.store).map_err(fail)?;
     let mut sink = HeaderSafeSink::default();
     store.with_secret(&locator, &mut sink).map_err(fail)?;
     sink.value.take().ok_or_else(|| fail(RemoteCredentialError::Missing))
+}
+
+fn variable_name(profile: &RemoteProviderProfile, reference: &CredentialReference) -> Option<String> {
+    profile
+        .credential_bindings
+        .get(reference)
+        .and_then(CredentialBinding::environment_variable)
+        .map(str::to_string)
 }
 
 /// RFC 7235 `token68`: the only shape a Bearer credential may take.

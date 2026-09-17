@@ -66,6 +66,7 @@ pub(super) fn plan_remote_create(
         os_keychain: keychain_guard
             .as_deref()
             .map(|store| -> &dyn RemoteCredentialStore { &**store }),
+        environment: Some(workbench.environment_store()),
     };
     let request = build_remote_session_request(remote, target, &stores).map_err(|error| match error {
         RemoteRequestError::UnknownTarget { .. } => CreateRefusal {
@@ -87,12 +88,12 @@ pub(super) fn plan_remote_create(
         {
             CreateRefusal {
                 code: "credentials_not_ready",
-                message: format!("{error}; enter or unlock it in Settings > Remote browsers"),
+                message: format!("{error}; check the selected credential source in Settings > Remote browsers; environment bindings require the named launch variable"),
             }
         }
         RemoteRequestError::Credential { .. } => CreateRefusal {
             code: "credentials_invalid",
-            message: format!("{error}; re-enter it in Settings > Remote browsers"),
+            message: format!("{error}; correct the selected credential source; environment bindings require a valid named launch variable"),
         },
         RemoteRequestError::Header { .. } => CreateRefusal {
             code: "credentials_invalid",

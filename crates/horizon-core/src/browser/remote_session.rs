@@ -260,6 +260,7 @@ mod tests {
         let stores = CredentialStores {
             session: &session,
             os_keychain: Some(&keychain),
+            environment: None,
         };
         let request = build_remote_session_request(&config, "ios_phone", &stores).expect("request");
         assert_eq!(request.endpoint, "https://grid.example.net/wd/hub");
@@ -311,6 +312,7 @@ mod tests {
         let stores = CredentialStores {
             session: &session,
             os_keychain: Some(&keychain),
+            environment: None,
         };
         let request = build_remote_session_request(&config, "ios_phone", &stores).expect("request");
         assert_eq!(
@@ -346,6 +348,7 @@ mod tests {
         let stores = CredentialStores {
             session: &session,
             os_keychain: None,
+            environment: None,
         };
         assert_eq!(
             build_remote_session_request(&config, "android", &stores).expect_err("unknown"),

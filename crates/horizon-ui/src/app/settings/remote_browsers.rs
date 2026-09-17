@@ -278,7 +278,7 @@ fn bind_reference(
         return false;
     }
     let slot = match store {
-        CredentialStoreKind::Session => None,
+        CredentialStoreKind::Session | CredentialStoreKind::Environment => None,
         CredentialStoreKind::OsKeychain => Some(format!("remote-browser/{provider}/{}", reference.as_str())),
     };
     profile
@@ -356,7 +356,8 @@ fn render_stores_section(ui: &mut Ui, workbench: &mut CredentialWorkbench) {
         super::dim_label(
             ui,
             "Session-only values are discarded when Horizon exits. OS-store values persist on this computer only \
-             and are never exported.",
+             and are never exported. Environment bindings are read from the named launch variables; \
+             agent and terminal children inherit them normally.",
         );
     });
 }
@@ -469,6 +470,19 @@ fn render_reference(
         });
         return chosen;
     }
+    if store == CredentialStoreKind::Environment {
+        if let Some(variable) = profile
+            .credential_bindings
+            .get(reference)
+            .and_then(CredentialBinding::environment_variable)
+        {
+            super::dim_label(
+                ui,
+                &format!("Bound to environment variable `{variable}`. The value is read at launch and never shown."),
+            );
+        }
+        return None;
+    }
     ui.horizontal(|ui| {
         password_field(ui, inputs.buffer(&key), provider, reference);
         let has_text = !inputs.buffer(&key).is_empty();
@@ -494,6 +508,7 @@ fn render_reference(
                     let _ = workbench.store_in_keychain(provider, profile, reference, &value);
                 }
             }
+            CredentialStoreKind::Environment => {}
         }
         if state == CredentialState::Present && ui.button("Delete").clicked() {
             let _ = workbench.delete(provider, profile, reference);
@@ -534,6 +549,7 @@ fn store_label(store: CredentialStoreKind, bound: bool) -> &'static str {
         (_, false) => "unbound",
         (CredentialStoreKind::Session, true) => "session-only",
         (CredentialStoreKind::OsKeychain, true) => "OS store",
+        (CredentialStoreKind::Environment, true) => "environment",
     }
 }
 

@@ -686,3 +686,90 @@ fn capability_extension_values_are_checked_at_every_depth() {
     );
     config.validate_definition().expect("benign nested values pass");
 }
+
+#[test]
+fn environment_bindings_name_variables_not_values() {
+    let mut config = sample();
+    let bindings = &mut config
+        .providers
+        .get_mut("device_cloud")
+        .expect("provider")
+        .credential_bindings;
+    bindings.insert(
+        CredentialReference::from("cloud-user"),
+        CredentialBinding {
+            store: CredentialStoreKind::Environment,
+            slot: Some("REMOTE_BROWSER_USERNAME".into()),
+        },
+    );
+    bindings.insert(
+        CredentialReference::from("cloud-key"),
+        CredentialBinding {
+            store: CredentialStoreKind::Environment,
+            slot: Some("REMOTE_BROWSER_ACCESS_KEY".into()),
+        },
+    );
+    config.validate().expect("environment bindings validate");
+    let names = config.environment_variable_names();
+    assert!(names.contains("REMOTE_BROWSER_USERNAME"));
+    assert!(names.contains("REMOTE_BROWSER_ACCESS_KEY"));
+    let encoded = serde_json::to_string(&config).expect("serializes");
+    assert!(encoded.contains("environment"));
+    assert!(encoded.contains("REMOTE_BROWSER_USERNAME"));
+    assert!(!encoded.contains("secret"));
+    let portable = config.export_portable();
+    assert!(portable.environment_variable_names().is_empty());
+    assert!(
+        !serde_json::to_string(&portable)
+            .expect("portable")
+            .contains("REMOTE_BROWSER")
+    );
+}
+
+#[test]
+fn environment_bindings_reject_missing_and_malformed_names() {
+    let mut config = sample();
+    config
+        .providers
+        .get_mut("device_cloud")
+        .expect("provider")
+        .credential_bindings
+        .insert(
+            CredentialReference::from("cloud-user"),
+            CredentialBinding {
+                store: CredentialStoreKind::Environment,
+                slot: None,
+            },
+        );
+    assert!(matches!(
+        config.validate_definition().expect_err("variable name required"),
+        RemoteConfigError::InvalidCredential {
+            problem: CredentialReferenceProblem::SlotRequired,
+            ..
+        }
+    ));
+
+    let mut config = sample();
+    config
+        .providers
+        .get_mut("device_cloud")
+        .expect("provider")
+        .credential_bindings
+        .insert(
+            CredentialReference::from("cloud-user"),
+            CredentialBinding {
+                store: CredentialStoreKind::Environment,
+                slot: Some("REMOTE-BROWSER-USER".into()),
+            },
+        );
+    let error = config.validate_definition().expect_err("hyphens are not POSIX names");
+    assert!(matches!(
+        error,
+        RemoteConfigError::InvalidCredential {
+            problem: CredentialReferenceProblem::MalformedVariable,
+            ..
+        }
+    ));
+    assert!(error.to_string().contains("cloud-user"), "{error}");
+    assert!(!error.to_string().contains("secret"), "{error}");
+}

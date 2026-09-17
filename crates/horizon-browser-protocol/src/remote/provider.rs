@@ -183,6 +183,9 @@ pub enum CredentialStoreKind {
     Session,
     /// Persisted in the platform credential store under `slot`.
     OsKeychain,
+    /// Read at launch from the named process environment variable (`slot`).
+    /// The value is copied into an in-memory sink.
+    Environment,
 }
 
 /// Machine-local binding from a reference to a store location. Carries no value.
@@ -190,14 +193,31 @@ pub enum CredentialStoreKind {
 #[serde(deny_unknown_fields)]
 pub struct CredentialBinding {
     pub store: CredentialStoreKind,
+    /// OS-store path, or the environment variable name when `store` is
+    /// [`CredentialStoreKind::Environment`]. Never a secret value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slot: Option<String>,
 }
 
 impl CredentialBinding {
+    /// The environment variable this binding names, when it is environment-backed.
+    #[must_use]
+    pub fn environment_variable(&self) -> Option<&str> {
+        match self.store {
+            CredentialStoreKind::Environment => self.slot.as_deref(),
+            CredentialStoreKind::Session | CredentialStoreKind::OsKeychain => None,
+        }
+    }
+
     fn problem(&self) -> Option<CredentialReferenceProblem> {
         match (self.store, self.slot.as_deref()) {
-            (CredentialStoreKind::OsKeychain, None) => Some(CredentialReferenceProblem::SlotRequired),
+            (CredentialStoreKind::OsKeychain | CredentialStoreKind::Environment, None) => {
+                Some(CredentialReferenceProblem::SlotRequired)
+            }
+            (CredentialStoreKind::Environment, Some(name)) if !valid_environment_variable(name) => {
+                Some(CredentialReferenceProblem::MalformedVariable)
+            }
+            (CredentialStoreKind::Environment, Some(_)) => None,
             (_, Some(slot)) if !valid_slot(slot) => Some(CredentialReferenceProblem::MalformedSlot),
             _ => None,
         }
@@ -361,4 +381,14 @@ fn valid_slot(value: &str) -> bool {
         && value
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/'))
+}
+
+fn valid_environment_variable(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    value.len() <= 128
+        && (first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
