@@ -237,8 +237,10 @@ resize, Fit and detach without expecting the read-only image to forward input.
 Use existing `browser_resize` for the outer browser viewport and `browser_video`
 encoding options for evidence quality. These do not resize the native desktop,
 change native VNC frame quality, or provide native screenshot cropping. Native
-frame sizing and quality controls are follow-up work; use only capabilities the
-connected tools actually expose.
+Device panels have separate View controls for maximum refresh, rendered image
+limits, explicit viewport, Fit and 1:1. These are local rendering controls; they
+do not resize the target or change VNC wire compression. Use only capabilities
+the connected tools actually expose.
 
 Record a short representative flow with `browser_video`, stop it, and copy the
 returned WebM export to private evidence **before `browser_close`** removes its

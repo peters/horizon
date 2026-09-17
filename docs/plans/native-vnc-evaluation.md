@@ -87,3 +87,22 @@ upstream mutex-holding `recv_event()` method.
 Use the [generic smoke instructions](../../scripts/device-smoke/README.md) for
 reproduction and video verification. Public evidence must contain only the
 synthetic Horizon fixture and must be inspected before publication.
+
+## Viewer rendering controls
+
+View controls are session-local. The default maximum refresh is 20 fps (range
+1–30); rendered images fit within 2048×2048 pixels by default, with independently
+adjustable width/height limits from 1 to 8192. Rendering retains aspect ratio and
+never upscales its source. Fit fills the available panel area; 1:1 displays one
+rendered image pixel per UI point with scrolling. Desktop and image dimensions
+are shown separately. Controls never change the target desktop resolution.
+
+An explicit viewport selects a nonempty rectangle inside the source desktop.
+Apply refuses invalid bounds; Whole desktop clears the crop. If the target later
+shrinks outside an active viewport, the connection stops with an error; clear the
+viewport and reconnect. Settings reset when the panel is recreated; restored
+panels still require manual connection. Refresh throttling limits refresh
+requests and frame production, not arbitrary unsolicited server traffic. Image
+limits and cropping affect local rendering, not negotiated VNC compression or
+wire bandwidth. Use existing browser_video fps, quality, max_width and
+max_file_bytes options for bounded isolated recordings.

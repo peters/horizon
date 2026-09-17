@@ -6,6 +6,7 @@ use std::{
 };
 
 use egui::{ColorImage, Context, ViewportId};
+use horizon_core::DeviceViewOptions;
 use tokio::sync::{oneshot, watch};
 use vnc::{PixelFormat, VncConnector, VncEncoding, X11Event};
 
@@ -39,6 +40,8 @@ pub(super) struct Updates {
     pub status: Option<Status>,
     viewport: ViewportId,
     visible: bool,
+    options: DeviceViewOptions,
+    pub desktop: Option<[usize; 2]>,
 }
 
 pub(super) struct Session {
@@ -49,12 +52,19 @@ pub(super) struct Session {
 }
 
 impl Session {
-    pub(super) fn start(address: SocketAddr, ctx: Context, viewport: ViewportId) -> Result<Self, ViewError> {
+    pub(super) fn start(
+        address: SocketAddr,
+        ctx: Context,
+        viewport: ViewportId,
+        options: DeviceViewOptions,
+    ) -> Result<Self, ViewError> {
         let updates = Arc::new(Mutex::new(Updates {
             image: None,
             status: Some(Status::Connecting),
             viewport,
             visible: true,
+            options,
+            desktop: None,
         }));
         let state = Arc::clone(&updates);
         let (stop, cancelled) = oneshot::channel();
@@ -88,6 +98,13 @@ impl Session {
         })
     }
 
+    pub(super) fn set_options(&self, options: DeviceViewOptions) {
+        self.updates
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .options = options;
+    }
+
     pub(super) fn set_visible(&self, visible: bool) {
         self.updates
             .lock()
@@ -111,6 +128,8 @@ impl Session {
             status: state.status.take(),
             viewport,
             visible: state.visible,
+            options: state.options,
+            desktop: state.desktop,
         }
     }
 }
@@ -168,8 +187,7 @@ async fn connection(
     .map_err(|_| ViewError::Timeout)??;
     publish_status(updates, ctx, Status::Connected);
     let mut framebuffer = Framebuffer::default();
-    let mut tick = tokio::time::interval(Duration::from_millis(50));
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut previous_options = None;
     loop {
         let mut full_refresh = !*visible.borrow_and_update();
         if full_refresh {
@@ -178,7 +196,11 @@ async fn connection(
                 .await
                 .map_err(|_| ViewError::Frame("viewer closed"))?;
         }
-        tick.tick().await;
+        let options = updates
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .options;
+        tokio::time::sleep(options.interval()).await;
         if !*visible.borrow() {
             continue;
         }
@@ -202,13 +224,15 @@ async fn connection(
                 idle = true;
             }
         }
-        if changed {
-            let image = framebuffer.image();
+        if (changed || previous_options != Some(options)) && !framebuffer.size().contains(&0) {
+            let image = framebuffer.image(options)?;
+            previous_options = Some(options);
             let viewport = {
                 let mut state = updates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 // Only the latest frame is retained; slow rendering cannot grow
                 // an application-side queue of full desktop images.
                 state.image = Some(image);
+                state.desktop = Some(framebuffer.size());
                 state.visible.then_some(state.viewport)
             };
             if let Some(viewport) = viewport {

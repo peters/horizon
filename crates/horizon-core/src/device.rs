@@ -1,3 +1,6 @@
+mod view;
+pub use view::{DeviceImageLayout, DeviceViewOptions, DeviceViewport};
+
 use std::net::SocketAddr;
 
 use crate::{Error, Result};

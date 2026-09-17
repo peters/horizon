@@ -373,3 +373,7 @@ coordinate semantics are validated. The geometry fixtures run in the browser-eng
 The preflight requires visual-viewport evidence. It retains native hit-testing
 for transparent interactive controls and the first client-rectangle convention
 of Element Click; searching later fragments is a separate behavior change.
+
+Device view limits and viewport layout live in `crates/horizon-core/src/device/view.rs`;
+`crates/horizon-ui/src/device_widget/controls.rs` collects session-local presentation
+settings while its worker applies the bounded image layout.

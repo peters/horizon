@@ -54,7 +54,7 @@ pub use config::{
     SpeechBackend, SpeechConfig, SpeechHotkeyMode, SpeechProfile, SpeechTask, TerminalConfig, WindowConfig,
     WorkspaceConfig,
 };
-pub use device::{DevicePanelState, DeviceViewTarget};
+pub use device::{DeviceImageLayout, DevicePanelState, DeviceViewOptions, DeviceViewTarget, DeviceViewport};
 pub use editor::{MarkdownEditor, PanelContent, PreviewMode};
 pub use error::{Error, Result};
 pub use git_changes::DiffViewer;

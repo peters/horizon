@@ -77,8 +77,34 @@ impl Framebuffer {
         Ok(())
     }
 
-    pub(super) fn image(&self) -> ColorImage {
-        ColorImage::from_rgba_unmultiplied([self.width, self.height], &self.rgba)
+    pub(super) fn size(&self) -> [usize; 2] {
+        [self.width, self.height]
+    }
+
+    pub(super) fn image(&self, options: horizon_core::DeviceViewOptions) -> Result<ColorImage, ViewError> {
+        let layout = options
+            .layout(self.size())
+            .map_err(|error| ViewError::Server(error.to_string()))?;
+        if layout.output == self.size() {
+            return Ok(ColorImage::from_rgba_unmultiplied(self.size(), &self.rgba));
+        }
+        let source_columns: Vec<_> = (0..layout.output[0])
+            .map(|x| (layout.source.x + (2 * x + 1) * layout.source.width / (2 * layout.output[0])) * 4)
+            .collect();
+        let mut pixels = Vec::with_capacity(layout.output[0] * layout.output[1]);
+        for y in 0..layout.output[1] {
+            let row = (layout.source.y + (2 * y + 1) * layout.source.height / (2 * layout.output[1])) * self.width * 4;
+            for column in &source_columns {
+                let offset = row + column;
+                pixels.push(egui::Color32::from_rgba_unmultiplied(
+                    self.rgba[offset],
+                    self.rgba[offset + 1],
+                    self.rgba[offset + 2],
+                    self.rgba[offset + 3],
+                ));
+            }
+        }
+        Ok(ColorImage::new(layout.output, pixels))
     }
 }
 
@@ -115,8 +141,50 @@ mod tests {
         ))?;
         assert_eq!(frame.rgba, [1, 2, 3, 255, 1, 2, 3, 255, 4, 5, 6, 255]);
         frame.apply(VncEvent::SetResolution(vnc::Screen { width: 1, height: 2 }))?;
-        assert_eq!(frame.image().size, [1, 2]);
+        assert_eq!(frame.image(horizon_core::DeviceViewOptions::default())?.size, [1, 2]);
         assert_eq!(frame.rgba, [0; 8]);
+        Ok(())
+    }
+
+    #[test]
+    fn viewport_scaling_samples_the_selected_source_pixels() -> Result<(), ViewError> {
+        let mut frame = Framebuffer::default();
+        frame.apply(VncEvent::SetResolution(vnc::Screen { width: 4, height: 2 }))?;
+        frame.apply(VncEvent::RawImage(
+            Rect {
+                x: 0,
+                y: 0,
+                width: 4,
+                height: 2,
+            },
+            (0..8).flat_map(|value| [value, 0, 0, 255]).collect(),
+        ))?;
+        let identity = frame.image(horizon_core::DeviceViewOptions::default())?;
+        assert_eq!(identity.size, [4, 2]);
+        assert_eq!(
+            identity.pixels.iter().map(egui::Color32::r).collect::<Vec<_>>(),
+            (0..8).collect::<Vec<_>>()
+        );
+        let options = horizon_core::DeviceViewOptions {
+            viewport: Some(horizon_core::DeviceViewport {
+                x: 2,
+                y: 0,
+                width: 2,
+                height: 2,
+            }),
+            max_width: 1,
+            max_height: 1,
+            ..Default::default()
+        };
+        let image = frame.image(options)?;
+        assert_eq!(image.size, [1, 1]);
+        assert_eq!(image.pixels[0].r(), 7);
+        assert_eq!(frame.size(), [4, 2]);
+        frame.apply(VncEvent::SetResolution(vnc::Screen { width: 2, height: 2 }))?;
+        assert!(
+            frame.image(options).is_err(),
+            "a stale viewport is refused after target resize"
+        );
         Ok(())
     }
 
