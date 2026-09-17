@@ -292,3 +292,10 @@ Once a profile group has been shared, its backend remains fixed for that group's
 lifetime, including after a sibling panel closes. This prevents switching away
 while a closed sibling still owns the profile during asynchronous teardown.
 Standalone profiles retain ordinary backend switching.
+
+### Duplicate requests
+
+The control manifest stores duplicate requests in a nested queue that older hosts
+cannot misinterpret as independent creation. `app::browser_duplicate` revalidates
+the actor, workspace, source ownership, readiness and handoff state before invoking
+the core operation and exposing the result.
