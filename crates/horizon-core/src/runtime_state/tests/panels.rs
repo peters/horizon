@@ -322,14 +322,22 @@ fn board_snapshot_preserves_the_panel_work_policy() {
     let panel_id = board
         .create_panel(
             PanelOptions {
-                kind: PanelKind::Editor,
+                kind: PanelKind::Shell,
+                command: Some(if cfg!(windows) { "cmd.exe" } else { "/bin/sh" }.into()),
+                args: vec![if cfg!(windows) { "/C" } else { "-c" }.into(), "exit".into()],
+                work_resume: crate::agent_work::ResumePolicy {
+                    enabled: true,
+                    max_downtime_seconds: 60,
+                },
                 ..PanelOptions::default()
             },
             workspace,
         )
         .expect("panel");
-    let panel = board.panel_mut(panel_id).expect("panel exists");
-    panel.work_resume.enabled = true;
+    let panel = board.panel(panel_id).expect("panel exists");
+    assert!(panel.work_resume.enabled);
+    assert_eq!(panel.work_resume.max_downtime_seconds, 60);
     let state = RuntimeState::from_board(&board, WindowConfig::default(), CanvasViewState::default());
     assert!(state.workspaces[0].panels[0].work_resume.enabled);
+    board.shutdown_terminal_panels();
 }
