@@ -327,3 +327,7 @@ Safari, desktop and multi-click paths retain their existing native dispatch.
 The gate requires negotiated `platformName=Android` and `browserName=chrome`;
 other Chromium-branded names retain their existing dispatch until their native
 coordinate semantics are validated. The geometry fixtures run in the browser-engine CI tier.
+
+The preflight requires visual-viewport evidence. It retains native hit-testing
+for transparent interactive controls and the first client-rectangle convention
+of Element Click; searching later fragments is a separate behavior change.

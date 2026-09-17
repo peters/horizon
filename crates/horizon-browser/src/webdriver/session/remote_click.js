@@ -20,8 +20,9 @@ function sample() {
         fail('element_not_visible', 'Click target is not visible'); return;
     }
     const v = window.visualViewport;
-    const ox = v ? v.offsetLeft : 0, oy = v ? v.offsetTop : 0;
-    const width = v ? v.width : innerWidth, height = v ? v.height : innerHeight;
+    if (!v) { fail('viewport_unavailable', 'Visual viewport geometry is unavailable'); return; }
+    const ox = v.offsetLeft, oy = v.offsetTop;
+    const width = v.width, height = v.height;
     const left = Math.max(rect.left, ox), right = Math.min(rect.right, ox + width);
     const top = Math.max(rect.top, oy), bottom = Math.min(rect.bottom, oy + height);
     if (right <= left || bottom <= top) {
@@ -33,7 +34,7 @@ function sample() {
         previous = null; stable = 0;
         setTimeout(sample, 50); return;
     }
-    const geometry = [rect.left, rect.top, rect.right, rect.bottom, ox, oy, width, height, v ? v.scale : 1, scrollX, scrollY];
+    const geometry = [rect.left, rect.top, rect.right, rect.bottom, ox, oy, width, height, v.scale, scrollX, scrollY];
     if (previous && geometry.every((value, i) => Math.abs(value - previous[i]) < 0.25)) stable++;
     else { stable = 0; previous = geometry; }
     if (stable >= 3) {

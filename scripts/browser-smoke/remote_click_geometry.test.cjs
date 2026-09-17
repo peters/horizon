@@ -31,8 +31,8 @@ function probe(options = {}) {
                 return inside && !options.obscured && !(options.nestedClip && scrolls === 0) ? element : {};
             },
         },
-        window: {visualViewport:viewport},
-        getComputedStyle: () => ({display:options.hidden ? 'none' : 'block', visibility:'visible'}),
+        window: {visualViewport:options.noViewport ? null : viewport},
+        getComputedStyle: () => ({display:options.hidden ? 'none' : 'block', visibility:'visible', opacity:options.transparent ? '0' : '1'}),
         performance: {now:() => now},
         scrollX:0, scrollY:0, innerWidth:400, innerHeight:800,
         setTimeout: (callback, delay) => timers.push([callback, now + delay]),
@@ -90,8 +90,14 @@ test('continuous movement is refused within a bounded interval', () => {
     assert.equal(elapsed, 2000);
 });
 
-test('covered, disabled, hidden and replaced targets never yield a click point', () => {
-    for (const [option, code] of [['obscured','element_obscured'], ['disabled','element_disabled'], ['hidden','element_not_visible'], ['stale','stale_reference']]) {
+test('untrustworthy targets or missing visual viewport never yield a click point', () => {
+    for (const [option, code] of [['obscured','element_obscured'], ['disabled','element_disabled'], ['hidden','element_not_visible'], ['noViewport','viewport_unavailable'], ['stale','stale_reference']]) {
         assert.equal(probe({[option]:true}).result.error.code, code);
     }
+});
+
+test('transparent native targets retain their existing hit-tested click behavior', () => {
+    const {result, hitPoints} = probe({transparent:true});
+    assert.equal(result.error, undefined);
+    assert.deepEqual(hitPoints, [[80, 210]]);
 });
