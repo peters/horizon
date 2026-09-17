@@ -37,14 +37,6 @@ impl PendingBrowserClose {
             .as_ref()
             .is_some_and(|signal| signal.remote_provider() == Some(provider) && signal.holds_remote_allocation())
     }
-
-    /// Whether this close still holds an allocation counted against the
-    /// cross-instance provider identity `key`.
-    pub(super) fn holds_remote_allocation_for_key(&self, key: &str) -> bool {
-        self.teardown
-            .as_ref()
-            .is_some_and(|signal| signal.remote_quota_key() == Some(key) && signal.holds_remote_allocation())
-    }
 }
 
 /// Where a pending close stands at one poll.
@@ -89,17 +81,13 @@ pub(super) fn close_outcome(
         return Ok(());
     }
     match release {
-        Some(outcome @ RemoteReleaseOutcome::Failed { .. }) => Err((
+        Some(RemoteReleaseOutcome::Failed { .. }) => Err((
             "release_failed",
-            format!(
-                "browser panel closed but the provider refused to release its session ({outcome}); check the provider before allocating again"
-            ),
+            "browser panel closed but the provider refused release; use browser_remote_allocations to reconcile its exact session".to_string(),
         )),
-        Some(outcome @ RemoteReleaseOutcome::ReleaseUnknown { .. }) => Err((
+        Some(RemoteReleaseOutcome::ReleaseUnknown { .. }) => Err((
             "release_unknown",
-            format!(
-                "browser panel closed but the provider gave no trustworthy answer to the release ({outcome}); check the provider before allocating again"
-            ),
+            "browser panel closed but release is unconfirmed; use browser_remote_allocations to reconcile its exact session".to_string(),
         )),
         None => Err((
             "release_unknown",
@@ -246,6 +234,7 @@ impl HorizonApp {
     /// waits for the remote release and profile cleanup; the requests are
     /// settled as `host_shutdown` because nothing will poll them again.
     pub(super) fn retire_pending_browser_closes_for_shutdown(&mut self) {
+        self.refresh_remote_recovery_scope();
         for pending in std::mem::take(&mut self.browser_create_host.pending_closes) {
             complete_close_failure(
                 &pending.request,
@@ -511,7 +500,8 @@ mod tests {
         )
         .expect_err("a refused release is not a close");
         assert_eq!(failed.0, "release_failed");
-        assert!(failed.1.contains("busy"));
+        assert!(!failed.1.contains("busy"), "provider messages stay private");
+        assert!(failed.1.contains("browser_remote_allocations"));
         let unknown = close_outcome(
             true,
             Some(&RemoteReleaseOutcome::ReleaseUnknown {
@@ -521,6 +511,7 @@ mod tests {
         )
         .expect_err("an unanswered release is not a close");
         assert_eq!(unknown.0, "release_unknown");
-        assert!(unknown.1.contains("3 attempts"));
+        assert!(!unknown.1.contains("timed out"));
+        assert!(unknown.1.contains("browser_remote_allocations"));
     }
 }

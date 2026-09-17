@@ -115,6 +115,7 @@ pub struct Board {
 pub(crate) struct UnreleasedRemoteHold {
     pub(crate) provider: String,
     pub(crate) quota_key: Option<String>,
+    pub(crate) recovery: Option<horizon_browser::RemoteAllocation>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -408,7 +409,13 @@ impl Board {
         let unreleased_count = self
             .unreleased_remote_holds
             .iter()
-            .filter(|held| unreleased(held))
+            .filter(|held| {
+                unreleased(held)
+                    && !held
+                        .recovery
+                        .as_ref()
+                        .is_some_and(horizon_browser::RemoteAllocation::is_released)
+            })
             .count();
         live_count + retired_count + unreleased_count
     }
@@ -417,6 +424,12 @@ impl Board {
     /// session whose release was never established so it keeps counting
     /// without keeping cleanup polling alive.
     fn sweep_retired_browser_shutdowns(&mut self) {
+        self.unreleased_remote_holds.retain(|hold| {
+            !hold
+                .recovery
+                .as_ref()
+                .is_some_and(horizon_browser::RemoteAllocation::is_released)
+        });
         let (complete, pending): (Vec<_>, Vec<_>) = self
             .retired_browser_shutdown_signals
             .drain(..)
@@ -430,6 +443,7 @@ impl Board {
                 self.unreleased_remote_holds.push(UnreleasedRemoteHold {
                     provider: provider.to_string(),
                     quota_key: signal.remote_quota_key().map(str::to_string),
+                    recovery: signal.remote_recovery(),
                 });
             }
         }

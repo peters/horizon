@@ -14,6 +14,7 @@ pub(super) struct RemoteLifecycle {
     /// exactly once: Retry would bypass the host's provider limit, so a
     /// stopped panel needs a new create, which goes through that check.
     request: Option<RemoteSessionRequest>,
+    recovery: Option<horizon_browser::RemoteAllocation>,
     /// Configured remote target name.
     target: String,
     /// Configured provider the session was (or is being) allocated at.
@@ -88,6 +89,7 @@ impl RemoteLifecycle {
             target: request.label.clone(),
             provider: Some(request.provider.clone()),
             quota_key: Some(request.quota_key.clone()),
+            recovery: Some(request.recovery.clone()),
             request: Some(request),
             release_established: false,
             device: None,
@@ -99,6 +101,7 @@ impl RemoteLifecycle {
         Self {
             request: None,
             identity_display: RemoteIdentityDisplay::ended(),
+            recovery: None,
             target,
             provider: None,
             quota_key: None,
@@ -224,9 +227,14 @@ impl BrowserPanelState {
     /// nothing; its session ended with the previous run.
     #[must_use]
     pub fn holds_remote_allocation(&self) -> bool {
-        self.remote
-            .as_ref()
-            .is_some_and(|remote| remote.provider.is_some() && !remote.release_established)
+        self.remote.as_ref().is_some_and(|remote| {
+            remote.provider.is_some()
+                && !remote.release_established
+                && !remote
+                    .recovery
+                    .as_ref()
+                    .is_some_and(horizon_browser::RemoteAllocation::is_released)
+        })
     }
 
     /// Driver-less remote panel for host tests: counts as holding an
@@ -237,6 +245,7 @@ impl BrowserPanelState {
         let mut state = Self::inert();
         state.status = BrowserStatus::Ready;
         state.remote = Some(RemoteLifecycle::live(RemoteSessionRequest {
+            recovery: horizon_browser::RemoteAllocation::default(),
             endpoint: "https://grid.example.net/wd/hub".to_string(),
             authorization: None,
             capabilities: serde_json::json!({}),

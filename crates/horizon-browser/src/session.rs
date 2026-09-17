@@ -157,6 +157,7 @@ pub struct BrowserSession {
     remote_release: shutdown::RemoteReleaseReport,
     /// Configured provider of a remote session, for the host's occupancy count.
     remote_provider: Option<String>,
+    remote_recovery: Option<crate::RemoteAllocation>,
     /// The provider identity the allocation counts against across instances.
     remote_quota_key: Option<String>,
     event_wake: BrowserEventWake,
@@ -314,6 +315,7 @@ fn start_session_with_group(
     let remote_release = shutdown::RemoteReleaseReport::new(std::sync::Mutex::new(
         config.remote.as_ref().map(|_| RemoteReleaseOutcome::NeverAllocated),
     ));
+    let remote_recovery = config.remote.as_ref().map(|r| r.recovery.clone());
     let remote_provider = config.remote.as_ref().map(|request| request.provider.clone());
     let remote_quota_key = config.remote.as_ref().map(|request| request.quota_key.clone());
     let driver_remote_release = Arc::clone(&remote_release);
@@ -385,6 +387,7 @@ fn start_session_with_group(
         completion_rx,
         remote_release,
         remote_provider,
+        remote_recovery,
         remote_quota_key,
         event_wake,
         committed_url,

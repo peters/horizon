@@ -13,7 +13,6 @@ use horizon_core::browser::{BackendAvailability, BackendKind, BrowserStatus};
 use horizon_core::{Board, PanelId, PanelKind, PanelOptions, WorkspaceId, browser_actor};
 
 use super::HorizonApp;
-use super::browser_remote_create::plan_remote_create;
 
 const CREATE_REQUEST_POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// How long a create with an initial URL waits, after the backend is ready,
@@ -30,18 +29,16 @@ const STARTUP_DEADLINE_HEADROOM: Duration = Duration::from_millis(750);
 #[derive(Default)]
 pub(super) struct BrowserCreateHostState {
     last_request_poll: Option<Instant>,
+    pub(super) recovery_requests: Vec<manifest::recovery::RecoveryRequest>,
     pending: Vec<PendingBrowserCreate>,
     /// Closes the host has applied but whose session teardown has not
     /// completed yet; each is published once its teardown signal settles.
     pub(super) pending_closes: Vec<super::browser_close_requests::PendingBrowserClose>,
-    /// Cross-instance provider slots this host holds, per provider identity
-    /// (quota key, not the mutable provider name); trimmed to the host's
-    /// hold count for that identity on every poll.
-    pub(super) remote_slot_leases:
-        std::collections::BTreeMap<String, Vec<horizon_core::browser::remote_slots::SlotLease>>,
+    /// Exact allocation ownership, recovery handles, and cross-instance leases.
+    pub(super) remote_allocations: horizon_core::browser::remote_recovery::RemoteAllocations,
     /// Remote sessions whose release was never established by a board this
     /// host has since replaced: each keeps counting against its provider's
-    /// `max_sessions` and keeps one slot leased for the rest of the process.
+    /// `max_sessions` and keeps its slot leased until exact release is established.
     pub(super) orphaned_remote_holds: Vec<horizon_core::OrphanedRemoteHold>,
     /// Board placement the manifests were last stamped for; a change
     /// re-stamps on the same frame instead of waiting for the next tick.
@@ -252,7 +249,10 @@ impl HorizonApp {
             changed = true;
             self.start_requested_browser(request, actor_panel);
         }
-        changed | self.poll_browser_visibility_requests() | self.poll_browser_close_requests()
+        changed
+            | self.poll_browser_visibility_requests()
+            | self.poll_browser_close_requests()
+            | self.poll_remote_recovery()
     }
 
     fn start_requested_browser(&mut self, mut request: BrowserCreateRequest, actor_panel: ActorPanel) {
@@ -272,26 +272,18 @@ impl HorizonApp {
         // A remote target is resolved before any panel exists, so a missing
         // or locked credential, an unknown target or a full provider is
         // reported to the agent as a typed refusal.
-        let remote = match request.target.as_deref() {
-            Some(target) => match plan_remote_create(&self.template_config, &self.remote_browser_credentials, target) {
-                Ok(plan) => Some(plan),
-                Err(refused) => {
-                    complete_failure(&request, refused.code, &refused.message);
-                    return;
-                }
-            },
-            None => None,
+        let remote = match self.plan_and_admit_remote(&request, actor_panel.workspace_id) {
+            Ok(plan) => plan,
+            Err(refused) => {
+                complete_failure(&request, refused.code, &refused.message);
+                return;
+            }
         };
         let backend = remote.as_ref().map_or_else(
             || request.backend.unwrap_or(self.template_config.browser.backend),
             |plan| plan.backend,
         );
-        if let Some(plan) = &remote {
-            if let Err((code, message)) = self.admit_remote_create(plan) {
-                complete_failure(&request, code, message);
-                return;
-            }
-        } else {
+        if remote.is_none() {
             if let BackendAvailability::UnsupportedPlatform(reason) = backend.availability() {
                 complete_failure(&request, "unsupported_platform", reason);
                 return;
@@ -308,6 +300,7 @@ impl HorizonApp {
 
         let mut browser_config = self.template_config.browser.clone();
         browser_config.backend = backend;
+        let recovery = remote.as_ref().map(|plan| plan.request.recovery.clone());
         let options = duplicate.unwrap_or_else(|| PanelOptions {
             command: request.url.clone(),
             kind: PanelKind::Browser,
@@ -319,6 +312,9 @@ impl HorizonApp {
         let panel_id = match self.board.create_panel(options, actor_panel.workspace_id) {
             Ok(panel_id) => panel_id,
             Err(error) => {
+                if let Some(recovery) = &recovery {
+                    recovery.cancel_before_launch();
+                }
                 tracing::error!(request_id = %request.request_id, %error, "failed to create requested browser panel");
                 complete_failure(
                     &request,
@@ -337,6 +333,11 @@ impl HorizonApp {
             );
             return;
         };
+        if let Some(recovery) = recovery {
+            self.browser_create_host
+                .remote_allocations
+                .attach_panel(recovery.reference(), panel_local_id.clone());
+        }
         for status in [BrowserCreateAuditStatus::Queued, BrowserCreateAuditStatus::Dispatched] {
             if let Err(error) = manifest::record_create_status(&panel_local_id, &request, backend, status) {
                 tracing::error!(request_id = %request.request_id, %error, "could not audit requested browser creation");

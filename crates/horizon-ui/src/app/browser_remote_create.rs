@@ -127,13 +127,43 @@ pub(super) fn remote_session_limit_reached(config: &Config, provider: &str, hold
 }
 
 impl HorizonApp {
+    pub(super) fn plan_and_admit_remote(
+        &mut self,
+        request: &horizon_core::browser::manifest::BrowserCreateRequest,
+        workspace_id: horizon_core::WorkspaceId,
+    ) -> Result<Option<RemoteCreatePlan>, CreateRefusal> {
+        let Some(target) = request.target.as_deref() else {
+            return Ok(None);
+        };
+        let plan = plan_remote_create(&self.template_config, &self.remote_browser_credentials, target)?;
+        let workspace = self
+            .board
+            .workspace(workspace_id)
+            .map(|w| w.local_id.clone())
+            .ok_or_else(|| CreateRefusal {
+                code: "workspace_unavailable",
+                message: "the requesting workspace no longer exists".into(),
+            })?;
+        self.admit_remote_create(&plan, &request.actor, &workspace)
+            .map_err(|(code, message)| CreateRefusal {
+                code,
+                message: message.to_string(),
+            })?;
+        Ok(Some(plan))
+    }
+
     /// Admit a planned remote create against the provider's quota: first
     /// this host's own holds, then the slots shared with other Horizon
     /// instances on this computer.
     ///
     /// # Errors
     /// The typed create refusal when the quota is reached either way.
-    pub(super) fn admit_remote_create(&mut self, plan: &RemoteCreatePlan) -> Result<(), (&'static str, &'static str)> {
+    pub(super) fn admit_remote_create(
+        &mut self,
+        plan: &RemoteCreatePlan,
+        owner: &str,
+        workspace: &str,
+    ) -> Result<(), (&'static str, &'static str)> {
         let holds = remote_holds(self, &plan.provider);
         if remote_session_limit_reached(&self.template_config, &plan.provider, holds) {
             return Err((
@@ -141,7 +171,18 @@ impl HorizonApp {
                 "the remote provider has reached its configured max_sessions; allocations count until their release is established",
             ));
         }
-        self.lease_remote_slot(plan)
+        let lease = self.lease_remote_slot(plan)?;
+        self.browser_create_host.remote_allocations.insert(
+            horizon_core::browser::remote_recovery::HeldRemoteAllocation {
+                allocation: plan.request.recovery.clone(),
+                provider: plan.provider.clone(),
+                workspace: workspace.to_string(),
+                owner: owner.to_string(),
+                panel: None,
+                lease,
+            },
+        );
+        Ok(())
     }
 
     /// Lease one cross-instance provider slot for the planned create. Other
@@ -152,17 +193,13 @@ impl HorizonApp {
     ///
     /// # Errors
     /// The typed create refusal when every slot is held.
-    pub(super) fn lease_remote_slot(&mut self, plan: &RemoteCreatePlan) -> Result<(), (&'static str, &'static str)> {
-        let root = horizon_core::HorizonHome::resolve();
+    pub(super) fn lease_remote_slot(
+        &mut self,
+        plan: &RemoteCreatePlan,
+    ) -> Result<Option<remote_slots::SlotLease>, (&'static str, &'static str)> {
+        let root = self.session_store.home();
         match remote_slots::acquire_slot(root.root(), &plan.quota_key, plan.max_sessions) {
-            Ok(lease) => {
-                self.browser_create_host
-                    .remote_slot_leases
-                    .entry(plan.quota_key.clone())
-                    .or_default()
-                    .push(lease);
-                Ok(())
-            }
+            Ok(lease) => Ok(Some(lease)),
             Err(remote_slots::SlotError::Busy { .. }) => Err((
                 "remote_session_limit_reached",
                 "the remote provider's configured max_sessions are held by Horizon instances on this computer; allocations count until their release is established",
@@ -173,53 +210,21 @@ impl HorizonApp {
             )),
             Err(error) => {
                 tracing::warn!(%error, "remote provider slot files unavailable; proceeding on this host's count alone");
-                Ok(())
+                Ok(None)
             }
         }
     }
 }
 
-/// Keep exactly as many cross-instance slot leases per provider identity as
-/// this host holds allocations under that identity; the rest are freed for
-/// other Horizon instances. Called on the host's poll tick after holds may
-/// have changed. The identity travels with each session, so a provider whose
-/// endpoint or credential reference was reconfigured keeps the older
-/// identity's leases until those sessions are released.
+/// Free only leases whose exact allocation is released, and prune old board holds.
 pub(super) fn trim_remote_slot_leases(app: &mut HorizonApp) {
-    let keys: Vec<String> = app.browser_create_host.remote_slot_leases.keys().cloned().collect();
-    for key in keys {
-        let holds = remote_holds_for_key(app, &key);
-        if let Some(leases) = app.browser_create_host.remote_slot_leases.get_mut(&key) {
-            leases.truncate(holds);
-            if leases.is_empty() {
-                app.browser_create_host.remote_slot_leases.remove(&key);
-            }
-        }
-    }
-}
-
-/// Allocations counted against the cross-instance provider identity `key`
-/// anywhere this host knows about: the board (live, retired, unreleased),
-/// pending closes, a session switch still tearing the previous board down,
-/// and holds that earlier boards left unreleased.
-pub(super) fn remote_holds_for_key(app: &HorizonApp, key: &str) -> usize {
-    let pending = app
-        .browser_create_host
-        .pending_closes
-        .iter()
-        .filter(|pending| pending.holds_remote_allocation_for_key(key))
-        .count();
-    let switching = app
-        .pending_session_switch
-        .as_ref()
-        .map_or(0, |switch| switch.shutdown_progress.remote_holds_for_key(key));
-    let orphaned = app
-        .browser_create_host
-        .orphaned_remote_holds
-        .iter()
-        .filter(|held| held.quota_key.as_deref() == Some(key))
-        .count();
-    app.board.remote_holds_for_key(key) + pending + switching + orphaned
+    app.browser_create_host.remote_allocations.poll();
+    app.browser_create_host.orphaned_remote_holds.retain(|hold| {
+        !hold
+            .recovery
+            .as_ref()
+            .is_some_and(horizon_core::browser::RemoteAllocation::is_released)
+    });
 }
 
 impl HorizonApp {
@@ -249,7 +254,13 @@ pub(super) fn remote_holds(app: &HorizonApp, provider: &str) -> usize {
         .browser_create_host
         .orphaned_remote_holds
         .iter()
-        .filter(|held| held.provider == provider)
+        .filter(|held| {
+            held.provider == provider
+                && !held
+                    .recovery
+                    .as_ref()
+                    .is_some_and(horizon_core::browser::RemoteAllocation::is_released)
+        })
         .count();
     app.board.remote_holds(provider) + pending + orphaned
 }
@@ -448,55 +459,5 @@ mod tests {
         assert_eq!(refused.code, "credentials_invalid");
         assert!(refused.message.contains("`key`"));
         assert!(!refused.message.contains("has space"), "no value leaks");
-    }
-
-    #[test]
-    fn slot_leases_are_trimmed_to_the_hosts_holds() {
-        use horizon_core::browser::BrowserPanelState;
-        use horizon_core::{Panel, PanelContent, PanelId, PanelKind};
-
-        let (_temp, mut app) = crate::app::test_support::test_app();
-        let slots = tempfile::tempdir().expect("slots");
-        let lease = |key: &str| remote_slots::acquire_slot(slots.path(), key, 4).expect("slot");
-        app.browser_create_host
-            .remote_slot_leases
-            .insert("grid".to_string(), vec![lease("g"), lease("g")]);
-        app.browser_create_host
-            .remote_slot_leases
-            .insert("other".to_string(), vec![lease("o")]);
-
-        // One live remote panel on the grid provider holds one slot.
-        let workspace = app.board.create_workspace("alpha");
-        app.board.panels.push(Panel::from_content(
-            PanelId(9_301),
-            workspace,
-            PanelKind::Browser,
-            PanelContent::Browser(Box::new(BrowserPanelState::inert_remote("ios_phone", "grid"))),
-        ));
-        trim_remote_slot_leases(&mut app);
-        assert_eq!(
-            app.browser_create_host.remote_slot_leases.get("grid").map(Vec::len),
-            Some(1),
-            "one hold keeps one lease (the test panel's quota key is its provider name)"
-        );
-        assert!(
-            !app.browser_create_host.remote_slot_leases.contains_key("other"),
-            "a provider with no holds keeps no lease"
-        );
-        // A sibling test's fork may retain the descriptor until its child execs.
-        let _released_slot = (0..100)
-            .find_map(|_| match remote_slots::acquire_slot(slots.path(), "o", 1) {
-                Ok(lease) => Some(lease),
-                Err(remote_slots::SlotError::Busy { .. }) => {
-                    std::thread::sleep(std::time::Duration::from_millis(5));
-                    None
-                }
-                Err(error) => panic!("{error}"),
-            })
-            .expect("the freed slot is available to another instance");
-        match remote_slots::acquire_slot(slots.path(), "g", 1) {
-            Err(remote_slots::SlotError::Busy { .. }) => {}
-            other => panic!("the held slot stays held: {other:?}"),
-        }
     }
 }

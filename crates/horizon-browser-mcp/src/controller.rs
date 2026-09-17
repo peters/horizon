@@ -16,6 +16,7 @@ use thiserror::Error;
 use crate::model::{BrowserPanel, ProtocolKind};
 
 mod handoff;
+mod recovery;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
 const RESULT_POLL_INTERVAL: Duration = Duration::from_millis(20);

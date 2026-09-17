@@ -11,8 +11,9 @@ use crate::webdriver::remote_http::RemoteAuthorizationHeader;
 use crate::webdriver::test_server::{Reply, Server};
 use horizon_browser_protocol::remote::{DeviceKind, DeviceRequirement};
 
-fn request(endpoint: &str) -> RemoteSessionRequest {
+pub(super) fn request(endpoint: &str) -> RemoteSessionRequest {
     RemoteSessionRequest {
+        recovery: crate::RemoteAllocation::default(),
         endpoint: endpoint.to_string(),
         authorization: Some(Arc::new(
             RemoteAuthorizationHeader::new("Basic c2VjcmV0".into()).expect("header"),
@@ -232,8 +233,8 @@ fn release_is_verified_or_reported_unknown_after_bounded_attempts() {
     assert_eq!(
         host.release("abc"),
         RemoteReleaseOutcome::Failed {
-            error: "unknown error".into(),
-            message: "busy".into(),
+            error: "release refused".into(),
+            message: "the provider did not confirm the exact session release".into(),
         }
     );
     assert_eq!(refused.recorded().len(), 1, "a WebDriver answer is not retried");

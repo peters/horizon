@@ -1,4 +1,6 @@
 mod http_auth;
+mod recovery;
+pub(crate) use recovery::RemoteAllocationsInput;
 mod network;
 mod viewport;
 pub(crate) use viewport::{ResizeInput, ResizeOutput};

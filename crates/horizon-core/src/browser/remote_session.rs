@@ -70,6 +70,7 @@ pub fn build_remote_session_request(
         .map(Arc::new);
     let limits = &provider.limits;
     Ok(RemoteSessionRequest {
+        recovery: horizon_browser::RemoteAllocation::default(),
         endpoint: provider.endpoint.as_str().to_string(),
         authorization,
         capabilities: capabilities_for(provider.adapter, target_name, target)?,

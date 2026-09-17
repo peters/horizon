@@ -26,6 +26,7 @@ pub enum ForcedBrowserShutdownStatus {
 pub struct OrphanedRemoteHold {
     pub provider: String,
     pub quota_key: Option<String>,
+    pub recovery: Option<horizon_browser::RemoteAllocation>,
 }
 
 /// Tracks the progress of an asynchronous panel shutdown.
@@ -112,6 +113,12 @@ impl ShutdownProgress {
             .unreleased_remote_holds
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        unreleased.retain(|hold| {
+            !hold
+                .recovery
+                .as_ref()
+                .is_some_and(horizon_browser::RemoteAllocation::is_released)
+        });
         signals.retain(|signal| {
             if signal.is_complete() {
                 self.browsers_completed.fetch_add(1, Ordering::Relaxed);
@@ -121,6 +128,7 @@ impl ShutdownProgress {
                     unreleased.push(super::UnreleasedRemoteHold {
                         provider: provider.to_string(),
                         quota_key: signal.remote_quota_key().map(str::to_string),
+                        recovery: signal.remote_recovery(),
                     });
                 }
                 false
@@ -148,7 +156,13 @@ impl ShutdownProgress {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
-            .filter(|held| held.quota_key.as_deref() == Some(key))
+            .filter(|held| {
+                held.quota_key.as_deref() == Some(key)
+                    && !held
+                        .recovery
+                        .as_ref()
+                        .is_some_and(horizon_browser::RemoteAllocation::is_released)
+            })
             .count();
         in_flight + finished
     }
@@ -170,6 +184,7 @@ impl ShutdownProgress {
             .map(|held| OrphanedRemoteHold {
                 provider: held.provider,
                 quota_key: held.quota_key,
+                recovery: held.recovery,
             })
             .collect()
     }
@@ -398,6 +413,35 @@ mod tests {
     }
 
     #[test]
+    fn recovered_holds_are_pruned_and_shutdown_handoff_preserves_identity() {
+        let mut board = crate::Board::new();
+        for _ in 0..140 {
+            let allocation = horizon_browser::RemoteAllocation::default();
+            allocation.cancel_before_launch();
+            board.unreleased_remote_holds.push(super::super::UnreleasedRemoteHold {
+                provider: "grid".into(),
+                quota_key: Some("quota".into()),
+                recovery: Some(allocation),
+            });
+        }
+        let unresolved = horizon_browser::RemoteAllocation::default();
+        board.unreleased_remote_holds.push(super::super::UnreleasedRemoteHold {
+            provider: "grid".into(),
+            quota_key: Some("quota".into()),
+            recovery: Some(unresolved.clone()),
+        });
+        board.process_output();
+        assert_eq!(board.unreleased_remote_holds.len(), 1);
+        let progress = board.begin_async_shutdown();
+        assert_eq!(progress.remote_holds_for_key("quota"), 1);
+        let holds = progress.take_unreleased_remote_holds();
+        assert_eq!(holds.len(), 1);
+        assert_eq!(holds[0].recovery.as_ref(), Some(&unresolved));
+        unresolved.cancel_before_launch();
+        assert!(holds[0].recovery.as_ref().expect("shared recovery").is_released());
+    }
+
+    #[test]
     fn unreleased_holds_survive_the_teardowns_and_reach_the_host() {
         use horizon_browser::RemoteReleaseOutcome;
 
@@ -409,6 +453,7 @@ mod tests {
                 BrowserShutdownSignal::completed_remote_for_test("grid", Some(RemoteReleaseOutcome::Released)),
             ],
             vec![super::super::UnreleasedRemoteHold {
+                recovery: None,
                 provider: "grid".into(),
                 quota_key: Some("grid".into()),
             }],

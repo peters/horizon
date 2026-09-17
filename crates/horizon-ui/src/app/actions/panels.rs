@@ -76,6 +76,7 @@ impl HorizonApp {
         &mut self,
         panel_id: PanelId,
     ) -> Option<horizon_core::browser::BrowserShutdownSignal> {
+        self.refresh_remote_recovery_scope();
         let transcript = self
             .board
             .panel(panel_id)

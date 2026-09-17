@@ -209,6 +209,14 @@ fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
             .as_str()
             .is_some_and(|description| description.contains("without stopping"))
     );
+    let recovery = listed_tool(tools, "browser_remote_allocations");
+    assert!(recovery["inputSchema"]["properties"].get("operation").is_some());
+    assert!(recovery["inputSchema"]["properties"].get("reference").is_some());
+    assert!(
+        recovery["description"]
+            .as_str()
+            .is_some_and(|text| text.contains("exact-session absence"))
+    );
     let close = listed_tool(tools, "browser_close");
     assert!(
         close["description"]

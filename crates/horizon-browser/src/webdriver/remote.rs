@@ -4,6 +4,7 @@
 //! mutation is replayed.
 
 pub mod identity;
+pub mod recovery;
 mod watchdog;
 
 use std::fmt;
@@ -30,6 +31,8 @@ const RELEASE_ATTEMPTS: u8 = 3;
 /// configuration, the resolved authorization) happens before this point.
 #[derive(Clone)]
 pub struct RemoteSessionRequest {
+    /// Private allocation identity retained through teardown.
+    pub recovery: recovery::RemoteAllocation,
     /// Control endpoint including base path, already validated by the host.
     pub endpoint: String,
     /// Header sent to that endpoint only; `None` for an unauthenticated grid.
@@ -371,6 +374,9 @@ impl RemoteHost {
                 });
             }
         };
+        request
+            .recovery
+            .identify(Arc::clone(&self.transport), session.id.clone());
         match Watchdog::start(
             Arc::clone(&self.transport),
             session.id.clone(),
@@ -447,18 +453,38 @@ fn release_session(transport: &RemoteHttpClient, session_id: &str) -> RemoteRele
     let path = format!("/session/{session_id}");
     let mut last_reason = String::new();
     for attempt in 1..=RELEASE_ATTEMPTS {
-        match transport.request("DELETE", &path, None, RELEASE_ATTEMPT_TIMEOUT) {
-            Ok(_) => return RemoteReleaseOutcome::Released,
-            Err(HttpError::WebDriver { error, message }) => {
-                if error == "invalid session id" {
+        if let Ok((status, bytes)) = transport.request_bytes("DELETE", &path, None, RELEASE_ATTEMPT_TIMEOUT) {
+            if matches!(status, 401 | 403) {
+                return RemoteReleaseOutcome::Failed {
+                    error: "authentication failed".into(),
+                    message: "the original provider rejected the credential".into(),
+                };
+            }
+            let response = super::http::interpret_body(status, &bytes);
+            match response {
+                Ok(value)
+                    if (status == 200 && value.get("value") == Some(&Value::Null))
+                        || (status == 204 && bytes.is_empty()) =>
+                {
+                    return RemoteReleaseOutcome::Released;
+                }
+                Err(HttpError::WebDriver { error, .. }) if status == 404 && error == "invalid session id" => {
                     return RemoteReleaseOutcome::AlreadyGone;
                 }
-                return RemoteReleaseOutcome::Failed { error, message };
+                Err(HttpError::WebDriver { .. }) => {
+                    return RemoteReleaseOutcome::Failed {
+                        error: "release refused".into(),
+                        message: "the provider did not confirm the exact session release".into(),
+                    };
+                }
+                _ => last_reason = "the provider returned an unrecognized release response".into(),
             }
-            Err(other) => {
-                last_reason = other.to_string();
-                tracing::warn!(attempt, "remote session release attempt failed: {last_reason}");
-            }
+        } else {
+            last_reason = "the provider release request did not return a complete response".into();
+            tracing::warn!(
+                attempt,
+                "remote session release attempt failed without a trustworthy response"
+            );
         }
     }
     RemoteReleaseOutcome::ReleaseUnknown {
