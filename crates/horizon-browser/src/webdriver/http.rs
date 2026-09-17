@@ -1,6 +1,6 @@
 use std::io::{Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use thiserror::Error;
@@ -65,31 +65,63 @@ impl HttpClient {
         body: Option<&Value>,
         read_timeout: Duration,
     ) -> Result<Value, HttpError> {
+        self.request_until(method, path, body, Instant::now() + read_timeout)
+    }
+
+    pub(super) fn request_until(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+        deadline: Instant,
+    ) -> Result<Value, HttpError> {
         if !path.starts_with('/') || path.contains(['\r', '\n']) {
             return Err(HttpError::InvalidResponse(format!("invalid request path {path:?}")));
         }
         let body = body.map_or_else(String::new, Value::to_string);
-        let mut stream = TcpStream::connect_timeout(&self.address, CONNECT_TIMEOUT)?;
-        stream.set_read_timeout(Some(read_timeout))?;
-        stream.set_write_timeout(Some(IO_TIMEOUT))?;
+        let mut stream = TcpStream::connect_timeout(&self.address, remaining_timeout(deadline)?.min(CONNECT_TIMEOUT))?;
         stream.set_nodelay(true)?;
-        write!(
-            stream,
+        let request = format!(
             "{method} {path} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             self.address,
             body.len()
-        )?;
-        stream.flush()?;
-
+        );
+        let mut pending = request.as_bytes();
+        while !pending.is_empty() {
+            stream.set_write_timeout(Some(remaining_timeout(deadline)?.min(IO_TIMEOUT)))?;
+            let written = stream.write(pending)?;
+            if written == 0 {
+                return Err(std::io::Error::from(std::io::ErrorKind::WriteZero).into());
+            }
+            pending = &pending[written..];
+        }
         let mut response = Vec::new();
-        stream
-            .take(u64::try_from(MAX_RESPONSE_BYTES + 1).unwrap_or(u64::MAX))
-            .read_to_end(&mut response)?;
-        if response.len() > MAX_RESPONSE_BYTES {
-            return Err(HttpError::InvalidResponse("response exceeded 64 MiB".to_string()));
+        let mut buffer = [0; 8192];
+        loop {
+            stream.set_read_timeout(Some(remaining_timeout(deadline)?))?;
+            let read = stream.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            if response.len() + read > MAX_RESPONSE_BYTES {
+                return Err(HttpError::InvalidResponse("response exceeded 64 MiB".to_string()));
+            }
+            response.extend_from_slice(&buffer[..read]);
         }
         parse_response(&response)
     }
+}
+
+pub(super) fn remaining_timeout(deadline: Instant) -> Result<Duration, HttpError> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or_else(|| {
+            HttpError::Io(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "WebDriver command deadline exceeded",
+            ))
+        })
 }
 
 fn parse_response(response: &[u8]) -> Result<Value, HttpError> {
@@ -243,5 +275,46 @@ mod tests {
         };
         assert!(unsupported.is_unsupported_websocket_capability());
         assert!(!busy.is_unsupported_websocket_capability());
+    }
+    #[test]
+    fn absolute_deadline_bounds_a_stalled_response_body() {
+        use super::super::test_server::{Reply, Server};
+        let server = Server::start(vec![
+            Reply::json(200, &serde_json::json!({"value":null})).body_delayed(std::time::Duration::from_millis(500)),
+        ]);
+        let client = super::HttpClient::new(([127, 0, 0, 1], server.port).into()).expect("client");
+        let start = std::time::Instant::now();
+        assert!(
+            client
+                .request_until("GET", "/status", None, start + std::time::Duration::from_millis(40))
+                .is_err()
+        );
+        assert!(start.elapsed() < std::time::Duration::from_millis(400));
+    }
+
+    #[test]
+    fn trickling_bytes_does_not_renew_the_absolute_deadline() {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener");
+        let client = super::HttpClient::new(listener.local_addr().expect("address")).expect("client");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut request = [0; 4096];
+            let _ = stream.read(&mut request);
+            for byte in b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{\"value\":null}" {
+                if stream.write_all(&[*byte]).is_err() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        });
+        let start = std::time::Instant::now();
+        assert!(
+            client
+                .request_until("GET", "/status", None, start + std::time::Duration::from_millis(80))
+                .is_err()
+        );
+        assert!(start.elapsed() < std::time::Duration::from_millis(500));
+        server.join().expect("server");
     }
 }

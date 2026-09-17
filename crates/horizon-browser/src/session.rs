@@ -205,17 +205,82 @@ pub fn start_session(config: BrowserSessionConfig) -> Result<BrowserSession, cra
     start_session_with_group(config, None)
 }
 
-/// Start a separate page in a shared local Chromium session.
+/// A local browser profile with independently controlled pages.
+#[derive(Clone, Debug)]
+pub enum SharedSessionGroup {
+    Chromium(SharedBrowserSession),
+    Firefox(crate::webdriver::SharedFirefoxSession),
+}
+
+impl From<SharedBrowserSession> for SharedSessionGroup {
+    fn from(group: SharedBrowserSession) -> Self {
+        Self::Chromium(group)
+    }
+}
+
+impl SharedSessionGroup {
+    #[must_use]
+    pub fn new_firefox(profile_id: String) -> Self {
+        Self::Firefox(crate::webdriver::SharedFirefoxSession::new(profile_id))
+    }
+
+    #[must_use]
+    pub fn profile_id(&self) -> &str {
+        match self {
+            Self::Chromium(group) => group.profile_id(),
+            Self::Firefox(group) => group.profile_id(),
+        }
+    }
+
+    #[must_use]
+    pub fn is_idle(&self) -> bool {
+        match self {
+            Self::Chromium(group) => group.is_idle(),
+            Self::Firefox(group) => group.is_idle(),
+        }
+    }
+
+    pub(super) fn retire_profile_for_cleanup(&self) -> bool {
+        match self {
+            Self::Chromium(group) => group.retire_profile_for_cleanup(),
+            Self::Firefox(group) => group.retire_profile_for_cleanup(),
+        }
+    }
+
+    fn backend(&self) -> BackendKind {
+        match self {
+            Self::Chromium(_) => BackendKind::ChromiumCdp,
+            Self::Firefox(_) => BackendKind::FirefoxBidi,
+        }
+    }
+
+    fn firefox(&self) -> Option<&crate::webdriver::SharedFirefoxSession> {
+        match self {
+            Self::Firefox(group) => Some(group),
+            Self::Chromium(_) => None,
+        }
+    }
+
+    fn reserve(self, stop: Arc<AtomicBool>) -> Option<shared::SharedDriverReservation> {
+        match self {
+            Self::Chromium(group) => Some(group.reserve(stop)),
+            Self::Firefox(_) => None,
+        }
+    }
+}
+
+/// Start a separate page in a shared local Chromium or Firefox session.
 ///
 /// # Errors
 /// Rejects unsupported backends or invalid launch configurations.
 pub fn start_shared_session(
     config: BrowserSessionConfig,
-    group: SharedBrowserSession,
+    group: impl Into<SharedSessionGroup>,
 ) -> Result<BrowserSession, crate::BrowserError> {
-    if config.browser.backend != BackendKind::ChromiumCdp || config.remote.is_some() {
+    let group = group.into();
+    if config.browser.backend != group.backend() || config.remote.is_some() {
         return Err(crate::BrowserError::LaunchConfig(std::io::Error::other(
-            "shared sessions require local Chromium",
+            "shared session backend must match the local browser",
         )));
     }
     start_session_with_group(config, Some(group))
@@ -223,7 +288,7 @@ pub fn start_shared_session(
 
 fn start_session_with_group(
     config: BrowserSessionConfig,
-    group: Option<SharedBrowserSession>,
+    group: Option<SharedSessionGroup>,
 ) -> Result<BrowserSession, crate::BrowserError> {
     let mut config = config;
     config.browser = config
@@ -257,7 +322,11 @@ fn start_session_with_group(
     let panel_local_id = config.panel_local_id.clone();
     let coordination = config.coordination.clone();
     let stop_requested = Arc::new(AtomicBool::new(false));
-    let group = group.map(|group| group.reserve(Arc::clone(&stop_requested)));
+    let firefox_group = group
+        .as_ref()
+        .and_then(SharedSessionGroup::firefox)
+        .map(|group| group.reserve(Arc::clone(&stop_requested)));
+    let group = group.and_then(|group| group.reserve(Arc::clone(&stop_requested)));
     let driver_stop_requested = Arc::clone(&stop_requested);
     let slot = Arc::clone(&frame_slot);
     std::thread::Builder::new()
@@ -273,7 +342,10 @@ fn start_session_with_group(
                     completion: completion_tx,
                     remote_release: driver_remote_release,
                 },
-                &driver_process_control,
+                crate::webdriver::WebDriverLaunch {
+                    process_control: &driver_process_control,
+                    group: None,
+                },
             ),
             BackendKind::ChromiumCdp => run_driver(
                 &config,
@@ -297,7 +369,10 @@ fn start_session_with_group(
                     completion: completion_tx,
                     remote_release: driver_remote_release,
                 },
-                &driver_process_control,
+                crate::webdriver::WebDriverLaunch {
+                    process_control: &driver_process_control,
+                    group: firefox_group,
+                },
             ),
         })
         .map_err(crate::BrowserError::DriverThread)?;

@@ -12,6 +12,7 @@ use super::transport::ClassicTransport;
 pub(super) enum DriverHost {
     /// A driver process Horizon spawned and owns on this machine.
     Local(WebDriverService),
+    Shared(super::shared::SharedFirefoxPage),
     /// A session at a remote grid, bounded by the local watchdog.
     Remote(RemoteHost),
 }
@@ -20,6 +21,7 @@ pub(super) enum DriverHost {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum HostExit {
     Process(ExitStatus),
+    SharedClosed,
     Expired(RemoteExpiry),
 }
 
@@ -27,7 +29,7 @@ impl HostExit {
     pub(super) fn code(self) -> Option<i32> {
         match self {
             Self::Process(status) => status.code(),
-            Self::Expired(_) => None,
+            Self::Expired(_) | Self::SharedClosed => None,
         }
     }
 }
@@ -36,7 +38,45 @@ impl DriverHost {
     pub(super) fn transport(&self) -> &dyn ClassicTransport {
         match self {
             Self::Local(service) => &service.http,
+            Self::Shared(page) => page,
             Self::Remote(host) => host.transport(),
+        }
+    }
+
+    pub(super) fn shared_context(&self) -> Option<&str> {
+        match self {
+            Self::Shared(page) => Some(&page.context),
+            _ => None,
+        }
+    }
+
+    pub(super) fn remember_bidi_registration(&mut self, method: &'static str, id: String) {
+        if let Self::Shared(page) = self {
+            page.remember(method, id);
+        }
+    }
+
+    pub(super) fn record_bidi_result(
+        &mut self,
+        method: &str,
+        params: &serde_json::Value,
+        result: &Result<serde_json::Value, crate::websocket::JsonWsError>,
+    ) {
+        if let Self::Shared(page) = self {
+            page.record_bidi_result(method, params, result);
+        }
+    }
+
+    pub(super) fn accepts_bidi_event(&mut self, event: &serde_json::Value) -> bool {
+        match self {
+            Self::Shared(page) => page.accepts_event(event),
+            _ => true,
+        }
+    }
+
+    pub(super) fn context_destroyed(&self) {
+        if let Self::Shared(page) = self {
+            page.context_destroyed();
         }
     }
 
@@ -46,7 +86,7 @@ impl DriverHost {
 
     pub(super) fn remote(&mut self) -> Option<&mut RemoteHost> {
         match self {
-            Self::Local(_) => None,
+            Self::Local(_) | Self::Shared(_) => None,
             Self::Remote(host) => Some(host),
         }
     }
@@ -55,6 +95,7 @@ impl DriverHost {
     pub(super) fn exit(&mut self) -> Option<HostExit> {
         match self {
             Self::Local(service) => service.process.child_status().map(HostExit::Process),
+            Self::Shared(page) => page.is_closed().then_some(HostExit::SharedClosed),
             Self::Remote(host) => host.check_expiry().map(HostExit::Expired),
         }
     }
@@ -70,6 +111,10 @@ impl DriverHost {
             Self::Local(service) => {
                 service.delete_session(session_id);
                 let _ = service.process.kill();
+                None
+            }
+            Self::Shared(page) => {
+                page.close();
                 None
             }
             Self::Remote(host) => Some(host.release(session_id)),

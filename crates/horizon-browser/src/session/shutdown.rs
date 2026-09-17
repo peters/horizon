@@ -32,7 +32,7 @@ pub struct BrowserShutdownSignal {
     panel_local_id: Option<String>,
     coordination: Option<Arc<dyn BrowserCoordination>>,
     profile_cleanup: Mutex<ProfileCleanupState>,
-    shared_profile: Option<super::SharedBrowserSession>,
+    shared_profile: Option<Arc<super::SharedSessionGroup>>,
 }
 
 enum ProfileCleanupState {
@@ -76,7 +76,7 @@ impl BrowserShutdownSignal {
     }
 
     #[must_use]
-    pub fn with_shared_profile_cleanup(mut self, group: super::SharedBrowserSession) -> Self {
+    pub fn with_shared_profile_cleanup(mut self, group: Arc<super::SharedSessionGroup>) -> Self {
         self.shared_profile = Some(group);
         self
     }
