@@ -363,7 +363,17 @@ mod tests {
             Err(remote_slots::SlotError::Busy { .. })
         ));
         let second = plan_remote_create(&app.template_config, &credentials, "ios_phone").expect("second plan");
-        app.admit_remote_create(&second, "owner", "workspace")
+        // Concurrent process tests can inherit the freed lock until exec.
+        // Retry admission only; an omitted admission-time poll still fails.
+        (0..100)
+            .find_map(|_| match app.admit_remote_create(&second, "owner", "workspace") {
+                Ok(()) => Some(()),
+                Err(("remote_session_limit_reached", _)) => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                    None
+                }
+                Err(error) => panic!("unexpected admission failure: {error:?}"),
+            })
             .expect("same-batch admission without a host poll");
         assert!(
             matches!(
