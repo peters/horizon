@@ -141,7 +141,7 @@ jobs:
             device_test_dir=$(mktemp -d)
             trap '\''rm -rf "$device_test_dir"'\'' EXIT
             printf '\''{"id":"ci-device","endpoint":{"kind":"local_x11","display":"%s"}}'\'' "$DISPLAY" > "$device_test_dir/target.json"
-            HORIZON_DEVICE_TEST_TARGET="$device_test_dir/target.json" cargo test --locked -p horizon-device --features cli --test x11_live -- --ignored
+            HORIZON_DEVICE_TEST_TARGET="$device_test_dir/target.json" cargo test --locked -p horizon-device --features cli --test x11_live --test cli -- --ignored
           '
 
   browser-harness-tests:

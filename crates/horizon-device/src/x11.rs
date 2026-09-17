@@ -104,6 +104,10 @@ impl Backend for X11 {
             .map_err(unavailable)?
             .reply()
             .map_err(unavailable)?;
+        let captured_unix_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(unavailable)?
+            .as_millis();
         let setup = self.connection.setup();
         let format = setup
             .pixmap_formats
@@ -148,10 +152,7 @@ impl Backend for X11 {
         }
         Ok(Observation {
             geometry,
-            captured_unix_ms: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_err(unavailable)?
-                .as_millis(),
+            captured_unix_ms,
             mime_type: "image/png".into(),
             image_base64: STANDARD.encode(png),
         })
@@ -192,11 +193,14 @@ fn inject(input: &mut Enigo, action: &Action) -> enigo::InputResult<()> {
             input.move_mouse(from.x, from.y, Abs)?;
             let result = (|| {
                 input.button(B::Left, Direction::Press)?;
-                for step in 1..=20 {
-                    std::thread::sleep(Duration::from_millis(u64::from(*duration_ms) / 20));
+                let started = std::time::Instant::now();
+                let duration = Duration::from_millis(u64::from(*duration_ms));
+                for step in 1..=20_u16 {
+                    let deadline = duration * u32::from(step) / 20;
+                    std::thread::sleep(deadline.saturating_sub(started.elapsed()));
                     input.move_mouse(
-                        from.x + (to.x - from.x) * step / 20,
-                        from.y + (to.y - from.y) * step / 20,
+                        from.x + (to.x - from.x) * i32::from(step) / 20,
+                        from.y + (to.y - from.y) * i32::from(step) / 20,
                         Abs,
                     )?;
                 }
