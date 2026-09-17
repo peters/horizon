@@ -26,10 +26,25 @@ pub(super) fn bind_browser_skill(home: &Path, host_id: &std::ffi::OsStr) -> io::
     let lease = super::user_skills::bind_prepared_skill_root(host_id, dir.clone(), validate_browser_skill, || {
         validate_browser_skill(&dir)?;
         register(home)?;
-        super::sync_plugin_files(&dir, super::BROWSER_SKILL_FILES)?;
-        Ok(())
+        install_browser_skill(&dir)
     })?;
     Ok(vec![lease])
+}
+
+fn install_browser_skill(dir: &Path) -> io::Result<()> {
+    if dir.try_exists()? {
+        return Ok(());
+    }
+    let parent = dir
+        .parent()
+        .ok_or_else(|| io::Error::other("skill directory has no parent"))?;
+    // Publish only a complete directory. An interrupted write leaves a sibling
+    // staging directory, never a partial skill that looks like user content.
+    let staging = tempfile::Builder::new()
+        .prefix(".horizon-browser-")
+        .tempdir_in(parent)?;
+    super::sync_plugin_files(staging.path(), super::BROWSER_SKILL_FILES)?;
+    fs::rename(staging.path(), dir)
 }
 
 fn validate_browser_skill(dir: &Path) -> io::Result<()> {

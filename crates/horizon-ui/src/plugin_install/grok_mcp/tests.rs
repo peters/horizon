@@ -231,3 +231,20 @@ fn registration_extends_inline_server_tables_without_changing_existing_settings(
     assert!(!register(home.path()).expect("idempotent"));
     assert_eq!(fs::read_to_string(path).expect("unchanged second pass"), text);
 }
+
+#[test]
+fn interrupted_skill_staging_does_not_block_a_later_host() {
+    use super::super::release_skill_roots;
+    let home = tempfile::tempdir().expect("home");
+    register(home.path()).expect("registration before interrupted install");
+    let staging = home.path().join("skills/.horizon-browser-interrupted");
+    fs::create_dir_all(&staging).expect("interrupted staging");
+    fs::write(staging.join("partial.tmp"), "partial").expect("incomplete write");
+    let dir = home.path().join("skills/horizon-browser");
+    assert!(!dir.exists());
+    let mut leases = bind_browser_skill(home.path(), std::ffi::OsStr::new("retry")).expect("recover install");
+    assert_eq!(leases.len(), 1);
+    validate_browser_skill(&dir).expect("complete skill");
+    release_skill_roots(&mut leases);
+    assert!(!dir.exists());
+}
