@@ -176,10 +176,135 @@ pub(super) fn shutdown_for_restart(terminal: &mut crate::terminal::Terminal) -> 
 
 #[cfg(all(test, unix))]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
     use super::*;
     use crate::agent_work::{ResumePolicy, StartupPlan, WorkLaunch};
     use crate::runtime_state::AgentSessionBinding;
     use crate::{PanelId, PanelOptions, WorkspaceId};
+
+    #[test]
+    fn confirmed_restart_replaces_the_process_and_submits_the_brief_once() {
+        const CHILD_ENV: &str = "HORIZON_TEST_MANUAL_RESTART_CHILD";
+        if std::env::var_os(CHILD_ENV).is_some() {
+            exercise_confirmed_restart();
+            return;
+        }
+        let home = tempfile::tempdir().expect("isolated home");
+        let bin = home.path().join("bin");
+        std::fs::create_dir(&bin).expect("fixture bin");
+        std::fs::write(home.path().join(".bashrc"), "").expect("isolated shell config");
+        let provider = bin.join("pi");
+        std::fs::write(
+            &provider,
+            r#"#!/bin/bash
+if test -f "$HOME/provider.pid"; then
+    read -r previous < "$HOME/provider.pid"
+    if kill -0 "$previous" 2>/dev/null; then
+        printf 'overlapping processes\n' > "$HOME/overlap"
+    fi
+fi
+printf '%s\0' "$@" > "$HOME/args.$$"
+printf '%s\n' "$$" > "$HOME/provider.pid"
+trap 'exit 0' HUP TERM
+printf '%s\n' "$$" >> "$HOME/launches"
+while :; do read -r -t 1 || :; done
+"#,
+        )
+        .expect("fixture executable");
+        std::fs::set_permissions(&provider, std::fs::Permissions::from_mode(0o700)).expect("executable permission");
+        // Re-exec isolates HOME, PATH and SHELL from concurrent tests and ensures
+        // the ordinary launch resolver can only find our disposable provider.
+        let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args([
+                "--exact",
+                concat!(
+                    module_path!(),
+                    "::confirmed_restart_replaces_the_process_and_submits_the_brief_once"
+                )
+                .trim_start_matches("horizon_core::"),
+                "--nocapture",
+            ])
+            .env_clear()
+            .env(CHILD_ENV, "1")
+            .env("HOME", home.path())
+            .env("SHELL", "/bin/bash")
+            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+            .current_dir(home.path())
+            .output()
+            .expect("isolated test process");
+        assert!(
+            output.status.success(),
+            "isolated restart failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let launches = std::fs::read_to_string(home.path().join("launches")).expect("test child executed");
+        assert_eq!(launches.lines().count(), 3);
+        assert!(
+            !home.path().join("overlap").exists(),
+            "replacement started before previous process exited"
+        );
+    }
+
+    fn exercise_confirmed_restart() {
+        let home = std::path::PathBuf::from(std::env::var_os("HOME").expect("fixture home"));
+        let mut panel = Panel::spawn(
+            PanelId(1),
+            WorkspaceId(1),
+            PanelOptions {
+                kind: PanelKind::Pi,
+                cwd: Some(home.clone()),
+                local_id: Some("manual-restart-fixture".into()),
+                is_restore: true,
+                work_resume: ResumePolicy {
+                    enabled: true,
+                    ..Default::default()
+                },
+                session_binding: Some(AgentSessionBinding::new(
+                    PanelKind::Pi,
+                    "fixture-session".into(),
+                    None,
+                    None,
+                    None,
+                )),
+                ..Default::default()
+            },
+        )
+        .expect("restored disposable provider");
+        assert_eq!(wait_for_launch(&home, 1), ["--session", "fixture-session"]);
+        panel.request_work_resume().expect("confirm offered continuation");
+        panel.restart().expect("confirmed restart");
+        let args = wait_for_launch(&home, 2);
+        assert_eq!(args.len(), 3, "exactly one brief must be submitted");
+        assert_eq!(&args[..2], ["--session", "fixture-session"]);
+        assert!(args[2].starts_with("The user selected Resume work in Horizon for this conversation."));
+        assert!(panel.terminal().expect("terminal").pending_work_resume().is_none());
+        assert!(panel.requested_work_brief().expect("consumed authorization").is_none());
+        panel.restart().expect("ordinary restart after continuation");
+        assert_eq!(wait_for_launch(&home, 3), ["--session", "fixture-session"]);
+        shutdown_for_restart(panel.terminal_mut().expect("terminal")).expect("close disposable provider");
+    }
+
+    fn wait_for_launch(home: &std::path::Path, expected: usize) -> Vec<String> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let launches = std::fs::read_to_string(home.join("launches")).unwrap_or_default();
+            let pids: Vec<_> = launches.lines().collect();
+            assert!(pids.len() <= expected, "unexpected additional provider launch");
+            if pids.len() == expected && launches.ends_with('\n') {
+                let bytes = std::fs::read(home.join(format!("args.{}", pids[expected - 1]))).expect("provider args");
+                return bytes
+                    .strip_suffix(&[0])
+                    .expect("NUL terminated arguments")
+                    .split(|byte| *byte == 0)
+                    .map(|arg| String::from_utf8(arg.to_vec()).expect("UTF-8 argument"))
+                    .collect();
+            }
+            assert!(std::time::Instant::now() < deadline, "provider did not launch");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
 
     fn fixture() -> Panel {
         let mut panel = Panel::spawn(
