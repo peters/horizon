@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod agent_work_hook;
 mod app;
 mod badge;
 mod branding;
@@ -37,6 +38,9 @@ use horizon_core::{
 use tracing_subscriber::fmt::format::FmtSpan;
 
 fn main() -> eframe::Result {
+    if agent_work_hook::run_if_requested() {
+        return Ok(());
+    }
     init_tracing();
 
     if browser_mcp_mode_requested() {
