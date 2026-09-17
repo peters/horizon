@@ -212,6 +212,14 @@ pub(crate) struct CreateInput {
     pub(crate) timeout_millis: Option<u64>,
 }
 
+/// A fresh page sharing the source panel's login and website storage.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(crate) struct DuplicateInput {
+    pub panel_id: String,
+    pub visible: Option<bool>,
+    pub timeout_millis: Option<u64>,
+}
+
 /// Where the requested first page stood when `browser_create` returned.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]

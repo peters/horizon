@@ -145,7 +145,7 @@ fn listed_tool<'a>(tools: &'a Value, name: &str) -> &'a Value {
 
 fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     let encoded_tools = tools.to_string();
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(18));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(19));
     let resize = listed_tool(tools, "browser_resize");
     for field in ["panel_id", "width", "height", "reset", "timeout_millis"] {
         assert!(

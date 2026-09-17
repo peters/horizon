@@ -299,3 +299,8 @@ The control manifest stores duplicate requests in a nested queue that older host
 cannot misinterpret as independent creation. `app::browser_duplicate` revalidates
 the actor, workspace, source ownership, readiness and handoff state before invoking
 the core operation and exposing the result.
+
+The panel titlebar menu and public `browser_duplicate` tool expose shared-page
+creation for ready local Chromium and Firefox panels. UI duplication reveals the
+new panel; tool requests pass through host authorization. The public tool contract
+and smoke gate include duplication without exposing browser transport endpoints.

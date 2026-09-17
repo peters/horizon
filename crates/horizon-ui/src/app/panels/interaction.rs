@@ -133,6 +133,24 @@ impl HorizonApp {
     ) {
         drag_response.context_menu(|ui| {
             ui.set_min_width(180.0);
+            if kind == PanelKind::Browser {
+                let supported = self
+                    .board
+                    .panel(panel_id)
+                    .and_then(|panel| panel.browser())
+                    .is_some_and(horizon_core::browser::BrowserPanelState::can_duplicate);
+                if ui
+                    .add_enabled(supported, egui::Button::new("Duplicate panel"))
+                    .on_hover_text(
+                        "Open the same URL in a new panel, sharing login and website storage. Requires local Chromium or Firefox.",
+                    )
+                    .clicked()
+                {
+                    outcome.duplicate_browser = true;
+                    ui.close();
+                }
+                ui.separator();
+            }
             ui.label(
                 egui::RichText::new("Move to Workspace")
                     .size(11.0)
@@ -306,6 +324,16 @@ impl HorizonApp {
         }
         if matches!(outcome.command, Some(PanelCommand::CreateWorkspace)) {
             self.workspace_creates.push(panel_id);
+        }
+        if outcome.duplicate_browser {
+            match self.board.duplicate_browser_panel(panel_id) {
+                Ok(duplicate) => {
+                    self.reveal_selected_panel(ctx, duplicate);
+                    self.mark_runtime_dirty();
+                    ctx.request_repaint();
+                }
+                Err(error) => tracing::warn!(%error, "could not duplicate browser panel"),
+            }
         }
         if let Some(workspace_id) = outcome.workspace_assignment {
             self.workspace_assignments.push((panel_id, workspace_id));

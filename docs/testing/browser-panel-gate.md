@@ -89,7 +89,7 @@ The reusable runner:
   commit (use `--allow-dirty` only for an explicitly provisional diagnosis);
 - serves the committed fixtures on a random loopback port;
 - launches the exact Horizon binary with an agent panel and no Browser panel;
-- invokes only the eighteen public `browser_*` MCP tools;
+- invokes only the nineteen public `browser_*` MCP tools;
 - proves empty discovery followed by an audited hidden `browser_create` in the
   requesting agent's workspace whose result already reports the committed
   first page (`navigation: committed`, `startup_millis`) and is queryable

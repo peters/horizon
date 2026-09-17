@@ -76,6 +76,12 @@ shell commands, files, or other MCP servers.
   `WebDriver` and no network capture.
 - `browser_visibility` shows or hides an existing panel without stopping its
   browser, ownership lease, network capture, or MCP control.
+- `browser_duplicate` opens the current URL in another panel sharing the source
+  panel's cookies and persistent website storage. It supports ready local Chromium
+  and Firefox panels in the caller's workspace. Each panel keeps independent
+  navigation, input, and automation; logout affects its siblings. Closing a sibling preserves the
+  remaining pages, and saved panels restore their shared profile. Unsaved forms,
+  history, and live JavaScript state are not copied.
 - `browser_close` closes a panel the caller owns in its workspace and stops
   its session; a remote device allocation is released by that teardown. The
   panel leaves `browser_list`; read what you need from `browser_audit` before

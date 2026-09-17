@@ -22,6 +22,7 @@ TOOL_NAMES = [
     "browser_audit",
     "browser_close",
     "browser_create",
+    "browser_duplicate",
     "browser_evaluate",
     "browser_handoff",
     "browser_http_auth",

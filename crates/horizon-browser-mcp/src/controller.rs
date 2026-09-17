@@ -293,6 +293,32 @@ impl BrowserController {
             Duration::from_millis(timeout_millis),
         )
         .map_err(|source| ControlError::internal_io("could not queue browser panel creation", source))?;
+        self.wait_for_create(action_id, timeout_millis).await
+    }
+
+    pub(crate) async fn duplicate(
+        &self,
+        panel_id: &str,
+        visible: bool,
+        timeout_millis: Option<u64>,
+    ) -> Result<CreateReceipt, ControlError> {
+        if !is_horizon_actor(&self.actor) {
+            return Err(ControlError::CreateUnavailable);
+        }
+        self.require_host_instance()?;
+        self.ensure_claim(panel_id)?;
+        let timeout_millis = bounded_create_timeout(timeout_millis);
+        let action_id = manifest::enqueue_duplicate(
+            self.identity(),
+            panel_id,
+            visible,
+            Duration::from_millis(timeout_millis),
+        )
+        .map_err(|source| self.denied(panel_id, "could not queue browser duplication", source))?;
+        self.wait_for_create(action_id, timeout_millis).await
+    }
+
+    async fn wait_for_create(&self, action_id: String, timeout_millis: u64) -> Result<CreateReceipt, ControlError> {
         let started = Instant::now();
         loop {
             if let Some(result) = manifest::take_create_result(&action_id, &self.actor)

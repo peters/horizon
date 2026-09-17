@@ -92,6 +92,28 @@ impl HorizonBrowserMcp {
     }
 
     #[tool(
+        name = "browser_duplicate",
+        description = "Open the source panel's current URL in a new panel in the same workspace, sharing cookies and persistent website storage. Local Chromium and Firefox. Navigation, input, and automation remain independent; logout affects all shared panels. Does not copy unsaved forms, history, or live JavaScript state. Use only when additional panels are requested."
+    )]
+    async fn browser_duplicate(
+        &self,
+        Parameters(input): Parameters<crate::model::DuplicateInput>,
+    ) -> Result<Json<CreateOutput>, String> {
+        let receipt = self
+            .controller
+            .duplicate(&input.panel_id, input.visible.unwrap_or(true), input.timeout_millis)
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(Json(CreateOutput {
+            action_id: receipt.action_id,
+            panel: receipt.panel,
+            navigation: crate::model::CreateNavigationState::resolve(receipt.navigation, true),
+            navigation_error: receipt.navigation_error,
+            startup_millis: receipt.startup_millis,
+        }))
+    }
+
+    #[tool(
         name = "browser_visibility",
         description = "Show or hide a live browser panel without stopping its browser session, network capture, ownership, or MCP control. Hidden panels remain listed and auditable. For a Horizon-injected agent identity the panel must already be in the calling agent's workspace; visible=true never moves a panel there."
     )]
@@ -553,6 +575,7 @@ mod tests {
                 "browser_audit",
                 "browser_close",
                 "browser_create",
+                "browser_duplicate",
                 "browser_evaluate",
                 "browser_handoff",
                 "browser_http_auth",
