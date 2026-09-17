@@ -84,6 +84,9 @@ impl Panel {
         env: &std::collections::HashMap<String, String>,
         brief: Option<&str>,
     ) -> Result<Option<String>> {
+        if brief.is_some() {
+            self.check_saved_work_session()?;
+        }
         let owned = self
             .launch_args
             .is_empty()
@@ -98,6 +101,43 @@ impl Panel {
             self.append_work_brief(&mut args.to_vec(), brief)?;
         }
         Ok(owned)
+    }
+
+    fn check_saved_work_session(&self) -> Result<()> {
+        use crate::runtime_state::{AgentSessionCatalog, PanelState, RuntimeState, WorkspaceState};
+
+        let binding = self
+            .session_binding
+            .as_ref()
+            .ok_or_else(|| Error::State("Missing conversation identity".into()))?;
+        let exists = if self.kind == PanelKind::Claude {
+            crate::runtime_state::claude_session_transcript_exists(&binding.session_id)
+        } else {
+            // Scope discovery to this provider and preserve the confirmed exact
+            // ID; bootstrap aliases must never silently retarget a continuation.
+            let state = RuntimeState {
+                workspaces: vec![WorkspaceState {
+                    panels: vec![PanelState {
+                        kind: self.kind,
+                        session_binding: Some(binding.clone()),
+                        ..PanelState::default()
+                    }],
+                    ..WorkspaceState::default()
+                }],
+                ..RuntimeState::default()
+            };
+            AgentSessionCatalog::load_for_runtime_state(&state)?
+                .into_catalog()
+                .recent_for(self.kind, None)
+                .iter()
+                .any(|session| session.session_id == binding.session_id && saved_session_backing_exists(session))
+        };
+        if !exists {
+            return Err(Error::State(
+                "The saved conversation could not be verified. Review it and continue from its terminal.".into(),
+            ));
+        }
+        Ok(())
     }
 
     pub(super) fn prepare_restart_work(
@@ -188,6 +228,92 @@ impl Panel {
     }
 }
 
+fn saved_session_backing_exists(session: &crate::runtime_state::AgentSessionRecord) -> bool {
+    match session.kind {
+        PanelKind::Codex => saved_rollout_header(&session.session_id).is_some(),
+        PanelKind::Grok => saved_grok_history(session).is_some(),
+        // The Pi catalog reads the session file; the OpenCode database is its
+        // authoritative session store rather than a separate search index.
+        PanelKind::Pi | PanelKind::OpenCode => true,
+        _ => false,
+    }
+}
+
+fn saved_rollout_header(session_id: &str) -> Option<()> {
+    let connection = crate::local_store::open_read_only_sqlite(&crate::local_store::codex_db_path()?).ok()?;
+    let path: String = connection
+        .query_row(
+            "SELECT substr(rollout_path, 1, 4097) FROM threads WHERE id = ?1",
+            [session_id],
+            |row| row.get(0),
+        )
+        .ok()?;
+    if path.len() > 4096 {
+        return None;
+    }
+    let path = std::path::Path::new(&path);
+    if !path.is_absolute() {
+        return None;
+    }
+    let header = readable_session_header(path)?;
+    (header.get("type")?.as_str()? == "session_meta" && header.get("payload")?.get("id")?.as_str()? == session_id)
+        .then_some(())
+}
+
+fn saved_grok_history(session: &crate::runtime_state::AgentSessionRecord) -> Option<()> {
+    use std::path::{Component, Path, PathBuf};
+
+    let mut components = Path::new(&session.session_id).components();
+    if !matches!(components.next(), Some(Component::Normal(_)))
+        || components.next().is_some()
+        || session.session_id.contains(['/', '\\'])
+    {
+        return None;
+    }
+    let cwd = Path::new(session.cwd.as_deref()?);
+    let directory = crate::local_store::grok_home_dir()?.join("sessions");
+    for entry in std::fs::read_dir(directory).ok()?.take(4096) {
+        let entry = entry.ok()?;
+        if !entry.file_type().ok()?.is_dir() {
+            continue;
+        }
+        let name = entry.file_name();
+        let mut decoded = url::form_urlencoded::parse(name.to_str()?.as_bytes());
+        let Some((decoded_cwd, value)) = decoded.next() else {
+            continue;
+        };
+        if !value.is_empty()
+            || decoded.next().is_some()
+            || Path::new(decoded_cwd.as_ref()).components().collect::<PathBuf>() != cwd
+        {
+            continue;
+        }
+        let header = readable_session_header(&entry.path().join(&session.session_id).join("chat_history.jsonl"))?;
+        header.get("type")?.as_str()?;
+        header.get("content")?;
+        return Some(());
+    }
+    None
+}
+
+fn readable_session_header(path: &std::path::Path) -> Option<serde_json::Value> {
+    use std::io::{BufRead, BufReader, Read};
+
+    const MAX_HEADER_BYTES: u64 = 1024 * 1024;
+    if !path.metadata().ok()?.is_file() {
+        return None;
+    }
+    let file = std::fs::File::open(path).ok()?;
+    let mut bytes = Vec::new();
+    BufReader::new(file.take(MAX_HEADER_BYTES + 1))
+        .read_until(b'\n', &mut bytes)
+        .ok()?;
+    if u64::try_from(bytes.len()).ok()? > MAX_HEADER_BYTES {
+        return None;
+    }
+    serde_json::from_slice(&bytes).ok()
+}
+
 pub(super) fn shutdown_for_restart(terminal: &mut crate::terminal::Terminal) -> Result<()> {
     if !terminal.shutdown_with_timeout(std::time::Duration::from_secs(2)) {
         return Err(Error::State(
@@ -273,8 +399,15 @@ while :; do read -r -t 1 || :; done
 
     fn exercise_confirmed_restart() {
         let home = std::path::PathBuf::from(std::env::var_os("HOME").expect("fixture home"));
+        let saved_session = write_pi_session(&home);
         let mut panel = restored_provider(&home, PanelKind::Pi);
         assert_eq!(wait_for_launch(&home, 1), ["--session", "fixture-session"]);
+        panel.check_saved_work_session().expect("catalog-backed session");
+        exercise_catalog_rows(&mut panel, &home);
+        assert_refusal_preserves_process(&mut panel, &home, "saved conversation", || {
+            std::fs::remove_file(saved_session).expect("delete saved session after confirmation");
+        });
+        let _ = write_pi_session(&home);
         assert_refusal_preserves_process(&mut panel, &home, "owned executable", || {
             std::fs::write(home.join(".bashrc"), "pi() { :; }").expect("replace executable resolution");
         });
@@ -304,6 +437,83 @@ while :; do read -r -t 1 || :; done
             std::fs::remove_file(transcript).expect("remove transcript after confirmation");
         });
         shutdown_for_restart(panel.terminal_mut().expect("terminal")).expect("close missing-history provider");
+    }
+
+    fn write_pi_session(home: &std::path::Path) -> std::path::PathBuf {
+        let directory = home.join(".pi/agent/sessions/fixture");
+        std::fs::create_dir_all(&directory).expect("session directory");
+        let path = directory.join("fixture-session.jsonl");
+        let session = serde_json::json!({
+            "type": "session", "id": "fixture-session", "cwd": home,
+            "timestamp": "2026-01-01T00:00:00.000Z", "version": 3
+        });
+        std::fs::write(&path, format!("{session}\n")).expect("saved session");
+        path
+    }
+
+    fn exercise_catalog_rows(panel: &mut Panel, home: &std::path::Path) {
+        for (kind, path, table, schema) in [
+            (
+                PanelKind::Codex,
+                home.join(".codex/state_5.sqlite"),
+                "threads",
+                "CREATE TABLE threads (id TEXT, rollout_path TEXT, source TEXT, title TEXT, cwd TEXT, updated_at INTEGER, archived INTEGER);
+                 INSERT INTO threads VALUES ('fixture-session', NULL, 'cli', 'Fixture', '/repo', 1, 0);",
+            ),
+            (
+                PanelKind::OpenCode,
+                crate::opencode_paths::opencode_db_path().expect("session DB path"),
+                "session",
+                "CREATE TABLE session (id TEXT, title TEXT, directory TEXT, time_updated INTEGER, time_archived INTEGER, parent_id TEXT);
+                 INSERT INTO session VALUES ('fixture-session', 'Fixture', '/repo', 1, NULL, NULL);",
+            ),
+            (
+                PanelKind::Grok,
+                crate::local_store::grok_sessions_db_path().expect("session DB path"),
+                "session_docs",
+                "CREATE TABLE session_docs (session_id TEXT, cwd TEXT, updated_at INTEGER, title TEXT);
+                 INSERT INTO session_docs VALUES ('fixture-session', '/repo', 1, 'Fixture');",
+            ),
+        ] {
+            panel.kind = kind;
+            panel.session_binding.as_mut().expect("binding").kind = kind;
+            // The matching Pi ID must not satisfy another provider's lookup.
+            assert!(panel.check_saved_work_session().is_err(), "{kind:?} missing store");
+            std::fs::create_dir_all(path.parent().expect("DB directory")).expect("DB directory");
+            let connection = rusqlite::Connection::open(&path).expect("fixture DB");
+            connection.execute_batch(schema).expect("saved session row");
+            let backing = match kind {
+                PanelKind::Codex => {
+                    assert!(panel.check_saved_work_session().is_err(), "NULL rollout path");
+                    let path = home.join(".codex/sessions/fixture.jsonl");
+                    connection.execute("UPDATE threads SET rollout_path = ?1", [path.to_str().expect("path")]).expect("rollout path");
+                    Some((path, serde_json::json!({"type": "session_meta", "payload": {"id": "fixture-session"}})))
+                }
+                PanelKind::Grok => Some((
+                    home.join(".grok/sessions/%2Frepo/fixture-session/chat_history.jsonl"),
+                    serde_json::json!({"type": "user", "content": "Fixture request"}),
+                )),
+                _ => None,
+            };
+            if let Some((path, header)) = &backing {
+                assert!(panel.check_saved_work_session().is_err(), "{kind:?} stale index without backing file");
+                std::fs::create_dir_all(path.parent().expect("session directory")).expect("session directory");
+                std::fs::write(path, format!("{header}\n")).expect("saved transcript");
+                panel.check_saved_work_session().expect("indexed readable transcript");
+                assert_refusal_preserves_process(panel, home, "saved conversation", || {
+                    std::fs::remove_file(path).expect("remove transcript while retaining index row");
+                });
+                assert!(panel.check_saved_work_session().is_err(), "{kind:?} deleted backing file");
+                std::fs::write(path, "").expect("empty saved transcript");
+                assert!(panel.check_saved_work_session().is_err(), "{kind:?} empty backing file");
+                std::fs::write(path, format!("{header}\n")).expect("restore saved transcript");
+            }
+            panel.check_saved_work_session().expect("provider-scoped saved session");
+            connection.execute(&format!("DELETE FROM {table}"), []).expect("delete session");
+            assert!(panel.check_saved_work_session().is_err(), "{kind:?} deleted session");
+        }
+        panel.kind = PanelKind::Pi;
+        panel.session_binding.as_mut().expect("binding").kind = PanelKind::Pi;
     }
 
     fn assert_refusal_preserves_process(
