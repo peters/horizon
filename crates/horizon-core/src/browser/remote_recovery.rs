@@ -10,7 +10,6 @@ pub struct HeldRemoteAllocation {
     pub provider: String,
     pub workspace: String,
     pub owner: String,
-    pub panel: Option<String>,
     pub lease: Option<SlotLease>,
 }
 
@@ -25,41 +24,11 @@ impl RemoteAllocations {
         self.records.insert(record.allocation.reference().to_string(), record);
     }
 
-    pub fn attach_panel(&mut self, reference: &str, panel: String) {
-        if let Some(record) = self.records.get_mut(reference) {
-            record.panel = Some(panel);
-        }
-    }
-
-    /// Refresh scope while a panel is live, before its manifest disappears.
-    pub fn update_scope(&mut self, panel: &str, workspace: &str, owner: Option<&str>) {
-        for record in self
-            .records
-            .values_mut()
-            .filter(|record| record.panel.as_deref() == Some(panel))
-        {
+    /// Refresh the exact panel instance's scope before its manifest disappears.
+    pub fn update_scope(&mut self, allocation: &RemoteAllocation, workspace: &str, owner: Option<&str>) {
+        if let Some(record) = self.records.get_mut(allocation.reference()) {
             record.workspace = workspace.to_string();
             record.owner = owner.unwrap_or_default().to_string();
-        }
-    }
-
-    pub fn expect_workspace(&self, panel: &str, workspace: &str) {
-        for record in self
-            .records
-            .values()
-            .filter(|record| record.panel.as_deref() == Some(panel))
-        {
-            record.allocation.expect_workspace(workspace);
-        }
-    }
-
-    pub fn confirm_scope(&self, panel: &str, confirmed: bool) {
-        for record in self
-            .records
-            .values()
-            .filter(|record| record.panel.as_deref() == Some(panel))
-        {
-            record.allocation.confirm_scope(confirmed);
         }
     }
 
@@ -140,7 +109,6 @@ mod tests {
             provider: "grid".into(),
             workspace: "workspace".into(),
             owner: "owner".into(),
-            panel: None,
             lease: None,
         });
         assert!(records.summaries(Some(("owner", "workspace"))).is_empty());
@@ -154,7 +122,6 @@ mod tests {
                 provider: "grid".into(),
                 workspace: "workspace".into(),
                 owner: "owner".into(),
-                panel: None,
                 lease: None,
             });
         }
@@ -174,7 +141,6 @@ mod tests {
                 provider: "grid".into(),
                 workspace: "workspace-a".into(),
                 owner: owner.into(),
-                panel: None,
                 lease: Some(super::super::remote_slots::acquire_slot(dir.path(), "quota", 2).expect("lease")),
             });
         }

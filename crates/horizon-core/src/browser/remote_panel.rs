@@ -167,6 +167,12 @@ impl BrowserPanelState {
         state
     }
 
+    /// The exact allocation belonging to this panel instance; restored panels have none.
+    #[must_use]
+    pub fn remote_allocation(&self) -> Option<&horizon_browser::RemoteAllocation> {
+        self.remote.as_ref().and_then(|remote| remote.recovery.as_ref())
+    }
+
     /// Configured remote target name, when this panel runs (or ran) remotely.
     #[must_use]
     pub fn remote_target(&self) -> Option<&str> {

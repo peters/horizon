@@ -178,7 +178,6 @@ impl HorizonApp {
                 provider: plan.provider.clone(),
                 workspace: workspace.to_string(),
                 owner: owner.to_string(),
-                panel: None,
                 lease,
             },
         );

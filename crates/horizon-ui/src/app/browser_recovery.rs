@@ -88,15 +88,30 @@ impl HorizonApp {
             .map(|w| w.local_id.clone())
     }
 
+    pub(super) fn panel_remote_allocation(&self, local_id: &str) -> Option<&horizon_core::browser::RemoteAllocation> {
+        self.board
+            .panels
+            .iter()
+            .find(|panel| panel.local_id == local_id)?
+            .browser()?
+            .remote_allocation()
+    }
+
     pub(super) fn refresh_remote_recovery_scope(&mut self) {
         self.restamp_browser_manifests_for_placement();
-        for panel in self.board.panels.iter().filter(|p| p.browser().is_some()) {
+        for panel in &self.board.panels {
+            let Some(allocation) = panel
+                .browser()
+                .and_then(horizon_core::browser::BrowserPanelState::remote_allocation)
+            else {
+                continue;
+            };
             let Some(workspace) = self.board.workspaces.iter().find(|w| w.id == panel.workspace_id) else {
                 continue;
             };
             if let Some(manifest) = manifest::read(&panel.local_id) {
                 self.browser_create_host.remote_allocations.update_scope(
-                    &panel.local_id,
+                    allocation,
                     &workspace.local_id,
                     manifest.owner.as_ref().map(|owner| owner.name.as_str()),
                 );

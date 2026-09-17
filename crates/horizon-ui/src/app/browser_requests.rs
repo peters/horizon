@@ -333,11 +333,6 @@ impl HorizonApp {
             );
             return;
         };
-        if let Some(recovery) = recovery {
-            self.browser_create_host
-                .remote_allocations
-                .attach_panel(recovery.reference(), panel_local_id.clone());
-        }
         for status in [BrowserCreateAuditStatus::Queued, BrowserCreateAuditStatus::Dispatched] {
             if let Err(error) = manifest::record_create_status(&panel_local_id, &request, backend, status) {
                 tracing::error!(request_id = %request.request_id, %error, "could not audit requested browser creation");
@@ -491,14 +486,14 @@ impl HorizonApp {
     fn sync_browser_manifest_host_state(&self) -> HostStateSync {
         let placements = browser_placements(&self.board);
         for placement in &placements {
-            self.browser_create_host
-                .remote_allocations
-                .expect_workspace(&placement.local_id, &placement.workspace.local_id);
+            if let Some(allocation) = self.panel_remote_allocation(&placement.local_id) {
+                allocation.expect_workspace(&placement.workspace.local_id);
+            }
         }
         sync_manifest_host_state(self.host_manifest_root(), &placements, |panel, confirmed| {
-            self.browser_create_host
-                .remote_allocations
-                .confirm_scope(panel, confirmed);
+            if let Some(allocation) = self.panel_remote_allocation(panel) {
+                allocation.confirm_scope(confirmed);
+            }
         })
     }
 

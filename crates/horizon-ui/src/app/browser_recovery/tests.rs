@@ -60,7 +60,6 @@ fn host_dispatch_authorizes_waits_and_completes_exact_recovery() {
             provider: "fixture".into(),
             owner: owner.into(),
             workspace: workspace_local.clone(),
-            panel: None,
             lease: Some(remote_slots::acquire_slot(temp.path(), "quota", 2).expect("lease")),
         });
     }
@@ -110,4 +109,54 @@ fn host_dispatch_authorizes_waits_and_completes_exact_recovery() {
         remote_slots::acquire_slot(temp.path(), "quota", 2),
         Err(remote_slots::SlotError::Busy { .. })
     ));
+}
+
+#[test]
+fn moving_a_restored_panel_cannot_retarget_an_earlier_orphan() {
+    use horizon_core::browser::{BrowserConfig, BrowserPanelState};
+    use horizon_core::{Panel, PanelContent, PanelId};
+    let (_temp, mut app) = test_app();
+    let original = app.board.create_workspace("original");
+    let restored = app.board.create_workspace("restored");
+    let workspace = app.board.workspace(original).expect("workspace").local_id.clone();
+    let allocation =
+        RemoteAllocation::unresolved_for_test("http://127.0.0.1:1", "retired-private").expect("allocation");
+    allocation.mark_published();
+    allocation.expect_workspace(&workspace);
+    allocation.retain_scope(horizon_browser::RemoteAllocationScope {
+        host: manifest::host_instance().into(),
+        workspace: Some(workspace.clone()),
+        owner: Some("original-owner".into()),
+    });
+    app.browser_create_host.remote_allocations.insert(HeldRemoteAllocation {
+        allocation,
+        provider: "fixture".into(),
+        owner: "original-owner".into(),
+        workspace: workspace.clone(),
+        lease: None,
+    });
+    let browser = BrowserPanelState::restored_remote("saved-panel", &BrowserConfig::default(), "fixture".into(), None);
+    assert!(browser.remote_allocation().is_none());
+    let panel_id = PanelId(500);
+    let mut panel = Panel::from_content(
+        panel_id,
+        original,
+        PanelKind::Browser,
+        PanelContent::Browser(Box::new(browser)),
+    );
+    panel.local_id = "saved-panel".into();
+    app.board.panels.push(panel);
+    app.refresh_remote_recovery_scope();
+    app.board.assign_panel_to_workspace(panel_id, restored);
+    app.refresh_remote_recovery_scope();
+    let summaries = app
+        .browser_create_host
+        .remote_allocations
+        .summaries(Some(("original-owner", &workspace)));
+    assert_eq!(
+        summaries.len(),
+        1,
+        "restored placement cannot mutate the retired allocation"
+    );
+    assert_eq!(summaries[0].status, RemoteRecoveryStatus::Unresolved);
 }
