@@ -104,7 +104,17 @@ fn host_dispatch_authorizes_waits_and_completes_exact_recovery() {
     );
     assert!(app.browser_create_host.recovery_requests.is_empty());
     app.poll_remote_recovery_queue(&queue);
-    let _available = remote_slots::acquire_slot(temp.path(), "quota", 2).expect("matching lease released");
+    // Concurrent test forks can retain a released descriptor until exec.
+    let _available = (0..100)
+        .find_map(|_| match remote_slots::acquire_slot(temp.path(), "quota", 2) {
+            Ok(lease) => Some(lease),
+            Err(remote_slots::SlotError::Busy { .. }) => {
+                std::thread::sleep(Duration::from_millis(5));
+                None
+            }
+            Err(error) => panic!("{error}"),
+        })
+        .expect("matching lease released after forked children exec");
     assert!(matches!(
         remote_slots::acquire_slot(temp.path(), "quota", 2),
         Err(remote_slots::SlotError::Busy { .. })
