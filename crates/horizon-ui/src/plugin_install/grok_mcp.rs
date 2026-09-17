@@ -21,6 +21,41 @@ HORIZON_BROWSER_ACTOR = "${HORIZON_BROWSER_ACTOR:-}"
 HORIZON_BROWSER_HOST_INSTANCE = "${HORIZON_BROWSER_HOST_INSTANCE:-}"
 "#;
 
+pub(super) fn bind_browser_skill(home: &Path, host_id: &std::ffi::OsStr) -> io::Result<Vec<super::SkillRootLease>> {
+    let dir = home.join("skills").join(super::HORIZON_BROWSER_SKILL);
+    let lease = super::user_skills::bind_prepared_skill_root(host_id, dir.clone(), || {
+        validate_browser_skill(&dir)?;
+        register(home)?;
+        super::sync_plugin_files(&dir, super::BROWSER_SKILL_FILES)?;
+        Ok(())
+    })?;
+    Ok(vec![lease])
+}
+
+fn validate_browser_skill(dir: &Path) -> io::Result<()> {
+    let metadata = match fs::symlink_metadata(dir) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if metadata.is_dir() {
+        let mut entries = fs::read_dir(dir)?;
+        let entry = entries.next().transpose()?;
+        if let Some(entry) = entry
+            && entries.next().is_none()
+            && entry.file_name() == "SKILL.md"
+            && entry.file_type()?.is_file()
+            && fs::read_to_string(entry.path())? == super::BROWSER_SKILL_FILES[0].content
+        {
+            return Ok(());
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "Grok browser skill is not Horizon-owned; preserving existing content",
+    ))
+}
+
 pub(super) fn register(home: &Path) -> io::Result<bool> {
     fs::create_dir_all(home)?;
     let lock = OpenOptions::new()

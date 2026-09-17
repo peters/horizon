@@ -182,6 +182,12 @@ pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) -> AgentPluginHo
     if let Err(error) = lease.bind_user_skills_with_cleanup(&user_skill_dirs, &extra_cleanup) {
         tracing::warn!(%error, "failed to bind Horizon skill root leases");
     }
+    if let Some(root) = provider_home(grok_home.as_deref(), user_home.as_deref(), ".grok") {
+        match grok_mcp::bind_browser_skill(&root, manifest::host_instance().as_ref()) {
+            Ok(roots) => lease.skill_roots.extend(roots),
+            Err(error) => tracing::warn!(%error, "Grok browser integration unavailable; preserving existing settings"),
+        }
+    }
     sync_leased_user_skills(
         &lease,
         horizon_home,
@@ -390,7 +396,6 @@ fn user_skill_lease_dirs(
     }
     if let Some(grok_root) = provider_home(grok_home, user_home, ".grok") {
         dirs.push(grok_root.join("skills").join(HORIZON_NOTIFY_SKILL));
-        dirs.push(grok_root.join("skills").join(HORIZON_BROWSER_SKILL));
     }
     if let Some(codex_root) = provider_home(codex_home, user_home, ".codex") {
         dirs.push(codex_root.join("skills").join(HORIZON_NOTIFY_SKILL));
@@ -522,7 +527,7 @@ mod tests {
         assert!(!dirs.contains(&home.join(".agents/skills/horizon-browser")));
         assert!(!dirs.contains(&home.join(".gemini/skills/horizon-notify")));
         assert!(!dirs.contains(&home.join(".kilocode/skills/horizon-browser")));
-        assert!(dirs.contains(&home.join(".grok/skills/horizon-browser")));
+        assert!(!dirs.contains(&home.join(".grok/skills/horizon-browser")));
         assert!(abandoned.contains(&home.join(".agents/skills/horizon-notify")));
         assert!(abandoned.contains(&home.join(".agents/skills/horizon-browser")));
         assert!(abandoned.contains(&home.join(".gemini/skills/horizon-notify")));

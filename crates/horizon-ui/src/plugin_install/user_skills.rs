@@ -102,7 +102,7 @@ fn claim_dir(claimed: &mut Vec<PathBuf>, dir: &Path) -> bool {
 }
 
 fn push_acquired(leases: &mut Vec<SkillRootLease>, host_id: &OsStr, skill_dir: &Path, install: bool) {
-    match acquire_skill_root(host_id, skill_dir.to_path_buf(), install) {
+    match acquire_skill_root(host_id, skill_dir.to_path_buf(), install, || Ok(())) {
         Ok(lease) => leases.push(lease),
         Err(error) => {
             tracing::warn!(path = %skill_dir.display(), %error, "failed to lease Horizon skill root");
@@ -110,7 +110,20 @@ fn push_acquired(leases: &mut Vec<SkillRootLease>, host_id: &OsStr, skill_dir: &
     }
 }
 
-fn acquire_skill_root(host_id: &OsStr, skill_dir: PathBuf, install: bool) -> io::Result<SkillRootLease> {
+pub(super) fn bind_prepared_skill_root(
+    host_id: &OsStr,
+    skill_dir: PathBuf,
+    prepare: impl FnOnce() -> io::Result<()>,
+) -> io::Result<SkillRootLease> {
+    acquire_skill_root(host_id, skill_dir, true, prepare)
+}
+
+fn acquire_skill_root(
+    host_id: &OsStr,
+    skill_dir: PathBuf,
+    install: bool,
+    prepare: impl FnOnce() -> io::Result<()>,
+) -> io::Result<SkillRootLease> {
     let coord_dir = skill_coord_dir(&skill_dir).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -125,6 +138,7 @@ fn acquire_skill_root(host_id: &OsStr, skill_dir: PathBuf, install: bool) -> io:
     })?;
     std::fs::create_dir_all(&live_dir)?;
     let coord = lock_coord(&coord_dir)?;
+    prepare()?;
     let live_path = {
         let mut name = host_id.to_os_string();
         name.push(".live");

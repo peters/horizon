@@ -415,7 +415,12 @@ fn resolve_agent_launch_command(
     let program = command.unwrap_or_else(|| definition.default_command.to_string());
     let mut launch_args = match definition.integration {
         AgentIntegrationKind::CodexMcp if uses_default_command => horizon_codex_mcp_args(),
-        AgentIntegrationKind::GrokMcp if uses_default_command && !args.iter().any(|arg| arg == "--no-leader") => {
+        AgentIntegrationKind::GrokMcp
+            if uses_default_command
+                && !args
+                    .iter()
+                    .any(|arg| matches!(arg.as_str(), "--no-leader" | "--leader")) =>
+        {
             vec!["--no-leader".to_string()]
         }
         AgentIntegrationKind::None | AgentIntegrationKind::CodexMcp | AgentIntegrationKind::GrokMcp => Vec::new(),
@@ -766,6 +771,15 @@ mod tests {
             fresh_launch_context(&PanelResume::Fresh),
         );
         assert_eq!(already_set.join(" ").matches("--no-leader").count(), 1);
+        let (_, explicit_leader) = resolve_launch_command(
+            None,
+            vec!["--leader".to_string()],
+            None,
+            PanelKind::Grok,
+            fresh_launch_context(&PanelResume::Fresh),
+        );
+        assert!(explicit_leader.join(" ").contains("--leader"));
+        assert!(!explicit_leader.join(" ").contains("--no-leader"));
         let (_, custom) = resolve_launch_command(
             Some("custom-grok".to_string()),
             vec!["custom-arg".to_string()],
