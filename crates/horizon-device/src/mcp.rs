@@ -1,7 +1,7 @@
 use crate::dispatch::Dispatcher;
 use horizon_device::ActRequest;
 use rmcp::{
-    ServerHandler,
+    ServerHandler, ServiceExt,
     handler::server::wrapper::Parameters,
     model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerInfo},
     tool, tool_router,
@@ -91,5 +91,24 @@ impl ServerHandler for Server {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("horizon-device", env!("CARGO_PKG_VERSION")))
             .with_instructions("Only control the configured authorized device. Observe before and after input. Live viewing is read-only; use device tools for application input. Bounded input already in progress finishes and releases held input even if a tool request is cancelled.")
+    }
+}
+
+pub async fn serve(dispatcher: Dispatcher) -> u8 {
+    let result = async {
+        let service = Server::new(dispatcher)
+            .serve(rmcp::transport::stdio())
+            .await
+            .map_err(|error| error.to_string())?;
+        service.waiting().await.map_err(|error| error.to_string())?;
+        Ok::<_, String>(())
+    }
+    .await;
+    match result {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("device MCP transport failed: {error}");
+            1
+        }
     }
 }

@@ -42,6 +42,18 @@ fn cooperating_process_lock_prevents_backend_access() -> Result<(), Box<dyn std:
     Ok(())
 }
 
+#[test]
+fn mcp_startup_errors_leave_stdout_as_protocol_only() -> Result<(), Box<dyn std::error::Error>> {
+    let output = Command::new(env!("CARGO_BIN_EXE_horizon-device"))
+        .args(["--target", "unused.json", "mcp"])
+        .stdin(std::process::Stdio::null())
+        .output()?;
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("MCP transport failed"));
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 mod live_mcp {
     use super::*;
@@ -80,6 +92,13 @@ mod live_mcp {
                 }
             });
             Ok(Self { child, input, output })
+        }
+        fn initialize(&mut self) -> Result<()> {
+            self.send(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+            "protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"device-test","version":"1"}}}))?;
+            assert!(self.receive(1)?["result"]["capabilities"]["tools"].is_object());
+            self.send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}))?;
+            Ok(())
         }
         fn send(&mut self, value: Value) -> Result<()> {
             writeln!(self.input, "{value}")?;
@@ -121,10 +140,7 @@ mod live_mcp {
         let (connection, screen) = x11rb::connect(Some(display))?;
         let root = connection.setup().roots[screen].root;
         let mut session = Session::start(&target)?;
-        session.send(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
-            "protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"device-test","version":"1"}}}))?;
-        assert!(session.receive(1)?["result"]["capabilities"]["tools"].is_object());
-        session.send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}))?;
+        session.initialize()?;
         let image = session.call(2, "device_screenshot", json!({}))?;
         assert_eq!(image["isError"], false);
         assert_eq!(image["content"][1]["type"], "image");
@@ -164,6 +180,101 @@ mod live_mcp {
             std::thread::sleep(Duration::from_millis(5));
         }
         assert_eq!(session.call(6, "device_screenshot", json!({}))?["isError"], false);
+        Ok(())
+    }
+    #[test]
+    #[ignore = "requires HORIZON_DEVICE_TEST_TARGET pointing to an owned virtual desktop"]
+    fn cli_and_mcp_preserve_unicode_for_a_delayed_receiver() -> Result<()> {
+        use x11rb::protocol::{
+            Event,
+            xproto::{CreateWindowAux, EventMask, InputFocus, WindowClass},
+        };
+        let target = std::env::var("HORIZON_DEVICE_TEST_TARGET")?;
+        let config: horizon_device::Target = serde_json::from_slice(&std::fs::read(&target)?)?;
+        let horizon_device::Endpoint::LocalX11 { display } = &config.endpoint else {
+            return Err("requires X11".into());
+        };
+        let (connection, screen) = x11rb::connect(Some(display))?;
+        let root = connection.setup().roots[screen].root;
+        let window = connection.generate_id()?;
+        connection
+            .create_window(
+                x11rb::COPY_DEPTH_FROM_PARENT,
+                window,
+                root,
+                0,
+                0,
+                100,
+                100,
+                0,
+                WindowClass::INPUT_OUTPUT,
+                0,
+                &CreateWindowAux::new()
+                    .override_redirect(1)
+                    .event_mask(EventMask::KEY_PRESS),
+            )?
+            .check()?;
+        connection.map_window(window)?.check()?;
+        connection
+            .set_input_focus(InputFocus::PARENT, window, x11rb::CURRENT_TIME)?
+            .check()?;
+        let expected = "UTF8 æøå🦀 AaZz_09!?";
+        for mode in ["cli", "mcp"] {
+            let geometry = horizon_device::Device::connect(&config)?.screenshot()?.geometry;
+            let request = json!({"geometry":geometry,"action":{"kind":"type","text":expected}});
+            let target = target.clone();
+            let sender = std::thread::spawn(move || -> std::result::Result<(), String> {
+                send_type(mode, &target, request).map_err(|error| error.to_string())
+            });
+            let deadline = Instant::now() + Duration::from_secs(15);
+            let mut received = String::new();
+            while Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(30));
+                while let Some(event) = connection.poll_for_event()? {
+                    if let Event::KeyPress(event) = event {
+                        let mapping = connection.get_keyboard_mapping(event.detail, 1)?.reply()?;
+                        let symbol = mapping.keysyms.first().copied().unwrap_or_default();
+                        let codepoint = if symbol & 0xff00_0000 == 0x0100_0000 {
+                            symbol & 0x00ff_ffff
+                        } else {
+                            symbol
+                        };
+                        received.push(char::from_u32(codepoint).unwrap_or('\u{fffd}'));
+                    }
+                }
+                if sender.is_finished() {
+                    break;
+                }
+            }
+            sender
+                .join()
+                .map_err(|_| "text sender panicked")?
+                .map_err(std::io::Error::other)?;
+            assert_eq!(received, expected, "{mode} keeps Unicode mappings alive until consumed");
+        }
+        Ok(())
+    }
+
+    fn send_type(mode: &str, target: &str, request: Value) -> Result<()> {
+        if mode == "mcp" {
+            let mut session = Session::start(target)?;
+            session.initialize()?;
+            assert_eq!(session.call(2, "device_act", request)?["isError"], false);
+        } else {
+            let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-device"))
+                .args(["--target", target, "act", "-"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()?;
+            child
+                .stdin
+                .take()
+                .ok_or("missing stdin")?
+                .write_all(request.to_string().as_bytes())?;
+            let output = child.wait_with_output()?;
+            assert!(output.status.success());
+            assert_eq!(serde_json::from_slice::<Value>(&output.stdout)?["ok"], true);
+        }
         Ok(())
     }
 }

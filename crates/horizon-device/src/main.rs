@@ -3,7 +3,6 @@ mod dispatch;
 mod mcp;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use dispatch::Dispatcher;
-use rmcp::ServiceExt;
 use serde_json::{Value, json};
 use std::{
     io::{Read, Write},
@@ -41,14 +40,10 @@ async fn run() -> Result<u8, String> {
     let command = args.next().ok_or("missing command")?;
     if command == "mcp" {
         if args.next().is_some() {
-            return Err("unexpected MCP arguments".into());
+            eprintln!("unexpected MCP arguments");
+            return Ok(2);
         }
-        let service = mcp::Server::new(dispatcher)
-            .serve(rmcp::transport::stdio())
-            .await
-            .map_err(|e| e.to_string())?;
-        service.waiting().await.map_err(|e| e.to_string())?;
-        return Ok(0);
+        return Ok(mcp::serve(dispatcher).await);
     }
     let mut extra = args.next();
     if args.next().is_some() {
