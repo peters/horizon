@@ -4,7 +4,9 @@
 
 use horizon_browser::{BackendKind, BrowserConfig, RemoteSessionRequest, normalize_navigation_target};
 
-use super::{BrowserDrainOutput, BrowserPanelState, BrowserStatus, retain_effective_profile_root};
+use super::{
+    BrowserDrainOutput, BrowserPanelState, BrowserStatus, RemoteIdentityDisplay, retain_effective_profile_root,
+};
 
 /// What a panel knows about the remote session it runs (or ran) at.
 pub(super) struct RemoteLifecycle {
@@ -27,6 +29,7 @@ pub(super) struct RemoteLifecycle {
     /// The allocated device as the provider's evidence describes it, once
     /// the driver verified it against the target.
     device: Option<String>,
+    identity_display: RemoteIdentityDisplay,
     /// Why the remote lifecycle ended before the panel became ready, as a
     /// typed code and a value-free message for the create result.
     failure: Option<RemoteFailure>,
@@ -81,6 +84,7 @@ impl RemoteFailure {
 impl RemoteLifecycle {
     fn live(request: RemoteSessionRequest) -> Self {
         Self {
+            identity_display: RemoteIdentityDisplay::requested(&request),
             target: request.label.clone(),
             provider: Some(request.provider.clone()),
             quota_key: Some(request.quota_key.clone()),
@@ -91,9 +95,10 @@ impl RemoteLifecycle {
         }
     }
 
-    const fn restored(target: String) -> Self {
+    fn restored(target: String) -> Self {
         Self {
             request: None,
+            identity_display: RemoteIdentityDisplay::ended(),
             target,
             provider: None,
             quota_key: None,
@@ -176,6 +181,19 @@ impl BrowserPanelState {
     #[must_use]
     pub fn remote_device(&self) -> Option<&str> {
         self.remote.as_ref().and_then(|remote| remote.device.as_deref())
+    }
+
+    /// Cached provider and browser identity for the panel chrome.
+    #[must_use]
+    pub fn remote_identity_display(&self) -> Option<&RemoteIdentityDisplay> {
+        self.remote.as_ref().map(|remote| &remote.identity_display)
+    }
+
+    pub(super) fn clear_remote_identity(&mut self) {
+        if let Some(remote) = self.remote.as_mut() {
+            remote.device = None;
+            remote.identity_display.clear();
+        }
     }
 
     /// Why the remote lifecycle ended before the panel became ready, when
@@ -307,6 +325,15 @@ impl BrowserPanelState {
                     ..
                 }
         );
+        let ended = !matches!(
+            &event,
+            RemoteSessionEvent::Allocating { .. }
+                | RemoteSessionEvent::Allocated { .. }
+                | RemoteSessionEvent::DeviceIdentity { .. }
+        );
+        if ended {
+            self.clear_remote_identity();
+        }
         let mut device = None;
         let mut failure = None;
         let note = match event {
@@ -315,6 +342,9 @@ impl BrowserPanelState {
                 format!("remote session {session_digest} allocated for {label}")
             }
             RemoteSessionEvent::DeviceIdentity { label, identity } => {
+                if let Some(remote) = self.remote.as_mut() {
+                    remote.identity_display.confirm(&identity);
+                }
                 let summary = identity.summary();
                 device = Some(summary.clone());
                 format!("remote device for {label} verified: {summary}")
@@ -460,6 +490,7 @@ mod tests {
                     model: Some("iPhone 16".into()),
                     os_version: Some("18.6".into()),
                     hardware: Some(DeviceEvidence::Physical),
+                    ..RemoteDeviceIdentity::default()
                 },
             },
             &mut output,

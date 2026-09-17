@@ -152,6 +152,11 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   credential stores at create time. Nothing here allocates or renders; the
   panel keeps the request for Retry and never consults a store again.
 
+- `browser/remote_identity.rs` caches friendly remote-session labels and full
+  hover details from provider evidence, keeping requested settings separate.
+  Remote lifecycle transitions clear the evidence; the UI only sizes and
+  truncates the cached label.
+
 ### `horizon-browser-cli`
 
 - Owns deterministic browser plans, bounded execution control, durable job
