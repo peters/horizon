@@ -235,3 +235,35 @@ fn missing_registry_and_repository_changes_downgrade_clean_work() {
     std::fs::write(fixture.home.path().join(".git/info/exclude"), "").expect("change worktree visibility");
     assert_eq!(fixture.inspect().0, RestartDecision::Ask(AskReason::RepositoryChanged));
 }
+
+#[test]
+fn invalid_resume_limits_never_enable_unattended_work() {
+    for value in ["33", "999999999999999999999999999", "-1", "invalid", ""] {
+        assert_eq!(super::parse_resume_limit(value), 0);
+    }
+    assert_eq!(super::parse_resume_limit("0"), 0);
+    assert_eq!(super::parse_resume_limit("3"), 3);
+    assert_eq!(super::parse_resume_limit("32"), 32);
+}
+
+#[test]
+fn missing_identity_keeps_an_opted_in_panel_visible_for_review() {
+    let policy = super::super::ResumePolicy {
+        enabled: true,
+        ..Default::default()
+    };
+    let plan = StartupPlan::prepare(
+        &WorkLaunch {
+            panel: "missing-identity",
+            kind: PanelKind::Claude,
+            policy: &policy,
+            cwd: None,
+            session_id: None,
+            default_command: true,
+        },
+        true,
+        true,
+    );
+    assert_eq!(plan.state.pending(), Some(AskReason::MissingEvidence));
+    assert!(plan.seed.is_none());
+}

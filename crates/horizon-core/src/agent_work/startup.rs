@@ -11,10 +11,14 @@ use super::{AskReason, RestartDecision, RestartEvidence, StoredWork, TranscriptS
 
 pub(crate) fn configured_resume_limit() -> usize {
     match std::env::var("HORIZON_WORK_RESUME_LIMIT") {
-        Ok(value) => value.parse::<usize>().unwrap_or(0).min(32),
+        Ok(value) => parse_resume_limit(&value),
         Err(std::env::VarError::NotPresent) => 3,
         Err(std::env::VarError::NotUnicode(_)) => 0,
     }
+}
+
+fn parse_resume_limit(value: &str) -> usize {
+    value.parse::<usize>().ok().filter(|limit| *limit <= 32).unwrap_or(0)
 }
 
 thread_local! {
@@ -74,7 +78,7 @@ impl WorkLaunch<'_> {
         program: &str,
         is_restore: bool,
         unambiguous: bool,
-        args: &mut Vec<String>,
+        args: &mut [String],
         env: &mut std::collections::HashMap<String, String>,
     ) -> StartupPlan {
         let owned = unambiguous.then(|| self.owned_command(program, args, env)).flatten();
@@ -89,7 +93,7 @@ impl StartupPlan {
     pub(crate) fn prepare(launch: &WorkLaunch<'_>, is_restore: bool, unambiguous: bool) -> Self {
         let (decision, seed) = if is_restore && launch.policy.enabled && launch.default_command {
             if unambiguous {
-                inspect(launch).unwrap_or((RestartDecision::NotResumable, None))
+                inspect(launch).unwrap_or((RestartDecision::Ask(AskReason::MissingEvidence), None))
             } else {
                 (RestartDecision::Ask(AskReason::MissingEvidence), None)
             }
