@@ -251,6 +251,34 @@ pub(super) fn retain_scope(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_publication_preserves_admission_recovery_until_a_manifest_is_committed() {
+        let root = tempfile::tempdir().expect("root");
+        let path = super::super::manifest_path_for_root(root.path(), "publication");
+        std::fs::create_dir_all(&path).expect("block manifest replacement");
+        let allocation = horizon_browser::RemoteAllocation::default();
+        let mut populated = false;
+        assert!(super::super::initialize_at(&path, "publication", Some(&allocation), |_| populated = true).is_err());
+        assert!(populated, "fail the commit after constructing the manifest");
+        allocation.cancel_before_launch();
+        assert_eq!(
+            allocation.status_for("host", "owner", "workspace", true),
+            Some(RemoteRecoveryStatus::Released),
+            "an unpublished allocation retains its admitted owner scope"
+        );
+
+        std::fs::remove_dir(&path).expect("unblock publication");
+        let published = horizon_browser::RemoteAllocation::default();
+        super::super::initialize_at(&path, "publication", Some(&published), |_| {}).expect("commit manifest");
+        published.cancel_before_launch();
+        assert_eq!(
+            published.status_for("host", "owner", "workspace", true),
+            None,
+            "a published allocation requires final manifest scope at retirement"
+        );
+    }
+
     #[test]
     fn removal_captures_the_final_owner_under_the_manifest_lock() {
         use super::super::{

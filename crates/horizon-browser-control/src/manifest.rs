@@ -333,20 +333,31 @@ pub fn write_at(path: &Path, manifest: &BrowserManifest) -> std::io::Result<()> 
 /// Fails when the lock or manifest write cannot be completed.
 pub(crate) fn initialize(
     panel_local_id: &str,
+    allocation: Option<&horizon_browser::RemoteAllocation>,
     update: impl FnOnce(&mut BrowserManifest),
 ) -> std::io::Result<BrowserManifest> {
-    initialize_at(&default_manifest_path(panel_local_id), panel_local_id, update)
+    initialize_at(
+        &default_manifest_path(panel_local_id),
+        panel_local_id,
+        allocation,
+        update,
+    )
 }
 
 fn initialize_at(
     path: &Path,
     panel_local_id: &str,
+    allocation: Option<&horizon_browser::RemoteAllocation>,
     update: impl FnOnce(&mut BrowserManifest),
 ) -> std::io::Result<BrowserManifest> {
-    mutate_at(path, panel_local_id, true, |manifest| {
+    let manifest = mutate_at(path, panel_local_id, true, |manifest| {
         update(manifest);
         true
-    })
+    })?;
+    if let Some(allocation) = allocation {
+        allocation.mark_published();
+    }
+    Ok(manifest)
 }
 
 /// Atomically read, mutate, and replace one manifest while holding the
@@ -711,10 +722,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
     }
 
     fn initialize(&self, panel_local_id: &str, state: &horizon_browser::CoordinationState) -> std::io::Result<()> {
-        initialize(panel_local_id, |manifest| {
-            if let Some(allocation) = &self.remote_allocation {
-                allocation.mark_published();
-            }
+        initialize(panel_local_id, self.remote_allocation.as_ref(), |manifest| {
             manifest.panel_local_id = panel_local_id.to_string();
             adopt_driver_host(manifest, host_instance());
             manifest.backend = state.backend;
@@ -1138,7 +1146,7 @@ mod tests {
         let root = test_root();
         let path = manifest_path_for_root(&root, "initialize");
 
-        let manifest = initialize_at(&path, "initialize", |manifest| {
+        let manifest = initialize_at(&path, "initialize", None, |manifest| {
             manifest.browser_ws = "ws://127.0.0.1:2/devtools/browser/y".to_string();
         })
         .unwrap();

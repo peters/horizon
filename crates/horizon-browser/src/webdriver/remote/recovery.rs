@@ -106,7 +106,7 @@ impl RemoteAllocation {
         Ok(allocation)
     }
 
-    /// Called inside the coordinator's manifest publication transaction.
+    /// Called after the coordinator successfully commits its initial manifest.
     pub fn mark_published(&self) {
         let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.published = true;

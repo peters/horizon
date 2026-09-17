@@ -50,8 +50,9 @@ impl RemoteAllocations {
     }
 
     #[must_use]
-    pub fn summaries(&self, scope: Option<(&str, &str)>) -> Vec<RemoteAllocationSummary> {
-        self.records
+    pub fn summaries(&mut self, scope: Option<(&str, &str)>) -> Vec<RemoteAllocationSummary> {
+        let summaries = self
+            .records
             .values()
             .filter_map(|record| {
                 let status = match scope {
@@ -70,7 +71,11 @@ impl RemoteAllocations {
                     message: status.message().to_string(),
                 })
             })
-            .collect()
+            .collect();
+        // Release is monotonic: every Released snapshot must have relinquished
+        // its cross-instance lease before either UI or MCP can publish it.
+        self.poll();
+        summaries
     }
 
     /// Unknown and unauthorized references intentionally have the same result.
@@ -148,7 +153,14 @@ mod tests {
         assert!(records.summaries(Some(("actor-a", "workspace-b"))).is_empty());
         assert!(!records.reconcile(second.reference(), Some(("actor-a", "workspace-a"))));
         first.cancel_before_launch();
-        assert!(records.poll());
+        let released = records.summaries(Some(("actor-a", "workspace-a")));
+        assert_eq!(released[0].status, RemoteRecoveryStatus::Released);
+        let _available = super::super::remote_slots::acquire_slot(dir.path(), "quota", 2)
+            .expect("a published release makes its lease immediately available");
+        assert!(matches!(
+            super::super::remote_slots::acquire_slot(dir.path(), "quota", 2),
+            Err(super::super::remote_slots::SlotError::Busy { .. })
+        ));
         assert!(records.records[first.reference()].lease.is_none());
         assert!(records.records[second.reference()].lease.is_some());
         assert!(records.reconcile(first.reference(), Some(("actor-a", "workspace-a"))));
