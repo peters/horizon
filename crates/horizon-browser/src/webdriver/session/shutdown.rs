@@ -16,16 +16,26 @@ use super::Driver;
 pub(super) struct Completion {
     tx: Option<mpsc::Sender<()>>,
     process: ChromeProcessControl,
+    pub(super) group: Option<super::super::FirefoxReservation>,
 }
 
 impl Completion {
-    pub(super) fn new(tx: mpsc::Sender<()>, process: ChromeProcessControl) -> Self {
-        Self { tx: Some(tx), process }
+    pub(super) fn new(
+        tx: mpsc::Sender<()>,
+        process: ChromeProcessControl,
+        group: Option<super::super::FirefoxReservation>,
+    ) -> Self {
+        Self {
+            tx: Some(tx),
+            process,
+            group,
+        }
     }
 }
 
 impl Drop for Completion {
     fn drop(&mut self) {
+        drop(self.group.take());
         self.process.mark_registration_settled();
         if let Some(tx) = self.tx.take() {
             let _ = tx.send(());
@@ -64,7 +74,15 @@ impl Driver {
             self.remove_firefox_network_bridge(event_tx);
             let _ = self.network.stop();
         }
-        let _ = self.classic_delete("actions");
+        if self.host.shared_context().is_some() {
+            let _ = self.call_bidi(
+                "input.releaseActions",
+                &serde_json::json!({"context": self.context_id}),
+                event_tx,
+            );
+        } else {
+            let _ = self.classic_delete("actions");
+        }
         if let Some(outcome) = self.host.release(&self.session_id) {
             let label = self
                 .host

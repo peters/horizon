@@ -192,12 +192,20 @@ pub(super) fn establish_bidi(
         host.delete_session(session_id);
         return Err("Firefox did not return the required WebDriver BiDi webSocketUrl".to_string());
     }
-    let mut context_id = bidi.as_mut().and_then(discover_context);
+    let shared = host.shared_context().is_some();
+    let mut context_id = host
+        .shared_context()
+        .map(str::to_owned)
+        .or_else(|| bidi.as_mut().and_then(discover_context));
     if firefox_bidi && context_id.is_none() {
         host.delete_session(session_id);
         return Err("Firefox BiDi returned no top-level browsing context".to_string());
     }
-    if firefox_bidi
+    if shared && let Some(link) = bidi.as_mut() {
+        super::bidi::subscribe_shared_page(link, host, config.browser.automation_disclosure)?;
+    }
+    if !shared
+        && firefox_bidi
         && config.browser.automation_disclosure == AutomationDisclosurePolicy::MinimizeCommonSignals
         && let Some(link) = bidi.as_mut()
         && let Err(error) = install_common_signal_preload(link)
@@ -207,7 +215,8 @@ pub(super) fn establish_bidi(
             "Firefox could not install pre-document automation disclosure minimization: {error}"
         ));
     }
-    if let Some(link) = bidi.as_mut()
+    if !shared
+        && let Some(link) = bidi.as_mut()
         && let Err(error) = subscribe(link, config.browser.backend, context_id.as_deref())
     {
         if firefox_bidi {

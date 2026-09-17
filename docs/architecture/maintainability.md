@@ -266,3 +266,12 @@ cover queued startup, and page lifecycle controls cannot terminate a live siblin
 Final release retires the process before profile cleanup; failed startup retains
 the exact child control, and failed target close remains pending. Existing
 `start_session` callers retain exclusive sessions.
+
+### Shared Firefox lifecycle
+
+`session::SharedSessionGroup` selects a Chromium or Firefox profile group.
+`webdriver/shared.rs` owns Firefox context reservations, page cleanup and exact
+process retirement. Each page filters BiDi events to its context tree. Classic
+commands select their context and execute under one shared lock and one deadline;
+session-global routes are rejected. Failed page cleanup retains its context and
+registration IDs for bounded retries while preserving active siblings.

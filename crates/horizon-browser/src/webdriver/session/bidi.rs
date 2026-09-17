@@ -50,6 +50,9 @@ impl Driver {
             self.handle_bidi_navigate_response(event, event_tx);
             return;
         }
+        if !self.host.accepts_bidi_event(event) {
+            return;
+        }
         if event.get("method").and_then(Value::as_str) == Some("network.authRequired") {
             self.continue_http_auth(event, event_tx);
             return;
@@ -61,6 +64,7 @@ impl Driver {
         let method = event.get("method").and_then(Value::as_str).unwrap_or_default();
         let params = event.get("params").unwrap_or(&Value::Null);
         if self.context_id.is_none()
+            && self.host.shared_context().is_none()
             && let Some(context) = created_top_level_context(method, params)
         {
             self.context_id = Some(context.to_string());
@@ -142,6 +146,7 @@ impl Driver {
             let destroyed = params.get("context").and_then(Value::as_str);
             if destroyed == self.context_id.as_deref() {
                 self.context_id = None;
+                self.host.context_destroyed();
                 self.advance_generation();
             }
         }
@@ -177,6 +182,56 @@ pub(super) fn connect_bidi_with_startup_retry(url: &str, stop_requested: &Atomic
         }
         std::thread::sleep(Duration::from_millis(25));
     }
+}
+
+pub(super) fn subscribe_shared_page(
+    link: &mut JsonWsLink,
+    host: &mut super::super::host::DriverHost,
+    disclosure: crate::AutomationDisclosurePolicy,
+) -> Result<(), String> {
+    let context = host
+        .shared_context()
+        .ok_or_else(|| "missing shared Firefox context".to_string())?
+        .to_owned();
+    let mut register = |method, params: Value, field, remove| -> Result<(), String> {
+        let result = link
+            .call(COMMAND_TIMEOUT, method, &params)
+            .result
+            .map_err(|error| error.to_string())?;
+        let id = result
+            .get(field)
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("{method} returned no registration identity"))?;
+        host.remember_bidi_registration(remove, id.to_owned());
+        Ok(())
+    };
+    register(
+        "session.subscribe",
+        bidi_subscription_params(&base_bidi_events(), Some(&context)),
+        "subscription",
+        "session.unsubscribe",
+    )?;
+    register(
+        "session.subscribe",
+        bidi_subscription_params(super::http_auth::firefox_http_auth_events(), Some(&context)),
+        "subscription",
+        "session.unsubscribe",
+    )?;
+    register(
+        "network.addIntercept",
+        super::http_auth::firefox_http_auth_intercept_params(&context),
+        "intercept",
+        "network.removeIntercept",
+    )?;
+    if disclosure == crate::AutomationDisclosurePolicy::MinimizeCommonSignals {
+        register(
+            "script.addPreloadScript",
+            json!({"functionDeclaration": COMMON_SIGNAL_PRELOAD_FUNCTION, "contexts": [context]}),
+            "script",
+            "script.removePreloadScript",
+        )?;
+    }
+    Ok(())
 }
 
 pub(super) fn subscribe(link: &mut JsonWsLink, backend: BackendKind, context_id: Option<&str>) -> Result<(), String> {

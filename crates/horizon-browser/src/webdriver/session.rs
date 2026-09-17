@@ -120,6 +120,11 @@ struct PendingHistoryStart {
     expires_at: Instant,
 }
 
+pub(crate) struct WebDriverLaunch<'a> {
+    pub(crate) process_control: &'a ChromeProcessControl,
+    pub(crate) group: Option<super::FirefoxReservation>,
+}
+
 pub(crate) fn run_webdriver(
     config: &BrowserSessionConfig,
     event_tx: &BrowserEventSender,
@@ -127,13 +132,14 @@ pub(crate) fn run_webdriver(
     frame_slot: &Arc<FrameSlot>,
     stop_requested: &Arc<AtomicBool>,
     teardown: crate::session::DriverTeardown,
-    process_control: &ChromeProcessControl,
+    launch: WebDriverLaunch<'_>,
 ) {
     let crate::session::DriverTeardown {
         completion: completion_tx,
         remote_release,
     } = teardown;
-    let _completion = Completion::new(completion_tx, process_control.clone());
+    let process_control = launch.process_control;
+    let completion = Completion::new(completion_tx, process_control.clone(), launch.group);
     let Some(_coordination_lifetime) = crate::coordination::CoordinationLifetime::start(config) else {
         let _ = event_tx.send(BrowserEvent::Warning(crate::coordination::PREPARE_FAILURE.to_string()));
         let _ = event_tx.send(BrowserEvent::Stopped { code: None });
@@ -146,6 +152,7 @@ pub(crate) fn run_webdriver(
         frame_slot,
         event_tx,
         remote_release,
+        completion.group.as_ref().map(|reservation| &reservation.group),
     ) {
         Ok(driver) => driver,
         Err(error) => {
@@ -154,25 +161,7 @@ pub(crate) fn run_webdriver(
             return;
         }
     };
-    driver.initialize_coordination();
-    driver.initialize_classic_document_identity();
-    let capabilities = driver.active_capabilities();
-    frame_slot.publish_backend_capabilities(capabilities);
-    let _ = event_tx.send(BrowserEvent::BackendReady(capabilities));
-    let startup_navigation_pending = config
-        .initial_url
-        .as_deref()
-        .filter(|url| !url.is_empty() && *url != "about:blank")
-        .is_some_and(|url| driver.navigate_initial(url, event_tx));
-    // `Ready` means the servicing loop below is about to run: commands and
-    // agent actions are only usable from here on, so it must not be
-    // published before the (bounded) startup navigation returned. The host
-    // resets its loading flag on `Ready`, so a startup navigation that is
-    // still running is reported as loading again right after it.
-    let _ = event_tx.send(BrowserEvent::Ready);
-    if startup_navigation_pending {
-        let _ = event_tx.send(BrowserEvent::Loading(true));
-    }
+    driver.prepare_ready(config, frame_slot, event_tx);
 
     while !stop_requested.load(Ordering::Acquire) {
         let mut stop = false;
@@ -240,6 +229,31 @@ pub(crate) fn run_webdriver(
 }
 
 impl Driver {
+    fn prepare_ready(&mut self, config: &BrowserSessionConfig, frame_slot: &FrameSlot, event_tx: &BrowserEventSender) {
+        if self.firefox_bidi() {
+            self.set_viewport(config.width, config.height, event_tx);
+        }
+        self.initialize_coordination();
+        self.initialize_classic_document_identity();
+        let capabilities = self.active_capabilities();
+        frame_slot.publish_backend_capabilities(capabilities);
+        let _ = event_tx.send(BrowserEvent::BackendReady(capabilities));
+        let startup_navigation_pending = config
+            .initial_url
+            .as_deref()
+            .filter(|url| !url.is_empty() && *url != "about:blank")
+            .is_some_and(|url| self.navigate_initial(url, event_tx));
+        // `Ready` means the servicing loop below is about to run: commands and
+        // agent actions are only usable from here on, so it must not be
+        // published before the (bounded) startup navigation returned. The host
+        // resets its loading flag on `Ready`, so a startup navigation that is
+        // still running is reported as loading again right after it.
+        let _ = event_tx.send(BrowserEvent::Ready);
+        if startup_navigation_pending {
+            let _ = event_tx.send(BrowserEvent::Loading(true));
+        }
+    }
+
     fn service_browser_request(
         &mut self,
         request: &crate::AgentAction,
@@ -268,12 +282,21 @@ impl Driver {
         frame_slot: &Arc<FrameSlot>,
         event_tx: &BrowserEventSender,
         remote_release: crate::session::RemoteReleaseReport,
+        group: Option<&super::SharedFirefoxSession>,
     ) -> Result<Self, String> {
         let (mut host, session, remote_device) = if let Some(request) = &config.remote {
             let (host, session, device) = start_remote(request, event_tx, &remote_release, stop_requested)?;
             (host, session, Some(device.summary()))
         } else {
-            let (host, session) = start_local(config, process_control, stop_requested)?;
+            let (host, session) = if let Some(group) = group {
+                let mut shared_config = config.clone();
+                group.profile_id().clone_into(&mut shared_config.panel_local_id);
+                group.acquire(&shared_config.browser, process_control, stop_requested, |control| {
+                    start_local(&shared_config, control, stop_requested)
+                })?
+            } else {
+                start_local(config, process_control, stop_requested)?
+            };
             (host, session, None)
         };
         let NewSession {
