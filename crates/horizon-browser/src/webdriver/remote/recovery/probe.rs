@@ -31,7 +31,7 @@ impl SessionProbe {
 
     pub(super) fn probe(&self) -> RemoteRecoveryStatus {
         let path = format!("/session/{}/url", self.session);
-        let (status, body) = match response(&self.transport, &path) {
+        let (status, body) = match response(&self.transport, &path, false) {
             Ok(response) => response,
             Err(status) => return status,
         };
@@ -56,7 +56,7 @@ impl SessionProbe {
             return RemoteRecoveryStatus::IdentityUnavailable;
         }
         let path = format!("/automate/sessions/{segment}.json");
-        let (status, body) = match response(report, &path) {
+        let (status, body) = match response(report, &path, true) {
             Ok(response) => response,
             Err(status) => return status,
         };
@@ -77,7 +77,7 @@ impl SessionProbe {
     }
 }
 
-fn response(transport: &RemoteHttpClient, path: &str) -> Result<(u16, Value), RemoteRecoveryStatus> {
+fn response(transport: &RemoteHttpClient, path: &str, reporting: bool) -> Result<(u16, Value), RemoteRecoveryStatus> {
     let (status, bytes) = transport.request_bytes("GET", path, None, PROBE_TIMEOUT).map_err(|_| {
         tracing::warn!("remote recovery transport failed; capacity retained");
         RemoteRecoveryStatus::ProviderUnavailable
@@ -85,7 +85,7 @@ fn response(transport: &RemoteHttpClient, path: &str) -> Result<(u16, Value), Re
     if matches!(status, 401 | 403) {
         return Err(RemoteRecoveryStatus::AuthenticationRequired);
     }
-    if matches!(status, 502..=504) {
+    if matches!(status, 502..=504) || (reporting && (500..=599).contains(&status)) {
         return Err(RemoteRecoveryStatus::ProviderUnavailable);
     }
     let body = serde_json::from_slice(&bytes).map_err(|_| {

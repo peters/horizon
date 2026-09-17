@@ -67,7 +67,7 @@ fn report_authentication_ambiguity_and_active_execution_keep_capacity() {
         (401, record("done"), RemoteRecoveryStatus::AuthenticationRequired),
         (403, record("done"), RemoteRecoveryStatus::AuthenticationRequired),
         (404, record("done"), RemoteRecoveryStatus::UnsupportedResponse),
-        (500, record("done"), RemoteRecoveryStatus::UnsupportedResponse),
+        (500, record("done"), RemoteRecoveryStatus::ProviderUnavailable),
         (200, record("running"), RemoteRecoveryStatus::Active),
     ] {
         let hub = Server::start(vec![Reply::json(500, &json!({"value":null}))]);
@@ -117,7 +117,7 @@ fn transport_failures_keep_the_hold_even_if_reporting_could_claim_completion() {
 
 #[test]
 fn reporting_gateway_outages_are_distinct_from_unsupported_session_formats() {
-    for status in [502, 503, 504] {
+    for status in [500, 501, 502, 503, 504, 599] {
         for body in [b"<html>unavailable</html>".to_vec(), b"{}".to_vec()] {
             let hub = Server::start(vec![Reply::json(500, &json!({"value":null}))]);
             let mut reply = Reply::json(status, &json!({}));
