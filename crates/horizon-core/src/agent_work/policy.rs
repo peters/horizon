@@ -41,6 +41,14 @@ pub struct SuspendRecord {
     pub cancelled_by_horizon: bool,
 }
 
+impl SuspendRecord {
+    pub(super) fn has_working_snapshot_before_cancel(&self) -> bool {
+        self.before_cancel
+            .as_ref()
+            .is_some_and(|before| before.state == TurnState::Working)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AskReason {
     UncleanShutdown,
@@ -153,6 +161,7 @@ impl RestartEvidence<'_> {
         }
         if record.prompt_id.is_empty()
             || record.generation == 0
+            || !record.has_working_snapshot_before_cancel()
             || !matches!(ledger.state, TurnState::Working | TurnState::Interrupted)
             || record.final_transcript.is_none()
             || !ledger.ended_at_millis.is_some_and(|ended| {
@@ -183,6 +192,35 @@ impl RestartEvidence<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_incomplete_handoffs_need_confirmation(
+        record: &SuspendRecord,
+        evidence: &RestartEvidence<'_>,
+        transcript: &TranscriptSnapshot,
+    ) {
+        for state in [
+            None,
+            Some(TurnState::Unknown),
+            Some(TurnState::Blocked),
+            Some(TurnState::Finished),
+            Some(TurnState::Failed),
+            Some(TurnState::Interrupted),
+        ] {
+            let mut incomplete = record.clone();
+            incomplete.before_cancel = state.map(|state| TranscriptSnapshot {
+                state,
+                ..transcript.clone()
+            });
+            assert_eq!(
+                RestartEvidence {
+                    handoff: Some(&incomplete),
+                    ..*evidence
+                }
+                .classify(1),
+                RestartDecision::Ask(AskReason::MissingEvidence)
+            );
+        }
+    }
 
     #[test]
     fn only_a_complete_clean_handoff_can_continue_automatically() {
@@ -235,6 +273,7 @@ mod tests {
             now_millis: 3000,
         };
         assert_eq!(evidence.classify(1), RestartDecision::Resume);
+        assert_incomplete_handoffs_need_confirmation(&record, &evidence, &transcript);
         assert_eq!(evidence.classify(0), RestartDecision::Ask(AskReason::BatchLimit));
         evidence.session_live_elsewhere = true;
         assert_eq!(evidence.classify(1), RestartDecision::NotResumable);

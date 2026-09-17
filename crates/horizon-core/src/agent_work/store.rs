@@ -131,9 +131,16 @@ impl WorkStore {
         if let Some(parent) = health_path.parent() {
             private_directory(parent)?;
         }
-        let mut health = private_options().write(true).create_new(true).open(health_path)?;
+        let mut health = private_options().write(true).create_new(true).open(&health_path)?;
         health.write_all(b"1")?;
         health.sync_all()?;
+        #[cfg(unix)]
+        for directory in health_path.ancestors().skip(1) {
+            File::open(directory)?.sync_all()?;
+            if Some(directory) == self.root.parent() {
+                break;
+            }
+        }
         self.write(&record)?;
         self.prune_health(panel, owner);
         Ok(())
@@ -223,6 +230,7 @@ impl WorkStore {
             .ok_or_else(|| invalid("missing work record"))?;
         if record.owner_token != owner
             || record.kind != handoff.kind
+            || !handoff.has_working_snapshot_before_cancel()
             || record.ledger.session_id != handoff.session_id
             || record.ledger.prompt_id.as_deref() != Some(&handoff.prompt_id)
             || record.ledger.generation != handoff.generation

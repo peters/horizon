@@ -76,6 +76,46 @@ impl Fixture {
 }
 
 #[test]
+fn incomplete_pre_cancel_evidence_cannot_be_saved() {
+    let fixture = Fixture::new();
+    let valid = fixture.handoff();
+    for state in [
+        None,
+        Some(TurnState::Unknown),
+        Some(TurnState::Blocked),
+        Some(TurnState::Finished),
+        Some(TurnState::Failed),
+        Some(TurnState::Interrupted),
+    ] {
+        let mut incomplete = valid.clone();
+        incomplete.before_cancel = state.map(|state| TranscriptSnapshot {
+            state,
+            ..valid.before_cancel.clone().expect("working snapshot")
+        });
+        assert!(fixture.store.save_handoff("host", incomplete).is_err());
+        assert!(
+            fixture
+                .store
+                .read("panel")
+                .expect("read")
+                .expect("record")
+                .handoff
+                .is_none()
+        );
+    }
+    fixture.store.save_handoff("host", valid).expect("complete evidence");
+    assert!(
+        fixture
+            .store
+            .read("panel")
+            .expect("read")
+            .expect("record")
+            .handoff
+            .is_some()
+    );
+}
+
+#[test]
 fn persistent_handoff_round_trips_and_is_claimed_once() {
     let mut fixture = Fixture::new();
     fixture.seal();
