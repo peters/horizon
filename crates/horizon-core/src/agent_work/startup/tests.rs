@@ -61,7 +61,7 @@ fn seeded_prompt_is_a_single_quoted_argument() {
     ));
     assert_eq!(args[1], "agent --resume session 'don'\\''t execute $(false); `false`'");
     let mut direct = vec!["--resume".into(), "session".into()];
-    assert!(!append_seed(PanelKind::Claude, &mut direct, "brief"));
+    assert_eq!(append_seed(PanelKind::Claude, &mut direct, "brief"), cfg!(windows));
 }
 
 #[cfg(target_os = "linux")]

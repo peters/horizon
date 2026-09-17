@@ -180,15 +180,15 @@ pub(super) fn spawn_terminal(
     let title = name.unwrap_or_else(|| default_terminal_title(id, saved_ssh_connection.as_ref()));
     let initial_ssh_status = (kind == PanelKind::Ssh).then_some(SshConnectionStatus::Connecting);
     let mut env = agent_env(kind, &local_id, saved_command.is_none());
-    let work_launch = crate::agent_work::WorkLaunch {
+    let work_plan = crate::agent_work::WorkLaunch {
         panel: &local_id,
         kind,
         policy: &work_resume,
         cwd: saved_cwd.as_deref(),
         session_id: session_binding.as_ref().map(|binding| binding.session_id.as_str()),
         default_command: saved_command.is_none(),
-    };
-    let work_plan = work_launch.start(&program, is_restore, saved_args.is_empty(), &mut launch_args, &mut env);
+    }
+    .start(&program, is_restore, saved_args.is_empty(), &mut launch_args, &mut env);
     let panel_args = TerminalPanelBuildArgs {
         id,
         local_id,

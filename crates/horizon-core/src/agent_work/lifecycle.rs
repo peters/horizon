@@ -29,17 +29,6 @@ pub(crate) struct WorkOwner {
 }
 
 impl WorkLaunch<'_> {
-    pub(crate) fn attach_launch(
-        &self,
-        program: &str,
-        unambiguous: bool,
-        args: &mut [String],
-        env: &mut HashMap<String, String>,
-    ) -> Option<Arc<WorkOwner>> {
-        let owned = unambiguous.then(|| self.owned_command(program, args, env)).flatten();
-        self.attach(owned.as_deref(), args, env)
-    }
-
     pub(crate) fn owned_command(
         &self,
         program: &str,
