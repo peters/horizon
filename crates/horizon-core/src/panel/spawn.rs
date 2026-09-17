@@ -103,6 +103,7 @@ impl StaticPanelSeed {
             terminal_title: String::new(),
             kind,
             resume: PanelResume::Fresh,
+            work_resume: crate::agent_work::ResumePolicy::default(),
             layout: PanelLayout {
                 position: self.position.unwrap_or_default(),
                 size: self.size.unwrap_or(DEFAULT_PANEL_SIZE),
