@@ -328,6 +328,68 @@ mod live_mcp {
         Ok(())
     }
 
+    #[test]
+    #[ignore = "requires HORIZON_DEVICE_TEST_TARGET pointing to an owned virtual desktop"]
+    fn cli_and_mcp_forward_cropped_jpeg_capture_options() -> Result<()> {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        let target = std::env::var("HORIZON_DEVICE_TEST_TARGET")?;
+        let config = serde_json::from_slice(&std::fs::read(&target)?)?;
+        let geometry = serde_json::to_value(horizon_device::Device::connect(&config)?.screenshot()?.geometry)?;
+        let options = json!({
+            "region":{"x":10,"y":20,"width":40,"height":30},
+            "output":{"width":20,"height":15},"format":"jpeg","quality":75
+        });
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("capture.jpg");
+        let output = Command::new(env!("CARGO_BIN_EXE_horizon-device"))
+            .args(["--target", &target, "screenshot"])
+            .arg(&path)
+            .args(["--options", &options.to_string()])
+            .output()?;
+        assert!(output.status.success());
+        let cli: Value = serde_json::from_slice(&output.stdout)?;
+        assert_eq!(cli["ok"], true);
+        assert!(cli["result"].get("image_base64").is_none());
+        assert_eq!(cli["result"]["path"], path.to_str().ok_or("non-UTF8 test path")?);
+        assert_capture(&cli["result"], &std::fs::read(path)?, &geometry, &options)?;
+
+        let mut session = Session::start(&target)?;
+        session.initialize()?;
+        let mcp = session.call(2, "device_screenshot", options.clone())?;
+        assert_eq!(mcp["isError"], false);
+        assert_eq!(mcp["content"][1]["type"], "image");
+        assert_eq!(mcp["content"][1]["mimeType"], "image/jpeg");
+        let receipt: Value = serde_json::from_str(mcp["content"][0]["text"].as_str().ok_or("missing receipt")?)?;
+        assert_eq!(receipt["ok"], true);
+        assert!(receipt["result"].get("image_base64").is_none());
+        let bytes = STANDARD.decode(mcp["content"][1]["data"].as_str().ok_or("missing image")?)?;
+        assert_capture(&receipt["result"], &bytes, &geometry, &options)?;
+        Ok(())
+    }
+
+    fn assert_capture(observation: &Value, bytes: &[u8], geometry: &Value, options: &Value) -> Result<()> {
+        assert_eq!(observation["geometry"], *geometry);
+        assert_eq!(observation["source_region"], options["region"]);
+        assert_eq!(observation["image_dimensions"], options["output"]);
+        assert_eq!(observation["mime_type"], "image/jpeg");
+        assert!(bytes.starts_with(&[0xff, 0xd8]));
+        // Walk JPEG segments to verify the encoded dimensions, not just metadata.
+        let mut offset = 2;
+        while let Some(header) = bytes.get(offset..offset + 4) {
+            assert_eq!(header[0], 0xff);
+            let length = usize::from(u16::from_be_bytes([header[2], header[3]]));
+            assert!(length >= 2);
+            if header[1] == 0xc0 {
+                let frame = bytes.get(offset + 4..offset + 9).ok_or("truncated JPEG frame")?;
+                assert_eq!(u16::from_be_bytes([frame[1], frame[2]]), 15);
+                assert_eq!(u16::from_be_bytes([frame[3], frame[4]]), 20);
+                return Ok(());
+            }
+            offset += 2 + length;
+        }
+        Err("missing baseline JPEG frame".into())
+    }
+
     fn send_type(mode: &str, target: &str, request: Value) -> Result<()> {
         if mode == "mcp" {
             let mut session = Session::start(target)?;
