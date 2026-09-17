@@ -89,7 +89,7 @@ The reusable runner:
   commit (use `--allow-dirty` only for an explicitly provisional diagnosis);
 - serves the committed fixtures on a random loopback port;
 - launches the exact Horizon binary with an agent panel and no Browser panel;
-- invokes only the eighteen public `browser_*` MCP tools;
+- invokes only the nineteen public `browser_*` MCP tools;
 - proves empty discovery followed by an audited hidden `browser_create` in the
   requesting agent's workspace whose result already reports the committed
   first page (`navigation: committed`, `startup_millis`) and is queryable
@@ -98,6 +98,10 @@ The reusable runner:
   snapshot/query/ref lifetime, trusted
   single and double click, Unicode fill, scroll, history, wait/evaluate,
   disclosure, redacted audit, failures, and optional handoff;
+- duplicates the hidden panel through `browser_duplicate`, verifies distinct
+  identity, shared storage and independent navigation, closes the duplicate,
+  and confirms the source remains usable (Safari instead verifies the typed
+  unsupported-backend refusal);
 - proves an immediate backend navigation rejection returns a typed MCP failure,
   retains the last valid page, and is audited as failed rather than completed;
 - proves `browser_navigate` reports typed outcomes: a committed navigation with

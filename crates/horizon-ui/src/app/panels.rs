@@ -72,6 +72,7 @@ struct PanelUiOutcome {
     resize_delta: Vec2,
     commit_terminal_resize: bool,
     workspace_assignment: Option<WorkspaceId>,
+    duplicate_browser: bool,
     session_rebind_and_restart: Option<AgentSessionBinding>,
     command: Option<PanelCommand>,
     rename_action: RenameEditAction,

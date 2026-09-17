@@ -58,6 +58,14 @@ short-lived `ref` in `browser_act`. Navigation, another snapshot or query, and
 `browser_wait` can invalidate earlier refs, so reacquire a ref immediately
 before an action when the page may have changed.
 
+When the user explicitly requests another panel sharing an existing login, call
+`browser_duplicate` with the source `panel_id`. The source must be a ready local
+Chromium or Firefox panel in your workspace; ownership and handoff guards still
+apply. The panels share cookies and persistent site storage, so logging out in
+one affects the others. Navigation and input are independent; forms, history,
+and live JavaScript state are not copied. This does not authorize helper panels
+as a workaround for iframe, popup, dialog, or consent interactions.
+
 Snapshots expose iframe boundaries as `iframe` nodes. If the current top-level
 semantic tools cannot reach the embedded frame content, call `browser_handoff`
 on the original panel so the user can complete the interaction; do not open a
