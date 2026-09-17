@@ -9,6 +9,7 @@ use crate::browser::{BrowserConfig, BrowserPanelState};
 
 fn requested() -> RemoteIdentityDisplay {
     RemoteIdentityDisplay::requested(&RemoteSessionRequest {
+        recovery: horizon_browser::RemoteAllocation::default(),
         endpoint: "https://example.test".into(),
         authorization: None,
         capabilities: json!({"browserName": "MicrosoftEdge", "platformName": "Windows"}),

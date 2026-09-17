@@ -54,7 +54,7 @@ impl RemoteAllocations {
 
     #[must_use]
     pub fn summaries(&mut self, scope: Option<(&str, &str)>) -> Vec<RemoteAllocationSummary> {
-        let summaries = self
+        let mut summaries: Vec<_> = self
             .records
             .values()
             .filter_map(|record| {
@@ -78,6 +78,7 @@ impl RemoteAllocations {
         // Release is monotonic: every Released snapshot must have relinquished
         // its cross-instance lease before either UI or MCP can publish it.
         self.poll();
+        summaries.retain(|summary| self.records.contains_key(&summary.reference));
         summaries
     }
 
@@ -133,8 +134,13 @@ mod tests {
                 lease: None,
             });
         }
-        records.poll();
-        assert_eq!(records.summaries(None).len(), 128);
+        let summaries = records.summaries(None);
+        assert_eq!(summaries.len(), 128);
+        assert!(
+            summaries
+                .iter()
+                .all(|summary| records.reconcile(&summary.reference, None))
+        );
     }
 
     #[test]
