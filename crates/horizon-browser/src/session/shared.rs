@@ -25,6 +25,16 @@ struct SharedState {
     pages: usize,
     retiring: bool,
     profile_retired: bool,
+    launch_identity: Option<SharedLaunchIdentity>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct SharedLaunchIdentity {
+    profile: std::path::PathBuf,
+    command: String,
+    extra_args: Vec<String>,
+    headless: bool,
+    disclosure: crate::AutomationDisclosurePolicy,
 }
 
 impl SharedState {
@@ -123,9 +133,28 @@ impl SharedBrowserSession {
         stop: &AtomicBool,
         panel_control: &ChromeProcessControl,
     ) -> Result<Option<(DriverProcess, String)>, String> {
+        self.pin_launch(launch)?;
         self.acquire_with(stop, panel_control, |control| {
             super::startup::start_chrome(launch, stop, control)
         })
+    }
+
+    fn pin_launch(&self, launch: &crate::process::ChromeLaunch) -> Result<(), String> {
+        let identity = SharedLaunchIdentity {
+            profile: std::path::absolute(&launch.profile_dir).map_err(|error| error.to_string())?,
+            command: launch.command.clone(),
+            extra_args: launch.extra_args.clone(),
+            headless: launch.headless,
+            disclosure: launch.automation_disclosure,
+        };
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.launch_identity.as_ref().is_some_and(|pinned| pinned != &identity) {
+            return Err(
+                "shared browser process configuration does not match its pinned profile and launch settings".into(),
+            );
+        }
+        state.launch_identity.get_or_insert(identity);
+        Ok(())
     }
 
     fn acquire_with(

@@ -408,3 +408,29 @@ fn force_during_startup_is_retained_when_the_page_delegate_replaces_it() {
     assert!(!control.terminate(Duration::ZERO));
     assert!(control.delegate(Arc::new(UnreapedProcess(true.into()))));
 }
+
+#[test]
+fn shared_process_pins_profile_and_launch_settings_across_restarts() {
+    let group = SharedBrowserSession::new("profile".into());
+    let mut launch = crate::process::ChromeLaunch {
+        command: "browser-fixture".into(),
+        profile_dir: std::path::PathBuf::from("profile-a"),
+        width: 800,
+        height: 600,
+        headless: true,
+        extra_args: Vec::new(),
+        automation_disclosure: crate::AutomationDisclosurePolicy::default(),
+    };
+    assert!(group.pin_launch(&launch).is_ok());
+    launch.width = 1200;
+    assert!(group.pin_launch(&launch).is_ok(), "page dimensions remain independent");
+    group.state.lock().expect("state").close_browser(None);
+    launch.profile_dir = std::path::PathBuf::from("profile-b");
+    assert!(
+        group.pin_launch(&launch).is_err(),
+        "a stopped group still identifies its original profile"
+    );
+    launch.profile_dir = std::path::PathBuf::from("profile-a");
+    launch.headless = false;
+    assert!(group.pin_launch(&launch).is_err());
+}
