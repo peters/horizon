@@ -160,3 +160,75 @@ fn moving_a_restored_panel_cannot_retarget_an_earlier_orphan() {
     );
     assert_eq!(summaries[0].status, RemoteRecoveryStatus::Unresolved);
 }
+
+#[test]
+fn moving_then_bulk_closing_refreshes_the_remote_allocation_scope() {
+    use horizon_core::browser::BrowserPanelState;
+    use horizon_core::{Panel, PanelContent, PanelId};
+    let (_temp, mut app) = test_app();
+    let original = app.board.create_workspace("original");
+    let destination = app.board.create_workspace("destination");
+    let original_local = app.board.workspace(original).expect("original").local_id.clone();
+    let destination_local = app.board.workspace(destination).expect("destination").local_id.clone();
+    let browser = BrowserPanelState::inert_remote("fixture", "fixture");
+    let allocation = browser.remote_allocation().expect("allocation").clone();
+    allocation.mark_published();
+    let panel_id = PanelId(500);
+    let panel = Panel::from_content(
+        panel_id,
+        original,
+        PanelKind::Browser,
+        PanelContent::Browser(Box::new(browser)),
+    );
+    let path = manifest::manifest_path_for_root(app.session_store.home().root(), &panel.local_id);
+    manifest::write_at(
+        &path,
+        &manifest::BrowserManifest {
+            panel_local_id: panel.local_id.clone(),
+            host: Some(manifest::host_instance().into()),
+            owner: Some(manifest::ManifestOwner {
+                name: "owner".into(),
+                tty: None,
+                updated_at: manifest::now_millis(),
+            }),
+            ..manifest::BrowserManifest::default()
+        },
+    )
+    .expect("manifest");
+    app.board.panels.push(panel);
+    app.board
+        .workspace_mut(original)
+        .expect("workspace")
+        .panels
+        .push(panel_id);
+    app.refresh_remote_recovery_scope();
+    assert_eq!(
+        manifest::read_at(&path)
+            .expect("manifest")
+            .workspace
+            .expect("scope")
+            .local_id,
+        original_local
+    );
+
+    app.board.assign_panel_to_workspace(panel_id, destination);
+    app.close_workspace_panels(destination);
+    assert!(app.board.panel(panel_id).is_none());
+    let retired = manifest::read_at(&path).expect("driver retirement snapshot");
+    assert_eq!(retired.workspace.as_ref().expect("scope").local_id, destination_local);
+    allocation.retain_scope(horizon_browser::RemoteAllocationScope {
+        host: retired.host.expect("host"),
+        workspace: retired.workspace.map(|workspace| workspace.local_id),
+        owner: retired.owner.map(|owner| owner.name),
+    });
+    assert!(
+        allocation
+            .status_for(manifest::host_instance(), "owner", &original_local, true)
+            .is_none()
+    );
+    assert!(
+        allocation
+            .status_for(manifest::host_instance(), "owner", &destination_local, true)
+            .is_some()
+    );
+}

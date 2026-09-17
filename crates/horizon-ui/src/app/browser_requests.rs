@@ -336,7 +336,7 @@ impl HorizonApp {
         for status in [BrowserCreateAuditStatus::Queued, BrowserCreateAuditStatus::Dispatched] {
             if let Err(error) = manifest::record_create_status(&panel_local_id, &request, backend, status) {
                 tracing::error!(request_id = %request.request_id, %error, "could not audit requested browser creation");
-                self.board.close_panel(panel_id);
+                self.close_panel(panel_id);
                 complete_failure(
                     &request,
                     "audit_failed",
@@ -535,7 +535,7 @@ impl HorizonApp {
                 BrowserCreateCompletion::Waiting => waiting.push(pending),
                 BrowserCreateCompletion::Completed => changed = true,
                 BrowserCreateCompletion::Failed => {
-                    self.board.close_panel(pending.panel_id);
+                    self.close_panel(pending.panel_id);
                     changed = true;
                 }
             }

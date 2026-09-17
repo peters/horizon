@@ -94,6 +94,7 @@ impl HorizonApp {
     }
 
     pub(in crate::app) fn close_workspace_panels(&mut self, workspace_id: WorkspaceId) {
+        self.refresh_remote_recovery_scope();
         let panels_to_close: Vec<_> = self
             .board
             .workspace(workspace_id)
