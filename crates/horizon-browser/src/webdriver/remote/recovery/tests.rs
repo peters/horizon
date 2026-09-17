@@ -181,6 +181,7 @@ fn authorization_is_checked_with_retirement_before_probe_admission() {
     let caller = allocation.clone();
     let worker = std::thread::spawn(move || caller.reconcile_for("host", "old-owner", "workspace", true));
     state.scope = Some(super::RemoteAllocationScope {
+        admission_fallback: false,
         host: "host".into(),
         owner: Some("final-owner".into()),
         workspace: Some("workspace".into()),
@@ -201,6 +202,7 @@ fn an_unconfirmed_stamp_cannot_authorize_a_retired_manifest_snapshot() {
     allocation.mark_published();
     allocation.confirm_scope(false);
     allocation.retain_scope(super::RemoteAllocationScope {
+        admission_fallback: false,
         host: "host".into(),
         owner: Some("old-owner".into()),
         workspace: Some("old-workspace".into()),
@@ -227,6 +229,7 @@ fn teardown_winning_a_restamp_race_cannot_preserve_the_previous_workspace() {
     allocation.mark_published();
     allocation.expect_workspace("old-workspace");
     allocation.retain_scope(super::RemoteAllocationScope {
+        admission_fallback: false,
         host: "host".into(),
         owner: Some("owner".into()),
         workspace: Some("old-workspace".into()),

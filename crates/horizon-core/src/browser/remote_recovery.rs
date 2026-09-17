@@ -21,6 +21,9 @@ pub struct RemoteAllocations {
 
 impl RemoteAllocations {
     pub fn insert(&mut self, record: HeldRemoteAllocation) {
+        record
+            .allocation
+            .record_admission(super::manifest::host_instance(), &record.owner, &record.workspace);
         self.records.insert(record.allocation.reference().to_string(), record);
     }
 

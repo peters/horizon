@@ -124,6 +124,7 @@ fn moving_a_restored_panel_cannot_retarget_an_earlier_orphan() {
     allocation.mark_published();
     allocation.expect_workspace(&workspace);
     allocation.retain_scope(horizon_browser::RemoteAllocationScope {
+        admission_fallback: false,
         host: manifest::host_instance().into(),
         workspace: Some(workspace.clone()),
         owner: Some("original-owner".into()),
@@ -217,6 +218,7 @@ fn moving_then_bulk_closing_refreshes_the_remote_allocation_scope() {
     let retired = manifest::read_at(&path).expect("driver retirement snapshot");
     assert_eq!(retired.workspace.as_ref().expect("scope").local_id, destination_local);
     allocation.retain_scope(horizon_browser::RemoteAllocationScope {
+        admission_fallback: false,
         host: retired.host.expect("host"),
         workspace: retired.workspace.map(|workspace| workspace.local_id),
         owner: retired.owner.map(|owner| owner.name),

@@ -157,6 +157,10 @@ pub struct BrowserManifest {
     pub audit_path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<ManifestOwner>,
+    /// Sticky ownership history for exact-allocation recovery. Missing history
+    /// from older writers is unknown and cannot authorize admission fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ownership_established: Option<bool>,
     pub user_active: bool,
     pub user_active_at: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -885,6 +889,7 @@ fn adopt_driver_host(manifest: &mut BrowserManifest, host: &str) {
     if manifest.host.as_deref() != Some(host) {
         manifest.workspace = None;
         manifest.owner = None;
+        manifest.ownership_established = Some(false);
         manifest.actions.clear();
         manifest.handoff = None;
         manifest.host = Some(host.to_string());
@@ -940,6 +945,7 @@ mod tests {
             host: None,
             audit_path: String::new(),
             owner: None,
+            ownership_established: None,
             user_active: false,
             user_active_at: 0,
             handoff: None,

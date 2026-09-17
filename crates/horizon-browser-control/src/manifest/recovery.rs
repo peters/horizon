@@ -242,6 +242,11 @@ pub(super) fn retain_scope(
         .filter(|workspace| workspace.host_instance == host)
         .map(|workspace| workspace.local_id.clone());
     allocation.retain_scope(horizon_browser::RemoteAllocationScope {
+        admission_fallback: manifest.ownership_established == Some(false)
+            && manifest
+                .workspace
+                .as_ref()
+                .is_none_or(|workspace| workspace.host_instance == host),
         host: host.to_string(),
         workspace,
         owner: manifest.owner.as_ref().map(|owner| owner.name.clone()),
@@ -251,6 +256,80 @@ pub(super) fn retain_scope(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_recovery_uses_admission_only_when_ownership_was_never_assigned() {
+        use super::super::{ManifestCoordination, ManifestWorkspace, initialize_at, update_at};
+        for (name, history, permitted) in [
+            ("never", Some(false), true),
+            ("unstamped", Some(false), true),
+            ("foreign", Some(false), false),
+            ("released", Some(true), false),
+            ("legacy", None, false),
+        ] {
+            let root = tempfile::tempdir().expect("root");
+            let path = super::super::manifest_path_for_root(root.path(), name);
+            let allocation = horizon_browser::RemoteAllocation::default();
+            allocation.record_admission("host-a", "requester", "workspace-a");
+            initialize_at(&path, name, Some(&allocation), |manifest| {
+                super::super::adopt_driver_host(manifest, "host-a");
+                manifest.workspace = Some(ManifestWorkspace::new("host-a", "workspace-a", Vec::new()));
+            })
+            .expect("initialize before assigning an owner");
+            assert_eq!(
+                super::super::read_at(&path).expect("manifest").ownership_established,
+                Some(false)
+            );
+            update_at(&path, name, |manifest| {
+                if name == "unstamped" {
+                    manifest.workspace = None;
+                } else if name == "foreign" {
+                    manifest.workspace.as_mut().expect("workspace").host_instance = "host-b".into();
+                }
+                if history == Some(true) {
+                    assert!(super::super::agent::try_claim_owner(manifest, "another-owner", None, 1));
+                    manifest.owner = None;
+                } else if history.is_none() {
+                    manifest.ownership_established = None;
+                }
+            })
+            .expect("ownership history");
+            let coordinator = ManifestCoordination::with_remote_allocation(Some(allocation.clone()));
+            assert_eq!(
+                coordinator.remove_at(root.path(), name, "host-a", std::time::Duration::from_secs(1)),
+                Some(true)
+            );
+            allocation.cancel_before_launch();
+            assert_eq!(
+                allocation
+                    .status_for("host-a", "requester", "workspace-a", false)
+                    .is_some(),
+                permitted,
+                "{name}"
+            );
+            assert!(
+                allocation
+                    .status_for("host-b", "requester", "workspace-a", true)
+                    .is_none()
+            );
+            assert!(
+                allocation
+                    .status_for("host-a", "another-owner", "workspace-a", true)
+                    .is_none()
+            );
+            allocation.expect_workspace("workspace-b");
+            assert!(
+                allocation
+                    .status_for("host-a", "requester", "workspace-a", true)
+                    .is_none()
+            );
+            assert!(
+                allocation
+                    .status_for("host-a", "requester", "workspace-b", true)
+                    .is_none()
+            );
+        }
+    }
 
     #[test]
     fn failed_publication_preserves_admission_recovery_until_a_manifest_is_committed() {

@@ -53,6 +53,8 @@ pub struct RemoteAllocation {
 /// Host authorization captured atomically before its live manifest disappears.
 #[derive(Clone, Debug)]
 pub struct RemoteAllocationScope {
+    /// Trustworthy manifest evidence that no owner was ever assigned.
+    pub admission_fallback: bool,
     pub host: String,
     pub workspace: Option<String>,
     pub owner: Option<String>,
@@ -60,6 +62,7 @@ pub struct RemoteAllocationScope {
 
 #[derive(Default)]
 struct State {
+    admission: Option<RemoteAllocationScope>,
     published: bool,
     scope_unconfirmed: bool,
     expected_workspace: Option<String>,
@@ -95,6 +98,19 @@ impl PartialEq for RemoteAllocation {
 impl Eq for RemoteAllocation {}
 
 impl RemoteAllocation {
+    /// Preserve the exact initial requester independently of later ownership.
+    pub fn record_admission(&self, host: &str, owner: &str, workspace: &str) {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .admission
+            .get_or_insert_with(|| RemoteAllocationScope {
+                admission_fallback: false,
+                host: host.to_string(),
+                owner: Some(owner.to_string()),
+                workspace: Some(workspace.to_string()),
+            });
+    }
     /// Construct an unresolved exact allocation for host integration fixtures.
     /// # Errors
     /// The fixture endpoint is invalid.
@@ -289,9 +305,21 @@ fn permits(state: &State, access: &Access<'_>) -> bool {
     }
     if state.published && (state.retired || state.scope.is_some()) {
         state.scope.as_ref().is_some_and(|scope| {
-            scope.host == access.host
-                && scope.owner.as_deref() == Some(access.owner)
-                && scope.workspace.as_deref() == Some(access.workspace)
+            if scope.host != access.host {
+                return false;
+            }
+            if scope.owner.is_none() && scope.admission_fallback {
+                return state.admission.as_ref().is_some_and(|admission| {
+                    admission.host == access.host
+                        && admission.owner.as_deref() == Some(access.owner)
+                        && admission.workspace.as_deref() == Some(access.workspace)
+                        && scope
+                            .workspace
+                            .as_deref()
+                            .is_none_or(|workspace| workspace == access.workspace)
+                });
+            }
+            scope.owner.as_deref() == Some(access.owner) && scope.workspace.as_deref() == Some(access.workspace)
         })
     } else {
         access.admitted

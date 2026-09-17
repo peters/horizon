@@ -1252,6 +1252,7 @@ mod tests {
         let allocation = horizon_core::browser::RemoteAllocation::default();
         allocation.mark_published();
         allocation.retain_scope(horizon_browser::RemoteAllocationScope {
+            admission_fallback: false,
             host: manifest::host_instance().into(),
             workspace: Some("workspace".into()),
             owner: Some("owner".into()),
