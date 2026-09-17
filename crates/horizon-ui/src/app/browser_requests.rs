@@ -13,7 +13,6 @@ use horizon_core::browser::{BackendAvailability, BackendKind, BrowserStatus};
 use horizon_core::{Board, PanelId, PanelKind, PanelOptions, WorkspaceId, browser_actor};
 
 use super::HorizonApp;
-use super::browser_remote_create::plan_remote_create;
 
 const CREATE_REQUEST_POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// How long a create with an initial URL waits, after the backend is ready,
@@ -30,18 +29,16 @@ const STARTUP_DEADLINE_HEADROOM: Duration = Duration::from_millis(750);
 #[derive(Default)]
 pub(super) struct BrowserCreateHostState {
     last_request_poll: Option<Instant>,
+    pub(super) recovery_requests: Vec<manifest::recovery::RecoveryRequest>,
     pending: Vec<PendingBrowserCreate>,
     /// Closes the host has applied but whose session teardown has not
     /// completed yet; each is published once its teardown signal settles.
     pub(super) pending_closes: Vec<super::browser_close_requests::PendingBrowserClose>,
-    /// Cross-instance provider slots this host holds, per provider identity
-    /// (quota key, not the mutable provider name); trimmed to the host's
-    /// hold count for that identity on every poll.
-    pub(super) remote_slot_leases:
-        std::collections::BTreeMap<String, Vec<horizon_core::browser::remote_slots::SlotLease>>,
+    /// Exact allocation ownership, recovery handles, and cross-instance leases.
+    pub(super) remote_allocations: horizon_core::browser::remote_recovery::RemoteAllocations,
     /// Remote sessions whose release was never established by a board this
     /// host has since replaced: each keeps counting against its provider's
-    /// `max_sessions` and keeps one slot leased for the rest of the process.
+    /// `max_sessions` and keeps its slot leased until exact release is established.
     pub(super) orphaned_remote_holds: Vec<horizon_core::OrphanedRemoteHold>,
     /// Board placement the manifests were last stamped for; a change
     /// re-stamps on the same frame instead of waiting for the next tick.
@@ -252,7 +249,10 @@ impl HorizonApp {
             changed = true;
             self.start_requested_browser(request, actor_panel);
         }
-        changed | self.poll_browser_visibility_requests() | self.poll_browser_close_requests()
+        changed
+            | self.poll_browser_visibility_requests()
+            | self.poll_browser_close_requests()
+            | self.poll_remote_recovery()
     }
 
     fn start_requested_browser(&mut self, mut request: BrowserCreateRequest, actor_panel: ActorPanel) {
@@ -272,26 +272,18 @@ impl HorizonApp {
         // A remote target is resolved before any panel exists, so a missing
         // or locked credential, an unknown target or a full provider is
         // reported to the agent as a typed refusal.
-        let remote = match request.target.as_deref() {
-            Some(target) => match plan_remote_create(&self.template_config, &self.remote_browser_credentials, target) {
-                Ok(plan) => Some(plan),
-                Err(refused) => {
-                    complete_failure(&request, refused.code, &refused.message);
-                    return;
-                }
-            },
-            None => None,
+        let remote = match self.plan_and_admit_remote(&request, actor_panel.workspace_id) {
+            Ok(plan) => plan,
+            Err(refused) => {
+                complete_failure(&request, refused.code, &refused.message);
+                return;
+            }
         };
         let backend = remote.as_ref().map_or_else(
             || request.backend.unwrap_or(self.template_config.browser.backend),
             |plan| plan.backend,
         );
-        if let Some(plan) = &remote {
-            if let Err((code, message)) = self.admit_remote_create(plan) {
-                complete_failure(&request, code, message);
-                return;
-            }
-        } else {
+        if remote.is_none() {
             if let BackendAvailability::UnsupportedPlatform(reason) = backend.availability() {
                 complete_failure(&request, "unsupported_platform", reason);
                 return;
@@ -308,6 +300,7 @@ impl HorizonApp {
 
         let mut browser_config = self.template_config.browser.clone();
         browser_config.backend = backend;
+        let recovery = remote.as_ref().map(|plan| plan.request.recovery.clone());
         let options = duplicate.unwrap_or_else(|| PanelOptions {
             command: request.url.clone(),
             kind: PanelKind::Browser,
@@ -319,6 +312,9 @@ impl HorizonApp {
         let panel_id = match self.board.create_panel(options, actor_panel.workspace_id) {
             Ok(panel_id) => panel_id,
             Err(error) => {
+                if let Some(recovery) = &recovery {
+                    recovery.cancel_before_launch();
+                }
                 tracing::error!(request_id = %request.request_id, %error, "failed to create requested browser panel");
                 complete_failure(
                     &request,
@@ -340,7 +336,7 @@ impl HorizonApp {
         for status in [BrowserCreateAuditStatus::Queued, BrowserCreateAuditStatus::Dispatched] {
             if let Err(error) = manifest::record_create_status(&panel_local_id, &request, backend, status) {
                 tracing::error!(request_id = %request.request_id, %error, "could not audit requested browser creation");
-                self.board.close_panel(panel_id);
+                self.close_panel(panel_id);
                 complete_failure(
                     &request,
                     "audit_failed",
@@ -488,7 +484,17 @@ impl HorizonApp {
     /// workspace membership current, so MCP authorization follows panel moves
     /// and visibility changes made through the UI.
     fn sync_browser_manifest_host_state(&self) -> HostStateSync {
-        sync_manifest_host_state(self.host_manifest_root(), &browser_placements(&self.board))
+        let placements = browser_placements(&self.board);
+        for placement in &placements {
+            if let Some(allocation) = self.panel_remote_allocation(&placement.local_id) {
+                allocation.expect_workspace(&placement.workspace.local_id);
+            }
+        }
+        sync_manifest_host_state(self.host_manifest_root(), &placements, |panel, confirmed| {
+            if let Some(allocation) = self.panel_remote_allocation(panel) {
+                allocation.confirm_scope(confirmed);
+            }
+        })
     }
 
     /// Whether an agent create for this panel has not completed yet.
@@ -529,7 +535,7 @@ impl HorizonApp {
                 BrowserCreateCompletion::Waiting => waiting.push(pending),
                 BrowserCreateCompletion::Completed => changed = true,
                 BrowserCreateCompletion::Failed => {
-                    self.board.close_panel(pending.panel_id);
+                    self.close_panel(pending.panel_id);
                     changed = true;
                 }
             }
@@ -588,21 +594,30 @@ fn browser_placements(board: &Board) -> Vec<BrowserPlacement> {
 /// do not make the sync incomplete; every I/O failure does (including a
 /// permission failure on the lock or the write), so the caller retries on
 /// the next frame.
-fn sync_manifest_host_state(root: &Path, placements: &[BrowserPlacement]) -> HostStateSync {
+fn sync_manifest_host_state(
+    root: &Path,
+    placements: &[BrowserPlacement],
+    mut confirm_scope: impl FnMut(&str, bool),
+) -> HostStateSync {
     let mut sync = HostStateSync {
         changed: false,
         complete: true,
     };
     for placement in placements {
         match manifest::sync_host_state_in(root, &placement.local_id, placement.visible, &placement.workspace) {
-            Ok(HostStampOutcome::Written) => sync.changed = true,
-            Ok(HostStampOutcome::Unchanged) => {}
+            Ok(HostStampOutcome::Written) => {
+                sync.changed = true;
+                confirm_scope(&placement.local_id, true);
+            }
+            Ok(HostStampOutcome::Unchanged) => confirm_scope(&placement.local_id, true),
             Ok(HostStampOutcome::NotOwned) => {
+                confirm_scope(&placement.local_id, false);
                 tracing::debug!(panel_id = %placement.local_id, "browser manifest belongs to another Horizon host");
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
                 sync.complete = false;
+                confirm_scope(&placement.local_id, false);
                 tracing::warn!(panel_id = %placement.local_id, %error, "could not synchronize browser host state");
             }
         }
@@ -1189,14 +1204,14 @@ mod tests {
             }]
         };
 
-        let first = sync_manifest_host_state(root.path(), &placements(&board, true));
+        let first = sync_manifest_host_state(root.path(), &placements(&board, true), |_, _| {});
         assert!(first.changed && first.complete);
         let stamped = manifest::read_at(&path).expect("stamped manifest");
         assert!(stamped.authorizes(AgentIdentity::new(&actor, Some(manifest::host_instance()))));
         assert!(!stamped.hidden);
 
         board.assign_panel_to_workspace(agent_id, beta);
-        let moved = sync_manifest_host_state(root.path(), &placements(&board, false));
+        let moved = sync_manifest_host_state(root.path(), &placements(&board, false), |_, _| {});
         assert!(moved.changed && moved.complete);
         let restamped = manifest::read_at(&path).expect("re-stamped manifest");
         assert!(
@@ -1205,7 +1220,7 @@ mod tests {
         );
         assert!(restamped.hidden, "visibility follows the board");
 
-        let steady = sync_manifest_host_state(root.path(), &placements(&board, false));
+        let steady = sync_manifest_host_state(root.path(), &placements(&board, false), |_, _| {});
         assert!(
             !steady.changed && steady.complete,
             "an unchanged placement writes nothing"
@@ -1216,11 +1231,45 @@ mod tests {
             visible: true,
             workspace: browser_workspace(&board, alpha).expect("alpha workspace"),
         }];
-        let sync = sync_manifest_host_state(root.path(), &missing);
+        let sync = sync_manifest_host_state(root.path(), &missing, |_, _| {});
         assert!(
             !sync.changed && sync.complete,
             "a manifest that is not live yet is not this host's to stamp"
         );
+    }
+
+    #[test]
+    fn failed_manifest_sync_revokes_recovery_but_missing_retired_manifests_do_not() {
+        let root = tempfile::tempdir().expect("root");
+        let path = manifest::manifest_path_for_root(root.path(), "browser-1");
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("directory");
+        std::fs::write(&path, "invalid manifest").expect("unreadable manifest fixture");
+        let placements = vec![BrowserPlacement {
+            local_id: "browser-1".into(),
+            visible: true,
+            workspace: ManifestWorkspace::new(manifest::host_instance(), "workspace", Vec::new()),
+        }];
+        let allocation = horizon_core::browser::RemoteAllocation::default();
+        allocation.mark_published();
+        allocation.retain_scope(horizon_browser::RemoteAllocationScope {
+            admission_fallback: false,
+            host: manifest::host_instance().into(),
+            workspace: Some("workspace".into()),
+            owner: Some("owner".into()),
+        });
+        let sync = sync_manifest_host_state(root.path(), &placements, |_, confirmed| {
+            allocation.confirm_scope(confirmed);
+        });
+        assert!(!sync.complete);
+        assert_eq!(
+            allocation.status_for(manifest::host_instance(), "owner", "workspace", true),
+            None
+        );
+        std::fs::remove_file(&path).expect("simulate completed teardown");
+        let sync = sync_manifest_host_state(root.path(), &placements, |_, _| {
+            panic!("absence must preserve the existing retirement decision");
+        });
+        assert!(sync.complete);
     }
 
     #[test]

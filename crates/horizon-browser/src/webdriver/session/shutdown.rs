@@ -15,6 +15,8 @@ use super::Driver;
 
 pub(super) struct Completion {
     tx: Option<mpsc::Sender<()>>,
+    recovery: Option<crate::RemoteAllocation>,
+    release: crate::session::RemoteReleaseReport,
     process: ChromeProcessControl,
     pub(super) group: Option<super::super::FirefoxReservation>,
 }
@@ -22,11 +24,15 @@ pub(super) struct Completion {
 impl Completion {
     pub(super) fn new(
         tx: mpsc::Sender<()>,
+        recovery: Option<crate::RemoteAllocation>,
+        release: crate::session::RemoteReleaseReport,
         process: ChromeProcessControl,
         group: Option<super::super::FirefoxReservation>,
     ) -> Self {
         Self {
             tx: Some(tx),
+            recovery,
+            release,
             process,
             group,
         }
@@ -35,6 +41,14 @@ impl Completion {
 
 impl Drop for Completion {
     fn drop(&mut self) {
+        if let Some(recovery) = &self.recovery {
+            recovery.finish(
+                self.release
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .as_ref(),
+            );
+        }
         drop(self.group.take());
         self.process.mark_registration_settled();
         if let Some(tx) = self.tx.take() {

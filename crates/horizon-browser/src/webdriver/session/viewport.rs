@@ -295,6 +295,7 @@ mod tests {
         // a process. The real Firefox resize and event paths run below; remote
         // capability admission is intentionally not part of this fixture.
         let request = crate::RemoteSessionRequest {
+            recovery: crate::RemoteAllocation::default(),
             endpoint: classic.endpoint(""),
             authorization: None,
             capabilities: json!({}),

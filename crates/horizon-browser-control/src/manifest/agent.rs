@@ -331,6 +331,7 @@ pub(super) fn append_rejected_actions(panel_local_id: &str, actions: Vec<AgentAc
 }
 
 fn set_owner(manifest: &mut BrowserManifest, agent_name: &str, tty: Option<&str>, now: i64) {
+    manifest.ownership_established = Some(true);
     manifest.owner = Some(ManifestOwner {
         name: agent_name.to_string(),
         tty: tty.map(str::to_string),
@@ -629,6 +630,7 @@ mod tests {
             &path,
             &BrowserManifest {
                 panel_local_id: "panel".to_string(),
+                ownership_established: Some(true),
                 owner: Some(ManifestOwner {
                     name: "agent-a".to_string(),
                     tty: None,
@@ -656,6 +658,7 @@ mod tests {
         assert!(release_at(&path, "panel", "agent-a").unwrap());
         let released = super::super::read_at(&path).unwrap();
         assert!(released.owner.is_none());
+        assert_eq!(released.ownership_established, Some(true));
         assert!(released.handoff.is_none());
         assert!(!release_at(&path, "panel", "agent-a").unwrap());
     }

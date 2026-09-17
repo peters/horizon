@@ -139,7 +139,13 @@ pub(crate) fn run_webdriver(
         remote_release,
     } = teardown;
     let process_control = launch.process_control;
-    let completion = Completion::new(completion_tx, process_control.clone(), launch.group);
+    let completion = Completion::new(
+        completion_tx,
+        config.remote.as_ref().map(|r| r.recovery.clone()),
+        Arc::clone(&remote_release),
+        process_control.clone(),
+        launch.group,
+    );
     let Some(_coordination_lifetime) = crate::coordination::CoordinationLifetime::start(config) else {
         let _ = event_tx.send(BrowserEvent::Warning(crate::coordination::PREPARE_FAILURE.to_string()));
         let _ = event_tx.send(BrowserEvent::Stopped { code: None });
@@ -580,6 +586,7 @@ mod tests {
             committed_url: crate::session::CommittedUrl::default(),
         };
         let request = super::super::remote::RemoteSessionRequest {
+            recovery: crate::RemoteAllocation::default(),
             endpoint: "http://grid.example.net/wd/hub".to_string(),
             authorization: None,
             capabilities: serde_json::json!({}),

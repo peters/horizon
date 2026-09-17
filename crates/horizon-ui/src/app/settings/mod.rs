@@ -2,6 +2,7 @@ mod bar;
 mod general;
 mod presets;
 mod remote_browsers;
+mod remote_recovery;
 mod shortcuts;
 mod speech;
 #[cfg(test)]
@@ -159,6 +160,7 @@ impl HorizonApp {
                 editor,
                 &mut self.speech_model_info_cache,
                 &mut self.remote_browser_credentials,
+                &mut self.browser_create_host.remote_allocations,
             );
         }
     }
@@ -307,6 +309,7 @@ fn render_settings_panel(
     editor: &mut SettingsEditor,
     model_info_cache: &mut speech::SpeechModelInfoCache,
     credentials: &mut CredentialWorkbench,
+    allocations: &mut horizon_core::browser::remote_recovery::RemoteAllocations,
 ) {
     let viewport_width = util::viewport_local_rect(ui).width();
     let default_width = settings_panel_default_width(viewport_width);
@@ -333,7 +336,7 @@ fn render_settings_panel(
                 SettingsTab::Yaml => {
                     yaml_editor::render(ui, config_path, &mut editor.buffer, available);
                 }
-                tab => render_gui_tab(ui, tab, editor, model_info_cache, credentials, available),
+                tab => render_gui_tab(ui, tab, editor, model_info_cache, credentials, allocations, available),
             }
         });
 }
@@ -344,6 +347,7 @@ fn render_gui_tab(
     editor: &mut SettingsEditor,
     model_info_cache: &mut speech::SpeechModelInfoCache,
     credentials: &mut CredentialWorkbench,
+    allocations: &mut horizon_core::browser::remote_recovery::RemoteAllocations,
     available: Vec2,
 ) {
     let SettingsEditor {
@@ -371,6 +375,7 @@ fn render_gui_tab(
                 SettingsTab::Shortcuts => shortcuts::render(ui, config),
                 SettingsTab::Presets => presets::render(ui, config),
                 SettingsTab::RemoteBrowsers => {
+                    remote_recovery::render(ui, allocations);
                     remote_browsers::render(ui, config, credentials, credential_inputs, portable_profile)
                 }
                 // Yaml is handled before this function is called.

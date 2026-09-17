@@ -11,6 +11,7 @@ pub use remote_identity::RemoteIdentityDisplay;
 mod remote_panel;
 pub use remote_panel::RemoteFailure;
 pub mod remote_profile;
+pub mod remote_recovery;
 pub mod remote_session;
 pub mod remote_slots;
 mod shared_session;
@@ -31,7 +32,8 @@ pub use horizon_browser::{
     BrowserEditCommand, BrowserEvent, BrowserEventWaker, BrowserInput, BrowserKey, BrowserModifiers, BrowserSession,
     BrowserShutdownSignal, BrowserVideoCapture, BrowserVideoCaptureOptions, BrowserVideoOperation, BrowserVideoState,
     DEFAULT_VIEWPORT, FrameDelivery, FrameMetrics, FrameSlot, NativeSelectOption, NativeSelectPopup, PageScrollState,
-    RemoteReleaseOutcome, RemoteSessionEvent, RemoteSessionRequest, normalize_navigation_target,
+    RemoteAllocation, RemoteRecoveryStatus, RemoteReleaseOutcome, RemoteSessionEvent, RemoteSessionRequest,
+    normalize_navigation_target,
 };
 const FORCED_CHROME_SHUTDOWN_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
 
@@ -385,11 +387,14 @@ impl BrowserPanelState {
             // numbers stay monotonic, so a retried session's first frame is
             // never mistaken for an unchanged one by the UI's seq check.
             frame_slot: Arc::clone(&self.frame_slot),
-            coordination: Some(Arc::new(manifest::ManifestCoordination::default())),
+            coordination: Some(Arc::new(manifest::ManifestCoordination::with_remote_allocation(
+                remote.as_ref().map(|request| request.recovery.clone()),
+            ))),
             capture_directory: Some(capture_directory),
             video: Arc::new(horizon_browser::VideoCaptureHandle::default()),
             remote,
         };
+        let recovery = session_config.remote.as_ref().map(|request| request.recovery.clone());
         let started = if let Some(group) = &self.shared_session {
             session::start_shared_session(session_config, group.as_ref().clone())
         } else {
@@ -408,6 +413,9 @@ impl BrowserPanelState {
                 self.session = Some(Box::new(handle));
             }
             Err(error) => {
+                if let Some(recovery) = recovery {
+                    recovery.cancel_before_launch();
+                }
                 self.status = BrowserStatus::Error {
                     message: error.to_string(),
                 };

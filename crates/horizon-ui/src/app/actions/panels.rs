@@ -76,6 +76,7 @@ impl HorizonApp {
         &mut self,
         panel_id: PanelId,
     ) -> Option<horizon_core::browser::BrowserShutdownSignal> {
+        self.refresh_remote_recovery_scope();
         let transcript = self
             .board
             .panel(panel_id)
@@ -93,6 +94,7 @@ impl HorizonApp {
     }
 
     pub(in crate::app) fn close_workspace_panels(&mut self, workspace_id: WorkspaceId) {
+        self.refresh_remote_recovery_scope();
         let panels_to_close: Vec<_> = self
             .board
             .workspace(workspace_id)

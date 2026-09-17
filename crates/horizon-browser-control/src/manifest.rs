@@ -46,6 +46,7 @@ mod audit;
 mod capture;
 mod close;
 mod create;
+pub mod recovery;
 mod request_queue;
 mod result;
 mod visibility;
@@ -156,6 +157,10 @@ pub struct BrowserManifest {
     pub audit_path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner: Option<ManifestOwner>,
+    /// Sticky ownership history for exact-allocation recovery. Missing history
+    /// from older writers is unknown and cannot authorize admission fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ownership_established: Option<bool>,
     pub user_active: bool,
     pub user_active_at: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -332,20 +337,31 @@ pub fn write_at(path: &Path, manifest: &BrowserManifest) -> std::io::Result<()> 
 /// Fails when the lock or manifest write cannot be completed.
 pub(crate) fn initialize(
     panel_local_id: &str,
+    allocation: Option<&horizon_browser::RemoteAllocation>,
     update: impl FnOnce(&mut BrowserManifest),
 ) -> std::io::Result<BrowserManifest> {
-    initialize_at(&default_manifest_path(panel_local_id), panel_local_id, update)
+    initialize_at(
+        &default_manifest_path(panel_local_id),
+        panel_local_id,
+        allocation,
+        update,
+    )
 }
 
 fn initialize_at(
     path: &Path,
     panel_local_id: &str,
+    allocation: Option<&horizon_browser::RemoteAllocation>,
     update: impl FnOnce(&mut BrowserManifest),
 ) -> std::io::Result<BrowserManifest> {
-    mutate_at(path, panel_local_id, true, |manifest| {
+    let manifest = mutate_at(path, panel_local_id, true, |manifest| {
         update(manifest);
         true
-    })
+    })?;
+    if let Some(allocation) = allocation {
+        allocation.mark_published();
+    }
+    Ok(manifest)
 }
 
 /// Atomically read, mutate, and replace one manifest while holding the
@@ -494,6 +510,7 @@ fn remove_owned_at_with_timeout(
     host: &str,
     timeout: Duration,
     prune_owned_storage: impl FnOnce(Duration) -> std::io::Result<()>,
+    retain_scope: impl FnOnce(&BrowserManifest),
 ) -> std::io::Result<bool> {
     let deadline = Instant::now() + timeout;
     if let Some(parent) = path.parent() {
@@ -504,14 +521,16 @@ fn remove_owned_at_with_timeout(
     // Only a present manifest that names this host proves ownership; a
     // missing file or a host-less manifest written by an older Horizon that
     // adopted the id is left untouched.
-    if read_at(path).is_none_or(|manifest| manifest.host.as_deref() != Some(host)) {
+    let Some(manifest) = read_at(path).filter(|manifest| manifest.host.as_deref() == Some(host)) else {
         tracing::debug!(target: "browser", path = %path.display(), "leaving browser manifest this host does not own");
         return Ok(false);
-    }
+    };
     prune_owned_storage(deadline.saturating_duration_since(Instant::now()))?;
     match std::fs::remove_file(path) {
-        Ok(()) => Ok(true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Ok(()) => {
+            retain_scope(&manifest);
+            Ok(true)
+        }
         Err(error) => Err(error),
     }
 }
@@ -640,11 +659,20 @@ fn remove_at_with_timeout(path: &Path, timeout: Duration) -> std::io::Result<()>
 /// coordination boundary.
 #[derive(Debug, Default)]
 pub struct ManifestCoordination {
+    remote_allocation: Option<horizon_browser::RemoteAllocation>,
     audit: audit::AuditSink,
     retained_results: Mutex<BTreeMap<String, Vec<String>>>,
 }
 
 impl ManifestCoordination {
+    #[must_use]
+    pub fn with_remote_allocation(remote_allocation: Option<horizon_browser::RemoteAllocation>) -> Self {
+        Self {
+            remote_allocation,
+            ..Self::default()
+        }
+    }
+
     fn remove_at(&self, root: &Path, panel_local_id: &str, host: &str, timeout: Duration) -> Option<bool> {
         let retained_action_id = self
             .retained_results
@@ -653,14 +681,24 @@ impl ManifestCoordination {
             .get(panel_local_id)
             .cloned();
         let path = manifest_path_for_root(root, panel_local_id);
-        match remove_owned_at_with_timeout(&path, host, timeout, |remaining| {
-            result::remove_stale_except_at(
-                root,
-                panel_local_id,
-                retained_action_id.as_deref().unwrap_or_default(),
-                remaining,
-            )
-        }) {
+        match remove_owned_at_with_timeout(
+            &path,
+            host,
+            timeout,
+            |remaining| {
+                result::remove_stale_except_at(
+                    root,
+                    panel_local_id,
+                    retained_action_id.as_deref().unwrap_or_default(),
+                    remaining,
+                )
+            },
+            |manifest| {
+                if let Some(allocation) = &self.remote_allocation {
+                    recovery::retain_scope(allocation, manifest, host);
+                }
+            },
+        ) {
             Ok(owned) => {
                 self.retained_results
                     .lock()
@@ -688,7 +726,7 @@ impl horizon_browser::BrowserCoordination for ManifestCoordination {
     }
 
     fn initialize(&self, panel_local_id: &str, state: &horizon_browser::CoordinationState) -> std::io::Result<()> {
-        initialize(panel_local_id, |manifest| {
+        initialize(panel_local_id, self.remote_allocation.as_ref(), |manifest| {
             manifest.panel_local_id = panel_local_id.to_string();
             adopt_driver_host(manifest, host_instance());
             manifest.backend = state.backend;
@@ -851,6 +889,7 @@ fn adopt_driver_host(manifest: &mut BrowserManifest, host: &str) {
     if manifest.host.as_deref() != Some(host) {
         manifest.workspace = None;
         manifest.owner = None;
+        manifest.ownership_established = Some(false);
         manifest.actions.clear();
         manifest.handoff = None;
         manifest.host = Some(host.to_string());
@@ -906,6 +945,7 @@ mod tests {
             host: None,
             audit_path: String::new(),
             owner: None,
+            ownership_established: None,
             user_active: false,
             user_active_at: 0,
             handoff: None,
@@ -1112,7 +1152,7 @@ mod tests {
         let root = test_root();
         let path = manifest_path_for_root(&root, "initialize");
 
-        let manifest = initialize_at(&path, "initialize", |manifest| {
+        let manifest = initialize_at(&path, "initialize", None, |manifest| {
             manifest.browser_ws = "ws://127.0.0.1:2/devtools/browser/y".to_string();
         })
         .unwrap();
@@ -1225,17 +1265,17 @@ mod tests {
         assert!(effect_ran);
 
         assert!(
-            !remove_owned_at_with_timeout(&path, "host-a", Duration::from_secs(1), |_| Ok(())).unwrap(),
+            !remove_owned_at_with_timeout(&path, "host-a", Duration::from_secs(1), |_| Ok(()), |_| {}).unwrap(),
             "a superseded driver's teardown reports the manifest as not its own"
         );
         assert!(
             path.exists(),
             "a superseded driver's teardown leaves the adopted manifest"
         );
-        assert!(remove_owned_at_with_timeout(&path, "host-b", Duration::from_secs(1), |_| Ok(())).unwrap());
+        assert!(remove_owned_at_with_timeout(&path, "host-b", Duration::from_secs(1), |_| Ok(()), |_| {}).unwrap());
         assert!(!path.exists());
         assert!(
-            !remove_owned_at_with_timeout(&path, "host-b", Duration::from_secs(1), |_| Ok(())).unwrap(),
+            !remove_owned_at_with_timeout(&path, "host-b", Duration::from_secs(1), |_| Ok(()), |_| {}).unwrap(),
             "a missing manifest proves nothing about driver ownership"
         );
         assert_eq!(
@@ -1247,7 +1287,7 @@ mod tests {
 
         let legacy = manifest_path_for_root(&root, "legacy");
         write_at(&legacy, &sample("legacy")).unwrap();
-        assert!(!remove_owned_at_with_timeout(&legacy, "host-a", Duration::from_secs(1), |_| Ok(())).unwrap());
+        assert!(!remove_owned_at_with_timeout(&legacy, "host-a", Duration::from_secs(1), |_| Ok(()), |_| {}).unwrap());
         assert!(
             legacy.exists(),
             "a host-less manifest may belong to an older Horizon that adopted the id, so teardown leaves it"

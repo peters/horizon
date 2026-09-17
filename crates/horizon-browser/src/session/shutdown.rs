@@ -25,6 +25,7 @@ pub struct BrowserShutdownSignal {
     completion_rx: mpsc::Receiver<()>,
     remote_release: RemoteReleaseReport,
     remote_provider: Option<String>,
+    remote_recovery: Option<crate::RemoteAllocation>,
     remote_quota_key: Option<String>,
     driver_complete: AtomicBool,
     process_complete: AtomicBool,
@@ -51,6 +52,16 @@ enum ProfileCleanupState {
 const PROFILE_CLEANUP_RETRY_DELAY: Duration = Duration::from_secs(1);
 
 impl BrowserShutdownSignal {
+    pub(super) fn with_remote_recovery(mut self, recovery: Option<crate::RemoteAllocation>) -> Self {
+        self.remote_recovery = recovery;
+        self
+    }
+
+    #[must_use]
+    pub fn remote_recovery(&self) -> Option<crate::RemoteAllocation> {
+        self.remote_recovery.clone()
+    }
+
     pub(super) fn running(
         completion_rx: mpsc::Receiver<()>,
         remote_release: RemoteReleaseReport,
@@ -64,6 +75,7 @@ impl BrowserShutdownSignal {
             completion_rx,
             remote_release,
             remote_provider,
+            remote_recovery: None,
             remote_quota_key,
             driver_complete: AtomicBool::new(false),
             process_complete: AtomicBool::new(false),
@@ -100,6 +112,7 @@ impl BrowserShutdownSignal {
             completion_rx,
             remote_release: RemoteReleaseReport::default(),
             remote_provider: None,
+            remote_recovery: None,
             remote_quota_key: None,
             driver_complete: AtomicBool::new(true),
             process_complete: AtomicBool::new(true),
@@ -145,7 +158,12 @@ impl BrowserShutdownSignal {
     /// provider may still be about to ask. Local browsers never hold one.
     #[must_use]
     pub fn holds_remote_allocation(&self) -> bool {
-        if self.remote_provider.is_none() {
+        if self.remote_provider.is_none()
+            || self
+                .remote_recovery
+                .as_ref()
+                .is_some_and(crate::RemoteAllocation::is_released)
+        {
             return false;
         }
         match self.remote_release() {
@@ -305,6 +323,7 @@ impl BrowserShutdownSignal {
             completion_rx,
             remote_release: Arc::new(Mutex::new(release)),
             remote_provider: Some(provider.to_string()),
+            remote_recovery: None,
             remote_quota_key: Some(provider.to_string()),
             driver_complete: AtomicBool::new(true),
             process_complete: AtomicBool::new(true),
@@ -326,6 +345,7 @@ impl BrowserShutdownSignal {
             completion_rx,
             remote_release: RemoteReleaseReport::default(),
             remote_provider: None,
+            remote_recovery: None,
             remote_quota_key: None,
             driver_complete: AtomicBool::new(false),
             process_complete: AtomicBool::new(false),

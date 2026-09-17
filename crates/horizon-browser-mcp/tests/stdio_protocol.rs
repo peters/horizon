@@ -145,7 +145,7 @@ fn listed_tool<'a>(tools: &'a Value, name: &str) -> &'a Value {
 
 fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     let encoded_tools = tools.to_string();
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(19));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(20));
     let resize = listed_tool(tools, "browser_resize");
     for field in ["panel_id", "width", "height", "reset", "timeout_millis"] {
         assert!(
@@ -208,6 +208,14 @@ fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
         visibility["description"]
             .as_str()
             .is_some_and(|description| description.contains("without stopping"))
+    );
+    let recovery = listed_tool(tools, "browser_remote_allocations");
+    assert!(recovery["inputSchema"]["properties"].get("operation").is_some());
+    assert!(recovery["inputSchema"]["properties"].get("reference").is_some());
+    assert!(
+        recovery["description"]
+            .as_str()
+            .is_some_and(|text| text.contains("exact-session absence"))
     );
     let close = listed_tool(tools, "browser_close");
     assert!(

@@ -189,3 +189,11 @@ session; the canvas panel letterboxes it. Call `browser_resize` with
 clears the pin. A timeout/failure may follow a backend mutation: inspect the
 page or retry rather than assuming no change. `browser_video` max_width and
 codec alignment affect encoding only. Reacquire semantic refs after resizing.
+
+For capacity retained after a remote panel disappears, use
+`browser_remote_allocations` with `operation: list`, then `operation: reconcile`
+and one returned `reference`. This checks only the exact retired allocation
+at its original provider. Active, unidentified, or uncertain sessions retain
+their holds. Repeated reconciliation is safe; never infer release from an
+empty panel list or account-wide session counts. The user can also reconcile
+in Settings > Remote browsers.

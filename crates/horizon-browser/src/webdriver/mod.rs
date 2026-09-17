@@ -12,6 +12,7 @@ mod transport;
 
 pub use http::HttpError;
 pub use remote::identity::{DeviceEvidence, DeviceEvidenceSource, RemoteDeviceIdentity};
+pub use remote::recovery::{RemoteAllocation, RemoteAllocationScope, RemoteRecoveryStatus};
 pub use remote::{
     AllocationRefusal, RemoteExpiry, RemoteReleaseOutcome, RemoteSessionEvent, RemoteSessionRequest, RemoteStartFailure,
 };

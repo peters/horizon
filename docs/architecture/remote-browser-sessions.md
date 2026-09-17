@@ -269,3 +269,25 @@ as a ready state.
    demonstrated differences.
 6. Evidence and documentation: setup examples, rotation, support matrix,
    measured latency, real-device smoke including provider-side release.
+
+
+### Recovery after a panel disappears
+
+`browser_remote_allocations` lists allocations owned by the calling agent in
+its current workspace. `operation: reconcile` with a returned safe `reference`
+checks the exact retired session using its original transport and authorization.
+Settings > Remote browsers exposes the same operation for the host user.
+
+The engine keeps private session identity in a shared `RemoteAllocation` handle,
+including allocations rejected during startup. Driver completion makes the handle
+eligible for a bounded asynchronous probe. Core's `RemoteAllocations` registry
+associates each handle with its own quota lease and retained owner/workspace scope.
+Board retirement and session switching retain the handle; no credentials or raw
+provider session identifiers are written to the public request/result queue.
+
+An exact invalid-session response frees that allocation's lease. Active sessions,
+missing identity, rejected original credentials, outages, malformed responses,
+and nonspecific HTTP 404s keep capacity held. Credential replacement never retargets
+an old allocation to a new account or origin. Released entries remain idempotently
+queryable in a bounded history of 128 records; unresolved records are never evicted.
+Recovery does not reconstruct identities discarded by an older running binary.

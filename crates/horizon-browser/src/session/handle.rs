@@ -143,6 +143,7 @@ impl BrowserSession {
             self.panel_local_id,
             self.coordination,
         )
+        .with_remote_recovery(self.remote_recovery)
     }
 
     /// Return the existing teardown-completion signal after the driver has
@@ -159,6 +160,7 @@ impl BrowserSession {
             self.panel_local_id,
             self.coordination,
         )
+        .with_remote_recovery(self.remote_recovery)
     }
 
     #[must_use]
@@ -244,6 +246,7 @@ mod tests {
                 completion_rx,
                 remote_release: crate::session::RemoteReleaseReport::default(),
                 remote_provider: None,
+                remote_recovery: None,
                 remote_quota_key: None,
                 event_wake: BrowserEventWake::default(),
                 committed_url: CommittedUrl::default(),

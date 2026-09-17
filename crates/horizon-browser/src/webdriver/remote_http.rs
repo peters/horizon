@@ -132,14 +132,14 @@ impl fmt::Debug for RemoteHttpClient {
     }
 }
 
-impl ClassicTransport for RemoteHttpClient {
-    fn request(
+impl RemoteHttpClient {
+    pub(super) fn request_bytes(
         &self,
         method: &str,
         path: &str,
         body: Option<&Value>,
         read_timeout: Duration,
-    ) -> Result<Value, HttpError> {
+    ) -> Result<(u16, Vec<u8>), HttpError> {
         let url = self.url(path)?;
         let timeout = read_timeout;
         let authorization = self.authorization.as_ref().map(RemoteAuthorizationHeader::value);
@@ -166,6 +166,13 @@ impl ClassicTransport for RemoteHttpClient {
                 ureq::Error::BodyExceedsLimit(_) => HttpError::InvalidResponse("response exceeded 64 MiB".into()),
                 other => map_transport_error(other),
             })?;
+        Ok((status, bytes))
+    }
+}
+
+impl ClassicTransport for RemoteHttpClient {
+    fn request(&self, method: &str, path: &str, body: Option<&Value>, timeout: Duration) -> Result<Value, HttpError> {
+        let (status, bytes) = self.request_bytes(method, path, body, timeout)?;
         interpret_body(status, &bytes)
     }
 }
