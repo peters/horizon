@@ -199,6 +199,8 @@ pub struct Terminal {
     event_rx: mpsc::Receiver<Event>,
     event_loop_handle: Option<JoinHandle<(TerminalEventLoop, TerminalEventLoopState)>>,
     child_pid: Option<u32>,
+    #[cfg(target_os = "linux")]
+    child_start_time: Option<u64>,
     rows: u16,
     cols: u16,
     cell_width: u16,

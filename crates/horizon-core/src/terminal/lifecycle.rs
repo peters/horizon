@@ -61,6 +61,8 @@ impl Terminal {
         let child_pid = Some(pty.child().id());
         #[cfg(windows)]
         let child_pid = None;
+        #[cfg(target_os = "linux")]
+        let child_start_time = child_pid.and_then(process_start_time);
         let event_loop = EventLoop::new(term.clone(), event_loop_proxy, pty, true, false)
             .map_err(|error| Error::Pty(format!("failed to initialize terminal event loop: {error}")))?;
         let event_sender = event_loop.channel();
@@ -74,6 +76,8 @@ impl Terminal {
             event_sender,
             event_rx,
             event_loop_handle,
+            #[cfg(target_os = "linux")]
+            child_start_time,
             child_pid,
             rows,
             cols,
@@ -163,6 +167,25 @@ impl Terminal {
         }
     }
 
+    pub(crate) fn owned_process_id(&self) -> Option<u32> {
+        if !self.work_continuation.owns_process
+            || self.child_exited
+            || self.shutdown_complete.load(Ordering::Acquire)
+            || self
+                .event_loop_handle
+                .as_ref()
+                .is_none_or(std::thread::JoinHandle::is_finished)
+        {
+            return None;
+        }
+        let pid = self.child_pid?;
+        #[cfg(target_os = "linux")]
+        if self.child_start_time.is_none() || process_start_time(pid) != self.child_start_time {
+            return None;
+        }
+        Some(pid)
+    }
+
     #[must_use]
     pub fn shutdown_with_timeout(&mut self, timeout: Duration) -> bool {
         self.request_shutdown();
@@ -234,4 +257,16 @@ impl Drop for Terminal {
         // starting up or the PTY is stuck on I/O.
         drop(self.event_loop_handle.take());
     }
+}
+
+#[cfg(target_os = "linux")]
+fn process_start_time(pid: u32) -> Option<u64> {
+    std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .ok()?
+        .rsplit_once(')')?
+        .1
+        .split_whitespace()
+        .nth(19)?
+        .parse()
+        .ok()
 }

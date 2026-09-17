@@ -102,6 +102,7 @@ impl Panel {
         super::work_resume::shutdown_for_restart(
             self.terminal_mut()
                 .ok_or_else(|| Error::State("No terminal to restart".into()))?,
+            work_brief.is_some(),
         )?;
         let work = self.prepare_restart_work(owned.as_deref(), &mut launch_args, &mut env, work_brief.as_deref())?;
         self.content = PanelContent::Terminal(Terminal::spawn(TerminalSpawnOptions {

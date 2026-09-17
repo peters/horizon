@@ -86,6 +86,8 @@ impl Panel {
     ) -> Result<Option<String>> {
         if brief.is_some() {
             self.check_saved_work_session()?;
+            let owned_pid = self.terminal().and_then(crate::terminal::Terminal::owned_process_id);
+            self.check_work_session_exit(owned_pid)?;
         }
         let owned = self
             .launch_args
@@ -112,6 +114,10 @@ impl Panel {
             .ok_or_else(|| Error::State("Missing conversation identity".into()))?;
         let exists = if self.kind == PanelKind::Claude {
             saved_claude_history(&binding.session_id).is_some()
+        } else if self.kind == PanelKind::Pi {
+            saved_pi_history(&binding.session_id).is_some()
+        } else if self.kind == PanelKind::Grok {
+            saved_grok_history(&binding.session_id).is_some()
         } else {
             // Scope discovery to this provider and preserve the confirmed exact
             // ID; bootstrap aliases must never silently retarget a continuation.
@@ -148,7 +154,7 @@ impl Panel {
         brief: Option<&str>,
     ) -> Result<RestartWork> {
         if brief.is_some() {
-            self.check_work_session_exit()?;
+            self.check_work_session_exit(None)?;
         }
         let work_owner = self.work_launch().attach(owned, args, env);
         let work_state = self.prepare_work_process(args, owned);
@@ -204,15 +210,15 @@ impl Panel {
         Ok(Some("The user selected Resume work in Horizon for this conversation. Re-read the latest user request and current conversation, then continue only the work already authorized. Re-verify the working tree, tool side effects, and background processes; interrupted tools may have partially completed. This does not answer pending questions or grant tool permissions. Ask the user if approval or a decision is still needed.".into()))
     }
 
-    fn check_work_session_exit(&self) -> Result<()> {
+    fn check_work_session_exit(&self, owned_pid: Option<u32>) -> Result<()> {
         if self.kind == PanelKind::Claude
             && self
                 .session_binding
                 .as_ref()
-                .is_some_and(|binding| crate::runtime_state::live_claude_session_ids().contains(&binding.session_id))
+                .is_some_and(|binding| competing_session(&binding.session_id, owned_pid) != Some(false))
         {
             return Err(Error::State(
-                "This conversation is still open in another process.".into(),
+                "This conversation may still be open in another process.".into(),
             ));
         }
         Ok(())
@@ -226,6 +232,46 @@ impl Panel {
         }
         Ok(())
     }
+}
+
+fn competing_session(session: &str, owned_pid: Option<u32>) -> Option<bool> {
+    use std::io::Read;
+
+    let directory = crate::local_store::user_home_dir()?.join(".claude/sessions");
+    let entries = match std::fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Some(false),
+        Err(_) => return None,
+    };
+    for (index, entry) in entries.enumerate() {
+        if index >= 4096 {
+            return None;
+        }
+        let path = entry.ok()?.path();
+        if path.extension().is_none_or(|extension| extension != "json") {
+            continue;
+        }
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)
+            .ok()?
+            .take(64 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .ok()?;
+        if bytes.len() > 64 * 1024 {
+            return None;
+        }
+        let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+        if value.get("sessionId")?.as_str()? != session {
+            continue;
+        }
+        let pid = u32::try_from(value.get("pid")?.as_u64()?).ok().filter(|pid| *pid > 0)?;
+        if Some(pid) != owned_pid
+            && (!cfg!(target_os = "linux") || std::path::Path::new(&format!("/proc/{pid}")).try_exists().ok()?)
+        {
+            return Some(true);
+        }
+    }
+    Some(false)
 }
 
 fn saved_claude_history(session_id: &str) -> Option<()> {
@@ -277,10 +323,8 @@ fn saved_claude_history(session_id: &str) -> Option<()> {
 fn saved_session_backing_exists(session: &crate::runtime_state::AgentSessionRecord) -> bool {
     match session.kind {
         PanelKind::Codex => saved_rollout_header(&session.session_id).is_some(),
-        PanelKind::Grok => saved_grok_history(session).is_some(),
-        // The Pi catalog reads the session file; the OpenCode database is its
-        // authoritative session store rather than a separate search index.
-        PanelKind::Pi | PanelKind::OpenCode => true,
+        // This database is the authoritative store rather than a search index.
+        PanelKind::OpenCode => true,
         _ => false,
     }
 }
@@ -301,22 +345,30 @@ fn saved_rollout_header(session_id: &str) -> Option<()> {
     if !path.is_absolute() {
         return None;
     }
-    let header = readable_session_header(path)?;
-    (header.get("type")?.as_str()? == "session_meta" && header.get("payload")?.get("id")?.as_str()? == session_id)
-        .then_some(())
+    let header = session_metadata(path, PanelKind::Codex, &mut (1024 * 1024))?;
+    (header.get("payload")?.get("id")?.as_str()? == session_id).then_some(())
 }
 
-fn saved_grok_history(session: &crate::runtime_state::AgentSessionRecord) -> Option<()> {
+fn saved_grok_history(session_id: &str) -> Option<()> {
     use std::path::{Component, Path, PathBuf};
 
-    let mut components = Path::new(&session.session_id).components();
+    let mut components = Path::new(session_id).components();
     if !matches!(components.next(), Some(Component::Normal(_)))
         || components.next().is_some()
-        || session.session_id.contains(['/', '\\'])
+        || session_id.contains(['/', '\\'])
     {
         return None;
     }
-    let cwd = Path::new(session.cwd.as_deref()?);
+    let connection = crate::local_store::open_read_only_sqlite(&crate::local_store::grok_sessions_db_path()?).ok()?;
+    let mut query = connection
+        .prepare("SELECT substr(cwd, 1, 4097) FROM session_docs WHERE session_id = ?1 LIMIT 2")
+        .ok()?;
+    let mut rows = query.query([session_id]).ok()?;
+    let cwd: String = rows.next().ok()??.get(0).ok()?;
+    if cwd.len() > 4096 || rows.next().ok()?.is_some() {
+        return None;
+    }
+    let cwd = Path::new(cwd.trim()).components().collect::<PathBuf>();
     let directory = crate::local_store::grok_home_dir()?.join("sessions");
     for entry in std::fs::read_dir(directory).ok()?.take(4096) {
         let entry = entry.ok()?;
@@ -334,12 +386,100 @@ fn saved_grok_history(session: &crate::runtime_state::AgentSessionRecord) -> Opt
         {
             continue;
         }
-        let header = readable_session_header(&entry.path().join(&session.session_id).join("chat_history.jsonl"))?;
-        header.get("type")?.as_str()?;
-        header.get("content")?;
-        return Some(());
+        let header = readable_session_header(&entry.path().join(session_id).join("chat_history.jsonl"))?;
+        let content = header.get("content")?;
+        return match header.get("type")?.as_str()? {
+            "system" | "assistant" | "tool_result" => content.is_string(),
+            "user" => {
+                content.is_string()
+                    || content.as_array().is_some_and(|parts| {
+                        !parts.is_empty()
+                            && parts.iter().all(|part| {
+                                part.get("type").and_then(serde_json::Value::as_str) == Some("text")
+                                    && part.get("text").is_some_and(serde_json::Value::is_string)
+                            })
+                    })
+            }
+            _ => false,
+        }
+        .then_some(());
     }
     None
+}
+
+fn saved_pi_history(session_id: &str) -> Option<()> {
+    let root = crate::local_store::user_home_dir()?.join(".pi/agent/sessions");
+    let mut entries_left = 4096_usize;
+    let mut bytes_left = 32 * 1024 * 1024;
+    let mut found = false;
+    for directory in std::fs::read_dir(root).ok()? {
+        entries_left = entries_left.checked_sub(1)?;
+        let directory = directory.ok()?;
+        if !directory.file_type().ok()?.is_dir() {
+            continue;
+        }
+        for entry in std::fs::read_dir(directory.path()).ok()? {
+            entries_left = entries_left.checked_sub(1)?;
+            let entry = entry.ok()?;
+            let file_type = entry.file_type().ok()?;
+            if file_type.is_file() && entry.path().extension().is_some_and(|extension| extension == "jsonl") {
+                let header = session_metadata(&entry.path(), PanelKind::Pi, &mut bytes_left);
+                if let Some(header) = header
+                    && header.get("id").and_then(serde_json::Value::as_str) == Some(session_id)
+                {
+                    if found
+                        || ["parentSession", "parent_session"].iter().any(|key| {
+                            header
+                                .get(key)
+                                .is_some_and(|value| !value.is_null() && value.as_str() != Some(""))
+                        })
+                    {
+                        return None;
+                    }
+                    found = true;
+                }
+            }
+            if bytes_left == 0 {
+                return None;
+            }
+        }
+    }
+    found.then_some(())
+}
+
+fn session_metadata(path: &std::path::Path, kind: PanelKind, budget: &mut u64) -> Option<serde_json::Value> {
+    use std::io::{BufRead, BufReader, Read};
+
+    if !path.metadata().ok()?.is_file() {
+        return None;
+    }
+    let limit = (*budget).min(1024 * 1024);
+    let mut reader = BufReader::new(std::fs::File::open(path).ok()?.take(limit + 1));
+    let mut remaining = limit;
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        let count = u64::try_from(reader.read_until(b'\n', &mut line).ok()?).ok()?;
+        *budget = budget.saturating_sub(count);
+        remaining = remaining.checked_sub(count)?;
+        if count == 0 {
+            return None;
+        }
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&line) else {
+            continue;
+        };
+        let expected = if kind == PanelKind::Pi {
+            "session"
+        } else {
+            "session_meta"
+        };
+        if value.get("type").and_then(serde_json::Value::as_str) == Some(expected) {
+            return Some(value);
+        }
+        if kind == PanelKind::Pi {
+            return None;
+        }
+    }
 }
 
 fn readable_session_header(path: &std::path::Path) -> Option<serde_json::Value> {
@@ -360,8 +500,8 @@ fn readable_session_header(path: &std::path::Path) -> Option<serde_json::Value> 
     serde_json::from_slice(&bytes).ok()
 }
 
-pub(super) fn shutdown_for_restart(terminal: &mut crate::terminal::Terminal) -> Result<()> {
-    if !terminal.shutdown_with_timeout(std::time::Duration::from_secs(2)) {
+pub(super) fn shutdown_for_restart(terminal: &mut crate::terminal::Terminal, continuation: bool) -> Result<()> {
+    if !terminal.shutdown_with_timeout(std::time::Duration::from_secs(2)) && continuation {
         return Err(Error::State(
             "The previous process has not finished shutting down. No continuation was started.".into(),
         ));

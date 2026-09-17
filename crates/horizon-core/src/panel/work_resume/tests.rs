@@ -28,7 +28,7 @@ if test -f "$HOME/provider.pid"; then
 fi
 printf '%s\0' "$@" > "$HOME/args.$$"
 printf '%s\n' "$$" > "$HOME/provider.pid"
-trap 'exit 0' HUP TERM
+trap 'rm -f "$HOME/.claude/sessions/$$.json"; exit 0' HUP TERM
 printf '%s\n' "$$" >> "$HOME/launches"
 while :; do read -r -t 1 || :; done
 "#,
@@ -76,6 +76,7 @@ fn exercise_confirmed_restart() {
     let mut panel = restored_provider(&home, PanelKind::Pi);
     assert_eq!(wait_for_launch(&home, 1), ["--session", "fixture-session"]);
     panel.check_saved_work_session().expect("catalog-backed session");
+    exercise_pi_history(&mut panel, &home, &saved_session);
     exercise_catalog_rows(&mut panel, &home);
     assert_refusal_preserves_process(&mut panel, &home, "saved conversation", || {
         std::fs::remove_file(saved_session).expect("delete saved session after confirmation");
@@ -95,7 +96,7 @@ fn exercise_confirmed_restart() {
     assert!(panel.requested_work_brief().expect("consumed authorization").is_none());
     panel.restart().expect("ordinary restart after continuation");
     assert_eq!(wait_for_launch(&home, 3), ["--session", "fixture-session"]);
-    shutdown_for_restart(panel.terminal_mut().expect("terminal")).expect("close disposable provider");
+    shutdown_for_restart(panel.terminal_mut().expect("terminal"), true).expect("close disposable provider");
 
     let mut panel = restored_provider(&home, PanelKind::Claude);
     let _ = wait_for_launch(&home, 4);
@@ -127,6 +128,7 @@ fn exercise_confirmed_restart() {
         });
     }
     std::fs::write(&transcript, valid).expect("repair history");
+    exercise_competing_session(&mut panel, &home);
     panel.request_work_resume().expect("confirm repaired history");
     panel.restart().expect("resume repaired history");
     let args = wait_for_launch(&home, 5);
@@ -137,19 +139,146 @@ fn exercise_confirmed_restart() {
             .count(),
         1
     );
-    shutdown_for_restart(panel.terminal_mut().expect("terminal")).expect("close repaired-history provider");
+    shutdown_for_restart(panel.terminal_mut().expect("terminal"), true).expect("close repaired-history provider");
 }
 
 fn write_pi_session(home: &std::path::Path) -> std::path::PathBuf {
     let directory = home.join(".pi/agent/sessions/fixture");
     std::fs::create_dir_all(&directory).expect("session directory");
-    let path = directory.join("fixture-session.jsonl");
+    let path = directory.join("2026-01-01T00-00-00_fixture-session.jsonl");
     let session = serde_json::json!({
         "type": "session", "id": "fixture-session", "cwd": home,
         "timestamp": "2026-01-01T00:00:00.000Z", "version": 3
     });
     std::fs::write(&path, format!("{session}\n")).expect("saved session");
     path
+}
+
+fn exercise_pi_history(panel: &mut Panel, home: &std::path::Path, path: &std::path::Path) {
+    let valid = std::fs::read_to_string(path).expect("saved header");
+    std::fs::File::open(path)
+        .expect("session file")
+        .set_times(std::fs::FileTimes::new().set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1)))
+        .expect("old session timestamp");
+    for index in 0..129 {
+        std::fs::write(
+            path.with_file_name(format!("newer-{index}.jsonl")),
+            valid.replace("fixture-session", &format!("newer-{index}")),
+        )
+        .expect("newer session");
+    }
+    panel
+        .check_saved_work_session()
+        .expect("exact old session beyond picker limit");
+    for hidden in [
+        path.parent()
+            .expect("cwd directory")
+            .join("nested")
+            .join(path.file_name().expect("session name")),
+        home.join(".pi/agent/sessions")
+            .join(path.file_name().expect("session name")),
+    ] {
+        std::fs::create_dir_all(hidden.parent().expect("hidden directory")).expect("hidden directory");
+        assert_refusal_preserves_process(panel, home, "saved conversation", || {
+            std::fs::rename(path, &hidden).expect("move outside native discovery layout");
+        });
+        std::fs::rename(&hidden, path).expect("restore discoverable session");
+    }
+    for invalid in [
+        String::new(),
+        "{invalid}\n".into(),
+        "{}\n".into(),
+        valid.replace("fixture-session", "wrong-session"),
+        valid.replace("\"version\":3", "\"parentSession\":\"parent\",\"version\":3"),
+    ] {
+        assert_refusal_preserves_process(panel, home, "saved conversation", || {
+            std::fs::write(path, invalid).expect("invalidate saved session");
+        });
+        std::fs::write(path, &valid).expect("restore valid header");
+    }
+    std::fs::write(path, format!("{{invalid}}\n\n{valid}")).expect("native-tolerated preamble");
+    panel.check_saved_work_session().expect("native header scan");
+    std::fs::write(path, valid).expect("restore header");
+}
+
+fn exercise_competing_session(panel: &mut Panel, home: &std::path::Path) {
+    let directory = home.join(".claude/sessions");
+    std::fs::create_dir_all(&directory).expect("registry");
+    let pid = panel
+        .terminal()
+        .expect("terminal")
+        .owned_process_id()
+        .expect("owned live process");
+    std::fs::write(
+        directory.join(format!("{pid}.json")),
+        serde_json::json!({"sessionId":"fixture-session", "pid":pid}).to_string(),
+    )
+    .expect("own registry entry");
+    panel
+        .check_work_session_exit(Some(pid))
+        .expect("exclude verified owned process only");
+    let competitor = directory.join("competing.json");
+    assert_refusal_preserves_process(panel, home, "another process", || {
+        std::fs::write(
+            &competitor,
+            serde_json::json!({"sessionId":"fixture-session", "pid":std::process::id()}).to_string(),
+        )
+        .expect("competing registry entry");
+    });
+    std::fs::remove_file(competitor).expect("remove competing entry");
+}
+
+fn exercise_indexed_history(
+    panel: &mut Panel,
+    home: &std::path::Path,
+    connection: &rusqlite::Connection,
+    path: &std::path::Path,
+    header: &serde_json::Value,
+) {
+    if panel.kind == PanelKind::Codex {
+        let preamble = "{\"type\":\"event_msg\",\"payload\":{}}\n".repeat(12);
+        std::fs::write(path, format!("{preamble}{header}\n")).expect("metadata preamble");
+        panel
+            .check_saved_work_session()
+            .expect("metadata after more than eight rows");
+        assert_refusal_preserves_process(panel, home, "saved conversation", || {
+            std::fs::write(
+                path,
+                format!("{preamble}{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"wrong-session\"}}}}\n"),
+            )
+            .expect("wrong metadata identity");
+        });
+    } else {
+        connection
+            .execute_batch(
+                "WITH RECURSIVE newer(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM newer WHERE n<1001)
+            INSERT INTO session_docs SELECT 'newer-' || n, '/repo', 2, 'newer' FROM newer;",
+            )
+            .expect("newer index rows");
+        panel
+            .check_saved_work_session()
+            .expect("exact old session beyond picker limit");
+        for invalid in [
+            "{invalid}",
+            "{\"type\":\"invalid\",\"content\":null}",
+            "{\"type\":\"user\",\"content\":null}",
+            "{\"type\":\"system\",\"content\":[]}",
+            "{\"type\":\"user\",\"content\":[{\"type\":\"text\",\"text\":false}]}",
+        ] {
+            std::fs::write(path, format!("{header}\n")).expect("repair history");
+            assert_refusal_preserves_process(panel, home, "saved conversation", || {
+                std::fs::write(path, invalid).expect("malformed history");
+            });
+        }
+        for valid in [
+            serde_json::json!({"type":"system","content":"fixture"}),
+            serde_json::json!({"type":"user","content":[{"type":"text","text":"fixture"}]}),
+        ] {
+            std::fs::write(path, format!("{valid}\n")).expect("native message shape");
+            panel.check_saved_work_session().expect("native message shape");
+        }
+    }
+    std::fs::write(path, format!("{header}\n")).expect("restore indexed history");
 }
 
 fn exercise_catalog_rows(panel: &mut Panel, home: &std::path::Path) {
@@ -201,6 +330,7 @@ fn exercise_catalog_rows(panel: &mut Panel, home: &std::path::Path) {
                 std::fs::create_dir_all(path.parent().expect("session directory")).expect("session directory");
                 std::fs::write(path, format!("{header}\n")).expect("saved transcript");
                 panel.check_saved_work_session().expect("indexed readable transcript");
+                exercise_indexed_history(panel, home, &connection, path, header);
                 assert_refusal_preserves_process(panel, home, "saved conversation", || {
                     std::fs::remove_file(path).expect("remove transcript while retaining index row");
                 });
@@ -348,7 +478,7 @@ fn manual_request_is_revoked_by_user_input_or_disabling_policy() {
     panel.set_work_resume_enabled(false);
     assert!(panel.terminal().expect("terminal").pending_work_resume().is_none());
     assert!(panel.request_work_resume().is_err());
-    shutdown_for_restart(panel.terminal_mut().expect("terminal")).expect("close fixture");
+    shutdown_for_restart(panel.terminal_mut().expect("terminal"), true).expect("close fixture");
 }
 #[test]
 fn custom_arguments_and_missing_bindings_cannot_target_a_different_conversation() {
@@ -358,7 +488,7 @@ fn custom_arguments_and_missing_bindings_cannot_target_a_different_conversation(
     panel.launch_args.clear();
     panel.session_binding = None;
     assert!(panel.request_work_resume().is_err());
-    shutdown_for_restart(panel.terminal_mut().expect("terminal")).expect("close fixture");
+    shutdown_for_restart(panel.terminal_mut().expect("terminal"), true).expect("close fixture");
 }
 #[test]
 fn changing_the_binding_revokes_the_offer_and_consumes_queued_authorization() {
@@ -369,5 +499,5 @@ fn changing_the_binding_revokes_the_offer_and_consumes_queued_authorization() {
     assert!(panel.request_work_resume().is_err());
     assert!(panel.requested_work_brief().is_err());
     assert!(panel.requested_work_brief().expect("refusal consumed").is_none());
-    shutdown_for_restart(panel.terminal_mut().expect("terminal")).expect("close fixture");
+    shutdown_for_restart(panel.terminal_mut().expect("terminal"), true).expect("close fixture");
 }
