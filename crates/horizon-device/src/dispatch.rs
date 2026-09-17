@@ -56,8 +56,12 @@ impl Dispatcher {
             options.mode(0o600);
         }
         let file = options.open(path).map_err(io_error)?;
-        file.try_lock()
-            .map_err(|_| DeviceError::Unavailable("device busy; another command is active".into()))?;
+        file.try_lock().map_err(|error| match error {
+            std::fs::TryLockError::WouldBlock => {
+                DeviceError::Unavailable("device busy; another command is active".into())
+            }
+            std::fs::TryLockError::Error(error) => io_error(error),
+        })?;
         Ok(file)
     }
 }
