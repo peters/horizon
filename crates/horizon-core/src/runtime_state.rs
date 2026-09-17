@@ -220,11 +220,11 @@ impl RuntimeState {
         Ok(())
     }
 
-    /// Give browser panels fresh process-artifact identities when a persisted
-    /// session is copied. Browser profiles and live manifests are keyed by
-    /// panel local id, while duplicated sessions can run alongside their
-    /// source; retaining those ids would make both Chrome drivers share and
-    /// remove each other's files.
+    /// Give copied browser panels fresh manifest and profile identities.
+    /// Manifests use panel local IDs; profiles use the persisted session ID,
+    /// falling back to the panel local ID for legacy standalone panels.
+    /// Rekey shared groups together so a copied session preserves membership
+    /// without sharing or removing its source session's files.
     pub(crate) fn regenerate_browser_local_ids(&mut self) {
         let mut groups: std::collections::HashMap<_, _> = self
             .workspaces
