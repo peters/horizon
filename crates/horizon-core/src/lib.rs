@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod agent_work;
 mod agents;
 mod attention;
 mod board;
