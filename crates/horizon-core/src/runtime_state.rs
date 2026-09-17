@@ -309,6 +309,7 @@ impl RuntimeState {
                             rows: terminal.map_or(DEFAULT_ROWS, Terminal::rows),
                             cols: terminal.map_or(DEFAULT_COLS, Terminal::cols),
                             resume: panel.resume.clone(),
+                            work_resume: panel.work_resume.clone(),
                             position: Some(panel.layout.position),
                             size: Some(panel.layout.size),
                             ssh_connection: panel.ssh_connection.clone(),
