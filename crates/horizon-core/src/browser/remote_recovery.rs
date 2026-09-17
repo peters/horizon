@@ -43,6 +43,26 @@ impl RemoteAllocations {
         }
     }
 
+    pub fn expect_workspace(&self, panel: &str, workspace: &str) {
+        for record in self
+            .records
+            .values()
+            .filter(|record| record.panel.as_deref() == Some(panel))
+        {
+            record.allocation.expect_workspace(workspace);
+        }
+    }
+
+    pub fn confirm_scope(&self, panel: &str, confirmed: bool) {
+        for record in self
+            .records
+            .values()
+            .filter(|record| record.panel.as_deref() == Some(panel))
+        {
+            record.allocation.confirm_scope(confirmed);
+        }
+    }
+
     pub fn poll(&mut self) -> bool {
         let mut changed = false;
         for (reference, record) in &mut self.records {

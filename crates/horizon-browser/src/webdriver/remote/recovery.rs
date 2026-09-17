@@ -61,6 +61,8 @@ pub struct RemoteAllocationScope {
 #[derive(Default)]
 struct State {
     published: bool,
+    scope_unconfirmed: bool,
+    expected_workspace: Option<String>,
     scope: Option<RemoteAllocationScope>,
     identity: Option<(Arc<RemoteHttpClient>, String)>,
     retired: bool,
@@ -106,6 +108,23 @@ impl RemoteAllocation {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .scope = Some(scope);
+    }
+
+    /// Update authoritative placement before attempting filesystem synchronization.
+    pub fn expect_workspace(&self, workspace: &str) {
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.expected_workspace.as_deref() != Some(workspace) {
+            state.expected_workspace = Some(workspace.to_string());
+        }
+    }
+
+    /// A failed host stamp cannot authorize recovery through its stale manifest.
+    /// Confirmation after retirement cannot revive an invalidated snapshot.
+    pub fn confirm_scope(&self, confirmed: bool) {
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !confirmed || (!state.retired && state.scope.is_none()) {
+            state.scope_unconfirmed = !confirmed;
+        }
     }
 
     /// Scope authorization and the returned status come from one snapshot.
@@ -249,6 +268,14 @@ struct Access<'a> {
 }
 
 fn permits(state: &State, access: &Access<'_>) -> bool {
+    if state.scope_unconfirmed
+        || state
+            .expected_workspace
+            .as_deref()
+            .is_some_and(|workspace| workspace != access.workspace)
+    {
+        return false;
+    }
     if state.published && (state.retired || state.scope.is_some()) {
         state.scope.as_ref().is_some_and(|scope| {
             scope.host == access.host

@@ -194,3 +194,46 @@ fn authorization_is_checked_with_retirement_before_probe_admission() {
     assert!(allocation.reconcile_for("host", "final-owner", "workspace", false));
     assert_eq!(wait(&allocation), RemoteRecoveryStatus::Released);
 }
+
+#[test]
+fn an_unconfirmed_stamp_cannot_authorize_a_retired_manifest_snapshot() {
+    let allocation = RemoteAllocation::default();
+    allocation.mark_published();
+    allocation.confirm_scope(false);
+    allocation.retain_scope(super::RemoteAllocationScope {
+        host: "host".into(),
+        owner: Some("old-owner".into()),
+        workspace: Some("old-workspace".into()),
+    });
+    allocation.finish(None);
+    allocation.confirm_scope(true);
+    assert_eq!(allocation.status_for("host", "old-owner", "old-workspace", true), None);
+    assert!(!allocation.reconcile_for("host", "old-owner", "old-workspace", true));
+    assert_eq!(allocation.status(), RemoteRecoveryStatus::IdentityUnavailable);
+
+    let live = RemoteAllocation::default();
+    live.mark_published();
+    live.confirm_scope(false);
+    live.confirm_scope(true);
+    assert_eq!(
+        live.status_for("host", "owner", "workspace", true),
+        Some(RemoteRecoveryStatus::InUse)
+    );
+}
+
+#[test]
+fn teardown_winning_a_restamp_race_cannot_preserve_the_previous_workspace() {
+    let allocation = RemoteAllocation::default();
+    allocation.mark_published();
+    allocation.expect_workspace("old-workspace");
+    allocation.retain_scope(super::RemoteAllocationScope {
+        host: "host".into(),
+        owner: Some("owner".into()),
+        workspace: Some("old-workspace".into()),
+    });
+    allocation.finish(None);
+    assert!(allocation.status_for("host", "owner", "old-workspace", true).is_some());
+    allocation.expect_workspace("new-workspace");
+    assert_eq!(allocation.status_for("host", "owner", "old-workspace", true), None);
+    assert_eq!(allocation.status_for("host", "owner", "new-workspace", true), None);
+}
