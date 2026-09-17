@@ -23,7 +23,7 @@ HORIZON_BROWSER_HOST_INSTANCE = "${HORIZON_BROWSER_HOST_INSTANCE:-}"
 
 pub(super) fn bind_browser_skill(home: &Path, host_id: &std::ffi::OsStr) -> io::Result<Vec<super::SkillRootLease>> {
     let dir = home.join("skills").join(super::HORIZON_BROWSER_SKILL);
-    let lease = super::user_skills::bind_prepared_skill_root(host_id, dir.clone(), || {
+    let lease = super::user_skills::bind_prepared_skill_root(host_id, dir.clone(), validate_browser_skill, || {
         validate_browser_skill(&dir)?;
         register(home)?;
         super::sync_plugin_files(&dir, super::BROWSER_SKILL_FILES)?;
@@ -128,7 +128,7 @@ fn lock_config(file: &fs::File) -> io::Result<()> {
 }
 
 fn append_registration(original: &str) -> io::Result<Option<String>> {
-    let document = parse(original)?;
+    let mut document = parse(original)?;
     let expected = parse(REGISTRATION)?;
     if let Some(servers) = document.get("mcp_servers") {
         let Some(servers) = servers.as_table_like() else {
@@ -145,6 +145,15 @@ fn append_registration(original: &str) -> io::Result<Option<String>> {
                 "Grok already has a different horizon-browser server; registration left unchanged",
             ));
         }
+    }
+    if let Some(servers) = document.get_mut("mcp_servers").and_then(Item::as_inline_table_mut) {
+        let registration = expected["mcp_servers"]["horizon-browser"]
+            .as_table()
+            .ok_or_else(|| io::Error::other("embedded registration is not a table"))?
+            .clone()
+            .into_inline_table();
+        servers.insert("horizon-browser", Value::InlineTable(registration));
+        return Ok(Some(document.to_string()));
     }
     let updated = format!("{original}\n{REGISTRATION}");
     // Inline/dotted table declarations can forbid appending a child table.

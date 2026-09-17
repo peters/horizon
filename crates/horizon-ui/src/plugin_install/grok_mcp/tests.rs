@@ -160,15 +160,20 @@ fn concurrent_startup_waits_for_complete_skill_installation() {
         let first = scope.spawn(move || {
             let dir = first_dir;
             let home = first_home;
-            user_skills::bind_prepared_skill_root(std::ffi::OsStr::new("first"), dir.clone(), || {
-                register(home.path())?;
-                fs::create_dir_all(dir)?;
-                fs::write(dir.join("SKILL.md"), "partial")?;
-                partial_tx.send(()).expect("partial signal");
-                finish_rx.recv().expect("finish signal");
-                sync_plugin_files(dir, BROWSER_SKILL_FILES)?;
-                Ok(())
-            })
+            user_skills::bind_prepared_skill_root(
+                std::ffi::OsStr::new("first"),
+                dir.clone(),
+                validate_browser_skill,
+                || {
+                    register(home.path())?;
+                    fs::create_dir_all(dir)?;
+                    fs::write(dir.join("SKILL.md"), "partial")?;
+                    partial_tx.send(()).expect("partial signal");
+                    finish_rx.recv().expect("finish signal");
+                    sync_plugin_files(dir, BROWSER_SKILL_FILES)?;
+                    Ok(())
+                },
+            )
             .expect("first lease")
         });
         partial_rx.recv().expect("partial installation");
@@ -187,4 +192,42 @@ fn concurrent_startup_waits_for_complete_skill_installation() {
         release_skill_roots(&mut second);
         assert!(!dir.exists());
     });
+}
+
+#[test]
+fn cleanup_preserves_skill_content_added_or_replaced_after_startup() {
+    use super::super::release_skill_roots;
+    for replace in [false, true] {
+        let home = tempfile::tempdir().expect("home");
+        let dir = home.path().join("skills/horizon-browser");
+        let mut leases = bind_browser_skill(home.path(), std::ffi::OsStr::new("host")).expect("lease");
+        let path = dir.join(if replace { "SKILL.md" } else { "notes.txt" });
+        fs::write(&path, "user content").expect("user edit");
+        release_skill_roots(&mut leases);
+        assert_eq!(
+            fs::read_to_string(path).expect("user content preserved"),
+            "user content"
+        );
+    }
+}
+
+#[test]
+fn registration_extends_inline_server_tables_without_changing_existing_settings() {
+    let original = "# custom settings\nmcp_servers = { other = { command = 'other', args = ['--flag'] } } # keep comment\n[cli]\nuse_leader = true\n";
+    let home = tempfile::tempdir().expect("home");
+    let path = home.path().join("config.toml");
+    fs::write(&path, original).expect("original");
+    assert!(register(home.path()).expect("register inline"));
+    let text = fs::read_to_string(&path).expect("registered");
+    let document = parse(&text).expect("valid config");
+    let prior = parse(original).expect("prior config");
+    assert!(equivalent(
+        &document["mcp_servers"]["other"],
+        &prior["mcp_servers"]["other"]
+    ));
+    assert!(equivalent(&document["cli"], &prior["cli"]));
+    assert!(text.contains("# custom settings"));
+    assert!(text.contains("# keep comment"));
+    assert!(!register(home.path()).expect("idempotent"));
+    assert_eq!(fs::read_to_string(path).expect("unchanged second pass"), text);
 }

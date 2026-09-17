@@ -16,7 +16,10 @@ pub(super) const HORIZON_BROWSER_SKILL: &str = "horizon-browser";
 pub(super) const RETIRED_OFFLOAD_SKILL: &str = "horizon-offload";
 const LEASES_DIR: &str = ".horizon-leases";
 
+type SkillOwnershipCheck = fn(&Path) -> io::Result<()>;
+
 pub(super) struct SkillRootLease {
+    cleanup_guard: Option<SkillOwnershipCheck>,
     skill_dir: PathBuf,
     install: bool,
     live_path: PathBuf,
@@ -69,7 +72,9 @@ pub(super) fn release_skill_roots(leases: &mut [SkillRootLease]) {
         match another_live_host(live_dir, &lease.live_path) {
             Ok(true) => {}
             Ok(false) => {
-                remove_horizon_skill_dir(&lease.skill_dir);
+                if lease.cleanup_guard.is_none_or(|check| check(&lease.skill_dir).is_ok()) {
+                    remove_horizon_skill_dir(&lease.skill_dir);
+                }
                 // Keep `.horizon-leases` and `.lock`. Unlinking the directory
                 // while this lock is held lets a starter block on the old inode,
                 // then fail to create its `.live` marker in the gone directory.
@@ -113,9 +118,12 @@ fn push_acquired(leases: &mut Vec<SkillRootLease>, host_id: &OsStr, skill_dir: &
 pub(super) fn bind_prepared_skill_root(
     host_id: &OsStr,
     skill_dir: PathBuf,
+    cleanup_guard: SkillOwnershipCheck,
     prepare: impl FnOnce() -> io::Result<()>,
 ) -> io::Result<SkillRootLease> {
-    acquire_skill_root(host_id, skill_dir, true, prepare)
+    let mut lease = acquire_skill_root(host_id, skill_dir, true, prepare)?;
+    lease.cleanup_guard = Some(cleanup_guard);
+    Ok(lease)
 }
 
 fn acquire_skill_root(
@@ -166,6 +174,7 @@ fn acquire_skill_root(
     }
     drop(coord);
     Ok(SkillRootLease {
+        cleanup_guard: None,
         skill_dir,
         install,
         live_path,
