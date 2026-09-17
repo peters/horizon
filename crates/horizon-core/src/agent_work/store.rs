@@ -139,6 +139,42 @@ impl WorkStore {
         Ok(())
     }
 
+    /// Mark a hook in flight before reading input. Abandoned invocations veto
+    /// continuation even if the recorder is terminated before its error handler.
+    ///
+    /// # Errors
+    /// Returns an error for invalid identity or marker persistence failure.
+    pub fn begin_hook(&self, panel: &str, owner: &str) -> io::Result<String> {
+        self.check_health_marker(panel, owner)?;
+        let token = uuid::Uuid::new_v4().to_string();
+        let path = self.pending_path(panel, owner, &token)?;
+        private_options().write(true).create_new(true).open(&path)?.sync_all()?;
+        #[cfg(unix)]
+        File::open(path.parent().ok_or_else(|| invalid("missing marker directory"))?)?.sync_all()?;
+        Ok(token)
+    }
+
+    /// Clear only this invocation after its ledger update has completed.
+    ///
+    /// # Errors
+    /// Returns an error for an invalid or inaccessible marker.
+    pub fn finish_hook(&self, panel: &str, owner: &str, token: &str) -> io::Result<()> {
+        let path = self.pending_path(panel, owner, token)?;
+        fs::remove_file(&path)?;
+        #[cfg(unix)]
+        File::open(path.parent().ok_or_else(|| invalid("missing marker directory"))?)?.sync_all()?;
+        Ok(())
+    }
+
+    fn pending_path(&self, panel: &str, owner: &str, token: &str) -> io::Result<PathBuf> {
+        if !valid_id(token) {
+            return Err(invalid("invalid hook token"));
+        }
+        Ok(self
+            .health_path(panel, owner)?
+            .with_file_name(format!("{owner}.pending.{token}")))
+    }
+
     /// Persist a lifecycle event from a panel whose launch was registered.
     ///
     /// # Errors
@@ -152,7 +188,10 @@ impl WorkStore {
             return Err(invalid("invalid lifecycle identity"));
         }
         let _lock = self.lock(panel)?;
-        let mut record = self.read(panel)?.ok_or_else(|| invalid("unregistered panel launch"))?;
+        self.check_health_marker(panel, owner)?;
+        let mut record = self
+            .read_raw(panel)?
+            .ok_or_else(|| invalid("unregistered panel launch"))?;
         if record.owner_token != owner
             || record.kind != kind
             || (!record.ledger.session_id.is_empty() && record.ledger.session_id != input.event.session_id)
@@ -301,6 +340,20 @@ impl WorkStore {
     }
 
     fn check_health(&self, panel: &str, owner: &str) -> io::Result<()> {
+        self.check_health_marker(panel, owner)?;
+        let prefix = format!("{owner}.pending.");
+        for (index, entry) in fs::read_dir(self.root.join("health").join(panel))?.enumerate() {
+            if index >= 4096 {
+                return Err(invalid("too many hook markers"));
+            }
+            if entry?.file_name().to_string_lossy().starts_with(&prefix) {
+                return Err(invalid("a lifecycle hook has not completed"));
+            }
+        }
+        Ok(())
+    }
+
+    fn check_health_marker(&self, panel: &str, owner: &str) -> io::Result<()> {
         let path = self.health_path(panel, owner)?;
         // A marker that can no longer be invalidated cannot authorize work.
         let _writable = OpenOptions::new().write(true).open(&path)?;
@@ -317,7 +370,13 @@ impl WorkStore {
         // Registration holds the panel lock and has durably published the new
         // owner. A late old hook now falls back to the owner-checked invalidator.
         for entry in entries.take(4096).flatten() {
-            if entry.file_name() != current && entry.file_type().is_ok_and(|kind| kind.is_file()) {
+            if entry.file_name() != current
+                && !entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(&format!("{current}.pending."))
+                && entry.file_type().is_ok_and(|kind| kind.is_file())
+            {
                 let _ = fs::remove_file(entry.path());
             }
         }
