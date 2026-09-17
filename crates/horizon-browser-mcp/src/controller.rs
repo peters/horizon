@@ -124,7 +124,7 @@ pub(crate) enum ControlError {
         "browser create request {action_id} timed out after {timeout_millis} ms; call browser_list before retrying because a late panel may still be visible"
     )]
     CreateTimeout { action_id: String, timeout_millis: u64 },
-    #[error("browser_create is available only to an agent panel launched inside Horizon")]
+    #[error("browser panel creation and duplication are available only to an agent panel launched inside Horizon")]
     CreateUnavailable,
     #[error(
         "browser panel {panel_id} is outside the calling agent's Horizon workspace; use browser_list to find controllable panels or browser_create to open one there"

@@ -215,8 +215,11 @@ pub(crate) struct CreateInput {
 /// A fresh page sharing the source panel's login and website storage.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(crate) struct DuplicateInput {
+    /// Source panel ID from `browser_list`. Requires a ready local Chromium or Firefox panel in the calling agent's workspace that the caller can claim.
     pub panel_id: String,
+    /// Whether the duplicate is shown initially (default true). Hidden panels remain live and controllable.
     pub visible: Option<bool>,
+    /// Total host-and-browser startup timeout in milliseconds (clamped to 5000-60000, default 60000).
     pub timeout_millis: Option<u64>,
 }
 

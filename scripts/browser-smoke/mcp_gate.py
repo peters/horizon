@@ -1142,6 +1142,71 @@ def exercise_capture_retention(
     }
 
 
+def exercise_duplicate(
+    client: McpClient, args: argparse.Namespace, panel_id: str, action_ids: list[str]
+) -> dict[str, Any]:
+    if args.backend == "safari":
+        _, error = client.call("browser_duplicate", {"panel_id": panel_id}, expect_error=True)
+        if error is None or "unsupported_backend" not in error:
+            raise AssertionError(error)
+        return {"supported": False}
+
+    key = "horizon-smoke-duplicate-" + panel_id
+    record_action(
+        client, "browser_evaluate",
+        {"panel_id": panel_id, "expression": f"localStorage.setItem({json.dumps(key)}, 'shared')"},
+        action_ids,
+    )
+    duplicate_id = None
+    try:
+        created, _ = client.call("browser_duplicate", {"panel_id": panel_id, "visible": False})
+        assert created is not None
+        duplicate = created["panel"]
+        duplicate_id = duplicate["panel_id"]
+        if duplicate_id == panel_id:
+            duplicate_id = None  # Never close the source if a broken response aliases it.
+            raise AssertionError(created)
+        if (
+            not duplicate_id or duplicate["backend"] != args.backend
+            or not duplicate["owned_by_caller"] or duplicate["visible"]
+            or created.get("navigation") != "committed"
+            or duplicate["url"] != f"{args.base_url}/index.html"
+        ):
+            raise AssertionError(created)
+        shared, _ = client.call(
+            "browser_evaluate",
+            {"panel_id": duplicate_id, "expression": f"localStorage.getItem({json.dumps(key)})"},
+        )
+        if shared is None or shared["value"] != "shared":
+            raise AssertionError(shared)
+        navigated, _ = client.call(
+            "browser_navigate", {"panel_id": duplicate_id, "url": f"{args.base_url}/next.html"}
+        )
+        assert navigated is not None
+        verify_navigation_outcome(navigated, "commit", "committed", f"{args.base_url}/next.html", redirected=False)
+    finally:
+        try:
+            if duplicate_id:
+                closed, _ = client.call("browser_close", {"panel_id": duplicate_id})
+                if closed is None or not closed["closed"]:
+                    raise AssertionError(closed)
+        finally:
+            record_action(
+                client, "browser_evaluate",
+                {"panel_id": panel_id, "expression": f"localStorage.removeItem({json.dumps(key)})"},
+                action_ids,
+            )
+    source = record_action(
+        client, "browser_evaluate", {"panel_id": panel_id, "expression": "location.href"}, action_ids
+    )
+    if source["value"] != f"{args.base_url}/index.html":
+        raise AssertionError(source)
+    listed, _ = client.call("browser_list", {})
+    if listed is None or [panel["panel_id"] for panel in listed["panels"]] != [panel_id]:
+        raise AssertionError(listed)
+    return {"supported": True, "shared_storage": True, "independent_navigation": True, "closed": True}
+
+
 def exercise_viewport(
     client: McpClient, panel_id: str, url: str, action_ids: list[str]
 ) -> None:
@@ -1224,6 +1289,7 @@ def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
         raise AssertionError(video_capability)
 
     action_ids: list[str] = [create_action_id]
+    duplication = exercise_duplicate(client, args, panel_id, action_ids)
     if "resize" in detail["capabilities"]:
         exercise_viewport(client, panel_id, f"{args.base_url}/index.html", action_ids)
     failed_ids: list[str] = []
@@ -1594,6 +1660,7 @@ def exercise(client: McpClient, args: argparse.Namespace) -> dict[str, Any]:
         "wait_outcomes": wait_outcomes,
         "backend": args.backend,
         "completed_actions": len(action_ids),
+        "duplication": duplication,
         "double_click": {"count": 2, "trusted": True},
         "handoff_request_id": handoff_request,
         "network_capture": network_capture,
