@@ -275,3 +275,7 @@ process retirement. Each page filters BiDi events to its context tree. Classic
 commands select their context and execute under one shared lock and one deadline;
 session-global routes are rejected. Failed page cleanup retains its context and
 registration IDs for bounded retries while preserving active siblings.
+
+An ambiguous Firefox context-creation reply retains ownership until exact-process
+reap and blocks further creation in that generation. Runtime capture registrations
+join the same retry ledger as startup registrations.

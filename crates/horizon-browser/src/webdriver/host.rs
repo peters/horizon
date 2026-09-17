@@ -56,6 +56,17 @@ impl DriverHost {
         }
     }
 
+    pub(super) fn record_bidi_result(
+        &mut self,
+        method: &str,
+        params: &serde_json::Value,
+        result: &Result<serde_json::Value, crate::websocket::JsonWsError>,
+    ) {
+        if let Self::Shared(page) = self {
+            page.record_bidi_result(method, params, result);
+        }
+    }
+
     pub(super) fn accepts_bidi_event(&mut self, event: &serde_json::Value) -> bool {
         match self {
             Self::Shared(page) => page.accepts_event(event),

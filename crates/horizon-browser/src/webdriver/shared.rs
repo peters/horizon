@@ -33,6 +33,7 @@ struct GroupState {
     endpoint: String,
     retiring: Arc<AtomicBool>,
     profile_retired: bool,
+    creation_uncertain: bool,
     launch_identity: Option<FirefoxLaunchIdentity>,
 }
 
@@ -131,6 +132,9 @@ impl SharedFirefoxSession {
         if state.profile_retired {
             return Err("shared Firefox profile has been retired for deletion".into());
         }
+        if state.creation_uncertain && !state.control.is_reaped() {
+            return Err("Firefox page creation is uncertain; close the shared panels before retrying".into());
+        }
         if stop.load(Ordering::Acquire) {
             return Err("Firefox page startup cancelled".into());
         }
@@ -165,6 +169,59 @@ impl SharedFirefoxSession {
             return Err("shared Firefox session has stopped".into());
         }
         let mut link = JsonWsLink::connect(&state.endpoint).map_err(|error| error.to_string())?;
+        let lifecycle = Arc::new(PageControl {
+            control: state.control.clone(),
+            retiring: Arc::clone(&state.retiring),
+            released: Arc::new(AtomicBool::new(false)),
+            stops: Arc::clone(&self.stops),
+            cleanup: Arc::new(Mutex::new(PageCleanup {
+                endpoint: state.endpoint.clone(),
+                context: String::new(),
+                registrations: Vec::new(),
+                retry_after: Instant::now(),
+            })),
+            closing: false.into(),
+            cleanup_done: Arc::new(false.into()),
+            retry_running: Arc::new(false.into()),
+        });
+        if panel_control.delegate(lifecycle.clone()) {
+            let _ = panel_control.terminate(Duration::ZERO);
+        }
+        let context = state.create_context(&mut link, first)?;
+        context.clone_into(
+            &mut lifecycle
+                .cleanup
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .context,
+        );
+        state.retiring.store(false, Ordering::Release);
+        let service = state
+            .service
+            .as_ref()
+            .ok_or_else(|| "Firefox service disappeared".to_string())?;
+        let page = SharedFirefoxPage {
+            group: self.clone(),
+            lifecycle,
+            http: service.http,
+            context: context.clone(),
+            session_id: state.session_id.clone(),
+            contexts: std::collections::HashSet::from([context.clone()]),
+        };
+        let session = NewSession {
+            id: state.session_id.clone(),
+            capabilities: state.capabilities.clone(),
+        };
+        drop(state);
+        Ok((DriverHost::Shared(page), session))
+    }
+}
+
+impl GroupState {
+    fn create_context(&mut self, link: &mut JsonWsLink, first: bool) -> Result<String, String> {
+        // The command may execute without a reply. Retain this generation's
+        // cleanup ownership and refuse more creates until it has been reaped.
+        self.creation_uncertain = true;
         let context = if first {
             link.call(
                 Duration::from_secs(5),
@@ -188,49 +245,12 @@ impl SharedFirefoxSession {
             .and_then(Value::as_str)
             .map(str::to_owned)
         }
+        .filter(|context| !context.is_empty())
         .ok_or_else(|| "Firefox did not return the exact page context".to_string())?;
-        state.retiring.store(false, Ordering::Release);
-        let lifecycle = Arc::new(PageControl {
-            control: state.control.clone(),
-            retiring: Arc::clone(&state.retiring),
-            released: Arc::new(AtomicBool::new(false)),
-            stops: Arc::clone(&self.stops),
-            cleanup: Arc::new(Mutex::new(PageCleanup {
-                endpoint: state.endpoint.clone(),
-                context: context.clone(),
-                registrations: Vec::new(),
-                retry_after: Instant::now(),
-            })),
-            closing: false.into(),
-            cleanup_done: Arc::new(false.into()),
-            retry_running: Arc::new(false.into()),
-        });
-        let force_requested = panel_control.delegate(lifecycle.clone());
-        let service = state
-            .service
-            .as_ref()
-            .ok_or_else(|| "Firefox service disappeared".to_string())?;
-        let page = SharedFirefoxPage {
-            group: self.clone(),
-            lifecycle,
-            http: service.http,
-            context: context.clone(),
-            session_id: state.session_id.clone(),
-            contexts: std::collections::HashSet::from([context.clone()]),
-        };
-        let session = NewSession {
-            id: state.session_id.clone(),
-            capabilities: state.capabilities.clone(),
-        };
-        drop(state);
-        if force_requested {
-            let _ = panel_control.terminate(Duration::from_secs(1));
-        }
-        Ok((DriverHost::Shared(page), session))
+        self.creation_uncertain = false;
+        Ok(context)
     }
-}
 
-impl GroupState {
     fn close(&mut self) {
         self.retiring.store(true, Ordering::Release);
         if let Some(service) = self.service.as_mut() {
@@ -284,6 +304,9 @@ struct PageCleanup {
 
 impl PageCleanup {
     fn attempt(&mut self, released: &AtomicBool) -> bool {
+        if self.context.is_empty() {
+            return false;
+        }
         let Ok(mut link) = JsonWsLink::connect(&self.endpoint) else {
             return false;
         };
@@ -291,6 +314,7 @@ impl PageCleanup {
             let params = match *method {
                 "session.unsubscribe" => json!({"subscriptions": [id]}),
                 "network.removeIntercept" => json!({"intercept": id}),
+                "network.removeDataCollector" => json!({"collector": id}),
                 _ => json!({"script": id}),
             };
             !registration_removed(&link.call(Duration::from_secs(1), method, &params).result)
@@ -332,6 +356,7 @@ fn registration_removed(result: &Result<Value, JsonWsError>) -> bool {
                 ("session.unsubscribe", "invalid argument")
                     | ("network.removeIntercept", "no such intercept")
                     | ("script.removePreloadScript", "no such script")
+                    | ("network.removeDataCollector", "no such network collector")
             )
         }
         Err(_) => false,
@@ -370,7 +395,7 @@ impl PageControl {
         let Ok(mut cleanup) = self.cleanup.try_lock() else {
             return;
         };
-        if Instant::now() < cleanup.retry_after || cleanup.endpoint.is_empty() {
+        if Instant::now() < cleanup.retry_after || (cleanup.endpoint.is_empty() || cleanup.context.is_empty()) {
             return;
         }
         cleanup.retry_after = Instant::now() + Duration::from_secs(1);
@@ -480,6 +505,46 @@ impl SharedFirefoxPage {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .registrations
             .push((method, id));
+    }
+
+    pub(super) fn record_bidi_result(&mut self, method: &str, params: &Value, result: &Result<Value, JsonWsError>) {
+        let registration = match method {
+            "session.subscribe" => Some(("subscription", "session.unsubscribe")),
+            "network.addIntercept" => Some(("intercept", "network.removeIntercept")),
+            "script.addPreloadScript" => Some(("script", "script.removePreloadScript")),
+            "network.addDataCollector" => Some(("collector", "network.removeDataCollector")),
+            _ => None,
+        };
+        if let Some((field, remove)) = registration {
+            if let Ok(value) = result
+                && let Some(id) = value.get(field).and_then(Value::as_str)
+            {
+                self.remember(remove, id.to_owned());
+            }
+        } else if registration_removed(result) {
+            self.lifecycle
+                .cleanup
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .registrations
+                .retain(|(remove, id)| {
+                    if *remove != method {
+                        return true;
+                    }
+                    let field = match method {
+                        "network.removeIntercept" => "intercept",
+                        "network.removeDataCollector" => "collector",
+                        "script.removePreloadScript" => "script",
+                        _ => {
+                            return !params
+                                .get("subscriptions")
+                                .and_then(Value::as_array)
+                                .is_some_and(|ids| ids.iter().any(|value| value.as_str() == Some(id)));
+                        }
+                    };
+                    params.get(field).and_then(Value::as_str) != Some(id)
+                });
+        }
     }
 
     pub(super) fn close(&mut self) {
@@ -772,11 +837,62 @@ mod tests {
         assert!(state.pin_launch(&config, "group").is_err());
     }
     #[test]
+    fn ambiguous_creation_retains_cleanup_and_blocks_more_windows_until_process_reap() {
+        use std::net::TcpListener;
+        use tungstenite::Message;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("fixture");
+        let address = listener.local_addr().expect("address");
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("connect");
+            let mut socket = tungstenite::accept(stream).expect("handshake");
+            let Message::Text(text) = socket.read().expect("create") else {
+                panic!("text")
+            };
+            let command: Value = serde_json::from_str(&text).expect("json");
+            assert_eq!(command["method"], "browsingContext.create");
+            // The window was created, but its identifying response was lost.
+            socket.close(None).expect("lose reply");
+        });
+        let group = SharedFirefoxSession::new("profile".into());
+        let sibling = group.reserve(Arc::new(false.into()));
+        let (page, process) = page(group.clone(), 1, "");
+        let control = Arc::clone(&page.lifecycle);
+        let mut link = JsonWsLink::connect(&format!("ws://{address}/")).expect("link");
+        {
+            let mut state = group.state.lock().expect("state");
+            state.control = control.control.clone();
+            assert!(state.create_context(&mut link, false).is_err());
+        }
+        drop(page);
+        for _ in 0..3 {
+            assert!(
+                group
+                    .acquire(
+                        &crate::BrowserConfig::default(),
+                        &ChromeProcessControl::default(),
+                        &AtomicBool::new(false),
+                        |_| panic!("must not create again")
+                    )
+                    .is_err()
+            );
+            assert!(!control.is_reaped());
+            assert!(!control.terminate(Duration::ZERO));
+        }
+        assert!(!control.retry_running.load(Ordering::Acquire));
+        assert_eq!(process.terminations.load(Ordering::Acquire), 0);
+        process.reaped.store(true, Ordering::Release);
+        assert!(control.is_reaped());
+        server.join().expect("server");
+        drop(sibling);
+    }
+
+    #[test]
     fn cleanup_accepts_only_command_specific_absence_errors() {
         for (method, code) in [
             ("session.unsubscribe", "invalid argument"),
             ("network.removeIntercept", "no such intercept"),
             ("script.removePreloadScript", "no such script"),
+            ("network.removeDataCollector", "no such network collector"),
         ] {
             assert!(registration_removed(&Err(JsonWsError::Protocol {
                 method: method.into(),
@@ -815,7 +931,7 @@ mod tests {
                     started_tx.send(()).expect("started");
                     release_rx.recv_timeout(Duration::from_secs(3)).expect("release");
                 }
-                for _ in 0..if retry { 2 } else { 3 } {
+                for _ in 0..if retry { 4 } else { 5 } {
                     let Message::Text(text) = socket.read().expect("command") else {
                         panic!("text");
                     };
@@ -841,10 +957,23 @@ mod tests {
         let (mut page, process) = page(group, 1, "orphan");
         let control = Arc::clone(&page.lifecycle);
         control.cleanup.lock().expect("cleanup").endpoint = format!("ws://{address}/");
-        page.remember("session.unsubscribe", "owned-subscription".into());
+        for (method, result) in [
+            ("session.subscribe", json!({"subscription":"owned-subscription"})),
+            ("network.addDataCollector", json!({"collector":"owned-collector"})),
+            ("script.addPreloadScript", json!({"script":"owned-preload"})),
+        ] {
+            page.record_bidi_result(method, &json!({}), &Ok(result));
+        }
+        page.record_bidi_result(
+            "network.removeDataCollector",
+            &json!({"collector":"owned-collector"}),
+            &Err(JsonWsError::Timeout {
+                method: "network.removeDataCollector".into(),
+            }),
+        );
         drop(page);
         assert!(!control.cleanup_done.load(Ordering::Acquire));
-        assert_eq!(control.cleanup.lock().expect("cleanup").registrations.len(), 1);
+        assert_eq!(control.cleanup.lock().expect("cleanup").registrations.len(), 3);
         assert!(!control.terminate(Duration::ZERO));
         assert_eq!(process.terminations.load(Ordering::Acquire), 0);
         control.cleanup.lock().expect("cleanup").retry_after = Instant::now();
@@ -865,7 +994,7 @@ mod tests {
         }
         assert_eq!(process.terminations.load(Ordering::Acquire), 0);
         let commands = server.join().expect("server");
-        assert_eq!(commands.len(), 5);
+        assert_eq!(commands.len(), 9);
         for command in commands
             .iter()
             .filter(|command| command["method"] == "browsingContext.close")

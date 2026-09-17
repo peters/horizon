@@ -26,6 +26,7 @@ impl Driver {
     ) -> Result<Value, String> {
         let link = self.bidi.as_mut().ok_or_else(|| "BiDi is unavailable".to_string())?;
         let outcome = link.call(COMMAND_TIMEOUT, method, params);
+        self.host.record_bidi_result(method, params, &outcome.result);
         for event in outcome.events {
             self.handle_bidi_event(&event, event_tx);
         }
