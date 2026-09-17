@@ -91,10 +91,20 @@ impl RestartEvidence<'_> {
             return RestartDecision::NotResumable;
         }
         let Some(record) = self.handoff else {
-            return if transcript.state == TurnState::Working && self.stale_live_session {
-                RestartDecision::Ask(AskReason::UncleanShutdown)
-            } else {
-                RestartDecision::NotResumable
+            if self.ledger.is_some_and(|ledger| {
+                ledger.session_id == self.session_id
+                    && (ledger.deliberate_exit
+                        || matches!(
+                            ledger.state,
+                            TurnState::Finished | TurnState::Failed | TurnState::Interrupted
+                        ))
+            }) {
+                return RestartDecision::NotResumable;
+            }
+            return match (transcript.state, self.stale_live_session) {
+                (TurnState::Working, true) => RestartDecision::Ask(AskReason::UncleanShutdown),
+                (TurnState::Blocked, _) => RestartDecision::Ask(AskReason::WaitingForUser),
+                _ => RestartDecision::NotResumable,
             };
         };
         if record.kind != self.kind
@@ -258,6 +268,13 @@ mod tests {
         assert_eq!(evidence.classify(1), RestartDecision::NotResumable);
         evidence.stale_live_session = true;
         assert_eq!(evidence.classify(1), RestartDecision::Ask(AskReason::UncleanShutdown));
+        evidence.transcript = Some(&blocked);
+        evidence.stale_live_session = false;
+        assert_eq!(evidence.classify(1), RestartDecision::Ask(AskReason::WaitingForUser));
+        evidence.ledger = Some(&failed);
+        assert_eq!(evidence.classify(1), RestartDecision::NotResumable);
+        evidence.transcript = Some(&transcript);
+        assert_eq!(evidence.classify(1), RestartDecision::NotResumable);
     }
     #[test]
     fn a_horizon_interrupt_needs_the_same_final_turn_and_session() {

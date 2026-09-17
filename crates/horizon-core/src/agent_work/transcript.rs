@@ -125,6 +125,7 @@ fn claude_state(value: &Value) -> Option<TurnState> {
                 .or_else(|| content.as_array()?.first()?.get("text")?.as_str());
             Some(match text {
                 Some(text) if text.starts_with("[Request interrupted by user") => TurnState::Interrupted,
+                Some(text) if text.starts_with("<task-notification>") => TurnState::Working,
                 Some(text) if text.starts_with('<') || text.starts_with('/') => TurnState::Unknown,
                 Some(text) if !text.trim().is_empty() => TurnState::Working,
                 None if content.as_array().is_some_and(|blocks| {
@@ -186,6 +187,13 @@ mod tests {
         ] {
             assert_eq!(classify(PanelKind::Claude, format!("{line}\n").as_bytes()), expected);
         }
+    }
+
+    #[test]
+    fn unanswered_background_notifications_preserve_work_evidence() {
+        let tail =
+            b"{\"type\":\"user\",\"message\":{\"content\":\"<task-notification>completed</task-notification>\"}}\n";
+        assert_eq!(classify(PanelKind::Claude, tail), TurnState::Working);
     }
 
     #[test]
