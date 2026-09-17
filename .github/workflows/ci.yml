@@ -51,6 +51,10 @@ jobs:
         run: python3 -B scripts/test_install_ci_ubuntu_dependencies.py -v
       - name: Verify GitHub release orchestration
         run: python3 -B scripts/test_release_github.py -v
+      - name: Verify Surge dependency updates
+        run: |
+          python3 -B scripts/test_check_surge_dependency.py -v
+          python3 -B scripts/check_surge_dependency.py
       - name: Maintainability
         run: ./scripts/check-maintainability.sh
       - name: Version Sync
