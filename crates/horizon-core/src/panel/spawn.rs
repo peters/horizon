@@ -158,7 +158,7 @@ pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, mut opts: Pane
             let remote = match (opts.remote_session.take(), opts.remote_target.take()) {
                 (Some(request), _) => BrowserSpawnMode::Remote(Box::new(request)),
                 (None, Some(target)) => BrowserSpawnMode::RestoredRemote(target),
-                (None, None) => BrowserSpawnMode::Local,
+                (None, None) => BrowserSpawnMode::Local(opts.browser_session_id.take()),
             };
             let seed = StaticPanelSeed::from_options(id, workspace_id, local_id, &mut opts);
             spawn_browser(seed, command, browser_config, remote)
@@ -313,7 +313,7 @@ fn spawn_usage(mut seed: StaticPanelSeed) -> Panel {
 
 /// Where a browser panel's session runs.
 enum BrowserSpawnMode {
-    Local,
+    Local(Option<String>),
     /// A prepared remote request: allocate at the grid instead of launching.
     Remote(Box<horizon_browser::RemoteSessionRequest>),
     /// A remote panel from a previous run; it comes back stopped.
@@ -337,9 +337,12 @@ fn spawn_browser(
     });
     let browser_config = browser_config.unwrap_or_default();
     let browser = match mode {
-        BrowserSpawnMode::Local => {
-            crate::browser::BrowserPanelState::start(seed.local_id.clone(), &browser_config, initial_url.clone())?
-        }
+        BrowserSpawnMode::Local(session_id) => crate::browser::BrowserPanelState::start_with_session(
+            seed.local_id.clone(),
+            &browser_config,
+            initial_url.clone(),
+            session_id.as_deref(),
+        )?,
         BrowserSpawnMode::Remote(request) => crate::browser::BrowserPanelState::start_remote(
             seed.local_id.clone(),
             &browser_config,

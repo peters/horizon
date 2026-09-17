@@ -152,6 +152,8 @@ pub struct PanelOptions {
     /// Active `browser` config section, so spawn honors `--config` and
     /// in-memory config edits instead of re-reading the default path.
     pub browser_config: Option<crate::browser::BrowserConfig>,
+    /// Stable profile identity shared by explicitly duplicated browser pages.
+    pub browser_session_id: Option<String>,
     /// Run the browser panel at a remote grid with this prepared request
     /// instead of launching a local browser.
     pub remote_session: Option<horizon_browser::RemoteSessionRequest>,
@@ -186,6 +188,7 @@ impl Default for PanelOptions {
             session_binding: None,
             template: None,
             browser_config: None,
+            browser_session_id: None,
             remote_session: None,
             remote_target: None,
             transcript_root: None,

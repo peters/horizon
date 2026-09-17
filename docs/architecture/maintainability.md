@@ -279,3 +279,11 @@ registration IDs for bounded retries while preserving active siblings.
 An ambiguous Firefox context-creation reply retains ownership until exact-process
 reap and blocks further creation in that generation. Runtime capture registrations
 join the same retry ledger as startup registrations.
+
+### Browser profile membership
+
+`horizon-core::browser::shared_session` owns local profile-group membership,
+shared-page launch options, and duplicate eligibility. Runtime snapshots persist
+the group ID independently of panel identity. Session copies rekey groups while
+preserving shared membership; cleanup retains the registered group until exact
+process retirement and final profile deletion.

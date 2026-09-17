@@ -199,8 +199,15 @@ impl SessionStore {
                 for panel in &workspace.panels {
                     if panel.kind == crate::panel::PanelKind::Browser {
                         let browser_config = panel.browser_config_for_restore(&runtime_state.browser);
-                        let profile_dir =
-                            crate::browser::profile_dir_for_home(&browser_config, &self.home, &panel.local_id);
+                        let profile_dir = crate::browser::profile_dir_for_home(
+                            &browser_config,
+                            &self.home,
+                            panel
+                                .browser_profile
+                                .as_ref()
+                                .and_then(|profile| profile.session_id.as_deref())
+                                .unwrap_or(&panel.local_id),
+                        );
                         remove_dir_if_exists(&profile_dir)?;
                     }
                 }

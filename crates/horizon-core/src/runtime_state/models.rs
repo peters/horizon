@@ -371,6 +371,10 @@ impl PanelState {
             remote_workspace: self.remote_workspace.clone(),
             session_binding: self.session_binding.clone(),
             template: self.template.clone(),
+            browser_session_id: self
+                .browser_profile
+                .as_ref()
+                .and_then(|profile| profile.session_id.clone()),
             browser_config: (self.kind == PanelKind::Browser).then(|| self.browser_config_for_restore(browser_config)),
             remote_session: None,
             remote_target: self
@@ -424,6 +428,8 @@ pub struct BrowserProfileState {
     /// comes back stopped: its session ended with the previous run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]

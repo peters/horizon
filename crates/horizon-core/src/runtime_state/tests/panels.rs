@@ -91,6 +91,7 @@ fn persisted_browser_profile_root_survives_other_config_changes() {
     let panel = PanelState {
         kind: PanelKind::Browser,
         browser_profile: Some(BrowserProfileState {
+            session_id: None,
             root: Some(PathBuf::from("/profiles/used-at-launch")),
             backend: None,
             hidden: false,
@@ -206,6 +207,7 @@ fn a_persisted_remote_target_restores_as_a_stopped_remote_panel() {
     let panel = PanelState {
         kind: PanelKind::Browser,
         browser_profile: Some(BrowserProfileState {
+            session_id: None,
             root: None,
             backend: None,
             hidden: false,
@@ -219,4 +221,79 @@ fn a_persisted_remote_target_restores_as_a_stopped_remote_panel() {
         options.remote_session.is_none(),
         "a restore never carries a session request: credentials are resolved per create"
     );
+}
+
+#[test]
+fn shared_browser_identity_survives_save_restore_and_whole_session_copy_rekeys_it() {
+    let panel = |id: &str| PanelState {
+        local_id: id.into(),
+        kind: PanelKind::Browser,
+        browser_profile: Some(BrowserProfileState {
+            session_id: Some("original".into()),
+            ..BrowserProfileState::default()
+        }),
+        ..PanelState::default()
+    };
+    let state = RuntimeState {
+        workspaces: vec![WorkspaceState {
+            panels: vec![panel("original"), panel("duplicate")],
+            ..WorkspaceState::default()
+        }],
+        ..RuntimeState::default()
+    };
+    let yaml = state.to_yaml().expect("serialize");
+    let mut restored: RuntimeState = serde_yaml::from_str(&yaml).expect("restore");
+    for panel in &restored.workspaces[0].panels {
+        assert_eq!(
+            panel
+                .to_panel_options(&crate::browser::BrowserConfig::default())
+                .browser_session_id
+                .as_deref(),
+            Some("original")
+        );
+    }
+    restored.regenerate_browser_local_ids();
+    let profiles: Vec<_> = restored.workspaces[0]
+        .panels
+        .iter()
+        .map(|panel| panel.browser_profile.as_ref().expect("profile").session_id.as_deref())
+        .collect();
+    assert_eq!(profiles[0], profiles[1]);
+    assert_eq!(profiles[0], Some(restored.workspaces[0].panels[0].local_id.as_str()));
+    assert_ne!(profiles[0], Some("original"));
+    assert_ne!(restored.workspaces[0].panels[0].local_id, "original");
+}
+
+#[test]
+fn legacy_browser_profiles_restore_without_a_shared_identity() {
+    let profile: BrowserProfileState = serde_yaml::from_str("root: /profiles\n").expect("legacy profile");
+    assert!(profile.session_id.is_none());
+}
+
+#[test]
+fn copying_a_standalone_browser_preserves_its_profile_owner_identity() {
+    let mut state = RuntimeState {
+        workspaces: vec![WorkspaceState {
+            panels: vec![PanelState {
+                local_id: "standalone".into(),
+                kind: PanelKind::Browser,
+                browser_profile: Some(BrowserProfileState {
+                    session_id: Some("standalone".into()),
+                    ..BrowserProfileState::default()
+                }),
+                ..PanelState::default()
+            }],
+            ..WorkspaceState::default()
+        }],
+        focused_panel_local_id: Some("standalone".into()),
+        ..RuntimeState::default()
+    };
+    state.regenerate_browser_local_ids();
+    let panel = &state.workspaces[0].panels[0];
+    assert_ne!(panel.local_id, "standalone");
+    assert_eq!(
+        panel.browser_profile.as_ref().expect("profile").session_id.as_deref(),
+        Some(panel.local_id.as_str())
+    );
+    assert_eq!(state.focused_panel_local_id.as_deref(), Some(panel.local_id.as_str()));
 }

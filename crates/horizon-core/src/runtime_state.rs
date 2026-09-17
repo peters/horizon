@@ -226,12 +226,28 @@ impl RuntimeState {
     /// source; retaining those ids would make both Chrome drivers share and
     /// remove each other's files.
     pub(crate) fn regenerate_browser_local_ids(&mut self) {
+        let mut groups: std::collections::HashMap<_, _> = self
+            .workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.panels)
+            .filter(|panel| panel.kind == PanelKind::Browser)
+            .map(|panel| (panel.local_id.clone(), new_local_id()))
+            .collect();
         for workspace in &mut self.workspaces {
             for panel in &mut workspace.panels {
                 if panel.kind != PanelKind::Browser {
                     continue;
                 }
-                let old_local_id = std::mem::replace(&mut panel.local_id, new_local_id());
+                if let Some(profile) = &mut panel.browser_profile
+                    && let Some(session_id) = &mut profile.session_id
+                {
+                    session_id.clone_from(groups.entry(session_id.clone()).or_insert_with(new_local_id));
+                }
+                let replacement = groups
+                    .entry(panel.local_id.clone())
+                    .or_insert_with(new_local_id)
+                    .clone();
+                let old_local_id = std::mem::replace(&mut panel.local_id, replacement);
                 if self.focused_panel_local_id.as_deref() == Some(old_local_id.as_str()) {
                     self.focused_panel_local_id.clone_from(&Some(panel.local_id.clone()));
                 }
@@ -302,6 +318,7 @@ impl RuntimeState {
                                 .filter(|editor| editor.file_path.is_none() && !editor.text.is_empty())
                                 .map(|editor| editor.text.clone()),
                             browser_profile: browser.map(|browser| BrowserProfileState {
+                                session_id: browser.shared_profile_id().map(str::to_string),
                                 root: browser.profile_root_for_persistence().map(Path::to_path_buf),
                                 backend: Some(browser.backend()),
                                 hidden: !panel.visible,
