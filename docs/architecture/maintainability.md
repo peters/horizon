@@ -57,6 +57,7 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   host size. Firefox driver glue lives in `webdriver/session/viewport.rs`. Each
   backend observes from its driver loop, and `FrameSlot` exposes the explicit
   target so renderers can gate pointer input on matching frames.
+- `webdriver/session/startup.rs` owns local and remote allocation and BiDi setup.
 - `webdriver/session.rs` orchestrates Firefox and Safari. Host coordination
   belongs in `webdriver/session/coordination.rs`, synchronous navigation
   outcomes in `webdriver/session/navigation.rs`, session creation and
