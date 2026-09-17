@@ -802,13 +802,16 @@ mod tests {
         let capture = handle.snapshot().unwrap_or_else(|| panic!("paused capture missing"));
         assert_eq!(capture.state, BrowserVideoState::Paused);
         let wall = u64::try_from(system_now_millis().saturating_sub(capture.started_at_millis).max(0)).unwrap_or(0);
+        // The pause acknowledgment precedes elapsed telemetry publication.
+        let capture = thread
+            .finish()
+            .unwrap_or_else(|error| panic!("finish paused encoder: {error}"));
         assert!(
             wall.saturating_sub(capture.elapsed_millis) >= 200,
             "elapsed should freeze at the backdated pause request (elapsed={} wall={})",
             capture.elapsed_millis,
             wall
         );
-        let _ = thread.finish();
     }
 
     #[test]

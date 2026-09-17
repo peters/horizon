@@ -6,6 +6,8 @@ use serde_json::json;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+mod provider;
+
 fn wait(allocation: &RemoteAllocation) -> RemoteRecoveryStatus {
     let deadline = Instant::now() + Duration::from_secs(3);
     while allocation.status() == RemoteRecoveryStatus::Reconciling {
@@ -21,6 +23,7 @@ fn owned(server: &Server) -> RemoteAllocation {
     allocation.identify(
         Arc::new(RemoteHttpClient::new(&server.endpoint("/wd/hub"), Some(header)).expect("transport")),
         "private-session".into(),
+        None,
     );
     allocation.finish(None);
     allocation
@@ -90,15 +93,15 @@ fn active_authentication_errors_outages_and_non_session_404s_keep_the_hold() {
         ),
         (
             Reply::json(404, &json!({"value":{"error":"unknown command"}})),
-            RemoteRecoveryStatus::ProviderUnavailable,
+            RemoteRecoveryStatus::UnsupportedResponse,
         ),
         (
             Reply::json(500, &json!({"value":{"error":"invalid session id"}})),
-            RemoteRecoveryStatus::ProviderUnavailable,
+            RemoteRecoveryStatus::UnsupportedResponse,
         ),
         (
             Reply::json(200, &json!({"value":null})),
-            RemoteRecoveryStatus::ProviderUnavailable,
+            RemoteRecoveryStatus::UnsupportedResponse,
         ),
     ] {
         let server = Server::start(vec![reply]);
