@@ -74,21 +74,53 @@ fn hash_file(path: &Path, hash: &mut Sha256, remaining: &mut u64) -> Result<()> 
     if before.len() > *remaining {
         return Err(std::io::Error::other("repository evidence exceeds limit"));
     }
-    let mut bytes = Vec::new();
-    (&mut file).take(*remaining + 1).read_to_end(&mut bytes)?;
+    hash.update(before.len().to_le_bytes());
+    let mut reader = (&mut file).take(*remaining + 1);
+    let mut buffer = [0; 8192];
+    let mut bytes_read = 0;
+    loop {
+        let count = reader.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        bytes_read += count as u64;
+        if bytes_read > *remaining {
+            return Err(std::io::Error::other("repository changed during snapshot"));
+        }
+        hash.update(&buffer[..count]);
+    }
     let after = file.metadata()?;
-    if bytes.len() as u64 > *remaining || before.len() != after.len() || before.modified()? != after.modified()? {
+    if bytes_read != before.len() || before.len() != after.len() || before.modified()? != after.modified()? {
         return Err(std::io::Error::other("repository changed during snapshot"));
     }
-    *remaining -= bytes.len() as u64;
-    hash.update((bytes.len() as u64).to_le_bytes());
-    hash.update(bytes);
+    *remaining -= bytes_read;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn streaming_preserves_the_fingerprint_format_and_shared_byte_budget() {
+        let dir = tempfile::tempdir().expect("fixture");
+        let path = dir.path().join("file");
+        let contents = b"fingerprint fixture\n".repeat(1024);
+        fs::write(&path, &contents).expect("write");
+        let size = contents.len() as u64;
+        let mut expected = Sha256::new();
+        expected.update(size.to_le_bytes());
+        expected.update(&contents);
+        let mut actual = Sha256::new();
+        let mut remaining = size;
+        hash_file(&path, &mut actual, &mut remaining).expect("streaming fingerprint");
+        assert_eq!(actual.finalize(), expected.finalize());
+        assert_eq!(remaining, 0);
+        assert!(hash_file(&path, &mut Sha256::new(), &mut remaining).is_err());
+        let empty = dir.path().join("empty");
+        fs::write(&empty, []).expect("empty file");
+        hash_file(&empty, &mut Sha256::new(), &mut remaining).expect("empty file fits zero budget");
+    }
 
     #[test]
     fn fingerprint_detects_dirty_content_changes_without_a_dirty_flag_transition() {
