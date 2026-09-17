@@ -29,7 +29,36 @@ pub(crate) struct WorkOwner {
 }
 
 impl WorkLaunch<'_> {
-    pub(crate) fn attach(&self, args: &mut [String], env: &mut HashMap<String, String>) -> Option<Arc<WorkOwner>> {
+    pub(crate) fn attach_launch(
+        &self,
+        program: &str,
+        unambiguous: bool,
+        args: &mut [String],
+        env: &mut HashMap<String, String>,
+    ) -> Option<Arc<WorkOwner>> {
+        let owned = unambiguous.then(|| self.owned_command(program, args, env)).flatten();
+        self.attach(owned.as_deref(), args, env)
+    }
+
+    pub(crate) fn owned_command(
+        &self,
+        program: &str,
+        args: &[String],
+        env: &HashMap<String, String>,
+    ) -> Option<String> {
+        if !self.policy.enabled || !self.default_command || !self.kind.is_agent() {
+            return None;
+        }
+        super::command::owned_command(program, args, self.cwd, env)
+    }
+
+    pub(crate) fn attach(
+        &self,
+        owned_command: Option<&str>,
+        args: &mut [String],
+        env: &mut HashMap<String, String>,
+    ) -> Option<Arc<WorkOwner>> {
+        let owned_command = owned_command?;
         // The empirical teardown/seeded-resume proof currently covers Linux.
         // Other providers and platforms retain the explicit confirmation path.
         if !cfg!(target_os = "linux") || !self.policy.enabled || self.kind != PanelKind::Claude || !self.default_command
@@ -65,7 +94,7 @@ impl WorkLaunch<'_> {
         }
         // The PTY must own the provider, not an intermediate shell, so joining
         // its teardown proves provider exit before the final transcript read.
-        args[1].insert_str(0, "exec ");
+        owned_command.clone_into(&mut args[1]);
         args[1].push_str(" --plugin-dir ");
         args[1].push_str(&quote_argument(plugin));
         for (key, value) in [
@@ -185,7 +214,7 @@ fn cancellation_input(bytes: &[u8]) -> bool {
     matches!(key, "99" | "67") && modifiers.saturating_sub(1) & 4 != 0
 }
 
-fn quote_argument(argument: &str) -> String {
+pub(super) fn quote_argument(argument: &str) -> String {
     format!("'{}'", argument.replace('\'', "'\\''"))
 }
 

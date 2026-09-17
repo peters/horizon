@@ -285,7 +285,9 @@ impl Board {
             );
         }
         let browser_count = shutdown.panel_count();
-        if !shutdown.wait_for_browser_shutdown(BROWSER_PANEL_SHUTDOWN_TIMEOUT) {
+        if !shutdown
+            .wait_for_browser_shutdown(BROWSER_PANEL_SHUTDOWN_TIMEOUT.saturating_sub(shutdown.started_at().elapsed()))
+        {
             tracing::warn!(
                 browser_count,
                 forced_timeout_ms = FORCED_BROWSER_SHUTDOWN_WAIT.as_millis(),

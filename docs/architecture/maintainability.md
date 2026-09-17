@@ -131,6 +131,7 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   `runtime_state/binding_bootstrap.rs`; provider-specific session-store parsing
   belongs in focused leaves such as `runtime_state/agent_sessions/codex.rs`.
 - `agent_work/` keeps restart-work evidence separate from conversation binding.
+  `command.rs` verifies external executable ownership with a bounded shell probe; functions and aliases keep their ordinary launch.
   `ledger.rs` correlates lifecycle events by prompt; `transcript.rs` reads bounded
   provider tails without retaining their content; `policy.rs` makes conservative
   restart decisions from explicit evidence. `store.rs` owns bounded, private,

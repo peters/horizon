@@ -1,6 +1,7 @@
 //! Conservative evidence for continuing work after a host restart.
 //! Reading a conversation is not permission to start another turn.
 
+mod command;
 mod ledger;
 mod lifecycle;
 mod policy;
