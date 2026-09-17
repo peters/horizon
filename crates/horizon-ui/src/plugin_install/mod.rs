@@ -6,6 +6,7 @@ use std::sync::{Mutex, PoisonError};
 use horizon_core::browser::manifest;
 use horizon_core::{HorizonHome, browser_mcp_executable, codex_home_dir, grok_home_dir, user_home_dir};
 
+mod grok_mcp;
 mod user_skills;
 use user_skills::{
     HORIZON_BROWSER_SKILL, HORIZON_NOTIFY_SKILL, RETIRED_OFFLOAD_SKILL, SkillRootLease, bind_skill_roots,
@@ -345,6 +346,18 @@ fn install_agent_plugins_impl(
         if skill_dir_is_leased(lease, &dir) {
             updated_files += sync_plugin_files(&dir, NOTIFY_SKILL_FILES)?;
         }
+        let browser_dir = grok_root.join("skills").join(HORIZON_BROWSER_SKILL);
+        if skill_dir_is_leased(lease, &browser_dir) {
+            match grok_mcp::register(&grok_root) {
+                Ok(changed) => {
+                    updated_files += usize::from(changed);
+                    updated_files += sync_plugin_files(&browser_dir, BROWSER_SKILL_FILES)?;
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "Grok browser integration unavailable; preserving existing settings");
+                }
+            }
+        }
     }
     if let Some(codex_root) = provider_home(codex_home, user_home, ".codex") {
         let notify_dir = codex_root.join("skills").join(HORIZON_NOTIFY_SKILL);
@@ -377,6 +390,7 @@ fn user_skill_lease_dirs(
     }
     if let Some(grok_root) = provider_home(grok_home, user_home, ".grok") {
         dirs.push(grok_root.join("skills").join(HORIZON_NOTIFY_SKILL));
+        dirs.push(grok_root.join("skills").join(HORIZON_BROWSER_SKILL));
     }
     if let Some(codex_root) = provider_home(codex_home, user_home, ".codex") {
         dirs.push(codex_root.join("skills").join(HORIZON_NOTIFY_SKILL));
@@ -508,7 +522,7 @@ mod tests {
         assert!(!dirs.contains(&home.join(".agents/skills/horizon-browser")));
         assert!(!dirs.contains(&home.join(".gemini/skills/horizon-notify")));
         assert!(!dirs.contains(&home.join(".kilocode/skills/horizon-browser")));
-        assert!(!dirs.contains(&home.join(".grok/skills/horizon-browser")));
+        assert!(dirs.contains(&home.join(".grok/skills/horizon-browser")));
         assert!(abandoned.contains(&home.join(".agents/skills/horizon-notify")));
         assert!(abandoned.contains(&home.join(".agents/skills/horizon-browser")));
         assert!(abandoned.contains(&home.join(".gemini/skills/horizon-notify")));
@@ -622,8 +636,8 @@ mod tests {
             "browser MCP skill must not be exported to agents without Horizon MCP injection"
         );
         assert!(
-            !user_home.join(".grok/skills/horizon-browser/SKILL.md").exists(),
-            "browser MCP skill must not be exported to agents without Horizon MCP injection"
+            user_home.join(".grok/skills/horizon-browser/SKILL.md").exists(),
+            "Grok receives the matching browser MCP skill"
         );
         assert_eq!(
             std::fs::read_to_string(horizon_home.codex_skill_dir().join("SKILL.md"))

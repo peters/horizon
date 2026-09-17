@@ -415,7 +415,10 @@ fn resolve_agent_launch_command(
     let program = command.unwrap_or_else(|| definition.default_command.to_string());
     let mut launch_args = match definition.integration {
         AgentIntegrationKind::CodexMcp if uses_default_command => horizon_codex_mcp_args(),
-        AgentIntegrationKind::None | AgentIntegrationKind::CodexMcp => Vec::new(),
+        AgentIntegrationKind::GrokMcp if uses_default_command && !args.iter().any(|arg| arg == "--no-leader") => {
+            vec!["--no-leader".to_string()]
+        }
+        AgentIntegrationKind::None | AgentIntegrationKind::CodexMcp | AgentIntegrationKind::GrokMcp => Vec::new(),
         AgentIntegrationKind::ClaudePluginDir => horizon_claude_plugin_args(),
     };
     match definition.resume_mode {
@@ -579,7 +582,7 @@ fn default_shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| platform_default_shell().to_string())
 }
 
-pub(super) fn agent_env(kind: PanelKind, local_id: &str) -> HashMap<String, String> {
+pub(super) fn agent_env(kind: PanelKind, local_id: &str, uses_default_command: bool) -> HashMap<String, String> {
     let mut env = HashMap::new();
     if kind.is_agent() {
         env.insert("HORIZON".to_string(), "1".to_string());
@@ -588,6 +591,14 @@ pub(super) fn agent_env(kind: PanelKind, local_id: &str) -> HashMap<String, Stri
             crate::browser::manifest::HOST_INSTANCE_ENV.to_string(),
             crate::browser::manifest::host_instance().to_string(),
         );
+    }
+    if kind == PanelKind::Grok {
+        let command = uses_default_command
+            .then(crate::browser_mcp_executable)
+            .flatten()
+            .and_then(|path| path.into_os_string().into_string().ok())
+            .unwrap_or_default();
+        env.insert("HORIZON_BROWSER_MCP_EXECUTABLE".to_string(), command);
     }
     if kind == PanelKind::Claude {
         // Keep the conversation in Horizon's terminal history so its scrollbar
@@ -700,7 +711,7 @@ mod tests {
 
     #[test]
     fn agent_environment_exposes_a_stable_browser_actor() {
-        let env = agent_env(PanelKind::Codex, "panel-42");
+        let env = agent_env(PanelKind::Codex, "panel-42", true);
         assert_eq!(env.get("HORIZON").map(String::as_str), Some("1"));
         assert_eq!(
             env.get("HORIZON_BROWSER_ACTOR").map(String::as_str),
@@ -710,7 +721,7 @@ mod tests {
             env.get(crate::browser::manifest::HOST_INSTANCE_ENV).map(String::as_str),
             Some(crate::browser::manifest::host_instance())
         );
-        assert!(agent_env(PanelKind::Shell, "panel-42").is_empty());
+        assert!(agent_env(PanelKind::Shell, "panel-42", true).is_empty());
         assert_eq!(browser_actor(&"x".repeat(512)).len(), 24);
     }
 
@@ -738,6 +749,43 @@ mod tests {
     }
 
     #[test]
+    fn grok_browser_integration_stays_in_process_and_preserves_custom_launches() {
+        let (_, args) = resolve_launch_command(
+            None,
+            Vec::new(),
+            None,
+            PanelKind::Grok,
+            fresh_launch_context(&PanelResume::Fresh),
+        );
+        assert!(args.join(" ").contains("grok --no-leader"));
+        let (_, already_set) = resolve_launch_command(
+            None,
+            vec!["--no-leader".to_string()],
+            None,
+            PanelKind::Grok,
+            fresh_launch_context(&PanelResume::Fresh),
+        );
+        assert_eq!(already_set.join(" ").matches("--no-leader").count(), 1);
+        let (_, custom) = resolve_launch_command(
+            Some("custom-grok".to_string()),
+            vec!["custom-arg".to_string()],
+            None,
+            PanelKind::Grok,
+            fresh_launch_context(&PanelResume::Fresh),
+        );
+        assert!(!custom.join(" ").contains("--no-leader"));
+        assert_eq!(
+            agent_env(PanelKind::Grok, "custom", false)["HORIZON_BROWSER_MCP_EXECUTABLE"],
+            ""
+        );
+        let first = agent_env(PanelKind::Grok, "first", true);
+        let second = agent_env(PanelKind::Grok, "second", true);
+        assert_ne!(first["HORIZON_BROWSER_ACTOR"], second["HORIZON_BROWSER_ACTOR"]);
+        assert!(!first["HORIZON_BROWSER_MCP_EXECUTABLE"].is_empty());
+        assert!(!first.contains_key("GROK_HOME"));
+    }
+
+    #[test]
     fn custom_codex_launch_does_not_inject_the_horizon_mcp_registration() {
         let (_, args) = resolve_launch_command(
             Some("/opt/custom-codex".to_string()),
@@ -754,7 +802,7 @@ mod tests {
 
     #[test]
     fn claude_uses_horizon_native_scrollback() {
-        let claude_env = agent_env(PanelKind::Claude, "claude-panel");
+        let claude_env = agent_env(PanelKind::Claude, "claude-panel", true);
 
         assert_eq!(
             claude_env
@@ -762,8 +810,8 @@ mod tests {
                 .map(String::as_str),
             Some("1")
         );
-        assert!(!agent_env(PanelKind::Codex, "codex-panel").contains_key("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"));
-        assert!(!agent_env(PanelKind::Shell, "shell-panel").contains_key("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"));
+        assert!(!agent_env(PanelKind::Codex, "codex-panel", true).contains_key("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"));
+        assert!(!agent_env(PanelKind::Shell, "shell-panel", true).contains_key("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"));
     }
 
     #[test]

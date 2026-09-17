@@ -1150,7 +1150,7 @@ mod tests {
             },
         );
 
-        assert_eq!(args, vec!["-ic".to_string(), "grok".to_string()]);
+        assert_eq!(args, vec!["-ic".to_string(), "grok --no-leader".to_string()]);
     }
 
     #[test]
@@ -1173,7 +1173,7 @@ mod tests {
 
         assert_eq!(args.len(), 2);
         assert_eq!(args[0], "-ic");
-        assert_eq!(args[1], "grok --resume session-42 -m grok-build");
+        assert_eq!(args[1], "grok --no-leader --resume session-42 -m grok-build");
     }
 
     #[test]
