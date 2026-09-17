@@ -11,17 +11,36 @@ use crate::panel::{PanelKind, PanelOptions};
 
 pub(super) type ProfileSession = SharedSessionGroup;
 
-type Registry = Mutex<HashMap<PathBuf, Weak<ProfileSession>>>;
+struct RegisteredSession {
+    session: Weak<ProfileSession>,
+    ever_shared: bool,
+}
+
+type Registry = Mutex<HashMap<PathBuf, RegisteredSession>>;
+
+fn registry() -> &'static Registry {
+    static REGISTRY: OnceLock<Registry> = OnceLock::new();
+    REGISTRY.get_or_init(Mutex::default)
+}
+
+pub(super) fn has_shared_members(config: &BrowserConfig, group: &Arc<ProfileSession>) -> bool {
+    registry()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(&config.profile_dir(group.profile_id()))
+        .is_some_and(|entry| entry.ever_shared && Weak::ptr_eq(&entry.session, &Arc::downgrade(group)))
+}
 
 pub(super) fn acquire(config: &BrowserConfig, profile_id: &str) -> Arc<ProfileSession> {
-    static REGISTRY: OnceLock<Registry> = OnceLock::new();
     let key = config.profile_dir(profile_id);
-    let mut sessions = REGISTRY
-        .get_or_init(Mutex::default)
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    sessions.retain(|_, session| session.strong_count() > 0);
-    if let Some(session) = sessions.get(&key).and_then(Weak::upgrade) {
+    let mut sessions = registry().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    sessions.retain(|_, entry| entry.session.strong_count() > 0);
+    if let Some(entry) = sessions.get_mut(&key)
+        && let Some(session) = entry.session.upgrade()
+    {
+        // Closed siblings may still be shutting down after their host handles
+        // disappear. Keep a shared profile on one backend for this lifetime.
+        entry.ever_shared = true;
         return session;
     }
     let session = Arc::new(if config.backend == BackendKind::FirefoxBidi {
@@ -29,7 +48,13 @@ pub(super) fn acquire(config: &BrowserConfig, profile_id: &str) -> Arc<ProfileSe
     } else {
         SharedSessionGroup::Chromium(SharedBrowserSession::new(profile_id.to_string()))
     });
-    sessions.insert(key, Arc::downgrade(&session));
+    sessions.insert(
+        key,
+        RegisteredSession {
+            session: Arc::downgrade(&session),
+            ever_shared: false,
+        },
+    );
     session
 }
 
@@ -148,6 +173,78 @@ mod tests {
         drop(reacquired);
         drop(signal);
         assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn standalone_profile_can_still_switch_backend() {
+        let root = tempfile::tempdir().expect("profiles");
+        let mut source = panel(root.path(), "source", "source");
+        let (completion, receiver) = std::sync::mpsc::channel();
+        source.teardown_signal = Some(Box::new(horizon_browser::session::BrowserShutdownSignal::for_test(
+            receiver,
+        )));
+        source.switch_backend(BackendKind::FirefoxBidi);
+        assert_eq!(source.backend(), BackendKind::FirefoxBidi);
+        assert!(source.navigation_error.is_none());
+        assert!(source.pending_relaunch.is_some());
+        completion.send(()).expect("finish old driver");
+    }
+
+    #[test]
+    fn closing_sibling_keeps_backend_fixed_through_pending_shutdown() {
+        for backend in [BackendKind::ChromiumCdp, BackendKind::FirefoxBidi] {
+            let root = tempfile::tempdir().expect("profiles");
+            let mut source = BrowserPanelState::inert();
+            source.config.profile_root = Some(root.path().to_path_buf());
+            source.config.backend = backend;
+            source.panel_local_id = "source".into();
+            source.status = BrowserStatus::Ready;
+            source.shared_session = Some(acquire(&source.config, "source"));
+            assert!(!has_shared_members(
+                &source.config,
+                source.shared_session.as_ref().expect("standalone")
+            ));
+            let mut duplicate = BrowserPanelState::inert();
+            duplicate.config = source.config.clone();
+            duplicate.panel_local_id = "duplicate".into();
+            duplicate.shared_session = Some(acquire(&duplicate.config, "source"));
+            let (completion, receiver) = std::sync::mpsc::channel();
+            duplicate.teardown_signal = Some(Box::new(horizon_browser::session::BrowserShutdownSignal::for_test(
+                receiver,
+            )));
+            let shutdown = duplicate.close_permanently();
+            drop(duplicate);
+            assert!(!shutdown.is_complete());
+            let group = Arc::downgrade(source.shared_session.as_ref().expect("source group"));
+            assert_eq!(
+                Arc::strong_count(source.shared_session.as_ref().expect("sole panel")),
+                1
+            );
+            let other = if backend == BackendKind::ChromiumCdp {
+                BackendKind::FirefoxBidi
+            } else {
+                BackendKind::ChromiumCdp
+            };
+            source.switch_backend(other);
+            assert_eq!(source.backend(), backend);
+            assert!(source.navigation_error.is_some());
+            assert!(Weak::ptr_eq(
+                &Arc::downgrade(source.shared_session.as_ref().expect("unchanged group")),
+                &group
+            ));
+            completion.send(()).expect("finish sibling");
+            assert!(shutdown.wait(Duration::from_secs(2)));
+            drop(shutdown);
+            // Membership is sticky because an absent host handle alone does
+            // not establish that every sibling has released the profile.
+            source.switch_backend(other);
+            assert_eq!(source.backend(), backend);
+            drop(group);
+            let profile = source.config.profile_dir("source");
+            std::fs::create_dir_all(&profile).expect("profile");
+            assert!(source.close_permanently().wait(Duration::from_secs(2)));
+            assert!(!profile.exists());
+        }
     }
 
     #[test]

@@ -287,3 +287,8 @@ shared-page launch options, and duplicate eligibility. Runtime snapshots persist
 the group ID independently of panel identity. Session copies rekey groups while
 preserving shared membership; cleanup retains the registered group until exact
 process retirement and final profile deletion.
+
+Once a profile group has been shared, its backend remains fixed for that group's
+lifetime, including after a sibling panel closes. This prevents switching away
+while a closed sibling still owns the profile during asynchronous teardown.
+Standalone profiles retain ordinary backend switching.

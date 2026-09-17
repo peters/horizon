@@ -325,11 +325,9 @@ impl BrowserPanelState {
             // A remote session's browser is fixed by its target.
             return;
         }
-        if self
-            .shared_session
-            .as_ref()
-            .is_some_and(|session| Arc::strong_count(session) > 1 || session.profile_id() != self.panel_local_id)
-        {
+        if self.shared_session.as_ref().is_some_and(|session| {
+            shared_session::has_shared_members(&self.config, session) || session.profile_id() != self.panel_local_id
+        }) {
             self.navigation_error = Some("Shared browser panels must keep the same backend".into());
             return;
         }
