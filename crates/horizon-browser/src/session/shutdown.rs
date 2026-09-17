@@ -32,6 +32,7 @@ pub struct BrowserShutdownSignal {
     panel_local_id: Option<String>,
     coordination: Option<Arc<dyn BrowserCoordination>>,
     profile_cleanup: Mutex<ProfileCleanupState>,
+    shared_profile: Option<super::SharedBrowserSession>,
 }
 
 enum ProfileCleanupState {
@@ -69,8 +70,15 @@ impl BrowserShutdownSignal {
             process_control,
             panel_local_id: Some(panel_local_id),
             coordination,
+            shared_profile: None,
             profile_cleanup: Mutex::new(ProfileCleanupState::NotRequired),
         }
+    }
+
+    #[must_use]
+    pub fn with_shared_profile_cleanup(mut self, group: super::SharedBrowserSession) -> Self {
+        self.shared_profile = Some(group);
+        self
     }
 
     #[must_use]
@@ -83,7 +91,7 @@ impl BrowserShutdownSignal {
     }
 
     #[must_use]
-    pub fn completed_with_profile_cleanup(profile_dir: std::path::PathBuf) -> Self {
+    pub fn completed() -> Self {
         let (completion_tx, completion_rx) = mpsc::channel();
         drop(completion_tx);
         let process_control = ChromeProcessControl::default();
@@ -98,8 +106,14 @@ impl BrowserShutdownSignal {
             process_control,
             panel_local_id: None,
             coordination: None,
-            profile_cleanup: Mutex::new(ProfileCleanupState::Pending(profile_dir)),
+            shared_profile: None,
+            profile_cleanup: Mutex::new(ProfileCleanupState::NotRequired),
         }
+    }
+
+    #[must_use]
+    pub fn completed_with_profile_cleanup(profile_dir: std::path::PathBuf) -> Self {
+        Self::completed().with_profile_cleanup(profile_dir)
     }
 
     #[must_use]
@@ -231,6 +245,9 @@ impl BrowserShutdownSignal {
     }
 
     fn profile_cleanup_is_complete(&self) -> bool {
+        if self.shared_profile.as_ref().is_some_and(|group| !group.is_idle()) {
+            return false;
+        }
         let mut cleanup = self
             .profile_cleanup
             .lock()
@@ -239,6 +256,14 @@ impl BrowserShutdownSignal {
     }
 
     fn wait_for_profile_cleanup(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        while self.shared_profile.as_ref().is_some_and(|group| !group.is_idle()) {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let timeout = deadline.saturating_duration_since(Instant::now());
         let mut cleanup = self
             .profile_cleanup
             .lock()
@@ -278,6 +303,7 @@ impl BrowserShutdownSignal {
             process_control,
             panel_local_id: None,
             coordination: None,
+            shared_profile: None,
             profile_cleanup: Mutex::new(ProfileCleanupState::NotRequired),
         }
     }
@@ -298,6 +324,7 @@ impl BrowserShutdownSignal {
             process_control,
             panel_local_id: None,
             coordination: None,
+            shared_profile: None,
             profile_cleanup: Mutex::new(ProfileCleanupState::NotRequired),
         }
     }

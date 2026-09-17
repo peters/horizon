@@ -5,11 +5,11 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
+use super::shared::DriverProcess;
 use crate::cdp::CdpLink;
 use crate::frames::FrameSlot;
 use crate::input::{BrowserInputCdpExt, is_user_activity};
 use crate::page_scroll::VerticalScrollbarPress;
-use crate::process::ChromeProcess;
 use crate::{AgentAction, BrowserAuditStatus, BrowserButton, BrowserControlFailure, BrowserInput, PageScrollState};
 
 use crate::navigation::AgentActionExecution;
@@ -52,7 +52,7 @@ impl DriverState {
         event_tx: &BrowserEventSender,
         frame_slot: &Arc<FrameSlot>,
         actions: Vec<AgentAction>,
-        chrome: &mut ChromeProcess,
+        chrome: &mut DriverProcess,
     ) -> bool {
         for request in actions {
             // A blocking action later in the batch must not delay the typed

@@ -4,9 +4,9 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use super::shared::DriverProcess;
 use crate::frames::FrameSlot;
 use crate::navigation::{AgentActionExecution, PendingNavigation, now_millis};
-use crate::process::ChromeProcess;
 use crate::wait::{
     BackendChecked, Observation, PendingWait, WAIT_MAX_RESULTS, WaitResult, WaitStop, defer_result_during_shutdown,
     run_while_backend_available,
@@ -24,7 +24,7 @@ impl DriverState {
         event_tx: &BrowserEventSender,
         frame_slot: &Arc<FrameSlot>,
         request: &AgentAction,
-        chrome: &mut ChromeProcess,
+        chrome: &mut DriverProcess,
     ) -> AgentActionExecution {
         let BrowserControlAction::WaitForSelector {
             selector,
@@ -85,7 +85,7 @@ impl DriverState {
         link: &mut crate::cdp::CdpLink,
         event_tx: &BrowserEventSender,
         frame_slot: &Arc<FrameSlot>,
-        chrome: &mut ChromeProcess,
+        chrome: &mut DriverProcess,
     ) {
         let Some(mut pending) = self.pending_wait.take() else {
             return;

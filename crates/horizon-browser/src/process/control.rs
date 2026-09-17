@@ -22,6 +22,11 @@ pub(crate) struct ServiceProcess {
 /// deadline can terminate and reap the browser even if its driver is stuck in
 /// teardown. Retaining the native child or Windows Job Object, rather than
 /// only its PID, avoids targeting a later process that reused the number.
+pub(crate) trait ProcessLifecycle: Send + Sync {
+    fn is_reaped(&self) -> bool;
+    fn terminate(&self, timeout: Duration) -> bool;
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct ChromeProcessControl {
     inner: Arc<Mutex<ChromeProcessControlState>>,
@@ -30,11 +35,19 @@ pub(crate) struct ChromeProcessControl {
 #[derive(Default)]
 struct ChromeProcessControlState {
     child: Option<Arc<Mutex<ProcessChild>>>,
+    delegate: Option<Arc<dyn ProcessLifecycle>>,
     force_requested: bool,
     registration_settled: bool,
 }
 
 impl ChromeProcessControl {
+    pub(crate) fn delegate(&self, lifecycle: Arc<dyn ProcessLifecycle>) {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .delegate = Some(lifecycle);
+    }
+
     pub(super) fn register(&self, child: &Arc<Mutex<ProcessChild>>) {
         let force_requested = {
             let mut state = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -77,6 +90,10 @@ impl ChromeProcessControl {
                 Err(TryLockError::Poisoned(error)) => error.into_inner(),
                 Err(TryLockError::WouldBlock) => return false,
             };
+            if let Some(delegate) = state.delegate.clone() {
+                drop(state);
+                return delegate.is_reaped();
+            }
             state.child.clone()
         };
         let Some(child) = child else {
@@ -113,6 +130,10 @@ impl ChromeProcessControl {
                 tracing::warn!("timed out waiting for browser process-control state");
                 return false;
             };
+            if let Some(delegate) = state.delegate.clone() {
+                drop(state);
+                return delegate.terminate(deadline.saturating_duration_since(Instant::now()));
+            }
             state.force_requested = true;
             if let Some(child) = state.child.clone() {
                 break child;
