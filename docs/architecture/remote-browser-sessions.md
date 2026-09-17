@@ -56,6 +56,10 @@ browser:
         credential_bindings:
           device-cloud-user: { store: os_keychain, slot: remote-browser/device-cloud/username }
           device-cloud-key: { store: session }
+          # Unattended / container alternative (variable names only; values come
+          # from the launching process, never from this file):
+          # device-cloud-user: { store: environment, slot: REMOTE_BROWSER_USERNAME }
+          # device-cloud-key: { store: environment, slot: REMOTE_BROWSER_ACCESS_KEY }
         limits:
           max_sessions: 1
           allocation_timeout_seconds: 120
@@ -102,8 +106,16 @@ Rules the configuration PR enforces:
   Manager, Linux Secret Service), under the distinct service name
   `horizon-remote-browser` and items keyed by endpoint origin plus slot. The
   `keyring` facade crate itself is not linked: its 4.x documentation directs
-  applications that choose their stores to `keyring-core`. No file store, no
-  environment interpolation.
+  applications that choose their stores to `keyring-core`. `store: environment`
+  names a process environment variable in `slot` (for example
+  `REMOTE_BROWSER_USERNAME`). Horizon copies that variable from the launching
+  process into the in-memory sink at startup and does not look at session or
+  OS-store values for the same reference. There is no implicit interpolation of
+  arbitrary `$VARS` in YAML, and no silent fallback to another store. Spawned
+  agent and terminal children inherit these variables normally. The Horizon
+  process, its children, the container specification and process environment
+  inspection can expose launch-time values. Use session or keychain bindings
+  when credentials should not be delivered through the environment. No file store.
 - Exported profiles carry providers, targets, limits and authentication
   references; machine-local `credential_bindings` are stripped, and whether a
   reference has a value on this machine is a live readiness query rather than
@@ -125,6 +137,76 @@ Rules the configuration PR enforces:
   endpoint or authentication conflict with a trusted local provider.
 - Existing files without `browser.remote` load unchanged and local backends keep
   their defaults. Parsing and readiness checks never allocate.
+
+### Unattended containers and CI
+
+Every credential reference selects its own variable. Multiple providers may
+use distinct variables simultaneously, even when their reference names match.
+A provider may also mix environment, session and keychain bindings; only the
+explicitly selected source is consulted. Settings changes capture newly bound
+variables from the same launching process and drop unused snapshots.
+
+Configuration names variables only. Values come from the invoking environment
+or CI secret bindings; they do not belong in the image, the target profile, or
+command-line arguments.
+
+```yaml
+browser:
+  remote:
+    providers:
+      device_cloud:
+        adapter: webdriver
+        endpoint: https://grid.example.net/wd/hub
+        authentication:
+          kind: basic
+          username_ref: device-cloud-user
+          password_ref: device-cloud-key
+        credential_bindings:
+          device-cloud-user: { store: environment, slot: REMOTE_BROWSER_USERNAME }
+          device-cloud-key: { store: environment, slot: REMOTE_BROWSER_ACCESS_KEY }
+      second_cloud:
+        adapter: webdriver
+        endpoint: https://second-grid.example.net/wd/hub
+        authentication: { kind: bearer, token_ref: api-token }
+        credential_bindings:
+          api-token: { store: environment, slot: SECOND_BROWSER_TOKEN }
+    targets:
+      ios_phone:
+        provider: device_cloud
+        browser_name: safari
+        platform_name: iOS
+        device: { kind: physical, model: configured-ios-model, os_version: "18" }
+```
+
+```bash
+docker run --rm \
+  -e REMOTE_BROWSER_USERNAME \
+  -e REMOTE_BROWSER_ACCESS_KEY \
+  -e SECOND_BROWSER_TOKEN \
+  -v "$PWD/config.yaml:/config/config.yaml:ro" \
+  example/browser-test-runner \
+  --config /config/config.yaml --ephemeral
+```
+
+GitHub Actions placeholder (the secret values stay in the runner's secret
+store; the workflow file contains only names):
+
+```yaml
+jobs:
+  remote-browser:
+    runs-on: ubuntu-latest
+    container: example/browser-test-runner
+    env:
+      REMOTE_BROWSER_USERNAME: ${{ secrets.REMOTE_BROWSER_USERNAME }}
+      REMOTE_BROWSER_ACCESS_KEY: ${{ secrets.REMOTE_BROWSER_ACCESS_KEY }}
+      SECOND_BROWSER_TOKEN: ${{ secrets.SECOND_BROWSER_TOKEN }}
+    steps:
+      - run: horizon --config /config/config.yaml --ephemeral
+```
+
+Remote sessions still use the public `browser_*` MCP tools (`browser_create`
+with a configured `target`, then snapshot/actions, then `browser_close`). No
+alternate control API is added for environment credentials.
 
 ## Device identity and evidence
 

@@ -475,7 +475,25 @@ Provider-backed overview controls and workspace setup remain separate integratio
 | `--new-session` | Start a new saved session from the current config |
 | `--blank` | Start with an empty board (combine with `--ephemeral` for a throwaway canvas) |
 | `--export-remote-profile <path>` | Write the shareable remote browser profile (providers, targets, credential references; no credential values or bindings) and exit |
-| `--import-remote-profile <path>` | Merge a portable remote browser profile into the config file and exit (one profile command per launch, never the config file itself); credentials are entered afterwards in Settings > Remote browsers |
+| `--import-remote-profile <path>` | Merge a portable remote browser profile into the config file and exit (one profile command per launch, never the config file itself); credentials are entered afterwards in Settings > Remote browsers, or bound in YAML to environment variable names for unattended launches |
+
+Machine-local `credential_bindings` name a store, never a secret. `store:
+session` and `store: os_keychain` are entered in Settings > Remote browsers.
+`store: environment` with `slot: REMOTE_BROWSER_USERNAME` (and a matching
+access-key variable) copies those values from the launching process at startup
+so a container or CI job can authenticate without a desktop keychain. Agent and
+terminal children inherit launch environment variables normally. Each
+reference selects its own variable, so multiple providers and credentials work
+together. See the [configuration examples](docs/architecture/remote-browser-sessions.md#unattended-containers-and-ci). The Horizon process,
+the container spec, and the parent's environment listing still show launch-time
+secrets; do not put values in the image, the profile, or argv.
+
+```bash
+docker run --rm \
+  -e REMOTE_BROWSER_USERNAME \
+  -e REMOTE_BROWSER_ACCESS_KEY \
+  example/browser-test-runner
+```
 
 ---
 

@@ -7,13 +7,13 @@ use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use horizon_browser::remote::{CredentialReference, CredentialStoreKind, RemoteProviderProfile};
+use horizon_browser::remote::{CredentialReference, CredentialStoreKind, RemoteBrowserConfig, RemoteProviderProfile};
 
 use zeroize::Zeroizing;
 
 use super::{
-    CredentialLocator, CredentialReadiness, CredentialState, CredentialStores, KeyringCredentialStore,
-    RemoteCredentialError, RemoteCredentialStore, Sealed, SessionCredentialStore, readiness,
+    CredentialLocator, CredentialReadiness, CredentialState, CredentialStores, EnvironmentCredentialStore,
+    KeyringCredentialStore, RemoteCredentialError, RemoteCredentialStore, Sealed, SessionCredentialStore, readiness,
 };
 
 /// Boxed store the worker thread owns; the allocation path borrows it later.
@@ -135,6 +135,7 @@ struct KeychainLink {
 /// Session store plus a keychain worker, with a presence cache the UI reads.
 pub struct CredentialWorkbench {
     session: SessionCredentialStore,
+    environment: EnvironmentCredentialStore,
     keychain: Option<KeychainLink>,
     keychain_state: KeychainState,
     presence: BTreeMap<OsAddress, CredentialState>,
@@ -168,6 +169,7 @@ impl CredentialWorkbench {
             .ok();
         Self {
             session: SessionCredentialStore::new(),
+            environment: EnvironmentCredentialStore::new(),
             keychain: Some(KeychainLink {
                 commands: command_tx,
                 events: event_rx,
@@ -282,6 +284,7 @@ impl CredentialWorkbench {
         let stores = CredentialStores {
             session: &self.session,
             os_keychain: Some(&cache),
+            environment: Some(&self.environment),
         };
         readiness(profile, &stores)
     }
@@ -379,6 +382,7 @@ impl CredentialWorkbench {
                 ));
                 result
             }
+            CredentialStoreKind::Environment => Err(RemoteCredentialError::StoreUnavailable),
             CredentialStoreKind::OsKeychain => {
                 let result = self
                     .available_link()
@@ -438,10 +442,22 @@ impl CredentialWorkbench {
         std::mem::take(&mut self.notices)
     }
 
+    /// Copy environment-backed bindings from the launching process into the
+    /// in-memory snapshot. Missing names stay missing; captured names are kept.
+    pub fn load_environment_bindings(&mut self, remote: &RemoteBrowserConfig) {
+        let names = remote.environment_variable_names();
+        self.environment.capture_from_process(&names);
+    }
+
     /// Stores for allocation-time resolution. The OS store is only offered once opened.
     #[must_use]
     pub fn session_store(&self) -> &SessionCredentialStore {
         &self.session
+    }
+
+    #[must_use]
+    pub fn environment_store(&self) -> &EnvironmentCredentialStore {
+        &self.environment
     }
 
     #[must_use]

@@ -177,7 +177,7 @@ impl HorizonApp {
             remote_hosts_last_refresh: None,
             last_session_catalog_refresh: None,
             last_panel_output_at: Some(Instant::now()), browser_create_host: BrowserCreateHostState::default(),
-            settings: None, remote_browser_credentials: CredentialWorkbench::spawn_platform(),
+            settings: None, remote_browser_credentials: spawn_remote_browser_credentials(config),
             speech_model_info_cache: settings::SpeechModelInfoCache::new(),
             session_manager: None,
             managed_install,
@@ -219,6 +219,12 @@ impl HorizonApp {
             exit_cleanup_complete: false,
         }
     }
+}
+
+fn spawn_remote_browser_credentials(config: &Config) -> CredentialWorkbench {
+    let mut workbench = CredentialWorkbench::spawn_platform();
+    workbench.load_environment_bindings(&config.browser.remote);
+    workbench
 }
 
 fn managed_install_state() -> (Option<ManagedInstall>, Option<Instant>) {

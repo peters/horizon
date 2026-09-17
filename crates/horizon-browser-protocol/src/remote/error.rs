@@ -62,6 +62,8 @@ pub enum CredentialReferenceProblem {
     UnusedBinding,
     SlotRequired,
     MalformedSlot,
+    /// `store: environment` names a variable that is not a POSIX identifier.
+    MalformedVariable,
     /// Another binding for the same endpoint origin uses the same slot, so
     /// both would read and overwrite one OS-store item.
     DuplicateSlot,
@@ -74,8 +76,11 @@ impl CredentialReferenceProblem {
             Self::MalformedReference => "is not a valid credential reference name",
             Self::MissingBinding => "is referenced by the authentication block but has no credential binding",
             Self::UnusedBinding => "is bound but not referenced by the authentication block",
-            Self::SlotRequired => "needs a slot for the OS credential store",
+            Self::SlotRequired => "needs a slot for this credential store",
             Self::MalformedSlot => "has a slot that is not a valid store path",
+            Self::MalformedVariable => {
+                "needs a 1-128 character environment variable name starting with an ASCII letter or _, followed by ASCII letters, digits, or _"
+            }
             Self::DuplicateSlot => "shares its OS-store slot with another binding for the same endpoint origin",
         }
     }

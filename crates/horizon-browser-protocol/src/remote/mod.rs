@@ -10,7 +10,7 @@ mod error;
 mod provider;
 mod target;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -144,6 +144,22 @@ impl RemoteBrowserConfig {
             providers,
             targets: self.targets.clone(),
         }
+    }
+
+    /// Environment variable names referenced by `store: environment` bindings.
+    /// Names only; never values.
+    #[must_use]
+    pub fn environment_variable_names(&self) -> BTreeSet<String> {
+        self.providers
+            .values()
+            .flat_map(|provider| {
+                provider
+                    .credential_bindings
+                    .values()
+                    .filter_map(CredentialBinding::environment_variable)
+                    .map(str::to_string)
+            })
+            .collect()
     }
 
     /// Presence of a binding for each authentication reference, per provider,

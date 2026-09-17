@@ -20,14 +20,22 @@ fn basic_profile(username_store: CredentialStoreKind, password_store: Credential
         CredentialReference::from("user"),
         CredentialBinding {
             store: username_store,
-            slot: (username_store == CredentialStoreKind::OsKeychain).then(|| "remote-browser/grid/user".to_string()),
+            slot: match username_store {
+                CredentialStoreKind::OsKeychain => Some("remote-browser/grid/user".to_string()),
+                CredentialStoreKind::Environment => Some("REMOTE_BROWSER_USERNAME".to_string()),
+                CredentialStoreKind::Session => None,
+            },
         },
     );
     credential_bindings.insert(
         CredentialReference::from("key"),
         CredentialBinding {
             store: password_store,
-            slot: (password_store == CredentialStoreKind::OsKeychain).then(|| "remote-browser/grid/key".to_string()),
+            slot: match password_store {
+                CredentialStoreKind::OsKeychain => Some("remote-browser/grid/key".to_string()),
+                CredentialStoreKind::Environment => Some("REMOTE_BROWSER_ACCESS_KEY".to_string()),
+                CredentialStoreKind::Session => None,
+            },
         },
     );
     RemoteProviderProfile {
@@ -56,6 +64,7 @@ fn basic_header_is_built_from_session_values_and_never_exposed() {
     let stores = CredentialStores {
         session: &session,
         os_keychain: None,
+        environment: None,
     };
     let authorization = resolve_authorization(&profile, &stores)
         .expect("resolves")
@@ -81,6 +90,7 @@ fn session_values_are_scoped_to_the_endpoint_origin() {
     let stores = CredentialStores {
         session: &session,
         os_keychain: None,
+        environment: None,
     };
     let error = resolve_authorization(&other, &stores).expect_err("other origin has no values");
     assert_eq!(error.reference, CredentialReference::from("user"));
@@ -103,6 +113,7 @@ fn bearer_header_and_none_authentication() {
     let stores = CredentialStores {
         session: &session,
         os_keychain: None,
+        environment: None,
     };
     let authorization = resolve_authorization(&profile, &stores)
         .expect("resolves")
@@ -124,6 +135,7 @@ fn readiness_reports_missing_locked_and_unavailable_without_values() {
     let stores = CredentialStores {
         session: &session,
         os_keychain: Some(&keychain),
+        environment: None,
     };
     let report = readiness(&profile, &stores);
     assert_eq!(report[0].state, CredentialState::Present);
@@ -140,6 +152,7 @@ fn readiness_reports_missing_locked_and_unavailable_without_values() {
     let stores = CredentialStores {
         session: &session,
         os_keychain: Some(&keychain),
+        environment: None,
     };
     assert_eq!(readiness(&profile, &stores)[0].state, CredentialState::Locked);
     let error = resolve_authorization(&profile, &stores).expect_err("locked store");
@@ -149,6 +162,7 @@ fn readiness_reports_missing_locked_and_unavailable_without_values() {
     let stores = CredentialStores {
         session: &session,
         os_keychain: None,
+        environment: None,
     };
     assert_eq!(readiness(&profile, &stores)[0].state, CredentialState::StoreUnavailable);
     let error = resolve_authorization(&profile, &stores).expect_err("no OS store");
@@ -163,6 +177,7 @@ fn unbound_reference_is_reported_as_missing_not_a_panic() {
     let stores = CredentialStores {
         session: &session,
         os_keychain: None,
+        environment: None,
     };
     let report = readiness(&profile, &stores);
     assert_eq!(report.len(), 2);
@@ -190,6 +205,7 @@ fn values_must_be_bounded_and_header_safe() {
     let stores = CredentialStores {
         session: &session,
         os_keychain: None,
+        environment: None,
     };
     let error = resolve_authorization(&profile, &stores).expect_err("control characters");
     assert_eq!(error.error, RemoteCredentialError::NotHeaderSafe);
@@ -237,6 +253,7 @@ fn basic_usernames_may_not_contain_colons_and_bearer_tokens_follow_token68() {
     let stores = CredentialStores {
         session: &session,
         os_keychain: None,
+        environment: None,
     };
     let error = resolve_authorization(&profile, &stores).expect_err("colon in username");
     assert_eq!(error.error, RemoteCredentialError::InvalidUsername);
@@ -251,6 +268,7 @@ fn basic_usernames_may_not_contain_colons_and_bearer_tokens_follow_token68() {
         let stores = CredentialStores {
             session: &session,
             os_keychain: None,
+            environment: None,
         };
         let error = resolve_authorization(&bearer, &stores).expect_err("bad token68");
         assert_eq!(error.error, RemoteCredentialError::InvalidBearerToken, "{bad:?}");
@@ -259,6 +277,7 @@ fn basic_usernames_may_not_contain_colons_and_bearer_tokens_follow_token68() {
     let stores = CredentialStores {
         session: &session,
         os_keychain: None,
+        environment: None,
     };
     assert_eq!(
         resolve_authorization(&bearer, &stores)
@@ -277,6 +296,7 @@ fn a_failing_store_is_reported_unavailable_not_missing() {
     let stores = CredentialStores {
         session: &session,
         os_keychain: Some(&failing),
+        environment: None,
     };
     assert_eq!(readiness(&profile, &stores)[0].state, CredentialState::StoreUnavailable);
     assert_eq!(
@@ -802,6 +822,7 @@ fn os_store_round_trip_smoke() {
     let stores = CredentialStores {
         session: &SessionCredentialStore::new(),
         os_keychain: Some(&store),
+        environment: None,
     };
     let mut smoke = profile.clone();
     smoke
