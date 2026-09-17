@@ -204,7 +204,10 @@ fn work_records_are_private() {
 #[test]
 fn failed_hooks_poison_only_their_launch_even_while_the_record_is_locked() {
     let mut fixture = Fixture::new();
-    assert!(fixture.store.invalidate("panel", "other-host").is_err());
+    fixture
+        .store
+        .invalidate("panel", "other-host")
+        .expect("obsolete invalidation is inert");
     assert!(fixture.store.read("panel").expect("record").is_some());
     let lock = fixture.store.lock("panel").expect("hold record lock");
     fixture.input.event.hook_event_name = "PermissionRequest".into();
@@ -266,4 +269,93 @@ fn failure_during_claim_persistence_sacrifices_the_claim_without_authorizing_res
             .consumed
     );
     assert!(fixture.store.claim_handoff(&record).is_err());
+}
+
+#[test]
+fn a_new_owner_cannot_claim_an_old_generations_handoff() {
+    let mut fixture = Fixture::new();
+    fixture.seal();
+    fixture
+        .store
+        .register_owner(
+            "panel",
+            PanelKind::Claude,
+            "next",
+            Some("session"),
+            fixture.directory.path(),
+        )
+        .expect("new owner");
+    let current = fixture.store.read("panel").expect("read").expect("record");
+    assert!(current.handoff.is_some());
+    assert!(
+        !fixture
+            .store
+            .claim_handoff(&current)
+            .expect("cannot claim stale generation")
+    );
+}
+
+#[test]
+fn an_invalidated_launch_does_not_pass_its_handoff_to_a_new_owner() {
+    let mut fixture = Fixture::new();
+    fixture.seal();
+    fixture.store.invalidate("panel", "host").expect("invalidate");
+    fixture
+        .store
+        .register_owner(
+            "panel",
+            PanelKind::Claude,
+            "next",
+            Some("session"),
+            fixture.directory.path(),
+        )
+        .expect("new owner");
+    assert!(
+        fixture
+            .store
+            .read("panel")
+            .expect("read")
+            .expect("record")
+            .handoff
+            .is_none()
+    );
+}
+
+#[test]
+fn inaccessible_health_uses_record_removal_without_deleting_a_new_owner() {
+    let fixture = Fixture::new();
+    let health = fixture.store.health_path("panel", "host").expect("health");
+    fs::remove_file(&health).expect("remove marker");
+    fs::create_dir(&health).expect("inaccessible marker");
+    fixture
+        .store
+        .invalidate("panel", "host")
+        .expect("fallback invalidation");
+    assert!(fixture.store.read("panel").expect("read").is_none());
+    fixture
+        .store
+        .register_owner(
+            "panel",
+            PanelKind::Claude,
+            "next",
+            Some("session"),
+            fixture.directory.path(),
+        )
+        .expect("new owner");
+    fixture.store.invalidate("panel", "host").expect("old invalidation");
+    assert_eq!(
+        fixture.store.read("panel").expect("read").expect("record").owner_token,
+        "next"
+    );
+}
+
+#[test]
+fn unrelated_tool_events_do_not_rewrite_the_ledger() {
+    let mut fixture = Fixture::new();
+    let path = fixture.store.record_path("panel").expect("path");
+    let before = fs::read(&path).expect("before");
+    fixture.input.event.tool_name = Some("Read".into());
+    fixture.event("PreToolUse", 3);
+    fixture.event("PostToolUse", 4);
+    assert_eq!(fs::read(path).expect("after"), before);
 }

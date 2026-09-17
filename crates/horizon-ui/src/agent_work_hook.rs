@@ -22,8 +22,14 @@ pub(crate) fn run_if_requested() -> bool {
         .as_millis();
     let now = i64::try_from(now).unwrap_or(i64::MAX);
     if let Err(error) = context.process(io::stdin().lock(), now) {
-        let _ = context.store.invalidate(&context.panel, &context.owner);
+        if context.store.invalidate(&context.panel, &context.owner).is_err() {
+            eprintln!("agent work evidence could not be invalidated; continuation requires manual review");
+            // Exit 2 can make a Stop hook continue the agent. Recorder errors
+            // must report failure without changing provider turn behavior.
+            std::process::exit(3);
+        }
         eprintln!("agent work hook could not save evidence ({:?})", error.kind());
+        std::process::exit(1);
     }
     true
 }
