@@ -62,8 +62,8 @@ pub use close::{
 };
 pub use create::{
     BrowserCreateAuditStatus, BrowserCreateOutcome, BrowserCreateRequest, BrowserCreateResult, CreateNavigation,
-    claim_create_request, complete_create_request, enqueue_create, list_create_requests, record_create_status,
-    take_create_result,
+    claim_create_request, complete_create_request, enqueue_create, enqueue_duplicate, list_create_requests,
+    record_create_status, take_create_result,
 };
 pub use result::{action_result_path_for_root, default_action_result_path, take_action_result};
 pub use visibility::{

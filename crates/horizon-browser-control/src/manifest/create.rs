@@ -41,6 +41,8 @@ pub struct BrowserCreateRequest {
     /// resolves it; agents never see an endpoint or a credential.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duplicate_from: Option<String>,
     #[serde(default = "default_visible")]
     pub visible: bool,
     pub requested_at_millis: i64,
@@ -61,6 +63,7 @@ impl BrowserCreateRequest {
             url: None,
             backend: None,
             target: None,
+            duplicate_from: None,
             visible: true,
             requested_at_millis: 0,
             deadline_at_millis: i64::MAX,
@@ -218,6 +221,65 @@ fn enqueue_at(
     visible: bool,
     timeout: Duration,
 ) -> std::io::Result<String> {
+    enqueue_operation_at(
+        root,
+        identity,
+        CreateParameters {
+            url,
+            backend,
+            target,
+            visible,
+            duplicate_from: None,
+        },
+        timeout,
+    )
+}
+
+struct CreateParameters {
+    url: Option<String>,
+    backend: Option<BackendKind>,
+    target: Option<String>,
+    visible: bool,
+    duplicate_from: Option<String>,
+}
+
+/// Queue a new page sharing a source panel's local Chromium or Firefox session.
+///
+/// # Errors
+/// Requires a scoped host identity and a private request queue with capacity.
+pub fn enqueue_duplicate(
+    identity: AgentIdentity<'_>,
+    panel_id: &str,
+    visible: bool,
+    timeout: Duration,
+) -> std::io::Result<String> {
+    enqueue_operation_at(
+        BrowserRuntimePaths::resolve().root(),
+        identity,
+        CreateParameters {
+            url: None,
+            backend: None,
+            target: None,
+            visible,
+            duplicate_from: Some(panel_id.to_string()),
+        },
+        timeout,
+    )
+}
+
+fn enqueue_operation_at(
+    root: &Path,
+    identity: AgentIdentity<'_>,
+    parameters: CreateParameters,
+    timeout: Duration,
+) -> std::io::Result<String> {
+    let CreateParameters {
+        url,
+        backend,
+        target,
+        visible,
+        duplicate_from,
+    } = parameters;
     let actor = identity.actor;
     super::agent::validate_actor(actor)?;
     validate_target(target.as_deref(), backend)?;
@@ -246,6 +308,15 @@ fn enqueue_at(
         .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
     }
 
+    // Older hosts only poll the ordinary creation queue. A distinct queue
+    // prevents them from silently opening an isolated page for a duplicate.
+    let request_id = if duplicate_from.is_some() {
+        format!("duplicate-{}", new_action_id())
+    } else {
+        new_action_id()
+    };
+    let operation_root = operation_root(root, &request_id);
+    let root = operation_root.as_path();
     let directory = create_directory(root);
     std::fs::create_dir_all(&directory)?;
     let _queue_lock = ManifestLock::acquire(&queue_lock_path(&directory))?;
@@ -257,7 +328,6 @@ fn enqueue_at(
         ));
     }
 
-    let request_id = new_action_id();
     let requested_at_millis = super::now_millis();
     let timeout_millis = i64::try_from(timeout.as_millis()).unwrap_or(i64::MAX);
     let request = BrowserCreateRequest {
@@ -267,6 +337,7 @@ fn enqueue_at(
         url,
         backend,
         target,
+        duplicate_from,
         visible,
         requested_at_millis,
         deadline_at_millis: requested_at_millis.saturating_add(timeout_millis),
@@ -281,7 +352,11 @@ fn enqueue_at(
 /// # Errors
 /// Returns an error when the request directory cannot be read.
 pub fn list_create_requests() -> std::io::Result<Vec<BrowserCreateRequest>> {
-    list_at(BrowserRuntimePaths::resolve().root())
+    let paths = BrowserRuntimePaths::resolve();
+    let mut requests = list_at(paths.root())?;
+    requests.extend(list_at(&paths.root().join("shared-pages"))?);
+    requests.sort_by_key(|request| request.requested_at_millis);
+    Ok(requests)
 }
 
 fn list_at(root: &Path) -> std::io::Result<Vec<BrowserCreateRequest>> {
@@ -331,7 +406,7 @@ pub fn claim_create_request(
     claimant_pid: u32,
 ) -> std::io::Result<Option<BrowserCreateRequest>> {
     claim_at(
-        BrowserRuntimePaths::resolve().root(),
+        &operation_root(BrowserRuntimePaths::resolve().root(), request_id),
         request_id,
         actor,
         host_instance,
@@ -380,7 +455,10 @@ fn claim_at(
 /// # Errors
 /// Returns an error when the private result cannot be written atomically.
 pub fn complete_create_request(result: &BrowserCreateResult) -> std::io::Result<()> {
-    complete_at(BrowserRuntimePaths::resolve().root(), result)
+    complete_at(
+        &operation_root(BrowserRuntimePaths::resolve().root(), &result.request_id),
+        result,
+    )
 }
 
 fn complete_at(root: &Path, result: &BrowserCreateResult) -> std::io::Result<()> {
@@ -404,7 +482,11 @@ fn complete_at(root: &Path, result: &BrowserCreateResult) -> std::io::Result<()>
 /// Returns an error for invalid data, an actor mismatch, or filesystem
 /// failure. Invalid results are retained for diagnosis.
 pub fn take_create_result(request_id: &str, actor: &str) -> std::io::Result<Option<BrowserCreateResult>> {
-    take_at(BrowserRuntimePaths::resolve().root(), request_id, actor)
+    take_at(
+        &operation_root(BrowserRuntimePaths::resolve().root(), request_id),
+        request_id,
+        actor,
+    )
 }
 
 fn take_at(root: &Path, request_id: &str, actor: &str) -> std::io::Result<Option<BrowserCreateResult>> {
@@ -475,6 +557,14 @@ fn create_directory(root: &Path) -> PathBuf {
     root.join("runtime").join("browser-create")
 }
 
+fn operation_root(root: &Path, request_id: &str) -> PathBuf {
+    if request_id.starts_with("duplicate-") {
+        root.join("shared-pages")
+    } else {
+        root.to_path_buf()
+    }
+}
+
 fn request_path(root: &Path, request_id: &str) -> PathBuf {
     create_directory(root).join(format!("{}.request.json", safe_local_id(request_id)))
 }
@@ -490,6 +580,52 @@ const fn default_visible() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duplicates_are_invisible_to_legacy_hosts_and_keep_exact_claim_identity() {
+        let root = tempfile::tempdir().expect("queue root");
+        let actor = AgentIdentity {
+            actor: "horizon:test",
+            host_instance: Some("host"),
+        };
+        let id = enqueue_operation_at(
+            root.path(),
+            actor,
+            CreateParameters {
+                url: None,
+                backend: None,
+                target: None,
+                visible: true,
+                duplicate_from: Some("source".into()),
+            },
+            Duration::from_secs(5),
+        )
+        .expect("queue duplicate");
+        assert!(list_at(root.path()).expect("legacy queue").is_empty());
+        let queue = operation_root(root.path(), &id);
+        let requests = list_at(&queue).expect("duplicate queue");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].duplicate_from.as_deref(), Some("source"));
+        assert!(
+            claim_at(&queue, &id, actor.actor, "other-host", 1)
+                .expect("foreign host")
+                .is_none()
+        );
+        let request = claim_at(&queue, &id, actor.actor, "host", 1)
+            .expect("claim")
+            .expect("claimed");
+        assert!(
+            claim_at(&queue, &id, actor.actor, "host", 2)
+                .expect("second claim")
+                .is_none()
+        );
+        complete_at(
+            &queue,
+            &BrowserCreateResult::failed(&request, "unsupported_backend", "fixture refusal"),
+        )
+        .expect("result");
+        assert!(take_at(&queue, &id, actor.actor).expect("read result").is_some());
+    }
 
     #[test]
     fn ready_outcomes_keep_the_legacy_shape_and_default_the_navigation_state() {

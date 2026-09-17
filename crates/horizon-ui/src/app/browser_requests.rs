@@ -255,18 +255,20 @@ impl HorizonApp {
         changed | self.poll_browser_visibility_requests() | self.poll_browser_close_requests()
     }
 
-    fn start_requested_browser(&mut self, request: BrowserCreateRequest, actor_panel: ActorPanel) {
+    fn start_requested_browser(&mut self, mut request: BrowserCreateRequest, actor_panel: ActorPanel) {
         // Startup latency counts everything the host does from accepting the
         // request, including panel creation and the audit writes.
         let started_at = Instant::now();
-        if request.deadline_at_millis < manifest::now_millis() {
-            complete_failure(
-                &request,
-                "request_expired",
-                "browser create request expired before Horizon could accept it",
-            );
+        if refuse_expired_create(&request) {
             return;
         }
+        let duplicate = match self.prepare_browser_duplicate(&mut request, actor_panel) {
+            Ok(options) => options,
+            Err((code, message)) => {
+                complete_failure(&request, code, message);
+                return;
+            }
+        };
         // A remote target is resolved before any panel exists, so a missing
         // or locked credential, an unknown target or a full provider is
         // reported to the agent as a typed refusal.
@@ -306,14 +308,14 @@ impl HorizonApp {
 
         let mut browser_config = self.template_config.browser.clone();
         browser_config.backend = backend;
-        let options = PanelOptions {
+        let options = duplicate.unwrap_or_else(|| PanelOptions {
             command: request.url.clone(),
             kind: PanelKind::Browser,
             visible: request.visible,
             browser_config: Some(browser_config),
             remote_session: remote.map(|plan| plan.request),
             ..PanelOptions::default()
-        };
+        });
         let panel_id = match self.board.create_panel(options, actor_panel.workspace_id) {
             Ok(panel_id) => panel_id,
             Err(error) => {
@@ -868,6 +870,18 @@ fn complete_visibility_result(result: &BrowserVisibilityResult) {
     if let Err(error) = manifest::complete_visibility_request(result) {
         tracing::error!(request_id = %result.request_id, %error, "could not publish browser visibility result");
     }
+}
+
+fn refuse_expired_create(request: &BrowserCreateRequest) -> bool {
+    if request.deadline_at_millis >= manifest::now_millis() {
+        return false;
+    }
+    complete_failure(
+        request,
+        "request_expired",
+        "browser create request expired before Horizon could accept it",
+    );
+    true
 }
 
 #[cfg(test)]
