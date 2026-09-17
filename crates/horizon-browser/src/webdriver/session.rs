@@ -23,6 +23,7 @@ mod http_auth;
 pub(crate) mod native_select;
 mod navigation;
 mod network;
+mod remote_click;
 mod safari;
 mod scrollbar;
 mod semantic;
@@ -58,6 +59,7 @@ struct Driver {
     /// The allocated remote device as the provider's evidence describes
     /// it, for coordination; `None` for a local browser.
     remote_device: Option<String>,
+    remote_android_chromium: bool,
     session_id: String,
     bidi: Option<JsonWsLink>,
     automation_ws: String,
@@ -324,6 +326,7 @@ impl Driver {
             host,
             remote_release,
             remote_device,
+            remote_android_chromium: remote_click::uses_visual_viewport(config.remote.is_some(), &capabilities),
             session_id,
             bidi,
             automation_ws,

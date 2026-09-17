@@ -253,6 +253,12 @@ impl Driver {
         event_tx: &BrowserEventSender,
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
         let selector = self.semantic.resolve(target)?;
+        if self.remote_android_chromium && count == 1 {
+            let (x, y) = self.remote_click_point(&selector)?;
+            self.perform_click(x, y, count, event_tx)
+                .map_err(|error| BrowserControlFailure::new("input_failed", error))?;
+            return Ok(BrowserControlValue::Accepted);
+        }
         let value = self.evaluate_json(&target_rect_expression(&selector, false))?;
         let (x, y) = parse_target_rect(&value)?;
         self.capture_teach_fingerprint(Some((x, y)))?;
@@ -287,9 +293,18 @@ impl Driver {
         let mut payload = self
             .actions
             .click_payload(x, y, BrowserButton::Left, count, BrowserModifiers::none());
+        if self.remote_android_chromium && count == 1 {
+            super::remote_click::use_touch_pointer(&mut payload);
+        }
         let result = if self.firefox_bidi() {
             payload["context"] = json!(self.context_id);
             self.call_bidi("input.performActions", &payload, event_tx).map(|_| ())
+        } else if self.remote_android_chromium && count == 1 {
+            super::remote_click::click_through(
+                self.host.transport(),
+                &format!("/session/{}", self.session_id),
+                &payload,
+            )
         } else {
             self.classic_post("actions", &payload).map(|_| ())
         };
@@ -606,6 +621,22 @@ mod tests {
         let error = click_through(&transport, "/session/s1", "#x").expect_err("unroutable");
         assert!(error.contains("cannot form a route"), "{error}");
         assert_eq!(transport.sent().len(), 1);
+    }
+
+    #[test]
+    fn native_mobile_click_preserves_the_element_click_navigation_timeout() {
+        let transport = Scripted::new(vec![Ok(json!({"value": null}))]);
+        let payload = json!({"actions":[{"type":"pointer","id":"horizon-touch",
+        "parameters":{"pointerType":"touch"},"actions":[
+            {"type":"pointerMove","origin":"viewport","x":80,"y":38},
+            {"type":"pointerDown","button":0},{"type":"pointerUp","button":0}
+        ]}]});
+        super::super::remote_click::click_through(&transport, "/session/s1", &payload).expect("native tap");
+        assert_eq!(
+            transport.sent(),
+            vec![("POST".into(), "/session/s1/actions".into(), payload)]
+        );
+        assert_eq!(transport.timeouts(), vec![super::super::NAVIGATION_HTTP_TIMEOUT]);
     }
 
     #[test]

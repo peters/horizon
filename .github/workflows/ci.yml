@@ -107,6 +107,8 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Verify dependency boundary
         run: python3 scripts/check-browser-engine-dependencies.py
+      - name: Test remote click geometry
+        run: node --test scripts/browser-smoke/remote_click_geometry.test.cjs
       - name: Test and lint standalone engine
         env:
           ENGINE_FEATURES: ${{ matrix.features }}

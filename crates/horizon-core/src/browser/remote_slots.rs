@@ -234,6 +234,20 @@ mod tests {
         assert_ne!(quota_key(&unauthenticated), key);
     }
 
+    fn acquire_after_drop(root: &std::path::Path, key: &str, max_sessions: u32) -> super::SlotLease {
+        // Another test's forked child may hold the freed descriptor until exec.
+        (0..100)
+            .find_map(|_| match acquire_slot(root, key, max_sessions) {
+                Ok(lease) => Some(lease),
+                Err(SlotError::Busy { .. }) => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                    None
+                }
+                Err(error) => panic!("{error}"),
+            })
+            .expect("freed slot within the fork-inheritance window")
+    }
+
     #[test]
     fn slots_are_leased_up_to_the_limit_and_freed_on_drop() {
         let root = tempfile::tempdir().expect("tempdir");
@@ -249,18 +263,7 @@ mod tests {
             "another key is another quota"
         );
         drop(first);
-        // Another test's forked child may hold the freed descriptor until it
-        // execs (the fork-inheritance window); the caller's retry sees it free.
-        let reused = (0..100)
-            .find_map(|_| match acquire_slot(root.path(), "k", 2) {
-                Ok(lease) => Some(lease),
-                Err(SlotError::Busy { .. }) => {
-                    std::thread::sleep(std::time::Duration::from_millis(5));
-                    None
-                }
-                Err(error) => panic!("{error}"),
-            })
-            .expect("freed slot");
+        let reused = acquire_after_drop(root.path(), "k", 2);
         assert_eq!(reused.path().file_name().and_then(|n| n.to_str()), Some("slot-0.lock"));
         match acquire_slot(root.path(), "k", 0) {
             Err(SlotError::Busy { max_sessions: 0 }) => {}
@@ -278,14 +281,14 @@ mod tests {
         drop(first);
         drop(second);
         // The quota is now two: the lease on slot 2 is one of them.
-        let one_more = acquire_slot(root.path(), "k", 2).expect("one session left under the smaller quota");
+        let one_more = acquire_after_drop(root.path(), "k", 2);
         match acquire_slot(root.path(), "k", 2) {
             Err(SlotError::Busy { max_sessions: 2 }) => {}
             other => panic!("the high slot and the new lease fill the quota, got {other:?}"),
         }
         drop(one_more);
         drop(high);
-        assert!(acquire_slot(root.path(), "k", 2).is_ok());
+        let _available = acquire_after_drop(root.path(), "k", 2);
     }
 
     #[test]
