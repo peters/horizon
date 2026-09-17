@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::PanelKind;
+
 use super::{TranscriptSnapshot, TurnLedger, TurnState};
 
 /// Separate from conversation binding: restoring history does not opt a panel
@@ -22,6 +24,9 @@ impl Default for ResumePolicy {
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct SuspendRecord {
+    pub kind: PanelKind,
+    /// Snapshot taken before cancellation; an existing user interrupt is a veto.
+    pub before_cancel: Option<TranscriptSnapshot>,
     pub panel_local_id: String,
     pub session_id: String,
     pub prompt_id: String,
@@ -54,6 +59,7 @@ pub enum RestartDecision {
 }
 
 pub struct RestartEvidence<'a> {
+    pub kind: PanelKind,
     pub panel_local_id: &'a str,
     pub session_id: &'a str,
     pub cwd: &'a str,
@@ -78,7 +84,10 @@ impl RestartEvidence<'_> {
         let Some(transcript) = self.transcript else {
             return RestartDecision::NotResumable;
         };
-        if matches!(transcript.state, TurnState::Finished | TurnState::Unknown) {
+        if matches!(
+            transcript.state,
+            TurnState::Finished | TurnState::Failed | TurnState::Unknown
+        ) {
             return RestartDecision::NotResumable;
         }
         let Some(record) = self.handoff else {
@@ -88,7 +97,8 @@ impl RestartEvidence<'_> {
                 RestartDecision::NotResumable
             };
         };
-        if record.panel_local_id != self.panel_local_id
+        if record.kind != self.kind
+            || record.panel_local_id != self.panel_local_id
             || record.session_id != self.session_id
             || record.cwd != self.cwd
         {
@@ -101,11 +111,16 @@ impl RestartEvidence<'_> {
         {
             return RestartDecision::NotResumable;
         }
-        if transcript.state == TurnState::Interrupted && !record.cancelled_by_horizon {
+        if (transcript.state == TurnState::Interrupted
+            || self.ledger.is_some_and(|ledger| ledger.state == TurnState::Interrupted)
+            || record.cancelled_by_horizon)
+            && (!record.cancelled_by_horizon
+                || !record
+                    .before_cancel
+                    .as_ref()
+                    .is_some_and(|before| before.state == TurnState::Working && before.bytes < transcript.bytes))
+        {
             return RestartDecision::NotResumable;
-        }
-        if transcript.state == TurnState::Blocked {
-            return RestartDecision::Ask(AskReason::WaitingForUser);
         }
         let Some(ledger) = self.ledger else {
             return RestartDecision::Ask(AskReason::MissingEvidence);
@@ -114,13 +129,17 @@ impl RestartEvidence<'_> {
             || ledger.prompt_id.as_deref() != Some(&record.prompt_id)
             || ledger.generation != record.generation
             || ledger.deliberate_exit
-            || ledger.state == TurnState::Finished
+            || matches!(ledger.state, TurnState::Finished | TurnState::Failed)
             || (ledger.state == TurnState::Interrupted && !record.cancelled_by_horizon)
         {
             return RestartDecision::NotResumable;
         }
-        if ledger.state == TurnState::Blocked {
+        if ledger.state == TurnState::Blocked || transcript.state == TurnState::Blocked {
             return RestartDecision::Ask(AskReason::WaitingForUser);
+        }
+        // Only this lifecycle has been verified through PTY teardown and seeded resume.
+        if self.kind != PanelKind::Claude {
+            return RestartDecision::Ask(AskReason::MissingEvidence);
         }
         if record.prompt_id.is_empty()
             || record.generation == 0
@@ -163,6 +182,12 @@ mod tests {
             state: TurnState::Working,
         };
         let record = SuspendRecord {
+            kind: PanelKind::Claude,
+            before_cancel: Some(TranscriptSnapshot {
+                bytes: 5,
+                tail_sha256: [0; 32],
+                state: TurnState::Working,
+            }),
             panel_local_id: "panel".into(),
             session_id: "session".into(),
             prompt_id: "prompt".into(),
@@ -186,6 +211,7 @@ mod tests {
             ..ResumePolicy::default()
         };
         let mut evidence = RestartEvidence {
+            kind: PanelKind::Claude,
             panel_local_id: "panel",
             session_id: "session",
             cwd: "/repo",
@@ -209,6 +235,25 @@ mod tests {
         evidence.now_millis = 20_000_000;
         assert_eq!(evidence.classify(1), RestartDecision::Ask(AskReason::Downtime));
         evidence.now_millis = 3000;
+        let mut unsupported = record.clone();
+        unsupported.kind = PanelKind::Pi;
+        evidence.kind = PanelKind::Pi;
+        evidence.handoff = Some(&unsupported);
+        assert_eq!(evidence.classify(1), RestartDecision::Ask(AskReason::MissingEvidence));
+        evidence.kind = PanelKind::Claude;
+        evidence.handoff = Some(&record);
+        let mut failed = ledger.clone();
+        failed.state = TurnState::Failed;
+        let mut blocked = transcript.clone();
+        blocked.state = TurnState::Blocked;
+        let mut blocked_record = record.clone();
+        blocked_record.final_transcript = Some(blocked.clone());
+        evidence.handoff = Some(&blocked_record);
+        evidence.transcript = Some(&blocked);
+        evidence.ledger = Some(&failed);
+        assert_eq!(evidence.classify(1), RestartDecision::NotResumable);
+        evidence.transcript = Some(&transcript);
+        evidence.ledger = Some(&ledger);
         evidence.handoff = None;
         assert_eq!(evidence.classify(1), RestartDecision::NotResumable);
         evidence.stale_live_session = true;
@@ -222,6 +267,12 @@ mod tests {
             state: TurnState::Interrupted,
         };
         let mut record = SuspendRecord {
+            kind: PanelKind::Claude,
+            before_cancel: Some(TranscriptSnapshot {
+                bytes: 5,
+                tail_sha256: [0; 32],
+                state: TurnState::Working,
+            }),
             panel_local_id: "panel".into(),
             session_id: "session".into(),
             prompt_id: "prompt".into(),
@@ -246,6 +297,7 @@ mod tests {
         };
         let decision = |record: &SuspendRecord, ledger: &TurnLedger, transcript: &TranscriptSnapshot| {
             RestartEvidence {
+                kind: PanelKind::Claude,
                 panel_local_id: "panel",
                 session_id: "session",
                 cwd: "/repo",
@@ -261,6 +313,17 @@ mod tests {
             .classify(1)
         };
         assert_eq!(decision(&record, &ledger, &transcript), RestartDecision::Resume);
+        record.kind = PanelKind::Pi;
+        assert_eq!(decision(&record, &ledger, &transcript), RestartDecision::NotResumable);
+        record.kind = PanelKind::Claude;
+        let before = record.before_cancel.take();
+        assert_eq!(decision(&record, &ledger, &transcript), RestartDecision::NotResumable);
+        record.before_cancel = Some(transcript.clone());
+        assert_eq!(decision(&record, &ledger, &transcript), RestartDecision::NotResumable);
+        record.before_cancel = before;
+        ledger.state = TurnState::Failed;
+        assert_eq!(decision(&record, &ledger, &transcript), RestartDecision::NotResumable);
+        ledger.state = TurnState::Interrupted;
         record.cancelled_by_horizon = false;
         assert_eq!(decision(&record, &ledger, &transcript), RestartDecision::NotResumable);
         record.cancelled_by_horizon = true;
@@ -276,6 +339,16 @@ mod tests {
         let mut advanced = transcript.clone();
         advanced.bytes += 1;
         assert_eq!(decision(&record, &ledger, &advanced), RestartDecision::NotResumable);
+        let mut working = transcript.clone();
+        working.state = TurnState::Working;
+        record.final_transcript = Some(working.clone());
+        record.before_cancel = None;
+        assert_eq!(decision(&record, &ledger, &working), RestartDecision::NotResumable);
+        record.before_cancel = Some(TranscriptSnapshot {
+            bytes: 5,
+            tail_sha256: [0; 32],
+            state: TurnState::Working,
+        });
         record.final_transcript = None;
         assert_eq!(
             decision(&record, &ledger, &transcript),

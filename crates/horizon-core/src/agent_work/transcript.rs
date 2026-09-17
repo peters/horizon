@@ -19,6 +19,7 @@ pub enum TurnState {
     Finished,
     Interrupted,
     Blocked,
+    Failed,
 }
 
 /// Bounded tail evidence without transcript text. A changed length or tail
@@ -87,13 +88,13 @@ fn claude_state(value: &Value) -> Option<TurnState> {
         return None;
     }
     if value.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true) {
-        return Some(TurnState::Blocked);
+        return Some(TurnState::Failed);
     }
     let message = value.get("message")?;
     match value.get("type").and_then(Value::as_str)? {
         "assistant" => Some(match message.get("stop_reason").and_then(Value::as_str) {
             Some("end_turn") => TurnState::Finished,
-            Some("stop_sequence" | "refusal") => TurnState::Blocked,
+            Some("stop_sequence" | "refusal") => TurnState::Failed,
             Some("tool_use") => {
                 if message.get("content").and_then(Value::as_array).is_some_and(|content| {
                     content
@@ -150,7 +151,7 @@ fn codex_state(value: &Value) -> Option<TurnState> {
         "task_started" => Some(TurnState::Working),
         "task_complete" => Some(TurnState::Finished),
         "turn_aborted" => Some(TurnState::Interrupted),
-        "error" => Some(TurnState::Blocked),
+        "error" => Some(TurnState::Failed),
         _ => None,
     }
 }
@@ -172,7 +173,7 @@ mod tests {
             ),
             (
                 r#"{"type":"assistant","message":{"stop_reason":"stop_sequence"}}"#,
-                TurnState::Blocked,
+                TurnState::Failed,
             ),
             (
                 r#"{"type":"user","message":{"content":"please work"}}"#,

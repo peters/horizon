@@ -75,7 +75,7 @@ impl TurnLedger {
             }
             _ if self.prompt_id.is_none() || self.prompt_id != event.prompt_id => return,
             "Stop" => self.close_turn(TurnState::Finished),
-            "StopFailure" => self.close_turn(TurnState::Blocked),
+            "StopFailure" => self.close_turn(TurnState::Failed),
             _ if self.turn_closed => return,
             "Interrupt" => self.close_turn(if self.pending_questions.is_empty() {
                 TurnState::Interrupted
@@ -182,7 +182,7 @@ mod tests {
         ledger.apply(&event("UserPromptSubmit", Some("q")), 4);
         ledger.apply(&event("StopFailure", Some("q")), 5);
         ledger.apply(&event("PostToolUse", Some("q")), 6);
-        assert_eq!(ledger.state, TurnState::Blocked);
+        assert_eq!(ledger.state, TurnState::Failed);
     }
 
     #[test]
@@ -190,7 +190,7 @@ mod tests {
         for (end, expected) in [
             ("Stop", TurnState::Finished),
             ("Interrupt", TurnState::Blocked),
-            ("StopFailure", TurnState::Blocked),
+            ("StopFailure", TurnState::Failed),
         ] {
             let mut ledger = TurnLedger::default();
             ledger.apply(&event("UserPromptSubmit", Some("p")), 1);
@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn completion_or_failure_after_interrupt_remains_a_resume_veto() {
-        for (end, expected) in [("Stop", TurnState::Finished), ("StopFailure", TurnState::Blocked)] {
+        for (end, expected) in [("Stop", TurnState::Finished), ("StopFailure", TurnState::Failed)] {
             let mut ledger = TurnLedger::default();
             ledger.apply(&event("UserPromptSubmit", Some("p")), 1);
             ledger.apply(&event("Interrupt", Some("p")), 2);
