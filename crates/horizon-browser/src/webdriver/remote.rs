@@ -314,6 +314,7 @@ pub(super) struct RemoteHost {
     max_session: Duration,
     idle_release: Duration,
     watchdog: Option<Watchdog>,
+    report: Option<Arc<RemoteHttpClient>>,
 }
 
 impl RemoteHost {
@@ -328,7 +329,21 @@ impl RemoteHost {
         };
         let transport = RemoteHttpClient::new(&request.endpoint, authorization)
             .map_err(|error| RemoteStartFailure::InvalidEndpoint(error.to_string()))?;
+        let report = match &request.evidence {
+            DeviceEvidenceSource::Capabilities => None,
+            DeviceEvidenceSource::BrowserstackSession { api_endpoint } => {
+                let authorization = request
+                    .authorization
+                    .as_ref()
+                    .map(|header| clone_header(header))
+                    .transpose()?;
+                Some(Arc::new(RemoteHttpClient::new(api_endpoint, authorization).map_err(
+                    |error| RemoteStartFailure::InvalidEndpoint(error.to_string()),
+                )?))
+            }
+        };
         Ok(Self {
+            report,
             transport: Arc::new(transport),
             label: request.label.clone(),
             max_session: request.max_session,
@@ -376,7 +391,7 @@ impl RemoteHost {
         };
         request
             .recovery
-            .identify(Arc::clone(&self.transport), session.id.clone());
+            .identify(Arc::clone(&self.transport), session.id.clone(), self.report.clone());
         match Watchdog::start(
             Arc::clone(&self.transport),
             session.id.clone(),

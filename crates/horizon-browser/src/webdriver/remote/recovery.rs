@@ -1,12 +1,14 @@
 //! Private exact-allocation recovery; no provider identifiers are serialized.
 use std::fmt;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
 use super::super::remote_http::RemoteHttpClient;
 use super::RemoteReleaseOutcome;
+
+mod probe;
+use probe::SessionProbe;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -20,6 +22,7 @@ pub enum RemoteRecoveryStatus {
     IdentityUnavailable,
     AuthenticationRequired,
     ProviderUnavailable,
+    UnsupportedResponse,
 }
 
 impl RemoteRecoveryStatus {
@@ -36,6 +39,9 @@ impl RemoteRecoveryStatus {
             }
             Self::AuthenticationRequired => {
                 "The original credential was rejected; capacity remains held. Restore its access at the original provider before reconciling again."
+            }
+            Self::UnsupportedResponse => {
+                "The provider returned an unsupported exact-session response; capacity remains held."
             }
             Self::ProviderUnavailable => {
                 "The provider gave no trustworthy session result; capacity remains held. Retry when the original provider is available."
@@ -67,7 +73,7 @@ struct State {
     scope_unconfirmed: bool,
     expected_workspace: Option<String>,
     scope: Option<RemoteAllocationScope>,
-    identity: Option<(Arc<RemoteHttpClient>, String)>,
+    identity: Option<SessionProbe>,
     retired: bool,
     status: RemoteRecoveryStatus,
 }
@@ -117,7 +123,11 @@ impl RemoteAllocation {
     #[cfg(any(test, feature = "test-support"))]
     pub fn unresolved_for_test(endpoint: &str, session: &str) -> Result<Self, crate::WebDriverHttpError> {
         let allocation = Self::default();
-        allocation.identify(Arc::new(RemoteHttpClient::new(endpoint, None)?), session.to_string());
+        allocation.identify(
+            Arc::new(RemoteHttpClient::new(endpoint, None)?),
+            session.to_string(),
+            None,
+        );
         allocation.finish(None);
         Ok(allocation)
     }
@@ -199,11 +209,16 @@ impl RemoteAllocation {
         self.status() == RemoteRecoveryStatus::Released
     }
 
-    pub(super) fn identify(&self, transport: Arc<RemoteHttpClient>, session: String) {
+    pub(super) fn identify(
+        &self,
+        transport: Arc<RemoteHttpClient>,
+        session: String,
+        report: Option<Arc<RemoteHttpClient>>,
+    ) {
         self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .identity = Some((transport, session));
+            .identity = Some(SessionProbe::new(transport, session, report));
     }
 
     pub(crate) fn finish(&self, outcome: Option<&RemoteReleaseOutcome>) {
@@ -264,8 +279,7 @@ impl RemoteAllocation {
         if std::thread::Builder::new()
             .name("remote-reconcile".into())
             .spawn(move || {
-                let (transport, session) = identity;
-                let status = probe(&transport, &session);
+                let status = identity.probe();
                 let mut state = allocation
                     .state
                     .lock()
@@ -323,26 +337,6 @@ fn permits(state: &State, access: &Access<'_>) -> bool {
         })
     } else {
         access.admitted
-    }
-}
-
-fn probe(transport: &RemoteHttpClient, session: &str) -> RemoteRecoveryStatus {
-    let path = format!("/session/{session}/url");
-    let Ok((status, bytes)) = transport.request_bytes("GET", &path, None, Duration::from_secs(10)) else {
-        return RemoteRecoveryStatus::ProviderUnavailable;
-    };
-    if matches!(status, 401 | 403) {
-        return RemoteRecoveryStatus::AuthenticationRequired;
-    }
-    let Ok(body) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-        return RemoteRecoveryStatus::ProviderUnavailable;
-    };
-    if status == 404 && body["value"]["error"] == "invalid session id" {
-        RemoteRecoveryStatus::Released
-    } else if status == 200 && body["value"].is_string() {
-        RemoteRecoveryStatus::Active
-    } else {
-        RemoteRecoveryStatus::ProviderUnavailable
     }
 }
 

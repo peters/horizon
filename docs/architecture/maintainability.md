@@ -314,7 +314,8 @@ and smoke gate include duplication without exposing browser transport endpoints.
 ### Remote allocation recovery
 
 Remote allocation recovery is split between the engine's
-`webdriver/remote/recovery` (private identity and bounded provider probe), core's
+`webdriver/remote/recovery` (private identity and authorization) and its `probe`
+module (bounded exact-session WebDriver and provider reporting evidence), core's
 `browser/remote_recovery` (scope and exact lease ownership), the browser control
 `manifest/recovery` queue, and the UI's `app/browser_recovery` dispatch and
 `settings/remote_recovery` presentation. Network work does not run on the UI thread.
