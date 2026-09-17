@@ -191,6 +191,7 @@ impl Dimensions for TerminalDimensions {
 }
 
 pub struct Terminal {
+    pub(crate) work_continuation: crate::agent_work::WorkContinuation,
     pub(crate) work_owner: Option<Arc<crate::agent_work::WorkOwner>>,
     term: Arc<FairMutex<Term<TerminalEventProxy>>>,
     event_sender: EventLoopSender,
