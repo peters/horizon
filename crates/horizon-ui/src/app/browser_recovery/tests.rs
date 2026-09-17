@@ -8,6 +8,20 @@ use std::net::TcpListener;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+fn released_slot(root: &std::path::Path) -> remote_slots::SlotLease {
+    // Concurrent test forks can retain a released descriptor until exec.
+    (0..100)
+        .find_map(|_| match remote_slots::acquire_slot(root, "quota", 2) {
+            Ok(lease) => Some(lease),
+            Err(remote_slots::SlotError::Busy { .. }) => {
+                std::thread::sleep(Duration::from_millis(5));
+                None
+            }
+            Err(error) => panic!("{error}"),
+        })
+        .expect("matching lease released after forked children exec")
+}
+
 #[test]
 fn host_dispatch_authorizes_waits_and_completes_exact_recovery() {
     let (temp, mut app) = test_app();
@@ -104,17 +118,7 @@ fn host_dispatch_authorizes_waits_and_completes_exact_recovery() {
     );
     assert!(app.browser_create_host.recovery_requests.is_empty());
     app.poll_remote_recovery_queue(&queue);
-    // Concurrent test forks can retain a released descriptor until exec.
-    let _available = (0..100)
-        .find_map(|_| match remote_slots::acquire_slot(temp.path(), "quota", 2) {
-            Ok(lease) => Some(lease),
-            Err(remote_slots::SlotError::Busy { .. }) => {
-                std::thread::sleep(Duration::from_millis(5));
-                None
-            }
-            Err(error) => panic!("{error}"),
-        })
-        .expect("matching lease released after forked children exec");
+    let _available = released_slot(temp.path());
     assert!(matches!(
         remote_slots::acquire_slot(temp.path(), "quota", 2),
         Err(remote_slots::SlotError::Busy { .. })
