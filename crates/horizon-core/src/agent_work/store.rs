@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::PanelKind;
+use crate::horizon_home::safe_local_id;
 
 use super::{HookEvent, SuspendRecord, TranscriptSnapshot, TurnLedger, TurnState};
 
@@ -135,12 +136,7 @@ impl WorkStore {
         health.write_all(b"1")?;
         health.sync_all()?;
         #[cfg(unix)]
-        for directory in health_path.ancestors().skip(1) {
-            File::open(directory)?.sync_all()?;
-            if Some(directory) == self.root.parent() {
-                break;
-            }
-        }
+        self.sync_parent_directories(&health_path)?;
         self.write(&record)?;
         self.prune_health(panel, owner);
         Ok(())
@@ -339,9 +335,10 @@ impl WorkStore {
             // must never remove a newer launch's record.
             let _lock = self.lock(panel)?;
             if self.read_raw(panel)?.is_some_and(|record| record.owner_token == owner) {
-                fs::remove_file(self.record_path(panel)?)?;
+                let path = self.record_path(panel)?;
+                fs::remove_file(&path)?;
                 #[cfg(unix)]
-                File::open(&self.root)?.sync_all()?;
+                self.sync_parent_directories(&path)?;
             }
             Ok(())
         }
@@ -350,7 +347,7 @@ impl WorkStore {
     fn check_health(&self, panel: &str, owner: &str) -> io::Result<()> {
         self.check_health_marker(panel, owner)?;
         let prefix = format!("{owner}.pending.");
-        for (index, entry) in fs::read_dir(self.root.join("health").join(panel))?.enumerate() {
+        for (index, entry) in fs::read_dir(self.health_directory(panel)?)?.enumerate() {
             if index >= 4096 {
                 return Err(invalid("too many hook markers"));
             }
@@ -372,7 +369,7 @@ impl WorkStore {
     }
 
     fn prune_health(&self, panel: &str, current: &str) {
-        let Ok(entries) = fs::read_dir(self.root.join("health").join(panel)) else {
+        let Ok(entries) = self.health_directory(panel).and_then(fs::read_dir) else {
             return;
         };
         // Registration holds the panel lock and has durably published the new
@@ -395,19 +392,31 @@ impl WorkStore {
         if !valid_id(owner) {
             return Err(invalid("invalid launch token"));
         }
-        Ok(self.root.join("health").join(panel).join(owner))
+        Ok(self.health_directory(panel)?.join(owner))
+    }
+
+    fn health_directory(&self, panel: &str) -> io::Result<PathBuf> {
+        Ok(self.root.join("health").join(panel_path(panel)?))
     }
 
     fn record_path(&self, panel: &str) -> io::Result<PathBuf> {
-        if !valid_id(panel) {
-            return Err(invalid("invalid panel identity"));
+        Ok(self.root.join(panel_path(panel)?).with_extension("json"))
+    }
+
+    #[cfg(unix)]
+    fn sync_parent_directories(&self, path: &Path) -> io::Result<()> {
+        for directory in path.ancestors().skip(1) {
+            File::open(directory)?.sync_all()?;
+            if Some(directory) == self.root.parent() {
+                break;
+            }
         }
-        Ok(self.root.join(format!("{panel}.json")))
+        Ok(())
     }
 
     fn lock(&self, panel: &str) -> io::Result<File> {
         let path = self.record_path(panel)?.with_extension("lock");
-        private_directory(&self.root)?;
+        private_directory(path.parent().ok_or_else(|| invalid("missing record directory"))?)?;
         let file = private_options()
             .read(true)
             .write(true)
@@ -438,11 +447,25 @@ impl WorkStore {
         let mut temporary = tempfile::NamedTempFile::new_in(&self.root)?;
         temporary.write_all(&bytes)?;
         temporary.as_file().sync_all()?;
-        temporary.persist(path).map_err(|error| error.error)?;
+        temporary.persist(&path).map_err(|error| error.error)?;
         #[cfg(unix)]
-        File::open(&self.root)?.sync_all()?;
+        self.sync_parent_directories(&path)?;
         Ok(())
     }
+}
+
+fn panel_path(panel: &str) -> io::Result<PathBuf> {
+    if !valid_id(panel) {
+        return Err(invalid("invalid panel identity"));
+    }
+    let encoded = safe_local_id(panel);
+    // The longest valid ID expands beyond filesystem component limits. An even
+    // split cannot collide with a complete encoding, whose length is always odd.
+    Ok(if encoded.len() > 240 {
+        Path::new(&encoded[..240]).join(&encoded[240..])
+    } else {
+        PathBuf::from(encoded)
+    })
 }
 
 fn valid_id(value: &str) -> bool {

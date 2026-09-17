@@ -421,7 +421,7 @@ fn registration_prunes_old_markers_without_allowing_old_hooks_to_invalidate_curr
             owner
         );
         assert_eq!(
-            fs::read_dir(fixture.store.root.join("health/panel"))
+            fs::read_dir(fixture.store.health_directory("panel").expect("health directory"))
                 .expect("markers")
                 .count(),
             1
@@ -482,4 +482,35 @@ fn new_owner_cannot_inherit_an_abandoned_handoff() {
     assert!(fixture.store.finish_hook("panel", "host", &abandoned).is_err());
     fixture.store.invalidate("panel", "host").expect("late invalidation");
     assert!(fixture.store.read("panel").expect("new still healthy").is_some());
+}
+
+#[test]
+fn panel_paths_preserve_identity_on_case_insensitive_filesystems() {
+    let directory = tempfile::tempdir().expect("fixture directory");
+    let store = WorkStore::new(directory.path());
+    let ids = [
+        "Panel-A".to_owned(),
+        "panel-a".to_owned(),
+        "CON".to_owned(),
+        "nul".to_owned(),
+        "P".repeat(128),
+    ];
+    let mut paths = std::collections::HashSet::new();
+    for panel in &ids {
+        store
+            .register_owner(panel, PanelKind::Claude, "owner", None, directory.path())
+            .expect("register");
+        let record_path = store.record_path(panel).expect("record path");
+        assert!(paths.insert(record_path.to_string_lossy().to_ascii_lowercase()));
+        assert!(record_path.components().all(|part| part.as_os_str().len() <= 255));
+        let token = store.begin_hook(panel, "owner").expect("begin hook");
+        assert!(store.read(panel).is_err());
+        store.finish_hook(panel, "owner", &token).expect("finish hook");
+    }
+    for panel in &ids {
+        assert_eq!(store.read(panel).expect("read").expect("record").panel_local_id, *panel);
+    }
+    store.invalidate("Panel-A", "owner").expect("invalidate one panel");
+    assert!(store.read("Panel-A").is_err());
+    assert!(store.read("panel-a").expect("other panel").is_some());
 }
