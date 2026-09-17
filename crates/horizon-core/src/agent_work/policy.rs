@@ -83,6 +83,9 @@ pub struct RestartEvidence<'a> {
 
 impl RestartEvidence<'_> {
     fn without_handoff(&self, transcript: &TranscriptSnapshot) -> RestartDecision {
+        if transcript.state == TurnState::Interrupted {
+            return RestartDecision::NotResumable;
+        }
         if self.ledger.is_some_and(|ledger| {
             ledger.session_id == self.session_id
                 && (ledger.deliberate_exit
@@ -319,6 +322,15 @@ mod tests {
         assert_eq!(evidence.classify(1), RestartDecision::Ask(AskReason::UncleanShutdown));
         evidence.transcript = Some(&blocked);
         evidence.stale_live_session = false;
+        assert_eq!(evidence.classify(1), RestartDecision::Ask(AskReason::WaitingForUser));
+        let mut waiting = ledger.clone();
+        waiting.state = TurnState::Blocked;
+        let mut interrupted = transcript.clone();
+        interrupted.state = TurnState::Interrupted;
+        evidence.ledger = Some(&waiting);
+        evidence.transcript = Some(&interrupted);
+        assert_eq!(evidence.classify(1), RestartDecision::NotResumable);
+        evidence.transcript = Some(&blocked);
         assert_eq!(evidence.classify(1), RestartDecision::Ask(AskReason::WaitingForUser));
         evidence.ledger = Some(&failed);
         assert_eq!(evidence.classify(1), RestartDecision::NotResumable);
