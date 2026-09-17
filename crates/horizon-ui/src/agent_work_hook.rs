@@ -61,6 +61,7 @@ impl HookContext {
     }
 
     fn process(&self, input: impl Read, now: i64) -> io::Result<()> {
+        let token = self.store.begin_hook(&self.panel, &self.owner)?;
         let mut bytes = Vec::new();
         input.take(MAX_HOOK_BYTES + 1).read_to_end(&mut bytes)?;
         if bytes.len() as u64 > MAX_HOOK_BYTES {
@@ -68,7 +69,9 @@ impl HookContext {
         }
         let input: HookInput = serde_json::from_slice(&bytes)
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid lifecycle input"))?;
-        self.store.apply_hook(&self.panel, self.kind, &self.owner, &input, now)
+        self.store
+            .apply_hook(&self.panel, self.kind, &self.owner, &input, now)?;
+        self.store.finish_hook(&self.panel, &self.owner, &token)
     }
 }
 
@@ -85,8 +88,16 @@ mod tests {
             owner: "owner".into(),
             kind: PanelKind::Claude,
         };
-        assert!(context.process(b"not JSON".as_slice(), 1).is_err());
-        assert!(context.process(io::repeat(b' ').take(MAX_HOOK_BYTES + 1), 1).is_err());
-        assert!(context.store.read("panel").expect("read").is_none());
+        context
+            .store
+            .register_owner("panel", PanelKind::Claude, "owner", Some("session"), temp.path())
+            .expect("register");
+        let malformed = context.process(b"not JSON".as_slice(), 1).expect_err("malformed input");
+        assert_eq!(malformed.to_string(), "invalid lifecycle input");
+        let oversized = context
+            .process(io::repeat(b' ').take(MAX_HOOK_BYTES + 1), 1)
+            .expect_err("oversized input");
+        assert_eq!(oversized.to_string(), "hook input exceeds limit");
+        assert!(context.store.read("panel").is_err());
     }
 }

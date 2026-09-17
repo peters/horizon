@@ -388,3 +388,58 @@ fn registration_prunes_old_markers_without_allowing_old_hooks_to_invalidate_curr
         );
     }
 }
+
+#[test]
+fn abandoned_hook_vetoes_reads_even_after_an_overlapping_hook_finishes() {
+    let mut fixture = Fixture::new();
+    let abandoned = fixture.store.begin_hook("panel", "host").expect("first invocation");
+    let completed = fixture.store.begin_hook("panel", "host").expect("second invocation");
+    fixture.event("Stop", 3);
+    fixture
+        .store
+        .finish_hook("panel", "host", &completed)
+        .expect("complete second");
+    assert!(fixture.store.read("panel").is_err());
+    fixture
+        .store
+        .finish_hook("panel", "host", &abandoned)
+        .expect("complete first");
+    assert!(fixture.store.read("panel").expect("healthy").is_some());
+}
+
+#[test]
+fn pending_hook_at_claim_authorization_vetoes_dispatch() {
+    let mut fixture = Fixture::new();
+    fixture.seal();
+    let expected = fixture.store.read("panel").expect("read").expect("record");
+    assert!(
+        fixture
+            .store
+            .claim_with(&expected, || {
+                fixture.store.begin_hook("panel", "host").expect("racing hook");
+            })
+            .is_err()
+    );
+}
+
+#[test]
+fn new_owner_cannot_inherit_an_abandoned_handoff() {
+    let mut fixture = Fixture::new();
+    fixture.seal();
+    let abandoned = fixture.store.begin_hook("panel", "host").expect("old hook");
+    fixture
+        .store
+        .register_owner(
+            "panel",
+            PanelKind::Claude,
+            "new-host",
+            Some("session"),
+            fixture.directory.path(),
+        )
+        .expect("new owner");
+    let record = fixture.store.read("panel").expect("new health").expect("record");
+    assert!(record.handoff.is_none());
+    assert!(fixture.store.finish_hook("panel", "host", &abandoned).is_err());
+    fixture.store.invalidate("panel", "host").expect("late invalidation");
+    assert!(fixture.store.read("panel").expect("new still healthy").is_some());
+}
