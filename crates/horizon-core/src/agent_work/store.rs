@@ -134,7 +134,9 @@ impl WorkStore {
         let mut health = private_options().write(true).create_new(true).open(health_path)?;
         health.write_all(b"1")?;
         health.sync_all()?;
-        self.write(&record)
+        self.write(&record)?;
+        self.prune_health(panel, owner);
+        Ok(())
     }
 
     /// Persist a lifecycle event from a panel whose launch was registered.
@@ -222,6 +224,9 @@ impl WorkStore {
 
     /// Claim once, before launching the resumed turn. A crash after claiming
     /// sacrifices automatic retry rather than submitting the same work twice.
+    /// The final health check is the authorization point: later invalidation
+    /// cannot revoke a returned claim. Call only after provider exit has been
+    /// verified, immediately before dispatch; never queue or cache this result.
     ///
     /// # Errors
     /// Returns an error on contention, invalid records or persistence failure.
@@ -303,6 +308,19 @@ impl WorkStore {
             return Err(invalid("launch evidence was invalidated by a failed hook"));
         }
         Ok(())
+    }
+
+    fn prune_health(&self, panel: &str, current: &str) {
+        let Ok(entries) = fs::read_dir(self.root.join("health").join(panel)) else {
+            return;
+        };
+        // Registration holds the panel lock and has durably published the new
+        // owner. A late old hook now falls back to the owner-checked invalidator.
+        for entry in entries.take(4096).flatten() {
+            if entry.file_name() != current && entry.file_type().is_ok_and(|kind| kind.is_file()) {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
     }
 
     fn health_path(&self, panel: &str, owner: &str) -> io::Result<PathBuf> {
