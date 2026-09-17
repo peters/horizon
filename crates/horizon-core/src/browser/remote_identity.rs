@@ -46,9 +46,18 @@ impl RemoteIdentityDisplay {
         }
     }
 
-    pub(super) fn clear(&mut self) {
-        self.label = format!("{} · Session ended", self.provider);
-        self.tooltip = "Session ended. Previous browser and device details have been cleared.".into();
+    pub(super) fn clear(&mut self, release_confirmed: bool) {
+        let status = if release_confirmed {
+            "Session ended"
+        } else {
+            "Release unconfirmed"
+        };
+        self.label = format!("{} · {status}", self.provider);
+        self.tooltip = if release_confirmed {
+            "Session ended. Previous browser and device details have been cleared."
+        } else {
+            "Session identity is unavailable. The provider may still hold this session; check its release status before creating another. Previous browser and device details have been cleared."
+        }.into();
     }
 
     pub(super) fn confirm(&mut self, identity: &RemoteDeviceIdentity) {

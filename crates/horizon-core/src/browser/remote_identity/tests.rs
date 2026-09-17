@@ -116,6 +116,20 @@ fn session_replacement_and_end_clear_previous_identity() {
         state.holds_remote_allocation(),
         "clearing the label does not release the provider quota"
     );
+    assert!(
+        state
+            .remote_identity_display()
+            .expect("remote")
+            .label()
+            .ends_with("Release unconfirmed")
+    );
+    assert!(
+        state
+            .remote_identity_display()
+            .expect("remote")
+            .tooltip()
+            .contains("may still hold")
+    );
     confirm(&mut state);
     state.stop();
     assert_eq!(state.remote_device(), None);
@@ -124,8 +138,20 @@ fn session_replacement_and_end_clear_previous_identity() {
             .remote_identity_display()
             .expect("remote")
             .label()
+            .ends_with("Release unconfirmed")
+    );
+    state.apply_remote_session_event_for_tests(RemoteSessionEvent::Released {
+        label: "target".into(),
+        outcome: RemoteReleaseOutcome::Released,
+    });
+    assert!(
+        state
+            .remote_identity_display()
+            .expect("remote")
+            .label()
             .ends_with("Session ended")
     );
+    assert!(!state.holds_remote_allocation());
     let restored = BrowserPanelState::restored_remote("restored", &BrowserConfig::default(), "target".into(), None);
     assert!(
         restored

@@ -29,6 +29,9 @@ pub fn show(
     state: &mut BrowserUiState,
     interactive: bool,
 ) -> (bool, bool) {
+    if let Some(identity) = browser.remote_identity_display() {
+        remote_identity_header(ui, identity);
+    }
     let chrome_row = ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         ui.set_min_height(CHROME_HEIGHT);
@@ -47,7 +50,7 @@ pub fn show(
         clicked |= nav_button(ui, "→", "Forward", browser, BrowserCommand::Forward, interactive);
         clicked |= nav_button(ui, "⟳", "Reload", browser, BrowserCommand::Reload, interactive);
         clicked |= video_controls(ui, browser, interactive);
-        clicked |= backend_picker(ui, panel_id, browser, interactive, natural_chip_width.min(80.0));
+        clicked |= backend_picker(ui, panel_id, browser, interactive);
         // Measure after the nav buttons so the cap fits the real remainder.
         // The owner name is an unrestricted external string: cap the chip to
         // what the row can spare while keeping the URL bar a usable minimum
@@ -89,6 +92,20 @@ pub fn show(
     (url_focused, clicked)
 }
 
+fn remote_identity_header(ui: &mut Ui, identity: &horizon_core::browser::RemoteIdentityDisplay) {
+    // A dedicated row keeps the hover target usable at the minimum panel width.
+    ui.add_sized(
+        vec2(ui.available_width(), CHROME_HEIGHT),
+        egui::Label::new(identity.label())
+            .wrap_mode(TextWrapMode::Truncate)
+            .show_tooltip_when_elided(false),
+    )
+    .on_hover_ui(|ui| {
+        ui.set_max_width(crate::text::stable_tooltip_max_width(ui));
+        ui.add(egui::Label::new(identity.tooltip()).wrap());
+    });
+}
+
 /// Whether the backend picker may act, and the explanation shown when a
 /// remote target fixes the browser.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -112,22 +129,8 @@ fn backend_picker(
     panel_id: horizon_core::PanelId,
     browser: &mut BrowserPanelState,
     interactive: bool,
-    ownership_width: f32,
 ) -> bool {
-    if let Some(identity) = browser.remote_identity_display() {
-        // Bound the identity before the URL bar takes the remaining width.
-        // The full provider text stays available even in a narrow panel.
-        let width = (ui.available_width() - URL_MIN_WIDTH - ownership_width - 12.0).clamp(0.0, 320.0);
-        ui.add_sized(
-            vec2(width, CHROME_HEIGHT),
-            egui::Label::new(identity.label())
-                .wrap_mode(TextWrapMode::Truncate)
-                .show_tooltip_when_elided(false),
-        )
-        .on_hover_ui(|ui| {
-            ui.set_max_width(crate::text::stable_tooltip_max_width(ui));
-            ui.add(egui::Label::new(identity.tooltip()).wrap());
-        });
+    if browser.is_remote() {
         return false;
     }
     let previous = browser.backend();
@@ -508,7 +511,7 @@ mod tests {
         let mut changed = None;
         let _ = ctx
             .run_ui(egui::RawInput::default(), |ui| {
-                changed = Some(backend_picker(ui, horizon_core::PanelId(1), &mut remote, true, 0.0));
+                changed = Some(backend_picker(ui, horizon_core::PanelId(1), &mut remote, true));
             })
             .discard_textures();
         assert_eq!(changed, Some(false));
@@ -541,25 +544,19 @@ mod tests {
                 ..horizon_browser::RemoteDeviceIdentity::default()
             },
         });
-        for (width, ownership_width) in [(240.0, 0.0), (360.0, 80.0), (800.0, 80.0)] {
+        remote.owner = Some("Test owner".into());
+        for width in [320.0, 360.0, 500.0] {
             let ctx = egui::Context::default();
+            let mut state = crate::browser_widget::BrowserUiState::default();
             let output = ctx
                 .run_ui(
                     egui::RawInput {
-                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 100.0))),
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 180.0))),
                         ..egui::RawInput::default()
                     },
                     |ui| {
-                        ui.horizontal(|ui| {
-                            assert!(!backend_picker(
-                                ui,
-                                horizon_core::PanelId(1),
-                                &mut remote,
-                                true,
-                                ownership_width
-                            ));
-                            assert!(ui.available_width() >= super::URL_MIN_WIDTH + ownership_width);
-                        });
+                        super::show(ui, horizon_core::PanelId(1), &mut remote, &mut state, true);
+                        assert!(ui.min_rect().right() <= width);
                     },
                 )
                 .discard_textures();
@@ -573,7 +570,12 @@ mod tests {
                 .expect("identity text");
             assert_eq!(text.galley.rows.len(), 1);
             assert!(text.galley.elided, "long identity must elide at width {width}");
-            assert!(text.galley.size().x <= 320.0);
+            assert!(text.galley.size().x > 200.0, "identity remains readable and hoverable");
+            let bounds = text.visual_bounding_rect();
+            assert!(
+                bounds.left() >= 0.0 && bounds.right() <= width,
+                "width={width}, bounds={bounds:?}"
+            );
         }
     }
 

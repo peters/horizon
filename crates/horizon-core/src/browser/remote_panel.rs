@@ -192,7 +192,9 @@ impl BrowserPanelState {
     pub(super) fn clear_remote_identity(&mut self) {
         if let Some(remote) = self.remote.as_mut() {
             remote.device = None;
-            remote.identity_display.clear();
+            remote
+                .identity_display
+                .clear(remote.provider.is_none() || remote.release_established);
         }
     }
 
@@ -325,6 +327,9 @@ impl BrowserPanelState {
                     ..
                 }
         );
+        if released && let Some(remote) = self.remote.as_mut() {
+            remote.release_established = true;
+        }
         let ended = !matches!(
             &event,
             RemoteSessionEvent::Allocating { .. }
@@ -384,9 +389,6 @@ impl BrowserPanelState {
         tracing::info!(target: "browser", "{note}");
         self.remote_status = Some(note);
         if let Some(remote) = self.remote.as_mut() {
-            if released {
-                remote.release_established = true;
-            }
             if device.is_some() {
                 remote.device = device;
             }
