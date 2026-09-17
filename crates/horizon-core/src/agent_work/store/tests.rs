@@ -359,3 +359,32 @@ fn unrelated_tool_events_do_not_rewrite_the_ledger() {
     fixture.event("PostToolUse", 4);
     assert_eq!(fs::read(path).expect("after"), before);
 }
+
+#[test]
+fn registration_prunes_old_markers_without_allowing_old_hooks_to_invalidate_current_owner() {
+    let fixture = Fixture::new();
+    for index in 0..20 {
+        let owner = format!("owner-{index}");
+        fixture
+            .store
+            .register_owner(
+                "panel",
+                PanelKind::Claude,
+                &owner,
+                Some("session"),
+                fixture.directory.path(),
+            )
+            .expect("register");
+        fixture.store.invalidate("panel", "host").expect("delayed old hook");
+        assert_eq!(
+            fixture.store.read("panel").expect("read").expect("record").owner_token,
+            owner
+        );
+        assert_eq!(
+            fs::read_dir(fixture.store.root.join("health/panel"))
+                .expect("markers")
+                .count(),
+            1
+        );
+    }
+}
