@@ -133,7 +133,11 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
 - `agent_work/` keeps restart-work evidence separate from conversation binding.
   `ledger.rs` correlates lifecycle events by prompt; `transcript.rs` reads bounded
   provider tails without retaining their content; `policy.rs` makes conservative
-  restart decisions from explicit evidence. These primitives do not launch turns.
+  restart decisions from explicit evidence. `store.rs` owns bounded, private,
+  atomic metadata writes and one-shot handoff claims. The UI's internal
+  `--agent-work-hook` command records events before initializing plugins or the
+  GUI; the dedicated opt-in plugin is leased with the owning host. These
+  primitives do not launch turns.
 - `local_store.rs` centralizes agent-store environment paths and read-only
   SQLite opening so discovery, validation, and usage reporting agree.
 - Shared domain helpers belong here when both core and UI need them.

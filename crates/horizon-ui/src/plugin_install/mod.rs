@@ -8,6 +8,7 @@ use horizon_core::{HorizonHome, browser_mcp_executable, codex_home_dir, grok_hom
 
 mod grok_mcp;
 mod user_skills;
+mod work_hooks;
 use user_skills::{
     HORIZON_BROWSER_SKILL, HORIZON_NOTIFY_SKILL, RETIRED_OFFLOAD_SKILL, SkillRootLease, bind_skill_roots,
     release_skill_roots, remove_horizon_skill_dir,
@@ -177,6 +178,9 @@ pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) -> AgentPluginHo
             return AgentPluginHostGuard;
         }
     };
+    if let Err(error) = work_hooks::install(&horizon_home.agent_work_plugin_dir_for_host(manifest::host_instance())) {
+        tracing::warn!(%error, "work resume hooks unavailable");
+    }
     let user_skill_dirs = user_skill_lease_dirs(user_home.as_deref(), grok_home.as_deref(), codex_home.as_deref());
     let extra_cleanup = user_skill_cleanup_dirs(user_home.as_deref(), codex_home.as_deref());
     if let Err(error) = lease.bind_user_skills_with_cleanup(&user_skill_dirs, &extra_cleanup) {

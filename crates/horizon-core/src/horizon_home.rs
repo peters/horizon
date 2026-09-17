@@ -24,6 +24,11 @@ impl HorizonHome {
     }
 
     #[must_use]
+    pub fn agent_work_plugin_dir_for_host(&self, host_instance: &str) -> PathBuf {
+        self.agent_plugin_host_dir(host_instance).join("work-resume")
+    }
+
+    #[must_use]
     pub fn config_path(&self) -> PathBuf {
         self.root.join("config.yaml")
     }
