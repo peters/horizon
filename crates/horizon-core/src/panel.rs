@@ -1,5 +1,6 @@
 mod lifecycle;
 mod spawn;
+mod work_resume;
 
 use std::borrow::Cow;
 use std::path::PathBuf;

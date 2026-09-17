@@ -192,6 +192,7 @@ impl Dimensions for TerminalDimensions {
 
 pub struct Terminal {
     pub(crate) work_continuation: crate::agent_work::WorkContinuation,
+    shutdown_complete: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) work_owner: Option<Arc<crate::agent_work::WorkOwner>>,
     term: Arc<FairMutex<Term<TerminalEventProxy>>>,
     event_sender: EventLoopSender,
@@ -216,6 +217,7 @@ pub struct Terminal {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     use std::collections::HashMap;
@@ -362,6 +364,21 @@ mod tests {
             kitty_keyboard: true,
         })
         .expect("terminal should spawn")
+    }
+
+    #[test]
+    fn asynchronous_teardown_remains_observable_after_the_handle_is_taken() {
+        let mut terminal = spawn_test_terminal();
+        let completed = Arc::new(AtomicUsize::new(0));
+        terminal.request_shutdown();
+        assert!(terminal.begin_async_join(&completed));
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while completed.load(Ordering::Acquire) == 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(completed.load(Ordering::Acquire), 1);
+        assert!(terminal.wait_for_shutdown(Duration::ZERO));
+        assert!(terminal.shutdown_with_timeout(Duration::ZERO));
     }
 
     #[test]

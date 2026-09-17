@@ -68,6 +68,7 @@ impl Terminal {
 
         let mut terminal = Self {
             work_owner: None,
+            shutdown_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             work_continuation: crate::agent_work::WorkContinuation::default(),
             term,
             event_sender,
@@ -136,10 +137,11 @@ impl Terminal {
         }
 
         let Some(event_loop_handle) = self.event_loop_handle.take() else {
-            return true;
+            return self.shutdown_complete.load(Ordering::Acquire);
         };
 
         let (shutdown_tx, shutdown_rx) = mpsc::sync_channel(1);
+        let completed = Arc::clone(&self.shutdown_complete);
         std::thread::spawn(move || {
             // Drop the joined event loop on this helper thread so PTY teardown
             // cannot block the UI thread in `Pty::drop`.
@@ -147,6 +149,7 @@ impl Terminal {
                 Ok(_) => JoinStatus::Complete,
                 Err(_) => JoinStatus::Panicked,
             };
+            completed.store(true, Ordering::Release);
             let _ = shutdown_tx.send(status);
         });
 
@@ -180,6 +183,7 @@ impl Terminal {
         };
         let sender = self.event_sender.clone();
         let done = Arc::clone(completed);
+        let terminal_done = Arc::clone(&self.shutdown_complete);
         std::thread::spawn(move || {
             let prepared = owner.prepare_suspend();
             if prepared {
@@ -196,6 +200,7 @@ impl Terminal {
                     owner.finish_suspend();
                 }
             }
+            terminal_done.store(true, Ordering::Release);
             done.fetch_add(1, Ordering::Relaxed);
         });
         true
@@ -208,10 +213,12 @@ impl Terminal {
             return false;
         };
         let done = Arc::clone(completed);
+        let terminal_done = Arc::clone(&self.shutdown_complete);
         std::thread::spawn(move || {
             // Join and drop on this helper thread so PTY teardown cannot block
             // the UI thread.
             let _ = handle.join();
+            terminal_done.store(true, Ordering::Release);
             done.fetch_add(1, Ordering::Relaxed);
         });
         true

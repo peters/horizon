@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use crate::editor::{MarkdownEditor, PanelContent};
 use crate::error::{Error, Result};
 use crate::runtime_state::claude_session_transcript_exists;
@@ -44,6 +42,7 @@ impl Panel {
             return Ok(());
         }
 
+        let work_brief = self.requested_work_brief()?;
         let Some(terminal) = self.content.terminal_mut() else {
             // Editor panels don't restart — just reload from disk if file-backed.
             if let Some(editor) = self.content.editor_mut()
@@ -59,7 +58,7 @@ impl Panel {
         let cols = terminal.cols();
 
         // Graceful shutdown of the old terminal.
-        let _ = terminal.shutdown_with_timeout(Duration::from_secs(2));
+        super::work_resume::shutdown_for_restart(terminal)?;
 
         // A pre-assigned Claude binding may not have a transcript yet (panel
         // never received a message); resuming it would fail, so relaunch
@@ -94,6 +93,9 @@ impl Panel {
             );
         }
 
+        if work_brief.is_some() && !should_resume {
+            return Err(Error::State("The saved conversation is no longer available.".into()));
+        }
         let mut env = agent_env(self.kind, &self.local_id, self.launch_command.is_none());
         let work_launch = crate::agent_work::WorkLaunch {
             panel: &self.local_id,
@@ -103,7 +105,21 @@ impl Panel {
             session_id: self.session_binding.as_ref().map(|binding| binding.session_id.as_str()),
             default_command: self.launch_command.is_none(),
         };
-        let work_owner = work_launch.attach_launch(&program, self.launch_args.is_empty(), &mut launch_args, &mut env);
+        let owned = self
+            .launch_args
+            .is_empty()
+            .then(|| work_launch.owned_command(&program, &launch_args, &env))
+            .flatten();
+        if work_brief.is_some() && owned.is_none() {
+            return Err(Error::State(
+                "The launch no longer resolves to an owned executable. Continue from its terminal.".into(),
+            ));
+        }
+        let work_owner = work_launch.attach(owned.as_deref(), &mut launch_args, &mut env);
+        let work_state = self.prepare_work_process(&mut launch_args, owned.as_deref());
+        if let Some(brief) = work_brief {
+            self.append_requested_work(&mut launch_args, &brief)?;
+        }
         self.content = PanelContent::Terminal(Terminal::spawn(TerminalSpawnOptions {
             program,
             args: launch_args,
@@ -121,6 +137,7 @@ impl Panel {
 
         if let Some(terminal) = self.terminal_mut() {
             terminal.work_owner = work_owner;
+            terminal.work_continuation = work_state;
         }
         self.launched_at_millis = current_unix_millis();
         self.ssh_status = if self.kind == PanelKind::Ssh {
