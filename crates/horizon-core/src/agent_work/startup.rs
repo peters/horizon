@@ -46,6 +46,7 @@ impl Drop for RestoreBudget {
 #[derive(Default)]
 pub(crate) struct WorkContinuation {
     pub(crate) requested_session: Option<String>,
+    pub(crate) offered_session: Option<String>,
     pub(crate) owns_process: bool,
     reason: Option<AskReason>,
     touched: AtomicBool,
@@ -118,12 +119,14 @@ impl StartupPlan {
         } else {
             (RestartDecision::NotResumable, None)
         };
+        let mut state = match decision {
+            RestartDecision::Ask(reason) => WorkContinuation::ask(reason),
+            _ => WorkContinuation::default(),
+        };
+        state.offered_session = launch.session_id.map(str::to_owned);
         Self {
             owner: None,
-            state: match decision {
-                RestartDecision::Ask(reason) => WorkContinuation::ask(reason),
-                _ => WorkContinuation::default(),
-            },
+            state,
             seed,
         }
     }
@@ -133,7 +136,7 @@ impl StartupPlan {
             if attached && append_seed(PanelKind::Claude, args, &seed) {
                 REMAINING.set(REMAINING.get().saturating_sub(1));
             } else {
-                self.state = WorkContinuation::ask(AskReason::MissingEvidence);
+                self.state.reason = Some(AskReason::MissingEvidence);
             }
         }
     }
