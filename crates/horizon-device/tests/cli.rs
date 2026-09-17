@@ -116,6 +116,49 @@ fn capture_options_cli_syntax_is_validated_before_backend_access() -> Result<(),
 }
 
 #[test]
+fn trailing_arguments_are_rejected_without_waiting_for_stdin() -> Result<(), Box<dyn std::error::Error>> {
+    use std::{
+        process::Stdio,
+        time::{Duration, Instant},
+    };
+    for args in [
+        vec!["act", "-", "extra"],
+        vec!["screenshot", "--options", "-", "extra"],
+        vec!["screenshot", "unused.jpg", "--options", "-", "extra"],
+    ] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-device"))
+            .args(["--target", "unused.json"])
+            .args(&args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()?;
+        let input = child.stdin.take().ok_or("missing stdin")?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let status = loop {
+            if let Some(status) = child.try_wait()? {
+                break Some(status);
+            }
+            if Instant::now() >= deadline {
+                child.kill()?;
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let output = child.wait_with_output()?;
+        drop(input);
+        assert_eq!(
+            status.and_then(|status| status.code()),
+            Some(2),
+            "{args:?} waited for stdin"
+        );
+        let body: Value = serde_json::from_slice(&output.stdout)?;
+        assert_eq!(body["error"]["code"], "invalid_request");
+        assert_eq!(body["error"]["message"], "unexpected arguments");
+    }
+    Ok(())
+}
+
+#[test]
 fn mcp_startup_errors_leave_stdout_as_protocol_only() -> Result<(), Box<dyn std::error::Error>> {
     let output = Command::new(env!("CARGO_BIN_EXE_horizon-device"))
         .args(["--target", "unused.json", "mcp"])

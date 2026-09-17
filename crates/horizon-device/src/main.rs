@@ -48,7 +48,7 @@ async fn run() -> Result<u8, String> {
     let mut output = None;
     let request = match command.as_str() {
         "act" => Command::Act(
-            serde_json::from_str(&read_json(args.next().ok_or("act requires JSON")?)?)
+            serde_json::from_str(&read_final_json(&mut args, "act requires JSON")?)
                 .map_err(|error| format!("invalid action: {error}"))?,
         ),
         "doctor" => Command::Doctor,
@@ -65,7 +65,7 @@ async fn run() -> Result<u8, String> {
                     if flag != "--options" {
                         return Err("expected --options JSON after output path".into());
                     }
-                    options = serde_json::from_str(&read_json(args.next().ok_or("missing capture options")?)?)
+                    options = serde_json::from_str(&read_final_json(&mut args, "missing capture options")?)
                         .map_err(|error| format!("invalid capture options: {error}"))?;
                 }
             }
@@ -102,6 +102,14 @@ async fn run() -> Result<u8, String> {
     }
     println!("{value}");
     Ok(u8::from(value["ok"] != true))
+}
+
+fn read_final_json(args: &mut impl Iterator<Item = String>, missing: &str) -> Result<String, String> {
+    let text = args.next().ok_or(missing)?;
+    if args.next().is_some() {
+        return Err("unexpected arguments".into());
+    }
+    read_json(text)
 }
 
 fn read_json(mut text: String) -> Result<String, String> {
