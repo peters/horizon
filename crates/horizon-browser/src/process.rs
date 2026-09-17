@@ -19,7 +19,7 @@ use thiserror::Error;
 use crate::AutomationDisclosurePolicy;
 use crate::cdp::parse_devtools_ws_url;
 
-pub(crate) use control::{ChromeProcessControl, ServiceProcess};
+pub(crate) use control::{ChromeProcessControl, ProcessLifecycle, ServiceProcess};
 
 #[cfg(windows)]
 pub(super) type ProcessChild = Box<dyn ChildWrapper>;

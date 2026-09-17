@@ -37,7 +37,10 @@ mod native_select;
 mod navigation;
 mod network;
 mod semantic;
+mod shared;
 mod shutdown;
+use shared::DriverProcess;
+pub use shared::SharedBrowserSession;
 
 pub use shutdown::{DriverTeardown, RemoteReleaseReport};
 mod startup;
@@ -52,7 +55,7 @@ pub use handle::{BrowserEventWaker, CommittedUrl};
 pub use horizon_browser_protocol::BrowserCommand;
 use native_select::NativeSelectState;
 pub use shutdown::BrowserShutdownSignal;
-use startup::run_driver;
+use startup::{DriverLaunch, run_driver};
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
@@ -63,7 +66,7 @@ use std::time::{Duration, Instant};
 use crate::cdp::{CdpError, CdpLink};
 use crate::frames::FrameSlot;
 use crate::page_scroll::VerticalScrollbarDrag;
-use crate::process::{ChromeProcess, ChromeProcessControl};
+use crate::process::ChromeProcessControl;
 use crate::semantic::SemanticState;
 use crate::webdriver::RemoteReleaseOutcome;
 use crate::{ActiveBackendCapabilities, BackendKind, PageScrollState, normalize_navigation_target};
@@ -199,6 +202,29 @@ const SCROLLBAR_LAYOUT_RETRY_DELAY: Duration = Duration::from_millis(100);
 /// Fails when the launch config cannot be resolved or the OS thread cannot
 /// be spawned.
 pub fn start_session(config: BrowserSessionConfig) -> Result<BrowserSession, crate::BrowserError> {
+    start_session_with_group(config, None)
+}
+
+/// Start a separate page in a shared local Chromium session.
+///
+/// # Errors
+/// Rejects unsupported backends or invalid launch configurations.
+pub fn start_shared_session(
+    config: BrowserSessionConfig,
+    group: SharedBrowserSession,
+) -> Result<BrowserSession, crate::BrowserError> {
+    if config.browser.backend != BackendKind::ChromiumCdp || config.remote.is_some() {
+        return Err(crate::BrowserError::LaunchConfig(std::io::Error::other(
+            "shared sessions require local Chromium",
+        )));
+    }
+    start_session_with_group(config, Some(group))
+}
+
+fn start_session_with_group(
+    config: BrowserSessionConfig,
+    group: Option<SharedBrowserSession>,
+) -> Result<BrowserSession, crate::BrowserError> {
     let mut config = config;
     config.browser = config
         .browser
@@ -231,6 +257,7 @@ pub fn start_session(config: BrowserSessionConfig) -> Result<BrowserSession, cra
     let panel_local_id = config.panel_local_id.clone();
     let coordination = config.coordination.clone();
     let stop_requested = Arc::new(AtomicBool::new(false));
+    let group = group.map(|group| group.reserve(Arc::clone(&stop_requested)));
     let driver_stop_requested = Arc::clone(&stop_requested);
     let slot = Arc::clone(&frame_slot);
     std::thread::Builder::new()
@@ -254,8 +281,11 @@ pub fn start_session(config: BrowserSessionConfig) -> Result<BrowserSession, cra
                 &command_rx,
                 &slot,
                 &driver_stop_requested,
-                completion_tx,
-                driver_process_control,
+                DriverLaunch {
+                    completion_tx,
+                    process_control: driver_process_control,
+                    group,
+                },
             ),
             BackendKind::FirefoxBidi | BackendKind::SafariWebDriver => crate::webdriver::run_webdriver(
                 &config,
@@ -291,7 +321,7 @@ pub fn start_session(config: BrowserSessionConfig) -> Result<BrowserSession, cra
 
 fn run_loop(
     state: &mut DriverState,
-    chrome: &mut ChromeProcess,
+    chrome: &mut DriverProcess,
     link: &mut CdpLink,
     command_rx: &CommandReceiver,
     frame_slot: &Arc<FrameSlot>,
@@ -303,15 +333,11 @@ fn run_loop(
             state.flush_http_response_bodies(link, event_tx, frame_slot);
             state.capture_final_url(link, event_tx, frame_slot);
             state.settle_pending_wait_for_shutdown(Instant::now());
-            // Ask Chrome to exit cleanly so it marks its profile session
-            // complete (kill alone leaves a "crashed" state that makes the
-            // next launch restore stale tabs); the kill below is the
-            // fallback for an uncooperative process.
-            let outcome = link.call_and_drain(Duration::from_secs(1), "Browser.close", &serde_json::json!({}), None);
-            for message in outcome.drained {
-                state.handle_message(link, event_tx, frame_slot, message);
+            if let Some(target) = state.target_id.as_deref() {
+                chrome.close_page(link, target);
+            } else {
+                let _ = chrome.kill();
             }
-            let _ = chrome.kill();
             let _ = event_tx.send(BrowserEvent::Stopped { code: None });
             break;
         }
@@ -396,7 +422,7 @@ fn run_loop(
     state.finish_pending_resize("browser_unavailable", "browser session stopped");
 }
 
-fn stop_for_chrome_exit(state: &mut DriverState, chrome: &mut ChromeProcess, event_tx: &BrowserEventSender) -> bool {
+fn stop_for_chrome_exit(state: &mut DriverState, chrome: &mut DriverProcess, event_tx: &BrowserEventSender) -> bool {
     let Some(status) = chrome.child_status() else {
         return false;
     };

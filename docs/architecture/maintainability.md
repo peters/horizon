@@ -256,3 +256,13 @@ If the answer to any of those is "yes", follow the
 [pull-request scope rules](../../AGENTS.md#pull-request-scope): land purely
 mechanical moves in a focused prerequisite PR and keep each semantic change to
 one independently testable outcome.
+
+
+### Shared Chromium lifecycle
+
+`horizon-browser::session::SharedBrowserSession` provides an opt-in process and
+profile group. Each driver owns its own page target and connection. Reservations
+cover queued startup, and page lifecycle controls cannot terminate a live sibling.
+Final release retires the process before profile cleanup; failed startup retains
+the exact child control, and failed target close remains pending. Existing
+`start_session` callers retain exclusive sessions.

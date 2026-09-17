@@ -11,6 +11,8 @@ use crate::frames::FrameSlot;
 use crate::process::{ChromeError, ChromeProcess, ChromeProcessControl};
 use crate::{AutomationDisclosurePolicy, BrowserConfig};
 
+use super::shared::{DriverProcess, SharedBrowserSession, SharedDriverReservation};
+
 use super::{
     BrowserEvent, BrowserEventSender, BrowserSessionConfig, CALL_TIMEOUT, CommandReceiver, DriverState, WS_URL_TIMEOUT,
     run_loop,
@@ -23,12 +25,14 @@ const DEVTOOLS_PORT_REAP_FAILURE: &str =
 /// Settles process registration and resolves the driver's teardown signal
 /// exactly once, on thread exit.
 struct DriverCompletion {
+    group: Option<SharedDriverReservation>,
     completion_tx: Option<mpsc::Sender<()>>,
     process_control: ChromeProcessControl,
 }
 
 impl Drop for DriverCompletion {
     fn drop(&mut self) {
+        self.group.take();
         self.process_control.mark_registration_settled();
         if let Some(tx) = self.completion_tx.take() {
             let _ = tx.send(());
@@ -38,7 +42,7 @@ impl Drop for DriverCompletion {
 
 fn cancel_startup_if_requested(
     requested: &AtomicBool,
-    chrome: &mut ChromeProcess,
+    chrome: &mut DriverProcess,
     event_tx: &BrowserEventSender,
 ) -> bool {
     if !requested.load(Ordering::Acquire) {
@@ -49,8 +53,23 @@ fn cancel_startup_if_requested(
     true
 }
 
+fn cancel_target_startup(
+    stop: &AtomicBool,
+    chrome: &mut DriverProcess,
+    link: &mut CdpLink,
+    target: &str,
+    events: &BrowserEventSender,
+) -> bool {
+    if !stop.load(Ordering::Acquire) {
+        return false;
+    }
+    chrome.close_page(link, target);
+    let _ = events.send(BrowserEvent::Stopped { code: None });
+    true
+}
+
 struct DriverConnection {
-    chrome: ChromeProcess,
+    chrome: DriverProcess,
     link: CdpLink,
     ws_url: String,
     target_id: String,
@@ -63,8 +82,9 @@ fn initialize_driver(
     event_tx: &BrowserEventSender,
     stop_requested: &AtomicBool,
     process_control: &ChromeProcessControl,
+    group: Option<&SharedBrowserSession>,
 ) -> Option<DriverConnection> {
-    let launch = match build_launch(config) {
+    let mut launch = match build_launch(config) {
         Ok(launch) => launch,
         Err(message) => {
             let _ = event_tx.send(BrowserEvent::Warning(message));
@@ -76,7 +96,19 @@ fn initialize_driver(
         let _ = event_tx.send(BrowserEvent::Stopped { code: None });
         return None;
     }
-    let (mut chrome, ws_url) = match start_chrome(&launch, stop_requested, process_control) {
+    let started = if let Some(group) = group {
+        launch.profile_dir = profile_dir(&config.browser, group.profile_id());
+        group.acquire(
+            &launch,
+            config.browser.hide_native_window,
+            stop_requested,
+            process_control,
+        )
+    } else {
+        start_chrome(&launch, stop_requested, process_control)
+            .map(|connection| connection.map(|(process, endpoint)| (DriverProcess::Exclusive(process), endpoint)))
+    };
+    let (mut chrome, ws_url) = match started {
         Ok(Some(connection)) => connection,
         Ok(None) => {
             let _ = event_tx.send(BrowserEvent::Stopped { code: None });
@@ -106,7 +138,7 @@ fn initialize_driver(
     initialize_target(config, event_tx, stop_requested, chrome, link, ws_url)
 }
 
-fn start_chrome(
+pub(super) fn start_chrome(
     launch: &crate::process::ChromeLaunch,
     stop_requested: &AtomicBool,
     process_control: &ChromeProcessControl,
@@ -178,7 +210,7 @@ fn initialize_target(
     config: &BrowserSessionConfig,
     event_tx: &BrowserEventSender,
     stop_requested: &AtomicBool,
-    mut chrome: ChromeProcess,
+    mut chrome: DriverProcess,
     mut link: CdpLink,
     ws_url: String,
 ) -> Option<DriverConnection> {
@@ -193,7 +225,11 @@ fn initialize_target(
     }
     // Resolve the caller page before creating the hidden metadata target so
     // target ordering can never bind the panel to the temporary page.
-    let existing_target = first_page_target(&mut link, stop_requested);
+    let existing_target = if chrome.is_shared() {
+        chrome.registered_target()
+    } else {
+        first_page_target(&mut link, stop_requested)
+    };
     if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
         return None;
     }
@@ -206,35 +242,27 @@ fn initialize_target(
         let _ = event_tx.send(BrowserEvent::Stopped { code: None });
         return None;
     };
-    if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
+    chrome.register_target(&target_id);
+    if cancel_target_startup(stop_requested, &mut chrome, &mut link, &target_id, event_tx) {
         return None;
     }
     let native_user_agent_metadata =
-        match prepare_disclosure_metadata(&mut link, stop_requested, config.browser.automation_disclosure) {
+        match prepare_disclosure_metadata(&mut link, &chrome, stop_requested, config.browser.automation_disclosure) {
             Ok(metadata) => metadata,
             Err(error) => {
                 let _ = event_tx.send(BrowserEvent::Warning(format!(
                     "browser disclosure bootstrap failed: {error}"
                 )));
-                let _ = chrome.kill();
+                chrome.close_page(&mut link, &target_id);
                 let _ = event_tx.send(BrowserEvent::Stopped { code: None });
                 return None;
             }
         };
-    if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
+    if cancel_target_startup(stop_requested, &mut chrome, &mut link, &target_id, event_tx) {
         return None;
     }
-    let _ = call_during_startup(
-        &mut link,
-        stop_requested,
-        "Target.setAutoAttach",
-        &serde_json::json!({ "autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true }),
-    );
-    if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
-        return None;
-    }
-    // setAutoAttach only covers *future* targets: attach explicitly to the
-    // page that Chrome opened at startup (creating one if it has none).
+    // Only attach this page and its children. Browser-wide auto-attachment
+    // would expose siblings' targets to this panel's input/capture bridges.
     let Some(session_id) = link
         .call_and_drain_until(
             CALL_TIMEOUT,
@@ -248,11 +276,11 @@ fn initialize_target(
         .and_then(|result| result.get("sessionId").and_then(|s| s.as_str()).map(str::to_string))
     else {
         let _ = event_tx.send(BrowserEvent::Warning("initial attach failed".to_string()));
-        let _ = chrome.kill();
+        chrome.close_page(&mut link, &target_id);
         let _ = event_tx.send(BrowserEvent::Stopped { code: None });
         return None;
     };
-    if cancel_startup_if_requested(stop_requested, &mut chrome, event_tx) {
+    if cancel_target_startup(stop_requested, &mut chrome, &mut link, &target_id, event_tx) {
         return None;
     }
     Some(DriverConnection {
@@ -267,6 +295,7 @@ fn initialize_target(
 
 fn prepare_disclosure_metadata(
     link: &mut CdpLink,
+    chrome: &DriverProcess,
     stop_requested: &AtomicBool,
     policy: AutomationDisclosurePolicy,
 ) -> Result<Option<serde_json::Value>, String> {
@@ -294,22 +323,28 @@ fn prepare_disclosure_metadata(
         .ok_or_else(|| "Target.createTarget omitted targetId".to_string())?
         .to_string();
 
+    chrome.register_target(&target_id);
     let metadata = read_disclosure_metadata_from_target(link, stop_requested, &target_id);
-    let close_result = call_during_startup(
-        link,
-        stop_requested,
-        "Target.closeTarget",
-        &serde_json::json!({ "targetId": target_id }),
-    )
-    .map_err(|error| format!("Target.closeTarget: {error}"))
-    .and_then(|result| {
-        result
-            .get("success")
-            .and_then(serde_json::Value::as_bool)
-            .is_some_and(|success| success)
-            .then_some(())
-            .ok_or_else(|| "Target.closeTarget did not close the disclosure target".to_string())
-    });
+    let close_result = link
+        .call_and_drain(
+            CALL_TIMEOUT,
+            "Target.closeTarget",
+            &serde_json::json!({ "targetId": target_id }),
+            None,
+        )
+        .result
+        .map_err(|error| format!("Target.closeTarget: {error}"))
+        .and_then(|result| {
+            result
+                .get("success")
+                .and_then(serde_json::Value::as_bool)
+                .is_some_and(|success| success)
+                .then_some(())
+                .ok_or_else(|| "Target.closeTarget did not close the disclosure target".to_string())
+        });
+    if close_result.is_ok() {
+        chrome.forget_closed_target(&target_id);
+    }
     match (metadata, close_result) {
         (Ok(metadata), Ok(())) => Ok(Some(metadata)),
         (Err(error), _) | (Ok(_), Err(error)) => Err(error),
@@ -368,26 +403,42 @@ fn call_during_startup(
     .result
 }
 
+pub(super) struct DriverLaunch {
+    pub(super) completion_tx: mpsc::Sender<()>,
+    pub(super) process_control: ChromeProcessControl,
+    pub(super) group: Option<SharedDriverReservation>,
+}
+
 pub(super) fn run_driver(
     config: &BrowserSessionConfig,
     event_tx: &BrowserEventSender,
     command_rx: &CommandReceiver,
     frame_slot: &Arc<FrameSlot>,
     stop_requested: &Arc<AtomicBool>,
-    completion_tx: mpsc::Sender<()>,
-    process_control: ChromeProcessControl,
+    launch: DriverLaunch,
 ) {
+    let DriverLaunch {
+        completion_tx,
+        process_control,
+        group,
+    } = launch;
     let completion_guard = DriverCompletion {
         completion_tx: Some(completion_tx),
         process_control,
+        group,
     };
     let Some(_coordination_lifetime) = crate::coordination::CoordinationLifetime::start(config) else {
         let _ = event_tx.send(BrowserEvent::Warning(crate::coordination::PREPARE_FAILURE.to_string()));
         let _ = event_tx.send(BrowserEvent::Stopped { code: None });
         return;
     };
-    let Some(mut connection) = initialize_driver(config, event_tx, stop_requested, &completion_guard.process_control)
-    else {
+    let Some(mut connection) = initialize_driver(
+        config,
+        event_tx,
+        stop_requested,
+        &completion_guard.process_control,
+        completion_guard.group.as_ref().map(|reservation| &reservation.session),
+    ) else {
         return;
     };
 
@@ -405,7 +456,9 @@ pub(super) fn run_driver(
         &connection.session_id,
         &connection.target_id,
     ) {
-        let _ = connection.chrome.kill();
+        connection
+            .chrome
+            .close_page(&mut connection.link, &connection.target_id);
         let _ = event_tx.send(BrowserEvent::Stopped { code: None });
         return;
     }
@@ -418,11 +471,13 @@ pub(super) fn run_driver(
         frame_slot,
         event_tx,
     );
-    let _ = connection.chrome.kill();
+    connection
+        .chrome
+        .close_page(&mut connection.link, &connection.target_id);
 }
 
 /// First existing `page` target, if any.
-fn first_page_target(link: &mut CdpLink, stop_requested: &AtomicBool) -> Option<String> {
+pub(super) fn first_page_target(link: &mut CdpLink, stop_requested: &AtomicBool) -> Option<String> {
     let result = call_during_startup(link, stop_requested, "Target.getTargets", &serde_json::json!({})).ok()?;
     result
         .get("targetInfos")
@@ -446,7 +501,7 @@ fn first_available_page_target_id(targets: &[serde_json::Value]) -> Option<&str>
 }
 
 /// Create a fresh page target as a fallback (browser opened without one).
-fn create_page_target(link: &mut CdpLink, stop_requested: &AtomicBool) -> Option<String> {
+pub(super) fn create_page_target(link: &mut CdpLink, stop_requested: &AtomicBool) -> Option<String> {
     let result = call_during_startup(
         link,
         stop_requested,
