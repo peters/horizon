@@ -26,7 +26,7 @@ use crate::workspace::{Workspace, WorkspaceId};
 
 const PANEL_CHROME_PAD: f32 = 8.0;
 const PANEL_CHROME_TITLEBAR: f32 = 34.0;
-const TERMINAL_PANEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+const TERMINAL_PANEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 const BROWSER_PANEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 const READY_FOR_INPUT_AUTO_DISMISS_AFTER: Duration = Duration::from_secs(45);
 fn vec2_eq(left: [f32; 2], right: [f32; 2]) -> bool {
@@ -276,42 +276,15 @@ impl Board {
     }
 
     pub fn shutdown_terminal_panels(&mut self) {
-        for panel in &mut self.panels {
-            panel.request_shutdown();
+        let shutdown = self.begin_async_shutdown();
+        if !shutdown.wait_for_completion(TERMINAL_PANEL_SHUTDOWN_TIMEOUT) {
+            tracing::warn!(
+                completed = shutdown.panels_completed(),
+                total = shutdown.panel_count(),
+                "timed out waiting for panel shutdown"
+            );
         }
-
-        for panel in &mut self.panels {
-            if panel.terminal().is_none() {
-                continue;
-            }
-            if !panel.wait_for_shutdown(TERMINAL_PANEL_SHUTDOWN_TIMEOUT) {
-                tracing::warn!(
-                    panel_id = panel.id.0,
-                    kind = ?panel.kind,
-                    timeout_ms = TERMINAL_PANEL_SHUTDOWN_TIMEOUT.as_millis(),
-                    "timed out waiting for terminal panel shutdown"
-                );
-            }
-        }
-
-        // Browser drivers tear down Chrome on their own threads. Collect every
-        // signal before waiting so all panels share one normal deadline and
-        // one forced-cleanup deadline instead of multiplying either timeout
-        // by the panel count.
-        let mut browser_shutdown_signals = Vec::new();
-        for panel in &mut self.panels {
-            if let Some(signal) = panel.browser_shutdown_signal() {
-                browser_shutdown_signals.push(signal);
-            }
-        }
-        browser_shutdown_signals.append(&mut self.retired_browser_shutdown_signals);
-        let browser_count = browser_shutdown_signals.len();
-        let shutdown = ShutdownProgress::new(
-            browser_count,
-            Arc::new(AtomicUsize::new(0)),
-            browser_shutdown_signals,
-            std::mem::take(&mut self.unreleased_remote_holds),
-        );
+        let browser_count = shutdown.panel_count();
         if !shutdown.wait_for_browser_shutdown(BROWSER_PANEL_SHUTDOWN_TIMEOUT) {
             tracing::warn!(
                 browser_count,
