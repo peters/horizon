@@ -20,8 +20,10 @@ impl Panel {
     ///
     /// # Errors
     ///
-    /// Returns an error if a terminal cannot be spawned or a file-backed
-    /// editor cannot be reopened.
+    /// Returns an error if a terminal cannot be spawned, a file-backed editor
+    /// cannot be reopened, or a retired remote task is requested. Continuation
+    /// also refuses stale authorization, unverifiable saved history or launch
+    /// ownership, and incomplete shutdown of the previous process.
     pub fn restart(&mut self) -> Result<()> {
         if self.remote_workspace.is_some() {
             return Err(Error::State(
