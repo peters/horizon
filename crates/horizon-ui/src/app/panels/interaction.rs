@@ -205,6 +205,7 @@ impl HorizonApp {
                 outcome.command = Some(PanelCommand::CreateWorkspace);
                 ui.close();
             }
+            self.render_work_resume_controls(ui, panel_id);
             if kind.is_agent() || kind == PanelKind::Ssh {
                 ui.separator();
                 let restart_label = if kind == PanelKind::Ssh { "Reconnect" } else { "Restart" };

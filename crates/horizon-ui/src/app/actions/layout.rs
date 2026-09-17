@@ -128,6 +128,10 @@ impl HorizonApp {
             zones.push(rect);
         }
 
+        if let Some(rect) = self.work_resume_overlay_rect(ctx) {
+            zones.push(rect);
+        }
+
         OverlayExclusion::new(zones)
     }
 

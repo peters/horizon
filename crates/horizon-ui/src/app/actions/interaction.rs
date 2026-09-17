@@ -200,7 +200,13 @@ impl HorizonApp {
             )
         });
         let panel_geometry = self.visible_panel_geometry_for_canvas_view(canvas_rect, visible_workspace);
-        let pointer_in_canvas = pointer_position.is_some_and(|position| canvas_rect.contains(position));
+        let pointer_in_canvas = pointer_position.is_some_and(|position| {
+            canvas_rect.contains(position)
+                && !(visible_workspace.is_none()
+                    && self
+                        .work_resume_overlay_rect(ctx)
+                        .is_some_and(|rect| rect.contains(position)))
+        });
         let space_drag_claimed =
             pointer_in_canvas && primary_down && space_down && space_drag_modifier_active(modifiers);
         let ctrl_or_cmd = modifiers.ctrl || modifiers.command;

@@ -33,6 +33,23 @@ pub struct TurnLedger {
     pub generation: u64,
     pub(super) pending_questions: Vec<String>,
     pub(super) turn_closed: bool,
+    #[serde(default = "legacy_stop_review")]
+    pub(super) stop_review: StopReview,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum StopReview {
+    #[default]
+    Clear,
+    PossibleContinuation,
+    Vetoed,
+}
+
+fn legacy_stop_review() -> StopReview {
+    // Older records cannot distinguish a completed turn from an earlier veto
+    // subsequently overwritten by Stop. A fresh prompt supplies that boundary.
+    StopReview::Vetoed
 }
 
 impl TurnLedger {
@@ -56,6 +73,7 @@ impl TurnLedger {
                 self.ended_at_millis = None;
                 self.deliberate_exit = false;
                 self.turn_closed = false;
+                self.stop_review = StopReview::Clear;
             }
             "UserPromptSubmit" => {
                 self.prompt_id = event.prompt_id.clone().filter(|id| !id.is_empty());
@@ -68,20 +86,43 @@ impl TurnLedger {
                 self.ended_at_millis = None;
                 self.deliberate_exit = false;
                 self.turn_closed = false;
+                self.stop_review = StopReview::Clear;
             }
             "SessionEnd" => {
                 self.ended_at_millis = Some(now_millis);
-                self.deliberate_exit = event.reason.as_deref() != Some("other");
+                self.deliberate_exit |= event.reason.as_deref() != Some("other");
             }
             _ if self.prompt_id.is_none() || self.prompt_id != event.prompt_id => return,
-            "Stop" => self.close_turn(TurnState::Finished),
-            "StopFailure" => self.close_turn(TurnState::Failed),
+            "Stop" => {
+                if self.stop_review != StopReview::Vetoed {
+                    self.stop_review = StopReview::Clear;
+                }
+                self.close_turn(TurnState::Finished);
+            }
+            "StopFailure" => {
+                self.stop_review = StopReview::Vetoed;
+                self.close_turn(TurnState::Failed);
+            }
+            "Interrupt" => {
+                self.stop_review = StopReview::Vetoed;
+                if !self.turn_closed {
+                    self.close_turn(if self.pending_questions.is_empty() {
+                        TurnState::Interrupted
+                    } else {
+                        TurnState::Blocked
+                    });
+                }
+            }
+            "PreToolUse" | "PostToolUse" | "PermissionRequest" | "Elicitation" | "ElicitationResult"
+                if self.state == TurnState::Finished =>
+            {
+                // Another Stop hook may have continued the turn. Late events
+                // cannot prove that, so keep completion as an automatic veto.
+                if self.stop_review != StopReview::Vetoed {
+                    self.stop_review = StopReview::PossibleContinuation;
+                }
+            }
             _ if self.turn_closed => return,
-            "Interrupt" => self.close_turn(if self.pending_questions.is_empty() {
-                TurnState::Interrupted
-            } else {
-                TurnState::Blocked
-            }),
             "PermissionRequest" | "Elicitation" => self.block_on(event.tool_use_id.as_deref()),
             "PreToolUse"
                 if matches!(
@@ -103,6 +144,12 @@ impl TurnLedger {
             _ => return,
         }
         self.updated_at_millis = now_millis;
+    }
+
+    pub(super) fn needs_stop_review(&self) -> bool {
+        self.state == TurnState::Finished
+            && self.stop_review == StopReview::PossibleContinuation
+            && !self.deliberate_exit
     }
 
     fn close_turn(&mut self, state: TurnState) {
@@ -244,5 +291,61 @@ mod tests {
         assert_eq!(ledger.generation, 2);
         assert_eq!(ledger.state, TurnState::Unknown);
         assert!(ledger.prompt_id.is_none());
+    }
+
+    #[test]
+    fn post_stop_activity_is_only_ambiguity_and_requires_the_same_prompt() {
+        let mut ledger = TurnLedger::default();
+        ledger.apply(&event("UserPromptSubmit", Some("p")), 1);
+        ledger.apply(&event("Stop", Some("p")), 2);
+        for prompt in [None, Some("old")] {
+            ledger.apply(&event("PreToolUse", prompt), 3);
+            assert!(!ledger.needs_stop_review());
+        }
+        ledger.apply(&event("PreToolUse", Some("p")), 4);
+        assert_eq!(ledger.state, TurnState::Finished);
+        assert!(ledger.needs_stop_review());
+        ledger.apply(&event("Stop", Some("p")), 5);
+        assert!(!ledger.needs_stop_review());
+    }
+
+    #[test]
+    fn legacy_completed_records_require_a_fresh_turn_before_stop_review() {
+        assert_eq!(TurnLedger::default().stop_review, StopReview::Clear);
+        let mut ledger: TurnLedger = serde_json::from_value(serde_json::json!({
+            "session_id": "session", "prompt_id": "p", "state": "finished",
+            "updated_at_millis": 1, "turn_closed": true
+        }))
+        .expect("legacy record");
+        ledger.apply(&event("PreToolUse", Some("p")), 2);
+        assert_eq!(ledger.stop_review, StopReview::Vetoed);
+        assert!(!ledger.needs_stop_review());
+        ledger.apply(&event("UserPromptSubmit", Some("new")), 3);
+        ledger.apply(&event("Stop", Some("new")), 4);
+        ledger.apply(&event("PreToolUse", Some("new")), 5);
+        assert!(ledger.needs_stop_review());
+    }
+
+    #[test]
+    fn interruption_failure_and_deliberate_exit_veto_later_stop_activity() {
+        for veto in ["Interrupt", "StopFailure", "SessionEnd"] {
+            for reset in ["UserPromptSubmit", "SessionStart"] {
+                let mut ledger = TurnLedger::default();
+                for (index, name) in ["UserPromptSubmit", "Stop", "PreToolUse", veto, "Stop", "PostToolUse"]
+                    .into_iter()
+                    .enumerate()
+                {
+                    ledger.apply(&event(name, Some("p")), i64::try_from(index).expect("index"));
+                }
+                let mut end = event("SessionEnd", Some("p"));
+                end.reason = Some("other".into());
+                ledger.apply(&end, 7);
+                assert_eq!(ledger.state, TurnState::Finished);
+                assert!(!ledger.needs_stop_review());
+                ledger.apply(&event(reset, Some("new")), 8);
+                assert_eq!(ledger.stop_review, StopReview::Clear);
+                assert!(!ledger.deliberate_exit);
+            }
+        }
     }
 }

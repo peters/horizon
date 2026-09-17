@@ -34,6 +34,7 @@ mod test_support;
 mod updates;
 pub(crate) mod util;
 mod view;
+mod work_resume;
 mod workspace;
 mod yaml_highlight;
 
