@@ -186,9 +186,103 @@ fn a_clean_handoff_is_claimed_once_and_never_replayed() {
     assert_eq!(fixture.inspect().0, RestartDecision::NotResumable);
 }
 
+#[cfg(target_os = "linux")]
+fn record_later_question(fixture: &mut Fixture) {
+    fixture.input.event.prompt_id = Some("later-prompt".into());
+    fixture.input.event.source = Some("resume".into());
+    fixture.input.event.tool_name = Some("AskUserQuestion".into());
+    fixture.input.event.tool_use_id = Some("question".into());
+    for name in ["SessionStart", "UserPromptSubmit", "PreToolUse"] {
+        fixture.input.event.hook_event_name = name.into();
+        fixture
+            .store
+            .apply_hook(
+                "panel",
+                PanelKind::Claude,
+                "owner",
+                &fixture.input,
+                current_unix_millis(),
+            )
+            .expect("later turn");
+    }
+    std::fs::write(&fixture.input.transcript_path, "{\"type\":\"assistant\",\"message\":{\"stop_reason\":\"tool_use\",\"content\":[{\"type\":\"tool_use\",\"name\":\"AskUserQuestion\"}]}}\n").expect("current question");
+}
+
 #[test]
 #[cfg(target_os = "linux")]
-fn budget_and_live_session_gates_do_not_claim_the_handoff() {
+fn a_later_question_is_manual_even_when_an_old_handoff_remains() {
+    let _budget = RestoreBudget::new(5);
+    for consumed in [false, true] {
+        let mut fixture = Fixture::new();
+        fixture.seal();
+        if consumed {
+            assert_eq!(fixture.inspect().0, RestartDecision::Resume);
+            assert_eq!(fixture.inspect().0, RestartDecision::NotResumable);
+        }
+        record_later_question(&mut fixture);
+        for _ in 0..2 {
+            assert_eq!(
+                fixture.inspect(),
+                (RestartDecision::Ask(AskReason::WaitingForUser), None)
+            );
+            assert_eq!(
+                fixture.store.read("panel").expect("read").expect("record").consumed,
+                consumed
+            );
+        }
+        fixture.input.event.hook_event_name = "SessionStart".into();
+        fixture
+            .store
+            .apply_hook(
+                "panel",
+                PanelKind::Claude,
+                "owner",
+                &fixture.input,
+                current_unix_millis(),
+            )
+            .expect("reopen");
+        assert_eq!(
+            fixture.inspect(),
+            (RestartDecision::Ask(AskReason::WaitingForUser), None)
+        );
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn later_questions_do_not_override_completion_exit_or_transcript_interrupts() {
+    let _budget = RestoreBudget::new(5);
+    let mut fixture = Fixture::new();
+    fixture.seal();
+    assert_eq!(fixture.inspect().0, RestartDecision::Resume);
+    for veto in ["Stop", "StopFailure", "SessionEnd"] {
+        record_later_question(&mut fixture);
+        fixture.input.event.hook_event_name = veto.into();
+        fixture.input.event.reason = Some("prompt_input_exit".into());
+        fixture
+            .store
+            .apply_hook(
+                "panel",
+                PanelKind::Claude,
+                "owner",
+                &fixture.input,
+                current_unix_millis(),
+            )
+            .expect("veto");
+        assert_eq!(fixture.inspect(), (RestartDecision::NotResumable, None));
+    }
+    record_later_question(&mut fixture);
+    std::fs::write(
+        &fixture.input.transcript_path,
+        "{\"type\":\"user\",\"message\":{\"content\":\"[Request interrupted by user]\"}}\n",
+    )
+    .expect("user interrupt");
+    assert_eq!(fixture.inspect(), (RestartDecision::NotResumable, None));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn budget_and_uncertain_process_identity_do_not_claim_the_handoff() {
     let _budget = RestoreBudget::new(0);
     let mut fixture = Fixture::new();
     fixture.seal();
@@ -199,7 +293,7 @@ fn budget_and_live_session_gates_do_not_claim_the_handoff() {
     )
     .expect("live");
     REMAINING.set(5);
-    assert_eq!(fixture.inspect().0, RestartDecision::NotResumable);
+    assert_eq!(fixture.inspect().0, RestartDecision::Ask(AskReason::MissingEvidence));
     assert!(!fixture.store.read("panel").expect("read").expect("record").consumed);
 }
 

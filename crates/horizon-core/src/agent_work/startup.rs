@@ -7,7 +7,9 @@ use crate::PanelKind;
 use crate::horizon_home::HorizonHome;
 use crate::panel::current_unix_millis;
 
-use super::{AskReason, RestartDecision, RestartEvidence, StoredWork, TranscriptSnapshot, WorkLaunch, WorkStore};
+use super::{
+    AskReason, RestartDecision, RestartEvidence, StoredWork, TranscriptSnapshot, TurnState, WorkLaunch, WorkStore,
+};
 
 pub(crate) fn configured_resume_limit() -> usize {
     match std::env::var("HORIZON_WORK_RESUME_LIMIT") {
@@ -157,7 +159,7 @@ fn inspect_at(
     let record = store.read(launch.panel).ok()?;
     if record
         .as_ref()
-        .is_some_and(|r| r.consumed || r.kind != launch.kind || r.ledger.session_id != session)
+        .is_some_and(|r| r.kind != launch.kind || r.ledger.session_id != session)
     {
         return Some((RestartDecision::NotResumable, None));
     }
@@ -167,6 +169,12 @@ fn inspect_at(
         .map(|r| r.transcript_path.clone())
         .or_else(|| super::discovery::transcript(home, session))?;
     let transcript = TranscriptSnapshot::read(&transcript_path, launch.kind).ok()?;
+    // A handoff belongs to its recorded turn. A later question is independent
+    // evidence for manual review, even after that handoff has been consumed.
+    let waiting_for_user = transcript.state == TurnState::Blocked;
+    if !waiting_for_user && record.as_ref().is_some_and(|record| record.consumed) {
+        return Some((RestartDecision::NotResumable, None));
+    }
     let fingerprint = super::repository::fingerprint(&cwd);
     let now = current_unix_millis();
     let evidence = RestartEvidence {
@@ -175,7 +183,10 @@ fn inspect_at(
         session_id: session,
         cwd: cwd.to_str()?,
         policy: launch.policy,
-        handoff: record.as_ref().and_then(|r| r.handoff.as_ref()),
+        handoff: record
+            .as_ref()
+            .filter(|_| !waiting_for_user)
+            .and_then(|r| r.handoff.as_ref()),
         ledger: record.as_ref().map(|r| &r.ledger),
         transcript: Some(&transcript),
         repo_fingerprint: fingerprint.as_deref(),
