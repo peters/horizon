@@ -97,29 +97,7 @@ impl Panel {
             return Err(Error::State("The saved conversation is no longer available.".into()));
         }
         let mut env = agent_env(self.kind, &self.local_id, self.launch_command.is_none());
-        let work_launch = crate::agent_work::WorkLaunch {
-            panel: &self.local_id,
-            kind: self.kind,
-            policy: &self.work_resume,
-            cwd: self.launch_cwd.as_deref(),
-            session_id: self.session_binding.as_ref().map(|binding| binding.session_id.as_str()),
-            default_command: self.launch_command.is_none(),
-        };
-        let owned = self
-            .launch_args
-            .is_empty()
-            .then(|| work_launch.owned_command(&program, &launch_args, &env))
-            .flatten();
-        if work_brief.is_some() && owned.is_none() {
-            return Err(Error::State(
-                "The launch no longer resolves to an owned executable. Continue from its terminal.".into(),
-            ));
-        }
-        let work_owner = work_launch.attach(owned.as_deref(), &mut launch_args, &mut env);
-        let work_state = self.prepare_work_process(&mut launch_args, owned.as_deref());
-        if let Some(brief) = work_brief {
-            self.append_requested_work(&mut launch_args, &brief)?;
-        }
+        let work = self.prepare_restart_work(&program, &mut launch_args, &mut env, work_brief.as_deref())?;
         self.content = PanelContent::Terminal(Terminal::spawn(TerminalSpawnOptions {
             program,
             args: launch_args,
@@ -136,8 +114,8 @@ impl Panel {
         })?);
 
         if let Some(terminal) = self.terminal_mut() {
-            terminal.work_owner = work_owner;
-            terminal.work_continuation = work_state;
+            terminal.work_owner = work.owner;
+            terminal.work_continuation = work.state;
         }
         self.launched_at_millis = current_unix_millis();
         self.ssh_status = if self.kind == PanelKind::Ssh {
