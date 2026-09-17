@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use super::{Driver, webdriver_value};
 use crate::BrowserControlFailure;
 use crate::semantic::check_script_error;
+use crate::webdriver::transport::ClassicTransport;
 
 pub(super) fn uses_visual_viewport(remote: bool, capabilities: &Value) -> bool {
     remote
@@ -27,6 +28,13 @@ pub(super) fn use_touch_pointer(payload: &mut Value) {
             source["parameters"]["pointerType"] = json!("touch");
         }
     }
+}
+
+pub(super) fn click_through(transport: &dyn ClassicTransport, session: &str, payload: &Value) -> Result<(), String> {
+    transport
+        .post_with_read_timeout(&format!("{session}/actions"), payload, super::NAVIGATION_HTTP_TIMEOUT)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 #[derive(Deserialize)]

@@ -299,6 +299,12 @@ impl Driver {
         let result = if self.firefox_bidi() {
             payload["context"] = json!(self.context_id);
             self.call_bidi("input.performActions", &payload, event_tx).map(|_| ())
+        } else if self.remote_android_chromium && count == 1 {
+            super::remote_click::click_through(
+                self.host.transport(),
+                &format!("/session/{}", self.session_id),
+                &payload,
+            )
         } else {
             self.classic_post("actions", &payload).map(|_| ())
         };
@@ -615,6 +621,22 @@ mod tests {
         let error = click_through(&transport, "/session/s1", "#x").expect_err("unroutable");
         assert!(error.contains("cannot form a route"), "{error}");
         assert_eq!(transport.sent().len(), 1);
+    }
+
+    #[test]
+    fn native_mobile_click_preserves_the_element_click_navigation_timeout() {
+        let transport = Scripted::new(vec![Ok(json!({"value": null}))]);
+        let payload = json!({"actions":[{"type":"pointer","id":"horizon-touch",
+        "parameters":{"pointerType":"touch"},"actions":[
+            {"type":"pointerMove","origin":"viewport","x":80,"y":38},
+            {"type":"pointerDown","button":0},{"type":"pointerUp","button":0}
+        ]}]});
+        super::super::remote_click::click_through(&transport, "/session/s1", &payload).expect("native tap");
+        assert_eq!(
+            transport.sent(),
+            vec![("POST".into(), "/session/s1/actions".into(), payload)]
+        );
+        assert_eq!(transport.timeouts(), vec![super::super::NAVIGATION_HTTP_TIMEOUT]);
     }
 
     #[test]

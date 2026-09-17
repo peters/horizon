@@ -84,10 +84,12 @@ test('keyboard movement and zoom restart the stability interval', () => {
     assert.ok(elapsed >= 550);
 });
 
-test('continuous movement is refused within a bounded interval', () => {
-    const {result, elapsed} = probe({rect:now => ({left:30, right:130, top:200 + now / 100, bottom:220 + now / 100, width:100, height:20})});
-    assert.equal(result.error.code, 'viewport_unstable');
-    assert.equal(elapsed, 2000);
+test('continuous movement is refused even when each sample moves less than the tolerance', () => {
+    for (const divisor of [100, 250]) {
+        const {result, elapsed} = probe({rect:now => ({left:30, right:130, top:200 + now / divisor, bottom:220 + now / divisor, width:100, height:20})});
+        assert.equal(result.error.code, 'viewport_unstable');
+        assert.equal(elapsed, 2000);
+    }
 });
 
 test('untrustworthy targets or missing visual viewport never yield a click point', () => {
