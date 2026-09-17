@@ -164,8 +164,19 @@ mod tests {
         first.cancel_before_launch();
         let released = records.summaries(Some(("actor-a", "workspace-a")));
         assert_eq!(released[0].status, RemoteRecoveryStatus::Released);
-        let _available = super::super::remote_slots::acquire_slot(dir.path(), "quota", 2)
-            .expect("a published release makes its lease immediately available");
+        // Concurrent test forks can retain a released descriptor until exec.
+        let _available = (0..100)
+            .find_map(
+                |_| match super::super::remote_slots::acquire_slot(dir.path(), "quota", 2) {
+                    Ok(lease) => Some(lease),
+                    Err(super::super::remote_slots::SlotError::Busy { .. }) => {
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                        None
+                    }
+                    Err(error) => panic!("{error}"),
+                },
+            )
+            .expect("a published release makes its lease available after forked children exec");
         assert!(matches!(
             super::super::remote_slots::acquire_slot(dir.path(), "quota", 2),
             Err(super::super::remote_slots::SlotError::Busy { .. })
