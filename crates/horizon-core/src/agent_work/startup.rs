@@ -9,6 +9,14 @@ use crate::panel::current_unix_millis;
 
 use super::{AskReason, RestartDecision, RestartEvidence, StoredWork, TranscriptSnapshot, WorkLaunch, WorkStore};
 
+pub(crate) fn configured_resume_limit() -> usize {
+    match std::env::var("HORIZON_WORK_RESUME_LIMIT") {
+        Ok(value) => value.parse::<usize>().unwrap_or(0).min(32),
+        Err(std::env::VarError::NotPresent) => 3,
+        Err(std::env::VarError::NotUnicode(_)) => 0,
+    }
+}
+
 thread_local! {
     static REMAINING: Cell<usize> = const { Cell::new(0) };
 }
