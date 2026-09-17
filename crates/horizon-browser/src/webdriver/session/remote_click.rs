@@ -113,6 +113,27 @@ mod tests {
     }
 
     #[test]
+    fn fractional_viewport_round_trips_still_dispatch_integer_native_coordinates() {
+        use crate::webdriver::actions::ActionState;
+        use crate::{BrowserButton, BrowserModifiers};
+
+        let point = ClickPoint {
+            x: 1.4,
+            y: 217.4,
+            offset_x: 0.4,
+            offset_y: 0.4,
+            width: 300.0,
+            height: 434.0,
+        };
+        let (x, y) = point.visual_coordinates().expect("visible point");
+        let mut payload = ActionState::default().click_payload(x, y, BrowserButton::Left, 1, BrowserModifiers::none());
+        use_touch_pointer(&mut payload);
+        let movement = &payload["actions"][0]["actions"][0];
+        assert_eq!(movement["x"].as_i64(), Some(1));
+        assert_eq!(movement["y"].as_i64(), Some(217));
+    }
+
+    #[test]
     fn untrusted_points_are_rejected() {
         for y in [f64::NAN, f64::INFINITY, -1.0, 434.0] {
             let point = ClickPoint {
