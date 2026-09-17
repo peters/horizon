@@ -34,6 +34,7 @@ struct SharedLaunchIdentity {
     command: String,
     extra_args: Vec<String>,
     headless: bool,
+    hide_native_window: bool,
     disclosure: crate::AutomationDisclosurePolicy,
 }
 
@@ -130,21 +131,23 @@ impl SharedBrowserSession {
     pub(super) fn acquire(
         &self,
         launch: &crate::process::ChromeLaunch,
+        hide_native_window: bool,
         stop: &AtomicBool,
         panel_control: &ChromeProcessControl,
     ) -> Result<Option<(DriverProcess, String)>, String> {
-        self.pin_launch(launch)?;
+        self.pin_launch(launch, hide_native_window)?;
         self.acquire_with(stop, panel_control, |control| {
             super::startup::start_chrome(launch, stop, control)
         })
     }
 
-    fn pin_launch(&self, launch: &crate::process::ChromeLaunch) -> Result<(), String> {
+    fn pin_launch(&self, launch: &crate::process::ChromeLaunch, hide_native_window: bool) -> Result<(), String> {
         let identity = SharedLaunchIdentity {
             profile: std::path::absolute(&launch.profile_dir).map_err(|error| error.to_string())?,
             command: launch.command.clone(),
             extra_args: launch.extra_args.clone(),
             headless: launch.headless,
+            hide_native_window,
             disclosure: launch.automation_disclosure,
         };
         let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -177,6 +180,7 @@ impl SharedBrowserSession {
         if state.retiring && alive {
             return Err("previous shared browser has not finished stopping".into());
         }
+        let mut initial_target = None;
         if state.pages == 0 && !alive {
             if state.process.as_mut().is_some_and(|process| !process.kill()) || !state.control.is_reaped() {
                 return Err("previous shared browser has not released its profile".into());
@@ -195,6 +199,11 @@ impl SharedBrowserSession {
             state.retiring = false;
             state.process = Some(process);
             state.endpoint = endpoint;
+            initial_target = claim_initial_target(&state.endpoint, stop);
+            if initial_target.is_none() {
+                state.close_browser(None);
+                return Err("shared browser did not expose its initial page".into());
+            }
         } else if state
             .process
             .as_mut()
@@ -205,7 +214,7 @@ impl SharedBrowserSession {
         state.pages += 1;
         let lifecycle = Arc::new(PageLifecycle {
             state: Arc::clone(&self.state),
-            target: Mutex::new(None),
+            target: Mutex::new(initial_target),
             closing: AtomicBool::new(false),
             released: AtomicBool::new(false),
             last_page: AtomicBool::new(false),
@@ -221,6 +230,13 @@ impl SharedBrowserSession {
         }
         Ok(Some((DriverProcess::Shared(lifecycle), endpoint)))
     }
+}
+
+fn claim_initial_target(endpoint: &str, stop: &AtomicBool) -> Option<String> {
+    CdpLink::connect(endpoint).ok().and_then(|mut link| {
+        super::startup::first_page_target(&mut link, stop)
+            .or_else(|| super::startup::create_page_target(&mut link, stop))
+    })
 }
 
 pub(super) struct SharedDriverReservation {
@@ -384,6 +400,17 @@ impl DriverProcess {
                 .process
                 .as_mut()
                 .and_then(ChromeProcess::child_status),
+        }
+    }
+
+    pub(super) fn registered_target(&self) -> Option<String> {
+        match self {
+            Self::Exclusive(_) => None,
+            Self::Shared(page) => page
+                .target
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
         }
     }
 

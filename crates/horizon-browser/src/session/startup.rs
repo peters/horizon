@@ -98,7 +98,12 @@ fn initialize_driver(
     }
     let started = if let Some(group) = group {
         launch.profile_dir = profile_dir(&config.browser, group.profile_id());
-        group.acquire(&launch, stop_requested, process_control)
+        group.acquire(
+            &launch,
+            config.browser.hide_native_window,
+            stop_requested,
+            process_control,
+        )
     } else {
         start_chrome(&launch, stop_requested, process_control)
             .map(|connection| connection.map(|(process, endpoint)| (DriverProcess::Exclusive(process), endpoint)))
@@ -221,7 +226,7 @@ fn initialize_target(
     // Resolve the caller page before creating the hidden metadata target so
     // target ordering can never bind the panel to the temporary page.
     let existing_target = if chrome.is_shared() {
-        None
+        chrome.registered_target()
     } else {
         first_page_target(&mut link, stop_requested)
     };
@@ -467,7 +472,7 @@ pub(super) fn run_driver(
 }
 
 /// First existing `page` target, if any.
-fn first_page_target(link: &mut CdpLink, stop_requested: &AtomicBool) -> Option<String> {
+pub(super) fn first_page_target(link: &mut CdpLink, stop_requested: &AtomicBool) -> Option<String> {
     let result = call_during_startup(link, stop_requested, "Target.getTargets", &serde_json::json!({})).ok()?;
     result
         .get("targetInfos")
@@ -491,7 +496,7 @@ fn first_available_page_target_id(targets: &[serde_json::Value]) -> Option<&str>
 }
 
 /// Create a fresh page target as a fallback (browser opened without one).
-fn create_page_target(link: &mut CdpLink, stop_requested: &AtomicBool) -> Option<String> {
+pub(super) fn create_page_target(link: &mut CdpLink, stop_requested: &AtomicBool) -> Option<String> {
     let result = call_during_startup(
         link,
         stop_requested,

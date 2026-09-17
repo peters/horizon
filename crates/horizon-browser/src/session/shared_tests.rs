@@ -421,16 +421,64 @@ fn shared_process_pins_profile_and_launch_settings_across_restarts() {
         extra_args: Vec::new(),
         automation_disclosure: crate::AutomationDisclosurePolicy::default(),
     };
-    assert!(group.pin_launch(&launch).is_ok());
+    assert!(group.pin_launch(&launch, false).is_ok());
+    assert!(
+        group.pin_launch(&launch, true).is_err(),
+        "native window policy belongs to the process"
+    );
     launch.width = 1200;
-    assert!(group.pin_launch(&launch).is_ok(), "page dimensions remain independent");
+    assert!(
+        group.pin_launch(&launch, false).is_ok(),
+        "page dimensions remain independent"
+    );
     group.state.lock().expect("state").close_browser(None);
     launch.profile_dir = std::path::PathBuf::from("profile-b");
     assert!(
-        group.pin_launch(&launch).is_err(),
+        group.pin_launch(&launch, false).is_err(),
         "a stopped group still identifies its original profile"
     );
     launch.profile_dir = std::path::PathBuf::from("profile-a");
     launch.headless = false;
-    assert!(group.pin_launch(&launch).is_err());
+    assert!(group.pin_launch(&launch, false).is_err());
+}
+
+#[test]
+fn initial_target_identity_is_page_specific() {
+    let (_group, _first, _second, left, right) = pages();
+    left.register_target("launch-page");
+    assert_eq!(left.registered_target().as_deref(), Some("launch-page"));
+    assert!(right.registered_target().is_none());
+}
+
+#[test]
+fn initial_target_claim_preserves_empty_startup_fallback() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("fixture");
+    let address = listener.local_addr().expect("address");
+    let server = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("connect");
+        stream.set_read_timeout(Some(Duration::from_secs(3))).expect("timeout");
+        let mut socket = tungstenite::accept(stream).expect("handshake");
+        let mut methods = Vec::new();
+        for result in [json!({"targetInfos": []}), json!({"targetId": "created-initial"})] {
+            let Message::Text(text) = socket.read().expect("command") else {
+                panic!("text command");
+            };
+            let command: Value = serde_json::from_str(&text).expect("json");
+            methods.push(command["method"].as_str().expect("method").to_owned());
+            socket
+                .send(Message::Text(
+                    json!({"id": command["id"], "result": result}).to_string().into(),
+                ))
+                .expect("reply");
+        }
+        methods
+    });
+    assert_eq!(
+        claim_initial_target(&format!("ws://{address}/"), &AtomicBool::new(false)).as_deref(),
+        Some("created-initial")
+    );
+    assert_eq!(
+        server.join().expect("server"),
+        ["Target.getTargets", "Target.createTarget"]
+    );
 }
