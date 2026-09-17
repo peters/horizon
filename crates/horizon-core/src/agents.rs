@@ -79,6 +79,7 @@ pub enum AgentIntegrationKind {
     None,
     CodexMcp,
     ClaudePluginDir,
+    GrokMcp,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -211,7 +212,7 @@ const GROK: AgentDefinition = AgentDefinition {
         fresh_session_flag: None,
     },
     session_validation: AgentSessionValidationMode::None,
-    integration: AgentIntegrationKind::None,
+    integration: AgentIntegrationKind::GrokMcp,
     kitty_keyboard: false,
 };
 

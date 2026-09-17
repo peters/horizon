@@ -16,7 +16,10 @@ pub(super) const HORIZON_BROWSER_SKILL: &str = "horizon-browser";
 pub(super) const RETIRED_OFFLOAD_SKILL: &str = "horizon-offload";
 const LEASES_DIR: &str = ".horizon-leases";
 
+type SkillOwnershipCheck = fn(&Path) -> io::Result<()>;
+
 pub(super) struct SkillRootLease {
+    cleanup_guard: Option<SkillOwnershipCheck>,
     skill_dir: PathBuf,
     install: bool,
     live_path: PathBuf,
@@ -69,7 +72,9 @@ pub(super) fn release_skill_roots(leases: &mut [SkillRootLease]) {
         match another_live_host(live_dir, &lease.live_path) {
             Ok(true) => {}
             Ok(false) => {
-                remove_horizon_skill_dir(&lease.skill_dir);
+                if lease.cleanup_guard.is_none_or(|check| check(&lease.skill_dir).is_ok()) {
+                    remove_horizon_skill_dir(&lease.skill_dir);
+                }
                 // Keep `.horizon-leases` and `.lock`. Unlinking the directory
                 // while this lock is held lets a starter block on the old inode,
                 // then fail to create its `.live` marker in the gone directory.
@@ -102,7 +107,7 @@ fn claim_dir(claimed: &mut Vec<PathBuf>, dir: &Path) -> bool {
 }
 
 fn push_acquired(leases: &mut Vec<SkillRootLease>, host_id: &OsStr, skill_dir: &Path, install: bool) {
-    match acquire_skill_root(host_id, skill_dir.to_path_buf(), install) {
+    match acquire_skill_root(host_id, skill_dir.to_path_buf(), install, || Ok(())) {
         Ok(lease) => leases.push(lease),
         Err(error) => {
             tracing::warn!(path = %skill_dir.display(), %error, "failed to lease Horizon skill root");
@@ -110,7 +115,23 @@ fn push_acquired(leases: &mut Vec<SkillRootLease>, host_id: &OsStr, skill_dir: &
     }
 }
 
-fn acquire_skill_root(host_id: &OsStr, skill_dir: PathBuf, install: bool) -> io::Result<SkillRootLease> {
+pub(super) fn bind_prepared_skill_root(
+    host_id: &OsStr,
+    skill_dir: PathBuf,
+    cleanup_guard: SkillOwnershipCheck,
+    prepare: impl FnOnce() -> io::Result<()>,
+) -> io::Result<SkillRootLease> {
+    let mut lease = acquire_skill_root(host_id, skill_dir, true, prepare)?;
+    lease.cleanup_guard = Some(cleanup_guard);
+    Ok(lease)
+}
+
+fn acquire_skill_root(
+    host_id: &OsStr,
+    skill_dir: PathBuf,
+    install: bool,
+    prepare: impl FnOnce() -> io::Result<()>,
+) -> io::Result<SkillRootLease> {
     let coord_dir = skill_coord_dir(&skill_dir).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -125,6 +146,7 @@ fn acquire_skill_root(host_id: &OsStr, skill_dir: PathBuf, install: bool) -> io:
     })?;
     std::fs::create_dir_all(&live_dir)?;
     let coord = lock_coord(&coord_dir)?;
+    prepare()?;
     let live_path = {
         let mut name = host_id.to_os_string();
         name.push(".live");
@@ -152,6 +174,7 @@ fn acquire_skill_root(host_id: &OsStr, skill_dir: PathBuf, install: bool) -> io:
     }
     drop(coord);
     Ok(SkillRootLease {
+        cleanup_guard: None,
         skill_dir,
         install,
         live_path,

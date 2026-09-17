@@ -179,7 +179,7 @@ pub(super) fn spawn_terminal(
     } else {
         None
     };
-    let env = agent_env(kind, &local_id);
+    let env = agent_env(kind, &local_id, saved_command.is_none());
     let panel_args = TerminalPanelBuildArgs {
         id,
         local_id,
