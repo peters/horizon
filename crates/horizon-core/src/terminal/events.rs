@@ -72,7 +72,7 @@ impl Terminal {
 
         if mode.contains(TermMode::FOCUS_IN_OUT) {
             let sequence = if focused { b"\x1b[I" } else { b"\x1b[O" };
-            self.write_input(sequence);
+            self.write_protocol(sequence);
         }
     }
 
@@ -93,17 +93,17 @@ impl Terminal {
                     term::ClipboardType::Clipboard => self.clipboard_contents.as_str(),
                     term::ClipboardType::Selection => self.selection_contents.as_str(),
                 };
-                self.write_input(formatter(contents).as_bytes());
+                self.write_protocol(formatter(contents).as_bytes());
             }
             Event::ColorRequest(index, formatter) => {
                 let color = self.color_for_request(index);
-                self.write_input(formatter(color).as_bytes());
+                self.write_protocol(formatter(color).as_bytes());
             }
             Event::PtyWrite(text) => {
-                self.write_input(text.as_bytes());
+                self.write_protocol(text.as_bytes());
             }
             Event::TextAreaSizeRequest(formatter) => {
-                self.write_input(formatter(self.window_size()).as_bytes());
+                self.write_protocol(formatter(self.window_size()).as_bytes());
             }
             Event::Exit => {
                 self.child_exited = true;
