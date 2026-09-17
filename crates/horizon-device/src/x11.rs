@@ -161,6 +161,40 @@ impl Backend for X11 {
         if self.geometry()? != request.geometry {
             return Err(DeviceError::StaleGeometry);
         }
+        if let Action::Type { text } = &request.action {
+            let setup = self.connection.setup();
+            let mapping = self
+                .connection
+                .get_keyboard_mapping(setup.min_keycode, setup.max_keycode - setup.min_keycode + 1)
+                .map_err(unavailable)?
+                .reply()
+                .map_err(unavailable)?;
+            let mut needed: std::collections::BTreeSet<_> = text.chars().collect();
+            let mut available = 0;
+            for (keycode, symbols) in (setup.min_keycode..=setup.max_keycode)
+                .zip(mapping.keysyms.chunks(usize::from(mapping.keysyms_per_keycode)))
+            {
+                if keycode != 8 && symbols.iter().all(|symbol| *symbol == 0) {
+                    available += 1;
+                }
+                // Enigo reuses exact first-level keysyms. Only Latin-1 has an
+                // unambiguous mapping without duplicating its legacy symbol table.
+                if let Some(&symbol) = symbols.first() {
+                    let codepoint = match symbol {
+                        0x20..=0x7e | 0xa0..=0xff => Some(symbol),
+                        _ => None,
+                    };
+                    if let Some(character) = codepoint.and_then(char::from_u32) {
+                        needed.remove(&character);
+                    }
+                }
+            }
+            if needed.len() > available {
+                return Err(DeviceError::Invalid(
+                    "text exceeds available X11 Unicode key mappings".into(),
+                ));
+            }
+        }
         let Endpoint::LocalX11 { display } = &self.target.endpoint;
         let mut input = Enigo::new(&Settings {
             x11_display: Some(display.clone()),

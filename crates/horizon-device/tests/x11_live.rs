@@ -87,13 +87,39 @@ fn delayed_text_receiver_preserves_unicode(target: &Target) -> Result<(), Box<dy
     connection
         .set_input_focus(InputFocus::PARENT, window, x11rb::CURRENT_TIME)?
         .check()?;
-    let expected = "printf \"NATIVE_VNC_MVP æøå🦀\\n\"";
+    let setup = connection.setup();
+    let mapping = connection
+        .get_keyboard_mapping(setup.min_keycode, setup.max_keycode - setup.min_keycode + 1)?
+        .reply()?;
+    let capacity = (setup.min_keycode..=setup.max_keycode)
+        .zip(mapping.keysyms.chunks(usize::from(mapping.keysyms_per_keycode)))
+        .filter(|(keycode, symbols)| *keycode != 8 && symbols.iter().all(|symbol| *symbol == 0))
+        .count();
+    assert!(capacity > 0 && capacity < 256);
+    let expected: String = (0..u32::try_from(capacity)?)
+        .filter_map(|index| char::from_u32(0xe000 + index))
+        .collect();
+    let mut device = Device::connect(target)?;
+    let geometry = device.screenshot()?.geometry;
+    assert!(matches!(
+        device.act(&ActRequest {
+            geometry,
+            action: Action::Type {
+                text: format!("{expected}\u{f000}")
+            },
+        }),
+        Err(DeviceError::Invalid(_))
+    ));
+    while let Some(event) = connection.poll_for_event()? {
+        assert!(!matches!(event, Event::KeyPress(_)), "rejected request sent input");
+    }
+    let sent = expected.clone();
     let target = target.clone();
     let sender = std::thread::spawn(move || -> horizon_device::Result<()> {
         let mut device = Device::connect(&target)?;
         device.act(&ActRequest {
             geometry: device.screenshot()?.geometry,
-            action: Action::Type { text: expected.into() },
+            action: Action::Type { text: sent },
         })?;
         Ok(())
     });

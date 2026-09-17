@@ -43,6 +43,8 @@ scalars and 4096 UTF-8 bytes without NUL, up to four modifiers. X11 text is pace
 at 20 ms per character with a final 100 ms drain interval; split longer text into
 bounded actions and observe the result. Coordinates must fall inside the screenshot.
 Use stdin for entered text to avoid exposing it in process arguments/history.
+Distinct characters needing temporary X11 mappings must fit the currently unused
+keycodes; oversized requests fail before sending input.
 
 Library consumers need no async runtime:
 
