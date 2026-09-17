@@ -1,0 +1,36 @@
+[package]
+name = "horizon-device"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+description = "Small device observation and input library with optional CLI and MCP tools"
+repository = "https://github.com/peters/horizon"
+readme = "README.md"
+publish = ["crates-io"]
+
+[features]
+default = []
+cli = ["dep:rmcp", "dep:schemars", "dep:tokio"]
+
+[[bin]]
+name = "horizon-device"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+png = "0.18"
+base64 = "0.23.1"
+rmcp = { version = "3.1.4", default-features = false, features = ["macros", "server", "transport-io"], optional = true }
+schemars = { version = "1", optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros"], optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+enigo = { version = "0.6.1", default-features = false, features = ["x11rb"] }
+x11rb = "0.14"
+
+[dev-dependencies]
+tempfile = "3"

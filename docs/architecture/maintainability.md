@@ -12,6 +12,17 @@ are retained only as inert compatibility data with command-replay guards until
 versioned migration; no remote-development controller consumes them. Config v11
 omits obsolete top-level provider profiles while preserving `browser.remote`.
 
+### `horizon-device`
+
+- Independently packageable library; default builds need no Horizon or async
+  runtime. `model` owns target/endpoint, geometry and bounded action types;
+  the private `x11` adapter owns Linux capture/input implementation details.
+- The optional `cli` binary owns target-file locking, CLI dispatch and stdio MCP.
+  Device input and screenshots share one contract across both transports.
+- Application/display lifecycle, live viewers, and remote management remain
+  caller responsibilities. Future device adapters must advertise explicit
+  capabilities; no viewer renderer or remote manager belongs in the library.
+
 ### `horizon-browser-protocol`
 
 - Owns the small serialized contract shared by browser engines and clients:
