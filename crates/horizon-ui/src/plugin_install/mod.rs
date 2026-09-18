@@ -375,16 +375,16 @@ fn install_agent_plugins_impl(
         if skill_dir_is_leased(lease, &dir) {
             updated_files += sync_plugin_files(&dir, NOTIFY_SKILL_FILES)?;
         }
-        let device_dir = grok_root.join("skills").join(HORIZON_DEVICE_SKILL);
-        if skill_dir_is_leased(lease, &device_dir) {
-            updated_files += sync_plugin_files(&device_dir, DEVICE_SKILL_FILES)?;
-        }
         let browser_dir = grok_root.join("skills").join(HORIZON_BROWSER_SKILL);
+        let device_dir = grok_root.join("skills").join(HORIZON_DEVICE_SKILL);
         if skill_dir_is_leased(lease, &browser_dir) {
             match grok_mcp::register(&grok_root) {
                 Ok(changed) => {
                     updated_files += usize::from(changed);
                     updated_files += sync_plugin_files(&browser_dir, BROWSER_SKILL_FILES)?;
+                    if skill_dir_is_leased(lease, &device_dir) {
+                        updated_files += sync_plugin_files(&device_dir, DEVICE_SKILL_FILES)?;
+                    }
                 }
                 Err(error) => {
                     tracing::warn!(%error, "Grok browser integration unavailable; preserving existing settings");
@@ -810,6 +810,38 @@ mod tests {
         assert!(
             !user_home.join(".grok/skills/horizon-device/SKILL.md").exists(),
             "GROK_HOME must replace ~/.grok for the device skill rather than writing both"
+        );
+    }
+
+    #[test]
+    fn grok_device_skill_requires_browser_mcp_registration() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let horizon_home = HorizonHome::from_root(temp.path().join(".horizon"));
+        let user_home = temp.path().join("user-home");
+        let claude_plugin_dir = horizon_home.claude_plugin_dir_for_host("host-a");
+        let mut lease =
+            AgentPluginHostLease::acquire(horizon_home.agent_plugin_host_dir("host-a")).expect("host lease");
+        lease
+            .bind_user_skills(&user_skill_lease_dirs(Some(&user_home), None, None))
+            .expect("bind user skills");
+        sync_leased_user_skills(
+            &lease,
+            &horizon_home,
+            &claude_plugin_dir,
+            Some(&user_home),
+            None,
+            None,
+            Path::new("/opt/horizon"),
+        );
+
+        assert!(user_home.join(".grok/skills/horizon-notify/SKILL.md").is_file());
+        assert!(
+            !user_home.join(".grok/skills/horizon-browser/SKILL.md").exists(),
+            "Grok browser skill is leased only after MCP registration"
+        );
+        assert!(
+            !user_home.join(".grok/skills/horizon-device/SKILL.md").exists(),
+            "Grok device skill must not publish without the browser MCP that provides device_panel"
         );
     }
 
