@@ -77,15 +77,7 @@ impl DeviceUiState {
                 self.status = status;
             }
             if let Some(image) = updates.image {
-                let current = self.controls.options.for_desktop(self.desktop.unwrap_or(image.size));
-                if updates.produced_with.is_none_or(|produced| produced == current) {
-                    self.upload_displayed(ui, image);
-                    self.presented_options = updates.produced_with.or(Some(current));
-                    if self.texture.is_some() {
-                        self.image.received = true;
-                        self.image.sequence = self.image.sequence.saturating_add(1);
-                    }
-                }
+                self.apply_worker_image(ui, image, updates.produced_with);
             }
             if let Some(full) = full {
                 self.desktop = Some(full.size);
@@ -120,20 +112,14 @@ impl DeviceUiState {
                 }
             }
         });
+        let previous = self.controls.options;
         let changed = ui
             .add_enabled_ui(interactive, |ui| {
                 self.controls
                     .show(ui, self.desktop, self.texture.as_ref().map(TextureHandle::size))
             })
             .inner;
-        if changed {
-            if let Some(session) = &self.session {
-                session.set_options(self.controls.options);
-                if let Some(full) = session.latest_full() {
-                    self.source = Some(full);
-                }
-            }
-            self.presented_options = None;
+        if changed && self.apply_view_options(previous) {
             ui.ctx().request_repaint();
         }
         self.refresh_presentation(ui);
@@ -161,34 +147,78 @@ impl DeviceUiState {
         self.desktop = Some(image.size);
         self.source = Some(image);
         self.presented_options = None;
-        self.refresh_presentation(ui);
-        if self.texture.is_some() {
-            self.image.received = true;
-            self.image.sequence = self.image.sequence.saturating_add(1);
+        if self.refresh_presentation(ui) {
+            self.record_received_frame();
         }
     }
 
-    fn refresh_presentation(&mut self, ui: &Ui) {
-        let Some(source) = self.source.as_ref() else {
+    fn apply_worker_image(&mut self, ui: &Ui, image: ColorImage, produced_with: Option<DeviceViewOptions>) {
+        let current = self.controls.options.for_desktop(self.desktop.unwrap_or(image.size));
+        if produced_with.is_none_or(|produced| produced.same_presentation(current)) {
+            let uploaded = self.upload_displayed(ui, image);
+            self.presented_options = produced_with.or(Some(current));
+            if uploaded {
+                self.record_received_frame();
+            }
+            return;
+        }
+        // Newer pixels can arrive under older crop/limits. Re-present the retained
+        // desktop so a later static period cannot keep the stale image.
+        let Some(full) = self.session.as_ref().and_then(Session::latest_full) else {
             return;
         };
+        self.desktop = Some(full.size);
+        self.source = Some(full);
+        self.presented_options = None;
+        if self.refresh_presentation(ui) {
+            self.record_received_frame();
+        }
+    }
+
+    fn apply_view_options(&mut self, previous: DeviceViewOptions) -> bool {
+        if let Some(session) = &self.session {
+            session.set_options(self.controls.options);
+        }
+        if previous.same_presentation(self.controls.options) {
+            return false;
+        }
+        if let Some(full) = self.session.as_ref().and_then(Session::latest_full) {
+            self.source = Some(full);
+        }
+        self.presented_options = None;
+        true
+    }
+
+    fn record_received_frame(&mut self) {
+        self.image.received = true;
+        self.image.sequence = self.image.sequence.saturating_add(1);
+    }
+
+    fn refresh_presentation(&mut self, ui: &Ui) -> bool {
+        let Some(source) = self.source.as_ref() else {
+            return false;
+        };
         let options = self.controls.options.for_desktop(source.size);
-        if self.presented_options == Some(options) {
-            return;
+        if self
+            .presented_options
+            .is_some_and(|presented| presented.same_presentation(options))
+        {
+            return false;
         }
         match present_image(source, options) {
             Ok(displayed) => {
                 self.presented_options = Some(options);
-                self.upload_displayed(ui, displayed);
+                self.upload_displayed(ui, displayed)
             }
             Err(error) => {
                 self.presented_options = Some(options);
                 self.controls.set_error(error.to_string());
+                false
             }
         }
     }
 
-    fn upload_displayed(&mut self, ui: &Ui, image: ColorImage) {
+    fn upload_displayed(&mut self, ui: &Ui, image: ColorImage) -> bool {
         let limit = ui.ctx().input(|input| input.max_texture_side);
         if image.size.iter().any(|side| *side == 0 || *side > limit) {
             if let Some(full) = self.session.as_ref().and_then(Session::latest_full) {
@@ -197,10 +227,13 @@ impl DeviceUiState {
             self.session = None;
             self.texture = None;
             self.status = Status::Disconnected("Desktop exceeds the renderer's texture limit".into());
+            false
         } else if let Some(texture) = &mut self.texture {
             texture.set(image, TextureOptions::LINEAR);
+            true
         } else {
             self.texture = Some(ui.ctx().load_texture("device-view", image, TextureOptions::LINEAR));
+            true
         }
     }
 
@@ -535,6 +568,86 @@ mod tests {
         assert!(!evidence.image.image_displayed);
         assert_eq!(evidence.image.frame_sequence, 0);
     }
+
+    #[test]
+    fn fps_only_change_does_not_resample_the_retained_desktop() {
+        let (ctx, device, mut state) = disconnected_viewer();
+        show_viewer(&ctx, &mut state, &device, Vec::new());
+        let presented = state.presented_options;
+        assert!(presented.is_some());
+        let previous = state.controls.options;
+        state.controls.options.max_fps = 1;
+        assert!(!state.apply_view_options(previous));
+        assert_eq!(state.presented_options, presented);
+        show_viewer(&ctx, &mut state, &device, Vec::new());
+        assert_eq!(state.presented_options, presented);
+        assert_eq!(presented_size(&state), Some([8, 4]));
+        assert_eq!(state.image.sequence, 1);
+    }
+
+    #[test]
+    fn discarded_stale_worker_frame_represents_the_latest_desktop() {
+        let (ctx, device, mut state) = disconnected_viewer();
+        show_viewer(&ctx, &mut state, &device, Vec::new());
+        assert_eq!(state.image.sequence, 1);
+        let latest = ColorImage::filled([8, 4], egui::Color32::RED);
+        let queued = ColorImage::filled([2, 2], egui::Color32::GREEN);
+        state.session = Some(Session::pending_frame(
+            latest,
+            queued,
+            DeviceViewOptions {
+                viewport: Some(horizon_core::DeviceViewport {
+                    x: 0,
+                    y: 0,
+                    width: 2,
+                    height: 2,
+                }),
+                ..Default::default()
+            },
+        ));
+        show_viewer(&ctx, &mut state, &device, Vec::new());
+        assert_eq!(
+            state.source.as_ref().map(|source| source.pixels[0]),
+            Some(egui::Color32::RED)
+        );
+        assert_eq!(presented_size(&state), Some([8, 4]));
+        assert!(state.image.received);
+        assert_eq!(state.image.sequence, 2);
+        assert!(matches!(state.status, Status::Connected));
+    }
+
+    #[test]
+    fn worker_frame_with_a_different_fps_is_not_treated_as_stale() {
+        let (ctx, device, mut state) = disconnected_viewer();
+        show_viewer(&ctx, &mut state, &device, Vec::new());
+        let latest = ColorImage::filled([8, 4], egui::Color32::RED);
+        let cropped = ColorImage::filled([2, 2], egui::Color32::GREEN);
+        let crop = DeviceViewOptions {
+            max_fps: 1,
+            viewport: Some(horizon_core::DeviceViewport {
+                x: 0,
+                y: 0,
+                width: 2,
+                height: 2,
+            }),
+            ..Default::default()
+        };
+        state.controls.options = DeviceViewOptions {
+            max_fps: 30,
+            viewport: crop.viewport,
+            ..Default::default()
+        };
+        state.session = Some(Session::pending_frame(latest, cropped, crop));
+        show_viewer(&ctx, &mut state, &device, Vec::new());
+        assert_ne!(
+            state.source.as_ref().map(|source| source.pixels[0]),
+            Some(egui::Color32::RED),
+            "matching crop must keep the local source instead of replacing it"
+        );
+        assert_eq!(presented_size(&state), Some([2, 2]));
+        assert_eq!(state.image.sequence, 2);
+    }
+
     #[test]
     fn connected_texture_is_not_display_proof_when_image_is_clipped() {
         let ctx = egui::Context::default();

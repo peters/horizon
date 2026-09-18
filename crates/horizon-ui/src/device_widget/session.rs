@@ -118,6 +118,26 @@ impl Session {
             .clone()
     }
 
+    #[cfg(test)]
+    pub(super) fn pending_frame(latest_full: ColorImage, image: ColorImage, produced_with: DeviceViewOptions) -> Self {
+        let (visibility, _) = watch::channel(true);
+        Self {
+            updates: Arc::new(Mutex::new(Updates {
+                image: Some(image),
+                produced_with: Some(produced_with),
+                status: Some(Status::Connected),
+                viewport: ViewportId::ROOT,
+                visible: true,
+                options: produced_with,
+                desktop: Some(latest_full.size),
+            })),
+            latest_full: Arc::new(Mutex::new(Some(latest_full))),
+            stop: None,
+            visibility,
+            thread: None,
+        }
+    }
+
     pub(super) fn set_visible(&self, visible: bool) {
         self.updates
             .lock()

@@ -106,7 +106,8 @@ including after the VNC worker disconnects. If the target later shrinks outside
 an active viewport, the crop is cleared and the whole desktop is shown. Settings
 reset when the panel is recreated; restored panels still require manual
 connection. Refresh throttling limits refresh requests and frame production, not
-arbitrary unsolicited server traffic. Image limits and cropping affect local
+arbitrary unsolicited server traffic; changing only Maximum fps does not
+recrop or rescale the last desktop. Image limits and cropping affect local
 rendering, not negotiated VNC compression or wire bandwidth. Reconnect starts a
 new worker and keeps the last presented image until a new desktop arrives.
 

@@ -35,6 +35,12 @@ pub struct DeviceImageLayout {
 }
 
 impl DeviceViewOptions {
+    /// Crop and output limits, excluding refresh cadence.
+    #[must_use]
+    pub fn same_presentation(self, other: Self) -> bool {
+        self.max_width == other.max_width && self.max_height == other.max_height && self.viewport == other.viewport
+    }
+
     /// Return to the whole desktop when a resize makes the active crop invalid.
     #[must_use]
     pub fn for_desktop(mut self, desktop: [usize; 2]) -> Self {
@@ -178,6 +184,33 @@ mod tests {
             .layout([100, 80])
             .is_err()
         );
+    }
+
+    #[test]
+    fn presentation_equality_ignores_refresh_cadence() {
+        let crop = DeviceViewport {
+            x: 1,
+            y: 1,
+            width: 2,
+            height: 2,
+        };
+        let slow = DeviceViewOptions {
+            max_fps: 1,
+            viewport: Some(crop),
+            ..Default::default()
+        };
+        let fast = DeviceViewOptions {
+            max_fps: 30,
+            viewport: Some(crop),
+            ..Default::default()
+        };
+        assert!(slow.same_presentation(fast));
+        assert!(!slow.same_presentation(DeviceViewOptions { max_width: 100, ..fast }));
+        assert!(!slow.same_presentation(DeviceViewOptions {
+            max_height: 100,
+            ..fast
+        }));
+        assert!(!slow.same_presentation(DeviceViewOptions { viewport: None, ..fast }));
     }
 
     #[test]

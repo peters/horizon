@@ -39,6 +39,10 @@ Must include:
   and Whole desktop clicks take effect on a retained desktop.
 - `apply_viewport_and_reconnect_keep_the_last_desktop` — Apply viewport crops
   the last frame; Reconnect starts a worker without dropping that image.
+- `fps_only_change_does_not_resample_the_retained_desktop` — Maximum fps does
+  not recrop or rescale the last desktop.
+- `discarded_stale_worker_frame_represents_the_latest_desktop` — a worker frame
+  produced with older crop/limits still updates the retained desktop.
 - `viewport_scaling_samples_the_selected_source_pixels` — crop/scale samples
   the selected source pixels.
 - `an_active_viewport_can_be_cleared_without_desktop_geometry` — Whole desktop
