@@ -307,7 +307,7 @@ fn handle_pointer_events(
             egui::Event::MouseWheel {
                 delta, unit, modifiers, ..
             } => {
-                if !input::panel_content_owns_wheel(*modifiers, pointer.pointer_buttons.primary) {
+                if !input::panel_content_owns_wheel(*modifiers, pointer_buttons_before_event.primary) {
                     continue;
                 }
                 if let Some(point) = pointer.hovered_point

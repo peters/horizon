@@ -518,8 +518,10 @@ fn wheel_before_release_finalizes_selection_in_the_post_scroll_viewport() {
 
     harness.frame(primary_press(anchor));
     harness.frame(vec![Event::PointerMoved(pointer)]);
-    harness.frame(wheel(-1.0));
-    harness.frame(primary_release(pointer));
+
+    let mut events = wheel(-1.0);
+    events.extend(primary_release(pointer));
+    harness.frame(events);
 
     assert_eq!(harness.scrollback(), 9);
     assert_eq!(
@@ -571,12 +573,16 @@ fn wheel_before_press_starts_selection_in_the_post_scroll_viewport() {
     events.push(Event::PointerMoved(pointer));
     harness.frame(events);
 
-    assert_eq!(harness.scrollback(), 9);
-    assert_ne!(harness.viewport_line(1), pre_scroll_anchor);
+    assert_eq!(
+        harness.scrollback(),
+        10,
+        "unmodified wheel before a press belongs to the canvas, not terminal scrollback"
+    );
+    assert_eq!(harness.viewport_line(1), pre_scroll_anchor);
     assert_eq!(
         harness.selected_first_line(),
         harness.viewport_line(1),
-        "a press after wheel-down must anchor in the post-scroll viewport"
+        "a press after unmodified wheel-down must still anchor in the current viewport"
     );
     assert_eq!(
         harness.selected_last_line(),
@@ -599,12 +605,16 @@ fn wheel_before_alt_press_replays_local_anchor_in_normal_mode() {
     events.push(Event::PointerMoved(pointer));
     harness.frame(events);
 
-    assert_eq!(harness.scrollback(), 9);
-    assert_ne!(harness.viewport_line(1), pre_scroll_anchor);
+    assert_eq!(
+        harness.scrollback(),
+        10,
+        "unmodified wheel before Alt+press belongs to the canvas, not terminal scrollback"
+    );
+    assert_eq!(harness.viewport_line(1), pre_scroll_anchor);
     assert_eq!(
         harness.selected_first_line(),
         harness.viewport_line(1),
-        "Alt+press after wheel-down must anchor in the post-scroll viewport when mouse reporting is inactive"
+        "Alt+press after unmodified wheel-down must still anchor in the current viewport when mouse reporting is inactive"
     );
     assert_eq!(harness.selected_last_line(), harness.viewport_line(4));
 }
@@ -736,14 +746,18 @@ fn release_wheel_and_press_in_one_frame_anchor_the_new_drag_post_scroll() {
     events.extend(wheel(-1.0));
     events.extend(primary_press(second_anchor));
     harness.frame(events);
-    assert_eq!(harness.scrollback(), 9);
+    assert_eq!(
+        harness.scrollback(),
+        10,
+        "unmodified wheel after release belongs to the canvas, not terminal scrollback"
+    );
 
     harness.frame(vec![Event::PointerMoved(extended)]);
 
     assert_eq!(
         harness.selected_first_line(),
         harness.viewport_line(5),
-        "a press after a same-frame release and wheel must anchor in the post-scroll viewport"
+        "a press after a same-frame release and unmodified wheel must still anchor in the current viewport"
     );
     assert_eq!(
         harness.selected_last_line(),

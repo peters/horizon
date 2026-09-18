@@ -1,6 +1,6 @@
 use std::mem;
 
-use egui::{Context, Event, Key, Modifiers, Rect, Vec2};
+use egui::{Context, Event, Key, Modifiers, PointerButton, Rect, Vec2};
 use horizon_core::WorkspaceId;
 
 use super::super::super::input::{TerminalInputEvent, panel_content_owns_wheel, terminal_input_events};
@@ -147,6 +147,38 @@ fn wheel_pans_canvas(pointer_in_canvas: bool, ctrl_or_cmd: bool, panel_keeps_whe
     pointer_in_canvas && !ctrl_or_cmd && !panel_keeps_wheel
 }
 
+fn primary_down_at_frame_start(events: &[Event], primary_at_end: bool) -> bool {
+    let mut primary = primary_at_end;
+    for event in events.iter().rev() {
+        if let Event::PointerButton {
+            button: PointerButton::Primary,
+            pressed,
+            ..
+        } = event
+        {
+            primary = !*pressed;
+        }
+    }
+    primary
+}
+
+fn panel_owns_any_wheel_event(events: &[Event], mut primary_down: bool) -> bool {
+    for event in events {
+        match event {
+            Event::PointerButton {
+                button: PointerButton::Primary,
+                pressed,
+                ..
+            } => primary_down = *pressed,
+            Event::MouseWheel { modifiers, .. } if panel_content_owns_wheel(*modifiers, primary_down) => {
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 impl HorizonApp {
     pub(in super::super) fn handle_fullscreen_toggle(&mut self, ctx: &Context) {
         // A chord being captured by the settings hotkey binder must not
@@ -280,8 +312,9 @@ impl HorizonApp {
                     .contains(position)
             })
         });
-        let panel_keeps_wheel =
-            pointer_over_scrollable && panel_content_owns_wheel(modifiers, primary_down) && !drag_panning;
+        let panel_keeps_wheel = pointer_over_scrollable
+            && panel_owns_any_wheel_event(&events, primary_down_at_frame_start(&events, primary_down))
+            && !drag_panning;
         let pan_delta = if drag_panning {
             pointer_delta
         } else if wheel_pans_canvas(pointer_in_canvas, ctrl_or_cmd, panel_keeps_wheel) {
@@ -765,9 +798,10 @@ mod tests {
     use super::super::super::CanvasPanSpaceKeyState;
     use super::{
         HeldSpeechBinding, MiddlePanMode, MiddlePanTarget, PendingCaptureEvent, canvas_zoom_multiplier,
-        clear_released_speech_hotkeys, next_middle_pan_active, pending_capture_event, primary_selection_routing_active,
-        swallow_cancel_escape_event, swallow_captured_clipboard_event, swallow_correlated_shift_text,
-        swallow_held_speech_hotkey_event, swallow_speech_hotkey_event, wheel_pan_scroll_input, wheel_pans_canvas,
+        clear_released_speech_hotkeys, next_middle_pan_active, panel_owns_any_wheel_event, pending_capture_event,
+        primary_down_at_frame_start, primary_selection_routing_active, swallow_cancel_escape_event,
+        swallow_captured_clipboard_event, swallow_correlated_shift_text, swallow_held_speech_hotkey_event,
+        swallow_speech_hotkey_event, wheel_pan_scroll_input, wheel_pans_canvas,
     };
 
     #[test]
@@ -856,6 +890,27 @@ mod tests {
         let factor = canvas_zoom_multiplier(1.0, true, Vec2::new(0.0, 12.0)).expect("ctrl+scroll");
         assert!((factor - (12.0_f32 / 200.0).exp()).abs() < f32::EPSILON);
         assert_eq!(canvas_zoom_multiplier(1.25, true, Vec2::ZERO), Some(1.25));
+    }
+
+    #[test]
+    fn wheel_before_primary_release_stays_on_the_panel() {
+        let events = vec![
+            Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: Vec2::new(0.0, -12.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: Modifiers::NONE,
+            },
+            Event::PointerButton {
+                pos: egui::pos2(1.0, 1.0),
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Modifiers::NONE,
+            },
+        ];
+        let start = primary_down_at_frame_start(&events, false);
+        assert!(start);
+        assert!(panel_owns_any_wheel_event(&events, start));
     }
 
     #[test]
