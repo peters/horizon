@@ -1,3 +1,4 @@
+mod canvas_wheel;
 mod command_palette;
 mod interaction;
 mod layout;

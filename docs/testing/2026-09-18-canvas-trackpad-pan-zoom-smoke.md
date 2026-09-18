@@ -1,6 +1,6 @@
 # Smoke Test: Canvas Trackpad Pan And Zoom
 
-Temporary validation for two-finger canvas pan over focused panels, Ctrl+scroll zoom, and Ctrl+Plus/Minus on a non-US layout.
+Temporary validation for two-finger canvas pan over focused panels and Ctrl+scroll zoom.
 
 Delete this file after the UI validation pass is complete unless it is explicitly needed longer.
 
@@ -8,7 +8,7 @@ Delete this file after the UI validation pass is complete unless it is explicitl
 
 - Repository: `peters/horizon`
 - Branch: `fix/canvas-zoom-touchpad-layout`
-- Platform: Linux laptop with a multitouch clickpad (System76 Bonobo WS / `bonw16` is the original report). A Norwegian or other non-US keyboard layout is required for the Ctrl+Plus lane.
+- Platform: Linux laptop with a multitouch clickpad (System76 Bonobo WS / `bonw16` is the original report).
 
 ## Build
 
@@ -34,7 +34,7 @@ Use `target/debug/horizon` from this branch. Launch with an isolated config if a
    - Expected: canvas pans, same as before.
 4. Hold **Ctrl** and two-finger scroll over empty canvas and over a panel.
    - Expected: canvas zoom changes in both cases. Terminal does not receive the wheel.
-5. Command palette **Reset Zoom** / **Zoom In** / **Zoom Out** still work. Keyboard Ctrl+Plus/Minus on non-US layouts is a follow-up (layout-unmodified shortcut matching).
+5. Command palette **Reset Zoom** / **Zoom In** / **Zoom Out** still work.
 6. **Space** + one-finger drag over a panel.
    - Expected: canvas pans. No space is inserted into the terminal.
 
@@ -55,6 +55,6 @@ Close and reopen Horizon. Pan/zoom restore from the session as before.
 
 ## Visual
 
-Screenshot after launch and after a two-finger pan over a focused terminal.
+Screenshot after launch, after a two-finger pan over a focused terminal, and after fit-workspace.
 
 This is a motion-sensitive check. Record a short video from the isolated test desktop of two-finger pan over a focused terminal so the board moves while terminal content stays put. Start the recorder before the gesture and stop after. If recording is unavailable or stalls, this lane is **blocked** — do not sign off from screenshots alone.

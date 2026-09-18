@@ -29,6 +29,7 @@ pub(super) use interaction::ArrangedPanelDrag;
 pub(in crate::app) struct PanelScreenGeometry {
     pub(in crate::app) screen_rect: Rect,
     pub(in crate::app) terminal_body_screen_rect: Option<Rect>,
+    pub(in crate::app) body: Rect,
 }
 
 struct PanelSnapshot {
@@ -353,21 +354,22 @@ impl HorizonApp {
             ),
             canvas_rect,
         )?;
-        let terminal_body_screen_rect = panel.terminal().and_then(|_| {
-            let panel_rect = Rect::from_min_size(canvas_position, canvas_size);
-            let body_rect = PanelFrame::new(panel_rect).body;
-            clip_screen_rect_to_canvas(
-                Rect::from_min_size(
-                    self.canvas_to_screen(canvas_rect, body_rect.min),
-                    self.canvas_size_to_screen(body_rect.size()),
-                ),
-                canvas_rect,
-            )
-        });
+        let panel_rect = Rect::from_min_size(canvas_position, canvas_size);
+        let body_rect = PanelFrame::new(panel_rect).body;
+        let body_screen_rect = clip_screen_rect_to_canvas(
+            Rect::from_min_size(
+                self.canvas_to_screen(canvas_rect, body_rect.min),
+                self.canvas_size_to_screen(body_rect.size()),
+            ),
+            canvas_rect,
+        )
+        .unwrap_or(screen_rect);
+        let terminal_body_screen_rect = panel.terminal().map(|_| body_screen_rect);
 
         Some(PanelScreenGeometry {
             screen_rect,
             terminal_body_screen_rect,
+            body: body_screen_rect,
         })
     }
 
