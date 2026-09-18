@@ -74,7 +74,9 @@ read-only; reconnect is manual and closing a panel closes only its connection.
 
 Generic Horizon testing exercises live terminal output, panel movement,
 resize/Fit, detach/fullscreen, read-only input isolation, connection recovery and
-normal shutdown inside a noVNC-observed isolated desktop. Final-candidate testing must repeat these checks after dependency changes.
+normal shutdown inside an isolated desktop (historically observed through noVNC).
+Final-candidate testing must repeat these checks after dependency changes using
+the native VNC Device panel required by `AGENTS.md`.
 
 DesktopSize protocol coverage is an in-memory server test, not proof of live
 server resolution reconfiguration. Native macOS/Windows builds, Apple ARD,
@@ -104,5 +106,6 @@ viewport and reconnect. Settings reset when the panel is recreated; restored
 panels still require manual connection. Refresh throttling limits refresh
 requests and frame production, not arbitrary unsolicited server traffic. Image
 limits and cropping affect local rendering, not negotiated VNC compression or
-wire bandwidth. Use existing browser_video fps, quality, max_width and
-max_file_bytes options for bounded isolated recordings.
+wire bandwidth. Record native flows directly from the isolated desktop as
+described in the [smoke guide](../../scripts/device-smoke/README.md#video-evidence-and-cleanup);
+`browser_video` records browser pages only.
