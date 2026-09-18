@@ -89,7 +89,9 @@ impl DeviceUiState {
                 self.source = Some(full);
             }
         }
-        if let Some(source) = &self.source {
+        if self.desktop.is_none()
+            && let Some(source) = &self.source
+        {
             self.desktop = Some(source.size);
         }
         ui.horizontal_wrapped(|ui| {
@@ -203,6 +205,9 @@ impl DeviceUiState {
         self.initialized = true;
         self.image.displayed = false;
         self.image.previous_displayed = false;
+        if let Some(full) = self.session.as_ref().and_then(Session::latest_full) {
+            self.source = Some(full);
+        }
         self.session = None;
         match Session::start(
             device.target.address(),
