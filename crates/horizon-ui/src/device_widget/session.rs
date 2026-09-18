@@ -259,7 +259,7 @@ async fn connection(
                 // Only the latest frame is retained; slow rendering cannot grow
                 // an application-side queue of full desktop images.
                 state.image = Some(image);
-                state.produced_with = Some(options);
+                state.produced_with = Some(options.for_desktop(framebuffer.size()));
                 state.desktop = Some(framebuffer.size());
                 state.visible.then_some(state.viewport)
             };
