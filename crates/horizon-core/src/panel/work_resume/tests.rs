@@ -296,7 +296,7 @@ fn exercise_indexed_history(
                 std::fs::write(path, invalid).expect("malformed history");
             });
         }
-        let duplicate = home.join(".grok/sessions/%2frepo/fixture-session");
+        let duplicate = home.join(".grok/sessions/%2F%72epo/fixture-session");
         std::fs::write(path, format!("{header}\n")).expect("repair history");
         assert_refusal_preserves_process(panel, home, "saved conversation", || {
             std::fs::create_dir_all(&duplicate).expect("ambiguous encoded directory");
