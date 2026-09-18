@@ -228,14 +228,15 @@ impl Server {
     }
 }
 impl ServerHandler for Server {
-    async fn on_cancelled(
+    fn on_cancelled(
         &self,
         notification: rmcp::model::CancelledNotificationParam,
         _: rmcp::service::NotificationContext<RoleServer>,
-    ) {
+    ) -> impl Future<Output = ()> {
         if let Some(id) = notification.request_id {
             self.deliveries.cancel(&id);
         }
+        std::future::ready(())
     }
     async fn call_tool(
         &self,
