@@ -226,3 +226,23 @@ The browser engine remains in `horizon-browser`; it does not depend on this
 server or an async runtime. The MCP adapter owns Tokio and protocol transport.
 The default coordination root remains `HOME/.horizon`; configurable runtime
 roots are a separate follow-up in #693.
+
+## Shared provider usage
+
+`browser_provider_usage` reads shared remote-provider capacity without allocating
+a browser session or requiring the settings UI to be open. Omit `provider` for
+all configured profiles, or pass `{"provider":"team_cloud"}` for one profile.
+The host resolves each profile's own credential bindings; callers never pass keys
+or endpoints. Multiple accounts on one provider need distinct bindings.
+
+The result is `{"providers":[...]}`. Each row contains `provider`, `supported`,
+`local_session_limit`, optional `running`, `allowed`, `queued`,
+`sampled_at_millis` (Unix milliseconds), and `error`. Missing credentials or API
+failures leave counts null and report an error for that row; unsupported adapters
+are explicitly marked. This snapshot includes competing clients and is not a
+reservation. Hosted capacity remains provider-managed.
+
+This tool requires a live Horizon-launched agent identity, as configured remote
+session creation does. A local standalone browser host has no remote-provider
+configuration. CLI plans invoke the same tool; see the
+[CLI usage example](../horizon-browser-cli/README.md#shared-remote-provider-usage).

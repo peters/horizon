@@ -43,6 +43,38 @@ credentials for later challenges; it does not revoke Authorization values the
 browser already cached, so open a new panel for a clean unauthenticated
 session.
 
+## Shared remote-provider usage
+
+From a Horizon-launched agent or its child process, the CLI plan runner can query
+shared provider capacity without opening settings or allocating a browser session.
+It uses the same public `browser_provider_usage` MCP tool and the host's configured
+credential bindings. A local standalone browser host has no remote-provider
+configuration and returns an explicit host-identity error for this operation.
+
+Save this as `provider-usage.json`, then run
+`horizon-browser run provider-usage.json`:
+
+```json
+{
+  "version": 1,
+  "steps": [
+    {"id": "all", "tool": "browser_provider_usage"},
+    {"id": "one", "tool": "browser_provider_usage", "arguments": {"provider": "team_cloud"}}
+  ]
+}
+```
+
+Omitting `provider` queries all configured profiles. Each result includes the
+profile name, support status, optional local limit, running/allowed/queued counts,
+actual sample time (`sampled_at_millis`, Unix milliseconds), and any provider error.
+Failed or unsupported reads return null counts, not zero capacity. Counts are
+informational snapshots and do not reserve slots or gate session creation.
+
+For multiple accounts on the same provider, configure separate profiles with
+separate credential references, OS-store slots, or environment-variable bindings.
+Reusing the same bindings intentionally shares an account. Secrets and provider
+endpoints are never tool arguments or usage results.
+
 ## Prompt-first jobs
 
 The default command is a quoted goal. It starts an isolated hidden browser,

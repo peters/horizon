@@ -16,6 +16,7 @@ use thiserror::Error;
 use crate::model::{BrowserPanel, ProtocolKind};
 
 mod handoff;
+pub(crate) mod provider_usage;
 mod recovery;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);

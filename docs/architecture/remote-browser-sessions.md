@@ -391,3 +391,19 @@ and nonspecific HTTP 404s keep capacity held. Credential replacement never retar
 an old allocation to a new account or origin. Released entries remain idempotently
 queryable in a bounded history of 128 records; unresolved records are never evicted.
 Recovery does not reconstruct identities discarded by an older running binary.
+
+## Provider usage across interfaces
+
+The UI and the public `browser_provider_usage` MCP tool both use
+`horizon_core::browser::remote_usage` for provider policy, credential snapshots,
+API adaptation, and background reads. CLI plans call that same MCP tool. The host
+serves requests with settings closed, validates the calling agent against its
+live board, and returns only provider names, aggregate counts, sample timestamps,
+and value-free failures. It neither allocates sessions nor reserves capacity.
+
+`horizon-browser-control::manifest::provider_usage` owns the bounded private
+host request/reply queue. The MCP controller transports the request and the UI
+host bridge drives the shared usage model. These files are an internal transport;
+agents must use the public MCP tool rather than reading the queue directly.
+A standalone local-browser host has no configured remote-provider credentials,
+so the tool reports that a live Horizon host identity is required.

@@ -387,3 +387,9 @@ refresh actions. Adding a provider API requires an adapter and normalization,
 without changing the shared display. `RemoteProviderProfile::local_session_limit`
 expresses whether an adapter uses a local grid limit or provider-managed capacity.
 Allocation ownership and cleanup remain in the existing recovery modules.
+
+The `manifest/provider_usage` queue carries only safe provider summaries between
+MCP and its owning host. `controller/provider_usage` is the MCP transport boundary;
+`app/browser_provider_usage` performs host authorization and dispatch into the
+shared core model. The CLI plan runner invokes the same public tool. Provider API
+and credential logic must not be copied into either transport or UI rendering.

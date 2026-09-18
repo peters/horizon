@@ -29,6 +29,7 @@ const STARTUP_DEADLINE_HEADROOM: Duration = Duration::from_millis(750);
 #[derive(Default)]
 pub(super) struct BrowserCreateHostState {
     last_request_poll: Option<Instant>,
+    pub(super) provider_usage: super::browser_provider_usage::UsageHostState,
     pub(super) recovery_requests: Vec<manifest::recovery::RecoveryRequest>,
     pending: Vec<PendingBrowserCreate>,
     /// Closes the host has applied but whose session teardown has not
@@ -253,6 +254,7 @@ impl HorizonApp {
             | self.poll_browser_visibility_requests()
             | self.poll_browser_close_requests()
             | self.poll_remote_recovery()
+            | self.poll_provider_usage()
     }
 
     fn start_requested_browser(&mut self, mut request: BrowserCreateRequest, actor_panel: ActorPanel) {

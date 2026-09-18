@@ -46,6 +46,7 @@ mod audit;
 mod capture;
 mod close;
 mod create;
+pub mod provider_usage;
 pub mod recovery;
 mod request_queue;
 mod result;

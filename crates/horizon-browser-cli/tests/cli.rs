@@ -2,6 +2,7 @@ use std::io::{BufRead as _, BufReader, Write as _};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use horizon_browser_control::manifest::provider_usage::{ProviderUsageSummary, UsageQueue};
 use horizon_browser_control::manifest::{self, BrowserManifest};
 use serde_json::{Value, json};
 
@@ -800,7 +801,7 @@ fn mcp_subcommand_negotiates_and_publishes_the_browser_contract() {
         "method": "tools/list",
         "params": {}
     }));
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(20));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(21));
     assert!(tools.to_string().contains("browser_network_watch"));
     assert!(tools.to_string().contains("browser_http_auth"));
     assert!(tools.to_string().contains("browser_resize"));
@@ -1125,4 +1126,87 @@ impl Drop for McpProcess {
             let _ = self.child.wait();
         }
     }
+}
+
+#[test]
+fn cli_plan_calls_the_public_usage_tool_and_preserves_multiple_provider_results() {
+    let root = tempfile::tempdir().expect("root");
+    let plan = root.path().join("plan.json");
+    std::fs::write(
+        &plan,
+        serde_json::to_vec(&json!({
+            "version":1,"steps":[{"id":"usage","tool":"browser_provider_usage"}]
+        }))
+        .expect("plan"),
+    )
+    .expect("write plan");
+    let child = Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
+        .args(["run", plan.to_str().expect("path")])
+        .env_remove("HORIZON")
+        .env_remove("HORIZON_BROWSER_ROOT")
+        .env("HOME", root.path())
+        .env("HORIZON_BROWSER_ACTOR", "horizon:usage-agent")
+        .env("HORIZON_BROWSER_HOST_INSTANCE", "usage-host")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("CLI");
+    let queue = UsageQueue::new(root.path().join(".horizon"));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let requests = queue.claim("usage-host").expect("host queue");
+        if let Some(request) = requests.first() {
+            assert!(request.provider.is_none());
+            let rows = ["account-a", "account-b"]
+                .into_iter()
+                .enumerate()
+                .map(|(index, name)| ProviderUsageSummary {
+                    provider: name.to_string(),
+                    supported: true,
+                    local_session_limit: None,
+                    running: Some(index as u64),
+                    allowed: Some(4),
+                    queued: Some(0),
+                    sampled_at_millis: Some(12345),
+                    error: None,
+                })
+                .collect();
+            queue.complete(&request.result(rows, None)).expect("complete");
+            break;
+        }
+        assert!(Instant::now() < deadline, "CLI did not call usage tool");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let output = child.wait_with_output().expect("CLI exit");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let report: Value = serde_json::from_slice(&output.stdout).expect("JSON report");
+    assert_eq!(report["ok"], true);
+    let providers = &report["steps"][0]["result"]["providers"];
+    assert_eq!(providers[0]["provider"], "account-a");
+    assert_eq!(providers[1]["provider"], "account-b");
+    assert_eq!(providers[1]["running"], 1);
+}
+
+#[test]
+fn standalone_cli_reports_missing_provider_host_instead_of_zero_capacity() {
+    let root = tempfile::tempdir().expect("root");
+    let plan = root.path().join("plan.json");
+    std::fs::write(
+        &plan,
+        br#"{"version":1,"steps":[{"id":"usage","tool":"browser_provider_usage"}]}"#,
+    )
+    .expect("plan");
+    let output = Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
+        .args(["run", plan.to_str().expect("path")])
+        .env_remove("HORIZON")
+        .env_remove("HORIZON_BROWSER_ACTOR")
+        .env_remove("HORIZON_BROWSER_HOST_INSTANCE")
+        .env_remove("HORIZON_BROWSER_ROOT")
+        .env("HOME", root.path())
+        .output()
+        .expect("CLI");
+    assert!(!output.status.success());
+    let report: Value = serde_json::from_slice(&output.stdout).expect("JSON report");
+    assert_eq!(report["ok"], false);
+    assert!(report.to_string().contains("requires a live Horizon host identity"));
 }
