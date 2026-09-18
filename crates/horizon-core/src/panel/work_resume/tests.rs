@@ -110,6 +110,7 @@ fn exercise_confirmed_restart() {
     );
     std::fs::write(&transcript, valid).expect("saved transcript");
     panel.check_saved_work_session().expect("metadata-prefixed history");
+    exercise_message_shapes(&panel, &transcript, valid);
     assert!(crate::runtime_state::claude_session_transcript_exists(
         "fixture-session"
     ));
@@ -122,6 +123,14 @@ fn exercise_confirmed_restart() {
         "{}\n".into(),
         valid.replace("fixture-session", "other-session"),
         valid.replacen('{', "{\"isSidechain\":true,", 1),
+        valid.replace("\"role\":\"user\"", "\"role\":\"assistant\""),
+        valid.replace("\"role\":\"user\",", ""),
+        valid.replace("\"Fixture request\"", "[false]"),
+        valid.replace("\"Fixture request\"", "[{\"type\":\"image\",\"source\":{}}]"),
+        valid.replace("\"Fixture request\"", "[{\"type\":\"tool_result\",\"tool_use_id\":\"tool\",\"content\":[{\"type\":\"tool_use\",\"id\":\"nested\",\"name\":\"Read\",\"input\":{}}]}]"),
+        valid.replace("\"Fixture request\"", "[{\"type\":\"text\",\"text\":false}]"),
+        format!("{valid}{{invalid}}\n"),
+        format!("{valid}{}", valid.replace("fixture-session", "other-session")),
     ] {
         std::fs::write(&transcript, valid).expect("restore valid history");
         assert_refusal_preserves_process(&mut panel, &home, "saved conversation", || {
@@ -142,6 +151,21 @@ fn exercise_confirmed_restart() {
         1
     );
     shutdown_for_restart(panel.terminal_mut().expect("terminal"), true).expect("close repaired-history provider");
+}
+
+fn exercise_message_shapes(panel: &Panel, path: &std::path::Path, prefix: &str) {
+    for content in [
+        serde_json::json!([{"type":"tool_result","tool_use_id":"tool"}]),
+        serde_json::json!([{"type":"tool_result","tool_use_id":"tool","content":[]}]),
+        serde_json::json!([{"type":"tool_result","tool_use_id":"tool","content":[{"type":"tool_reference","tool_name":"Read"}]}]),
+        serde_json::json!([{"type":"tool_result","tool_use_id":"tool","content":[{"type":"search_result","source":"fixture","title":"Fixture","content":[{"type":"text","text":"result"}]}]}]),
+        serde_json::json!([{"type":"image","source":{"type":"base64","media_type":"image/png","data":"fixture"}}]),
+    ] {
+        let row = serde_json::json!({"type":"user", "sessionId":"fixture-session", "message":{"role":"user", "content":content}});
+        std::fs::write(path, format!("{prefix}{row}\n")).expect("supported later message");
+        panel.check_saved_work_session().expect("supported native blocks");
+    }
+    std::fs::write(path, prefix).expect("restore history");
 }
 
 fn write_pi_session(home: &std::path::Path) -> std::path::PathBuf {
@@ -271,6 +295,22 @@ fn exercise_indexed_history(
             assert_refusal_preserves_process(panel, home, "saved conversation", || {
                 std::fs::write(path, invalid).expect("malformed history");
             });
+        }
+        let duplicate = home.join(".grok/sessions/%2frepo/fixture-session");
+        std::fs::write(path, format!("{header}\n")).expect("repair history");
+        assert_refusal_preserves_process(panel, home, "saved conversation", || {
+            std::fs::create_dir_all(&duplicate).expect("ambiguous encoded directory");
+            std::fs::write(duplicate.join("chat_history.jsonl"), format!("{header}\n")).expect("duplicate history");
+        });
+        std::fs::remove_dir_all(duplicate.parent().expect("encoded directory")).expect("remove duplicate");
+        let directory = home.join(".grok/sessions");
+        assert_refusal_preserves_process(panel, home, "saved conversation", || {
+            for index in 0..4096 {
+                std::fs::write(directory.join(format!("unrelated-{index}")), "").expect("directory scan bound");
+            }
+        });
+        for index in 0..4096 {
+            std::fs::remove_file(directory.join(format!("unrelated-{index}"))).expect("remove scan entries");
         }
         for valid in [
             serde_json::json!({"type":"system","content":"fixture"}),

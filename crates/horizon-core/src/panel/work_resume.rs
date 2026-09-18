@@ -310,10 +310,14 @@ fn saved_claude_history(session_id: &str) -> Option<()> {
     let mut reader = BufReader::new(std::fs::File::open(transcript?).ok()?.take(MAX_PREFIX_BYTES + 1));
     let mut line = Vec::new();
     let mut remaining = MAX_PREFIX_BYTES;
+    let mut has_message = false;
     // Initial mode and file-history rows are metadata, not resumable messages.
     for index in 0..128 {
         line.clear();
         let bytes = u64::try_from(reader.read_until(b'\n', &mut line).ok()?).ok()?;
+        if bytes == 0 {
+            break;
+        }
         remaining = remaining.checked_sub(bytes)?;
         let value: serde_json::Value = serde_json::from_slice(&line).ok()?;
         if index == 0 && value.get("isSidechain").and_then(serde_json::Value::as_bool) == Some(true) {
@@ -322,16 +326,83 @@ fn saved_claude_history(session_id: &str) -> Option<()> {
         if value.get("sessionId").is_some_and(|id| id.as_str() != Some(session_id)) {
             return None;
         }
-        if matches!(value.get("type")?.as_str()?, "user" | "assistant") {
-            return (value.get("sessionId")?.as_str()? == session_id
-                && value
-                    .get("message")?
-                    .get("content")
-                    .is_some_and(|content| content.is_string() || content.is_array()))
-            .then_some(());
+        let kind = value.get("type")?.as_str()?;
+        if matches!(kind, "user" | "assistant") {
+            let message = value.get("message")?;
+            if value.get("sessionId")?.as_str()? != session_id
+                || message.get("role")?.as_str()? != kind
+                || !supported_message_content(message.get("content")?)
+            {
+                return None;
+            }
+            has_message = true;
         }
     }
-    None
+    has_message.then_some(())
+}
+
+fn supported_message_content(content: &serde_json::Value) -> bool {
+    content.is_string()
+        || content.as_array().is_some_and(|blocks| {
+            !blocks.is_empty()
+                && blocks.iter().all(|block| {
+                    let string = |key| block.get(key).is_some_and(serde_json::Value::is_string);
+                    match block.get("type").and_then(serde_json::Value::as_str) {
+                        Some("text") => string("text"),
+                        Some("thinking") => string("thinking") && string("signature"),
+                        Some("tool_reference") => string("tool_name"),
+                        Some("search_result") => {
+                            string("source")
+                                && string("title")
+                                && block
+                                    .get("content")
+                                    .and_then(serde_json::Value::as_array)
+                                    .is_some_and(|parts| {
+                                        parts.iter().all(|part| {
+                                            part.get("type").and_then(serde_json::Value::as_str) == Some("text")
+                                                && part.get("text").is_some_and(serde_json::Value::is_string)
+                                        })
+                                    })
+                        }
+                        Some("redacted_thinking") => string("data"),
+                        Some("image" | "document") => block.get("source").is_some_and(supported_content_source),
+                        Some("tool_use") => {
+                            string("id")
+                                && string("name")
+                                && block.get("input").is_some_and(serde_json::Value::is_object)
+                        }
+                        Some("tool_result") => {
+                            string("tool_use_id")
+                                && block.get("is_error").is_none_or(serde_json::Value::is_boolean)
+                                && block.get("content").is_none_or(supported_tool_result_content)
+                        }
+                        _ => false,
+                    }
+                })
+        })
+}
+
+fn supported_tool_result_content(content: &serde_json::Value) -> bool {
+    content.is_string()
+        || content.as_array().is_some_and(|parts| {
+            parts.iter().all(|part| {
+                matches!(
+                    part.get("type").and_then(serde_json::Value::as_str),
+                    Some("text" | "image" | "document" | "search_result" | "tool_reference")
+                )
+            }) && (parts.is_empty() || supported_message_content(content))
+        })
+}
+
+fn supported_content_source(source: &serde_json::Value) -> bool {
+    let string = |key| source.get(key).is_some_and(serde_json::Value::is_string);
+    match source.get("type").and_then(serde_json::Value::as_str) {
+        Some("base64" | "text") => string("data") && string("media_type"),
+        Some("url") => string("url"),
+        Some("file") => string("file_id"),
+        Some("content") => source.get("content").is_some_and(supported_message_content),
+        _ => false,
+    }
 }
 
 fn saved_session_backing_exists(session: &crate::runtime_state::AgentSessionRecord) -> bool {
@@ -384,7 +455,11 @@ fn saved_grok_history(session_id: &str) -> Option<()> {
     }
     let cwd = Path::new(cwd.trim()).components().collect::<PathBuf>();
     let directory = crate::local_store::grok_home_dir()?.join("sessions");
-    for entry in std::fs::read_dir(directory).ok()?.take(4096) {
+    let mut candidate = None;
+    for (index, entry) in std::fs::read_dir(directory).ok()?.enumerate() {
+        if index >= 4096 {
+            return None;
+        }
         let entry = entry.ok()?;
         if !entry.file_type().ok()?.is_dir() {
             continue;
@@ -400,25 +475,30 @@ fn saved_grok_history(session_id: &str) -> Option<()> {
         {
             continue;
         }
-        let header = readable_session_header(&entry.path().join(session_id).join("chat_history.jsonl"))?;
-        let content = header.get("content")?;
-        return match header.get("type")?.as_str()? {
-            "system" | "assistant" | "tool_result" => content.is_string(),
-            "user" => {
-                content.is_string()
-                    || content.as_array().is_some_and(|parts| {
-                        !parts.is_empty()
-                            && parts.iter().all(|part| {
-                                part.get("type").and_then(serde_json::Value::as_str) == Some("text")
-                                    && part.get("text").is_some_and(serde_json::Value::is_string)
-                            })
-                    })
-            }
-            _ => false,
+        if candidate
+            .replace(entry.path().join(session_id).join("chat_history.jsonl"))
+            .is_some()
+        {
+            return None;
         }
-        .then_some(());
     }
-    None
+    let header = readable_session_header(&candidate?)?;
+    let content = header.get("content")?;
+    match header.get("type")?.as_str()? {
+        "system" | "assistant" | "tool_result" => content.is_string(),
+        "user" => {
+            content.is_string()
+                || content.as_array().is_some_and(|parts| {
+                    !parts.is_empty()
+                        && parts.iter().all(|part| {
+                            part.get("type").and_then(serde_json::Value::as_str) == Some("text")
+                                && part.get("text").is_some_and(serde_json::Value::is_string)
+                        })
+                })
+        }
+        _ => false,
+    }
+    .then_some(())
 }
 
 fn saved_pi_history(session_id: &str) -> Option<()> {
