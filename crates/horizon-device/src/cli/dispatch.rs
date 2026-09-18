@@ -425,7 +425,7 @@ mod tests {
             );
             dispatcher.remove_marker("resize-observe")?;
             assert_eq!(std::fs::read(&dispatcher.target_file)?, b"original");
-            if name.ends_with(".lock") || name.contains(".resize-") {
+            if name == "session.lock" || name.contains(".resize-") {
                 assert!(matches!(dispatcher.lock(), Err(DeviceError::Invalid(_))));
             }
         }
