@@ -1,5 +1,6 @@
 use alacritty_terminal::term::TermMode;
 use egui::{Context, Id, Modifiers, MouseWheelUnit, PointerButton, Vec2};
+use horizon_core::PanelId;
 
 use super::keyboard::control_modifier;
 use super::{GridPoint, PointerButtons};
@@ -100,6 +101,44 @@ pub fn canvas_claims_unmodified_wheel(ctx: &Context) -> bool {
 pub fn set_canvas_claims_unmodified_wheel(ctx: &Context, claims: bool) {
     let id = canvas_claims_unmodified_wheel_id(ctx);
     ctx.data_mut(|data| data.insert_temp(id, claims));
+}
+
+fn panel_primary_gesture_id(ctx: &Context) -> Id {
+    Id::new(("horizon_panel_primary_gesture", ctx.viewport_id()))
+}
+
+#[derive(Clone, Copy)]
+enum RecordedPanelPrimaryGesture {
+    OffPanel,
+    Panel(PanelId),
+}
+
+#[must_use]
+pub fn panel_primary_gesture(ctx: &Context) -> Option<PanelId> {
+    let id = panel_primary_gesture_id(ctx);
+    match ctx.data(|data| data.get_temp::<RecordedPanelPrimaryGesture>(id)) {
+        Some(RecordedPanelPrimaryGesture::Panel(id)) => Some(id),
+        Some(RecordedPanelPrimaryGesture::OffPanel) | None => None,
+    }
+}
+
+#[must_use]
+pub fn panel_owns_primary_wheel_gesture(ctx: &Context, panel_id: PanelId, fallback_primary: bool) -> bool {
+    let id = panel_primary_gesture_id(ctx);
+    match ctx.data(|data| data.get_temp::<RecordedPanelPrimaryGesture>(id)) {
+        Some(RecordedPanelPrimaryGesture::Panel(id)) => id == panel_id,
+        Some(RecordedPanelPrimaryGesture::OffPanel) => false,
+        None => fallback_primary,
+    }
+}
+
+pub fn set_panel_primary_gesture(ctx: &Context, panel: Option<PanelId>) {
+    let id = panel_primary_gesture_id(ctx);
+    let recorded = match panel {
+        Some(panel) => RecordedPanelPrimaryGesture::Panel(panel),
+        None => RecordedPanelPrimaryGesture::OffPanel,
+    };
+    ctx.data_mut(|data| data.insert_temp(id, recorded));
 }
 
 pub fn wheel_action(
@@ -245,10 +284,11 @@ fn discrete_scroll_steps(delta: f32, unit: MouseWheelUnit, cell_extent: f32) -> 
 mod tests {
     use super::{
         canvas_claims_unmodified_wheel, panel_content_owns_wheel, panel_content_owns_wheel_with_canvas_claim,
-        set_canvas_claims_unmodified_wheel,
+        panel_owns_primary_wheel_gesture, set_canvas_claims_unmodified_wheel, set_panel_primary_gesture,
     };
     use crate::test_egui::DiscardTextures;
     use egui::{Context, Modifiers, RawInput};
+    use horizon_core::PanelId;
 
     #[test]
     fn unmodified_wheel_belongs_to_the_canvas() {
@@ -298,6 +338,13 @@ mod tests {
         assert!(!canvas_claims_unmodified_wheel(&ctx));
         set_canvas_claims_unmodified_wheel(&ctx, true);
         assert!(canvas_claims_unmodified_wheel(&ctx));
+        let panel = PanelId(7);
+        assert!(panel_owns_primary_wheel_gesture(&ctx, panel, true));
+        set_panel_primary_gesture(&ctx, None);
+        assert!(!panel_owns_primary_wheel_gesture(&ctx, panel, true));
+        set_panel_primary_gesture(&ctx, Some(panel));
+        assert!(panel_owns_primary_wheel_gesture(&ctx, panel, false));
+        assert!(!panel_owns_primary_wheel_gesture(&ctx, PanelId(8), true));
         let _ = ctx.end_pass().discard_textures();
     }
 }

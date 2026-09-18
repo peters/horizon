@@ -304,24 +304,9 @@ fn handle_pointer_events(
                     index,
                 );
             }
-            egui::Event::MouseWheel {
-                delta, unit, modifiers, ..
-            } => {
-                if skip_canvas_owned_wheel(*modifiers, pointer_buttons_before_event.primary, &pointer.ui_ctx) {
-                    continue;
-                }
-                if let Some(point) = pointer.hovered_point
-                    && let Some(action) = input::wheel_action(
-                        *delta,
-                        *unit,
-                        Vec2::new(pointer.metrics.char_width, pointer.metrics.line_height),
-                        *modifiers,
-                        pointer.terminal_mode,
-                        point,
-                    )
-                {
-                    local_scrollback_changed |= apply_wheel_action(panel, action);
-                }
+            egui::Event::MouseWheel { .. } => {
+                local_scrollback_changed |=
+                    handle_panel_wheel(panel, pointer, event, pointer_buttons_before_event.primary);
             }
             _ => {}
         }
@@ -329,10 +314,44 @@ fn handle_pointer_events(
     local_scrollback_changed
 }
 
-fn skip_canvas_owned_wheel(modifiers: egui::Modifiers, primary_down: bool, ctx: &egui::Context) -> bool {
+fn handle_panel_wheel(
+    panel: &mut Panel,
+    pointer: &PointerContext<'_>,
+    event: &egui::Event,
+    primary_down: bool,
+) -> bool {
+    let egui::Event::MouseWheel {
+        delta, unit, modifiers, ..
+    } = event
+    else {
+        return false;
+    };
+    if skip_canvas_owned_wheel(*modifiers, panel.id, primary_down, &pointer.ui_ctx) {
+        return false;
+    }
+    let Some(point) = pointer.hovered_point else {
+        return false;
+    };
+    input::wheel_action(
+        *delta,
+        *unit,
+        Vec2::new(pointer.metrics.char_width, pointer.metrics.line_height),
+        *modifiers,
+        pointer.terminal_mode,
+        point,
+    )
+    .is_some_and(|action| apply_wheel_action(panel, action))
+}
+
+fn skip_canvas_owned_wheel(
+    modifiers: egui::Modifiers,
+    panel_id: PanelId,
+    primary_down: bool,
+    ctx: &egui::Context,
+) -> bool {
     !input::panel_content_owns_wheel_with_canvas_claim(
         modifiers,
-        primary_down,
+        input::panel_owns_primary_wheel_gesture(ctx, panel_id, primary_down),
         input::canvas_claims_unmodified_wheel(ctx),
     )
 }

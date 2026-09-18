@@ -1,4 +1,5 @@
-use egui::{Context, Event, MouseWheelUnit, PointerButton, Vec2};
+use egui::{Context, Event, MouseWheelUnit, PointerButton, Pos2, Vec2};
+use horizon_core::PanelId;
 
 use crate::input::panel_content_owns_wheel;
 
@@ -96,7 +97,8 @@ fn wheel_event_points(unit: MouseWheelUnit, delta: Vec2, page_height: f32) -> Ve
     }
 }
 
-pub(super) fn primary_down_at_frame_start(events: &[Event], primary_at_end: bool) -> bool {
+#[cfg(test)]
+fn primary_down_at_frame_start(events: &[Event], primary_at_end: bool) -> bool {
     let mut primary = primary_at_end;
     for event in events.iter().rev() {
         if let Event::PointerButton {
@@ -111,45 +113,60 @@ pub(super) fn primary_down_at_frame_start(events: &[Event], primary_at_end: bool
     primary
 }
 
+pub(super) fn apply_primary_gesture_event(
+    gesture_panel: &mut Option<PanelId>,
+    event: &Event,
+    panel_at: impl Fn(Pos2) -> Option<PanelId>,
+) {
+    let Event::PointerButton {
+        button: PointerButton::Primary,
+        pressed,
+        pos,
+        ..
+    } = event
+    else {
+        return;
+    };
+    *gesture_panel = if *pressed { panel_at(*pos) } else { None };
+}
+
 pub(super) fn classify_canvas_wheel_events(
     events: &[Event],
-    mut primary_down: bool,
+    mut gesture_panel: Option<PanelId>,
+    current_topmost: Option<PanelId>,
     pointer_over_scrollable: bool,
     pointer_over_host_overlay: bool,
     page_height: f32,
-) -> CanvasWheelBuckets {
+    panel_at: impl Fn(Pos2) -> Option<PanelId>,
+) -> (CanvasWheelBuckets, Option<PanelId>) {
     let mut buckets = CanvasWheelBuckets::default();
     for event in events {
-        match event {
-            Event::PointerButton {
-                button: PointerButton::Primary,
-                pressed,
-                ..
-            } => primary_down = *pressed,
-            Event::MouseWheel {
-                unit, delta, modifiers, ..
-            } => {
-                if pointer_over_host_overlay && !(modifiers.ctrl || modifiers.command) {
-                    buckets.skipped_for_panel = true;
-                    continue;
-                }
-                if pointer_over_scrollable && panel_content_owns_wheel(*modifiers, primary_down) {
-                    buckets.skipped_for_panel = true;
-                    continue;
-                }
-                let points = wheel_event_points(*unit, *delta, page_height);
-                if modifiers.ctrl || modifiers.command {
-                    buckets.zoom += points;
-                } else if modifiers.shift && points.x == 0.0 {
-                    buckets.pan += Vec2::new(points.y, 0.0);
-                } else {
-                    buckets.pan += points;
-                }
-            }
-            _ => {}
+        apply_primary_gesture_event(&mut gesture_panel, event, &panel_at);
+        let Event::MouseWheel {
+            unit, delta, modifiers, ..
+        } = event
+        else {
+            continue;
+        };
+        let panel_primary = gesture_panel.is_some() && gesture_panel == current_topmost;
+        if pointer_over_host_overlay && !(modifiers.ctrl || modifiers.command) {
+            buckets.skipped_for_panel = true;
+            continue;
+        }
+        if pointer_over_scrollable && panel_content_owns_wheel(*modifiers, panel_primary) {
+            buckets.skipped_for_panel = true;
+            continue;
+        }
+        let points = wheel_event_points(*unit, *delta, page_height);
+        if modifiers.ctrl || modifiers.command {
+            buckets.zoom += points;
+        } else if modifiers.shift && points.x == 0.0 {
+            buckets.pan += Vec2::new(points.y, 0.0);
+        } else {
+            buckets.pan += points;
         }
     }
-    buckets
+    (buckets, gesture_panel)
 }
 
 #[cfg(test)]
@@ -160,6 +177,36 @@ mod tests {
         wheel_pan_scroll_input,
     };
     use egui::{Event, Modifiers, Vec2};
+    use horizon_core::PanelId;
+
+    const PANEL: PanelId = PanelId(1);
+
+    fn classify(
+        events: &[Event],
+        primary_at_start: bool,
+        over_scrollable: bool,
+        over_overlay: bool,
+    ) -> CanvasWheelBuckets {
+        classify_at(events, primary_at_start, over_scrollable, over_overlay, |_| Some(PANEL)).0
+    }
+
+    fn classify_at(
+        events: &[Event],
+        primary_at_start: bool,
+        over_scrollable: bool,
+        over_overlay: bool,
+        panel_at: impl Fn(egui::Pos2) -> Option<PanelId>,
+    ) -> (CanvasWheelBuckets, Option<PanelId>) {
+        classify_canvas_wheel_events(
+            events,
+            primary_at_start.then_some(PANEL),
+            Some(PANEL),
+            over_scrollable,
+            over_overlay,
+            800.0,
+            panel_at,
+        )
+    }
 
     fn point_wheel(delta: Vec2, modifiers: Modifiers) -> Event {
         Event::MouseWheel {
@@ -215,7 +262,7 @@ mod tests {
         ];
         let start = primary_down_at_frame_start(&events, false);
         assert!(start);
-        let wheels = classify_canvas_wheel_events(&events, start, true, false, 800.0);
+        let wheels = classify(&events, start, true, false);
         assert_eq!(wheels.pan, Vec2::ZERO);
         assert_eq!(wheels.zoom, Vec2::ZERO);
     }
@@ -226,7 +273,7 @@ mod tests {
             point_wheel(Vec2::new(0.0, 8.0), Modifiers::NONE),
             point_wheel(Vec2::new(0.0, 4.0), Modifiers::CTRL),
         ];
-        let wheels = classify_canvas_wheel_events(&events, false, false, false, 800.0);
+        let wheels = classify(&events, false, false, false);
         assert_eq!(wheels.pan, Vec2::new(0.0, 8.0));
         assert_eq!(wheels.zoom, Vec2::new(0.0, 4.0));
         let (zoom, pan, followup) = resolve_smoothed_wheel(true, wheels, Vec2::new(0.0, 99.0), None);
@@ -273,7 +320,7 @@ mod tests {
             point_wheel(Vec2::new(0.0, 5.0), Modifiers::SHIFT),
             point_wheel(Vec2::new(0.0, 8.0), Modifiers::NONE),
         ];
-        let wheels = classify_canvas_wheel_events(&events, false, true, false, 800.0);
+        let wheels = classify(&events, false, true, false);
         assert!(wheels.skipped_for_panel);
         assert_eq!(wheels.pan, Vec2::new(0.0, 8.0));
         let (zoom, pan, followup) = resolve_smoothed_wheel(true, wheels, Vec2::new(0.0, 13.0), None);
@@ -285,12 +332,12 @@ mod tests {
     #[test]
     fn native_select_popup_keeps_unmodified_wheel() {
         let events = vec![point_wheel(Vec2::new(0.0, 8.0), Modifiers::NONE)];
-        let wheels = classify_canvas_wheel_events(&events, false, true, true, 800.0);
+        let wheels = classify(&events, false, true, true);
         assert!(wheels.skipped_for_panel);
         assert_eq!(wheels.pan, Vec2::ZERO);
         assert_eq!(wheels.zoom, Vec2::ZERO);
         let ctrl = vec![point_wheel(Vec2::new(0.0, 8.0), Modifiers::CTRL)];
-        let zoom = classify_canvas_wheel_events(&ctrl, false, true, true, 800.0);
+        let zoom = classify(&ctrl, false, true, true);
         assert!(!zoom.skipped_for_panel);
         assert_eq!(zoom.zoom, Vec2::new(0.0, 8.0));
     }
@@ -298,7 +345,7 @@ mod tests {
     #[test]
     fn shift_wheel_outside_a_panel_body_stays_on_the_canvas() {
         let events = vec![point_wheel(Vec2::new(0.0, 8.0), Modifiers::SHIFT)];
-        let wheels = classify_canvas_wheel_events(&events, false, false, false, 800.0);
+        let wheels = classify(&events, false, false, false);
         assert!(!wheels.skipped_for_panel);
         assert_eq!(wheels.pan, Vec2::new(8.0, 0.0));
     }
@@ -306,10 +353,27 @@ mod tests {
     #[test]
     fn alt_wheel_over_a_panel_body_stays_on_the_panel() {
         let events = vec![point_wheel(Vec2::new(0.0, 8.0), Modifiers::ALT)];
-        let wheels = classify_canvas_wheel_events(&events, false, true, false, 800.0);
+        let wheels = classify(&events, false, true, false);
         assert!(wheels.skipped_for_panel);
         assert_eq!(wheels.pan, Vec2::ZERO);
         assert_eq!(wheels.zoom, Vec2::ZERO);
+    }
+
+    #[test]
+    fn primary_held_off_the_panel_does_not_block_canvas_pan() {
+        let events = vec![
+            Event::PointerButton {
+                pos: egui::pos2(1.0, 1.0),
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            },
+            point_wheel(Vec2::new(0.0, 8.0), Modifiers::NONE),
+        ];
+        let (wheels, gesture) = classify_at(&events, false, true, false, |_| None);
+        assert!(!wheels.skipped_for_panel);
+        assert_eq!(wheels.pan, Vec2::new(0.0, 8.0));
+        assert_eq!(gesture, None);
     }
 
     #[test]

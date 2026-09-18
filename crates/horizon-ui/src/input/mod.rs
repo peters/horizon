@@ -11,7 +11,8 @@ pub use keyboard::{
 };
 pub use mouse::{
     WheelAction, canvas_claims_unmodified_wheel, mouse_button_report, mouse_motion_report, panel_content_owns_wheel,
-    panel_content_owns_wheel_with_canvas_claim, set_canvas_claims_unmodified_wheel, wheel_action,
+    panel_content_owns_wheel_with_canvas_claim, panel_owns_primary_wheel_gesture, panel_primary_gesture,
+    set_canvas_claims_unmodified_wheel, set_panel_primary_gesture, wheel_action,
 };
 pub(crate) use winit_keyboard::{FrameKeyEvent, ObservedKeyboardInputs, TerminalInputEvent, terminal_input_events};
 

@@ -3,7 +3,10 @@ use std::mem;
 use egui::{Context, Event, Key, Modifiers, Rect, Vec2};
 use horizon_core::{PanelId, WorkspaceId};
 
-use super::super::super::input::{TerminalInputEvent, set_canvas_claims_unmodified_wheel, terminal_input_events};
+use super::super::super::input::{
+    TerminalInputEvent, panel_primary_gesture, set_canvas_claims_unmodified_wheel, set_panel_primary_gesture,
+    terminal_input_events,
+};
 use super::super::panels::PanelScreenGeometry;
 use super::super::shortcuts::{
     event_uses_shortcut_key, is_clipboard_pseudo_event, pending_hotkey_capture, shortcut_event_matches,
@@ -11,8 +14,8 @@ use super::super::shortcuts::{
 };
 use super::super::{CanvasPanSpaceKeyState, HeldSpeechBinding, HorizonApp};
 use super::canvas_wheel::{
-    CanvasWheelFollowup, canvas_wheel_followup_id, canvas_zoom_multiplier, classify_canvas_wheel_events,
-    drop_pan_when_egui_already_zoomed, primary_down_at_frame_start, resolve_smoothed_wheel, wheel_pan_scroll_input,
+    CanvasWheelFollowup, apply_primary_gesture_event, canvas_wheel_followup_id, canvas_zoom_multiplier,
+    classify_canvas_wheel_events, drop_pan_when_egui_already_zoomed, resolve_smoothed_wheel, wheel_pan_scroll_input,
 };
 use super::support::fullscreen_panel_is_renderable;
 
@@ -268,14 +271,22 @@ impl HorizonApp {
         });
         set_canvas_claims_unmodified_wheel(ctx, pointer_in_canvas);
         let followup_id = canvas_wheel_followup_id(ctx);
+        let panel_at = |position| {
+            topmost_panel_geometry(&panel_geometry, &self.panel_screen_order, position)
+                .and_then(|(id, geometry)| geometry.body.contains(position).then_some(id))
+        };
+        let mut gesture_panel = panel_primary_gesture(ctx);
         let (pan_scroll, zoom_factor) = if pointer_in_canvas {
-            let wheels = classify_canvas_wheel_events(
+            let (wheels, next_gesture) = classify_canvas_wheel_events(
                 &events,
-                primary_down_at_frame_start(&events, primary_down),
+                gesture_panel,
+                topmost.map(|(id, _)| id),
                 pointer_over_scrollable,
                 pointer_over_host_overlay,
                 viewport_height,
+                panel_at,
             );
+            gesture_panel = next_gesture;
             let has_wheel_events = events.iter().any(|event| matches!(event, Event::MouseWheel { .. }));
             let previous_followup = ctx
                 .data(|data| data.get_temp::<Option<CanvasWheelFollowup>>(followup_id))
@@ -292,9 +303,13 @@ impl HorizonApp {
             pan_scroll = drop_pan_when_egui_already_zoomed(zoom_delta, wheels, pan_scroll);
             (pan_scroll, zoom_factor)
         } else {
+            for event in &events {
+                apply_primary_gesture_event(&mut gesture_panel, event, panel_at);
+            }
             ctx.data_mut(|data| data.insert_temp(followup_id, None::<CanvasWheelFollowup>));
             (Vec2::ZERO, None)
         };
+        set_panel_primary_gesture(ctx, gesture_panel);
         if let Some(factor) = zoom_factor {
             let anchor = pointer_position.unwrap_or_else(|| canvas_rect.center());
             if self.zoom_canvas_at(canvas_rect, anchor, self.canvas_view.zoom * factor) {
