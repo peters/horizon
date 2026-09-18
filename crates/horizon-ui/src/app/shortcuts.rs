@@ -18,8 +18,14 @@ pub(crate) fn shortcut_pressed_with_observed(
     observed: &[FrameKeyEvent],
     binding: ShortcutBinding,
 ) -> bool {
-    shortcut_pressed_in_events(events, binding)
-        || observed.iter().any(|frame| observed_shortcut_matches(frame, binding))
+    // When winit observed this frame's presses, match the layout-unmodified
+    // key only. Ctrl can rewrite the egui logical key (Norwegian `+` → Minus),
+    // and OR-ing that stripped key would also fire zoom_out for zoom_in.
+    if observed.iter().any(|frame| frame.pressed_unmodified_key().is_some()) {
+        observed.iter().any(|frame| observed_shortcut_matches(frame, binding))
+    } else {
+        shortcut_pressed_in_events(events, binding)
+    }
 }
 
 fn observed_shortcut_matches(frame: &FrameKeyEvent, binding: ShortcutBinding) -> bool {
@@ -438,9 +444,27 @@ mod tests {
             Key::Plus,
             Modifiers::COMMAND | Modifiers::CTRL,
         );
-        assert!(shortcut_pressed_with_observed(&[], &[observed], binding));
-
+        assert!(shortcut_pressed_with_observed(
+            &[],
+            std::slice::from_ref(&observed),
+            binding
+        ));
         let minus = ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Minus);
+        assert!(
+            !shortcut_pressed_with_observed(
+                &[Event::Key {
+                    key: Key::Minus,
+                    physical_key: Some(Key::Minus),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::COMMAND | Modifiers::CTRL,
+                }],
+                std::slice::from_ref(&observed),
+                minus
+            ),
+            "Ctrl+Plus must not also match zoom_out from the stripped logical Minus"
+        );
+
         let observed_minus = crate::input::FrameKeyEvent::pressed_unmodified_for_test(
             Key::Slash,
             Key::Minus,

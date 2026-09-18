@@ -263,6 +263,9 @@ impl HorizonApp {
             if self.zoom_canvas_at(canvas_rect, anchor, self.canvas_view.zoom * factor) {
                 self.clear_terminal_selections();
             }
+            if scroll != Vec2::ZERO {
+                ctx.input_mut(|input| input.smooth_scroll_delta = Vec2::ZERO);
+            }
             self.canvas_pan_input_claimed = false;
             self.is_panning = false;
             return;
