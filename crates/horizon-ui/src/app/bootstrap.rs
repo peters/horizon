@@ -68,6 +68,7 @@ impl HorizonApp {
     ) -> Self {
         let shortcuts = resolve_shortcuts(config);
         let action_commands_cache = command_registry::action_commands(&shortcuts, util::primary_shortcut_label());
+        pin_chrome_to_native_display_scale(egui_ctx);
         egui_ctx.set_fonts(configure_fonts());
         let mut board = Board::new();
         board.attention_enabled = config.features.attention_feed;
@@ -283,11 +284,34 @@ fn insert_font_data(fonts: &mut egui::FontDefinitions, name: &str, bytes: &'stat
         .insert(name.to_owned(), egui::FontData::from_static(bytes).into());
 }
 
+/// Keep root chrome at the OS display scale.
+///
+/// Horizon owns Ctrl/Cmd +/-, 0, and Ctrl+scroll for canvas zoom. egui's
+/// default `zoom_with_keyboard` uses those same chords to change
+/// `Context::zoom_factor`, which scales the sidebar, toolbar, and minimap
+/// independently of the canvas. That GUI zoom does not follow a later
+/// desktop resolution or DPI change, so chrome stays oversized on a large
+/// display. Pin zoom to 1.0 and leave pixel density to `native_pixels_per_point`.
+pub(super) fn pin_chrome_to_native_display_scale(ctx: &Context) {
+    let zoom_with_keyboard = ctx.options(|options| options.zoom_with_keyboard);
+    if zoom_with_keyboard {
+        ctx.options_mut(|options| options.zoom_with_keyboard = false);
+    }
+    if (ctx.zoom_factor() - 1.0).abs() > f32::EPSILON {
+        ctx.set_zoom_factor(1.0);
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use egui::FontFamily;
+    use egui::{Event, FontFamily, Key, Modifiers, RawInput};
 
     use super::{FONT_INTER, FONT_JETBRAINS_MONO, FONT_NOTO_CJK, FONT_NOTO_SYMBOLS, configure_fonts};
+    use crate::app::test_support::{
+        editor_workspace_state, raw_input, run_app_frame_with_input, test_app_with_startup,
+    };
+    use crate::test_egui::DiscardTextures;
+    use horizon_core::{CanvasViewState, RuntimeState, StartupDecision};
 
     #[test]
     fn configure_fonts_registers_ui_and_terminal_fallback_stacks() {
@@ -309,5 +333,92 @@ mod tests {
         assert_eq!(monospace.get(2).map(String::as_str), Some(FONT_NOTO_SYMBOLS));
         assert!(fonts.font_data.contains_key(FONT_NOTO_CJK));
         assert!(fonts.font_data.contains_key(FONT_NOTO_SYMBOLS));
+    }
+
+    #[test]
+    fn egui_keyboard_zoom_scales_the_whole_ui_by_default() {
+        let ctx = egui::Context::default();
+        assert!(ctx.options(|options| options.zoom_with_keyboard));
+        assert!((ctx.zoom_factor() - 1.0).abs() <= f32::EPSILON);
+
+        let mut input = RawInput::default();
+        input.events.push(command_key(Key::Plus));
+        let _ = ctx.run_ui(input, |_| {}).discard_textures();
+        let _ = ctx.run_ui(RawInput::default(), |_| {}).discard_textures();
+
+        assert!((ctx.zoom_factor() - 1.1).abs() < 0.001);
+    }
+
+    #[test]
+    fn horizon_pins_chrome_to_native_display_scale() {
+        let (_temp, ctx, _app) = test_app_with_startup(StartupDecision::Ephemeral {
+            runtime_state: Box::new(RuntimeState::default()),
+        });
+
+        assert!(!ctx.options(|options| options.zoom_with_keyboard));
+        assert!((ctx.zoom_factor() - 1.0).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn canvas_zoom_shortcuts_do_not_scale_root_chrome() {
+        let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+            runtime_state: Box::new(RuntimeState {
+                canvas_view: Some(CanvasViewState::default()),
+                workspaces: vec![editor_workspace_state("alpha", [0.0, 0.0])],
+                ..RuntimeState::default()
+            }),
+        });
+        app.root_viewport_stabilizer = None;
+        let viewport = raw_input([1600.0, 1000.0], None);
+        let _ = run_app_frame_with_input(&ctx, &mut app, viewport.clone());
+
+        let before = app.canvas_view.zoom;
+        let mut zoom_in = viewport.clone();
+        zoom_in.events.push(Event::Key {
+            key: Key::Equals,
+            physical_key: Some(Key::Equals),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers {
+                ctrl: !cfg!(target_os = "macos"),
+                mac_cmd: cfg!(target_os = "macos"),
+                command: true,
+                ..egui::Modifiers::NONE
+            },
+        });
+        let _ = run_app_frame_with_input(&ctx, &mut app, zoom_in);
+        let _ = run_app_frame_with_input(&ctx, &mut app, viewport);
+
+        assert!(app.canvas_view.zoom > before);
+        assert!(!ctx.options(|options| options.zoom_with_keyboard));
+        assert!((ctx.zoom_factor() - 1.0).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn prepare_frame_repins_chrome_if_gui_zoom_drifts() {
+        let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+            runtime_state: Box::new(RuntimeState::default()),
+        });
+        ctx.options_mut(|options| {
+            options.zoom_with_keyboard = true;
+            options.zoom_factor = 1.5;
+        });
+
+        let viewport = raw_input([1600.0, 1000.0], None);
+        let _ = run_app_frame_with_input(&ctx, &mut app, viewport.clone());
+        let _ = run_app_frame_with_input(&ctx, &mut app, viewport);
+
+        assert!(!ctx.options(|options| options.zoom_with_keyboard));
+        assert!((ctx.zoom_factor() - 1.0).abs() <= f32::EPSILON);
+    }
+
+    fn command_key(key: Key) -> Event {
+        Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::COMMAND,
+        }
     }
 }
