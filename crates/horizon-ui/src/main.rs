@@ -12,6 +12,8 @@ mod dir_picker;
 mod editor_widget;
 mod git_changes_widget;
 mod input;
+#[cfg(any(test, target_os = "linux"))]
+mod linux_desktop;
 mod loading_spinner;
 mod native_app;
 mod plugin_install;
@@ -50,6 +52,8 @@ fn main() -> eframe::Result {
     }
 
     let horizon_home = HorizonHome::resolve();
+    #[cfg(target_os = "linux")]
+    linux_desktop::install();
     let _agent_plugin_host = plugin_install::install_agent_plugins(&horizon_home);
 
     let cli_args = match parse_cli_args(std::env::args().skip(1)) {
