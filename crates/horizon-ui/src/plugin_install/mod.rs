@@ -10,8 +10,8 @@ mod grok_mcp;
 mod user_skills;
 mod work_hooks;
 use user_skills::{
-    HORIZON_BROWSER_SKILL, HORIZON_NOTIFY_SKILL, HORIZON_SPEECH_SKILL, RETIRED_OFFLOAD_SKILL, SkillRootLease,
-    bind_skill_roots, release_skill_roots, remove_horizon_skill_dir,
+    HORIZON_BROWSER_SKILL, HORIZON_DEVICE_SKILL, HORIZON_NOTIFY_SKILL, HORIZON_SPEECH_SKILL, RETIRED_OFFLOAD_SKILL,
+    SkillRootLease, bind_prepared_skill_root, bind_skill_roots, release_skill_roots, remove_horizon_skill_dir,
 };
 
 struct EmbeddedFile {
@@ -32,6 +32,13 @@ const CLAUDE_PLUGIN_FILES: &[EmbeddedFile] = &[
         content: include_str!(concat!(
             env!("OUT_DIR"),
             "/assets/plugins/claude-code/skills/horizon-browser/SKILL.md"
+        )),
+    },
+    EmbeddedFile {
+        relative_path: "skills/horizon-device/SKILL.md",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/claude-code/skills/horizon-device/SKILL.md"
         )),
     },
     EmbeddedFile {
@@ -89,6 +96,50 @@ const SPEECH_SKILL_FILES: &[EmbeddedFile] = &[
         )),
     },
 ];
+
+const DEVICE_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
+    relative_path: "SKILL.md",
+    content: include_str!(concat!(
+        env!("OUT_DIR"),
+        "/assets/plugins/codex/skills/horizon-device/SKILL.md"
+    )),
+}];
+
+fn validate_device_skill(dir: &Path) -> io::Result<()> {
+    let metadata = match std::fs::symlink_metadata(dir) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if metadata.is_dir() {
+        let mut entries = std::fs::read_dir(dir)?;
+        let entry = entries.next().transpose()?;
+        if let Some(entry) = entry
+            && entries.next().is_none()
+            && entry.file_name() == "SKILL.md"
+            && entry.file_type()?.is_file()
+            && std::fs::read_to_string(entry.path())? == DEVICE_SKILL_FILES[0].content
+        {
+            return Ok(());
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "Grok device skill is not Horizon-owned; preserving existing content",
+    ))
+}
+
+fn install_device_skill(dir: &Path) -> io::Result<()> {
+    if dir.try_exists()? {
+        return Ok(());
+    }
+    let parent = dir
+        .parent()
+        .ok_or_else(|| io::Error::other("skill directory has no parent"))?;
+    let staging = tempfile::Builder::new().prefix(".horizon-device-").tempdir_in(parent)?;
+    sync_plugin_files(staging.path(), DEVICE_SKILL_FILES)?;
+    std::fs::rename(staging.path(), dir)
+}
 
 /// `$HOME`-relative skill roots that receive `horizon-notify` for the life of
 /// this Horizon process. Claude also gets it through the host plugin tree.
@@ -165,6 +216,25 @@ impl AgentPluginHostLease {
         Ok(())
     }
 
+    fn bind_grok_device_skill(&mut self, grok_root: &Path, browser_bound: bool) {
+        let Some(host_id) = self.host_dir.file_name() else {
+            return;
+        };
+        let device_dir = grok_root.join("skills").join(HORIZON_DEVICE_SKILL);
+        match bind_prepared_skill_root(host_id, device_dir.clone(), validate_device_skill, || {
+            if browser_bound {
+                validate_device_skill(&device_dir)?;
+                install_device_skill(&device_dir)?;
+            }
+            Ok(())
+        }) {
+            Ok(device_lease) => self.skill_roots.push(device_lease),
+            Err(error) => {
+                tracing::warn!(path = %device_dir.display(), %error, "Grok device skill unavailable; preserving existing content");
+            }
+        }
+    }
+
     fn covers_skill_dir(&self, skill_dir: &Path) -> bool {
         self.skill_roots.iter().any(|root| root.covers_skill_dir(skill_dir))
     }
@@ -219,8 +289,14 @@ pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) -> AgentPluginHo
     }
     if let Some(root) = provider_home(grok_home.as_deref(), user_home.as_deref(), ".grok") {
         match grok_mcp::bind_browser_skill(&root, manifest::host_instance().as_ref()) {
-            Ok(roots) => lease.skill_roots.extend(roots),
-            Err(error) => tracing::warn!(%error, "Grok browser integration unavailable; preserving existing settings"),
+            Ok(roots) => {
+                lease.skill_roots.extend(roots);
+                lease.bind_grok_device_skill(&root, true);
+            }
+            Err(error) => {
+                tracing::warn!(%error, "Grok browser integration unavailable; preserving existing settings");
+                lease.bind_grok_device_skill(&root, false);
+            }
         }
     }
     sync_leased_user_skills(
@@ -371,7 +447,14 @@ fn install_agent_plugins_impl(
     )?);
     updated_files += sync_plugin_files(&horizon_home.codex_skill_dir(), NOTIFY_SKILL_FILES)?;
     updated_files += sync_plugin_files(&horizon_home.codex_browser_skill_dir(), BROWSER_SKILL_FILES)?;
-    updated_files += sync_plugin_files(&horizon_home.codex_speech_skill_dir(), SPEECH_SKILL_FILES)?;
+    updated_files += sync_plugin_files(
+        &horizon_home.codex_integrations_dir().join(HORIZON_DEVICE_SKILL),
+        DEVICE_SKILL_FILES,
+    )?;
+    updated_files += sync_plugin_files(
+        &horizon_home.codex_integrations_dir().join(HORIZON_SPEECH_SKILL),
+        SPEECH_SKILL_FILES,
+    )?;
 
     if let Some(home) = user_home {
         for skill_root in NOTIFY_SKILL_ROOTS {
@@ -389,11 +472,15 @@ fn install_agent_plugins_impl(
             updated_files += sync_plugin_files(&dir, NOTIFY_SKILL_FILES)?;
         }
         let browser_dir = grok_root.join("skills").join(HORIZON_BROWSER_SKILL);
+        let device_dir = grok_root.join("skills").join(HORIZON_DEVICE_SKILL);
         if skill_dir_is_leased(lease, &browser_dir) {
             match grok_mcp::register(&grok_root) {
                 Ok(changed) => {
                     updated_files += usize::from(changed);
                     updated_files += sync_plugin_files(&browser_dir, BROWSER_SKILL_FILES)?;
+                    if skill_dir_is_leased(lease, &device_dir) {
+                        updated_files += sync_plugin_files(&device_dir, DEVICE_SKILL_FILES)?;
+                    }
                 }
                 Err(error) => {
                     tracing::warn!(%error, "Grok browser integration unavailable; preserving existing settings");
@@ -404,12 +491,16 @@ fn install_agent_plugins_impl(
     if let Some(codex_root) = provider_home(codex_home, user_home, ".codex") {
         let notify_dir = codex_root.join("skills").join(HORIZON_NOTIFY_SKILL);
         let browser_dir = codex_root.join("skills").join(HORIZON_BROWSER_SKILL);
+        let device_dir = codex_root.join("skills").join(HORIZON_DEVICE_SKILL);
         let speech_dir = codex_root.join("skills").join(HORIZON_SPEECH_SKILL);
         if skill_dir_is_leased(lease, &notify_dir) {
             updated_files += sync_plugin_files(&notify_dir, NOTIFY_SKILL_FILES)?;
         }
         if skill_dir_is_leased(lease, &browser_dir) {
             updated_files += sync_plugin_files(&browser_dir, BROWSER_SKILL_FILES)?;
+        }
+        if skill_dir_is_leased(lease, &device_dir) {
+            updated_files += sync_plugin_files(&device_dir, DEVICE_SKILL_FILES)?;
         }
         if skill_dir_is_leased(lease, &speech_dir) {
             updated_files += sync_plugin_files(&speech_dir, SPEECH_SKILL_FILES)?;
@@ -440,6 +531,7 @@ fn user_skill_lease_dirs(
     if let Some(codex_root) = provider_home(codex_home, user_home, ".codex") {
         dirs.push(codex_root.join("skills").join(HORIZON_NOTIFY_SKILL));
         dirs.push(codex_root.join("skills").join(HORIZON_BROWSER_SKILL));
+        dirs.push(codex_root.join("skills").join(HORIZON_DEVICE_SKILL));
         dirs.push(codex_root.join("skills").join(HORIZON_SPEECH_SKILL));
     }
     dirs
@@ -536,10 +628,11 @@ mod tests {
     use horizon_core::HorizonHome;
 
     use super::{
-        AgentPluginHostLease, BROWSER_SKILL_FILES, CLAUDE_PLUGIN_FILES, EmbeddedFile, HORIZON_BROWSER_SKILL,
-        HORIZON_NOTIFY_SKILL, NOTIFY_SKILL_FILES, NOTIFY_SKILL_ROOTS, abandoned_user_skill_dirs,
-        agent_plugin_host_lock_path, install_agent_plugins_impl, open_lock_file, prune_stale_agent_plugin_hosts,
-        sync_file_if_changed, sync_leased_user_skills, sync_plugin_files, user_skill_dir, user_skill_lease_dirs,
+        AgentPluginHostLease, BROWSER_SKILL_FILES, CLAUDE_PLUGIN_FILES, DEVICE_SKILL_FILES, EmbeddedFile,
+        HORIZON_BROWSER_SKILL, HORIZON_DEVICE_SKILL, HORIZON_NOTIFY_SKILL, NOTIFY_SKILL_FILES, NOTIFY_SKILL_ROOTS,
+        abandoned_user_skill_dirs, agent_plugin_host_lock_path, install_agent_plugins_impl, open_lock_file,
+        prune_stale_agent_plugin_hosts, sync_file_if_changed, sync_leased_user_skills, sync_plugin_files,
+        user_skill_dir, user_skill_lease_dirs,
     };
 
     fn write_skill_dir(path: &Path, body: &str) {
@@ -564,12 +657,16 @@ mod tests {
         assert!(dirs.contains(&home.join(".gemini/antigravity-cli/skills/horizon-notify")));
         assert!(dirs.contains(&home.join(".codex/skills/horizon-notify")));
         assert!(dirs.contains(&home.join(".codex/skills/horizon-browser")));
+        assert!(dirs.contains(&home.join(".codex/skills/horizon-device")));
+        assert!(!dirs.contains(&home.join(".grok/skills/horizon-device")));
         assert!(dirs.contains(&home.join(".codex/skills/horizon-speech")));
         assert!(!dirs.contains(&home.join(".claude/skills/horizon-speech")));
         assert!(!dirs.contains(&home.join(".agents/skills/horizon-notify")));
         assert!(!dirs.contains(&home.join(".agents/skills/horizon-browser")));
+        assert!(!dirs.contains(&home.join(".agents/skills/horizon-device")));
         assert!(!dirs.contains(&home.join(".gemini/skills/horizon-notify")));
         assert!(!dirs.contains(&home.join(".kilocode/skills/horizon-browser")));
+        assert!(!dirs.contains(&home.join(".kilocode/skills/horizon-device")));
         assert!(!dirs.contains(&home.join(".grok/skills/horizon-browser")));
         assert!(abandoned.contains(&home.join(".agents/skills/horizon-notify")));
         assert!(abandoned.contains(&home.join(".agents/skills/horizon-browser")));
@@ -620,6 +717,39 @@ mod tests {
         assert_eq!(second, 0);
     }
 
+    fn assert_installed_skill(path: &Path, content: &str) {
+        assert_eq!(
+            std::fs::read_to_string(path).unwrap_or_else(|_| panic!("skill missing at {}", path.display())),
+            content,
+        );
+    }
+
+    fn assert_claude_plugin_skill(plugin_dir: &Path, relative_path: &str) {
+        assert_eq!(
+            std::fs::read_to_string(plugin_dir.join(relative_path)).expect("claude plugin skill"),
+            CLAUDE_PLUGIN_FILES
+                .iter()
+                .find(|file| file.relative_path == relative_path)
+                .expect("claude plugin file")
+                .content,
+        );
+    }
+
+    fn assert_browser_and_device_skill_split() {
+        assert!(BROWSER_SKILL_FILES[0].content.contains("browser_visibility"));
+        assert!(BROWSER_SKILL_FILES[0].content.contains("browser_network_watch"));
+        assert!(
+            !BROWSER_SKILL_FILES[0].content.contains("device_panel"),
+            "browser skill must not own native VNC Device panel lifecycle"
+        );
+        assert!(DEVICE_SKILL_FILES[0].content.contains("device_panel"));
+        assert!(DEVICE_SKILL_FILES[0].content.contains("native VNC"));
+    }
+
+    fn assert_skill_absent(path: &Path, reason: &str) {
+        assert!(!path.exists(), "{reason}");
+    }
+
     #[test]
     fn install_agent_plugins_syncs_notify_skill_into_every_agent_home() {
         let temp = tempfile::tempdir().expect("temp dir");
@@ -640,69 +770,69 @@ mod tests {
 
         assert!(updated > 0);
         for skill_root in NOTIFY_SKILL_ROOTS {
-            let notify_path = user_skill_dir(&user_home, skill_root, HORIZON_NOTIFY_SKILL).join("SKILL.md");
-            assert_eq!(
-                std::fs::read_to_string(&notify_path)
-                    .unwrap_or_else(|_| panic!("notify skill missing at {}", notify_path.display())),
+            assert_installed_skill(
+                &user_skill_dir(&user_home, skill_root, HORIZON_NOTIFY_SKILL).join("SKILL.md"),
                 NOTIFY_SKILL_FILES[0].content,
             );
         }
-        assert_eq!(
-            std::fs::read_to_string(user_home.join(".gemini/antigravity-cli/skills/horizon-notify/SKILL.md"))
-                .expect("antigravity notify skill"),
+        assert_installed_skill(
+            &user_home.join(".grok/skills/horizon-notify/SKILL.md"),
             NOTIFY_SKILL_FILES[0].content,
         );
-        assert_eq!(
-            std::fs::read_to_string(user_home.join(".grok/skills/horizon-notify/SKILL.md"))
-                .expect("grok skill should fall back to ~/.grok"),
+        assert_installed_skill(
+            &user_home.join(".codex/skills/horizon-notify/SKILL.md"),
             NOTIFY_SKILL_FILES[0].content,
         );
-        assert_eq!(
-            std::fs::read_to_string(user_home.join(".codex/skills/horizon-notify/SKILL.md"))
-                .expect("codex skill should fall back to ~/.codex"),
-            NOTIFY_SKILL_FILES[0].content,
-        );
-        assert_eq!(
-            std::fs::read_to_string(user_home.join(".codex/skills/horizon-browser/SKILL.md"))
-                .expect("codex browser skill should fall back to ~/.codex"),
+        assert_installed_skill(
+            &user_home.join(".codex/skills/horizon-browser/SKILL.md"),
             BROWSER_SKILL_FILES[0].content,
         );
-        assert!(
-            !user_home.join(".agents/skills/horizon-notify/SKILL.md").exists(),
-            "notify skill must not broadcast through ~/.agents/skills"
+        assert_installed_skill(
+            &user_home.join(".codex/skills/horizon-device/SKILL.md"),
+            DEVICE_SKILL_FILES[0].content,
         );
-        assert!(
-            !user_home.join(".agents/skills/horizon-browser/SKILL.md").exists(),
-            "browser MCP skill must not broadcast through ~/.agents/skills"
+        assert_installed_skill(
+            &user_home.join(".grok/skills/horizon-device/SKILL.md"),
+            DEVICE_SKILL_FILES[0].content,
         );
-        assert!(
-            !user_home.join(".gemini/skills/horizon-notify/SKILL.md").exists(),
-            "notify skill must use the Antigravity CLI home, not the Gemini CLI home"
+        assert_skill_absent(
+            &user_home.join(".agents/skills/horizon-notify/SKILL.md"),
+            "notify skill must not broadcast through ~/.agents/skills",
         );
-        assert!(
-            !user_home.join(".kilocode/skills/horizon-browser/SKILL.md").exists(),
-            "browser MCP skill must not be exported to agents without Horizon MCP injection"
+        assert_skill_absent(
+            &user_home.join(".agents/skills/horizon-browser/SKILL.md"),
+            "browser MCP skill must not broadcast through ~/.agents/skills",
+        );
+        assert_skill_absent(
+            &user_home.join(".gemini/skills/horizon-notify/SKILL.md"),
+            "notify skill must use the Antigravity CLI home, not the Gemini CLI home",
+        );
+        assert_skill_absent(
+            &user_home.join(".kilocode/skills/horizon-browser/SKILL.md"),
+            "browser MCP skill must not be exported to agents without Horizon MCP injection",
+        );
+        assert_skill_absent(
+            &user_home.join(".kilocode/skills/horizon-device/SKILL.md"),
+            "device skill must not be exported to agents without Horizon MCP injection",
         );
         assert!(
             user_home.join(".grok/skills/horizon-browser/SKILL.md").exists(),
             "Grok receives the matching browser MCP skill"
         );
-        assert_eq!(
-            std::fs::read_to_string(horizon_home.codex_skill_dir().join("SKILL.md"))
-                .expect("horizon codex integration should be synced"),
+        assert_installed_skill(
+            &horizon_home.codex_skill_dir().join("SKILL.md"),
             NOTIFY_SKILL_FILES[0].content,
         );
-        assert_eq!(
-            std::fs::read_to_string(claude_plugin_dir.join("skills/horizon-notify/SKILL.md"))
-                .expect("claude plugin notify skill should be installed"),
-            CLAUDE_PLUGIN_FILES
-                .iter()
-                .find(|file| file.relative_path == "skills/horizon-notify/SKILL.md")
-                .expect("claude notify file")
-                .content,
+        assert_claude_plugin_skill(&claude_plugin_dir, "skills/horizon-notify/SKILL.md");
+        assert_claude_plugin_skill(&claude_plugin_dir, "skills/horizon-device/SKILL.md");
+        assert_installed_skill(
+            &horizon_home
+                .codex_integrations_dir()
+                .join(HORIZON_DEVICE_SKILL)
+                .join("SKILL.md"),
+            DEVICE_SKILL_FILES[0].content,
         );
-        assert!(BROWSER_SKILL_FILES[0].content.contains("browser_visibility"));
-        assert!(BROWSER_SKILL_FILES[0].content.contains("browser_network_watch"));
+        assert_browser_and_device_skill_split();
         let mcp_config = std::fs::read_to_string(claude_plugin_dir.join(".mcp.json"))
             .expect("Claude MCP config should be installed");
         assert!(mcp_config.contains("/opt/horizon"));
@@ -770,9 +900,79 @@ mod tests {
                 .expect("notify skill should be installed under GROK_HOME"),
             NOTIFY_SKILL_FILES[0].content,
         );
+        assert_eq!(
+            std::fs::read_to_string(grok_home.join("skills/horizon-device/SKILL.md"))
+                .expect("device skill should be installed under GROK_HOME"),
+            DEVICE_SKILL_FILES[0].content,
+        );
         assert!(
             !user_home.join(".grok/skills/horizon-notify/SKILL.md").exists(),
             "GROK_HOME must replace ~/.grok rather than writing both"
+        );
+        assert!(
+            !user_home.join(".grok/skills/horizon-device/SKILL.md").exists(),
+            "GROK_HOME must replace ~/.grok for the device skill rather than writing both"
+        );
+    }
+
+    #[test]
+    fn grok_device_skill_requires_browser_mcp_registration() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let horizon_home = HorizonHome::from_root(temp.path().join(".horizon"));
+        let user_home = temp.path().join("user-home");
+        let grok_root = user_home.join(".grok");
+        let leftover = grok_root.join("skills").join(HORIZON_DEVICE_SKILL);
+        write_skill_dir(&leftover, DEVICE_SKILL_FILES[0].content);
+        let custom = grok_root.join("skills").join("custom-device");
+        write_skill_dir(&custom, "user skill");
+        let claude_plugin_dir = horizon_home.claude_plugin_dir_for_host("host-a");
+        let mut lease =
+            AgentPluginHostLease::acquire(horizon_home.agent_plugin_host_dir("host-a")).expect("host lease");
+        lease
+            .bind_user_skills(&user_skill_lease_dirs(Some(&user_home), None, None))
+            .expect("bind user skills");
+        lease.bind_grok_device_skill(&grok_root, false);
+        sync_leased_user_skills(
+            &lease,
+            &horizon_home,
+            &claude_plugin_dir,
+            Some(&user_home),
+            None,
+            None,
+            Path::new("/opt/horizon"),
+        );
+
+        assert!(user_home.join(".grok/skills/horizon-notify/SKILL.md").is_file());
+        assert!(
+            !user_home.join(".grok/skills/horizon-browser/SKILL.md").exists(),
+            "Grok browser skill is leased only after MCP registration"
+        );
+        drop(lease);
+        assert!(
+            !leftover.exists(),
+            "failed Grok browser registration must not retain a leftover Horizon-owned device skill"
+        );
+        assert!(
+            custom.join("SKILL.md").is_file(),
+            "unrelated Grok skills must be preserved"
+        );
+    }
+
+    #[test]
+    fn grok_preserves_a_user_managed_device_skill() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let horizon_home = HorizonHome::from_root(temp.path().join(".horizon"));
+        let grok_root = temp.path().join("user-home/.grok");
+        let custom = grok_root.join("skills").join(HORIZON_DEVICE_SKILL);
+        write_skill_dir(&custom, "user device skill");
+        let mut lease =
+            AgentPluginHostLease::acquire(horizon_home.agent_plugin_host_dir("host-a")).expect("host lease");
+        lease.bind_grok_device_skill(&grok_root, true);
+        lease.bind_grok_device_skill(&grok_root, false);
+        drop(lease);
+        assert_eq!(
+            std::fs::read_to_string(custom.join("SKILL.md")).expect("preserved skill"),
+            "user device skill"
         );
     }
 

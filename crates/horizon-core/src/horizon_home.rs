@@ -109,11 +109,6 @@ impl HorizonHome {
     }
 
     #[must_use]
-    pub fn codex_speech_skill_dir(&self) -> PathBuf {
-        self.codex_integrations_dir().join("horizon-speech")
-    }
-
-    #[must_use]
     pub fn browsers_manifest_dir(&self) -> PathBuf {
         self.root.join("runtime").join("browsers")
     }
