@@ -120,6 +120,30 @@ jobs:
           cargo test --locked -p horizon-browser --no-default-features "${features[@]}"
           cargo clippy --locked -p horizon-browser --all-targets --no-default-features "${features[@]}" -- -D warnings
 
+  device:
+    name: Device library and CLI/MCP
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: device
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: bash scripts/install-ci-ubuntu-dependencies.sh libxkbcommon-dev pkg-config xvfb xauth
+      - run: cargo test --locked -p horizon-device
+      - run: cargo test --locked -p horizon-device --features cli
+      - run: cargo clippy --locked -p horizon-device --all-targets --features cli -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
+      - run: cargo package --locked -p horizon-device --features cli
+      - name: Native input lifecycle
+        run: |
+          xvfb-run -a -s '-screen 0 1280x800x24 -nolisten tcp -extension MIT-SHM' bash -eu -c '
+            device_test_dir=$(mktemp -d)
+            trap '\''rm -rf "$device_test_dir"'\'' EXIT
+            printf '\''{"id":"ci-device","endpoint":{"kind":"local_x11","display":"%s"}}'\'' "$DISPLAY" > "$device_test_dir/target.json"
+            HORIZON_DEVICE_TEST_TARGET="$device_test_dir/target.json" cargo test --locked -p horizon-device --features cli --test x11_live --test cli -- --ignored --test-threads=1
+          '
+
   browser-harness-tests:
     name: Browser harness tests
     runs-on: ubuntu-latest
