@@ -6,9 +6,9 @@ use super::BrowserController;
 
 impl BrowserController {
     pub(crate) async fn device_panel(&self, operation: Operation) -> Result<Outcome, String> {
+        let started = Instant::now();
         let timeout = Duration::from_secs(10);
         let request = device::enqueue(self.identity(), operation, timeout).map_err(|error| error.to_string())?;
-        let started = Instant::now();
         loop {
             if let Some(result) = device::take_result(&request).map_err(|error| error.to_string())? {
                 return Ok(result);
