@@ -10,8 +10,8 @@ mod grok_mcp;
 mod user_skills;
 mod work_hooks;
 use user_skills::{
-    HORIZON_BROWSER_SKILL, HORIZON_DEVICE_SKILL, HORIZON_NOTIFY_SKILL, RETIRED_OFFLOAD_SKILL, SkillRootLease,
-    bind_prepared_skill_root, bind_skill_roots, release_skill_roots, remove_horizon_skill_dir,
+    HORIZON_BROWSER_SKILL, HORIZON_DEVICE_SKILL, HORIZON_NOTIFY_SKILL, HORIZON_SPEECH_SKILL, RETIRED_OFFLOAD_SKILL,
+    SkillRootLease, bind_prepared_skill_root, bind_skill_roots, release_skill_roots, remove_horizon_skill_dir,
 };
 
 struct EmbeddedFile {
@@ -48,6 +48,20 @@ const CLAUDE_PLUGIN_FILES: &[EmbeddedFile] = &[
             "/assets/plugins/claude-code/skills/horizon-notify/SKILL.md"
         )),
     },
+    EmbeddedFile {
+        relative_path: "skills/horizon-speech/SKILL.md",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/claude-code/skills/horizon-speech/SKILL.md"
+        )),
+    },
+    EmbeddedFile {
+        relative_path: "skills/horizon-speech/level.py",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/claude-code/skills/horizon-speech/level.py"
+        )),
+    },
 ];
 
 const NOTIFY_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
@@ -65,6 +79,23 @@ const BROWSER_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
         "/assets/plugins/codex/skills/horizon-browser/SKILL.md"
     )),
 }];
+
+const SPEECH_SKILL_FILES: &[EmbeddedFile] = &[
+    EmbeddedFile {
+        relative_path: "SKILL.md",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/codex/skills/horizon-speech/SKILL.md"
+        )),
+    },
+    EmbeddedFile {
+        relative_path: "level.py",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/codex/skills/horizon-speech/level.py"
+        )),
+    },
+];
 
 const DEVICE_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
     relative_path: "SKILL.md",
@@ -420,6 +451,10 @@ fn install_agent_plugins_impl(
         &horizon_home.codex_integrations_dir().join(HORIZON_DEVICE_SKILL),
         DEVICE_SKILL_FILES,
     )?;
+    updated_files += sync_plugin_files(
+        &horizon_home.codex_integrations_dir().join(HORIZON_SPEECH_SKILL),
+        SPEECH_SKILL_FILES,
+    )?;
 
     if let Some(home) = user_home {
         for skill_root in NOTIFY_SKILL_ROOTS {
@@ -457,6 +492,7 @@ fn install_agent_plugins_impl(
         let notify_dir = codex_root.join("skills").join(HORIZON_NOTIFY_SKILL);
         let browser_dir = codex_root.join("skills").join(HORIZON_BROWSER_SKILL);
         let device_dir = codex_root.join("skills").join(HORIZON_DEVICE_SKILL);
+        let speech_dir = codex_root.join("skills").join(HORIZON_SPEECH_SKILL);
         if skill_dir_is_leased(lease, &notify_dir) {
             updated_files += sync_plugin_files(&notify_dir, NOTIFY_SKILL_FILES)?;
         }
@@ -465,6 +501,9 @@ fn install_agent_plugins_impl(
         }
         if skill_dir_is_leased(lease, &device_dir) {
             updated_files += sync_plugin_files(&device_dir, DEVICE_SKILL_FILES)?;
+        }
+        if skill_dir_is_leased(lease, &speech_dir) {
+            updated_files += sync_plugin_files(&speech_dir, SPEECH_SKILL_FILES)?;
         }
     }
 
@@ -493,6 +532,7 @@ fn user_skill_lease_dirs(
         dirs.push(codex_root.join("skills").join(HORIZON_NOTIFY_SKILL));
         dirs.push(codex_root.join("skills").join(HORIZON_BROWSER_SKILL));
         dirs.push(codex_root.join("skills").join(HORIZON_DEVICE_SKILL));
+        dirs.push(codex_root.join("skills").join(HORIZON_SPEECH_SKILL));
     }
     dirs
 }
@@ -589,10 +629,10 @@ mod tests {
 
     use super::{
         AgentPluginHostLease, BROWSER_SKILL_FILES, CLAUDE_PLUGIN_FILES, DEVICE_SKILL_FILES, EmbeddedFile,
-        HORIZON_BROWSER_SKILL, HORIZON_DEVICE_SKILL, HORIZON_NOTIFY_SKILL, NOTIFY_SKILL_FILES, NOTIFY_SKILL_ROOTS,
-        abandoned_user_skill_dirs, agent_plugin_host_lock_path, install_agent_plugins_impl, open_lock_file,
-        prune_stale_agent_plugin_hosts, sync_file_if_changed, sync_leased_user_skills, sync_plugin_files,
-        user_skill_dir, user_skill_lease_dirs,
+        HORIZON_BROWSER_SKILL, HORIZON_DEVICE_SKILL, HORIZON_NOTIFY_SKILL, HORIZON_SPEECH_SKILL, NOTIFY_SKILL_FILES,
+        NOTIFY_SKILL_ROOTS, SPEECH_SKILL_FILES, abandoned_user_skill_dirs, agent_plugin_host_lock_path,
+        install_agent_plugins_impl, open_lock_file, prune_stale_agent_plugin_hosts, sync_file_if_changed,
+        sync_leased_user_skills, sync_plugin_files, user_skill_dir, user_skill_lease_dirs,
     };
 
     fn write_skill_dir(path: &Path, body: &str) {
@@ -619,6 +659,8 @@ mod tests {
         assert!(dirs.contains(&home.join(".codex/skills/horizon-browser")));
         assert!(dirs.contains(&home.join(".codex/skills/horizon-device")));
         assert!(!dirs.contains(&home.join(".grok/skills/horizon-device")));
+        assert!(dirs.contains(&home.join(".codex/skills/horizon-speech")));
+        assert!(!dirs.contains(&home.join(".claude/skills/horizon-speech")));
         assert!(!dirs.contains(&home.join(".agents/skills/horizon-notify")));
         assert!(!dirs.contains(&home.join(".agents/skills/horizon-browser")));
         assert!(!dirs.contains(&home.join(".agents/skills/horizon-device")));
@@ -680,6 +722,30 @@ mod tests {
             std::fs::read_to_string(path).unwrap_or_else(|_| panic!("skill missing at {}", path.display())),
             content,
         );
+    }
+
+    /// `horizon-speech` ships two files, so assert both reach every
+    /// destination: a missing `SPEECH_SKILL_FILES` entry or a skipped sync
+    /// target would otherwise pass on the directory alone. The Claude and Codex
+    /// copies are byte-identical, so one expectation covers both.
+    fn assert_speech_skill_installed(user_home: &Path, horizon_home: &HorizonHome, claude_plugin_dir: &Path) {
+        for file in SPEECH_SKILL_FILES {
+            assert_installed_skill(
+                &user_home.join(".codex/skills/horizon-speech").join(file.relative_path),
+                file.content,
+            );
+            assert_installed_skill(
+                &horizon_home
+                    .codex_integrations_dir()
+                    .join(HORIZON_SPEECH_SKILL)
+                    .join(file.relative_path),
+                file.content,
+            );
+            assert_installed_skill(
+                &claude_plugin_dir.join("skills/horizon-speech").join(file.relative_path),
+                file.content,
+            );
+        }
     }
 
     fn assert_claude_plugin_skill(plugin_dir: &Path, relative_path: &str) {
@@ -753,6 +819,7 @@ mod tests {
             &user_home.join(".grok/skills/horizon-device/SKILL.md"),
             DEVICE_SKILL_FILES[0].content,
         );
+        assert_speech_skill_installed(&user_home, &horizon_home, &claude_plugin_dir);
         assert_skill_absent(
             &user_home.join(".agents/skills/horizon-notify/SKILL.md"),
             "notify skill must not broadcast through ~/.agents/skills",

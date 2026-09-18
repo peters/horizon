@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 pub(super) const HORIZON_NOTIFY_SKILL: &str = "horizon-notify";
 pub(super) const HORIZON_BROWSER_SKILL: &str = "horizon-browser";
 pub(super) const HORIZON_DEVICE_SKILL: &str = "horizon-device";
+pub(super) const HORIZON_SPEECH_SKILL: &str = "horizon-speech";
 // Recognized only for migration cleanup; never installed by this version.
 pub(super) const RETIRED_OFFLOAD_SKILL: &str = "horizon-offload";
 const LEASES_DIR: &str = ".horizon-leases";
@@ -241,6 +242,7 @@ pub(super) fn remove_horizon_skill_dir(path: &Path) {
     if name != HORIZON_NOTIFY_SKILL
         && name != HORIZON_BROWSER_SKILL
         && name != HORIZON_DEVICE_SKILL
+        && name != HORIZON_SPEECH_SKILL
         && name != RETIRED_OFFLOAD_SKILL
     {
         return;
