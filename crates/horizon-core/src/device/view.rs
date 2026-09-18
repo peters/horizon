@@ -35,6 +35,26 @@ pub struct DeviceImageLayout {
 }
 
 impl DeviceViewOptions {
+    /// Return to the whole desktop when a resize makes the active crop invalid.
+    #[must_use]
+    pub fn for_desktop(mut self, desktop: [usize; 2]) -> Self {
+        if self.viewport.is_some_and(|viewport| {
+            viewport.width == 0
+                || viewport.height == 0
+                || viewport
+                    .x
+                    .checked_add(viewport.width)
+                    .is_none_or(|end| end > desktop[0])
+                || viewport
+                    .y
+                    .checked_add(viewport.height)
+                    .is_none_or(|end| end > desktop[1])
+        }) {
+            self.viewport = None;
+        }
+        self
+    }
+
     /// # Errors
     /// Rejects invalid limits and viewports outside the current desktop.
     pub fn layout(self, desktop: [usize; 2]) -> Result<DeviceImageLayout> {

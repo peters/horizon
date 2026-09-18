@@ -94,6 +94,7 @@ impl Framebuffer {
 
     pub(super) fn image(&self, options: horizon_core::DeviceViewOptions) -> Result<ColorImage, ViewError> {
         let layout = options
+            .for_desktop(self.size())
             .layout(self.size())
             .map_err(|error| ViewError::Server(error.to_string()))?;
         if layout.output == self.size() {
@@ -227,10 +228,7 @@ mod tests {
         assert_eq!(image.pixels[0].r(), 7);
         assert_eq!(frame.size(), [4, 2]);
         frame.apply(VncEvent::SetResolution(vnc::Screen { width: 2, height: 2 }))?;
-        assert!(
-            frame.image(options).is_err(),
-            "a stale viewport is refused after target resize"
-        );
+        assert_eq!(frame.image(options)?.size, [1, 1]);
         Ok(())
     }
 

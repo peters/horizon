@@ -248,3 +248,25 @@ fn extended_layout_announcements_do_not_start_full_refresh_loops() -> Result<(),
     wait_for_green_pixel(&session, [3, 2]);
     Ok(())
 }
+
+#[test]
+fn shrink_with_an_outside_crop_preserves_the_session() -> Result<(), ViewError> {
+    let (session, mut stream) = connected_session()?;
+    send_pixel(&mut stream)?;
+    wait_for_green_pixel(&session, [2, 2]);
+    session.set_options(DeviceViewOptions {
+        viewport: Some(horizon_core::DeviceViewport {
+            x: 1,
+            y: 1,
+            width: 1,
+            height: 1,
+        }),
+        ..Default::default()
+    });
+    send_extended_size(&mut stream, 1, 1)?;
+    refresh_until(&mut stream, [3, 1, 0, 0, 0, 0, 0, 1, 0, 1])?;
+    send_pixel(&mut stream)?;
+    wait_for_green_pixel(&session, [1, 1]);
+    refresh_until(&mut stream, [3, 1, 0, 0, 0, 0, 0, 1, 0, 1])?;
+    Ok(())
+}

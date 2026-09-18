@@ -12,6 +12,13 @@ pub(super) struct Controls {
 impl Controls {
     pub(super) fn show(&mut self, ui: &mut Ui, desktop: Option<[usize; 2]>, rendered: Option<[usize; 2]>) -> bool {
         let before = self.options;
+        if let Some(desktop) = desktop {
+            self.options = self.options.for_desktop(desktop);
+            if self.options.viewport != before.viewport {
+                self.draft = None;
+                self.error = None;
+            }
+        }
         ui.collapsing("View controls", |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.label("Maximum fps");
@@ -100,6 +107,32 @@ impl Controls {
 mod tests {
     use super::*;
     use crate::test_egui::DiscardTextures;
+
+    #[test]
+    fn shrink_clears_an_outside_crop_and_its_draft() {
+        let viewport = DeviceViewport {
+            x: 1800,
+            y: 900,
+            width: 100,
+            height: 100,
+        };
+        let mut controls = Controls {
+            options: DeviceViewOptions {
+                viewport: Some(viewport),
+                ..Default::default()
+            },
+            draft: Some(viewport),
+            ..Default::default()
+        };
+        let context = egui::Context::default();
+        let _ = context
+            .run_ui(egui::RawInput::default(), |ui| {
+                assert!(controls.show(ui, Some([1280, 720]), None));
+            })
+            .discard_textures();
+        assert!(controls.options.viewport.is_none());
+        assert!(controls.draft.is_none());
+    }
 
     #[test]
     fn an_active_viewport_can_be_cleared_without_desktop_geometry() {
