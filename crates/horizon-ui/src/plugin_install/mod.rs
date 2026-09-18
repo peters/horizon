@@ -194,8 +194,6 @@ impl AgentPluginHostLease {
             if browser_bound {
                 validate_device_skill(&device_dir)?;
                 install_device_skill(&device_dir)?;
-            } else if validate_device_skill(&device_dir).is_ok() {
-                remove_horizon_skill_dir(&device_dir);
             }
             Ok(())
         }) {
