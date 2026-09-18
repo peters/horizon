@@ -32,7 +32,7 @@ struct_excessive_bools = "allow"
 
 [workspace.dependencies]
 # Licensed decoder fixes shared by the native viewer and optional resize adapter.
-vnc = { package = "vnc-rs", git = "https://github.com/peters/vnc-rs.git", rev = "439a044b944c2394a967eddec990fe8b4559194f" }
+vnc = { package = "vnc-rs", git = "https://github.com/peters/vnc-rs.git", rev = "43848a7baa39f852beaf52b28eeb58f7d56ad669" }
 horizon-browser = { path = "crates/horizon-browser", version = "0.2.7" }
 horizon-browser-control = { path = "crates/horizon-browser-control", version = "0.2.7" }
 horizon-browser-mcp = { path = "crates/horizon-browser-mcp", version = "0.2.7" }
