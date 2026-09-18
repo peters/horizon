@@ -143,12 +143,23 @@ fn listed_tool<'a>(tools: &'a Value, name: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("{name} tool"))
 }
 
+fn assert_device_panel_contract(tools: &Value) {
+    let device = listed_tool(tools, "device_panel").to_string();
+    for operation in ["create", "list", "inspect", "visibility", "reconnect", "close"] {
+        assert!(
+            device.contains(operation),
+            "missing Device lifecycle operation {operation}"
+        );
+    }
+}
+
 fn assert_listed_tools_keep_the_browser_contract(tools: &Value) {
     let encoded_tools = tools.to_string();
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(21));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(22));
     let usage = listed_tool(tools, "browser_provider_usage");
     assert!(usage["inputSchema"]["properties"].get("provider").is_some());
     assert!(usage["inputSchema"]["properties"].get("credentials").is_none());
+    assert_device_panel_contract(tools);
     let resize = listed_tool(tools, "browser_resize");
     for field in ["panel_id", "width", "height", "reset", "timeout_millis"] {
         assert!(

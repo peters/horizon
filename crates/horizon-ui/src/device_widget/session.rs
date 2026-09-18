@@ -132,6 +132,14 @@ impl Session {
             desktop: state.desktop,
         }
     }
+
+    pub(super) fn take_status(&self) -> Option<Status> {
+        self.updates
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .status
+            .take()
+    }
 }
 
 impl Drop for Session {
@@ -189,6 +197,7 @@ async fn connection(
     publish_status(updates, ctx, Status::Connected);
     let mut framebuffer = Framebuffer::default();
     let mut previous_options = None;
+    let mut received_pixels = false;
     loop {
         let mut full_refresh = !*visible.borrow_and_update();
         if full_refresh {
@@ -213,6 +222,10 @@ async fn connection(
                 break;
             }
             if let Some(event) = client.poll_event().await? {
+                if matches!(event, vnc::VncEvent::SetResolution(_)) {
+                    received_pixels = false;
+                }
+                received_pixels |= matches!(event, vnc::VncEvent::RawImage(_, _));
                 full_refresh |= matches!(event, vnc::VncEvent::SetResolution(_));
                 changed |= framebuffer.apply(event)?;
                 idle = false;
@@ -225,7 +238,7 @@ async fn connection(
                 idle = true;
             }
         }
-        if (changed || previous_options != Some(options)) && !framebuffer.size().contains(&0) {
+        if received_pixels && (changed || previous_options != Some(options)) && !framebuffer.size().contains(&0) {
             let image = framebuffer.image(options)?;
             previous_options = Some(options);
             let viewport = {

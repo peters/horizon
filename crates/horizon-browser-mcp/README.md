@@ -246,3 +246,40 @@ This tool requires a live Horizon-launched agent identity, as configured remote
 session creation does. A local standalone browser host has no remote-provider
 configuration. CLI plans invoke the same tool; see the
 [CLI usage example](../horizon-browser-cli/README.md#shared-remote-provider-usage).
+
+## Native Device viewer lifecycle
+
+`device_panel` manages read-only native VNC viewers in the caller's current
+Horizon workspace. It does not forward input or provision a desktop. Use the
+standalone device CLI/MCP with an explicitly configured isolated target for input.
+
+```json
+{"operation":"create","endpoint":"127.0.0.1:5900"}
+{"operation":"list"}
+{"operation":"inspect","panel_id":"<returned id>"}
+{"operation":"visibility","panel_id":"<returned id>","visible":false}
+{"operation":"reconnect","panel_id":"<returned id>"}
+{"operation":"close","panel_id":"<returned id>"}
+```
+
+Creation returns a stable id immediately. Inspect `connection`,
+`image_received`, `image_displayed`, and `frame_sequence` before claiming live
+image evidence. `visible` is the panel's presentation setting; the image can
+still be off canvas or clipped. `image_displayed` describes the last completed
+UI frame and requires a connected image intersecting the drawing clip. An old
+texture after a disconnect is not a live image. The frame sequence counts
+uploaded images in the current connection and resets on explicit reconnect.
+
+All operations require a Horizon-injected caller and host identity. Discovery
+and inspection are workspace-scoped. Only the creator/owner may change visibility
+or close a viewer. Explicit reconnect can acquire an unowned viewer, including a
+restored one; it never steals another agent's viewer. Restore remains stopped.
+Closing releases the viewer connection without terminating its target. Ownership
+is session-local and is not persisted across application restarts.
+
+Endpoints accept numeric loopback addresses and nonzero ports only, including
+`[::1]:5900`; hostnames, remote addresses, URLs and commands are refused. Host
+requests expire before dispatch after 10 seconds; the MCP wait is bounded to 15
+seconds. On `host_timeout`, list before retrying a mutation because it may have
+completed without a delivered result. Hosts predating this API return that
+bounded timeout and require a normal application upgrade to gain the capability.
