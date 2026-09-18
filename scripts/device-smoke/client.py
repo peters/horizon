@@ -24,7 +24,7 @@ class Client:
             self.process.stdin.write(json.dumps({'jsonrpc': '2.0', 'method': 'notifications/initialized'}) + '\n')
             self.process.stdin.flush()
             tools = self.rpc('tools/list', {})
-            assert {t['name'] for t in tools['tools']} == {'device_doctor', 'device_screenshot', 'device_act'}
+            assert {'device_doctor', 'device_screenshot', 'device_act'} <= {t['name'] for t in tools['tools']}
 
     def rpc(self, method, params):
         self.sequence += 1

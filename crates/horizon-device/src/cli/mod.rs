@@ -9,8 +9,19 @@ use std::{
     path::PathBuf,
 };
 
+pub type ResizeFactory = fn(&crate::Target) -> crate::Result<Box<dyn crate::ResizeBackend>>;
+
 pub async fn run() -> std::process::ExitCode {
-    match execute().await {
+    run_inner(None).await
+}
+
+/// Run the same CLI/MCP contract with an optional desktop resize transport.
+pub async fn run_with_resize(factory: ResizeFactory) -> std::process::ExitCode {
+    run_inner(Some(factory)).await
+}
+
+async fn run_inner(factory: Option<ResizeFactory>) -> std::process::ExitCode {
+    match execute(factory).await {
         Ok(code) => std::process::ExitCode::from(code),
         Err(error) => {
             println!(
@@ -21,12 +32,12 @@ pub async fn run() -> std::process::ExitCode {
         }
     }
 }
-async fn execute() -> Result<u8, String> {
+async fn execute(factory: Option<ResizeFactory>) -> Result<u8, String> {
     let mut args = std::env::args().skip(1);
     let first = args.next().unwrap_or_default();
     if first == "--help" || first.is_empty() {
         println!(
-            "horizon-device --target FILE doctor|screenshot [OUTPUT] [--options JSON]|act JSON|mcp\nJSON may be '-' to read up to 64 KiB from stdin.\nTarget JSON: {{\"id\":\"lab\",\"endpoint\":{{\"kind\":\"local_x11\",\"display\":\":99\"}}}}\nUse a private directory for FILE; cooperating CLI/MCP commands share FILE's .lock sibling.\nNo default display, application launching, or remote management."
+            "horizon-device --target FILE doctor|resize JSON|screenshot [OUTPUT] [--options JSON]|act JSON|mcp\nJSON may be '-' to read up to 64 KiB from stdin.\nTarget JSON: {{\"id\":\"lab\",\"endpoint\":{{\"kind\":\"local_x11\",\"display\":\":99\"}}}}\nUse a private directory for FILE; cooperating CLI/MCP commands share FILE's .lock sibling.\nNo default display, application launching, or remote management."
         );
         return Ok(0);
     }
@@ -35,6 +46,7 @@ async fn execute() -> Result<u8, String> {
     }
     let dispatcher = Dispatcher {
         target_file: PathBuf::from(args.next().ok_or("missing target file")?),
+        resize_factory: factory,
     };
     let command = args.next().ok_or("missing command")?;
     if command == "mcp" {
@@ -51,6 +63,10 @@ async fn execute() -> Result<u8, String> {
                 .map_err(|error| format!("invalid action: {error}"))?,
         ),
         "doctor" => Command::Doctor,
+        "resize" => Command::Resize(
+            serde_json::from_str(&read_final_json(&mut args, "resize requires JSON")?)
+                .map_err(|error| format!("invalid resize: {error}"))?,
+        ),
         "screenshot" => {
             let mut options = crate::CaptureOptions::default();
             if let Some(first) = args.next() {
@@ -70,12 +86,14 @@ async fn execute() -> Result<u8, String> {
             }
             Command::Screenshot(options)
         }
-        _ => return Err("expected doctor, screenshot, act, or mcp".into()),
+        _ => return Err("expected doctor, screenshot, act, resize, or mcp".into()),
     };
     if args.next().is_some() {
         return Err("unexpected arguments".into());
     }
-    let mut value = dispatcher.call(request);
+    let mut value = tokio::task::spawn_blocking(move || dispatcher.call(request))
+        .await
+        .map_err(|_| "device worker failed; observe before retrying".to_owned())?;
     if command == "screenshot"
         && value["ok"] == true
         && let Some(path) = output

@@ -1,5 +1,5 @@
 use super::dispatch::{Command, Dispatcher};
-use crate::{ActRequest, CaptureOptions};
+use crate::{ActRequest, CaptureOptions, ResizeRequest};
 use rmcp::{
     ServerHandler, ServiceExt,
     handler::server::wrapper::Parameters,
@@ -45,7 +45,7 @@ impl Server {
 impl Server {
     #[tool(
         name = "device_doctor",
-        description = "Check the explicitly configured local device and its input/capture capabilities."
+        description = "Check the configured device, input/capture capabilities, desktop resize support, owner permission and limits."
     )]
     async fn doctor(&self) -> CallToolResult {
         self.execute(Command::Doctor).await
@@ -63,6 +63,13 @@ impl Server {
     )]
     async fn act(&self, Parameters(request): Parameters<ActRequest>) -> CallToolResult {
         self.execute(Command::Act(request)).await
+    }
+    #[tool(
+        name = "device_resize",
+        description = "Explicitly resize the actual configured desktop within owner-enabled limits. Check device_doctor first. Returns requested and confirmed dimensions; capture a fresh screenshot before input. Never retry an uncertain resize without owner reconciliation. Screenshot output dimensions and viewer Fit do not resize the desktop. A bounded resize already in progress completes even if this request is cancelled."
+    )]
+    async fn resize(&self, Parameters(request): Parameters<ResizeRequest>) -> CallToolResult {
+        self.execute(Command::Resize(request)).await
     }
 }
 impl ServerHandler for Server {

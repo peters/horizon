@@ -68,3 +68,23 @@ children exited and target configuration expired. This packaged skill does not
 automatically register an MCP server or start a viewer: callers must supply the
 CLI executable and target or register the explicit `--target <file> mcp` command
 in their agent's supported configuration.
+
+## Desktop resizing
+
+Owner permission is separate from server support. Enable
+`desktop_resize.policy.enabled` only for the owned container session, with
+`max_width`, `max_height` and `max_pixels` limits. An optional adapter uses the
+explicit `desktop_resize.vnc_address`; existing X11 users need no VNC dependency.
+
+Check `doctor`, then call `resize '{"width":1920,"height":1080}'` or MCP
+`device_resize` with the same dimensions. A confirmed result includes requested
+and applied dimensions and current surface geometry. Capture a fresh screenshot
+before input. Pre-resize coordinates remain stale after a grow/shrink round
+trip. Screenshot crop/output dimensions and viewer Fit do not resize the desktop.
+
+The CLI/MCP runner serializes commands and writes a `target.resize-pending`
+journal before dispatch. After a timeout, disconnect or process exit during
+mutation, the owner must reconcile the same session before removing that journal.
+`device_resize` cannot enable permission or clear uncertainty. A separate
+`target.resize-observe` marker blocks input until a successful fresh screenshot.
+A bounded operation already in progress finishes even if its MCP caller cancels.

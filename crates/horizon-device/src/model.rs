@@ -12,6 +12,8 @@ pub enum Endpoint {
 pub struct Target {
     pub id: String,
     pub endpoint: Endpoint,
+    #[serde(default)]
+    pub desktop_resize: crate::ResizeConfig,
 }
 
 /// Input coordinates are relative to this original device surface, in surface pixels.
@@ -139,6 +141,8 @@ pub struct Observation {
 pub struct Readiness {
     pub geometry: Geometry,
     pub capabilities: Vec<Capability>,
+    #[serde(default)]
+    pub desktop_resize: crate::ResizeReadiness,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

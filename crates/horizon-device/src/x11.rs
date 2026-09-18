@@ -7,6 +7,7 @@ use enigo::{Direction, Enigo, Keyboard, Mouse, Settings};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use x11rb::{
     connection::Connection,
+    protocol::randr::ConnectionExt as _,
     protocol::xproto::{ConnectionExt, ImageFormat, ImageOrder},
     rust_connection::RustConnection,
 };
@@ -16,6 +17,7 @@ pub struct X11 {
     connection: RustConnection,
     root: u32,
     visual: u32,
+    randr: bool,
 }
 fn unavailable(e: impl std::fmt::Display) -> DeviceError {
     DeviceError::Unavailable(e.to_string())
@@ -43,8 +45,31 @@ impl X11 {
             ));
         }
         let s = &connection.setup().roots[screen];
+        // Resize-enabled targets need a revision that survives a size round trip.
+        let randr = connection
+            .query_extension(b"RANDR")
+            .map_err(unavailable)?
+            .reply()
+            .map_err(unavailable)?
+            .present;
+        let randr = if randr {
+            let version = connection
+                .randr_query_version(1, 3)
+                .map_err(unavailable)?
+                .reply()
+                .map_err(unavailable)?;
+            (version.major_version, version.minor_version) >= (1, 3)
+        } else {
+            false
+        };
+        if target.desktop_resize.policy.enabled && !randr {
+            return Err(DeviceError::Unsupported(
+                "desktop resizing requires RandR geometry revisions".into(),
+            ));
+        }
         Ok(Self {
             target: target.clone(),
+            randr: randr && target.desktop_resize.policy.enabled,
             root: s.root,
             visual: s.root_visual,
             connection,
@@ -63,12 +88,25 @@ impl X11 {
             ));
         }
         let Endpoint::LocalX11 { display } = &self.target.endpoint;
+        let revision = if self.randr {
+            self.connection
+                .randr_get_screen_resources_current(self.root)
+                .map_err(unavailable)?
+                .reply()
+                .map_err(unavailable)?
+                .config_timestamp
+        } else {
+            0
+        };
         Ok(Geometry {
             target_id: self.target.id.clone(),
             surface_id: "display".into(),
             width: u32::from(g.width),
             height: u32::from(g.height),
-            revision: format!("{display}:{}:{}:{}:{}", self.root, g.width, g.height, g.depth),
+            revision: format!(
+                "{display}:{}:{}:{}:{}:{revision}",
+                self.root, g.width, g.height, g.depth
+            ),
         })
     }
 }
@@ -83,6 +121,7 @@ impl Backend for X11 {
         Ok(Readiness {
             geometry: self.screenshot(&CaptureOptions::default())?.geometry,
             capabilities: vec![Capability::Screenshot, Capability::Pointer, Capability::Keyboard],
+            desktop_resize: crate::ResizeReadiness::default(),
         })
     }
     fn screenshot(&self, options: &CaptureOptions) -> Result<Observation> {

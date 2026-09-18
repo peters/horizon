@@ -33,6 +33,12 @@ impl Backend for Fake {
 fn invalid_inputs_never_reach_backend() {
     let calls = Rc::new(Cell::new(0));
     let mut device = Device {
+        resize: crate::resize::ResizeControl {
+            config: ResizeConfig::default(),
+            backend: None,
+            uncertain: false,
+            needs_observation: std::cell::Cell::new(false),
+        },
         backend: Box::new(Fake { actions: calls.clone() }),
     };
     for action in [
@@ -84,6 +90,12 @@ fn invalid_inputs_never_reach_backend() {
 fn unicode_is_text_not_a_keyboard_layout_assumption() {
     let calls = Rc::new(Cell::new(0));
     let mut device = Device {
+        resize: crate::resize::ResizeControl {
+            config: ResizeConfig::default(),
+            backend: None,
+            uncertain: false,
+            needs_observation: std::cell::Cell::new(false),
+        },
         backend: Box::new(Fake { actions: calls.clone() }),
     };
     assert!(
@@ -110,6 +122,7 @@ fn transport_rejects_unknown_fields_and_actions() {
 fn only_local_display_endpoints_are_accepted() {
     for display in ["", "localhost:0", ":", ":0.", ":0.0.1", "unix:0"] {
         let target = Target {
+            desktop_resize: crate::ResizeConfig::default(),
             id: "fixture".into(),
             endpoint: Endpoint::LocalX11 {
                 display: display.into(),
