@@ -5,6 +5,7 @@ use horizon_core::browser::{BrowserButton, BrowserCommand, BrowserInput, Browser
 
 use super::keyboard::{key_modifiers, to_browser_modifiers};
 use crate::browser_widget::{BrowserPointerClick, BrowserUiState};
+use crate::input::panel_content_owns_wheel;
 
 /// CDP `buttons` bitmask for currently-down mouse buttons.
 const BUTTON_LEFT: u32 = 1;
@@ -125,33 +126,54 @@ pub(super) fn events(
                 flush_pending_move(browser, &mut pending_move);
                 end_captured_drags(browser, state, frame, &mut event_buttons, event_modifiers);
             }
-            Event::MouseWheel { unit, delta, .. } => {
+            Event::MouseWheel { .. } => {
                 flush_pending_move(browser, &mut pending_move);
-                if wheel_pos.is_some_and(|pos| overlay_blocks_pointer(browser, frame, pos)) {
-                    continue;
-                }
-                if let Some(p) = wheel_pos {
-                    let scale = match *unit {
-                        egui::MouseWheelUnit::Point => 1.0,
-                        egui::MouseWheelUnit::Line => 16.0,
-                        egui::MouseWheelUnit::Page => 500.0,
-                    };
-                    let (x, y) = to_page_coords(frame.rect, frame.frame_size, p);
-                    let (delta_x, delta_y) = cdp_wheel_delta(*delta, scale);
-                    browser.send(BrowserCommand::Input(BrowserInput::Wheel {
-                        x,
-                        y,
-                        delta_x,
-                        delta_y,
-                        modifiers: event_modifiers,
-                    }));
-                }
+                send_owned_wheel(browser, frame, event, wheel_pos, event_buttons, event_modifiers);
             }
             _ => flush_pending_move(browser, &mut pending_move),
         }
     }
     flush_pending_move(browser, &mut pending_move);
     state.pointer_modifiers = frame_final_modifiers;
+}
+
+fn send_owned_wheel(
+    browser: &mut BrowserPanelState,
+    frame: PointerFrame,
+    event: &Event,
+    wheel_pos: Option<egui::Pos2>,
+    event_buttons: u32,
+    event_modifiers: BrowserModifiers,
+) {
+    let Event::MouseWheel {
+        unit, delta, modifiers, ..
+    } = event
+    else {
+        return;
+    };
+    if wheel_pos.is_some_and(|pos| overlay_blocks_pointer(browser, frame, pos)) {
+        return;
+    }
+    if !panel_content_owns_wheel(*modifiers, event_buttons & BUTTON_LEFT != 0) {
+        return;
+    }
+    let Some(p) = wheel_pos else {
+        return;
+    };
+    let scale = match *unit {
+        egui::MouseWheelUnit::Point => 1.0,
+        egui::MouseWheelUnit::Line => 16.0,
+        egui::MouseWheelUnit::Page => 500.0,
+    };
+    let (x, y) = to_page_coords(frame.rect, frame.frame_size, p);
+    let (delta_x, delta_y) = cdp_wheel_delta(*delta, scale);
+    browser.send(BrowserCommand::Input(BrowserInput::Wheel {
+        x,
+        y,
+        delta_x,
+        delta_y,
+        modifiers: event_modifiers,
+    }));
 }
 
 /// Replay one pointer-button press/release into the page, translating its

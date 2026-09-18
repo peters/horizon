@@ -9,7 +9,7 @@ pub use keyboard::{
     KeyEventContext, KeyIdentity, KeyTranslation, paste_bytes, should_defer_textual_key,
     translate_key_event_with_physical, translate_text_event,
 };
-pub use mouse::{WheelAction, mouse_button_report, mouse_motion_report, wheel_action};
+pub use mouse::{WheelAction, mouse_button_report, mouse_motion_report, panel_content_owns_wheel, wheel_action};
 pub(crate) use winit_keyboard::{FrameKeyEvent, ObservedKeyboardInputs, TerminalInputEvent, terminal_input_events};
 
 #[derive(Clone, Copy)]

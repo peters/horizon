@@ -55,6 +55,17 @@ pub fn mouse_motion_report(
     Some(mouse_report(code, true, modifiers, mode, point))
 }
 
+/// Unmodified two-finger/wheel motion pans the canvas even over a panel.
+/// Shift+wheel, or wheel during a primary-button gesture (text selection),
+/// still belongs to the panel body.
+#[must_use]
+pub fn panel_content_owns_wheel(modifiers: Modifiers, primary_down: bool) -> bool {
+    if modifiers.ctrl || modifiers.command {
+        return false;
+    }
+    modifiers.shift || primary_down
+}
+
 pub fn wheel_action(
     delta: Vec2,
     unit: MouseWheelUnit,
@@ -191,5 +202,25 @@ fn discrete_scroll_steps(delta: f32, unit: MouseWheelUnit, cell_extent: f32) -> 
             }
             (delta / cell_extent).round().clamp(i32::MIN as f32, i32::MAX as f32) as i32
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::panel_content_owns_wheel;
+    use egui::Modifiers;
+
+    #[test]
+    fn unmodified_wheel_belongs_to_the_canvas() {
+        assert!(!panel_content_owns_wheel(Modifiers::NONE, false));
+        assert!(!panel_content_owns_wheel(Modifiers::CTRL, false));
+        assert!(!panel_content_owns_wheel(Modifiers::COMMAND, false));
+    }
+
+    #[test]
+    fn shift_or_primary_keeps_wheel_on_the_panel() {
+        assert!(panel_content_owns_wheel(Modifiers::SHIFT, false));
+        assert!(panel_content_owns_wheel(Modifiers::NONE, true));
+        assert!(!panel_content_owns_wheel(Modifiers::CTRL | Modifiers::SHIFT, true));
     }
 }

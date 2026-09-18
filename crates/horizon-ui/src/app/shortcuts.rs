@@ -1,6 +1,8 @@
 use egui::{Event, InputState, Key, Modifiers};
 use horizon_core::{ShortcutBinding, ShortcutKey, ShortcutModifiers};
 
+use crate::input::FrameKeyEvent;
+
 const CAPTURED_CLIPBOARD_EVENT_ID: &str = "speech_captured_clipboard_event";
 
 pub(crate) fn shortcut_pressed(input: &InputState, binding: ShortcutBinding) -> bool {
@@ -9,6 +11,22 @@ pub(crate) fn shortcut_pressed(input: &InputState, binding: ShortcutBinding) -> 
 
 pub(crate) fn shortcut_pressed_in_events(events: &[Event], binding: ShortcutBinding) -> bool {
     events.iter().any(|event| shortcut_event_matches(event, binding))
+}
+
+pub(crate) fn shortcut_pressed_with_observed(
+    events: &[Event],
+    observed: &[FrameKeyEvent],
+    binding: ShortcutBinding,
+) -> bool {
+    shortcut_pressed_in_events(events, binding)
+        || observed.iter().any(|frame| observed_shortcut_matches(frame, binding))
+}
+
+fn observed_shortcut_matches(frame: &FrameKeyEvent, binding: ShortcutBinding) -> bool {
+    let Some((key, physical_key, modifiers)) = frame.pressed_unmodified_key() else {
+        return false;
+    };
+    modifiers.matches_logically(egui_modifiers(binding.modifiers)) && key_matches(key, physical_key, binding.key)
 }
 
 /// Whether the binder is *actively capturing* (raw flag only), excluding the
@@ -253,7 +271,7 @@ mod tests {
 
     use super::{
         event_uses_shortcut_key, hotkey_capture_active, mark_captured_clipboard_event, press_and_release_in_events,
-        shortcut_pressed, take_captured_clipboard_event,
+        shortcut_pressed, shortcut_pressed_with_observed, take_captured_clipboard_event,
     };
 
     #[test]
@@ -408,6 +426,27 @@ mod tests {
         let input = egui::InputState::default().begin_pass(raw, false, 1.0, egui::InputOptions::default());
 
         assert!(shortcut_pressed(&input, binding));
+    }
+
+    #[test]
+    fn plus_shortcuts_follow_unmodified_layout_when_ctrl_rewrites_the_logical_key() {
+        let binding = ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Plus);
+        // Norwegian `+` is physical Minus. With Ctrl held, X11 often reports
+        // the US key (Minus) while key_without_modifiers stays `+`.
+        let observed = crate::input::FrameKeyEvent::pressed_unmodified_for_test(
+            Key::Minus,
+            Key::Plus,
+            Modifiers::COMMAND | Modifiers::CTRL,
+        );
+        assert!(shortcut_pressed_with_observed(&[], &[observed], binding));
+
+        let minus = ShortcutBinding::new(ShortcutModifiers::PRIMARY, ShortcutKey::Minus);
+        let observed_minus = crate::input::FrameKeyEvent::pressed_unmodified_for_test(
+            Key::Slash,
+            Key::Minus,
+            Modifiers::COMMAND | Modifiers::CTRL,
+        );
+        assert!(shortcut_pressed_with_observed(&[], &[observed_minus], minus));
     }
 
     #[test]

@@ -518,10 +518,8 @@ fn wheel_before_release_finalizes_selection_in_the_post_scroll_viewport() {
 
     harness.frame(primary_press(anchor));
     harness.frame(vec![Event::PointerMoved(pointer)]);
-
-    let mut events = wheel(-1.0);
-    events.extend(primary_release(pointer));
-    harness.frame(events);
+    harness.frame(wheel(-1.0));
+    harness.frame(primary_release(pointer));
 
     assert_eq!(harness.scrollback(), 9);
     assert_eq!(
@@ -547,7 +545,11 @@ fn release_before_wheel_keeps_the_pre_scroll_selection_marker() {
     events.extend(wheel(-1.0));
     harness.frame(events);
 
-    assert_eq!(harness.scrollback(), 9);
+    assert_eq!(
+        harness.scrollback(),
+        10,
+        "unmodified wheel after release belongs to the canvas, not terminal scrollback"
+    );
     assert_eq!(
         harness.selected_last_line(),
         selected_before_scroll,

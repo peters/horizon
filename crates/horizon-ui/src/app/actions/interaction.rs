@@ -3,7 +3,7 @@ use std::mem;
 use egui::{Context, Event, Key, Modifiers, Rect, Vec2};
 use horizon_core::WorkspaceId;
 
-use super::super::super::input::{TerminalInputEvent, terminal_input_events};
+use super::super::super::input::{TerminalInputEvent, panel_content_owns_wheel, terminal_input_events};
 use super::super::shortcuts::{
     event_uses_shortcut_key, is_clipboard_pseudo_event, pending_hotkey_capture, shortcut_event_matches,
     shortcut_pressed, take_captured_clipboard_event,
@@ -129,6 +129,24 @@ fn wheel_pan_scroll_input(input: &egui::InputState) -> Vec2 {
     input.smooth_scroll_delta
 }
 
+/// Matches egui's default `InputOptions::scroll_zoom_speed` so Ctrl+scroll
+/// zoom is identical whether egui converted the wheel or we apply it here.
+const SCROLL_ZOOM_SPEED: f32 = 1.0 / 200.0;
+
+fn canvas_zoom_multiplier(zoom_delta: f32, ctrl_or_cmd: bool, scroll: Vec2) -> Option<f32> {
+    if (zoom_delta - 1.0).abs() > f32::EPSILON {
+        return Some(zoom_delta);
+    }
+    if ctrl_or_cmd && scroll != Vec2::ZERO {
+        return Some((SCROLL_ZOOM_SPEED * (scroll.x + scroll.y)).exp());
+    }
+    None
+}
+
+fn wheel_pans_canvas(pointer_in_canvas: bool, ctrl_or_cmd: bool, panel_keeps_wheel: bool) -> bool {
+    pointer_in_canvas && !ctrl_or_cmd && !panel_keeps_wheel
+}
+
 impl HorizonApp {
     pub(in super::super) fn handle_fullscreen_toggle(&mut self, ctx: &Context) {
         // A chord being captured by the settings hotkey binder must not
@@ -238,9 +256,11 @@ impl HorizonApp {
         self.middle_pan_active =
             next_middle_pan_active(self.middle_pan_active, middle_down, target, mode, pointer_delta);
         self.canvas_pan_input_claimed = pointer_in_canvas && (self.middle_pan_active || space_drag_claimed);
-        if pointer_in_canvas && (zoom_delta - 1.0).abs() > f32::EPSILON {
+        if let Some(factor) = canvas_zoom_multiplier(zoom_delta, ctrl_or_cmd, scroll)
+            && pointer_in_canvas
+        {
             let anchor = pointer_position.unwrap_or_else(|| canvas_rect.center());
-            if self.zoom_canvas_at(canvas_rect, anchor, self.canvas_view.zoom * zoom_delta) {
+            if self.zoom_canvas_at(canvas_rect, anchor, self.canvas_view.zoom * factor) {
                 self.clear_terminal_selections();
             }
             self.canvas_pan_input_claimed = false;
@@ -249,18 +269,19 @@ impl HorizonApp {
         }
 
         let drag_panning = self.canvas_pan_input_claimed;
-        let pointer_over_panel = pointer_position.is_some_and(|position| {
-            pointer_in_canvas
-                && !drag_panning
-                && scroll != Vec2::ZERO
-                && !ctrl_or_cmd
-                && panel_geometry
-                    .iter()
-                    .any(|(_, geometry)| geometry.screen_rect.contains(position))
+        let pointer_over_scrollable = pointer_position.is_some_and(|position| {
+            panel_geometry.iter().any(|(_, geometry)| {
+                geometry
+                    .terminal_body_screen_rect
+                    .unwrap_or(geometry.screen_rect)
+                    .contains(position)
+            })
         });
+        let panel_keeps_wheel =
+            pointer_over_scrollable && panel_content_owns_wheel(modifiers, primary_down) && !drag_panning;
         let pan_delta = if drag_panning {
             pointer_delta
-        } else if pointer_in_canvas && !pointer_over_panel && !ctrl_or_cmd {
+        } else if wheel_pans_canvas(pointer_in_canvas, ctrl_or_cmd, panel_keeps_wheel) {
             if modifiers.shift && scroll.x == 0.0 {
                 Vec2::new(scroll.y, 0.0)
             } else {
@@ -278,6 +299,9 @@ impl HorizonApp {
             self.canvas_view.set_pan_offset([pan_offset.x, pan_offset.y]);
             self.mark_runtime_dirty();
             self.clear_terminal_selections();
+            if !drag_panning && scroll != Vec2::ZERO {
+                ctx.input_mut(|input| input.smooth_scroll_delta = Vec2::ZERO);
+            }
         }
     }
 
@@ -737,10 +761,10 @@ mod tests {
     use super::super::super::super::input::TerminalInputEvent;
     use super::super::super::CanvasPanSpaceKeyState;
     use super::{
-        HeldSpeechBinding, MiddlePanMode, MiddlePanTarget, PendingCaptureEvent, clear_released_speech_hotkeys,
-        next_middle_pan_active, pending_capture_event, primary_selection_routing_active, swallow_cancel_escape_event,
-        swallow_captured_clipboard_event, swallow_correlated_shift_text, swallow_held_speech_hotkey_event,
-        swallow_speech_hotkey_event, wheel_pan_scroll_input,
+        HeldSpeechBinding, MiddlePanMode, MiddlePanTarget, PendingCaptureEvent, canvas_zoom_multiplier,
+        clear_released_speech_hotkeys, next_middle_pan_active, pending_capture_event, primary_selection_routing_active,
+        swallow_cancel_escape_event, swallow_captured_clipboard_event, swallow_correlated_shift_text,
+        swallow_held_speech_hotkey_event, swallow_speech_hotkey_event, wheel_pan_scroll_input, wheel_pans_canvas,
     };
 
     #[test]
@@ -813,6 +837,22 @@ mod tests {
         // delta, so this single field is the whole pan input.
         assert_eq!(input.smooth_scroll_delta, delta);
         assert_eq!(wheel_pan_scroll_input(&input), delta);
+    }
+
+    #[test]
+    fn unmodified_wheel_pans_the_canvas_even_over_a_panel() {
+        assert!(wheel_pans_canvas(true, false, false));
+        assert!(!wheel_pans_canvas(true, false, true));
+        assert!(!wheel_pans_canvas(true, true, false));
+        assert!(!wheel_pans_canvas(false, false, false));
+    }
+
+    #[test]
+    fn ctrl_scroll_zooms_when_egui_leaves_zoom_delta_unchanged() {
+        assert_eq!(canvas_zoom_multiplier(1.0, false, Vec2::new(0.0, 12.0)), None);
+        let factor = canvas_zoom_multiplier(1.0, true, Vec2::new(0.0, 12.0)).expect("ctrl+scroll");
+        assert!((factor - (12.0_f32 / 200.0).exp()).abs() < f32::EPSILON);
+        assert_eq!(canvas_zoom_multiplier(1.25, true, Vec2::ZERO), Some(1.25));
     }
 
     #[test]

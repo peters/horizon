@@ -1,7 +1,7 @@
 use egui::Context;
 
 use crate::app::HorizonApp;
-use crate::app::shortcuts::shortcut_pressed;
+use crate::app::shortcuts::shortcut_pressed_with_observed;
 use crate::command_palette::{CommandPalette, PaletteAction};
 use crate::command_registry::CommandId;
 use crate::search_overlay::SearchOverlay;
@@ -162,11 +162,15 @@ impl HorizonApp {
             (self.shortcuts.search, CommandId::ToggleSearch),
         ];
 
+        let observed = self
+            .frame_keyboard_events
+            .get(&ctx.viewport_id())
+            .map_or(&[][..], Vec::as_slice);
         let (toggle_palette, triggered_command) = ctx.input(|input| {
-            let palette = shortcut_pressed(input, self.shortcuts.command_palette);
+            let palette = shortcut_pressed_with_observed(&input.events, observed, self.shortcuts.command_palette);
             let command = shortcut_bindings
                 .iter()
-                .find(|(binding, _)| shortcut_pressed(input, *binding))
+                .find(|(binding, _)| shortcut_pressed_with_observed(&input.events, observed, *binding))
                 .map(|(_, id)| id.clone());
             (palette, command)
         });
