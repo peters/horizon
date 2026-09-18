@@ -1,0 +1,13 @@
+[package]
+name = "horizon-device-vnc"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+publish = false
+description = "Optional VNC desktop resize adapter for the device CLI and MCP tools"
+
+[dependencies]
+horizon-device = { path = "../horizon-device", features = ["cli"] }
+vnc.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time"] }

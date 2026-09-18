@@ -1,7 +1,7 @@
 {
     "name": "horizon",
     "version": "0.1.0",
-    "description": "Horizon workspace integration for notifications and audited MCP control of live browser panels.",
+    "description": "Horizon workspace integration for notifications, audited MCP control of live browser panels, and native VNC Device panels.",
     "mcpServers": "./.mcp.json",
     "author": {
         "name": "Horizon"
