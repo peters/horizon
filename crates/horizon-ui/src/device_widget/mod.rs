@@ -3,10 +3,13 @@ mod controls;
 mod frame;
 mod session;
 
-use egui::{TextureHandle, TextureOptions, Ui};
-use horizon_core::DevicePanelState;
-use horizon_core::browser::manifest::device::{Connection, ImageEvidence, PanelState};
+use egui::{ColorImage, TextureHandle, TextureOptions, Ui};
+use horizon_core::{
+    DevicePanelState, DeviceViewOptions,
+    browser::manifest::device::{Connection, ImageEvidence, PanelState},
+};
 
+use frame::present_image;
 use session::{Session, Status};
 
 #[derive(Default)]
@@ -16,7 +19,10 @@ pub(crate) struct DeviceUiState {
     initialized: bool,
     rendered: bool,
     session: Option<Session>,
+    /// Last full desktop from the worker. View controls crop/scale this locally.
+    source: Option<ColorImage>,
     texture: Option<TextureHandle>,
+    presented_options: Option<DeviceViewOptions>,
     status: Status,
     desktop: Option<[usize; 2]>,
     controls: controls::Controls,
@@ -57,13 +63,18 @@ impl DeviceUiState {
         }
         if let Some(session) = &self.session {
             let updates = session.take_updates(ui.ctx().viewport_id());
-            self.desktop = updates.desktop;
+            if let Some(desktop) = updates.desktop {
+                self.desktop = Some(desktop);
+            }
             if let Some(status) = updates.status {
                 self.status = status;
             }
             if let Some(image) = updates.image {
-                self.update_texture(ui, image);
+                self.set_source(ui, image);
             }
+        }
+        if let Some(source) = &self.source {
+            self.desktop = Some(source.size);
         }
         ui.horizontal_wrapped(|ui| {
             ui.label("Read-only");
@@ -93,9 +104,13 @@ impl DeviceUiState {
                     .show(ui, self.desktop, self.texture.as_ref().map(TextureHandle::size))
             })
             .inner;
-        if changed && let Some(session) = &self.session {
-            session.set_options(self.controls.options);
+        if changed {
+            if let Some(session) = &self.session {
+                session.set_options(self.controls.options);
+            }
+            ui.ctx().request_repaint();
         }
+        self.refresh_presentation(ui);
         ui.separator();
         if let Some(texture) = &self.texture {
             let size = texture.size_vec2();
@@ -115,29 +130,58 @@ impl DeviceUiState {
         }
     }
 
-    fn update_texture(&mut self, ui: &Ui, image: egui::ColorImage) {
-        let limit = ui.ctx().input(|input| input.max_texture_side);
-        if image.size.iter().any(|side| *side == 0 || *side > limit) {
-            self.session = None;
-            self.texture = None;
-            self.status = Status::Disconnected("Desktop exceeds the renderer's texture limit".into());
-        } else if let Some(texture) = &mut self.texture {
-            texture.set(image, TextureOptions::LINEAR);
-            self.image.sequence = self.image.sequence.saturating_add(1);
-        } else {
-            self.texture = Some(ui.ctx().load_texture("device-view", image, TextureOptions::LINEAR));
+    fn set_source(&mut self, ui: &Ui, image: ColorImage) {
+        self.desktop = Some(image.size);
+        self.source = Some(image);
+        self.presented_options = None;
+        self.refresh_presentation(ui);
+        if self.texture.is_some() {
             self.image.sequence = self.image.sequence.saturating_add(1);
         }
     }
 
+    fn refresh_presentation(&mut self, ui: &Ui) {
+        let Some(source) = self.source.as_ref() else {
+            return;
+        };
+        let options = self.controls.options.for_desktop(source.size);
+        self.controls.options = options;
+        if self.presented_options == Some(options) && self.texture.is_some() {
+            return;
+        }
+        match present_image(source, options) {
+            Ok(displayed) => {
+                self.presented_options = Some(options);
+                self.upload_displayed(ui, displayed);
+            }
+            Err(error) => self.controls.set_error(error.to_string()),
+        }
+    }
+
+    fn upload_displayed(&mut self, ui: &Ui, image: ColorImage) {
+        let limit = ui.ctx().input(|input| input.max_texture_side);
+        if image.size.iter().any(|side| *side == 0 || *side > limit) {
+            self.session = None;
+            self.texture = None;
+            self.presented_options = None;
+            self.status = Status::Disconnected("Desktop exceeds the renderer's texture limit".into());
+        } else if let Some(texture) = &mut self.texture {
+            texture.set(image, TextureOptions::LINEAR);
+        } else {
+            self.texture = Some(ui.ctx().load_texture("device-view", image, TextureOptions::LINEAR));
+        }
+    }
+
+    #[cfg(test)]
+    fn update_texture(&mut self, ui: &Ui, image: ColorImage) {
+        self.set_source(ui, image);
+    }
+
     pub(crate) fn reconnect(&mut self, ctx: &egui::Context, device: &DevicePanelState) {
         self.initialized = true;
-        self.image.sequence = 0;
         self.image.displayed = false;
         self.image.previous_displayed = false;
         self.session = None;
-        self.texture = None;
-        self.desktop = None;
         match Session::start(
             device.target.address(),
             ctx.clone(),
@@ -201,9 +245,102 @@ mod tests {
     use super::*;
     use crate::test_egui::DiscardTextures;
 
+    fn fixture_device() -> DevicePanelState {
+        DevicePanelState {
+            target: horizon_core::DeviceViewTarget::parse("127.0.0.1:5900").unwrap(),
+            connect_on_start: false,
+        }
+    }
+
+    fn text_center(output: &egui::FullOutput, label: &str) -> egui::Pos2 {
+        output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == label => Some(text.pos + text.galley.size() * 0.5),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing label {label}"))
+    }
+
+    fn click_events(pos: egui::Pos2, pressed: bool) -> Vec<egui::Event> {
+        vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]
+    }
+
+    fn patterned_desktop() -> ColorImage {
+        ColorImage::new(
+            [8, 4],
+            (0..32).map(|value| egui::Color32::from_rgb(value, 40, 80)).collect(),
+        )
+    }
+
+    fn disconnected_viewer() -> (egui::Context, DevicePanelState, DeviceUiState) {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|style| style.animation_time = 0.0);
+        let state = DeviceUiState {
+            initialized: true,
+            status: Status::Disconnected("The VNC client isn't started. Or it is already closed".into()),
+            ..Default::default()
+        };
+        (ctx, fixture_device(), state)
+    }
+
+    fn show_viewer(
+        ctx: &egui::Context,
+        state: &mut DeviceUiState,
+        device: &DevicePanelState,
+        events: Vec<egui::Event>,
+    ) {
+        let _ = ctx
+            .run_ui(
+                egui::RawInput {
+                    events,
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    if state.source.is_none() {
+                        state.update_texture(ui, patterned_desktop());
+                    }
+                    state.show(ui, device, true);
+                },
+            )
+            .discard_textures();
+    }
+
+    fn click_label(ctx: &egui::Context, state: &mut DeviceUiState, device: &DevicePanelState, label: &str) {
+        let output = ctx
+            .run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0))),
+                    ..Default::default()
+                },
+                |ui| state.show(ui, device, true),
+            )
+            .discard_textures();
+        let pos = text_center(&output, label);
+        for pressed in [true, false] {
+            show_viewer(ctx, state, device, click_events(pos, pressed));
+        }
+    }
+
+    fn presented_size(state: &DeviceUiState) -> Option<[usize; 2]> {
+        state.texture.as_ref().map(TextureHandle::size)
+    }
+
     #[test]
     fn narrow_frame_exceeding_gpu_limit_is_rejected_before_texture_upload() {
         let mut state = DeviceUiState::default();
+        state.controls.options.max_width = 8192;
+        state.controls.options.max_height = 8192;
         let ctx = egui::Context::default();
         let output = ctx.run_ui(
             egui::RawInput {
@@ -218,6 +355,83 @@ mod tests {
         assert!(state.texture.is_none());
         assert!(matches!(state.status, Status::Disconnected(_)));
         assert_eq!(state.image.sequence, 0, "rejected images are not uploaded frames");
+    }
+
+    #[test]
+    fn image_limits_and_viewport_apply_without_a_live_session() {
+        let (ctx, device, mut state) = disconnected_viewer();
+        show_viewer(&ctx, &mut state, &device, Vec::new());
+        assert_eq!(presented_size(&state), Some([8, 4]));
+        assert_eq!(state.image.sequence, 1);
+
+        state.controls.options.max_width = 4;
+        state.controls.options.max_height = 4;
+        state.presented_options = None;
+        show_viewer(&ctx, &mut state, &device, Vec::new());
+        assert_eq!(presented_size(&state), Some([4, 2]));
+        assert_eq!(
+            state.image.sequence, 1,
+            "local presentation is not a new received frame"
+        );
+
+        state.controls.options.max_width = 2048;
+        state.controls.options.max_height = 2048;
+        state.controls.options.viewport = Some(horizon_core::DeviceViewport {
+            x: 4,
+            y: 0,
+            width: 4,
+            height: 4,
+        });
+        state.presented_options = None;
+        show_viewer(&ctx, &mut state, &device, Vec::new());
+        assert_eq!(presented_size(&state), Some([4, 4]));
+    }
+
+    #[test]
+    fn fit_one_to_one_and_whole_desktop_clicks_work_without_a_session() {
+        let (ctx, device, mut state) = disconnected_viewer();
+        state.controls.options.viewport = Some(horizon_core::DeviceViewport {
+            x: 4,
+            y: 0,
+            width: 4,
+            height: 4,
+        });
+        show_viewer(&ctx, &mut state, &device, Vec::new());
+        assert_eq!(presented_size(&state), Some([4, 4]));
+        click_label(&ctx, &mut state, &device, "View controls");
+        click_label(&ctx, &mut state, &device, "1:1");
+        assert!(state.controls.one_to_one);
+        click_label(&ctx, &mut state, &device, "Fit");
+        assert!(!state.controls.one_to_one);
+        click_label(&ctx, &mut state, &device, "Whole desktop");
+        assert!(state.controls.options.viewport.is_none());
+        assert_eq!(presented_size(&state), Some([8, 4]));
+    }
+
+    #[test]
+    fn apply_viewport_and_reconnect_keep_the_last_desktop() {
+        let (ctx, device, mut state) = disconnected_viewer();
+        show_viewer(&ctx, &mut state, &device, Vec::new());
+        click_label(&ctx, &mut state, &device, "View controls");
+        state.controls.draft = Some(horizon_core::DeviceViewport {
+            x: 0,
+            y: 0,
+            width: 2,
+            height: 2,
+        });
+        click_label(&ctx, &mut state, &device, "Apply viewport");
+        assert_eq!(
+            state
+                .controls
+                .options
+                .viewport
+                .map(|viewport| [viewport.width, viewport.height]),
+            Some([2, 2])
+        );
+        assert_eq!(presented_size(&state), Some([2, 2]));
+        click_label(&ctx, &mut state, &device, "Reconnect");
+        assert!(matches!(state.status, Status::Connecting));
+        assert_eq!(presented_size(&state), Some([2, 2]));
     }
     #[test]
     fn connected_texture_is_not_display_proof_when_image_is_clipped() {

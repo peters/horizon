@@ -5,11 +5,15 @@ use horizon_core::{DeviceViewOptions, DeviceViewport};
 pub(super) struct Controls {
     pub options: DeviceViewOptions,
     pub one_to_one: bool,
-    draft: Option<DeviceViewport>,
+    pub(super) draft: Option<DeviceViewport>,
     error: Option<String>,
 }
 
 impl Controls {
+    pub(super) fn set_error(&mut self, error: String) {
+        self.error = Some(error);
+    }
+
     pub(super) fn show(&mut self, ui: &mut Ui, desktop: Option<[usize; 2]>, rendered: Option<[usize; 2]>) -> bool {
         let before = self.options;
         if let Some(desktop) = desktop {

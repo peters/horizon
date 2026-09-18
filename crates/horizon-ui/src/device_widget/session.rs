@@ -196,7 +196,6 @@ async fn connection(
     .map_err(|_| ViewError::Timeout)??;
     publish_status(updates, ctx, Status::Connected);
     let mut framebuffer = Framebuffer::default();
-    let mut previous_options = None;
     let mut received_pixels = false;
     loop {
         let mut full_refresh = !*visible.borrow_and_update();
@@ -234,9 +233,10 @@ async fn connection(
                 idle = true;
             }
         }
-        if received_pixels && (changed || previous_options != Some(options)) && !framebuffer.size().contains(&0) {
-            let image = framebuffer.image(options)?;
-            previous_options = Some(options);
+        // Publish the full desktop. Viewport, image limits, Fit and 1:1 are
+        // applied by the UI so they still work after this worker exits.
+        if received_pixels && changed && !framebuffer.size().contains(&0) {
+            let image = framebuffer.full_image()?;
             let viewport = {
                 let mut state = updates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 // Only the latest frame is retained; slow rendering cannot grow
