@@ -11,7 +11,7 @@ mod user_skills;
 mod work_hooks;
 use user_skills::{
     HORIZON_BROWSER_SKILL, HORIZON_DEVICE_SKILL, HORIZON_NOTIFY_SKILL, RETIRED_OFFLOAD_SKILL, SkillRootLease,
-    bind_skill_roots, release_skill_roots, remove_horizon_skill_dir,
+    bind_prepared_skill_root, bind_skill_roots, release_skill_roots, remove_horizon_skill_dir,
 };
 
 struct EmbeddedFile {
@@ -73,6 +73,42 @@ const DEVICE_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
         "/assets/plugins/codex/skills/horizon-device/SKILL.md"
     )),
 }];
+
+fn validate_device_skill(dir: &Path) -> io::Result<()> {
+    let metadata = match std::fs::symlink_metadata(dir) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if metadata.is_dir() {
+        let mut entries = std::fs::read_dir(dir)?;
+        let entry = entries.next().transpose()?;
+        if let Some(entry) = entry
+            && entries.next().is_none()
+            && entry.file_name() == "SKILL.md"
+            && entry.file_type()?.is_file()
+            && std::fs::read_to_string(entry.path())? == DEVICE_SKILL_FILES[0].content
+        {
+            return Ok(());
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "Grok device skill is not Horizon-owned; preserving existing content",
+    ))
+}
+
+fn install_device_skill(dir: &Path) -> io::Result<()> {
+    if dir.try_exists()? {
+        return Ok(());
+    }
+    let parent = dir
+        .parent()
+        .ok_or_else(|| io::Error::other("skill directory has no parent"))?;
+    let staging = tempfile::Builder::new().prefix(".horizon-device-").tempdir_in(parent)?;
+    sync_plugin_files(staging.path(), DEVICE_SKILL_FILES)?;
+    std::fs::rename(staging.path(), dir)
+}
 
 /// `$HOME`-relative skill roots that receive `horizon-notify` for the life of
 /// this Horizon process. Claude also gets it through the host plugin tree.
@@ -154,12 +190,22 @@ impl AgentPluginHostLease {
             return;
         };
         let device_dir = grok_root.join("skills").join(HORIZON_DEVICE_SKILL);
-        let roots = if browser_bound {
-            bind_skill_roots(host_id, &[device_dir], &[])
-        } else {
-            bind_skill_roots(host_id, &[], &[device_dir])
-        };
-        self.skill_roots.extend(roots);
+        if browser_bound {
+            match bind_prepared_skill_root(host_id, device_dir.clone(), validate_device_skill, || {
+                validate_device_skill(&device_dir)?;
+                install_device_skill(&device_dir)
+            }) {
+                Ok(device_lease) => self.skill_roots.push(device_lease),
+                Err(error) => {
+                    tracing::warn!(path = %device_dir.display(), %error, "Grok device skill unavailable; preserving existing content");
+                }
+            }
+            return;
+        }
+        if validate_device_skill(&device_dir).is_ok() {
+            self.skill_roots
+                .extend(bind_skill_roots(host_id, &[], std::slice::from_ref(&device_dir)));
+        }
     }
 
     fn covers_skill_dir(&self, skill_dir: &Path) -> bool {
@@ -838,7 +884,9 @@ mod tests {
         let user_home = temp.path().join("user-home");
         let grok_root = user_home.join(".grok");
         let leftover = grok_root.join("skills").join(HORIZON_DEVICE_SKILL);
-        write_skill_dir(&leftover, "stale device skill");
+        write_skill_dir(&leftover, DEVICE_SKILL_FILES[0].content);
+        let custom = grok_root.join("skills").join("custom-device");
+        write_skill_dir(&custom, "user skill");
         let claude_plugin_dir = horizon_home.claude_plugin_dir_for_host("host-a");
         let mut lease =
             AgentPluginHostLease::acquire(horizon_home.agent_plugin_host_dir("host-a")).expect("host lease");
@@ -863,7 +911,29 @@ mod tests {
         );
         assert!(
             !leftover.exists(),
-            "failed Grok browser registration must not retain a leftover device skill"
+            "failed Grok browser registration must not retain a leftover Horizon-owned device skill"
+        );
+        assert!(
+            custom.join("SKILL.md").is_file(),
+            "unrelated Grok skills must be preserved"
+        );
+    }
+
+    #[test]
+    fn grok_preserves_a_user_managed_device_skill() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let horizon_home = HorizonHome::from_root(temp.path().join(".horizon"));
+        let grok_root = temp.path().join("user-home/.grok");
+        let custom = grok_root.join("skills").join(HORIZON_DEVICE_SKILL);
+        write_skill_dir(&custom, "user device skill");
+        let mut lease =
+            AgentPluginHostLease::acquire(horizon_home.agent_plugin_host_dir("host-a")).expect("host lease");
+        lease.bind_grok_device_skill(&grok_root, true);
+        lease.bind_grok_device_skill(&grok_root, false);
+        drop(lease);
+        assert_eq!(
+            std::fs::read_to_string(custom.join("SKILL.md")).expect("preserved skill"),
+            "user device skill"
         );
     }
 
