@@ -125,12 +125,26 @@ fn skip_reason(
 
 #[cfg(target_os = "linux")]
 fn packaged_desktop_exists() -> bool {
-    [
-        Path::new("/usr/share/applications/horizon.desktop"),
-        Path::new("/usr/local/share/applications/horizon.desktop"),
-    ]
-    .into_iter()
-    .any(Path::exists)
+    packaged_data_dirs(std::env::var_os("XDG_DATA_DIRS").as_deref())
+        .iter()
+        .any(|dir| dir.join("applications").join(DESKTOP_FILE_NAME).exists())
+}
+
+fn packaged_data_dirs(xdg_data_dirs: Option<&std::ffi::OsStr>) -> Vec<std::path::PathBuf> {
+    let parsed = xdg_data_dirs
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            std::env::split_paths(value)
+                .filter(|path| path.is_absolute())
+                .collect::<Vec<_>>()
+        })
+        .filter(|dirs: &Vec<_>| !dirs.is_empty());
+    parsed.unwrap_or_else(|| {
+        vec![
+            std::path::PathBuf::from("/usr/local/share"),
+            std::path::PathBuf::from("/usr/share"),
+        ]
+    })
 }
 
 #[cfg(target_os = "linux")]
@@ -214,6 +228,7 @@ fn quote_exec(path: &Path) -> io::Result<String> {
     let value = path
         .to_str()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "executable path is not valid UTF-8"))?;
+    let value = value.replace('%', "%%");
     if value.bytes().any(|byte| {
         matches!(
             byte,
@@ -236,9 +251,16 @@ fn quote_exec(path: &Path) -> io::Result<String> {
                 | b'`'
         )
     }) {
-        Ok(format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\"")))
+        Ok(format!(
+            "\"{}\"",
+            value
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('$', "\\$")
+                .replace('`', "\\`")
+        ))
     } else {
-        Ok(value.to_owned())
+        Ok(value)
     }
 }
 
@@ -261,7 +283,7 @@ fn sync_bytes_if_changed(path: &Path, content: &[u8]) -> io::Result<bool> {
 mod tests {
     use super::{
         DESKTOP_FILE_NAME, GENERATED_MARKER, ICON_PNGS, STOCK_PACKAGING_DESKTOP, SkipReason, desktop_file_contents,
-        install_into, normalize_desktop, quote_exec, should_replace_desktop, skip_reason,
+        install_into, normalize_desktop, packaged_data_dirs, quote_exec, should_replace_desktop, skip_reason,
     };
     use std::path::Path;
 
@@ -319,6 +341,40 @@ mod tests {
         assert_eq!(
             quote_exec(Path::new("/opt/Horizon App/horizon")).expect("spaced path"),
             "\"/opt/Horizon App/horizon\""
+        );
+        assert_eq!(
+            quote_exec(Path::new("/opt/100%/horizon")).expect("percent path"),
+            "/opt/100%%/horizon"
+        );
+        assert_eq!(
+            quote_exec(Path::new("/opt/foo$/horizon")).expect("dollar path"),
+            "\"/opt/foo\\$/horizon\""
+        );
+    }
+
+    #[test]
+    fn packaged_data_dirs_use_xdg_data_dirs_then_defaults() {
+        assert_eq!(
+            packaged_data_dirs(None),
+            vec![
+                std::path::PathBuf::from("/usr/local/share"),
+                std::path::PathBuf::from("/usr/share")
+            ]
+        );
+        let custom = std::env::join_paths(["/opt/share", "/custom/share"]).expect("join paths");
+        assert_eq!(
+            packaged_data_dirs(Some(custom.as_os_str())),
+            vec![
+                std::path::PathBuf::from("/opt/share"),
+                std::path::PathBuf::from("/custom/share")
+            ]
+        );
+        assert_eq!(
+            packaged_data_dirs(Some(std::ffi::OsStr::new("relative"))),
+            vec![
+                std::path::PathBuf::from("/usr/local/share"),
+                std::path::PathBuf::from("/usr/share")
+            ]
         );
     }
 
