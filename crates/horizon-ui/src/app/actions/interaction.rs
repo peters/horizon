@@ -4,6 +4,7 @@ use egui::{Context, Event, Key, Modifiers, Rect, Vec2};
 use horizon_core::{PanelId, WorkspaceId};
 
 use super::super::super::input::{TerminalInputEvent, set_canvas_claims_unmodified_wheel, terminal_input_events};
+use super::super::panels::PanelScreenGeometry;
 use super::super::shortcuts::{
     event_uses_shortcut_key, is_clipboard_pseudo_event, pending_hotkey_capture, shortcut_event_matches,
     shortcut_pressed, take_captured_clipboard_event,
@@ -127,6 +128,26 @@ fn space_drag_modifier_active(modifiers: Modifiers) -> bool {
     !modifiers.ctrl && !modifiers.command && !modifiers.alt
 }
 
+fn topmost_panel_geometry(
+    panel_geometry: &[(PanelId, PanelScreenGeometry)],
+    paint_order: &[PanelId],
+    position: egui::Pos2,
+) -> Option<(PanelId, PanelScreenGeometry)> {
+    let hit = |id: &PanelId| {
+        panel_geometry
+            .iter()
+            .find(|(panel_id, geometry)| panel_id == id && geometry.screen_rect.contains(position))
+            .copied()
+    };
+    paint_order.iter().rev().find_map(hit).or_else(|| {
+        panel_geometry
+            .iter()
+            .rev()
+            .find(|(_, geometry)| geometry.screen_rect.contains(position))
+            .copied()
+    })
+}
+
 impl HorizonApp {
     pub(in super::super) fn handle_fullscreen_toggle(&mut self, ctx: &Context) {
         // A chord being captured by the settings hotkey binder must not
@@ -237,12 +258,12 @@ impl HorizonApp {
             next_middle_pan_active(self.middle_pan_active, middle_down, target, mode, pointer_delta);
         self.canvas_pan_input_claimed = pointer_in_canvas && (self.middle_pan_active || space_drag_claimed);
         let pointer_over_scrollable = pointer_position.is_some_and(|position| {
-            panel_geometry
-                .iter()
-                .any(|(_, geometry)| geometry.body.contains(position))
+            topmost_panel_geometry(&panel_geometry, &self.panel_screen_order, position)
+                .is_some_and(|(_, geometry)| geometry.body.contains(position))
         });
         let pointer_over_host_overlay = pointer_position.is_some_and(|position| {
-            self.pointer_over_native_select_popup(ctx, panel_geometry.iter().map(|(id, _)| *id), position)
+            topmost_panel_geometry(&panel_geometry, &self.panel_screen_order, position)
+                .is_some_and(|(id, _)| self.pointer_over_native_select_popup(ctx, std::iter::once(id), position))
         });
         set_canvas_claims_unmodified_wheel(ctx, pointer_in_canvas);
         let followup_id = canvas_wheel_followup_id(ctx);
@@ -767,17 +788,45 @@ fn primary_selection_routing_active() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use egui::{Event, Key, Modifiers, Vec2};
-    use horizon_core::{ShortcutBinding, ShortcutKey, ShortcutModifiers};
+    use egui::{Event, Key, Modifiers, Rect, Vec2, pos2};
+    use horizon_core::{PanelId, ShortcutBinding, ShortcutKey, ShortcutModifiers};
 
     use super::super::super::super::input::TerminalInputEvent;
     use super::super::super::CanvasPanSpaceKeyState;
+    use super::super::super::panels::PanelScreenGeometry;
     use super::{
         HeldSpeechBinding, MiddlePanMode, MiddlePanTarget, PendingCaptureEvent, clear_released_speech_hotkeys,
         next_middle_pan_active, pending_capture_event, primary_selection_routing_active, swallow_cancel_escape_event,
         swallow_captured_clipboard_event, swallow_correlated_shift_text, swallow_held_speech_hotkey_event,
-        swallow_speech_hotkey_event,
+        swallow_speech_hotkey_event, topmost_panel_geometry,
     };
+
+    fn geometry(screen: Rect, body: Rect) -> PanelScreenGeometry {
+        PanelScreenGeometry {
+            screen_rect: screen,
+            terminal_body_screen_rect: None,
+            body,
+        }
+    }
+
+    #[test]
+    fn topmost_titlebar_does_not_inherit_a_covered_panel_body() {
+        let back = geometry(
+            Rect::from_min_max(pos2(0.0, 0.0), pos2(200.0, 200.0)),
+            Rect::from_min_max(pos2(0.0, 20.0), pos2(200.0, 200.0)),
+        );
+        let front = geometry(
+            Rect::from_min_max(pos2(0.0, 40.0), pos2(200.0, 74.0)),
+            Rect::from_min_max(pos2(0.0, 74.0), pos2(200.0, 74.0)),
+        );
+        let panels = [(PanelId(1), back), (PanelId(2), front)];
+        let order = [PanelId(1), PanelId(2)];
+        let on_front_chrome = pos2(80.0, 50.0);
+        let top = topmost_panel_geometry(&panels, &order, on_front_chrome).expect("front panel");
+        assert_eq!(top.0, PanelId(2));
+        assert!(!top.1.body.contains(on_front_chrome));
+        assert!(back.body.contains(on_front_chrome));
+    }
 
     #[test]
     fn captured_clipboard_marker_swallows_pseudo_events_only() {

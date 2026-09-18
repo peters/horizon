@@ -70,6 +70,8 @@ pub(super) fn canvas_zoom_multiplier(zoom_delta: f32, zoom_scroll: Vec2) -> Opti
         return Some(zoom_delta);
     }
     if zoom_scroll != Vec2::ZERO {
+        // Match egui 0.36 `InputState`: Ctrl-wheel zoom is
+        // `(scroll_zoom_speed * (delta.x + delta.y)).exp()`.
         return Some((SCROLL_ZOOM_SPEED * (zoom_scroll.x + zoom_scroll.y)).exp());
     }
     None
@@ -183,6 +185,8 @@ mod tests {
         assert_eq!(canvas_zoom_multiplier(1.0, Vec2::ZERO), None);
         let factor = canvas_zoom_multiplier(1.0, Vec2::new(0.0, 12.0)).expect("ctrl+scroll");
         assert!((factor - (12.0_f32 / 200.0).exp()).abs() < f32::EPSILON);
+        let diagonal = canvas_zoom_multiplier(1.0, Vec2::new(4.0, 8.0)).expect("egui x+y");
+        assert!((diagonal - (12.0_f32 / 200.0).exp()).abs() < f32::EPSILON);
         assert_eq!(canvas_zoom_multiplier(1.25, Vec2::ZERO), Some(1.25));
     }
 

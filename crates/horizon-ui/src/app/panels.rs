@@ -363,7 +363,7 @@ impl HorizonApp {
             ),
             canvas_rect,
         )
-        .unwrap_or(screen_rect);
+        .unwrap_or(Rect::NOTHING);
         let terminal_body_screen_rect = panel.terminal().map(|_| body_screen_rect);
 
         Some(PanelScreenGeometry {
