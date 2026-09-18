@@ -140,6 +140,7 @@ const LINE_SCROLL_SPEED: f32 = 40.0;
 struct CanvasWheelBuckets {
     zoom: Vec2,
     pan: Vec2,
+    skipped_for_panel: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -160,7 +161,7 @@ fn resolve_smoothed_wheel(
 ) -> (Vec2, Vec2, Option<CanvasWheelFollowup>) {
     if has_wheel_events {
         let mixed = buckets.pan != Vec2::ZERO && buckets.zoom != Vec2::ZERO;
-        if mixed {
+        if mixed || (buckets.skipped_for_panel && (buckets.pan != Vec2::ZERO || buckets.zoom != Vec2::ZERO)) {
             return (buckets.zoom, buckets.pan, None);
         }
         if buckets.zoom != Vec2::ZERO {
@@ -236,6 +237,7 @@ fn classify_canvas_wheel_events(
                 unit, delta, modifiers, ..
             } => {
                 if pointer_over_scrollable && panel_content_owns_wheel(*modifiers, primary_down) {
+                    buckets.skipped_for_panel = true;
                     continue;
                 }
                 let points = wheel_event_points(*unit, *delta, page_height);
@@ -370,29 +372,31 @@ impl HorizonApp {
                     .contains(position)
             })
         });
-        let wheels = classify_canvas_wheel_events(
-            &events,
-            primary_down_at_frame_start(&events, primary_down),
-            pointer_over_scrollable,
-            canvas_rect.height(),
-        );
-        let has_wheel_events = events.iter().any(|event| matches!(event, Event::MouseWheel { .. }));
         let followup_id = canvas_wheel_followup_id(ctx);
-        let previous_followup = ctx
-            .data(|data| data.get_temp::<Option<CanvasWheelFollowup>>(followup_id))
-            .flatten();
-        let (zoom_scroll, pan_scroll, next_followup) =
-            resolve_smoothed_wheel(has_wheel_events, wheels, scroll, previous_followup);
-        ctx.data_mut(|data| data.insert_temp(followup_id, next_followup));
-        let mixed_wheel = wheels.pan != Vec2::ZERO && wheels.zoom != Vec2::ZERO;
-        let zoom_factor = if pointer_in_canvas {
-            if mixed_wheel {
+        let (pan_scroll, zoom_factor) = if pointer_in_canvas {
+            let wheels = classify_canvas_wheel_events(
+                &events,
+                primary_down_at_frame_start(&events, primary_down),
+                pointer_over_scrollable,
+                canvas_rect.height(),
+            );
+            let has_wheel_events = events.iter().any(|event| matches!(event, Event::MouseWheel { .. }));
+            let previous_followup = ctx
+                .data(|data| data.get_temp::<Option<CanvasWheelFollowup>>(followup_id))
+                .flatten();
+            let (zoom_scroll, pan_scroll, next_followup) =
+                resolve_smoothed_wheel(has_wheel_events, wheels, scroll, previous_followup);
+            ctx.data_mut(|data| data.insert_temp(followup_id, next_followup));
+            let mixed_wheel = wheels.pan != Vec2::ZERO && wheels.zoom != Vec2::ZERO || wheels.skipped_for_panel;
+            let zoom_factor = if mixed_wheel {
                 canvas_zoom_multiplier(1.0, zoom_scroll)
             } else {
                 canvas_zoom_multiplier(zoom_delta, zoom_scroll)
-            }
+            };
+            (pan_scroll, zoom_factor)
         } else {
-            None
+            ctx.data_mut(|data| data.insert_temp(followup_id, None::<CanvasWheelFollowup>));
+            (Vec2::ZERO, None)
         };
         if let Some(factor) = zoom_factor {
             let anchor = pointer_position.unwrap_or_else(|| canvas_rect.center());
@@ -419,7 +423,7 @@ impl HorizonApp {
             self.mark_runtime_dirty();
             self.clear_terminal_selections();
         }
-        if zoom_factor.is_some() || (!drag_panning && pan_scroll != Vec2::ZERO) {
+        if pointer_in_canvas && (zoom_factor.is_some() || (!drag_panning && pan_scroll != Vec2::ZERO)) {
             ctx.input_mut(|input| input.smooth_scroll_delta = Vec2::ZERO);
         }
     }
@@ -1015,6 +1019,7 @@ mod tests {
         let pan_buckets = CanvasWheelBuckets {
             pan: Vec2::new(0.0, 8.0),
             zoom: Vec2::ZERO,
+            skipped_for_panel: false,
         };
         let smoothed = Vec2::new(0.0, 3.0);
         let (zoom, pan, followup) = resolve_smoothed_wheel(true, pan_buckets, smoothed, None);
@@ -1033,11 +1038,27 @@ mod tests {
         let zoom_buckets = CanvasWheelBuckets {
             pan: Vec2::ZERO,
             zoom: Vec2::new(0.0, 12.0),
+            skipped_for_panel: false,
         };
         let (zoom, pan, followup) = resolve_smoothed_wheel(true, zoom_buckets, Vec2::ZERO, None);
         assert_eq!(zoom, Vec2::new(0.0, 12.0));
         assert_eq!(pan, Vec2::ZERO);
         assert_eq!(followup, Some(CanvasWheelFollowup::Zoom));
+    }
+
+    #[test]
+    fn mixed_panel_and_canvas_wheels_use_raw_canvas_bucket() {
+        let events = vec![
+            point_wheel(Vec2::new(0.0, 5.0), Modifiers::SHIFT),
+            point_wheel(Vec2::new(0.0, 8.0), Modifiers::NONE),
+        ];
+        let wheels = classify_canvas_wheel_events(&events, false, true, 800.0);
+        assert!(wheels.skipped_for_panel);
+        assert_eq!(wheels.pan, Vec2::new(0.0, 8.0));
+        let (zoom, pan, followup) = resolve_smoothed_wheel(true, wheels, Vec2::new(0.0, 13.0), None);
+        assert_eq!(zoom, Vec2::ZERO);
+        assert_eq!(pan, Vec2::new(0.0, 8.0));
+        assert_eq!(followup, None);
     }
 
     #[test]
