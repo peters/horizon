@@ -37,6 +37,7 @@ pub(super) enum Status {
 
 pub(super) struct Updates {
     pub image: Option<ColorImage>,
+    pub produced_with: Option<DeviceViewOptions>,
     pub status: Option<Status>,
     viewport: ViewportId,
     visible: bool,
@@ -61,6 +62,7 @@ impl Session {
     ) -> Result<Self, ViewError> {
         let updates = Arc::new(Mutex::new(Updates {
             image: None,
+            produced_with: None,
             status: Some(Status::Connecting),
             viewport,
             visible: true,
@@ -136,6 +138,7 @@ impl Session {
         state.viewport = viewport;
         Updates {
             image: state.image.take(),
+            produced_with: state.produced_with,
             status: state.status.take(),
             viewport,
             visible: state.visible,
@@ -256,6 +259,7 @@ async fn connection(
                 // Only the latest frame is retained; slow rendering cannot grow
                 // an application-side queue of full desktop images.
                 state.image = Some(image);
+                state.produced_with = Some(options);
                 state.desktop = Some(framebuffer.size());
                 state.visible.then_some(state.viewport)
             };

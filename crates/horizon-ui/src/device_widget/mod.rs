@@ -75,10 +75,13 @@ impl DeviceUiState {
                 self.status = status;
             }
             if let Some(image) = updates.image {
-                self.upload_displayed(ui, image);
-                self.presented_options = Some(self.controls.options);
-                if self.texture.is_some() {
-                    self.image.sequence = self.image.sequence.saturating_add(1);
+                let current = self.controls.options.for_desktop(self.desktop.unwrap_or(image.size));
+                if updates.produced_with.is_none_or(|produced| produced == current) {
+                    self.upload_displayed(ui, image);
+                    self.presented_options = updates.produced_with.or(Some(current));
+                    if self.texture.is_some() {
+                        self.image.sequence = self.image.sequence.saturating_add(1);
+                    }
                 }
             }
             if let Some(full) = full {
@@ -163,7 +166,7 @@ impl DeviceUiState {
             return;
         };
         let options = self.controls.options.for_desktop(source.size);
-        if self.presented_options == Some(options) && self.texture.is_some() {
+        if self.presented_options == Some(options) {
             return;
         }
         match present_image(source, options) {
@@ -171,7 +174,10 @@ impl DeviceUiState {
                 self.presented_options = Some(options);
                 self.upload_displayed(ui, displayed);
             }
-            Err(error) => self.controls.set_error(error.to_string()),
+            Err(error) => {
+                self.presented_options = Some(options);
+                self.controls.set_error(error.to_string());
+            }
         }
     }
 
@@ -180,7 +186,6 @@ impl DeviceUiState {
         if image.size.iter().any(|side| *side == 0 || *side > limit) {
             self.session = None;
             self.texture = None;
-            self.presented_options = None;
             self.status = Status::Disconnected("Desktop exceeds the renderer's texture limit".into());
         } else if let Some(texture) = &mut self.texture {
             texture.set(image, TextureOptions::LINEAR);
