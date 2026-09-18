@@ -106,5 +106,6 @@ viewport and reconnect. Settings reset when the panel is recreated; restored
 panels still require manual connection. Refresh throttling limits refresh
 requests and frame production, not arbitrary unsolicited server traffic. Image
 limits and cropping affect local rendering, not negotiated VNC compression or
-wire bandwidth. Use existing browser_video fps, quality, max_width and
-max_file_bytes options for bounded isolated recordings.
+wire bandwidth. Record native flows directly from the isolated desktop as
+described in the [smoke guide](../../scripts/device-smoke/README.md#video-evidence-and-cleanup);
+`browser_video` records browser pages only.
