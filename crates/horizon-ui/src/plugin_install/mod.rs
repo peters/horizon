@@ -149,6 +149,19 @@ impl AgentPluginHostLease {
         Ok(())
     }
 
+    fn bind_grok_device_skill(&mut self, grok_root: &Path, browser_bound: bool) {
+        let Some(host_id) = self.host_dir.file_name() else {
+            return;
+        };
+        let device_dir = grok_root.join("skills").join(HORIZON_DEVICE_SKILL);
+        let roots = if browser_bound {
+            bind_skill_roots(host_id, &[device_dir], &[])
+        } else {
+            bind_skill_roots(host_id, &[], &[device_dir])
+        };
+        self.skill_roots.extend(roots);
+    }
+
     fn covers_skill_dir(&self, skill_dir: &Path) -> bool {
         self.skill_roots.iter().any(|root| root.covers_skill_dir(skill_dir))
     }
@@ -203,8 +216,14 @@ pub(crate) fn install_agent_plugins(horizon_home: &HorizonHome) -> AgentPluginHo
     }
     if let Some(root) = provider_home(grok_home.as_deref(), user_home.as_deref(), ".grok") {
         match grok_mcp::bind_browser_skill(&root, manifest::host_instance().as_ref()) {
-            Ok(roots) => lease.skill_roots.extend(roots),
-            Err(error) => tracing::warn!(%error, "Grok browser integration unavailable; preserving existing settings"),
+            Ok(roots) => {
+                lease.skill_roots.extend(roots);
+                lease.bind_grok_device_skill(&root, true);
+            }
+            Err(error) => {
+                tracing::warn!(%error, "Grok browser integration unavailable; preserving existing settings");
+                lease.bind_grok_device_skill(&root, false);
+            }
         }
     }
     sync_leased_user_skills(
@@ -427,7 +446,6 @@ fn user_skill_lease_dirs(
     }
     if let Some(grok_root) = provider_home(grok_home, user_home, ".grok") {
         dirs.push(grok_root.join("skills").join(HORIZON_NOTIFY_SKILL));
-        dirs.push(grok_root.join("skills").join(HORIZON_DEVICE_SKILL));
     }
     if let Some(codex_root) = provider_home(codex_home, user_home, ".codex") {
         dirs.push(codex_root.join("skills").join(HORIZON_NOTIFY_SKILL));
@@ -558,7 +576,7 @@ mod tests {
         assert!(dirs.contains(&home.join(".codex/skills/horizon-notify")));
         assert!(dirs.contains(&home.join(".codex/skills/horizon-browser")));
         assert!(dirs.contains(&home.join(".codex/skills/horizon-device")));
-        assert!(dirs.contains(&home.join(".grok/skills/horizon-device")));
+        assert!(!dirs.contains(&home.join(".grok/skills/horizon-device")));
         assert!(!dirs.contains(&home.join(".agents/skills/horizon-notify")));
         assert!(!dirs.contains(&home.join(".agents/skills/horizon-browser")));
         assert!(!dirs.contains(&home.join(".agents/skills/horizon-device")));
@@ -818,12 +836,16 @@ mod tests {
         let temp = tempfile::tempdir().expect("temp dir");
         let horizon_home = HorizonHome::from_root(temp.path().join(".horizon"));
         let user_home = temp.path().join("user-home");
+        let grok_root = user_home.join(".grok");
+        let leftover = grok_root.join("skills").join(HORIZON_DEVICE_SKILL);
+        write_skill_dir(&leftover, "stale device skill");
         let claude_plugin_dir = horizon_home.claude_plugin_dir_for_host("host-a");
         let mut lease =
             AgentPluginHostLease::acquire(horizon_home.agent_plugin_host_dir("host-a")).expect("host lease");
         lease
             .bind_user_skills(&user_skill_lease_dirs(Some(&user_home), None, None))
             .expect("bind user skills");
+        lease.bind_grok_device_skill(&grok_root, false);
         sync_leased_user_skills(
             &lease,
             &horizon_home,
@@ -840,8 +862,8 @@ mod tests {
             "Grok browser skill is leased only after MCP registration"
         );
         assert!(
-            !user_home.join(".grok/skills/horizon-device/SKILL.md").exists(),
-            "Grok device skill must not publish without the browser MCP that provides device_panel"
+            !leftover.exists(),
+            "failed Grok browser registration must not retain a leftover device skill"
         );
     }
 
