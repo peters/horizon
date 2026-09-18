@@ -9,6 +9,7 @@ mod browser_recovery;
 mod browser_remote_create;
 mod browser_requests;
 mod canvas;
+mod canvas_drag;
 mod canvas_scroll;
 mod detached_viewports;
 mod device_requests;

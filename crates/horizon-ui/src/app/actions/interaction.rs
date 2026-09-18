@@ -4,6 +4,7 @@ use egui::{Context, Event, Key, Modifiers, Rect, Vec2};
 use horizon_core::WorkspaceId;
 
 use super::super::super::input::{TerminalInputEvent, terminal_input_events};
+use super::super::canvas_drag::canvas_drag_delta;
 use super::super::canvas_scroll::route_canvas_scroll;
 use super::super::shortcuts::{
     event_uses_shortcut_key, is_clipboard_pseudo_event, pending_hotkey_capture, shortcut_event_matches,
@@ -238,7 +239,14 @@ impl HorizonApp {
         };
         self.middle_pan_active =
             next_middle_pan_active(self.middle_pan_active, middle_down, target, mode, pointer_delta);
-        self.canvas_pan_input_claimed = pointer_in_canvas && (self.middle_pan_active || space_drag_claimed);
+        let primary_canvas_drag = canvas_drag_delta(
+            ctx,
+            canvas_rect,
+            &panel_geometry.iter().map(|(_, geometry)| geometry.screen_rect),
+            &events,
+        );
+        self.canvas_pan_input_claimed =
+            pointer_in_canvas && (self.middle_pan_active || space_drag_claimed || primary_canvas_drag.is_some());
         if pointer_in_canvas && (zoom_delta - 1.0).abs() > f32::EPSILON {
             route_canvas_scroll(ctx, false, false);
             let anchor = pointer_position.unwrap_or_else(|| canvas_rect.center());
@@ -262,7 +270,7 @@ impl HorizonApp {
             pointer_in_canvas && !drag_panning && !ctrl_or_cmd,
         );
         let pan_delta = if drag_panning {
-            pointer_delta
+            primary_canvas_drag.unwrap_or(pointer_delta)
         } else if scroll_routing.pans_canvas {
             if modifiers.shift && scroll.x == 0.0 {
                 Vec2::new(scroll.y, 0.0)
