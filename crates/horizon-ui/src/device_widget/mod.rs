@@ -10,13 +10,30 @@ use session::{Session, Status};
 #[derive(Default)]
 pub(crate) struct DeviceUiState {
     initialized: bool,
+    rendered: bool,
     session: Option<Session>,
     texture: Option<TextureHandle>,
     status: Status,
 }
 
 impl DeviceUiState {
+    #[cfg(test)]
+    pub(crate) fn was_rendered(&self) -> bool {
+        self.rendered
+    }
+
+    pub(crate) fn begin_frame(&mut self) {
+        self.rendered = false;
+    }
+
+    pub(crate) fn finish_frame(&self) {
+        if let Some(session) = &self.session {
+            session.set_visible(self.rendered);
+        }
+    }
+
     pub(crate) fn show(&mut self, ui: &mut Ui, device: &DevicePanelState, interactive: bool) {
+        self.rendered = true;
         if !self.initialized {
             self.initialized = true;
             if device.connect_on_start {

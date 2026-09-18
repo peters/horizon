@@ -9,6 +9,8 @@ mod browser_remote_create;
 mod browser_requests;
 mod canvas;
 mod detached_viewports;
+#[cfg(test)]
+mod device_tests;
 mod file_drop;
 mod file_drop_highlight;
 mod frame_stats;
@@ -319,9 +321,9 @@ fn resolve_shortcuts(config: &Config) -> AppShortcuts {
     }
 }
 
-impl eframe::App for HorizonApp {
+impl HorizonApp {
     #[profiling::function]
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn update_ui(&mut self, ui: &mut egui::Ui) {
         let ctx = &ui.ctx().clone();
         let now = Instant::now();
         self.frame_stats.record_frame(now);
@@ -390,6 +392,20 @@ impl eframe::App for HorizonApp {
         self.finalize_frame(ctx, had_panel_output, workspace_count_before, panel_count_before);
         // Last, after every phase that can move or hide a panel this frame.
         self.restamp_browser_manifests_for_placement();
+    }
+}
+
+impl eframe::App for HorizonApp {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        for state in self.panel_render_caches.device_ui_state.values_mut() {
+            state.begin_frame();
+        }
+        self.update_ui(ui);
+        // Immediate detached viewports have finished too. Reconcile once, even
+        // when startup or session-switch overlays bypass panel rendering.
+        for state in self.panel_render_caches.device_ui_state.values() {
+            state.finish_frame();
+        }
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {

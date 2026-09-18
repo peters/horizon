@@ -6,7 +6,7 @@ use std::{
 };
 
 use egui::{ColorImage, Context, ViewportId};
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 use vnc::{PixelFormat, VncConnector, VncEncoding, X11Event};
 
 use super::frame::Framebuffer;
@@ -38,11 +38,13 @@ pub(super) struct Updates {
     pub image: Option<ColorImage>,
     pub status: Option<Status>,
     viewport: ViewportId,
+    visible: bool,
 }
 
 pub(super) struct Session {
     updates: Arc<Mutex<Updates>>,
     stop: Option<oneshot::Sender<()>>,
+    visibility: watch::Sender<bool>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -52,9 +54,11 @@ impl Session {
             image: None,
             status: Some(Status::Connecting),
             viewport,
+            visible: true,
         }));
         let state = Arc::clone(&updates);
         let (stop, cancelled) = oneshot::channel();
+        let (visibility, visible) = watch::channel(true);
         let thread = std::thread::Builder::new().name("device-view".into()).spawn(move || {
             let result = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -65,7 +69,7 @@ impl Session {
                         // decoder/socket task, including a stalled handshake or read.
                         tokio::select! {
                             _ = cancelled => Ok(()),
-                            result = connection(address, &state, &ctx) => result,
+                            result = connection(address, &state, &ctx, visible) => result,
                         }
                     })
                 });
@@ -79,8 +83,24 @@ impl Session {
         Ok(Self {
             updates,
             stop: Some(stop),
+            visibility,
             thread: Some(thread),
         })
+    }
+
+    pub(super) fn set_visible(&self, visible: bool) {
+        self.updates
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .visible = visible;
+        self.visibility.send_if_modified(|current| {
+            if *current == visible {
+                false
+            } else {
+                *current = visible;
+                true
+            }
+        });
     }
 
     pub(super) fn take_updates(&self, viewport: ViewportId) -> Updates {
@@ -90,6 +110,7 @@ impl Session {
             image: state.image.take(),
             status: state.status.take(),
             viewport,
+            visible: state.visible,
         }
     }
 }
@@ -111,12 +132,19 @@ fn publish_status(updates: &Mutex<Updates>, ctx: &Context, status: Status) {
     let viewport = {
         let mut state = updates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.status = Some(status);
-        state.viewport
+        state.visible.then_some(state.viewport)
     };
-    ctx.request_repaint_of(viewport);
+    if let Some(viewport) = viewport {
+        ctx.request_repaint_of(viewport);
+    }
 }
 
-async fn connection(address: SocketAddr, updates: &Mutex<Updates>, ctx: &Context) -> Result<(), ViewError> {
+async fn connection(
+    address: SocketAddr,
+    updates: &Mutex<Updates>,
+    ctx: &Context,
+    mut visible: watch::Receiver<bool>,
+) -> Result<(), ViewError> {
     let client = tokio::time::timeout(Duration::from_secs(5), async {
         let stream = tokio::net::TcpStream::connect(address).await?;
         stream.set_nodelay(true)?;
@@ -143,7 +171,17 @@ async fn connection(address: SocketAddr, updates: &Mutex<Updates>, ctx: &Context
     let mut tick = tokio::time::interval(Duration::from_millis(50));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
+        let mut full_refresh = !*visible.borrow_and_update();
+        if full_refresh {
+            visible
+                .wait_for(|visible| *visible)
+                .await
+                .map_err(|_| ViewError::Frame("viewer closed"))?;
+        }
         tick.tick().await;
+        if !*visible.borrow() {
+            continue;
+        }
         let mut changed = false;
         let started = std::time::Instant::now();
         let mut idle = false;
@@ -152,6 +190,7 @@ async fn connection(address: SocketAddr, updates: &Mutex<Updates>, ctx: &Context
                 break;
             }
             if let Some(event) = client.poll_event().await? {
+                full_refresh |= matches!(event, vnc::VncEvent::SetResolution(_));
                 changed |= framebuffer.apply(event)?;
                 idle = false;
             } else if idle {
@@ -170,110 +209,24 @@ async fn connection(address: SocketAddr, updates: &Mutex<Updates>, ctx: &Context
                 // Only the latest frame is retained; slow rendering cannot grow
                 // an application-side queue of full desktop images.
                 state.image = Some(image);
-                state.viewport
+                state.visible.then_some(state.viewport)
             };
-            ctx.request_repaint_of(viewport);
+            if let Some(viewport) = viewport {
+                ctx.request_repaint_of(viewport);
+            }
         }
-        tokio::time::timeout(Duration::from_secs(5), client.input(X11Event::Refresh))
-            .await
-            .map_err(|_| ViewError::Timeout)??;
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            client.input(if full_refresh {
+                X11Event::FullRefresh
+            } else {
+                X11Event::Refresh
+            }),
+        )
+        .await
+        .map_err(|_| ViewError::Timeout)??;
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use std::io::{Read, Write};
-
-    use super::*;
-
-    #[test]
-    fn close_cancels_a_server_that_never_sends_its_greeting() -> Result<(), ViewError> {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-        listener.set_nonblocking(true)?;
-        let session = Session::start(listener.local_addr()?, Context::default(), ViewportId::ROOT)?;
-        let accepted = std::time::Instant::now();
-        let (mut stream, _) = loop {
-            match listener.accept() {
-                Ok(connection) => break connection,
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    assert!(accepted.elapsed() < Duration::from_secs(2), "viewer did not connect");
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-                Err(error) => return Err(error.into()),
-            }
-        };
-        stream.set_nonblocking(false)?;
-        stream.set_read_timeout(Some(Duration::from_secs(1)))?;
-        let start = std::time::Instant::now();
-        drop(session);
-        assert!(start.elapsed() < Duration::from_secs(1));
-        assert_eq!(stream.read(&mut [0; 1])?, 0);
-        Ok(())
-    }
-
-    #[test]
-    fn close_cancels_a_connected_server_with_an_incomplete_frame() -> Result<(), ViewError> {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-        listener.set_nonblocking(true)?;
-        let session = Session::start(listener.local_addr()?, Context::default(), ViewportId::ROOT)?;
-        let started = std::time::Instant::now();
-        let (mut stream, _) = loop {
-            match listener.accept() {
-                Ok(connection) => break connection,
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    assert!(started.elapsed() < Duration::from_secs(2), "viewer did not connect");
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-                Err(error) => return Err(error.into()),
-            }
-        };
-        stream.set_nonblocking(false)?;
-        stream.set_read_timeout(Some(Duration::from_secs(2)))?;
-        stream.set_write_timeout(Some(Duration::from_secs(2)))?;
-        stream.write_all(b"RFB 003.008\n")?;
-        let mut version = [0; 12];
-        stream.read_exact(&mut version)?;
-        assert_eq!(&version, b"RFB 003.008\n");
-        stream.write_all(&[1, 1])?;
-        let mut byte = [0; 1];
-        stream.read_exact(&mut byte)?;
-        assert_eq!(byte, [1], "no-auth security selected");
-        stream.write_all(&[0; 4])?;
-        stream.read_exact(&mut byte)?;
-        assert_eq!(byte, [1], "shared connection requested");
-        // A 2x2 true-color desktop, with no server name.
-        stream.write_all(&[
-            0, 2, 0, 2, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 0, 8, 16, 0, 0, 0, 0, 0, 0, 0,
-        ])?;
-        let mut pixel_format = [0; 20];
-        stream.read_exact(&mut pixel_format)?;
-        assert_eq!(pixel_format[0], 0);
-        let mut encodings_header = [0; 4];
-        stream.read_exact(&mut encodings_header)?;
-        assert_eq!(encodings_header[0], 2);
-        let count = usize::from(u16::from_be_bytes([encodings_header[2], encodings_header[3]]));
-        assert_eq!(count, 4);
-        stream.read_exact(&mut [0; 16])?;
-        let mut refresh = [0; 10];
-        stream.read_exact(&mut refresh)?;
-        assert_eq!(refresh[0], 3, "handshake completed before cancellation");
-        // Begin one Raw rectangle but leave its pixel payload unfinished.
-        stream.write_all(&[0, 0, 0, 1, 0, 0, 0, 0, 0, 2, 0, 2, 0, 0, 0, 0, 1, 2, 3, 0])?;
-        assert!(matches!(
-            session.take_updates(ViewportId::ROOT).status,
-            Some(Status::Connected)
-        ));
-        let closed = std::time::Instant::now();
-        drop(session);
-        assert!(closed.elapsed() < Duration::from_secs(1));
-        // Drain any queued refresh requests and prove the connection was closed.
-        let mut remaining = Vec::new();
-        match stream.read_to_end(&mut remaining) {
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => {}
-            Err(error) => return Err(error.into()),
-        }
-        assert!(remaining.as_chunks::<10>().0.iter().all(|request| request[0] == 3));
-        Ok(())
-    }
-}
+mod tests;

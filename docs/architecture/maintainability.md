@@ -30,8 +30,10 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   persists the target. Restored panels require manual reconnect.
 - `horizon-ui::device_widget` owns only read-only presentation. `frame` validates
   and composites decoded rectangles; `session` owns a cancellable socket/decoder
-  worker and a single latest-frame slot. Panel/workspace/session cleanup drops
-  the worker. Viewer input never reaches the target.
+  worker and a single latest-frame slot. The completed UI pass reconciles root
+  and detached viewer visibility; hidden workers pause frame requests and resume
+  with a full refresh. Desktop resizing also requests a full refresh. Panel,
+  workspace and session cleanup drops the worker. Viewer input never reaches the target.
 - The native decoder is a narrowly patched Git dependency pinned by full commit
   in `Cargo.toml`. Its fork retains licenses, provenance and qualification limits.
   It is excluded from the publishable `horizon-device` control package. The

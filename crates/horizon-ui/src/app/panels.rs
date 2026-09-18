@@ -256,7 +256,7 @@ fn show_panel_body_contents(
         ),
         PanelKind::GitChanges => GitChangesView::new(panel).show(ui, is_focused),
         PanelKind::Usage => UsageDashboardView::new(panel).show(ui, is_focused),
-        PanelKind::Device => {
+        PanelKind::Device if panel.device().is_some() => {
             if let (Some(state), Some(device)) = (body_context.device_ui_state, panel.device()) {
                 state.show(ui, device, interactive);
             }

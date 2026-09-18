@@ -1,0 +1,204 @@
+use std::io::{Read, Write};
+
+use super::*;
+
+#[test]
+fn close_cancels_a_server_that_never_sends_its_greeting() -> Result<(), ViewError> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    listener.set_nonblocking(true)?;
+    let session = Session::start(listener.local_addr()?, Context::default(), ViewportId::ROOT)?;
+    let accepted = std::time::Instant::now();
+    let (mut stream, _) = loop {
+        match listener.accept() {
+            Ok(connection) => break connection,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(accepted.elapsed() < Duration::from_secs(2), "viewer did not connect");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(error) => return Err(error.into()),
+        }
+    };
+    stream.set_nonblocking(false)?;
+    stream.set_read_timeout(Some(Duration::from_secs(1)))?;
+    let start = std::time::Instant::now();
+    drop(session);
+    assert!(start.elapsed() < Duration::from_secs(1));
+    assert_eq!(stream.read(&mut [0; 1])?, 0);
+    Ok(())
+}
+
+#[test]
+fn close_cancels_a_connected_server_with_an_incomplete_frame() -> Result<(), ViewError> {
+    let (session, mut stream) = connected_session()?;
+    // Begin one Raw rectangle but leave its pixel payload unfinished.
+    stream.write_all(&[0, 0, 0, 1, 0, 0, 0, 0, 0, 2, 0, 2, 0, 0, 0, 0, 1, 2, 3, 0])?;
+    assert!(matches!(
+        session.take_updates(ViewportId::ROOT).status,
+        Some(Status::Connected)
+    ));
+    let closed = std::time::Instant::now();
+    drop(session);
+    assert!(closed.elapsed() < Duration::from_secs(1));
+    // Drain any queued refresh requests and prove the connection was closed.
+    let mut remaining = Vec::new();
+    match stream.read_to_end(&mut remaining) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => {}
+        Err(error) => return Err(error.into()),
+    }
+    assert!(remaining.as_chunks::<10>().0.iter().all(|request| request[0] == 3));
+    Ok(())
+}
+fn connected_session() -> Result<(Session, std::net::TcpStream), ViewError> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    listener.set_nonblocking(true)?;
+    let session = Session::start(listener.local_addr()?, Context::default(), ViewportId::ROOT)?;
+    let started = std::time::Instant::now();
+    let (mut stream, _) = loop {
+        match listener.accept() {
+            Ok(connection) => break connection,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(started.elapsed() < Duration::from_secs(2), "viewer did not connect");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(error) => return Err(error.into()),
+        }
+    };
+    stream.set_nonblocking(false)?;
+    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+    stream.write_all(b"RFB 003.008\n")?;
+    let mut version = [0; 12];
+    stream.read_exact(&mut version)?;
+    assert_eq!(&version, b"RFB 003.008\n");
+    stream.write_all(&[1, 1])?;
+    let mut byte = [0; 1];
+    stream.read_exact(&mut byte)?;
+    assert_eq!(byte, [1], "no-auth security selected");
+    stream.write_all(&[0; 4])?;
+    stream.read_exact(&mut byte)?;
+    assert_eq!(byte, [1], "shared connection requested");
+    // A 2x2 true-color desktop, with no server name.
+    stream.write_all(&[
+        0, 2, 0, 2, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 0, 8, 16, 0, 0, 0, 0, 0, 0, 0,
+    ])?;
+    let mut pixel_format = [0; 20];
+    stream.read_exact(&mut pixel_format)?;
+    assert_eq!(pixel_format[0], 0);
+    let mut encodings_header = [0; 4];
+    stream.read_exact(&mut encodings_header)?;
+    assert_eq!(encodings_header[0], 2);
+    let count = usize::from(u16::from_be_bytes([encodings_header[2], encodings_header[3]]));
+    assert_eq!(count, 4);
+    stream.read_exact(&mut [0; 16])?;
+    let mut refresh = [0; 10];
+    stream.read_exact(&mut refresh)?;
+    assert_eq!(refresh[0], 3, "handshake completed before cancellation");
+    Ok((session, stream))
+}
+
+fn refresh_until(stream: &mut std::net::TcpStream, expected: [u8; 10]) -> Result<(), ViewError> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let mut request = [0; 10];
+        stream.read_exact(&mut request)?;
+        assert_eq!(request[0], 3);
+        if request == expected {
+            return Ok(());
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "missing refresh {expected:?}; got {request:?}"
+        );
+    }
+}
+
+fn send_pixel(stream: &mut std::net::TcpStream) -> Result<(), ViewError> {
+    stream.write_all(&[0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 20, 180, 40, 0])?;
+    Ok(())
+}
+
+fn wait_for_green_pixel(session: &Session, size: [usize; 2]) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        if let Some(image) = session.take_updates(ViewportId::ROOT).image
+            && image.size == size
+            && image.pixels[0] == egui::Color32::from_rgb(20, 180, 40)
+        {
+            return;
+        }
+        assert!(std::time::Instant::now() < deadline, "updated pixels never arrived");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn resized_desktop_requests_all_pixels_before_incremental_updates() -> Result<(), ViewError> {
+    let (session, mut stream) = connected_session()?;
+    send_pixel(&mut stream)?;
+    wait_for_green_pixel(&session, [2, 2]);
+    // DesktopSize changes to 1x1 without resending the unchanged pixel. An
+    // incremental request alone would leave the newly allocated image blank.
+    stream.write_all(&[0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 255, 255, 255, 33])?;
+    refresh_until(&mut stream, [3, 0, 0, 0, 0, 0, 0, 1, 0, 1])?;
+    send_pixel(&mut stream)?;
+    wait_for_green_pixel(&session, [1, 1]);
+    refresh_until(&mut stream, [3, 1, 0, 0, 0, 0, 0, 1, 0, 1])?;
+    Ok(())
+}
+
+#[test]
+fn hidden_viewer_pauses_requests_and_resumes_with_a_complete_frame() -> Result<(), ViewError> {
+    let (session, mut stream) = connected_session()?;
+    send_pixel(&mut stream)?;
+    wait_for_green_pixel(&session, [2, 2]);
+    session.set_visible(false);
+    stream.set_read_timeout(Some(Duration::from_millis(200)))?;
+    // Drain requests already sent before suspension, then require a quiet
+    // interval longer than several ordinary refresh periods.
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let mut request = [0; 10];
+        match stream.read_exact(&mut request) {
+            Ok(()) => {
+                assert_eq!(request[0], 3);
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "hidden viewer never stopped requesting frames"
+                );
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                break;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let _ = session.take_updates(ViewportId::ROOT);
+    send_pixel(&mut stream)?;
+    let error = stream
+        .read_exact(&mut [0; 10])
+        .expect_err("hidden viewer requested a frame");
+    assert!(matches!(
+        error.kind(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+    ));
+    assert!(session.take_updates(ViewportId::ROOT).image.is_none());
+    session.set_visible(true);
+    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    refresh_until(&mut stream, [3, 0, 0, 0, 0, 0, 0, 2, 0, 2])?;
+    send_pixel(&mut stream)?;
+    wait_for_green_pixel(&session, [2, 2]);
+    session.set_visible(false);
+    let closed = std::time::Instant::now();
+    drop(session);
+    assert!(
+        closed.elapsed() < Duration::from_secs(1),
+        "hidden worker failed to cancel"
+    );
+    Ok(())
+}
