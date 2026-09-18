@@ -47,6 +47,8 @@ The same namespace gives namespaced processes a private writable `/tmp` and a
 session bus at the standard `/run/user/<uid>/bus` path, backed by fixture
 runtime, so native applications and `dbus-run-session` can bind sockets. Host
 `/tmp/.X11-unix` is re-bound read-only so the fixture X server stays reachable.
+`--horizon` and `--tools` paths are re-bound after that `/tmp` overlay so a
+frozen binary under `/tmp/horizon-smoke-bin.*` remains executable.
 When AppArmor's query file exists, only that file is bound writable so policy
 checks reach the host LSM; policy load and remove stay read-only, host
 enforcement is unchanged, and the developer's session bus is not used. The

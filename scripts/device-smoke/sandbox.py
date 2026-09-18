@@ -96,12 +96,14 @@ class Sandbox:
         self.apparmor = apparmor
 
 
-def prepare(state, environ=None, bind_apparmor_query=True):
+def prepare(state, environ=None, bind_apparmor_query=True, extra_ro_binds=()):
     """Create private dirs, bwrap prefix, host env, and sandbox env.
 
     `state` must already exist. Host processes keep XDG_RUNTIME_DIR on the
     fixture path. Namespaced processes see the standard `/run/user/<uid>` path
     backed by that same directory, plus a private writable `/tmp`.
+    `extra_ro_binds` are re-mounted after that `/tmp` overlay so documented
+    executable and tools paths under `/tmp` stay visible.
     """
     state = Path(state).resolve()
     data = state / 'data'
@@ -128,6 +130,13 @@ def prepare(state, environ=None, bind_apparmor_query=True):
         '--bind', str(state), str(state),
         '--bind', str(private_home), str(Path.home()),
     ]
+    seen = {str(state), str(private_home)}
+    for path in extra_ro_binds:
+        resolved = str(Path(path).resolve())
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        namespace += ['--ro-bind', resolved, resolved]
     if X11_SOCKET_DIR.is_dir():
         namespace += ['--ro-bind', str(X11_SOCKET_DIR), str(X11_SOCKET_DIR)]
     namespace += access_bind

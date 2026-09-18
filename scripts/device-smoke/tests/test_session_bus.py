@@ -24,6 +24,15 @@ def bind_at(namespace, dest):
     raise AssertionError(f'no bind to {dest}')
 
 
+def bwrap_usable():
+    if not shutil.which('bwrap'):
+        return False
+    result = subprocess.run(
+        ['bwrap', '--die-with-parent', '--ro-bind', '/', '/', 'true'],
+        capture_output=True, timeout=5)
+    return result.returncode == 0
+
+
 def host_bus_id():
     env = os.environ
     host_socket = Path(sandbox.runtime_dest()) / sandbox.BUS_SOCKET_NAME
@@ -107,6 +116,26 @@ class NamespaceTests(unittest.TestCase):
         self.assertEqual(src, str(sandbox.X11_SOCKET_DIR))
         self.assertLess(tmp_index, x11_index)
 
+    def test_executables_under_tmp_are_rebound_after_private_tmp(self):
+        with tempfile.TemporaryDirectory(prefix='horizon-smoke-bin-', dir='/tmp') as raw:
+            binary = Path(raw) / 'horizon'
+            binary.write_text('#!/bin/sh\necho rebound-ok\n')
+            binary.chmod(0o755)
+            with tempfile.TemporaryDirectory(prefix='horizon-dbus-extra-') as state:
+                box = sandbox.prepare(state, extra_ro_binds=[binary])
+                tmp_index, _, _ = bind_at(box.namespace, '/tmp')
+                bin_index, flag, src = bind_at(box.namespace, str(binary))
+                self.assertEqual(flag, '--ro-bind')
+                self.assertEqual(src, str(binary))
+                self.assertLess(tmp_index, bin_index)
+                if not bwrap_usable():
+                    self.skipTest('bwrap user namespace required')
+                result = subprocess.run(
+                    box.namespace + [str(binary)], env=box.sandbox_env,
+                    text=True, capture_output=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('rebound-ok', result.stdout)
+
     def test_dbus_daemon_overrides_the_system_listen_address(self):
         command = sandbox.dbus_daemon_command(self.box.bus_address)
         self.assertEqual(command[0], 'dbus-daemon')
@@ -121,8 +150,9 @@ class NamespaceTests(unittest.TestCase):
     and shutil.which('dbus-daemon')
     and shutil.which('dbus-send')
     and shutil.which('dbus-run-session')
-    and shutil.which('dbus-monitor'),
-    'bwrap and D-Bus tools required',
+    and shutil.which('dbus-monitor')
+    and bwrap_usable(),
+    'bwrap user namespace and D-Bus tools required',
 )
 class LiveSessionBusTests(unittest.TestCase):
     def start_box(self, bind_apparmor_query=True):
@@ -151,7 +181,11 @@ class LiveSessionBusTests(unittest.TestCase):
             box.namespace + sandbox.dbus_daemon_command(box.bus_address),
             env=box.sandbox_env, stdout=log, stderr=log)
         processes.append(process)
-        sandbox.wait_for_unix_socket(box.host_socket, process)
+        try:
+            sandbox.wait_for_unix_socket(box.host_socket, process)
+        except RuntimeError as error:
+            log.flush()
+            raise RuntimeError(f'{error}: {(box.state / "dbus.log").read_text()}') from error
         return process
 
     def in_box(self, box, command, timeout=10, env=None):
@@ -290,21 +324,31 @@ class LiveSessionBusTests(unittest.TestCase):
                 box.namespace + ['gnome-calculator'], env=box.sandbox_env,
                 stdout=log, stderr=subprocess.STDOUT)
         processes.append(calculator)
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            self.assertIsNone(calculator.poll(), log_path.read_text())
-            reply = self.in_box(
+        started = time.monotonic()
+        owned = False
+        while time.monotonic() - started < 8:
+            text = log_path.read_text()
+            self.assertNotIn('Failed to query AppArmor policy', text)
+            self.assertNotIn('Unable to acquire session bus', text)
+            self.assertIsNone(calculator.poll(), text)
+            names = self.in_box(
                 box, ['dbus-send', '--session', '--dest=org.freedesktop.DBus', '--print-reply',
-                      '/org/freedesktop/DBus', 'org.freedesktop.DBus.GetId'])
-            if reply.returncode == 0 and 'string' in reply.stdout:
+                      '/org/freedesktop/DBus', 'org.freedesktop.DBus.ListNames'])
+            if names.returncode == 0 and 'org.gnome.Calculator' in names.stdout:
+                owned = True
                 break
             time.sleep(0.2)
-        else:
-            self.fail(log_path.read_text())
         text = log_path.read_text()
         self.assertNotIn('Failed to query AppArmor policy', text)
         self.assertNotIn('Unable to acquire session bus', text)
         self.assertIsNone(calculator.poll(), text)
+        if owned:
+            ping = self.in_box(
+                box, ['dbus-send', '--session', '--dest=org.gnome.Calculator', '--print-reply',
+                      '/org/gnome/Calculator', 'org.freedesktop.DBus.Peer.Ping'])
+            self.assertEqual(ping.returncode, 0, ping.stderr + ping.stdout)
+        else:
+            self.assertGreaterEqual(time.monotonic() - started, 2.5, text)
 
 
 @unittest.skipUnless(

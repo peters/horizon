@@ -50,7 +50,10 @@ def main():
     args.state.mkdir(mode=0o700, parents=True, exist_ok=False)
     args.state = args.state.resolve()
     app = args.horizon.resolve(strict=True)
-    box = sandbox.prepare(args.state)
+    extra_ro_binds = [app]
+    if args.tools:
+        extra_ro_binds.append(args.tools.resolve())
+    box = sandbox.prepare(args.state, extra_ro_binds=extra_ro_binds)
     data = box.data
     namespace = box.namespace
     host_env = box.host_env
