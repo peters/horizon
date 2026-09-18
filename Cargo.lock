@@ -2341,6 +2341,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-device-vnc"
+version = "0.1.0"
+dependencies = [
+ "horizon-device",
+ "tokio",
+ "vnc-rs",
+]
+
+[[package]]
 name = "horizon-ui"
 version = "0.2.7"
 dependencies = [
@@ -5806,7 +5815,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 [[package]]
 name = "vnc-rs"
 version = "0.5.3"
-source = "git+https://github.com/peters/vnc-rs.git?rev=ab3d2a20053d86e79cc2623044afed00a931b402#ab3d2a20053d86e79cc2623044afed00a931b402"
+source = "git+https://github.com/peters/vnc-rs.git?rev=439a044b944c2394a967eddec990fe8b4559194f#439a044b944c2394a967eddec990fe8b4559194f"
 dependencies = [
  "async_io_stream",
  "flate2",

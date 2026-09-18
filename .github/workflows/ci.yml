@@ -137,6 +137,9 @@ jobs:
         run: python3 -B -m unittest discover -s scripts/device-smoke/tests -v
       - run: cargo test --locked -p horizon-device
       - run: cargo test --locked -p horizon-device --features cli
+      - run: cargo test --locked -p horizon-device-vnc
+      - run: cargo build --locked -p horizon-device-vnc
+      - run: cargo clippy --locked -p horizon-device-vnc --all-targets -- -D warnings
       - name: Qualify pinned VNC decoder
         run: |
           decoder_dir=$(mktemp -d)
@@ -155,7 +158,8 @@ jobs:
             device_test_dir=$(mktemp -d)
             trap '\''rm -rf "$device_test_dir"'\'' EXIT
             printf '\''{"id":"ci-device","endpoint":{"kind":"local_x11","display":"%s"}}'\'' "$DISPLAY" > "$device_test_dir/target.json"
-            HORIZON_DEVICE_TEST_TARGET="$device_test_dir/target.json" cargo test --locked -p horizon-device --features cli --test x11_live --test cli -- --ignored --test-threads=1
+            HORIZON_DEVICE_TEST_TARGET="$device_test_dir/target.json" cargo test --locked -p horizon-device --features cli --lib --test x11_live --test cli -- --ignored --test-threads=1
+            python3 scripts/device-smoke/resize_lifecycle.py --binary target/debug/horizon-device-vnc --target "$device_test_dir/target.json"
           '
 
   browser-harness-tests:
