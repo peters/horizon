@@ -82,9 +82,11 @@ and applied dimensions and current surface geometry. Capture a fresh screenshot
 before input. Pre-resize coordinates remain stale after a grow/shrink round
 trip. Screenshot crop/output dimensions and viewer Fit do not resize the desktop.
 
-The CLI/MCP runner serializes commands and writes a `target.resize-pending`
+The CLI/MCP runner serializes commands and writes a `target.json.resize-pending`
 journal before dispatch. After a timeout, disconnect or process exit during
 mutation, the owner must reconcile the same session before removing that journal.
 `device_resize` cannot enable permission or clear uncertainty. A separate
-`target.resize-observe` marker blocks input until a successful fresh screenshot.
+`target.json.resize-observe` marker blocks input until a successful fresh screenshot.
 A bounded operation already in progress finishes even if its MCP caller cancels.
+
+Target filenames must not end in `.lock`, `.resize-pending` or `.resize-observe`.

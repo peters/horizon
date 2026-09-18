@@ -124,7 +124,9 @@ impl Dispatcher {
     }
 
     fn marker(&self, extension: &str) -> PathBuf {
-        self.target_file.with_extension(extension)
+        let mut path = self.target_file.as_os_str().to_os_string();
+        path.push(format!(".{extension}"));
+        path.into()
     }
 
     fn remove_marker(&self, extension: &str) -> crate::Result<()> {
@@ -187,6 +189,15 @@ impl Dispatcher {
     }
 
     fn lock(&self) -> crate::Result<File> {
+        if self
+            .target_file
+            .extension()
+            .is_some_and(|extension| matches!(extension.to_str(), Some("lock" | "resize-pending" | "resize-observe")))
+        {
+            return Err(DeviceError::Invalid(
+                "target filename uses a reserved control suffix".into(),
+            ));
+        }
         // The supplied config lives in a caller-owned private session directory.
         // Keep the inode after unlock so independent CLI/MCP processes cooperate.
         let path = self.target_file.with_extension("lock");
@@ -389,6 +400,34 @@ mod tests {
         dispatcher.resize_factory = Some(unavailable);
         let response = dispatcher.call(Command::Doctor);
         assert_eq!(response.value["error"]["code"], "resize_uncertain");
+        Ok(())
+    }
+    #[test]
+    fn target_names_never_alias_or_get_deleted_as_markers() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        for name in [
+            "session",
+            "session.json",
+            "session.yaml",
+            "session.resize-observe",
+            "session.resize-pending",
+            "session.lock",
+        ] {
+            let dispatcher = Dispatcher {
+                target_file: directory.path().join(name),
+                resize_factory: None,
+            };
+            std::fs::write(&dispatcher.target_file, b"original")?;
+            assert_eq!(
+                dispatcher.marker("resize-observe"),
+                directory.path().join(format!("{name}.resize-observe"))
+            );
+            dispatcher.remove_marker("resize-observe")?;
+            assert_eq!(std::fs::read(&dispatcher.target_file)?, b"original");
+            if name.ends_with(".lock") || name.contains(".resize-") {
+                assert!(matches!(dispatcher.lock(), Err(DeviceError::Invalid(_))));
+            }
+        }
         Ok(())
     }
 }
