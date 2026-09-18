@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::mem;
 
 use egui::{Context, Event, Key, Modifiers, Rect, Vec2};
@@ -134,16 +133,14 @@ fn topmost_panel_geometry(
     paint_order: &[PanelId],
     position: egui::Pos2,
 ) -> Option<(PanelId, PanelScreenGeometry)> {
-    let by_id: HashMap<PanelId, PanelScreenGeometry> = panel_geometry.iter().copied().collect();
     paint_order
         .iter()
         .rev()
         .find_map(|id| {
-            by_id
-                .get(id)
+            panel_geometry
+                .iter()
+                .find(|(panel_id, geometry)| panel_id == id && geometry.screen_rect.contains(position))
                 .copied()
-                .filter(|geometry| geometry.screen_rect.contains(position))
-                .map(|geometry| (*id, geometry))
         })
         .or_else(|| {
             panel_geometry
@@ -229,10 +226,7 @@ impl HorizonApp {
         let panel_geometry = self.visible_panel_geometry_for_canvas_view(canvas_rect, visible_workspace);
         let pointer_in_canvas = pointer_position.is_some_and(|position| {
             canvas_rect.contains(position)
-                && !(visible_workspace.is_none()
-                    && self
-                        .work_resume_overlay_rect(ctx)
-                        .is_some_and(|rect| rect.contains(position)))
+                && !(visible_workspace.is_none() && self.overlay_exclusion_zones(ctx).contains(position))
         });
         let space_drag_claimed =
             pointer_in_canvas && primary_down && space_down && space_drag_modifier_active(modifiers);
