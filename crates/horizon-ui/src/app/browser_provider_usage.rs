@@ -71,7 +71,9 @@ impl HorizonApp {
             if error.is_none() {
                 for (name, monitor) in &mut pending.providers {
                     if let Some(profile) = self.template_config.browser.remote.providers.get(name) {
-                        if !timed_out {
+                        if timed_out {
+                            monitor.poll(profile);
+                        } else {
                             monitor.update(profile, &self.remote_browser_credentials, false);
                         }
                         refreshing |= monitor.refreshing();
@@ -234,7 +236,13 @@ mod tests {
             queued: 0,
         };
         let mut completed = ProviderUsageMonitor::default();
+        completed.update(
+            &app.template_config.browser.remote.providers["cloud-a"],
+            &app.remote_browser_credentials,
+            false,
+        );
         completed.sample = Some((sample, std::time::Instant::now()));
+        completed.error = None;
         app.browser_create_host.provider_usage.pending.push(PendingUsage {
             request,
             providers: [
