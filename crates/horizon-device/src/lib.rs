@@ -3,6 +3,8 @@
 //! No GUI, model provider, application lifecycle, or transport is required.
 
 mod capture;
+#[cfg(feature = "cli")]
+pub mod cli;
 mod model;
 #[cfg(target_os = "linux")]
 mod x11;

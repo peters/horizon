@@ -1,4 +1,4 @@
-use horizon_device::{ActRequest, CaptureOptions, Device, DeviceError, Target};
+use crate::{ActRequest, CaptureOptions, Device, DeviceError, Target};
 use serde_json::{Value, json};
 use std::{
     fs::{File, OpenOptions},
@@ -23,7 +23,7 @@ impl Dispatcher {
             Err(error) => json!({"ok":false,"error":{"code":error.code(),"message":error.to_string()}}),
         }
     }
-    fn execute(&self, command: Command) -> horizon_device::Result<Value> {
+    fn execute(&self, command: Command) -> crate::Result<Value> {
         let _lock = self.lock()?;
         let mut bytes = Vec::new();
         File::open(&self.target_file)
@@ -44,7 +44,7 @@ impl Dispatcher {
         }
     }
 
-    fn lock(&self) -> horizon_device::Result<File> {
+    fn lock(&self) -> crate::Result<File> {
         // The supplied config lives in a caller-owned private session directory.
         // Keep the inode after unlock so independent CLI/MCP processes cooperate.
         let path = self.target_file.with_extension("lock");

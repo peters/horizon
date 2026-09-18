@@ -1,5 +1,5 @@
-use crate::dispatch::{Command, Dispatcher};
-use horizon_device::{ActRequest, CaptureOptions};
+use super::dispatch::{Command, Dispatcher};
+use crate::{ActRequest, CaptureOptions};
 use rmcp::{
     ServerHandler, ServiceExt,
     handler::server::wrapper::Parameters,
