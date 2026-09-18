@@ -33,6 +33,8 @@ struct ImageDisplay {
     sequence: u64,
     displayed: bool,
     previous_displayed: bool,
+    /// This connection has uploaded a frame. A retained texture is not evidence.
+    received: bool,
 }
 
 impl DeviceUiState {
@@ -80,6 +82,7 @@ impl DeviceUiState {
                     self.upload_displayed(ui, image);
                     self.presented_options = updates.produced_with.or(Some(current));
                     if self.texture.is_some() {
+                        self.image.received = true;
                         self.image.sequence = self.image.sequence.saturating_add(1);
                     }
                 }
@@ -147,7 +150,7 @@ impl DeviceUiState {
                 let scale = (available.x / size.x).min(available.y / size.y);
                 visible_image(ui, texture, size * scale)
             };
-            self.image.displayed = image_visible && matches!(self.status, Status::Connected);
+            self.image.displayed = image_visible && self.image.received && matches!(self.status, Status::Connected);
         } else {
             ui.label("The device desktop appears here after connection.");
         }
@@ -160,6 +163,7 @@ impl DeviceUiState {
         self.presented_options = None;
         self.refresh_presentation(ui);
         if self.texture.is_some() {
+            self.image.received = true;
             self.image.sequence = self.image.sequence.saturating_add(1);
         }
     }
@@ -207,8 +211,7 @@ impl DeviceUiState {
 
     pub(crate) fn reconnect(&mut self, ctx: &egui::Context, device: &DevicePanelState) {
         self.initialized = true;
-        self.image.displayed = false;
-        self.image.previous_displayed = false;
+        self.image = ImageDisplay::default();
         if let Some(full) = self.session.as_ref().and_then(Session::latest_full) {
             self.source = Some(full);
         }
@@ -251,8 +254,11 @@ impl DeviceUiState {
             visible,
             owned_by_caller: self.owner.as_deref() == Some(actor),
             image: ImageEvidence {
-                image_received: self.texture.is_some(),
-                image_displayed: visible && self.image.previous_displayed && connection == Connection::Connected,
+                image_received: self.image.received,
+                image_displayed: visible
+                    && self.image.received
+                    && self.image.previous_displayed
+                    && connection == Connection::Connected,
                 frame_sequence: self.image.sequence,
             },
             connection,
@@ -495,6 +501,39 @@ mod tests {
         click_label(&ctx, &mut state, &device, "Reconnect");
         assert!(matches!(state.status, Status::Connecting));
         assert_eq!(presented_size(&state), Some([2, 2]));
+        assert_eq!(state.image.sequence, 0);
+        assert!(!state.image.received);
+        let evidence = state.observation("panel".into(), &device, true, "agent");
+        assert!(!evidence.image.image_received);
+        assert!(!evidence.image.image_displayed);
+        assert_eq!(evidence.image.frame_sequence, 0);
+    }
+
+    #[test]
+    fn reconnect_does_not_report_a_retained_texture_as_live_evidence() {
+        let (ctx, device, mut state) = disconnected_viewer();
+        show_viewer(&ctx, &mut state, &device, Vec::new());
+        assert!(state.image.received);
+        assert_eq!(state.image.sequence, 1);
+        click_label(&ctx, &mut state, &device, "Reconnect");
+        let _worker = state.session.take();
+        state.status = Status::Connected;
+        let _ = ctx
+            .run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0))),
+                    ..Default::default()
+                },
+                |ui| state.show(ui, &device, true),
+            )
+            .discard_textures();
+        assert_eq!(presented_size(&state), Some([8, 4]));
+        assert!(!state.image.displayed);
+        state.begin_frame();
+        let evidence = state.observation("panel".into(), &device, true, "agent");
+        assert!(!evidence.image.image_received);
+        assert!(!evidence.image.image_displayed);
+        assert_eq!(evidence.image.frame_sequence, 0);
     }
     #[test]
     fn connected_texture_is_not_display_proof_when_image_is_clipped() {

@@ -119,8 +119,10 @@ desktop resolution or the presented image size.
 ### B6. Reconnect and last-frame controls
 
 1. Click **Reconnect** while the source is still up. Status becomes
-   Connecting, then Connected; `frame_sequence` advances again. The last image
-   remains visible until the new desktop arrives.
+   Connecting. The last image remains visible, but inspect must report
+   `image_received: false`, `image_displayed: false`, and `frame_sequence: 0`
+   until the new worker uploads a frame. Then Connected, and `frame_sequence`
+   advances again.
 2. Stop the source fixture (or its x11vnc) so the viewer reports Disconnected.
    The last desktop image must remain. Repeat B3 and B4 on that last frame:
    limits, Apply viewport, and Whole desktop must still change the **Image**
