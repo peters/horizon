@@ -10,7 +10,7 @@ use horizon_core::DeviceViewOptions;
 use tokio::sync::{oneshot, watch};
 use vnc::{PixelFormat, VncConnector, VncEncoding, X11Event};
 
-use super::frame::Framebuffer;
+use super::frame::{Framebuffer, present_image};
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum ViewError {
@@ -37,6 +37,7 @@ pub(super) enum Status {
 
 pub(super) struct Updates {
     pub image: Option<ColorImage>,
+    pub produced_with: Option<DeviceViewOptions>,
     pub status: Option<Status>,
     viewport: ViewportId,
     visible: bool,
@@ -46,6 +47,7 @@ pub(super) struct Updates {
 
 pub(super) struct Session {
     updates: Arc<Mutex<Updates>>,
+    latest_full: Arc<Mutex<Option<ColorImage>>>,
     stop: Option<oneshot::Sender<()>>,
     visibility: watch::Sender<bool>,
     thread: Option<JoinHandle<()>>,
@@ -60,13 +62,16 @@ impl Session {
     ) -> Result<Self, ViewError> {
         let updates = Arc::new(Mutex::new(Updates {
             image: None,
+            produced_with: None,
             status: Some(Status::Connecting),
             viewport,
             visible: true,
             options,
             desktop: None,
         }));
+        let latest_full = Arc::new(Mutex::new(None));
         let state = Arc::clone(&updates);
+        let retained = Arc::clone(&latest_full);
         let (stop, cancelled) = oneshot::channel();
         let (visibility, visible) = watch::channel(true);
         let thread = std::thread::Builder::new().name("device-view".into()).spawn(move || {
@@ -79,7 +84,7 @@ impl Session {
                         // decoder/socket task, including a stalled handshake or read.
                         tokio::select! {
                             _ = cancelled => Ok(()),
-                            result = connection(address, &state, &ctx, visible) => result,
+                            result = connection(address, &state, &retained, &ctx, visible) => result,
                         }
                     })
                 });
@@ -92,6 +97,7 @@ impl Session {
         })?;
         Ok(Self {
             updates,
+            latest_full,
             stop: Some(stop),
             visibility,
             thread: Some(thread),
@@ -103,6 +109,33 @@ impl Session {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .options = options;
+    }
+
+    pub(super) fn latest_full(&self) -> Option<ColorImage> {
+        self.latest_full
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    #[cfg(test)]
+    pub(super) fn pending_frame(latest_full: ColorImage, image: ColorImage, produced_with: DeviceViewOptions) -> Self {
+        let (visibility, _) = watch::channel(true);
+        Self {
+            updates: Arc::new(Mutex::new(Updates {
+                image: Some(image),
+                produced_with: Some(produced_with),
+                status: Some(Status::Connected),
+                viewport: ViewportId::ROOT,
+                visible: true,
+                options: produced_with,
+                desktop: Some(latest_full.size),
+            })),
+            latest_full: Arc::new(Mutex::new(Some(latest_full))),
+            stop: None,
+            visibility,
+            thread: None,
+        }
     }
 
     pub(super) fn set_visible(&self, visible: bool) {
@@ -125,6 +158,7 @@ impl Session {
         state.viewport = viewport;
         Updates {
             image: state.image.take(),
+            produced_with: state.produced_with,
             status: state.status.take(),
             viewport,
             visible: state.visible,
@@ -169,6 +203,7 @@ fn publish_status(updates: &Mutex<Updates>, ctx: &Context, status: Status) {
 async fn connection(
     address: SocketAddr,
     updates: &Mutex<Updates>,
+    latest_full: &Mutex<Option<ColorImage>>,
     ctx: &Context,
     mut visible: watch::Receiver<bool>,
 ) -> Result<(), ViewError> {
@@ -196,7 +231,6 @@ async fn connection(
     .map_err(|_| ViewError::Timeout)??;
     publish_status(updates, ctx, Status::Connected);
     let mut framebuffer = Framebuffer::default();
-    let mut previous_options = None;
     let mut received_pixels = false;
     loop {
         let mut full_refresh = !*visible.borrow_and_update();
@@ -234,14 +268,18 @@ async fn connection(
                 idle = true;
             }
         }
-        if received_pixels && (changed || previous_options != Some(options)) && !framebuffer.size().contains(&0) {
-            let image = framebuffer.image(options)?;
-            previous_options = Some(options);
+        // Sample off the UI thread. The full desktop is retained so view
+        // controls can re-present after disconnect or an options change.
+        if received_pixels && changed && !framebuffer.size().contains(&0) {
+            let full = framebuffer.full_image()?;
+            let image = present_image(&full, options)?;
+            *latest_full.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(full);
             let viewport = {
                 let mut state = updates.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 // Only the latest frame is retained; slow rendering cannot grow
                 // an application-side queue of full desktop images.
                 state.image = Some(image);
+                state.produced_with = Some(options.for_desktop(framebuffer.size()));
                 state.desktop = Some(framebuffer.size());
                 state.visible.then_some(state.viewport)
             };

@@ -92,32 +92,48 @@ impl Framebuffer {
         [self.width, self.height]
     }
 
-    pub(super) fn image(&self, options: horizon_core::DeviceViewOptions) -> Result<ColorImage, ViewError> {
-        let layout = options
-            .for_desktop(self.size())
-            .layout(self.size())
-            .map_err(|error| ViewError::Server(error.to_string()))?;
-        if layout.output == self.size() {
-            return Ok(ColorImage::from_rgba_unmultiplied(self.size(), &self.rgba));
+    pub(super) fn full_image(&self) -> Result<ColorImage, ViewError> {
+        if self.size().contains(&0) {
+            return Err(ViewError::Frame("unsupported desktop size"));
         }
-        let source_columns: Vec<_> = (0..layout.output[0])
-            .map(|x| (layout.source.x + (2 * x + 1) * layout.source.width / (2 * layout.output[0])) * 4)
-            .collect();
-        let mut pixels = Vec::with_capacity(layout.output[0] * layout.output[1]);
-        for y in 0..layout.output[1] {
-            let row = (layout.source.y + (2 * y + 1) * layout.source.height / (2 * layout.output[1])) * self.width * 4;
-            for column in &source_columns {
-                let offset = row + column;
-                pixels.push(egui::Color32::from_rgba_unmultiplied(
-                    self.rgba[offset],
-                    self.rgba[offset + 1],
-                    self.rgba[offset + 2],
-                    self.rgba[offset + 3],
-                ));
-            }
-        }
-        Ok(ColorImage::new(layout.output, pixels))
+        Ok(ColorImage::from_rgba_unmultiplied(self.size(), &self.rgba))
     }
+
+    #[cfg(test)]
+    pub(super) fn image(&self, options: horizon_core::DeviceViewOptions) -> Result<ColorImage, ViewError> {
+        present_image(&self.full_image()?, options)
+    }
+}
+
+/// Crop and scale a full desktop image for local view controls.
+pub(super) fn present_image(
+    source: &ColorImage,
+    options: horizon_core::DeviceViewOptions,
+) -> Result<ColorImage, ViewError> {
+    let layout = options
+        .for_desktop(source.size)
+        .layout(source.size)
+        .map_err(|error| ViewError::Server(error.to_string()))?;
+    if layout.source.x == 0
+        && layout.source.y == 0
+        && layout.source.width == source.size[0]
+        && layout.source.height == source.size[1]
+        && layout.output == source.size
+    {
+        return Ok(source.clone());
+    }
+    let width = source.size[0];
+    let columns: Vec<_> = (0..layout.output[0])
+        .map(|x| layout.source.x + (2 * x + 1) * layout.source.width / (2 * layout.output[0]))
+        .collect();
+    let mut pixels = Vec::with_capacity(layout.output[0] * layout.output[1]);
+    for y in 0..layout.output[1] {
+        let row = layout.source.y + (2 * y + 1) * layout.source.height / (2 * layout.output[1]);
+        for column in &columns {
+            pixels.push(source.pixels[row * width + *column]);
+        }
+    }
+    Ok(ColorImage::new(layout.output, pixels))
 }
 
 #[cfg(test)]
@@ -229,6 +245,15 @@ mod tests {
         assert_eq!(frame.size(), [4, 2]);
         frame.apply(VncEvent::SetResolution(vnc::Screen { width: 2, height: 2 }))?;
         assert_eq!(frame.image(options)?.size, [1, 1]);
+        let presented = present_image(
+            &ColorImage::new(
+                [4, 2],
+                (0..8).map(|value| egui::Color32::from_rgb(value, 0, 0)).collect(),
+            ),
+            options,
+        )?;
+        assert_eq!(presented.size, [1, 1]);
+        assert_eq!(presented.pixels[0].r(), 7);
         Ok(())
     }
 
