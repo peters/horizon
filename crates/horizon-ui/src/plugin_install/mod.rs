@@ -190,21 +190,19 @@ impl AgentPluginHostLease {
             return;
         };
         let device_dir = grok_root.join("skills").join(HORIZON_DEVICE_SKILL);
-        if browser_bound {
-            match bind_prepared_skill_root(host_id, device_dir.clone(), validate_device_skill, || {
+        match bind_prepared_skill_root(host_id, device_dir.clone(), validate_device_skill, || {
+            if browser_bound {
                 validate_device_skill(&device_dir)?;
-                install_device_skill(&device_dir)
-            }) {
-                Ok(device_lease) => self.skill_roots.push(device_lease),
-                Err(error) => {
-                    tracing::warn!(path = %device_dir.display(), %error, "Grok device skill unavailable; preserving existing content");
-                }
+                install_device_skill(&device_dir)?;
+            } else if validate_device_skill(&device_dir).is_ok() {
+                remove_horizon_skill_dir(&device_dir);
             }
-            return;
-        }
-        if validate_device_skill(&device_dir).is_ok() {
-            self.skill_roots
-                .extend(bind_skill_roots(host_id, &[], std::slice::from_ref(&device_dir)));
+            Ok(())
+        }) {
+            Ok(device_lease) => self.skill_roots.push(device_lease),
+            Err(error) => {
+                tracing::warn!(path = %device_dir.display(), %error, "Grok device skill unavailable; preserving existing content");
+            }
         }
     }
 
@@ -909,6 +907,7 @@ mod tests {
             !user_home.join(".grok/skills/horizon-browser/SKILL.md").exists(),
             "Grok browser skill is leased only after MCP registration"
         );
+        drop(lease);
         assert!(
             !leftover.exists(),
             "failed Grok browser registration must not retain a leftover Horizon-owned device skill"
