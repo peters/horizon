@@ -629,10 +629,10 @@ mod tests {
 
     use super::{
         AgentPluginHostLease, BROWSER_SKILL_FILES, CLAUDE_PLUGIN_FILES, DEVICE_SKILL_FILES, EmbeddedFile,
-        HORIZON_BROWSER_SKILL, HORIZON_DEVICE_SKILL, HORIZON_NOTIFY_SKILL, NOTIFY_SKILL_FILES, NOTIFY_SKILL_ROOTS,
-        abandoned_user_skill_dirs, agent_plugin_host_lock_path, install_agent_plugins_impl, open_lock_file,
-        prune_stale_agent_plugin_hosts, sync_file_if_changed, sync_leased_user_skills, sync_plugin_files,
-        user_skill_dir, user_skill_lease_dirs,
+        HORIZON_BROWSER_SKILL, HORIZON_DEVICE_SKILL, HORIZON_NOTIFY_SKILL, HORIZON_SPEECH_SKILL, NOTIFY_SKILL_FILES,
+        NOTIFY_SKILL_ROOTS, SPEECH_SKILL_FILES, abandoned_user_skill_dirs, agent_plugin_host_lock_path,
+        install_agent_plugins_impl, open_lock_file, prune_stale_agent_plugin_hosts, sync_file_if_changed,
+        sync_leased_user_skills, sync_plugin_files, user_skill_dir, user_skill_lease_dirs,
     };
 
     fn write_skill_dir(path: &Path, body: &str) {
@@ -724,6 +724,30 @@ mod tests {
         );
     }
 
+    /// `horizon-speech` ships two files, so assert both reach every
+    /// destination: a missing `SPEECH_SKILL_FILES` entry or a skipped sync
+    /// target would otherwise pass on the directory alone. The Claude and Codex
+    /// copies are byte-identical, so one expectation covers both.
+    fn assert_speech_skill_installed(user_home: &Path, horizon_home: &HorizonHome, claude_plugin_dir: &Path) {
+        for file in SPEECH_SKILL_FILES {
+            assert_installed_skill(
+                &user_home.join(".codex/skills/horizon-speech").join(file.relative_path),
+                file.content,
+            );
+            assert_installed_skill(
+                &horizon_home
+                    .codex_integrations_dir()
+                    .join(HORIZON_SPEECH_SKILL)
+                    .join(file.relative_path),
+                file.content,
+            );
+            assert_installed_skill(
+                &claude_plugin_dir.join("skills/horizon-speech").join(file.relative_path),
+                file.content,
+            );
+        }
+    }
+
     fn assert_claude_plugin_skill(plugin_dir: &Path, relative_path: &str) {
         assert_eq!(
             std::fs::read_to_string(plugin_dir.join(relative_path)).expect("claude plugin skill"),
@@ -795,6 +819,7 @@ mod tests {
             &user_home.join(".grok/skills/horizon-device/SKILL.md"),
             DEVICE_SKILL_FILES[0].content,
         );
+        assert_speech_skill_installed(&user_home, &horizon_home, &claude_plugin_dir);
         assert_skill_absent(
             &user_home.join(".agents/skills/horizon-notify/SKILL.md"),
             "notify skill must not broadcast through ~/.agents/skills",

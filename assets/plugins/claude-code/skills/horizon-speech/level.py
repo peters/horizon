@@ -20,8 +20,11 @@ def read_mono_samples(path):
         raw = handle.readframes(handle.getnframes())
 
     if width == 1:
-        # 8-bit WAV is unsigned, centred on 128.
-        values = [(byte - 128) / 128.0 for byte in raw]
+        # 8-bit WAV is unsigned and centred on 128, so its range is asymmetric:
+        # 255 is +127 while 0 is -128. Scale each half by its own endpoint, or a
+        # positive-clipped capture peaks at 127/128 and never trips the clipping
+        # threshold.
+        values = [(b - 128) / 127.0 if b >= 128 else (b - 128) / 128.0 for b in raw]
     elif width == 2:
         count = len(raw) // 2
         values = [v / 32768.0 for v in struct.unpack(f"<{count}h", raw[: count * 2])]

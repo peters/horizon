@@ -24,8 +24,14 @@ reason this skill exists.
 
 ## 1. Compare configured device against reality
 
-The Horizon config lives at `~/.horizon/config.yaml` (Linux/macOS) or
-`%USERPROFILE%\.horizon\config.yaml` (Windows). Read `features.speech`:
+Horizon resolves its config by checking, in order, `$HOME/.horizon/`, then
+`$XDG_CONFIG_HOME/horizon/`, then a relative `horizon.yaml`/`horizon.yml` in the
+working directory. Resolution keys off `HOME` on every platform — **Windows
+included**; `USERPROFILE` is never consulted, so a native Windows launch without
+`HOME` set falls back to the relative path. Confirm which file is actually live
+before trusting it, or you may inspect a config Horizon never loaded.
+
+Read `features.speech` from that file:
 
 - `input_device: ""` means the system default input is used.
 - A non-empty name is matched case-insensitively: exact, then substring, then a
@@ -55,10 +61,19 @@ offers one.
 Ask the user to speak normally for about six seconds. Record mono at 16 kHz —
 that is what the models consume.
 
-- Linux: `arecord -f S16_LE -r 16000 -c 1 -d 6 sample.wav`
-  (or `pw-record --rate 16000 --channels 1 sample.wav`)
+**Record from the device step 1 matched, never the system default.** When
+`input_device` names a non-default microphone, sampling the default measures a
+different device than Horizon uses and can yield the exact opposite diagnosis —
+a silent default while the real microphone works, or the reverse.
+
+- Linux (ALSA): `arecord -D <device> -f S16_LE -r 16000 -c 1 -d 6 sample.wav`,
+  where `<device>` is a name from `arecord -L`
+- Linux (PipeWire): `pw-record --target <node-name-or-id> --rate 16000 --channels 1 sample.wav`
 - macOS: `ffmpeg -f avfoundation -i ":<device-index>" -ar 16000 -ac 1 -t 6 sample.wav`
 - Windows: `ffmpeg -f dshow -i audio="<device name>" -ar 16000 -ac 1 -t 6 sample.wav`
+
+Only fall back to the default device when `input_device` is empty, since that is
+what Horizon itself then uses.
 
 Tell the user **when recording starts**. If you launch the recorder as a
 background task, add a visible countdown first — otherwise the window elapses
@@ -67,21 +82,28 @@ and misdiagnose it as a dead microphone.
 
 ## 3. Measure the level
 
-Run the bundled analyzer (Python 3, standard library only):
+`level.py` sits next to this `SKILL.md`. Invoke it by its full path — the
+working directory is normally the user's workspace, not the installed skill
+directory, so a bare `level.py` will not be found:
 
 ```
-python3 level.py sample.wav
+python3 <dir containing this SKILL.md>/level.py sample.wav
 ```
 
-It prints peak, RMS, clipped-sample count and a verdict:
+On Windows use the standard launcher: `py -3 ...\level.py sample.wav`.
+
+It needs only the Python 3 standard library, and reports peak, RMS and clipped
+samples, each as a percentage of full scale so the numbers mean the same thing
+at every sample width:
 
 | Reading | Meaning | Fix |
 | --- | --- | --- |
-| `peak` ~0 | Capture muted or no device | Unmute capture; check the device is selected and present |
-| `peak` < 200 | Effectively no signal | Wrong input selected, or nothing connected |
+| `peak` below 0.6% | No signal — capture muted, or no device | Unmute capture; confirm the right device is selected and present |
 | clipped samples > 20 | Too hot — distortion | Lower gain; turn microphone boost **off** first |
-| RMS < 2% | Too quiet | Raise gain, or move closer |
-| RMS 5–25% | Ideal for ASR | Nothing to do |
+| `rms` above 25% | Hotter than necessary | Reduce gain slightly |
+| `rms` 5–25% | Ideal for ASR | Nothing to do |
+| `rms` 2–5% | Usable | A little more gain would help |
+| `rms` below 2% | Too quiet | Raise gain, or move closer |
 
 ## 4. Transcribe the same file
 
