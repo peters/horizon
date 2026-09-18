@@ -10,7 +10,7 @@ geometry take another screenshot. On indeterminate input observe before deciding
 whether another action is appropriate; never replay blindly.
 
 The local CLI has the same contract:
-`horizon-device --target <private-target.json> doctor|screenshot|act <JSON>`.
+`horizon-device --target <private-target.json> doctor|screenshot|act|resize <JSON>`.
 For screenshots an optional output path writes a new private file instead of
 base64 JSON. Optional `--options JSON` (or `--options -` for stdin) accepts
 `region: {x,y,width,height}`, `output: {width,height}`, `format: png|jpeg`, and
@@ -79,3 +79,28 @@ children exited and target configuration expired. This packaged skill does not
 automatically register an MCP server or start a viewer: callers must supply the
 CLI executable and target or register the explicit `--target <file> mcp` command
 in their agent's supported configuration.
+
+## Desktop resizing
+
+Owner permission is separate from server support. Enable
+`desktop_resize.policy.enabled` only for the owned container session, with
+`max_width`, `max_height` and `max_pixels` limits. An optional adapter uses the
+explicit `desktop_resize.vnc_address`; existing X11 users need no VNC dependency.
+
+Check `doctor`, then call `resize '{"width":1920,"height":1080}'` or MCP
+`device_resize` with the same dimensions. A confirmed result includes requested
+and applied dimensions and current surface geometry. Capture a fresh screenshot
+before input. Pre-resize coordinates remain stale after a grow/shrink round
+trip. Screenshot crop/output dimensions and viewer Fit do not resize the desktop.
+
+The CLI/MCP runner serializes commands and writes a `target.json.resize-pending`
+journal before dispatch. After a timeout, disconnect or process exit during
+mutation, the owner must reconcile the same session before removing that journal.
+`device_resize` cannot enable permission or clear uncertainty. A separate
+`target.json.resize-observe` marker blocks input until a successful fresh screenshot.
+A bounded operation already in progress finishes even if its MCP caller cancels.
+
+Target filenames must not end in `.lock`, `.resize-pending` or `.resize-observe`.
+
+CLI/MCP errors include `resize_uncertain`: true means a resize may have been
+applied and requires owner reconciliation before retrying.

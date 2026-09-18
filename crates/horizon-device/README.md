@@ -27,7 +27,7 @@ success, 1 for a device failure, and 2 for invalid CLI arguments/output failure.
 Screenshot without a path returns image base64 (PNG by default); with a path it creates a new mode
 0600 file and returns its path. Existing files are never overwritten.
 
-MCP exposes `device_doctor`, `device_screenshot`, and `device_act`; screenshots
+MCP exposes `device_doctor`, `device_screenshot`, `device_act`, and `device_resize`; screenshots
 include an MCP image block and geometry metadata. Optional screenshot arguments
 are the same object accepted by CLI `--options`. CLI `act` and MCP `device_act`
 accept the same JSON object:
@@ -52,6 +52,7 @@ Library consumers need no async runtime:
 ```rust,no_run
 use horizon_device::{Device, Endpoint, Target};
 let target = Target {
+    desktop_resize: Default::default(),
     id: "lab".into(),
     endpoint: Endpoint::LocalX11 { display: ":99".into() },
 };
@@ -128,3 +129,28 @@ out-of-image points. Observe again when geometry is stale. Image compression and
 scaling affect screenshot size; they do not alter the device desktop or VNC wire
 compression. The JPEG encoder is an independent optional-format dependency;
 no GUI or VNC library is introduced.
+
+## Desktop resizing
+
+Owner permission is separate from server support. Enable
+`desktop_resize.policy.enabled` only for the owned container session, with
+`max_width`, `max_height` and `max_pixels` limits. An optional adapter uses the
+explicit `desktop_resize.vnc_address`; existing X11 users need no VNC dependency.
+
+Check `doctor`, then call `resize '{"width":1920,"height":1080}'` or MCP
+`device_resize` with the same dimensions. A confirmed result includes requested
+and applied dimensions and current surface geometry. Capture a fresh screenshot
+before input. Pre-resize coordinates remain stale after a grow/shrink round
+trip. Screenshot crop/output dimensions and viewer Fit do not resize the desktop.
+
+The CLI/MCP runner serializes commands and writes a `target.json.resize-pending`
+journal before dispatch. After a timeout, disconnect or process exit during
+mutation, the owner must reconcile the same session before removing that journal.
+`device_resize` cannot enable permission or clear uncertainty. A separate
+`target.json.resize-observe` marker blocks input until a successful fresh screenshot.
+A bounded operation already in progress finishes even if its MCP caller cancels.
+
+Target filenames must not end in `.lock`, `.resize-pending` or `.resize-observe`.
+
+CLI/MCP errors include `resize_uncertain`: true means a resize may have been
+applied and requires owner reconciliation before retrying.

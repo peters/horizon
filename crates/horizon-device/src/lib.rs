@@ -6,6 +6,8 @@ mod capture;
 #[cfg(feature = "cli")]
 pub mod cli;
 mod model;
+mod resize;
+pub use resize::*;
 #[cfg(target_os = "linux")]
 mod x11;
 pub use model::*;
@@ -20,10 +22,20 @@ pub enum DeviceError {
     Unavailable(String),
     #[error("geometry changed; obtain a new screenshot")]
     StaleGeometry,
+    #[error("desktop resize denied: {0}")]
+    ResizeDenied(String),
+    #[error("desktop resize timed out (uncertain: {uncertain})")]
+    ResizeTimeout { uncertain: bool },
+    #[error("desktop resize outcome uncertain; owner reconciliation required: {0}")]
+    ResizeUncertain(String),
     #[error("input outcome indeterminate; observe before retrying: {0}")]
     Indeterminate(String),
 }
 impl DeviceError {
+    #[must_use]
+    pub const fn resize_uncertain(&self) -> bool {
+        matches!(self, Self::ResizeUncertain(_) | Self::ResizeTimeout { uncertain: true })
+    }
     #[must_use]
     pub const fn code(&self) -> &'static str {
         match self {
@@ -31,6 +43,9 @@ impl DeviceError {
             Self::Unsupported(_) => "unsupported",
             Self::Unavailable(_) => "unavailable",
             Self::StaleGeometry => "stale_geometry",
+            Self::ResizeDenied(_) => "resize_denied",
+            Self::ResizeTimeout { .. } => "resize_timeout",
+            Self::ResizeUncertain(_) => "resize_uncertain",
             Self::Indeterminate(_) => "indeterminate",
         }
     }
@@ -40,6 +55,12 @@ pub type Result<T> = std::result::Result<T, DeviceError>;
 /// A small backend boundary; remote/mobile implementations need no native handles
 /// in public requests. Backends must validate before sending any input.
 trait Backend {
+    fn supports_resize_revisions(&self) -> bool {
+        false
+    }
+    fn resize_geometry(&self) -> Result<Geometry> {
+        Err(DeviceError::Unsupported("geometry-only resize preflight".into()))
+    }
     fn doctor(&self) -> Result<Readiness>;
     fn screenshot(&self, options: &CaptureOptions) -> Result<Observation>;
     fn act(&mut self, request: &ActRequest) -> Result<ActionReceipt>;
@@ -47,6 +68,7 @@ trait Backend {
 
 pub struct Device {
     backend: Box<dyn Backend>,
+    resize: resize::ResizeControl,
 }
 impl Device {
     /// Open an explicit target. The caller serializes access to shared device input.
@@ -54,6 +76,7 @@ impl Device {
     /// # Errors
     /// Rejects invalid, unsupported, or unavailable targets.
     pub fn connect(target: &Target) -> Result<Self> {
+        target.desktop_resize.validate()?;
         if target.id.is_empty() || target.id.len() > 128 {
             return Err(DeviceError::Invalid("target id must contain 1..128 bytes".into()));
         }
@@ -61,6 +84,12 @@ impl Device {
         {
             Ok(Self {
                 backend: Box::new(x11::X11::connect(target)?),
+                resize: resize::ResizeControl {
+                    config: target.desktop_resize.clone(),
+                    backend: None,
+                    uncertain: false,
+                    needs_observation: std::cell::Cell::new(false),
+                },
             })
         }
         #[cfg(not(target_os = "linux"))]
@@ -71,7 +100,9 @@ impl Device {
     /// # Errors
     /// Returns an error when capture geometry or input readiness cannot be queried.
     pub fn doctor(&self) -> Result<Readiness> {
-        self.backend.doctor()
+        let mut readiness = self.backend.doctor()?;
+        readiness.desktop_resize = self.resize.readiness(self.backend.supports_resize_revisions())?;
+        Ok(readiness)
     }
     /// # Errors
     /// Returns an error for unavailable capture, unsupported formats, or geometry changes.
@@ -83,11 +114,16 @@ impl Device {
     /// # Errors
     /// Rejects invalid capture options before reading pixels.
     pub fn screenshot_with(&self, options: &CaptureOptions) -> Result<Observation> {
-        self.backend.screenshot(options)
+        let observation = self.backend.screenshot(options)?;
+        self.resize.needs_observation.set(false);
+        Ok(observation)
     }
     /// # Errors
     /// Rejects invalid/stale requests before input; partial input returns indeterminate.
     pub fn act(&mut self, request: &ActRequest) -> Result<ActionReceipt> {
+        if self.resize.needs_observation.get() {
+            return Err(DeviceError::StaleGeometry);
+        }
         validate(request)?;
         self.backend.act(request)
     }

@@ -31,7 +31,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros"], opt
 
 [target.'cfg(target_os = "linux")'.dependencies]
 enigo = { version = "0.6.1", default-features = false, features = ["x11rb"] }
-x11rb = "0.14"
+x11rb = { version = "0.14", features = ["randr"] }
 
 [dev-dependencies]
 tempfile = "3"
