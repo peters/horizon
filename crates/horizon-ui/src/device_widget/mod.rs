@@ -116,7 +116,6 @@ impl DeviceUiState {
     }
 
     fn update_texture(&mut self, ui: &Ui, image: egui::ColorImage) {
-        self.image.sequence = self.image.sequence.saturating_add(1);
         let limit = ui.ctx().input(|input| input.max_texture_side);
         if image.size.iter().any(|side| *side == 0 || *side > limit) {
             self.session = None;
@@ -124,8 +123,10 @@ impl DeviceUiState {
             self.status = Status::Disconnected("Desktop exceeds the renderer's texture limit".into());
         } else if let Some(texture) = &mut self.texture {
             texture.set(image, TextureOptions::LINEAR);
+            self.image.sequence = self.image.sequence.saturating_add(1);
         } else {
             self.texture = Some(ui.ctx().load_texture("device-view", image, TextureOptions::LINEAR));
+            self.image.sequence = self.image.sequence.saturating_add(1);
         }
     }
 
@@ -216,6 +217,7 @@ mod tests {
         let _ = output.discard_textures();
         assert!(state.texture.is_none());
         assert!(matches!(state.status, Status::Disconnected(_)));
+        assert_eq!(state.image.sequence, 0, "rejected images are not uploaded frames");
     }
     #[test]
     fn connected_texture_is_not_display_proof_when_image_is_clipped() {
