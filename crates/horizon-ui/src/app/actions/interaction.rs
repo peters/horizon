@@ -378,7 +378,9 @@ impl HorizonApp {
         );
         let has_wheel_events = events.iter().any(|event| matches!(event, Event::MouseWheel { .. }));
         let followup_id = canvas_wheel_followup_id(ctx);
-        let previous_followup = ctx.data(|data| data.get_temp(followup_id));
+        let previous_followup = ctx
+            .data(|data| data.get_temp::<Option<CanvasWheelFollowup>>(followup_id))
+            .flatten();
         let (zoom_scroll, pan_scroll, next_followup) =
             resolve_smoothed_wheel(has_wheel_events, wheels, scroll, previous_followup);
         ctx.data_mut(|data| data.insert_temp(followup_id, next_followup));
