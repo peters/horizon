@@ -55,6 +55,9 @@ pub type Result<T> = std::result::Result<T, DeviceError>;
 /// A small backend boundary; remote/mobile implementations need no native handles
 /// in public requests. Backends must validate before sending any input.
 trait Backend {
+    fn supports_resize_revisions(&self) -> bool {
+        false
+    }
     fn doctor(&self) -> Result<Readiness>;
     fn screenshot(&self, options: &CaptureOptions) -> Result<Observation>;
     fn act(&mut self, request: &ActRequest) -> Result<ActionReceipt>;
@@ -95,6 +98,7 @@ impl Device {
     pub fn doctor(&self) -> Result<Readiness> {
         let mut readiness = self.backend.doctor()?;
         readiness.desktop_resize = self.resize.readiness()?;
+        readiness.desktop_resize.supported &= self.backend.supports_resize_revisions();
         Ok(readiness)
     }
     /// # Errors

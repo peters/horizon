@@ -140,6 +140,11 @@ impl Device {
                 "previous resize requires owner reconciliation".into(),
             ));
         }
+        if !self.backend.supports_resize_revisions() {
+            return Err(DeviceError::Unsupported(
+                "desktop resizing requires stable geometry revisions".into(),
+            ));
+        }
         let backend = self
             .resize
             .backend
@@ -151,15 +156,29 @@ impl Device {
             ));
         }
         let before = self.backend.doctor()?.geometry;
-        if backend.dimensions()?
-            != (ImageDimensions {
-                width: before.width,
-                height: before.height,
-            })
-        {
+        let current = ImageDimensions {
+            width: before.width,
+            height: before.height,
+        };
+        if backend.dimensions()? != current {
             return Err(DeviceError::Invalid(
                 "resize server and input surface dimensions differ".into(),
             ));
+        }
+        // The resized desktop must remain fully capturable and input-addressable,
+        // even when the owner raises policy limits beyond the backend's bounds.
+        crate::CaptureOptions::default().plan(&Geometry {
+            width: requested.width,
+            height: requested.height,
+            ..before.clone()
+        })?;
+        if requested == current {
+            self.resize.needs_observation.set(true);
+            return Ok(ResizeReceipt {
+                requested,
+                applied: current,
+                geometry: before,
+            });
         }
         let needs_observation = self.resize.needs_observation.get();
         self.resize.uncertain = true;

@@ -16,6 +16,7 @@ pub(crate) struct State {
     revision: u32,
     calls: usize,
     supported: bool,
+    revisions: bool,
     outcome: Outcome,
 }
 struct Fake(Arc<Mutex<State>>);
@@ -32,6 +33,12 @@ impl Fake {
     }
 }
 impl Backend for Fake {
+    fn supports_resize_revisions(&self) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .revisions
+    }
     fn doctor(&self) -> Result<Readiness> {
         Ok(Readiness {
             geometry: self.geometry(),
@@ -106,6 +113,7 @@ pub(crate) fn fixture(enabled: bool, outcome: Outcome) -> (Device, Arc<Mutex<Sta
         revision: 1,
         calls: 0,
         supported: true,
+        revisions: true,
         outcome,
     }));
     let device = Device {
@@ -261,5 +269,59 @@ fn a_denied_resize_does_not_erase_an_earlier_screenshot_requirement()
     device.screenshot()?;
     assert!(device.act(&action).is_ok());
 
+    Ok(())
+}
+
+#[test]
+fn owner_limits_cannot_exceed_capture_and_input_bounds() {
+    let (mut device, state) = fixture(true, Outcome::Confirm);
+    device.resize.config.policy.max_width = u32::MAX;
+    device.resize.config.policy.max_height = u32::MAX;
+    device.resize.config.policy.max_pixels = u64::MAX;
+    for (width, height) in [(32_769, 1), (1, 32_769), (3000, 3000)] {
+        assert!(matches!(
+            device.resize_desktop(&ResizeRequest { width, height }),
+            Err(DeviceError::Invalid(_))
+        ));
+    }
+    assert_eq!(state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).calls, 0);
+}
+
+#[test]
+fn missing_resize_revisions_preserve_observation_and_input() -> Result<()> {
+    let (mut device, state) = fixture(true, Outcome::Confirm);
+    state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .revisions = false;
+    let readiness = device.doctor()?.desktop_resize;
+    assert!(readiness.permitted);
+    assert!(!readiness.supported);
+    assert!(matches!(
+        device.resize_desktop(&request()),
+        Err(DeviceError::Unsupported(_))
+    ));
+    let geometry = device.screenshot()?.geometry;
+    device.act(&ActRequest {
+        geometry,
+        action: Action::Type {
+            text: "synthetic".into(),
+        },
+    })?;
+    assert_eq!(state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).calls, 0);
+    Ok(())
+}
+
+#[test]
+fn confirmed_unchanged_size_does_not_dispatch_to_the_backend() -> Result<()> {
+    let (mut device, state) = fixture(true, Outcome::Timeout(true));
+    let receipt = device.resize_desktop(&ResizeRequest {
+        width: 1280,
+        height: 720,
+    })?;
+    assert_eq!(receipt.requested, receipt.applied);
+    assert_eq!(state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).calls, 0);
+    assert!(!device.resize.uncertain);
+    assert!(device.resize.needs_observation.get());
     Ok(())
 }

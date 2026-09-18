@@ -62,14 +62,9 @@ impl X11 {
         } else {
             false
         };
-        if target.desktop_resize.policy.enabled && !randr {
-            return Err(DeviceError::Unsupported(
-                "desktop resizing requires RandR geometry revisions".into(),
-            ));
-        }
         Ok(Self {
             target: target.clone(),
-            randr: randr && target.desktop_resize.policy.enabled,
+            randr,
             root: s.root,
             visual: s.root_visual,
             connection,
@@ -88,7 +83,7 @@ impl X11 {
             ));
         }
         let Endpoint::LocalX11 { display } = &self.target.endpoint;
-        let revision = if self.randr {
+        let revision = if self.randr && self.target.desktop_resize.policy.enabled {
             self.connection
                 .randr_get_screen_resources_current(self.root)
                 .map_err(unavailable)?
@@ -111,6 +106,9 @@ impl X11 {
     }
 }
 impl Backend for X11 {
+    fn supports_resize_revisions(&self) -> bool {
+        self.randr
+    }
     fn doctor(&self) -> Result<Readiness> {
         let Endpoint::LocalX11 { display } = &self.target.endpoint;
         Enigo::new(&Settings {
