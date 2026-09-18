@@ -84,13 +84,19 @@ impl Dispatcher {
             }
         })?;
         device.resize.uncertain = pending;
-        if !pending
-            && device.backend.supports_resize_revisions()
+        if device.backend.supports_resize_revisions()
             && matches!(command, Command::Doctor | Command::Resize(_))
             && target.desktop_resize.vnc_address.is_some()
             && let Some(factory) = self.resize_factory
         {
-            device = device.with_resize_backend(factory(&target)?);
+            let backend = factory(&target).map_err(|error| {
+                if pending {
+                    DeviceError::ResizeUncertain(error.to_string())
+                } else {
+                    error
+                }
+            })?;
+            device = device.with_resize_backend(backend);
         }
         match command {
             Command::Doctor => {
@@ -348,6 +354,39 @@ mod tests {
             br#"{"id":"fixture","endpoint":{"kind":"local_x11","display":":54321"}}"#,
         )
         .map_err(io_error)?;
+        let response = dispatcher.call(Command::Doctor);
+        assert_eq!(response.value["error"]["code"], "resize_uncertain");
+        Ok(())
+    }
+    #[test]
+    #[ignore = "requires HORIZON_DEVICE_TEST_TARGET pointing to an owned X11 desktop with RandR"]
+    fn pending_doctor_reports_capability_or_preserves_transport_uncertainty()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        fn supported(_: &Target) -> crate::Result<Box<dyn crate::ResizeBackend>> {
+            fixture(true, Outcome::Confirm)
+                .0
+                .resize
+                .backend
+                .ok_or_else(|| DeviceError::Unavailable("missing fixture".into()))
+        }
+        fn unavailable(_: &Target) -> crate::Result<Box<dyn crate::ResizeBackend>> {
+            Err(DeviceError::Unavailable("disconnected".into()))
+        }
+        let directory = tempfile::tempdir()?;
+        let mut target: Target = serde_json::from_slice(&std::fs::read(std::env::var("HORIZON_DEVICE_TEST_TARGET")?)?)?;
+        target.desktop_resize.policy.enabled = true;
+        target.desktop_resize.vnc_address = Some("127.0.0.1:1".parse()?);
+        let mut dispatcher = Dispatcher {
+            target_file: directory.path().join("target.json"),
+            resize_factory: Some(supported),
+        };
+        std::fs::write(&dispatcher.target_file, serde_json::to_vec(&target)?)?;
+        std::fs::write(dispatcher.marker("resize-pending"), b"pending")?;
+        let response = dispatcher.call(Command::Doctor);
+        assert_eq!(response.value["result"]["desktop_resize"]["supported"], true);
+        assert_eq!(response.value["result"]["desktop_resize"]["uncertain"], true);
+        drop(response);
+        dispatcher.resize_factory = Some(unavailable);
         let response = dispatcher.call(Command::Doctor);
         assert_eq!(response.value["error"]["code"], "resize_uncertain");
         Ok(())
