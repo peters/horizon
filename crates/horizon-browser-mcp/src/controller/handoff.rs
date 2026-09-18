@@ -39,6 +39,8 @@ impl BrowserController {
         resume_request_id: Option<&str>,
     ) -> Result<HandoffReceipt, ControlError> {
         let started = Instant::now();
+        let panel = self.authorized_manifest(panel_id)?;
+        require_supported_handoff(&panel)?;
         if let Some(request_id) = resume_request_id {
             if !wait {
                 return Err(ControlError::internal_io(
@@ -142,6 +144,13 @@ impl BrowserController {
     }
 }
 
+fn require_supported_handoff(panel: &manifest::BrowserManifest) -> Result<(), ControlError> {
+    if panel.remote_target.is_some() {
+        return Err(ControlError::RemoteHandoffUnsupported);
+    }
+    Ok(())
+}
+
 fn bounded_handoff_timeout(timeout_millis: Option<u64>) -> u64 {
     timeout_millis
         .unwrap_or(DEFAULT_HANDOFF_TIMEOUT_MILLIS)
@@ -155,6 +164,21 @@ fn elapsed_millis(started: Instant) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_handoff_is_refused_for_visible_and_hidden_panels() {
+        for hidden in [false, true] {
+            let panel = manifest::BrowserManifest {
+                remote_target: Some("phone".into()),
+                hidden,
+                ..manifest::BrowserManifest::default()
+            };
+            let error = require_supported_handoff(&panel).expect_err("remote steering unavailable");
+            assert!(matches!(error, ControlError::RemoteHandoffUnsupported));
+            assert!(error.to_string().contains("unsupported_backend"));
+        }
+        require_supported_handoff(&manifest::BrowserManifest::default()).expect("local handoff supported");
+    }
 
     #[test]
     fn handoff_timeout_is_bounded() {
