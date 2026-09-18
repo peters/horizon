@@ -83,7 +83,9 @@ impl X11 {
             ));
         }
         let Endpoint::LocalX11 { display } = &self.target.endpoint;
-        let revision = if self.randr && self.target.desktop_resize.policy.enabled {
+        let revision = if self.randr
+            && (self.target.desktop_resize.policy.enabled || self.target.desktop_resize.vnc_address.is_some())
+        {
             self.connection
                 .randr_get_screen_resources_current(self.root)
                 .map_err(unavailable)?

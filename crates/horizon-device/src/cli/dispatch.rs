@@ -11,6 +11,7 @@ pub enum Command {
     Screenshot(CaptureOptions),
     Act(ActRequest),
     Resize(crate::ResizeRequest),
+    SetResizeEnabled(super::permission::ResizePermission),
 }
 
 #[derive(Clone)]
@@ -68,14 +69,17 @@ impl Dispatcher {
         let mut bytes = Vec::new();
         File::open(&self.target_file)
             .map_err(io_error)?
-            .take(4097)
+            .take(u64::from(super::MAX_TARGET_BYTES) + 1)
             .read_to_end(&mut bytes)
             .map_err(io_error)?;
-        if bytes.len() > 4096 {
+        if bytes.len() > usize::from(super::MAX_TARGET_BYTES) {
             return Err(DeviceError::Invalid("target config too large".into()));
         }
         let target: Target =
             serde_json::from_slice(&bytes).map_err(|_| DeviceError::Invalid("invalid target config".into()))?;
+        if let Command::SetResizeEnabled(permission) = &command {
+            return super::permission::save(&self.target_file, &bytes, target, permission);
+        }
         if let Command::Resize(request) = &command {
             target.desktop_resize.policy.validate(request.dimensions())?;
         }
@@ -126,6 +130,7 @@ impl Dispatcher {
                 serde_json::to_value(device.act(&request)?).map_err(io_error)
             }
             Command::Resize(request) => self.resize(&mut device, &request),
+            Command::SetResizeEnabled(_) => Err(DeviceError::Invalid("permission update already handled".into())),
         }
     }
 

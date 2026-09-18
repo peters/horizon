@@ -11,7 +11,7 @@ publish = ["crates-io"]
 
 [features]
 default = []
-cli = ["dep:rmcp", "dep:schemars", "dep:tokio"]
+cli = ["dep:rmcp", "dep:schemars", "dep:tokio", "dep:tempfile"]
 
 [[bin]]
 name = "horizon-device"
@@ -19,6 +19,7 @@ path = "src/main.rs"
 required-features = ["cli"]
 
 [dependencies]
+tempfile = { workspace = true, optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

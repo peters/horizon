@@ -1,4 +1,5 @@
 use super::dispatch::{Command, Dispatcher, Response};
+use super::permission::ResizePermission;
 use crate::{ActRequest, CaptureOptions, ResizeRequest};
 use rmcp::{
     RoleServer, ServerHandler, ServiceExt,
@@ -218,6 +219,13 @@ impl Server {
     )]
     async fn act(&self, Parameters(request): Parameters<ActRequest>) -> CallToolResult {
         self.execute(Command::Act(request), None).await
+    }
+    #[tool(
+        name = "device_set_resize_enabled",
+        description = "Enable or disable desktop resizing for this configured target at runtime. Persists permission for CLI and MCP without restarting. Preserves size limits, endpoint and uncertainty journals; does not resize or cancel a dispatched operation. Requires a writable target configuration."
+    )]
+    async fn set_resize_enabled(&self, Parameters(permission): Parameters<ResizePermission>) -> CallToolResult {
+        self.execute(Command::SetResizeEnabled(permission), None).await
     }
     #[tool(
         name = "device_resize",

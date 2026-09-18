@@ -27,7 +27,7 @@ success, 1 for a device failure, and 2 for invalid CLI arguments/output failure.
 Screenshot without a path returns image base64 (PNG by default); with a path it creates a new mode
 0600 file and returns its path. Existing files are never overwritten.
 
-MCP exposes `device_doctor`, `device_screenshot`, `device_act`, and `device_resize`; screenshots
+MCP exposes `device_doctor`, `device_screenshot`, `device_act`, `device_resize`, and `device_set_resize_enabled`; screenshots
 include an MCP image block and geometry metadata. Optional screenshot arguments
 are the same object accepted by CLI `--options`. CLI `act` and MCP `device_act`
 accept the same JSON object:
@@ -154,3 +154,17 @@ Target filenames must not end in `.lock`, `.resize-pending` or `.resize-observe`
 
 CLI/MCP errors include `resize_uncertain`: true means a resize may have been
 applied and requires owner reconciliation before retrying.
+
+Resize permission can change at runtime without restarting the MCP server:
+
+```sh
+horizon-device --target /private/session/target.json --resize-enabled true
+horizon-device --target /private/session/target.json --resize-enabled false
+```
+
+The equivalent MCP tool is `device_set_resize_enabled` with `{"enabled":true}`
+or `{"enabled":false}`. Both persist only permission in the target file, retaining
+its endpoint, size limits and pending-resize journals. Configuration must be a
+writable regular file in a private directory. A permission change waits for no
+operation: it returns busy while another command holds the target lock. Disabling
+afterward affects later requests and does not cancel an already dispatched resize.
