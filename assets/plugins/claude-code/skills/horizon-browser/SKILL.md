@@ -1,9 +1,13 @@
 ---
 name: horizon-browser
-description: Control, inspect, or audit a live browser panel inside Horizon through the Horizon browser MCP tools.
+description: Control, inspect, or audit Horizon browser panels, and manage native VNC Device panels for isolated application tests through public MCP tools.
 ---
 
 # Horizon browser control
+
+For native application tests, go directly to [Isolated native application
+testing](#isolated-native-application-testing) and use `device_panel`. The
+browser-panel discovery and creation workflow below applies to browser pages.
 
 Use the `browser_*` MCP tools as the only agent-facing browser contract. Do
 not inspect Horizon runtime files, connect to raw CDP/BiDi/WebDriver endpoints,
@@ -200,54 +204,55 @@ in Settings > Remote browsers.
 
 ## Isolated native application testing
 
-For native application work, use a task-owned virtual desktop observed through a
-read-only noVNC page in Horizon. Keep browser interactions on these public
-`browser_*` tools; use explicitly configured device CLI/MCP tools only for input
-into the native test desktop. A native Device panel is a read-only Rust VNC
-viewer, not a browser and not a device-input API. noVNC provides the outer test
-view; it is not required by the native panel itself.
+Always observe interactive native application tests live through a **Horizon
+native VNC Device panel in the user's current workspace**. Use a task-owned
+isolated desktop and private application state. Do not use noVNC or a browser
+viewer, or substitute screenshots/recordings for the live panel. Browser-page
+work still uses the public `browser_*` tools above.
 
-Run independent applications in parallel when requested, with a separate unused
-display, private application configuration/home, expiring device target, loopback
-VNC/web ports, and owned process tree for each fixture. Record which exact target
-and process each agent owns. Keep input and screenshot geometry scoped to that
-target; never reuse another fixture's coordinates or fall back to the developer's
-desktop. A request for independent test viewers permits the corresponding
-`browser_create` calls with `allow_additional: true`; it does not permit unrelated
-helper sessions. The Horizon source checkout's `scripts/device-smoke/README.md`
-describes its fixture and optional project-local device registration. Other native
-applications need equivalent isolation supplied by their own test launcher.
+The same MCP server exposes `device_panel` for native viewer lifecycle. Call
+`operation: "list"` to discover panels in the caller's workspace. Create a
+task-owned viewer with `operation: "create"` and the fixture's numeric loopback
+`endpoint` (IP and nonzero port); retain its returned `panel_id`. This requires
+a Horizon-launched agent and a supporting host. The tool does not provision a
+desktop or forward input. The source checkout's `scripts/device-smoke/README.md`
+describes the isolated fixture; launch it with `--native-view` and use its
+`vnc_address`, not a browser URL.
 
-Build the intended checkout to completion before launching. Avoid sharing a
-Cargo target directory between different source trees during qualification.
-Copy candidate executables into a new task-owned directory, record their hashes,
-and launch those frozen copies. Verify the executable and hash of the actual
-application child; the fixture's recorded launcher PID may be `bwrap`. Preserve
-existing application processes. A later rebuild does not update an already
-running process; close only the owned candidate normally before replacing it.
+Creation returns immediately. Use `operation: "inspect"` and the returned id to
+verify `connection: "connected"`, `image_received`, `image_displayed` and an
+advancing `frame_sequence` while target output changes. `visible` is only a
+presentation setting; an image can be off canvas or clipped. Set
+`operation: "visibility", visible: true` for a hidden owned viewer, then verify
+actual presentation. Never claim that a separate isolated viewer is visible to
+the user merely because its screenshot is available.
 
-Inspect outer noVNC page readiness with `browser_snapshot` or `browser_query`.
-Observe native pixels with `device_screenshot` and recorded `browser_video`
-frames; drive the native target through `device_doctor`, `device_screenshot` and
-`device_act`, or their CLI counterparts. Check actual application output after input: a dispatched action
-is not an assertion. For a nested native-panel test, keep the viewer fixture and
-the viewed target fixture distinct, with separate device targets. Exercise view
-resize, Fit and detach without expecting the read-only image to forward input.
+`operation: "reconnect"` explicitly connects and acquires an unowned/restored
+viewer; do not take another owner's panel. Restored viewers stay stopped until
+reconnected. `operation: "close"` closes an owned viewer without terminating its
+target. On `host_timeout`, list before retrying a mutation because it may have
+completed. If the tool, supporting host or visible native viewer is unavailable,
+report the blocked lane. Do not fall back to noVNC, edit private runtime files,
+restart active sessions, or automate the developer's desktop.
 
-Use existing `browser_resize` for the outer browser viewport and `browser_video`
-encoding options for evidence quality. These do not resize the native desktop,
-change native VNC frame quality, or provide native screenshot cropping. Native
-Device panels have separate View controls for maximum refresh, rendered image
-limits, explicit viewport, Fit and 1:1. These are local rendering controls; they
-do not resize the target or change VNC wire compression. Use only capabilities
-the connected tools actually expose.
+Drive the isolated target with explicitly configured device CLI/MCP tools: use
+`device_doctor`, then `device_screenshot`, then bounded `device_act` input with
+fresh geometry. Observe the result after each action. The native image is
+read-only. Independent fixtures need separate displays, private state, device
+targets, loopback VNC ports and owned process trees. For a nested Device-panel
+test, view the isolated Horizon containing that panel through a native panel
+in the user's workspace; keep each target and its geometry distinct.
 
-Record a short representative flow with `browser_video`, stop it, and copy the
-returned WebM export to private evidence **before `browser_close`** removes its
-profile and capture exports. Inspect representative frames and correlate them
-with the frozen candidate hash and observed result. Keep internal application
-names, scenarios, screenshots, recordings and operational identifiers local;
-public examples use only generic Horizon fixtures and synthetic content. Close
-only owned browser panels and test applications, then stop their owned fixtures
-and verify target expiry and child cleanup. Parallel work must not interrupt the
-developer's desktop or another agent's fixture.
+Finish the intended build in its own target directory, freeze executables and
+record hashes before launch. Verify the actual application child PID and hash;
+a `bwrap` launcher PID is not enough. Preserve existing application processes.
+Native View controls change local rendering, not target desktop geometry or VNC
+compression. Device screenshot crop/output options are separate controls.
+
+Record feature flows directly from the task-owned isolated desktop with a
+recorder scoped to that display, and inspect representative decoded frames.
+Native panels have no recording API; `browser_video` records browser pages only.
+If native recording is unavailable or stalls, report the recording lane as
+blocked rather than substituting still images or noVNC. Keep evidence private,
+with the candidate hash and scenario. Close only owned viewers and test
+applications, then stop their fixtures and verify target expiry and child exit.

@@ -74,7 +74,9 @@ read-only; reconnect is manual and closing a panel closes only its connection.
 
 Generic Horizon testing exercises live terminal output, panel movement,
 resize/Fit, detach/fullscreen, read-only input isolation, connection recovery and
-normal shutdown inside a noVNC-observed isolated desktop. Final-candidate testing must repeat these checks after dependency changes.
+normal shutdown inside an isolated desktop (historically observed through noVNC).
+Final-candidate testing must repeat these checks after dependency changes using
+the native VNC Device panel required by `AGENTS.md`.
 
 DesktopSize protocol coverage is an in-memory server test, not proof of live
 server resolution reconfiguration. Native macOS/Windows builds, Apple ARD,

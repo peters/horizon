@@ -38,7 +38,7 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
   in `Cargo.toml`. Its fork retains licenses, provenance and qualification limits.
   It is excluded from the publishable `horizon-device` control package. The
   standalone crate's screenshot/action contract remains independent of viewing.
-- Isolated Linux fixtures and noVNC recording live in `scripts/device-smoke`.
+- Isolated Linux fixtures live in `scripts/device-smoke`; interactive tests use a native VNC Device panel and recording scoped to the isolated desktop.
   They are development prerequisites; no recorder or remote manager is added
   to the product.
 

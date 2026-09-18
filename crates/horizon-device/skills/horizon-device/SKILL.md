@@ -47,21 +47,32 @@ against that frozen copy, following the actual child rather than a sandbox
 launcher such as `bwrap`. Close only the owned candidate normally when replacing
 it; a rebuild does not change a running process.
 
-A separate read-only viewer can observe the same display; it does not provide
-device tools. In Horizon, use an outer noVNC browser panel through the
-horizon-browser skill and public `browser_*` tools. Its native Device panel is a
-read-only VNC viewer, not a browser. Keep native input on this CLI/MCP contract;
-never use it to automate the outer browser. Each nested viewer/target desktop
-needs its own target configuration.
+Always observe interactive native tests live through a **Horizon native VNC
+Device panel in the user's current workspace**. Do not use noVNC or a browser
+viewer. A screenshot, recording, or viewer on a different isolated desktop does
+not satisfy the live-view requirement. The native panel is read-only; keep input
+on this explicitly configured CLI/MCP target. Each nested viewer/target desktop
+needs its own target configuration and fresh screenshot geometry.
 
-For feature evidence, use the viewer's supported recording controls. With
-Horizon `browser_video`, stop recording and copy its finalized WebM export before
-`browser_close` deletes the profile and exports. Browser viewport/video settings
-do not change native desktop dimensions. Use screenshot options for native
-crop/quality, and existing browser_video quality/fps/max_width/max_file_bytes
-for bounded evidence. Client-side scaling does not reduce VNC wire bandwidth. Inspect evidence before retaining it. Keep internal application names,
-scenarios, images, video and operational details private; public demonstrations
-use generic fixtures and synthetic content only.
+The Horizon host's public `device_panel` tool manages viewing separately from
+this standalone device server: list/create/inspect/visibility/reconnect/close.
+Create with the fixture's numeric loopback VNC endpoint and inspect connection,
+image receipt, actual display and frame sequence during changing output before
+claiming the user has a live view. Follow the `horizon-browser` skill's native
+viewer lifecycle section for ownership and timeout handling; its `browser_*`
+operations remain for browser pages. Use `--native-view` with the repository's
+`scripts/device-smoke/serve.py` fixture. If the host/tool or visible native panel
+is unavailable, report the blocked lane; do not substitute noVNC or automate the
+developer's desktop. Unit/headless tests do not need a viewer.
+
+For feature evidence, record directly from the task-owned isolated desktop using
+a recorder explicitly scoped to its display. Native panels have no video API;
+`browser_video` is for browser pages. Start before the flow, stop afterward and
+inspect decoded frames. If recording is unavailable or stalls, report the blocked
+recording lane; still images do not replace motion evidence. Use screenshot
+options for native crop/quality; client-side scaling does not reduce VNC wire
+bandwidth. Keep application-specific workflows and evidence private; public
+demonstrations use generic fixtures and synthetic content only.
 
 Close only task-owned viewers and application/display fixtures, then verify
 children exited and target configuration expired. This packaged skill does not

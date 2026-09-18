@@ -24,18 +24,18 @@ Reuse the same `smoke_bin` directory in every terminal used for this run.
 Do not overwrite the frozen copies while their fixtures are alive.
 
 Prerequisites are Xvfb, Openbox, x11vnc, bubblewrap (`bwrap`), `dbus-daemon`,
-noVNC and Python 3 with websockify. `xinput` is needed for cancellation checks.
+and Python 3. `xinput` is needed for cancellation checks.
 The device library build needs libxkbcommon. The scripts do not install
 prerequisites. An optional `--tools ROOT` accepts unpacked Debian tools under
 `ROOT/usr`.
 
-## Horizon inside a noVNC browser panel
+## Horizon inside a native VNC Device panel
 
 Start an isolated target desktop in a terminal and leave the fixture running:
 
 ```sh
 python3 scripts/device-smoke/serve.py --horizon "$smoke_bin/horizon" \
-  --state /tmp/horizon-device-target
+  --native-view --state /tmp/horizon-device-target
 ```
 
 Use a new state path if it already exists. The harness atomically allocates an
@@ -70,11 +70,34 @@ ports; keep an explicit owner and PID-to-target mapping. This harness allocates
 its own display and ports. It launches Horizon only; other applications require
 an equivalent isolated launcher. Never share targets or geometry between agents.
 
-The printed manifest and `lab.json` contain `viewer_url`, `vnc_address`, the
-display and owned process IDs. Open `viewer_url` in a separate Horizon browser
-panel through the horizon-browser skill and its public MCP tools. The outer
-browser is only the viewer; device CLI/MCP controls the isolated native desktop.
-Never automate or record the developer's desktop as a fallback.
+With `--native-view`, the printed manifest and `lab.json` contain `vnc_address`,
+the display and owned process IDs; `viewer_url` is null. This mode starts no
+noVNC assets, websockify or browser. The harness still supports its legacy web
+mode, but always pass `--native-view` for interactive testing under `AGENTS.md`.
+
+Use the public `device_panel` tool exposed by Horizon's MCP server to create a
+**visible native Device panel in the calling agent's current workspace**. The
+agent must be launched inside a supporting Horizon host. Read the endpoint from
+this fixture's `lab.json`; the following port is only an example:
+
+```json
+{"operation":"list"}
+{"operation":"create","endpoint":"127.0.0.1:5900"}
+{"operation":"inspect","panel_id":"<returned id>"}
+```
+
+Check `connection: "connected"`, `image_received`, `image_displayed`, and an
+advancing `frame_sequence` during changing target output. Creation returns
+immediately; `visible` alone does not prove that an image is on screen. On
+`host_timeout`, list before retrying a mutation. Restored viewers need an explicit
+`reconnect`; only operate on task-owned panels. See the
+[native lifecycle contract](../../crates/horizon-browser-mcp/README.md#native-device-viewer-lifecycle).
+
+If the tool, host support or visible native panel is unavailable, report the
+blocked lane. Do not open noVNC, modify private runtime files, restart an active
+session or automate the developer's desktop. Screenshots and recordings are
+supporting evidence, not a replacement for the user's live panel. Device CLI/MCP
+controls the isolated target; the panel is a read-only viewer.
 
 Use the target configuration to observe the disposable desktop:
 
@@ -117,13 +140,13 @@ panel points at that target's direct VNC endpoint:
 ```sh
 device_vnc_address=$(python3 -c 'import json; print(json.load(open("/tmp/horizon-device-target/lab.json"))["vnc_address"])')
 python3 scripts/device-smoke/serve.py --horizon "$smoke_bin/horizon" \
-  --device-address "$device_vnc_address" --state /tmp/horizon-device-viewer
+  --native-view --device-address "$device_vnc_address" --state /tmp/horizon-device-viewer
 ```
 
-Open the second fixture's `viewer_url` through public Horizon browser tools.
-The test chain is:
+Create a native Device panel in the current user's Horizon workspace pointing
+at the second fixture's `vnc_address`, and verify its live image. The test chain is:
 
-`current Horizon → browser/noVNC → isolated Horizon → native Device panel → isolated Horizon target`
+`current Horizon → native Device panel → isolated Horizon → native Device panel → isolated Horizon target`
 
 The generated private config uses `kind: device` and the existing `command` field
 for the VNC endpoint. It does not modify default presets or the developer's
@@ -147,34 +170,37 @@ Acceptance checks:
 - Stop each remaining owned fixture, verify its children exited and its target
   config expired, and retain only approved evidence.
 
-`--native-view` is available when a target fixture only needs its direct VNC
-server. It sets `viewer_url` to null and skips noVNC assets/websockify. Do not use
-it for the outer Horizon desktop that must be observed through noVNC. x11vnc is
-loopback-only and read-only in both modes.
+Both fixtures use `--native-view`. x11vnc remains loopback-only and read-only.
+The viewer fixture must itself be watched live in the current user's native
+Device panel; inspecting a screenshot of that fixture is not enough.
 
 ## Video evidence and cleanup
 
-For visible feature additions or behavior changes, record a short clip through
-Horizon's public `browser_video` MCP tool:
+For visible feature additions or behavior changes, record a short clip directly
+from the task-owned isolated desktop. The native panel does not expose video
+recording, and `browser_video` records browser pages only. Do not start noVNC to
+obtain a recording.
 
-1. Check `video_capture.supported` on the outer noVNC panel.
-2. Start with its `panel_id`, `operation: "start"`, `fps: 5`,
-   `compression_level: 0`, `quality: 70`, and `max_width: 1280`. Increase resolution
-   when fine text is an acceptance criterion.
-3. Perform the synthetic feature flow through device CLI/MCP. Wait for the
-   verified result, then stop the recording.
-4. Copy the finalized WebM into the private evidence directory **before closing
-   the browser panel**; closing removes its profile and capture exports.
-5. Play back or decode representative frames before and after the interaction.
-   Retain the candidate binary hash, scenario, duration and encoded/dropped/repeated
-   frame counts. A recording's existence is not proof that it captured the flow.
+1. Select a native recorder explicitly scoped to the fixture's display and
+   private evidence directory. Verify it can capture that display before relying
+   on it. This fixture disables MIT-SHM; do not assume any particular X11 recorder
+   works, or that process liveness proves it is capturing frames.
+2. Start before the interaction, perform the synthetic flow through device
+   CLI/MCP, verify the application result, then stop and finalize the recording.
+3. Play back or decode representative frames before, during and after the flow.
+   Check that changes and movement are visible. Record the candidate hash,
+   scenario, duration and available frame/drop statistics with the evidence.
+4. If recording is unavailable, stalls or has no usable frames, report the
+   recording lane as blocked. Screenshots are still required after launch and
+   resize/fit but cannot replace motion evidence.
 
-No additional recording service is needed. Recording may drop frames and is not
-a VNC frame-rate benchmark. Only generic Horizon fixtures and synthetic content
-are eligible for a public demonstration; review the actual frames before any
-separately authorized publication.
+Keep evidence private until publication is authorized. Only generic Horizon
+fixtures and synthetic content are eligible for a public demonstration; inspect
+the actual frames before any separately authorized publication.
 
-Closing/reloading the browser leaves the fixture running. Ctrl-C stops only the
+Close the test application normally and confirm it exited, then close its
+owned viewer with `device_panel` operation `close`. Closing the viewer only
+releases the VNC connection; it does not stop the fixture. Ctrl-C stops only the
 harness's owned children, expires `target.json` and removes private application
 state. Logs and evidence remain. Normal application exit also completes the
 harness; unexpected child failure fails it and triggers cleanup.
