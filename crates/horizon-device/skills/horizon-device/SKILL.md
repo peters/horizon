@@ -90,3 +90,6 @@ mutation, the owner must reconcile the same session before removing that journal
 A bounded operation already in progress finishes even if its MCP caller cancels.
 
 Target filenames must not end in `.lock`, `.resize-pending` or `.resize-observe`.
+
+CLI/MCP errors include `resize_uncertain`: true means a resize may have been
+applied and requires owner reconciliation before retrying.

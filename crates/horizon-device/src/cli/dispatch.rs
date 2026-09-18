@@ -52,7 +52,7 @@ impl Dispatcher {
         });
         result.unwrap_or_else(|error| {
             Response::new(
-                json!({"ok":false,"error":{"code":error.code(),"message":error.to_string()}}),
+                json!({"ok":false,"error":{"code":error.code(),"message":error.to_string(),"resize_uncertain":error.resize_uncertain()}}),
                 None,
                 None,
             )
@@ -360,6 +360,7 @@ mod tests {
             height: 1080,
         }));
         assert_eq!(response.value["error"]["code"], "resize_uncertain");
+        assert_eq!(response.value["error"]["resize_uncertain"], true);
         std::fs::write(
             &dispatcher.target_file,
             br#"{"id":"fixture","endpoint":{"kind":"local_x11","display":":54321"}}"#,
