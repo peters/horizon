@@ -10,6 +10,7 @@ mod browser_remote_create;
 mod browser_requests;
 mod canvas;
 mod detached_viewports;
+mod device_requests;
 #[cfg(test)]
 mod device_tests;
 mod file_drop;
@@ -185,6 +186,7 @@ struct SpeechNotice {
 /// Per-panel UI caches that survive across frames.
 #[derive(Default)]
 pub struct PanelRenderCaches {
+    device_request_poll: Option<Instant>,
     pub(crate) terminal_grid_cache: HashMap<PanelId, TerminalGridCache>,
     pub(crate) browser_ui_state: HashMap<PanelId, crate::browser_widget::BrowserUiState>,
     pub(crate) device_ui_state: HashMap<PanelId, crate::device_widget::DeviceUiState>,

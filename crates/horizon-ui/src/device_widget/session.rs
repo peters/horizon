@@ -132,6 +132,14 @@ impl Session {
             desktop: state.desktop,
         }
     }
+
+    pub(super) fn take_status(&self) -> Option<Status> {
+        self.updates
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .status
+            .take()
+    }
 }
 
 impl Drop for Session {
@@ -189,6 +197,7 @@ async fn connection(
     publish_status(updates, ctx, Status::Connected);
     let mut framebuffer = Framebuffer::default();
     let mut previous_options = None;
+    let mut received_pixels = false;
     loop {
         let mut full_refresh = !*visible.borrow_and_update();
         if full_refresh {
@@ -214,7 +223,7 @@ async fn connection(
             }
             if let Some(event) = client.poll_event().await? {
                 full_refresh |= matches!(event, vnc::VncEvent::SetResolution(_));
-                changed |= framebuffer.apply(event)?;
+                changed |= apply_frame_event(&mut framebuffer, &mut received_pixels, event)?;
                 idle = false;
             } else if idle {
                 break;
@@ -225,7 +234,7 @@ async fn connection(
                 idle = true;
             }
         }
-        if (changed || previous_options != Some(options)) && !framebuffer.size().contains(&0) {
+        if received_pixels && (changed || previous_options != Some(options)) && !framebuffer.size().contains(&0) {
             let image = framebuffer.image(options)?;
             previous_options = Some(options);
             let viewport = {
@@ -253,5 +262,66 @@ async fn connection(
     }
 }
 
+fn apply_frame_event(
+    framebuffer: &mut Framebuffer,
+    received_pixels: &mut bool,
+    event: vnc::VncEvent,
+) -> Result<bool, ViewError> {
+    let reset = matches!(event, vnc::VncEvent::SetResolution(_));
+    let pixels = matches!(event, vnc::VncEvent::RawImage(_, _));
+    let previous_size = framebuffer.size();
+    let changed = framebuffer.apply(event)?;
+    if reset || framebuffer.size() != previous_size {
+        *received_pixels = false;
+    }
+    *received_pixels |= pixels;
+    Ok(changed)
+}
+
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod image_evidence_tests {
+    use super::*;
+
+    #[test]
+    fn extended_resize_waits_for_pixels_but_same_size_announcement_preserves_them() -> Result<(), ViewError> {
+        let mut framebuffer = Framebuffer::default();
+        let mut received_pixels = false;
+        for width in [2, 2, 4] {
+            let previous_size = framebuffer.size();
+            let event = vnc::VncEvent::DesktopUpdate(vnc::DesktopUpdate {
+                reason: vnc::DesktopReason::Server,
+                status: vnc::DesktopStatus::Success,
+                layout: Some(vnc::DesktopLayout {
+                    width,
+                    height: 1,
+                    screens: Vec::new(),
+                }),
+            });
+            let changed = apply_frame_event(&mut framebuffer, &mut received_pixels, event)?;
+            let resized = previous_size != framebuffer.size();
+            assert_eq!(changed, resized);
+            assert_eq!(
+                received_pixels, !resized,
+                "a resized blank buffer is not received pixels"
+            );
+            apply_frame_event(
+                &mut framebuffer,
+                &mut received_pixels,
+                vnc::VncEvent::RawImage(
+                    vnc::Rect {
+                        x: 0,
+                        y: 0,
+                        width,
+                        height: 1,
+                    },
+                    vec![255; usize::from(width) * 4],
+                ),
+            )?;
+            assert!(received_pixels, "new pixels resume image publication");
+        }
+        Ok(())
+    }
+}

@@ -55,6 +55,17 @@ impl HorizonBrowserMcp {
 #[tool_router]
 impl HorizonBrowserMcp {
     #[tool(
+        name = "device_panel",
+        description = "Manage read-only native Device viewers in the calling agent's current Horizon workspace. Operations: create(endpoint), list, inspect(panel_id), visibility(panel_id,visible), reconnect(panel_id), close(panel_id). Endpoints must be explicit numeric loopback addresses with nonzero ports. Create returns a stable id immediately, not proof of a live image: inspect connection, image_received, image_displayed and frame_sequence. Visible means host presentation state; image_displayed describes the latest completed UI frame. Reconnect explicitly acquires an unowned/restored viewer; another owner's viewer cannot be mutated. Close releases only the owned viewer connection and never terminates its target. Restores never reconnect automatically. Requires a supporting Horizon host; host response is bounded to 15 seconds. Native input is separate, through explicitly configured standalone device CLI/MCP targets."
+    )]
+    async fn device_panel(
+        &self,
+        Parameters(input): Parameters<horizon_browser_control::manifest::device::Operation>,
+    ) -> Result<Json<horizon_browser_control::manifest::device::Outcome>, String> {
+        self.controller.device_panel(input).await.map(Json)
+    }
+
+    #[tool(
         name = "browser_remote_allocations",
         description = "List remote allocations owned by the calling agent in its current workspace, including unresolved holds after panels disappear. Use operation=list, then operation=reconcile with one returned reference to check that exact retired session at its original provider. This read-only provider check takes up to 15 seconds. Active, unidentified, unauthenticated or uncertain sessions keep their capacity. Only exact-session absence frees the corresponding lease. Repeated reconciliation is safe; credentials and provider session identifiers are never returned."
     )]
@@ -614,6 +625,7 @@ mod tests {
                 "browser_video",
                 "browser_visibility",
                 "browser_wait",
+                "device_panel",
             ]
         );
         let schemas = serde_json::to_string(&server.tool_router.list_all()).unwrap_or_default();

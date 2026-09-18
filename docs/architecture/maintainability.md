@@ -378,6 +378,13 @@ Device view limits and viewport layout live in `crates/horizon-core/src/device/v
 `crates/horizon-ui/src/device_widget/controls.rs` collects session-local presentation
 settings while its worker applies the bounded image layout.
 
+Native Device panel lifecycle uses `manifest/device.rs` for bounded private host
+requests, `horizon-browser-mcp/src/controller/device.rs` for public MCP dispatch,
+and `app/device_requests.rs` for live board scope and ownership checks. Requests
+are host-bound; inspection is workspace-scoped and mutations require ownership.
+`device_widget` reports connection and actual clipped image presentation
+separately. Native input remains in the standalone device crate.
+
 ### Shared remote-provider capacity
 
 `browser/remote_usage` owns the provider-independent usage snapshot, refresh
