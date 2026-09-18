@@ -33,11 +33,17 @@ async fn run_inner(factory: Option<ResizeFactory>) -> std::process::ExitCode {
     }
 }
 async fn execute(factory: Option<ResizeFactory>) -> Result<u8, String> {
-    let mut args = std::env::args().skip(1);
+    let mut args = std::env::args();
+    let executable = args.next().unwrap_or_default();
+    let program = std::path::Path::new(&executable)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("horizon-device");
     let first = args.next().unwrap_or_default();
     if first == "--help" || first.is_empty() {
         println!(
-            "horizon-device --target FILE doctor|resize JSON|screenshot [OUTPUT] [--options JSON]|act JSON|mcp\nJSON may be '-' to read up to 64 KiB from stdin.\nTarget JSON: {{\"id\":\"lab\",\"endpoint\":{{\"kind\":\"local_x11\",\"display\":\":99\"}}}}\nUse a private directory for FILE; cooperating CLI/MCP commands share FILE's .lock sibling.\nNo default display, application launching, or remote management."
+            "{program} --target FILE doctor|resize JSON|screenshot [OUTPUT] [--options JSON]|act JSON|mcp\nJSON may be '-' to read up to 64 KiB from stdin.\nTarget JSON: {{\"id\":\"lab\",\"endpoint\":{{\"kind\":\"local_x11\",\"display\":\":99\"}}}}\nUse a private directory for FILE; cooperating CLI/MCP commands share FILE's .lock sibling.\nNo default display, application launching, or remote management."
         );
         return Ok(0);
     }

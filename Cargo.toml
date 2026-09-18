@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/horizon-device",
+    "crates/horizon-device-vnc",
     "crates/horizon-browser",
     "crates/horizon-browser-cli",
     "crates/horizon-browser-control",
@@ -30,8 +31,8 @@ pedantic = { level = "warn", priority = -1 }
 struct_excessive_bools = "allow"
 
 [workspace.dependencies]
-# Licensed local safety fixes; only the native viewer depends on this decoder.
-vnc = { package = "vnc-rs", git = "https://github.com/peters/vnc-rs.git", rev = "ab3d2a20053d86e79cc2623044afed00a931b402" }
+# Licensed decoder fixes shared by the native viewer and optional resize adapter.
+vnc = { package = "vnc-rs", git = "https://github.com/peters/vnc-rs.git", rev = "43848a7baa39f852beaf52b28eeb58f7d56ad669" }
 horizon-browser = { path = "crates/horizon-browser", version = "0.2.7" }
 horizon-browser-control = { path = "crates/horizon-browser-control", version = "0.2.7" }
 horizon-browser-mcp = { path = "crates/horizon-browser-mcp", version = "0.2.7" }
