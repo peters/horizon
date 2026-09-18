@@ -228,6 +228,7 @@ impl CredentialBinding {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RemoteSessionLimits {
+    /// Local grid limit; retained for compatibility but ignored by `BrowserStack`.
     pub max_sessions: u32,
     pub allocation_timeout_seconds: u32,
     pub idle_release_seconds: u32,
@@ -240,7 +241,7 @@ impl RemoteSessionLimits {
     pub const IDLE_RELEASE_SECONDS: (u32, u32) = (30, 3_600);
     pub const MAX_SESSION_SECONDS: (u32, u32) = (60, 14_400);
 
-    fn validate(self, provider: &str) -> Result<(), RemoteConfigError> {
+    fn validate(self, provider: &str, adapter: RemoteAdapterKind) -> Result<(), RemoteConfigError> {
         let checks = [
             ("max_sessions", self.max_sessions, Self::MAX_SESSIONS),
             (
@@ -260,6 +261,9 @@ impl RemoteSessionLimits {
             ),
         ];
         for (field, value, (min, max)) in checks {
+            if field == "max_sessions" && adapter == RemoteAdapterKind::Browserstack {
+                continue;
+            }
             if !(min..=max).contains(&value) {
                 return Err(RemoteConfigError::InvalidLimit {
                     provider: provider.to_string(),
@@ -301,11 +305,20 @@ pub struct RemoteProviderProfile {
 }
 
 impl RemoteProviderProfile {
+    /// Hosted account capacity is enforced by `BrowserStack`, across all clients.
+    #[must_use]
+    pub fn local_session_limit(&self) -> Option<u32> {
+        match self.adapter {
+            RemoteAdapterKind::Webdriver => Some(self.limits.max_sessions),
+            RemoteAdapterKind::Browserstack => None,
+        }
+    }
+
     /// Structural validation: limits, reference names, and the shape of every
     /// binding that is present. A binding that is merely missing is not a
     /// definition error; that is the readiness state [`Self::validate_bindings`] reports.
     pub(super) fn validate_definition(&self, provider: &str) -> Result<(), RemoteConfigError> {
-        self.limits.validate(provider)?;
+        self.limits.validate(provider, self.adapter)?;
         for reference in self.authentication.references() {
             if !reference.is_well_formed() {
                 return Err(credential_error(

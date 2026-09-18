@@ -3,6 +3,7 @@ mod general;
 mod presets;
 mod remote_browsers;
 mod remote_recovery;
+mod remote_usage;
 mod shortcuts;
 mod speech;
 #[cfg(test)]
@@ -69,6 +70,7 @@ pub(super) struct SettingsEditor {
     editing_config: Option<Config>,
     credential_inputs: remote_browsers::CredentialInputs,
     portable_profile: remote_browsers::PortableProfilePanel,
+    provider_usage: remote_usage::UsagePanels,
 }
 
 #[derive(Clone, Copy)]
@@ -97,6 +99,7 @@ impl HorizonApp {
                 editing_config,
                 credential_inputs: remote_browsers::CredentialInputs::default(),
                 portable_profile: remote_browsers::PortableProfilePanel::new(&self.config_path),
+                provider_usage: remote_usage::UsagePanels::default(),
             });
         }
     }
@@ -358,6 +361,7 @@ fn render_gui_tab(
         editing_config,
         credential_inputs,
         portable_profile,
+        provider_usage,
         buffer,
         ..
     } = editor;
@@ -380,7 +384,14 @@ fn render_gui_tab(
                 SettingsTab::Presets => presets::render(ui, config),
                 SettingsTab::RemoteBrowsers => {
                     remote_recovery::render(ui, allocations);
-                    remote_browsers::render(ui, config, credentials, credential_inputs, portable_profile)
+                    remote_browsers::render(
+                        ui,
+                        config,
+                        credentials,
+                        credential_inputs,
+                        portable_profile,
+                        provider_usage,
+                    )
                 }
                 // Yaml is handled before this function is called.
                 SettingsTab::Yaml => return,

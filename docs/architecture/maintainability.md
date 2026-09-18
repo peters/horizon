@@ -377,3 +377,13 @@ of Element Click; searching later fragments is a separate behavior change.
 Device view limits and viewport layout live in `crates/horizon-core/src/device/view.rs`;
 `crates/horizon-ui/src/device_widget/controls.rs` collects session-local presentation
 settings while its worker applies the bounded image layout.
+
+### Shared remote-provider capacity
+
+`browser/remote_usage` owns the provider-independent usage snapshot, refresh
+state, credential snapshot and provider API adapters. It performs no session
+admission or mutation. `settings/remote_usage` only renders snapshots and collects
+refresh actions. Adding a provider API requires an adapter and normalization,
+without changing the shared display. `RemoteProviderProfile::local_session_limit`
+expresses whether an adapter uses a local grid limit or provider-managed capacity.
+Allocation ownership and cleanup remain in the existing recovery modules.
