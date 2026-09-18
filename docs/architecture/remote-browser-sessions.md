@@ -3,8 +3,9 @@
 Status: accepted for [#628](https://github.com/peters/horizon/issues/628) phase 1
 on 2026-09-14, informed by the real-device evidence in
 [`docs/testing/2026-09-14-remote-mobile-webdriver-spike.md`](../testing/2026-09-14-remote-mobile-webdriver-spike.md).
-Nothing below is implemented yet; the phases at the end name the PRs that will
-carry each piece. Provider credentials are separate from the routine login
+The decision and phase list record the original implementation plan. Provider
+profiles, credential binding, remote allocation and cleanup are implemented; the
+shared usage and capacity behavior is described in the implementation notes below. Provider credentials are separate from the routine login
 credentials in [`browser-routine-credentials.md`](browser-routine-credentials.md).
 
 ## Decision
@@ -261,7 +262,7 @@ cancelling after allocation releases the owned session.
   value, submit, actions) are likewise never replayed after an ambiguous
   response.
 - Every allocation is bound to the Horizon instance, workspace, panel and a
-  unique request id. Concurrency is enforced across Horizon instances that
+  unique request id. For generic `webdriver` grids, concurrency is enforced across Horizon instances that
   share the same configured provider identity through a private lock keyed by
   endpoint and username reference; provider quotas stay authoritative. The
   lock is `max_sessions` slot files under the Horizon home
@@ -275,6 +276,23 @@ cancelling after allocation releases the owned session.
   host whose slot files cannot be used falls back to its own count, and holds
   a replaced board left unreleased stay leased by the host for the rest of the
   process.
+- The `browserstack` adapter delegates capacity to the provider. It takes no
+  local quota lease and does not enforce `max_sessions`; existing fields remain
+  readable for compatibility. Allocation records still retain ownership and
+  uncertain outcomes for exact-session cleanup. Allocation, idle, and lifetime
+  timeouts remain enforced. Provider usage never decides local admission.
+- Settings > Remote browsers shows each supported provider's shared running /
+  allowed and queued sessions. `browser::remote_usage` normalizes provider APIs;
+  its first adapter reads `GET /automate/plan.json` at `api.browserstack.com`
+  with the configured session credentials. The displayed allowance is the
+  smaller of the plan and team limits when both are returned. This snapshot
+  includes competing clients and can change before the next allocation.
+  Refresh runs on opening the view, every 30 seconds while open, or manually.
+  Network and OS-store reads run on a worker; requests have a ten-second timeout,
+  a 64 KiB response limit, and never follow redirects. Failures show an error
+  and mark the last successful sample stale. Profile/binding changes and local
+  credential edits invalidate cached results. Multiple provider rows refresh
+  independently; unsupported adapters do not make usage API requests.
 - DELETE that times out is `release_unknown`, retried in a bounded way for that
   exact session id and shown as unresolved cleanup. Release is `released` only
   when the provider reports a terminal status where such an API exists;

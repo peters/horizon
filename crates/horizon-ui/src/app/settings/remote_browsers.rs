@@ -230,13 +230,19 @@ pub(super) fn render(
     workbench: &mut CredentialWorkbench,
     inputs: &mut CredentialInputs,
     portable: &mut PortableProfilePanel,
+    usage: &mut super::remote_usage::UsagePanels,
 ) -> bool {
     workbench.poll();
-    inputs.absorb(workbench.take_notices());
+    let notices = workbench.take_notices();
+    if !notices.is_empty() {
+        usage.clear();
+    }
+    inputs.absorb(notices);
     inputs.retain_current(config);
     render_stores_section(ui, workbench);
     let mut changed = render_portable_section(ui, config, portable);
     let providers = &config.browser.remote.providers;
+    usage.retain(|name, _| providers.contains_key(name));
     if providers.is_empty() {
         super::section_heading(ui, "Providers");
         super::section_card(ui, |ui| {
@@ -251,7 +257,7 @@ pub(super) fn render(
     }
     let mut bind = None;
     for (name, profile) in providers {
-        if let Some(request) = render_provider(ui, config, name, profile, workbench, inputs) {
+        if let Some(request) = render_provider(ui, config, name, profile, workbench, inputs, usage) {
             bind = Some(request);
         }
     }
@@ -369,6 +375,7 @@ fn render_provider(
     profile: &RemoteProviderProfile,
     workbench: &mut CredentialWorkbench,
     inputs: &mut CredentialInputs,
+    usage: &mut super::remote_usage::UsagePanels,
 ) -> Option<(String, CredentialReference, CredentialStoreKind)> {
     super::section_heading(ui, name);
     super::section_card(ui, |ui| {
@@ -383,10 +390,13 @@ fn render_provider(
         super::dim_label(
             ui,
             &format!(
-                "{} · {} · limits {} session(s), {} s allocation, {} s idle, {} s max · targets: {}",
+                "{} · {} · {}, {} s allocation, {} s idle, {} s max · targets: {}",
                 profile.endpoint.as_str(),
                 authentication_label(&profile.authentication),
-                profile.limits.max_sessions,
+                profile.local_session_limit().map_or_else(
+                    || "Provider-managed capacity".to_string(),
+                    |limit| format!("Local limit: {limit} session(s)"),
+                ),
                 profile.limits.allocation_timeout_seconds,
                 profile.limits.idle_release_seconds,
                 profile.limits.max_session_seconds,
@@ -408,6 +418,7 @@ fn render_provider(
                     .size(11.0),
             );
         }
+        super::remote_usage::render(ui, name, profile, workbench, usage);
         let readiness = workbench.readiness(profile);
         if readiness.is_empty() {
             super::dim_label(ui, "No authentication configured for this provider.");

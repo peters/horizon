@@ -773,3 +773,29 @@ fn environment_bindings_reject_missing_and_malformed_names() {
     assert!(error.to_string().contains("cloud-user"), "{error}");
     assert!(!error.to_string().contains("secret"), "{error}");
 }
+
+#[test]
+fn provider_managed_capacity_ignores_legacy_session_limit_but_keeps_timeouts() {
+    let mut config = sample();
+    let provider = config.providers.get_mut("device_cloud").expect("provider");
+    provider.adapter = RemoteAdapterKind::Browserstack;
+    provider.limits.max_sessions = 0;
+    assert_eq!(provider.local_session_limit(), None);
+    config.validate().expect("legacy limit ignored");
+    let json = serde_json::to_string(&config).expect("serialize");
+    let restored: RemoteBrowserConfig = serde_json::from_str(&json).expect("old field still loads");
+    restored.validate().expect("round trip");
+    config
+        .providers
+        .get_mut("device_cloud")
+        .expect("provider")
+        .limits
+        .max_session_seconds = 0;
+    assert!(matches!(
+        config.validate(),
+        Err(RemoteConfigError::InvalidLimit {
+            field: "max_session_seconds",
+            ..
+        })
+    ));
+}

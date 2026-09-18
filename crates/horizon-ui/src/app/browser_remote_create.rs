@@ -26,7 +26,7 @@ pub(super) struct RemoteCreatePlan {
     /// The provider identity every Horizon instance on this computer shares
     /// the quota through (see `remote_slots`), and that quota.
     pub(super) quota_key: String,
-    pub(super) max_sessions: u32,
+    pub(super) max_sessions: Option<u32>,
 }
 
 /// Why a remote create is refused: the typed result code and its message.
@@ -55,7 +55,7 @@ pub(super) fn plan_remote_create(
     let (quota_key, max_sessions) = remote
         .providers
         .get(&provider)
-        .map(|profile| (remote_slots::quota_key(profile), profile.limits.max_sessions))
+        .map(|profile| (remote_slots::quota_key(profile), profile.local_session_limit()))
         .unwrap_or_default();
     let keychain = workbench.keychain_store();
     let keychain_guard = keychain
@@ -120,11 +120,11 @@ pub(super) fn remote_session_limit_reached(config: &Config, provider: &str, hold
         .remote
         .providers
         .get(provider)
-        .map(|profile| profile.limits.max_sessions)
+        .map(horizon_core::browser::remote::RemoteProviderProfile::local_session_limit)
     else {
         return true;
     };
-    holds >= usize::try_from(limit).unwrap_or(usize::MAX)
+    limit.is_some_and(|limit| holds >= usize::try_from(limit).unwrap_or(usize::MAX))
 }
 
 impl HorizonApp {
@@ -198,8 +198,11 @@ impl HorizonApp {
         &mut self,
         plan: &RemoteCreatePlan,
     ) -> Result<Option<remote_slots::SlotLease>, (&'static str, &'static str)> {
+        let Some(max_sessions) = plan.max_sessions else {
+            return Ok(None);
+        };
         let root = self.session_store.home();
-        match remote_slots::acquire_slot(root.root(), &plan.quota_key, plan.max_sessions) {
+        match remote_slots::acquire_slot(root.root(), &plan.quota_key, max_sessions) {
             Ok(lease) => Ok(Some(lease)),
             Err(remote_slots::SlotError::Busy { .. }) => Err((
                 "remote_session_limit_reached",
@@ -488,6 +491,51 @@ mod tests {
             board.remote_holds("other-grid"),
             1,
             "an established release frees the slot"
+        );
+    }
+
+    #[test]
+    fn provider_managed_capacity_bypasses_local_holds_and_locks_but_tracks_ownership() {
+        let (_temp, mut app) = crate::app::test_support::test_app();
+        app.template_config = config();
+        app.template_config
+            .browser
+            .remote
+            .providers
+            .get_mut("grid")
+            .expect("provider")
+            .adapter = RemoteAdapterKind::Browserstack;
+        let mut credentials = workbench();
+        credentials
+            .set_session_value(
+                "grid",
+                &app.template_config.browser.remote.providers["grid"],
+                &CredentialReference::from("key"),
+                b"synthetic-key",
+            )
+            .expect("credential");
+        assert!(!remote_session_limit_reached(&app.template_config, "grid", usize::MAX));
+        let first = plan_remote_create(&app.template_config, &credentials, "ios_phone").expect("first");
+        let second = plan_remote_create(&app.template_config, &credentials, "ios_phone").expect("second");
+        let _existing_lock = remote_slots::acquire_slot(app.session_store.home().root(), &first.quota_key, 1)
+            .expect("existing instance");
+        app.admit_remote_create(&first, "owner-a", "workspace")
+            .expect("first admission");
+        app.admit_remote_create(&second, "owner-b", "workspace")
+            .expect("second admission");
+        let records = &mut app.browser_create_host.remote_allocations;
+        assert_eq!(records.summaries(None).len(), 2);
+        assert_eq!(records.summaries(Some(("owner-a", "workspace"))).len(), 1);
+        assert!(!records.reconcile(second.request.recovery.reference(), Some(("owner-a", "workspace"))));
+        first.request.recovery.cancel_before_launch();
+        let released = records.summaries(Some(("owner-a", "workspace")));
+        assert_eq!(
+            released[0].status,
+            horizon_core::browser::RemoteRecoveryStatus::Released
+        );
+        assert_ne!(
+            records.summaries(Some(("owner-b", "workspace")))[0].status,
+            horizon_core::browser::RemoteRecoveryStatus::Released
         );
     }
 
