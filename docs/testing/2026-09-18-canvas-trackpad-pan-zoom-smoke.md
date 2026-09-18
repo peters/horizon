@@ -34,8 +34,7 @@ Use `target/debug/horizon` from this branch. Launch with an isolated config if a
    - Expected: canvas pans, same as before.
 4. Hold **Ctrl** and two-finger scroll over empty canvas and over a panel.
    - Expected: canvas zoom changes in both cases. Terminal does not receive the wheel.
-5. **Ctrl+Plus** and **Ctrl+Minus** (the keys labeled `+` and `-` on the current layout, including Norwegian `+` next to `0`).
-   - Expected: canvas zooms in and out. Command palette **Reset Zoom** / **Zoom In** / **Zoom Out** still work.
+5. Command palette **Reset Zoom** / **Zoom In** / **Zoom Out** still work. Keyboard Ctrl+Plus/Minus on non-US layouts is a follow-up (layout-unmodified shortcut matching).
 6. **Space** + one-finger drag over a panel.
    - Expected: canvas pans. No space is inserted into the terminal.
 

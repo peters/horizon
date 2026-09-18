@@ -91,36 +91,10 @@ pub(crate) struct FrameKeyEvent {
     physical_key: Option<Key>,
     pressed: bool,
     modifiers: Modifiers,
-    unmodified_key: Option<Key>,
     pub(crate) key_without_modifiers_text: Option<String>,
 }
 
 impl FrameKeyEvent {
-    #[must_use]
-    pub(crate) fn pressed_unmodified_key(&self) -> Option<(Key, Option<Key>, Modifiers)> {
-        if self.kind != KeyboardOutputKind::Key || !self.pressed {
-            return None;
-        }
-        Some((
-            self.unmodified_key.unwrap_or(self.key),
-            self.physical_key,
-            self.modifiers,
-        ))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn pressed_unmodified_for_test(key: Key, unmodified_key: Key, modifiers: Modifiers) -> Self {
-        Self {
-            kind: KeyboardOutputKind::Key,
-            key,
-            physical_key: Some(key),
-            pressed: true,
-            modifiers,
-            unmodified_key: Some(unmodified_key),
-            key_without_modifiers_text: None,
-        }
-    }
-
     fn matches(&self, key: Key, physical_key: Option<Key>, pressed: bool, modifiers: Modifiers) -> bool {
         self.kind == KeyboardOutputKind::Key
             && self.key == key
@@ -165,7 +139,6 @@ struct ObservedKeyboardEvent {
     physical_key: Option<Key>,
     pressed: bool,
     modifiers: Modifiers,
-    unmodified_key: Option<Key>,
     key_without_modifiers_text: Option<String>,
 }
 
@@ -205,7 +178,6 @@ impl ObservedKeyboardEvent {
             physical_key,
             pressed,
             modifiers,
-            unmodified_key: key_from_winit_key(unmodified_key),
             key_without_modifiers_text: unmodified_key
                 .to_text()
                 .filter(|text| !text.is_empty())
@@ -219,18 +191,6 @@ impl ObservedKeyboardEvent {
             && self.physical_key == physical_key
             && self.pressed == pressed
             && self.modifiers == modifiers
-    }
-
-    fn into_frame_key_event(self) -> FrameKeyEvent {
-        FrameKeyEvent {
-            kind: self.kind,
-            key: self.key,
-            physical_key: self.physical_key,
-            pressed: self.pressed,
-            modifiers: self.modifiers,
-            unmodified_key: self.unmodified_key,
-            key_without_modifiers_text: self.key_without_modifiers_text,
-        }
     }
 }
 
@@ -258,28 +218,56 @@ fn align_observed_keyboard_events(events: &[Event], observed: VecDeque<ObservedK
                 if let Some(observed_event) = consume_matching(&mut observed, |candidate| {
                     candidate.matches_key_event(*key, *physical_key, *pressed, *modifiers)
                 }) {
-                    frame_key_events.push(observed_event.into_frame_key_event());
+                    frame_key_events.push(FrameKeyEvent {
+                        kind: observed_event.kind,
+                        key: observed_event.key,
+                        physical_key: observed_event.physical_key,
+                        pressed: observed_event.pressed,
+                        modifiers: observed_event.modifiers,
+                        key_without_modifiers_text: observed_event.key_without_modifiers_text,
+                    });
                 }
             }
             Event::Cut => {
                 if let Some(observed_event) =
                     consume_matching(&mut observed, |candidate| candidate.kind == KeyboardOutputKind::Cut)
                 {
-                    frame_key_events.push(observed_event.into_frame_key_event());
+                    frame_key_events.push(FrameKeyEvent {
+                        kind: observed_event.kind,
+                        key: observed_event.key,
+                        physical_key: observed_event.physical_key,
+                        pressed: observed_event.pressed,
+                        modifiers: observed_event.modifiers,
+                        key_without_modifiers_text: observed_event.key_without_modifiers_text,
+                    });
                 }
             }
             Event::Copy => {
                 if let Some(observed_event) =
                     consume_matching(&mut observed, |candidate| candidate.kind == KeyboardOutputKind::Copy)
                 {
-                    frame_key_events.push(observed_event.into_frame_key_event());
+                    frame_key_events.push(FrameKeyEvent {
+                        kind: observed_event.kind,
+                        key: observed_event.key,
+                        physical_key: observed_event.physical_key,
+                        pressed: observed_event.pressed,
+                        modifiers: observed_event.modifiers,
+                        key_without_modifiers_text: observed_event.key_without_modifiers_text,
+                    });
                 }
             }
             Event::Paste(_) => {
                 if let Some(observed_event) =
                     consume_matching(&mut observed, |candidate| candidate.kind == KeyboardOutputKind::Paste)
                 {
-                    frame_key_events.push(observed_event.into_frame_key_event());
+                    frame_key_events.push(FrameKeyEvent {
+                        kind: observed_event.kind,
+                        key: observed_event.key,
+                        physical_key: observed_event.physical_key,
+                        pressed: observed_event.pressed,
+                        modifiers: observed_event.modifiers,
+                        key_without_modifiers_text: observed_event.key_without_modifiers_text,
+                    });
                 }
             }
             _ => {}
@@ -516,24 +504,6 @@ mod tests {
     use egui::{Event, Key, Modifiers, RawInput};
 
     #[test]
-    fn unmodified_plus_survives_ctrl_rewriting_the_logical_key_to_minus() {
-        use winit::keyboard::{Key as WinitKey, KeyCode, PhysicalKey};
-
-        let observed = ObservedKeyboardEvent::from_keys(
-            &WinitKey::Character("-".into()),
-            PhysicalKey::Code(KeyCode::Minus),
-            true,
-            Modifiers::CTRL | Modifiers::COMMAND,
-            &WinitKey::Character("+".into()),
-        )
-        .expect("plus key is observed");
-        assert_eq!(observed.key, Key::Minus);
-        assert_eq!(observed.unmodified_key, Some(Key::Plus));
-        let frame = observed.into_frame_key_event();
-        assert_eq!(frame.pressed_unmodified_key().map(|(key, _, _)| key), Some(Key::Plus));
-    }
-
-    #[test]
     fn remapped_physical_function_key_keeps_unicode_metadata_through_event_alignment() {
         use winit::keyboard::{Key as WinitKey, KeyCode, PhysicalKey};
 
@@ -608,7 +578,6 @@ mod tests {
                 physical_key: Some(Key::C),
                 pressed: true,
                 modifiers: Modifiers::CTRL,
-                unmodified_key: Some(Key::C),
                 key_without_modifiers_text: Some("c".to_owned()),
             },
             ObservedKeyboardEvent {
@@ -617,7 +586,6 @@ mod tests {
                 physical_key: Some(Key::OpenBracket),
                 pressed: true,
                 modifiers: Modifiers::SHIFT,
-                unmodified_key: Some(Key::OpenBracket),
                 key_without_modifiers_text: Some("å".to_owned()),
             },
         ]
@@ -634,7 +602,6 @@ mod tests {
                     physical_key: Some(Key::C),
                     pressed: true,
                     modifiers: Modifiers::CTRL,
-                    unmodified_key: Some(Key::C),
                     key_without_modifiers_text: Some("c".to_owned()),
                 },
                 FrameKeyEvent {
@@ -643,7 +610,6 @@ mod tests {
                     physical_key: Some(Key::OpenBracket),
                     pressed: true,
                     modifiers: Modifiers::SHIFT,
-                    unmodified_key: Some(Key::OpenBracket),
                     key_without_modifiers_text: Some("å".to_owned()),
                 },
             ]
@@ -671,7 +637,6 @@ mod tests {
                 physical_key: Some(Key::OpenBracket),
                 pressed: true,
                 modifiers: Modifiers::SHIFT,
-                unmodified_key: Some(Key::OpenBracket),
                 key_without_modifiers_text: Some("å".to_owned()),
             }],
         );
@@ -686,7 +651,6 @@ mod tests {
                 physical_key: Some(Key::OpenBracket),
                 pressed: true,
                 modifiers: Modifiers::SHIFT,
-                unmodified_key: Some(Key::OpenBracket),
                 key_without_modifiers_text: Some("å".to_owned()),
             })
         );
@@ -702,7 +666,6 @@ mod tests {
                 physical_key: Some(Key::C),
                 pressed: true,
                 modifiers: Modifiers::CTRL,
-                unmodified_key: Some(Key::C),
                 key_without_modifiers_text: Some("c".to_owned()),
             }],
         );
@@ -723,7 +686,6 @@ mod tests {
                 physical_key: Some(Key::A),
                 pressed: true,
                 modifiers: Modifiers::NONE,
-                unmodified_key: Some(Key::A),
                 key_without_modifiers_text: Some("a".to_owned()),
             });
 
