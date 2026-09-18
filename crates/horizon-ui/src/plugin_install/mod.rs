@@ -10,8 +10,8 @@ mod grok_mcp;
 mod user_skills;
 mod work_hooks;
 use user_skills::{
-    HORIZON_BROWSER_SKILL, HORIZON_NOTIFY_SKILL, RETIRED_OFFLOAD_SKILL, SkillRootLease, bind_skill_roots,
-    release_skill_roots, remove_horizon_skill_dir,
+    HORIZON_BROWSER_SKILL, HORIZON_NOTIFY_SKILL, HORIZON_SPEECH_SKILL, RETIRED_OFFLOAD_SKILL, SkillRootLease,
+    bind_skill_roots, release_skill_roots, remove_horizon_skill_dir,
 };
 
 struct EmbeddedFile {
@@ -41,6 +41,20 @@ const CLAUDE_PLUGIN_FILES: &[EmbeddedFile] = &[
             "/assets/plugins/claude-code/skills/horizon-notify/SKILL.md"
         )),
     },
+    EmbeddedFile {
+        relative_path: "skills/horizon-speech/SKILL.md",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/claude-code/skills/horizon-speech/SKILL.md"
+        )),
+    },
+    EmbeddedFile {
+        relative_path: "skills/horizon-speech/level.py",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/claude-code/skills/horizon-speech/level.py"
+        )),
+    },
 ];
 
 const NOTIFY_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
@@ -58,6 +72,23 @@ const BROWSER_SKILL_FILES: &[EmbeddedFile] = &[EmbeddedFile {
         "/assets/plugins/codex/skills/horizon-browser/SKILL.md"
     )),
 }];
+
+const SPEECH_SKILL_FILES: &[EmbeddedFile] = &[
+    EmbeddedFile {
+        relative_path: "SKILL.md",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/codex/skills/horizon-speech/SKILL.md"
+        )),
+    },
+    EmbeddedFile {
+        relative_path: "level.py",
+        content: include_str!(concat!(
+            env!("OUT_DIR"),
+            "/assets/plugins/codex/skills/horizon-speech/level.py"
+        )),
+    },
+];
 
 /// `$HOME`-relative skill roots that receive `horizon-notify` for the life of
 /// this Horizon process. Claude also gets it through the host plugin tree.
@@ -340,6 +371,7 @@ fn install_agent_plugins_impl(
     )?);
     updated_files += sync_plugin_files(&horizon_home.codex_skill_dir(), NOTIFY_SKILL_FILES)?;
     updated_files += sync_plugin_files(&horizon_home.codex_browser_skill_dir(), BROWSER_SKILL_FILES)?;
+    updated_files += sync_plugin_files(&horizon_home.codex_speech_skill_dir(), SPEECH_SKILL_FILES)?;
 
     if let Some(home) = user_home {
         for skill_root in NOTIFY_SKILL_ROOTS {
@@ -372,11 +404,15 @@ fn install_agent_plugins_impl(
     if let Some(codex_root) = provider_home(codex_home, user_home, ".codex") {
         let notify_dir = codex_root.join("skills").join(HORIZON_NOTIFY_SKILL);
         let browser_dir = codex_root.join("skills").join(HORIZON_BROWSER_SKILL);
+        let speech_dir = codex_root.join("skills").join(HORIZON_SPEECH_SKILL);
         if skill_dir_is_leased(lease, &notify_dir) {
             updated_files += sync_plugin_files(&notify_dir, NOTIFY_SKILL_FILES)?;
         }
         if skill_dir_is_leased(lease, &browser_dir) {
             updated_files += sync_plugin_files(&browser_dir, BROWSER_SKILL_FILES)?;
+        }
+        if skill_dir_is_leased(lease, &speech_dir) {
+            updated_files += sync_plugin_files(&speech_dir, SPEECH_SKILL_FILES)?;
         }
     }
 
@@ -404,6 +440,7 @@ fn user_skill_lease_dirs(
     if let Some(codex_root) = provider_home(codex_home, user_home, ".codex") {
         dirs.push(codex_root.join("skills").join(HORIZON_NOTIFY_SKILL));
         dirs.push(codex_root.join("skills").join(HORIZON_BROWSER_SKILL));
+        dirs.push(codex_root.join("skills").join(HORIZON_SPEECH_SKILL));
     }
     dirs
 }
@@ -527,6 +564,8 @@ mod tests {
         assert!(dirs.contains(&home.join(".gemini/antigravity-cli/skills/horizon-notify")));
         assert!(dirs.contains(&home.join(".codex/skills/horizon-notify")));
         assert!(dirs.contains(&home.join(".codex/skills/horizon-browser")));
+        assert!(dirs.contains(&home.join(".codex/skills/horizon-speech")));
+        assert!(!dirs.contains(&home.join(".claude/skills/horizon-speech")));
         assert!(!dirs.contains(&home.join(".agents/skills/horizon-notify")));
         assert!(!dirs.contains(&home.join(".agents/skills/horizon-browser")));
         assert!(!dirs.contains(&home.join(".gemini/skills/horizon-notify")));
