@@ -142,6 +142,45 @@ struct CanvasWheelBuckets {
     pan: Vec2,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CanvasWheelFollowup {
+    Pan,
+    Zoom,
+}
+
+fn canvas_wheel_followup_id(ctx: &Context) -> egui::Id {
+    egui::Id::new(("horizon_canvas_wheel_followup", ctx.viewport_id()))
+}
+
+fn resolve_smoothed_wheel(
+    has_wheel_events: bool,
+    buckets: CanvasWheelBuckets,
+    smoothed: Vec2,
+    previous: Option<CanvasWheelFollowup>,
+) -> (Vec2, Vec2, Option<CanvasWheelFollowup>) {
+    if has_wheel_events {
+        let mixed = buckets.pan != Vec2::ZERO && buckets.zoom != Vec2::ZERO;
+        if mixed {
+            return (buckets.zoom, buckets.pan, None);
+        }
+        if buckets.zoom != Vec2::ZERO {
+            return (smoothed, Vec2::ZERO, Some(CanvasWheelFollowup::Zoom));
+        }
+        if buckets.pan != Vec2::ZERO {
+            return (Vec2::ZERO, smoothed, Some(CanvasWheelFollowup::Pan));
+        }
+        return (Vec2::ZERO, Vec2::ZERO, None);
+    }
+    if smoothed == Vec2::ZERO {
+        return (Vec2::ZERO, Vec2::ZERO, None);
+    }
+    match previous {
+        Some(CanvasWheelFollowup::Zoom) => (smoothed, Vec2::ZERO, previous),
+        Some(CanvasWheelFollowup::Pan) => (Vec2::ZERO, smoothed, previous),
+        None => (Vec2::ZERO, Vec2::ZERO, None),
+    }
+}
+
 fn canvas_zoom_multiplier(zoom_delta: f32, zoom_scroll: Vec2) -> Option<f32> {
     if (zoom_delta - 1.0).abs() > f32::EPSILON {
         return Some(zoom_delta);
@@ -333,26 +372,34 @@ impl HorizonApp {
             pointer_over_scrollable,
             canvas_rect.height(),
         );
-        if let Some(factor) = canvas_zoom_multiplier(zoom_delta, wheels.zoom)
-            && pointer_in_canvas
-        {
+        let has_wheel_events = events.iter().any(|event| matches!(event, Event::MouseWheel { .. }));
+        let followup_id = canvas_wheel_followup_id(ctx);
+        let previous_followup = ctx.data(|data| data.get_temp(followup_id));
+        let (zoom_scroll, pan_scroll, next_followup) =
+            resolve_smoothed_wheel(has_wheel_events, wheels, scroll, previous_followup);
+        ctx.data_mut(|data| data.insert_temp(followup_id, next_followup));
+        let mixed_wheel = wheels.pan != Vec2::ZERO && wheels.zoom != Vec2::ZERO;
+        let zoom_factor = if pointer_in_canvas {
+            if mixed_wheel {
+                canvas_zoom_multiplier(1.0, zoom_scroll)
+            } else {
+                canvas_zoom_multiplier(zoom_delta, zoom_scroll)
+            }
+        } else {
+            None
+        };
+        if let Some(factor) = zoom_factor {
             let anchor = pointer_position.unwrap_or_else(|| canvas_rect.center());
             if self.zoom_canvas_at(canvas_rect, anchor, self.canvas_view.zoom * factor) {
                 self.clear_terminal_selections();
             }
-            if scroll != Vec2::ZERO || wheels.zoom != Vec2::ZERO {
-                ctx.input_mut(|input| input.smooth_scroll_delta = Vec2::ZERO);
-            }
-            self.canvas_pan_input_claimed = false;
-            self.is_panning = false;
-            return;
         }
 
         let drag_panning = self.canvas_pan_input_claimed;
         let pan_delta = if drag_panning {
             pointer_delta
         } else if pointer_in_canvas {
-            wheels.pan
+            pan_scroll
         } else {
             Vec2::ZERO
         };
@@ -365,9 +412,9 @@ impl HorizonApp {
             self.canvas_view.set_pan_offset([pan_offset.x, pan_offset.y]);
             self.mark_runtime_dirty();
             self.clear_terminal_selections();
-            if !drag_panning && (scroll != Vec2::ZERO || wheels.pan != Vec2::ZERO) {
-                ctx.input_mut(|input| input.smooth_scroll_delta = Vec2::ZERO);
-            }
+        }
+        if zoom_factor.is_some() || (!drag_panning && pan_scroll != Vec2::ZERO) {
+            ctx.input_mut(|input| input.smooth_scroll_delta = Vec2::ZERO);
         }
     }
 
@@ -827,11 +874,12 @@ mod tests {
     use super::super::super::super::input::TerminalInputEvent;
     use super::super::super::CanvasPanSpaceKeyState;
     use super::{
-        HeldSpeechBinding, MiddlePanMode, MiddlePanTarget, PendingCaptureEvent, canvas_zoom_multiplier,
-        classify_canvas_wheel_events, clear_released_speech_hotkeys, next_middle_pan_active, pending_capture_event,
-        primary_down_at_frame_start, primary_selection_routing_active, swallow_cancel_escape_event,
-        swallow_captured_clipboard_event, swallow_correlated_shift_text, swallow_held_speech_hotkey_event,
-        swallow_speech_hotkey_event, wheel_pan_scroll_input,
+        CanvasWheelBuckets, CanvasWheelFollowup, HeldSpeechBinding, MiddlePanMode, MiddlePanTarget,
+        PendingCaptureEvent, canvas_zoom_multiplier, classify_canvas_wheel_events, clear_released_speech_hotkeys,
+        next_middle_pan_active, pending_capture_event, primary_down_at_frame_start, primary_selection_routing_active,
+        resolve_smoothed_wheel, swallow_cancel_escape_event, swallow_captured_clipboard_event,
+        swallow_correlated_shift_text, swallow_held_speech_hotkey_event, swallow_speech_hotkey_event,
+        wheel_pan_scroll_input,
     };
 
     #[test]
@@ -950,6 +998,28 @@ mod tests {
         let wheels = classify_canvas_wheel_events(&events, false, false, 800.0);
         assert_eq!(wheels.pan, Vec2::new(0.0, 8.0));
         assert_eq!(wheels.zoom, Vec2::new(0.0, 4.0));
+        let (zoom, pan, followup) = resolve_smoothed_wheel(true, wheels, Vec2::new(0.0, 99.0), None);
+        assert_eq!(zoom, wheels.zoom);
+        assert_eq!(pan, wheels.pan);
+        assert_eq!(followup, None);
+    }
+
+    #[test]
+    fn uniform_wheel_uses_smoothed_delta_and_followup_frames() {
+        let pan_buckets = CanvasWheelBuckets {
+            pan: Vec2::new(0.0, 8.0),
+            zoom: Vec2::ZERO,
+        };
+        let smoothed = Vec2::new(0.0, 3.0);
+        let (zoom, pan, followup) = resolve_smoothed_wheel(true, pan_buckets, smoothed, None);
+        assert_eq!(zoom, Vec2::ZERO);
+        assert_eq!(pan, smoothed);
+        assert_eq!(followup, Some(CanvasWheelFollowup::Pan));
+        let leftover = Vec2::new(0.0, 2.0);
+        let (zoom, pan, followup) = resolve_smoothed_wheel(false, CanvasWheelBuckets::default(), leftover, followup);
+        assert_eq!(zoom, Vec2::ZERO);
+        assert_eq!(pan, leftover);
+        assert_eq!(followup, Some(CanvasWheelFollowup::Pan));
     }
 
     #[test]
