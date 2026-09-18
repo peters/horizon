@@ -65,6 +65,17 @@ pub(super) fn resolve_smoothed_wheel(
     }
 }
 
+/// egui latches Ctrl on a trackpad gesture until `TouchPhase::End`, so
+/// `zoom_delta` can stay off 1 after the raw event is already classified as
+/// pan. The same physical motion must not pan and zoom together.
+pub(super) fn drop_pan_when_egui_already_zoomed(zoom_delta: f32, wheels: CanvasWheelBuckets, pan_scroll: Vec2) -> Vec2 {
+    if (zoom_delta - 1.0).abs() > f32::EPSILON && wheels.zoom == Vec2::ZERO && wheels.pan != Vec2::ZERO {
+        Vec2::ZERO
+    } else {
+        pan_scroll
+    }
+}
+
 pub(super) fn canvas_zoom_multiplier(zoom_delta: f32, zoom_scroll: Vec2) -> Option<f32> {
     if (zoom_delta - 1.0).abs() > f32::EPSILON {
         return Some(zoom_delta);
@@ -145,7 +156,8 @@ pub(super) fn classify_canvas_wheel_events(
 mod tests {
     use super::{
         CanvasWheelBuckets, CanvasWheelFollowup, canvas_zoom_multiplier, classify_canvas_wheel_events,
-        primary_down_at_frame_start, resolve_smoothed_wheel, wheel_pan_scroll_input,
+        drop_pan_when_egui_already_zoomed, primary_down_at_frame_start, resolve_smoothed_wheel, wheel_event_points,
+        wheel_pan_scroll_input,
     };
     use egui::{Event, Modifiers, Vec2};
 
@@ -298,5 +310,30 @@ mod tests {
         assert!(wheels.skipped_for_panel);
         assert_eq!(wheels.pan, Vec2::ZERO);
         assert_eq!(wheels.zoom, Vec2::ZERO);
+    }
+
+    #[test]
+    fn page_wheel_uses_the_passed_viewport_height() {
+        assert_eq!(
+            wheel_event_points(egui::MouseWheelUnit::Page, Vec2::new(0.0, 1.0), 900.0),
+            Vec2::new(0.0, 900.0)
+        );
+    }
+
+    #[test]
+    fn latched_zoom_delta_does_not_also_pan() {
+        let wheels = CanvasWheelBuckets {
+            pan: Vec2::new(0.0, 8.0),
+            zoom: Vec2::ZERO,
+            skipped_for_panel: false,
+        };
+        assert_eq!(
+            drop_pan_when_egui_already_zoomed(1.25, wheels, Vec2::new(0.0, 8.0)),
+            Vec2::ZERO
+        );
+        assert_eq!(
+            drop_pan_when_egui_already_zoomed(1.0, wheels, Vec2::new(0.0, 8.0)),
+            Vec2::new(0.0, 8.0)
+        );
     }
 }

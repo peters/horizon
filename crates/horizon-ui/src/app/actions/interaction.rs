@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::mem;
 
 use egui::{Context, Event, Key, Modifiers, Rect, Vec2};
@@ -12,7 +13,7 @@ use super::super::shortcuts::{
 use super::super::{CanvasPanSpaceKeyState, HeldSpeechBinding, HorizonApp};
 use super::canvas_wheel::{
     CanvasWheelFollowup, canvas_wheel_followup_id, canvas_zoom_multiplier, classify_canvas_wheel_events,
-    primary_down_at_frame_start, resolve_smoothed_wheel, wheel_pan_scroll_input,
+    drop_pan_when_egui_already_zoomed, primary_down_at_frame_start, resolve_smoothed_wheel, wheel_pan_scroll_input,
 };
 use super::support::fullscreen_panel_is_renderable;
 
@@ -133,19 +134,24 @@ fn topmost_panel_geometry(
     paint_order: &[PanelId],
     position: egui::Pos2,
 ) -> Option<(PanelId, PanelScreenGeometry)> {
-    let hit = |id: &PanelId| {
-        panel_geometry
-            .iter()
-            .find(|(panel_id, geometry)| panel_id == id && geometry.screen_rect.contains(position))
-            .copied()
-    };
-    paint_order.iter().rev().find_map(hit).or_else(|| {
-        panel_geometry
-            .iter()
-            .rev()
-            .find(|(_, geometry)| geometry.screen_rect.contains(position))
-            .copied()
-    })
+    let by_id: HashMap<PanelId, PanelScreenGeometry> = panel_geometry.iter().copied().collect();
+    paint_order
+        .iter()
+        .rev()
+        .find_map(|id| {
+            by_id
+                .get(id)
+                .copied()
+                .filter(|geometry| geometry.screen_rect.contains(position))
+                .map(|geometry| (*id, geometry))
+        })
+        .or_else(|| {
+            panel_geometry
+                .iter()
+                .rev()
+                .find(|(_, geometry)| geometry.screen_rect.contains(position))
+                .copied()
+        })
 }
 
 impl HorizonApp {
@@ -205,6 +211,7 @@ impl HorizonApp {
             scroll,
             pointer_delta,
             zoom_delta,
+            viewport_height,
         ) = ctx.input(|input| {
             (
                 input.events.clone(),
@@ -216,6 +223,7 @@ impl HorizonApp {
                 wheel_pan_scroll_input(input),
                 input.pointer.delta(),
                 input.zoom_delta(),
+                input.viewport_rect().height(),
             )
         });
         let panel_geometry = self.visible_panel_geometry_for_canvas_view(canvas_rect, visible_workspace);
@@ -257,13 +265,12 @@ impl HorizonApp {
         self.middle_pan_active =
             next_middle_pan_active(self.middle_pan_active, middle_down, target, mode, pointer_delta);
         self.canvas_pan_input_claimed = pointer_in_canvas && (self.middle_pan_active || space_drag_claimed);
-        let pointer_over_scrollable = pointer_position.is_some_and(|position| {
-            topmost_panel_geometry(&panel_geometry, &self.panel_screen_order, position)
-                .is_some_and(|(_, geometry)| geometry.body.contains(position))
-        });
+        let topmost = pointer_position
+            .and_then(|position| topmost_panel_geometry(&panel_geometry, &self.panel_screen_order, position));
+        let pointer_over_scrollable = pointer_position
+            .is_some_and(|position| topmost.is_some_and(|(_, geometry)| geometry.body.contains(position)));
         let pointer_over_host_overlay = pointer_position.is_some_and(|position| {
-            topmost_panel_geometry(&panel_geometry, &self.panel_screen_order, position)
-                .is_some_and(|(id, _)| self.pointer_over_native_select_popup(ctx, std::iter::once(id), position))
+            topmost.is_some_and(|(id, _)| self.pointer_over_native_select_popup(ctx, std::iter::once(id), position))
         });
         set_canvas_claims_unmodified_wheel(ctx, pointer_in_canvas);
         let followup_id = canvas_wheel_followup_id(ctx);
@@ -273,13 +280,13 @@ impl HorizonApp {
                 primary_down_at_frame_start(&events, primary_down),
                 pointer_over_scrollable,
                 pointer_over_host_overlay,
-                canvas_rect.height(),
+                viewport_height,
             );
             let has_wheel_events = events.iter().any(|event| matches!(event, Event::MouseWheel { .. }));
             let previous_followup = ctx
                 .data(|data| data.get_temp::<Option<CanvasWheelFollowup>>(followup_id))
                 .flatten();
-            let (zoom_scroll, pan_scroll, next_followup) =
+            let (zoom_scroll, mut pan_scroll, next_followup) =
                 resolve_smoothed_wheel(has_wheel_events, wheels, scroll, previous_followup);
             ctx.data_mut(|data| data.insert_temp(followup_id, next_followup));
             let mixed_wheel = wheels.pan != Vec2::ZERO && wheels.zoom != Vec2::ZERO || wheels.skipped_for_panel;
@@ -288,6 +295,7 @@ impl HorizonApp {
             } else {
                 canvas_zoom_multiplier(zoom_delta, zoom_scroll)
             };
+            pan_scroll = drop_pan_when_egui_already_zoomed(zoom_delta, wheels, pan_scroll);
             (pan_scroll, zoom_factor)
         } else {
             ctx.data_mut(|data| data.insert_temp(followup_id, None::<CanvasWheelFollowup>));
