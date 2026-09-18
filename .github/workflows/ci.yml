@@ -139,6 +139,7 @@ jobs:
       - run: cargo test --locked -p horizon-device --features cli
       - run: cargo test --locked -p horizon-device-vnc
       - run: cargo build --locked -p horizon-device-vnc
+      - run: python3 scripts/device-smoke/resize_permission.py --binary target/debug/horizon-device-vnc
       - run: cargo clippy --locked -p horizon-device-vnc --all-targets -- -D warnings
       - name: Qualify pinned VNC decoder
         run: |

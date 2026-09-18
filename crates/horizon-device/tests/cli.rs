@@ -456,3 +456,36 @@ mod live_mcp {
         Ok(())
     }
 }
+
+#[test]
+fn runtime_resize_permission_flag_is_explicit_and_validated_before_writes() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let target = directory.path().join("target.json");
+    std::fs::write(
+        &target,
+        r#"{"id":"absent","endpoint":{"kind":"local_x11","display":":999999"}}"#,
+    )?;
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_horizon-device"))
+            .arg("--target")
+            .arg(&target)
+            .args(args)
+            .output()
+    };
+    for enabled in ["true", "false"] {
+        let output = run(&["--resize-enabled", enabled])?;
+        assert!(output.status.success());
+        let value: Value = serde_json::from_slice(&output.stdout)?;
+        assert_eq!(value["result"]["enabled"], enabled == "true");
+    }
+    let original = std::fs::read(&target)?;
+    for args in [
+        vec!["--resize-enabled"],
+        vec!["--resize-enabled", "yes"],
+        vec!["--resize-enabled", "true", "extra"],
+    ] {
+        assert_eq!(run(&args)?.status.code(), Some(2));
+        assert_eq!(std::fs::read(&target)?, original);
+    }
+    Ok(())
+}

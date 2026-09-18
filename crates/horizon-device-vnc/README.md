@@ -38,7 +38,8 @@ horizon-device-vnc --target /private/session/target.json screenshot /private/ses
 horizon-device-vnc --target /private/session/target.json mcp
 ```
 
-MCP exposes `device_doctor`, `device_resize`, `device_screenshot` and `device_act`.
+MCP exposes `device_doctor`, `device_resize`, `device_screenshot`, `device_act`
+and `device_set_resize_enabled`.
 Check support and permission separately. Resize returns requested and confirmed
 applied dimensions with current geometry. Capture a fresh screenshot before
 input; old geometry is rejected even after returning to the original size.
@@ -57,3 +58,9 @@ owned X11 target; it does not resize that desktop:
 python3 scripts/device-smoke/resize_lifecycle.py \
   --binary target/debug/horizon-device-vnc --target /private/session/target.json
 ```
+
+Change permission while the MCP server is running with
+`horizon-device-vnc --target /private/session/target.json --resize-enabled true`
+(or `false`), or call `device_set_resize_enabled` with `{"enabled":true}`
+(or `false`). The change is saved for subsequent commands, retains all configured
+limits, and does not resize the desktop or clear an uncertain operation.

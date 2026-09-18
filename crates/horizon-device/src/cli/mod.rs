@@ -1,6 +1,7 @@
 //! Shared command-line and MCP entry point for device adapters.
 mod dispatch;
 mod mcp;
+mod permission;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use dispatch::{Command, Dispatcher};
 use serde_json::{Value, json};
@@ -8,6 +9,8 @@ use std::{
     io::{Read, Write},
     path::PathBuf,
 };
+
+pub(super) const MAX_TARGET_BYTES: u16 = 4096;
 
 pub type ResizeFactory = fn(&crate::Target) -> crate::Result<Box<dyn crate::ResizeBackend>>;
 
@@ -43,7 +46,7 @@ async fn execute(factory: Option<ResizeFactory>) -> Result<u8, String> {
     let first = args.next().unwrap_or_default();
     if first == "--help" || first.is_empty() {
         println!(
-            "{program} --target FILE doctor|resize JSON|screenshot [OUTPUT] [--options JSON]|act JSON|mcp\nJSON may be '-' to read up to 64 KiB from stdin.\nTarget JSON: {{\"id\":\"lab\",\"endpoint\":{{\"kind\":\"local_x11\",\"display\":\":99\"}}}}\nUse a private directory for FILE; cooperating CLI/MCP commands share FILE's .lock sibling.\nNo default display, application launching, or remote management."
+            "{program} --target FILE doctor|--resize-enabled true|false|resize JSON|screenshot [OUTPUT] [--options JSON]|act JSON|mcp\nJSON may be '-' to read up to 64 KiB from stdin.\nTarget JSON: {{\"id\":\"lab\",\"endpoint\":{{\"kind\":\"local_x11\",\"display\":\":99\"}}}}\nUse a private directory for FILE; cooperating CLI/MCP commands share FILE's .lock sibling.\nNo default display, application launching, or remote management."
         );
         return Ok(0);
     }
@@ -69,6 +72,10 @@ async fn execute(factory: Option<ResizeFactory>) -> Result<u8, String> {
                 .map_err(|error| format!("invalid action: {error}"))?,
         ),
         "doctor" => Command::Doctor,
+        "--resize-enabled" => Command::SetResizeEnabled(permission::ResizePermission {
+            enabled: serde_json::from_str(&read_final_json(&mut args, "--resize-enabled requires true or false")?)
+                .map_err(|_| "--resize-enabled requires true or false")?,
+        }),
         "resize" => Command::Resize(
             serde_json::from_str(&read_final_json(&mut args, "resize requires JSON")?)
                 .map_err(|error| format!("invalid resize: {error}"))?,
@@ -92,7 +99,7 @@ async fn execute(factory: Option<ResizeFactory>) -> Result<u8, String> {
             }
             Command::Screenshot(options)
         }
-        _ => return Err("expected doctor, screenshot, act, resize, or mcp".into()),
+        _ => return Err("expected doctor, screenshot, act, resize, --resize-enabled, or mcp".into()),
     };
     if args.next().is_some() {
         return Err("unexpected arguments".into());

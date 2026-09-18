@@ -133,3 +133,11 @@ Target filenames must not end in `.lock`, `.resize-pending` or `.resize-observe`
 
 CLI/MCP errors include `resize_uncertain`: true means a resize may have been
 applied and requires owner reconciliation before retrying.
+
+To change permission during a running session, call `device_set_resize_enabled`
+with `{"enabled":true}` or `{"enabled":false}`, or use
+`horizon-device --target <file> --resize-enabled true|false` from another CLI.
+The next operation reloads the saved setting; no MCP restart is needed. Limits,
+endpoint and pending journals are preserved. A busy result means retry the
+permission change after the current operation finishes; disabling cannot cancel
+an already dispatched resize or reconcile uncertainty.
