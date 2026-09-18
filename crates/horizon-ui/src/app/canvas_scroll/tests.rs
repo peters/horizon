@@ -184,6 +184,44 @@ fn panel_scroll_does_not_become_a_pan_until_a_new_gesture() {
     assert_offset(app.canvas_view.pan_offset, [before[0], before[1] - 5.0]);
 }
 
+#[test]
+fn coalesced_panel_end_and_canvas_start_only_pan_by_the_new_gesture() {
+    let (_temp, ctx, mut app) = app_fixture();
+    let panel_rect = app.visible_panel_geometry_for_canvas_view(app.canvas_rect(&ctx), None)[0]
+        .1
+        .screen_rect;
+    let _ = run_app_frame_with_input(
+        &ctx,
+        &mut app,
+        scroll_frame(1.0, panel_rect.center(), Vec2::ZERO, TouchPhase::Start),
+    );
+    let before = app.canvas_view.pan_offset;
+    let pointer = panel_rect.center_top() - Vec2::new(0.0, 20.0);
+    let mut input = scroll_frame(1.016, pointer, Vec2::new(0.0, -5.0), TouchPhase::Move);
+    input.events.extend([
+        wheel(Vec2::ZERO, TouchPhase::End),
+        wheel(Vec2::ZERO, TouchPhase::Start),
+        wheel(Vec2::new(0.0, -3.0), TouchPhase::Move),
+    ]);
+    let _ = run_app_frame_with_input(&ctx, &mut app, input);
+    assert_offset(app.canvas_view.pan_offset, [before[0], before[1] - 3.0]);
+    let wheels = ctx.input(|input| {
+        input
+            .events
+            .iter()
+            .filter(|event| matches!(event, Event::MouseWheel { .. }))
+            .cloned()
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        wheels,
+        vec![
+            wheel(Vec2::new(0.0, -5.0), TouchPhase::Move),
+            wheel(Vec2::ZERO, TouchPhase::End)
+        ]
+    );
+}
+
 fn claim(gesture: &mut ScrollGesture, time: f64, on_canvas: bool, events: Vec<Event>) -> bool {
     let input = egui::InputState::default().begin_pass(
         RawInput {

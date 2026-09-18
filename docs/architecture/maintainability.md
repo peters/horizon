@@ -228,6 +228,8 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
 - Owns rendering, egui interaction, transient view state, and deferred UI
   actions.
 - `app/mod.rs` orchestrates frame flow only.
+- `native_app/pinch.rs` bridges window-scoped XInput 2.4 pinch and focus events
+  into the existing zoom path; older X11 servers retain keyboard/scroll zoom.
 - `app/bootstrap.rs` constructs the initial application state and configures
   startup-only fonts and install discovery. It does not own per-frame polling,
   provider actions, or remote execution lifetime.

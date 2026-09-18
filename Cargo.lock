@@ -2378,6 +2378,7 @@ dependencies = [
  "vnc-rs",
  "wgpu",
  "winit",
+ "x11rb 0.14.0",
  "zeroize",
 ]
 
