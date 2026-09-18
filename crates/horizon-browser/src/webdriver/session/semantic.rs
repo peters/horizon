@@ -52,7 +52,8 @@ fn element_reference(response: &Value) -> Option<&str> {
 /// Replace the text of the element `selector` matches through the W3C Find
 /// Element, Element Clear and Element Send Keys commands under `session`
 /// (`/session/<id>`). The opaque element reference becomes one encoded route
-/// segment, and the first failing command ends the sequence.
+/// segment, and the first failing command ends the sequence. Success also
+/// requires the live field to retain the requested value after native input.
 fn send_keys_through(
     transport: &dyn ClassicTransport,
     session: &str,
@@ -66,7 +67,21 @@ fn send_keys_through(
     };
     let element = find_element_segment(&post, selector)?;
     post(&format!("element/{element}/clear"), &json!({}))?;
-    post(&format!("element/{element}/value"), &json!({ "text": text }))?;
+    if !text.is_empty() {
+        post(&format!("element/{element}/value"), &json!({ "text": text }))?;
+    }
+    // Resolve again: a reactive handler may replace the original element.
+    // Return only equality, never the current or requested field contents.
+    let response = post(
+        "execute/sync",
+        &json!({
+            "script": "const element = document.querySelector(arguments[0]); return !!element && (element.isContentEditable ? element.textContent : element.value) === arguments[1];",
+            "args": [selector, text],
+        }),
+    )?;
+    if webdriver_value(&response).and_then(Value::as_bool) != Some(true) {
+        return Err("remote fill did not retain the requested value; native input may be unsupported or the page may have changed the field".to_string());
+    }
     Ok(())
 }
 
@@ -325,7 +340,7 @@ impl Driver {
         event_tx: &BrowserEventSender,
     ) -> Result<BrowserControlValue, BrowserControlFailure> {
         let selector = self.semantic.resolve(target)?;
-        let result = self.evaluate_json(&target_rect_expression(&selector, true))?;
+        let result = self.evaluate_json(&target_rect_expression(&selector, !self.host.is_remote()))?;
         let _ = parse_target_rect(&result)?;
         self.capture_teach_fingerprint(None)?;
         if self.host.is_remote() {
@@ -557,10 +572,11 @@ mod tests {
             Ok(json!({"value": {"element-6066-11e4-a52e-4f735466cecf": "node 1 {a}"}})),
             Ok(json!({"value": null})),
             Ok(json!({"value": null})),
+            Ok(json!({"value": true})),
         ]);
         send_keys_through(&transport, "/session/s1", "input[name=q]", "Ada").expect("fill");
         assert_eq!(
-            transport.sent(),
+            transport.sent()[..3],
             vec![
                 (
                     "POST".to_string(),
@@ -580,6 +596,8 @@ mod tests {
             ]
         );
     }
+
+    mod fill;
 
     #[test]
     fn a_click_finds_the_element_and_clicks_it_through_the_driver() {
