@@ -3,7 +3,9 @@ use std::mem;
 use egui::{Context, Event, Key, Modifiers, MouseWheelUnit, PointerButton, Rect, Vec2};
 use horizon_core::WorkspaceId;
 
-use super::super::super::input::{TerminalInputEvent, panel_content_owns_wheel, terminal_input_events};
+use super::super::super::input::{
+    TerminalInputEvent, panel_content_owns_wheel, set_canvas_claims_unmodified_wheel, terminal_input_events,
+};
 use super::super::shortcuts::{
     event_uses_shortcut_key, is_clipboard_pseudo_event, pending_hotkey_capture, shortcut_event_matches,
     shortcut_pressed, take_captured_clipboard_event,
@@ -223,6 +225,7 @@ fn classify_canvas_wheel_events(
     events: &[Event],
     mut primary_down: bool,
     pointer_over_scrollable: bool,
+    pointer_over_host_overlay: bool,
     page_height: f32,
 ) -> CanvasWheelBuckets {
     let mut buckets = CanvasWheelBuckets::default();
@@ -236,6 +239,10 @@ fn classify_canvas_wheel_events(
             Event::MouseWheel {
                 unit, delta, modifiers, ..
             } => {
+                if pointer_over_host_overlay && !(modifiers.ctrl || modifiers.command) {
+                    buckets.skipped_for_panel = true;
+                    continue;
+                }
                 if pointer_over_scrollable && panel_content_owns_wheel(*modifiers, primary_down) {
                     buckets.skipped_for_panel = true;
                     continue;
@@ -372,12 +379,16 @@ impl HorizonApp {
                     .contains(position)
             })
         });
+        let pointer_over_host_overlay =
+            pointer_position.is_some_and(|position| self.pointer_over_native_select_popup(ctx, position));
+        set_canvas_claims_unmodified_wheel(ctx, pointer_in_canvas);
         let followup_id = canvas_wheel_followup_id(ctx);
         let (pan_scroll, zoom_factor) = if pointer_in_canvas {
             let wheels = classify_canvas_wheel_events(
                 &events,
                 primary_down_at_frame_start(&events, primary_down),
                 pointer_over_scrollable,
+                pointer_over_host_overlay,
                 canvas_rect.height(),
             );
             let has_wheel_events = events.iter().any(|event| matches!(event, Event::MouseWheel { .. }));
@@ -426,6 +437,14 @@ impl HorizonApp {
         if pointer_in_canvas && (zoom_factor.is_some() || (!drag_panning && pan_scroll != Vec2::ZERO)) {
             ctx.input_mut(|input| input.smooth_scroll_delta = Vec2::ZERO);
         }
+    }
+
+    fn pointer_over_native_select_popup(&self, ctx: &Context, position: egui::Pos2) -> bool {
+        let viewport = ctx.viewport_id();
+        self.panel_render_caches
+            .browser_ui_state
+            .values()
+            .any(|state| state.select_menu_contains(viewport, position))
     }
 
     fn clear_terminal_selections(&self) {
@@ -994,7 +1013,7 @@ mod tests {
         ];
         let start = primary_down_at_frame_start(&events, false);
         assert!(start);
-        let wheels = classify_canvas_wheel_events(&events, start, true, 800.0);
+        let wheels = classify_canvas_wheel_events(&events, start, true, false, 800.0);
         assert_eq!(wheels.pan, Vec2::ZERO);
         assert_eq!(wheels.zoom, Vec2::ZERO);
     }
@@ -1005,7 +1024,7 @@ mod tests {
             point_wheel(Vec2::new(0.0, 8.0), Modifiers::NONE),
             point_wheel(Vec2::new(0.0, 4.0), Modifiers::CTRL),
         ];
-        let wheels = classify_canvas_wheel_events(&events, false, false, 800.0);
+        let wheels = classify_canvas_wheel_events(&events, false, false, false, 800.0);
         assert_eq!(wheels.pan, Vec2::new(0.0, 8.0));
         assert_eq!(wheels.zoom, Vec2::new(0.0, 4.0));
         let (zoom, pan, followup) = resolve_smoothed_wheel(true, wheels, Vec2::new(0.0, 99.0), None);
@@ -1052,13 +1071,26 @@ mod tests {
             point_wheel(Vec2::new(0.0, 5.0), Modifiers::SHIFT),
             point_wheel(Vec2::new(0.0, 8.0), Modifiers::NONE),
         ];
-        let wheels = classify_canvas_wheel_events(&events, false, true, 800.0);
+        let wheels = classify_canvas_wheel_events(&events, false, true, false, 800.0);
         assert!(wheels.skipped_for_panel);
         assert_eq!(wheels.pan, Vec2::new(0.0, 8.0));
         let (zoom, pan, followup) = resolve_smoothed_wheel(true, wheels, Vec2::new(0.0, 13.0), None);
         assert_eq!(zoom, Vec2::ZERO);
         assert_eq!(pan, Vec2::new(0.0, 8.0));
         assert_eq!(followup, None);
+    }
+
+    #[test]
+    fn native_select_popup_keeps_unmodified_wheel() {
+        let events = vec![point_wheel(Vec2::new(0.0, 8.0), Modifiers::NONE)];
+        let wheels = classify_canvas_wheel_events(&events, false, true, true, 800.0);
+        assert!(wheels.skipped_for_panel);
+        assert_eq!(wheels.pan, Vec2::ZERO);
+        assert_eq!(wheels.zoom, Vec2::ZERO);
+        let ctrl = vec![point_wheel(Vec2::new(0.0, 8.0), Modifiers::CTRL)];
+        let zoom = classify_canvas_wheel_events(&ctrl, false, true, true, 800.0);
+        assert!(!zoom.skipped_for_panel);
+        assert_eq!(zoom.zoom, Vec2::new(0.0, 8.0));
     }
 
     #[test]

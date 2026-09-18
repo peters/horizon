@@ -50,6 +50,9 @@ impl HorizonApp {
 
     #[profiling::function]
     pub(super) fn process_frame_inputs(&mut self, ctx: &Context) -> bool {
+        // Fullscreen skips `handle_canvas_pan`, so unmodified wheel must
+        // default to the panel until that handler claims it this frame.
+        input::set_canvas_claims_unmodified_wheel(ctx, false);
         self.sync_panel_focus_from_pointer_press(ctx);
         // Speech runs before the fullscreen handler so that Escape cancels an
         // active recording instead of also exiting panel fullscreen.

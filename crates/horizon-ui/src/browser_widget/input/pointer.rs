@@ -5,7 +5,7 @@ use horizon_core::browser::{BrowserButton, BrowserCommand, BrowserInput, Browser
 
 use super::keyboard::{key_modifiers, to_browser_modifiers};
 use crate::browser_widget::{BrowserPointerClick, BrowserUiState};
-use crate::input::panel_content_owns_wheel;
+use crate::input::{canvas_claims_unmodified_wheel, panel_content_owns_wheel_with_canvas_claim};
 
 /// CDP `buttons` bitmask for currently-down mouse buttons.
 const BUTTON_LEFT: u32 = 1;
@@ -128,7 +128,15 @@ pub(super) fn events(
             }
             Event::MouseWheel { .. } => {
                 flush_pending_move(browser, &mut pending_move);
-                send_owned_wheel(browser, frame, event, wheel_pos, event_buttons, event_modifiers);
+                send_owned_wheel(
+                    browser,
+                    frame,
+                    event,
+                    wheel_pos,
+                    event_buttons,
+                    event_modifiers,
+                    canvas_claims_unmodified_wheel(ctx),
+                );
             }
             _ => flush_pending_move(browser, &mut pending_move),
         }
@@ -142,8 +150,11 @@ fn should_forward_browser_wheel(
     event_buttons: u32,
     overlay_blocks: bool,
     has_position: bool,
+    canvas_claims: bool,
 ) -> bool {
-    has_position && !overlay_blocks && panel_content_owns_wheel(modifiers, event_buttons & BUTTON_LEFT != 0)
+    has_position
+        && !overlay_blocks
+        && panel_content_owns_wheel_with_canvas_claim(modifiers, event_buttons & BUTTON_LEFT != 0, canvas_claims)
 }
 
 fn send_owned_wheel(
@@ -153,6 +164,7 @@ fn send_owned_wheel(
     wheel_pos: Option<egui::Pos2>,
     event_buttons: u32,
     event_modifiers: BrowserModifiers,
+    canvas_claims: bool,
 ) {
     let Event::MouseWheel {
         unit, delta, modifiers, ..
@@ -165,6 +177,7 @@ fn send_owned_wheel(
         event_buttons,
         wheel_pos.is_some_and(|pos| overlay_blocks_pointer(browser, frame, pos)),
         wheel_pos.is_some(),
+        canvas_claims,
     ) {
         return;
     }
@@ -574,12 +587,42 @@ mod tests {
 
     #[test]
     fn plain_wheel_is_held_for_the_canvas() {
-        assert!(!should_forward_browser_wheel(egui::Modifiers::NONE, 0, false, true));
+        assert!(!should_forward_browser_wheel(
+            egui::Modifiers::NONE,
+            0,
+            false,
+            true,
+            true
+        ));
+    }
+
+    #[test]
+    fn plain_wheel_reaches_the_page_when_canvas_pan_is_idle() {
+        assert!(should_forward_browser_wheel(
+            egui::Modifiers::NONE,
+            0,
+            false,
+            true,
+            false
+        ));
+        assert!(!should_forward_browser_wheel(
+            egui::Modifiers::CTRL,
+            0,
+            false,
+            true,
+            false
+        ));
     }
 
     #[test]
     fn shift_wheel_still_reaches_the_page() {
-        assert!(should_forward_browser_wheel(egui::Modifiers::SHIFT, 0, false, true));
+        assert!(should_forward_browser_wheel(
+            egui::Modifiers::SHIFT,
+            0,
+            false,
+            true,
+            true
+        ));
     }
 
     #[test]
@@ -588,6 +631,7 @@ mod tests {
             egui::Modifiers::NONE,
             BUTTON_LEFT,
             false,
+            true,
             true
         ));
     }

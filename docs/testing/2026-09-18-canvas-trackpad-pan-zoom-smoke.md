@@ -47,6 +47,8 @@ Use `target/debug/horizon` from this branch. Launch with an isolated config if a
    - Expected: canvas pans.
 3. Browser panel: unmodified two-finger pans the canvas; Shift+two-finger scrolls the page.
 4. Fit workspace, then Ctrl+scroll and two-finger pan. Expected: zoom/pan still apply.
+5. Fullscreen a terminal (panel fullscreen). Unmodified two-finger scroll. Expected: the terminal scrollback moves; the canvas is not visible so it must not steal the wheel.
+6. Browser panel with a long native `<select>` list open. Unmodified two-finger over the menu. Expected: the menu scrolls; the canvas does not pan.
 
 ## Persistence
 

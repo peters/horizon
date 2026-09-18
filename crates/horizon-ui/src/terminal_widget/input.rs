@@ -307,7 +307,7 @@ fn handle_pointer_events(
             egui::Event::MouseWheel {
                 delta, unit, modifiers, ..
             } => {
-                if !input::panel_content_owns_wheel(*modifiers, pointer_buttons_before_event.primary) {
+                if skip_canvas_owned_wheel(*modifiers, pointer_buttons_before_event.primary, &pointer.ui_ctx) {
                     continue;
                 }
                 if let Some(point) = pointer.hovered_point
@@ -327,6 +327,14 @@ fn handle_pointer_events(
         }
     }
     local_scrollback_changed
+}
+
+fn skip_canvas_owned_wheel(modifiers: egui::Modifiers, primary_down: bool, ctx: &egui::Context) -> bool {
+    !input::panel_content_owns_wheel_with_canvas_claim(
+        modifiers,
+        primary_down,
+        input::canvas_claims_unmodified_wheel(ctx),
+    )
 }
 
 fn apply_wheel_action(panel: &mut Panel, action: input::WheelAction) -> bool {

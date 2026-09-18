@@ -1,5 +1,5 @@
 use alacritty_terminal::term::TermMode;
-use egui::{Modifiers, MouseWheelUnit, PointerButton, Vec2};
+use egui::{Context, Id, Modifiers, MouseWheelUnit, PointerButton, Vec2};
 
 use super::keyboard::control_modifier;
 use super::{GridPoint, PointerButtons};
@@ -58,12 +58,48 @@ pub fn mouse_motion_report(
 /// Unmodified two-finger/wheel motion pans the canvas even over a panel.
 /// Shift+wheel, or wheel during a primary-button gesture (text selection),
 /// still belongs to the panel body.
+///
+/// This is the board-view rule, where the canvas pan handler is running.
+/// Fullscreen (and any other path that skips that handler) must pass
+/// `canvas_claims = false` so unmodified wheel stays on the panel.
 #[must_use]
 pub fn panel_content_owns_wheel(modifiers: Modifiers, primary_down: bool) -> bool {
+    panel_content_owns_wheel_with_canvas_claim(modifiers, primary_down, true)
+}
+
+/// Same ownership rule as [`panel_content_owns_wheel`], but unmodified wheel
+/// stays on the panel when the canvas pan handler is not claiming it.
+#[must_use]
+pub fn panel_content_owns_wheel_with_canvas_claim(
+    modifiers: Modifiers,
+    primary_down: bool,
+    canvas_claims: bool,
+) -> bool {
     if modifiers.ctrl || modifiers.command {
         return false;
     }
-    modifiers.shift || primary_down
+    modifiers.shift || primary_down || !canvas_claims
+}
+
+fn canvas_claims_unmodified_wheel_id(ctx: &Context) -> Id {
+    Id::new(("horizon_canvas_claims_unmodified_wheel", ctx.viewport_id()))
+}
+
+/// Whether this viewport's canvas pan handler is claiming unmodified wheel.
+///
+/// Unset means the handler has not run; widget tests treat that as the
+/// board-view default (canvas claims). The app clears the flag at the start
+/// of each root frame so fullscreen, which skips the handler, defaults to
+/// panel scroll.
+#[must_use]
+pub fn canvas_claims_unmodified_wheel(ctx: &Context) -> bool {
+    let id = canvas_claims_unmodified_wheel_id(ctx);
+    ctx.data(|data| data.get_temp::<bool>(id)).unwrap_or(true)
+}
+
+pub fn set_canvas_claims_unmodified_wheel(ctx: &Context, claims: bool) {
+    let id = canvas_claims_unmodified_wheel_id(ctx);
+    ctx.data_mut(|data| data.insert_temp(id, claims));
 }
 
 pub fn wheel_action(
@@ -207,8 +243,12 @@ fn discrete_scroll_steps(delta: f32, unit: MouseWheelUnit, cell_extent: f32) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::panel_content_owns_wheel;
-    use egui::Modifiers;
+    use super::{
+        canvas_claims_unmodified_wheel, panel_content_owns_wheel, panel_content_owns_wheel_with_canvas_claim,
+        set_canvas_claims_unmodified_wheel,
+    };
+    use crate::test_egui::DiscardTextures;
+    use egui::{Context, Modifiers, RawInput};
 
     #[test]
     fn unmodified_wheel_belongs_to_the_canvas() {
@@ -222,5 +262,40 @@ mod tests {
         assert!(panel_content_owns_wheel(Modifiers::SHIFT, false));
         assert!(panel_content_owns_wheel(Modifiers::NONE, true));
         assert!(!panel_content_owns_wheel(Modifiers::CTRL | Modifiers::SHIFT, true));
+    }
+
+    #[test]
+    fn unmodified_wheel_stays_on_the_panel_when_canvas_pan_is_idle() {
+        assert!(panel_content_owns_wheel_with_canvas_claim(
+            Modifiers::NONE,
+            false,
+            false
+        ));
+        assert!(panel_content_owns_wheel_with_canvas_claim(
+            Modifiers::SHIFT,
+            false,
+            false
+        ));
+        assert!(!panel_content_owns_wheel_with_canvas_claim(
+            Modifiers::CTRL,
+            false,
+            false
+        ));
+        assert!(!panel_content_owns_wheel_with_canvas_claim(
+            Modifiers::COMMAND,
+            true,
+            false
+        ));
+    }
+
+    #[test]
+    fn canvas_claim_flag_does_not_deadlock_on_context_data() {
+        let ctx = Context::default();
+        ctx.begin_pass(RawInput::default());
+        set_canvas_claims_unmodified_wheel(&ctx, false);
+        assert!(!canvas_claims_unmodified_wheel(&ctx));
+        set_canvas_claims_unmodified_wheel(&ctx, true);
+        assert!(canvas_claims_unmodified_wheel(&ctx));
+        let _ = ctx.end_pass().discard_textures();
     }
 }

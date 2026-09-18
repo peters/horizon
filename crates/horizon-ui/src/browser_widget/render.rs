@@ -31,6 +31,7 @@ pub fn show_body(
     state: &mut BrowserUiState,
     interactive: bool,
 ) -> BodyOutput {
+    state.last_select_menu_screen = None;
     let available = ui.available_rect_before_wrap();
     if available.size().x.min(available.size().y) < 24.0 {
         return BodyOutput {
@@ -128,9 +129,12 @@ pub fn show_body(
         state.select_popup_dismissed = false;
     }
     super::select_popup::sync_ui_state(&mut state.select_popup, popup.as_deref());
-    if let (Some(popup), Some(open)) = (popup.as_deref(), state.select_popup.as_mut()) {
-        let _ = super::select_popup::show(ui, browser, rect, frame_size, popup, open);
-    }
+    let menu = if let (Some(popup), Some(open)) = (popup.as_deref(), state.select_popup.as_mut()) {
+        super::select_popup::show(ui, browser, rect, frame_size, popup, open)
+    } else {
+        None
+    };
+    state.set_select_menu_screen(ui, menu.map(|layout| layout.menu));
 
     BodyOutput {
         image_rect: Some(rect),

@@ -85,6 +85,8 @@ pub struct BrowserUiState {
     select_popup: Option<select_popup::SelectPopupUi>,
     /// True after a blur dismiss was queued so we do not spam Escape.
     select_popup_dismissed: bool,
+    /// Last painted native `<select>` menu, in screen space for this viewport.
+    last_select_menu_screen: Option<(egui::ViewportId, egui::Rect)>,
 }
 
 impl BrowserUiState {
@@ -99,6 +101,23 @@ impl BrowserUiState {
             ..Self::default()
         };
         true
+    }
+
+    /// Screen-space hit test for the host-painted native `<select>` menu.
+    #[must_use]
+    pub(crate) fn select_menu_contains(&self, viewport: egui::ViewportId, pos: Pos2) -> bool {
+        self.last_select_menu_screen
+            .is_some_and(|(id, rect)| id == viewport && rect.contains(pos))
+    }
+
+    fn set_select_menu_screen(&mut self, ui: &Ui, menu: Option<egui::Rect>) {
+        self.last_select_menu_screen = menu.map(|rect| {
+            let screen = ui
+                .ctx()
+                .layer_transform_to_global(ui.layer_id())
+                .map_or(rect, |transform| transform * rect);
+            (ui.ctx().viewport_id(), screen)
+        });
     }
 }
 
