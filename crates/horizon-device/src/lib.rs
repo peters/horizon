@@ -97,8 +97,7 @@ impl Device {
     /// Returns an error when capture geometry or input readiness cannot be queried.
     pub fn doctor(&self) -> Result<Readiness> {
         let mut readiness = self.backend.doctor()?;
-        readiness.desktop_resize = self.resize.readiness()?;
-        readiness.desktop_resize.supported &= self.backend.supports_resize_revisions();
+        readiness.desktop_resize = self.resize.readiness(self.backend.supports_resize_revisions())?;
         Ok(readiness)
     }
     /// # Errors

@@ -17,11 +17,12 @@ impl Server {
     }
     async fn execute(&self, command: Command) -> CallToolResult {
         let dispatcher = self.dispatcher.clone();
-        let Ok(mut response) = tokio::task::spawn_blocking(move || dispatcher.call(command)).await else {
+        let Ok(mut delivered) = tokio::task::spawn_blocking(move || dispatcher.call(command)).await else {
             return CallToolResult::error(vec![ContentBlock::text(
                 "device worker failed; observe before retrying",
             )]);
         };
+        let response = &mut delivered.value;
         let success = response["ok"] == true;
         let mime = response["result"]["mime_type"]
             .as_str()
@@ -33,6 +34,9 @@ impl Server {
         let mut content = vec![ContentBlock::text(response.to_string())];
         if let Some(serde_json::Value::String(image)) = image {
             content.push(ContentBlock::image(image, mime));
+        }
+        if let Err(error) = delivered.complete_observation() {
+            return CallToolResult::error(vec![ContentBlock::text(error.to_string())]);
         }
         if success {
             CallToolResult::success(content)

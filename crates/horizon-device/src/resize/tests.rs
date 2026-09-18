@@ -17,6 +17,7 @@ pub(crate) struct State {
     calls: usize,
     supported: bool,
     revisions: bool,
+    negotiation_error: bool,
     outcome: Outcome,
 }
 struct Fake(Arc<Mutex<State>>);
@@ -77,11 +78,11 @@ impl Backend for Fake {
 }
 impl ResizeBackend for Fake {
     fn supported(&self) -> Result<bool> {
-        Ok(self
-            .0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .supported)
+        let state = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.negotiation_error {
+            return Err(DeviceError::Unavailable("negotiation failed".into()));
+        }
+        Ok(state.supported)
     }
     fn dimensions(&self) -> Result<ImageDimensions> {
         let g = self.geometry();
@@ -114,6 +115,7 @@ pub(crate) fn fixture(enabled: bool, outcome: Outcome) -> (Device, Arc<Mutex<Sta
         calls: 0,
         supported: true,
         revisions: true,
+        negotiation_error: false,
         outcome,
     }));
     let device = Device {
@@ -290,10 +292,11 @@ fn owner_limits_cannot_exceed_capture_and_input_bounds() {
 #[test]
 fn missing_resize_revisions_preserve_observation_and_input() -> Result<()> {
     let (mut device, state) = fixture(true, Outcome::Confirm);
-    state
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .revisions = false;
+    {
+        let mut state = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.revisions = false;
+        state.negotiation_error = true;
+    }
     let readiness = device.doctor()?.desktop_resize;
     assert!(readiness.permitted);
     assert!(!readiness.supported);

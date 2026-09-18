@@ -18,15 +18,53 @@ pub struct Dispatcher {
     pub target_file: PathBuf,
     pub resize_factory: Option<super::ResizeFactory>,
 }
-impl Dispatcher {
-    pub fn call(&self, command: Command) -> Value {
-        match self.execute(command) {
-            Ok(value) => json!({"ok":true,"result":value}),
-            Err(error) => json!({"ok":false,"error":{"code":error.code(),"message":error.to_string()}}),
+pub(super) struct Response {
+    pub value: Value,
+    _lock: Option<File>,
+    observation: Option<PathBuf>,
+}
+impl Response {
+    pub(super) fn new(value: Value, lock: Option<File>, observation: Option<PathBuf>) -> Self {
+        Self {
+            value,
+            _lock: lock,
+            observation,
         }
     }
+    pub(super) fn complete_observation(&mut self) -> crate::Result<()> {
+        if let Some(path) = &self.observation {
+            remove_file(path)?;
+        }
+        self.observation = None;
+        Ok(())
+    }
+}
+impl Dispatcher {
+    pub fn call(&self, command: Command) -> Response {
+        let result = self.lock().and_then(|lock| {
+            let observation = matches!(command, Command::Screenshot(_)).then(|| self.marker("resize-observe"));
+            let value = self.execute(command)?;
+            Ok(Response::new(
+                json!({"ok":true,"result":value}),
+                Some(lock),
+                observation,
+            ))
+        });
+        result.unwrap_or_else(|error| {
+            Response::new(
+                json!({"ok":false,"error":{"code":error.code(),"message":error.to_string()}}),
+                None,
+                None,
+            )
+        })
+    }
     fn execute(&self, command: Command) -> crate::Result<Value> {
-        let _lock = self.lock()?;
+        let pending = self.marker("resize-pending").symlink_metadata().is_ok();
+        if pending && matches!(command, Command::Resize(_)) {
+            return Err(DeviceError::ResizeUncertain(
+                "previous resize requires owner reconciliation".into(),
+            ));
+        }
         let mut bytes = Vec::new();
         File::open(&self.target_file)
             .map_err(io_error)?
@@ -38,8 +76,17 @@ impl Dispatcher {
         }
         let target: Target =
             serde_json::from_slice(&bytes).map_err(|_| DeviceError::Invalid("invalid target config".into()))?;
-        let mut device = Device::connect(&target)?;
-        if matches!(command, Command::Doctor | Command::Resize(_))
+        let mut device = Device::connect(&target).map_err(|error| {
+            if pending {
+                DeviceError::ResizeUncertain(error.to_string())
+            } else {
+                error
+            }
+        })?;
+        device.resize.uncertain = pending;
+        if !pending
+            && device.backend.supports_resize_revisions()
+            && matches!(command, Command::Doctor | Command::Resize(_))
             && target.desktop_resize.vnc_address.is_some()
             && let Some(factory) = self.resize_factory
         {
@@ -47,13 +94,17 @@ impl Dispatcher {
         }
         match command {
             Command::Doctor => {
-                let mut readiness = device.doctor()?;
-                readiness.desktop_resize.uncertain |= self.marker("resize-pending").exists();
+                let readiness = device.doctor().map_err(|error| {
+                    if pending {
+                        DeviceError::ResizeUncertain(error.to_string())
+                    } else {
+                        error
+                    }
+                })?;
                 serde_json::to_value(readiness).map_err(io_error)
             }
             Command::Screenshot(options) => {
                 let observation = device.screenshot_with(&options)?;
-                self.remove_marker("resize-observe")?;
                 serde_json::to_value(observation).map_err(io_error)
             }
             Command::Act(request) => {
@@ -71,33 +122,34 @@ impl Dispatcher {
     }
 
     fn remove_marker(&self, extension: &str) -> crate::Result<()> {
-        match std::fs::remove_file(self.marker(extension)) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(io_error(error)),
-        }
+        remove_file(&self.marker(extension))
     }
 
-    fn resize(&self, device: &mut Device, request: &crate::ResizeRequest) -> crate::Result<Value> {
-        // Persist uncertainty before dispatch, including process termination.
-        // Only the owner may remove an unresolved journal after reconciliation.
-        let pending = self.marker("resize-pending");
-        let mut options = OpenOptions::new();
-        options.create_new(true).write(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let file = options.open(&pending).map_err(|error| {
+    fn prepare_pending(&self, initialize: impl FnOnce(&File) -> crate::Result<()>) -> crate::Result<()> {
+        let options = marker_options();
+        let file = options.open(self.marker("resize-pending")).map_err(|error| {
             if error.kind() == std::io::ErrorKind::AlreadyExists {
                 DeviceError::ResizeUncertain("previous resize requires owner reconciliation".into())
             } else {
                 io_error(error)
             }
         })?;
-        serde_json::to_writer(&file, request).map_err(io_error)?;
-        file.sync_all().map_err(io_error)?;
+        let result = initialize(&file);
+        drop(file);
+        if result.is_err() {
+            self.remove_marker("resize-pending")?;
+        }
+        result
+    }
+
+    fn resize(&self, device: &mut Device, request: &crate::ResizeRequest) -> crate::Result<Value> {
+        // Persist uncertainty before dispatch, including process termination.
+        // Only the owner may remove an unresolved journal after reconciliation.
+        self.prepare_pending(|file| {
+            serde_json::to_writer(file, request).map_err(io_error)?;
+            file.sync_all().map_err(io_error)
+        })?;
+        let options = marker_options();
         // A fresh process must also refuse input until a post-resize screenshot.
         let observed = self.marker("resize-observe");
         let observation_was_required = observed.symlink_metadata().is_ok();
@@ -152,6 +204,24 @@ impl Dispatcher {
         Ok(file)
     }
 }
+fn marker_options() -> OpenOptions {
+    let mut options = OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options
+}
+fn remove_file(path: &std::path::Path) -> crate::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(io_error(error)),
+    }
+}
+
 fn io_error(e: impl std::fmt::Display) -> DeviceError {
     DeviceError::Unavailable(e.to_string())
 }
@@ -232,6 +302,54 @@ mod tests {
             assert_eq!(dispatcher.marker("resize-observe").exists(), result.is_ok());
         }
 
+        Ok(())
+    }
+    #[test]
+    fn failed_journal_initialization_removes_only_the_new_journal() -> crate::Result<()> {
+        let directory = tempfile::tempdir().map_err(io_error)?;
+        let dispatcher = Dispatcher {
+            target_file: directory.path().join("target.json"),
+            resize_factory: None,
+        };
+        let failed = dispatcher.prepare_pending(|mut file| {
+            use std::io::Write;
+            file.write_all(b"partial").map_err(io_error)?;
+            Err(DeviceError::Unavailable("sync failed".into()))
+        });
+        assert!(failed.is_err());
+        assert!(!dispatcher.marker("resize-pending").exists());
+        std::fs::write(dispatcher.marker("resize-pending"), b"original").map_err(io_error)?;
+        assert!(matches!(
+            dispatcher.prepare_pending(|_| Ok(())),
+            Err(DeviceError::ResizeUncertain(_))
+        ));
+        assert_eq!(
+            std::fs::read(dispatcher.marker("resize-pending")).map_err(io_error)?,
+            b"original"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn pending_resize_is_reported_before_missing_target_or_transport() -> crate::Result<()> {
+        let directory = tempfile::tempdir().map_err(io_error)?;
+        let dispatcher = Dispatcher {
+            target_file: directory.path().join("target.json"),
+            resize_factory: None,
+        };
+        std::fs::write(dispatcher.marker("resize-pending"), b"pending").map_err(io_error)?;
+        let response = dispatcher.call(Command::Resize(crate::ResizeRequest {
+            width: 1920,
+            height: 1080,
+        }));
+        assert_eq!(response.value["error"]["code"], "resize_uncertain");
+        std::fs::write(
+            &dispatcher.target_file,
+            br#"{"id":"fixture","endpoint":{"kind":"local_x11","display":":54321"}}"#,
+        )
+        .map_err(io_error)?;
+        let response = dispatcher.call(Command::Doctor);
+        assert_eq!(response.value["error"]["code"], "resize_uncertain");
         Ok(())
     }
 }

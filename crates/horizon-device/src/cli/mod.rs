@@ -91,11 +91,15 @@ async fn execute(factory: Option<ResizeFactory>) -> Result<u8, String> {
     if args.next().is_some() {
         return Err("unexpected arguments".into());
     }
-    let mut value = tokio::task::spawn_blocking(move || dispatcher.call(request))
+    let response = tokio::task::spawn_blocking(move || dispatcher.call(request))
         .await
         .map_err(|_| "device worker failed; observe before retrying".to_owned())?;
-    if command == "screenshot"
-        && value["ok"] == true
+    deliver(response, output, &mut std::io::stdout().lock())
+}
+
+fn deliver(mut response: dispatch::Response, output: Option<String>, writer: &mut impl Write) -> Result<u8, String> {
+    let value = &mut response.value;
+    if value["ok"] == true
         && let Some(path) = output
     {
         let encoded = value["result"]["image_base64"].as_str().ok_or("missing image")?;
@@ -117,8 +121,14 @@ async fn execute(factory: Option<ResizeFactory>) -> Result<u8, String> {
             .remove("image_base64");
         value["result"]["path"] = Value::String(path);
     }
-    println!("{value}");
-    Ok(u8::from(value["ok"] != true))
+    writeln!(writer, "{value}").map_err(|error| error.to_string())?;
+    writer.flush().map_err(|error| error.to_string())?;
+    let code = u8::from(value["ok"] != true);
+    if let Err(error) = response.complete_observation() {
+        eprintln!("screenshot delivered but input remains gated: {error}");
+        return Ok(1);
+    }
+    Ok(code)
 }
 
 fn read_final_json(args: &mut impl Iterator<Item = String>, missing: &str) -> Result<String, String> {
@@ -141,4 +151,77 @@ fn read_json(mut text: String) -> Result<String, String> {
         return Err("request exceeds 64 KiB".into());
     }
     Ok(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::File;
+
+    fn screenshot(directory: &std::path::Path) -> std::io::Result<dispatch::Response> {
+        let marker = directory.join("target.resize-observe");
+        std::fs::write(&marker, b"")?;
+        let lock = File::create(directory.join("target.lock"))?;
+        lock.lock()?;
+        Ok(dispatch::Response::new(
+            json!({"ok": true, "result": {"image_base64": "AQID"}}),
+            Some(lock),
+            Some(marker),
+        ))
+    }
+
+    #[test]
+    fn failed_file_delivery_keeps_the_observation_gate() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let output = directory.path().join("existing.png");
+        std::fs::write(&output, b"original")?;
+        let response = screenshot(directory.path())?;
+        assert!(deliver(response, Some(output.to_string_lossy().into_owned()), &mut Vec::new()).is_err());
+        assert!(directory.path().join("target.resize-observe").exists());
+        assert_eq!(std::fs::read(output)?, b"original");
+        Ok(())
+    }
+
+    struct FailedFlush;
+    impl Write for FailedFlush {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::other("closed output"))
+        }
+    }
+
+    #[test]
+    fn failed_stdout_delivery_keeps_the_observation_gate() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let response = screenshot(directory.path())?;
+        assert!(deliver(response, None, &mut FailedFlush).is_err());
+        assert!(directory.path().join("target.resize-observe").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn cancelled_response_keeps_the_gate_and_holds_the_lock_until_dropped() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let response = screenshot(directory.path())?;
+        let competing = File::open(directory.path().join("target.lock"))?;
+        assert!(matches!(competing.try_lock(), Err(std::fs::TryLockError::WouldBlock)));
+        drop(response);
+        competing.try_lock()?;
+        assert!(directory.path().join("target.resize-observe").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn delivered_screenshot_releases_the_observation_gate() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let response = screenshot(directory.path())?;
+        let mut output = Vec::new();
+        assert_eq!(deliver(response, None, &mut output)?, 0);
+        assert!(!directory.path().join("target.resize-observe").exists());
+        let value: Value = serde_json::from_slice(&output)?;
+        assert_eq!(value["result"]["image_base64"], "AQID");
+        Ok(())
+    }
 }

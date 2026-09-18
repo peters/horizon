@@ -103,13 +103,14 @@ pub(crate) struct ResizeControl {
     pub needs_observation: std::cell::Cell<bool>,
 }
 impl ResizeControl {
-    pub fn readiness(&self) -> Result<ResizeReadiness> {
+    pub fn readiness(&self, revisions: bool) -> Result<ResizeReadiness> {
         Ok(ResizeReadiness {
             permitted: self.config.policy.enabled,
-            supported: match &self.backend {
-                Some(backend) => backend.supported()?,
-                None => false,
-            },
+            supported: revisions
+                && match &self.backend {
+                    Some(backend) => backend.supported()?,
+                    None => false,
+                },
             uncertain: self.uncertain,
             limits: self.config.policy.clone(),
         })
