@@ -5,6 +5,22 @@ enum Reply {
     Silent,
     Raw,
     DesktopSize,
+    Resize,
+}
+
+fn layout_update(reason: u16, width: u16, height: u16) -> Vec<u8> {
+    let mut update = vec![0, 0, 0, 1];
+    for value in [reason, 0, width, height] {
+        update.extend(value.to_be_bytes());
+    }
+    update.extend((-308i32).to_be_bytes());
+    update.extend([1, 0, 0, 0]);
+    update.extend(0u32.to_be_bytes());
+    for value in [0, 0, width, height] {
+        update.extend(value.to_be_bytes());
+    }
+    update.extend(0u32.to_be_bytes());
+    update
 }
 
 fn server(reply: Reply, close: Option<std::sync::mpsc::Receiver<()>>) -> (Target, std::thread::JoinHandle<()>) {
@@ -24,6 +40,7 @@ fn server(reply: Reply, close: Option<std::sync::mpsc::Receiver<()>>) -> (Target
         init.extend(b"test");
         stream.write_all(&init).unwrap();
         let mut refreshes = 0;
+        let mut resize_requested = false;
         loop {
             let mut kind = [0];
             if stream.read_exact(&mut kind).is_err() {
@@ -41,19 +58,24 @@ fn server(reply: Reply, close: Option<std::sync::mpsc::Receiver<()>>) -> (Target
                 }
                 3 => {
                     refreshes += 1;
-                    assert_eq!(refreshes, 1, "resize control must not poll framebuffers");
+                    let expected = if resize_requested { 2 } else { 1 };
+                    assert_eq!(refreshes, expected, "resize control must not poll framebuffers");
                     stream.read_exact(&mut [0; 9]).unwrap();
                     if let Some(close) = &close {
-                        let mut update = vec![0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1];
-                        update.extend((-308i32).to_be_bytes());
-                        update.extend([1, 0, 0, 0]);
-                        update.extend([0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0]);
-                        stream.write_all(&update).unwrap();
+                        stream.write_all(&layout_update(0, 1, 1)).unwrap();
                         close.recv_timeout(Duration::from_secs(3)).unwrap();
                         return;
                     }
                     match reply {
                         Reply::Silent => {}
+                        Reply::Resize => {
+                            let update = if resize_requested {
+                                layout_update(1, 2, 3)
+                            } else {
+                                layout_update(0, 1, 1)
+                            };
+                            stream.write_all(&update).unwrap();
+                        }
                         Reply::Raw => stream
                             .write_all(&[0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 20, 180, 40, 0])
                             .unwrap(),
@@ -63,6 +85,17 @@ fn server(reply: Reply, close: Option<std::sync::mpsc::Receiver<()>>) -> (Target
                             stream.write_all(&update).unwrap();
                         }
                     }
+                }
+                251 => {
+                    assert!(matches!(reply, Reply::Resize));
+                    assert!(!resize_requested);
+                    let mut request = [0; 23];
+                    stream.read_exact(&mut request).unwrap();
+                    assert_eq!(
+                        request,
+                        [0, 0, 2, 0, 3, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 3, 0, 0, 0, 0]
+                    );
+                    resize_requested = true;
                 }
                 unexpected => panic!("unexpected client message {unexpected}"),
             }
@@ -127,4 +160,17 @@ fn disconnect_after_negotiation_invalidates_cached_capability_and_dimensions() {
     }
     assert!(matches!(backend.supported(), Err(DeviceError::Unavailable(_))));
     assert!(matches!(backend.dimensions(), Err(DeviceError::Unavailable(_))));
+}
+
+#[test]
+fn resize_returns_server_confirmed_dimensions() {
+    let (target, server) = server(Reply::Resize, None);
+    let mut backend = connect_with_timeout(&target, Duration::from_secs(2)).unwrap();
+    assert!(backend.supported().unwrap());
+    assert_eq!(backend.dimensions().unwrap(), ImageDimensions { width: 1, height: 1 });
+    let requested = ImageDimensions { width: 2, height: 3 };
+    assert_eq!(backend.resize(requested).unwrap(), requested);
+    assert_eq!(backend.dimensions().unwrap(), requested);
+    drop(backend);
+    server.join().unwrap();
 }
