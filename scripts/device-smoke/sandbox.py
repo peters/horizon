@@ -137,8 +137,7 @@ def prepare(state, environ=None, bind_apparmor_query=True, extra_ro_binds=()):
             continue
         seen.add(resolved)
         namespace += ['--ro-bind', resolved, resolved]
-    if X11_SOCKET_DIR.is_dir():
-        namespace += ['--ro-bind', str(X11_SOCKET_DIR), str(X11_SOCKET_DIR)]
+    namespace += ['--ro-bind-try', str(X11_SOCKET_DIR), str(X11_SOCKET_DIR)]
     namespace += access_bind
     namespace += ['--chdir', str(data), '--']
     base = dict(environ if environ is not None else os.environ)

@@ -18,7 +18,7 @@ import sandbox  # noqa: E402
 
 def bind_at(namespace, dest):
     for index, item in enumerate(namespace):
-        if item in ('--bind', '--ro-bind', '--dev-bind') and index + 2 < len(namespace):
+        if item in ('--bind', '--ro-bind', '--ro-bind-try', '--dev-bind') and index + 2 < len(namespace):
             if namespace[index + 2] == dest:
                 return index, item, namespace[index + 1]
     raise AssertionError(f'no bind to {dest}')
@@ -108,11 +108,9 @@ class NamespaceTests(unittest.TestCase):
             self.assertFalse(self.box.apparmor['sandbox_query_bind'])
 
     def test_x11_socket_dir_is_rebound_read_only_after_private_tmp(self):
-        if not sandbox.X11_SOCKET_DIR.is_dir():
-            self.skipTest('no host X11 socket directory')
         tmp_index, _, _ = bind_at(self.box.namespace, '/tmp')
         x11_index, flag, src = bind_at(self.box.namespace, str(sandbox.X11_SOCKET_DIR))
-        self.assertEqual(flag, '--ro-bind')
+        self.assertEqual(flag, '--ro-bind-try')
         self.assertEqual(src, str(sandbox.X11_SOCKET_DIR))
         self.assertLess(tmp_index, x11_index)
 

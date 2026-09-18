@@ -46,14 +46,16 @@ for this child; it does not change the real HOME value or existing sessions.
 The same namespace gives namespaced processes a private writable `/tmp` and a
 session bus at the standard `/run/user/<uid>/bus` path, backed by fixture
 runtime, so native applications and `dbus-run-session` can bind sockets. Host
-`/tmp/.X11-unix` is re-bound read-only so the fixture X server stays reachable.
-`--horizon` and `--tools` paths are re-bound after that `/tmp` overlay so a
-frozen binary under `/tmp/horizon-smoke-bin.*` remains executable.
-When AppArmor's query file exists, only that file is bound writable so policy
-checks reach the host LSM; policy load and remove stay read-only, host
-enforcement is unchanged, and the developer's session bus is not used. The
-fixture starts and stops its own `dbus-daemon`. `LIBGL_ALWAYS_SOFTWARE` does
-not disable Vulkan, so the debug app may use the available GPU.
+`/tmp/.X11-unix` is re-bound read-only when bwrap starts, after Xvfb has created
+it, so the fixture X server stays reachable even if that directory was missing
+when the harness prepared the namespace. `--horizon` and `--tools` paths are
+re-bound after that `/tmp` overlay so a frozen binary under
+`/tmp/horizon-smoke-bin.*` remains executable. When AppArmor's query file
+exists, only that file is bound writable so policy checks reach the host LSM;
+policy load and remove stay read-only, host enforcement is unchanged, and the
+developer's session bus is not used. The fixture starts and stops its own
+`dbus-daemon`. `LIBGL_ALWAYS_SOFTWARE` does not disable Vulkan, so the debug
+app may use the available GPU.
 
 Before accepting smoke results, find the actual Horizon child within this
 fixture's owned process tree. The recorded launcher PID may refer to `bwrap`.
