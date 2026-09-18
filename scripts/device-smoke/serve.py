@@ -10,6 +10,8 @@ import re
 import subprocess
 import time
 
+import sandbox
+
 
 def bound_port(process, path, pattern):
     deadline = time.monotonic() + 10
@@ -48,33 +50,25 @@ def main():
     args.state.mkdir(mode=0o700, parents=True, exist_ok=False)
     args.state = args.state.resolve()
     app = args.horizon.resolve(strict=True)
-    data = args.state / 'data'
-    data.mkdir()
-    private_home = data / 'home'
-    private_home.mkdir(mode=0o700)
-    runtime = data / 'runtime'
-    runtime.mkdir(mode=0o700)
-    namespace = ['bwrap', '--die-with-parent', '--ro-bind', '/', '/',
-                 '--bind', str(args.state), str(args.state),
-                 '--bind', str(private_home), str(Path.home()),
-                 '--dev-bind', '/dev', '/dev', '--chdir', str(data), '--']
-    env = os.environ.copy()
-    for key in ('HORIZON', 'WAYLAND_DISPLAY', 'DBUS_SESSION_BUS_ADDRESS',
-                'CODEX_HOME', 'GROK_HOME', 'PYTHONPATH', 'XAUTHORITY'):
-        env.pop(key, None)
-    env.update(XDG_DATA_HOME=str(data), XDG_CONFIG_HOME=str(data / 'config'),
-               XDG_CACHE_HOME=str(data / 'cache'), XDG_RUNTIME_DIR=str(runtime),
-               HISTFILE='/dev/null')
+    box = sandbox.prepare(args.state)
+    data = box.data
+    namespace = box.namespace
+    host_env = box.host_env
+    env = box.sandbox_env
     if args.tools:
         root = args.tools.resolve()
-        env['PATH'] = f'{root}/usr/bin:' + env.get('PATH', '')
-        env['LD_LIBRARY_PATH'] = f'{root}/usr/lib/x86_64-linux-gnu'
-        env['PYTHONPATH'] = f'{root}/usr/lib/python3/dist-packages'
+        path = f'{root}/usr/bin:' + host_env.get('PATH', '')
+        ld_library = f'{root}/usr/lib/x86_64-linux-gnu'
+        pythonpath = f'{root}/usr/lib/python3/dist-packages'
+        for child_env in (host_env, env):
+            child_env['PATH'] = path
+            child_env['LD_LIBRARY_PATH'] = ld_library
+            child_env['PYTHONPATH'] = pythonpath
         web = root / 'usr/share/novnc'
     else:
         web = Path('/usr/share/novnc')
-    for tool in ('Xvfb', 'openbox', 'x11vnc', 'bwrap'):
-        if not shutil.which(tool, path=env['PATH']):
+    for tool in ('Xvfb', 'openbox', 'x11vnc', 'bwrap', 'dbus-daemon'):
+        if not shutil.which(tool, path=host_env['PATH']):
             raise SystemExit(f'Missing prerequisite: {tool}')
     if not args.native_view and not (web / 'vnc.html').is_file():
         raise SystemExit('Missing noVNC assets')
@@ -98,7 +92,7 @@ def main():
         logs.append(log)
         xvfb = subprocess.Popen(['Xvfb', '-displayfd', str(write_fd), '-screen', '0',
                                  '1600x1000x24', '-nolisten', 'tcp', '-extension', 'MIT-SHM'],
-                                pass_fds=(write_fd,), stdout=log, stderr=log, env=env)
+                                pass_fds=(write_fd,), stdout=log, stderr=log, env=host_env)
         children.append(xvfb)
         os.close(write_fd)
         import select
@@ -108,9 +102,12 @@ def main():
             number = pipe.readline().strip()
         if not number.isdigit():
             raise RuntimeError('Xvfb did not report a display')
-        env['DISPLAY'] = ':' + number
-        env['XDG_SESSION_TYPE'] = 'x11'
-        env['LIBGL_ALWAYS_SOFTWARE'] = '1'
+        for child_env in (host_env, env):
+            child_env['DISPLAY'] = ':' + number
+            child_env['XDG_SESSION_TYPE'] = 'x11'
+            child_env['LIBGL_ALWAYS_SOFTWARE'] = '1'
+        spawn('dbus', sandbox.dbus_daemon_command(box.bus_address))
+        sandbox.wait_for_unix_socket(box.host_socket, children[-1])
         spawn('openbox', ['openbox'])
         config = data / 'horizon.yaml'
         fixture = {
@@ -144,7 +141,8 @@ def main():
             url = f'http://127.0.0.1:{web_port}/vnc.html?autoconnect=true&resize=scale&view_only=true'
         manifest = {'display': env['DISPLAY'], 'viewer_url': url,
                     'vnc_address': f'127.0.0.1:{vnc_port}', 'app': str(app),
-                    'pids': [p.pid for p in children], 'fixture': 'horizon-debug'}
+                    'pids': [p.pid for p in children], 'fixture': 'horizon-debug',
+                    'session_bus': {'address': box.bus_address, 'apparmor': box.apparmor}}
         (args.state / 'target.json').write_text(json.dumps({'id': args.state.name, 'endpoint': {'kind': 'local_x11', 'display': env['DISPLAY']}}))
         (args.state / 'lab.json').write_text(json.dumps(manifest, indent=2))
         print(json.dumps(manifest), flush=True)
