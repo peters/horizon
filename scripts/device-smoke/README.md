@@ -23,10 +23,11 @@ sha256sum "$smoke_bin/horizon" "$smoke_bin/horizon-device" > "$smoke_bin/SHA256S
 Reuse the same `smoke_bin` directory in every terminal used for this run.
 Do not overwrite the frozen copies while their fixtures are alive.
 
-Prerequisites are Xvfb, Openbox, x11vnc, bubblewrap (`bwrap`), noVNC and Python 3
-with websockify. `xinput` is needed for cancellation checks. The device library
-build needs libxkbcommon. The scripts do not install prerequisites. An optional
-`--tools ROOT` accepts unpacked Debian tools under `ROOT/usr`.
+Prerequisites are Xvfb, Openbox, x11vnc, bubblewrap (`bwrap`), `dbus-daemon`,
+noVNC and Python 3 with websockify. `xinput` is needed for cancellation checks.
+The device library build needs libxkbcommon. The scripts do not install
+prerequisites. An optional `--tools ROOT` accepts unpacked Debian tools under
+`ROOT/usr`.
 
 ## Horizon inside a noVNC browser panel
 
@@ -42,8 +43,19 @@ unused 1600×1000 Xvfb display, disables MIT-SHM and starts its own window manag
 It launches an ephemeral Horizon with a heartbeat terminal and a plain Bash input
 terminal. A filesystem namespace masks the developer's home with private state
 for this child; it does not change the real HOME value or existing sessions.
-`LIBGL_ALWAYS_SOFTWARE` does not disable Vulkan, so the debug app may use the
-available GPU.
+The same namespace gives namespaced processes a private writable `/tmp` and a
+session bus at the standard `/run/user/<uid>/bus` path, backed by fixture
+runtime, so native applications and `dbus-run-session` can bind sockets. Host
+`/tmp/.X11-unix` is re-bound read-only when bwrap starts, after Xvfb has created
+it, so the fixture X server stays reachable even if that directory was missing
+when the harness prepared the namespace. `--horizon` and `--tools` paths are
+re-bound after that `/tmp` overlay so a frozen binary under
+`/tmp/horizon-smoke-bin.*` remains executable. When AppArmor's query file
+exists, only that file is bound writable so policy checks reach the host LSM;
+policy load and remove stay read-only, host enforcement is unchanged, and the
+developer's session bus is not used. The fixture starts and stops its own
+`dbus-daemon`. `LIBGL_ALWAYS_SOFTWARE` does not disable Vulkan, so the debug
+app may use the available GPU.
 
 Before accepting smoke results, find the actual Horizon child within this
 fixture's owned process tree. The recorded launcher PID may refer to `bwrap`.

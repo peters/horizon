@@ -55,6 +55,8 @@ jobs:
         run: |
           python3 -B scripts/test_check_surge_dependency.py -v
           python3 -B scripts/check_surge_dependency.py
+      - name: Isolated desktop session bus
+        run: python3 -B -m unittest discover -s scripts/device-smoke/tests -v
       - name: Maintainability
         run: ./scripts/check-maintainability.sh
       - name: Version Sync
@@ -130,7 +132,9 @@ jobs:
         with:
           prefix-key: device
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: bash scripts/install-ci-ubuntu-dependencies.sh libxkbcommon-dev libwayland-dev pkg-config xvfb xauth
+      - run: bash scripts/install-ci-ubuntu-dependencies.sh libxkbcommon-dev libwayland-dev pkg-config xvfb xauth bubblewrap
+      - name: Isolated desktop session bus
+        run: python3 -B -m unittest discover -s scripts/device-smoke/tests -v
       - run: cargo test --locked -p horizon-device
       - run: cargo test --locked -p horizon-device --features cli
       - name: Qualify pinned VNC decoder
