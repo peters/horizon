@@ -157,6 +157,10 @@ pub(crate) enum ControlError {
         "browser handoff {request_id} timed out after {timeout_millis} ms; the user may be still steering. Keep this turn active and call browser_panel once: if handoff_pending is true, call browser_handoff again with resume_request_id={request_id} and timeout_millis omitted for the default human wait. If handoff completed, take a fresh snapshot and continue. Stop on cancellation, panel closure, lost ownership, or an unrecoverable connection failure. Do not end the turn with a final waiting message"
     )]
     HandoffTimeout { request_id: String, timeout_millis: u64 },
+    #[error(
+        "browser handoff failed (unsupported_backend): manual steering is not supported for remote browser sessions; use browser_act for supported actions and verify their outcomes"
+    )]
+    RemoteHandoffUnsupported,
     #[error("browser action {action_id} failed ({code}): {message}")]
     Browser {
         action_id: String,

@@ -152,6 +152,10 @@ shell commands, files, or other MCP servers.
   capture stop, capture replacement, or timeout.
 - `browser_handoff` pauses automation so the user can steer, and waits until
   they hand the panel back (`handoff_pending: false`) unless `wait` is false.
+  Remote sessions do not advertise handoff and return `unsupported_backend`
+  before claiming ownership, creating/resuming a handoff, or starting a wait.
+  Manual remote steering is not supported; showing the panel is not proof of
+  usable native input. This applies to MCP and CLI plans using the same tool.
   Keep the agent turn active, including while its client yields a running tool.
   Omit `timeout_millis` for the default 15-minute human wait. After a timeout,
   inspect `browser_panel`; while still pending, retry with the

@@ -807,6 +807,7 @@ fn semantic_capabilities(backend: BackendKind, remote: bool) -> Vec<String> {
         "handoff", "audit",
     ]
     .into_iter()
+    .filter(|capability| !remote || *capability != "handoff")
     .map(str::to_string)
     .collect::<Vec<_>>();
     if backend != BackendKind::SafariWebDriver && !remote {
@@ -894,7 +895,7 @@ mod tests {
             !panel
                 .capabilities
                 .iter()
-                .any(|capability| capability == "network_capture" || capability == "resize")
+                .any(|capability| capability == "network_capture" || capability == "resize" || capability == "handoff")
         );
         assert!(panel.capabilities.iter().any(|capability| capability == "snapshot"));
         assert!(panel.video_capture.supported, "screenshot-based recording still works");

@@ -699,3 +699,6 @@ fn browser_handoff_resume_rejects_stale_request_and_lost_ownership() {
     assert!(read_at(&path).expect("manifest").owner.is_none());
     agent.close();
 }
+
+#[path = "workspace_scope/remote_handoff.rs"]
+mod remote_handoff;
