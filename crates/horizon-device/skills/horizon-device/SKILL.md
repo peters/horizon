@@ -10,7 +10,7 @@ geometry take another screenshot. On indeterminate input observe before deciding
 whether another action is appropriate; never replay blindly.
 
 The local CLI has the same contract:
-`horizon-device --target <private-target.json> doctor|screenshot|act <JSON>`.
+`horizon-device --target <private-target.json> doctor|screenshot|act|resize <JSON>`.
 For screenshots an optional output path writes a new private file instead of
 base64 JSON. Optional `--options JSON` (or `--options -` for stdin) accepts
 `region: {x,y,width,height}`, `output: {width,height}`, `format: png|jpeg`, and

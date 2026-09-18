@@ -58,6 +58,9 @@ trait Backend {
     fn supports_resize_revisions(&self) -> bool {
         false
     }
+    fn resize_geometry(&self) -> Result<Geometry> {
+        Err(DeviceError::Unsupported("geometry-only resize preflight".into()))
+    }
     fn doctor(&self) -> Result<Readiness>;
     fn screenshot(&self, options: &CaptureOptions) -> Result<Observation>;
     fn act(&mut self, request: &ActRequest) -> Result<ActionReceipt>;

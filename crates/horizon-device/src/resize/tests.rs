@@ -40,7 +40,11 @@ impl Backend for Fake {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .revisions
     }
+    fn resize_geometry(&self) -> Result<Geometry> {
+        Ok(self.geometry())
+    }
     fn doctor(&self) -> Result<Readiness> {
+        CaptureOptions::default().plan(&self.geometry())?;
         Ok(Readiness {
             geometry: self.geometry(),
             capabilities: Vec::new(),
@@ -326,5 +330,20 @@ fn confirmed_unchanged_size_does_not_dispatch_to_the_backend() -> Result<()> {
     assert_eq!(state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).calls, 0);
     assert!(!device.resize.uncertain);
     assert!(device.resize.needs_observation.get());
+    Ok(())
+}
+
+#[test]
+fn oversized_current_desktop_can_shrink_without_preflight_capture() -> Result<()> {
+    let (mut device, state) = fixture(true, Outcome::Confirm);
+    {
+        let mut state = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.width = 4096;
+        state.height = 2160;
+    }
+    assert!(matches!(device.doctor(), Err(DeviceError::Invalid(_))));
+    let receipt = device.resize_desktop(&request())?;
+    assert_eq!(receipt.applied, request().dimensions());
+    assert_eq!(state.lock().unwrap_or_else(std::sync::PoisonError::into_inner).calls, 1);
     Ok(())
 }

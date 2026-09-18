@@ -27,7 +27,7 @@ success, 1 for a device failure, and 2 for invalid CLI arguments/output failure.
 Screenshot without a path returns image base64 (PNG by default); with a path it creates a new mode
 0600 file and returns its path. Existing files are never overwritten.
 
-MCP exposes `device_doctor`, `device_screenshot`, and `device_act`; screenshots
+MCP exposes `device_doctor`, `device_screenshot`, `device_act`, and `device_resize`; screenshots
 include an MCP image block and geometry metadata. Optional screenshot arguments
 are the same object accepted by CLI `--options`. CLI `act` and MCP `device_act`
 accept the same JSON object:

@@ -109,6 +109,9 @@ impl Backend for X11 {
     fn supports_resize_revisions(&self) -> bool {
         self.randr
     }
+    fn resize_geometry(&self) -> Result<Geometry> {
+        self.geometry()
+    }
     fn doctor(&self) -> Result<Readiness> {
         let Endpoint::LocalX11 { display } = &self.target.endpoint;
         Enigo::new(&Settings {

@@ -156,7 +156,7 @@ impl Device {
                 "server does not support desktop resizing".into(),
             ));
         }
-        let before = self.backend.doctor()?.geometry;
+        let before = self.backend.resize_geometry()?;
         let current = ImageDimensions {
             width: before.width,
             height: before.height,
