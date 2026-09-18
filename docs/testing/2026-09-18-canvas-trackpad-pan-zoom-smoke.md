@@ -54,4 +54,6 @@ Close and reopen Horizon. Pan/zoom restore from the session as before.
 
 ## Visual
 
-Screenshot after launch and after a two-finger pan over a focused terminal. If a recorder is available, capture the pan over the focused panel so the board moves while the terminal content stays put.
+Screenshot after launch and after a two-finger pan over a focused terminal.
+
+This is a motion-sensitive check. Record a short video from the isolated test desktop of two-finger pan over a focused terminal so the board moves while terminal content stays put. Start the recorder before the gesture and stop after. If recording is unavailable or stalls, this lane is **blocked** — do not sign off from screenshots alone.

@@ -1,6 +1,6 @@
 use std::mem;
 
-use egui::{Context, Event, Key, Modifiers, PointerButton, Rect, Vec2};
+use egui::{Context, Event, Key, Modifiers, MouseWheelUnit, PointerButton, Rect, Vec2};
 use horizon_core::WorkspaceId;
 
 use super::super::super::input::{TerminalInputEvent, panel_content_owns_wheel, terminal_input_events};
@@ -133,18 +133,31 @@ fn wheel_pan_scroll_input(input: &egui::InputState) -> Vec2 {
 /// zoom is identical whether egui converted the wheel or we apply it here.
 const SCROLL_ZOOM_SPEED: f32 = 1.0 / 200.0;
 
-fn canvas_zoom_multiplier(zoom_delta: f32, ctrl_or_cmd: bool, scroll: Vec2) -> Option<f32> {
+/// Native default of `InputOptions::line_scroll_speed`.
+const LINE_SCROLL_SPEED: f32 = 40.0;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct CanvasWheelBuckets {
+    zoom: Vec2,
+    pan: Vec2,
+}
+
+fn canvas_zoom_multiplier(zoom_delta: f32, zoom_scroll: Vec2) -> Option<f32> {
     if (zoom_delta - 1.0).abs() > f32::EPSILON {
         return Some(zoom_delta);
     }
-    if ctrl_or_cmd && scroll != Vec2::ZERO {
-        return Some((SCROLL_ZOOM_SPEED * (scroll.x + scroll.y)).exp());
+    if zoom_scroll != Vec2::ZERO {
+        return Some((SCROLL_ZOOM_SPEED * (zoom_scroll.x + zoom_scroll.y)).exp());
     }
     None
 }
 
-fn wheel_pans_canvas(pointer_in_canvas: bool, ctrl_or_cmd: bool, panel_keeps_wheel: bool) -> bool {
-    pointer_in_canvas && !ctrl_or_cmd && !panel_keeps_wheel
+fn wheel_event_points(unit: MouseWheelUnit, delta: Vec2, page_height: f32) -> Vec2 {
+    match unit {
+        MouseWheelUnit::Point => delta,
+        MouseWheelUnit::Line => LINE_SCROLL_SPEED * delta,
+        MouseWheelUnit::Page => Vec2::new(delta.x * page_height, delta.y * page_height),
+    }
 }
 
 fn primary_down_at_frame_start(events: &[Event], primary_at_end: bool) -> bool {
@@ -162,7 +175,13 @@ fn primary_down_at_frame_start(events: &[Event], primary_at_end: bool) -> bool {
     primary
 }
 
-fn panel_owns_any_wheel_event(events: &[Event], mut primary_down: bool) -> bool {
+fn classify_canvas_wheel_events(
+    events: &[Event],
+    mut primary_down: bool,
+    pointer_over_scrollable: bool,
+    page_height: f32,
+) -> CanvasWheelBuckets {
+    let mut buckets = CanvasWheelBuckets::default();
     for event in events {
         match event {
             Event::PointerButton {
@@ -170,13 +189,25 @@ fn panel_owns_any_wheel_event(events: &[Event], mut primary_down: bool) -> bool 
                 pressed,
                 ..
             } => primary_down = *pressed,
-            Event::MouseWheel { modifiers, .. } if panel_content_owns_wheel(*modifiers, primary_down) => {
-                return true;
+            Event::MouseWheel {
+                unit, delta, modifiers, ..
+            } => {
+                if pointer_over_scrollable && panel_content_owns_wheel(*modifiers, primary_down) {
+                    continue;
+                }
+                let points = wheel_event_points(*unit, *delta, page_height);
+                if modifiers.ctrl || modifiers.command {
+                    buckets.zoom += points;
+                } else if modifiers.shift && points.x == 0.0 {
+                    buckets.pan += Vec2::new(points.y, 0.0);
+                } else {
+                    buckets.pan += points;
+                }
             }
             _ => {}
         }
     }
-    false
+    buckets
 }
 
 impl HorizonApp {
@@ -288,22 +319,6 @@ impl HorizonApp {
         self.middle_pan_active =
             next_middle_pan_active(self.middle_pan_active, middle_down, target, mode, pointer_delta);
         self.canvas_pan_input_claimed = pointer_in_canvas && (self.middle_pan_active || space_drag_claimed);
-        if let Some(factor) = canvas_zoom_multiplier(zoom_delta, ctrl_or_cmd, scroll)
-            && pointer_in_canvas
-        {
-            let anchor = pointer_position.unwrap_or_else(|| canvas_rect.center());
-            if self.zoom_canvas_at(canvas_rect, anchor, self.canvas_view.zoom * factor) {
-                self.clear_terminal_selections();
-            }
-            if scroll != Vec2::ZERO {
-                ctx.input_mut(|input| input.smooth_scroll_delta = Vec2::ZERO);
-            }
-            self.canvas_pan_input_claimed = false;
-            self.is_panning = false;
-            return;
-        }
-
-        let drag_panning = self.canvas_pan_input_claimed;
         let pointer_over_scrollable = pointer_position.is_some_and(|position| {
             panel_geometry.iter().any(|(_, geometry)| {
                 geometry
@@ -312,17 +327,32 @@ impl HorizonApp {
                     .contains(position)
             })
         });
-        let panel_keeps_wheel = pointer_over_scrollable
-            && panel_owns_any_wheel_event(&events, primary_down_at_frame_start(&events, primary_down))
-            && !drag_panning;
+        let wheels = classify_canvas_wheel_events(
+            &events,
+            primary_down_at_frame_start(&events, primary_down),
+            pointer_over_scrollable,
+            canvas_rect.height(),
+        );
+        if let Some(factor) = canvas_zoom_multiplier(zoom_delta, wheels.zoom)
+            && pointer_in_canvas
+        {
+            let anchor = pointer_position.unwrap_or_else(|| canvas_rect.center());
+            if self.zoom_canvas_at(canvas_rect, anchor, self.canvas_view.zoom * factor) {
+                self.clear_terminal_selections();
+            }
+            if scroll != Vec2::ZERO || wheels.zoom != Vec2::ZERO {
+                ctx.input_mut(|input| input.smooth_scroll_delta = Vec2::ZERO);
+            }
+            self.canvas_pan_input_claimed = false;
+            self.is_panning = false;
+            return;
+        }
+
+        let drag_panning = self.canvas_pan_input_claimed;
         let pan_delta = if drag_panning {
             pointer_delta
-        } else if wheel_pans_canvas(pointer_in_canvas, ctrl_or_cmd, panel_keeps_wheel) {
-            if modifiers.shift && scroll.x == 0.0 {
-                Vec2::new(scroll.y, 0.0)
-            } else {
-                scroll
-            }
+        } else if pointer_in_canvas {
+            wheels.pan
         } else {
             Vec2::ZERO
         };
@@ -335,7 +365,7 @@ impl HorizonApp {
             self.canvas_view.set_pan_offset([pan_offset.x, pan_offset.y]);
             self.mark_runtime_dirty();
             self.clear_terminal_selections();
-            if !drag_panning && scroll != Vec2::ZERO {
+            if !drag_panning && (scroll != Vec2::ZERO || wheels.pan != Vec2::ZERO) {
                 ctx.input_mut(|input| input.smooth_scroll_delta = Vec2::ZERO);
             }
         }
@@ -798,10 +828,10 @@ mod tests {
     use super::super::super::CanvasPanSpaceKeyState;
     use super::{
         HeldSpeechBinding, MiddlePanMode, MiddlePanTarget, PendingCaptureEvent, canvas_zoom_multiplier,
-        clear_released_speech_hotkeys, next_middle_pan_active, panel_owns_any_wheel_event, pending_capture_event,
+        classify_canvas_wheel_events, clear_released_speech_hotkeys, next_middle_pan_active, pending_capture_event,
         primary_down_at_frame_start, primary_selection_routing_active, swallow_cancel_escape_event,
         swallow_captured_clipboard_event, swallow_correlated_shift_text, swallow_held_speech_hotkey_event,
-        swallow_speech_hotkey_event, wheel_pan_scroll_input, wheel_pans_canvas,
+        swallow_speech_hotkey_event, wheel_pan_scroll_input,
     };
 
     #[test]
@@ -877,30 +907,26 @@ mod tests {
     }
 
     #[test]
-    fn unmodified_wheel_pans_the_canvas_even_over_a_panel() {
-        assert!(wheel_pans_canvas(true, false, false));
-        assert!(!wheel_pans_canvas(true, false, true));
-        assert!(!wheel_pans_canvas(true, true, false));
-        assert!(!wheel_pans_canvas(false, false, false));
+    fn ctrl_scroll_zooms_when_egui_leaves_zoom_delta_unchanged() {
+        assert_eq!(canvas_zoom_multiplier(1.0, Vec2::ZERO), None);
+        let factor = canvas_zoom_multiplier(1.0, Vec2::new(0.0, 12.0)).expect("ctrl+scroll");
+        assert!((factor - (12.0_f32 / 200.0).exp()).abs() < f32::EPSILON);
+        assert_eq!(canvas_zoom_multiplier(1.25, Vec2::ZERO), Some(1.25));
     }
 
-    #[test]
-    fn ctrl_scroll_zooms_when_egui_leaves_zoom_delta_unchanged() {
-        assert_eq!(canvas_zoom_multiplier(1.0, false, Vec2::new(0.0, 12.0)), None);
-        let factor = canvas_zoom_multiplier(1.0, true, Vec2::new(0.0, 12.0)).expect("ctrl+scroll");
-        assert!((factor - (12.0_f32 / 200.0).exp()).abs() < f32::EPSILON);
-        assert_eq!(canvas_zoom_multiplier(1.25, true, Vec2::ZERO), Some(1.25));
+    fn point_wheel(delta: Vec2, modifiers: Modifiers) -> Event {
+        Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta,
+            phase: egui::TouchPhase::Move,
+            modifiers,
+        }
     }
 
     #[test]
     fn wheel_before_primary_release_stays_on_the_panel() {
         let events = vec![
-            Event::MouseWheel {
-                unit: egui::MouseWheelUnit::Point,
-                delta: Vec2::new(0.0, -12.0),
-                phase: egui::TouchPhase::Move,
-                modifiers: Modifiers::NONE,
-            },
+            point_wheel(Vec2::new(0.0, -12.0), Modifiers::NONE),
             Event::PointerButton {
                 pos: egui::pos2(1.0, 1.0),
                 button: egui::PointerButton::Primary,
@@ -910,7 +936,20 @@ mod tests {
         ];
         let start = primary_down_at_frame_start(&events, false);
         assert!(start);
-        assert!(panel_owns_any_wheel_event(&events, start));
+        let wheels = classify_canvas_wheel_events(&events, start, true, 800.0);
+        assert_eq!(wheels.pan, Vec2::ZERO);
+        assert_eq!(wheels.zoom, Vec2::ZERO);
+    }
+
+    #[test]
+    fn mixed_ctrl_and_plain_wheels_in_one_frame_are_partitioned() {
+        let events = vec![
+            point_wheel(Vec2::new(0.0, 8.0), Modifiers::NONE),
+            point_wheel(Vec2::new(0.0, 4.0), Modifiers::CTRL),
+        ];
+        let wheels = classify_canvas_wheel_events(&events, false, false, 800.0);
+        assert_eq!(wheels.pan, Vec2::new(0.0, 8.0));
+        assert_eq!(wheels.zoom, Vec2::new(0.0, 4.0));
     }
 
     #[test]
