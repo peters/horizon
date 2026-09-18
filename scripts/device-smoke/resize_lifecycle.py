@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import queue
 import select
 import socket
 import struct
@@ -34,6 +35,7 @@ class ResizeServer:
         self.address = '127.0.0.1:' + str(self.listener.getsockname()[1])
         self.received = threading.Event()
         self.requests = 0
+        self.failures = queue.SimpleQueue()
         self.stopped = threading.Event()
         self.clients = []
         self.threads = []
@@ -85,6 +87,8 @@ class ResizeServer:
                     raise AssertionError('unexpected wire request: ' + str(kind))
         except (EOFError, ConnectionError, OSError):
             pass
+        except Exception as error:
+            self.failures.put(error)
         finally:
             stream.close()
 
@@ -102,6 +106,8 @@ class ResizeServer:
             thread.join(timeout=2)
         assert not self.acceptor.is_alive()
         assert all(not thread.is_alive() for thread in self.threads)
+        if not self.failures.empty():
+            raise AssertionError('resize server worker failed') from self.failures.get()
 
 
 def invoke(binary, target, command, request=None):
