@@ -99,8 +99,8 @@ fn connected_session() -> Result<(Session, std::net::TcpStream), ViewError> {
     stream.read_exact(&mut encodings_header)?;
     assert_eq!(encodings_header[0], 2);
     let count = usize::from(u16::from_be_bytes([encodings_header[2], encodings_header[3]]));
-    assert_eq!(count, 4);
-    stream.read_exact(&mut [0; 16])?;
+    assert_eq!(count, 5);
+    stream.read_exact(&mut [0; 20])?;
     let mut refresh = [0; 10];
     stream.read_exact(&mut refresh)?;
     assert_eq!(refresh[0], 3, "handshake completed before cancellation");
@@ -210,5 +210,63 @@ fn hidden_viewer_pauses_requests_and_resumes_with_a_complete_frame() -> Result<(
         closed.elapsed() < Duration::from_secs(1),
         "hidden worker failed to cancel"
     );
+    Ok(())
+}
+
+fn send_extended_size(stream: &mut std::net::TcpStream, width: u16, height: u16) -> Result<(), ViewError> {
+    let mut packet = vec![0, 0, 0, 1, 0, 0, 0, 0];
+    packet.extend(width.to_be_bytes());
+    packet.extend(height.to_be_bytes());
+    packet.extend((-308_i32).to_be_bytes());
+    packet.extend([1, 0, 0, 0]);
+    packet.extend(1_u32.to_be_bytes());
+    packet.extend([0; 4]);
+    packet.extend(width.to_be_bytes());
+    packet.extend(height.to_be_bytes());
+    packet.extend([0; 4]);
+    stream.write_all(&packet)?;
+    Ok(())
+}
+
+#[test]
+fn extended_layout_announcements_do_not_start_full_refresh_loops() -> Result<(), ViewError> {
+    let (session, mut stream) = connected_session()?;
+    send_pixel(&mut stream)?;
+    wait_for_green_pixel(&session, [2, 2]);
+    refresh_until(&mut stream, [3, 1, 0, 0, 0, 0, 0, 2, 0, 2])?;
+    for _ in 0..4 {
+        send_extended_size(&mut stream, 2, 2)?;
+        let mut request = [0; 10];
+        stream.read_exact(&mut request)?;
+        assert_eq!(request, [3, 1, 0, 0, 0, 0, 0, 2, 0, 2]);
+    }
+    // Extended resize invalidates pixels; the server supplies the new contents
+    // in response to the next incremental request, without a full-refresh loop.
+    send_extended_size(&mut stream, 3, 2)?;
+    refresh_until(&mut stream, [3, 1, 0, 0, 0, 0, 0, 3, 0, 2])?;
+    send_pixel(&mut stream)?;
+    wait_for_green_pixel(&session, [3, 2]);
+    Ok(())
+}
+
+#[test]
+fn shrink_with_an_outside_crop_preserves_the_session() -> Result<(), ViewError> {
+    let (session, mut stream) = connected_session()?;
+    send_pixel(&mut stream)?;
+    wait_for_green_pixel(&session, [2, 2]);
+    session.set_options(DeviceViewOptions {
+        viewport: Some(horizon_core::DeviceViewport {
+            x: 1,
+            y: 1,
+            width: 1,
+            height: 1,
+        }),
+        ..Default::default()
+    });
+    send_extended_size(&mut stream, 1, 1)?;
+    refresh_until(&mut stream, [3, 1, 0, 0, 0, 0, 0, 1, 0, 1])?;
+    send_pixel(&mut stream)?;
+    wait_for_green_pixel(&session, [1, 1]);
+    refresh_until(&mut stream, [3, 1, 0, 0, 0, 0, 0, 1, 0, 1])?;
     Ok(())
 }

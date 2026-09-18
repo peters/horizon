@@ -13,15 +13,16 @@ pub(super) struct Framebuffer {
 impl Framebuffer {
     pub(super) fn apply(&mut self, event: VncEvent) -> Result<bool, ViewError> {
         match event {
-            VncEvent::SetResolution(size) => {
-                let (width, height) = (usize::from(size.width), usize::from(size.height));
-                if width == 0 || height == 0 || width * height > 8_294_400 {
-                    return Err(ViewError::Frame("unsupported desktop size"));
+            VncEvent::SetResolution(size) => self.resize(usize::from(size.width), usize::from(size.height)),
+            VncEvent::DesktopUpdate(update) => {
+                let Some(layout) = update.layout else {
+                    return Ok(false);
+                };
+                let (width, height) = (usize::from(layout.width), usize::from(layout.height));
+                if self.size() == [width, height] {
+                    return Ok(false);
                 }
-                self.width = width;
-                self.height = height;
-                self.rgba = vec![0; width * height * 4];
-                Ok(true)
+                self.resize(width, height)
             }
             VncEvent::RawImage(rect, bytes) => {
                 self.write(rect, &bytes)?;
@@ -49,6 +50,16 @@ impl Framebuffer {
             VncEvent::SetPixelFormat(_) | VncEvent::Bell | VncEvent::Text(_) => Ok(false),
             _ => Err(ViewError::Frame("unsupported viewer event")),
         }
+    }
+
+    fn resize(&mut self, width: usize, height: usize) -> Result<bool, ViewError> {
+        if width == 0 || height == 0 || width * height > 8_294_400 {
+            return Err(ViewError::Frame("unsupported desktop size"));
+        }
+        self.width = width;
+        self.height = height;
+        self.rgba = vec![0; width * height * 4];
+        Ok(true)
     }
 
     fn check(&self, rect: Rect) -> Result<(), ViewError> {
@@ -83,6 +94,7 @@ impl Framebuffer {
 
     pub(super) fn image(&self, options: horizon_core::DeviceViewOptions) -> Result<ColorImage, ViewError> {
         let layout = options
+            .for_desktop(self.size())
             .layout(self.size())
             .map_err(|error| ViewError::Server(error.to_string()))?;
         if layout.output == self.size() {
@@ -111,6 +123,41 @@ impl Framebuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unchanged_extended_layout_preserves_pixels_and_rejection_preserves_geometry() -> Result<(), ViewError> {
+        let mut frame = Framebuffer::default();
+        frame.resize(2, 1)?;
+        frame.write(
+            Rect {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+            },
+            &[20, 180, 40, 0],
+        )?;
+        let before = frame.rgba.clone();
+        let update = vnc::DesktopUpdate {
+            reason: vnc::DesktopReason::Server,
+            status: vnc::DesktopStatus::Success,
+            layout: Some(vnc::DesktopLayout {
+                width: 2,
+                height: 1,
+                screens: Vec::new(),
+            }),
+        };
+        assert!(!frame.apply(VncEvent::DesktopUpdate(update))?);
+        assert_eq!(frame.rgba, before);
+        assert!(!frame.apply(VncEvent::DesktopUpdate(vnc::DesktopUpdate {
+            reason: vnc::DesktopReason::ThisClient,
+            status: vnc::DesktopStatus::Prohibited,
+            layout: None,
+        }))?);
+        assert_eq!(frame.size(), [2, 1]);
+        assert_eq!(frame.rgba, before);
+        Ok(())
+    }
 
     #[test]
     fn overlapping_copy_and_resize_preserve_valid_pixels() -> Result<(), ViewError> {
@@ -181,10 +228,7 @@ mod tests {
         assert_eq!(image.pixels[0].r(), 7);
         assert_eq!(frame.size(), [4, 2]);
         frame.apply(VncEvent::SetResolution(vnc::Screen { width: 2, height: 2 }))?;
-        assert!(
-            frame.image(options).is_err(),
-            "a stale viewport is refused after target resize"
-        );
+        assert_eq!(frame.image(options)?.size, [1, 1]);
         Ok(())
     }
 

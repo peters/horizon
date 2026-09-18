@@ -175,6 +175,7 @@ async fn connection(
             .add_encoding(VncEncoding::CopyRect)
             .add_encoding(VncEncoding::Raw)
             .add_encoding(VncEncoding::DesktopSizePseudo)
+            .add_encoding(VncEncoding::ExtendedDesktopSizePseudo)
             .allow_shared(true)
             .set_pixel_format(PixelFormat::rgba())
             .build()?
