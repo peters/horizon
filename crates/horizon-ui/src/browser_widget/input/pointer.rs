@@ -137,6 +137,15 @@ pub(super) fn events(
     state.pointer_modifiers = frame_final_modifiers;
 }
 
+fn should_forward_browser_wheel(
+    modifiers: egui::Modifiers,
+    event_buttons: u32,
+    overlay_blocks: bool,
+    has_position: bool,
+) -> bool {
+    has_position && !overlay_blocks && panel_content_owns_wheel(modifiers, event_buttons & BUTTON_LEFT != 0)
+}
+
 fn send_owned_wheel(
     browser: &mut BrowserPanelState,
     frame: PointerFrame,
@@ -151,10 +160,12 @@ fn send_owned_wheel(
     else {
         return;
     };
-    if wheel_pos.is_some_and(|pos| overlay_blocks_pointer(browser, frame, pos)) {
-        return;
-    }
-    if !panel_content_owns_wheel(*modifiers, event_buttons & BUTTON_LEFT != 0) {
+    if !should_forward_browser_wheel(
+        *modifiers,
+        event_buttons,
+        wheel_pos.is_some_and(|pos| overlay_blocks_pointer(browser, frame, pos)),
+        wheel_pos.is_some(),
+    ) {
         return;
     }
     let Some(p) = wheel_pos else {
@@ -559,6 +570,26 @@ mod tests {
     fn wheel_deltas_follow_the_dom_direction() {
         assert_eq!(cdp_wheel_delta(egui::vec2(2.0, 3.0), 16.0), (-32.0, -48.0));
         assert_eq!(cdp_wheel_delta(egui::vec2(-2.0, -3.0), 16.0), (32.0, 48.0));
+    }
+
+    #[test]
+    fn plain_wheel_is_held_for_the_canvas() {
+        assert!(!should_forward_browser_wheel(egui::Modifiers::NONE, 0, false, true));
+    }
+
+    #[test]
+    fn shift_wheel_still_reaches_the_page() {
+        assert!(should_forward_browser_wheel(egui::Modifiers::SHIFT, 0, false, true));
+    }
+
+    #[test]
+    fn press_then_wheel_still_reaches_the_page() {
+        assert!(should_forward_browser_wheel(
+            egui::Modifiers::NONE,
+            BUTTON_LEFT,
+            false,
+            true
+        ));
     }
 
     #[test]

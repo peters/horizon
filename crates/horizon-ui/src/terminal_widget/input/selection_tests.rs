@@ -560,7 +560,7 @@ fn release_before_wheel_keeps_the_pre_scroll_selection_marker() {
 }
 
 #[test]
-fn wheel_before_press_starts_selection_in_the_post_scroll_viewport() {
+fn wheel_before_press_keeps_selection_in_the_current_viewport() {
     let mut harness = PointerHarness::new(10);
     harness.frame(Vec::new());
     let body_rect = harness.frame(Vec::new());
@@ -730,7 +730,7 @@ fn inside_release_then_outside_press_completes_at_the_release_position() {
 }
 
 #[test]
-fn release_wheel_and_press_in_one_frame_anchor_the_new_drag_post_scroll() {
+fn release_wheel_and_press_in_one_frame_keeps_the_new_drag_in_the_current_viewport() {
     let mut harness = PointerHarness::new(10);
     harness.frame(Vec::new());
     let body_rect = harness.frame(Vec::new());
