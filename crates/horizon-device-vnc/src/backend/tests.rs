@@ -1,7 +1,7 @@
 use super::*;
 use std::io::{Read, Write};
 
-fn server(responsive: bool) -> (Target, std::thread::JoinHandle<()>) {
+fn server(responsive: bool, close: Option<std::sync::mpsc::Receiver<()>>) -> (Target, std::thread::JoinHandle<()>) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let server = std::thread::spawn(move || {
@@ -37,6 +37,15 @@ fn server(responsive: bool) -> (Target, std::thread::JoinHandle<()>) {
                     refreshes += 1;
                     assert_eq!(refreshes, 1, "resize control must not poll framebuffers");
                     stream.read_exact(&mut [0; 9]).unwrap();
+                    if let Some(close) = &close {
+                        let mut update = vec![0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1];
+                        update.extend((-308i32).to_be_bytes());
+                        update.extend([1, 0, 0, 0]);
+                        update.extend([0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0]);
+                        stream.write_all(&update).unwrap();
+                        close.recv_timeout(Duration::from_secs(3)).unwrap();
+                        return;
+                    }
                     if responsive {
                         // One raw pixel is an observed legacy framebuffer response.
                         stream
@@ -61,7 +70,7 @@ fn server(responsive: bool) -> (Target, std::thread::JoinHandle<()>) {
 
 #[test]
 fn stalled_negotiation_is_a_definite_timeout() {
-    let (target, server) = server(false);
+    let (target, server) = server(false, None);
     assert!(matches!(
         connect_with_timeout(&target, Duration::from_millis(300)),
         Err(DeviceError::ResizeTimeout { uncertain: false })
@@ -71,7 +80,7 @@ fn stalled_negotiation_is_a_definite_timeout() {
 
 #[test]
 fn responsive_legacy_server_is_unsupported_without_a_resize_request() {
-    let (target, server) = server(true);
+    let (target, server) = server(true, None);
     let backend = connect_with_timeout(&target, Duration::from_millis(300)).unwrap();
     assert!(!backend.supported().unwrap());
     drop(backend);
@@ -88,4 +97,21 @@ fn timeout_uncertainty_tracks_dispatch() {
         resize_error(&ResizeError::Timeout),
         DeviceError::ResizeTimeout { uncertain: true }
     ));
+}
+
+#[test]
+fn disconnect_after_negotiation_invalidates_cached_capability_and_dimensions() {
+    let (close, closed) = std::sync::mpsc::channel();
+    let (target, server) = server(false, Some(closed));
+    let backend = connect_with_timeout(&target, Duration::from_secs(2)).unwrap();
+    assert!(backend.supported().unwrap());
+    assert_eq!(backend.dimensions().unwrap(), ImageDimensions { width: 1, height: 1 });
+    close.send(()).unwrap();
+    server.join().unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while matches!(backend.supported(), Ok(true)) && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(matches!(backend.supported(), Err(DeviceError::Unavailable(_))));
+    assert!(matches!(backend.dimensions(), Err(DeviceError::Unavailable(_))));
 }

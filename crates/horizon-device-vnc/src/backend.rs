@@ -89,9 +89,13 @@ struct VncResize {
 }
 impl ResizeBackend for VncResize {
     fn supported(&self) -> Result<bool> {
+        if self.drain.is_finished() {
+            return Err(DeviceError::Unavailable("VNC resize connection disconnected".into()));
+        }
         Ok(self.client.desktop_layout().is_some())
     }
     fn dimensions(&self) -> Result<ImageDimensions> {
+        self.supported()?;
         self.client
             .desktop_layout()
             .map(|layout| ImageDimensions {
