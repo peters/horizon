@@ -149,11 +149,7 @@ impl ProviderUsageMonitor {
     /// Called by active usage consumers. Network and OS-store reads run
     /// off the render thread. A changed profile drops results from the old binding.
     pub fn update(&mut self, profile: &RemoteProviderProfile, credentials: &CredentialWorkbench, force: bool) {
-        if self.profile.as_ref() != Some(profile) {
-            *self = Self::default();
-            self.profile = Some(profile.clone());
-        }
-        self.poll();
+        self.poll(profile);
         if self.refreshing() || (!force && self.last_attempt.is_some_and(|at| at.elapsed() < REFRESH_INTERVAL)) {
             return;
         }
@@ -185,7 +181,17 @@ impl ProviderUsageMonitor {
         }
     }
 
-    fn poll(&mut self) {
+    /// Consume a completed response without starting a refresh. A changed
+    /// profile discards results from the old credential binding.
+    pub fn poll(&mut self, profile: &RemoteProviderProfile) {
+        if self.profile.as_ref() != Some(profile) {
+            *self = Self::default();
+            self.profile = Some(profile.clone());
+        }
+        self.poll_pending();
+    }
+
+    fn poll_pending(&mut self) {
         let Some(pending) = &self.pending else { return };
         let result = match pending.try_recv() {
             Ok(result) => result,

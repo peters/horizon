@@ -132,19 +132,19 @@ fn errors_keep_the_last_sample_and_disconnected_workers_recover() {
         .checked_sub(Duration::from_secs(120))
         .expect("earlier fetch");
     sender.send(Ok((usage, fetched_at))).expect("success");
-    monitor.poll();
+    monitor.poll_pending();
     let sample = monitor.sample.expect("sample");
     assert_eq!(sample.1, fetched_at, "hidden views must retain the actual fetch time");
     let (sender, receiver) = channel();
     monitor.pending = Some(receiver);
     sender.send(Err(UsageError::AccessDenied)).expect("failure");
-    monitor.poll();
+    monitor.poll_pending();
     assert_eq!(monitor.sample, Some(sample));
     assert_eq!(monitor.error, Some(UsageError::AccessDenied));
     let (sender, receiver) = channel();
     monitor.pending = Some(receiver);
     drop(sender);
-    monitor.poll();
+    monitor.poll_pending();
     assert_eq!(monitor.error, Some(UsageError::Unavailable));
     assert!(!monitor.refreshing());
 }
@@ -355,7 +355,7 @@ fn stalled_workers_settle_with_an_error_and_keep_the_last_sample() {
         last_attempt: Instant::now().checked_sub(REQUEST_TIMEOUT),
         ..ProviderUsageMonitor::default()
     };
-    monitor.poll();
+    monitor.poll_pending();
     assert!(!monitor.refreshing());
     assert_eq!(monitor.error, Some(UsageError::Unavailable));
     assert_eq!(monitor.sample, Some(sample));
@@ -443,4 +443,37 @@ fn duplicate_environment_references_resolve_from_the_original_binding() {
     let prepared =
         PreparedUsage::new(&profile, &credentials).expect("both references read the original environment binding");
     assert!(prepared.authorization().is_ok());
+}
+
+#[test]
+fn polling_at_a_consumer_deadline_keeps_completed_results_without_starting_work() {
+    let original = profile();
+    let sample = (
+        ProviderUsage {
+            running: 2,
+            allowed: 4,
+            queued: 0,
+        },
+        Instant::now(),
+    );
+    for changed in [false, true] {
+        let (sender, receiver) = channel();
+        sender.send(Ok(sample)).expect("completed response");
+        let last_attempt = Instant::now().checked_sub(REFRESH_INTERVAL);
+        let mut monitor = ProviderUsageMonitor {
+            profile: Some(original.clone()),
+            pending: Some(receiver),
+            last_attempt,
+            ..ProviderUsageMonitor::default()
+        };
+        let mut current = original.clone();
+        if changed {
+            current.endpoint = ControlEndpoint::parse("https://grid.example.test").expect("changed endpoint");
+        }
+        monitor.poll(&current);
+        assert!(!monitor.refreshing(), "poll must not start another worker");
+        assert_eq!(monitor.sample, (!changed).then_some(sample));
+        assert_eq!(monitor.last_attempt, if changed { None } else { last_attempt });
+        assert!(monitor.error.is_none());
+    }
 }
