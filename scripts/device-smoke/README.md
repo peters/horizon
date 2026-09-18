@@ -23,8 +23,8 @@ sha256sum "$smoke_bin/horizon" "$smoke_bin/horizon-device" > "$smoke_bin/SHA256S
 Reuse the same `smoke_bin` directory in every terminal used for this run.
 Do not overwrite the frozen copies while their fixtures are alive.
 
-Prerequisites are Xvfb, Openbox, x11vnc, bubblewrap (`bwrap`), `dbus-daemon`,
-and Python 3. `xinput` is needed for cancellation checks.
+For the required native workflow, prerequisites are Xvfb, Openbox, x11vnc,
+bubblewrap (`bwrap`), `dbus-daemon` and Python 3. `xinput` is needed for cancellation checks.
 The device library build needs libxkbcommon. The scripts do not install
 prerequisites. An optional `--tools ROOT` accepts unpacked Debian tools under
 `ROOT/usr`.
@@ -73,7 +73,11 @@ an equivalent isolated launcher. Never share targets or geometry between agents.
 With `--native-view`, the printed manifest and `lab.json` contain `vnc_address`,
 the display and owned process IDs; `viewer_url` is null. This mode starts no
 noVNC assets, websockify or browser. The harness still supports its legacy web
-mode, but always pass `--native-view` for interactive testing under `AGENTS.md`.
+mode, which additionally requires noVNC assets and Python websockify, but always
+pass `--native-view` for interactive testing under `AGENTS.md`. Its legacy help
+and heartbeat labels still mention noVNC even in native mode; those labels do
+not establish which viewer is running. Verify the flag, manifest and owned
+processes when collecting evidence.
 
 Use the public `device_panel` tool exposed by Horizon's MCP server to create a
 **visible native Device panel in the calling agent's current workspace**. The
