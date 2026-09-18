@@ -5,6 +5,9 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 
 use super::input::ObservedKeyboardInputs;
 
+#[cfg(target_os = "linux")]
+mod pinch;
+
 pub(crate) fn run_native_with_keyboard_observer(
     app_name: &str,
     native_options: NativeOptions,
@@ -16,6 +19,10 @@ pub(crate) fn run_native_with_keyboard_observer(
 
     let eframe_app = eframe::create_native(app_name, native_options, app_creator, &event_loop);
     let mut app = KeyboardAwareApp::new(eframe_app, observed_keyboard_inputs);
+    #[cfg(target_os = "linux")]
+    {
+        app.pinch = pinch::NativePinch::start(&event_loop);
+    }
     event_loop.run_app(&mut app)?;
     Ok(())
 }
@@ -25,6 +32,8 @@ struct KeyboardAwareApp<'app> {
     observed_keyboard_inputs: ObservedKeyboardInputs,
     modifiers: egui::Modifiers,
     native_window_liveness: NativeWindowLiveness,
+    #[cfg(target_os = "linux")]
+    pinch: Option<pinch::NativePinch>,
 }
 
 impl<'app> KeyboardAwareApp<'app> {
@@ -34,6 +43,8 @@ impl<'app> KeyboardAwareApp<'app> {
             observed_keyboard_inputs,
             modifiers: egui::Modifiers::default(),
             native_window_liveness: NativeWindowLiveness::default(),
+            #[cfg(target_os = "linux")]
+            pinch: None,
         }
     }
 }
@@ -84,6 +95,10 @@ impl ApplicationHandler<UserEvent> for KeyboardAwareApp<'_> {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, window_id: winit::window::WindowId, event: WindowEvent) {
+        #[cfg(target_os = "linux")]
+        if let Some(pinch) = &mut self.pinch {
+            pinch.observe_window(window_id, &event);
+        }
         match self.native_window_liveness.classify(window_id, &event) {
             NativeWindowEventAction::RootDestroyed => {
                 tracing::warn!(
@@ -134,6 +149,12 @@ impl ApplicationHandler<UserEvent> for KeyboardAwareApp<'_> {
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         if self.native_window_liveness.is_root_destroyed() {
             return;
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(pinch) = &mut self.pinch {
+            for (window_id, event) in pinch.take_events() {
+                self.inner.window_event(event_loop, window_id, event);
+            }
         }
         self.inner.user_event(event_loop, event);
     }

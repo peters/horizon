@@ -50,7 +50,7 @@ Horizon has five nouns. Everything else is a shortcut, a preset, or a panel kind
 
 | Noun | What it is | How you use it |
 |:-----|:-----------|:---------------|
-| **Canvas** | The infinite 2D surface | Middle-mouse or Space+drag to pan. Ctrl+scroll to zoom. Minimap to jump. |
+| **Canvas** | The infinite 2D surface | Drag empty canvas or swipe with two fingers to pan. Pinch or Ctrl+scroll to zoom. Minimap to jump. |
 | **Workspace** | A color-coded cluster with a shared working directory | Ctrl+double-click the canvas and pick a preset, or click **New** in the sidebar. Arrange with **Default** (free), **Rows**, **Cols**, or **Grid**. Detach it to its own window. |
 | **Panel** | One live surface inside a workspace | Shell, SSH, coding agent, browser, markdown, git, or usage. |
 | **Preset** | A named template for a new panel | Command palette, Ctrl+double-click, or **Ctrl+Shift+N** (first preset). |
@@ -316,7 +316,10 @@ Most app shortcuts use **Ctrl+Shift** so they do not steal shell chords (Ctrl+C,
 | Interaction | What it does |
 |:------------|:-------------|
 | **Middle-mouse drag** | Pan the canvas |
+| **Left-click drag on empty canvas** | Pan; the gesture stays with the canvas when crossing panels |
 | **Space + Left-click drag** | Pan the canvas |
+| **Two-finger swipe on empty canvas** | Pan; swipes starting inside panels scroll their contents |
+| **Pinch** | Zoom around the cursor (Linux/X11 requires XInput 2.4 gesture support) |
 | **Minimap click-and-drag** | Jump to that area of the canvas |
 | **Ctrl+Scroll** | Zoom around the cursor |
 | **Click** in a mouse-reporting TUI | Deliver the click to the app (Grok, vim, less, …) |

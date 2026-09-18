@@ -228,6 +228,8 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
 - Owns rendering, egui interaction, transient view state, and deferred UI
   actions.
 - `app/mod.rs` orchestrates frame flow only.
+- `native_app/pinch.rs` bridges window-scoped XInput 2.4 pinch and focus events
+  into the existing zoom path; older X11 servers retain keyboard/scroll zoom.
 - `app/bootstrap.rs` constructs the initial application state and configures
   startup-only fonts and install discovery. It does not own per-frame polling,
   provider actions, or remote execution lifetime.
@@ -243,6 +245,8 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
     provider, capabilities and credentials resolved before any panel exists,
     typed refusals that carry no value, and the per-provider session limit
   - `canvas`: canvas rendering and HUD
+  - `canvas_scroll`: viewport-local scroll gesture ownership and canvas event consumption
+  - `canvas_drag`: viewport-local ownership for primary drags starting on empty canvas
   - `lifecycle`: frame orchestration and repaint pacing, with application-exit
     ownership and persistence sequencing in `lifecycle/shutdown.rs`
   - `panel_chrome`: panel titlebar chrome, badges, and rename UI
