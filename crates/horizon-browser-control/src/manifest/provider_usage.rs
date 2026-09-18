@@ -1,7 +1,5 @@
 //! Bounded host-scoped, read-only requests for shared provider usage.
-use super::request_queue::{
-    MAX_PENDING_REQUESTS, prune_at, queue_lock_path, read_json, request_count, write_private_json,
-};
+use super::request_queue::{MAX_PENDING_REQUESTS, prune_at, queue_lock_path, read_json, write_private_json};
 use super::{AgentIdentity, ManifestLock};
 use crate::paths::{BrowserRuntimePaths, safe_local_id};
 use serde::{Deserialize, Serialize};
@@ -121,7 +119,7 @@ fn enqueue_at(root: &Path, identity: AgentIdentity<'_>, provider: Option<String>
     std::fs::create_dir_all(&dir)?;
     let _lock = ManifestLock::acquire(&queue_lock_path(&dir))?;
     prune_at(&dir)?;
-    if request_count(&dir)? >= MAX_PENDING_REQUESTS {
+    if retained_entry_count(&dir)? >= MAX_PENDING_REQUESTS {
         return Err(std::io::Error::new(
             std::io::ErrorKind::WouldBlock,
             "provider_usage queue is full",
@@ -137,6 +135,15 @@ fn enqueue_at(root: &Path, identity: AgentIdentity<'_>, provider: Option<String>
     };
     write_private_json(&path(root, &request.request_id, "request"), &request)?;
     Ok(request.request_id)
+}
+
+fn retained_entry_count(dir: &Path) -> std::io::Result<usize> {
+    std::fs::read_dir(dir)?.try_fold(0, |count, entry| {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        Ok(count + usize::from(name.ends_with(".request.json") || name.ends_with(".result.json")))
+    })
 }
 
 /// Claim only this host's requests atomically. Host dispatch must verify the
@@ -277,6 +284,32 @@ mod tests {
         }
         assert_eq!(
             queue.enqueue(identity, None).expect_err("full").kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
+    #[test]
+    fn unconsumed_results_remain_bounded_until_taken() {
+        let root = tempfile::tempdir().expect("root");
+        let queue = UsageQueue::new(root.path().to_path_buf());
+        let identity = AgentIdentity::new("horizon:agent", Some("host-a"));
+        for _ in 0..MAX_PENDING_REQUESTS {
+            queue.enqueue(identity, None).expect("enqueue");
+        }
+        let requests = queue.claim("host-a").expect("claim");
+        for request in &requests {
+            queue.complete(&request.result(vec![], None)).expect("complete");
+        }
+        assert_eq!(
+            queue
+                .enqueue(identity, None)
+                .expect_err("retained results fill queue")
+                .kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        assert!(queue.take(identity, &requests[0].request_id).expect("take").is_some());
+        queue.enqueue(identity, None).expect("one available slot");
+        assert_eq!(
+            queue.enqueue(identity, None).expect_err("full again").kind(),
             std::io::ErrorKind::WouldBlock
         );
     }

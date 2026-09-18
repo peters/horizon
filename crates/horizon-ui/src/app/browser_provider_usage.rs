@@ -56,7 +56,12 @@ impl HorizonApp {
                 || actor_panel(&self.board, &pending.request.actor).is_none()
             {
                 Some("provider_usage_unavailable")
-            } else if pending.request.provider.is_some() && pending.providers.is_empty() {
+            } else if pending
+                .request
+                .provider
+                .as_ref()
+                .is_some_and(|name| !self.template_config.browser.remote.providers.contains_key(name))
+            {
                 Some("provider_unknown")
             } else {
                 None
@@ -196,11 +201,27 @@ mod tests {
             Some("provider_unknown")
         );
         assert_partial_timeout(&mut app, &queue, identity);
+        assert_removed_profile(&mut app, &queue, identity);
         let foreign = AgentIdentity::new("horizon:missing-agent", Some(manifest::host_instance()));
         let id = queue.enqueue(foreign, None).expect("stale agent");
         app.poll_provider_usage_queue(&queue);
         let result = queue.take(foreign, &id).expect("result").expect("refused");
         assert_eq!(result.error.as_deref(), Some("provider_usage_unavailable"));
+        assert!(result.providers.is_empty());
+    }
+    fn assert_removed_profile(app: &mut HorizonApp, queue: &UsageQueue, identity: AgentIdentity<'_>) {
+        let id = queue
+            .enqueue(identity, Some("cloud-b".into()))
+            .expect("selected profile");
+        let request = queue.claim(manifest::host_instance()).expect("claim").remove(0);
+        app.browser_create_host.provider_usage.pending.push(PendingUsage {
+            request,
+            providers: [("cloud-b".into(), ProviderUsageMonitor::default())].into(),
+        });
+        app.template_config.browser.remote.providers.remove("cloud-b");
+        app.poll_provider_usage_queue(queue);
+        let result = queue.take(identity, &id).expect("result").expect("completed");
+        assert_eq!(result.error.as_deref(), Some("provider_unknown"));
         assert!(result.providers.is_empty());
     }
     fn assert_partial_timeout(app: &mut HorizonApp, queue: &UsageQueue, identity: AgentIdentity<'_>) {
