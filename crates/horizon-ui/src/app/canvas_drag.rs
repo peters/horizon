@@ -1,4 +1,4 @@
-use egui::{Context, Event, Id, Order, PointerButton, Pos2, Rect, Vec2};
+use egui::{Context, Event, Id, Key, Order, PointerButton, Pos2, Rect, Vec2};
 
 #[derive(Clone, Copy)]
 struct CanvasDrag {
@@ -32,7 +32,8 @@ pub(super) fn canvas_drag_delta(
     let mut drag = ctx.data(|data| data.get_temp::<CanvasDrag>(id));
     let max_click_dist = ctx.options(|options| options.input_options.max_click_dist);
     let mut movement = None;
-    if ctx.input(|input| input.focused) {
+    let allowed = ctx.input(|input| input.focused && !input.key_down(Key::Space) && !input.pointer.middle_down());
+    if allowed {
         for event in events {
             let delta = match event {
                 Event::PointerButton {
@@ -70,7 +71,7 @@ pub(super) fn canvas_drag_delta(
             }
         }
     }
-    if ctx.input(|input| !input.focused || !input.pointer.primary_down() || !input.modifiers.is_none()) {
+    if !allowed || ctx.input(|input| !input.pointer.primary_down() || !input.modifiers.is_none()) {
         drag = None;
     }
     if drag.is_some_and(|drag| drag.dragging) {

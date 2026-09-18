@@ -160,6 +160,48 @@ fn coalesced_release_and_new_press_keep_their_own_motion() {
 }
 
 #[test]
+fn space_and_middle_panning_do_not_replay_primary_drag_threshold_motion() {
+    let start = Pos2::new(1200.0, 180.0);
+    for mode in [
+        Event::Key {
+            key: egui::Key::Space,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        },
+        Event::PointerButton {
+            pos: start,
+            button: PointerButton::Middle,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        },
+    ] {
+        let (_temp, ctx, mut app) = fixture();
+        let _ = run_app_frame_with_input(
+            &ctx,
+            &mut app,
+            frame(0.5, vec![Event::PointerMoved(start)], Modifiers::NONE),
+        );
+        let before = Vec2::from(app.canvas_view.pan_offset);
+        let _ = run_app_frame_with_input(
+            &ctx,
+            &mut app,
+            frame(1.0, vec![mode, button(start, true, Modifiers::NONE)], Modifiers::NONE),
+        );
+        for (time, movement) in [(1.016, 3.0), (1.032, 9.0)] {
+            let offset = Vec2::new(movement, 0.0);
+            let _ = run_app_frame_with_input(
+                &ctx,
+                &mut app,
+                frame(time, vec![Event::PointerMoved(start + offset)], Modifiers::NONE),
+            );
+            assert_offset(app.canvas_view.pan_offset, before + offset);
+        }
+    }
+}
+
+#[test]
 fn panel_origin_drags_do_not_become_canvas_drags() {
     let (_temp, ctx, mut app) = fixture();
     let panel = app.visible_panel_geometry_for_canvas_view(app.canvas_rect(&ctx), None)[0]
