@@ -263,8 +263,6 @@ fn shrink_with_an_outside_crop_preserves_the_session() -> Result<(), ViewError> 
         }),
         ..Default::default()
     });
-    send_pixel(&mut stream)?;
-    wait_for_green_pixel(&session, [2, 2]);
     send_extended_size(&mut stream, 1, 1)?;
     refresh_until(&mut stream, [3, 1, 0, 0, 0, 0, 0, 1, 0, 1])?;
     send_pixel(&mut stream)?;

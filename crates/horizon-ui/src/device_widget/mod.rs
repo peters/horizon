@@ -61,8 +61,13 @@ impl DeviceUiState {
                 self.reconnect(ui.ctx(), device);
             }
         }
-        if let Some(session) = &self.session {
+        let incoming = self.session.as_ref().map(|session| {
             let updates = session.take_updates(ui.ctx().viewport_id());
+            let disconnected = matches!(updates.status, Some(Status::Disconnected(_) | Status::Stopped));
+            let full = disconnected.then(|| session.latest_full()).flatten();
+            (updates, full)
+        });
+        if let Some((updates, full)) = incoming {
             if let Some(desktop) = updates.desktop {
                 self.desktop = Some(desktop);
             }
@@ -70,7 +75,15 @@ impl DeviceUiState {
                 self.status = status;
             }
             if let Some(image) = updates.image {
-                self.set_source(ui, image);
+                self.upload_displayed(ui, image);
+                self.presented_options = Some(self.controls.options);
+                if self.texture.is_some() {
+                    self.image.sequence = self.image.sequence.saturating_add(1);
+                }
+            }
+            if let Some(full) = full {
+                self.desktop = Some(full.size);
+                self.source = Some(full);
             }
         }
         if let Some(source) = &self.source {
@@ -107,7 +120,11 @@ impl DeviceUiState {
         if changed {
             if let Some(session) = &self.session {
                 session.set_options(self.controls.options);
+                if let Some(full) = session.latest_full() {
+                    self.source = Some(full);
+                }
             }
+            self.presented_options = None;
             ui.ctx().request_repaint();
         }
         self.refresh_presentation(ui);
@@ -130,6 +147,7 @@ impl DeviceUiState {
         }
     }
 
+    #[cfg(test)]
     fn set_source(&mut self, ui: &Ui, image: ColorImage) {
         self.desktop = Some(image.size);
         self.source = Some(image);
@@ -145,7 +163,6 @@ impl DeviceUiState {
             return;
         };
         let options = self.controls.options.for_desktop(source.size);
-        self.controls.options = options;
         if self.presented_options == Some(options) && self.texture.is_some() {
             return;
         }
@@ -385,6 +402,38 @@ mod tests {
         state.presented_options = None;
         show_viewer(&ctx, &mut state, &device, Vec::new());
         assert_eq!(presented_size(&state), Some([4, 4]));
+    }
+
+    #[test]
+    fn desktop_shrink_lets_controls_clear_the_stale_viewport_draft() {
+        let (ctx, device, mut state) = disconnected_viewer();
+        let crop = horizon_core::DeviceViewport {
+            x: 4,
+            y: 0,
+            width: 4,
+            height: 4,
+        };
+        state.controls.options.viewport = Some(crop);
+        state.controls.draft = Some(crop);
+        show_viewer(&ctx, &mut state, &device, Vec::new());
+        click_label(&ctx, &mut state, &device, "View controls");
+        let _ = ctx
+            .run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    state.update_texture(ui, ColorImage::filled([4, 2], egui::Color32::WHITE));
+                    state.show(ui, &device, true);
+                },
+            )
+            .discard_textures();
+        assert!(state.controls.options.viewport.is_none());
+        assert_eq!(
+            state.controls.draft.map(|draft| [draft.width, draft.height]),
+            Some([4, 2])
+        );
     }
 
     #[test]
