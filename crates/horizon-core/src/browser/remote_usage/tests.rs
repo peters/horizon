@@ -251,3 +251,159 @@ fn session_credentials_do_not_wait_for_an_unrelated_keychain_lock() {
     worker.join().expect("worker");
     assert_eq!(resolved_while_locked, Ok(true));
 }
+
+#[test]
+fn two_accounts_on_one_provider_keep_distinct_bound_credentials() {
+    let mut first = profile();
+    let mut second = profile();
+    let mut credentials = credentials();
+    for (profile, prefix) in [(&mut first, "first"), (&mut second, "second")] {
+        let user = CredentialReference::from(format!("{prefix}-user").as_str());
+        let key = CredentialReference::from(format!("{prefix}-key").as_str());
+        profile.authentication = RemoteAuthentication::Basic {
+            username_ref: user.clone(),
+            password_ref: key.clone(),
+        };
+        profile.credential_bindings = [user.clone(), key.clone()]
+            .into_iter()
+            .map(|reference| {
+                (
+                    reference,
+                    CredentialBinding {
+                        store: CredentialStoreKind::Session,
+                        slot: None,
+                    },
+                )
+            })
+            .collect();
+        credentials
+            .set_session_value(prefix, profile, &user, prefix.as_bytes())
+            .expect("user");
+        credentials
+            .set_session_value(prefix, profile, &key, b"synthetic-key")
+            .expect("key");
+    }
+    let first_request = PreparedUsage::new(&first, &credentials).expect("first account");
+    let second_request = PreparedUsage::new(&second, &credentials).expect("second account");
+    let first_auth = first_request.authorization().expect("first authorization");
+    let second_auth = second_request.authorization().expect("second authorization");
+    assert_eq!(first_auth.origin(), second_auth.origin());
+    assert_eq!(first_auth.header_value(), "Basic Zmlyc3Q6c3ludGhldGljLWtleQ==");
+    assert_eq!(second_auth.header_value(), "Basic c2Vjb25kOnN5bnRoZXRpYy1rZXk=");
+    credentials
+        .set_session_value(
+            "first",
+            &first,
+            &CredentialReference::from("first-key"),
+            b"replacement-key",
+        )
+        .expect("rotate first account");
+    let unchanged = PreparedUsage::new(&second, &credentials)
+        .expect("second still ready")
+        .authorization()
+        .expect("second auth");
+    assert_eq!(unchanged.header_value(), second_auth.header_value());
+    let changed = PreparedUsage::new(&first, &credentials)
+        .expect("first still ready")
+        .authorization()
+        .expect("first auth");
+    assert_ne!(changed.header_value(), first_auth.header_value());
+}
+
+#[test]
+fn usage_delegation_rejects_unrelated_and_lookalike_origins() {
+    let adapter = UsageAdapter::Browserstack;
+    assert!(adapter.authorizes_origin("https://hub-cloud.browserstack.com"));
+    for origin in [
+        "https://grid.example.test",
+        "https://hub-cloud.browserstack.com.evil.test",
+        "http://hub-cloud.browserstack.com",
+        "https://hub-cloud.browserstack.com:8443",
+    ] {
+        assert!(!adapter.authorizes_origin(origin));
+        let mut profile = profile();
+        if let Ok(endpoint) = ControlEndpoint::parse(origin) {
+            profile.endpoint = endpoint;
+            let mut credentials = credentials();
+            credentials
+                .set_session_value("cloud", &profile, &CredentialReference::from("key"), b"synthetic-key")
+                .expect("credential");
+            assert_eq!(
+                PreparedUsage::new(&profile, &credentials)
+                    .expect("snapshot")
+                    .fetch(adapter),
+                Err(UsageError::Unsupported)
+            );
+        }
+    }
+}
+
+#[test]
+fn stalled_workers_settle_with_an_error_and_keep_the_last_sample() {
+    let (_sender, receiver) = channel();
+    let sample = (
+        ProviderUsage {
+            running: 1,
+            allowed: 4,
+            queued: 0,
+        },
+        Instant::now(),
+    );
+    let mut monitor = ProviderUsageMonitor {
+        pending: Some(receiver),
+        sample: Some(sample),
+        last_attempt: Instant::now().checked_sub(REQUEST_TIMEOUT),
+        ..ProviderUsageMonitor::default()
+    };
+    monitor.poll();
+    assert!(!monitor.refreshing());
+    assert_eq!(monitor.error, Some(UsageError::Unavailable));
+    assert_eq!(monitor.sample, Some(sample));
+}
+
+#[test]
+fn busy_keychain_fails_without_waiting() {
+    let store: SharedStore = std::sync::Arc::new(std::sync::Mutex::new(Box::new(FakeCredentialStore::new())));
+    let _guard = store.lock().expect("lock");
+    let prepared = PreparedUsage {
+        profile: profile(),
+        memory: SessionCredentialStore::new(),
+        keychain: Some(std::sync::Arc::clone(&store)),
+    };
+    assert!(matches!(prepared.authorization(), Err(UsageError::Unavailable)));
+}
+
+#[test]
+fn duplicate_environment_references_resolve_from_the_original_binding() {
+    if std::env::var_os("HORIZON_USAGE_DUPLICATE_TEST").is_none() {
+        let status = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "browser::remote_usage::tests::duplicate_environment_references_resolve_from_the_original_binding",
+            ])
+            .env("HORIZON_USAGE_DUPLICATE_TEST", "synthetic")
+            .status()
+            .expect("isolated environment test");
+        assert!(status.success());
+        return;
+    }
+    let mut profile = profile();
+    profile.authentication = RemoteAuthentication::Basic {
+        username_ref: CredentialReference::from("key"),
+        password_ref: CredentialReference::from("key"),
+    };
+    let binding = profile
+        .credential_bindings
+        .get_mut(&CredentialReference::from("key"))
+        .expect("binding");
+    binding.store = CredentialStoreKind::Environment;
+    binding.slot = Some("HORIZON_USAGE_DUPLICATE_TEST".into());
+    let mut credentials = credentials();
+    credentials.load_environment_bindings(&horizon_browser::remote::RemoteBrowserConfig {
+        providers: [("cloud".into(), profile.clone())].into(),
+        ..Default::default()
+    });
+    let prepared =
+        PreparedUsage::new(&profile, &credentials).expect("both references read the original environment binding");
+    assert!(prepared.authorization().is_ok());
+}

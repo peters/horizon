@@ -58,6 +58,6 @@ pub(super) fn render(
     ui.ctx().request_repaint_after(if monitor.refreshing() {
         Duration::from_millis(100)
     } else {
-        Duration::from_secs(1)
+        monitor.next_refresh_in()
     });
 }

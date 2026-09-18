@@ -58,6 +58,21 @@ impl UsageAdapter {
         }
     }
 
+    fn authorizes_origin(self, origin: &str) -> bool {
+        match self {
+            Self::Browserstack => matches!(
+                origin,
+                "https://hub-cloud.browserstack.com"
+                    | "https://hub.browserstack.com"
+                    | "https://hub-apse.browserstack.com"
+                    | "https://hub-aps.browserstack.com"
+                    | "https://hub-euw.browserstack.com"
+                    | "https://hub-use.browserstack.com"
+                    | "https://hub-usw.browserstack.com"
+            ),
+        }
+    }
+
     fn decode(self, bytes: &[u8]) -> Result<ProviderUsage, UsageError> {
         match self {
             Self::Browserstack => {
@@ -104,7 +119,13 @@ impl ProviderUsageMonitor {
         self.pending.is_some()
     }
 
-    /// Called only while the usage view is open. Network and OS-store reads run
+    #[must_use]
+    pub fn next_refresh_in(&self) -> Duration {
+        self.last_attempt
+            .map_or(Duration::ZERO, |at| REFRESH_INTERVAL.saturating_sub(at.elapsed()))
+    }
+
+    /// Called by active usage consumers. Network and OS-store reads run
     /// off the render thread. A changed profile drops results from the old binding.
     pub fn update(&mut self, profile: &RemoteProviderProfile, credentials: &CredentialWorkbench, force: bool) {
         if self.profile.as_ref() != Some(profile) {
@@ -140,8 +161,8 @@ impl ProviderUsageMonitor {
         let Some(pending) = &self.pending else { return };
         let result = match pending.try_recv() {
             Ok(result) => result,
-            Err(TryRecvError::Empty) => return,
-            Err(TryRecvError::Disconnected) => Err(UsageError::Unavailable),
+            Err(TryRecvError::Empty) if self.last_attempt.is_none_or(|at| at.elapsed() < REQUEST_TIMEOUT) => return,
+            Err(TryRecvError::Empty | TryRecvError::Disconnected) => Err(UsageError::Unavailable),
         };
         self.pending = None;
         match result {
@@ -168,12 +189,11 @@ impl PreparedUsage {
             keychain: None,
         };
         // Copy only this provider's in-memory credentials. OS-store access is
-        // deferred to the worker, including its potentially blocking mutex.
+        // deferred to the worker; a busy store fails without waiting on its mutex.
         for reference in profile.authentication.references() {
-            let binding = snapshot
-                .profile
+            let binding = profile
                 .credential_bindings
-                .get_mut(reference)
+                .get(reference)
                 .ok_or(UsageError::Credentials)?;
             let store: &dyn RemoteCredentialStore = match binding.store {
                 CredentialStoreKind::Session => credentials.session_store(),
@@ -193,7 +213,9 @@ impl PreparedUsage {
                     },
                 )
                 .map_err(|_| UsageError::Credentials)?;
-            binding.store = CredentialStoreKind::Session;
+            if let Some(binding) = snapshot.profile.credential_bindings.get_mut(reference) {
+                binding.store = CredentialStoreKind::Session;
+            }
         }
         Ok(snapshot)
     }
@@ -202,7 +224,12 @@ impl PreparedUsage {
         let guard = self
             .keychain
             .as_ref()
-            .map(|store| store.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+            .map(|store| match store.try_lock() {
+                Ok(guard) => Ok(guard),
+                Err(std::sync::TryLockError::Poisoned(error)) => Ok(error.into_inner()),
+                Err(std::sync::TryLockError::WouldBlock) => Err(UsageError::Unavailable),
+            })
+            .transpose()?;
         resolve_authorization(
             &self.profile,
             &CredentialStores {
@@ -216,9 +243,15 @@ impl PreparedUsage {
     }
 
     fn fetch(self, adapter: UsageAdapter) -> Result<ProviderUsage, UsageError> {
+        if !adapter.authorizes_origin(&self.profile.endpoint.origin()) {
+            return Err(UsageError::Unsupported);
+        }
         let authorization = self.authorization()?;
-        // Named adapters authorize this fixed provider API in addition to the
-        // configured hub, as with session identity checks. Never follow redirects.
+        if !adapter.authorizes_origin(authorization.origin()) {
+            return Err(UsageError::Credentials);
+        }
+        // Only explicitly trusted provider hubs may delegate their credentials
+        // to this fixed provider API. Redirects never extend that authorization.
         fetch_usage(adapter, &adapter.endpoint(), authorization.header_value())
     }
 }

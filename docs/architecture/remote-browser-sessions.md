@@ -3,8 +3,9 @@
 Status: accepted for [#628](https://github.com/peters/horizon/issues/628) phase 1
 on 2026-09-14, informed by the real-device evidence in
 [`docs/testing/2026-09-14-remote-mobile-webdriver-spike.md`](../testing/2026-09-14-remote-mobile-webdriver-spike.md).
-Nothing below is implemented yet; the phases at the end name the PRs that will
-carry each piece. Provider credentials are separate from the routine login
+The decision and phase list record the original implementation plan. Provider
+profiles, credential binding, remote allocation and cleanup are implemented; the
+shared usage and capacity behavior is described in the implementation notes below. Provider credentials are separate from the routine login
 credentials in [`browser-routine-credentials.md`](browser-routine-credentials.md).
 
 ## Decision
