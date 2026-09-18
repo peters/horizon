@@ -87,6 +87,7 @@ impl DeviceUiState {
             if let Some(full) = full {
                 self.desktop = Some(full.size);
                 self.source = Some(full);
+                self.presented_options = None;
             }
         }
         if self.desktop.is_none()
@@ -186,6 +187,9 @@ impl DeviceUiState {
     fn upload_displayed(&mut self, ui: &Ui, image: ColorImage) {
         let limit = ui.ctx().input(|input| input.max_texture_side);
         if image.size.iter().any(|side| *side == 0 || *side > limit) {
+            if let Some(full) = self.session.as_ref().and_then(Session::latest_full) {
+                self.source = Some(full);
+            }
             self.session = None;
             self.texture = None;
             self.status = Status::Disconnected("Desktop exceeds the renderer's texture limit".into());
