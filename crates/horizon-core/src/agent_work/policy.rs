@@ -86,6 +86,13 @@ impl RestartEvidence<'_> {
         if transcript.state == TurnState::Interrupted {
             return RestartDecision::NotResumable;
         }
+        if transcript.state == TurnState::Working
+            && self
+                .ledger
+                .is_some_and(|ledger| ledger.session_id == self.session_id && ledger.needs_stop_review())
+        {
+            return RestartDecision::Ask(AskReason::MissingEvidence);
+        }
         if self.ledger.is_some_and(|ledger| {
             ledger.session_id == self.session_id
                 && (ledger.deliberate_exit
@@ -160,10 +167,17 @@ impl RestartEvidence<'_> {
             || ledger.prompt_id.as_deref() != Some(&record.prompt_id)
             || ledger.generation != record.generation
             || ledger.deliberate_exit
-            || matches!(ledger.state, TurnState::Finished | TurnState::Failed)
+            || ledger.state == TurnState::Failed
             || (ledger.state == TurnState::Interrupted && !record.cancelled_by_horizon)
         {
             return RestartDecision::NotResumable;
+        }
+        if ledger.state == TurnState::Finished {
+            return if transcript.state == TurnState::Working && ledger.needs_stop_review() {
+                RestartDecision::Ask(AskReason::MissingEvidence)
+            } else {
+                RestartDecision::NotResumable
+            };
         }
         if ledger.state == TurnState::Blocked || transcript.state == TurnState::Blocked {
             return RestartDecision::Ask(AskReason::WaitingForUser);
@@ -204,6 +218,7 @@ impl RestartEvidence<'_> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::ledger::StopReview;
     use super::*;
 
     fn assert_incomplete_handoffs_need_confirmation(
@@ -233,6 +248,141 @@ mod tests {
                 RestartDecision::Ask(AskReason::MissingEvidence)
             );
         }
+    }
+
+    #[test]
+    fn an_old_handoff_cannot_hide_stop_ambiguity_or_bypass_identity_and_tail_checks() {
+        let policy = ResumePolicy {
+            enabled: true,
+            ..ResumePolicy::default()
+        };
+        let transcript = TranscriptSnapshot {
+            bytes: 10,
+            tail_sha256: [1; 32],
+            state: TurnState::Working,
+        };
+        let ledger = TurnLedger {
+            session_id: "session".into(),
+            prompt_id: Some("prompt".into()),
+            generation: 1,
+            state: TurnState::Finished,
+            stop_review: StopReview::PossibleContinuation,
+            ..TurnLedger::default()
+        };
+        let mut record = SuspendRecord {
+            kind: PanelKind::Claude,
+            panel_local_id: "panel".into(),
+            session_id: "session".into(),
+            prompt_id: "prompt".into(),
+            generation: 1,
+            suspended_at_millis: 1,
+            cwd: "/repo".into(),
+            repo_fingerprint: None,
+            before_cancel: None,
+            final_transcript: None,
+            cancelled_by_horizon: false,
+        };
+        let decision = |record: &SuspendRecord| {
+            RestartEvidence {
+                kind: PanelKind::Claude,
+                panel_local_id: "panel",
+                session_id: "session",
+                cwd: "/repo",
+                policy: &policy,
+                handoff: Some(record),
+                ledger: Some(&ledger),
+                transcript: Some(&transcript),
+                repo_fingerprint: None,
+                session_live_elsewhere: false,
+                stale_live_session: false,
+                now_millis: 10,
+            }
+            .classify(32)
+        };
+        assert_eq!(decision(&record), RestartDecision::Ask(AskReason::MissingEvidence));
+        record.final_transcript = Some(transcript.clone());
+        assert_eq!(decision(&record), RestartDecision::Ask(AskReason::MissingEvidence));
+        record.cancelled_by_horizon = true;
+        assert_eq!(decision(&record), RestartDecision::NotResumable);
+        record.cancelled_by_horizon = false;
+        for field in ["kind", "panel", "session", "prompt", "generation", "cwd", "tail"] {
+            let mut changed = record.clone();
+            match field {
+                "kind" => changed.kind = PanelKind::Pi,
+                "panel" => changed.panel_local_id = "other".into(),
+                "session" => changed.session_id = "other".into(),
+                "prompt" => changed.prompt_id = "other".into(),
+                "generation" => changed.generation += 1,
+                "cwd" => changed.cwd = "/other".into(),
+                "tail" => changed.final_transcript.as_mut().expect("snapshot").bytes += 1,
+                _ => unreachable!(),
+            }
+            assert_eq!(decision(&changed), RestartDecision::NotResumable, "{field}");
+        }
+    }
+
+    #[test]
+    fn a_possibly_vetoed_stop_only_offers_review_of_independently_working_evidence() {
+        let policy = ResumePolicy {
+            enabled: true,
+            ..ResumePolicy::default()
+        };
+        let mut ledger = TurnLedger::default();
+        for (index, name) in ["UserPromptSubmit", "Stop", "PreToolUse"].into_iter().enumerate() {
+            let event = serde_json::from_value(serde_json::json!({
+                "session_id": "session", "prompt_id": "prompt", "hook_event_name": name
+            }))
+            .expect("event");
+            ledger.apply(&event, i64::try_from(index).expect("index"));
+        }
+        let decision = |ledger: &TurnLedger, state| {
+            let transcript = TranscriptSnapshot {
+                bytes: 10,
+                tail_sha256: [1; 32],
+                state,
+            };
+            RestartEvidence {
+                kind: PanelKind::Claude,
+                panel_local_id: "panel",
+                session_id: "session",
+                cwd: "/repo",
+                policy: &policy,
+                handoff: None,
+                ledger: Some(ledger),
+                transcript: Some(&transcript),
+                repo_fingerprint: None,
+                session_live_elsewhere: false,
+                stale_live_session: false,
+                now_millis: 10,
+            }
+            .classify(32)
+        };
+        assert_eq!(
+            decision(&ledger, TurnState::Working),
+            RestartDecision::Ask(AskReason::MissingEvidence)
+        );
+        for state in [
+            TurnState::Finished,
+            TurnState::Interrupted,
+            TurnState::Failed,
+            TurnState::Unknown,
+            TurnState::Blocked,
+        ] {
+            assert_eq!(decision(&ledger, state), RestartDecision::NotResumable);
+        }
+        for veto in ["Interrupt", "StopFailure", "SessionEnd"] {
+            let mut vetoed = ledger.clone();
+            for name in [veto, "Stop", "PreToolUse"] {
+                let event = serde_json::from_value(serde_json::json!({
+                    "session_id": "session", "prompt_id": "prompt", "hook_event_name": name
+                }))
+                .expect("event");
+                vetoed.apply(&event, 4);
+            }
+            assert_eq!(decision(&vetoed, TurnState::Working), RestartDecision::NotResumable);
+        }
+        ledger.session_id = "other-session".into();
+        assert_eq!(decision(&ledger, TurnState::Working), RestartDecision::NotResumable);
     }
 
     #[test]

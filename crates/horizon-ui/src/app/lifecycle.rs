@@ -203,6 +203,15 @@ impl HorizonApp {
         for panel_id in panels_to_restart {
             if let Err(error) = self.board.restart_panel(panel_id) {
                 tracing::error!(panel_id = panel_id.0, %error, "failed to restart panel");
+                if let Some(workspace) = self.board.panel_workspace_id(panel_id) {
+                    self.board.create_attention(
+                        workspace,
+                        Some(panel_id),
+                        "restart",
+                        error.to_string(),
+                        horizon_core::AttentionSeverity::High,
+                    );
+                }
             } else {
                 self.panel_render_caches.terminal_grid_cache.remove(&panel_id);
                 self.panel_render_caches.editor_preview_cache.remove(&panel_id);
@@ -283,6 +292,7 @@ impl HorizonApp {
             self.handle_canvas_pan(ui);
         }
         self.render_toolbar(ui);
+        self.render_work_resume_banner(ui);
         self.render_sidebar(ui);
         self.render_canvas(ui);
         let overlay_zones = self.overlay_exclusion_zones(ui);

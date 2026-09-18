@@ -111,6 +111,11 @@ impl Terminal {
         self.write_protocol(bytes);
     }
 
+    /// Forward pointer motion without treating a hover as a user decision.
+    pub fn write_pointer_motion(&self, bytes: &[u8]) {
+        self.write_protocol(bytes);
+    }
+
     pub(super) fn write_protocol(&self, bytes: &[u8]) {
         if bytes.is_empty() {
             return;

@@ -405,8 +405,9 @@ fn handle_pointer_motion(
         )
         && let Some(bytes) = input::mouse_motion_report(pointer_buttons, modifiers, terminal_mode, point)
         && !bytes.is_empty()
+        && let Some(terminal) = panel.terminal()
     {
-        panel.write_input(&bytes);
+        terminal.write_pointer_motion(&bytes);
     }
 }
 
