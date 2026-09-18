@@ -164,10 +164,14 @@ fn resolve_smoothed_wheel(
             return (buckets.zoom, buckets.pan, None);
         }
         if buckets.zoom != Vec2::ZERO {
-            return (smoothed, Vec2::ZERO, Some(CanvasWheelFollowup::Zoom));
+            // egui may have already converted Ctrl-wheel into zoom_delta and
+            // left smooth_scroll_delta at zero; keep the raw bucket then.
+            let zoom = if smoothed == Vec2::ZERO { buckets.zoom } else { smoothed };
+            return (zoom, Vec2::ZERO, Some(CanvasWheelFollowup::Zoom));
         }
         if buckets.pan != Vec2::ZERO {
-            return (Vec2::ZERO, smoothed, Some(CanvasWheelFollowup::Pan));
+            let pan = if smoothed == Vec2::ZERO { buckets.pan } else { smoothed };
+            return (Vec2::ZERO, pan, Some(CanvasWheelFollowup::Pan));
         }
         return (Vec2::ZERO, Vec2::ZERO, None);
     }
@@ -1020,6 +1024,18 @@ mod tests {
         assert_eq!(zoom, Vec2::ZERO);
         assert_eq!(pan, leftover);
         assert_eq!(followup, Some(CanvasWheelFollowup::Pan));
+    }
+
+    #[test]
+    fn ctrl_wheel_event_frame_keeps_raw_zoom_when_smoothed_delta_is_empty() {
+        let zoom_buckets = CanvasWheelBuckets {
+            pan: Vec2::ZERO,
+            zoom: Vec2::new(0.0, 12.0),
+        };
+        let (zoom, pan, followup) = resolve_smoothed_wheel(true, zoom_buckets, Vec2::ZERO, None);
+        assert_eq!(zoom, Vec2::new(0.0, 12.0));
+        assert_eq!(pan, Vec2::ZERO);
+        assert_eq!(followup, Some(CanvasWheelFollowup::Zoom));
     }
 
     #[test]
