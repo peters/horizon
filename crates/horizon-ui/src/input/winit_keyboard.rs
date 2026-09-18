@@ -144,10 +144,24 @@ struct ObservedKeyboardEvent {
 
 impl ObservedKeyboardEvent {
     fn from_winit(event: &KeyEvent, modifiers: Modifiers) -> Option<Self> {
-        let physical_key = physical_key_from_winit(event.physical_key);
-        let logical_key = key_from_winit_key(&event.logical_key);
-        let key = logical_key.or(physical_key)?;
-        let pressed = event.state.is_pressed();
+        Self::from_keys(
+            &event.logical_key,
+            event.physical_key,
+            event.state.is_pressed(),
+            modifiers,
+            &event.key_without_modifiers(),
+        )
+    }
+
+    fn from_keys(
+        logical_key: &WinitKey,
+        physical_key: PhysicalKey,
+        pressed: bool,
+        modifiers: Modifiers,
+        unmodified_key: &WinitKey,
+    ) -> Option<Self> {
+        let physical_key = physical_key_from_winit(physical_key);
+        let key = key_from_winit_key(logical_key).or(physical_key)?;
         let kind = if pressed && is_cut_command(modifiers, key) {
             KeyboardOutputKind::Cut
         } else if pressed && is_copy_command(modifiers, key) {
@@ -164,8 +178,7 @@ impl ObservedKeyboardEvent {
             physical_key,
             pressed,
             modifiers,
-            key_without_modifiers_text: event
-                .key_without_modifiers()
+            key_without_modifiers_text: unmodified_key
                 .to_text()
                 .filter(|text| !text.is_empty())
                 .map(ToOwned::to_owned),
@@ -368,6 +381,9 @@ fn key_from_named_key(named_key: NamedKey) -> Option<Key> {
 }
 
 fn key_from_key_code(key: KeyCode) -> Option<Key> {
+    if let Some(key) = function_key_from_key_code(key) {
+        return Some(key);
+    }
     Some(match key {
         KeyCode::ArrowDown => Key::ArrowDown,
         KeyCode::ArrowLeft => Key::ArrowLeft,
@@ -439,12 +455,108 @@ fn key_from_key_code(key: KeyCode) -> Option<Key> {
     })
 }
 
+fn function_key_from_key_code(key: KeyCode) -> Option<Key> {
+    Some(match key {
+        KeyCode::F1 => Key::F1,
+        KeyCode::F2 => Key::F2,
+        KeyCode::F3 => Key::F3,
+        KeyCode::F4 => Key::F4,
+        KeyCode::F5 => Key::F5,
+        KeyCode::F6 => Key::F6,
+        KeyCode::F7 => Key::F7,
+        KeyCode::F8 => Key::F8,
+        KeyCode::F9 => Key::F9,
+        KeyCode::F10 => Key::F10,
+        KeyCode::F11 => Key::F11,
+        KeyCode::F12 => Key::F12,
+        KeyCode::F13 => Key::F13,
+        KeyCode::F14 => Key::F14,
+        KeyCode::F15 => Key::F15,
+        KeyCode::F16 => Key::F16,
+        KeyCode::F17 => Key::F17,
+        KeyCode::F18 => Key::F18,
+        KeyCode::F19 => Key::F19,
+        KeyCode::F20 => Key::F20,
+        KeyCode::F21 => Key::F21,
+        KeyCode::F22 => Key::F22,
+        KeyCode::F23 => Key::F23,
+        KeyCode::F24 => Key::F24,
+        KeyCode::F25 => Key::F25,
+        KeyCode::F26 => Key::F26,
+        KeyCode::F27 => Key::F27,
+        KeyCode::F28 => Key::F28,
+        KeyCode::F29 => Key::F29,
+        KeyCode::F30 => Key::F30,
+        KeyCode::F31 => Key::F31,
+        KeyCode::F32 => Key::F32,
+        KeyCode::F33 => Key::F33,
+        KeyCode::F34 => Key::F34,
+        KeyCode::F35 => Key::F35,
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         FrameKeyEvent, KeyboardOutputKind, ObservedKeyboardEvent, align_observed_keyboard_events, terminal_input_events,
     };
     use egui::{Event, Key, Modifiers, RawInput};
+
+    #[test]
+    fn remapped_physical_function_key_keeps_unicode_metadata_through_event_alignment() {
+        use winit::keyboard::{Key as WinitKey, KeyCode, PhysicalKey};
+
+        let logical = WinitKey::Character("æ".into());
+        let observed = ObservedKeyboardEvent::from_keys(
+            &logical,
+            PhysicalKey::Code(KeyCode::F19),
+            true,
+            Modifiers::NONE,
+            &logical,
+        )
+        .expect("physical function key is observed");
+        let events = [
+            Event::Key {
+                key: Key::F19,
+                physical_key: Some(Key::F19),
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            },
+            Event::Text("æ".into()),
+        ];
+        let aligned = align_observed_keyboard_events(&events, [observed].into());
+        let terminal = terminal_input_events(&events, aligned);
+        assert_eq!(terminal[0].key_without_modifiers_text.as_deref(), Some("æ"));
+        assert!(
+            super::super::translate_key_event_with_physical(
+                super::super::KeyIdentity::new(
+                    Key::F19,
+                    Some(Key::F19),
+                    terminal[0].key_without_modifiers_text.as_deref()
+                ),
+                super::super::KeyEventContext::new(
+                    true,
+                    false,
+                    Modifiers::NONE,
+                    alacritty_terminal::term::TermMode::NONE
+                ),
+            )
+            .is_none(),
+            "physical fallback must not emit an additional function-key sequence"
+        );
+        for (physical, expected) in [
+            (KeyCode::F1, Key::F1),
+            (KeyCode::F24, Key::F24),
+            (KeyCode::F35, Key::F35),
+        ] {
+            assert_eq!(
+                super::physical_key_from_winit(PhysicalKey::Code(physical)),
+                Some(expected)
+            );
+        }
+    }
 
     #[test]
     fn copy_command_keeps_its_origin_and_following_key_context() {

@@ -18,6 +18,17 @@ impl<'a> KeyIdentity<'a> {
             key_without_modifiers_text,
         }
     }
+
+    pub(super) fn remapped_text(self) -> Option<&'a str> {
+        let text = self.key_without_modifiers_text?;
+        // A printable logical symbol can arrive on a physical function key
+        // after X11 remapping. It must not also emit that key's escape sequence.
+        (self.physical_key == Some(self.key)
+            && printable_text(self.key, Modifiers::NONE).is_none()
+            && !text.is_empty()
+            && text.chars().all(|character| !character.is_control()))
+        .then_some(text)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -53,7 +64,10 @@ pub fn translate_key_event_with_physical(
         return None;
     }
 
-    let text = printable_text(key_identity.key, context.modifiers);
+    let remapped_text = key_identity.remapped_text();
+    let text = remapped_text
+        .map(ToOwned::to_owned)
+        .or_else(|| printable_text(key_identity.key, context.modifiers));
     let control = control_modifier(context.modifiers);
     let kitty = context.mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL);
 
@@ -72,7 +86,10 @@ pub fn translate_key_event_with_physical(
             .pressed
             .then_some(text.as_deref())
             .flatten()
-            .filter(|_| should_suppress_text_for_key(key_identity.key, context.modifiers, context.mode))
+            .filter(|_| {
+                remapped_text.is_some()
+                    || should_suppress_text_for_key(key_identity.key, context.modifiers, context.mode)
+            })
             .map(ToOwned::to_owned);
         return Some(KeyTranslation { bytes, suppress_text });
     }
@@ -81,7 +98,9 @@ pub fn translate_key_event_with_physical(
         return None;
     }
 
-    if let Some(bytes) = named_key_sequence(key_identity.key, context.modifiers, context.mode) {
+    if remapped_text.is_none()
+        && let Some(bytes) = named_key_sequence(key_identity.key, context.modifiers, context.mode)
+    {
         return Some(KeyTranslation {
             bytes,
             suppress_text: should_suppress_text_for_key(key_identity.key, context.modifiers, context.mode)
