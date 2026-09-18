@@ -154,6 +154,11 @@ fn exercise_confirmed_restart() {
 }
 
 fn exercise_message_shapes(panel: &Panel, path: &std::path::Path, prefix: &str) {
+    let completed = serde_json::json!({"type":"assistant", "sessionId":"fixture-session", "message":{"role":"assistant", "content":[], "stop_reason":"end_turn"}});
+    std::fs::write(path, format!("{prefix}{completed}\n")).expect("empty completed assistant message");
+    panel
+        .check_saved_work_session()
+        .expect("empty native assistant content");
     for content in [
         serde_json::json!([{"type":"tool_result","tool_use_id":"tool"}]),
         serde_json::json!([{"type":"tool_result","tool_use_id":"tool","content":[]}]),

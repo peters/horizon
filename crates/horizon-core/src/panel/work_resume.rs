@@ -344,41 +344,38 @@ fn saved_claude_history(session_id: &str) -> Option<()> {
 fn supported_message_content(content: &serde_json::Value) -> bool {
     content.is_string()
         || content.as_array().is_some_and(|blocks| {
-            !blocks.is_empty()
-                && blocks.iter().all(|block| {
-                    let string = |key| block.get(key).is_some_and(serde_json::Value::is_string);
-                    match block.get("type").and_then(serde_json::Value::as_str) {
-                        Some("text") => string("text"),
-                        Some("thinking") => string("thinking") && string("signature"),
-                        Some("tool_reference") => string("tool_name"),
-                        Some("search_result") => {
-                            string("source")
-                                && string("title")
-                                && block
-                                    .get("content")
-                                    .and_then(serde_json::Value::as_array)
-                                    .is_some_and(|parts| {
-                                        parts.iter().all(|part| {
-                                            part.get("type").and_then(serde_json::Value::as_str) == Some("text")
-                                                && part.get("text").is_some_and(serde_json::Value::is_string)
-                                        })
+            blocks.iter().all(|block| {
+                let string = |key| block.get(key).is_some_and(serde_json::Value::is_string);
+                match block.get("type").and_then(serde_json::Value::as_str) {
+                    Some("text") => string("text"),
+                    Some("thinking") => string("thinking") && string("signature"),
+                    Some("tool_reference") => string("tool_name"),
+                    Some("search_result") => {
+                        string("source")
+                            && string("title")
+                            && block
+                                .get("content")
+                                .and_then(serde_json::Value::as_array)
+                                .is_some_and(|parts| {
+                                    parts.iter().all(|part| {
+                                        part.get("type").and_then(serde_json::Value::as_str) == Some("text")
+                                            && part.get("text").is_some_and(serde_json::Value::is_string)
                                     })
-                        }
-                        Some("redacted_thinking") => string("data"),
-                        Some("image" | "document") => block.get("source").is_some_and(supported_content_source),
-                        Some("tool_use") => {
-                            string("id")
-                                && string("name")
-                                && block.get("input").is_some_and(serde_json::Value::is_object)
-                        }
-                        Some("tool_result") => {
-                            string("tool_use_id")
-                                && block.get("is_error").is_none_or(serde_json::Value::is_boolean)
-                                && block.get("content").is_none_or(supported_tool_result_content)
-                        }
-                        _ => false,
+                                })
                     }
-                })
+                    Some("redacted_thinking") => string("data"),
+                    Some("image" | "document") => block.get("source").is_some_and(supported_content_source),
+                    Some("tool_use") => {
+                        string("id") && string("name") && block.get("input").is_some_and(serde_json::Value::is_object)
+                    }
+                    Some("tool_result") => {
+                        string("tool_use_id")
+                            && block.get("is_error").is_none_or(serde_json::Value::is_boolean)
+                            && block.get("content").is_none_or(supported_tool_result_content)
+                    }
+                    _ => false,
+                }
+            })
         })
 }
 
