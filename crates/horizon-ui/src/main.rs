@@ -12,6 +12,8 @@ mod dir_picker;
 mod editor_widget;
 mod git_changes_widget;
 mod input;
+#[cfg(any(test, target_os = "linux"))]
+mod linux_desktop;
 mod loading_spinner;
 mod native_app;
 mod plugin_install;
@@ -66,6 +68,8 @@ fn main() -> eframe::Result {
         let code = run_remote_profile_command(&resolved_config_path, profile_path);
         plugin_install::exit_after_releasing_plugins(code);
     }
+    #[cfg(target_os = "linux")]
+    linux_desktop::install();
     let config = load_config_or_default(&resolved_config_path);
     let session_store = SessionStore::new(horizon_home.clone(), resolved_config_path.clone());
     let startup = prepare_startup(&session_store, &config, &cli_args);

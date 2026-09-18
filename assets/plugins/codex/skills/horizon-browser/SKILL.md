@@ -70,9 +70,10 @@ and live JavaScript state are not copied. This does not authorize helper panels
 as a workaround for iframe, popup, dialog, or consent interactions.
 
 Snapshots expose iframe boundaries as `iframe` nodes. If the current top-level
-semantic tools cannot reach the embedded frame content, call `browser_handoff`
-on the original panel so the user can complete the interaction; do not open a
-separate panel for the frame.
+semantic tools cannot reach the embedded frame content, use `browser_handoff`
+on the original panel only when its capabilities include `handoff`. Remote
+sessions do not support manual steering and return `unsupported_backend`;
+report that limitation. Do not open a separate panel for the frame.
 
 `browser_navigate` returns a typed outcome: by default it waits until the
 document committed and reports `committed_url`, `title` when known, `loading`,
@@ -150,8 +151,10 @@ instrumentation because standard BiDi does not expose them; the panel
 advertises both distinctions. Safari network capture is currently unsupported.
 Do not describe Firefox WebSocket instrumentation as undetectable.
 
-When the user must steer, announce what they need to do in a progress message,
-then call `browser_handoff` with a concise reason. Keep this turn active until
+When the user must steer, first check that the panel advertises `handoff`.
+Remote sessions return `unsupported_backend` without starting a handoff or
+wait. For supported local sessions, announce what the user needs to do in a
+progress message, then call `browser_handoff` with a concise reason. Keep this turn active until
 the user selects **Done — hand back to agent**. Omit `timeout_millis` for the
 15-minute human wait; do not substitute a short page-action timeout such as
 60000 ms. Leave `wait` true (the default) and stop issuing page actions while

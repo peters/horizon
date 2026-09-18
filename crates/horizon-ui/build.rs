@@ -12,14 +12,22 @@ mod font_assets;
 /// verification the workspace root is not available, so CI copies the files
 /// into `CARGO_MANIFEST_DIR/publish-assets/` beforehand.
 const ASSETS: &[&str] = &[
+    "icons/icon-64.png",
     "icons/icon-128.png",
+    "icons/icon-256.png",
+    "icons/icon-512.png",
+    "icons/logo.svg",
     "plugins/claude-code/.claude-plugin/plugin.json",
     "plugins/claude-code/skills/horizon-browser/SKILL.md",
     "plugins/claude-code/skills/horizon-device/SKILL.md",
     "plugins/claude-code/skills/horizon-notify/SKILL.md",
+    "plugins/claude-code/skills/horizon-speech/SKILL.md",
+    "plugins/claude-code/skills/horizon-speech/level.py",
     "plugins/codex/skills/horizon-browser/SKILL.md",
     "plugins/codex/skills/horizon-device/SKILL.md",
     "plugins/codex/skills/horizon-notify/SKILL.md",
+    "plugins/codex/skills/horizon-speech/SKILL.md",
+    "plugins/codex/skills/horizon-speech/level.py",
 ];
 
 fn main() -> io::Result<()> {

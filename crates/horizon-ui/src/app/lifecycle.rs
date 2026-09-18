@@ -27,6 +27,7 @@ impl HorizonApp {
 
     #[profiling::function]
     pub(super) fn prepare_frame(&mut self, ui: &mut egui::Ui) -> bool {
+        super::bootstrap::pin_chrome_to_native_display_scale(ui.ctx());
         let resolved_theme = theme::resolve_theme(self.appearance_theme, ui.system_theme());
         if !self.theme_applied || resolved_theme != self.resolved_theme {
             self.resolved_theme = theme::apply(ui, self.appearance_theme);

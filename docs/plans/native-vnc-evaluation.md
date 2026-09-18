@@ -100,12 +100,17 @@ rendered image pixel per UI point with scrolling. Desktop and image dimensions
 are shown separately. Controls never change the target desktop resolution.
 
 An explicit viewport selects a nonempty rectangle inside the source desktop.
-Apply refuses invalid bounds; Whole desktop clears the crop. If the target later
-shrinks outside an active viewport, the connection stops with an error; clear the
-viewport and reconnect. Settings reset when the panel is recreated; restored
-panels still require manual connection. Refresh throttling limits refresh
-requests and frame production, not arbitrary unsolicited server traffic. Image
-limits and cropping affect local rendering, not negotiated VNC compression or
-wire bandwidth. Record native flows directly from the isolated desktop as
+Apply refuses invalid bounds; Whole desktop clears the crop. Viewport, image
+limits, Fit and 1:1 apply immediately to the last received full desktop image,
+including after the VNC worker disconnects. If the target later shrinks outside
+an active viewport, the crop is cleared and the whole desktop is shown. Settings
+reset when the panel is recreated; restored panels still require manual
+connection. Refresh throttling limits refresh requests and frame production, not
+arbitrary unsolicited server traffic; changing only Maximum fps does not
+recrop or rescale the last desktop. Image limits and cropping affect local
+rendering, not negotiated VNC compression or wire bandwidth. Reconnect starts a
+new worker and keeps the last presented image until a new desktop arrives.
+
+Record native flows directly from the isolated desktop as
 described in the [smoke guide](../../scripts/device-smoke/README.md#video-evidence-and-cleanup);
 `browser_video` records browser pages only.

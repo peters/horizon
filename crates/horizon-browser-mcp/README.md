@@ -106,6 +106,14 @@ shell commands, files, or other MCP servers.
   cross-origin policy prevents inspecting the frame document.
 - `browser_act` clicks, fills, scrolls, reloads, or traverses history. Set
   `count: 2` on a click for a backend-native trusted double-click.
+  Remote `fill` uses native Element Clear/Send Keys and reads the live field
+  back before reporting completion. An empty, reverted, missing, or otherwise
+  unequal value returns `input_failed`, even when the driver accepted the
+  commands. Clearing an input is verified too. This is an immediate value
+  postcondition, not a promise against later application changes or proof of
+  native-picker interaction. No JavaScript value-assignment fallback is used
+  for remote fill. Native date/time controls may reject a fill; inspect the
+  resulting field after a failure because clearing may already have occurred.
 - `browser_http_auth` is how a user supplies a username and password for HTTP
   Basic or Digest (MCP, CLI `run` plans, and prompt jobs all call this tool).
   Call `operation: set` with the credentials the user provided. Pass `origin`
@@ -144,6 +152,10 @@ shell commands, files, or other MCP servers.
   capture stop, capture replacement, or timeout.
 - `browser_handoff` pauses automation so the user can steer, and waits until
   they hand the panel back (`handoff_pending: false`) unless `wait` is false.
+  Remote sessions do not advertise handoff and return `unsupported_backend`
+  before claiming ownership, creating/resuming a handoff, or starting a wait.
+  Manual remote steering is not supported; showing the panel is not proof of
+  usable native input. This applies to MCP and CLI plans using the same tool.
   Keep the agent turn active, including while its client yields a running tool.
   Omit `timeout_millis` for the default 15-minute human wait. After a timeout,
   inspect `browser_panel`; while still pending, retry with the
