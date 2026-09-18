@@ -55,12 +55,18 @@ fn connect_with_timeout(target: &Target, deadline: Duration) -> Result<Box<dyn R
     let response_seen = Arc::new(AtomicBool::new(false));
     let response = Arc::clone(&response_seen);
     let drain = runtime.spawn(async move {
+        let mut server_init_seen = false;
         while let Ok(event) = receiver.recv_event().await {
             if matches!(event, VncEvent::Error(_)) {
                 break;
             }
-            if matches!(event, VncEvent::RawImage(_, _)) {
-                response.store(true, Ordering::Release);
+            match event {
+                // The decoder queues ServerInit before framebuffer events.
+                VncEvent::SetResolution(_) if !server_init_seen => server_init_seen = true,
+                VncEvent::RawImage(_, _) | VncEvent::SetResolution(_) | VncEvent::DesktopUpdate(_) => {
+                    response.store(true, Ordering::Release);
+                }
+                _ => {}
             }
         }
     });

@@ -1,7 +1,13 @@
 use super::*;
 use std::io::{Read, Write};
 
-fn server(responsive: bool, close: Option<std::sync::mpsc::Receiver<()>>) -> (Target, std::thread::JoinHandle<()>) {
+enum Reply {
+    Silent,
+    Raw,
+    DesktopSize,
+}
+
+fn server(reply: Reply, close: Option<std::sync::mpsc::Receiver<()>>) -> (Target, std::thread::JoinHandle<()>) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let server = std::thread::spawn(move || {
@@ -46,11 +52,16 @@ fn server(responsive: bool, close: Option<std::sync::mpsc::Receiver<()>>) -> (Ta
                         close.recv_timeout(Duration::from_secs(3)).unwrap();
                         return;
                     }
-                    if responsive {
-                        // One raw pixel is an observed legacy framebuffer response.
-                        stream
+                    match reply {
+                        Reply::Silent => {}
+                        Reply::Raw => stream
                             .write_all(&[0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 20, 180, 40, 0])
-                            .unwrap();
+                            .unwrap(),
+                        Reply::DesktopSize => {
+                            let mut update = vec![0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1];
+                            update.extend((-223i32).to_be_bytes());
+                            stream.write_all(&update).unwrap();
+                        }
                     }
                 }
                 unexpected => panic!("unexpected client message {unexpected}"),
@@ -70,7 +81,7 @@ fn server(responsive: bool, close: Option<std::sync::mpsc::Receiver<()>>) -> (Ta
 
 #[test]
 fn stalled_negotiation_is_a_definite_timeout() {
-    let (target, server) = server(false, None);
+    let (target, server) = server(Reply::Silent, None);
     assert!(matches!(
         connect_with_timeout(&target, Duration::from_millis(300)),
         Err(DeviceError::ResizeTimeout { uncertain: false })
@@ -80,11 +91,13 @@ fn stalled_negotiation_is_a_definite_timeout() {
 
 #[test]
 fn responsive_legacy_server_is_unsupported_without_a_resize_request() {
-    let (target, server) = server(true, None);
-    let backend = connect_with_timeout(&target, Duration::from_millis(300)).unwrap();
-    assert!(!backend.supported().unwrap());
-    drop(backend);
-    server.join().unwrap();
+    for reply in [Reply::Raw, Reply::DesktopSize] {
+        let (target, server) = server(reply, None);
+        let backend = connect_with_timeout(&target, Duration::from_millis(300)).unwrap();
+        assert!(!backend.supported().unwrap());
+        drop(backend);
+        server.join().unwrap();
+    }
 }
 
 #[test]
@@ -102,7 +115,7 @@ fn timeout_uncertainty_tracks_dispatch() {
 #[test]
 fn disconnect_after_negotiation_invalidates_cached_capability_and_dimensions() {
     let (close, closed) = std::sync::mpsc::channel();
-    let (target, server) = server(false, Some(closed));
+    let (target, server) = server(Reply::Silent, Some(closed));
     let backend = connect_with_timeout(&target, Duration::from_secs(2)).unwrap();
     assert!(backend.supported().unwrap());
     assert_eq!(backend.dimensions().unwrap(), ImageDimensions { width: 1, height: 1 });

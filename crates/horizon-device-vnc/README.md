@@ -27,7 +27,8 @@ VNC server to the same desktop:
 The container owner sets permission and limits; omitted permission is disabled.
 Only numeric loopback endpoints with a nonzero port are accepted. The server
 must permit shared, unauthenticated loopback connections and advertise
-ExtendedDesktopSize. Password authentication and general remote management are
+ExtendedDesktopSize with a single screen covering the entire desktop. Multi-monitor
+layouts are not supported. Password authentication and general remote management are
 outside this adapter.
 
 ```sh
