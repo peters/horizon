@@ -1,4 +1,5 @@
 //! Provider-wide capacity snapshots. Informational only: allocation is authoritative.
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
@@ -8,13 +9,33 @@ use horizon_browser::remote::{
 use serde::Deserialize;
 
 use crate::remote_browser_credential::{
-    CredentialLocator, CredentialStores, CredentialWorkbench, ProviderAuthorization, RemoteCredentialError,
-    RemoteCredentialStore, Sealed, SecretSink, SessionCredentialStore, SharedStore, resolve_authorization,
+    CredentialLocator, CredentialStores, CredentialWorkbench, KeyringCredentialStore, ProviderAuthorization,
+    RemoteCredentialError, RemoteCredentialStore, Sealed, SecretSink, SessionCredentialStore, StoreOpener,
+    resolve_authorization,
 };
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_RESPONSE_BYTES: u64 = 64 * 1024;
+const MAX_USAGE_WORKERS: usize = 32;
+static USAGE_WORKERS: AtomicUsize = AtomicUsize::new(0);
+
+struct UsageWorkerPermit<'a>(&'a AtomicUsize);
+impl<'a> UsageWorkerPermit<'a> {
+    fn acquire(counter: &'a AtomicUsize) -> Option<Self> {
+        counter
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                (count < MAX_USAGE_WORKERS).then(|| count + 1)
+            })
+            .ok()
+            .map(|_| Self(counter))
+    }
+}
+impl Drop for UsageWorkerPermit<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
+}
 
 /// Normalized shared usage; independent of the provider's wire format.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -148,8 +169,15 @@ impl ProviderUsageMonitor {
                 return;
             }
         };
+        let Some(permit) = UsageWorkerPermit::acquire(&USAGE_WORKERS) else {
+            self.error = Some(UsageError::Unavailable);
+            return;
+        };
         let (sender, receiver) = channel();
         match std::thread::Builder::new().name("remote-usage".into()).spawn(move || {
+            // Native credential reads may outlive the consumer's deadline. Keep
+            // their permit until the worker exits, without holding allocation locks.
+            let _permit = permit;
             let _ = sender.send(prepared.fetch(adapter).map(|usage| (usage, Instant::now())));
         }) {
             Ok(_) => self.pending = Some(receiver),
@@ -178,7 +206,7 @@ impl ProviderUsageMonitor {
 struct PreparedUsage {
     profile: RemoteProviderProfile,
     memory: SessionCredentialStore,
-    keychain: Option<SharedStore>,
+    keychain: Option<StoreOpener>,
 }
 
 impl PreparedUsage {
@@ -188,8 +216,8 @@ impl PreparedUsage {
             memory: SessionCredentialStore::new(),
             keychain: None,
         };
-        // Copy only this provider's in-memory credentials. OS-store access is
-        // deferred to the worker; a busy store fails without waiting on its mutex.
+        // Copy only this provider's in-memory credentials. OS-store access uses
+        // an independent connection on the worker, never the allocation store.
         for reference in profile.authentication.references() {
             let binding = profile
                 .credential_bindings
@@ -199,7 +227,10 @@ impl PreparedUsage {
                 CredentialStoreKind::Session => credentials.session_store(),
                 CredentialStoreKind::Environment => credentials.environment_store(),
                 CredentialStoreKind::OsKeychain => {
-                    snapshot.keychain = credentials.keychain_store();
+                    snapshot.keychain = Some(Box::new(|| {
+                        KeyringCredentialStore::open()
+                            .map(|store| Box::new(store) as Box<dyn RemoteCredentialStore + Send>)
+                    }));
                     continue;
                 }
             };
@@ -220,22 +251,19 @@ impl PreparedUsage {
         Ok(snapshot)
     }
 
-    fn authorization(&self) -> Result<ProviderAuthorization, UsageError> {
-        let guard = self
+    fn authorization(mut self) -> Result<ProviderAuthorization, UsageError> {
+        let keychain = self
             .keychain
-            .as_ref()
-            .map(|store| match store.try_lock() {
-                Ok(guard) => Ok(guard),
-                Err(std::sync::TryLockError::Poisoned(error)) => Ok(error.into_inner()),
-                Err(std::sync::TryLockError::WouldBlock) => Err(UsageError::Unavailable),
-            })
-            .transpose()?;
+            .take()
+            .map(|open| open())
+            .transpose()
+            .map_err(|_| UsageError::Credentials)?;
         resolve_authorization(
             &self.profile,
             &CredentialStores {
                 session: &self.memory,
                 environment: None,
-                os_keychain: guard.as_deref().map(|store| -> &dyn RemoteCredentialStore { &**store }),
+                os_keychain: keychain.as_deref().map(|store| -> &dyn RemoteCredentialStore { store }),
             },
         )
         .map_err(|_| UsageError::Credentials)?

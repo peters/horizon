@@ -362,15 +362,52 @@ fn stalled_workers_settle_with_an_error_and_keep_the_last_sample() {
 }
 
 #[test]
-fn busy_keychain_fails_without_waiting() {
-    let store: SharedStore = std::sync::Arc::new(std::sync::Mutex::new(Box::new(FakeCredentialStore::new())));
-    let _guard = store.lock().expect("lock");
-    let prepared = PreparedUsage {
-        profile: profile(),
-        memory: SessionCredentialStore::new(),
-        keychain: Some(std::sync::Arc::clone(&store)),
+fn stalled_usage_keychain_does_not_hold_the_allocation_store() {
+    let mut profile = profile();
+    let binding = profile
+        .credential_bindings
+        .get_mut(&CredentialReference::from("key"))
+        .expect("binding");
+    binding.store = CredentialStoreKind::OsKeychain;
+    binding.slot = Some("test-slot".into());
+    let mut credentials = credentials();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let shared = loop {
+        credentials.poll();
+        if let Some(shared) = credentials.keychain_store() {
+            break shared;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(1));
     };
-    assert!(matches!(prepared.authorization(), Err(UsageError::Unavailable)));
+    let mut prepared = PreparedUsage::new(&profile, &credentials).expect("prepare independent reader");
+    let (entered, reading) = channel();
+    let (release, resume) = channel();
+    prepared.keychain = Some(Box::new(move || {
+        entered.send(()).expect("reading");
+        resume.recv().expect("release");
+        Ok(Box::new(FakeCredentialStore::new()))
+    }));
+    let worker = std::thread::spawn(move || prepared.authorization());
+    reading.recv_timeout(Duration::from_secs(1)).expect("reader started");
+    assert!(shared.try_lock().is_ok(), "usage must never retain allocation's mutex");
+    release.send(()).expect("release reader");
+    assert!(worker.join().expect("worker").is_err());
+}
+
+#[test]
+fn worker_capacity_is_bounded_and_recovers_after_a_worker_exits() {
+    let counter = AtomicUsize::new(0);
+    let mut permits: Vec<_> = (0..MAX_USAGE_WORKERS)
+        .map(|_| UsageWorkerPermit::acquire(&counter).expect("capacity"))
+        .collect();
+    assert!(UsageWorkerPermit::acquire(&counter).is_none());
+    drop(permits.pop());
+    let recovered = UsageWorkerPermit::acquire(&counter).expect("released slot");
+    drop(permits);
+    assert_eq!(counter.load(Ordering::Relaxed), 1);
+    drop(recovered);
+    assert_eq!(counter.load(Ordering::Relaxed), 0);
 }
 
 #[test]

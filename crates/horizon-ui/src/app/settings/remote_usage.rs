@@ -17,6 +17,7 @@ pub(super) fn render(
     panels: &mut UsagePanels,
 ) {
     if !ProviderUsageMonitor::supported(profile) {
+        panels.remove(name);
         return;
     }
     let monitor = panels.entry(name.to_string()).or_default();
@@ -60,4 +61,45 @@ pub(super) fn render(
     } else {
         monitor.next_refresh_in()
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horizon_core::browser::remote::{
+        ControlEndpoint, RemoteAdapterKind, RemoteAuthentication, RemoteSessionLimits,
+    };
+    use horizon_core::browser::remote_usage::ProviderUsage;
+    use horizon_core::remote_browser_credential::FakeCredentialStore;
+
+    #[test]
+    fn switching_to_an_unsupported_adapter_discards_cached_usage() {
+        let profile = RemoteProviderProfile {
+            adapter: RemoteAdapterKind::Webdriver,
+            endpoint: ControlEndpoint::parse("https://grid.example.test").expect("endpoint"),
+            authentication: RemoteAuthentication::None {},
+            credential_bindings: BTreeMap::new(),
+            limits: RemoteSessionLimits::default(),
+        };
+        let mut monitor = ProviderUsageMonitor::default();
+        monitor.sample = Some((
+            ProviderUsage {
+                running: 2,
+                allowed: 4,
+                queued: 0,
+            },
+            std::time::Instant::now(),
+        ));
+        let mut panels = UsagePanels::from([("cloud".into(), monitor)]);
+        let credentials = CredentialWorkbench::with_opener(Box::new(|| Ok(Box::new(FakeCredentialStore::new()))));
+        let context = egui::Context::default();
+        let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+            render(ui, "cloud", &profile, &credentials, &mut panels);
+        });
+        output.textures_delta.clear();
+        assert!(
+            !panels.contains_key("cloud"),
+            "re-enabling usage must start with a fresh monitor"
+        );
+    }
 }
