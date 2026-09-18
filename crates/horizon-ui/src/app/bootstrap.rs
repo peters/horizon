@@ -307,10 +307,11 @@ mod tests {
     use egui::{Event, FontFamily, Key, Modifiers, RawInput};
 
     use super::{FONT_INTER, FONT_JETBRAINS_MONO, FONT_NOTO_CJK, FONT_NOTO_SYMBOLS, configure_fonts};
-    use crate::app::test_support::{raw_input, run_app_frame_with_input, test_app_with_startup};
-    use crate::command_registry::CommandId;
+    use crate::app::test_support::{
+        editor_workspace_state, raw_input, run_app_frame_with_input, test_app_with_startup,
+    };
     use crate::test_egui::DiscardTextures;
-    use horizon_core::{RuntimeState, StartupDecision};
+    use horizon_core::{CanvasViewState, RuntimeState, StartupDecision};
 
     #[test]
     fn configure_fonts_registers_ui_and_terminal_fallback_stacks() {
@@ -361,22 +362,35 @@ mod tests {
     #[test]
     fn canvas_zoom_shortcuts_do_not_scale_root_chrome() {
         let (_temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
-            runtime_state: Box::new(RuntimeState::default()),
+            runtime_state: Box::new(RuntimeState {
+                canvas_view: Some(CanvasViewState::default()),
+                workspaces: vec![editor_workspace_state("alpha", [0.0, 0.0])],
+                ..RuntimeState::default()
+            }),
         });
+        app.root_viewport_stabilizer = None;
         let viewport = raw_input([1600.0, 1000.0], None);
         let _ = run_app_frame_with_input(&ctx, &mut app, viewport.clone());
 
+        let before = app.canvas_view.zoom;
         let mut zoom_in = viewport.clone();
-        zoom_in.events.push(command_key(Key::Plus));
+        zoom_in.events.push(Event::Key {
+            key: Key::Equals,
+            physical_key: Some(Key::Equals),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers {
+                ctrl: !cfg!(target_os = "macos"),
+                mac_cmd: cfg!(target_os = "macos"),
+                command: true,
+                ..egui::Modifiers::NONE
+            },
+        });
         let _ = run_app_frame_with_input(&ctx, &mut app, zoom_in);
         let _ = run_app_frame_with_input(&ctx, &mut app, viewport);
 
-        assert!(!ctx.options(|options| options.zoom_with_keyboard));
-        assert!((ctx.zoom_factor() - 1.0).abs() <= f32::EPSILON);
-
-        let before = app.canvas_view.zoom;
-        app.execute_command(&ctx, &CommandId::ZoomIn);
         assert!(app.canvas_view.zoom > before);
+        assert!(!ctx.options(|options| options.zoom_with_keyboard));
         assert!((ctx.zoom_factor() - 1.0).abs() <= f32::EPSILON);
     }
 
