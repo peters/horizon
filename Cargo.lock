@@ -2257,6 +2257,7 @@ dependencies = [
  "profiling",
  "regex",
  "rusqlite",
+ "rustix 1.1.4",
  "secret-service",
  "security-framework",
  "serde",

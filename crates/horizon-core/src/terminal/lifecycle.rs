@@ -61,6 +61,8 @@ impl Terminal {
         let child_pid = Some(pty.child().id());
         #[cfg(windows)]
         let child_pid = None;
+        #[cfg(target_os = "linux")]
+        let child_start_time = child_pid.and_then(process_start_time);
         let event_loop = EventLoop::new(term.clone(), event_loop_proxy, pty, true, false)
             .map_err(|error| Error::Pty(format!("failed to initialize terminal event loop: {error}")))?;
         let event_sender = event_loop.channel();
@@ -68,11 +70,14 @@ impl Terminal {
 
         let mut terminal = Self {
             work_owner: None,
+            shutdown_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             work_continuation: crate::agent_work::WorkContinuation::default(),
             term,
             event_sender,
             event_rx,
             event_loop_handle,
+            #[cfg(target_os = "linux")]
+            child_start_time,
             child_pid,
             rows,
             cols,
@@ -136,10 +141,11 @@ impl Terminal {
         }
 
         let Some(event_loop_handle) = self.event_loop_handle.take() else {
-            return true;
+            return self.shutdown_complete.load(Ordering::Acquire);
         };
 
         let (shutdown_tx, shutdown_rx) = mpsc::sync_channel(1);
+        let completed = Arc::clone(&self.shutdown_complete);
         std::thread::spawn(move || {
             // Drop the joined event loop on this helper thread so PTY teardown
             // cannot block the UI thread in `Pty::drop`.
@@ -147,6 +153,7 @@ impl Terminal {
                 Ok(_) => JoinStatus::Complete,
                 Err(_) => JoinStatus::Panicked,
             };
+            completed.store(true, Ordering::Release);
             let _ = shutdown_tx.send(status);
         });
 
@@ -158,6 +165,25 @@ impl Terminal {
             }
             Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => false,
         }
+    }
+
+    pub(crate) fn owned_process_id(&self) -> Option<u32> {
+        if !self.work_continuation.owns_process
+            || self.child_exited
+            || self.shutdown_complete.load(Ordering::Acquire)
+            || self
+                .event_loop_handle
+                .as_ref()
+                .is_none_or(std::thread::JoinHandle::is_finished)
+        {
+            return None;
+        }
+        let pid = self.child_pid?;
+        #[cfg(target_os = "linux")]
+        if self.child_start_time.is_none() || process_start_time(pid) != self.child_start_time {
+            return None;
+        }
+        Some(pid)
     }
 
     #[must_use]
@@ -180,6 +206,7 @@ impl Terminal {
         };
         let sender = self.event_sender.clone();
         let done = Arc::clone(completed);
+        let terminal_done = Arc::clone(&self.shutdown_complete);
         std::thread::spawn(move || {
             let prepared = owner.prepare_suspend();
             if prepared {
@@ -196,6 +223,7 @@ impl Terminal {
                     owner.finish_suspend();
                 }
             }
+            terminal_done.store(true, Ordering::Release);
             done.fetch_add(1, Ordering::Relaxed);
         });
         true
@@ -208,10 +236,12 @@ impl Terminal {
             return false;
         };
         let done = Arc::clone(completed);
+        let terminal_done = Arc::clone(&self.shutdown_complete);
         std::thread::spawn(move || {
             // Join and drop on this helper thread so PTY teardown cannot block
             // the UI thread.
             let _ = handle.join();
+            terminal_done.store(true, Ordering::Release);
             done.fetch_add(1, Ordering::Relaxed);
         });
         true
@@ -227,4 +257,16 @@ impl Drop for Terminal {
         // starting up or the PTY is stuck on I/O.
         drop(self.event_loop_handle.take());
     }
+}
+
+#[cfg(target_os = "linux")]
+fn process_start_time(pid: u32) -> Option<u64> {
+    std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .ok()?
+        .rsplit_once(')')?
+        .1
+        .split_whitespace()
+        .nth(19)?
+        .parse()
+        .ok()
 }

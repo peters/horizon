@@ -12,7 +12,7 @@ mod store;
 mod transcript;
 
 pub use startup::resume_brief;
-pub(crate) use startup::{RestoreBudget, WorkContinuation, configured_resume_limit};
+pub(crate) use startup::{RestoreBudget, WorkContinuation, append_seed, configured_resume_limit};
 
 pub(crate) use lifecycle::{WorkLaunch, WorkOwner};
 
@@ -39,3 +39,6 @@ pub(crate) const WORK_ENV_KEYS: [&str; 5] = [
     WORK_KIND_ENV,
     WORK_EXECUTABLE_ENV,
 ];
+
+#[cfg(all(test, unix))]
+pub(crate) use startup::StartupPlan;

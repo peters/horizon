@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use crate::editor::{MarkdownEditor, PanelContent};
 use crate::error::{Error, Result};
 use crate::runtime_state::claude_session_transcript_exists;
@@ -22,8 +20,10 @@ impl Panel {
     ///
     /// # Errors
     ///
-    /// Returns an error if a terminal cannot be spawned or a file-backed
-    /// editor cannot be reopened.
+    /// Returns an error if a terminal cannot be spawned, a file-backed editor
+    /// cannot be reopened, or a retired remote task is requested. Continuation
+    /// also refuses stale authorization, unverifiable saved history or launch
+    /// ownership, and incomplete shutdown of the previous process.
     pub fn restart(&mut self) -> Result<()> {
         if self.remote_workspace.is_some() {
             return Err(Error::State(
@@ -44,6 +44,7 @@ impl Panel {
             return Ok(());
         }
 
+        let work_brief = self.requested_work_brief()?;
         let Some(terminal) = self.content.terminal_mut() else {
             // Editor panels don't restart — just reload from disk if file-backed.
             if let Some(editor) = self.content.editor_mut()
@@ -57,9 +58,6 @@ impl Panel {
 
         let rows = terminal.rows();
         let cols = terminal.cols();
-
-        // Graceful shutdown of the old terminal.
-        let _ = terminal.shutdown_with_timeout(Duration::from_secs(2));
 
         // A pre-assigned Claude binding may not have a transcript yet (panel
         // never received a message); resuming it would fail, so relaunch
@@ -94,16 +92,19 @@ impl Panel {
             );
         }
 
+        if work_brief.is_some() && !should_resume {
+            return Err(Error::State("The saved conversation is no longer available.".into()));
+        }
         let mut env = agent_env(self.kind, &self.local_id, self.launch_command.is_none());
-        let work_launch = crate::agent_work::WorkLaunch {
-            panel: &self.local_id,
-            kind: self.kind,
-            policy: &self.work_resume,
-            cwd: self.launch_cwd.as_deref(),
-            session_id: self.session_binding.as_ref().map(|binding| binding.session_id.as_str()),
-            default_command: self.launch_command.is_none(),
-        };
-        let work_owner = work_launch.attach_launch(&program, self.launch_args.is_empty(), &mut launch_args, &mut env);
+        let owned = self.preflight_restart_work(&program, &launch_args, &env, work_brief.as_deref())?;
+        // Refuse unusable continuation targets while the existing terminal is
+        // still available. Register the replacement owner only after teardown.
+        super::work_resume::shutdown_for_restart(
+            self.terminal_mut()
+                .ok_or_else(|| Error::State("No terminal to restart".into()))?,
+            work_brief.is_some(),
+        )?;
+        let work = self.prepare_restart_work(owned.as_deref(), &mut launch_args, &mut env, work_brief.as_deref())?;
         self.content = PanelContent::Terminal(Terminal::spawn(TerminalSpawnOptions {
             program,
             args: launch_args,
@@ -120,7 +121,8 @@ impl Panel {
         })?);
 
         if let Some(terminal) = self.terminal_mut() {
-            terminal.work_owner = work_owner;
+            terminal.work_owner = work.owner;
+            terminal.work_continuation = work.state;
         }
         self.launched_at_millis = current_unix_millis();
         self.ssh_status = if self.kind == PanelKind::Ssh {
