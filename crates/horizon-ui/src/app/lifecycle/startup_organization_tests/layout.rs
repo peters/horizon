@@ -497,6 +497,8 @@ fn already_aligned_startup_does_not_mark_runtime_dirty() {
     };
     let (_temp, ctx, mut app) = enabled_test_app(runtime_state);
     app.theme_applied = true;
+    let size = [app.window_config.width, app.window_config.height];
+    let _ = ctx.run_ui(raw_input(size, None), |_| {}).discard_textures();
     let workspace_ids: Vec<_> = app.board.workspaces.iter().map(|workspace| workspace.id).collect();
     let alignment = app
         .board
