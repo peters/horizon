@@ -1,5 +1,5 @@
-use crate::dispatch::Dispatcher;
-use horizon_device::ActRequest;
+use crate::dispatch::{Command, Dispatcher};
+use horizon_device::{ActRequest, CaptureOptions};
 use rmcp::{
     ServerHandler, ServiceExt,
     handler::server::wrapper::Parameters,
@@ -15,20 +15,24 @@ impl Server {
     pub fn new(dispatcher: Dispatcher) -> Self {
         Self { dispatcher }
     }
-    async fn execute(&self, command: &'static str, request: Option<ActRequest>) -> CallToolResult {
+    async fn execute(&self, command: Command) -> CallToolResult {
         let dispatcher = self.dispatcher.clone();
-        let Ok(mut response) = tokio::task::spawn_blocking(move || dispatcher.call(command, request)).await else {
+        let Ok(mut response) = tokio::task::spawn_blocking(move || dispatcher.call(command)).await else {
             return CallToolResult::error(vec![ContentBlock::text(
                 "device worker failed; observe before retrying",
             )]);
         };
         let success = response["ok"] == true;
+        let mime = response["result"]["mime_type"]
+            .as_str()
+            .unwrap_or("image/png")
+            .to_owned();
         let image = response["result"]
             .as_object_mut()
             .and_then(|r| r.remove("image_base64"));
         let mut content = vec![ContentBlock::text(response.to_string())];
         if let Some(serde_json::Value::String(image)) = image {
-            content.push(ContentBlock::image(image, "image/png"));
+            content.push(ContentBlock::image(image, mime));
         }
         if success {
             CallToolResult::success(content)
@@ -44,21 +48,21 @@ impl Server {
         description = "Check the explicitly configured local device and its input/capture capabilities."
     )]
     async fn doctor(&self) -> CallToolResult {
-        self.execute("doctor", None).await
+        self.execute(Command::Doctor).await
     }
     #[tool(
         name = "device_screenshot",
-        description = "Observe the configured device. Returns a PNG image and geometry receipt required by device_act."
+        description = "Observe the configured device. Optional crop, output dimensions and PNG/JPEG quality. Returns the original geometry, source_region and image_dimensions for mapping image pixels to surface coordinates."
     )]
-    async fn screenshot(&self) -> CallToolResult {
-        self.execute("screenshot", None).await
+    async fn screenshot(&self, Parameters(options): Parameters<CaptureOptions>) -> CallToolResult {
+        self.execute(Command::Screenshot(options)).await
     }
     #[tool(
         name = "device_act",
         description = "Send one bounded input action to the configured device using fresh screenshot geometry. Success means dispatched, not verified app outcome. Do not retry an indeterminate action without observing. Touch and accessibility are unsupported."
     )]
     async fn act(&self, Parameters(request): Parameters<ActRequest>) -> CallToolResult {
-        self.execute("act", Some(request)).await
+        self.execute(Command::Act(request)).await
     }
 }
 impl ServerHandler for Server {

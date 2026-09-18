@@ -1,6 +1,6 @@
 use crate::{
-    ActRequest, Action, ActionReceipt, Backend, Capability, DeviceError, Endpoint, Geometry, Key, Modifier,
-    Observation, Readiness, Result, Target,
+    ActRequest, Action, ActionReceipt, Backend, Capability, CaptureOptions, DeviceError, Endpoint, Geometry, Key,
+    Modifier, Observation, Readiness, Result, Target,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use enigo::{Direction, Enigo, Keyboard, Mouse, Settings};
@@ -81,24 +81,22 @@ impl Backend for X11 {
         })
         .map_err(unavailable)?;
         Ok(Readiness {
-            geometry: self.screenshot()?.geometry,
+            geometry: self.screenshot(&CaptureOptions::default())?.geometry,
             capabilities: vec![Capability::Screenshot, Capability::Pointer, Capability::Keyboard],
         })
     }
-    fn screenshot(&self) -> Result<Observation> {
+    fn screenshot(&self, options: &CaptureOptions) -> Result<Observation> {
         let geometry = self.geometry()?;
-        if u64::from(geometry.width) * u64::from(geometry.height) > 8_294_400 {
-            return Err(DeviceError::Unsupported("capture exceeds 8 megapixels".into()));
-        }
+        let plan = options.plan(&geometry)?;
         let image = self
             .connection
             .get_image(
                 ImageFormat::Z_PIXMAP,
                 self.root,
-                0,
-                0,
-                u16::try_from(geometry.width).map_err(unavailable)?,
-                u16::try_from(geometry.height).map_err(unavailable)?,
+                i16::try_from(plan.region.x).map_err(unavailable)?,
+                i16::try_from(plan.region.y).map_err(unavailable)?,
+                u16::try_from(plan.region.width).map_err(unavailable)?,
+                u16::try_from(plan.region.height).map_err(unavailable)?,
                 u32::MAX,
             )
             .map_err(unavailable)?
@@ -131,7 +129,7 @@ impl Backend for X11 {
                 "MVP capture requires 32-bit BGRX pixels".into(),
             ));
         }
-        let expected = geometry.width as usize * geometry.height as usize * 4;
+        let expected = plan.region.width as usize * plan.region.height as usize * 4;
         if image.data.len() != expected || self.geometry()? != geometry {
             return Err(DeviceError::StaleGeometry);
         }
@@ -142,19 +140,14 @@ impl Backend for X11 {
             .iter()
             .flat_map(|p| [p[2], p[1], p[0]])
             .collect();
-        let mut png = Vec::new();
-        {
-            let mut encoder = png::Encoder::new(&mut png, geometry.width, geometry.height);
-            encoder.set_color(png::ColorType::Rgb);
-            encoder.set_depth(png::BitDepth::Eight);
-            let mut writer = encoder.write_header().map_err(unavailable)?;
-            writer.write_image_data(&rgb).map_err(unavailable)?;
-        }
+        let (image, mime_type) = plan.encode(rgb)?;
         Ok(Observation {
             geometry,
+            source_region: plan.region,
+            image_dimensions: plan.output,
             captured_unix_ms,
-            mime_type: "image/png".into(),
-            image_base64: STANDARD.encode(png),
+            mime_type: mime_type.into(),
+            image_base64: STANDARD.encode(image),
         })
     }
     fn act(&mut self, request: &ActRequest) -> Result<ActionReceipt> {

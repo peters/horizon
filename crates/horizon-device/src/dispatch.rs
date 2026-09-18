@@ -1,4 +1,4 @@
-use horizon_device::{ActRequest, Device, DeviceError, Target};
+use horizon_device::{ActRequest, CaptureOptions, Device, DeviceError, Target};
 use serde_json::{Value, json};
 use std::{
     fs::{File, OpenOptions},
@@ -6,18 +6,24 @@ use std::{
     path::PathBuf,
 };
 
+pub enum Command {
+    Doctor,
+    Screenshot(CaptureOptions),
+    Act(ActRequest),
+}
+
 #[derive(Clone)]
 pub struct Dispatcher {
     pub target_file: PathBuf,
 }
 impl Dispatcher {
-    pub fn call(&self, command: &str, request: Option<ActRequest>) -> Value {
-        match self.execute(command, request) {
+    pub fn call(&self, command: Command) -> Value {
+        match self.execute(command) {
             Ok(value) => json!({"ok":true,"result":value}),
             Err(error) => json!({"ok":false,"error":{"code":error.code(),"message":error.to_string()}}),
         }
     }
-    fn execute(&self, command: &str, request: Option<ActRequest>) -> horizon_device::Result<Value> {
+    fn execute(&self, command: Command) -> horizon_device::Result<Value> {
         let _lock = self.lock()?;
         let mut bytes = Vec::new();
         File::open(&self.target_file)
@@ -32,15 +38,12 @@ impl Dispatcher {
             serde_json::from_slice(&bytes).map_err(|_| DeviceError::Invalid("invalid target config".into()))?;
         let mut device = Device::connect(&target)?;
         match command {
-            "doctor" => serde_json::to_value(device.doctor()?).map_err(io_error),
-            "screenshot" => serde_json::to_value(device.screenshot()?).map_err(io_error),
-            "act" => serde_json::to_value(
-                device.act(&request.ok_or_else(|| DeviceError::Invalid("missing action".into()))?)?,
-            )
-            .map_err(io_error),
-            _ => Err(DeviceError::Invalid("unknown command".into())),
+            Command::Doctor => serde_json::to_value(device.doctor()?).map_err(io_error),
+            Command::Screenshot(options) => serde_json::to_value(device.screenshot_with(&options)?).map_err(io_error),
+            Command::Act(request) => serde_json::to_value(device.act(&request)?).map_err(io_error),
         }
     }
+
     fn lock(&self) -> horizon_device::Result<File> {
         // The supplied config lives in a caller-owned private session directory.
         // Keep the inode after unlock so independent CLI/MCP processes cooperate.

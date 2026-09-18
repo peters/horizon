@@ -24,11 +24,12 @@ local display. There is no ambient `DISPLAY` fallback:
 CLI results are `{ "ok": true, "result": ... }` or
 `{ "ok": false, "error": { "code": ..., "message": ... } }`. Exit status is 0 for
 success, 1 for a device failure, and 2 for invalid CLI arguments/output failure.
-Screenshot without a path returns PNG base64; with a path it creates a new mode
+Screenshot without a path returns image base64 (PNG by default); with a path it creates a new mode
 0600 file and returns its path. Existing files are never overwritten.
 
 MCP exposes `device_doctor`, `device_screenshot`, and `device_act`; screenshots
-include an MCP image block and geometry metadata. CLI `act` and MCP `device_act`
+include an MCP image block and geometry metadata. Optional screenshot arguments
+are the same object accepted by CLI `--options`. CLI `act` and MCP `device_act`
 accept the same JSON object:
 
 ```json
@@ -41,7 +42,7 @@ Other actions: `drag` with `from`, `to`, `duration_ms`; `scroll` with `at`,
 Input limits: drag 1–2000 ms, scroll ±100 notches per axis, text 256 Unicode
 scalars and 4096 UTF-8 bytes without NUL, up to four modifiers. X11 text is paced
 at 20 ms per character with a final 100 ms drain interval; split longer text into
-bounded actions and observe the result. Coordinates must fall inside the screenshot.
+bounded actions and observe the result. Coordinates must fall inside the original surface described by the screenshot geometry.
 Use stdin for entered text to avoid exposing it in process arguments/history.
 Distinct characters needing temporary X11 mappings must fit the currently unused
 keycodes; oversized requests fail before sending input.
@@ -68,7 +69,8 @@ age or contents of the UI. Keep the lab alive and observe immediately before and
 after acting. A `dispatched` receipt does not prove the app reached the desired
 state. Never automatically replay an `indeterminate` action.
 
-Coordinates are screenshot pixels. Wheel notches are explicit, not mobile
+Coordinates are original surface pixels; cropped/scaled image coordinates must
+be mapped as described below. Wheel notches are explicit, not mobile
 swipes. Touch and accessibility are unsupported. Capture requires little-endian
 BGRX32, at most 8,294,400 pixels, and dimensions no greater than 32768 pixels. `doctor` probes capture and input readiness.
 Wayland and non-Linux endpoints are not implemented.
@@ -101,3 +103,28 @@ X11 MVP's needs. No upstream code was forked or copied. Live viewing is optional
 
 The package has independent version/dependency metadata and can be packaged
 outside the Horizon workspace. No publication is part of this MVP.
+
+## Capture options
+
+Full-resolution PNG remains the default. Crop and output size are independent:
+
+```sh
+horizon-device --target /private/lab/target.json screenshot /private/lab/crop.jpg --options '{"region":{"x":100,"y":50,"width":800,"height":600},"output":{"width":400,"height":300},"format":"jpeg","quality":85}'
+```
+
+MCP `device_screenshot` accepts that options object directly; `{}` keeps the
+existing defaults. CLI `--options -` reads bounded JSON from stdin. Supplying `quality` with PNG is rejected. JPEG quality is
+1–100, default 85. Both output dimensions are required when `output` is supplied;
+nearest-neighbor scaling produces exactly those dimensions. Crops must be inside
+the original surface. Capture and output each allow at most 8,294,400 pixels;
+output axes are bounded to 32768 pixels. Invalid options fail before pixel capture.
+
+The result retains original `geometry`, plus `source_region` and
+`image_dimensions`. Input still uses original surface coordinates and unchanged
+geometry. For image pixel `(ix, iy)`, map each axis using
+`source_origin + floor((image_pixel + 0.5) * source_size / image_size)`.
+The library's `Observation::surface_point` implements this mapping and rejects
+out-of-image points. Observe again when geometry is stale. Image compression and
+scaling affect screenshot size; they do not alter the device desktop or VNC wire
+compression. The JPEG encoder is an independent optional-format dependency;
+no GUI or VNC library is introduced.

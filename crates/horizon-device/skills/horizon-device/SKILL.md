@@ -11,14 +11,20 @@ whether another action is appropriate; never replay blindly.
 
 The local CLI has the same contract:
 `horizon-device --target <private-target.json> doctor|screenshot|act <JSON>`.
-For screenshots an optional final PNG path writes a new private file instead of
-base64 JSON. `act -` reads JSON from stdin. Use this to avoid putting entered text
+For screenshots an optional output path writes a new private file instead of
+base64 JSON. Optional `--options JSON` (or `--options -` for stdin) accepts
+`region: {x,y,width,height}`, `output: {width,height}`, `format: png|jpeg`, and
+JPEG-only `quality: 1..100`. MCP screenshot accepts the same options directly.
+Omitting options preserves full-resolution PNG; JPEG defaults to quality 85. `act -` reads JSON from stdin. Use this to avoid putting entered text
 in shell history. The MCP server uses `--target <file> mcp` and stays bound to that
 configured target. Read `--help` if the executable/target was not supplied.
 
 Action kinds: `click` (at, button), `drag` (from, to, duration_ms), `scroll` (at,
 vertical_notches, horizontal_notches), `type` (text), `key` (key, modifiers).
-Coordinates are screenshot pixels. Touch and accessibility are not implemented.
+Coordinates are original surface pixels. When a screenshot is cropped/scaled,
+map image pixels through `source_region` and `image_dimensions` before input:
+`origin + floor((pixel + 0.5) * source_size / image_size)` per axis. Keep the
+returned original geometry unchanged. Touch and accessibility are not implemented.
 Each `type` action accepts at most 256 Unicode scalars and 4096 UTF-8 bytes,
 without NUL. Text input is paced to let the application consume X11 key mappings;
 split longer text into bounded actions and verify the displayed result.
@@ -51,8 +57,9 @@ needs its own target configuration.
 For feature evidence, use the viewer's supported recording controls. With
 Horizon `browser_video`, stop recording and copy its finalized WebM export before
 `browser_close` deletes the profile and exports. Browser viewport/video settings
-do not change native desktop dimensions or provide native screenshot crop/quality
-controls. Inspect evidence before retaining it. Keep internal application names,
+do not change native desktop dimensions. Use screenshot options for native
+crop/quality, and existing browser_video quality/fps/max_width/max_file_bytes
+for bounded evidence. Client-side scaling does not reduce VNC wire bandwidth. Inspect evidence before retaining it. Keep internal application names,
 scenarios, images, video and operational details private; public demonstrations
 use generic fixtures and synthetic content only.
 

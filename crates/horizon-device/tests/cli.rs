@@ -43,6 +43,122 @@ fn cooperating_process_lock_prevents_backend_access() -> Result<(), Box<dyn std:
 }
 
 #[test]
+fn capture_options_cli_syntax_is_validated_before_backend_access() -> Result<(), Box<dyn std::error::Error>> {
+    use std::{io::Write, process::Stdio};
+    let dir = tempfile::tempdir()?;
+    let target = dir.path().join("target.json");
+    // A backend-independent sentinel: valid syntax reaches config parsing.
+    std::fs::write(&target, "deliberately invalid target")?;
+    let output = dir.path().join("image.png");
+    let path = output.to_str().ok_or("non-UTF8 test path")?;
+    let run = |args: &[&str], input: &str| -> Result<std::process::Output, Box<dyn std::error::Error>> {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-device"))
+            .arg("--target")
+            .arg(&target)
+            .arg("screenshot")
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()?;
+        let mut stdin = child.stdin.take().ok_or("missing stdin")?;
+        if args.last() == Some(&"-") {
+            stdin.write_all(input.as_bytes())?;
+        }
+        drop(stdin);
+        Ok(child.wait_with_output()?)
+    };
+    for args in [
+        vec![],
+        vec![path],
+        vec!["--options", "{}"],
+        vec![path, "--options", "{}"],
+        vec!["--options", "-"],
+        vec![path, "--options", "-"],
+    ] {
+        let response = run(&args, r#"{"format":"jpeg","quality":75}"#)?;
+        assert_eq!(response.status.code(), Some(1), "{args:?}");
+        let body: Value = serde_json::from_slice(&response.stdout)?;
+        assert_eq!(body["ok"], false);
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("invalid target config"))
+        );
+        assert!(!output.exists());
+    }
+    for (args, input) in [
+        (vec!["--options"], ""),
+        (vec!["--options", "not-json"], ""),
+        (vec!["--options", "{}", "extra"], ""),
+        (vec![path, "--options"], ""),
+        (vec![path, "--unknown", "{}"], ""),
+        (vec![path, "--options", "{}", "extra"], ""),
+        (vec!["--options", "-"], "not-json"),
+        (vec![path, "--options", "-"], r#"{"unknown":true}"#),
+    ] {
+        let response = run(&args, input)?;
+        assert_eq!(response.status.code(), Some(2), "{args:?}");
+        let body: Value = serde_json::from_slice(&response.stdout)?;
+        assert_eq!(body["ok"], false);
+        assert_eq!(body["error"]["code"], "invalid_request");
+        assert!(
+            !body["error"]["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("invalid target config"))
+        );
+        assert!(!output.exists());
+    }
+    let oversized = run(&["--options", "-"], &" ".repeat(65_537))?;
+    assert_eq!(oversized.status.code(), Some(2));
+    let body: Value = serde_json::from_slice(&oversized.stdout)?;
+    assert_eq!(body["error"]["message"], "request exceeds 64 KiB");
+    Ok(())
+}
+
+#[test]
+fn trailing_arguments_are_rejected_without_waiting_for_stdin() -> Result<(), Box<dyn std::error::Error>> {
+    use std::{
+        process::Stdio,
+        time::{Duration, Instant},
+    };
+    for args in [
+        vec!["act", "-", "extra"],
+        vec!["screenshot", "--options", "-", "extra"],
+        vec!["screenshot", "unused.jpg", "--options", "-", "extra"],
+    ] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_horizon-device"))
+            .args(["--target", "unused.json"])
+            .args(&args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()?;
+        let input = child.stdin.take().ok_or("missing stdin")?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let status = loop {
+            if let Some(status) = child.try_wait()? {
+                break Some(status);
+            }
+            if Instant::now() >= deadline {
+                child.kill()?;
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let output = child.wait_with_output()?;
+        drop(input);
+        assert_eq!(
+            status.and_then(|status| status.code()),
+            Some(2),
+            "{args:?} waited for stdin"
+        );
+        let body: Value = serde_json::from_slice(&output.stdout)?;
+        assert_eq!(body["error"]["code"], "invalid_request");
+        assert_eq!(body["error"]["message"], "unexpected arguments");
+    }
+    Ok(())
+}
+
+#[test]
 fn mcp_startup_errors_leave_stdout_as_protocol_only() -> Result<(), Box<dyn std::error::Error>> {
     let output = Command::new(env!("CARGO_BIN_EXE_horizon-device"))
         .args(["--target", "unused.json", "mcp"])
@@ -253,6 +369,68 @@ mod live_mcp {
             assert_eq!(received, expected, "{mode} keeps Unicode mappings alive until consumed");
         }
         Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires HORIZON_DEVICE_TEST_TARGET pointing to an owned virtual desktop"]
+    fn cli_and_mcp_forward_cropped_jpeg_capture_options() -> Result<()> {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        let target = std::env::var("HORIZON_DEVICE_TEST_TARGET")?;
+        let config = serde_json::from_slice(&std::fs::read(&target)?)?;
+        let geometry = serde_json::to_value(horizon_device::Device::connect(&config)?.screenshot()?.geometry)?;
+        let options = json!({
+            "region":{"x":10,"y":20,"width":40,"height":30},
+            "output":{"width":20,"height":15},"format":"jpeg","quality":75
+        });
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("capture.jpg");
+        let output = Command::new(env!("CARGO_BIN_EXE_horizon-device"))
+            .args(["--target", &target, "screenshot"])
+            .arg(&path)
+            .args(["--options", &options.to_string()])
+            .output()?;
+        assert!(output.status.success());
+        let cli: Value = serde_json::from_slice(&output.stdout)?;
+        assert_eq!(cli["ok"], true);
+        assert!(cli["result"].get("image_base64").is_none());
+        assert_eq!(cli["result"]["path"], path.to_str().ok_or("non-UTF8 test path")?);
+        assert_capture(&cli["result"], &std::fs::read(path)?, &geometry, &options)?;
+
+        let mut session = Session::start(&target)?;
+        session.initialize()?;
+        let mcp = session.call(2, "device_screenshot", options.clone())?;
+        assert_eq!(mcp["isError"], false);
+        assert_eq!(mcp["content"][1]["type"], "image");
+        assert_eq!(mcp["content"][1]["mimeType"], "image/jpeg");
+        let receipt: Value = serde_json::from_str(mcp["content"][0]["text"].as_str().ok_or("missing receipt")?)?;
+        assert_eq!(receipt["ok"], true);
+        assert!(receipt["result"].get("image_base64").is_none());
+        let bytes = STANDARD.decode(mcp["content"][1]["data"].as_str().ok_or("missing image")?)?;
+        assert_capture(&receipt["result"], &bytes, &geometry, &options)?;
+        Ok(())
+    }
+
+    fn assert_capture(observation: &Value, bytes: &[u8], geometry: &Value, options: &Value) -> Result<()> {
+        assert_eq!(observation["geometry"], *geometry);
+        assert_eq!(observation["source_region"], options["region"]);
+        assert_eq!(observation["image_dimensions"], options["output"]);
+        assert_eq!(observation["mime_type"], "image/jpeg");
+        assert!(bytes.starts_with(&[0xff, 0xd8]));
+        // Walk JPEG segments to verify the encoded dimensions, not just metadata.
+        let mut offset = 2;
+        while let Some(header) = bytes.get(offset..offset + 4) {
+            assert_eq!(header[0], 0xff);
+            let length = usize::from(u16::from_be_bytes([header[2], header[3]]));
+            assert!(length >= 2);
+            if header[1] == 0xc0 {
+                let frame = bytes.get(offset + 4..offset + 9).ok_or("truncated JPEG frame")?;
+                assert_eq!(u16::from_be_bytes([frame[1], frame[2]]), 15);
+                assert_eq!(u16::from_be_bytes([frame[3], frame[4]]), 20);
+                return Ok(());
+            }
+            offset += 2 + length;
+        }
+        Err("missing baseline JPEG frame".into())
     }
 
     fn send_type(mode: &str, target: &str, request: Value) -> Result<()> {
