@@ -101,6 +101,20 @@ cargo clippy --workspace --all-targets --features speech -- -D warnings -W clipp
 
 - Run the validation commands in the exact checkout you will push. If you split work across branches or `git worktree`s, rerun the blocking and strict clippy tiers in each final branch/worktree after applying the split, not only in the original combined checkout.
 
+### Browser Interface Parity
+
+- Treat browser features as capabilities shared by the UI, CLI, and MCP by default.
+  Include equivalent operations and status through the public MCP contract and
+  CLI plan runner where applicable; a settings-only implementation is not complete.
+- Keep provider, credential, capacity, and lifecycle logic in shared modules.
+  UI, CLI, and MCP must use the same provider policy and credential bindings.
+- Cover multiple configured providers and separate credential sets on the same
+  provider. Reusing a credential reference, OS-store slot, or environment binding
+  intentionally shares it; a profile name alone does not create credential isolation.
+- Validate each supported interface and document actual runtime requirements and
+  unsupported cases explicitly. Do not silently defer CLI/MCP support or require
+  the settings UI to be open for an agent-facing capability to work.
+
 ### Configuration Changes
 
 - When changing default presets, CLI flags, or any config-related code in `horizon-core/src/config.rs`, always sync the user's local config file (`~/.horizon/config.yaml`) to match

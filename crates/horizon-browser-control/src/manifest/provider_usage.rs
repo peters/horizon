@@ -1,0 +1,283 @@
+//! Bounded host-scoped, read-only requests for shared provider usage.
+use super::request_queue::{
+    MAX_PENDING_REQUESTS, prune_at, queue_lock_path, read_json, request_count, write_private_json,
+};
+use super::{AgentIdentity, ManifestLock};
+use crate::paths::{BrowserRuntimePaths, safe_local_id};
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ProviderUsageSummary {
+    pub provider: String,
+    pub supported: bool,
+    pub local_session_limit: Option<u32>,
+    pub running: Option<u64>,
+    pub allowed: Option<u64>,
+    pub queued: Option<u64>,
+    pub sampled_at_millis: Option<i64>,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct UsageRequest {
+    pub request_id: String,
+    pub actor: String,
+    pub host_instance: String,
+    pub provider: Option<String>,
+    pub deadline_at_millis: i64,
+    claimed: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct UsageResult {
+    pub request_id: String,
+    pub actor: String,
+    pub host_instance: String,
+    pub providers: Vec<ProviderUsageSummary>,
+    pub error: Option<String>,
+}
+
+impl UsageRequest {
+    #[must_use]
+    pub fn result(&self, providers: Vec<ProviderUsageSummary>, error: Option<String>) -> UsageResult {
+        UsageResult {
+            request_id: self.request_id.clone(),
+            actor: self.actor.clone(),
+            host_instance: self.host_instance.clone(),
+            providers,
+            error,
+        }
+    }
+}
+
+/// A usage queue bound to one private coordination root.
+pub struct UsageQueue {
+    root: PathBuf,
+}
+
+impl Default for UsageQueue {
+    fn default() -> Self {
+        Self::new(BrowserRuntimePaths::resolve().root().to_path_buf())
+    }
+}
+
+impl UsageQueue {
+    #[must_use]
+    pub fn new(root: PathBuf) -> Self {
+        Self { root }
+    }
+
+    /// # Errors
+    /// Invalid identity, unavailable storage, or a full queue.
+    pub fn enqueue(&self, identity: AgentIdentity<'_>, provider: Option<String>) -> std::io::Result<String> {
+        enqueue_at(&self.root, identity, provider)
+    }
+
+    /// # Errors
+    /// Unavailable or malformed queue storage.
+    pub fn claim(&self, host: &str) -> std::io::Result<Vec<UsageRequest>> {
+        claim_at(&self.root, host)
+    }
+
+    /// # Errors
+    /// Unavailable storage or a mismatched request identity.
+    pub fn complete(&self, result: &UsageResult) -> std::io::Result<()> {
+        complete_at(&self.root, result)
+    }
+
+    /// # Errors
+    /// Unavailable storage or a mismatched result identity.
+    pub fn take(&self, identity: AgentIdentity<'_>, request_id: &str) -> std::io::Result<Option<UsageResult>> {
+        take_at(&self.root, identity, request_id)
+    }
+}
+
+/// # Errors
+/// Invalid host identity, a full queue, or unavailable private storage.
+pub fn enqueue_provider_usage(identity: AgentIdentity<'_>, provider: Option<String>) -> std::io::Result<String> {
+    UsageQueue::default().enqueue(identity, provider)
+}
+
+fn enqueue_at(root: &Path, identity: AgentIdentity<'_>, provider: Option<String>) -> std::io::Result<String> {
+    super::agent::validate_actor(identity.actor)?;
+    let host = identity.host_instance.filter(|host| super::valid_host_instance(host));
+    if !identity.workspace_scoped()
+        || host.is_none()
+        || provider.as_ref().is_some_and(|r| {
+            r.is_empty()
+                || r.len() > 64
+                || !r
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        })
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "provider usage requires a Horizon host identity and a valid configured provider name",
+        ));
+    }
+    let dir = directory(root);
+    std::fs::create_dir_all(&dir)?;
+    let _lock = ManifestLock::acquire(&queue_lock_path(&dir))?;
+    prune_at(&dir)?;
+    if request_count(&dir)? >= MAX_PENDING_REQUESTS {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            "provider_usage queue is full",
+        ));
+    }
+    let request = UsageRequest {
+        request_id: horizon_browser::new_action_id(),
+        actor: identity.actor.to_string(),
+        host_instance: host.unwrap_or_default().to_string(),
+        provider,
+        deadline_at_millis: super::now_millis() + 15_000,
+        claimed: false,
+    };
+    write_private_json(&path(root, &request.request_id, "request"), &request)?;
+    Ok(request.request_id)
+}
+
+/// Claim only this host's requests atomically. Host dispatch must verify the
+/// live actor and the caller's live membership before any disclosure.
+/// # Errors
+/// Unavailable or malformed queue storage.
+pub fn claim_provider_usage_requests(host: &str) -> std::io::Result<Vec<UsageRequest>> {
+    UsageQueue::default().claim(host)
+}
+
+fn claim_at(root: &Path, host: &str) -> std::io::Result<Vec<UsageRequest>> {
+    let dir = directory(root);
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let _lock = ManifestLock::acquire(&queue_lock_path(&dir))?;
+    prune_at(&dir)?;
+    let mut requests = Vec::new();
+    for entry in std::fs::read_dir(&dir)? {
+        let entry = entry?;
+        if !entry.file_name().to_string_lossy().ends_with(".request.json") {
+            continue;
+        }
+        let Some(mut request) = read_json::<UsageRequest>(&entry.path())? else {
+            continue;
+        };
+        if request.host_instance != host
+            || request.claimed
+            || entry.path() != path(root, &request.request_id, "request")
+        {
+            continue;
+        }
+        request.claimed = true;
+        write_private_json(&entry.path(), &request)?;
+        requests.push(request);
+    }
+    Ok(requests)
+}
+
+/// # Errors
+/// Private result storage is unavailable.
+pub fn complete_provider_usage(result: &UsageResult) -> std::io::Result<()> {
+    UsageQueue::default().complete(result)
+}
+
+fn complete_at(root: &Path, result: &UsageResult) -> std::io::Result<()> {
+    let dir = directory(root);
+    let _lock = ManifestLock::acquire(&queue_lock_path(&dir))?;
+    let request_path = path(root, &result.request_id, "request");
+    let Some(request) = read_json::<UsageRequest>(&request_path)? else {
+        return Ok(());
+    };
+    if !request.claimed || request.actor != result.actor || request.host_instance != result.host_instance {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "provider_usage result identity mismatch",
+        ));
+    }
+    write_private_json(&path(root, &result.request_id, "result"), result)?;
+    std::fs::remove_file(request_path)
+}
+
+/// # Errors
+/// Result storage is unavailable or does not match the caller's identity.
+pub fn take_provider_usage_result(
+    identity: AgentIdentity<'_>,
+    request_id: &str,
+) -> std::io::Result<Option<UsageResult>> {
+    UsageQueue::default().take(identity, request_id)
+}
+
+fn take_at(root: &Path, identity: AgentIdentity<'_>, request_id: &str) -> std::io::Result<Option<UsageResult>> {
+    let dir = directory(root);
+    if !dir.exists() {
+        return Ok(None);
+    }
+    let result_path = path(root, request_id, "result");
+    if !result_path.exists() {
+        return Ok(None);
+    }
+    let _lock = ManifestLock::acquire(&queue_lock_path(&dir))?;
+    let Some(result) = read_json::<UsageResult>(&result_path)? else {
+        return Ok(None);
+    };
+    if result.request_id != request_id
+        || result.actor != identity.actor
+        || Some(result.host_instance.as_str()) != identity.host_instance
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "provider_usage result identity mismatch",
+        ));
+    }
+    std::fs::remove_file(result_path)?;
+    Ok(Some(result))
+}
+
+fn directory(root: &Path) -> PathBuf {
+    root.join("runtime").join("browser-provider-usage")
+}
+fn path(root: &Path, id: &str, kind: &str) -> PathBuf {
+    directory(root).join(format!("{}.{kind}.json", safe_local_id(id)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn usage_requests_are_host_scoped_bounded_and_results_are_actor_scoped() {
+        let root = tempfile::tempdir().expect("root");
+        let queue = UsageQueue::new(root.path().to_path_buf());
+        let identity = AgentIdentity::new("horizon:agent", Some("host-a"));
+        for (actor, host, provider) in [
+            ("external", Some("host-a"), None),
+            ("horizon:agent", None, None),
+            ("horizon:agent", Some("host-a"), Some("../secret".to_string())),
+        ] {
+            assert!(queue.enqueue(AgentIdentity::new(actor, host), provider).is_err());
+        }
+        let id = queue.enqueue(identity, Some("account-a".into())).expect("enqueue");
+        assert!(queue.claim("host-b").expect("other host").is_empty());
+        let requests = queue.claim("host-a").expect("claim");
+        assert_eq!(requests.len(), 1);
+        assert!(queue.claim("host-a").expect("claimed once").is_empty());
+        assert_eq!(requests[0].provider.as_deref(), Some("account-a"));
+        let result = requests[0].result(vec![], None);
+        queue.complete(&result).expect("complete");
+        assert!(
+            queue
+                .take(AgentIdentity::new("horizon:other", Some("host-a")), &id)
+                .is_err()
+        );
+        assert!(queue.take(identity, &id).expect("own result").is_some());
+        assert!(queue.take(identity, &id).expect("consume once").is_none());
+        for _ in 0..MAX_PENDING_REQUESTS {
+            queue.enqueue(identity, None).expect("bounded request");
+        }
+        assert_eq!(
+            queue.enqueue(identity, None).expect_err("full").kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
+}
