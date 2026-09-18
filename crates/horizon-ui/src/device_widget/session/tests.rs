@@ -6,7 +6,12 @@ use super::*;
 fn close_cancels_a_server_that_never_sends_its_greeting() -> Result<(), ViewError> {
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     listener.set_nonblocking(true)?;
-    let session = Session::start(listener.local_addr()?, Context::default(), ViewportId::ROOT)?;
+    let session = Session::start(
+        listener.local_addr()?,
+        Context::default(),
+        ViewportId::ROOT,
+        DeviceViewOptions::default(),
+    )?;
     let accepted = std::time::Instant::now();
     let (mut stream, _) = loop {
         match listener.accept() {
@@ -52,7 +57,12 @@ fn close_cancels_a_connected_server_with_an_incomplete_frame() -> Result<(), Vie
 fn connected_session() -> Result<(Session, std::net::TcpStream), ViewError> {
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     listener.set_nonblocking(true)?;
-    let session = Session::start(listener.local_addr()?, Context::default(), ViewportId::ROOT)?;
+    let session = Session::start(
+        listener.local_addr()?,
+        Context::default(),
+        ViewportId::ROOT,
+        DeviceViewOptions::default(),
+    )?;
     let started = std::time::Instant::now();
     let (mut stream, _) = loop {
         match listener.accept() {

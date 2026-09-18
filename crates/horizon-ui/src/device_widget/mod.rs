@@ -1,4 +1,5 @@
 //! Read-only native VNC rendering; device actions stay in the CLI/MCP crate.
+mod controls;
 mod frame;
 mod session;
 
@@ -14,6 +15,8 @@ pub(crate) struct DeviceUiState {
     session: Option<Session>,
     texture: Option<TextureHandle>,
     status: Status,
+    desktop: Option<[usize; 2]>,
+    controls: controls::Controls,
 }
 
 impl DeviceUiState {
@@ -42,6 +45,7 @@ impl DeviceUiState {
         }
         if let Some(session) = &self.session {
             let updates = session.take_updates(ui.ctx().viewport_id());
+            self.desktop = updates.desktop;
             if let Some(status) = updates.status {
                 self.status = status;
             }
@@ -71,16 +75,35 @@ impl DeviceUiState {
                 }
             }
         });
+        let changed = ui
+            .add_enabled_ui(interactive, |ui| {
+                self.controls
+                    .show(ui, self.desktop, self.texture.as_ref().map(TextureHandle::size))
+            })
+            .inner;
+        if changed && let Some(session) = &self.session {
+            session.set_options(self.controls.options);
+        }
         ui.separator();
         if let Some(texture) = &self.texture {
-            let available = ui.available_size().max(egui::Vec2::ZERO);
             let size = texture.size_vec2();
-            let scale = (available.x / size.x).min(available.y / size.y);
-            ui.add(
-                egui::Image::new(texture)
-                    .fit_to_exact_size(size * scale)
-                    .sense(egui::Sense::hover()),
-            );
+            if self.controls.one_to_one {
+                egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
+                    ui.add(
+                        egui::Image::new(texture)
+                            .fit_to_exact_size(size)
+                            .sense(egui::Sense::hover()),
+                    );
+                });
+            } else {
+                let available = ui.available_size().max(egui::Vec2::ZERO);
+                let scale = (available.x / size.x).min(available.y / size.y);
+                ui.add(
+                    egui::Image::new(texture)
+                        .fit_to_exact_size(size * scale)
+                        .sense(egui::Sense::hover()),
+                );
+            }
         } else {
             ui.label("The device desktop appears here after connection.");
         }
@@ -102,7 +125,13 @@ impl DeviceUiState {
     fn connect(&mut self, ui: &Ui, device: &DevicePanelState) {
         self.session = None;
         self.texture = None;
-        match Session::start(device.target.address(), ui.ctx().clone(), ui.ctx().viewport_id()) {
+        self.desktop = None;
+        match Session::start(
+            device.target.address(),
+            ui.ctx().clone(),
+            ui.ctx().viewport_id(),
+            self.controls.options,
+        ) {
             Ok(session) => {
                 self.session = Some(session);
                 self.status = Status::Connecting;
