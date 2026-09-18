@@ -56,8 +56,8 @@ pub fn mouse_motion_report(
 }
 
 /// Unmodified two-finger/wheel motion pans the canvas even over a panel.
-/// Shift+wheel, or wheel during a primary-button gesture (text selection),
-/// still belongs to the panel body.
+/// Shift+wheel, Alt+wheel, or wheel during a primary-button gesture
+/// (text selection), still belongs to the panel body.
 ///
 /// This is the board-view rule, where the canvas pan handler is running.
 /// Fullscreen (and any other path that skips that handler) must pass
@@ -78,7 +78,7 @@ pub fn panel_content_owns_wheel_with_canvas_claim(
     if modifiers.ctrl || modifiers.command {
         return false;
     }
-    modifiers.shift || primary_down || !canvas_claims
+    modifiers.shift || modifiers.alt || primary_down || !canvas_claims
 }
 
 fn canvas_claims_unmodified_wheel_id(ctx: &Context) -> Id {
@@ -260,8 +260,10 @@ mod tests {
     #[test]
     fn shift_or_primary_keeps_wheel_on_the_panel() {
         assert!(panel_content_owns_wheel(Modifiers::SHIFT, false));
+        assert!(panel_content_owns_wheel(Modifiers::ALT, false));
         assert!(panel_content_owns_wheel(Modifiers::NONE, true));
         assert!(!panel_content_owns_wheel(Modifiers::CTRL | Modifiers::SHIFT, true));
+        assert!(!panel_content_owns_wheel(Modifiers::CTRL | Modifiers::ALT, true));
     }
 
     #[test]

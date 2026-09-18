@@ -626,6 +626,11 @@ mod tests {
     }
 
     #[test]
+    fn alt_wheel_still_reaches_the_page() {
+        assert!(should_forward_browser_wheel(egui::Modifiers::ALT, 0, false, true, true));
+    }
+
+    #[test]
     fn press_then_wheel_still_reaches_the_page() {
         assert!(should_forward_browser_wheel(
             egui::Modifiers::NONE,

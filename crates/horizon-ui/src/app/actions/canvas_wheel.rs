@@ -290,4 +290,13 @@ mod tests {
         assert!(!wheels.skipped_for_panel);
         assert_eq!(wheels.pan, Vec2::new(8.0, 0.0));
     }
+
+    #[test]
+    fn alt_wheel_over_a_panel_body_stays_on_the_panel() {
+        let events = vec![point_wheel(Vec2::new(0.0, 8.0), Modifiers::ALT)];
+        let wheels = classify_canvas_wheel_events(&events, false, true, false, 800.0);
+        assert!(wheels.skipped_for_panel);
+        assert_eq!(wheels.pan, Vec2::ZERO);
+        assert_eq!(wheels.zoom, Vec2::ZERO);
+    }
 }

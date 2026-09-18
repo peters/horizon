@@ -30,6 +30,8 @@ Use `target/debug/horizon` from this branch. Launch with an isolated config if a
    - Expected: the **canvas** pans. Terminal scrollback does not move.
 2. Pointer over the focused terminal, **Shift** + two-finger scroll.
    - Expected: terminal scrollback moves. Canvas does not pan.
+2b. Pointer over the focused terminal, **Alt** + two-finger scroll.
+   - Expected: the terminal still receives the wheel (mouse reporting / app bindings). Canvas does not pan.
 3. Pointer over empty canvas, two-finger scroll.
    - Expected: canvas pans, same as before.
 4. Hold **Ctrl** and two-finger scroll over empty canvas and over a panel.
