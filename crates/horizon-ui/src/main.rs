@@ -7,6 +7,7 @@ mod branding;
 mod browser_widget;
 mod command_palette;
 mod command_registry;
+mod device_widget;
 mod dir_picker;
 mod editor_widget;
 mod git_changes_widget;

@@ -130,9 +130,19 @@ jobs:
         with:
           prefix-key: device
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: bash scripts/install-ci-ubuntu-dependencies.sh libxkbcommon-dev pkg-config xvfb xauth
+      - run: bash scripts/install-ci-ubuntu-dependencies.sh libxkbcommon-dev libwayland-dev pkg-config xvfb xauth
       - run: cargo test --locked -p horizon-device
       - run: cargo test --locked -p horizon-device --features cli
+      - name: Qualify pinned VNC decoder
+        run: |
+          decoder_dir=$(mktemp -d)
+          decoder_rev=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["dependencies"]["vnc"]["rev"])')
+          git -C "$decoder_dir" init
+          git -C "$decoder_dir" fetch --depth 1 https://github.com/peters/vnc-rs.git "$decoder_rev"
+          git -C "$decoder_dir" checkout --detach FETCH_HEAD
+          cargo fmt --manifest-path "$decoder_dir/Cargo.toml" -- --check
+          cargo test --manifest-path "$decoder_dir/Cargo.toml"
+          cargo clippy --manifest-path "$decoder_dir/Cargo.toml" --all-targets -- -D warnings
       - run: cargo clippy --locked -p horizon-device --all-targets --features cli -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
       - run: cargo package --locked -p horizon-device --features cli
       - name: Native input lifecycle

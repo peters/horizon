@@ -195,6 +195,7 @@ impl HorizonApp {
             self.panel_render_caches.terminal_grid_cache.remove(&panel_id);
             self.panel_render_caches.editor_preview_cache.remove(&panel_id);
             self.panel_render_caches.browser_ui_state.remove(&panel_id);
+            self.panel_render_caches.device_ui_state.remove(&panel_id);
             if self.renaming_panel == Some(panel_id) {
                 self.clear_panel_rename();
             }
@@ -216,6 +217,7 @@ impl HorizonApp {
                 self.panel_render_caches.terminal_grid_cache.remove(&panel_id);
                 self.panel_render_caches.editor_preview_cache.remove(&panel_id);
                 self.panel_render_caches.browser_ui_state.remove(&panel_id);
+                self.panel_render_caches.device_ui_state.remove(&panel_id);
             }
         }
     }

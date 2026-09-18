@@ -30,6 +30,8 @@ pedantic = { level = "warn", priority = -1 }
 struct_excessive_bools = "allow"
 
 [workspace.dependencies]
+# Licensed local safety fixes; only the native viewer depends on this decoder.
+vnc = { package = "vnc-rs", git = "https://github.com/peters/vnc-rs.git", rev = "22ad274efc9e0811f43336410871330be1e3db30" }
 horizon-browser = { path = "crates/horizon-browser", version = "0.2.7" }
 horizon-browser-control = { path = "crates/horizon-browser-control", version = "0.2.7" }
 horizon-browser-mcp = { path = "crates/horizon-browser-mcp", version = "0.2.7" }

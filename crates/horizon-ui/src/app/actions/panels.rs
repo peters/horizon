@@ -85,6 +85,7 @@ impl HorizonApp {
         self.panel_render_caches.terminal_grid_cache.remove(&panel_id);
         self.panel_render_caches.editor_preview_cache.remove(&panel_id);
         self.panel_render_caches.browser_ui_state.remove(&panel_id);
+        self.panel_render_caches.device_ui_state.remove(&panel_id);
         if let Some(transcript) = transcript
             && let Err(error) = transcript.delete_all()
         {
@@ -126,6 +127,7 @@ impl HorizonApp {
             self.panel_render_caches.terminal_grid_cache.remove(panel_id);
             self.panel_render_caches.editor_preview_cache.remove(panel_id);
             self.panel_render_caches.browser_ui_state.remove(panel_id);
+            self.panel_render_caches.device_ui_state.remove(panel_id);
         }
 
         if self
