@@ -76,6 +76,7 @@ impl Device {
     /// # Errors
     /// Rejects invalid, unsupported, or unavailable targets.
     pub fn connect(target: &Target) -> Result<Self> {
+        target.desktop_resize.validate()?;
         if target.id.is_empty() || target.id.len() > 128 {
             return Err(DeviceError::Invalid("target id must contain 1..128 bytes".into()));
         }

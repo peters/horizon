@@ -22,7 +22,7 @@ impl Default for ResizePolicy {
     }
 }
 impl ResizePolicy {
-    fn validate(&self, size: ImageDimensions) -> Result<()> {
+    pub(crate) fn validate(&self, size: ImageDimensions) -> Result<()> {
         if !self.enabled {
             return Err(DeviceError::ResizeDenied(
                 "desktop resizing is disabled by the target owner".into(),
@@ -47,6 +47,20 @@ impl ResizePolicy {
 pub struct ResizeConfig {
     pub policy: ResizePolicy,
     pub vnc_address: Option<SocketAddr>,
+}
+
+impl ResizeConfig {
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self
+            .vnc_address
+            .is_some_and(|address| !address.ip().is_loopback() || address.port() == 0)
+        {
+            return Err(DeviceError::Invalid(
+                "resize endpoint requires numeric loopback and a nonzero port".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -126,6 +140,18 @@ impl Device {
         self
     }
 
+    pub(crate) fn preflight_resize_size(&self, requested: ImageDimensions) -> Result<Geometry> {
+        let before = self.backend.resize_geometry()?;
+        // The resized desktop must remain fully capturable and input-addressable,
+        // even when the owner raises policy limits beyond the backend's bounds.
+        crate::CaptureOptions::default().plan(&Geometry {
+            width: requested.width,
+            height: requested.height,
+            ..before.clone()
+        })?;
+        Ok(before)
+    }
+
     /// Resize the actual desktop, then obtain a fresh screenshot before input.
     /// The caller serializes operations and must preserve uncertain outcomes
     /// across reconnections. The CLI/MCP runner journals these before dispatch.
@@ -146,6 +172,7 @@ impl Device {
                 "desktop resizing requires stable geometry revisions".into(),
             ));
         }
+        let before = self.preflight_resize_size(requested)?;
         let backend = self
             .resize
             .backend
@@ -156,7 +183,6 @@ impl Device {
                 "server does not support desktop resizing".into(),
             ));
         }
-        let before = self.backend.resize_geometry()?;
         let current = ImageDimensions {
             width: before.width,
             height: before.height,
@@ -166,13 +192,6 @@ impl Device {
                 "resize server and input surface dimensions differ".into(),
             ));
         }
-        // The resized desktop must remain fully capturable and input-addressable,
-        // even when the owner raises policy limits beyond the backend's bounds.
-        crate::CaptureOptions::default().plan(&Geometry {
-            width: requested.width,
-            height: requested.height,
-            ..before.clone()
-        })?;
         if requested == current {
             self.resize.needs_observation.set(true);
             return Ok(ResizeReceipt {

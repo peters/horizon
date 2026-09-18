@@ -76,6 +76,9 @@ impl Dispatcher {
         }
         let target: Target =
             serde_json::from_slice(&bytes).map_err(|_| DeviceError::Invalid("invalid target config".into()))?;
+        if let Command::Resize(request) = &command {
+            target.desktop_resize.policy.validate(request.dimensions())?;
+        }
         let mut device = Device::connect(&target).map_err(|error| {
             if pending {
                 DeviceError::ResizeUncertain(error.to_string())
@@ -84,6 +87,9 @@ impl Dispatcher {
             }
         })?;
         device.resize.uncertain = pending;
+        if let Command::Resize(request) = &command {
+            device.preflight_resize_size(request.dimensions())?;
+        }
         if device.backend.supports_resize_revisions()
             && matches!(command, Command::Doctor | Command::Resize(_))
             && target.desktop_resize.vnc_address.is_some()
@@ -392,7 +398,17 @@ mod tests {
             target_file: directory.path().join("target.json"),
             resize_factory: Some(supported),
         };
+        target.desktop_resize.policy.max_width = u32::MAX;
+        target.desktop_resize.policy.max_height = u32::MAX;
+        target.desktop_resize.policy.max_pixels = u64::MAX;
         std::fs::write(&dispatcher.target_file, serde_json::to_vec(&target)?)?;
+        dispatcher.resize_factory = Some(unavailable);
+        for (width, height) in [(32769, 1), (4096, 4096)] {
+            let response = dispatcher.call(Command::Resize(crate::ResizeRequest { width, height }));
+            assert_eq!(response.value["error"]["code"], "invalid_request");
+            assert!(!dispatcher.marker("resize-pending").exists());
+        }
+        dispatcher.resize_factory = Some(supported);
         std::fs::write(dispatcher.marker("resize-pending"), b"pending")?;
         let response = dispatcher.call(Command::Doctor);
         assert_eq!(response.value["result"]["desktop_resize"]["supported"], true);
@@ -401,6 +417,43 @@ mod tests {
         dispatcher.resize_factory = Some(unavailable);
         let response = dispatcher.call(Command::Doctor);
         assert_eq!(response.value["error"]["code"], "resize_uncertain");
+        Ok(())
+    }
+    #[test]
+    fn invalid_resize_configuration_fails_before_transport_access() -> crate::Result<()> {
+        let directory = tempfile::tempdir().map_err(io_error)?;
+        let dispatcher = Dispatcher {
+            target_file: directory.path().join("target.json"),
+            resize_factory: None,
+        };
+        for (enabled, address, command, expected) in [
+            (
+                false,
+                "127.0.0.1:1",
+                Command::Resize(crate::ResizeRequest {
+                    width: 1280,
+                    height: 720,
+                }),
+                "resize_denied",
+            ),
+            (
+                true,
+                "127.0.0.1:1",
+                Command::Resize(crate::ResizeRequest {
+                    width: 9000,
+                    height: 720,
+                }),
+                "invalid_request",
+            ),
+            (true, "0.0.0.0:5900", Command::Doctor, "invalid_request"),
+            (true, "192.0.2.1:5900", Command::Doctor, "invalid_request"),
+            (true, "[::1]:0", Command::Doctor, "invalid_request"),
+        ] {
+            let config = json!({"id":"fixture", "endpoint":{"kind":"local_x11","display":":999999"},
+                "desktop_resize":{"policy":{"enabled":enabled},"vnc_address":address}});
+            std::fs::write(&dispatcher.target_file, config.to_string()).map_err(io_error)?;
+            assert_eq!(dispatcher.call(command).value["error"]["code"], expected);
+        }
         Ok(())
     }
     #[test]
