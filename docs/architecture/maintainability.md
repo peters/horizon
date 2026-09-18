@@ -243,6 +243,7 @@ omits obsolete top-level provider profiles while preserving `browser.remote`.
     provider, capabilities and credentials resolved before any panel exists,
     typed refusals that carry no value, and the per-provider session limit
   - `canvas`: canvas rendering and HUD
+  - `canvas_scroll`: viewport-local scroll gesture ownership and canvas event consumption
   - `lifecycle`: frame orchestration and repaint pacing, with application-exit
     ownership and persistence sequencing in `lifecycle/shutdown.rs`
   - `panel_chrome`: panel titlebar chrome, badges, and rename UI

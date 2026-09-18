@@ -4,6 +4,7 @@ use egui::{Context, Event, Key, Modifiers, Rect, Vec2};
 use horizon_core::WorkspaceId;
 
 use super::super::super::input::{TerminalInputEvent, terminal_input_events};
+use super::super::canvas_scroll::route_canvas_scroll;
 use super::super::shortcuts::{
     event_uses_shortcut_key, is_clipboard_pseudo_event, pending_hotkey_capture, shortcut_event_matches,
     shortcut_pressed, take_captured_clipboard_event,
@@ -239,6 +240,7 @@ impl HorizonApp {
             next_middle_pan_active(self.middle_pan_active, middle_down, target, mode, pointer_delta);
         self.canvas_pan_input_claimed = pointer_in_canvas && (self.middle_pan_active || space_drag_claimed);
         if pointer_in_canvas && (zoom_delta - 1.0).abs() > f32::EPSILON {
+            route_canvas_scroll(ctx, false, false);
             let anchor = pointer_position.unwrap_or_else(|| canvas_rect.center());
             if self.zoom_canvas_at(canvas_rect, anchor, self.canvas_view.zoom * zoom_delta) {
                 self.clear_terminal_selections();
@@ -250,17 +252,18 @@ impl HorizonApp {
 
         let drag_panning = self.canvas_pan_input_claimed;
         let pointer_over_panel = pointer_position.is_some_and(|position| {
-            pointer_in_canvas
-                && !drag_panning
-                && scroll != Vec2::ZERO
-                && !ctrl_or_cmd
-                && panel_geometry
-                    .iter()
-                    .any(|(_, geometry)| geometry.screen_rect.contains(position))
+            panel_geometry
+                .iter()
+                .any(|(_, geometry)| geometry.screen_rect.contains(position))
         });
+        let scroll_routing = route_canvas_scroll(
+            ctx,
+            !pointer_over_panel,
+            pointer_in_canvas && !drag_panning && !ctrl_or_cmd,
+        );
         let pan_delta = if drag_panning {
             pointer_delta
-        } else if pointer_in_canvas && !pointer_over_panel && !ctrl_or_cmd {
+        } else if scroll_routing.pans_canvas {
             if modifiers.shift && scroll.x == 0.0 {
                 Vec2::new(scroll.y, 0.0)
             } else {
@@ -271,6 +274,8 @@ impl HorizonApp {
         };
 
         self.is_panning = pan_delta != Vec2::ZERO;
+        self.canvas_pan_input_claimed |= scroll_routing.pans_canvas;
+        scroll_routing.consume(ctx, &mut self.terminal_keyboard_events);
         if self.is_panning {
             self.pan_target = None;
             let mut pan_offset = Vec2::new(self.canvas_view.pan_offset[0], self.canvas_view.pan_offset[1]);
