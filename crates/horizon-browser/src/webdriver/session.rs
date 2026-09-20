@@ -50,6 +50,7 @@ const NAVIGATION_HTTP_TIMEOUT: Duration = Duration::from_millis(PAGE_LOAD_TIMEOU
 // time before Firefox can publish another frame.
 const MAX_COMMAND_BURST: usize = 4;
 
+#[allow(clippy::struct_excessive_bools)] // independent per-concern driver flags
 struct Driver {
     config: BrowserSessionConfig,
     host: DriverHost,
