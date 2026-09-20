@@ -170,19 +170,14 @@ impl HorizonApp {
     /// Whether the panel under the pointer zooms its own content. Panels are
     /// resolved with the paint order the current viewport's renderer recorded,
     /// so an overlapping panel on top keeps the gesture, and the rectangle is
-    /// the panel body the widget itself tests. A fullscreen panel covers the
-    /// viewport and owns the gesture outright.
+    /// the panel body the widget itself tests. A fullscreen panel in the root
+    /// window is not special-cased: that path returns before this handler
+    /// runs, while detached viewports keep routing with their own geometry.
     fn panel_owns_zoom_gesture(
         &self,
         panel_geometry: &[(PanelId, PanelScreenGeometry)],
         pointer: Option<egui::Pos2>,
     ) -> bool {
-        if let Some(panel_id) = self.fullscreen_panel {
-            return self
-                .board
-                .panel(panel_id)
-                .is_some_and(|panel| panel.browser().is_some() || panel.device().is_some());
-        }
         let Some(pointer) = pointer else {
             return false;
         };

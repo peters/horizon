@@ -183,13 +183,12 @@ impl DeviceUiState {
         let Some(delta) = panel_zoom::gesture_delta(ui, panel_zoom::owns_pointer(ui)) else {
             return;
         };
-        // A fitted image can sit outside the zoom range, so the gesture starts
-        // from the nearest supported scale.
-        let base = view.map_or_else(
-            || self.controls.zoom.unwrap_or_default(),
-            |view| PanelZoom::new(view.scale),
-        );
-        let next = base.scaled(delta);
+        // Start from the scale actually on screen, which for `Fit` can sit
+        // outside the supported range.
+        let displayed = view.map_or_else(|| self.controls.zoom.unwrap_or_default().factor(), |view| view.scale);
+        let Some(next) = panel_zoom::gesture_target(displayed, delta) else {
+            return;
+        };
         if let Some(view) = view
             && view.scale.is_finite()
             && view.scale > 0.0
@@ -199,10 +198,8 @@ impl DeviceUiState {
             let content = (pointer - view.image_rect.min) / view.scale;
             self.pending_scroll = Some((content * next.factor() - (pointer - view.body.min)).max(egui::Vec2::ZERO));
         }
-        if next != base || self.controls.zoom.is_none() {
-            ui.ctx().request_repaint();
-        }
         self.controls.zoom = Some(next);
+        ui.ctx().request_repaint();
     }
 
     #[cfg(test)]

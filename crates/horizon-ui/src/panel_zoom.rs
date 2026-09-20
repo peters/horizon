@@ -39,14 +39,25 @@ impl PanelZoom {
         self.0
     }
 
-    /// Apply a gesture multiplier from this scale, staying inside the range.
-    pub(crate) fn scaled(self, delta: f32) -> Self {
-        Self::new(self.0 * delta)
-    }
-
     pub(crate) fn label(self) -> String {
         format!("{}%", (self.0 * 100.0).round())
     }
+}
+
+/// The scale a gesture selects, starting from the scale on screen. `None`
+/// keeps the current presentation: a fitted image can sit outside the
+/// supported range, and clamping a gesture that pushes further out would move
+/// the image the opposite way (a desktop fitted at 10% would grow on a
+/// pinch out).
+pub(crate) fn gesture_target(displayed: f32, delta: f32) -> Option<PanelZoom> {
+    if !displayed.is_finite() || displayed <= 0.0 {
+        // No usable scale on screen: treat the gesture as starting from 100%.
+        return Some(PanelZoom::new(delta));
+    }
+    if (delta < 1.0 && displayed <= MIN_ZOOM) || (delta > 1.0 && displayed >= MAX_ZOOM) {
+        return None;
+    }
+    Some(PanelZoom::new(displayed * delta))
 }
 
 /// Percentage stops for a panel that always fills its body.
@@ -128,7 +139,7 @@ pub(crate) fn gesture_delta(ui: &Ui, hovered: bool) -> Option<f32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_ZOOM, MIN_ZOOM, PanelZoom, dropdown_with_fit, gesture_delta};
+    use super::{MAX_ZOOM, MIN_ZOOM, PanelZoom, dropdown_with_fit, gesture_delta, gesture_target};
     use crate::test_egui::DiscardTextures;
 
     #[test]
@@ -139,6 +150,25 @@ mod tests {
         assert!((PanelZoom::new(0.01).factor() - MIN_ZOOM).abs() <= f32::EPSILON);
         assert_eq!(PanelZoom::ONE.label(), "100%");
         assert_eq!(PanelZoom::new(0.666).label(), "67%");
+    }
+
+    #[test]
+    fn a_gesture_never_moves_the_image_against_its_own_direction() {
+        // Inside the range a gesture simply scales.
+        assert_eq!(gesture_target(1.0, 1.25), Some(PanelZoom::new(1.25)));
+        assert_eq!(gesture_target(1.0, 0.5), Some(PanelZoom::new(0.5)));
+        // A desktop fitted below the range stays fitted on a pinch out, and
+        // grows to the nearest supported scale on a pinch in.
+        assert_eq!(gesture_target(0.1, 0.5), None);
+        assert_eq!(gesture_target(0.1, 1.5), Some(PanelZoom::new(MIN_ZOOM)));
+        // A tiny desktop fitted above the range behaves symmetrically.
+        assert_eq!(gesture_target(8.0, 1.5), None);
+        assert_eq!(gesture_target(8.0, 0.5), Some(PanelZoom::new(MAX_ZOOM)));
+        // The ends of the range absorb gestures that push past them.
+        assert_eq!(gesture_target(MIN_ZOOM, 0.5), None);
+        assert_eq!(gesture_target(MAX_ZOOM, 1.5), None);
+        // A degenerate layout still accepts the gesture from 100%.
+        assert_eq!(gesture_target(0.0, 1.25), Some(PanelZoom::new(1.25)));
     }
 
     #[test]

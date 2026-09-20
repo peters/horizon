@@ -163,7 +163,9 @@ pub(super) fn apply_zoom_gesture(ui: &Ui, state: &mut BrowserUiState, hovered: b
     let Some(delta) = crate::panel_zoom::gesture_delta(ui, hovered) else {
         return;
     };
-    let zoomed = state.zoom.scaled(delta);
+    let Some(zoomed) = crate::panel_zoom::gesture_target(state.zoom.factor(), delta) else {
+        return;
+    };
     if zoomed == state.zoom {
         return;
     }
