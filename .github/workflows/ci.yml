@@ -75,10 +75,14 @@ jobs:
         run: ./scripts/check-version-sync.sh
       - name: Browser client dependency boundary
         run: python3 scripts/check-browser-client-dependencies.py
+      - name: Verify CI change detection
+        run: python3 -B scripts/test_detect_ci_build_inputs.py -v
       # One diff answers both gated lanes: Snap packaging and the release
       # Artifacts matrix. This job already checks out full history, so the
       # Artifacts gate costs nothing here instead of a second runner and a
-      # second full clone.
+      # second full clone. The classification lives in a script with its own
+      # test suite (run above) because a silent misclassification skips a
+      # release build.
       - id: changes
         name: Detect packaging and release inputs
         shell: bash
@@ -86,39 +90,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-        run: |
-          emit() {
-            echo "run_snap_build=$1" >> "$GITHUB_OUTPUT"
-            echo "release_inputs=$2" >> "$GITHUB_OUTPUT"
-          }
-
-          # A manual dispatch, a branch's first push (an all-zero base) and a
-          # base this checkout cannot resolve all leave the diff unknown, so
-          # they build everything rather than silently skipping a release.
-          if [ "$EVENT_NAME" = "workflow_dispatch" ] \
-            || ! git rev-parse --verify --quiet "${BASE_SHA}^{commit}" > /dev/null \
-            || ! changed_paths=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA"); then
-            emit true true
-            exit 0
-          fi
-
-          run_snap_build=false
-          release_inputs=false
-
-          while IFS= read -r path; do
-            case "$path" in
-              .github/workflows/ci.yml|.github/workflows/release.yml|scripts/build-surge-toolchain.sh|scripts/package-release-asset.sh|scripts/stage-surge-artifacts.sh|snap/*|packaging/linux/*|assets/icons/*)
-                run_snap_build=true
-                ;;
-            esac
-            case "$path" in
-              .github/workflows/ci.yml|scripts/package-release-asset.sh|rust-toolchain.toml|Cargo.toml|Cargo.lock|assets/*|crates/*)
-                release_inputs=true
-                ;;
-            esac
-          done <<< "$changed_paths"
-
-          emit "$run_snap_build" "$release_inputs"
+        run: ./scripts/detect-ci-build-inputs.sh "$EVENT_NAME" "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
 
   # Both feature sets share one runner: each finished in well under a minute,
   # the boundary and geometry checks above them are identical, and a second
@@ -250,9 +222,12 @@ jobs:
   rust-test:
     name: Tests (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
-    # Headroom for a cold cache: macOS x64 took 12 minutes of the old
-    # 15 while building the whole workspace twice (default and speech).
-    timeout-minutes: 25
+    # Headroom for a cold cache, which every cache-key change (a lock bump,
+    # a toolchain bump, an eviction) produces: macOS x64 spent 20 minutes of
+    # this on a measured cold run, most of it compiling the vendored speech
+    # C++ tree. A job that times out also skips the cache save, so the next
+    # run starts cold again.
+    timeout-minutes: 35
     strategy:
     # A failing OS releases the other two runners instead of holding them
     # to the full timeout; cancelled siblings keep their logs and a re-run
