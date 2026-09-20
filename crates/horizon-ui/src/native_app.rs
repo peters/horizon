@@ -86,6 +86,21 @@ impl NativeWindowLiveness {
     }
 }
 
+impl KeyboardAwareApp<'_> {
+    /// Feed any pending native pinch into the normal window-event path. The
+    /// Wayland bridge owns no thread, so this must run every loop iteration
+    /// rather than only when a bridge thread wakes the loop.
+    #[cfg(target_os = "linux")]
+    fn drain_pinch(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(pinch) = &mut self.pinch else {
+            return;
+        };
+        for (window_id, event) in pinch.take_events() {
+            self.inner.window_event(event_loop, window_id, event);
+        }
+    }
+}
+
 impl ApplicationHandler<UserEvent> for KeyboardAwareApp<'_> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.native_window_liveness.is_root_destroyed() {
@@ -151,11 +166,7 @@ impl ApplicationHandler<UserEvent> for KeyboardAwareApp<'_> {
             return;
         }
         #[cfg(target_os = "linux")]
-        if let Some(pinch) = &mut self.pinch {
-            for (window_id, event) in pinch.take_events() {
-                self.inner.window_event(event_loop, window_id, event);
-            }
-        }
+        self.drain_pinch(event_loop);
         self.inner.user_event(event_loop, event);
     }
 
@@ -175,6 +186,8 @@ impl ApplicationHandler<UserEvent> for KeyboardAwareApp<'_> {
         if self.native_window_liveness.is_root_destroyed() {
             return;
         }
+        #[cfg(target_os = "linux")]
+        self.drain_pinch(event_loop);
         self.inner.about_to_wait(event_loop);
     }
 
@@ -186,6 +199,12 @@ impl ApplicationHandler<UserEvent> for KeyboardAwareApp<'_> {
     }
 
     fn exiting(&mut self, event_loop: &ActiveEventLoop) {
+        // Release the pinch bridge while the display it adopted is still
+        // alive; winit tears that down once this call returns.
+        #[cfg(target_os = "linux")]
+        {
+            self.pinch = None;
+        }
         // `exiting` is the one callback that remains safe and necessary after
         // the native root handle is gone: eframe uses it to run `App::on_exit`
         // and destroy application state. Skipping it lets browser-driver

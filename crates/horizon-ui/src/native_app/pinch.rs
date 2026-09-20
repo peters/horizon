@@ -28,17 +28,9 @@ pub(super) enum NativePinch {
 
 impl NativePinch {
     pub(super) fn start(event_loop: &EventLoop<UserEvent>) -> Option<Self> {
-        X11Pinch::start(event_loop).map(Self::X11).or_else(|| {
-            let proxy = event_loop.create_proxy();
-            horizon_wayland::PinchBridge::start(event_loop, move || {
-                let _ = proxy.send_event(UserEvent::RequestRepaint {
-                    viewport_id: egui::ViewportId::ROOT,
-                    when: Instant::now(),
-                    cumulative_pass_nr: 0,
-                });
-            })
-            .map(Self::Wayland)
-        })
+        X11Pinch::start(event_loop)
+            .map(Self::X11)
+            .or_else(|| horizon_wayland::PinchBridge::start(event_loop).map(Self::Wayland))
     }
 
     pub(super) fn observe_window(&mut self, id: WindowId, event: &WindowEvent) {
@@ -56,7 +48,7 @@ impl NativePinch {
             // winit derives a Wayland `WindowId` from the surface proxy
             // pointer, which is exactly what the bridge reports.
             Self::Wayland(bridge) => bridge
-                .take()
+                .poll()
                 .into_iter()
                 .map(|pinch| {
                     (

@@ -6,11 +6,13 @@
 //! own surfaces. Instead we adopt the toolkit's `wl_display` through
 //! libwayland's foreign-display entry point and drive a private event queue on
 //! it, which makes this the *same* client and puts its surfaces in scope.
-
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
-use std::thread::JoinHandle;
+//!
+//! The bridge owns no thread and never blocks. libwayland demultiplexes a read
+//! to every queue of the connection, so the toolkit's own event loop feeds our
+//! queue as a side effect of its normal polling and [`PinchBridge::poll`] only
+//! drains what is already pending. That keeps every display access inside a
+//! `&mut self` call made by the display's owner from within its event loop,
+//! which is what makes the constructor safe to expose.
 
 use raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
 use wayland_client::backend::Backend;
@@ -34,36 +36,40 @@ pub struct Pinch {
     pub delta: f64,
 }
 
-/// A background bridge feeding pinch gestures from the compositor.
+/// A bridge feeding trackpad pinch gestures from the compositor.
 pub struct PinchBridge {
     connection: Connection,
-    handle: QueueHandle<Gestures>,
-    stopped: Arc<AtomicBool>,
-    worker: Option<JoinHandle<()>>,
-    incoming: Option<Receiver<Pinch>>,
+    queue: EventQueue<Gestures>,
+    state: Gestures,
+    /// Dropping the seat would take its pointer, and with it the gesture.
+    _seat: wl_seat::WlSeat,
 }
 
 impl PinchBridge {
     /// Adopt `display`'s Wayland connection and start listening for pinch.
     ///
     /// Returns `None` when the handle is not Wayland, the compositor offers no
-    /// pointer gestures, or the seat has no pointer. `wake` is called from the
-    /// bridge thread whenever gestures are ready, so the caller can nudge its
-    /// event loop into draining [`PinchBridge::take`].
+    /// pointer gestures, or the seat has no pointer.
     ///
-    /// The display must outlive the returned bridge.
-    pub fn start(display: &impl HasDisplayHandle, wake: impl Fn() + Send + 'static) -> Option<Self> {
+    /// Call [`PinchBridge::poll`] from the display owner's event loop.
+    pub fn start(display: &impl HasDisplayHandle) -> Option<Self> {
         let handle = display.display_handle().ok()?;
         let RawDisplayHandle::Wayland(display) = handle.as_raw() else {
             return None;
         };
-        // SAFETY: the caller guarantees the display outlives this bridge, and a
+        // SAFETY: `display_handle()` yields a live `wl_display` belonging to the
+        // caller, and the borrow proves it is alive for this call. The adopted
+        // backend is only ever used again from `&mut self` methods, which the
+        // caller can only reach while it still owns that display, and a
         // foreign-display backend never disconnects the display it adopted.
         #[allow(unsafe_code)]
         let backend = unsafe { Backend::from_foreign_display(display.display.as_ptr().cast()) };
         let connection = Connection::from_backend(backend);
-        match Self::spawn(connection, Box::new(wake)) {
-            Ok(bridge) => Some(bridge),
+        match Self::bind(connection) {
+            Ok(bridge) => {
+                tracing::info!("native Wayland pinch input enabled");
+                Some(bridge)
+            }
             Err(error) => {
                 tracing::warn!(%error, "native Wayland pinch input unavailable");
                 None
@@ -71,18 +77,17 @@ impl PinchBridge {
         }
     }
 
-    fn spawn(connection: Connection, wake: Box<dyn Fn() + Send>) -> Result<Self, PinchError> {
+    fn bind(connection: Connection) -> Result<Self, PinchError> {
         // A private queue keeps our proxies off the toolkit's queue: libwayland
         // routes every event to the queue its proxy was created on, so neither
         // side can swallow the other's events.
         let (globals, mut queue): (_, EventQueue<Gestures>) = registry_queue_init(&connection)?;
         let handle = queue.handle();
-        let (sender, incoming) = sync_channel(256);
         let mut state = Gestures {
             protocol: globals.bind(&handle, 1..=3, ())?,
             pinch: None,
-            sender,
             sequence: PinchSequence::default(),
+            pending: Vec::new(),
         };
         // A second `wl_seat` binding is legal and its `wl_pointer` receives the
         // same focus and motion events as the toolkit's own. The pinch object
@@ -93,68 +98,72 @@ impl PinchBridge {
         if state.pinch.is_none() {
             return Err(PinchError::NoPointer);
         }
-
-        let stopped = Arc::new(AtomicBool::new(false));
-        let worker_stopped = Arc::clone(&stopped);
-        let worker = std::thread::Builder::new()
-            .name("wayland-pinch".into())
-            .spawn(move || {
-                let _keep_alive = seat;
-                while !worker_stopped.load(Ordering::Acquire) {
-                    if queue.blocking_dispatch(&mut state).is_err() {
-                        break;
-                    }
-                    wake();
-                }
-            })?;
-        tracing::info!("native Wayland pinch input enabled");
+        state.pending.clear();
         Ok(Self {
             connection,
-            handle,
-            stopped,
-            worker: Some(worker),
-            incoming: Some(incoming),
+            queue,
+            state,
+            _seat: seat,
         })
     }
 
     /// Drain the pinch steps that arrived since the last call.
-    pub fn take(&mut self) -> Vec<Pinch> {
-        self.incoming
-            .as_ref()
-            .map_or_else(Vec::new, |incoming| incoming.try_iter().collect())
-    }
-}
-
-impl Drop for PinchBridge {
-    fn drop(&mut self) {
-        self.stopped.store(true, Ordering::Release);
-        // Release a producer blocked on a full queue before joining it.
-        self.incoming.take();
-        // The worker blocks in `wl_display_dispatch_queue`. A sync on our own
-        // queue makes the compositor answer with an event it wakes up for,
-        // after which it observes the stop flag.
-        self.connection.display().sync(&self.handle, ());
+    ///
+    /// Never blocks: it dispatches only what the toolkit's own socket reads
+    /// have already queued for us.
+    pub fn poll(&mut self) -> Vec<Pinch> {
         let _ = self.connection.flush();
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
+        if self.queue.dispatch_pending(&mut self.state).is_err() {
+            return Vec::new();
         }
+        std::mem::take(&mut self.state.pending)
     }
 }
 
 struct Gestures {
     protocol: ZwpPointerGesturesV1,
     pinch: Option<ZwpPointerGesturePinchV1>,
-    sender: SyncSender<Pinch>,
     sequence: PinchSequence,
+    pending: Vec<Pinch>,
 }
 
 /// The gesture in flight, tracked apart from the protocol objects so the scale
 /// conversion stays testable on its own.
 #[derive(Default)]
 struct PinchSequence {
-    /// Cumulative scale since `begin`, absent between gestures.
+    /// Cumulative scale of the last step handed to the caller, absent between
+    /// gestures.
     scale: Option<f64>,
     surface: Option<u64>,
+}
+
+impl PinchSequence {
+    fn begin(&mut self, surface: u64) {
+        self.scale = Some(1.0);
+        self.surface = Some(surface);
+    }
+
+    fn end(&mut self) {
+        *self = Self::default();
+    }
+
+    /// `zwp_pointer_gesture_pinch_v1` reports cumulative scale, while winit's
+    /// pinch delta is exponentiated by its consumers, so emit the log of the
+    /// ratio against the last step actually produced. Advancing the baseline
+    /// only when a step is produced keeps a rejected scale coalesced into the
+    /// next one instead of dropping it out of the gesture.
+    fn advance(&mut self, scale: f64) -> Option<Pinch> {
+        if scale <= 0.0 {
+            return None;
+        }
+        let previous = self.scale?;
+        let surface = self.surface?;
+        self.scale = Some(scale);
+        Some(Pinch {
+            surface,
+            delta: (scale / previous).ln(),
+        })
+    }
 }
 
 impl Dispatch<wl_seat::WlSeat, ()> for Gestures {
@@ -190,39 +199,14 @@ impl Dispatch<ZwpPointerGesturePinchV1, ()> for Gestures {
     ) {
         match event {
             zwp_pointer_gesture_pinch_v1::Event::Begin { surface, .. } => {
-                state.sequence = PinchSequence {
-                    scale: Some(1.0),
-                    surface: Some(surface.id().as_ptr() as u64),
-                };
+                state.sequence.begin(surface.id().as_ptr() as u64);
             }
             zwp_pointer_gesture_pinch_v1::Event::Update { scale, .. } => {
-                if let Some(pinch) = state.sequence.advance(scale) {
-                    // A full queue means the UI is stalled; dropping the step
-                    // beats blocking the protocol thread.
-                    let _ = state.sender.try_send(pinch);
-                }
+                state.pending.extend(state.sequence.advance(scale));
             }
-            zwp_pointer_gesture_pinch_v1::Event::End { .. } => {
-                state.sequence = PinchSequence::default();
-            }
+            zwp_pointer_gesture_pinch_v1::Event::End { .. } => state.sequence.end(),
             _ => {}
         }
-    }
-}
-
-impl PinchSequence {
-    /// `zwp_pointer_gesture_pinch_v1` reports cumulative scale, while winit's
-    /// pinch delta is exponentiated by its consumers, so emit the log ratio.
-    fn advance(&mut self, scale: f64) -> Option<Pinch> {
-        if scale <= 0.0 {
-            return None;
-        }
-        let previous = self.scale?;
-        self.scale = Some(scale);
-        Some(Pinch {
-            surface: self.surface?,
-            delta: (scale / previous).ln(),
-        })
     }
 }
 
@@ -261,8 +245,6 @@ enum PinchError {
     Bind(#[from] wayland_client::globals::BindError),
     #[error(transparent)]
     Dispatch(#[from] wayland_client::DispatchError),
-    #[error(transparent)]
-    Thread(#[from] std::io::Error),
     #[error("the seat announced no pointer")]
     NoPointer,
 }
@@ -272,10 +254,9 @@ mod tests {
     use super::*;
 
     fn sequence() -> PinchSequence {
-        PinchSequence {
-            scale: Some(1.0),
-            surface: Some(7),
-        }
+        let mut sequence = PinchSequence::default();
+        sequence.begin(7);
+        sequence
     }
 
     #[test]
@@ -298,5 +279,17 @@ mod tests {
         let pinch = state.advance(2.0).expect("valid pinch");
         assert!((pinch.delta.exp() - 2.0).abs() < 0.0001);
         assert_eq!(pinch.surface, 7);
+        state.end();
+        assert!(state.advance(2.5).is_none());
+    }
+
+    #[test]
+    fn a_rejected_scale_coalesces_into_the_next_step() {
+        // An update that yields no step must not move the baseline, or the
+        // gesture would silently lose that part of its scale.
+        let mut state = sequence();
+        assert!(state.advance(0.0).is_none());
+        let pinch = state.advance(1.5).expect("valid pinch");
+        assert!((pinch.delta.exp() - 1.5).abs() < 0.0001);
     }
 }
