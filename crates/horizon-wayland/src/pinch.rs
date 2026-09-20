@@ -52,8 +52,9 @@ pub struct PinchBridge {
 impl PinchBridge {
     /// Adopt `display`'s Wayland connection and start listening for pinch.
     ///
-    /// Returns `None` when the handle is not Wayland, the compositor offers no
-    /// pointer gestures, or the seat has no pointer.
+    /// Returns `None` when the handle is not Wayland or the compositor offers
+    /// no pointer gestures. A session with no pointer yet is not a failure:
+    /// the bridge stays and acquires one when a seat announces the capability.
     ///
     /// Call [`PinchBridge::poll`] from the display owner's event loop.
     ///

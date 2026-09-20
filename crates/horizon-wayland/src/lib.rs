@@ -12,8 +12,10 @@
 //! the life of the event loop and holding an `OwnedDisplayHandle` that outlives
 //! it on both the normal and the unwinding path.
 //!
-//! Both crates use `#![deny(unsafe_code)]` with narrowly scoped `#[allow]`s
-//! rather than `forbid`; every other Horizon crate keeps `forbid`.
+//! This crate, its `horizon-ui` call site and `horizon-cursor` (whose Windows
+//! cursor query has no safe equivalent) use `#![deny(unsafe_code)]` with
+//! narrowly scoped `#[allow]`s rather than `forbid`. Every other Horizon crate
+//! keeps `forbid`.
 
 #![deny(unsafe_code)]
 
