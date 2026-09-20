@@ -18,6 +18,61 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::rust_connection::RustConnection;
 
+/// Trackpad pinch reaches winit only on macOS and iOS, so Linux needs its own
+/// bridge per display server. Both feed the same `WindowEvent::PinchGesture`
+/// that the zoom path already consumes.
+pub(super) enum NativePinch {
+    X11(X11Pinch),
+    Wayland(horizon_wayland::PinchBridge),
+}
+
+impl NativePinch {
+    pub(super) fn start(event_loop: &EventLoop<UserEvent>) -> Option<Self> {
+        X11Pinch::start(event_loop).map(Self::X11).or_else(|| {
+            let proxy = event_loop.create_proxy();
+            horizon_wayland::PinchBridge::start(event_loop, move || {
+                let _ = proxy.send_event(UserEvent::RequestRepaint {
+                    viewport_id: egui::ViewportId::ROOT,
+                    when: Instant::now(),
+                    cumulative_pass_nr: 0,
+                });
+            })
+            .map(Self::Wayland)
+        })
+    }
+
+    pub(super) fn observe_window(&mut self, id: WindowId, event: &WindowEvent) {
+        match self {
+            Self::X11(bridge) => bridge.observe_window(id, event),
+            // winit derives a Wayland `WindowId` from the surface proxy
+            // pointer, so those gestures route themselves.
+            Self::Wayland(_) => {}
+        }
+    }
+
+    pub(super) fn take_events(&mut self) -> Vec<(WindowId, WindowEvent)> {
+        match self {
+            Self::X11(bridge) => bridge.take_events(),
+            // winit derives a Wayland `WindowId` from the surface proxy
+            // pointer, which is exactly what the bridge reports.
+            Self::Wayland(bridge) => bridge
+                .take()
+                .into_iter()
+                .map(|pinch| {
+                    (
+                        WindowId::from(pinch.surface),
+                        WindowEvent::PinchGesture {
+                            device_id: DeviceId::dummy(),
+                            delta: pinch.delta,
+                            phase: TouchPhase::Moved,
+                        },
+                    )
+                })
+                .collect(),
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 enum PinchError {
     #[error(transparent)]
@@ -32,7 +87,7 @@ enum PinchError {
     Thread(#[from] std::io::Error),
 }
 
-pub(super) struct NativePinch {
+pub(super) struct X11Pinch {
     connection: Arc<RustConnection>,
     wake_window: u32,
     stopped: Arc<AtomicBool>,
@@ -52,8 +107,8 @@ struct PinchState {
     sequences: HashMap<(u32, u16), PinchSequence>,
 }
 
-impl NativePinch {
-    pub(super) fn start(event_loop: &EventLoop<UserEvent>) -> Option<Self> {
+impl X11Pinch {
+    fn start(event_loop: &EventLoop<UserEvent>) -> Option<Self> {
         if !event_loop.is_x11() {
             return None;
         }
@@ -136,7 +191,7 @@ impl NativePinch {
         }))
     }
 
-    pub(super) fn observe_window(&mut self, id: WindowId, event: &WindowEvent) {
+    fn observe_window(&mut self, id: WindowId, event: &WindowEvent) {
         // winit's X11 WindowId is the XID; never use this conversion on Wayland.
         let Ok(window) = u32::try_from(u64::from(id)) else {
             return;
@@ -180,7 +235,7 @@ impl NativePinch {
         }
     }
 
-    pub(super) fn take_events(&mut self) -> Vec<(WindowId, WindowEvent)> {
+    fn take_events(&mut self) -> Vec<(WindowId, WindowEvent)> {
         self.incoming
             .as_ref()
             .map_or_else(Vec::new, |incoming| self.state.route(incoming.try_iter()))
@@ -226,7 +281,7 @@ impl PinchState {
     }
 }
 
-impl Drop for NativePinch {
+impl Drop for X11Pinch {
     fn drop(&mut self) {
         self.stopped.store(true, Ordering::Release);
         // Release a producer blocked on a full queue before joining it.

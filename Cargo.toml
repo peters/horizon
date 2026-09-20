@@ -12,6 +12,7 @@ members = [
     "crates/horizon-core",
     "crates/horizon-cursor",
     "crates/horizon-ui",
+    "crates/horizon-wayland",
 ]
 
 [workspace.package]
@@ -40,6 +41,7 @@ horizon-browser-protocol = { path = "crates/horizon-browser-protocol", version =
 horizon-browser-routines = { path = "crates/horizon-browser-routines", version = "0.2.7" }
 horizon-core = { path = "crates/horizon-core", version = "0.2.7" }
 horizon-cursor = { path = "crates/horizon-cursor", version = "0.2.7" }
+horizon-wayland = { path = "crates/horizon-wayland", version = "0.2.7" }
 thiserror = "2.0.20"
 tracing = "0.1.44"
 # Chrome DevTools Protocol transport for browser panels. Plain ws:// to
@@ -82,6 +84,10 @@ egui_commonmark = { version = "0.25.0", default-features = false, features = ["p
 winit = "0.30.13"
 # XInput 2.4 supplies Linux trackpad pinch events missing from winit 0.30.
 x11rb = { version = "0.14.0", features = ["xinput"] }
+# The pinch bridge adopts winit's `wl_display`, which needs libwayland itself:
+# the pure-Rust backend cannot adopt a foreign display. `dlopen` matches winit.
+wayland-client = { version = "0.31.15", features = ["system", "dlopen"] }
+wayland-protocols = { version = "0.32.13", features = ["client", "unstable"] }
 tempfile = "3.27.0"
 # Windows-only process-tree ownership for browser and WebDriver service
 # descendants. The wrapper creates the child suspended, assigns it to a Job
