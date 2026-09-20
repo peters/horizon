@@ -10,6 +10,8 @@ pub enum CloudViewRequest {
         url: Option<String>,
         #[serde(default)]
         backend: Option<crate::BackendKind>,
+        #[serde(default)]
+        target: Option<String>,
     },
     Poll {
         id: String,
@@ -17,6 +19,7 @@ pub enum CloudViewRequest {
         commands: Vec<BrowserCommand>,
     },
     List,
+    RevokeRemote,
     Close {
         id: String,
     },
@@ -26,6 +29,10 @@ pub struct CloudViewState {
     pub id: String,
     #[serde(default)]
     pub backend: crate::BackendKind,
+    #[serde(default)]
+    pub remote_target: Option<String>,
+    #[serde(default)]
+    pub remote_device: Option<String>,
     pub title: String,
     pub url: String,
     pub owner: Option<String>,

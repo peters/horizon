@@ -1,7 +1,9 @@
 #![forbid(unsafe_code)]
 mod browser;
+mod catalog;
 mod configuration;
 mod queues;
+mod remote;
 use horizon_browser_protocol::cloud_view::{CloudViewRequest, CloudViewResponse};
 use std::{
     io::{self, BufRead, BufReader, Read, Write},

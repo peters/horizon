@@ -31,10 +31,29 @@ pub struct Deployment {
     pub source_ready: bool,
     #[serde(default)]
     pub stop_requested: bool,
+    #[serde(default)]
+    pub browserstack_released: bool,
+    #[serde(default)]
+    pub browserstack_targets: std::collections::BTreeSet<String>,
 }
+impl Deployment {
+    #[must_use]
+    pub fn requires_browserstack_release(&self) -> bool {
+        self.profile.capabilities.browserstack.is_some() && !self.browserstack_released
+    }
+}
+
 pub struct Store {
     root: PathBuf,
     lock_file: File,
+}
+/// # Errors
+/// Rejects persisted identities that are not a single portable path component.
+pub fn cloud_directory(root: &Path, cloud_id: &str) -> Result<PathBuf> {
+    if !horizon_cloud::valid_id(cloud_id) {
+        return Err(Error::Invalid("Invalid cloud identity"));
+    }
+    Ok(root.join(cloud_id))
 }
 impl Store {
     /// # Errors
@@ -74,6 +93,12 @@ impl Store {
         }
     }
     /// # Errors
+    /// Persist cleanup intent before a credential transfer can become uncertain.
+    pub fn arm_browserstack(&self, state: &mut Deployment) -> Result<()> {
+        state.browserstack_released = false;
+        self.save(state)
+    }
+    /// # Errors
     /// Syncs file contents and parent directory before returning to the provider.
     pub fn save(&self, state: &Deployment) -> Result<()> {
         let bytes = serde_json::to_vec_pretty(state).map_err(|_| Error::Json)?;
@@ -96,6 +121,18 @@ impl Drop for Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn persisted_cloud_ids_cannot_escape_the_state_root() {
+        let temp = tempfile::tempdir().unwrap();
+        for id in ["", "..", "../outside", "/outside", "C:\\outside", "a/b", "a\\b"] {
+            assert!(cloud_directory(temp.path(), id).is_err(), "accepted {id:?}");
+        }
+        assert_eq!(
+            cloud_directory(temp.path(), "cloud-123").unwrap(),
+            temp.path().join("cloud-123")
+        );
+        assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 0);
+    }
     #[test]
     fn competing_controllers_cannot_both_hold_operation_lock() {
         let temp = tempfile::tempdir().unwrap();

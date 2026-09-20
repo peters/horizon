@@ -81,3 +81,31 @@ impl Drop for ControlOwner {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repeated_operations_replace_the_existing_controller_journal() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("controller.json");
+        for actor in ["first-agent", "second-agent"] {
+            let mut owner = ControlOwner {
+                path: path.clone(),
+                actor: actor.into(),
+                previous: std::fs::read(&path).ok(),
+                completed: false,
+            };
+            owner.save(true).unwrap();
+            let active: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            assert_eq!(active["actor"], actor);
+            assert_eq!(active["active"], true);
+            owner.complete();
+            drop(owner);
+            let completed: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            assert_eq!(completed["last_actor"], actor);
+            assert_eq!(completed["active"], false);
+        }
+    }
+}

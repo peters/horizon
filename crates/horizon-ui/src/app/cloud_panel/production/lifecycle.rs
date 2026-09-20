@@ -8,6 +8,7 @@ pub(super) enum Action {
     Delete,
     Desktop,
     Remove,
+    RevokeBrowserstack,
 }
 
 #[cfg(test)]
@@ -39,6 +40,32 @@ impl HorizonApp {
                 return;
             }
         };
+        let state_root = match cloud_runtime::state::cloud_directory(&root, &launch.id) {
+            Ok(path) => path,
+            Err(error) => {
+                runtime.error = Some(error.to_string());
+                runtime.state_unavailable = true;
+                return;
+            }
+        };
+        if action == Action::RevokeBrowserstack {
+            let Some(tx) = runtime.sender.clone() else { return };
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                let result = cloud_runtime::lifecycle::revoke_browserstack(
+                    &state_root,
+                    &settings,
+                    &cloud_runtime::Cancellation::default(),
+                );
+                let event = result.map_or_else(
+                    |error| Event::Output(error.to_string()),
+                    |state| Event::Snapshot(Box::new(state)),
+                );
+                let _ = tx.send(event);
+                ctx.request_repaint();
+            });
+            return;
+        }
         if let Some(cancel) = runtime.cancel.take() {
             cancel.cancel();
         }
@@ -52,11 +79,13 @@ impl HorizonApp {
         runtime.cancel = Some(cancel.clone());
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let root = root.join(&launch.id);
+            let root = state_root;
             let result = match action {
                 Action::Stop => cloud_runtime::lifecycle::stop(&root, &settings, &cancel)
                     .map(|state| Event::Stopped(Box::new(state))),
                 Action::Resume => cloud_runtime::lifecycle::resume(&root, &settings, &cancel).map(|()| Event::Resumed),
+                Action::RevokeBrowserstack => cloud_runtime::lifecycle::revoke_browserstack(&root, &settings, &cancel)
+                    .map(|state| Event::Snapshot(Box::new(state))),
                 Action::Delete => deployment::terminate(&root, &settings, &cancel).map(|()| Event::Deleted),
                 Action::Deploy | Action::Desktop | Action::Remove => return,
             };
@@ -87,7 +116,7 @@ impl HorizonApp {
             return;
         };
         let Some(root) = &self.cloud_prototype.root else { return };
-        let store = match Store::lock(&root.join(&launch.id)) {
+        let store = match cloud_runtime::state::cloud_directory(root, &launch.id).and_then(|path| Store::lock(&path)) {
             Ok(store) => store,
             Err(error) => {
                 self.cloud_prototype.error = Some(error.to_string());

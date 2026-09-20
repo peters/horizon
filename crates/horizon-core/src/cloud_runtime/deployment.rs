@@ -39,6 +39,7 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
     }
     let store = Store::lock(&request.state_root)?;
     let provider = RunPod::new(request.settings.credential()?);
+    super::settings::validate_ssh_identity(&request.settings.ssh_identity_file)?;
     let runner = Runner {
         cancel,
         emit,
@@ -46,6 +47,12 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
     };
     let mut state = initial_state(request, &store)?;
     let git_auth = super::git_auth::Prepared::for_repository(&request.settings.git_credentials, &state.repository)?;
+    let browser_auth = super::browser_auth::Prepared::for_repository(
+        &request.settings.browserstack_credentials,
+        &state.repository,
+        state.profile.capabilities.browserstack.as_ref(),
+        &state.cloud_id,
+    )?;
     if state.stop_requested {
         return Err(Error::Invalid(
             "Worker was explicitly stopped. Resume it before reconnecting; prior processes may be lost.",
@@ -74,19 +81,7 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
         .ok_or(Error::Invalid("Deployment has no worker specification"))?;
     // Opt-in may be added after a definite provisioning rejection saved a spec.
     // Validate that exact digest on every path that can still allocate a worker.
-    if state.operation == CreateState::Prepared {
-        Images {
-            docker_host: request.settings.docker_host.as_deref(),
-            docker_config: &request.settings.docker_config,
-            runner: &runner,
-        }
-        .validate_contract(
-            &spec.image_digest,
-            &state.cloud_id,
-            &state.profile.capabilities,
-            git_auth.is_some(),
-        )?;
-    }
+    validate_allocation_image(request, &state, &spec, git_auth.is_some(), &runner)?;
     state.stage = Stage::Provision;
     store.save(&state)?;
     emit(Event::stage(state.stage));
@@ -129,11 +124,39 @@ pub fn deploy(request: &Request, cancel: &Cancellation, emit: &dyn Fn(Event)) ->
             Duration::from_secs(20),
         )?;
     }
+    if let Some(browser_auth) = browser_auth {
+        state.browserstack_targets.clone_from(browser_auth.targets());
+        store.arm_browserstack(&mut state)?;
+        browser_auth.install(&connection, &runner)?;
+    }
     state.stage = Stage::Ready;
     store.save(&state)?;
     emit(Event::ready(Box::new(state.clone())));
     Ok(state)
 }
+fn validate_allocation_image(
+    request: &Request,
+    state: &Deployment,
+    spec: &WorkerSpec,
+    git_auth: bool,
+    runner: &Runner<'_>,
+) -> Result<()> {
+    if state.operation == CreateState::Prepared {
+        Images {
+            docker_host: request.settings.docker_host.as_deref(),
+            docker_config: &request.settings.docker_config,
+            runner,
+        }
+        .validate_contract(
+            &spec.image_digest,
+            &state.cloud_id,
+            &state.profile.capabilities,
+            git_auth,
+        )?;
+    }
+    Ok(())
+}
+
 fn validate_agent_auth(settings: &Settings, capabilities: &horizon_cloud::Capabilities) -> Result<()> {
     for path in [
         ("claude", &settings.anthropic_api_key_file),
@@ -203,6 +226,8 @@ fn initial_state(request: &Request, store: &Store) -> Result<Deployment> {
             sessions: Vec::new(),
             source_ready: false,
             stop_requested: false,
+            browserstack_released: true,
+            browserstack_targets: std::collections::BTreeSet::new(),
         }
     };
     store.save(&state)?;
@@ -309,6 +334,30 @@ pub fn terminate(root: &std::path::Path, settings: &Settings, cancel: &Cancellat
             |_| {},
         )?;
     }
+    if state.requires_browserstack_release()
+        && let CreateState::Bound { worker_id } = &operation
+    {
+        let worker = provider.inspect(worker_id, cancel)?.ok_or(Error::Invalid(
+            "Worker is lost; remote-device release must be verified before cleanup can be confirmed",
+        ))?;
+        worker.verify(&spec)?;
+        if worker.status() == horizon_cloud::WorkerStatus::Stopped {
+            return Err(Error::Invalid(
+                "Resume the worker to release its hosted devices before deletion",
+            ));
+        }
+        let connection = Connection::new(&worker, settings, store.root())?;
+        super::browser_auth::revoke(
+            &connection,
+            &Runner {
+                cancel,
+                emit: &|_| {},
+                secrets: Vec::new(),
+            },
+        )?;
+        state.browserstack_released = true;
+        store.save(&state)?;
+    }
     provider.terminate(&spec, &mut operation, cancel, |next| {
         state.operation = next.clone();
         store.save(&state).map_err(|_| horizon_cloud::CloudError::Persistence)
@@ -316,4 +365,53 @@ pub fn terminate(root: &std::path::Path, settings: &Settings, cancel: &Cancellat
     state.stage = Stage::Deleted;
     state.worker = None;
     store.save(&state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn failed_readiness_needs_no_ssh_cleanup_but_interrupted_credential_install_does() {
+        let root = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(root.path().join("repo")).unwrap();
+        let tree_id = repo.index().unwrap().write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let author = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
+        let revision = repo
+            .commit(Some("HEAD"), &author, &author, "Create fixture", &tree, &[])
+            .unwrap();
+        let settings = serde_json::from_value(serde_json::json!({
+            "runpod_key_file":"unused", "ssh_identity_file":"unused", "docker_config":"unused",
+            "registry_pull_auth_id":null, "cpu_flavors":[], "gpu_types":[]
+        }))
+        .unwrap();
+        let profile = serde_json::from_value(serde_json::json!({
+            "provider":"runpod", "image":"registry.example.com/worker:mobile", "cpu":4, "memory_gb":8, "gpu":false,
+            "capabilities":{"browserstack":{"targets":["phone"]}}
+        }))
+        .unwrap();
+        let request = Request {
+            cloud_id: "test".into(),
+            repository: repo.workdir().unwrap().into(),
+            revision: revision.to_string(),
+            profile,
+            state_root: root.path().join("cloud"),
+            settings,
+        };
+        let store = Store::lock(&request.state_root).unwrap();
+        let mut state = initial_state(&request, &store).unwrap();
+        state.stage = Stage::Readiness;
+        store.save(&state).unwrap();
+        assert!(!store.load().unwrap().unwrap().requires_browserstack_release());
+        store.arm_browserstack(&mut state).unwrap();
+        // Simulate losing the SSH installer response: the persisted fence must survive.
+        assert!(store.load().unwrap().unwrap().requires_browserstack_release());
+        let mut legacy = serde_json::to_value(&state).unwrap();
+        legacy.as_object_mut().unwrap().remove("browserstack_released");
+        assert!(
+            serde_json::from_value::<Deployment>(legacy)
+                .unwrap()
+                .requires_browserstack_release()
+        );
+    }
 }

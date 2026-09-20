@@ -68,6 +68,8 @@ fn stopped_cloud_keeps_its_environment_and_refuses_local_backend_switch() {
         id: "fixture".into(),
         initial_url: None,
         backend: super::super::BackendKind::ChromiumCdp,
+        target: None,
+        device: None,
         tx,
         latest: Latest::default(),
         waker: Waker::default(),
@@ -107,7 +109,7 @@ fn failed_firefox_transport_preserves_engine_for_persistence_and_retry() {
         backend: super::super::BackendKind::FirefoxBidi,
         ..Default::default()
     };
-    let mut panel = BrowserPanelState::start_cloud("firefox".into(), connection, None, &config).unwrap();
+    let mut panel = BrowserPanelState::start_cloud("firefox".into(), connection, None, None, &config).unwrap();
     for retry in [false, true] {
         if retry {
             panel.relaunch_cloud();

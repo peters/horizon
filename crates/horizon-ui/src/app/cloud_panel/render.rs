@@ -189,7 +189,6 @@ impl HorizonApp {
             self.render_cloud_runtimes(ctx);
         } else {
             self.render_production_runtimes(ctx);
-            self.render_cloud_creation(ctx);
         }
         let canvas = self.canvas_rect(ctx);
         let mut overview = false;
@@ -198,7 +197,9 @@ impl HorizonApp {
             .order(Order::Tooltip)
             .fixed_pos(canvas.min + Vec2::new(24.0, 20.0))
             .show(ctx, |ui| {
-                ctx.move_to_top(ui.layer_id());
+                if !self.cloud_creation_open() {
+                    ctx.move_to_top(ui.layer_id());
+                }
                 egui::Frame::new()
                     .fill(theme::BG_ELEVATED())
                     .stroke(Stroke::new(1.0, theme::BORDER_SUBTLE()))
@@ -247,6 +248,7 @@ impl HorizonApp {
         if overview {
             self.cloud_overview(ctx);
         }
+        self.render_cloud_creation(ctx);
     }
 }
 

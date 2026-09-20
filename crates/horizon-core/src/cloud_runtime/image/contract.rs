@@ -37,6 +37,12 @@ impl Images<'_> {
                 "Worker image cannot validate selected capabilities; rebuild with the current worker bootstrap",
             ));
         }
+        if capabilities.browserstack.is_some() && !output.lines().any(|line| line == "horizon-browserstack-contract=1")
+        {
+            return Err(Error::Invalid(
+                "Worker image lacks requested remote-browser support; rebuild before deployment",
+            ));
+        }
         if git_auth && !output.lines().any(|line| line == "horizon-git-auth-contract=1") {
             return Err(Error::Invalid("Worker image does not support Git credential transfer"));
         }

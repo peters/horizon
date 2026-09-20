@@ -24,6 +24,8 @@ pub struct UsageRequest {
     pub host_instance: String,
     pub provider: Option<String>,
     pub deadline_at_millis: i64,
+    #[serde(default)]
+    pub catalog: Option<horizon_browser::provider_catalog::CatalogQuery>,
     claimed: bool,
 }
 
@@ -33,6 +35,8 @@ pub struct UsageResult {
     pub actor: String,
     pub host_instance: String,
     pub providers: Vec<ProviderUsageSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog: Option<horizon_browser::provider_catalog::CatalogPage>,
     pub error: Option<String>,
 }
 
@@ -44,6 +48,7 @@ impl UsageRequest {
             actor: self.actor.clone(),
             host_instance: self.host_instance.clone(),
             providers,
+            catalog: None,
             error,
         }
     }
@@ -97,7 +102,36 @@ pub fn enqueue_provider_usage(identity: AgentIdentity<'_>, provider: Option<Stri
     UsageQueue::default().enqueue(identity, provider)
 }
 
+/// # Errors
+/// Invalid discovery query, host identity, full queue or unavailable private storage.
+pub fn enqueue_catalog(
+    identity: AgentIdentity<'_>,
+    query: horizon_browser::provider_catalog::CatalogQuery,
+) -> std::io::Result<String> {
+    enqueue_query_at(
+        BrowserRuntimePaths::resolve().root(),
+        identity,
+        Some(query.provider.clone()),
+        Some(query),
+    )
+}
+
 fn enqueue_at(root: &Path, identity: AgentIdentity<'_>, provider: Option<String>) -> std::io::Result<String> {
+    enqueue_query_at(root, identity, provider, None)
+}
+
+fn enqueue_query_at(
+    root: &Path,
+    identity: AgentIdentity<'_>,
+    provider: Option<String>,
+    catalog: Option<horizon_browser::provider_catalog::CatalogQuery>,
+) -> std::io::Result<String> {
+    if catalog.as_ref().is_some_and(|q| !q.valid()) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Invalid provider catalog query",
+        ));
+    }
     super::agent::validate_actor(identity.actor)?;
     let host = identity.host_instance.filter(|host| super::valid_host_instance(host));
     if !identity.workspace_scoped()
@@ -132,6 +166,7 @@ fn enqueue_at(root: &Path, identity: AgentIdentity<'_>, provider: Option<String>
         provider,
         deadline_at_millis: super::now_millis() + 15_000,
         claimed: false,
+        catalog,
     };
     write_private_json(&path(root, &request.request_id, "request"), &request)?;
     Ok(request.request_id)
@@ -251,6 +286,44 @@ fn path(root: &Path, id: &str, kind: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn catalog_queries_keep_host_actor_and_page_boundaries() {
+        use horizon_browser::provider_catalog::{CatalogPage, CatalogQuery};
+        let root = tempfile::tempdir().unwrap();
+        let identity = AgentIdentity::new("horizon:agent", Some("host-a"));
+        let query = CatalogQuery {
+            provider: "account".into(),
+            search: "phone".into(),
+            offset: 50,
+        };
+        let id = enqueue_query_at(root.path(), identity, Some("account".into()), Some(query.clone())).unwrap();
+        assert!(claim_at(root.path(), "host-b").unwrap().is_empty());
+        let request = claim_at(root.path(), "host-a").unwrap().remove(0);
+        assert_eq!(request.catalog, Some(query));
+        let mut result = request.result(vec![], None);
+        result.catalog = Some(CatalogPage {
+            total: 51,
+            ..Default::default()
+        });
+        complete_at(root.path(), &result).unwrap();
+        assert!(take_at(root.path(), AgentIdentity::new("horizon:other", Some("host-a")), &id).is_err());
+        assert_eq!(
+            take_at(root.path(), identity, &id)
+                .unwrap()
+                .unwrap()
+                .catalog
+                .unwrap()
+                .total,
+            51
+        );
+        let invalid = CatalogQuery {
+            provider: "account".into(),
+            search: "x".repeat(129),
+            offset: 0,
+        };
+        assert!(enqueue_query_at(root.path(), identity, Some("account".into()), Some(invalid)).is_err());
+    }
 
     #[test]
     fn usage_requests_are_host_scoped_bounded_and_results_are_actor_scoped() {

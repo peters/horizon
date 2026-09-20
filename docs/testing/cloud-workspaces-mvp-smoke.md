@@ -453,3 +453,84 @@ While a child remains fullscreen, finish or fail a background cloud deployment a
 confirm its events are processed before returning to overview. Retain the same
 fullscreen child and preserve membership. Repeat with nested cloud fullscreen and
 after reconnect; a stale caption refreshed only by Escape is a failure.
+
+## Opt-in hosted mobile browser regression
+
+Use synthetic application data in public evidence. Keep real application
+screenshots and all private account metadata outside this repository.
+
+1. Omit `capabilities.browserstack`: deploy native/minimal profiles, verify no
+   remote credential read, prompt, tunnel or advertised browser tool.
+2. Declare two existing physical-device targets, no local browsers, and one
+   worker-local HTTP port. With no local repository grant, verify failure before
+   any provider allocation. Repeat with a grant for another checkout, an account
+   outside the grant, missing credentials, malformed YAML and an older image.
+3. Build the remote-only image. Verify browser tools and Local runtime work while
+   local Chrome/Firefox and desktop executables are absent. Audit image history
+   and context: no credential values, runtime files or private source.
+4. Deploy using an authorized OS-store binding. Confirm source transfer and
+   normal agent worktrees/sessions. Verify private runtime file permissions and
+   that no secret appears in argv, build output, progress logs or saved state.
+5. Through public browser MCP, read shared provider capacity, create the iPhone
+   target, assert provider-reported physical identity, navigate to the worker's
+   synthetic app and exercise semantic input. Capture a private screenshot.
+   Close it and verify release before creating the Android target; repeat.
+6. Repeat agent-driven creation through a CLI plan. Check actual target labels,
+   fullscreen/restore, browser ownership and disabled local-engine behavior.
+7. Disconnect/restart the Horizon client while the remote agent interacts with
+   its phone panel. Reattach to the same worker, agent, tunnel and remote browser
+   identities. No replacement session or worker may be allocated automatically.
+8. Inject a definite remote-create rejection and an uncertain release using the
+   integration fixture. Retain uncertain allocation records, refuse false close
+   success and reconcile only the original allocation. Wrong targets on the same
+   panel identity must be rejected. A worker-service crash must expose retained
+   unknown allocation history and prevent silent fresh allocation.
+9. Revoke remote access. Verify hosted-device release before removing the private
+   key copies; verify the exact tunnel process exits while native agents stay
+   alive. Without its machine-local grant, reconnect must refuse transfer. With
+   the grant restored, reconnect may explicitly reinstall it.
+10. Stop/Delete a remote-enabled cloud and prove hosted devices are released before
+    compute disappears. Simulated release failure must block teardown and remain
+    visible. Preserve unrelated provider sessions, workers and credentials.
+11. Run focused configuration, credential, worker-image and UI tests, then the full
+    validation matrix on the final candidate. Repeat the decisive live smoke after
+    current-head review/CI; record immutable images, candidate hash, timestamps,
+    cleanup receipts and private screenshot/email references in the local ledger.
+
+Account-level mobile-device regression: declare only `browserstack.provider` and
+explicit worker ports, grant the account for the local checkout, and verify an
+agent can open a second configured device absent from optional preferred
+`targets`. A different ungranted account must fail before compute allocation.
+No profile may export credentials solely because repository YAML requests them.
+
+### Provider catalog regression
+
+- Declare the account and Local ports with no preconfigured device targets. An
+  absent account grant fails before worker allocation; omitted capabilities never
+  resolve or transfer account credentials.
+- On the worker, call `browser_provider_devices` through public MCP and a CLI plan.
+  Search phones, tablets and desktops, paginate, and select a combination that has
+  never been configured as a Horizon target. Verify the CLI uses the same policy.
+- Create from the returned reference; verify provider-confirmed device identity.
+  A forged, stale or another account's reference must fail before allocation.
+- Rebind the account and verify old discovery results cannot bypass the binding.
+  A provider timeout, 401, unsupported provider, oversized query and cancelled
+  discovery must leave no compute/device allocation or credential output.
+- Disconnect Horizon while an agent controls the device. Reconnect to the same
+  worker/session; close the device and verify exact release before revoking the
+  copied credential and terminating the task worker.
+
+### Existing New cloud dialog presentation
+
+Retain the same title, repository, committed revision, profile and create/deploy
+workflow. Check full-width fields, selected profile resources, visible Cancel/Create
+actions, errors and scrolling at 4K and the native 800×600 minimum. Read the
+actual window geometry: smaller requested widths may be clamped by the window
+manager. Tab/Shift-Tab and
+Space/Enter must stay in the modal; toolbar actions must not activate underneath.
+Hold Escape through repeats and release: dismiss only the dialog, retaining cloud
+fullscreen and terminal input isolation. Capture launch and resize plus a short
+native recording. No issue picker or remote-device picker belongs in this flow.
+Close the dialog, leave at least one ordinary frame, then reopen using its toolbar
+button. Repeat Tab traversal and click the backdrop over Fit all: dismiss the
+dialog without fitting the underlying canvas or activating other toolbar actions.

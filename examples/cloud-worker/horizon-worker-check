@@ -18,7 +18,7 @@ parser.add_argument('--ready', action='store_true')
 args = parser.parse_args()
 
 def capabilities(value):
-    if not isinstance(value, dict) or set(value) - {'agents', 'browsers', 'desktop'}:
+    if not isinstance(value, dict) or set(value) - {'agents', 'browsers', 'desktop', 'browserstack'}:
         raise ValueError('Invalid worker capability configuration')
     for field, allowed in [('agents', {'codex', 'claude', 'grok'}), ('browsers', {'chromium', 'firefox'})]:
         values = value.get(field, [])
@@ -26,7 +26,22 @@ def capabilities(value):
             raise ValueError('Unsupported worker capability')
     if not isinstance(value.get('desktop', False), bool):
         raise ValueError('Invalid desktop capability')
-    return {'agents': value.get('agents', []), 'browsers': value.get('browsers', []), 'desktop': value.get('desktop', False)}
+    result = {'agents': value.get('agents', []), 'browsers': value.get('browsers', []), 'desktop': value.get('desktop', False)}
+    remote = value.get('browserstack')
+    if remote is not None:
+        if not isinstance(remote, dict) or set(remote) - {'provider', 'targets', 'local_ports'}:
+            raise ValueError('Invalid remote browser capability')
+        targets, ports = remote.get('targets', []), remote.get('local_ports', [])
+        provider = remote.get('provider', 'browserstack')
+        import re
+        if not isinstance(provider, str) or not re.fullmatch(r'[A-Za-z0-9._-]{1,64}', provider):
+            raise ValueError('Invalid remote account name')
+        if not isinstance(targets, list) or len(targets) > 16 or any(not isinstance(v, str) or not re.fullmatch(r'[A-Za-z0-9._-]{1,64}', v) for v in targets):
+            raise ValueError('Invalid remote targets')
+        if not isinstance(ports, list) or len(ports) > 16 or any(type(v) is not int or not 1 <= v <= 65535 for v in ports):
+            raise ValueError('Invalid local ports')
+        result['browserstack'] = {'provider': provider, 'targets': sorted(set(targets)), 'local_ports': sorted(set(ports))}
+    return result
 
 def require(binary):
     if shutil.which(binary) is None:
@@ -55,6 +70,8 @@ try:
     selected = capabilities(json.loads(raw)) if raw else capabilities(json.loads(runtime.read_text())) if runtime.exists() else available
     if any(not set(selected[k]) <= set(available[k]) for k in ['agents', 'browsers']) or (selected['desktop'] and not available['desktop']):
         raise ValueError('Worker image does not contain the requested capabilities')
+    if 'browserstack' in selected and 'browserstack' not in available:
+        raise ValueError('Worker image lacks remote browser support')
     if args.agent:
         if args.agent != 'shell' and args.agent not in selected['agents']:
             raise ValueError('Agent is disabled by this cloud profile')
@@ -65,8 +82,13 @@ try:
     for agent in selected['agents']:
         require(agent)
         probe([agent, '--version'])
-    if selected['browsers']:
+    if selected['browsers'] or 'browserstack' in selected:
         require('horizon-browser')
+    if 'browserstack' in selected:
+        require('horizon-worker-browserstack')
+        require('BrowserStackLocal')
+        probe(['BrowserStackLocal', '--version'])
+        print('horizon-browserstack-contract=1')
     for browser in selected['browsers']:
         if browser == 'chromium':
             binary = next((name for name in ['chromium', 'chromium-browser', 'google-chrome-stable', 'google-chrome'] if shutil.which(name)), None)
@@ -87,7 +109,7 @@ try:
         print('horizon-git-auth-contract=1')
     if args.ready:
         active = capabilities(json.loads(runtime.read_text()))
-        if any(set(active[k]) != set(selected[k]) for k in ['agents', 'browsers']) or active['desktop'] != selected['desktop']:
+        if active != selected:
             raise ValueError('Active worker capabilities differ from this cloud profile')
         services_ready(selected)
     if args.write_runtime:

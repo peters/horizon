@@ -21,6 +21,8 @@ pub(super) struct CloudView {
     id: String,
     initial_url: Option<String>,
     backend: super::BackendKind,
+    pub(super) target: Option<String>,
+    pub(super) device: Option<String>,
     tx: mpsc::SyncSender<BrowserCommand>,
     latest: Latest,
     waker: Waker,
@@ -33,6 +35,7 @@ impl CloudView {
         connection: Connection,
         id: String,
         url: Option<String>,
+        target: Option<String>,
         backend: super::BackendKind,
         frames: Arc<FrameSlot>,
     ) -> io::Result<Self> {
@@ -81,6 +84,8 @@ impl CloudView {
             connection,
             id,
             initial_url: url,
+            target,
+            device: None,
             backend,
             tx,
             latest,
@@ -98,7 +103,8 @@ impl CloudView {
         let open = CloudViewRequest::Open {
             id: view.id.clone(),
             url: view.initial_url.clone(),
-            backend: Some(view.backend),
+            backend: view.target.is_none().then_some(view.backend),
+            target: view.target.clone(),
         };
         thread::spawn(move || {
             let result = pump(input, &responses, &rx, &frames, &latest, &waker, &stop, open);
@@ -218,6 +224,7 @@ impl BrowserPanelState {
     pub fn start_cloud(
         id: String,
         connection: Connection,
+        target: Option<String>,
         url: Option<String>,
         config: &super::BrowserConfig,
     ) -> crate::Result<Self> {
@@ -230,6 +237,7 @@ impl BrowserPanelState {
             connection,
             id,
             url,
+            target,
             config.backend,
             state.frame_slot.clone(),
         )?);
@@ -257,6 +265,19 @@ impl BrowserPanelState {
             self.url = Some(state.url);
             self.pending_user_navigation = None;
         }
+        if let Some(cloud) = &mut self.cloud {
+            cloud.target.clone_from(&state.remote_target);
+            cloud.device.clone_from(&state.remote_device);
+        }
+        self.remote_status = state.remote_target.as_ref().map(|target| {
+            format!(
+                "{target} · {}",
+                state
+                    .remote_device
+                    .as_deref()
+                    .unwrap_or("Awaiting provider confirmation")
+            )
+        });
         self.config.backend = state.backend;
         self.title = state.title;
         self.owner = state.owner;
@@ -289,6 +310,7 @@ impl BrowserPanelState {
             old.connection.clone(),
             old.id.clone(),
             old.initial_url.clone(),
+            old.target.clone(),
             old.backend,
             self.frame_slot.clone(),
         );

@@ -59,6 +59,16 @@ copies before Docker sees them, and records sizes/checksums. No source, settings
 credentials or previous image directory is copied. Keep each agent install in a
 separate layer so the compressed manifest records its actual contribution.
 
+For a GPU context, add `--gpu-base <upstream-runtime>@sha256:<digest>` to that
+preparation command. Choose the workload's compatible CUDA/TensorRT runtime,
+not a previous worker image. Preparation generates a standalone `Dockerfile.gpu`
+from the shared recipe with that immutable base and NVIDIA runtime environment.
+Use the generated file in the GPU profile; it accepts the same `HORIZON_*`
+arguments Horizon already supplies and needs no additional build argument.
+Without `--gpu-base`, preparation produces only the CPU recipe. Unpinned or
+credential-bearing bases fail before any context is written. The base digest
+must actually contain the required GPU libraries; its name alone proves nothing.
+
 The contract reports `horizon-worker-contract=1`, `horizon-source-contract=1` and
 `horizon-capabilities-contract=1`. Source transfer carries verified LFS objects and
 selected submodule history separately from images. A persisted session launch
@@ -145,3 +155,88 @@ interactive sessions retain their supported permission controls. An approved
 long-running command continues remotely after disconnect; a command waiting for
 interactive approval remains waiting. Record the chosen mode in acceptance
 evidence instead of claiming unattended shell execution from a version check.
+
+### Optional remote mobile browsers
+
+A profile can enable hosted device testing without installing a local browser:
+
+```yaml
+capabilities:
+  agents: [codex, claude]
+  browsers: []
+  desktop: false
+  browserstack:
+    provider: browserstack
+    local_ports: [8080]
+```
+
+The provider names an existing Horizon `browser.remote.providers` account.
+Agents may select **any device, OS and browser combination in the live provider
+catalog**, without preconfiguring a Horizon target. `browser_provider_devices`
+accepts the account name, search words and a pagination offset; pass a returned
+`target` to `browser_create`. The CLI plan runner exposes the same public tool.
+Device selection is agent-driven; this MVP has no device picker UI. Discovery never reserves capacity. Account entitlement and
+live availability are authoritative at allocation; provider evidence still verifies
+the actual device before a panel becomes ready.
+
+Existing `browser.remote.targets` remain supported. Optional YAML `targets`
+entries choose preferred starting targets only, never restrict allocation.
+One profile selects one account; different profiles can use separate bindings.
+Catalog references expire from the host cache after five minutes; rediscover
+before a new allocation when asked. This does not stop existing sessions.
+
+Authorize the exact local checkout once in the cloud `settings.json`:
+
+```json
+{
+  "browserstack_credentials": [{
+    "local_repository": "/absolute/path/to/checkout",
+    "configuration_file": "/absolute/path/to/horizon/config.yaml",
+    "providers": ["browserstack"]
+  }]
+}
+```
+
+This is an additional field in the existing settings object. It contains no
+credential values. Existing OS-keychain and explicitly named environment
+bindings are resolved at deployment. Session-only settings credentials must be
+bound to one of those persistent sources before deployment. The UI, Rust
+orchestrator and other deployment callers use the same grant and resolver.
+
+If `browserstack` is absent, Horizon neither prompts nor transfers credentials.
+A declaration is a requirement, not authority to export secrets: absent grants,
+ungranted accounts, missing starting targets and missing credentials fail before compute allocation.
+Existing version-1 profiles retain their previous defaults; remote device
+support is never added implicitly.
+
+Build with `HORIZON_BROWSERSTACK=true` (the deployment flow supplies this from
+capabilities). This adds the stripped browser tool helper and the official Local
+8.9 tunnel binary; it does not install Chrome, Firefox or a desktop. The pinned
+archive checksum fails the build if the upstream download changes. Update the
+checksum only after verifying the replacement archive from the official source.
+
+Credentials travel through SSH stdin into mode-0600 files under a mode-0700
+`/run/horizon-credentials` directory, outside images, source, build contexts and
+persistent provider volumes. Selected agents use the existing public browser
+MCP tools, including `browser_create(target=...)`, provider usage and allocation
+recovery. They never receive credentials in tool responses. Agents select remote
+devices through CLI/MCP; restored panels retain their target and show the
+provider-confirmed device identity. BrowserStack Local runs in its own worker
+tmux session. Only the listed loopback ports are tunneled, with a cloud-specific
+identifier, so the laptop can disconnect. Other public website resources can
+still load directly at the device.
+
+Use **Release devices and remove remote credentials** to close hosted devices,
+stop this cloud's private tunnel and remove its credential copies. Removing a
+local grant alone blocks future transfers; it cannot remotely revoke a secret
+already copied. Reconnect reinstalls credentials only when the grant remains.
+Stop/Delete first verifies hosted-device release. Uncertain release keeps its
+recovery record and blocks destructive cleanup; use `browser_remote_allocations`
+to inspect/reconcile the exact allocation. A lost worker service reports retained
+allocations as requiring provider verification; it does not claim recovery or
+silently retry allocation. An externally destroyed worker cannot revoke the
+account key; rotate it at the provider when necessary.
+
+Local tunnel flags and isolation rules follow the provider documentation:
+[Local binary options](https://www.browserstack.com/docs/local-testing/binary-params)
+and [multiple connections](https://www.browserstack.com/docs/automate/selenium/manage-multiple-connections).

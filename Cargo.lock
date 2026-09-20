@@ -2186,6 +2186,7 @@ dependencies = [
  "rav1e",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror 2.0.20",
  "tracing",
@@ -2295,6 +2296,7 @@ dependencies = [
  "png",
  "serde",
  "serde_json",
+ "tempfile",
  "toml_edit",
 ]
 

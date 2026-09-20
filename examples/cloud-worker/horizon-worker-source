@@ -52,8 +52,15 @@ def import_source():
             shutil.copyfile(content, destination)
         for index, module in enumerate(value['modules']):
             repo = ROOT / f'module-{index}.git'
+            revision = module['revision']
+            if len(revision) not in (40, 64) or any(c not in '0123456789abcdef' for c in revision):
+                raise ValueError('Invalid submodule revision')
+            object_format = 'sha256' if len(revision) == 64 else 'sha1'
             if not repo.exists():
-                git('init', '--bare', repo, stdout=subprocess.DEVNULL)
+                git('init', '--bare', '--object-format=' + object_format, repo, stdout=subprocess.DEVNULL)
+            actual_format = subprocess.check_output(['git', '--git-dir', str(repo), 'rev-parse', '--show-object-format'], text=True).strip()
+            if actual_format != object_format:
+                raise ValueError('Submodule object format mismatch')
             with (folder / f'module-{index}.pack').open('rb') as objects:
                 git('--git-dir', repo, 'index-pack', '--stdin', stdin=objects, stdout=subprocess.DEVNULL)
             git('--git-dir', repo, 'cat-file', '-e', module['revision'] + '^{commit}')

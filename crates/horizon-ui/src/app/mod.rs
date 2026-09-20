@@ -4,6 +4,7 @@ mod bootstrap;
 mod browser_close_requests;
 mod browser_connectors;
 mod browser_duplicate;
+mod browser_provider_catalog;
 mod browser_provider_usage;
 mod browser_recovery;
 mod browser_remote_create;

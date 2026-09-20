@@ -8,7 +8,12 @@ use horizon_browser_control::{
     manifest::{self, ManifestCoordination},
 };
 use horizon_browser_protocol::cloud_view::{CloudViewRequest, CloudViewResponse, CloudViewState};
-use std::{collections::BTreeMap, io, path::PathBuf, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    io,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 pub struct HostedBrowser {
     pub session: BrowserSession,
     pub state: CloudViewState,
@@ -20,6 +25,8 @@ pub struct Host {
     root: PathBuf,
     closed: std::collections::BTreeSet<String>,
     stopping: BTreeMap<String, horizon_browser::BrowserShutdownSignal>,
+    pub catalog: super::catalog::Host,
+    pub remote_allocations: super::remote::Allocations,
 }
 impl Host {
     pub fn new() -> io::Result<Self> {
@@ -40,6 +47,7 @@ impl Host {
             Err(error) if error.kind() == io::ErrorKind::NotFound => horizon_cloud::Capabilities::default(),
             Err(error) => return Err(error),
         };
+        let remote_allocations = super::remote::Allocations::new(root.join("remote-holds"))?;
         Ok(Self {
             capabilities,
             browsers: BTreeMap::new(),
@@ -47,19 +55,39 @@ impl Host {
             root,
             closed,
             stopping: BTreeMap::new(),
+            remote_allocations,
+            catalog: crate::catalog::Host::default(),
         })
     }
-    pub fn open(&mut self, id: &str, url: Option<String>, backend: Option<BackendKind>) -> io::Result<()> {
+    pub fn open(
+        &mut self,
+        id: &str,
+        url: Option<String>,
+        backend: Option<BackendKind>,
+        target: Option<&str>,
+        actor: &str,
+    ) -> io::Result<()> {
         if id.is_empty() || id.len() > 100 || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
             return Err(io::Error::other("Invalid browser identity"));
         }
         if let Some(existing) = self.browsers.get(id) {
-            if backend.is_some_and(|backend| backend != existing.state.backend) {
-                return Err(io::Error::other("Existing browser uses a different engine"));
-            }
+            validate_existing(&existing.state, backend, target)?;
             return Ok(());
         }
-        let backend = selected_backend(&self.capabilities, backend)?;
+        if target.is_some() && Path::new("/run/horizon-credentials/browserstack-revoked").exists() {
+            return Err(io::Error::other(
+                "Remote credentials were revoked; reconnect only after restoring the local grant",
+            ));
+        }
+        let remote = target
+            .map(|name| super::remote::request(&self.capabilities, name, &self.catalog.cache))
+            .transpose()?;
+        let backend = match &remote {
+            Some(remote) => remote.browser,
+            None => selected_backend(&self.capabilities, backend)?,
+        };
+        let coordination =
+            ManifestCoordination::with_remote_allocation(remote.as_ref().map(|request| request.recovery.clone()));
         let marker = self.root.join(id);
         if marker.exists() {
             return Err(io::Error::other(
@@ -68,6 +96,9 @@ impl Host {
         }
         if self.browsers.len() >= 16 {
             return Err(io::Error::other("Cloud browser capacity reached"));
+        }
+        if let Some(remote) = &remote {
+            self.remote_allocations.insert(id, actor, remote)?;
         }
         let config = BrowserConfig {
             backend,
@@ -79,24 +110,22 @@ impl Host {
             },
             ..BrowserConfig::default()
         };
-        let session = start_session(BrowserSessionConfig {
-            browser: config,
-            panel_local_id: id.into(),
-            initial_url: url,
-            width: 1280,
-            height: 800,
-            frame_slot: Arc::new(FrameSlot::new()),
-            coordination: Some(Arc::new(ManifestCoordination::default())),
-            capture_directory: Some(self.root.join("captures")),
-            video: Arc::new(VideoCaptureHandle::default()),
-            remote: None,
+        let session = start_fenced(&marker, || {
+            start_session(BrowserSessionConfig {
+                browser: config,
+                panel_local_id: id.into(),
+                initial_url: url,
+                width: 1280,
+                height: 800,
+                frame_slot: Arc::new(FrameSlot::new()),
+                coordination: Some(Arc::new(coordination)),
+                capture_directory: Some(self.root.join("captures")),
+                video: Arc::new(VideoCaptureHandle::default()),
+                remote,
+            })
+            .map_err(io::Error::other)
         })
-        .map_err(io::Error::other)?;
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(marker)?
-            .sync_all()?;
+        .inspect_err(|_| self.remote_allocations.cancel_start(id))?;
         self.browsers.insert(
             id.into(),
             HostedBrowser {
@@ -105,6 +134,7 @@ impl Host {
                     id: id.into(),
                     backend,
                     visible: true,
+                    remote_target: target.map(str::to_owned),
                     ..CloudViewState::default()
                 },
             },
@@ -115,6 +145,10 @@ impl Host {
         for browser in self.browsers.values_mut() {
             for event in browser.session.event_rx.try_iter() {
                 match event {
+                    BrowserEvent::RemoteSession(horizon_browser::RemoteSessionEvent::DeviceIdentity {
+                        identity,
+                        ..
+                    }) => browser.state.remote_device = Some(identity.summary()),
                     BrowserEvent::Ready => browser.state.ready = true,
                     BrowserEvent::Title(title) => browser.state.title = title,
                     BrowserEvent::UrlChanged(url) => browser.state.url = url,
@@ -146,7 +180,12 @@ impl Host {
     }
     pub fn request(&mut self, request: CloudViewRequest) -> CloudViewResponse {
         match request {
-            CloudViewRequest::Open { id, url, backend } => match self.open(&id, url, backend) {
+            CloudViewRequest::Open {
+                id,
+                url,
+                backend,
+                target,
+            } => match self.open(&id, url, backend, target.as_deref(), "") {
                 Ok(()) => self.snapshot(&id, 0),
                 Err(e) => CloudViewResponse {
                     error: Some(e.to_string()),
@@ -180,6 +219,33 @@ impl Host {
                     ..CloudViewResponse::default()
                 },
             },
+            CloudViewRequest::RevokeRemote => {
+                if let Err(error) = std::fs::write("/run/horizon-credentials/browserstack-revoked", "revoked") {
+                    return CloudViewResponse {
+                        error: Some(error.to_string()),
+                        ..CloudViewResponse::default()
+                    };
+                }
+                if let Err(error) = self.remote_allocations.ensure_recoverable() {
+                    return CloudViewResponse {
+                        error: Some(error.to_string()),
+                        ..CloudViewResponse::default()
+                    };
+                }
+                let ids: Vec<_> = self.remote_allocations.ids();
+                for id in &ids {
+                    if let Err(error) = self.close(id) {
+                        return CloudViewResponse {
+                            error: Some(error.to_string()),
+                            ..CloudViewResponse::default()
+                        };
+                    }
+                }
+                CloudViewResponse {
+                    closed: ids,
+                    ..CloudViewResponse::default()
+                }
+            }
             CloudViewRequest::List => CloudViewResponse {
                 closed: self.closed.iter().cloned().collect(),
                 browsers: self.browsers.values().map(|b| b.state.clone()).collect(),
@@ -201,6 +267,16 @@ impl Host {
         {
             return Err(io::Error::other("Browser shutdown is unresolved"));
         }
+        if self
+            .stopping
+            .get(id)
+            .is_some_and(horizon_browser::BrowserShutdownSignal::holds_remote_allocation)
+        {
+            return Err(io::Error::other(
+                "Remote device release is unconfirmed; reconcile the retained allocation before closing",
+            ));
+        }
+        self.remote_allocations.confirm_closed(id)?;
         self.stopping.remove(id);
         self.closed.insert(id.into());
         std::fs::write(self.root.join(id), "closed")?;
@@ -232,6 +308,46 @@ impl Host {
             ..CloudViewResponse::default()
         }
     }
+}
+
+fn validate_existing(state: &CloudViewState, backend: Option<BackendKind>, target: Option<&str>) -> io::Result<()> {
+    if state.remote_target.as_deref() != target {
+        return Err(io::Error::other("Existing browser uses a different remote target"));
+    }
+    if target.is_none() && backend.is_some_and(|backend| backend != state.backend) {
+        return Err(io::Error::other("Existing browser uses a different engine"));
+    }
+    Ok(())
+}
+
+// start_session only returns Err before its driver thread has started. Once it
+// returns a session, even a later asynchronous failure must retain the fence.
+fn start_fenced<T>(marker: &Path, start: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(marker)?
+        .sync_all()?;
+    sync_marker_directory(marker)?;
+    match start() {
+        Ok(session) => Ok(session),
+        Err(error) => {
+            std::fs::remove_file(marker)?;
+            sync_marker_directory(marker)?;
+            Err(error)
+        }
+    }
+}
+
+fn sync_marker_directory(marker: &Path) -> io::Result<()> {
+    let parent = marker
+        .parent()
+        .ok_or_else(|| io::Error::other("Browser history has no directory"))?;
+    #[cfg(unix)]
+    std::fs::File::open(parent)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = parent;
+    Ok(())
 }
 
 fn selected_backend(
@@ -271,6 +387,76 @@ fn encode_frame(frame: &horizon_browser::frames::FrameData) -> io::Result<String
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn completed_driver_does_not_prove_remote_release_or_discard_recovery() {
+        let root = tempfile::tempdir().unwrap();
+        let mut host = Host {
+            capabilities: horizon_cloud::Capabilities::default(),
+            catalog: crate::catalog::Host::default(),
+            browsers: BTreeMap::new(),
+            pending: Vec::new(),
+            root: root.path().into(),
+            closed: std::collections::BTreeSet::default(),
+            stopping: BTreeMap::new(),
+            remote_allocations: super::super::remote::Allocations::new(root.path().join("remote-holds")).unwrap(),
+        };
+        host.stopping.insert(
+            "phone".into(),
+            horizon_browser::BrowserShutdownSignal::completed_remote_for_test("account", None),
+        );
+        assert!(host.close("phone").is_err());
+        assert!(host.stopping.contains_key("phone"));
+        assert!(!host.closed.contains("phone"));
+        assert!(!root.path().join("phone").exists());
+        host.stopping.insert(
+            "phone".into(),
+            horizon_browser::BrowserShutdownSignal::completed_remote_for_test(
+                "account",
+                Some(horizon_browser::RemoteReleaseOutcome::Released),
+            ),
+        );
+        host.close("phone").unwrap();
+        assert!(!host.stopping.contains_key("phone"));
+        assert!(host.closed.contains("phone"));
+        assert_eq!(std::fs::read(root.path().join("phone")).unwrap(), b"closed");
+    }
+    #[test]
+    fn existing_browser_cannot_switch_target_or_cross_local_remote_boundary() {
+        let remote = CloudViewState {
+            remote_target: Some("phone-a".into()),
+            backend: BackendKind::SafariWebDriver,
+            ..Default::default()
+        };
+        assert!(validate_existing(&remote, None, Some("phone-a")).is_ok());
+        assert!(validate_existing(&remote, None, Some("phone-b")).is_err());
+        assert!(validate_existing(&remote, None, None).is_err());
+        assert!(validate_existing(&CloudViewState::default(), None, Some("phone-a")).is_err());
+    }
+    #[test]
+    fn launch_is_fenced_before_start_and_cannot_be_replayed_after_interruption() {
+        let root = tempfile::tempdir().unwrap();
+        let marker = root.path().join("browser");
+        let interrupted = std::panic::catch_unwind(|| {
+            let _: io::Result<()> = start_fenced(&marker, || {
+                assert!(marker.is_file());
+                panic!("simulated interruption before launch result");
+            });
+        });
+        assert!(interrupted.is_err());
+        assert!(start_fenced::<()>(&marker, || panic!("must not relaunch")).is_err());
+    }
+
+    #[test]
+    fn definite_prelaunch_failure_releases_the_identity_but_success_retains_it() {
+        let root = tempfile::tempdir().unwrap();
+        let marker = root.path().join("browser");
+        let failed: io::Result<()> = start_fenced(&marker, || Err(io::Error::other("driver thread not started")));
+        assert!(failed.is_err());
+        assert!(!marker.exists());
+        assert_eq!(start_fenced(&marker, || Ok(42)).unwrap(), 42);
+        assert!(marker.is_file());
+        assert!(start_fenced(&marker, || Ok(43)).is_err());
+    }
     #[test]
     fn disabled_engines_are_rejected_and_firefox_only_defaults_to_firefox() {
         let mut capabilities: horizon_cloud::Capabilities = serde_json::from_str("{}").unwrap();

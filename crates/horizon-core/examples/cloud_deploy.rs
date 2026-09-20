@@ -15,7 +15,7 @@ fn run() -> cloud_runtime::Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args.len() < 3 {
         return Err(cloud_runtime::Error::Invalid(
-            "Usage: cloud_deploy deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] | stop|resume|delete SETTINGS STATE_ROOT",
+            "Usage: cloud_deploy deploy|prepare-image SETTINGS REPOSITORY PROFILE STATE_ROOT CLOUD_ID [REVISION] | stop|resume|delete|revoke-browserstack SETTINGS STATE_ROOT",
         ));
     }
     let settings = Settings::load(&PathBuf::from(&args[1]))?;
@@ -25,6 +25,10 @@ fn run() -> cloud_runtime::Result<()> {
     }
     if args[0] == "stop" && args.len() == 3 {
         cloud_runtime::lifecycle::stop(&PathBuf::from(&args[2]), &settings, &cancel)?;
+        return Ok(());
+    }
+    if args[0] == "revoke-browserstack" && args.len() == 3 {
+        cloud_runtime::lifecycle::revoke_browserstack(&PathBuf::from(&args[2]), &settings, &cancel)?;
         return Ok(());
     }
     if args[0] == "resume" && args.len() == 3 {

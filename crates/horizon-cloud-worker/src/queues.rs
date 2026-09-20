@@ -3,6 +3,8 @@ use super::browser::Host;
 use horizon_browser_control::manifest::{self, AgentIdentity, BrowserCreateResult, CreateNavigation};
 pub fn poll(host: &mut Host) {
     host_controls(host);
+    super::remote::poll(&mut host.remote_allocations, &host.capabilities, &mut host.catalog);
+    host.catalog.poll(&host.capabilities);
     device_viewer_requests();
     let membership = workspace();
     for browser in host.browsers.values() {
@@ -21,16 +23,22 @@ pub fn poll(host: &mut Host) {
             ) else {
                 continue;
             };
-            if request.target.is_some() || request.duplicate_from.is_some() {
+            if request.duplicate_from.is_some() {
                 let _ = manifest::complete_create_request(&BrowserCreateResult::failed(
                     &request,
                     "unsupported_cloud_target",
-                    "This worker supports its local browser runtime",
+                    "Duplicating a cloud browser is not supported",
                 ));
                 continue;
             }
             let id = format!("browser-{}", request.request_id);
-            match host.open(&id, request.url.clone(), request.backend) {
+            match host.open(
+                &id,
+                request.url.clone(),
+                request.backend,
+                request.target.as_deref(),
+                &request.actor,
+            ) {
                 Ok(()) => {
                     if let Some(browser) = host.browsers.get_mut(&id) {
                         browser.state.visible = request.visible;

@@ -12,6 +12,7 @@ mod remote_panel;
 pub use remote_panel::RemoteFailure;
 #[cfg(feature = "cloud-workspaces")]
 mod cloud;
+pub mod remote_catalog;
 pub mod remote_profile;
 pub mod remote_recovery;
 pub mod remote_session;
@@ -935,6 +936,8 @@ fn retain_effective_profile_root(config: &mut BrowserConfig, default_root: &Path
     config.profile_root = Some(config.effective_profile_root(default_root));
     true
 }
+
+pub use horizon_browser::provider_catalog;
 
 #[cfg(test)]
 mod tests {

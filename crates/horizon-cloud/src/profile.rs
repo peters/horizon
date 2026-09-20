@@ -117,6 +117,26 @@ impl Profile {
     /// # Errors
     /// Rejects invalid resources, unsafe build paths and unsupported runtime contracts.
     pub fn validate(&self, design_fixture: bool) -> Result<(), ProfileError> {
+        if let Some(browserstack) = &self.capabilities.browserstack
+            && (browserstack.provider.is_empty()
+                || browserstack.provider.len() > 64
+                || !browserstack
+                    .provider
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+                || browserstack.targets.len() > 16
+                || browserstack.targets.iter().any(|name| {
+                    name.is_empty()
+                        || name.len() > 64
+                        || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+                })
+                || browserstack.local_ports.contains(&0)
+                || browserstack.local_ports.len() > 16)
+        {
+            return Err(ProfileError::Invalid(
+                "BrowserStack requires named targets and valid worker-local ports",
+            ));
+        }
         if self.provider != "runpod" && !(design_fixture && matches!(self.provider.as_str(), "daytona" | "fly")) {
             return Err(ProfileError::Invalid(
                 "Only RunPod can deploy workers; Daytona and Fly.io are design fixtures",
@@ -198,6 +218,37 @@ mod tests {
         assert!(minimal.profiles["min"].capabilities.agents.is_empty());
         assert!(minimal.profiles["min"].capabilities.browsers.is_empty());
         assert!(!minimal.profiles["min"].capabilities.desktop);
+    }
+    #[test]
+    fn remote_targets_require_explicit_valid_names_and_ports_without_secrets() {
+        let mut profile = CloudConfig::parse(EXAMPLE)
+            .unwrap()
+            .profiles
+            .remove("image-only")
+            .unwrap();
+        profile.capabilities.browserstack = Some(crate::BrowserStack {
+            provider: crate::BrowserStack::default_provider(),
+            targets: ["ios_phone".into(), "android_phone".into()].into(),
+            local_ports: [8080].into(),
+        });
+        assert!(profile.validate(false).is_ok());
+        profile
+            .capabilities
+            .browserstack
+            .as_mut()
+            .unwrap()
+            .local_ports
+            .insert(0);
+        assert!(profile.validate(false).is_err());
+        profile.capabilities.browserstack.as_mut().unwrap().local_ports.clear();
+        profile.capabilities.browserstack.as_mut().unwrap().provider.clear();
+        assert!(profile.validate(false).is_err());
+        assert!(
+            serde_json::from_str::<crate::Capabilities>(
+                r#"{"browserstack":{"targets":["phone"],"access_key":"private-value"}}"#
+            )
+            .is_err()
+        );
     }
     #[test]
     fn rejects_unsupported_and_secret_bearing_input_without_echoing() {

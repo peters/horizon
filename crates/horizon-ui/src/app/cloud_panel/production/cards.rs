@@ -59,6 +59,12 @@ impl HorizonApp {
                         {
                             fullscreen = Some(group.issue);
                         }
+                        if runtime.stage == Some(Stage::Ready)
+                            && launch.profile.capabilities.browserstack.is_some()
+                            && ui.button("Release devices and remove remote credentials").on_hover_text("Stops this cloud’s hosted browser sessions and private tunnel, then deletes its copied credentials. Reconnect transfers them again only while the local grant remains configured.").clicked()
+                        {
+                            action = Some((group.issue, Action::RevokeBrowserstack));
+                        }
                         if let Some(next) = runtime_actions(ui, runtime) {
                             action = Some((group.issue, next));
                         }
@@ -129,6 +135,9 @@ fn profile_details(ui: &mut egui::Ui, launch: &horizon_core::cloud_panel::CloudL
             launch.profile.capabilities.browsers_argument()
         }
     ));
+    if let Some(selected) = &launch.profile.capabilities.browserstack {
+        ui.small(format!("Remote account: {}", selected.provider));
+    }
     ui.small(if launch.profile.capabilities.desktop {
         "Desktop: enabled"
     } else {

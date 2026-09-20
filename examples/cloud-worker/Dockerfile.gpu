@@ -1,8 +1,0 @@
-# Build the shared Dockerfile with BASE_IMAGE set to the project CUDA/TensorRT
-# runtime and the selected capability arguments. Pin that clean GPU worker below.
-# Never use an old full worker or substitute a CPU runtime.
-ARG WORKER_IMAGE
-FROM ${WORKER_IMAGE}
-# RunPod supplies NVIDIA devices and its driver via the container runtime.
-# Install workload-specific CUDA libraries here if the selected project needs them.
-ENV NVIDIA_VISIBLE_DEVICES=all NVIDIA_DRIVER_CAPABILITIES=compute,utility

@@ -81,7 +81,7 @@ impl Material {
             if mode == 0o160_000 {
                 let local = directory.join(&name);
                 self.modules.push(Module {
-                    path: path.to_string_lossy().into_owned(),
+                    path: portable_path(&path)?,
                     revision: oid.to_string(),
                     repository: local.clone(),
                 });
@@ -124,7 +124,7 @@ impl Material {
                 let source = storage.join(&oid[..2]).join(&oid[2..4]).join(&oid);
                 verify_object(&source, &oid, size, runner)?;
                 self.assets.push(Asset {
-                    path: path.to_string_lossy().into_owned(),
+                    path: portable_path(&path)?,
                     oid,
                     size,
                     source,
@@ -145,6 +145,18 @@ impl Material {
         Ok(())
     }
 }
+fn portable_path(path: &Path) -> Result<String> {
+    safe_path(path)?;
+    path.components()
+        .map(|part| {
+            part.as_os_str()
+                .to_str()
+                .ok_or(Error::Invalid("Source paths must be UTF-8"))
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(|parts| parts.join("/"))
+}
+
 fn safe_path(path: &Path) -> Result<()> {
     if path.as_os_str().is_empty()
         || path
@@ -275,4 +287,13 @@ pub(super) fn archive(repository: &Path, revision: &str, root: &Path, runner: &R
         Duration::from_secs(300),
     )?;
     Ok(archive)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn manifest_paths_use_portable_slashes() {
+        let nested = std::path::Path::new("modules").join("child").join("asset.bin");
+        assert_eq!(super::portable_path(&nested).unwrap(), "modules/child/asset.bin");
+    }
 }

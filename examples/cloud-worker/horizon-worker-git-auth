@@ -88,7 +88,7 @@ def main():
         env = dict(os.environ)
         if value:
             env['GH_TOKEN'] = value['token']
-            env.setdefault('GH_REPO', value['repository'])
+            env['GH_REPO'] = value['repository']
             env['GH_HOST'] = 'github.com'
         os.execve('/usr/bin/gh', ['/usr/bin/gh', *sys.argv[1:]], env)
         return

@@ -54,6 +54,8 @@ fn cloud_removal_requires_readable_unlocked_and_safe_durable_state() {
         sessions: Vec::new(),
         source_ready: false,
         stop_requested: false,
+        browserstack_released: false,
+        browserstack_targets: std::collections::BTreeSet::new(),
     };
     store.save(&state).unwrap();
     app.remove_deleted_cloud(1, &ctx);
@@ -78,4 +80,38 @@ fn cloud_removal_requires_readable_unlocked_and_safe_durable_state() {
         app.cloud_prototype.groups.0.is_empty(),
         "unallocated cloud can be removed"
     );
+}
+
+#[test]
+fn restoring_an_absolute_cloud_identity_never_touches_its_target() {
+    let (temp, mut app) = test_app();
+    let ctx = egui::Context::default();
+    let workspace = app.board.create_workspace("cloud fixture");
+    let mut group = CloudGroup::new(
+        1,
+        "Invalid persisted cloud".into(),
+        app.board.workspace(workspace).unwrap().local_id.clone(),
+        temp.path().into(),
+        [0.0, 0.0],
+    );
+    let config = CloudConfig::parse("version: 1\ndefault: dev\nprofiles:\n  dev:\n    provider: runpod\n    image: example/worker:latest\n    cpu: 4\n    memory_gb: 8\n").unwrap();
+    let outside = temp.path().join("must-not-be-created");
+    group.remote = Some(CloudLaunch {
+        deployment_started: true,
+        id: outside.to_str().unwrap().into(),
+        revision: "a".repeat(40),
+        profile_name: "dev".into(),
+        profile: config.profiles["dev"].clone(),
+    });
+    app.board.cloud_groups.0.push(group);
+    app.cloud_prototype.initialized = false;
+    app.restore_cloud_state(&ctx);
+    let runtime = &app.cloud_prototype.production.runtimes[&1];
+    assert!(runtime.state_unavailable);
+    assert!(runtime.error.as_ref().unwrap().contains("Invalid cloud identity"));
+    assert!(!outside.exists());
+    app.start_production_deployment(1, &ctx);
+    app.remove_deleted_cloud(1, &ctx);
+    assert!(!outside.exists());
+    assert_eq!(app.cloud_prototype.groups.0.len(), 1);
 }

@@ -164,13 +164,18 @@ pub(super) fn spawn_panel(id: PanelId, workspace_id: WorkspaceId, mut opts: Pane
         PanelKind::Browser => {
             let command = opts.command.take();
             let browser_config = opts.browser_config.take();
+            #[cfg(feature = "cloud-workspaces")]
+            let cloud_target = opts.remote_target.clone();
             let remote = match (opts.remote_session.take(), opts.remote_target.take()) {
                 (Some(request), _) => BrowserSpawnMode::Remote(Box::new(request)),
                 (None, Some(target)) => BrowserSpawnMode::RestoredRemote(target),
                 (None, None) => BrowserSpawnMode::Local(opts.browser_session_id.take()),
             };
             #[cfg(feature = "cloud-workspaces")]
-            let remote = opts.cloud_connection.take().map_or(remote, BrowserSpawnMode::Cloud);
+            let remote = opts
+                .cloud_connection
+                .take()
+                .map_or(remote, |connection| BrowserSpawnMode::Cloud(connection, cloud_target));
             let seed = StaticPanelSeed::from_options(id, workspace_id, local_id, &mut opts);
             spawn_browser(seed, command, browser_config, remote)
         }
@@ -330,7 +335,7 @@ enum BrowserSpawnMode {
     /// A remote panel from a previous run; it comes back stopped.
     RestoredRemote(String),
     #[cfg(feature = "cloud-workspaces")]
-    Cloud(crate::cloud_runtime::ssh::Connection),
+    Cloud(crate::cloud_runtime::ssh::Connection, Option<String>),
 }
 
 /// Spawn a browser panel. The generic `command` field carries the optional
@@ -351,9 +356,10 @@ fn spawn_browser(
     let browser_config = browser_config.unwrap_or_default();
     let browser = match mode {
         #[cfg(feature = "cloud-workspaces")]
-        BrowserSpawnMode::Cloud(connection) => crate::browser::BrowserPanelState::start_cloud(
+        BrowserSpawnMode::Cloud(connection, target) => crate::browser::BrowserPanelState::start_cloud(
             seed.local_id.clone(),
             connection,
+            target,
             initial_url.clone(),
             &browser_config,
         )?,

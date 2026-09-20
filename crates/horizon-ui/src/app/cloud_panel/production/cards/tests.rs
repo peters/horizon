@@ -43,6 +43,8 @@ fn runtime_cards_keep_reserved_bounds_with_long_details_and_confirmations() {
                                 sessions: Vec::new(),
                                 source_ready: true,
                                 stop_requested: false,
+                                browserstack_released: false,
+                                browserstack_targets: std::collections::BTreeSet::new(),
                             }),
                             ..Default::default()
                         };

@@ -55,7 +55,8 @@ class GitAuthenticationTests(unittest.TestCase):
     def test_gh_injects_authentication_only_into_child_environment(self):
         with mock.patch.object(auth.subprocess, 'run'):
             auth.install(self.value)
-        with mock.patch.object(auth.sys, 'argv', ['gh', 'pr', 'list']), \
+        with mock.patch.dict(auth.os.environ, {'GH_REPO': 'unrelated/project', 'GH_HOST': 'unrelated.invalid'}), \
+                mock.patch.object(auth.sys, 'argv', ['gh', 'pr', 'list']), \
                 mock.patch.object(auth.os, 'execve') as execute:
             auth.main()
         executable, argv, env = execute.call_args.args
@@ -63,6 +64,7 @@ class GitAuthenticationTests(unittest.TestCase):
         self.assertNotIn(self.value['token'], str(argv))
         self.assertEqual(env['GH_TOKEN'], self.value['token'])
         self.assertEqual(env['GH_REPO'], 'example/project')
+        self.assertEqual(env['GH_HOST'], 'github.com')
 
     def test_malformed_and_non_private_bindings_are_refused_without_secret_diagnostics(self):
         for key, value in [('repository', '../repo'), ('author_name', 'name\ninjection'),

@@ -34,6 +34,10 @@ impl HorizonApp {
             }
         };
         for request in requests {
+            if request.catalog.is_some() {
+                self.browser_create_host.catalog.pending.push(request);
+                continue;
+            }
             let providers = self
                 .template_config
                 .browser

@@ -176,6 +176,10 @@ impl BrowserPanelState {
     /// Configured remote target name, when this panel runs (or ran) remotely.
     #[must_use]
     pub fn remote_target(&self) -> Option<&str> {
+        #[cfg(feature = "cloud-workspaces")]
+        if let Some(cloud) = &self.cloud {
+            return cloud.target.as_deref();
+        }
         self.remote.as_ref().map(|remote| remote.target.as_str())
     }
 
@@ -193,6 +197,10 @@ impl BrowserPanelState {
     /// verified; `None` before verification or for a local panel.
     #[must_use]
     pub fn remote_device(&self) -> Option<&str> {
+        #[cfg(feature = "cloud-workspaces")]
+        if let Some(cloud) = &self.cloud {
+            return cloud.device.as_deref();
+        }
         self.remote.as_ref().and_then(|remote| remote.device.as_deref())
     }
 

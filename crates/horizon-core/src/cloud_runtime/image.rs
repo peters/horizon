@@ -59,6 +59,8 @@ impl Images<'_> {
                         &format!("HORIZON_BROWSERS={}", profile.capabilities.browsers_argument()),
                         "--build-arg",
                         &format!("HORIZON_DESKTOP={}", profile.capabilities.desktop),
+                        "--build-arg",
+                        &format!("HORIZON_BROWSERSTACK={}", profile.capabilities.browserstack.is_some()),
                         "--tag",
                         &image,
                         "--file",

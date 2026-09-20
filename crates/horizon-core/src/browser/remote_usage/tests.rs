@@ -1,4 +1,5 @@
 use super::*;
+use horizon_browser::remote::RemoteAdapterKind;
 use std::io::{Read as _, Write as _};
 use std::net::TcpListener;
 

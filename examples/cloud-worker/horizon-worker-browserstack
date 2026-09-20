@@ -1,0 +1,207 @@
+#!/usr/bin/python3
+"""Install an explicit runtime binding and keep its worker-local tunnel supervised."""
+import base64
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import socket
+import signal
+import subprocess
+import sys
+import time
+import uuid
+
+ROOT = Path('/run/horizon-credentials')
+CONFIG = ROOT / 'browserstack.json'
+READY = ROOT / 'browserstack-ready'
+STOPPED = ROOT / 'browserstack-stopped'
+STARTED = ROOT / 'browserstack-started'
+REVOKED = ROOT / 'browserstack-revoked'
+TMUX = ['tmux', '-L', 'horizon-browserstack']
+
+
+def private_write(path, value):
+    pending = path.with_suffix('.new')
+    with pending.open('w') as stream:
+        os.chmod(pending, 0o600)
+        json.dump(value, stream)
+        stream.flush()
+        os.fsync(stream.fileno())
+    pending.replace(path)
+
+
+def validate(value, selected):
+    if not isinstance(value, dict) or value.get('version') != 1 or not isinstance(selected, dict):
+        raise ValueError('Remote browsers are not enabled')
+    if set(value) != {'version', 'remote', 'authorization', 'quota_keys', 'local_identifier', 'local_ports'}:
+        raise ValueError('Invalid runtime binding')
+    remote = value['remote']
+    targets = remote.get('targets', {})
+    if not isinstance(targets, dict):
+        raise ValueError('Invalid saved targets')
+    if not set(selected.get('targets', [])) <= set(targets) or sorted(value['local_ports']) != sorted(selected['local_ports']):
+        raise ValueError('Runtime binding differs from the declared targets')
+    if set(remote['providers']) != {selected.get('provider', 'browserstack')} or set(value['authorization']) != set(remote['providers']):
+        raise ValueError('Exactly one account is required')
+    if not re.fullmatch(r'horizon-[A-Za-z0-9_-]{1,100}', value['local_identifier']):
+        raise ValueError('Invalid tunnel identity')
+    for provider in remote['providers'].values():
+        if provider['adapter'] != 'browserstack' or provider.get('credential_bindings'):
+            raise ValueError('Invalid transferred provider')
+    for port in value['local_ports']:
+        if type(port) is not int or not 1 <= port <= 65535:
+            raise ValueError('Invalid worker-local port')
+    for target in targets.values():
+        if target['provider'] not in remote['providers']:
+            raise ValueError('Unknown target provider')
+        options = target['capability_extensions']['bstack:options']
+        if options.get('local') != bool(value['local_ports']):
+            raise ValueError('Tunnel selection mismatch')
+        if value['local_ports'] and options.get('localIdentifier') != value['local_identifier']:
+            raise ValueError('Tunnel identity mismatch')
+
+
+def tunnel_configuration(value):
+    header = next(iter(value['authorization'].values()))
+    if not isinstance(header, str) or not header.startswith('Basic '):
+        raise ValueError('Local testing requires Basic account authentication')
+    username, key = base64.b64decode(header[6:], validate=True).decode().split(':', 1)
+    if not username or not key or any(ord(c) < 33 or ord(c) > 126 for c in key):
+        raise ValueError('Invalid account authentication')
+    only = ','.join(f'{host},{port},{ssl}' for host in ['localhost', '127.0.0.1', 'bs-local.com']
+                    for port in value['local_ports'] for ssl in [0, 1])
+    return {'key': key, 'local-identifier': value['local_identifier'], 'only': only,
+            'only-automate': True, 'disable-dashboard': True}
+
+
+def alive():
+    return subprocess.run(TMUX + ['has-session', '-t', '=local'], stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL, timeout=5).returncode == 0
+
+
+def shutdown_confirmed():
+    if not STARTED.exists():
+        return True
+    started = json.loads(STARTED.read_text())
+    stopped = json.loads(STOPPED.read_text()) if STOPPED.exists() else {}
+    return bool(started.get('generation')) and stopped.get('generation') == started['generation']
+
+
+def install():
+    raw = sys.stdin.buffer.read(256 * 1024 + 1)
+    if len(raw) > 256 * 1024:
+        raise ValueError('Runtime binding too large')
+    value = json.loads(raw)
+    selected = json.loads(Path('/workspace/capabilities.json').read_text()).get('browserstack')
+    validate(value, selected)
+    if CONFIG.exists() and json.loads(CONFIG.read_text()) != value and alive():
+        raise ValueError('Stop the existing private tunnel before changing its account binding')
+    if value['local_ports']:
+        configuration = tunnel_configuration(value)
+        private_write(ROOT / 'browserstack-local.yml', configuration)
+    private_write(CONFIG, value)
+    if not value['local_ports']:
+        REVOKED.unlink(missing_ok=True)
+        return
+    if not alive():
+        if not shutdown_confirmed():
+            raise ValueError('Previous private tunnel shutdown is unconfirmed')
+        READY.unlink(missing_ok=True)
+        STOPPED.unlink(missing_ok=True)
+        subprocess.run(TMUX + ['new-session', '-d', '-s', 'local', 'horizon-worker-browserstack supervise'],
+                       check=True, timeout=10, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def ready():
+    value = json.loads(CONFIG.read_text())
+    if not value['local_ports']:
+        return
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        if READY.exists() and alive():
+            REVOKED.unlink(missing_ok=True)
+            return
+        if not alive():
+            raise ValueError('Private tunnel failed to start')
+        time.sleep(.25)
+    raise ValueError('Private tunnel readiness timed out')
+
+
+def supervise():
+    def shutdown(_signal, _frame):
+        raise SystemExit(0)
+    for number in [signal.SIGTERM, signal.SIGHUP]:
+        signal.signal(number, shutdown)
+    READY.unlink(missing_ok=True)
+    STOPPED.unlink(missing_ok=True)
+    generation = uuid.uuid4().hex
+    private_write(STARTED, {'generation': generation, 'pid': None})
+    # Credentials are in a private configuration file, never argv or the environment.
+    process = subprocess.Popen(['BrowserStackLocal', '--config-file', str(ROOT / 'browserstack-local.yml')],
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=ROOT)
+    private_write(STARTED, {'generation': generation, 'pid': process.pid})
+    try:
+        for line in process.stdout:
+            if 'You can now access your local server(s)' in line:
+                private_write(READY, {'ready': True})
+        if process.wait() != 0:
+            raise ValueError('Private tunnel stopped')
+    finally:
+        READY.unlink(missing_ok=True)
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+        private_write(STOPPED, {'stopped': True, 'generation': generation})
+
+
+def revoke():
+    with socket.create_connection(('127.0.0.1', 47280), timeout=40) as connection:
+        connection.sendall(b'{"operation":"revoke_remote"}\n')
+        with connection.makefile('rb') as stream:
+            reply = json.loads(stream.readline(1024 * 1024))
+    if reply.get('error'):
+        raise ValueError('Remote device release remains unresolved')
+    if alive():
+        subprocess.run(TMUX + ['kill-session', '-t', '=local'], check=True, timeout=10,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        deadline = time.monotonic() + 20
+        while not shutdown_confirmed() and time.monotonic() < deadline:
+            time.sleep(.1)
+    if not shutdown_confirmed():
+        raise ValueError('Tunnel shutdown is unconfirmed; retain credentials and verify the recorded child')
+    for name in ['browserstack.json', 'browserstack-local.yml', 'browserstack-ready']:
+        (ROOT / name).unlink(missing_ok=True)
+
+
+def main():
+    os.umask(0o077)
+    ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
+    ROOT.chmod(0o700)
+    if sys.argv[1:] == ['supervise']:
+        supervise()
+    elif sys.argv[1:] == ['revoke']:
+        with (ROOT / 'browserstack-install.lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            revoke()
+    elif sys.argv[1:] == ['ready']:
+        ready()
+    elif sys.argv[1:] == ['install']:
+        with (ROOT / 'browserstack-install.lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            install()
+    else:
+        raise ValueError('Use install, ready, supervise or revoke')
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError):
+        print('Remote browser setup failed; verify the declared targets, local grant and account access', file=sys.stderr)
+        sys.exit(1)

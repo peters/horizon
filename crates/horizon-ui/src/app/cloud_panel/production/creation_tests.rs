@@ -5,6 +5,7 @@ use horizon_core::{RuntimeState, StartupDecision};
 use std::time::{Duration, Instant};
 
 mod profiles;
+mod reopening;
 
 fn frame(ctx: &egui::Context, app: &mut HorizonApp, events: Vec<Event>, modifiers: Modifiers) {
     let mut input = raw_input([1400.0, 900.0], None);
@@ -29,6 +30,42 @@ fn key(ctx: &egui::Context, app: &mut HorizonApp, key: Key, modifiers: Modifiers
             modifiers,
         );
     }
+}
+
+#[test]
+fn creation_tab_navigation_never_activates_the_toolbar() {
+    let (temp, ctx, mut app) = test_app_with_startup(StartupDecision::Ephemeral {
+        runtime_state: Box::new(RuntimeState::default()),
+    });
+    app.root_viewport_stabilizer = None;
+    app.cloud_prototype.root = Some(temp.path().join("clouds"));
+    app.cloud_prototype.ready = true;
+    let _ = app.board.create_workspace("existing workspace");
+    for _ in 0..2 {
+        frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
+    }
+    app.add_mock_cloud(&ctx);
+    frame(&ctx, &mut app, Vec::new(), Modifiers::NONE);
+    for _ in 0..16 {
+        key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
+        if let Some(response) = ctx.memory(egui::Memory::focused).and_then(|id| ctx.read_response(id)) {
+            assert_eq!(
+                response.layer_id.id,
+                Id::new("cloud-creation"),
+                "modal focus escaped to another layer"
+            );
+        }
+    }
+    for _ in 0..16 {
+        key(&ctx, &mut app, Key::Tab, Modifiers::NONE);
+        key(&ctx, &mut app, Key::Space, Modifiers::NONE);
+        assert!(app.command_palette.is_none(), "modal focus reached Quick Nav");
+        assert!(app.settings.is_none(), "modal focus reached Settings");
+        if !app.cloud_creation_open() {
+            return;
+        }
+    }
+    panic!("keyboard navigation did not reach the dialog's Cancel action");
 }
 
 #[test]

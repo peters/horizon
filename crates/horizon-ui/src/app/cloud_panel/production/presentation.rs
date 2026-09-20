@@ -40,7 +40,7 @@ pub(super) fn watch(
             emit: &|_| {},
             secrets: vec![],
         };
-        if !state.profile.capabilities.desktop && state.profile.capabilities.browsers.is_empty() {
+        if !state.profile.capabilities.desktop && !state.profile.capabilities.browser_tools() {
             return Ok(());
         }
         while !cancel.is_cancelled() {
@@ -117,7 +117,14 @@ impl HorizonApp {
                 .clone()
                 .ok_or(cloud_runtime::Error::Invalid("Cloud is disconnected"))?;
             let settings = Settings::load(&root.join("settings.json"))?;
-            Ok((Connection::new(worker, &settings, &root.join(&launch.id))?, sender))
+            Ok((
+                Connection::new(
+                    worker,
+                    &settings,
+                    &cloud_runtime::state::cloud_directory(root, &launch.id)?,
+                )?,
+                sender,
+            ))
         })();
         match result {
             Ok((connection, sender)) => {
@@ -239,6 +246,7 @@ impl HorizonApp {
                 }
                 let mut options = PanelOptions {
                     kind: PanelKind::Browser,
+                    remote_target: browser.remote_target.clone(),
                     visible: browser.visible,
                     local_id: Some(browser.id),
                     command: (!browser.url.is_empty()).then_some(browser.url),
@@ -310,6 +318,10 @@ impl HorizonApp {
             size: Some(panel.layout.size),
             visible: panel.visible,
             command: panel.launch_command.clone(),
+            remote_target: panel
+                .browser()
+                .and_then(|browser| browser.remote_target())
+                .map(str::to_owned),
             browser_config: Some(horizon_core::browser::BrowserConfig {
                 backend: panel.browser_backend().unwrap_or(self.template_config.browser.backend),
                 ..self.template_config.browser.clone()

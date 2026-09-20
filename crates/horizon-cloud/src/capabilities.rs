@@ -49,6 +49,39 @@ pub struct Capabilities {
     pub browsers: BTreeSet<BrowserEngine>,
     #[serde(default)]
     pub desktop: bool,
+    /// Remote device targets require an explicit machine-local credential grant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browserstack: Option<BrowserStack>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserStack {
+    #[serde(default = "BrowserStack::default_provider")]
+    pub provider: String,
+    /// Optional preferred starting targets, never an allocation allowlist.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub targets: BTreeSet<String>,
+    /// Only these worker-loopback ports are exposed through the private tunnel.
+    #[serde(default)]
+    pub local_ports: BTreeSet<u16>,
+}
+
+impl BrowserStack {
+    pub const DEFAULT_PROVIDER: &str = "browserstack";
+    #[must_use]
+    pub fn default_provider() -> String {
+        Self::DEFAULT_PROVIDER.into()
+    }
+}
+impl Default for BrowserStack {
+    fn default() -> Self {
+        Self {
+            provider: Self::default_provider(),
+            targets: BTreeSet::new(),
+            local_ports: BTreeSet::new(),
+        }
+    }
 }
 
 impl Default for Capabilities {
@@ -57,11 +90,17 @@ impl Default for Capabilities {
             agents: [Agent::Codex, Agent::Claude, Agent::Grok].into(),
             browsers: [BrowserEngine::Chromium].into(),
             desktop: true,
+            browserstack: None,
         }
     }
 }
 
 impl Capabilities {
+    #[must_use]
+    pub fn browser_tools(&self) -> bool {
+        !self.browsers.is_empty() || self.browserstack.is_some()
+    }
+
     #[must_use]
     pub fn permits_agent(&self, name: &str) -> bool {
         name == "shell" || self.agents.iter().any(|agent| agent.as_str() == name)

@@ -4,7 +4,7 @@
 
 mod capabilities;
 mod profile;
-pub use capabilities::{Agent, BrowserEngine, Capabilities};
+pub use capabilities::{Agent, BrowserEngine, BrowserStack, Capabilities};
 pub mod runpod;
 mod worker;
 pub use profile::{

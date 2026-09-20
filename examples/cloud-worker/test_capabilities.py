@@ -59,6 +59,18 @@ class CapabilitiesTests(unittest.TestCase):
         self.assertNotIn('firefox', str(commands))
         self.assertIn('horizon-device', str(commands))
 
+    def test_remote_only_requires_tools_and_tunnel_but_no_local_browser(self):
+        selected = {'browserstack': {'targets': ['iphone'], 'local_ports': [8080]}}
+        self.write('/workspace/capabilities.json', selected)
+        self.assertEqual(self.run_check()[0], 1)
+        self.write('/etc/horizon-worker/capabilities.json', {'browserstack': {'targets': []}})
+        status, output, commands = self.run_check(missing=('firefox', 'geckodriver', 'google-chrome-stable', 'Xvfb'))
+        self.assertEqual(status, 0, output)
+        self.assertIn('horizon-browserstack-contract=1', output)
+        self.assertIn('BrowserStackLocal', str(commands))
+        for name in ['BrowserStackLocal', 'horizon-browser', 'horizon-worker-browserstack']:
+            self.assertEqual(self.run_check(missing=(name,))[0], 1)
+
     def test_missing_requested_agent_or_desktop_fails(self):
         for binary in ['codex', 'claude', 'Xvfb', 'horizon-device']:
             status, _, _ = self.run_check(missing=(binary,))

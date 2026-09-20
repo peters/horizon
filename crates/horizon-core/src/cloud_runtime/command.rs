@@ -46,6 +46,22 @@ impl Runner<'_> {
     /// Sends a caller-selected private file on stdin without exposing it in argv or output.
     pub fn private_input(&self, command: &mut Command, input: &std::path::Path) -> Result<()> {
         super::settings::validate_private_key_file(input)?;
+        self.private_payload(command, input)
+    }
+    /// # Errors
+    /// Uploads a bounded private structured payload without logging either stream.
+    pub fn private_payload(&self, command: &mut Command, input: &std::path::Path) -> Result<()> {
+        let meta = std::fs::metadata(input)?;
+        if !meta.is_file() || meta.len() > 256 * 1024 {
+            return Err(Error::Invalid("Invalid private runtime payload"));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if meta.permissions().mode() & 0o077 != 0 {
+                return Err(Error::Invalid("Runtime payload must be private (0600)"));
+            }
+        }
         command
             .stdin(std::fs::File::open(input)?)
             .stdout(Stdio::null())
@@ -55,7 +71,7 @@ impl Runner<'_> {
             emit: &|_| {},
             secrets: Vec::new(),
         }
-        .spawn("Agent credential upload", command, Duration::from_secs(30))?;
+        .spawn("Private runtime upload", command, Duration::from_secs(30))?;
         Ok(())
     }
     /// # Errors

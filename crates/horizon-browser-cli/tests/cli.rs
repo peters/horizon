@@ -801,7 +801,7 @@ fn mcp_subcommand_negotiates_and_publishes_the_browser_contract() {
         "method": "tools/list",
         "params": {}
     }));
-    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(22));
+    assert_eq!(tools["result"]["tools"].as_array().map(Vec::len), Some(23));
     assert!(tools.to_string().contains("browser_network_watch"));
     assert!(tools.to_string().contains("browser_http_auth"));
     assert!(tools.to_string().contains("browser_resize"));
@@ -1209,4 +1209,47 @@ fn standalone_cli_reports_missing_provider_host_instead_of_zero_capacity() {
     let report: Value = serde_json::from_slice(&output.stdout).expect("JSON report");
     assert_eq!(report["ok"], false);
     assert!(report.to_string().contains("requires a live Horizon host identity"));
+}
+
+#[test]
+fn cli_plan_discovers_provider_devices_without_a_browser_or_configured_target() {
+    let root = tempfile::tempdir().unwrap();
+    let plan = root.path().join("plan.json");
+    std::fs::write(&plan, br#"{"version":1,"steps":[{"id":"devices","tool":"browser_provider_devices","arguments":{"provider":"account","search":"phone","offset":50}}]}"#).unwrap();
+    let child = Command::new(env!("CARGO_BIN_EXE_horizon-browser"))
+        .args(["run", plan.to_str().unwrap()])
+        .env_remove("HORIZON")
+        .env_remove("HORIZON_BROWSER_ROOT")
+        .env("HOME", root.path())
+        .env("HORIZON_BROWSER_ACTOR", "horizon:catalog-agent")
+        .env("HORIZON_BROWSER_HOST_INSTANCE", "catalog-host")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let queue = UsageQueue::new(root.path().join(".horizon"));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(request) = queue.claim("catalog-host").unwrap().first() {
+            let query = request.catalog.as_ref().unwrap();
+            assert_eq!(query.provider, "account");
+            assert_eq!(query.search, "phone");
+            assert_eq!(query.offset, 50);
+            let mut result = request.result(vec![], None);
+            result.catalog = Some(horizon_browser::provider_catalog::CatalogPage {
+                total: 75,
+                next_offset: None,
+                devices: vec![],
+            });
+            queue.complete(&result).unwrap();
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["steps"][0]["result"]["catalog"]["total"], 75);
+    assert_eq!(report["steps"][0]["result"]["capacity_reserved"], false);
 }

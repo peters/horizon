@@ -429,3 +429,10 @@ The default `cloud-workspaces` feature enables operational RunPod clouds.
 `cloud-panel-mock` additionally enables labelled design fixtures; simulated
 providers never authorize allocation. Original fixture details remain in
 [the prototype guide](../prototypes/cloud-panels.md).
+
+Cloud remote-browser deployment uses repository-scoped machine-local grants in
+`cloud_runtime::browser_auth`; portable profiles contain target names and selected
+worker-local ports only. `horizon-browser::remote_config` and `provider_usage`
+share provider adaptation and capacity policy across desktop and worker hosts.
+The worker retains remote allocation recovery and teardown ownership; disconnecting
+its presentation client never releases a hosted device or ends the private tunnel.

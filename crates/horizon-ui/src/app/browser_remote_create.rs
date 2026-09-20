@@ -136,7 +136,37 @@ impl HorizonApp {
         let Some(target) = request.target.as_deref() else {
             return Ok(None);
         };
-        let plan = plan_remote_create(&self.template_config, &self.remote_browser_credentials, target)?;
+        let plan = if let Some(provider) = horizon_core::browser::remote_catalog::target_provider(target) {
+            let profile = self
+                .template_config
+                .browser
+                .remote
+                .providers
+                .get(provider)
+                .ok_or_else(|| CreateRefusal {
+                    code: "provider_unknown",
+                    message: "Catalog provider is not configured".into(),
+                })?;
+            let device = self
+                .browser_create_host
+                .catalog
+                .cache
+                .target(profile, target)
+                .map_err(|error| CreateRefusal {
+                    code: "provider_catalog_refresh_required",
+                    message: error.to_string(),
+                })?;
+            let mut config = self.template_config.clone();
+            config.browser.remote.targets.insert(
+                "catalog_selection".into(),
+                horizon_core::browser::provider_catalog::target_profile(device),
+            );
+            let mut plan = plan_remote_create(&config, &self.remote_browser_credentials, "catalog_selection")?;
+            horizon_core::browser::provider_catalog::apply_catalog_options(&mut plan.request, device);
+            plan
+        } else {
+            plan_remote_create(&self.template_config, &self.remote_browser_credentials, target)?
+        };
         let workspace = self
             .board
             .workspace(workspace_id)

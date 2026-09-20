@@ -7,9 +7,10 @@ FROM node:22-bookworm-slim AS selected
 ARG HORIZON_AGENTS=
 ARG HORIZON_BROWSERS=
 ARG HORIZON_DESKTOP=false
+ARG HORIZON_BROWSERSTACK=false
 # Only final stripped helpers belong in bin/. Unselected helpers stay in this stage.
 COPY bin/ /input/
-RUN node -e 'const fs=require("fs"); const out="/output/usr/local/bin"; fs.mkdirSync(out,{recursive:true}); const copy=n=>fs.copyFileSync("/input/"+n,out+"/"+n); copy("horizon-cloud-worker"); if(process.env.HORIZON_BROWSERS)copy("horizon-browser"); if(process.env.HORIZON_DESKTOP==="true")copy("horizon-device"); fs.mkdirSync("/output/etc/horizon-worker",{recursive:true});fs.writeFileSync("/output/etc/horizon-worker/capabilities.json",JSON.stringify({agents:process.env.HORIZON_AGENTS.split(",").filter(Boolean),browsers:process.env.HORIZON_BROWSERS.split(",").filter(Boolean),desktop:process.env.HORIZON_DESKTOP==="true"}));'
+RUN node -e 'const fs=require("fs"); const out="/output/usr/local/bin"; fs.mkdirSync(out,{recursive:true}); const copy=n=>fs.copyFileSync("/input/"+n,out+"/"+n); copy("horizon-cloud-worker"); if(process.env.HORIZON_BROWSERS || process.env.HORIZON_BROWSERSTACK==="true")copy("horizon-browser"); if(process.env.HORIZON_DESKTOP==="true")copy("horizon-device"); fs.mkdirSync("/output/etc/horizon-worker",{recursive:true});fs.writeFileSync("/output/etc/horizon-worker/capabilities.json",JSON.stringify({agents:process.env.HORIZON_AGENTS.split(",").filter(Boolean),browsers:process.env.HORIZON_BROWSERS.split(",").filter(Boolean),desktop:process.env.HORIZON_DESKTOP==="true",...(process.env.HORIZON_BROWSERSTACK==="true"?{browserstack:{targets:[],local_ports:[]}}:{})}));'
 FROM ${BASE_IMAGE}
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -41,6 +42,12 @@ RUN case ",$HORIZON_BROWSERS," in *,firefox,*) \
     && echo '0bde38707eb0a686a20c6bd50f4adcc7d60d4f73c60eb83ee9e0db8f65823e04  /tmp/geckodriver.tar.gz' | sha256sum -c - \
     && tar -xzf /tmp/geckodriver.tar.gz -C /usr/local/bin \
     && rm -f /tmp/geckodriver.tar.gz && rm -rf /var/lib/apt/lists/*;; esac
+ARG HORIZON_BROWSERSTACK=false
+RUN if [ "$HORIZON_BROWSERSTACK" = true ]; then \
+    curl -fsSL https://www.browserstack.com/browserstack-local/BrowserStackLocal-linux-x64.zip -o /tmp/browserstack.zip \
+    && echo '0b2349bde6a33fc417597a7960903fb7a80188ea738aa3e675e2eaae07ad7442  /tmp/browserstack.zip' | sha256sum -c - \
+    && python3 -c 'import zipfile; zipfile.ZipFile("/tmp/browserstack.zip").extract("BrowserStackLocal", "/usr/local/bin")' \
+    && chmod 755 /usr/local/bin/BrowserStackLocal && rm /tmp/browserstack.zip; fi
 COPY --from=selected /output/ /
 COPY horizon-worker-* /usr/local/bin/
 RUN chmod 755 /usr/local/bin/horizon-worker-* \

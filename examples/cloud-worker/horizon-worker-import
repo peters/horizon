@@ -5,7 +5,10 @@ revision="${1:?revision required}"
 [[ "$revision" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]] || exit 2
 exec 9>/workspace/import.lock
 flock 9
-if [ ! -d /workspace/repository.git ]; then git init --bare /workspace/repository.git >/dev/null; fi
+format=sha1
+if [ "${#revision}" = 64 ]; then format=sha256; fi
+if [ ! -d /workspace/repository.git ]; then git init --bare --object-format="$format" /workspace/repository.git >/dev/null; fi
+[ "$(git --git-dir=/workspace/repository.git rev-parse --show-object-format)" = "$format" ] || { echo 'Cloud object format mismatch' >&2; exit 3; }
 git --git-dir=/workspace/repository.git index-pack --stdin < /workspace/horizon-transfer.pack >/dev/null
 git --git-dir=/workspace/repository.git cat-file -e "$revision^{commit}"
 if git --git-dir=/workspace/repository.git rev-parse --verify refs/heads/base >/dev/null 2>&1; then

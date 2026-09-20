@@ -12,6 +12,7 @@ mod control;
 mod http_auth;
 pub mod input;
 mod network;
+pub mod provider_catalog;
 pub mod remote;
 mod semantic;
 mod video;

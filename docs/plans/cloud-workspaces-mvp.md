@@ -209,3 +209,61 @@ Keep original captures and the detailed qualification ledger private.
 - [ ] Complete current-head CI and independent review; resolve actionable threads.
 - [ ] Repeat final smoke after review, then verify task-only resource cleanup.
 - [ ] Await separate explicit merge authorization. No release is authorized.
+
+## Accepted extension: remote mobile browser testing
+
+The user requested this extension after accepting the initial candidate. It remains
+inside this implementation PR and must pass the same review, final smoke and
+cleanup gates. Repository names and application evidence remain private.
+
+- [x] Declare the remote account capability and worker-local ports per profile.
+- [ ] Resolve existing machine-local credentials only with a repository-specific grant.
+- [ ] Transfer credentials over authenticated SSH stdin into private runtime files.
+- [ ] Share browser provider adaptation across UI and worker; expose public MCP tools.
+- [ ] Run the private Local tunnel on the worker independently of the laptop.
+- [ ] Test iPhone and Android sequentially; retain provider-confirmed hardware identity.
+- [ ] Email private application screenshots and results to the user.
+- [ ] Cover omitted/disabled capabilities, missing grants, missing image support,
+  reconnect and cleanup with retained regression tests.
+
+Omitted declarations transfer nothing and cause no credential prompt. A declared
+requirement without its local grant fails before allocation. YAML never grants
+itself permission to export account credentials.
+
+User scope update: remove per-device credential-transfer allowlisting while retaining
+an explicit account-level local grant. Agents may discover and select any device/OS/browser
+combination offered by the provider, without a preconfigured target. CLI and MCP
+expose catalog discovery and selection under the same account policy; provider
+entitlement and capacity remain authoritative. Additional private repository qualification is authorized after the
+current acceptance gates; keep names, application captures and operational
+details out of this public record. Those results will be reported privately.
+
+Scope freeze, 2026-09-20: the user explicitly deferred the remote-device picker UI.
+Remove its implementation and supporting presentation-only transport. Keep account
+capabilities in YAML and device selection in CLI/MCP. The only approved visual pass
+is polishing the existing New cloud form while preserving its current actions.
+No issue picker, new provider UI, wizard or additional feature is authorized.
+Continue acceptance, independent review, current-head CI, final smoke and cleanup.
+
+New cloud presentation, 2026-09-20: implemented and locally verified; user
+acceptance of this visual revision remains pending. The existing flow now uses
+full-width fields, a clear type hierarchy, resource summaries for YAML profiles
+and a fixed action row. Native VNC validation covered pointer opening, CPU/GPU
+selection, 900×600 and the actual 800×600 minimum, Escape and reopening at 4K.
+The retained regression suite covers profile choice, terminal-input isolation,
+Tab containment and close/reopen layering. Independent review found a retained
+layer-order defect on reopen; the fix and a meaningful pointer regression passed.
+
+Private evidence is retained separately under `development-51/`: candidate and
+validation manifests, native-resolution screenshots and decoded 4K recordings.
+Candidate binary SHA-256:
+`b52899e04838de0a11eda232914aacffd9eefc63adcb311390fa0bcafe92f740`.
+This is a dirty local candidate based on `345633f671afc5a8fa5cfb25d9754101fed4e039`,
+not a new published or accepted commit. Full repository validation with
+loopback/PTY access passed formatting, maintainability, worker scripts, both
+workspace test tiers and blocking/strict Clippy. The advisory pedantic tier
+reported three unchanged device CLI test warnings. The private
+`final-validation-05/` record identifies the tested source manifest. A prior
+restricted-sandbox run could not bind mock server sockets and is not treated as
+product-test evidence. Independent local review of the final source is clear;
+current-head hosted review, CI and the final post-review smoke remain pending.

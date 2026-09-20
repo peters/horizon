@@ -41,3 +41,16 @@ profiles:
     cpu: 2
     memory_gb: 4
     capabilities: {}
+
+  mobile-testing:
+    provider: runpod
+    image: registry.example.com/horizon/worker-mobile
+    cpu: 4
+    memory_gb: 8
+    capabilities:
+      agents: [codex, claude]
+      browsers: []
+      desktop: false
+      browserstack:
+        provider: browserstack
+        local_ports: [8080]

@@ -5,14 +5,9 @@
 //! boundary and no credential value is ever handed to a caller.
 
 use std::sync::Arc;
-use std::time::Duration;
 
-use horizon_browser::remote::{
-    BROWSERSTACK_OPTIONS_KEY, BROWSERSTACK_SESSION_API, DeviceKind, ExtensionProblem, RemoteAdapterKind,
-    RemoteBrowserConfig, RemoteConfigError, RemoteTargetProfile,
-};
-use horizon_browser::{BackendKind, DeviceEvidenceSource, RemoteAuthorizationHeader, RemoteSessionRequest};
-use serde_json::{Map, Value};
+use horizon_browser::remote::{RemoteBrowserConfig, RemoteConfigError};
+use horizon_browser::{RemoteAuthorizationHeader, RemoteSessionRequest};
 
 use crate::remote_browser_credential::{CredentialStores, ResolveError, resolve_authorization};
 
@@ -68,114 +63,27 @@ pub fn build_remote_session_request(
             provider: target.provider.clone(),
         })?
         .map(Arc::new);
-    let limits = &provider.limits;
-    Ok(RemoteSessionRequest {
-        recovery: horizon_browser::RemoteAllocation::default(),
-        endpoint: provider.endpoint.as_str().to_string(),
+    horizon_browser::remote_config::configured_remote_request(
+        provider,
+        target,
+        target_name,
         authorization,
-        capabilities: capabilities_for(provider.adapter, target_name, target)?,
-        allocation_timeout: Duration::from_secs(u64::from(limits.allocation_timeout_seconds)),
-        max_session: Duration::from_secs(u64::from(limits.max_session_seconds)),
-        idle_release: Duration::from_secs(u64::from(limits.idle_release_seconds)),
-        label: target_name.to_string(),
-        provider: target.provider.clone(),
-        quota_key: super::remote_slots::quota_key(provider),
-        browser: browser_family(&target.browser_name),
-        device: target.device.clone(),
-        evidence: evidence_source(provider.adapter),
-    })
+        super::remote_slots::quota_key(provider),
+    )
+    .map_err(RemoteRequestError::Definition)
 }
 
-/// Where the driver finds the allocated device's identity for this adapter:
-/// the hosted grid's own session record, or the capabilities a standard
-/// endpoint echoes.
-fn evidence_source(adapter: RemoteAdapterKind) -> DeviceEvidenceSource {
-    match adapter {
-        RemoteAdapterKind::Webdriver => DeviceEvidenceSource::Capabilities,
-        RemoteAdapterKind::Browserstack => DeviceEvidenceSource::BrowserstackSession {
-            api_endpoint: BROWSERSTACK_SESSION_API.to_string(),
-        },
-    }
-}
-
-/// The local backend kind whose page semantics and capabilities match the
-/// target's browser family. Anything that is not Safari or Firefox is
-/// treated as Chromium.
-#[must_use]
-pub fn browser_family(browser_name: &str) -> BackendKind {
-    let lowered = browser_name.to_ascii_lowercase();
-    if lowered.contains("safari") {
-        BackendKind::SafariWebDriver
-    } else if lowered.contains("firefox") {
-        BackendKind::FirefoxBidi
-    } else {
-        BackendKind::ChromiumCdp
-    }
-}
-
-/// `alwaysMatch` capabilities: the standard browser and platform names, the
-/// target's namespaced extensions verbatim, and the device fields placed
-/// where the provider's adapter expects them. Configuration validation has
-/// already refused extensions that carry those fields or credentials.
-fn capabilities_for(
-    adapter: RemoteAdapterKind,
-    target_name: &str,
-    target: &RemoteTargetProfile,
-) -> Result<Value, RemoteRequestError> {
-    let mut capabilities = Map::new();
-    capabilities.insert("browserName".into(), Value::String(target.browser_name.clone()));
-    capabilities.insert("platformName".into(), Value::String(target.platform_name.clone()));
-    for (name, value) in &target.capability_extensions {
-        capabilities.insert(name.clone(), value.clone());
-    }
-    let device = &target.device;
-    match adapter {
-        RemoteAdapterKind::Webdriver => {
-            if let Some(model) = &device.model {
-                capabilities.insert("appium:deviceName".into(), Value::String(model.clone()));
-            }
-            if let Some(version) = &device.os_version {
-                capabilities.insert("appium:platformVersion".into(), Value::String(version.clone()));
-            }
-        }
-        RemoteAdapterKind::Browserstack => {
-            let options = capabilities
-                .entry(BROWSERSTACK_OPTIONS_KEY)
-                .or_insert_with(|| Value::Object(Map::new()));
-            if !options.is_object() {
-                // Configuration validation refuses this; never overwrite a
-                // configured value silently.
-                return Err(RemoteRequestError::Definition(
-                    RemoteConfigError::InvalidCapabilityExtension {
-                        target: target_name.to_string(),
-                        key: BROWSERSTACK_OPTIONS_KEY.to_string(),
-                        problem: ExtensionProblem::NotAnObject,
-                    },
-                ));
-            }
-            if let Value::Object(options) = options {
-                if let Some(model) = &device.model {
-                    options.insert("deviceName".into(), Value::String(model.clone()));
-                }
-                if let Some(version) = &device.os_version {
-                    options.insert("osVersion".into(), Value::String(version.clone()));
-                }
-                if device.kind == DeviceKind::Physical {
-                    options.insert("realMobile".into(), Value::String("true".into()));
-                }
-            }
-        }
-    }
-    Ok(Value::Object(capabilities))
-}
+pub use horizon_browser::remote_config::browser_family;
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use horizon_browser::remote::{DeviceKind, ExtensionProblem};
+    use horizon_browser::{BackendKind, DeviceEvidenceSource};
+    use std::{collections::BTreeMap, time::Duration};
 
     use horizon_browser::remote::{
         ControlEndpoint, CredentialBinding, CredentialReference, CredentialStoreKind, RemoteAdapterKind,
-        RemoteAuthentication, RemoteProviderProfile, RemoteSessionLimits,
+        RemoteAuthentication, RemoteProviderProfile, RemoteSessionLimits, RemoteTargetProfile,
     };
     use serde_json::json;
 

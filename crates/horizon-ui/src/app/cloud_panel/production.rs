@@ -1,6 +1,7 @@
 //! UI actions and progress for real deployments. Provider/build/session work lives in core.
 mod capabilities;
 mod cards;
+mod creation;
 #[cfg(all(test, unix))]
 mod creation_tests;
 mod lifecycle;
@@ -214,7 +215,8 @@ impl HorizonApp {
                 .iter()
                 .filter_map(|group| {
                     let launch = group.remote.as_ref()?;
-                    let result = Store::lock(&self.cloud_prototype.root.as_ref()?.join(&launch.id))
+                    let result = cloud_runtime::state::cloud_directory(self.cloud_prototype.root.as_ref()?, &launch.id)
+                        .and_then(|root| Store::lock(&root))
                         .and_then(|store| store.load());
                     let state = match result {
                         Ok(Some(state)) => state,
@@ -254,77 +256,6 @@ impl HorizonApp {
             for id in reconnect {
                 self.start_production_deployment(id, ctx);
             }
-        }
-    }
-    pub(super) fn render_cloud_creation(&mut self, ctx: &egui::Context) {
-        if !self.cloud_prototype.production.creating {
-            return;
-        }
-        let mut create = false;
-        let mut load = false;
-        let response = egui::Modal::new(egui::Id::new("cloud-creation")).show(ctx, |ui| {
-            ui.set_width(480.0);
-            ui.heading("New cloud");
-            let form = &mut self.cloud_prototype.production;
-            ui.label("Cloud title");
-            let title = ui.add(egui::TextEdit::singleline(&mut form.title).id(egui::Id::new("cloud-title")));
-            if std::mem::take(&mut form.focus_title_on_open) {
-                title.request_focus();
-            }
-            ui.label("Repository");
-            if ui
-                .add(egui::TextEdit::singleline(&mut form.repository).id(egui::Id::new("cloud-repository")))
-                .changed()
-            {
-                form.profiles = None;
-            }
-            ui.label("Committed base revision");
-            ui.add(egui::TextEdit::singleline(&mut form.revision).id(egui::Id::new("cloud-revision")));
-            ui.small("Only committed files are transferred. Local changes stay on this computer.");
-            load = ui.button("Read .horizon/cloud.yml").clicked();
-            if let Some(config) = &form.profiles {
-                ui.label("Profile");
-                ui.horizontal_wrapped(|ui| {
-                    for name in config.profiles.keys() {
-                        ui.selectable_value(&mut form.selected_profile, name.clone(), name);
-                    }
-                });
-            }
-            ui.horizontal(|ui| {
-                create = ui
-                    .add_enabled(
-                        !form.title.trim().is_empty() && form.profiles.is_some(),
-                        egui::Button::new("Create cloud"),
-                    )
-                    .clicked();
-                if ui.button("Cancel").clicked() {
-                    form.creating = false;
-                }
-            });
-            if let Some(error) = &self.cloud_prototype.error {
-                ui.colored_label(egui::Color32::LIGHT_RED, error);
-            }
-        });
-        if response.should_close() {
-            self.cloud_prototype.production.creating = false;
-            return;
-        }
-        if load {
-            let form = &mut self.cloud_prototype.production;
-            let result = std::fs::read_to_string(PathBuf::from(&form.repository).join(".horizon/cloud.yml"))
-                .map_err(|_| "Cannot read .horizon/cloud.yml".to_owned())
-                .and_then(|yaml| CloudConfig::parse(&yaml).map_err(|e| e.to_string()));
-            match result {
-                Ok(config) => {
-                    form.selected_profile.clone_from(&config.default);
-                    form.profiles = Some(config);
-                    self.cloud_prototype.error = None;
-                }
-                Err(e) => self.cloud_prototype.error = Some(e),
-            }
-        }
-        if create && let Err(error) = self.create_production_cloud(ctx) {
-            self.cloud_prototype.error = Some(error.to_string());
         }
     }
     fn create_production_cloud(&mut self, ctx: &egui::Context) -> cloud_runtime::Result<()> {
@@ -405,7 +336,16 @@ impl HorizonApp {
         let Some(root) = self.cloud_prototype.root.clone() else {
             return;
         };
-        let loaded = Store::lock(&root.join(&launch.id)).and_then(|store| store.load());
+        let state_root = match cloud_runtime::state::cloud_directory(&root, &launch.id) {
+            Ok(path) => path,
+            Err(error) => {
+                let runtime = self.cloud_prototype.production.runtimes.entry(id).or_default();
+                runtime.state_unavailable = true;
+                runtime.error = Some(error.to_string());
+                return;
+            }
+        };
+        let loaded = Store::lock(&state_root).and_then(|store| store.load());
         let existing = match loaded {
             Ok(Some(state)) => matches!(
                 state.operation,
@@ -435,7 +375,7 @@ impl HorizonApp {
             repository,
             revision: launch.revision,
             profile: launch.profile,
-            state_root: root.join(&launch.id),
+            state_root,
             settings,
         };
         if let Err(error) = deployment::prepare(&request) {
@@ -507,7 +447,7 @@ impl HorizonApp {
             .ok_or_else(|| horizon_core::Error::Config("No cloud settings".into()))?;
         let result = (|| -> cloud_runtime::Result<()> {
             let settings = Settings::load(&root.join("settings.json"))?;
-            let store = Store::lock(&root.join(&launch.id))?;
+            let store = Store::lock(&cloud_runtime::state::cloud_directory(root, &launch.id)?)?;
             let mut saved = store
                 .load()?
                 .ok_or(cloud_runtime::Error::Invalid("Missing cloud deployment"))?;
@@ -521,16 +461,13 @@ impl HorizonApp {
                 .ok_or(cloud_runtime::Error::Invalid("Cloud has no worker"))?;
             let connection = Connection::new(worker, &settings, store.root())?;
             if options.kind == PanelKind::Browser {
-                let observed = runtime
-                    .and_then(|runtime| runtime.browsers.iter().find(|browser| browser.id == id))
-                    .map(|browser| browser.backend);
-                let backend = capabilities::browser_backend(
+                let observed = runtime.and_then(|runtime| runtime.browsers.iter().find(|browser| browser.id == id));
+                capabilities::prepare_browser(
                     &launch.profile.capabilities,
+                    &state.browserstack_targets,
                     observed,
-                    options.browser_config.as_ref().map(|config| config.backend),
-                    options.is_restore,
+                    options,
                 )?;
-                options.browser_config.get_or_insert_with(Default::default).backend = backend;
                 options.cloud_connection = Some(connection);
                 options.local_id = Some(id);
                 options.cwd = None;

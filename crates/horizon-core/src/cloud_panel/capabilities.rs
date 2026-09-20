@@ -13,9 +13,7 @@ impl CloudGroup {
                 Some("Claude is disabled by this cloud profile")
             }
             PanelKind::Grok if !capabilities.permits_agent("grok") => Some("Grok is disabled by this cloud profile"),
-            PanelKind::Browser if capabilities.browsers.is_empty() => {
-                Some("Browsers are disabled by this cloud profile")
-            }
+            PanelKind::Browser if !capabilities.browser_tools() => Some("Browsers are disabled by this cloud profile"),
             PanelKind::Device if !capabilities.desktop => {
                 Some("Desktop viewing and control are disabled by this cloud profile")
             }

@@ -1,5 +1,6 @@
 //! Horizon coordination around the portable cloud provider. No work happens on the UI thread.
 pub use horizon_cloud::{Cancellation, CreateState};
+pub mod browser_auth;
 pub mod command;
 pub mod deployment;
 pub mod git_auth;
