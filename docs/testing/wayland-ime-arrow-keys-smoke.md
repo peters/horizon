@@ -7,17 +7,19 @@ pass is complete.
 ## What changed
 
 `prepare_terminal_keyboard_events` suppresses ArrowUp/Down/Left/Right,
-Backspace and key repeats while an IME composition is live. Suppression used to
-be seeded purely from a latch carried over from an earlier frame, so:
+Backspace and key repeats while an IME composition is live. The composition
+latch carried from an earlier frame seeded that decision unconditionally, so
+the `Preedit("")` that ends a Wayland text-input round trip could not release
+the keys it arrived with: egui reports that terminator after them, and the
+filter had already made its decision.
 
-1. a frame with keys and **no** IME event still filtered them, and
-2. the `Preedit("")` that ends a Wayland text-input round trip could not release
-   the keys it arrived with, because egui reports it after them.
-
-Suppression now requires evidence in the same frame: a frame without IME events
-passes through untouched, and a frame whose only composition news is a bare
-empty preedit starts uncomposed. A `Commit` still ends its composition where it
-arrives, so keys the IME consumed before it stay filtered.
+A frame whose composition news is nothing but "not composing" — only empty
+preedits, or an empty preedit and the empty commit of a cancelled composition —
+now starts uncomposed, so those keys reach the terminal. Everything else is
+unchanged: a frame carrying a live candidate or committed text keeps the latch,
+an eventless frame keeps it too (a composition spans frames, and a key can
+arrive before the IME answers it), and each IME event still starts or ends the
+composition where it arrives.
 
 ## Preconditions
 
@@ -32,9 +34,17 @@ arrives, so keys the IME consumed before it stay filtered.
 
 Run on a **native Wayland** session with ibus active
 (`XDG_SESSION_TYPE=wayland`, `WAYLAND_DISPLAY` set, `ibus-daemon` running).
-Confirm the process really is on Wayland before trusting the lane:
-`ls -l /proc/<pid>/fd | grep -c wayland` must be non-zero and the X11 socket
-count zero.
+Confirm the process really is on the Wayland backend before trusting the lane —
+environment variables state intent, not the backend winit picked, and a socket
+file descriptor resolves to `socket:[inode]` rather than to a path, so neither
+is evidence on its own. Check the loaded libraries and open files instead:
+
+```sh
+lsof -p <pid> | grep -iE 'wayland|X11-unix'
+```
+
+A Wayland-backed process maps `libwayland-client` and holds no `X11-unix`
+socket; an X11 or XWayland-backed one holds that socket.
 
 | # | Step | Expected |
 |---|------|----------|
