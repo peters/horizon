@@ -1,11 +1,13 @@
 use std::mem;
 
-use egui::{Context, Event, Key, Modifiers, Rect, Vec2};
-use horizon_core::WorkspaceId;
+use alacritty_terminal::term::TermMode;
+use egui::{Context, Event, Key, Modifiers, Pos2, Rect, Vec2};
+use horizon_core::{Panel, PanelId, WorkspaceId};
 
 use super::super::super::input::{TerminalInputEvent, terminal_input_events};
 use super::super::canvas_drag::canvas_drag_delta;
 use super::super::canvas_scroll::route_canvas_scroll;
+use super::super::panels::PanelScreenGeometry;
 use super::super::shortcuts::{
     event_uses_shortcut_key, is_clipboard_pseudo_event, pending_hotkey_capture, shortcut_event_matches,
     shortcut_pressed, take_captured_clipboard_event,
@@ -248,7 +250,7 @@ impl HorizonApp {
         self.canvas_pan_input_claimed =
             pointer_in_canvas && (self.middle_pan_active || space_drag_claimed || primary_canvas_drag.is_some());
         if pointer_in_canvas && (zoom_delta - 1.0).abs() > f32::EPSILON {
-            route_canvas_scroll(ctx, false, false);
+            route_canvas_scroll(ctx, false, false, false);
             let anchor = pointer_position.unwrap_or_else(|| canvas_rect.center());
             if self.zoom_canvas_at(canvas_rect, anchor, self.canvas_view.zoom * zoom_delta) {
                 self.clear_terminal_selections();
@@ -268,6 +270,7 @@ impl HorizonApp {
             ctx,
             !pointer_over_panel,
             pointer_in_canvas && !drag_panning && !ctrl_or_cmd,
+            self.panel_scroll_exhausted(pointer_position, &panel_geometry, scroll, modifiers.shift),
         );
         let pan_delta = if drag_panning {
             primary_canvas_drag.unwrap_or(pointer_delta)
@@ -291,6 +294,44 @@ impl HorizonApp {
             self.canvas_view.set_pan_offset([pan_offset.x, pan_offset.y]);
             self.mark_runtime_dirty();
             self.clear_terminal_selections();
+        }
+    }
+
+    /// Whether the panel under `position` can still absorb this scroll. A
+    /// latched gesture chains to the canvas once it cannot, the way a browser
+    /// hands off at a scroll container's edge. Only terminals expose a
+    /// reliable extent; other panel kinds keep the gesture.
+    fn panel_scroll_exhausted(
+        &self,
+        position: Option<Pos2>,
+        panel_geometry: &[(PanelId, PanelScreenGeometry)],
+        scroll: Vec2,
+        shift: bool,
+    ) -> bool {
+        let Some(position) = position else { return false };
+        let Some(terminal) = panel_geometry
+            .iter()
+            .rev()
+            .find(|(_, geometry)| geometry.screen_rect.contains(position))
+            .and_then(|(id, _)| self.board.panels.iter().find(|panel| panel.id == *id))
+            .and_then(Panel::terminal)
+        else {
+            return false;
+        };
+        let mode = terminal.mode();
+        if !shift
+            && (mode.intersects(TermMode::MOUSE_MODE)
+                || mode.contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL))
+        {
+            return false;
+        }
+        if scroll.y > 0.0 {
+            terminal.scrollback() >= terminal.history_size()
+        } else if scroll.y < 0.0 {
+            terminal.scrollback() == 0
+        } else {
+            // Horizontal-only swipes have nothing to absorb in the scrollback.
+            true
         }
     }
 

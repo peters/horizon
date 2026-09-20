@@ -20,7 +20,13 @@ pub(super) struct ScrollRouting {
 }
 
 impl ScrollGesture {
-    fn route(&mut self, input: &InputState, starts_on_canvas: bool, allowed: bool) -> ScrollRouting {
+    fn route(
+        &mut self,
+        input: &InputState,
+        starts_on_canvas: bool,
+        allowed: bool,
+        chain_to_canvas: bool,
+    ) -> ScrollRouting {
         if !allowed || !input.focused || input.pointer.any_pressed() {
             *self = Self::default();
             return ScrollRouting::default();
@@ -53,6 +59,12 @@ impl ScrollGesture {
                 }
                 TouchPhase::End | TouchPhase::Cancel | TouchPhase::Move => {}
             }
+            // Scroll chaining: a gesture latched to a panel moves to the canvas
+            // once that panel is at its scroll extent, and stays there for the
+            // rest of the gesture.
+            if chain_to_canvas && self.canvas_owned == Some(false) {
+                self.canvas_owned = Some(true);
+            }
             if self.canvas_owned == Some(true) {
                 routing.claimed_wheels.push(index);
                 has_canvas_motion |= delta != Vec2::ZERO;
@@ -69,10 +81,15 @@ impl ScrollGesture {
     }
 }
 
-pub(super) fn route_canvas_scroll(ctx: &Context, starts_on_canvas: bool, allowed: bool) -> ScrollRouting {
+pub(super) fn route_canvas_scroll(
+    ctx: &Context,
+    starts_on_canvas: bool,
+    allowed: bool,
+    chain_to_canvas: bool,
+) -> ScrollRouting {
     let id = Id::new(("canvas_scroll_gesture", ctx.viewport_id()));
     let mut gesture = ctx.data_mut(|data| data.get_temp::<ScrollGesture>(id).unwrap_or_default());
-    let routing = ctx.input(|input| gesture.route(input, starts_on_canvas, allowed));
+    let routing = ctx.input(|input| gesture.route(input, starts_on_canvas, allowed, chain_to_canvas));
     ctx.data_mut(|data| data.insert_temp(id, gesture));
     routing
 }

@@ -233,7 +233,7 @@ fn claim(gesture: &mut ScrollGesture, time: f64, on_canvas: bool, events: Vec<Ev
         1.0,
         egui::InputOptions::default(),
     );
-    gesture.route(&input, on_canvas, true).pans_canvas
+    gesture.route(&input, on_canvas, true, false).pans_canvas
 }
 
 #[test]
@@ -321,7 +321,7 @@ fn focus_loss_and_disallowed_input_release_the_gesture() {
         ));
         let mut input = egui::InputState::default();
         input.focused = focused;
-        assert!(!gesture.route(&input, false, !focused).pans_canvas);
+        assert!(!gesture.route(&input, false, !focused, false).pans_canvas);
         assert!(!claim(
             &mut gesture,
             1.016,
@@ -346,10 +346,53 @@ fn root_and_detached_viewports_have_separate_scroll_owners() {
         let _ = ctx
             .run_ui(input, |ui| {
                 assert_eq!(
-                    route_canvas_scroll(ui.ctx(), starts_on_canvas, true).pans_canvas,
+                    route_canvas_scroll(ui.ctx(), starts_on_canvas, true, false).pans_canvas,
                     expected
                 );
             })
             .discard_textures();
     }
+}
+
+fn route(gesture: &mut ScrollGesture, time: f64, on_canvas: bool, chain: bool, events: Vec<Event>) -> bool {
+    let input = egui::InputState::default().begin_pass(
+        RawInput {
+            time: Some(time),
+            events,
+            ..RawInput::default()
+        },
+        false,
+        1.0,
+        egui::InputOptions::default(),
+    );
+    gesture.route(&input, on_canvas, true, chain).pans_canvas
+}
+
+#[test]
+fn an_exhausted_panel_chains_its_gesture_to_the_canvas_and_keeps_it() {
+    let mut gesture = ScrollGesture::default();
+    let scroll = || vec![wheel(Vec2::new(0.0, -5.0), TouchPhase::Move)];
+    // The panel absorbs while it can still scroll.
+    assert!(!route(&mut gesture, 1.0, false, false, scroll()));
+    // At its extent the gesture moves to the canvas...
+    assert!(route(&mut gesture, 1.016, false, true, scroll()));
+    // ...and stays there even though the panel could scroll again.
+    assert!(route(&mut gesture, 1.032, false, false, scroll()));
+    // A new contact starts over the panel again.
+    route(
+        &mut gesture,
+        1.048,
+        false,
+        false,
+        vec![wheel(Vec2::ZERO, TouchPhase::End)],
+    );
+    assert!(!route(&mut gesture, 1.064, false, false, scroll()));
+}
+
+#[test]
+fn chaining_never_steals_a_gesture_that_started_on_the_canvas() {
+    let mut gesture = ScrollGesture::default();
+    let scroll = || vec![wheel(Vec2::new(0.0, -5.0), TouchPhase::Move)];
+    assert!(route(&mut gesture, 1.0, true, false, scroll()));
+    assert!(route(&mut gesture, 1.016, true, true, scroll()));
 }
