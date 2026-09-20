@@ -414,3 +414,47 @@ fn connected_texture_is_not_display_proof_when_image_is_clipped() {
         }
     }
 }
+
+#[test]
+fn the_zoom_anchor_is_independent_of_the_canvas_transform() {
+    // Panels paint through the canvas transform, so the anchor must be
+    // computed in layer coordinates: the same visual pointer position has to
+    // select the same source pixel however the canvas is panned or zoomed.
+    let local = egui::pos2(600.0, 500.0);
+    let anchored = |transform: Option<egui::emath::TSTransform>| {
+        let (ctx, device, mut state) = disconnected_viewer();
+        state.controls.zoom = Some(PanelZoom::ONE);
+        let pointer = transform.map_or(local, |transform| transform * local);
+        for zooming in [false, true] {
+            let mut events = vec![egui::Event::PointerMoved(pointer)];
+            if zooming {
+                events.push(egui::Event::Zoom(1.5));
+            }
+            let _ = ctx
+                .run_ui(
+                    egui::RawInput {
+                        events,
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0))),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        if let Some(transform) = transform {
+                            ui.ctx().set_transform_layer(ui.layer_id(), transform);
+                        }
+                        if state.source.is_none() {
+                            state.update_texture(ui, patterned_desktop());
+                        }
+                        state.show(ui, &device, true);
+                    },
+                )
+                .discard_textures();
+        }
+        state.pending_scroll.expect("the pinch anchors the scrolled view")
+    };
+    let plain = anchored(None);
+    let transformed = anchored(Some(egui::emath::TSTransform::new(egui::vec2(37.0, 19.0), 1.5)));
+    assert!(
+        (plain - transformed).length() < 0.5,
+        "canvas transform moved the anchor: {plain:?} vs {transformed:?}"
+    );
+}

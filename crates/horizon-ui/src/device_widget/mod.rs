@@ -166,7 +166,7 @@ impl DeviceUiState {
                 // anchor on; the new scale still applies.
                 if scale.is_finite()
                     && scale > 0.0
-                    && let Some(pointer) = ui.input(|input| input.pointer.hover_pos())
+                    && let Some(pointer) = panel_zoom::local_pointer(ui)
                 {
                     // Keep the pixel under the pointer where it is.
                     let content = (pointer - image_rect.min) / scale;

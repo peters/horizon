@@ -371,7 +371,9 @@ impl HorizonApp {
         Some(PanelScreenGeometry {
             screen_rect,
             terminal_body_screen_rect,
-            zooms_content: matches!(panel.kind, PanelKind::Browser | PanelKind::Device),
+            // Kind alone is not enough: a device panel that failed to spawn
+            // shows a terminal transcript and zooms nothing.
+            zooms_content: panel.browser().is_some() || panel.device().is_some(),
         })
     }
 

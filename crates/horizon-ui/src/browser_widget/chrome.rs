@@ -96,7 +96,12 @@ pub fn show(
 /// Page zoom selector. Fit has no meaning here: the page always fills the
 /// panel, at whichever scale the emulated viewport was laid out for.
 fn zoom_picker(ui: &mut Ui, state: &mut BrowserUiState, interactive: bool) -> bool {
-    crate::panel_zoom::dropdown(ui, "browser_zoom", &mut state.zoom, interactive)
+    if !crate::panel_zoom::dropdown(ui, "browser_zoom", &mut state.zoom, interactive) {
+        return false;
+    }
+    // The body was already laid out at the previous scale this frame.
+    ui.ctx().request_repaint();
+    true
 }
 
 fn remote_identity_header(ui: &mut Ui, identity: &horizon_core::browser::RemoteIdentityDisplay) {

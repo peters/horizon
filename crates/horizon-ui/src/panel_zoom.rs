@@ -97,6 +97,17 @@ fn show(
     *selection != before
 }
 
+/// The pointer in the caller's layer coordinates. Panels are painted through
+/// the canvas transform, so the global pointer does not match their rects.
+pub(crate) fn local_pointer(ui: &Ui) -> Option<egui::Pos2> {
+    let pointer = ui.input(|input| input.pointer.hover_pos())?;
+    Some(
+        ui.ctx()
+            .layer_transform_from_global(ui.layer_id())
+            .map_or(pointer, |from_global| from_global * pointer),
+    )
+}
+
 /// Pinch, or wheel with the zoom modifier, over panel content. The canvas
 /// leaves these gestures alone above panels that zoom their own content.
 pub(crate) fn gesture_delta(ui: &Ui, hovered: bool) -> Option<f32> {

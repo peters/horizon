@@ -154,9 +154,18 @@ fn zoomed_viewport(available: egui::Vec2, zoom: f32) -> (u32, u32) {
 }
 
 fn apply_zoom_gesture(ui: &Ui, state: &mut BrowserUiState, hovered: bool) {
-    if let Some(delta) = crate::panel_zoom::gesture_delta(ui, hovered) {
-        state.zoom = state.zoom.scaled(delta);
+    let Some(delta) = crate::panel_zoom::gesture_delta(ui, hovered) else {
+        return;
+    };
+    let zoomed = state.zoom.scaled(delta);
+    if zoomed == state.zoom {
+        return;
     }
+    state.zoom = zoomed;
+    // This frame already laid the body out at the previous scale, and a static
+    // page produces no frames of its own: ask for the one that resends the
+    // emulated viewport.
+    ui.ctx().request_repaint();
 }
 
 fn paint_browser_frame(ui: &Ui, rect: Rect, texture: &egui::TextureHandle) {
@@ -262,7 +271,7 @@ mod tests {
     use egui::{Rect, pos2};
     use horizon_core::browser::PageScrollState;
 
-    use super::vertical_scrollbar_geometry;
+    use super::{BrowserUiState, apply_zoom_gesture, vertical_scrollbar_geometry};
 
     fn scroll_state(scroll_y: f32) -> PageScrollState {
         PageScrollState {
@@ -291,5 +300,37 @@ mod tests {
         assert!((top_thumb.top() - image.top()).abs() < f32::EPSILON);
         assert!(middle_thumb.top() > top_thumb.top());
         assert!((top_thumb.height() - 123.2).abs() < 0.1);
+    }
+
+    #[test]
+    fn a_zoom_gesture_rescales_and_asks_for_the_frame_that_resends_the_viewport() {
+        use crate::test_egui::DiscardTextures;
+        let ctx = egui::Context::default();
+        let zoom_input = || egui::RawInput {
+            events: vec![egui::Event::Zoom(1.25)],
+            ..Default::default()
+        };
+        let mut state = BrowserUiState::default();
+        let mut repaint_requested = false;
+        let output = ctx.run_ui(zoom_input(), |ui| {
+            apply_zoom_gesture(ui, &mut state, true);
+            repaint_requested = ui.ctx().has_requested_repaint();
+        });
+        let _ = output.discard_textures();
+        assert!((state.zoom.factor() - 1.25).abs() < 0.001);
+        assert!(repaint_requested, "a static page needs the follow-up frame");
+
+        // Off the body, and at the end of the range, nothing changes.
+        let mut untouched = BrowserUiState::default();
+        let output = ctx.run_ui(zoom_input(), |ui| apply_zoom_gesture(ui, &mut untouched, false));
+        let _ = output.discard_textures();
+        assert_eq!(untouched.zoom, crate::panel_zoom::PanelZoom::ONE);
+        let mut clamped = BrowserUiState {
+            zoom: crate::panel_zoom::PanelZoom::new(crate::panel_zoom::MAX_ZOOM),
+            ..BrowserUiState::default()
+        };
+        let output = ctx.run_ui(zoom_input(), |ui| apply_zoom_gesture(ui, &mut clamped, true));
+        let _ = output.discard_textures();
+        assert!((clamped.zoom.factor() - crate::panel_zoom::MAX_ZOOM).abs() <= f32::EPSILON);
     }
 }
