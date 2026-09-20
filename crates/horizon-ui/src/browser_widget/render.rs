@@ -204,7 +204,15 @@ pub(super) fn apply_zoom_gesture(ui: &Ui, state: &mut BrowserUiState, hovered: b
     let Some(delta) = crate::panel_zoom::gesture_delta(ui, hovered) else {
         return;
     };
-    let Some(zoomed) = crate::panel_zoom::gesture_target(state.zoom.factor(), delta) else {
+    // Act on the scale actually on screen. A selection a resource limit had
+    // to cap is kept only while the gesture pushes further past that cap, so
+    // coming back toward the usable range responds immediately instead of
+    // walking a hidden value.
+    let requested = state.zoom.factor();
+    let effective = state.effective_zoom.factor();
+    let pushes_past_cap = (requested > effective && delta > 1.0) || (requested < effective && delta < 1.0);
+    let base = if pushes_past_cap { requested } else { effective };
+    let Some(zoomed) = crate::panel_zoom::gesture_target(base, delta) else {
         return;
     };
     if zoomed == state.zoom {
@@ -375,6 +383,39 @@ mod tests {
                 && f32::from(u16::try_from(width).expect("small")) >= MIN_STABLE_VIEWPORT_SIDE,
             "{width}x{height} is below the stable viewport floor"
         );
+    }
+
+    #[test]
+    fn a_capped_selection_still_responds_to_the_first_gesture_back() {
+        use crate::test_egui::DiscardTextures;
+        let ctx = egui::Context::default();
+        let gesture = |zoom: f32, effective: f32, delta: f32| {
+            let mut state = BrowserUiState {
+                zoom: crate::panel_zoom::PanelZoom::new(zoom),
+                effective_zoom: crate::panel_zoom::PanelZoom::new(effective),
+                ..BrowserUiState::default()
+            };
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    events: vec![egui::Event::Zoom(delta)],
+                    ..Default::default()
+                },
+                |ui| apply_zoom_gesture(ui, &mut state, true),
+            );
+            let _ = output.discard_textures();
+            state.zoom.factor()
+        };
+        // A selection the panel had to raise to 85% zooms in from there, not
+        // from the hidden 25%.
+        assert!((gesture(0.25, 0.85, 1.2) - 1.02).abs() < 0.01);
+        // Pushing further past the cap keeps walking the saved selection.
+        assert!(
+            (gesture(0.25, 0.85, 0.5) - 0.25).abs() < 0.01,
+            "clamped at the range end"
+        );
+        // The same from the other side: a 400% selection capped to 130%.
+        assert!((gesture(4.0, 1.3, 0.5) - 0.65).abs() < 0.01);
+        assert!((gesture(4.0, 1.3, 1.5) - 4.0).abs() < 0.01, "clamped at the range end");
     }
 
     #[test]

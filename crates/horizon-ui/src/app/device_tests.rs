@@ -173,6 +173,11 @@ fn a_pinch_over_a_device_panel_leaves_the_canvas_zoom_alone() {
 fn paint_order_and_overlays_decide_which_panel_owns_a_zoom_gesture() {
     let (_temp, ctx, mut app, panel) = device_app(Some("127.0.0.1:5903"));
     let notes = app.board.panel_id_by_local_id("notes-panel").expect("notes");
+    let device_layout = app.board.panel(panel).expect("device").layout;
+    if let Some(cover) = app.board.panel_mut(notes) {
+        cover.layout.position = device_layout.position;
+        cover.layout.size = device_layout.size;
+    }
     render(&ctx, &mut app);
     let canvas_rect = app.canvas_rect(&ctx);
     let geometry = app.visible_panel_geometry_for_canvas_view(canvas_rect, None);
@@ -185,8 +190,14 @@ fn paint_order_and_overlays_decide_which_panel_owns_a_zoom_gesture() {
 
     // Both panels cover the point; the one painted last owns it, so a
     // terminal or editor covering a device panel keeps zoom on the canvas.
-    app.panel_screen_rects.insert(panel, body);
-    app.panel_screen_rects.insert(notes, body);
+    assert!(
+        geometry
+            .iter()
+            .filter(|(_, geometry)| geometry.screen_rect.contains(point))
+            .count()
+            >= 2,
+        "the panels must overlap for this test to mean anything"
+    );
     app.panel_screen_order = vec![panel, notes];
     assert_eq!(app.zoom_gesture_panel(&ctx, None, &geometry, Some(point)), None);
     app.panel_screen_order = vec![notes, panel];
@@ -209,7 +220,6 @@ fn paint_order_and_overlays_decide_which_panel_owns_a_zoom_gesture() {
         .first()
         .copied()
         .expect("the fixture shows overlays");
-    app.panel_screen_rects.insert(panel, overlay);
     app.panel_screen_order = vec![panel];
     let covered = overlay.center();
     assert!(app.overlay_exclusion_zones(&ctx).contains(covered));

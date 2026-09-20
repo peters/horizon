@@ -191,17 +191,20 @@ impl HorizonApp {
         {
             return None;
         }
-        let topmost = *self.panel_screen_order.iter().rev().find(|panel_id| {
-            self.panel_screen_rects
-                .get(panel_id)
-                .is_some_and(|rect| rect.contains(pointer))
-        })?;
-        panel_geometry
-            .iter()
-            .any(|(panel_id, geometry)| {
-                *panel_id == topmost && geometry.zoom_body.is_some_and(|body| body.contains(pointer))
-            })
-            .then_some(topmost)
+        // Z-order comes from the recorded paint order, but the rectangles come
+        // from this frame's geometry: the recorded rects are a frame behind and
+        // a panel just moved or resized would route to where it used to be.
+        let hit = |panel_id: &PanelId| {
+            panel_geometry
+                .iter()
+                .find(|(candidate, _)| candidate == panel_id)
+                .filter(|(_, geometry)| geometry.screen_rect.contains(pointer))
+        };
+        let (topmost, geometry) = self.panel_screen_order.iter().rev().find_map(hit)?;
+        geometry
+            .zoom_body
+            .is_some_and(|body| body.contains(pointer))
+            .then_some(*topmost)
     }
 
     #[profiling::function]
