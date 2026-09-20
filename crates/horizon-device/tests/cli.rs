@@ -177,11 +177,21 @@ mod live_mcp {
         io::{BufRead, BufReader, Write},
         process::{Child, ChildStdin, Stdio},
         sync::mpsc::{Receiver, channel},
+        sync::{Mutex, MutexGuard, PoisonError},
         time::{Duration, Instant},
     };
     use x11rb::{connection::Connection, protocol::xproto::ConnectionExt};
 
     type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+    /// These tests share one device target, whose CLI/MCP runner serializes
+    /// commands and rejects a concurrent one with `device busy`. Cargo runs
+    /// them in parallel, so they must take turns themselves.
+    static TARGET: Mutex<()> = Mutex::new(());
+
+    fn exclusive_target() -> MutexGuard<'static, ()> {
+        TARGET.lock().unwrap_or_else(PoisonError::into_inner)
+    }
 
     struct Session {
         child: Child,
@@ -249,6 +259,7 @@ mod live_mcp {
     #[ignore = "requires HORIZON_DEVICE_TEST_TARGET pointing to an owned virtual desktop"]
     fn stdio_images_errors_and_cancelled_input_preserve_the_contract() -> Result<()> {
         use base64::Engine as _;
+        let _serialized = exclusive_target();
         let target = std::env::var("HORIZON_DEVICE_TEST_TARGET")?;
         let config: horizon_device::Target = serde_json::from_slice(&std::fs::read(&target)?)?;
         let horizon_device::Endpoint::LocalX11 { display } = &config.endpoint else {
@@ -305,6 +316,7 @@ mod live_mcp {
             Event,
             xproto::{CreateWindowAux, EventMask, InputFocus, WindowClass},
         };
+        let _serialized = exclusive_target();
         let target = std::env::var("HORIZON_DEVICE_TEST_TARGET")?;
         let config: horizon_device::Target = serde_json::from_slice(&std::fs::read(&target)?)?;
         let horizon_device::Endpoint::LocalX11 { display } = &config.endpoint else {
@@ -375,6 +387,7 @@ mod live_mcp {
     #[ignore = "requires HORIZON_DEVICE_TEST_TARGET pointing to an owned virtual desktop"]
     fn cli_and_mcp_forward_cropped_jpeg_capture_options() -> Result<()> {
         use base64::{Engine as _, engine::general_purpose::STANDARD};
+        let _serialized = exclusive_target();
         let target = std::env::var("HORIZON_DEVICE_TEST_TARGET")?;
         let config = serde_json::from_slice(&std::fs::read(&target)?)?;
         let geometry = serde_json::to_value(horizon_device::Device::connect(&config)?.screenshot()?.geometry)?;
