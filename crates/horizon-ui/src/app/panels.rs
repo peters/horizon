@@ -29,6 +29,9 @@ pub(super) use interaction::ArrangedPanelDrag;
 pub(in crate::app) struct PanelScreenGeometry {
     pub(in crate::app) screen_rect: Rect,
     pub(in crate::app) terminal_body_screen_rect: Option<Rect>,
+    /// Browser and device panels zoom their own content, so pinch and
+    /// zoom-modifier wheel over them must not zoom the canvas instead.
+    pub(in crate::app) zooms_content: bool,
 }
 
 struct PanelSnapshot {
@@ -368,6 +371,7 @@ impl HorizonApp {
         Some(PanelScreenGeometry {
             screen_rect,
             terminal_body_screen_rect,
+            zooms_content: matches!(panel.kind, PanelKind::Browser | PanelKind::Device),
         })
     }
 

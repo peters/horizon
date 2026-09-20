@@ -9,6 +9,7 @@ use horizon_core::{
     browser::manifest::device::{Connection, ImageEvidence, PanelState},
 };
 
+use crate::panel_zoom::{self, PanelZoom};
 use frame::present_image;
 use session::{Session, Status};
 
@@ -23,6 +24,8 @@ pub(crate) struct DeviceUiState {
     source: Option<ColorImage>,
     texture: Option<TextureHandle>,
     presented_options: Option<DeviceViewOptions>,
+    /// Scroll offset a pointer-anchored zoom asks for on the next frame.
+    pending_scroll: Option<egui::Vec2>,
     status: Status,
     desktop: Option<[usize; 2]>,
     controls: controls::Controls,
@@ -111,6 +114,7 @@ impl DeviceUiState {
                     ui.colored_label(ui.visuals().error_fg_color, format!("Disconnected: {error}"));
                 }
             }
+            self.controls.zoom_dropdown(ui, interactive);
         });
         let previous = self.controls.options;
         let changed = ui
@@ -124,19 +128,48 @@ impl DeviceUiState {
         }
         self.refresh_presentation(ui);
         ui.separator();
+        self.show_image(ui, interactive);
+    }
+
+    /// Paint the presented desktop at the selected scale and let a pinch or
+    /// zoom-modifier wheel over the body change that scale.
+    fn show_image(&mut self, ui: &mut Ui, interactive: bool) {
         if let Some(texture) = &self.texture {
             let size = texture.size_vec2();
-            let image_visible = if self.controls.one_to_one {
-                egui::ScrollArea::both()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| visible_image(ui, texture, size))
-                    .inner
+            let body = ui.available_rect_before_wrap();
+            // The whole body is the gesture target: a zoomed-in image can be
+            // scrolled away from the pointer, and Fit leaves letterbox margins.
+            let hovered = ui.rect_contains_pointer(body);
+            let available = body.size().max(egui::Vec2::ZERO);
+            // Fit letterboxes the whole image; a zoom paints the presented
+            // pixels at that scale and scrolls for whatever no longer fits.
+            let scale = self
+                .controls
+                .zoom
+                .map_or_else(|| (available.x / size.x).min(available.y / size.y), PanelZoom::factor);
+            let (image_visible, image_rect) = if self.controls.zoom.is_some() {
+                let mut area = egui::ScrollArea::both().auto_shrink([false, false]);
+                if let Some(offset) = self.pending_scroll.take() {
+                    area = area.scroll_offset(offset);
+                }
+                area.show(ui, |ui| visible_image(ui, texture, size * scale)).inner
             } else {
-                let available = ui.available_size().max(egui::Vec2::ZERO);
-                let scale = (available.x / size.x).min(available.y / size.y);
+                self.pending_scroll = None;
                 visible_image(ui, texture, size * scale)
             };
             self.image.displayed = image_visible && self.image.received && matches!(self.status, Status::Connected);
+            if interactive && let Some(delta) = panel_zoom::gesture_delta(ui, hovered) {
+                // A fitted image can sit outside the zoom range, so the
+                // gesture starts from the nearest supported scale.
+                let next = PanelZoom::new(scale).scaled(delta);
+                if let Some(pointer) = ui.input(|input| input.pointer.hover_pos()) {
+                    // Keep the pixel under the pointer where it is.
+                    let content = (pointer - image_rect.min) / scale;
+                    self.pending_scroll = Some((content * next.factor() - (pointer - body.min)).max(egui::Vec2::ZERO));
+                }
+                self.controls.zoom = Some(next);
+                ui.ctx().request_repaint();
+            }
         } else {
             ui.label("The device desktop appears here after connection.");
         }
@@ -300,14 +333,16 @@ impl DeviceUiState {
     }
 }
 
-fn visible_image(ui: &mut Ui, texture: &TextureHandle, size: egui::Vec2) -> bool {
+/// Paint the presented image; report whether any of it survived clipping and
+/// where it landed (the anchor for a pointer-centered zoom).
+fn visible_image(ui: &mut Ui, texture: &TextureHandle, size: egui::Vec2) -> (bool, egui::Rect) {
     let response = ui.add(
         egui::Image::new(texture)
             .fit_to_exact_size(size)
             .sense(egui::Sense::hover()),
     );
     let painted = response.rect.intersect(ui.clip_rect());
-    painted.width() > 0.0 && painted.height() > 0.0
+    (painted.width() > 0.0 && painted.height() > 0.0, response.rect)
 }
 
 #[cfg(test)]

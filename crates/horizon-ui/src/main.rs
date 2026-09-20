@@ -16,6 +16,7 @@ mod input;
 mod linux_desktop;
 mod loading_spinner;
 mod native_app;
+mod panel_zoom;
 mod plugin_install;
 mod primary_selection;
 mod remote_hosts_overlay;

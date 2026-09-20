@@ -43,9 +43,7 @@ pub fn show_body(
             keyboard_focus_id: None,
         };
     }
-    // egui layout sizes are finite and non-negative.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let viewport_size = (available.width().round() as u32, available.height().round() as u32);
+    let viewport_size = zoomed_viewport(available.size(), state.zoom.factor());
     let Some(data) = browser.frame_slot.latest() else {
         // No frame: the placeholder owns the body. It must be drawn before
         // allocating the body rect — allocating first would push the
@@ -85,6 +83,9 @@ pub fn show_body(
         // the final pointer outside the body; the stopped-drag flag keeps
         // ownership for the release frame so the in-rect press is replayed.
         || body_response.drag_stopped();
+    if interactive {
+        apply_zoom_gesture(ui, state, body_response.contains_pointer());
+    }
     let width = data.width as usize;
     let height = data.height as usize;
     let frame_size = [
@@ -140,6 +141,21 @@ pub fn show_body(
         retry_clicked: false,
         body_clicked,
         keyboard_focus_id,
+    }
+}
+
+/// Page zoom lays the body out in fewer (or more) CSS pixels than it occupies
+/// on screen; the frame that comes back is letterboxed to the body, so the
+/// page reflows and scales exactly like browser zoom.
+// egui layout sizes are finite and non-negative.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn zoomed_viewport(available: egui::Vec2, zoom: f32) -> (u32, u32) {
+    ((available.x / zoom).round() as u32, (available.y / zoom).round() as u32)
+}
+
+fn apply_zoom_gesture(ui: &Ui, state: &mut BrowserUiState, hovered: bool) {
+    if let Some(delta) = crate::panel_zoom::gesture_delta(ui, hovered) {
+        state.zoom = state.zoom.scaled(delta);
     }
 }
 

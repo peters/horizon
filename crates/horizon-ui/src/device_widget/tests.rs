@@ -171,7 +171,7 @@ fn desktop_shrink_lets_controls_clear_the_stale_viewport_draft() {
 }
 
 #[test]
-fn fit_one_to_one_and_whole_desktop_clicks_work_without_a_session() {
+fn zoom_and_whole_desktop_clicks_work_without_a_session() {
     let (ctx, device, mut state) = disconnected_viewer();
     state.controls.options.viewport = Some(horizon_core::DeviceViewport {
         x: 4,
@@ -181,14 +181,57 @@ fn fit_one_to_one_and_whole_desktop_clicks_work_without_a_session() {
     });
     show_viewer(&ctx, &mut state, &device, Vec::new());
     assert_eq!(presented_size(&state), Some([4, 4]));
-    click_label(&ctx, &mut state, &device, "View controls");
-    click_label(&ctx, &mut state, &device, "1:1");
-    assert!(state.controls.one_to_one);
+    // The dropdown opens on its current selection, then picks a stop.
     click_label(&ctx, &mut state, &device, "Fit");
-    assert!(!state.controls.one_to_one);
+    click_label(&ctx, &mut state, &device, "100%");
+    assert_eq!(state.controls.zoom, Some(PanelZoom::ONE));
+    click_label(&ctx, &mut state, &device, "100%");
+    click_label(&ctx, &mut state, &device, "Fit");
+    assert_eq!(state.controls.zoom, None);
+    click_label(&ctx, &mut state, &device, "View controls");
     click_label(&ctx, &mut state, &device, "Whole desktop");
     assert!(state.controls.options.viewport.is_none());
     assert_eq!(presented_size(&state), Some([8, 4]));
+}
+
+#[test]
+fn a_pinch_over_the_image_zooms_the_panel_and_leaves_the_desktop_alone() {
+    let (ctx, device, mut state) = disconnected_viewer();
+    show_viewer(&ctx, &mut state, &device, Vec::new());
+    let presented = presented_size(&state);
+    // Hover the fitted image, then pinch over it.
+    show_viewer(
+        &ctx,
+        &mut state,
+        &device,
+        vec![egui::Event::PointerMoved(egui::pos2(600.0, 500.0))],
+    );
+    show_viewer(
+        &ctx,
+        &mut state,
+        &device,
+        vec![
+            egui::Event::PointerMoved(egui::pos2(600.0, 500.0)),
+            egui::Event::Zoom(0.5),
+        ],
+    );
+    let first = state.controls.zoom.expect("the pinch selects an explicit scale");
+    show_viewer(
+        &ctx,
+        &mut state,
+        &device,
+        vec![
+            egui::Event::PointerMoved(egui::pos2(600.0, 500.0)),
+            egui::Event::Zoom(0.5),
+        ],
+    );
+    let second = state.controls.zoom.expect("the gesture keeps an explicit scale");
+    assert!(
+        second.factor() < first.factor(),
+        "each pinch out shrinks further: {first:?} then {second:?}"
+    );
+    assert_eq!(presented_size(&state), presented, "zoom never resamples the desktop");
+    assert_eq!(state.image.sequence, 1, "local zoom is not a received frame");
 }
 
 #[test]
@@ -336,14 +379,14 @@ fn connected_texture_is_not_display_proof_when_image_is_clipped() {
         target: horizon_core::DeviceViewTarget::parse("127.0.0.1:5900").unwrap(),
         connect_on_start: false,
     };
-    for one_to_one in [false, true] {
+    for zoom in [None, Some(PanelZoom::ONE)] {
         for (clip_height, expected) in [(20.0, false), (600.0, true)] {
             let mut state = DeviceUiState {
                 initialized: true,
                 status: Status::Connected,
                 ..Default::default()
             };
-            state.controls.one_to_one = one_to_one;
+            state.controls.zoom = zoom;
             let output = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
@@ -359,7 +402,7 @@ fn connected_texture_is_not_display_proof_when_image_is_clipped() {
                 },
             );
             let _ = output.discard_textures();
-            assert_eq!(state.image.displayed, expected, "1:1={one_to_one}, clip={clip_height}");
+            assert_eq!(state.image.displayed, expected, "zoom={zoom:?}, clip={clip_height}");
             state.begin_frame();
             assert_eq!(
                 state

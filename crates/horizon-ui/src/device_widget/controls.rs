@@ -1,10 +1,13 @@
 use egui::Ui;
 use horizon_core::{DeviceViewOptions, DeviceViewport};
 
+use crate::panel_zoom::{self, PanelZoom};
+
 #[derive(Default)]
 pub(super) struct Controls {
     pub options: DeviceViewOptions,
-    pub one_to_one: bool,
+    /// Presented-image scale; `None` fits the whole image into the panel body.
+    pub zoom: Option<PanelZoom>,
     pub(super) draft: Option<DeviceViewport>,
     error: Option<String>,
 }
@@ -12,6 +15,11 @@ pub(super) struct Controls {
 impl Controls {
     pub(super) fn set_error(&mut self, error: String) {
         self.error = Some(error);
+    }
+
+    /// Always-visible zoom selector, outside the collapsed view controls.
+    pub(super) fn zoom_dropdown(&mut self, ui: &mut Ui, interactive: bool) {
+        panel_zoom::dropdown_with_fit(ui, "device_zoom", &mut self.zoom, interactive);
     }
 
     pub(super) fn show(&mut self, ui: &mut Ui, desktop: Option<[usize; 2]>, rendered: Option<[usize; 2]>) -> bool {
@@ -40,9 +48,6 @@ impl Controls {
                 );
             });
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.one_to_one, false, "Fit");
-                ui.selectable_value(&mut self.one_to_one, true, "1:1")
-                    .on_hover_text("One rendered image pixel per UI point; image limits still apply.");
                 if (desktop.is_some() || self.options.viewport.is_some()) && ui.button("Whole desktop").clicked() {
                     self.options.viewport = None;
                     self.draft = None;

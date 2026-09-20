@@ -247,7 +247,13 @@ impl HorizonApp {
         );
         self.canvas_pan_input_claimed =
             pointer_in_canvas && (self.middle_pan_active || space_drag_claimed || primary_canvas_drag.is_some());
-        if pointer_in_canvas && (zoom_delta - 1.0).abs() > f32::EPSILON {
+        // A panel that zooms its own content owns the gesture over its frame.
+        let pointer_over_panel_zoom = pointer_position.is_some_and(|position| {
+            panel_geometry
+                .iter()
+                .any(|(_, geometry)| geometry.zooms_content && geometry.screen_rect.contains(position))
+        });
+        if pointer_in_canvas && !pointer_over_panel_zoom && (zoom_delta - 1.0).abs() > f32::EPSILON {
             route_canvas_scroll(ctx, false, false);
             let anchor = pointer_position.unwrap_or_else(|| canvas_rect.center());
             if self.zoom_canvas_at(canvas_rect, anchor, self.canvas_view.zoom * zoom_delta) {

@@ -51,6 +51,7 @@ pub fn show(
         clicked |= nav_button(ui, "⟳", "Reload", browser, BrowserCommand::Reload, interactive);
         clicked |= video_controls(ui, browser, interactive);
         clicked |= backend_picker(ui, panel_id, browser, interactive);
+        clicked |= zoom_picker(ui, state, interactive);
         // Measure after the nav buttons so the cap fits the real remainder.
         // The owner name is an unrestricted external string: cap the chip to
         // what the row can spare while keeping the URL bar a usable minimum
@@ -90,6 +91,12 @@ pub fn show(
     }
     clicked |= crate::browser_widget::teach::show(ui, browser, interactive);
     (url_focused, clicked)
+}
+
+/// Page zoom selector. Fit has no meaning here: the page always fills the
+/// panel, at whichever scale the emulated viewport was laid out for.
+fn zoom_picker(ui: &mut Ui, state: &mut BrowserUiState, interactive: bool) -> bool {
+    crate::panel_zoom::dropdown(ui, "browser_zoom", &mut state.zoom, interactive)
 }
 
 fn remote_identity_header(ui: &mut Ui, identity: &horizon_core::browser::RemoteIdentityDisplay) {

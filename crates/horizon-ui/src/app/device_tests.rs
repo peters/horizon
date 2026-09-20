@@ -117,3 +117,37 @@ fn detached_viewer_remains_active_during_root_fullscreen_and_reattachment() {
     assert!(!app.workspace_is_detached(workspace));
     assert!(rendered(&app, panel), "reattached viewer did not resume");
 }
+
+#[test]
+fn a_pinch_over_a_device_panel_leaves_the_canvas_zoom_alone() {
+    let (_temp, ctx, mut app, panel) = device_app(Some("127.0.0.1:5902"));
+    render(&ctx, &mut app);
+    let canvas_rect = app.canvas_rect(&ctx);
+    let geometry = app.visible_panel_geometry_for_canvas_view(canvas_rect, None);
+    let panel_rect = geometry
+        .iter()
+        .find(|(id, _)| *id == panel)
+        .expect("device panel geometry")
+        .1
+        .screen_rect;
+    let before = app.canvas_view;
+
+    let mut over_panel = raw_input([1400.0, 900.0], None);
+    over_panel.events.push(egui::Event::PointerMoved(panel_rect.center()));
+    over_panel.events.push(egui::Event::Zoom(1.25));
+    run_app_frame_with_input(&ctx, &mut app, over_panel);
+    assert_eq!(app.canvas_view, before, "the panel owns a pinch over its own frame");
+
+    let empty = egui::pos2(canvas_rect.right() - 8.0, canvas_rect.bottom() - 8.0);
+    assert!(
+        geometry
+            .iter()
+            .all(|(_, geometry)| !geometry.screen_rect.contains(empty)),
+        "the control point must be empty canvas"
+    );
+    let mut over_canvas = raw_input([1400.0, 900.0], None);
+    over_canvas.events.push(egui::Event::PointerMoved(empty));
+    over_canvas.events.push(egui::Event::Zoom(1.25));
+    run_app_frame_with_input(&ctx, &mut app, over_canvas);
+    assert!(app.canvas_view.zoom > before.zoom, "empty canvas still zooms");
+}

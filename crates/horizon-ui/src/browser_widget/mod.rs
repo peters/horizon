@@ -86,6 +86,9 @@ pub struct BrowserUiState {
     select_popup: Option<select_popup::SelectPopupUi>,
     /// True after a blur dismiss was queued so we do not spam Escape.
     select_popup_dismissed: bool,
+    /// Page zoom: the panel body is laid out in this many fewer (or more)
+    /// CSS pixels, so the page reflows exactly as it would in a browser.
+    zoom: crate::panel_zoom::PanelZoom,
 }
 
 impl BrowserUiState {
@@ -465,6 +468,43 @@ mod tests {
             pointer_viewport_state(false, Some([1280.0, 720.0]), Some((1280, 720)), (1280, 720)),
             PointerViewportState::Ready
         ));
+    }
+
+    #[test]
+    fn page_zoom_lays_the_body_out_in_scaled_css_pixels() {
+        use crate::test_egui::DiscardTextures;
+        let context = egui::Context::default();
+        let viewport_for = |zoom| {
+            let mut browser = horizon_core::browser::BrowserPanelState::inert();
+            let mut state = BrowserUiState {
+                zoom,
+                ..BrowserUiState::default()
+            };
+            let mut viewport = None;
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                    ..Default::default()
+                },
+                |ui| {
+                    viewport = super::render::show_body(ui, horizon_core::PanelId(1), &mut browser, &mut state, true)
+                        .viewport_size;
+                },
+            );
+            let _ = output.discard_textures();
+            viewport.expect("the body always reports the size it was laid out at")
+        };
+        let unscaled = viewport_for(crate::panel_zoom::PanelZoom::ONE);
+        // Zooming in lays the page out in fewer CSS pixels (and out, in more),
+        // which is what makes its content reflow and scale like browser zoom.
+        for (zoom, ratio) in [(2.0_f32, 0.5_f64), (0.5, 2.0)] {
+            let scaled = viewport_for(crate::panel_zoom::PanelZoom::new(zoom));
+            assert!(
+                (f64::from(scaled.0) - f64::from(unscaled.0) * ratio).abs() <= 1.0
+                    && (f64::from(scaled.1) - f64::from(unscaled.1) * ratio).abs() <= 1.0,
+                "{zoom}x of {unscaled:?} became {scaled:?}"
+            );
+        }
     }
 
     #[test]

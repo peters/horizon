@@ -125,26 +125,14 @@ pub(super) fn events(
                 flush_pending_move(browser, &mut pending_move);
                 end_captured_drags(browser, state, frame, &mut event_buttons, event_modifiers);
             }
-            Event::MouseWheel { unit, delta, .. } => {
+            Event::MouseWheel {
+                unit, delta, modifiers, ..
+            } => {
                 flush_pending_move(browser, &mut pending_move);
-                if wheel_pos.is_some_and(|pos| overlay_blocks_pointer(browser, frame, pos)) {
-                    continue;
-                }
-                if let Some(p) = wheel_pos {
-                    let scale = match *unit {
-                        egui::MouseWheelUnit::Point => 1.0,
-                        egui::MouseWheelUnit::Line => 16.0,
-                        egui::MouseWheelUnit::Page => 500.0,
-                    };
-                    let (x, y) = to_page_coords(frame.rect, frame.frame_size, p);
-                    let (delta_x, delta_y) = cdp_wheel_delta(*delta, scale);
-                    browser.send(BrowserCommand::Input(BrowserInput::Wheel {
-                        x,
-                        y,
-                        delta_x,
-                        delta_y,
-                        modifiers: event_modifiers,
-                    }));
+                if !wheel_is_panel_zoom(*modifiers)
+                    && let Some(position) = wheel_pos
+                {
+                    forward_wheel(browser, frame, position, *unit, *delta, event_modifiers);
                 }
             }
             _ => flush_pending_move(browser, &mut pending_move),
@@ -486,6 +474,39 @@ fn to_page_coords(rect: egui::Rect, frame_size: [f32; 2], pos: egui::Pos2) -> (f
     (x, y)
 }
 
+fn forward_wheel(
+    browser: &BrowserPanelState,
+    frame: PointerFrame,
+    position: egui::Pos2,
+    unit: egui::MouseWheelUnit,
+    delta: egui::Vec2,
+    modifiers: BrowserModifiers,
+) {
+    if overlay_blocks_pointer(browser, frame, position) {
+        return;
+    }
+    let scale = match unit {
+        egui::MouseWheelUnit::Point => 1.0,
+        egui::MouseWheelUnit::Line => 16.0,
+        egui::MouseWheelUnit::Page => 500.0,
+    };
+    let (x, y) = to_page_coords(frame.rect, frame.frame_size, position);
+    let (delta_x, delta_y) = cdp_wheel_delta(delta, scale);
+    browser.send(BrowserCommand::Input(BrowserInput::Wheel {
+        x,
+        y,
+        delta_x,
+        delta_y,
+        modifiers,
+    }));
+}
+
+/// Wheel with the zoom modifier belongs to the panel's own zoom, not to the
+/// page: forwarding it would make Chrome zoom the page a second time.
+const fn wheel_is_panel_zoom(modifiers: egui::Modifiers) -> bool {
+    modifiers.ctrl || modifiers.command
+}
+
 fn cdp_wheel_delta(delta: egui::Vec2, scale: f32) -> (f64, f64) {
     // egui reports positive movement toward the top/left; CDP uses the DOM
     // wheel convention where positive deltas move toward the bottom/right.
@@ -531,6 +552,14 @@ mod tests {
         // Points outside the frame clamp to its edge rather than mapping past it.
         let outside = to_page_coords(rect, [852.0, 393.0], egui::pos2(900.0, 1000.0));
         assert_eq!(outside, (852.0, 393.0));
+    }
+
+    #[test]
+    fn only_unmodified_wheels_reach_the_page() {
+        assert!(!wheel_is_panel_zoom(egui::Modifiers::NONE));
+        assert!(!wheel_is_panel_zoom(egui::Modifiers::SHIFT));
+        assert!(wheel_is_panel_zoom(egui::Modifiers::CTRL));
+        assert!(wheel_is_panel_zoom(egui::Modifiers::COMMAND));
     }
 
     #[test]

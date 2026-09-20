@@ -35,8 +35,10 @@ Must include:
 
 - `image_limits_and_viewport_apply_without_a_live_session` — image limits and
   viewport crop change the presented texture while status is Disconnected.
-- `fit_one_to_one_and_whole_desktop_clicks_work_without_a_session` — Fit, 1:1
-  and Whole desktop clicks take effect on a retained desktop.
+- `zoom_and_whole_desktop_clicks_work_without_a_session` — zoom dropdown and
+  Whole desktop clicks take effect on a retained desktop.
+- `a_pinch_over_the_image_zooms_the_panel_and_leaves_the_desktop_alone` — a
+  pinch/zoom-modifier wheel rescales locally without resampling the desktop.
 - `apply_viewport_and_reconnect_keep_the_last_desktop` — Apply viewport crops
   the last frame; Reconnect starts a worker without dropping that image.
 - `fps_only_change_does_not_resample_the_retained_desktop` — Maximum fps does
@@ -83,17 +85,21 @@ covering the control sequence below.
 ### B1. Expand View controls
 
 Click **View controls**. The collapsing body stays open and shows Maximum fps,
-Image limits, Fit, 1:1, Whole desktop, the desktop/image size label, viewport
-fields, and Apply viewport.
+Image limits, Whole desktop, the desktop/image size label, viewport fields, and
+Apply viewport. The zoom dropdown stays visible in the header row above it.
 
-### B2. Fit and 1:1
+### B2. Zoom
 
 1. Note the presented image size label (`Desktop W×H · Image w×h`).
-2. Click **1:1**. The image uses one presented pixel per UI point; scrollbars
-   appear when the image is larger than the remaining panel body. Target
-   desktop geometry is unchanged (`device_screenshot` of the **source**
-   fixture still reports the original size).
-3. Click **Fit**. The image letterboxes into the remaining panel area; the
+2. Open the zoom dropdown and choose **100%**. The image uses one presented
+   pixel per UI point; scrollbars appear when the image is larger than the
+   remaining panel body. Target desktop geometry is unchanged
+   (`device_screenshot` of the **source** fixture still reports the original
+   size).
+3. Pinch, or hold the zoom modifier and turn the wheel, over the image. The
+   percentage follows the gesture, the pixel under the pointer stays put, and
+   the plain wheel still scrolls the zoomed image. The canvas must not zoom.
+4. Choose **Fit**. The image letterboxes into the remaining panel area; the
    size label does not change.
 
 ### B3. Image limits
@@ -130,7 +136,7 @@ desktop resolution or the presented image size.
 2. Stop the source fixture (or its x11vnc) so the viewer reports Disconnected.
    The last desktop image must remain. Repeat B3 and B4 on that last frame:
    limits, Apply viewport, and Whole desktop must still change the **Image**
-   size label. Fit/1:1 must still switch layout.
+   size label. Zoom must still switch layout.
 3. Restart the source and click **Reconnect**. The panel connects to the new
    server and shows a live image.
 
@@ -145,7 +151,7 @@ expired. Keep only synthetic evidence.
 
 Restore a saved Device panel. It stays Stopped until **Reconnect**. View
 options are session-local: recreating the panel restores defaults (20 fps,
-2048×2048, Fit, no viewport).
+2048×2048, Fit zoom, no viewport).
 
 ## Pass criteria
 
@@ -153,8 +159,8 @@ options are session-local: recreating the panel restores defaults (20 fps,
 |---|---|---|
 | Maximum fps | Refresh cadence changes; live source still updates | Change desktop size |
 | Image limits | `Image` size in the label changes | Change `Desktop` size or VNC encoding |
-| Fit | Image letterboxes into the panel body | Crop the source |
-| 1:1 | Native presented pixels plus scroll when needed | Crop the source |
+| Zoom: Fit | Image letterboxes into the panel body | Crop the source |
+| Zoom: 25–400% | Scaled presented pixels plus scroll when needed | Crop the source or zoom the canvas |
 | Whole desktop | Clears crop; image returns to full desktop | Require a live worker when a last frame exists |
 | Apply viewport | Crops to the requested rectangle | Accept out-of-bounds rectangles |
 | Reconnect | Connecting, then a live or failed status | Drop the last image before a replacement |

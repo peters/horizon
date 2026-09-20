@@ -95,13 +95,16 @@ synthetic Horizon fixture and must be inspected before publication.
 View controls are session-local. The default maximum refresh is 20 fps (range
 1–30); rendered images fit within 2048×2048 pixels by default, with independently
 adjustable width/height limits from 1 to 8192. Rendering retains aspect ratio and
-never upscales its source. Fit fills the available panel area; 1:1 displays one
-rendered image pixel per UI point with scrolling. Desktop and image dimensions
-are shown separately. Controls never change the target desktop resolution.
+never upscales its source. The always-visible zoom selector chooses Fit (the
+image fills the available panel area) or a scale from 25% to 400%, where 100%
+is one rendered image pixel per UI point and anything larger scrolls; pinch, or
+wheel with the zoom modifier, over the image zooms around the pointer. Desktop
+and image dimensions are shown separately. Controls never change the target
+desktop resolution.
 
 An explicit viewport selects a nonempty rectangle inside the source desktop.
 Apply refuses invalid bounds; Whole desktop clears the crop. Viewport, image
-limits, Fit and 1:1 apply immediately to the last received full desktop image,
+limits and zoom apply immediately to the last received full desktop image,
 including after the VNC worker disconnects. If the target later shrinks outside
 an active viewport, the crop is cleared and the whole desktop is shown. Settings
 reset when the panel is recreated; restored panels still require manual
