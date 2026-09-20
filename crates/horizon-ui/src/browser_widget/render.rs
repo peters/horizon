@@ -8,6 +8,9 @@ use horizon_core::browser::{BrowserPanelState, BrowserStatus, PageScrollState};
 
 use crate::browser_widget::BrowserUiState;
 
+/// Smallest viewport side `synchronize_viewport` accepts as a real layout.
+const MIN_STABLE_VIEWPORT_SIDE: f32 = 33.0;
+
 pub struct BodyOutput {
     pub image_rect: Option<Rect>,
     pub frame_size: Option<[f32; 2]>,
@@ -153,9 +156,17 @@ pub fn show_body(
 /// Page zoom lays the body out in fewer (or more) CSS pixels than it occupies
 /// on screen; the frame that comes back is letterboxed to the body, so the
 /// page reflows and scales exactly like browser zoom.
+///
+/// A zoom that would push an axis under `MIN_STABLE_VIEWPORT_SIDE` is capped:
+/// `synchronize_viewport` treats such a viewport as a transient layout and
+/// never sends it, which would leave the page at its previous scale with the
+/// selected zoom doing nothing at all. A small panel zooms as far as it can
+/// instead.
 // egui layout sizes are finite and non-negative.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn zoomed_viewport(available: egui::Vec2, zoom: f32) -> (u32, u32) {
+    let ceiling = (available.min_elem() / MIN_STABLE_VIEWPORT_SIDE).max(1.0);
+    let zoom = zoom.min(ceiling);
     ((available.x / zoom).round() as u32, (available.y / zoom).round() as u32)
 }
 
@@ -308,6 +319,22 @@ mod tests {
         assert!((top_thumb.top() - image.top()).abs() < f32::EPSILON);
         assert!(middle_thumb.top() > top_thumb.top());
         assert!((top_thumb.height() - 123.2).abs() < 0.1);
+    }
+
+    #[test]
+    fn a_zoomed_viewport_stays_above_the_size_the_backend_sync_accepts() {
+        use super::{MIN_STABLE_VIEWPORT_SIDE, zoomed_viewport};
+        // A roomy panel zooms exactly as asked.
+        assert_eq!(zoomed_viewport(egui::vec2(800.0, 600.0), 4.0), (200, 150));
+        assert_eq!(zoomed_viewport(egui::vec2(800.0, 600.0), 0.5), (1600, 1200));
+        // A short one caps the effective zoom instead of selecting a viewport
+        // that would never be sent.
+        let (width, height) = zoomed_viewport(egui::vec2(420.0, 100.0), 4.0);
+        assert!(
+            f32::from(u16::try_from(height).expect("small")) >= MIN_STABLE_VIEWPORT_SIDE
+                && f32::from(u16::try_from(width).expect("small")) >= MIN_STABLE_VIEWPORT_SIDE,
+            "{width}x{height} is below the stable viewport floor"
+        );
     }
 
     #[test]

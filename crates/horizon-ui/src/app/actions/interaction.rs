@@ -167,18 +167,25 @@ impl HorizonApp {
         }
     }
 
-    /// The panel under the pointer that zooms its own content. Panels are
-    /// resolved with the paint order the current viewport's renderer recorded,
+    /// The panel under the pointer that zooms its own content, ignoring
+    /// anything covered by a fixed overlay. Panels are resolved with the
+    /// paint order the current viewport's renderer recorded,
     /// so an overlapping panel on top keeps the gesture, and the rectangle is
     /// the panel body the widget itself tests. A fullscreen panel in the root
     /// window is not special-cased: that path returns before this handler
     /// runs, while detached viewports keep routing with their own geometry.
-    fn zoom_gesture_panel(
+    pub(in crate::app) fn zoom_gesture_panel(
         &self,
+        ctx: &Context,
         panel_geometry: &[(PanelId, PanelScreenGeometry)],
         pointer: Option<egui::Pos2>,
     ) -> Option<PanelId> {
         let pointer = pointer?;
+        // Fixed overlays paint above every panel: a pinch on the minimap or
+        // the settings panel must not reach the panel behind it.
+        if self.overlay_exclusion_zones(ctx).contains(pointer) {
+            return None;
+        }
         let topmost = *self.panel_screen_order.iter().rev().find(|panel_id| {
             self.panel_screen_rects
                 .get(panel_id)
@@ -277,7 +284,7 @@ impl HorizonApp {
         // The first owner keeps the whole gesture: egui keeps smoothing zoom
         // deltas after the input stops, and the pointer may leave the panel.
         let candidate = self
-            .zoom_gesture_panel(&panel_geometry, pointer_position)
+            .zoom_gesture_panel(ctx, &panel_geometry, pointer_position)
             .map(panel_layer_salt);
         let pointer_over_panel_zoom = crate::panel_zoom::gesture_owner(ctx, candidate).is_some();
         if pointer_in_canvas && !pointer_over_panel_zoom && (zoom_delta - 1.0).abs() > f32::EPSILON {

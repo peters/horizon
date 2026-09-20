@@ -23,6 +23,12 @@ impl OverlayExclusion {
         self.zones.iter().any(|zone| zone.contains(point))
     }
 
+    /// The zones themselves, for callers that need a point inside one.
+    #[cfg(test)]
+    pub(super) fn zones(&self) -> &[Rect] {
+        &self.zones
+    }
+
     /// Returns `true` if `rect` overlaps any exclusion zone.
     pub(super) fn intersects(&self, rect: Rect) -> bool {
         self.zones.iter().any(|zone| zone.intersects(rect))

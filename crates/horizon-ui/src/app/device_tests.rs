@@ -168,3 +168,40 @@ fn a_pinch_over_a_device_panel_leaves_the_canvas_zoom_alone() {
     run_app_frame_with_input(&ctx, &mut app, over_canvas);
     assert!(app.canvas_view.zoom > before.zoom, "empty canvas still zooms");
 }
+
+#[test]
+fn paint_order_and_overlays_decide_which_panel_owns_a_zoom_gesture() {
+    let (_temp, ctx, mut app, panel) = device_app(Some("127.0.0.1:5903"));
+    let notes = app.board.panel_id_by_local_id("notes-panel").expect("notes");
+    render(&ctx, &mut app);
+    let canvas_rect = app.canvas_rect(&ctx);
+    let geometry = app.visible_panel_geometry_for_canvas_view(canvas_rect, None);
+    let body = geometry
+        .iter()
+        .find(|(id, _)| *id == panel)
+        .and_then(|(_, geometry)| geometry.zoom_body)
+        .expect("device body");
+    let point = body.center();
+
+    // Both panels cover the point; the one painted last owns it, so a
+    // terminal or editor covering a device panel keeps zoom on the canvas.
+    app.panel_screen_rects.insert(panel, body);
+    app.panel_screen_rects.insert(notes, body);
+    app.panel_screen_order = vec![panel, notes];
+    assert_eq!(app.zoom_gesture_panel(&ctx, &geometry, Some(point)), None);
+    app.panel_screen_order = vec![notes, panel];
+    assert_eq!(app.zoom_gesture_panel(&ctx, &geometry, Some(point)), Some(panel));
+
+    // A fixed overlay paints above every panel and keeps the gesture off it.
+    let overlay = app
+        .overlay_exclusion_zones(&ctx)
+        .zones()
+        .first()
+        .copied()
+        .expect("the fixture shows overlays");
+    app.panel_screen_rects.insert(panel, overlay);
+    app.panel_screen_order = vec![panel];
+    let covered = overlay.center();
+    assert!(app.overlay_exclusion_zones(&ctx).contains(covered));
+    assert_eq!(app.zoom_gesture_panel(&ctx, &geometry, Some(covered)), None);
+}
