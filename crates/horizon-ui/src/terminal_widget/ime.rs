@@ -58,8 +58,12 @@ pub(super) fn prepare_terminal_keyboard_events(
     events: &[TerminalInputEvent],
     ime_enabled: bool,
 ) -> Vec<TerminalInputEvent> {
-    let ime_events_present = events.iter().any(|event| matches!(event.event, egui::Event::Ime(_)));
-    if !ime_enabled && !ime_events_present {
+    // A composition latched in an earlier frame is evidence only while the IME
+    // keeps confirming it. A frame carrying keys and no IME event at all proves
+    // the IME is not acting on them, so the latch cannot speak for it: under
+    // Wayland text-input the latch would otherwise outlive its composition and
+    // swallow every later arrow, backspace and key repeat in the panel.
+    if !events.iter().any(|event| matches!(event.event, egui::Event::Ime(_))) {
         return events.to_vec();
     }
 
@@ -68,7 +72,11 @@ pub(super) fn prepare_terminal_keyboard_events(
     // frame is not evidence of one: on Wayland every text-input round trip
     // ends with a bare `Preedit("")` (winit's `Done` handler), which means
     // "nothing is composing" and used to take the frame's Backspace with it.
-    let mut composing = ime_enabled;
+    // egui reports that terminator after the keys it arrived with, so a frame
+    // whose only composition news is an empty preedit starts uncomposed; a
+    // commit still ends its own composition where it arrives, leaving the keys
+    // the IME consumed before it filtered.
+    let mut composing = ime_enabled && !reports_no_composition(events);
     let mut filtered = Vec::with_capacity(events.len());
     for event in events {
         match &event.event {
@@ -81,6 +89,21 @@ pub(super) fn prepare_terminal_keyboard_events(
     }
     filtered.sort_by_key(|event| !matches!(event.event, egui::Event::Ime(_)));
     filtered
+}
+
+/// Whether the frame's only composition news is that nothing is composing.
+/// A bare empty preedit is winit's end-of-round-trip bookkeeping rather than a
+/// composition that produced text, so it cannot retire keys it never owned.
+fn reports_no_composition(events: &[TerminalInputEvent]) -> bool {
+    let mut ends_uncomposed = false;
+    for event in events {
+        match &event.event {
+            egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) if text.is_empty() => ends_uncomposed = true,
+            egui::Event::Ime(egui::ImeEvent::Commit(_)) => return false,
+            _ => {}
+        }
+    }
+    ends_uncomposed
 }
 
 fn is_ime_incompatible_event(event: &egui::Event) -> bool {
@@ -220,6 +243,10 @@ mod tests {
         })
     }
 
+    fn commit(text: &str) -> TerminalInputEvent {
+        terminal_event(Event::Ime(egui::ImeEvent::Commit(text.to_owned())))
+    }
+
     fn preedit(text: &str) -> TerminalInputEvent {
         terminal_event(Event::Ime(egui::ImeEvent::Preedit {
             text: text.to_owned(),
@@ -266,6 +293,73 @@ mod tests {
             kept(false, vec![bs(), preedit("中")]),
             "key before a composition starts"
         );
+    }
+
+    /// Navigation must survive a latch the IME has stopped confirming. Wayland
+    /// text-input latches a composition per round trip, so a stale latch used
+    /// to make every later arrow, backspace and key repeat disappear.
+    #[test]
+    fn keys_survive_a_latched_composition_the_frame_says_nothing_about() {
+        let events = vec![
+            key(Key::ArrowDown, false),
+            key(Key::ArrowUp, true),
+            key(Key::Backspace, false),
+        ];
+
+        assert_eq!(prepare_terminal_keyboard_events(&events, true), events);
+    }
+
+    /// The bare `Preedit("")` that ends a Wayland round trip reports "nothing
+    /// is composing", and egui reports it after the keys it arrived with, so
+    /// it must not take them with it.
+    #[test]
+    fn keys_survive_the_empty_preedit_that_ends_a_wayland_round_trip() {
+        for trailing in [vec![preedit("")], vec![preedit("中"), preedit("")]] {
+            let mut events = vec![key(Key::ArrowDown, false), key(Key::Backspace, true)];
+            events.extend(trailing);
+
+            let filtered = prepare_terminal_keyboard_events(&events, true);
+
+            assert!(
+                filtered.iter().any(|event| matches!(
+                    event.event,
+                    Event::Key {
+                        key: Key::ArrowDown,
+                        ..
+                    }
+                )),
+                "arrow reached the terminal"
+            );
+            assert!(
+                filtered
+                    .iter()
+                    .any(|event| matches!(event.event, Event::Key { repeat: true, .. })),
+                "held backspace reached the terminal"
+            );
+        }
+    }
+
+    /// A composition that is still live owns these keys: a commit proves one
+    /// produced text, and a fresh preedit proves one is still on screen.
+    #[test]
+    fn a_live_composition_still_swallows_arrows_and_repeats() {
+        for events in [
+            vec![key(Key::ArrowDown, false), key(Key::ArrowUp, true), commit("中")],
+            vec![key(Key::ArrowDown, false), key(Key::ArrowUp, true), preedit("中")],
+        ] {
+            let filtered = prepare_terminal_keyboard_events(&events, true);
+
+            assert!(
+                filtered.iter().all(|event| !matches!(
+                    event.event,
+                    Event::Key {
+                        key: Key::ArrowDown | Key::ArrowUp,
+                        ..
+                    }
+                )),
+                "a live composition keeps the keys it consumed"
+            );
+        }
     }
 
     #[test]
