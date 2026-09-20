@@ -458,3 +458,54 @@ fn the_zoom_anchor_is_independent_of_the_canvas_transform() {
         "canvas transform moved the anchor: {plain:?} vs {transformed:?}"
     );
 }
+
+/// Rectangle of the textured image painted this frame, if any.
+fn painted_image_rect(output: &egui::FullOutput) -> Option<egui::Rect> {
+    fn walk(shape: &egui::Shape, found: &mut Option<egui::Rect>) {
+        match shape {
+            egui::Shape::Rect(rect) if rect.brush.is_some() => {
+                *found = Some(found.map_or(rect.rect, |seen: egui::Rect| seen.union(rect.rect)));
+            }
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    walk(shape, found);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut found = None;
+    for shape in &output.shapes {
+        walk(&shape.shape, &mut found);
+    }
+    found
+}
+
+#[test]
+fn an_image_smaller_than_the_body_is_centered_rather_than_pinned() {
+    // Zooming out below the body leaves no scroll range to hold a pixel in
+    // place, so the leftover space is split instead of pushing the image into
+    // the scroll origin.
+    let (ctx, device, mut state) = disconnected_viewer();
+    state.controls.zoom = Some(PanelZoom::new(2.0));
+    state.pending_scroll = Some(egui::vec2(400.0, 300.0));
+    show_viewer(&ctx, &mut state, &device, Vec::new());
+    let mut body = egui::Rect::NOTHING;
+    let output = ctx
+        .run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0))),
+                ..Default::default()
+            },
+            |ui| {
+                state.show(ui, &device, true);
+                body = ui.min_rect();
+            },
+        )
+        .discard_textures();
+    let image = painted_image_rect(&output).expect("the desktop is painted at the selected scale");
+    assert!(
+        (image.center().x - body.center().x).abs() < 4.0,
+        "image {image:?} is not centered in {body:?}"
+    );
+}

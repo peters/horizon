@@ -163,7 +163,7 @@ impl DeviceUiState {
             if let Some(offset) = self.pending_scroll.take() {
                 area = area.scroll_offset(offset);
             }
-            area.show(ui, |ui| visible_image(ui, texture, size * scale)).inner
+            area.show(ui, |ui| centered_image(ui, texture, size * scale)).inner
         } else {
             self.pending_scroll = None;
             visible_image(ui, texture, size * scale)
@@ -365,6 +365,25 @@ impl DeviceUiState {
 
 /// Paint the presented image; report whether any of it survived clipping and
 /// where it landed (the anchor for a pointer-centered zoom).
+/// Center a scaled image that no longer fills its viewport. A zoom anchor is
+/// only reachable while the image overflows — below that there is no scroll
+/// range to hold a pixel in place — so the leftover space is split instead of
+/// pinning the image to the scroll origin.
+fn centered_image(ui: &mut Ui, texture: &TextureHandle, size: egui::Vec2) -> (bool, egui::Rect) {
+    let slack = ((ui.available_size() - size) * 0.5).max(egui::Vec2::ZERO);
+    if slack.y > 0.0 {
+        ui.add_space(slack.y);
+    }
+    if slack.x <= 0.0 {
+        return visible_image(ui, texture, size);
+    }
+    ui.horizontal(|ui| {
+        ui.add_space(slack.x);
+        visible_image(ui, texture, size)
+    })
+    .inner
+}
+
 fn visible_image(ui: &mut Ui, texture: &TextureHandle, size: egui::Vec2) -> (bool, egui::Rect) {
     let response = ui.add(
         egui::Image::new(texture)
