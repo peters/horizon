@@ -178,8 +178,6 @@ class WorkflowTests(unittest.TestCase):
         expected = {
             "device": ["libxkbcommon-dev", "libwayland-dev", "pkg-config", "xvfb", "xauth", "bubblewrap"],
             "clippy": ["libasound2-dev", "pkg-config"],
-            "clippy-strict": ["libasound2-dev", "pkg-config"],
-            "clippy-pedantic": ["libasound2-dev", "pkg-config"],
             "rust-test": ["libasound2-dev", "pkg-config"],
         }
         self.assertEqual(workflow.count(prefix), len(expected))

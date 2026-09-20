@@ -91,9 +91,11 @@ crates/
 cargo fmt --all -- --check
 ./scripts/check-maintainability.sh
 # `--features speech` is the widest runner-buildable set (GPU features need
-# machine toolchains and add no Rust surface; needs libasound2-dev on Linux)
+# machine toolchains and add no Rust surface; needs libasound2-dev on Linux).
+# horizon-ui declares the feature, so every other crate builds identically
+# with and without it and the feature pass only needs that crate.
 RUSTFLAGS="-D warnings" cargo test --workspace
-RUSTFLAGS="-D warnings" cargo test --workspace --features speech
+RUSTFLAGS="-D warnings" cargo test -p horizon-ui --features speech
 cargo clippy --all-targets --features speech,trace-profiling -- -D warnings
 cargo clippy --workspace --lib --bins --examples --features speech -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
 cargo clippy --workspace --all-targets --features speech -- -D warnings -W clippy::pedantic
