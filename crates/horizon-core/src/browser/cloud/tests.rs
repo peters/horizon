@@ -132,7 +132,14 @@ fn failed_firefox_transport_preserves_engine_for_persistence_and_retry() {
         backend: super::super::BackendKind::FirefoxBidi,
         ..Default::default()
     };
-    let mut panel = BrowserPanelState::start_cloud("firefox".into(), connection, None, None, &config).unwrap();
+    let mut panel = BrowserPanelState::start_cloud(
+        "firefox".into(),
+        connection,
+        Some("catalog.fixture".into()),
+        None,
+        &config,
+    )
+    .unwrap();
     for retry in [false, true] {
         if retry {
             panel.relaunch_cloud();
@@ -146,6 +153,7 @@ fn failed_firefox_transport_preserves_engine_for_persistence_and_retry() {
             assert!(Instant::now() < deadline, "transport failure was not reported");
             thread::sleep(Duration::from_millis(10));
         }
+        assert_eq!(panel.remote_target(), Some("catalog.fixture"));
         assert_eq!(panel.backend(), super::super::BackendKind::FirefoxBidi);
         let saved = serde_json::to_value(&panel.config).unwrap();
         assert_eq!(saved["backend"], "firefox");

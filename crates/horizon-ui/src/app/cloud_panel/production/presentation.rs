@@ -193,10 +193,11 @@ impl HorizonApp {
                     &cloud_runtime::state::cloud_directory(root, &launch.id)?,
                 )?,
                 sender,
+                runtime.repaint_context.clone(),
             ))
         })();
         match result {
-            Ok((connection, sender)) => {
+            Ok((connection, sender, context)) => {
                 std::thread::spawn(move || {
                     if !local
                         .bytes()
@@ -230,6 +231,9 @@ impl HorizonApp {
                         ),
                     };
                     let _ = sender.send(event);
+                    if let Some(context) = context {
+                        context.request_repaint();
+                    }
                 });
             }
             Err(error) => self.cloud_prototype.error = Some(error.to_string()),

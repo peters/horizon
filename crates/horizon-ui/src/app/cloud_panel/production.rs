@@ -49,6 +49,7 @@ pub(super) enum Confirmation {
 #[derive(Default)]
 pub(super) struct Runtime {
     receiver: Option<Receiver<Event>>,
+    repaint_context: Option<egui::Context>,
     sender: Option<std::sync::mpsc::Sender<Event>>,
     cancel: Option<horizon_core::cloud_runtime::Cancellation>,
     stage: Option<Stage>,
@@ -72,7 +73,7 @@ pub(super) struct Runtime {
 }
 impl Runtime {
     fn needs_repaint(&self) -> bool {
-        self.receiver.is_some()
+        (self.receiver.is_some() && self.stage != Some(Stage::Ready))
             || self.needs_attach
             || self.needs_desktop
             || !self.pending_browser_attachments.is_empty()
@@ -90,6 +91,7 @@ impl HorizonApp {
         let mut removed = Vec::new();
         let mut resumed = Vec::new();
         for (&id, runtime) in &mut self.cloud_prototype.production.runtimes {
+            runtime.repaint_context.get_or_insert_with(|| ctx.clone());
             let events: Vec<_> = runtime
                 .receiver
                 .as_ref()

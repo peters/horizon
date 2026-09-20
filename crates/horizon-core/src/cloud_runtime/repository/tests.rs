@@ -252,23 +252,27 @@ fn sha256_source_reports_unsupported_format_during_preflight() {
 }
 
 #[test]
-#[cfg(unix)]
 fn nested_non_utf8_files_and_directories_are_rejected_during_preflight() {
-    use std::os::unix::ffi::OsStringExt;
     for directory in [false, true] {
         let temp = tempfile::tempdir().unwrap();
-        let repo = temp.path().join("repo");
-        init(&repo);
-        std::fs::create_dir(repo.join("nested")).unwrap();
-        let path = repo.join("nested").join(std::ffi::OsString::from_vec(vec![b'a', 0xff]));
-        if directory {
-            std::fs::create_dir(&path).unwrap();
-            std::fs::write(path.join("file.txt"), "committed").unwrap();
+        let repo = git2::Repository::init(temp.path()).unwrap();
+        let blob = repo.blob(b"committed").unwrap();
+        let (entry_id, mode) = if directory {
+            let mut tree = repo.treebuilder(None).unwrap();
+            tree.insert("file.txt", blob, 0o100_644).unwrap();
+            (tree.write().unwrap(), 0o040_000)
         } else {
-            std::fs::write(&path, "committed").unwrap();
-        }
-        git(&repo, &["add", "."]);
-        git(&repo, &["commit", "-m", "Create source fixture"]);
+            (blob, 0o100_644)
+        };
+        // Git can contain paths the host filesystem cannot materialize.
+        let mut nested = repo.treebuilder(None).unwrap();
+        nested.insert(b"a\xff".as_slice(), entry_id, mode).unwrap();
+        let mut root = repo.treebuilder(None).unwrap();
+        root.insert("nested", nested.write().unwrap(), 0o040_000).unwrap();
+        let tree = repo.find_tree(root.write().unwrap()).unwrap();
+        let author = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
+        repo.commit(Some("HEAD"), &author, &author, "Create source fixture", &tree, &[])
+            .unwrap();
         let cancel = horizon_cloud::Cancellation::default();
         let runner = Runner {
             cancel: &cancel,
@@ -276,7 +280,7 @@ fn nested_non_utf8_files_and_directories_are_rejected_during_preflight() {
             secrets: vec![],
         };
         assert!(matches!(
-            validate_tree(&repo, "HEAD", &runner),
+            validate_tree(temp.path(), "HEAD", &runner),
             Err(Error::Invalid("Source paths must be UTF-8"))
         ));
     }

@@ -2,6 +2,7 @@
 use horizon_browser::{RemoteAuthorizationHeader, RemoteSessionRequest, remote::RemoteBrowserConfig};
 use serde::Deserialize;
 use std::{collections::BTreeMap, io, path::Path, sync::Arc};
+mod recovery;
 const CONFIG: &str = "/run/horizon-credentials/browserstack.json";
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -118,6 +119,7 @@ struct Held {
     owner: String,
     provider: String,
     allocation: horizon_browser::RemoteAllocation,
+    restored: bool,
 }
 pub struct Allocations {
     held: BTreeMap<String, Held>,
@@ -128,6 +130,8 @@ pub struct Allocations {
 struct Journal {
     provider: String,
     reference: String,
+    #[serde(default)]
+    owner: Option<String>,
 }
 
 impl Allocations {
@@ -150,7 +154,12 @@ impl Allocations {
         })
     }
     pub fn ensure_recoverable(&self) -> io::Result<()> {
-        if !self.orphans.is_empty() {
+        if !self.orphans.is_empty()
+            || self
+                .held
+                .values()
+                .any(|held| held.restored && !held.allocation.is_released())
+        {
             return Err(io::Error::other(
                 "Worker service was lost with remote device allocations; verify their release at the provider before deleting this worker or starting more devices",
             ));
@@ -162,15 +171,32 @@ impl Allocations {
         let journal = Journal {
             provider: request.provider.clone(),
             reference: request.recovery.reference().into(),
+            owner: Some(actor.into()),
         };
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(self.root.join(id))?;
-        serde_json::to_writer(&mut file, &journal).map_err(io::Error::other)?;
-        file.sync_all()?;
+        let path = self.root.join(id);
+        let identities = self.root.join("identities");
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
         #[cfg(unix)]
-        std::fs::File::open(&self.root)?.sync_all()?;
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&path)?;
+        let retained = (|| -> io::Result<()> {
+            serde_json::to_writer(&mut file, &journal).map_err(io::Error::other)?;
+            file.sync_all()?;
+            std::fs::create_dir_all(&identities)?;
+            #[cfg(unix)]
+            std::fs::File::open(&self.root)?.sync_all()?;
+            request.recovery.retain_journal(&identities.join(id), request)
+        })();
+        drop(file);
+        if let Err(error) = retained {
+            // Nothing was handed to a driver, so this admission cannot own compute.
+            self.confirm_closed(id)?;
+            return Err(error);
+        }
         request
             .recovery
             .record_admission(horizon_browser_control::manifest::host_instance(), actor, "cloud");
@@ -181,6 +207,7 @@ impl Allocations {
                 owner: actor.into(),
                 provider: request.provider.clone(),
                 allocation: request.recovery.clone(),
+                restored: false,
             },
         );
         while self.held.len() > 128 {
@@ -203,22 +230,35 @@ impl Allocations {
                 "Remote device release is unconfirmed after worker service loss",
             ));
         }
+        if self
+            .held
+            .values()
+            .any(|held| held.id == id && !held.allocation.is_released())
+        {
+            return Err(io::Error::other("Remote device release is unconfirmed"));
+        }
         let path = self.root.join(id);
         if path.exists() {
             std::fs::remove_file(path)?;
+            #[cfg(unix)]
+            std::fs::File::open(&self.root)?.sync_all()?;
         }
-        #[cfg(unix)]
-        std::fs::File::open(&self.root)?.sync_all()?;
+        let identity = self.root.join("identities").join(id);
+        if identity.exists() {
+            std::fs::remove_file(identity)?;
+            #[cfg(unix)]
+            std::fs::File::open(self.root.join("identities"))?.sync_all()?;
+        }
         Ok(())
     }
     pub fn ids(&self) -> Vec<String> {
         self.held.values().map(|h| h.id.clone()).collect()
     }
     pub fn cancel_start(&mut self, id: &str) {
-        let _ = std::fs::remove_file(self.root.join(id));
         for held in self.held.values().filter(|held| held.id == id) {
             held.allocation.cancel_before_launch();
         }
+        let _ = self.confirm_closed(id);
     }
 }
 
@@ -237,6 +277,9 @@ pub fn poll(
 ) {
     use horizon_browser_control::manifest::{self, recovery};
     if let Ok(requests) = recovery::claim_recovery_requests(manifest::host_instance()) {
+        if !requests.is_empty() {
+            allocations.restore_retained(capabilities);
+        }
         for request in requests {
             let mut error = None;
             if let Some(reference) = &request.reference {
@@ -276,6 +319,18 @@ pub fn poll(
                 message: "Worker browser service was lost. Verify the hosted session release at the provider; automatic allocation retry is blocked.".into(),
             }));
             let _ = recovery::complete_recovery(&request.result(summaries, error));
+        }
+    }
+    let cleaned: Vec<_> = allocations
+        .held
+        .iter()
+        .filter(|(_, held)| held.restored && held.allocation.is_released())
+        .filter(|(_, held)| allocations.confirm_closed(&held.id).is_ok())
+        .map(|(reference, _)| reference.clone())
+        .collect();
+    for reference in cleaned {
+        if let Some(held) = allocations.held.get_mut(&reference) {
+            held.restored = false;
         }
     }
     if let Ok(requests) = manifest::provider_usage::claim_provider_usage_requests(manifest::host_instance()) {

@@ -233,6 +233,7 @@ impl Host {
                         ..CloudViewResponse::default()
                     };
                 }
+                self.remote_allocations.reconcile_retained_for_host(&self.capabilities);
                 if let Err(error) = self.remote_allocations.ensure_recoverable() {
                     return CloudViewResponse {
                         error: Some(error.to_string()),
@@ -265,6 +266,7 @@ impl Host {
         if !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') || id.is_empty() || id.len() > 100 {
             return Err(io::Error::other("Invalid browser identity"));
         }
+        self.pending_cleanup.insert(id.into());
         self.begin_shutdown(id);
         if let Some(signal) = self.stopping.get(id)
             && !signal.wait(std::time::Duration::from_secs(10))
@@ -272,7 +274,9 @@ impl Host {
         {
             return Err(io::Error::other("Browser shutdown is unresolved"));
         }
-        self.finish_close(id)
+        self.finish_close(id)?;
+        self.pending_cleanup.remove(id);
+        Ok(())
     }
     fn begin_shutdown(&mut self, id: &str) {
         if let Some(browser) = self.browsers.remove(id) {
@@ -440,7 +444,8 @@ mod tests {
             "phone".into(),
             horizon_browser::BrowserShutdownSignal::completed_remote_for_test("account", None),
         );
-        host.pending_cleanup.insert("phone".into());
+        assert!(host.close("phone").is_err());
+        assert!(host.pending_cleanup.contains("phone"));
         host.retry_cleanup();
         assert!(host.pending_cleanup.contains("phone"));
         assert!(host.stopping.contains_key("phone"));

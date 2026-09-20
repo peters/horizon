@@ -371,3 +371,40 @@ strip with a **Cloud** menu in the top toolbar. Reuse the existing New cloud and
 Fit all clouds actions; do not add a provider/issue/device picker. This belongs to
 the already-gated UI polish phase alongside Cloud settings, after current review,
 post-review smoke and task-compute cleanup.
+
+
+Seventh hosted-review disposition, 2026-09-20: independent reproduction disproved
+both the claimed missing-parent clone failure and the claimed restored-agent
+placeholder failure. Existing member-attachment restoration handles placeholders;
+Git creates nested clone destination parents. Four verified defects are corrected
+in the next bounded batch: retained allocation recovery after worker-service loss,
+remote-target identity after transport errors, rejected-resize controller attribution,
+and periodic repainting of idle Ready clouds. Private recovery journals retain exact
+session identity without credentials, bind to the original provider/account and
+owner, and clear only after provider-verified release. Trusted host revocation can
+reconcile ownerless UI allocations. Legacy identity-less journals remain explicitly
+unresolved. Pre-launch persistence failure rolls back its unallocated admission.
+The macOS invalid-byte-name regression now constructs Git trees directly instead
+of asking the host filesystem to accept an invalid name. Independent review and
+final validation for this batch remain in progress; no new UI features are included.
+
+Live mobile acceptance additionally found that an explicit browser close returning
+pending shutdown was not queued for deferred cleanup. After exact-session release,
+its local presentation could retain the last frame. Explicit closes now join the
+existing cleanup queue until shutdown and release are confirmed; the regression
+covers failed close followed by provider-confirmed release and automatic removal.
+
+The seventh-review correction batch passed independent local review on its exact
+17-file source manifest and every required local tier in `final-validation-15/`:
+2,317 workspace tests and 2,362 speech tests, zero failures and 15 ignored in each
+tier. Formatting, maintainability, worker checks and blocking/strict Clippy passed.
+The advisory tier retains the same three device-test diagnostics. Frozen native
+candidate `development-56/` is visible through the task-owned native VNC panel;
+its binary SHA-256 is
+`24fc0c8f59970bbe3e2be352045c91b56bb75f94c32ef6bfc3d2eea5f8c85441`.
+Both physical mobile operating systems have now completed private application
+interaction and decoded video capture on the preceding immutable worker image,
+with exact-session release confirmed. That evidence verifies the capture fix but
+does not validate this batch's retained-allocation or deferred-close corrections.
+Fresh immutable-image acceptance, current-head hosted checks/review, post-review
+smoke and cleanup remain open. The queued Cloud menu/settings phase remains gated.

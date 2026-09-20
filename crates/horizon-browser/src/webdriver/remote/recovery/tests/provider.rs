@@ -11,7 +11,9 @@ fn recovery(hub: &Server, report: &Server) -> RemoteAllocation {
             .expect("client"),
         )
     };
-    allocation.identify(client(hub), "exact-session".into(), Some(client(report)));
+    allocation
+        .identify(client(hub), "exact-session".into(), Some(client(report)))
+        .unwrap();
     allocation.finish(None);
     allocation
 }

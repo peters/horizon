@@ -261,7 +261,7 @@ impl BrowserPanelState {
         });
         self.apply_cloud_state(state, changed)
     }
-    fn apply_cloud_state(&mut self, state: CloudViewState, coordination_changed: bool) -> BrowserDrainOutput {
+    fn apply_cloud_state(&mut self, mut state: CloudViewState, coordination_changed: bool) -> BrowserDrainOutput {
         let url_changed = !state.url.is_empty() && self.url.as_deref() != Some(&state.url);
         if url_changed {
             self.url = Some(state.url);
@@ -269,6 +269,10 @@ impl BrowserPanelState {
         }
         if let Some(cloud) = &mut self.cloud {
             cloud.process_lost |= state.lost;
+            if state.error.is_some() {
+                state.remote_target = state.remote_target.or_else(|| cloud.target.clone());
+                state.remote_device = state.remote_device.or_else(|| cloud.device.clone());
+            }
             cloud.target.clone_from(&state.remote_target);
             cloud.device.clone_from(&state.remote_device);
         }

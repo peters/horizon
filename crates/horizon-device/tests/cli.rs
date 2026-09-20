@@ -489,3 +489,26 @@ fn runtime_resize_permission_flag_is_explicit_and_validated_before_writes() -> R
     }
     Ok(())
 }
+
+#[test]
+fn rejected_resize_preserves_the_previous_controller() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir()?;
+    let target = dir.path().join("target.json");
+    std::fs::write(&target, "not read before the resize fence")?;
+    let pending = dir.path().join("target.json.resize-pending");
+    let controller = dir.path().join("target.json.controller.json");
+    let previous = br#"{"actor":"original","last_actor":"original","active":true}"#;
+    std::fs::write(&pending, "unresolved resize")?;
+    std::fs::write(&controller, previous)?;
+    let output = Command::new(env!("CARGO_BIN_EXE_horizon-device"))
+        .env("HORIZON_DEVICE_ACTOR", "rejected-agent")
+        .arg("--target")
+        .arg(&target)
+        .args(["resize", r#"{"width":1920,"height":1080}"#])
+        .output()?;
+    let value: Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(value["error"]["resize_uncertain"], true);
+    assert_eq!(std::fs::read(&controller)?, previous);
+    assert_eq!(std::fs::read_to_string(&pending)?, "unresolved resize");
+    Ok(())
+}

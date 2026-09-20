@@ -44,16 +44,18 @@ impl Dispatcher {
     pub fn call(&self, command: Command) -> Response {
         let result = self.lock().and_then(|lock| {
             let observation = matches!(command, Command::Screenshot(_)).then(|| self.marker("resize-observe"));
-            let mut owner = if matches!(command, Command::Act(_) | Command::Resize(_)) {
-                super::control_owner::ControlOwner::begin(&self.target_file)?
-            } else {
-                None
-            };
+            let inherited_resize = self.marker("resize-pending").symlink_metadata().is_ok();
+            let mut owner =
+                if matches!(command, Command::Act(_)) || (!inherited_resize && matches!(command, Command::Resize(_))) {
+                    super::control_owner::ControlOwner::begin(&self.target_file)?
+                } else {
+                    None
+                };
             let result = self.execute(command);
             if (result.is_ok()
-                || result
-                    .as_ref()
-                    .is_err_and(|error| error.resize_uncertain() || matches!(error, DeviceError::Indeterminate(_))))
+                || result.as_ref().is_err_and(|error| {
+                    (!inherited_resize && error.resize_uncertain()) || matches!(error, DeviceError::Indeterminate(_))
+                }))
                 && let Some(owner) = &mut owner
             {
                 owner.complete();

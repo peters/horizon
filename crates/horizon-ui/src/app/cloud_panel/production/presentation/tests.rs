@@ -552,3 +552,19 @@ fn dismissing_pending_browser_placeholders_stops_repaint_retries() {
     assert!(runtime.pending_browser_attachments.is_empty());
     assert!(!runtime.needs_repaint());
 }
+
+#[test]
+fn ready_discovery_receiver_does_not_schedule_idle_repaint() {
+    let (_sender, receiver) = std::sync::mpsc::channel();
+    let mut runtime = Runtime {
+        receiver: Some(receiver),
+        stage: Some(cloud_runtime::Stage::Ready),
+        ..Default::default()
+    };
+    assert!(!runtime.needs_repaint());
+    runtime.stage = Some(cloud_runtime::Stage::Readiness);
+    assert!(runtime.needs_repaint());
+    runtime.stage = Some(cloud_runtime::Stage::Ready);
+    runtime.pending_browser_attachments.insert("retry".into());
+    assert!(runtime.needs_repaint());
+}

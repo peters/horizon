@@ -1,4 +1,4 @@
-//! Private exact-allocation recovery; no provider identifiers are serialized.
+//! Exact-allocation recovery; provider identities stay in private host journals.
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use super::super::remote_http::RemoteHttpClient;
 use super::RemoteReleaseOutcome;
 
+mod journal;
 mod probe;
 use probe::SessionProbe;
 
@@ -74,6 +75,7 @@ struct State {
     expected_workspace: Option<String>,
     scope: Option<RemoteAllocationScope>,
     identity: Option<SessionProbe>,
+    journal: Option<journal::Journal>,
     retired: bool,
     status: RemoteRecoveryStatus,
 }
@@ -123,11 +125,13 @@ impl RemoteAllocation {
     #[cfg(any(test, feature = "test-support"))]
     pub fn unresolved_for_test(endpoint: &str, session: &str) -> Result<Self, crate::WebDriverHttpError> {
         let allocation = Self::default();
-        allocation.identify(
-            Arc::new(RemoteHttpClient::new(endpoint, None)?),
-            session.to_string(),
-            None,
-        );
+        allocation
+            .identify(
+                Arc::new(RemoteHttpClient::new(endpoint, None)?),
+                session.to_string(),
+                None,
+            )
+            .map_err(|_| crate::WebDriverHttpError::InvalidResponse("Fixture journal failed".into()))?;
         allocation.finish(None);
         Ok(allocation)
     }
@@ -214,11 +218,14 @@ impl RemoteAllocation {
         transport: Arc<RemoteHttpClient>,
         session: String,
         report: Option<Arc<RemoteHttpClient>>,
-    ) {
-        self.state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .identity = Some(SessionProbe::new(transport, session, report));
+    ) -> std::io::Result<()> {
+        let mut state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let result = state
+            .journal
+            .as_mut()
+            .map_or(Ok(()), |journal| journal.identify(&session));
+        state.identity = Some(SessionProbe::new(transport, session, report));
+        result
     }
 
     pub(crate) fn finish(&self, outcome: Option<&RemoteReleaseOutcome>) {
@@ -234,6 +241,9 @@ impl RemoteAllocation {
         ) {
             state.status = RemoteRecoveryStatus::Released;
             state.identity = None;
+            if let Some(journal) = &mut state.journal {
+                journal.release();
+            }
         } else if state.status != RemoteRecoveryStatus::Released {
             state.status = if state.identity.is_some() {
                 RemoteRecoveryStatus::Unresolved
@@ -287,6 +297,9 @@ impl RemoteAllocation {
                 state.status = status;
                 if status == RemoteRecoveryStatus::Released {
                     state.identity = None;
+                    if let Some(journal) = &mut state.journal {
+                        journal.release();
+                    }
                 }
             })
             .is_err()
