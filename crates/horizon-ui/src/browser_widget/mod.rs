@@ -98,8 +98,11 @@ impl BrowserUiState {
         if self.active_backend == Some(backend) {
             return false;
         }
+        // Page zoom is a panel preference rather than backend state: only
+        // panel recreation resets it.
         *self = Self {
             active_backend: Some(backend),
+            zoom: self.zoom,
             ..Self::default()
         };
         true
@@ -187,6 +190,11 @@ impl<'a> BrowserView<'a> {
             state.synchronize_backend(browser.backend());
             render::show_body(ui, panel_id, browser, state, interactive)
         };
+        if interactive {
+            // Zoom belongs to the whole panel, chrome and placeholders
+            // included, so it matches what the canvas leaves alone.
+            render::apply_zoom_gesture(ui, state, crate::panel_zoom::owns_pointer(ui));
+        }
         let window_focused = ui.input(|input| input.viewport().focused.unwrap_or(true));
         let other_widget_has_focus = ui
             .memory(egui::Memory::focused)
@@ -200,26 +208,19 @@ impl<'a> BrowserView<'a> {
         } else {
             input::KeyboardTarget::None
         };
-        if let Some(body_id) = body.keyboard_focus_id {
-            if page_keyboard_active {
-                ui.memory_mut(|memory| {
-                    memory.set_focus_lock_filter(body_id, page_focus_event_filter());
-                });
-                if let Some(body_rect) = body.image_rect {
-                    ime::publish_page_ime_output(ui, body_id, body_rect);
-                }
-            } else {
-                ime::clear_page_ime_state(ui, body_id);
-            }
-        }
+        route_page_ime(ui, &body, page_keyboard_active);
         if let Some(browser) = self.panel.browser_mut() {
             if body.retry_clicked {
                 browser.relaunch();
                 // The new Chrome starts at its default viewport. Clear every
                 // per-session input/render cache so this frame immediately
                 // resends the panel's real viewport and cannot carry a held
-                // button or key into the replacement session.
-                *state = BrowserUiState::default();
+                // button or key into the replacement session. Page zoom is a
+                // panel preference, not session state, so it survives.
+                *state = BrowserUiState {
+                    zoom: state.zoom,
+                    ..BrowserUiState::default()
+                };
             }
             // A fixed viewport (a remote device) never converges on the
             // panel's size: the frame is letterboxed and scaled instead, so
@@ -263,6 +264,24 @@ impl<'a> BrowserView<'a> {
         // convention as the terminal body); an unconditional request would
         // steal focus from other panels every frame.
         chrome_clicked || body.body_clicked
+    }
+}
+
+/// Hold egui focus for the page and publish its IME rectangle while the page
+/// owns the keyboard; otherwise let egui have its keys and IME back.
+fn route_page_ime(ui: &Ui, body: &render::BodyOutput, page_keyboard_active: bool) {
+    let Some(body_id) = body.keyboard_focus_id else {
+        return;
+    };
+    if page_keyboard_active {
+        ui.memory_mut(|memory| {
+            memory.set_focus_lock_filter(body_id, page_focus_event_filter());
+        });
+        if let Some(body_rect) = body.image_rect {
+            ime::publish_page_ime_output(ui, body_id, body_rect);
+        }
+    } else {
+        ime::clear_page_ime_state(ui, body_id);
     }
 }
 
@@ -316,6 +335,8 @@ fn synchronize_viewport(
     if explicit_viewport.is_some() {
         // Remember changed host geometry for reset, but the intentional
         // letterboxing must not trigger retries or interrupt pointer drags.
+        // A pinned frame never follows panel zoom, so remember the real size.
+        let viewport = body.host_viewport_size.unwrap_or(viewport);
         if viewport != state.last_viewport
             && browser.try_send(BrowserCommand::SetViewport {
                 width: viewport.0,
@@ -480,30 +501,34 @@ mod tests {
                 zoom,
                 ..BrowserUiState::default()
             };
-            let mut viewport = None;
+            let mut sizes = None;
             let output = context.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
                     ..Default::default()
                 },
                 |ui| {
-                    viewport = super::render::show_body(ui, horizon_core::PanelId(1), &mut browser, &mut state, true)
-                        .viewport_size;
+                    let body = super::render::show_body(ui, horizon_core::PanelId(1), &mut browser, &mut state, true);
+                    sizes = body.viewport_size.zip(body.host_viewport_size);
                 },
             );
             let _ = output.discard_textures();
-            viewport.expect("the body always reports the size it was laid out at")
+            sizes.expect("the body always reports the size it was laid out at")
         };
-        let unscaled = viewport_for(crate::panel_zoom::PanelZoom::ONE);
+        let (unscaled, host) = viewport_for(crate::panel_zoom::PanelZoom::ONE);
+        assert_eq!(unscaled, host);
         // Zooming in lays the page out in fewer CSS pixels (and out, in more),
         // which is what makes its content reflow and scale like browser zoom.
         for (zoom, ratio) in [(2.0_f32, 0.5_f64), (0.5, 2.0)] {
-            let scaled = viewport_for(crate::panel_zoom::PanelZoom::new(zoom));
+            let (scaled, host_at_zoom) = viewport_for(crate::panel_zoom::PanelZoom::new(zoom));
             assert!(
                 (f64::from(scaled.0) - f64::from(unscaled.0) * ratio).abs() <= 1.0
                     && (f64::from(scaled.1) - f64::from(unscaled.1) * ratio).abs() <= 1.0,
                 "{zoom}x of {unscaled:?} became {scaled:?}"
             );
+            // A pinned viewport is restored from the panel's real size, which
+            // zoom must never move.
+            assert_eq!(host_at_zoom, host, "zoom changed the remembered host size");
         }
     }
 
@@ -525,6 +550,7 @@ mod tests {
                     image_rect: None,
                     frame_size: Some([390.0, 844.0]),
                     viewport_size,
+                    host_viewport_size: viewport_size,
                     pointer_target: true,
                     retry_clicked: false,
                     body_clicked: false,
@@ -555,6 +581,7 @@ mod tests {
                     image_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(390.0, 844.0))),
                     frame_size,
                     viewport_size: Some((900, 600)),
+                    host_viewport_size: Some((900, 600)),
                     pointer_target: true,
                     retry_clicked: false,
                     body_clicked: false,
@@ -594,6 +621,7 @@ mod tests {
         state.last_mouse = Some(pos2(12.0, 34.0));
         state.url_buffer = String::from("https://example.test/");
         state.url_submit_enter_pending = true;
+        state.zoom = crate::panel_zoom::PanelZoom::new(1.5);
 
         assert!(!state.synchronize_backend(BackendKind::ChromiumCdp));
         assert_eq!(state.seq, 42);
@@ -608,6 +636,9 @@ mod tests {
         assert!(state.last_mouse.is_none());
         assert!(state.url_buffer.is_empty());
         assert!(!state.url_submit_enter_pending);
+        // Page zoom is a panel preference, not session state: only recreating
+        // the panel resets it.
+        assert_eq!(state.zoom, crate::panel_zoom::PanelZoom::new(1.5));
     }
 
     #[test]

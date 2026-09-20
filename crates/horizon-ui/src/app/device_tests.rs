@@ -138,6 +138,19 @@ fn a_pinch_over_a_device_panel_leaves_the_canvas_zoom_alone() {
     run_app_frame_with_input(&ctx, &mut app, over_panel);
     assert_eq!(app.canvas_view, before, "the panel owns a pinch over its own frame");
 
+    // The panel's own handler only covers its body, so the titlebar above it
+    // stays with the canvas: ownership and handling share one rectangle.
+    let titlebar = egui::pos2(panel_rect.center().x, panel_rect.top() + 4.0);
+    let mut over_titlebar = raw_input([1400.0, 900.0], None);
+    over_titlebar.events.push(egui::Event::PointerMoved(titlebar));
+    over_titlebar.events.push(egui::Event::Zoom(1.25));
+    run_app_frame_with_input(&ctx, &mut app, over_titlebar);
+    assert!(
+        app.canvas_view.zoom > before.zoom,
+        "the panel body does not cover its frame"
+    );
+    app.canvas_view = before;
+
     let empty = egui::pos2(canvas_rect.right() - 8.0, canvas_rect.bottom() - 8.0);
     assert!(
         geometry

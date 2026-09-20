@@ -97,6 +97,14 @@ fn show(
     *selection != before
 }
 
+/// Whether the pointer is over this panel's body, which is the whole area a
+/// panel widget is given. The canvas leaves the gesture alone over exactly
+/// this rectangle, and egui resolves the stacking, so the two cannot
+/// disagree about which panel a pinch belongs to.
+pub(crate) fn owns_pointer(ui: &Ui) -> bool {
+    ui.rect_contains_pointer(ui.max_rect())
+}
+
 /// The pointer in the caller's layer coordinates. Panels are painted through
 /// the canvas transform, so the global pointer does not match their rects.
 pub(crate) fn local_pointer(ui: &Ui) -> Option<egui::Pos2> {

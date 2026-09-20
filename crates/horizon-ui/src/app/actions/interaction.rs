@@ -122,26 +122,6 @@ fn is_space_key_release(event: &Event) -> bool {
     )
 }
 
-/// The panel drawn last at `position`. Panels paint in board order with the
-/// focused panel on top, so the focused panel wins any overlap.
-fn topmost_panel_at(
-    geometry: &[(PanelId, PanelScreenGeometry)],
-    focused: Option<PanelId>,
-    position: egui::Pos2,
-) -> Option<&PanelScreenGeometry> {
-    let mut hit = None;
-    for (panel_id, panel) in geometry {
-        if !panel.screen_rect.contains(position) {
-            continue;
-        }
-        if Some(*panel_id) == focused {
-            return Some(panel);
-        }
-        hit = Some(panel);
-    }
-    hit
-}
-
 fn space_drag_modifier_active(modifiers: Modifiers) -> bool {
     !modifiers.ctrl && !modifiers.command && !modifiers.alt
 }
@@ -185,6 +165,38 @@ impl HorizonApp {
         {
             self.fullscreen_panel = None;
         }
+    }
+
+    /// Whether the panel under the pointer zooms its own content. Panels are
+    /// resolved with the paint order the current viewport's renderer recorded,
+    /// so an overlapping panel on top keeps the gesture, and the rectangle is
+    /// the panel body the widget itself tests. A fullscreen panel covers the
+    /// viewport and owns the gesture outright.
+    fn panel_owns_zoom_gesture(
+        &self,
+        panel_geometry: &[(PanelId, PanelScreenGeometry)],
+        pointer: Option<egui::Pos2>,
+    ) -> bool {
+        if let Some(panel_id) = self.fullscreen_panel {
+            return self
+                .board
+                .panel(panel_id)
+                .is_some_and(|panel| panel.browser().is_some() || panel.device().is_some());
+        }
+        let Some(pointer) = pointer else {
+            return false;
+        };
+        let topmost = self.panel_screen_order.iter().rev().find(|panel_id| {
+            self.panel_screen_rects
+                .get(panel_id)
+                .is_some_and(|rect| rect.contains(pointer))
+        });
+        let Some(topmost) = topmost else {
+            return false;
+        };
+        panel_geometry.iter().any(|(panel_id, geometry)| {
+            panel_id == topmost && geometry.zoom_body.is_some_and(|body| body.contains(pointer))
+        })
     }
 
     #[profiling::function]
@@ -237,7 +249,7 @@ impl HorizonApp {
             && pointer_position.is_some_and(|position| {
                 panel_geometry
                     .iter()
-                    .filter_map(|(_, geometry)| geometry.terminal_body_screen_rect)
+                    .filter_map(|(_, geometry)| geometry.terminal_body)
                     .any(|rect| rect.contains(position))
             });
         let terminal_events = self.terminal_events_for_viewport(ctx, &events);
@@ -269,11 +281,7 @@ impl HorizonApp {
         self.canvas_pan_input_claimed =
             pointer_in_canvas && (self.middle_pan_active || space_drag_claimed || primary_canvas_drag.is_some());
         // A panel that zooms its own content owns the gesture over its frame.
-        // Only the panel actually on top can claim it: egui hit-tests the same
-        // way, so claiming for a covered panel would zoom nothing at all.
-        let pointer_over_panel_zoom = pointer_position
-            .and_then(|position| topmost_panel_at(&panel_geometry, self.board.focused, position))
-            .is_some_and(|geometry| geometry.zooms_content);
+        let pointer_over_panel_zoom = self.panel_owns_zoom_gesture(&panel_geometry, pointer_position);
         if pointer_in_canvas && !pointer_over_panel_zoom && (zoom_delta - 1.0).abs() > f32::EPSILON {
             route_canvas_scroll(ctx, false, false);
             let anchor = pointer_position.unwrap_or_else(|| canvas_rect.center());
@@ -771,7 +779,6 @@ fn primary_selection_routing_active() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{PanelId, PanelScreenGeometry, topmost_panel_at};
     use egui::{Event, Key, Modifiers, Vec2};
     use horizon_core::{ShortcutBinding, ShortcutKey, ShortcutModifiers};
 
@@ -1231,26 +1238,5 @@ mod tests {
             repeat: false,
             modifiers: Modifiers::NONE,
         }
-    }
-
-    #[test]
-    fn only_the_panel_on_top_claims_a_zoom_gesture() {
-        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(100.0, 100.0));
-        let panel = |zooms_content| PanelScreenGeometry {
-            screen_rect: rect,
-            terminal_body_screen_rect: None,
-            zooms_content,
-        };
-        let geometry = vec![(PanelId(1), panel(true)), (PanelId(2), panel(false))];
-        let inside = egui::pos2(50.0, 50.0);
-        // Later panels paint over earlier ones.
-        assert!(!topmost_panel_at(&geometry, None, inside).expect("a hit").zooms_content);
-        // The focused panel paints last whatever its board position.
-        assert!(
-            topmost_panel_at(&geometry, Some(PanelId(1)), inside)
-                .expect("a hit")
-                .zooms_content
-        );
-        assert!(topmost_panel_at(&geometry, None, egui::pos2(500.0, 500.0)).is_none());
     }
 }

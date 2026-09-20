@@ -31,6 +31,14 @@ pub(crate) struct DeviceUiState {
     controls: controls::Controls,
 }
 
+/// What `show_image` painted this frame, in the panel's layer coordinates.
+#[derive(Clone, Copy)]
+struct ImageView {
+    scale: f32,
+    image_rect: egui::Rect,
+    body: egui::Rect,
+}
+
 #[derive(Default)]
 struct ImageDisplay {
     sequence: u64,
@@ -128,56 +136,73 @@ impl DeviceUiState {
         }
         self.refresh_presentation(ui);
         ui.separator();
-        self.show_image(ui, interactive);
-    }
-
-    /// Paint the presented desktop at the selected scale and let a pinch or
-    /// zoom-modifier wheel over the body change that scale.
-    fn show_image(&mut self, ui: &mut Ui, interactive: bool) {
-        if let Some(texture) = &self.texture {
-            let size = texture.size_vec2();
-            let body = ui.available_rect_before_wrap();
-            // The whole body is the gesture target: a zoomed-in image can be
-            // scrolled away from the pointer, and Fit leaves letterbox margins.
-            let hovered = ui.rect_contains_pointer(body);
-            let available = body.size().max(egui::Vec2::ZERO);
-            // Fit letterboxes the whole image; a zoom paints the presented
-            // pixels at that scale and scrolls for whatever no longer fits.
-            let scale = self
-                .controls
-                .zoom
-                .map_or_else(|| (available.x / size.x).min(available.y / size.y), PanelZoom::factor);
-            let (image_visible, image_rect) = if self.controls.zoom.is_some() {
-                let mut area = egui::ScrollArea::both().auto_shrink([false, false]);
-                if let Some(offset) = self.pending_scroll.take() {
-                    area = area.scroll_offset(offset);
-                }
-                area.show(ui, |ui| visible_image(ui, texture, size * scale)).inner
-            } else {
-                self.pending_scroll = None;
-                visible_image(ui, texture, size * scale)
-            };
-            self.image.displayed = image_visible && self.image.received && matches!(self.status, Status::Connected);
-            if interactive && let Some(delta) = panel_zoom::gesture_delta(ui, hovered) {
-                // A fitted image can sit outside the zoom range, so the
-                // gesture starts from the nearest supported scale.
-                let next = PanelZoom::new(scale).scaled(delta);
-                // A degenerate layout has no image pixel under the pointer to
-                // anchor on; the new scale still applies.
-                if scale.is_finite()
-                    && scale > 0.0
-                    && let Some(pointer) = panel_zoom::local_pointer(ui)
-                {
-                    // Keep the pixel under the pointer where it is.
-                    let content = (pointer - image_rect.min) / scale;
-                    self.pending_scroll = Some((content * next.factor() - (pointer - body.min)).max(egui::Vec2::ZERO));
-                }
-                self.controls.zoom = Some(next);
-                ui.ctx().request_repaint();
-            }
-        } else {
+        if self.texture.is_none() {
             ui.label("The device desktop appears here after connection.");
         }
+        let view = self.show_image(ui);
+        if interactive {
+            self.handle_zoom_gesture(ui, view);
+        }
+    }
+
+    /// Paint the presented desktop at the selected scale. Returns what was
+    /// painted, which a pointer-anchored zoom needs.
+    fn show_image(&mut self, ui: &mut Ui) -> Option<ImageView> {
+        let texture = self.texture.as_ref()?;
+        let size = texture.size_vec2();
+        let body = ui.available_rect_before_wrap();
+        let available = body.size().max(egui::Vec2::ZERO);
+        // Fit letterboxes the whole image; a zoom paints the presented pixels
+        // at that scale and scrolls for whatever no longer fits.
+        let scale = self
+            .controls
+            .zoom
+            .map_or_else(|| (available.x / size.x).min(available.y / size.y), PanelZoom::factor);
+        let (image_visible, image_rect) = if self.controls.zoom.is_some() {
+            let mut area = egui::ScrollArea::both().auto_shrink([false, false]);
+            if let Some(offset) = self.pending_scroll.take() {
+                area = area.scroll_offset(offset);
+            }
+            area.show(ui, |ui| visible_image(ui, texture, size * scale)).inner
+        } else {
+            self.pending_scroll = None;
+            visible_image(ui, texture, size * scale)
+        };
+        self.image.displayed = image_visible && self.image.received && matches!(self.status, Status::Connected);
+        Some(ImageView {
+            scale,
+            image_rect,
+            body,
+        })
+    }
+
+    /// Pinch, or wheel with the zoom modifier, anywhere over this panel. The
+    /// scale still changes before any desktop has arrived; only the
+    /// pointer-anchored scroll needs a painted image.
+    fn handle_zoom_gesture(&mut self, ui: &Ui, view: Option<ImageView>) {
+        let Some(delta) = panel_zoom::gesture_delta(ui, panel_zoom::owns_pointer(ui)) else {
+            return;
+        };
+        // A fitted image can sit outside the zoom range, so the gesture starts
+        // from the nearest supported scale.
+        let base = view.map_or_else(
+            || self.controls.zoom.unwrap_or_default(),
+            |view| PanelZoom::new(view.scale),
+        );
+        let next = base.scaled(delta);
+        if let Some(view) = view
+            && view.scale.is_finite()
+            && view.scale > 0.0
+            && let Some(pointer) = panel_zoom::local_pointer(ui)
+        {
+            // Keep the pixel under the pointer where it is.
+            let content = (pointer - view.image_rect.min) / view.scale;
+            self.pending_scroll = Some((content * next.factor() - (pointer - view.body.min)).max(egui::Vec2::ZERO));
+        }
+        if next != base || self.controls.zoom.is_none() {
+            ui.ctx().request_repaint();
+        }
+        self.controls.zoom = Some(next);
     }
 
     #[cfg(test)]

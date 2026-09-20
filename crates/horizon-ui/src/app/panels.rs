@@ -28,10 +28,16 @@ pub(super) use interaction::ArrangedPanelDrag;
 #[derive(Clone, Copy)]
 pub(in crate::app) struct PanelScreenGeometry {
     pub(in crate::app) screen_rect: Rect,
-    pub(in crate::app) terminal_body_screen_rect: Option<Rect>,
-    /// Browser and device panels zoom their own content, so pinch and
-    /// zoom-modifier wheel over them must not zoom the canvas instead.
-    pub(in crate::app) zooms_content: bool,
+    pub(in crate::app) terminal_body: Option<Rect>,
+    /// Body of a panel that zooms its own content. Browser and device widgets
+    /// consume pinch and zoom-modifier wheel over exactly this rectangle, so
+    /// the canvas must leave the gesture alone there — and only there.
+    pub(in crate::app) zoom_body: Option<Rect>,
+}
+
+/// The salt of the egui layer a panel is painted in.
+pub(in crate::app) fn panel_layer_salt(panel_id: PanelId) -> Id {
+    Id::new(("panel", panel_id.0))
 }
 
 struct PanelSnapshot {
@@ -356,7 +362,7 @@ impl HorizonApp {
             ),
             canvas_rect,
         )?;
-        let terminal_body_screen_rect = panel.terminal().and_then(|_| {
+        let body_screen_rect = || {
             let panel_rect = Rect::from_min_size(canvas_position, canvas_size);
             let body_rect = PanelFrame::new(panel_rect).body;
             clip_screen_rect_to_canvas(
@@ -366,14 +372,18 @@ impl HorizonApp {
                 ),
                 canvas_rect,
             )
-        });
+        };
+        let terminal_body = panel.terminal().and_then(|_| body_screen_rect());
+        // Content, not kind: a device panel that failed to spawn shows a
+        // terminal transcript and zooms nothing.
+        let zoom_body = (panel.browser().is_some() || panel.device().is_some())
+            .then(body_screen_rect)
+            .flatten();
 
         Some(PanelScreenGeometry {
             screen_rect,
-            terminal_body_screen_rect,
-            // Kind alone is not enough: a device panel that failed to spawn
-            // shows a terminal transcript and zooms nothing.
-            zooms_content: panel.browser().is_some() || panel.device().is_some(),
+            terminal_body,
+            zoom_body,
         })
     }
 
@@ -594,7 +604,7 @@ impl HorizonApp {
 
                 Some(PanelSnapshot {
                     screen_rect: geometry.screen_rect,
-                    terminal_body_screen_rect: geometry.terminal_body_screen_rect,
+                    terminal_body_screen_rect: geometry.terminal_body,
                     canvas_position,
                     canvas_size,
                     current_workspace_id: panel.workspace_id,
@@ -644,7 +654,7 @@ impl HorizonApp {
         // The area must stay interactable: since egui 0.36, non-interactable
         // layers are skipped by hit-testing, which makes every widget inside
         // (titlebar drag, close, resize handles) click-through.
-        egui::Area::new(Id::new(("panel", panel_id.0)))
+        egui::Area::new(panel_layer_salt(panel_id))
             .fixed_pos(snapshot.canvas_position)
             .clip_to_canvas(canvas_layer_clip)
             .order(if snapshot.is_focused {

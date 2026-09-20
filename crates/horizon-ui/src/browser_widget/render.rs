@@ -12,6 +12,10 @@ pub struct BodyOutput {
     pub image_rect: Option<Rect>,
     pub frame_size: Option<[f32; 2]>,
     pub viewport_size: Option<(u32, u32)>,
+    /// The body's own size, before panel zoom. A pinned viewport keeps its
+    /// backend-owned frame size, so the geometry remembered for a later reset
+    /// must be the panel's real size rather than a zoomed layout size.
+    pub host_viewport_size: Option<(u32, u32)>,
     /// This body's egui response owns the current pointer hit. Raw geometry
     /// alone is insufficient when browser panels overlap in different layers.
     pub pointer_target: bool,
@@ -37,6 +41,7 @@ pub fn show_body(
             image_rect: None,
             frame_size: None,
             viewport_size: None,
+            host_viewport_size: None,
             pointer_target: false,
             retry_clicked: false,
             body_clicked: false,
@@ -44,6 +49,7 @@ pub fn show_body(
         };
     }
     let viewport_size = zoomed_viewport(available.size(), state.zoom.factor());
+    let host_viewport_size = zoomed_viewport(available.size(), 1.0);
     let Some(data) = browser.frame_slot.latest() else {
         // No frame: the placeholder owns the body. It must be drawn before
         // allocating the body rect — allocating first would push the
@@ -54,6 +60,7 @@ pub fn show_body(
             image_rect: None,
             frame_size: None,
             viewport_size: Some(viewport_size),
+            host_viewport_size: Some(host_viewport_size),
             pointer_target: false,
             retry_clicked: retry,
             body_clicked: false,
@@ -83,9 +90,6 @@ pub fn show_body(
         // the final pointer outside the body; the stopped-drag flag keeps
         // ownership for the release frame so the in-rect press is replayed.
         || body_response.drag_stopped();
-    if interactive {
-        apply_zoom_gesture(ui, state, body_response.contains_pointer());
-    }
     let width = data.width as usize;
     let height = data.height as usize;
     let frame_size = [
@@ -112,6 +116,7 @@ pub fn show_body(
             image_rect: None,
             frame_size: Some(frame_size),
             viewport_size: Some(viewport_size),
+            host_viewport_size: Some(host_viewport_size),
             pointer_target,
             retry_clicked: false,
             body_clicked,
@@ -137,6 +142,7 @@ pub fn show_body(
         image_rect: Some(rect),
         frame_size: Some(frame_size),
         viewport_size: Some(viewport_size),
+        host_viewport_size: Some(host_viewport_size),
         pointer_target,
         retry_clicked: false,
         body_clicked,
@@ -153,7 +159,7 @@ fn zoomed_viewport(available: egui::Vec2, zoom: f32) -> (u32, u32) {
     ((available.x / zoom).round() as u32, (available.y / zoom).round() as u32)
 }
 
-fn apply_zoom_gesture(ui: &Ui, state: &mut BrowserUiState, hovered: bool) {
+pub(super) fn apply_zoom_gesture(ui: &Ui, state: &mut BrowserUiState, hovered: bool) {
     let Some(delta) = crate::panel_zoom::gesture_delta(ui, hovered) else {
         return;
     };
