@@ -193,11 +193,10 @@ fn stop(child: &mut Child) {
     let _ = child.kill();
     let _ = child.wait();
 }
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     #[test]
-    #[cfg(unix)]
     fn descendant_inheriting_output_cannot_bypass_deadline() {
         let cancel = Cancellation::default();
         let emit = |_| {};
@@ -217,7 +216,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
     fn cancellation_interrupts_in_flight_image_commands_and_their_descendants() {
         for name in ["image build", "image push"] {
             let cancel = Cancellation::default();
@@ -269,7 +267,6 @@ mod tests {
         }
     }
     #[test]
-    #[cfg(unix)]
     fn stderr_does_not_corrupt_stdout_and_secrets_are_redacted() {
         let cancel = Cancellation::default();
         let emit = |_| {};
@@ -289,7 +286,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
     fn private_authentication_input_cannot_reach_progress_output() {
         use std::os::unix::fs::PermissionsExt;
         let input = tempfile::NamedTempFile::new().unwrap();
