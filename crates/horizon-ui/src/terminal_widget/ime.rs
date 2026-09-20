@@ -63,8 +63,22 @@ pub(super) fn prepare_terminal_keyboard_events(
         return events.to_vec();
     }
 
-    let mut filtered = events.to_vec();
-    filtered.retain(|event| !is_ime_incompatible_event(&event.event));
+    // Only a live composition may swallow these keys, so track it per event
+    // instead of treating the whole frame as composing. An IME event in the
+    // frame is not evidence of one: on Wayland every text-input round trip
+    // ends with a bare `Preedit("")` (winit's `Done` handler), which means
+    // "nothing is composing" and used to take the frame's Backspace with it.
+    let mut composing = ime_enabled;
+    let mut filtered = Vec::with_capacity(events.len());
+    for event in events {
+        match &event.event {
+            egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) => composing = !text.is_empty(),
+            egui::Event::Ime(egui::ImeEvent::Commit(_)) => composing = false,
+            _ if composing && is_ime_incompatible_event(&event.event) => continue,
+            _ => {}
+        }
+        filtered.push(event.clone());
+    }
     filtered.sort_by_key(|event| !matches!(event.event, egui::Event::Ime(_)));
     filtered
 }
@@ -156,19 +170,19 @@ mod tests {
                 repeat: false,
                 modifiers: Modifiers::NONE,
             }),
+            terminal_event(Event::Key {
+                key: Key::B,
+                physical_key: None,
+                pressed: true,
+                repeat: true,
+                modifiers: Modifiers::NONE,
+            }),
             terminal_event(Event::Ime(egui::ImeEvent::Commit("中".to_owned()))),
             terminal_event(Event::Key {
                 key: Key::A,
                 physical_key: None,
                 pressed: true,
                 repeat: false,
-                modifiers: Modifiers::NONE,
-            }),
-            terminal_event(Event::Key {
-                key: Key::B,
-                physical_key: None,
-                pressed: true,
-                repeat: true,
                 modifiers: Modifiers::NONE,
             }),
         ];
@@ -193,6 +207,64 @@ mod tests {
             filtered
                 .iter()
                 .any(|event| matches!(event.event, Event::Key { key: Key::A, .. }))
+        );
+    }
+
+    fn key(key: Key, repeat: bool) -> TerminalInputEvent {
+        terminal_event(Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat,
+            modifiers: Modifiers::NONE,
+        })
+    }
+
+    fn preedit(text: &str) -> TerminalInputEvent {
+        terminal_event(Event::Ime(egui::ImeEvent::Preedit {
+            text: text.to_owned(),
+            active_range_chars: None,
+        }))
+    }
+
+    /// Only a live composition may swallow Backspace. Wayland ends every
+    /// text-input round trip with a bare `Preedit("")` meaning "not
+    /// composing", which must not take the frame's Backspace with it.
+    #[test]
+    fn backspace_survives_every_frame_without_a_live_composition() {
+        let bs = || key(Key::Backspace, false);
+        let commit = terminal_event(Event::Ime(egui::ImeEvent::Commit("æ".to_owned())));
+        let kept = |ime_enabled, events: Vec<TerminalInputEvent>| {
+            prepare_terminal_keyboard_events(&events, ime_enabled)
+                .iter()
+                .any(|event| {
+                    matches!(
+                        event.event,
+                        Event::Key {
+                            key: Key::Backspace,
+                            ..
+                        }
+                    )
+                })
+        };
+
+        assert!(kept(false, vec![preedit(""), bs()]), "idle empty preedit");
+        assert!(
+            kept(true, vec![preedit(""), bs()]),
+            "empty preedit ends a latched composition"
+        );
+        assert!(kept(true, vec![commit, bs()]), "commit releases later keys");
+        assert!(
+            kept(false, vec![preedit(""), key(Key::Backspace, true)]),
+            "held backspace"
+        );
+        assert!(
+            !kept(false, vec![preedit("中"), bs()]),
+            "live composition still filters"
+        );
+        assert!(
+            kept(false, vec![bs(), preedit("中")]),
+            "key before a composition starts"
         );
     }
 
