@@ -169,7 +169,20 @@ pub fn show_body(
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn zoomed_viewport(available: egui::Vec2, zoom: f32, max_texture_side: usize) -> (u32, u32) {
     let zoom = effective_zoom(available, zoom, max_texture_side);
-    ((available.x / zoom).round() as u32, (available.y / zoom).round() as u32)
+    // An extreme aspect ratio can want a scale that satisfies the texture
+    // limit on one axis and breaks the minimum viewport on the other. One
+    // scale cannot serve both, so each axis is clamped into the sendable
+    // range and the frame is letterboxed into the body as usual — a slightly
+    // different aspect beats a viewport the backend sync refuses to send.
+    let side_limit = side_limit(max_texture_side);
+    let width = (available.x / zoom).clamp(MIN_STABLE_VIEWPORT_SIDE, side_limit);
+    let height = (available.y / zoom).clamp(MIN_STABLE_VIEWPORT_SIDE, side_limit);
+    (width.round() as u32, height.round() as u32)
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn side_limit(max_texture_side: usize) -> f32 {
+    (max_texture_side.max(1) as f32).max(MIN_STABLE_VIEWPORT_SIDE)
 }
 
 /// Record the zoom this panel can really apply, and report the emulated
@@ -189,9 +202,8 @@ fn sync_viewport_sizes(ui: &Ui, state: &mut BrowserUiState, available: egui::Vec
 /// zooming out where the frame would pass the renderer's texture side limit
 /// or the pixel budget above; the panel reports this scale so the control
 /// shows what is really on screen.
-#[allow(clippy::cast_precision_loss)]
 fn effective_zoom(available: egui::Vec2, zoom: f32, max_texture_side: usize) -> f32 {
-    let side_limit = (max_texture_side.max(1) as f32).max(MIN_STABLE_VIEWPORT_SIDE);
+    let side_limit = side_limit(max_texture_side);
     let floor = (available.x / side_limit)
         .max(available.y / side_limit)
         .max((available.x * available.y / MAX_FRAME_PIXELS).sqrt())
@@ -377,6 +389,13 @@ mod tests {
         assert!(narrow <= 2048, "{narrow} passes a smaller renderer limit");
         // A short one caps the effective zoom instead of selecting a viewport
         // that would never be sent.
+        // Conflicting constraints (a body far wider than tall) still produce a
+        // viewport the backend sync will accept.
+        let (long, short) = zoomed_viewport(egui::vec2(40000.0, 120.0), 4.0, limit);
+        assert!(
+            f32::from(u16::try_from(short).expect("small")) >= MIN_STABLE_VIEWPORT_SIDE && long <= 8192,
+            "{long}x{short} is not sendable"
+        );
         let (width, height) = zoomed_viewport(egui::vec2(420.0, 100.0), 4.0, limit);
         assert!(
             f32::from(u16::try_from(height).expect("small")) >= MIN_STABLE_VIEWPORT_SIDE
