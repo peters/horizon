@@ -537,3 +537,22 @@ fn a_latched_gesture_keeps_its_anchor_after_the_pointer_leaves() {
         "the anchor moved with the pointer: {steady:?} vs {wandered:?}"
     );
 }
+
+#[test]
+fn choosing_a_zoom_abandons_the_previous_gesture_state() {
+    // A pending offset or anchor belongs to the scale it was computed for.
+    let (ctx, device, mut state) = disconnected_viewer();
+    state.controls.zoom = Some(PanelZoom::new(2.0));
+    show_viewer(&ctx, &mut state, &device, Vec::new());
+    state.pending_scroll = Some(egui::vec2(120.0, 90.0));
+    state.zoom_anchor = Some(ZoomAnchor {
+        captured_at: 0.0,
+        pointer: egui::pos2(600.0, 500.0),
+        content: egui::vec2(4.0, 2.0),
+    });
+    click_label(&ctx, &mut state, &device, "200%");
+    click_label(&ctx, &mut state, &device, "Fit");
+    assert_eq!(state.controls.zoom, None);
+    assert!(state.pending_scroll.is_none(), "a stale offset survived the selection");
+    assert!(state.zoom_anchor.is_none(), "a stale anchor survived the selection");
+}

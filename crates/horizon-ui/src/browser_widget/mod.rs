@@ -96,6 +96,16 @@ pub struct BrowserUiState {
 }
 
 impl BrowserUiState {
+    /// Drop theme-dependent render and input caches, keeping the panel's own
+    /// zoom: a repaint after an appearance change is not a new panel.
+    pub(crate) fn invalidate_theme(&mut self) {
+        *self = Self {
+            zoom: self.zoom,
+            effective_zoom: self.effective_zoom,
+            ..Self::default()
+        };
+    }
+
     /// Reset render and input caches when a different backend takes ownership
     /// of this panel. Returns whether a reset occurred.
     fn synchronize_backend(&mut self, backend: BackendKind) -> bool {
@@ -614,6 +624,25 @@ mod tests {
             pointer_viewport_state(false, Some([390.0, 844.0]), Some((1280, 800)), (1280, 800)),
             PointerViewportState::AwaitingFrame
         ));
+    }
+
+    #[test]
+    fn an_appearance_change_keeps_the_panel_zoom() {
+        let mut state = BrowserUiState {
+            zoom: crate::panel_zoom::PanelZoom::new(1.5),
+            effective_zoom: crate::panel_zoom::PanelZoom::new(1.5),
+            seq: 7,
+            last_viewport: (800, 600),
+            url_buffer: String::from("https://example.test/"),
+            ..BrowserUiState::default()
+        };
+        state.invalidate_theme();
+        assert_eq!(state.zoom, crate::panel_zoom::PanelZoom::new(1.5));
+        assert_eq!(state.effective_zoom, crate::panel_zoom::PanelZoom::new(1.5));
+        assert_eq!(state.seq, 0);
+        assert_eq!(state.last_viewport, (0, 0));
+        assert!(state.url_buffer.is_empty());
+        assert!(state.active_backend.is_none());
     }
 
     #[test]

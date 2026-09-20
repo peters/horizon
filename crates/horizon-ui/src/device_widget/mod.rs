@@ -135,7 +135,12 @@ impl DeviceUiState {
                     ui.colored_label(ui.visuals().error_fg_color, format!("Disconnected: {error}"));
                 }
             }
-            self.controls.zoom_dropdown(ui, interactive);
+            if self.controls.zoom_dropdown(ui, interactive) {
+                // A chosen scale starts fresh: an offset or anchor computed for
+                // the previous one would jump the image.
+                self.pending_scroll = None;
+                self.zoom_anchor = None;
+            }
         });
         let previous = self.controls.options;
         let changed = ui

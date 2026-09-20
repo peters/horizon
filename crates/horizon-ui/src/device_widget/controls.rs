@@ -18,8 +18,9 @@ impl Controls {
     }
 
     /// Always-visible zoom selector, outside the collapsed view controls.
-    pub(super) fn zoom_dropdown(&mut self, ui: &mut Ui, interactive: bool) {
-        panel_zoom::dropdown_with_fit(ui, "device_zoom", &mut self.zoom, interactive);
+    /// Returns whether the selection changed.
+    pub(super) fn zoom_dropdown(&mut self, ui: &mut Ui, interactive: bool) -> bool {
+        panel_zoom::dropdown_with_fit(ui, "device_zoom", &mut self.zoom, interactive)
     }
 
     pub(super) fn show(&mut self, ui: &mut Ui, desktop: Option<[usize; 2]>, rendered: Option<[usize; 2]>) -> bool {
