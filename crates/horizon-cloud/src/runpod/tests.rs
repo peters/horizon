@@ -10,7 +10,7 @@ fn spec() -> WorkerSpec {
         operation_id: "test-operation".into(),
         image_digest: format!("example/worker@sha256:{}", "a".repeat(64)),
         profile: crate::CloudConfig::parse(crate::EXAMPLE).unwrap().profiles["image-only"].clone(),
-        public_key: "ssh-ed25519 AAAATEST".into(),
+        public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f".into(),
         registry_auth_id: None,
         gpu_types: vec!["NVIDIA RTX A4000".into()],
         cpu_flavors: vec!["cpu3g".into()],
@@ -395,4 +395,27 @@ fn readiness_requires_reported_resources_and_a_gpu_when_requested() {
     assert!(parse(&value).verify_resources(&spec).is_ok());
     value["memoryInGb"] = json!(0);
     assert!(parse(&value).verify_resources(&spec).is_err());
+}
+
+#[test]
+fn malformed_public_keys_are_rejected_before_provider_access() {
+    let valid = spec().public_key;
+    for key in [
+        "ssh-ed25519 ",
+        "ssh-ed25519 invalid",
+        "ssh-ed25519 AAAA",
+        "ssh-rsa AAAA",
+    ] {
+        let mut spec = spec();
+        spec.public_key = key.into();
+        assert!(matches!(
+            spec.validate(),
+            Err(CloudError::Invalid("Worker requires an Ed25519 public key"))
+        ));
+    }
+    let mut spec = spec();
+    spec.public_key = format!("{valid} fixture@example.invalid");
+    spec.validate().unwrap();
+    spec.public_key.push('\n');
+    assert!(spec.validate().is_err());
 }

@@ -371,6 +371,31 @@ pub fn terminate(root: &std::path::Path, settings: &Settings, cancel: &Cancellat
 mod tests {
     use super::*;
     #[test]
+    fn selected_agent_credentials_must_be_nonempty_before_deployment() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let mut settings: Settings = serde_json::from_value(serde_json::json!({
+            "runpod_key_file":"unused", "ssh_identity_file":"unused", "docker_config":"unused",
+            "registry_pull_auth_id":null, "cpu_flavors":[], "gpu_types":[]
+        }))
+        .unwrap();
+        for agent in [horizon_cloud::Agent::Codex, horizon_cloud::Agent::Claude] {
+            settings.openai_api_key_file = (agent == horizon_cloud::Agent::Codex).then(|| file.path().into());
+            settings.anthropic_api_key_file = (agent == horizon_cloud::Agent::Claude).then(|| file.path().into());
+            let selected: horizon_cloud::Capabilities =
+                serde_json::from_value(serde_json::json!({"agents":[agent]})).unwrap();
+            let disabled: horizon_cloud::Capabilities = serde_json::from_str("{}").unwrap();
+            for content in ["", " \n\t\r", "fixture-credential\n"] {
+                std::fs::write(file.path(), content).unwrap();
+                assert_eq!(
+                    validate_agent_auth(&settings, &selected).is_ok(),
+                    !content.trim().is_empty()
+                );
+                assert!(validate_agent_auth(&settings, &disabled).is_ok());
+            }
+        }
+    }
+
+    #[test]
     fn failed_readiness_needs_no_ssh_cleanup_but_interrupted_credential_install_does() {
         let root = tempfile::tempdir().unwrap();
         let repo = git2::Repository::init(root.path().join("repo")).unwrap();

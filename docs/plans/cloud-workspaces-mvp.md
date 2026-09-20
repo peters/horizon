@@ -333,3 +333,41 @@ form was checked at 900×600 and the 4K resize recording was decoded. Its binary
 SHA-256 is `5afe45b47544591980edfebc96917c8fded773a416bbc55d23819d9830eb4993`.
 Hosted review, final immutable-image acceptance and post-review smoke/cleanup
 remain open; these local results do not close those gates.
+
+
+Sixth hosted-review disposition, 2026-09-20: five narrow findings were confirmed.
+Preflight now validates the Ed25519 wire structure, rejects empty selected-agent
+credential files, and rejects non-UTF-8 tree components. Browser-only attachment
+retries keep repainting after discovery stops and retire dismissed placeholders.
+Sidebar workspace focus includes empty/collapsed cloud frames and runtime cards.
+SHA-256 Git repositories remain unsupported by the current source reader; they
+now receive an explicit preflight error rather than a misleading submodule error.
+This does not add a new repository format. The portable provider crate reuses the
+existing workspace base64 dependency solely for public-key wire validation.
+
+Two other hosted suggestions do not establish the claimed failure: Ready cards
+already expose explicit reconnect, which recreates a failed desktop tunnel, and
+repeated remote-browser release is idempotent in both worker shutdown and private
+file removal. Independent review of the narrow fix batch is clear. Regression
+coverage includes malformed keys, selected/disabled credential bindings, nested
+invalid-byte files/directories, unsupported source format, attachment recovery,
+dismissed placeholders, and sidebar selection of cloud-only workspaces. Required
+validation and exact-candidate live proof are being rerun; no new settings UI or
+other feature expansion is included in this batch.
+
+
+The sixth-review fix batch passed all required local tiers in
+`final-validation-12/`: 2,311 workspace tests and 2,356 tests with speech,
+zero failures and 15 ignored in each tier. Blocking/strict Clippy, formatting,
+maintainability and worker/helper checks passed. The advisory tier still reports
+only the three unchanged device CLI test diagnostics. Independent review is clear
+on the 12-file code/test/dependency batch. The final immutable web worker reached
+Ready and its complete applicable application suite passed; mobile video capture,
+current-candidate UI smoke and the next hosted review remain pending.
+
+
+Additional queued UI preference: replace the floating in-canvas provider/control
+strip with a **Cloud** menu in the top toolbar. Reuse the existing New cloud and
+Fit all clouds actions; do not add a provider/issue/device picker. This belongs to
+the already-gated UI polish phase alongside Cloud settings, after current review,
+post-review smoke and task-compute cleanup.

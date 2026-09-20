@@ -51,6 +51,19 @@ impl Material {
                 "Source exceeds the supported submodule nesting or count",
             ));
         }
+        let format = runner.run(
+            "Inspect repository object format",
+            Command::new("git")
+                .arg("-C")
+                .arg(directory)
+                .args(["rev-parse", "--show-object-format"]),
+            Duration::from_secs(30),
+        )?;
+        if format.trim() != "sha1" {
+            return Err(Error::Invalid(
+                "Cloud source export currently requires a SHA-1 Git repository",
+            ));
+        }
         let repo = Repository::open(directory)
             .map_err(|_| Error::Invalid("Initialize selected submodules locally before deploying"))?;
         let tree = repo
@@ -58,17 +71,21 @@ impl Material {
             .and_then(|object| object.peel_to_tree())
             .map_err(|_| Error::Invalid("Selected submodule commit is not available locally"))?;
         let mut entries = Vec::new();
-        tree.walk(TreeWalkMode::PreOrder, |root, entry| {
+        let mut invalid_name = false;
+        let walk = tree.walk(TreeWalkMode::PreOrder, |root, entry| {
+            let Ok(name) = entry.name() else {
+                invalid_name = true;
+                return TreeWalkResult::Abort;
+            };
             if entry.kind() != Some(ObjectType::Tree) {
-                entries.push((
-                    format!("{root}{}", entry.name().unwrap_or_default()),
-                    entry.id(),
-                    entry.filemode(),
-                ));
+                entries.push((format!("{root}{name}"), entry.id(), entry.filemode()));
             }
             TreeWalkResult::Ok
-        })
-        .map_err(|_| Error::Invalid("Cannot inspect committed source tree"))?;
+        });
+        if invalid_name {
+            return Err(Error::Invalid("Source paths must be UTF-8"));
+        }
+        walk.map_err(|_| Error::Invalid("Cannot inspect committed source tree"))?;
         let mut media = None;
         let attributes = super::attributes::Attributes::new(&repo, &tree)?;
         for (name, oid, mode) in entries {

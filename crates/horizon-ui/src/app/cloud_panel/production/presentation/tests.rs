@@ -489,3 +489,66 @@ fn pending_session_retry_does_not_reopen_a_closed_healthy_view() {
             .is_empty()
     );
 }
+
+#[test]
+fn browser_attachment_keeps_repainting_after_discovery_watch_stops() {
+    let (temp, mut app) = restore_fixture();
+    app.sync_cloud_presentations();
+    let runtime = app.cloud_prototype.production.runtimes.get_mut(&1).unwrap();
+    runtime.receiver = None;
+    runtime.needs_attach = false;
+    runtime.pending_member_attachments.clear();
+    runtime.pending_session_attachments.clear();
+    runtime.browsers_discovered = true;
+    runtime.browsers = [
+        ("firefox", BackendKind::FirefoxBidi),
+        ("chromium", BackendKind::ChromiumCdp),
+    ]
+    .into_iter()
+    .map(|(id, backend)| CloudViewState {
+        id: id.into(),
+        backend,
+        ready: true,
+        ..Default::default()
+    })
+    .collect();
+    let settings = temp.path().join("settings.json");
+    let bytes = std::fs::read(&settings).unwrap();
+    std::fs::remove_file(&settings).unwrap();
+    app.sync_cloud_presentations();
+    assert!(app.cloud_prototype.production.runtimes[&1].needs_repaint());
+    assert!(
+        !app.cloud_prototype.production.runtimes[&1]
+            .pending_browser_attachments
+            .is_empty()
+    );
+    std::fs::write(settings, bytes).unwrap();
+    app.sync_cloud_presentations();
+    let runtime = &app.cloud_prototype.production.runtimes[&1];
+    assert!(runtime.pending_browser_attachments.is_empty());
+    assert!(!runtime.needs_repaint());
+    for local in ["firefox", "chromium"] {
+        assert!(
+            app.board
+                .panel(app.board.panel_id_by_local_id(local).unwrap())
+                .unwrap()
+                .browser()
+                .is_some()
+        );
+    }
+}
+
+#[test]
+fn dismissing_pending_browser_placeholders_stops_repaint_retries() {
+    let (_temp, mut app) = restore_fixture();
+    app.sync_cloud_presentations();
+    assert!(app.cloud_prototype.production.runtimes[&1].needs_repaint());
+    for local in ["firefox", "chromium"] {
+        app.board.close_panel(app.board.panel_id_by_local_id(local).unwrap());
+    }
+    app.sync_cloud_presentations();
+    let runtime = &app.cloud_prototype.production.runtimes[&1];
+    assert!(runtime.receiver.is_none());
+    assert!(runtime.pending_browser_attachments.is_empty());
+    assert!(!runtime.needs_repaint());
+}

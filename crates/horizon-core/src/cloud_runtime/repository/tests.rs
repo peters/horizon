@@ -219,3 +219,65 @@ fn large_ordinary_blob_with_later_lfs_attribute_is_not_treated_as_a_pointer() {
     };
     validate_tree(&repo, "HEAD", &runner).unwrap();
 }
+
+#[test]
+fn sha256_source_reports_unsupported_format_during_preflight() {
+    let temp = tempfile::tempdir().unwrap();
+    git(temp.path(), &["init", "--object-format=sha256"]);
+    git(
+        temp.path(),
+        &[
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "Create source fixture",
+        ],
+    );
+    let cancel = horizon_cloud::Cancellation::default();
+    let runner = Runner {
+        cancel: &cancel,
+        emit: &|_| {},
+        secrets: vec![],
+    };
+    assert!(matches!(
+        validate_tree(temp.path(), "HEAD", &runner),
+        Err(Error::Invalid(
+            "Cloud source export currently requires a SHA-1 Git repository"
+        ))
+    ));
+}
+
+#[test]
+#[cfg(unix)]
+fn nested_non_utf8_files_and_directories_are_rejected_during_preflight() {
+    use std::os::unix::ffi::OsStringExt;
+    for directory in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("repo");
+        init(&repo);
+        std::fs::create_dir(repo.join("nested")).unwrap();
+        let path = repo.join("nested").join(std::ffi::OsString::from_vec(vec![b'a', 0xff]));
+        if directory {
+            std::fs::create_dir(&path).unwrap();
+            std::fs::write(path.join("file.txt"), "committed").unwrap();
+        } else {
+            std::fs::write(&path, "committed").unwrap();
+        }
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-m", "Create source fixture"]);
+        let cancel = horizon_cloud::Cancellation::default();
+        let runner = Runner {
+            cancel: &cancel,
+            emit: &|_| {},
+            secrets: vec![],
+        };
+        assert!(matches!(
+            validate_tree(&repo, "HEAD", &runner),
+            Err(Error::Invalid("Source paths must be UTF-8"))
+        ));
+    }
+}

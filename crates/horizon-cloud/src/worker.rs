@@ -1,5 +1,6 @@
 //! Portable worker lifecycle. The caller durably persists `CreateState` before I/O.
 use crate::{Profile, valid_id, valid_image};
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -80,7 +81,7 @@ impl WorkerSpec {
                 "Worker requires a stable operation ID and immutable image digest",
             ));
         }
-        if !self.public_key.starts_with("ssh-ed25519 ") || self.public_key.contains(['\n', '\r']) {
+        if !valid_public_key(&self.public_key) {
             return Err(CloudError::Invalid("Worker requires an Ed25519 public key"));
         }
         if (self.profile.gpu && self.gpu_types.is_empty()) || (!self.profile.gpu && self.cpu_flavors.is_empty()) {
@@ -106,6 +107,22 @@ impl WorkerSpec {
         Ok(())
     }
 }
+fn valid_public_key(value: &str) -> bool {
+    if value.len() > 4096 || value.contains(['\n', '\r', '\0']) {
+        return false;
+    }
+    let mut fields = value.split_ascii_whitespace();
+    if fields.next() != Some("ssh-ed25519") {
+        return false;
+    }
+    let Some(encoded) = fields.next() else {
+        return false;
+    };
+    let mut wire = [0; 51];
+    base64::engine::general_purpose::STANDARD.decode_slice(encoded, &mut wire) == Ok(wire.len())
+        && wire.starts_with(b"\0\0\0\x0bssh-ed25519\0\0\0\x20")
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum CreateState {

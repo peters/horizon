@@ -75,6 +75,7 @@ impl Runtime {
         self.receiver.is_some()
             || self.needs_attach
             || self.needs_desktop
+            || !self.pending_browser_attachments.is_empty()
             || !self.pending_session_attachments.is_empty()
             || !self.pending_member_attachments.is_empty()
     }

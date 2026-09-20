@@ -15,7 +15,7 @@ use crate::theme;
 use super::panels::panel_kind_icon;
 use super::root_chrome::effective_sidebar_width;
 use super::util;
-use super::{HorizonApp, TOOLBAR_HEIGHT, WS_BG_PAD, WS_TITLE_HEIGHT};
+use super::{HorizonApp, TOOLBAR_HEIGHT};
 
 struct WorkspaceSidebarEntry {
     id: WorkspaceId,
@@ -683,12 +683,7 @@ impl HorizonApp {
                 // Attached canvas: reveal the clicked panel (zooming out when
                 // needed) instead of panning to the whole workspace bounds.
                 self.reveal_panel_visible(ctx, panel_id);
-            } else if let Some((min, max)) = self.board.workspace_bounds(workspace_id) {
-                let pos = Pos2::new(min[0] - WS_BG_PAD, min[1] - WS_BG_PAD - WS_TITLE_HEIGHT);
-                let size = Vec2::new(
-                    max[0] - min[0] + 2.0 * WS_BG_PAD,
-                    max[1] - min[1] + 2.0 * WS_BG_PAD + WS_TITLE_HEIGHT,
-                );
+            } else if let Some((pos, size)) = self.workspace_focus_frame(workspace_id) {
                 self.pan_to_canvas_pos_aligned(ctx, pos, size, true);
             }
         }
@@ -903,6 +898,39 @@ mod tests {
         sidebar_workspace_insert_dock_side, sidebar_workspace_name_width, sidebar_workspace_shows_panels,
     };
     use horizon_core::WorkspaceDockSide;
+
+    #[test]
+    #[cfg(feature = "cloud-workspaces")]
+    fn sidebar_focus_reveals_empty_and_collapsed_cloud_workspaces() {
+        for collapsed in [false, true] {
+            let (temp, mut app) = crate::app::test_support::test_app();
+            let workspace = app.board.create_workspace("fixture");
+            let mut group = horizon_core::cloud_panel::CloudGroup::new(
+                1,
+                "Fixture".into(),
+                app.board.workspace(workspace).unwrap().local_id.clone(),
+                temp.path().into(),
+                [1700.0, 900.0],
+            );
+            group.collapsed = collapsed;
+            app.cloud_prototype.groups.0.push(group);
+            assert!(app.board.workspace_bounds(workspace).is_none());
+            let ctx = egui::Context::default();
+            let (position, size) = app.workspace_focus_frame(workspace).unwrap();
+            app.pan_to_canvas_pos_aligned(&ctx, position, size, true);
+            let expected = app.pan_target.take();
+            assert!(expected.is_some());
+            app.apply_sidebar_actions(
+                &ctx,
+                &super::SidebarActions {
+                    pan_to_workspace: Some(workspace),
+                    ..Default::default()
+                },
+            );
+            assert_eq!(app.pan_target, expected);
+            assert_eq!(app.board.active_workspace, Some(workspace));
+        }
+    }
 
     #[test]
     fn sidebar_drop_docks_attached_workspace_against_attached_target() {

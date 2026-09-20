@@ -102,6 +102,13 @@ impl super::Runtime {
                 .cloned()
                 .collect();
         }
+        self.pending_browser_attachments.retain(|local| {
+            group.panels.contains(local)
+                && board
+                    .panel_id_by_local_id(local)
+                    .and_then(|id| board.panel(id))
+                    .is_some_and(|panel| panel.kind == PanelKind::Browser)
+        });
         let restore_desktop = std::mem::take(&mut self.needs_desktop);
         if restore || restore_desktop {
             self.pending_member_attachments.extend(
