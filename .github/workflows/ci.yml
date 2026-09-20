@@ -13,6 +13,14 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
+  # Dev and test builds keep line tables only: a panic backtrace still names
+  # its file and line, while the dropped variable and type DWARF (and the
+  # matching Windows PDB payload) cuts link time on every lane and shrinks
+  # what each rust-cache entry stores. Cache size is not cosmetic here - the
+  # repository sits at GitHub's 10 GB budget, where each save evicts main's
+  # entries and leaves the next job to build cold. Local builds are untouched.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
 
 # Cache policy: every rust-cache step below sets
 # `save-if: github.ref == 'refs/heads/main'`. Pull-request runs restore from
@@ -26,6 +34,9 @@ env:
 # cold build per lane until the next main run saves the new entry, which is
 # the cheaper tradeoff here. The Report rust-cache status steps surface
 # HIT/MISS from the action's cache-hit output in the job summary.
+# Entry count is part of the budget: jobs that build the same graph share one
+# runner (the three Clippy tiers, both browser-engine feature sets) instead of
+# keeping a near-duplicate cache each.
 jobs:
   # The small ubuntu checks share one runner instead of seven parallel
   # one-job runners: each finishes in well under a minute, so the fan-out
@@ -37,7 +48,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
-      run_snap_build: ${{ steps.snap-detect.outputs.run_snap_build }}
+      run_snap_build: ${{ steps.changes.outputs.run_snap_build }}
+      release_inputs: ${{ steps.changes.outputs.release_inputs }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -63,64 +75,79 @@ jobs:
         run: ./scripts/check-version-sync.sh
       - name: Browser client dependency boundary
         run: python3 scripts/check-browser-client-dependencies.py
-      - id: snap-detect
-        name: Detect Snap packaging changes
+      # One diff answers both gated lanes: Snap packaging and the release
+      # Artifacts matrix. This job already checks out full history, so the
+      # Artifacts gate costs nothing here instead of a second runner and a
+      # second full clone.
+      - id: changes
+        name: Detect packaging and release inputs
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
         run: |
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            echo "run_snap_build=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          emit() {
+            echo "run_snap_build=$1" >> "$GITHUB_OUTPUT"
+            echo "release_inputs=$2" >> "$GITHUB_OUTPUT"
+          }
 
-          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "00000000000000000000000000000000000000" ]; then
-            echo "run_snap_build=true" >> "$GITHUB_OUTPUT"
+          # A manual dispatch, a branch's first push (an all-zero base) and a
+          # base this checkout cannot resolve all leave the diff unknown, so
+          # they build everything rather than silently skipping a release.
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] \
+            || ! git rev-parse --verify --quiet "${BASE_SHA}^{commit}" > /dev/null \
+            || ! changed_paths=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA"); then
+            emit true true
             exit 0
           fi
 
           run_snap_build=false
+          release_inputs=false
 
           while IFS= read -r path; do
             case "$path" in
               .github/workflows/ci.yml|.github/workflows/release.yml|scripts/build-surge-toolchain.sh|scripts/package-release-asset.sh|scripts/stage-surge-artifacts.sh|snap/*|packaging/linux/*|assets/icons/*)
                 run_snap_build=true
-                break
                 ;;
             esac
-          done < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+            case "$path" in
+              .github/workflows/ci.yml|scripts/package-release-asset.sh|rust-toolchain.toml|Cargo.toml|Cargo.lock|assets/*|crates/*)
+                release_inputs=true
+                ;;
+            esac
+          done <<< "$changed_paths"
 
-          echo "run_snap_build=$run_snap_build" >> "$GITHUB_OUTPUT"
+          emit "$run_snap_build" "$release_inputs"
 
+  # Both feature sets share one runner: each finished in well under a minute,
+  # the boundary and geometry checks above them are identical, and a second
+  # matrix leg bought a duplicate cache entry for a near-identical graph.
   browser-engine:
-    name: Browser engine (${{ matrix.features }})
+    name: Browser engine
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    strategy:
-      matrix:
-        features: [minimal, video-capture]
+    # Two sequential feature sets, with headroom for a cold cache.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: browser-engine-${{ matrix.features }}
+          prefix-key: browser-engine
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Verify dependency boundary
         run: python3 scripts/check-browser-engine-dependencies.py
       - name: Test remote click geometry
         run: node --test scripts/browser-smoke/remote_click_geometry.test.cjs
       - name: Test and lint standalone engine
-        env:
-          ENGINE_FEATURES: ${{ matrix.features }}
         run: |
-          features=()
-          if [ "$ENGINE_FEATURES" != minimal ]; then
-            features=(--features "$ENGINE_FEATURES")
-          fi
-          cargo test --locked -p horizon-browser --no-default-features "${features[@]}"
-          cargo clippy --locked -p horizon-browser --all-targets --no-default-features "${features[@]}" -- -D warnings
+          for engine_features in "" video-capture; do
+            selected=()
+            if [ -n "$engine_features" ]; then
+              selected=(--features "$engine_features")
+            fi
+            cargo test --locked -p horizon-browser --no-default-features "${selected[@]}"
+            cargo clippy --locked -p horizon-browser --all-targets --no-default-features "${selected[@]}" -- -D warnings
+          done
 
   device:
     name: Device library and CLI/MCP
@@ -173,10 +200,17 @@ jobs:
         run: python3 -B -m unittest discover -s scripts/remote-browser-spike/tests -v
 
 
+  # The three lint tiers share one runner and one cache. Each tier took well
+  # under a minute on its own yet kept a separate half-gigabyte cache entry of
+  # a nearly identical dependency graph. `!cancelled()` keeps every tier
+  # reporting in one run, so a blocking failure still shows the strict and
+  # pedantic results the way three jobs used to.
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Three sequential tiers, with headroom for a cold cache: the first tier
+    # then compiles the vendored speech C++ tree before it can lint.
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v7
         with:
@@ -199,60 +233,18 @@ jobs:
       # Rust surface is identical to `speech` (they only toggle native
       # backends). cpal needs the ALSA headers on Linux.
       - run: bash scripts/install-ci-ubuntu-dependencies.sh libasound2-dev pkg-config
-      - run: cargo clippy --locked --all-targets --features speech,trace-profiling -- -D warnings
-
-  clippy-strict:
-    name: Clippy (strict)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          lfs: true
-      - id: rust-cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Report rust-cache status
-        shell: bash
-        run: |
-          if [ "${{ steps.rust-cache.outputs.cache-hit }}" = "true" ]; then
-            echo "rust-cache: HIT ($(du -sh target 2>/dev/null | cut -f1))" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "rust-cache: MISS - cold build (lock bump or eviction)" >> "$GITHUB_STEP_SUMMARY"
-          fi
-      - run: rustup component add clippy
+      - name: Blocking tier
+        run: cargo clippy --locked --all-targets --features speech,trace-profiling -- -D warnings
       # `--features speech` so the unwrap/expect ban also covers the speech
-      # runtime code (needs the ALSA headers to build cpal on Linux).
-      - run: bash scripts/install-ci-ubuntu-dependencies.sh libasound2-dev pkg-config
-      - run: cargo clippy --locked --workspace --lib --bins --examples --features speech -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
-
-  clippy-pedantic:
-    name: Clippy (pedantic — advisory)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          lfs: true
-      - id: rust-cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Report rust-cache status
-        shell: bash
-        run: |
-          if [ "${{ steps.rust-cache.outputs.cache-hit }}" = "true" ]; then
-            echo "rust-cache: HIT ($(du -sh target 2>/dev/null | cut -f1))" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "rust-cache: MISS - cold build (lock bump or eviction)" >> "$GITHUB_STEP_SUMMARY"
-          fi
-      - run: rustup component add clippy
-      - run: bash scripts/install-ci-ubuntu-dependencies.sh libasound2-dev pkg-config
-      - name: Run pedantic audit (non-blocking)
+      # runtime code.
+      - name: Strict tier
+        if: ${{ !cancelled() }}
+        run: cargo clippy --locked --workspace --lib --bins --examples --features speech -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
+      - name: Pedantic tier (advisory)
+        if: ${{ !cancelled() }}
         run: |
           cargo clippy --locked --workspace --all-targets --features speech -- -D warnings -W clippy::pedantic || {
-            echo "::warning::Pedantic lint debt detected (non-blocking advisory job)."
+            echo "::warning::Pedantic lint debt detected (non-blocking advisory tier)."
           }
 
   rust-test:
@@ -298,13 +290,17 @@ jobs:
         if: startsWith(matrix.os, 'macos-')
         run: echo "RUSTFLAGS=${RUSTFLAGS} -C link-arg=-Wl,-rpath,/usr/lib/swift" >> "$GITHUB_ENV"
       - run: cargo test --locked --workspace
-      # Speech tests (resampler, GGUF reader, shortcut matchers, engine
-      # state machine) run on every OS in the matrix so the native audio
-      # linkage (ALSA / CoreAudio) is exercised on each supported target;
-      # the no-mic and real-model paths stay env-gated off.
+      # `speech` is declared by horizon-ui alone, so every other crate builds
+      # identically with and without it and a second `--workspace` pass only
+      # re-ran their suites (about a minute per OS). The feature pass runs the
+      # crate that owns the gated code - capture, resampler, shortcut matchers
+      # and the engine state machine - and links the native audio backend
+      # (ALSA / CoreAudio) on each OS in the matrix; the no-mic and real-model
+      # paths stay env-gated off. horizon-core's speech config and GGUF reader
+      # are not feature-gated and run in the workspace pass above.
       - if: matrix.os == 'ubuntu-latest'
         run: bash scripts/install-ci-ubuntu-dependencies.sh libasound2-dev pkg-config
-      - run: cargo test --locked --workspace --features speech
+      - run: cargo test --locked -p horizon-ui --features speech
 
   windows-smoke:
     name: Windows test build
@@ -335,8 +331,10 @@ jobs:
         run: cargo test --locked -p horizon-browser-cli --test cli run_publishes_a_complete_relative_job_when_home_is_unset -- --exact
       # The speech feature is advertised on Windows too (WASAPI capture via
       # cpal); build it so a Windows-only break cannot pass CI. Compiling the
-      # vendored C++ tree here is the point — tests are not run.
-      - run: cargo test --locked --workspace --features speech --no-run
+      # vendored C++ tree here is the point — tests are not run. horizon-ui
+      # owns the feature, so the rest of the workspace is already built by the
+      # pass above.
+      - run: cargo test --locked -p horizon-ui --features speech --no-run
 
 
   snap-build:
@@ -361,37 +359,14 @@ jobs:
           name: horizon-linux-x64.snap
           path: ${{ steps.snapcraft.outputs.snap }}
 
-  # Docs/CI-only pushes to main must not pay for four release builds:
-  # gate the Artifacts matrix on the paths that can change the binary.
-  # workflow_dispatch always builds so a release can be forced on demand.
-  release-changes:
-    name: Release inputs changed
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    timeout-minutes: 3
-    outputs:
-      rust: ${{ steps.filter.outputs.rust }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - uses: dorny/paths-filter@v4.0.3
-        id: filter
-        with:
-          filters: |-
-            rust:
-              - 'assets/**'
-              - 'crates/**'
-              - 'Cargo.toml'
-              - 'Cargo.lock'
-              - 'rust-toolchain.toml'
-              - 'scripts/package-release-asset.sh'
-              - '.github/workflows/ci.yml'
-
+  # Docs/CI-only pushes to main must not pay for four release builds, so the
+  # matrix is gated on the paths that can change the binary, as detected by
+  # Repo checks. A workflow dispatch always builds, even when those checks
+  # fail, so a release can still be forced on demand.
   rust-artifacts:
     name: Artifacts (${{ matrix.name }})
-    if: always() && (github.event_name == 'workflow_dispatch' || needs.release-changes.outputs.rust == 'true')
-    needs: release-changes
+    if: always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && needs.repo-checks.outputs.release_inputs == 'true'))
+    needs: repo-checks
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
