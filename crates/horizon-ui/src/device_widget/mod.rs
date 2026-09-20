@@ -162,7 +162,12 @@ impl DeviceUiState {
                 // A fitted image can sit outside the zoom range, so the
                 // gesture starts from the nearest supported scale.
                 let next = PanelZoom::new(scale).scaled(delta);
-                if let Some(pointer) = ui.input(|input| input.pointer.hover_pos()) {
+                // A degenerate layout has no image pixel under the pointer to
+                // anchor on; the new scale still applies.
+                if scale.is_finite()
+                    && scale > 0.0
+                    && let Some(pointer) = ui.input(|input| input.pointer.hover_pos())
+                {
                     // Keep the pixel under the pointer where it is.
                     let content = (pointer - image_rect.min) / scale;
                     self.pending_scroll = Some((content * next.factor() - (pointer - body.min)).max(egui::Vec2::ZERO));
