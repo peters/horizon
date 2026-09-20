@@ -177,13 +177,18 @@ impl HorizonApp {
     pub(in crate::app) fn zoom_gesture_panel(
         &self,
         ctx: &Context,
+        visible_workspace: Option<WorkspaceId>,
         panel_geometry: &[(PanelId, PanelScreenGeometry)],
         pointer: Option<egui::Pos2>,
     ) -> Option<PanelId> {
         let pointer = pointer?;
         // Fixed overlays paint above every panel: a pinch on the minimap or
-        // the settings panel must not reach the panel behind it.
-        if self.overlay_exclusion_zones(ctx).contains(pointer) {
+        // the settings panel must not reach the panel behind it. Only the
+        // overlays this viewport actually paints count.
+        if self
+            .overlay_exclusion_zones_for(ctx, visible_workspace)
+            .contains(pointer)
+        {
             return None;
         }
         let topmost = *self.panel_screen_order.iter().rev().find(|panel_id| {
@@ -284,7 +289,7 @@ impl HorizonApp {
         // The first owner keeps the whole gesture: egui keeps smoothing zoom
         // deltas after the input stops, and the pointer may leave the panel.
         let candidate = self
-            .zoom_gesture_panel(ctx, &panel_geometry, pointer_position)
+            .zoom_gesture_panel(ctx, visible_workspace, &panel_geometry, pointer_position)
             .map(panel_layer_salt);
         let pointer_over_panel_zoom = crate::panel_zoom::gesture_owner(ctx, candidate).is_some();
         if pointer_in_canvas && !pointer_over_panel_zoom && (zoom_delta - 1.0).abs() > f32::EPSILON {

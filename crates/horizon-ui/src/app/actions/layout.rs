@@ -82,9 +82,22 @@ impl HorizonApp {
     /// once per frame and pass to rendering code that positions canvas-space
     /// elements (e.g. workspace labels) so they stay clear.
     pub(in crate::app) fn overlay_exclusion_zones(&self, ctx: &Context) -> OverlayExclusion {
+        self.overlay_exclusion_zones_for(ctx, None)
+    }
+
+    /// The same rectangles for the viewport actually being handled. A detached
+    /// window paints only its own workspace minimap, so the root window's
+    /// sidebar, settings and attention feed must not claim a gesture there,
+    /// and its minimap is painted even when no workspace is attached.
+    pub(in crate::app) fn overlay_exclusion_zones_for(
+        &self,
+        ctx: &Context,
+        detached_workspace: Option<WorkspaceId>,
+    ) -> OverlayExclusion {
+        let root = detached_workspace.is_none();
         let viewport = viewport_local_rect(ctx);
         let mut zones = Vec::new();
-        let sidebar_width = if self.sidebar_visible {
+        let sidebar_width = if root && self.sidebar_visible {
             effective_sidebar_width(viewport.width())
         } else {
             0.0
@@ -97,14 +110,18 @@ impl HorizonApp {
             ));
         }
 
-        if let Some(rect) = self.settings_panel_rect(ctx, viewport) {
-            zones.push(rect);
-        }
-        if let Some(rect) = self.settings_bar_rect(ctx, viewport) {
-            zones.push(rect);
+        if root {
+            if let Some(rect) = self.settings_panel_rect(ctx, viewport) {
+                zones.push(rect);
+            }
+            if let Some(rect) = self.settings_bar_rect(ctx, viewport) {
+                zones.push(rect);
+            }
         }
 
-        let minimap_height = if self.fixed_overlays_visible() && self.minimap_visible && self.any_attached_workspace() {
+        let minimap_visible =
+            self.fixed_overlays_visible() && self.minimap_visible && (!root || self.any_attached_workspace());
+        let minimap_height = if minimap_visible {
             let overlays = &self.template_config.overlays;
             let width = overlays.minimap_width.max(120.0) + MINIMAP_PAD * 2.0;
             let height = overlays.minimap_height.max(120.0) + MINIMAP_PAD * 2.0;
@@ -120,7 +137,8 @@ impl HorizonApp {
             0.0
         };
 
-        if self.fixed_overlays_visible()
+        if root
+            && self.fixed_overlays_visible()
             && self.template_config.features.attention_feed
             && let Some(rect) =
                 estimated_outer_rect(viewport, minimap_height, &self.template_config.overlays, &self.board)
@@ -128,7 +146,7 @@ impl HorizonApp {
             zones.push(rect);
         }
 
-        if let Some(rect) = self.work_resume_overlay_rect(ctx) {
+        if root && let Some(rect) = self.work_resume_overlay_rect(ctx) {
             zones.push(rect);
         }
 

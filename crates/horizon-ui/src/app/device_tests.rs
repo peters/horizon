@@ -188,9 +188,19 @@ fn paint_order_and_overlays_decide_which_panel_owns_a_zoom_gesture() {
     app.panel_screen_rects.insert(panel, body);
     app.panel_screen_rects.insert(notes, body);
     app.panel_screen_order = vec![panel, notes];
-    assert_eq!(app.zoom_gesture_panel(&ctx, &geometry, Some(point)), None);
+    assert_eq!(app.zoom_gesture_panel(&ctx, None, &geometry, Some(point)), None);
     app.panel_screen_order = vec![notes, panel];
-    assert_eq!(app.zoom_gesture_panel(&ctx, &geometry, Some(point)), Some(panel));
+    assert_eq!(app.zoom_gesture_panel(&ctx, None, &geometry, Some(point)), Some(panel));
+
+    // A detached window paints none of the root window's chrome, so a point
+    // under the root sidebar is free for its panels.
+    let sidebar = egui::pos2(canvas_rect.left() - 8.0, canvas_rect.center().y);
+    let workspace = app.board.panel(panel).expect("device").workspace_id;
+    assert!(app.overlay_exclusion_zones(&ctx).contains(sidebar));
+    assert!(
+        !app.overlay_exclusion_zones_for(&ctx, Some(workspace)).contains(sidebar),
+        "a detached viewport must not inherit the root sidebar"
+    );
 
     // A fixed overlay paints above every panel and keeps the gesture off it.
     let overlay = app
@@ -203,5 +213,5 @@ fn paint_order_and_overlays_decide_which_panel_owns_a_zoom_gesture() {
     app.panel_screen_order = vec![panel];
     let covered = overlay.center();
     assert!(app.overlay_exclusion_zones(&ctx).contains(covered));
-    assert_eq!(app.zoom_gesture_panel(&ctx, &geometry, Some(covered)), None);
+    assert_eq!(app.zoom_gesture_panel(&ctx, None, &geometry, Some(covered)), None);
 }
