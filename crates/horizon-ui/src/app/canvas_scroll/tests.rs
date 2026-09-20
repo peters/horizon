@@ -447,3 +447,26 @@ fn chaining_follows_the_gesture_owner_not_the_hover_target() {
             .pans_canvas
     );
 }
+
+#[test]
+fn a_zero_delta_gesture_start_does_not_chain() {
+    // A phased gesture opens with a zero-delta `Start`, which carries no
+    // direction. Chaining on it would hand the canvas a gesture belonging to a
+    // terminal that still has scrollback to give.
+    let mut gesture = ScrollGesture::default();
+    let start = route(
+        &mut gesture,
+        1.0,
+        false,
+        true,
+        vec![wheel(Vec2::ZERO, TouchPhase::Start)],
+    );
+    assert!(!start);
+    assert!(!route(
+        &mut gesture,
+        1.016,
+        false,
+        false,
+        vec![wheel(Vec2::new(0.0, -5.0), TouchPhase::Move)]
+    ));
+}

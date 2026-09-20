@@ -73,8 +73,10 @@ impl ScrollGesture {
             // Scroll chaining: a gesture latched to a panel moves to the canvas
             // once *that* panel is at its scroll extent, and stays there for
             // the rest of the gesture. The owner decides, so a pointer that
-            // drifts over some other panel mid-gesture changes nothing.
-            if self.canvas_owned == Some(false) && self.owner.is_some_and(exhausted) {
+            // drifts over some other panel mid-gesture changes nothing. Only
+            // an event carrying motion can chain: a phased gesture opens with a
+            // zero-delta `Start`, which has no direction to be exhausted in.
+            if delta != Vec2::ZERO && self.canvas_owned == Some(false) && self.owner.is_some_and(exhausted) {
                 self.canvas_owned = Some(true);
             }
             if self.canvas_owned == Some(true) {

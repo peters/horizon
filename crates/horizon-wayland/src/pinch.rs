@@ -18,6 +18,8 @@
 //! held across the run. [`PinchBridge::start`] is therefore `unsafe`, and the
 //! lifetime proof belongs to the integration layer that owns both ends.
 
+use std::collections::HashMap;
+
 use raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
 use wayland_client::backend::Backend;
 use wayland_client::globals::{GlobalListContents, registry_queue_init};
@@ -45,8 +47,6 @@ pub struct PinchBridge {
     connection: Connection,
     queue: EventQueue<Gestures>,
     state: Gestures,
-    /// Dropping the seat would take its pointer, and with it the gesture.
-    _seat: wl_seat::WlSeat,
 }
 
 impl PinchBridge {
@@ -96,26 +96,35 @@ impl PinchBridge {
         let handle = queue.handle();
         let mut state = Gestures {
             protocol: globals.bind(&handle, 1..=3, ())?,
-            pointer: None,
-            pinch: None,
-            sequence: PinchSequence::default(),
+            seats: HashMap::new(),
             pending: Vec::new(),
         };
+        // Bind every advertised seat, not just the first: a trackpad can belong
+        // to any of them. `Dispatch` then keeps pointer and gesture state keyed
+        // by the seat's registry name, and the registry callback below follows
+        // seats added or removed later.
+        let registry = globals.registry();
+        globals.contents().with_list(|globals| {
+            for global in globals {
+                if global.interface == wl_seat::WlSeat::interface().name {
+                    state.bind_seat(registry, global.name, global.version, &handle);
+                }
+            }
+        });
         // A second `wl_seat` binding is legal and its `wl_pointer` receives the
-        // same focus and motion events as the toolkit's own. The pinch object
-        // is created once the seat announces a pointer, since asking for one
-        // without that capability is a protocol error.
-        let seat: wl_seat::WlSeat = globals.bind(&handle, 1..=9, ())?;
+        // same focus and motion events as the toolkit's own. Each seat's pinch
+        // object is created once that seat announces a pointer, since asking
+        // for one without the capability is a protocol error.
         queue.roundtrip(&mut state)?;
-        if state.pinch.is_none() {
-            return Err(PinchError::NoPointer);
-        }
+        // A session can start with no pointer at all and gain one when a
+        // trackpad is plugged in, so keep the bridge and let the seat callback
+        // pick it up. Only a compositor without the gesture protocol (the bind
+        // above) makes pinch permanently unavailable.
         state.pending.clear();
         Ok(Self {
             connection,
             queue,
             state,
-            _seat: seat,
         })
     }
 
@@ -134,23 +143,63 @@ impl PinchBridge {
 
 struct Gestures {
     protocol: ZwpPointerGesturesV1,
+    /// Every bound seat, keyed by its registry name so the registry callback
+    /// can drop one when its global goes away.
+    seats: HashMap<u32, Seat>,
+    pending: Vec<Pinch>,
+}
+
+/// One seat's pointer, gesture object and the gesture currently in flight on
+/// it. Seats are independent, so their gestures cannot share state.
+struct Seat {
+    proxy: wl_seat::WlSeat,
     /// Kept so both objects can be released when the seat drops its pointer.
     pointer: Option<wl_pointer::WlPointer>,
     pinch: Option<ZwpPointerGesturePinchV1>,
     sequence: PinchSequence,
-    pending: Vec<Pinch>,
 }
 
 impl Gestures {
-    fn acquire_pointer(&mut self, seat: &wl_seat::WlSeat, handle: &QueueHandle<Self>) {
-        if self.pinch.is_some() {
+    fn bind_seat(&mut self, registry: &wl_registry::WlRegistry, name: u32, version: u32, handle: &QueueHandle<Self>) {
+        if self.seats.contains_key(&name) {
             return;
         }
-        let pointer = seat.get_pointer(handle, ());
-        self.pinch = Some(self.protocol.get_pinch_gesture(&pointer, handle, ()));
-        self.pointer = Some(pointer);
+        let seat: wl_seat::WlSeat = registry.bind(name, version.min(9), handle, name);
+        self.seats.insert(
+            name,
+            Seat {
+                proxy: seat,
+                pointer: None,
+                pinch: None,
+                sequence: PinchSequence::default(),
+            },
+        );
     }
 
+    fn drop_seat(&mut self, name: u32) {
+        if let Some(mut seat) = self.seats.remove(&name) {
+            seat.release_pointer();
+            if seat.proxy.version() >= wl_seat::REQ_RELEASE_SINCE {
+                seat.proxy.release();
+            }
+        }
+    }
+
+    fn acquire_pointer(&mut self, name: u32, handle: &QueueHandle<Self>) {
+        let protocol = self.protocol.clone();
+        let Some(seat) = self.seats.get_mut(&name) else {
+            return;
+        };
+        if seat.pinch.is_some() {
+            return;
+        }
+        let pointer = seat.proxy.get_pointer(handle, name);
+        seat.pinch = Some(protocol.get_pinch_gesture(&pointer, handle, name));
+        seat.pointer = Some(pointer);
+    }
+}
+
+impl Seat {
     /// A seat can drop its pointer across a device or seat reconfiguration.
     /// The protocol forbids a pre-removal pointer from emitting again once a
     /// version 5+ seat regains the capability, so both objects have to go and
@@ -207,12 +256,12 @@ impl PinchSequence {
     }
 }
 
-impl Dispatch<wl_seat::WlSeat, ()> for Gestures {
+impl Dispatch<wl_seat::WlSeat, u32> for Gestures {
     fn event(
         state: &mut Self,
-        seat: &wl_seat::WlSeat,
+        _seat: &wl_seat::WlSeat,
         event: wl_seat::Event,
-        (): &(),
+        name: &u32,
         _connection: &Connection,
         handle: &QueueHandle<Self>,
     ) {
@@ -223,30 +272,33 @@ impl Dispatch<wl_seat::WlSeat, ()> for Gestures {
             return;
         };
         if capabilities.contains(wl_seat::Capability::Pointer) {
-            state.acquire_pointer(seat, handle);
-        } else {
-            state.release_pointer();
+            state.acquire_pointer(*name, handle);
+        } else if let Some(seat) = state.seats.get_mut(name) {
+            seat.release_pointer();
         }
     }
 }
 
-impl Dispatch<ZwpPointerGesturePinchV1, ()> for Gestures {
+impl Dispatch<ZwpPointerGesturePinchV1, u32> for Gestures {
     fn event(
         state: &mut Self,
         _proxy: &ZwpPointerGesturePinchV1,
         event: zwp_pointer_gesture_pinch_v1::Event,
-        (): &(),
+        name: &u32,
         _connection: &Connection,
         _handle: &QueueHandle<Self>,
     ) {
+        let Some(seat) = state.seats.get_mut(name) else {
+            return;
+        };
         match event {
             zwp_pointer_gesture_pinch_v1::Event::Begin { surface, .. } => {
-                state.sequence.begin(surface.id().as_ptr() as u64);
+                seat.sequence.begin(surface.id().as_ptr() as u64);
             }
             zwp_pointer_gesture_pinch_v1::Event::Update { scale, .. } => {
-                state.pending.extend(state.sequence.advance(scale));
+                state.pending.extend(seat.sequence.advance(scale));
             }
-            zwp_pointer_gesture_pinch_v1::Event::End { .. } => state.sequence.end(),
+            zwp_pointer_gesture_pinch_v1::Event::End { .. } => seat.sequence.end(),
             _ => {}
         }
     }
@@ -272,12 +324,36 @@ macro_rules! ignore_events {
 }
 
 ignore_events!(
-    wl_pointer::WlPointer,
+    wl_pointer::WlPointer: u32,
     wl_surface::WlSurface,
     wl_callback::WlCallback,
     ZwpPointerGesturesV1,
-    wl_registry::WlRegistry: GlobalListContents,
 );
+
+/// Follow seats appearing and disappearing at runtime, so a replaced seat is
+/// picked up instead of leaving the bridge bound to a global that is gone.
+impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for Gestures {
+    fn event(
+        state: &mut Self,
+        registry: &wl_registry::WlRegistry,
+        event: wl_registry::Event,
+        _data: &GlobalListContents,
+        _connection: &Connection,
+        handle: &QueueHandle<Self>,
+    ) {
+        match event {
+            wl_registry::Event::Global {
+                name,
+                interface,
+                version,
+            } if interface == wl_seat::WlSeat::interface().name => {
+                state.bind_seat(registry, name, version, handle);
+            }
+            wl_registry::Event::GlobalRemove { name } => state.drop_seat(name),
+            _ => {}
+        }
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 enum PinchError {
@@ -287,8 +363,6 @@ enum PinchError {
     Bind(#[from] wayland_client::globals::BindError),
     #[error(transparent)]
     Dispatch(#[from] wayland_client::DispatchError),
-    #[error("the seat announced no pointer")]
-    NoPointer,
 }
 
 #[cfg(test)]
