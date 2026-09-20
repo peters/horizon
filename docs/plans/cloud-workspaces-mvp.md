@@ -217,10 +217,10 @@ inside this implementation PR and must pass the same review, final smoke and
 cleanup gates. Repository names and application evidence remain private.
 
 - [x] Declare the remote account capability and worker-local ports per profile.
-- [ ] Resolve existing machine-local credentials only with a repository-specific grant.
-- [ ] Transfer credentials over authenticated SSH stdin into private runtime files.
-- [ ] Share browser provider adaptation across UI and worker; expose public MCP tools.
-- [ ] Run the private Local tunnel on the worker independently of the laptop.
+- [x] Resolve existing machine-local credentials only with a repository-specific grant.
+- [x] Transfer credentials over authenticated SSH stdin into private runtime files.
+- [x] Share browser provider adaptation across UI and worker; expose public MCP tools.
+- [x] Run the private Local tunnel on the worker independently of the laptop.
 - [ ] Test iPhone and Android sequentially; retain provider-confirmed hardware identity.
 - [ ] Email private application screenshots and results to the user.
 - [ ] Cover omitted/disabled capabilities, missing grants, missing image support,
@@ -267,3 +267,21 @@ reported three unchanged device CLI test warnings. The private
 restricted-sandbox run could not bind mock server sockets and is not treated as
 product-test evidence. Independent local review of the final source is clear;
 current-head hosted review, CI and the final post-review smoke remain pending.
+
+Timeout reconciliation follow-up, 2026-09-20: a live remote browser timed out
+before application navigation. The provider's exact-session report confirmed
+termination, but the previous recovery code retained capacity because it did not
+recognize the execution statuses `timeout` and `error`. These statuses now release
+only after a successful report with the matching session identity. Editable test
+metadata, identity mismatch, authentication failure and uncertain transport still
+retain the hold. Independent review found no actionable issues. Regression tests
+cover both terminal statuses and misleading metadata. All required validation
+tiers passed in `final-validation-06/`; the same three advisory device-test lint
+findings remain. Live proof of the updated recovery path and successful mobile
+application captures are still pending and are not implied by these local results.
+
+The New cloud and remote browser changes are committed locally as
+`359221c844132f49730ed9e077575c622d3af221`; publication and current-head review
+will include this follow-up. The original public candidate's review and smoke
+do not validate the additional behavior. Detailed private application qualification
+and resource ledgers remain outside the public repository.
