@@ -29,6 +29,7 @@ use horizon_core::{AppShortcuts, Panel};
 use std::{sync::Arc, time::Duration};
 
 /// Per-panel UI state that must survive across frames.
+#[allow(clippy::struct_excessive_bools)] // independent per-concern panel flags
 #[derive(Default)]
 pub struct BrowserUiState {
     /// Backend whose session owns every cache below. A backend switch creates
