@@ -10,6 +10,10 @@ use crate::browser_widget::BrowserUiState;
 
 /// Smallest viewport side `synchronize_viewport` accepts as a real layout.
 const MIN_STABLE_VIEWPORT_SIDE: f32 = 33.0;
+/// Frames arrive at the emulated viewport's size, are decoded to RGB and
+/// uploaded as one texture, so zooming out is bounded by a 4K-class pixel
+/// budget as well as the renderer's own side limit.
+const MAX_FRAME_PIXELS: f32 = 8_294_400.0;
 
 pub struct BodyOutput {
     pub image_rect: Option<Rect>,
@@ -51,8 +55,7 @@ pub fn show_body(
             keyboard_focus_id: None,
         };
     }
-    let viewport_size = zoomed_viewport(available.size(), state.zoom.factor());
-    let host_viewport_size = zoomed_viewport(available.size(), 1.0);
+    let (viewport_size, host_viewport_size) = sync_viewport_sizes(ui, state, available.size());
     let Some(data) = browser.frame_slot.latest() else {
         // No frame: the placeholder owns the body. It must be drawn before
         // allocating the body rect — allocating first would push the
@@ -164,10 +167,37 @@ pub fn show_body(
 /// instead.
 // egui layout sizes are finite and non-negative.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn zoomed_viewport(available: egui::Vec2, zoom: f32) -> (u32, u32) {
-    let ceiling = (available.min_elem() / MIN_STABLE_VIEWPORT_SIDE).max(1.0);
-    let zoom = zoom.min(ceiling);
+fn zoomed_viewport(available: egui::Vec2, zoom: f32, max_texture_side: usize) -> (u32, u32) {
+    let zoom = effective_zoom(available, zoom, max_texture_side);
     ((available.x / zoom).round() as u32, (available.y / zoom).round() as u32)
+}
+
+/// Record the zoom this panel can really apply, and report the emulated
+/// viewport for it alongside the panel's own unzoomed size.
+fn sync_viewport_sizes(ui: &Ui, state: &mut BrowserUiState, available: egui::Vec2) -> ((u32, u32), (u32, u32)) {
+    let max_texture_side = ui.ctx().input(|input| input.max_texture_side);
+    state.effective_zoom =
+        crate::panel_zoom::PanelZoom::new(effective_zoom(available, state.zoom.factor(), max_texture_side));
+    (
+        zoomed_viewport(available, state.zoom.factor(), max_texture_side),
+        zoomed_viewport(available, 1.0, max_texture_side),
+    )
+}
+
+/// The zoom a panel can actually apply. Zooming in is capped where the
+/// viewport would drop under the size `synchronize_viewport` accepts, and
+/// zooming out where the frame would pass the renderer's texture side limit
+/// or the pixel budget above; the panel reports this scale so the control
+/// shows what is really on screen.
+#[allow(clippy::cast_precision_loss)]
+fn effective_zoom(available: egui::Vec2, zoom: f32, max_texture_side: usize) -> f32 {
+    let side_limit = (max_texture_side.max(1) as f32).max(MIN_STABLE_VIEWPORT_SIDE);
+    let floor = (available.x / side_limit)
+        .max(available.y / side_limit)
+        .max((available.x * available.y / MAX_FRAME_PIXELS).sqrt())
+        .max(crate::panel_zoom::MIN_ZOOM);
+    let ceiling = (available.min_elem() / MIN_STABLE_VIEWPORT_SIDE).max(floor);
+    zoom.clamp(floor, ceiling)
 }
 
 pub(super) fn apply_zoom_gesture(ui: &Ui, state: &mut BrowserUiState, hovered: bool) {
@@ -323,13 +353,23 @@ mod tests {
 
     #[test]
     fn a_zoomed_viewport_stays_above_the_size_the_backend_sync_accepts() {
-        use super::{MIN_STABLE_VIEWPORT_SIDE, zoomed_viewport};
+        use super::{MAX_FRAME_PIXELS, MIN_STABLE_VIEWPORT_SIDE, zoomed_viewport};
+        let limit = 8192;
         // A roomy panel zooms exactly as asked.
-        assert_eq!(zoomed_viewport(egui::vec2(800.0, 600.0), 4.0), (200, 150));
-        assert_eq!(zoomed_viewport(egui::vec2(800.0, 600.0), 0.5), (1600, 1200));
+        assert_eq!(zoomed_viewport(egui::vec2(800.0, 600.0), 4.0, limit), (200, 150));
+        assert_eq!(zoomed_viewport(egui::vec2(800.0, 600.0), 0.5, limit), (1600, 1200));
+        // Zooming out stops at the renderer's side limit and the pixel budget.
+        let (wide, high) = zoomed_viewport(egui::vec2(3000.0, 2000.0), 0.25, limit);
+        assert!(wide <= 8192 && high <= 8192, "{wide}x{high} passes the texture limit");
+        assert!(
+            f64::from(wide) * f64::from(high) <= f64::from(MAX_FRAME_PIXELS) * 1.01,
+            "{wide}x{high} passes the pixel budget"
+        );
+        let (narrow, _) = zoomed_viewport(egui::vec2(3000.0, 200.0), 0.25, 2048);
+        assert!(narrow <= 2048, "{narrow} passes a smaller renderer limit");
         // A short one caps the effective zoom instead of selecting a viewport
         // that would never be sent.
-        let (width, height) = zoomed_viewport(egui::vec2(420.0, 100.0), 4.0);
+        let (width, height) = zoomed_viewport(egui::vec2(420.0, 100.0), 4.0, limit);
         assert!(
             f32::from(u16::try_from(height).expect("small")) >= MIN_STABLE_VIEWPORT_SIDE
                 && f32::from(u16::try_from(width).expect("small")) >= MIN_STABLE_VIEWPORT_SIDE,

@@ -89,6 +89,10 @@ pub struct BrowserUiState {
     /// Page zoom: the panel body is laid out in this many fewer (or more)
     /// CSS pixels, so the page reflows exactly as it would in a browser.
     zoom: crate::panel_zoom::PanelZoom,
+    /// What that selection could actually be applied as this frame: a small
+    /// panel cannot zoom in past a usable viewport, and zooming out is bounded
+    /// by the renderer's texture limit and the frame pixel budget.
+    effective_zoom: crate::panel_zoom::PanelZoom,
 }
 
 impl BrowserUiState {
@@ -103,6 +107,7 @@ impl BrowserUiState {
         *self = Self {
             active_backend: Some(backend),
             zoom: self.zoom,
+            effective_zoom: self.effective_zoom,
             ..Self::default()
         };
         true
@@ -219,6 +224,7 @@ impl<'a> BrowserView<'a> {
                 // panel preference, not session state, so it survives.
                 *state = BrowserUiState {
                     zoom: state.zoom,
+                    effective_zoom: state.effective_zoom,
                     ..BrowserUiState::default()
                 };
             }

@@ -96,7 +96,8 @@ pub fn show(
 /// Page zoom selector. Fit has no meaning here: the page always fills the
 /// panel, at whichever scale the emulated viewport was laid out for.
 fn zoom_picker(ui: &mut Ui, state: &mut BrowserUiState, interactive: bool) -> bool {
-    if !crate::panel_zoom::dropdown(ui, "browser_zoom", &mut state.zoom, interactive) {
+    let displayed = state.effective_zoom;
+    if !crate::panel_zoom::dropdown(ui, "browser_zoom", &mut state.zoom, displayed, interactive) {
         return false;
     }
     // The body was already laid out at the previous scale this frame.

@@ -509,3 +509,31 @@ fn an_image_smaller_than_the_body_is_centered_rather_than_pinned() {
         "image {image:?} is not centered in {body:?}"
     );
 }
+
+#[test]
+fn a_latched_gesture_keeps_its_anchor_after_the_pointer_leaves() {
+    // egui smooths a gesture for several frames after the input stops. The
+    // anchor captured when the gesture started must survive that tail, so a
+    // pointer that has moved on cannot drag the view somewhere else.
+    let scroll_after = |wander: bool| {
+        let (ctx, device, mut state) = disconnected_viewer();
+        state.controls.zoom = Some(PanelZoom::new(2.0));
+        let inside = egui::pos2(600.0, 500.0);
+        let outside = egui::pos2(1190.0, 30.0);
+        for step in 0..3 {
+            let pointer = if wander && step == 2 { outside } else { inside };
+            let mut events = vec![egui::Event::PointerMoved(pointer)];
+            if step > 0 {
+                events.push(egui::Event::Zoom(1.2));
+            }
+            show_viewer(&ctx, &mut state, &device, events);
+        }
+        state.pending_scroll.expect("the gesture anchors the view")
+    };
+    let steady = scroll_after(false);
+    let wandered = scroll_after(true);
+    assert!(
+        (steady - wandered).length() < 0.5,
+        "the anchor moved with the pointer: {steady:?} vs {wandered:?}"
+    );
+}

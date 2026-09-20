@@ -60,10 +60,17 @@ pub(crate) fn gesture_target(displayed: f32, delta: f32) -> Option<PanelZoom> {
     Some(PanelZoom::new(displayed * delta))
 }
 
-/// Percentage stops for a panel that always fills its body.
-pub(crate) fn dropdown(ui: &mut Ui, id_salt: &'static str, zoom: &mut PanelZoom, interactive: bool) -> bool {
+/// Percentage stops for a panel that always fills its body. `displayed` is
+/// the scale actually applied, which a panel may have had to cap.
+pub(crate) fn dropdown(
+    ui: &mut Ui,
+    id_salt: &'static str,
+    zoom: &mut PanelZoom,
+    displayed: PanelZoom,
+    interactive: bool,
+) -> bool {
     let mut selection = Some(*zoom);
-    let changed = show(ui, id_salt, &mut selection, false, interactive);
+    let changed = show(ui, id_salt, &mut selection, Some(displayed), false, interactive);
     if let Some(next) = selection {
         *zoom = next;
     }
@@ -77,18 +84,21 @@ pub(crate) fn dropdown_with_fit(
     selection: &mut Option<PanelZoom>,
     interactive: bool,
 ) -> bool {
-    show(ui, id_salt, selection, true, interactive)
+    show(ui, id_salt, selection, None, true, interactive)
 }
 
 fn show(
     ui: &mut Ui,
     id_salt: &'static str,
     selection: &mut Option<PanelZoom>,
+    displayed: Option<PanelZoom>,
     allow_fit: bool,
     interactive: bool,
 ) -> bool {
     let before = *selection;
-    let selected_text = selection.map_or_else(|| "Fit".to_owned(), PanelZoom::label);
+    let selected_text = displayed
+        .or(*selection)
+        .map_or_else(|| "Fit".to_owned(), PanelZoom::label);
     ui.add_enabled_ui(interactive, |ui| {
         egui::ComboBox::from_id_salt(id_salt)
             .width(DROPDOWN_WIDTH)
@@ -110,7 +120,7 @@ fn show(
 
 /// Idle gap that ends a gesture whose wheel events carry no touch phase,
 /// matching the canvas scroll router.
-const GESTURE_IDLE_SECONDS: f64 = 0.15;
+pub(crate) const GESTURE_IDLE_SECONDS: f64 = 0.15;
 
 /// Owner of the zoom gesture in progress, and when it was last seen. egui
 /// keeps smoothing a wheel or pinch for several frames after the input stops,

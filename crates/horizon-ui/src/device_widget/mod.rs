@@ -26,9 +26,22 @@ pub(crate) struct DeviceUiState {
     presented_options: Option<DeviceViewOptions>,
     /// Scroll offset a pointer-anchored zoom asks for on the next frame.
     pending_scroll: Option<egui::Vec2>,
+    /// Anchor captured when the current gesture was claimed. egui keeps
+    /// smoothing a gesture after the pointer has moved on, so recomputing the
+    /// anchor from a pointer that has left the image would make it jump.
+    zoom_anchor: Option<ZoomAnchor>,
     status: Status,
     desktop: Option<[usize; 2]>,
     controls: controls::Controls,
+}
+
+/// The pixel a gesture holds in place, in the panel's layer coordinates.
+#[derive(Clone, Copy)]
+struct ZoomAnchor {
+    captured_at: f64,
+    pointer: egui::Pos2,
+    /// Source pixel under the pointer when the gesture started.
+    content: egui::Vec2,
 }
 
 /// What `show_image` painted this frame, in the panel's layer coordinates.
@@ -189,19 +202,43 @@ impl DeviceUiState {
         let Some(next) = panel_zoom::gesture_target(displayed, delta) else {
             return;
         };
-        if let Some(view) = view
-            && view.scale.is_finite()
-            && view.scale > 0.0
-            && let Some(pointer) = panel_zoom::local_pointer(ui)
-        {
-            // Keep the pixel under the pointer where it is.
-            let content = (pointer - view.image_rect.min) / view.scale;
-            self.pending_scroll = Some((content * next.factor() - (pointer - view.body.min)).max(egui::Vec2::ZERO));
-        }
+        self.anchor_zoom(ui, view, next);
         self.controls.zoom = Some(next);
         ui.ctx().request_repaint();
     }
 
+    /// Hold one source pixel in place for the whole gesture. The anchor is
+    /// captured where the gesture started and reused while it lasts, so the
+    /// smoothed tail of a gesture whose pointer has left the image cannot
+    /// drag the view somewhere else.
+    fn anchor_zoom(&mut self, ui: &Ui, view: Option<ImageView>, next: PanelZoom) {
+        let Some(view) = view else {
+            return;
+        };
+        let now = ui.input(|input| input.time);
+        let anchor = self
+            .zoom_anchor
+            .filter(|anchor| now - anchor.captured_at <= panel_zoom::GESTURE_IDLE_SECONDS)
+            .or_else(|| {
+                let pointer = panel_zoom::local_pointer(ui)?;
+                // A degenerate layout has no image pixel to anchor on; the new
+                // scale still applies.
+                (view.scale.is_finite() && view.scale > 0.0 && view.body.contains(pointer)).then(|| ZoomAnchor {
+                    captured_at: now,
+                    pointer,
+                    content: (pointer - view.image_rect.min) / view.scale,
+                })
+            });
+        let Some(anchor) = anchor else {
+            return;
+        };
+        self.pending_scroll =
+            Some((anchor.content * next.factor() - (anchor.pointer - view.body.min)).max(egui::Vec2::ZERO));
+        self.zoom_anchor = Some(ZoomAnchor {
+            captured_at: now,
+            ..anchor
+        });
+    }
     #[cfg(test)]
     fn set_source(&mut self, ui: &Ui, image: ColorImage) {
         self.desktop = Some(image.size);
@@ -360,8 +397,6 @@ impl DeviceUiState {
     }
 }
 
-/// Paint the presented image; report whether any of it survived clipping and
-/// where it landed (the anchor for a pointer-centered zoom).
 /// Center a scaled image that no longer fills its viewport. A zoom anchor is
 /// only reachable while the image overflows — below that there is no scroll
 /// range to hold a pixel in place — so the leftover space is split instead of
@@ -381,6 +416,8 @@ fn centered_image(ui: &mut Ui, texture: &TextureHandle, size: egui::Vec2) -> (bo
     .inner
 }
 
+/// Paint the presented image; report whether any of it survived clipping and
+/// where it landed (the anchor for a pointer-centered zoom).
 fn visible_image(ui: &mut Ui, texture: &TextureHandle, size: egui::Vec2) -> (bool, egui::Rect) {
     let response = ui.add(
         egui::Image::new(texture)
