@@ -3,7 +3,8 @@ use crate::{BrowserProfileState, PanelKind, PanelState, WorkspaceState};
 
 #[test]
 fn empty_store_creates_new_session() {
-    let root = test_root("empty-store");
+    let root_dir = test_root("empty-store");
+    let root = root_dir.path().to_path_buf();
     let home = HorizonHome::from_root(root.clone());
     let store = SessionStore::new(home.clone(), home.config_path());
 
@@ -23,7 +24,8 @@ fn empty_store_creates_new_session() {
 
 #[test]
 fn second_startup_resumes_previous_session() {
-    let root = test_root("resume-store");
+    let root_dir = test_root("resume-store");
+    let root = root_dir.path().to_path_buf();
     let home = HorizonHome::from_root(root.clone());
     let store = SessionStore::new(home.clone(), home.config_path());
     let created = store.create_new_session(&Config::default()).expect("create session");
@@ -44,7 +46,8 @@ fn second_startup_resumes_previous_session() {
 
 #[test]
 fn list_profile_sessions_returns_saved_session_summaries() {
-    let root = test_root("list-store");
+    let root_dir = test_root("list-store");
+    let root = root_dir.path().to_path_buf();
     let home = HorizonHome::from_root(root.clone());
     let store = SessionStore::new(home.clone(), home.config_path());
     let created = store.create_new_session(&Config::default()).expect("create session");
@@ -58,7 +61,8 @@ fn list_profile_sessions_returns_saved_session_summaries() {
 
 #[test]
 fn delete_session_removes_saved_state_and_updates_index() {
-    let root = test_root("delete-store");
+    let root_dir = test_root("delete-store");
+    let root = root_dir.path().to_path_buf();
     let home = HorizonHome::from_root(root.clone());
     let store = SessionStore::new(home.clone(), home.config_path());
     let first = store
@@ -84,7 +88,8 @@ fn delete_session_removes_saved_state_and_updates_index() {
 
 #[test]
 fn delete_session_removes_browser_profiles_from_the_saved_profile_root() {
-    let root = test_root("delete-browser-profiles");
+    let root_dir = test_root("delete-browser-profiles");
+    let root = root_dir.path().to_path_buf();
     let home = HorizonHome::from_root(root.clone());
     let store = SessionStore::new(home.clone(), home.config_path());
     let launched_profile_root = root.join("launched-browser-profiles");
@@ -134,7 +139,8 @@ fn delete_session_removes_browser_profiles_from_the_saved_profile_root() {
 
 #[test]
 fn delete_session_rejects_live_sessions() {
-    let root = test_root("delete-live-store");
+    let root_dir = test_root("delete-live-store");
+    let root = root_dir.path().to_path_buf();
     let home = HorizonHome::from_root(root.clone());
     let store = SessionStore::new(home.clone(), home.config_path());
     let created = store.create_new_session(&Config::default()).expect("create session");
@@ -150,7 +156,8 @@ fn delete_session_rejects_live_sessions() {
 
 #[test]
 fn duplicated_sessions_regenerate_browser_artifact_ids() {
-    let root = test_root("duplicate-browser-ids");
+    let root_dir = test_root("duplicate-browser-ids");
+    let root = root_dir.path().to_path_buf();
     let home = HorizonHome::from_root(root);
     let store = SessionStore::new(home.clone(), home.config_path());
     let browser_id = "shared-browser-id".to_string();
@@ -212,8 +219,11 @@ fn duplicated_sessions_regenerate_browser_artifact_ids() {
     );
 }
 
-fn test_root(label: &str) -> std::path::PathBuf {
-    let root = std::env::temp_dir().join(format!("horizon-session-store-{label}-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&root).expect("create temp root");
-    root
+/// The returned guard removes the directory when the test ends; bind it for
+/// the whole test rather than letting it drop at the end of the statement.
+fn test_root(label: &str) -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix(&format!("horizon-session-store-{label}-"))
+        .tempdir()
+        .expect("create temp root")
 }
