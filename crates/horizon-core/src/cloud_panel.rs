@@ -237,7 +237,7 @@ impl CloudGroup {
                 .map(|p| p.id)
                 .collect();
             for id in moved {
-                board.assign_panel_to_workspace(id, workspace);
+                board.reconcile_panel_workspace(id, workspace);
             }
         }
         self.hidden.retain(|id| self.panels.contains(id));
@@ -484,6 +484,45 @@ mod tests {
             groups.reconcile(&mut board);
             assert!(board.panel(id).unwrap().layout.position.iter().all(|p| p.is_finite()));
         }
+    }
+
+    #[test]
+    fn persisted_membership_is_repaired_without_allowing_user_moves() {
+        let mut board = Board::new();
+        let home = board.create_workspace("cloud home");
+        let other = board.create_workspace("other");
+        let panel = board
+            .create_panel(
+                PanelOptions {
+                    kind: PanelKind::Usage,
+                    ..Default::default()
+                },
+                home,
+            )
+            .unwrap();
+        let local_id = board.panel(panel).unwrap().local_id.clone();
+        let home_local = board.workspace(home).unwrap().local_id.clone();
+        let mut group = CloudGroup::new(1, "cloud".into(), home_local.clone(), PathBuf::new(), [0.0, 0.0]);
+        group.attach(&mut board, panel);
+        board.cloud_groups = CloudGroups(vec![group]);
+        let mut saved = crate::RuntimeState::from_board(
+            &board,
+            crate::WindowConfig::default(),
+            crate::CanvasViewState::default(),
+        );
+        let member = saved.workspaces[0].panels.remove(0);
+        saved.workspaces[1].panels.push(member);
+        let mut restored = Board::from_runtime_state(&saved).unwrap();
+        let panel = restored.panels.iter().find(|p| p.local_id == local_id).unwrap().id;
+        let home = restored.workspace_id_by_local_id(&home_local).unwrap();
+        assert_ne!(restored.panel_workspace_id(panel), Some(home));
+        let mut groups = restored.cloud_groups.clone();
+        groups.reconcile(&mut restored);
+        assert_eq!(restored.panel_workspace_id(panel), Some(home));
+        assert!(restored.workspace(home).unwrap().panels.contains(&panel));
+        assert!(!restored.workspace(other).unwrap().panels.contains(&panel));
+        restored.assign_panel_to_workspace(panel, other);
+        assert_eq!(restored.panel_workspace_id(panel), Some(home));
     }
 
     #[test]

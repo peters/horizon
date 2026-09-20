@@ -69,12 +69,16 @@ impl Host {
         target: Option<&str>,
         actor: &str,
     ) -> io::Result<()> {
-        if id.is_empty() || id.len() > 100 || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+        if !valid_identity(id) {
             return Err(io::Error::other("Invalid browser identity"));
         }
         if let Some(existing) = self.browsers.get(id) {
             validate_existing(&existing.state, backend, target)?;
             return Ok(());
+        }
+        let marker = self.root.join(id);
+        if marker.exists() {
+            return Err(io::Error::other(LOST_PROCESS));
         }
         if target.is_some() && Path::new("/run/horizon-credentials/browserstack-revoked").exists() {
             return Err(io::Error::other(
@@ -90,12 +94,6 @@ impl Host {
         };
         let coordination =
             ManifestCoordination::with_remote_allocation(remote.as_ref().map(|request| request.recovery.clone()));
-        let marker = self.root.join(id);
-        if marker.exists() {
-            return Err(io::Error::other(
-                "Browser process was lost; create a new browser explicitly",
-            ));
-        }
         if self.browsers.len() >= 16 {
             return Err(io::Error::other("Cloud browser capacity reached"));
         }
@@ -189,6 +187,14 @@ impl Host {
         match request {
             CloudViewRequest::Open {
                 id,
+                url: _,
+                backend,
+                target,
+            } if valid_identity(&id) && !self.browsers.contains_key(&id) && self.root.join(&id).exists() => {
+                lost_response(&id, backend, target)
+            }
+            CloudViewRequest::Open {
+                id,
                 url,
                 backend,
                 target,
@@ -263,7 +269,7 @@ impl Host {
         }
     }
     pub fn close(&mut self, id: &str) -> io::Result<()> {
-        if !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') || id.is_empty() || id.len() > 100 {
+        if !valid_identity(id) {
             return Err(io::Error::other("Invalid browser identity"));
         }
         self.pending_cleanup.insert(id.into());
@@ -309,10 +315,7 @@ impl Host {
     }
     fn snapshot(&self, id: &str, after: u64) -> CloudViewResponse {
         let Some(browser) = self.browsers.get(id) else {
-            return CloudViewResponse {
-                error: Some("Browser process no longer exists".into()),
-                ..CloudViewResponse::default()
-            };
+            return lost_response(id, None, None);
         };
         let mut state = browser.state.clone();
         if let Some(frame) = browser.session.frame_slot.latest() {
@@ -332,6 +335,26 @@ impl Host {
             error: None,
             ..CloudViewResponse::default()
         }
+    }
+}
+
+const LOST_PROCESS: &str = "Browser process was lost; create a new browser explicitly";
+
+fn valid_identity(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 100 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+fn lost_response(id: &str, backend: Option<BackendKind>, target: Option<String>) -> CloudViewResponse {
+    CloudViewResponse {
+        browsers: vec![CloudViewState {
+            id: id.into(),
+            backend: backend.unwrap_or_default(),
+            remote_target: target,
+            lost: true,
+            error: Some(LOST_PROCESS.into()),
+            ..CloudViewState::default()
+        }],
+        ..CloudViewResponse::default()
     }
 }
 
@@ -412,6 +435,54 @@ fn encode_frame(frame: &horizon_browser::frames::FrameData) -> io::Result<String
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fenced_browser_returns_typed_loss_before_credentials_or_capacity_validation() {
+        let root = tempfile::tempdir().unwrap();
+        let mut host = Host {
+            capabilities: serde_json::from_str("{}").unwrap(),
+            catalog: crate::catalog::Host::default(),
+            browsers: BTreeMap::new(),
+            pending: Vec::new(),
+            pending_cleanup: std::collections::BTreeSet::new(),
+            root: root.path().into(),
+            closed: std::collections::BTreeSet::default(),
+            stopping: BTreeMap::new(),
+            remote_allocations: super::super::remote::Allocations::new(root.path().join("remote-holds")).unwrap(),
+        };
+        std::fs::write(root.path().join("lost"), "").unwrap();
+        let response = host.request(CloudViewRequest::Open {
+            id: "lost".into(),
+            url: None,
+            backend: Some(BackendKind::FirefoxBidi),
+            target: Some("unconfigured-target".into()),
+        });
+        assert!(response.error.is_none());
+        let state = &response.browsers[0];
+        assert!(state.lost);
+        assert_eq!(state.id, "lost");
+        assert_eq!(state.backend, BackendKind::FirefoxBidi);
+        assert_eq!(state.remote_target.as_deref(), Some("unconfigured-target"));
+        assert!(state.error.as_deref().unwrap().contains("create a new browser"));
+        assert!(host.browsers.is_empty());
+        assert!(host.remote_allocations.ids().is_empty());
+        let polled = host.request(CloudViewRequest::Poll {
+            id: "lost".into(),
+            after: 0,
+            commands: Vec::new(),
+        });
+        assert!(polled.error.is_none());
+        assert!(polled.browsers[0].lost);
+        assert!(
+            host.request(CloudViewRequest::Open {
+                id: "../lost".into(),
+                url: None,
+                backend: None,
+                target: None,
+            })
+            .error
+            .is_some()
+        );
+    }
     #[test]
     fn completed_driver_does_not_prove_remote_release_or_discard_recovery() {
         let root = tempfile::tempdir().unwrap();

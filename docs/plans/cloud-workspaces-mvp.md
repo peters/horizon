@@ -408,3 +408,43 @@ with exact-session release confirmed. That evidence verifies the capture fix but
 does not validate this batch's retained-allocation or deferred-close corrections.
 Fresh immutable-image acceptance, current-head hosted checks/review, post-review
 smoke and cleanup remain open. The queued Cloud menu/settings phase remains gated.
+
+
+Eighth hosted-review disposition, 2026-09-20: four recovery findings were confirmed.
+The desktop presentation now retains its loopback listener throughout its lifetime,
+relays each bounded viewer connection over authenticated SSH and uses one absolute
+readiness deadline. Shutdown closes sockets and reaps the owned transports before
+joining threads. Accepted sockets explicitly use blocking mode across platforms.
+Persistence reconciliation can repair a cloud member's saved workspace without
+unlocking user moves. Worker browser fences now return typed process loss, stop
+client polling and disable Retry while retaining engine and target identity.
+
+Independent local review is clear on the eight-file source manifest
+`efa054b44130742c3b495d8d6939eb941fa932f7fd03bc108071daa1a3ff4ce2`.
+Targeted regressions pass; full validation is recorded separately in
+`final-validation-16/`. Optional automatic desktop retry and remembering locally
+dismissed terminal views are outside this correction batch; explicit reconnect
+and its documented session restoration remain the MVP behavior.
+
+The first-use acceptance story is now explicit for the gated UI phase: start an
+empty ephemeral Horizon profile, choose Cloud → New cloud, enter the compute key,
+select one or several supported agents, choose API-key or supported subscription
+authentication per agent, prepare/reload a repository profile, then deploy. Keep
+good defaults centralized, advanced settings secondary and errors actionable.
+The walkthrough must succeed without inherited secrets or manual hidden-file
+edits, including missing YAML, keyboard navigation, cancellation and resume.
+A real supported login flow is required; do not present unsupported subscription
+transfer as automatic. This is requested work, not yet implemented or verified.
+
+
+The eighth-review batch passed formatting, maintainability, worker checks and both
+required Clippy tiers. Workspace tests passed 2,324 with zero failures and 15
+ignored. The first speech run hit the existing dead-host CLI startup assertion;
+its complete log is retained. A full speech-tier retry passed 2,369 with zero
+failures and 15 ignored. Advisory diagnostics remain the same three device-test
+findings. Frozen native candidate `development-57/` has SHA-256
+`d5b460db18e837b42b426fa3363ecc6543ca7125a364f1061dbd92ab74760555`.
+It restored the existing remote session through the live native viewer. A later
+isolated-display interruption is retained as an unconfirmed fixture failure;
+the task desktop was restored without changing remote workers or shared sessions.
+Fresh final-image and post-review smoke remain pending.

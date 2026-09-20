@@ -337,6 +337,11 @@ impl Board {
         if self.cloud_groups.contains_panel(self, panel_id) {
             return;
         }
+        self.reconcile_panel_workspace(panel_id, workspace_id);
+    }
+
+    // Persistence repair may restore immutable membership; user moves use the guarded API above.
+    pub(crate) fn reconcile_panel_workspace(&mut self, panel_id: PanelId, workspace_id: WorkspaceId) {
         let Some(source_workspace_id) = self.panel_workspace_id(panel_id) else {
             return;
         };

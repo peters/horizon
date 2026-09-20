@@ -93,13 +93,40 @@ fn stopped_cloud_keeps_its_environment_and_refuses_local_backend_switch() {
         assert!(panel.cloud.is_some());
         assert!(!panel.backend_capabilities().clipboard);
     }
-    panel.apply_cloud_state(
-        CloudViewState {
-            lost: true,
-            ..Default::default()
+    panel.config.backend = super::super::BackendKind::FirefoxBidi;
+    let (reply, responses) = mpsc::sync_channel(1);
+    let (_, commands) = mpsc::sync_channel(1);
+    let response: CloudViewResponse = serde_json::from_value(serde_json::json!({
+        "browsers": [CloudViewState { id: "fixture".into(), lost: true, error: Some("Browser process was lost".into()), ..Default::default() }],
+        "error": null,
+    })).unwrap();
+    reply.send(response).unwrap();
+    drop(reply);
+    let latest = Latest::default();
+    let mut requests = Vec::new();
+    pump(
+        &mut requests,
+        &responses,
+        &commands,
+        &FrameSlot::new(),
+        &latest,
+        &Waker::default(),
+        &AtomicBool::new(false),
+        CloudViewRequest::Open {
+            id: "fixture".into(),
+            url: None,
+            backend: None,
+            target: None,
         },
-        false,
+    )
+    .unwrap();
+    assert_eq!(
+        String::from_utf8(requests).unwrap().lines().count(),
+        1,
+        "lost process must stop polling"
     );
+    panel.apply_cloud_state(latest.lock().unwrap().take().unwrap(), false);
+    assert_eq!(panel.backend(), super::super::BackendKind::FirefoxBidi);
     assert!(!panel.can_retry());
     let child = panel.cloud.as_ref().unwrap().child.clone();
     panel.relaunch_cloud();

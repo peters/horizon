@@ -206,11 +206,15 @@ fn pump(
             .find(|s| s.id == id)
             .ok_or_else(|| io::Error::other("Worker browser identity mismatch"))?;
         let after = state.sequence;
+        let lost = state.lost;
         if let Some(png) = state.png.take() {
             let _ = frames.store_base64_png(&png);
         }
         *latest.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(state);
         wake(waker);
+        if lost {
+            return Ok(());
+        }
         thread::sleep(Duration::from_millis(150));
         request = CloudViewRequest::Poll {
             id: id.clone(),
@@ -269,6 +273,9 @@ impl BrowserPanelState {
         }
         if let Some(cloud) = &mut self.cloud {
             cloud.process_lost |= state.lost;
+            if state.lost {
+                state.backend = self.config.backend;
+            }
             if state.error.is_some() {
                 state.remote_target = state.remote_target.or_else(|| cloud.target.clone());
                 state.remote_device = state.remote_device.or_else(|| cloud.device.clone());
